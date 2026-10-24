@@ -18,6 +18,7 @@ import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
 import {
   createRepositoryIdentityReader,
+  createRepositoryRootCommitFile,
   getRepositoryNameFromCommonDir,
   groupTodoProjects,
   failedRepositoryReadRetryMs,
@@ -26,6 +27,7 @@ import {
   type RunGit,
   type TodoProject,
   type TodoProjectMember,
+  type TodoProjectReadMode,
 } from '../todos/projects';
 import { boardMaxChars, createTodoBoard, formatTodoAge, formatTodoBoardBlocks, formatTodoBoardPeerBlock, type TodoSessionActivity } from '../todos/board';
 import { TodoStore, createEmptyTodoTopicFile } from '../todos/store';
@@ -130,7 +132,7 @@ describe('repository identity', () => {
     git(root, 'clone', '-q', main, path.join(root, 'example-repo-clone'));
     git(main, 'worktree', 'add', '-q', path.join(root, 'feature-x'));
     fs.mkdirSync(path.join(root, 'plain'));
-    const read = createRepositoryIdentityReader(runGitInFolder);
+    const { read } = createRepositoryIdentityReader({ runGit: runGitInFolder });
     const [mainIdentity, cloneIdentity, worktreeIdentity, plainIdentity] = await Promise.all(
       ['example-repo', 'example-repo-clone', 'feature-x', 'plain'].map((folder) => read(path.join(root, folder))),
     );
@@ -151,7 +153,7 @@ describe('repository identity', () => {
       calls += 1;
       return args[0] === 'rev-list' ? 'bbb\naaa' : '/w/example-repo/.git';
     };
-    const read = createRepositoryIdentityReader(runGit, () => clockMs);
+    const { read } = createRepositoryIdentityReader({ runGit, getNowMs: () => clockMs });
     assert.deepEqual(await read('/w/example-repo'), { rootCommit: 'aaa', repositoryName: 'example-repo' }, 'the first root, sorted');
     await read('/w/example-repo');
     assert.equal(calls, 2, 'cached');
@@ -167,7 +169,7 @@ describe('repository identity', () => {
       if (args[0] === 'rev-list') return 'aaa';
       return dir === '/w/example-repo' ? '.git' : '/w/example-repo/.git/worktrees/feature';
     };
-    const read = createRepositoryIdentityReader(runGit, () => nowMs);
+    const { read } = createRepositoryIdentityReader({ runGit, getNowMs: () => nowMs });
     assert.deepEqual(await read('/w/example-repo'), { rootCommit: 'aaa', repositoryName: 'example-repo' }, 'a relative `.git` is the folder\'s own');
     // A real worktree's common dir is the main repository's `.git`; this one names a worktree dir: still one history read per dir.
     await read('/w/feature');
@@ -178,7 +180,7 @@ describe('repository identity', () => {
       if (args[0] === 'rev-list') historyReads += 1;
       return sameRepository(dir, args, timeoutMs);
     };
-    const shared = createRepositoryIdentityReader(counting, () => nowMs);
+    const shared = createRepositoryIdentityReader({ runGit: counting, getNowMs: () => nowMs }).read;
     await shared('/w/example-repo');
     await shared('/w/example-repo-wt');
     assert.equal(historyReads, 1, 'one repository, one history walk');
@@ -195,7 +197,7 @@ describe('repository identity', () => {
         if (!isGitWorking) return null;
         return args[0] === 'rev-list' ? 'aaa' : path.join(root, '.git');
       };
-      const read = createRepositoryIdentityReader(runGit, () => clockMs, (line) => warnings.push(line));
+      const { read } = createRepositoryIdentityReader({ runGit, getNowMs: () => clockMs, logWarning: (line) => warnings.push(line) });
       assert.equal(await read(root), null);
       assert.equal(await read(root), null);
       assert.equal(warnings.length, 1, 'logged once, not per read');
@@ -204,11 +206,85 @@ describe('repository identity', () => {
       clockMs += failedRepositoryReadRetryMs;
       assert.equal((await read(root))?.rootCommit, 'aaa', 'tried again soon after');
       const plainWarnings: string[] = [];
-      const plain = createRepositoryIdentityReader(async () => null, () => nowMs, (line) => plainWarnings.push(line));
+      const plain = createRepositoryIdentityReader({ runGit: async () => null, getNowMs: () => nowMs, logWarning: (line) => plainWarnings.push(line) }).read;
       await plain(path.join(root, 'no-checkout-here'));
       assert.deepEqual(plainWarnings, [], 'a folder that is no checkout is no failure');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('repository identity off the prompt path (no prompt waits for git)', () => {
+  /** A git that answers only when released: what a slow history walk looks like. */
+  function createHeldGit(answer: (args: readonly string[]) => string) {
+    const asked: string[] = [];
+    let releases: Array<() => void> = [];
+    const runGit: RunGit = (_dir, args) => {
+      asked.push(args[0]);
+      return new Promise((resolve) => { releases.push(() => resolve(answer(args))); });
+    };
+    /** Answer every waiting call, and the calls those answers start, until git is quiet. */
+    async function releaseAll(): Promise<void> {
+      for (let round = 0; round < 10; round += 1) {
+        const waiting = releases;
+        releases = [];
+        waiting.forEach((release) => release());
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
+    return { runGit, asked, releaseAll };
+  }
+  const answerExampleRepo = (args: readonly string[]): string => (args[0] === 'rev-list' ? 'aaa' : '/w/example-repo/.git');
+
+  it('two reads of one folder at once share one git run', async () => {
+    const git = createHeldGit(answerExampleRepo);
+    const { read } = createRepositoryIdentityReader({ runGit: git.runGit, getNowMs: () => nowMs });
+    const both = Promise.all([read('/w/example-repo'), read('/w/example-repo')]);
+    await git.releaseAll();
+    const [first, second] = await both;
+    assert.deepEqual(first, rootX);
+    assert.deepEqual(second, rootX);
+    assert.deepEqual(git.asked, ['rev-parse', 'rev-list'], 'one git run, not one per reader');
+  });
+
+  it('peek never waits: a folder never read is unknown (its read starts), then known; past the TTL the last answer stays while git is asked again', async () => {
+    let clockMs = nowMs;
+    const git = createHeldGit(answerExampleRepo);
+    const reader = createRepositoryIdentityReader({ runGit: git.runGit, getNowMs: () => clockMs });
+    assert.equal(reader.peek('/w/example-repo'), undefined, 'unknown, and no wait');
+    assert.deepEqual(git.asked, ['rev-parse'], 'the read started');
+    assert.equal(reader.peek('/w/example-repo'), undefined);
+    await git.releaseAll();
+    assert.deepEqual(git.asked, ['rev-parse', 'rev-list'], 'one read, shared by both looks');
+    assert.deepEqual(reader.peek('/w/example-repo'), rootX);
+    clockMs += repositoryIdentityTtlMs;
+    assert.deepEqual(reader.peek('/w/example-repo'), rootX, 'the last answer while the folder is read again');
+    assert.deepEqual(git.asked, ['rev-parse', 'rev-list', 'rev-parse'], 'the refresh asks the quick step only');
+    await git.releaseAll();
+  });
+
+  it('the root commits persist by repository: a new process walks no history for one it knows; a broken file is read as empty', async () => {
+    const todosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-roots-'));
+    try {
+      const warnings: string[] = [];
+      const store = createRepositoryRootCommitFile(todosDir, (line) => warnings.push(line));
+      assert.deepEqual(await createRepositoryIdentityReader({ runGit: async (_dir, args) => answerExampleRepo(args), getNowMs: () => nowMs, rootCommitStore: store }).read('/w/example-repo'), rootX);
+      const filePath = path.join(todosDir, 'repositories.json');
+      assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+      const asked: string[] = [];
+      const counting: RunGit = async (_dir, args) => {
+        asked.push(args[0]);
+        return answerExampleRepo(args);
+      };
+      const next = createRepositoryIdentityReader({ runGit: counting, getNowMs: () => nowMs, rootCommitStore: createRepositoryRootCommitFile(todosDir) });
+      assert.deepEqual(await next.read('/w/example-repo-wt'), rootX);
+      assert.deepEqual(asked, ['rev-parse'], 'the history walk is not repeated');
+      fs.writeFileSync(filePath, '{"version":1,"rootCommits":');
+      assert.deepEqual(store.load(), {});
+      assert.equal(warnings.length, 1, 'one warning for the broken file');
+    } finally {
+      fs.rmSync(todosDir, { recursive: true, force: true });
     }
   });
 });
@@ -254,11 +330,15 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
   let project: TodoProject | null;
   const activities = new Map<string, TodoSessionActivity>();
   let boardShownKeys: string[] = [];
+  let isGroupingKnown: boolean;
+  let readModes: TodoProjectReadMode[] = [];
   beforeEach(() => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-board-'));
     clockMs = nowMs;
     project = { name: 'charness', memberKeys: [keyToString(topicA), keyToString(topicB), keyToString(issue1)] };
     boardShownKeys = [];
+    isGroupingKnown = true;
+    readModes = [];
   });
   afterEach(() => fs.rmSync(dataDir, { recursive: true, force: true }));
 
@@ -267,7 +347,10 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
     const registry = createTodoRegistry({ store, getNowMs: () => clockMs });
     const board = createTodoBoard({
       store,
-      getProjectOf: async () => project,
+      getProjectOf: async (_key, readMode) => {
+        readModes.push(readMode);
+        return readMode === 'knownOnly' && !isGroupingKnown ? null : project;
+      },
       getPeerLabel: (conversationKey) => (conversationKey === keyToString(issue1) ? 'PROJ-1 «Export to PDF»' : `#${conversationKey.split(':')[1]}`),
       getSessionActivity: (conversationKey) => activities.get(conversationKey) ?? 'idle',
       getNowMs: () => clockMs,
@@ -309,6 +392,23 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
     assert.match(await board.takePromptBoard(topicA) ?? '', /^Your published todo list:/);
     project = null;
     assert.equal(await board.takePromptBoard(topicA), null, 'an unbound topic is in no project');
+  });
+
+  it('a prompt and the mid-turn poll never wait for git: while the grouping is unknown no board, nothing seen; the tools wait', async () => {
+    const { registry, board, tools } = createServices();
+    registry.updateTodos(topicB, { items: [{ title: 'Fix the footer' }] });
+    isGroupingKnown = false;
+    assert.equal(await board.takePromptBoard(topicA), null, 'no board while the grouping is unknown');
+    isGroupingKnown = true;
+    assert.match(await board.takePromptBoard(topicA) ?? '', /^\[Project board · charness · 1 other topic\]/, 'still the whole board: nothing was marked seen');
+    registry.updateTodos(topicB, { items: [{ title: 'Fix the header' }] });
+    isGroupingKnown = false;
+    assert.equal(await board.peekChanges(topicA), null);
+    isGroupingKnown = true;
+    assert.match((await board.peekChanges(topicA))?.text ?? '', /Fix the header/);
+    await tools.read(topicA, {});
+    await tools.read(topicA, { scope: 'project' });
+    assert.deepEqual(readModes, ['knownOnly', 'knownOnly', 'knownOnly', 'knownOnly', 'wait', 'wait']);
   });
 
   it('todo_update and todo_read answer the own list and the delta; the project scope the whole board', async () => {

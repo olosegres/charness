@@ -24,6 +24,8 @@
  *     General's `/todo` lists the project with its topics
  *   → mid-turn (S4): while B works, A publishes; B gets A's change with its next tool result — the launch settings'
  *     `PostToolUse` hook prints B's inbox, as the real CLI runs it — and B's next prompt does not repeat it
+ *   → a prompt never waits for git: topic D on a new clone whose history walk git holds back (a `git` in the
+ *     instance's bin folder) — its prompt reaches the agent at once, with no board; once git answered, the whole board
  *
  * Nothing leaves the machine: the Bot API and the bot MCP are on loopback, the agent is the fake. Everything the test
  * starts is stopped in `after`.
@@ -72,6 +74,15 @@ const folderB = 'proj-b';
 const folderNotes = 'notes';
 const topicBThreadId = 222;
 const topicCThreadId = 444;
+/** A topic on another clone of A's repository, bound while git is slow to walk its history. */
+const folderD = 'proj-d';
+const topicDThreadId = 555;
+/** While this file (in the test root) exists, the instance's `git` holds every history walk back. */
+const gitHoldFileName = 'git-hold';
+/** Where the instance's `git` logs each history walk it starts and ends. */
+const gitWalkLogFileName = 'git-walks.log';
+/** Well inside git's own 30 s bound for the walk: a prompt that waited for it would miss this. */
+const promptPastHeldGitMs = 15 * 1000;
 /** The boot's last line before `bot.launch`, which resolves only when polling stops. */
 const launchLine = 'Launching Telegraf bot (long polling';
 const bootTimeoutMs = 60 * 1000;
@@ -240,6 +251,29 @@ async function compactWhenIdle(threadId: number): Promise<void> {
   throw new Error(`/compact was refused as busy ${compactAttempts} times`);
 }
 
+/**
+ * The instance's `git` (its bin folder is first on its PATH): the real one, except that a history walk
+ * (`rev-list`) waits while the hold file exists, and is logged when it starts and ends.
+ */
+function writeHoldingGit(instance: IsolatedInstanceLayout): void {
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const holdPath = path.join(instance.testRoot, gitHoldFileName);
+  const logPath = path.join(instance.testRoot, gitWalkLogFileName);
+  fs.writeFileSync(path.join(instance.binDir, 'git'), [
+    '#!/bin/sh',
+    'case " $* " in',
+    `  *" rev-list "*) echo "start $2" >> '${logPath}'; while [ -e '${holdPath}' ]; do sleep 0.1; done; '${realGit}' "$@"; status=$?; echo "end $2" >> '${logPath}'; exit $status;;`,
+    'esac',
+    `exec '${realGit}' "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+}
+
+function readGitWalkLog(): string {
+  const logPath = path.join(getLayout().testRoot, gitWalkLogFileName);
+  return fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
+}
+
 function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
@@ -258,6 +292,7 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
     runGit(repoA, 'add', '.');
     runGit(repoA, 'commit', '-q', '-m', 'first');
     runGit(layout.workRoot, 'clone', '-q', repoA, path.join(layout.workRoot, folderB));
+    writeHoldingGit(layout);
     process.on('exit', removeInstanceSync);
     process.once('SIGINT', exitOnSignal);
     process.once('SIGTERM', exitOnSignal);
@@ -507,5 +542,26 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
     });
     await publishThroughAgent(topicBThreadId, 'TODO-33', '[todo-touch]');
     assert.doesNotMatch(getPromptOf('TODO-33'), /Mid-turn item/);
+  });
+
+  // ── no prompt waits for git ───────────────────────────────────────────
+
+  it('a prompt never waits for git: a new clone\'s held history walk lets it through with no board; once git answered, the whole board', async () => {
+    const instance = getLayout();
+    const folderPathD = path.join(instance.workRoot, folderD);
+    execFileSync('git', ['clone', '-q', path.join(instance.workRoot, folderA), folderPathD], { stdio: 'ignore' });
+    const holdPath = path.join(instance.testRoot, gitHoldFileName);
+    fs.writeFileSync(holdPath, '');
+    await sendAndAwaitReply(topicDThreadId, `/bind ${folderD}`, `Bound to \`${folderD}\``);
+    await sendAndAwaitReply(topicDThreadId, '/claude', 'ready in');
+    fakeTelegram.pushOperatorMessage(topicDThreadId, 'TODO-41');
+    await getCharness().waitFor('D\'s prompt while git walks its history', promptPastHeldGitMs, () => readPrompts().some((prompt) => /\bTODO-41\b/.test(prompt.text)));
+    assert.ok(readGitWalkLog().includes(`start ${folderPathD}`) && !readGitWalkLog().includes(`end ${folderPathD}`), 'the walk was still held when the prompt went through');
+    assert.doesNotMatch(getPromptOf('TODO-41'), /Project board/, 'no board while the grouping is unknown');
+    fs.rmSync(holdPath);
+    await getCharness().waitFor('git answered', turnTimeoutMs, () => readGitWalkLog().includes(`end ${folderPathD}`));
+    fakeTelegram.pushOperatorMessage(topicDThreadId, 'TODO-42');
+    await getCharness().waitFor('D\'s next prompt', turnTimeoutMs, () => readPrompts().some((prompt) => /\bTODO-42\b/.test(prompt.text)));
+    assert.match(getPromptOf('TODO-42'), /\[Project board · proj-a · 2 other topics\]/, 'nothing was marked seen: the whole board');
   });
 });

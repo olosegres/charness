@@ -351,12 +351,12 @@ import { schedulerMcpServerName } from './scheduler/injection';
 import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBoot';
 import { RequestLedger } from './requests/requestLedger';
 import { answerRequest } from './requests/answerRequest';
-import { TodoStore } from './todos/store';
+import { TodoStore, todosDirName } from './todos/store';
 import { createTodoRegistry, type TodoReadArgs, type TodoRegistry } from './todos/registry';
 import type { TodoUpdateArgs } from './todos/merge';
 import { getTodoReminderIntervalMs } from './todos/nag';
 import { TodoReminderEngine } from './todos/reminderEngine';
-import { createRepositoryIdentityReader, groupTodoProjects, runGitInFolder, type TodoProject, type TodoProjectMember } from './todos/projects';
+import { createRepositoryIdentityReader, createRepositoryRootCommitFile, groupTodoProjects, runGitInFolder, type RepositoryIdentity, type RepositoryIdentityReader, type TodoProject, type TodoProjectMember, type TodoProjectReadMode } from './todos/projects';
 import { createTodoBoard, type TodoBoard, type TodoSessionActivity } from './todos/board';
 import { createTodoTools, type TodoTools } from './todos/tools';
 import { createTodoMidTurn, getTodoInboxDir, type TodoMidTurn } from './todos/midTurn';
@@ -1159,33 +1159,67 @@ function takeTodoPromptReminder(key: SessionKey): string | null {
 /** The staleness reminder's poll (`todos/reminderEngine.ts`), built at boot and started once the sessions are restored. */
 let todoReminderEngine: TodoReminderEngine | null = null;
 
-/** Which folders are one git repository (`todos/projects.ts`), cached. */
-const readTodoRepositoryIdentity = createRepositoryIdentityReader(runGitInFolder);
+let todoRepositories: RepositoryIdentityReader | null = null;
+
+/** Which folders are one git repository (`todos/projects.ts`), cached; the root commits persist in `DATA_DIR/todos`. */
+function getTodoRepositories(): RepositoryIdentityReader {
+  todoRepositories ??= createRepositoryIdentityReader({
+    runGit: runGitInFolder,
+    rootCommitStore: createRepositoryRootCommitFile(path.join(getDataDir(), todosDirName)),
+  });
+  return todoRepositories;
+}
 
 /** What the boards need of the Jira connector (D55, D57); set at boot when it is loaded. */
 let todoJiraConversations: Pick<JiraConnector, 'getConversationRepositoryNames' | 'getConversationTitle'> | null = null;
 
-/** Every bound conversation as the project grouping sees it, in binding order. */
-async function listTodoProjectMembers(): Promise<TodoProjectMember[]> {
-  return Promise.all(state.listBindings().map(async ({ key, data }): Promise<TodoProjectMember> => {
+/**
+ * Every bound conversation as the project grouping sees it, in binding order; `getIdentity` names a bound folder's
+ * repository, `undefined` = not known yet.
+ */
+async function listTodoProjectMembersBy(
+  getIdentity: (workDir: string) => Promise<RepositoryIdentity | null | undefined>,
+): Promise<Array<TodoProjectMember | undefined>> {
+  return Promise.all(state.listBindings().map(async ({ key, data }): Promise<TodoProjectMember | undefined> => {
     const conversationKey = keyToString(key);
     if (key.platform === 'jira') {
       return { conversationKey, workDir: null, identity: null, jiraRepositoryNames: todoJiraConversations?.getConversationRepositoryNames(key) ?? null };
     }
     const decision = resolveBoundWorkDir(ENV.workRoot, data);
     const workDir = decision.kind === 'proceed' ? decision.workDir : null;
-    return { conversationKey, workDir, identity: workDir === null ? null : await readTodoRepositoryIdentity(workDir) };
+    if (workDir === null) return { conversationKey, workDir, identity: null };
+    const identity = await getIdentity(workDir);
+    return identity === undefined ? undefined : { conversationKey, workDir, identity };
   }));
 }
 
-/** The instance's project boards (D15, D16, D57). */
+/** The instance's project boards (D15, D16, D57), waiting for git where a folder's read is due. */
 async function listTodoProjects(): Promise<TodoProject[]> {
-  return groupTodoProjects(await listTodoProjectMembers(), state.getTodoProjectOverrides());
+  const repositories = getTodoRepositories();
+  const members = await listTodoProjectMembersBy((workDir) => repositories.read(workDir));
+  return groupTodoProjects(members.filter((member) => member !== undefined), state.getTodoProjectOverrides());
 }
 
-async function getTodoProjectOf(key: SessionKey): Promise<TodoProject | null> {
+/**
+ * The project boards as known NOW, never waiting for git (a prompt, the mid-turn poll): `null` while a bound folder
+ * was never read — its read starts now, with every other one due.
+ */
+async function peekTodoProjects(): Promise<TodoProject[] | null> {
+  const repositories = getTodoRepositories();
+  const members = await listTodoProjectMembersBy(async (workDir) => repositories.peek(workDir));
+  return members.every((member) => member !== undefined) ? groupTodoProjects(members, state.getTodoProjectOverrides()) : null;
+}
+
+/** The bound folders' due repository reads start in the background (boot, a bind), so the next prompts find the grouping known. */
+function warmTodoProjects(): void {
+  if (!readTodoSettings().isEnabled) return;
+  void peekTodoProjects().catch((e: unknown) => console.error('[todos] the bound folders\' repositories could not be read:', e instanceof Error ? e.message : e));
+}
+
+async function getTodoProjectOf(key: SessionKey, readMode: TodoProjectReadMode): Promise<TodoProject | null> {
   const conversationKey = keyToString(key);
-  return (await listTodoProjects()).find((project) => project.memberKeys.includes(conversationKey)) ?? null;
+  const projects = readMode === 'wait' ? await listTodoProjects() : await peekTodoProjects();
+  return projects?.find((project) => project.memberKeys.includes(conversationKey)) ?? null;
 }
 
 /** How a conversation is named on a board and in the picker: `#topic (folder)`, or the issue `PROJ-123 «summary»` (D55). */
@@ -6141,6 +6175,7 @@ async function applyBinding(
   // than start a fresh one.
   const peers = state.listKeysForSubdir(subdir).filter(k => checkIsTelegramKey(k) && keyToString(k) !== keyToString(key));
   await state.setBinding(key, subdir, options.topicName !== undefined ? { topicName: options.topicName } : {});
+  warmTodoProjects();
 
   const message = peers.length > 0
     ? t('thread.bind_collision', {
@@ -13614,6 +13649,7 @@ export async function startBot(): Promise<void> {
     pollIntervalMs: ENV.testTimings.todoReminderPollMs,
   });
   getTodoMidTurn().clearInboxes();
+  warmTodoProjects();
 
   // Snapshot the persisted transient status-frame ids (S2) NOW, before reattach
   // can run any frame-id setter. A reattached session's first frame lifecycle
