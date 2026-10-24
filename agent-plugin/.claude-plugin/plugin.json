@@ -1,0 +1,7 @@
+{
+  "name": "charness",
+  "description": "Skills Charness gives the agents it starts: orchestrating detached workers with the bot's own tools",
+  "author": { "name": "Sergei Solo" },
+  "homepage": "https://github.com/olosegres/charness",
+  "license": "MIT"
+}

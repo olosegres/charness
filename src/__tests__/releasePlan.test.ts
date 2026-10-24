@@ -67,10 +67,12 @@ function plan(commits: ReleaseCommit[], overrides: Partial<Parameters<typeof cre
 }
 
 describe('what ships', () => {
-  test('source, the STT sidecar and nothing else under the shipped roots', () => {
+  test('source, the STT sidecar, the agent skills and nothing else under the shipped roots', () => {
     assert.equal(checkIsShippedPath('src/bot.ts'), true);
     assert.equal(checkIsShippedPath('src/adapters/claudeCliAdapter.ts'), true);
     assert.equal(checkIsShippedPath('stt/gigaam_sidecar.py'), true);
+    assert.equal(checkIsShippedPath('agent-plugin/skills/charness-manager/SKILL.md'), true, 'a skill-only change is a release change');
+    assert.equal(checkIsShippedPath('agent-plugin/.claude-plugin/plugin.json'), true);
     assert.equal(checkIsShippedPath('src/__tests__/bot.test.ts'), false);
     assert.equal(checkIsShippedPath('src/release/releasePlan.ts'), false);
     assert.equal(checkIsShippedPath('src/platform/README.md'), false);
@@ -394,9 +396,11 @@ describe('the pack check', () => {
   });
 
   test('every missing required file is named', () => {
-    const paths = goodFiles.filter((path) => path !== 'CHANGELOG.md' && path !== 'stt/gigaam_sidecar.py');
+    const missing = ['CHANGELOG.md', 'stt/gigaam_sidecar.py', 'agent-plugin/.claude-plugin/plugin.json'];
+    const paths = goodFiles.filter((path) => !missing.includes(path));
     assert.deepEqual(getPackViolations(createListing(paths), '3.3.0'), [
       'missing from the package: stt/gigaam_sidecar.py',
+      'missing from the package: agent-plugin/.claude-plugin/plugin.json',
       'missing from the package: CHANGELOG.md',
     ]);
   });

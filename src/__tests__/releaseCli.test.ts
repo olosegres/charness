@@ -25,7 +25,7 @@ const cliTimeoutMs = 90_000;
 const initialPackage = {
   name: 'demo-package',
   version: '3.2.0',
-  files: ['dist/', 'stt/gigaam_sidecar.py', 'README.md', 'LICENSE', 'CHANGELOG.md'],
+  files: ['dist/', 'stt/gigaam_sidecar.py', 'agent-plugin/', 'README.md', 'LICENSE', 'CHANGELOG.md'],
   // No "./": npm >= 11.10 drops a "./dist/…" bin entry at publish, and check-pack refuses it.
   bin: { charness: 'dist/cli.js' },
   scripts: { version: 'tsx src/release/cli.ts changelog && git add CHANGELOG.md', test: 'node --test' },
@@ -328,6 +328,9 @@ describe('check-pack', () => {
     writeRepoFile('dist/cli.js', '#!/usr/bin/env node\nprocess.stdout.write(`${require("../package.json").version}\\n`);\n');
     fs.chmodSync(path.join(repoDir, 'dist', 'cli.js'), 0o755);
     writeRepoFile(sidecarPath, '# sidecar\n');
+    // The skills the bot gives its agents; the manifest sits in a dot-folder npm must still pack.
+    writeRepoFile('agent-plugin/.claude-plugin/plugin.json', '{ "name": "charness" }\n');
+    writeRepoFile('agent-plugin/skills/charness-manager/SKILL.md', '---\nname: charness-manager\ndescription: d\n---\n');
     writeRepoFile('LICENSE', 'MIT\n');
   }
 

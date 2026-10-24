@@ -25,6 +25,7 @@
   "files": [
     "dist/",
     "stt/gigaam_sidecar.py",
+    "agent-plugin/",
     "CHANGELOG.md",
     "README.md",
     "DEVELOPMENT.md",

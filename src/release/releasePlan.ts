@@ -16,6 +16,8 @@ export const requiredPackFiles = [
   'package.json',
   'dist/cli.js',
   'stt/gigaam_sidecar.py',
+  'agent-plugin/.claude-plugin/plugin.json',
+  'agent-plugin/skills/charness-manager/SKILL.md',
   'CHANGELOG.md',
   'README.md',
   'LICENSE',
@@ -30,6 +32,8 @@ const shippedSourceRoot = 'src/';
 const shippedSourceExtension = '.ts';
 const unshippedSourcePrefixes = ['src/__tests__/', 'src/release/'];
 const shippedExtraPaths = ['stt/gigaam_sidecar.py'];
+/** Folders shipped as they are: the skills the bot gives its agents. */
+const shippedExtraPrefixes = ['agent-plugin/'];
 const shippedManifestFields = ['dependencies', 'bin', 'engines', 'files', 'main'] as const;
 
 const featCommitType = 'feat';
@@ -101,6 +105,7 @@ export class ReleaseError extends Error {}
 /** @description Whether a path is source that ships in the package; `package.json` is decided by its content. */
 export function checkIsShippedPath(filePath: string): boolean {
   if (shippedExtraPaths.includes(filePath)) return true;
+  if (shippedExtraPrefixes.some((prefix) => filePath.startsWith(prefix))) return true;
   if (!filePath.startsWith(shippedSourceRoot) || !filePath.endsWith(shippedSourceExtension)) return false;
   return !unshippedSourcePrefixes.some((prefix) => filePath.startsWith(prefix));
 }
