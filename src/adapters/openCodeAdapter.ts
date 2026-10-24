@@ -3706,7 +3706,15 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  /** @description Whether no active session is working — by the adapter's own view and by each directory's status. */
+  /**
+   * @description Whether no active session is working — by the adapter's own view and by each directory's status.
+   *
+   * The limit, known and accepted: only the folders of the bot's ACTIVE sessions are read. OpenCode offers no
+   * server-wide busy reading — `GET /session/status` answers for one folder instance, `GET /project` lists git roots
+   * (not the folders instances are keyed by), and the event stream reports only changes, so at boot it knows no
+   * earlier state. A turn running in a folder no active bot session uses (another client on the bot's server) is not
+   * seen and would end with the restart; the step runs once per bot start and only while a replacement is pending.
+   */
   private async checkIsEveryActiveSessionIdle(): Promise<boolean> {
     const activeSessions = Array.from(this.sessions.values()).filter((session) => session.isActive);
     if (activeSessions.some((session) => session.isBusy)) return false;
