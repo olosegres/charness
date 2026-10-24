@@ -77,6 +77,7 @@ export const jaDict: Record<string, string> = {
     '/quitall — 実行中の全エージェントを終了\n' +
     '/stt — 音声認識の設定\n' +
     '/update — ボットの更新：自動、通知のみ、オフ\n' +
+    '/todo — 全プロジェクトのエージェントのタスクリストと設定\n' +
     '/topic — フォルダ上に別のトピックを開く\n' +
     '/whoami /version — デバッグ\n\n' +
     'エージェントと話すには — トピックスレッドを開いてください。',
@@ -95,6 +96,7 @@ export const jaDict: Record<string, string> = {
     '/quit /status /output — 制御\n' +
     '/compact — エージェントのコンテキストを圧縮\n' +
     '/compact_on_idle — アイドル後に自動圧縮（切り替え）\n' +
+    '/todo — エージェントが公開したタスクリストとそのプロジェクト\n' +
     '/limits — 各アカウントとプロバイダーの使用状況。タップするとこのトピックを切り替えます\n' +
     '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
     '/accounts — Claude アカウントと OpenCode プロバイダー（切り替え、追加、再ログイン、削除、接続、切断）\n' +

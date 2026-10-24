@@ -77,6 +77,7 @@ export const frDict: Record<string, string> = {
     '/quitall — arrêter tous les agents en cours\n' +
     '/stt — réglages de la reconnaissance vocale\n' +
     '/update — mises à jour du bot : automatiques, notifier seulement, désactivées\n' +
+    '/todo — les listes de tâches des agents de chaque projet ; leurs réglages\n' +
     '/topic — ouvrir un autre fil sur un dossier\n' +
     '/whoami /version — débogage\n\n' +
     'Pour parler à un agent — ouvrez un fil thématique.',
@@ -95,6 +96,7 @@ export const frDict: Record<string, string> = {
     '/quit /status /output — contrôle\n' +
     '/compact — compacter le contexte de l\'agent\n' +
     '/compact_on_idle — compactage auto après inactivité (bascule)\n' +
+    '/todo — la liste de tâches publiée de l\'agent et son projet\n' +
     '/limits — usage de chaque compte et fournisseur ; touchez-en un pour y basculer ce sujet\n' +
     '/limits_autoswitch — bascule automatique de modèle en cas de limite d’usage (liste de secours, bascule, attente)\n' +
     '/accounts — comptes Claude et fournisseurs OpenCode (basculer, ajouter, reconnecter, retirer, connecter, déconnecter)\n' +

@@ -77,6 +77,7 @@ export const deDict: Record<string, string> = {
     '/quitall — jeden laufenden Agent beenden\n' +
     '/stt — Spracherkennung einstellen\n' +
     '/update — Bot-Updates: automatisch, nur benachrichtigen, aus\n' +
+    '/todo — die Aufgabenlisten der Agenten aller Projekte; ihre Einstellungen\n' +
     '/topic — weiteren Thread auf einem Ordner öffnen\n' +
     '/whoami /version — Debug\n\n' +
     'Um mit einem Agent zu sprechen — öffne einen thematischen Thread.',
@@ -95,6 +96,7 @@ export const deDict: Record<string, string> = {
     '/quit /status /output — Steuerung\n' +
     '/compact — Agent-Kontext komprimieren\n' +
     '/compact_on_idle — bei Leerlauf automatisch komprimieren (Umschalter)\n' +
+    '/todo — die veröffentlichte Aufgabenliste des Agenten und sein Projekt\n' +
     '/limits — Verbrauch aller Konten und Provider; tippe auf eines, um dieses Thema umzustellen\n' +
     '/limits_autoswitch — automatischer Modellwechsel bei Nutzungslimit (Ersatzliste, Wechsel, Warten)\n' +
     '/accounts — Claude-Konten und OpenCode-Provider (wechseln, hinzufügen, neu anmelden, entfernen, verbinden, trennen)\n' +

@@ -77,6 +77,7 @@ export const uzDict: Record<string, string> = {
     '/quitall — har bir ishlayotgan agentni to‘xtating\n' +
     '/stt — ovozni aniqlash sozlamalari\n' +
     '/update — bot yangilanishlari: avtomatik, faqat xabar, o‘chiq\n' +
+    '/todo — barcha loyihalar agentlarining vazifa ro\'yxatlari; ularning sozlamalari\n' +
     '/topic — papkada yana bitta mavzu ochish\n' +
     '/whoami /version — debugging\n\n' +
     'Agent bilan gaplashish uchun — mavzu mavzusini oching.',
@@ -95,6 +96,7 @@ export const uzDict: Record<string, string> = {
     '/quit /status /output — boshqaruv\n' +
     '/compact — agent kontekstini siqish\n' +
     '/compact_on_idle — bo‘sh turgandan keyin avtosiqish (almashtirgich)\n' +
+    '/todo — agentning e\'lon qilingan vazifalar ro\'yxati va uning loyihasi\n' +
     '/limits — har bir hisob va provayderning sarfi; bu mavzuni almashtirish uchun birini bosing\n' +
     '/limits_autoswitch — foydalanish limitida modelni avtomatik almashtirish (zaxira ro‘yxat, almashtirish, kutish)\n' +
     '/accounts — Claude hisoblari va OpenCode provayderlari (almashtirish, qo‘shish, qayta kirish, olib tashlash, ulash, uzish)\n' +

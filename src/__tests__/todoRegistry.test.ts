@@ -21,6 +21,7 @@ import { formatOwnTodoList, getTodoListView, getTrimmedTodoTitle } from '../todo
 import { createTodoRegistry, todoHistoryMaxItems } from '../todos/registry';
 import type { TodoTopicFile } from '../todos/types';
 import { renderTodoTopicView } from '../connectors/telegram/commands/todo';
+import { getKeyInLang, localeCodes } from '../i18n';
 
 const topicKey = makeTelegramKey(-1001111111111, 42);
 const jiraKey = makeJiraKey('PROJ-7');
@@ -243,5 +244,15 @@ describe('the registry service', () => {
     assert.equal(registry.getFinalAnswerNote(topicKey, nowMs + 5 * minuteMs), null, 'a "still accurate" call counts as touched');
     registry.updateTodos(topicKey, { items: [{ id: 't1', status: 'done' }] });
     assert.equal(registry.getFinalAnswerNote(topicKey, nowMs + 20 * minuteMs), null, 'nothing in work: no hint');
+  });
+});
+
+describe('/todo is found from /help', () => {
+  it('every locale\'s help for General and for a bound topic names /todo', () => {
+    for (const locale of localeCodes) {
+      for (const helpKey of ['help.general', 'help.thread_bound']) {
+        assert.match(getKeyInLang(locale, helpKey) ?? '', /(^|\n)\/todo — /, `${locale} ${helpKey}`);
+      }
+    }
   });
 });

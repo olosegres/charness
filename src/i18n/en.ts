@@ -81,6 +81,7 @@ export const enDict: Record<string, string> = {
     '/quitall — quit every running agent\n' +
     '/stt — voice recognition settings\n' +
     '/update — bot updates: automatic, notify only, off\n' +
+    '/todo — the agents\' todo lists of every project; their settings\n' +
     '/topic — open another topic on a folder\n' +
     '/whoami /version — debug\n\n' +
     'To talk to an agent — open a topical thread.',
@@ -99,6 +100,7 @@ export const enDict: Record<string, string> = {
     '/quit /status /output — control\n' +
     '/compact — compact agent context\n' +
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
+    '/todo — the agent\'s published todo list and the project it shares a board with\n' +
     '/limits — usage of every account and provider; tap one to switch this topic\n' +
     '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
     '/accounts — Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)\n' +

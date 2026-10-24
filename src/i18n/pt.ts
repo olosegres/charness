@@ -77,6 +77,7 @@ export const ptDict: Record<string, string> = {
     '/quitall — parar todos os agentes em execução\n' +
     '/stt — configurações de reconhecimento de voz\n' +
     '/update — atualizações do bot: automáticas, só avisar, desligadas\n' +
+    '/todo — as listas de tarefas dos agentes de cada projeto; suas configurações\n' +
     '/topic — abrir outro tópico numa pasta\n' +
     '/whoami /version — depuração\n\n' +
     'Para falar com um agente — abre um tópico temático.',
@@ -95,6 +96,7 @@ export const ptDict: Record<string, string> = {
     '/quit /status /output — controlo\n' +
     '/compact — compactar o contexto do agente\n' +
     '/compact_on_idle — compactar automaticamente após inatividade (alternar)\n' +
+    '/todo — a lista de tarefas publicada do agente e o seu projeto\n' +
     '/limits — uso de cada conta e fornecedor; toca num para trocar este tópico\n' +
     '/limits_autoswitch — troca automática de modelo ao atingir um limite de uso (lista de reserva, troca, espera)\n' +
     '/accounts — contas Claude e fornecedores OpenCode (trocar, adicionar, reiniciar sessão, remover, ligar, desligar)\n' +

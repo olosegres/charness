@@ -77,6 +77,7 @@ export const zhDict: Record<string, string> = {
     '/quitall — 退出所有运行中的代理\n' +
     '/stt — 语音识别设置\n' +
     '/update — 机器人更新：自动、仅通知、关闭\n' +
+    '/todo — 所有项目中智能体的任务列表及其设置\n' +
     '/topic — 在某个文件夹上再开一个话题\n' +
     '/whoami /version — 调试\n\n' +
     '要与代理对话 — 打开一个主题话题。',
@@ -95,6 +96,7 @@ export const zhDict: Record<string, string> = {
     '/quit /status /output — 控制\n' +
     '/compact — 压缩代理上下文\n' +
     '/compact_on_idle — 空闲后自动压缩（开关）\n' +
+    '/todo — 智能体发布的任务列表及其所在项目\n' +
     '/limits — 各账号和提供方的用量；点按其中一个即可切换此话题\n' +
     '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
     '/accounts — Claude 账号与 OpenCode 提供商（切换、添加、重新登录、移除、连接、断开）\n' +

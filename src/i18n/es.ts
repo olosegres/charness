@@ -77,6 +77,7 @@ export const esDict: Record<string, string> = {
     '/quitall — detener todos los agentes en ejecución\n' +
     '/stt — ajustes del reconocimiento de voz\n' +
     '/update — actualizaciones del bot: automáticas, solo avisar, apagadas\n' +
+    '/todo — las listas de tareas de los agentes de cada proyecto; sus ajustes\n' +
     '/topic — abrir otro hilo en una carpeta\n' +
     '/whoami /version — depuración\n\n' +
     'Para hablar con un agente — abre un hilo temático.',
@@ -95,6 +96,7 @@ export const esDict: Record<string, string> = {
     '/quit /status /output — control\n' +
     '/compact — compactar el contexto del agente\n' +
     '/compact_on_idle — compactar automáticamente tras inactividad (conmutador)\n' +
+    '/todo — la lista de tareas publicada del agente y su proyecto\n' +
     '/limits — uso de cada cuenta y proveedor; toca uno para cambiar este tema\n' +
     '/limits_autoswitch — cambio automático de modelo al alcanzar un límite de uso (lista de reserva, cambio, espera)\n' +
     '/accounts — cuentas de Claude y proveedores de OpenCode (cambiar, añadir, reiniciar sesión, quitar, conectar, desconectar)\n' +
