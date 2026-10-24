@@ -112,7 +112,8 @@ export async function postToSession(
   if (isWaitingForTurn) {
     // The session found live may be asleep by now: a per-turn conversation stops its process right after the turn
     // waited out above, and a prompt written to the stopped process is dropped. The ensure queues behind a stop in
-    // progress, resumes the session when it is over, and is a no-op on a live one.
+    // progress, resumes the session when it is over, and is a no-op on a live one. It cannot slip in BESIDE the stop:
+    // the stop is queued in the same tick the turn ends (`handleAgentTurnEnded`), before any poll can see the idle.
     const woken = await deps.ensureSession(conversationKey, fallbackAdapterName);
     if (!woken.ok) return { ok: false, reason: woken.reason };
     isFresh = isFresh || woken.isFresh;

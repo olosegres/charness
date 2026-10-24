@@ -5090,6 +5090,11 @@ const autoStopUnsupportedLoggedKeys = new Set<string>();
  * and that turn ends here too) or the process still works (a background task,
  * input not yet taken in). The session sleeps; the next trigger resumes it with
  * the prompt cache warm.
+ *
+ * The stop is QUEUED here, in the same tick the adapter marks the turn done (nothing awaits in between): a
+ * `postToSession` that polled the session idle and ensures it again (`postToSession.ts`) therefore always finds
+ * the stop already on the transition queue and runs after it. Keep it that way — an await ahead of the queueing
+ * would let that ensure run beside the stop and forward to the process it ends.
  */
 function handleAgentTurnEnded(key: SessionKey): void {
   noteThreadActivity(key);
