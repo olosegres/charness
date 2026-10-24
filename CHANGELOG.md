@@ -5,7 +5,8 @@
 **A `/claude` sent right after `/quit` no longer loses its new session at start.** The ended session killed its tmux session a
 second time, by name and without waiting, after the stop had killed it already; on a busy host that second kill could run once
 the new session had created its own tmux session of the same name, and the start then failed with "the CLI exited before its
-initialize handshake". An explicit stop kills the tmux session once.
+initialize handshake". An explicit stop kills the tmux session once. And `/quit` now says «stopped» only when the session is
+stopped: a `/claude` sent on that reply used to be told "already running", and then nothing ran.
 
 **A prompt that waited for the agent's running turn is no longer lost when the process is stopped right after that turn.** A Jira
 hand-over or a scheduled run that arrived while the agent was still working was written to the process the per-turn stop had

@@ -720,6 +720,12 @@ export interface AgentAdapter extends EventEmitter {
    * tmux TUI and OpenCode are never auto-stopped (L-D8).
    */
   suspendSession?(key: SessionKey): Promise<void>;
+  /**
+   * @description {@link stopSession}, resolving once the stop is DONE: the process gone and the session dropped, so
+   * `checkIsActive` is false and a start under the same key finds nothing running. Optional: a backend whose `stopSession`
+   * already finishes at once (or only queues its teardown) omits it. `/quit` waits on it before it says «stopped».
+   */
+  stopSessionAndWait?(key: SessionKey): Promise<void>;
   checkIsActive(key: SessionKey): boolean;
 
   /**

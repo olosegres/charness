@@ -1093,6 +1093,11 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     void this.stopSessionInternal(key);
   }
 
+  /** The stop of {@link stopSession}, resolved once the process is gone and the session dropped (joins a stop already in flight). */
+  async stopSessionAndWait(key: SessionKey): Promise<void> {
+    await this.stopSessionInternal(key);
+  }
+
   /**
    * @description Stop the process but KEEP the session resumable (lifecycle plan
    * L3): the same teardown as a stop (SIGTERM, tmux kill, host dir removed —

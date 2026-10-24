@@ -8118,8 +8118,12 @@ command(['quit', 'q'], async (_ctx, key) => {
     return;
   }
 
-  // OpenCode, terminal, any future adapter: tear down via stopSession.
-  adapter.stopSession(key);
+  // OpenCode, terminal, any future adapter: tear down via stopSession. «Stopped» is said once it is: a `/claude` sent on the
+  // reply must find the session gone, not «already running» — as one transition, so a start or resume waits behind it.
+  await sessionTransitions.run(keyToString(key), async () => {
+    if (adapter.stopSessionAndWait) await adapter.stopSessionAndWait(key);
+    else adapter.stopSession(key);
+  });
   // Explicit quit releases the session for good — no auto-reattach later.
   await state.clearAgentSessionIds(key);
   await replyToThread(key, t('agent.stopped', { label: adapter.label }));

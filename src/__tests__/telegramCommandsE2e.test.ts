@@ -64,7 +64,7 @@ import { getSttPaths } from '../stt/sttInstall';
 import { appendInstallProgress, holdInstallLock, releaseInstallLock, writeInstalledMarker } from './fixtures/sttInstallFiles';
 import type { FallbackChainEntry } from '../utils/fallbackChain';
 import type { ScheduleRecord } from '../scheduler/types';
-import { fakeAskQuestion, fakeAskToolName, fakeClaudeCodeVersionOverrideFileName, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudePrompt, type FakeClaudeToolCall, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
+import { fakeAskQuestion, fakeAskToolName, fakeClaudeCodeVersionOverrideFileName, fakeClaudeExitFlushDelayFileName, fakeClaudeLogFileNames, getFlagValues, getLaunchSessionId, type FakeClaudePrompt, type FakeClaudeToolCall, type FakeClaudeTurn } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -130,6 +130,9 @@ const escToCancelHint = '/esc to cancel';
 const afterCancelPromptLabel = 'ESC-1';
 /** The two prompts of the per-turn steps (L5): the first runs in a fresh process, the second in a resumed one. */
 const perTurnPromptLabels = ['PT-1', 'PT-2'] as const;
+const slowQuitPromptLabel = 'QUIT-1';
+/** How long after the stop signal the fake process leaves: far longer than the Bot API round trip of the reply to `/quit`. */
+const slowProcessExitMs = 1500;
 /** The prompts of the per-turn pick on an OLD CLI: a fresh start whose process must survive its turn, then a resume through the ensure that must keep the pick. */
 const perTurnOldCliPromptLabels = ['PT-0', 'PT-3'] as const;
 /** A per-turn stop follows the result at once — far inside the 55-minute idle window, which is not shortened here. */
@@ -1027,6 +1030,26 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     assert.equal(topic.listMessages().filter((message) => message.text === fakeAskQuestion.longOptionLabel).length, 1, 'posted once');
   });
 
+  it('a /claude sent on the reply to /quit starts a fresh session, though the process takes its time to leave', async () => {
+    const exitDelayPath = path.join(getLayout().fakeStateDir, fakeClaudeExitFlushDelayFileName);
+    // A process that took a turn writes its transcript metadata back a moment after the stop signal: the stop is not instant.
+    fs.writeFileSync(exitDelayPath, slowProcessExitMs.toString());
+    try {
+      fakeTelegram.pushOperatorMessage(topicThreadId, `${slowQuitPromptLabel} [fake:answer] a turn, so the process has something to write back`);
+      await getCharness().waitFor('the turn of the agent that will be quit', agentStartTimeoutMs, () => getAgentTurns(slowQuitPromptLabel).length === 1);
+      const [quitTurn] = getAgentTurns(slowQuitPromptLabel);
+      const launchesBefore = getSessionLaunches().length;
+
+      await topic.sendAndAwaitReply('/quit', 'stopped');
+      assert.equal(checkIsProcessAlive(quitTurn.pid), false, '«stopped» is said once the process is gone');
+      await topic.sendAndAwaitReply('/claude', 'ready in');
+      assert.ok(!topic.listMessages().some((message) => message.text.includes('already running')), 'nothing is «already running» after «stopped»');
+      assert.equal(getSessionLaunches().length, launchesBefore + 1, 'the /claude started a fresh session');
+    } finally {
+      fs.rmSync(exitDelayPath, { force: true });
+    }
+  });
+
   it('/quit tears down a pending /login: its pty ends', async () => {
     fs.rmSync(path.join(authStateDir, 'logged-in'), { force: true });
     await topic.sendAndAwaitReply('/login', fakeLoginUrl);
@@ -1137,7 +1160,8 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await getCharness().waitFor('the first prompt to reach the agent', agentStartTimeoutMs, () => getAgentTurns(perTurnPromptLabels[0]).length === 1);
     const [firstTurn] = getAgentTurns(perTurnPromptLabels[0]);
     await getCharness().waitFor('the process stopped right after its result', perTurnStopTimeoutMs, () => !checkIsProcessAlive(firstTurn.pid));
-    assert.ok(getCharness().output.includes(`[compact-on-idle] ${threadKeyString} process stopped; the session sleeps`), 'the per-turn stop is the idle stop\'s teardown');
+    // The per-turn stop is the idle stop's teardown; its line follows the bot's own tmux kill, after the process is gone.
+    await getCharness().waitFor('the per-turn stop logged by the idle stop\'s teardown', perTurnStopTimeoutMs, () => getCharness().output.slice(outputBefore).includes(`[compact-on-idle] ${threadKeyString} process stopped; the session sleeps`));
     assert.ok(!getCharness().output.slice(outputBefore).includes(`[ClaudeJson] session ${threadKeyString} exited unexpectedly`));
     await getCharness().waitFor('the session id persisted', replyTimeoutMs, () => Boolean(readPersistedState().agents?.[threadKeyString]?.claudeSessionId));
     assert.ok(readPersistedState().agents?.[threadKeyString]?.claudeSessionId, 'the session id is kept: the conversation sleeps');
