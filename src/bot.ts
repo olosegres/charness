@@ -25,6 +25,7 @@ import {
   registerClaudeConfigDirReader,
   registerClaudeRateLimitSink,
   registerClaudeTurnCostSink,
+  registerOpenCodeServerUpBudgetMs,
   registerThreadLocaleReader,
   stopAllAdaptersFor as sweepAdapters,
   getKnownAdapterNames,
@@ -13053,6 +13054,7 @@ export async function startBot(): Promise<void> {
   registerClaudeConfigDirReader(resolveThreadClaudeConfigDir);
   registerClaudeRateLimitSink(onClaudeRateLimitEvent);
   registerClaudeTurnCostSink(onClaudeTurnCost);
+  if (ENV.testTimings.openCodeServerUpBudgetMs !== undefined) registerOpenCodeServerUpBudgetMs(ENV.testTimings.openCodeServerUpBudgetMs);
   // The usage cache: a first poll now (off the boot path), then the timer.
   claudeUsageRefresher.start();
   void claudeUsageRefresher.refreshAll();

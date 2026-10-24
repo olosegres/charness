@@ -51,6 +51,10 @@ function checkAdapterTakesClaudeConfigDirReader(adapter: AgentAdapter): adapter 
   return typeof (adapter as { setClaudeConfigDirReader?: unknown }).setClaudeConfigDirReader === 'function';
 }
 
+function checkAdapterTakesServerUpBudget(adapter: AgentAdapter): adapter is AgentAdapter & { setServerRestartRetryBudgetMs(budgetMs: number): void } {
+  return typeof (adapter as { setServerRestartRetryBudgetMs?: unknown }).setServerRestartRetryBudgetMs === 'function';
+}
+
 function checkAdapterTakesJsonStreamTailWriter(adapter: AgentAdapter): adapter is AgentAdapter & { setJsonStreamTailWriter(writer: JsonStreamTailWriter): void } {
   return typeof (adapter as { setJsonStreamTailWriter?: unknown }).setJsonStreamTailWriter === 'function';
 }
@@ -153,6 +157,21 @@ export function registerSeenWatermarkWriter(writer: SeenWatermarkWriter): void {
   seenWatermarkWriter = writer;
   for (const adapter of adapterInstances.values()) {
     if (checkAdapterTakesWatermarkWriter(adapter)) adapter.setSeenWatermarkWriter(writer);
+  }
+}
+
+/** A test instance's bound on the retries that bring the OpenCode server up — same late-wiring idiom; `null`: the adapter's own. */
+let openCodeServerUpBudgetMs: number | null = null;
+
+/**
+ * @description Register a test instance's shorter bound on the retries that bring the OpenCode server up
+ * (`CHARNESS_TEST_TIMINGS` `openCodeServerUpBudgetMs`), applied to the instance whether it exists already or is
+ * created later. Never called in production: the adapter keeps its 60 s.
+ */
+export function registerOpenCodeServerUpBudgetMs(budgetMs: number): void {
+  openCodeServerUpBudgetMs = budgetMs;
+  for (const adapter of adapterInstances.values()) {
+    if (checkAdapterTakesServerUpBudget(adapter)) adapter.setServerRestartRetryBudgetMs(budgetMs);
   }
 }
 
@@ -337,6 +356,9 @@ export function getAdapter(name: string): AgentAdapter {
     }
     if (claudeTurnCostSink && checkAdapterTakesClaudeTurnCostSink(adapter)) {
       adapter.setClaudeTurnCostSink(claudeTurnCostSink);
+    }
+    if (openCodeServerUpBudgetMs !== null && checkAdapterTakesServerUpBudget(adapter)) {
+      adapter.setServerRestartRetryBudgetMs(openCodeServerUpBudgetMs);
     }
   }
   return adapter;

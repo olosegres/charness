@@ -64,7 +64,7 @@ const inFlightPromptLabel = 'RST-B';
 
 const replyTimeoutMs = 20 * 1000;
 const restartTimeoutMs = 60 * 1000;
-/** The retries' 60 s budget, plus the attempts that wait out a spawn and the install calls. */
+/** The retries' budget (60 s; 10 s in this flow), plus the attempts that wait out a spawn and the install calls. */
 const allAttemptsFailTimeoutMs = 3 * 60 * 1000;
 const afterFailurePromptLabel = 'RST-C';
 /** The log line of a failed attempt to bring the server up (`openCodeAdapter.ts`). */
@@ -164,7 +164,8 @@ describe('An OpenCode server that goes down, end to end: built charness, fake Bo
       CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
       OPENCODE_URL: openCodeUrl,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
-      ...getTelegramFlowTestTimingsEnv(),
+      // The retries that bring the server up: 10 s instead of 60 s, so the step whose every attempt fails gives up sooner.
+      ...getTelegramFlowTestTimingsEnv({ openCodeServerUpBudgetMs: 10_000 }),
     });
   });
 

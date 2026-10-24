@@ -1754,6 +1754,14 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   private serverRestartRetryBudgetMs = openCodeServerRestartRetryBudgetMs;
 
   /**
+   * @description A test instance's shorter bound on the retries that bring the server up (`CHARNESS_TEST_TIMINGS`,
+   * wired by `createAdapter.registerOpenCodeServerUpBudgetMs`); production keeps {@link openCodeServerRestartRetryBudgetMs}.
+   */
+  setServerRestartRetryBudgetMs(budgetMs: number): void {
+    this.serverRestartRetryBudgetMs = budgetMs;
+  }
+
+  /**
    * Per-thread display-prefs reader, injected by the bot at boot via
    * `createAdapter.registerDisplayPrefsReader` (S4). DELIBERATE deviation from
    * the S2/S3 "adapter stays mode-agnostic" pattern: the sub-agent branch

@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 import { formatTestTimingsBootLine, parseTestTimings, testTimingKeys, testTimingsEnvName, type TestTimings } from '../testTimings';
+import { openCodeServerRestartRetryBudgetMs } from '../adapters/openCodeAdapter';
 import { unconfirmedLimitProbeDelayMs } from '../apiErrorRetry';
 import { jiraPollIntervalMinSeconds } from '../connectors/jira/config';
 import { globalSendIntervalMs } from '../rateLimiter';
@@ -29,6 +30,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['requestFirstPostRetryDelayMs', postRetryDelaysMs[0]],
   ['limitProbeDelayMs', unconfirmedLimitProbeDelayMs],
   ['stateSaveDebounceMs', DEFAULT_SAVE_DEBOUNCE_MS],
+  ['openCodeServerUpBudgetMs', openCodeServerRestartRetryBudgetMs],
 ];
 /** One past the longest delay Node's timers keep: a longer one fires after 1 ms. */
 const beyondTimerMaxMs = 2_147_483_648;

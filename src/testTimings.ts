@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { openCodeServerRestartRetryBudgetMs } from './adapters/openCodeAdapter';
 import { unconfirmedLimitProbeDelayMs } from './apiErrorRetry';
 import { jiraPollIntervalMinSeconds } from './connectors/jira/config';
 import { globalSendIntervalMs } from './rateLimiter';
@@ -10,8 +11,8 @@ import { DEFAULT_SAVE_DEBOUNCE_MS } from './state';
  * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
  * production windows the process-level flows would otherwise wait out in real time (the Telegram send pacer's 2 s, the
  * Jira poll's 10 s floor, the wake-up sweep's minute, the first re-post retry's minute, the two-minute probe of an
- * unconfirmed usage limit, `state.json`'s save debounce). It is NOT a setting: no operator sets it and it is documented
- * only for developers (DEVELOPMENT.md); settings live in `settings.json`.
+ * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries). It is NOT a setting: no
+ * operator sets it and it is documented only for developers (DEVELOPMENT.md); settings live in `settings.json`.
  *
  * Unset (every production instance) = every built-in window as it is. Set, it is validated strictly at boot: an unknown
  * key or a bad value fails the start with the key named, and a valid one prints one line, so an instance that carries it
@@ -47,6 +48,8 @@ const testTimingsSchema = z.strictObject({
    * short, a flow reading the file after what the bot showed reads what it did.
    */
   stateSaveDebounceMs: createShorterWindowSchema(DEFAULT_SAVE_DEBOUNCE_MS).optional(),
+  /** The bound on the retries that bring a downed OpenCode server up (production: `openCodeServerRestartRetryBudgetMs`, 60 s). */
+  openCodeServerUpBudgetMs: createShorterWindowSchema(openCodeServerRestartRetryBudgetMs).optional(),
 });
 
 /** @name TestTimings @description The overrides in force; an absent key keeps its production window. */
