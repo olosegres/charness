@@ -357,6 +357,57 @@ test('compact.closingSectionInstruction substitutes the marker placeholders', ()
   assert.ok(!out.includes('{endMarker}'), 'endMarker placeholder not substituted');
 });
 
+/** The "IN <LANGUAGE>" reply directive each locale bakes into its agent-facing templates. */
+const expectedReplyLang: Record<string, string> = {
+  en: 'IN ENGLISH',
+  ru: 'IN RUSSIAN',
+  de: 'IN GERMAN',
+  fr: 'IN FRENCH',
+  es: 'IN SPANISH',
+  pt: 'IN PORTUGUESE',
+  zh: 'IN CHINESE',
+  ja: 'IN JAPANESE',
+  hi: 'IN HINDI',
+  uz: 'IN UZBEK',
+  ka: 'IN GEORGIAN',
+  uk: 'IN UKRAINIAN',
+};
+
+test('compact.closingSectionInstruction ends the closing section with the numbered next-steps checklist, in every locale', () => {
+  const startMarker = '<<<WHERE_WE_STOPPED>>>';
+  const endMarker = '<<<END_WHERE_WE_STOPPED>>>';
+  const enText = getKeyInLang('en' as Locale, 'compact.closingSectionInstruction');
+  assert.ok(enText, 'en closing instruction missing');
+  for (const loc of localeCodes) {
+    const text = getKeyInLang(loc as Locale, 'compact.closingSectionInstruction');
+    assert.ok(text, `closing instruction missing in ${loc}`);
+    // Agent-facing: the instruction stays English in every locale and only the reply language differs,
+    // so a locale that lagged behind the checklist wording shows up as a diff against `en`.
+    assert.equal(
+      text.replace(expectedReplyLang[loc], expectedReplyLang.en),
+      enText,
+      `${loc} closing instruction drifted from en beyond its reply language`,
+    );
+    assert.ok(text.includes(expectedReplyLang[loc]), `${loc} closing instruction must direct the reply "${expectedReplyLang[loc]}"`);
+
+    const rendered = runWithLocale(loc as Locale, () => t('compact.closingSectionInstruction', { startMarker, endMarker }));
+    const stepsAt = rendered.indexOf('(1) one or two terse sentences');
+    const questionAt = rendered.indexOf('(2) if you asked the user a question');
+    const checklistAt = rendered.indexOf('(3) as the LAST part of the section, right before ' + endMarker);
+    const tailAt = rendered.indexOf('Write nothing after ' + endMarker);
+    assert.ok(stepsAt >= 0 && stepsAt < questionAt, `${loc}: step (1) must come first`);
+    assert.ok(questionAt < checklistAt, `${loc}: the checklist comes after the question restatement`);
+    assert.ok(checklistAt < tailAt, `${loc}: the checklist comes before "write nothing after the end marker"`);
+    assert.ok(rendered.endsWith('Write nothing after ' + endMarker + '.'), `${loc}: nothing may follow the end marker: "${rendered}"`);
+
+    const checklist = rendered.slice(checklistAt, tailAt);
+    assert.match(checklist, /numbered checklist/);
+    assert.match(checklist, /Item 1 is "load these skills" followed by the exact name of every skill that was loaded/);
+    assert.match(checklist, /if none was loaded, leave that item out/);
+    assert.match(checklist, /Invent no new steps/);
+  }
+});
+
 test('compactOnIdle.setThisTopic substitutes the {state}', () => {
   const out = t('compactOnIdle.setThisTopic', { state: 'ON' });
   assert.ok(out.includes('ON'), `expected the state in "${out}"`);
@@ -1130,20 +1181,6 @@ test('agent-facing template reply-language directive varies per locale', () => {
   // The schedule.forwardPromptTemplate keeps English instructions but bakes
   // the TARGET reply language per locale. Each locale must carry a distinct
   // "IN <LANGUAGE>" directive (or the existing ru/en ones).
-  const expectedReplyLang: Record<string, string> = {
-    en: 'IN ENGLISH',
-    ru: 'IN RUSSIAN',
-    de: 'IN GERMAN',
-    fr: 'IN FRENCH',
-    es: 'IN SPANISH',
-    pt: 'IN PORTUGUESE',
-    zh: 'IN CHINESE',
-    ja: 'IN JAPANESE',
-    hi: 'IN HINDI',
-    uz: 'IN UZBEK',
-    ka: 'IN GEORGIAN',
-    uk: 'IN UKRAINIAN',
-  };
   for (const loc of localeCodes) {
     const fwd = getKeyInLang(loc as Locale, 'schedule.forwardPromptTemplate');
     const ivw = getKeyInLang(loc as Locale, 'schedule.interviewPromptTemplate');

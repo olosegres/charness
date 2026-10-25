@@ -300,7 +300,11 @@ export const compactionSummaryGuidance =
  * reloads it after a compaction: the summary drops its text and the fresh
  * session keeps working without the procedure it was following. Naming the
  * skills and saying in plain words that they must be loaded again is the only
- * way the continuing session learns to re-invoke them.
+ * way the continuing session learns to re-invoke them. A compaction that also
+ * carries the per-locale closing section (`compact.closingSectionInstruction`, the
+ * idle compaction) ends that section with a numbered checklist whose item 1 repeats
+ * this reload; the hook and the plugin have no closing section, so for an overflow
+ * compaction this text alone is the reminder.
  */
 export const compactionSkillsGuidance =
   'List every skill that was loaded (invoked) during this session by its exact name, and state explicitly, in plain words, that the continuing session MUST load each of these skills again and follow it before resuming the work: a skill\'s instructions are not carried over by this summary, so without reloading them the fresh session works without them. If no skill was loaded, omit this.';

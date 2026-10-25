@@ -470,7 +470,7 @@ export const enDict: Record<string, string> = {
   // Agent-facing (appended to the compaction prompt); English instructions, but
   // the "IN <language>" directive is baked per locale like the schedule.* templates.
   'compact.closingSectionInstruction':
-    'After the summary, append a final section wrapped EXACTLY between a line containing only {startMarker} and a line containing only {endMarker}. Inside that section, write IN ENGLISH: (1) one or two terse sentences on what we were doing and the immediate next step; (2) if you asked the user a question that is still unanswered, restate that question and list its answer options. Write nothing after {endMarker}.',
+    'After the summary, append a final section wrapped EXACTLY between a line containing only {startMarker} and a line containing only {endMarker}. Inside that section, write IN ENGLISH: (1) one or two terse sentences on what we were doing and the immediate next step; (2) if you asked the user a question that is still unanswered, restate that question and list its answer options; (3) as the LAST part of the section, right before {endMarker}, a numbered checklist (1., 2., 3., one short item per line) of what the continuing session does next. Item 1 is "load these skills" followed by the exact name of every skill that was loaded (invoked) in this session, never translated or shortened; if none was loaded, leave that item out. The other items are the steps (1) and (2) already ask for, in that order: each next step named in (1), then, if (2) applies, asking the user that question again. Invent no new steps. Write nothing after {endMarker}.',
 
   'compactOnIdle.notice':
     '🧹 Auto compacted on idle to save tokens via cache.\n/compact_on_idle — turn it off or show the summary.',

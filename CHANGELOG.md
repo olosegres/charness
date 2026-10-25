@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**The summary an idle compaction leaves now ends with a numbered checklist of what the agent does next, and its first item is to load the skills it had loaded.**
+After a compaction the continuing session often skipped reloading its skills and worked without them. The closing «where we stopped» section now
+finishes with a short numbered list: item 1 is «load these skills» with their exact names (no such item when none was loaded), then the next steps
+and the still-unanswered question, in that order. The list is the last thing in the summary.
+
 **A usage-limit resume that finds its session gone no longer says «resumed» right before «no session».** When the bot restarted while a
 topic waited for a limit's reset and the conversation was ended in the same moment, the topic read the pinned «work resumed» notice and
 then «no session». The «resumed» notice now goes out only after a session took the "continue" prompt.

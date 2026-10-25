@@ -31,6 +31,7 @@ import {
   getPendingWorkRecheckDelayMs,
   pendingWorkRecheckMarginMs,
 } from '../utils/compactOnIdle';
+import { t } from '../i18n';
 
 type IdleFireInput = Parameters<typeof getIdleFireDecision>[0];
 
@@ -291,6 +292,29 @@ test('buildCompactionInstruction: Claude backends get the D3 + skills guidance, 
   // The closing directive says "write nothing after the end marker", so it must
   // be the last instruction the model reads.
   assert.ok(claude.indexOf(compactionSkillsGuidance) < claude.indexOf(closing), 'closing comes last');
+});
+
+test('buildCompactionInstruction: the idle compaction closes with the skills-first checklist, nothing after the end marker', () => {
+  // The real per-locale closing text, as `getCompactionInstruction` composes it. The skills sentence
+  // stays outside the section; the checklist is the LAST thing the model reads before the end marker.
+  const closing = t('compact.closingSectionInstruction', {
+    startMarker: compactionClosingStartMarker,
+    endMarker: compactionClosingEndMarker,
+  });
+  const instruction = buildCompactionInstruction({
+    bakesSummaryGuidance: false,
+    summaryGuidance: compactionSummaryGuidance,
+    bakesSkillsGuidance: false,
+    skillsGuidance: compactionSkillsGuidance,
+    closingSectionInstruction: closing,
+  });
+  assert.ok(instruction);
+  assert.ok(instruction.endsWith(`Write nothing after ${compactionClosingEndMarker}.`));
+  const checklistAt = instruction.indexOf('a numbered checklist');
+  assert.ok(checklistAt > instruction.indexOf(compactionSkillsGuidance), 'the skills sentence precedes the closing section');
+  assert.ok(checklistAt > instruction.indexOf(compactionClosingStartMarker), 'the checklist is inside the closing section');
+  assert.ok(checklistAt < instruction.lastIndexOf(compactionClosingEndMarker), 'the checklist ends before the end marker');
+  assert.match(instruction.slice(checklistAt), /^a numbered checklist \(1\., 2\., 3\., one short item per line\) of what the continuing session does next\. Item 1 is "load these skills"/);
 });
 
 test('buildCompactionInstruction: OpenCode omits the baked D3 guidance but still gets the skills guidance', () => {
