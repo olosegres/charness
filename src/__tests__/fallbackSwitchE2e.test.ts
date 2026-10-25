@@ -81,6 +81,8 @@ import {
   type PersistedState,
 } from './e2e/fallbackFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
+import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../utils/jsonStreamHost';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -146,6 +148,23 @@ async function startCharness(): Promise<void> {
 /** The bot is stopped, its state edited the way a persisted instance would hold it, and started again. */
 async function restartWithState(edit: (state: PersistedState) => void): Promise<void> {
   charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), edit);
+}
+
+/**
+ * Whether the fake agent of a topic has ended its last turn: its stream carries a `result` after the last prompt it
+ * echoed (a tool result is not a prompt).
+ */
+function checkIsAgentIdle(threadId: number): boolean {
+  const { stdoutFile } = getJsonStreamSessionPaths(resolveJsonStreamSessionDir(getLayout().dataDir, makeTelegramKey(group.id, threadId)));
+  let lastPromptLine = -1;
+  let lastResultLine = -1;
+  fs.readFileSync(stdoutFile, 'utf8').split('\n').forEach((line, lineIndex) => {
+    if (!line.trim()) return;
+    const frame = JSON.parse(line) as { type?: string; message?: { content?: unknown } };
+    if (frame.type === 'user' && typeof frame.message?.content === 'string') lastPromptLine = lineIndex;
+    if (frame.type === 'result') lastResultLine = lineIndex;
+  });
+  return lastResultLine > lastPromptLine;
 }
 
 /** Send a labelled prompt whose first turn the fake agent ends on a usage limit that resets at {@link resetsAtIso}. */
@@ -531,6 +550,9 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
   });
 
   it('an operator\'s explicit OFF stays OFF across a restart: the screen says OFF and a limit offers «🔁 Switch to …» instead of moving the topic', async () => {
+    // The step before leaves topic C's agent finishing the turn the wake-up engine asked for (its `answer_request` call
+    // to the bot). A restart inside that call cuts its reply: the agent holds every later prompt behind the call for a minute.
+    await getCharness().waitFor('topic C\'s agent to end its last turn', replyTimeoutMs, () => checkIsAgentIdle(thirdTopicThreadId));
     await restartWithState((persisted) => {
       persisted.claudeAutoSwitchOnLimitEnabled = false;
       persisted.fallbackChain = [{ backend: 'claude', profile: takeoverAccount, model: null }];
