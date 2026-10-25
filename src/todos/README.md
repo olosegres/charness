@@ -134,5 +134,6 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
   turn is held open (a question waiting, a compaction: no work, so nothing is delivered then either) and when the
   session starts, stops or ends (`clearThreadContextMarker`, and the poll's busy → inactive edge). The changes stay
   unseen and ride the next prompt, and the inbox dir is empty between turns, so the hook starts no `node` for anyone.
-  A copy the hook moved aside and never removed (`<id>.json.<pid>`) goes too. The boot clears every inbox: this
-  process does not know what an old one carries, and what it carried is still unseen.
+  A copy a hook moved aside and never removed (`<id>.json.<pid>`, any session's) goes too, once that hook's process
+  is gone — a live one may still be reading it. The boot clears every inbox: this process does not know what an old
+  one carries, and what it carried is still unseen.

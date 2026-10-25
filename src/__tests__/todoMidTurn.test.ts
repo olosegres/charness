@@ -181,13 +181,21 @@ describe('the inbox lifecycle', () => {
     await midTurn.deliverIfPending(topicKey);
     assert.equal(fs.existsSync(getTodoInboxDir(dataDir)), false);
   });
-  it('withdrawing an inbox also removes a copy the hook moved aside and never removed; another session\'s and a temp file stay', async () => {
+  it('withdrawing an inbox removes any session\'s copy a hook moved aside and never removed — only once that hook is gone', async () => {
     const midTurn = createMidTurn();
     const inboxDir = getTodoInboxDir(dataDir);
     fs.mkdirSync(inboxDir, { recursive: true });
-    for (const name of [`${sessionId}.json.4242`, `another-session.json.4242`, `${sessionId}.json.4242.tmp`]) fs.writeFileSync(path.join(inboxDir, name), 'x');
+    const deadPid = spawnSync('true').pid;
+    const livePid = process.pid;
+    const names = {
+      deadOwn: `${sessionId}.json.${deadPid}`,
+      deadEarlierSession: `earlier-session.json.${deadPid}`,
+      live: `${sessionId}.json.${livePid}`,
+      botTemp: `${sessionId}.json.${deadPid}.tmp`,
+    };
+    for (const name of Object.values(names)) fs.writeFileSync(path.join(inboxDir, name), 'x');
     midTurn.discardInbox(topicKey);
-    assert.deepEqual(fs.readdirSync(inboxDir).sort(), [`${sessionId}.json.4242.tmp`, 'another-session.json.4242'].sort());
+    assert.deepEqual(fs.readdirSync(inboxDir).sort(), [names.live, names.botTemp].sort(), 'a live hook may still be reading its copy; a temp file is the bot\'s');
   });
 });
 

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { keyToString, type SessionKey } from '../sessionKey';
+import { checkIsPidAlive } from '../utils/jsonStreamHost';
 import { shellSingleQuote } from '../utils/tmuxExec';
 import { getTodosDir } from './store';
 import type { TodoBoardChanges } from './board';
@@ -16,10 +17,12 @@ import type { TodoBoardChanges } from './board';
  *   OpenCode  — a note queued INTO the running turn (`AgentAdapter.queueNoteIntoRunningTurn`: `prompt_async`, read
  *               between steps, with nothing of the turn reset), never while a provider retry is waited out.
  *
- * The bot writes the inbox (atomically) only while the session is busy and something changed since the agent last
- * saw it; the changes count as seen once the hook took the file (the next poll finds it gone). A turn start the bot
- * makes discards a waiting inbox — that prompt carries the changes itself. A restart forgets what was written: at
- * worst a change is delivered twice, never lost.
+ * The bot writes the inbox (atomically) only while the session works (busy, its turn not held open) and something
+ * changed since the agent last saw it; the changes count as seen once the hook took the file (the next poll finds it
+ * gone). A waiting inbox is withdrawn wherever no tool call of the session can take it any more — a turn start the bot
+ * makes (that prompt carries the changes itself), a turn's end, a turn held open, the session's start, stop or end —
+ * and its changes stay unseen for the next prompt, so the inbox dir is empty between turns. A restart forgets what was
+ * written: at worst a change is delivered twice, never lost.
  */
 
 /** What opens the note a running OpenCode turn reads (agent-facing English); the board's changes follow it. */
@@ -32,8 +35,8 @@ export const todoInboxMaxChars = 10_000;
 /** A session id names a file: only these characters, so no id can reach outside the inbox. */
 const sessionIdRe = /^[A-Za-z0-9_-]+$/;
 const inboxFileExtension = '.json';
-/** What the hook appends to the inbox it moves aside: its process id. */
-const takenCopySuffixRe = /^\d+$/;
+/** A copy the hook moved aside: `<session id>.json.<the hook's process id>` (never the bot's `….tmp`). */
+const takenCopyNameRe = /^[A-Za-z0-9_-]+\.json\.(\d+)$/;
 /** Private: what the agents work on. */
 const inboxFileMode = 0o600;
 
@@ -103,7 +106,10 @@ export interface TodoMidTurnDeps {
   inboxDir: string;
   getClaudeSessionId: (key: SessionKey) => string | null;
   postRunningTurnNote: (key: SessionKey, text: string) => Promise<boolean>;
+  /** Whether a process runs (the hook that moved an inbox aside, run as the bot's own user); `kill(pid, 0)` by default. */
+  checkIsProcessAlive?: (pid: number) => boolean;
 }
+
 
 /** @name TodoMidTurn @description What the reminder poll and the prompt choke point call. */
 export interface TodoMidTurn {
@@ -111,7 +117,11 @@ export interface TodoMidTurn {
   deliverIfPending(key: SessionKey): Promise<void>;
   /** Inboxes the hook took since the last look count as seen. */
   reconcile(): void;
-  /** A turn start the bot makes: the prompt carries the changes, so a waiting inbox is withdrawn. */
+  /**
+   * No tool call of the session can take its inbox any more (a turn start the bot makes, a turn's end, a turn held
+   * open, the session's start, stop or end): a waiting inbox is withdrawn — counted as seen if the hook took it
+   * meanwhile — and the copies hooks that are gone moved aside and never removed go with it.
+   */
   discardInbox(key: SessionKey): void;
   /**
    * At boot: every inbox left is withdrawn — this process does not know what it carries, and a session that ended
@@ -134,7 +144,7 @@ function checkIsSameRevisions(left: Readonly<Record<string, number>>, right: Rea
 }
 
 export function createTodoMidTurn(deps: TodoMidTurnDeps): TodoMidTurn {
-  const { board, inboxDir, getClaudeSessionId, postRunningTurnNote } = deps;
+  const { board, inboxDir, getClaudeSessionId, postRunningTurnNote, checkIsProcessAlive = checkIsPidAlive } = deps;
   const pendingInboxes = new Map<string, PendingInbox>();
 
   function reconcileOne(conversationKey: string, pending: PendingInbox): void {
@@ -145,12 +155,10 @@ export function createTodoMidTurn(deps: TodoMidTurnDeps): TodoMidTurn {
 
   /**
    * A copy the hook moved aside and never removed (its `node` ended between the move and the removal) would keep the
-   * inbox dir non-empty: the session's own `<id>.json.<pid>` copies go. The bot's temp files (`….tmp`) are not such.
+   * inbox dir non-empty until boot. Any session's copy goes — but only once the hook that moved it is gone: a live one
+   * may be reading it this very moment, and its change already counts as seen.
    */
-  function removeTakenLeftovers(key: SessionKey): void {
-    const sessionId = getClaudeSessionId(key);
-    if (sessionId === null || !sessionIdRe.test(sessionId)) return;
-    const takenPrefix = `${sessionId}${inboxFileExtension}.`;
+  function removeTakenLeftovers(): void {
     let names: string[];
     try {
       names = fs.readdirSync(inboxDir);
@@ -158,7 +166,8 @@ export function createTodoMidTurn(deps: TodoMidTurnDeps): TodoMidTurn {
       return;
     }
     for (const name of names) {
-      if (name.startsWith(takenPrefix) && takenCopySuffixRe.test(name.slice(takenPrefix.length))) fs.rmSync(path.join(inboxDir, name), { force: true });
+      const hookPid = takenCopyNameRe.exec(name)?.[1];
+      if (hookPid !== undefined && !checkIsProcessAlive(Number(hookPid))) fs.rmSync(path.join(inboxDir, name), { force: true });
     }
   }
 
@@ -201,7 +210,7 @@ export function createTodoMidTurn(deps: TodoMidTurnDeps): TodoMidTurn {
     },
 
     discardInbox(key) {
-      removeTakenLeftovers(key);
+      removeTakenLeftovers();
       const conversationKey = keyToString(key);
       const pending = pendingInboxes.get(conversationKey);
       if (!pending) return;
