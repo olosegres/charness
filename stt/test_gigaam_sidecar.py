@@ -242,6 +242,33 @@ class PauseSplitterTest(unittest.TestCase):
         self.assertEqual(len(pieces), 2)
         self.assertTrue(np.array_equal(np.concatenate(pieces), audio))
 
+    def test_the_model_splitter_resamples_with_the_model_and_asks_the_vad_for_gaps_of_min_pause_ms(self):
+        calls = {}
+
+        class FakeModel:
+            def resampler(self, waveforms, lengths, sample_rate):
+                calls["resample"] = (waveforms.shape, list(lengths), sample_rate)
+                return waveforms[:, ::3], lengths // 3
+
+        class FakeVad:
+            def segment_batch(self, waveforms, lengths, sample_rate, **options):
+                calls["vad"] = (waveforms.shape, list(lengths), sample_rate, options)
+                return iter([iter([(np.int64(0), np.int64(SAMPLE_RATE)), (np.int64(2 * SAMPLE_RATE), np.int64(3 * SAMPLE_RATE))])])
+
+        split = sidecar.make_model_pause_splitter(FakeModel(), FakeVad())
+        pieces, sample_rate = split(np.zeros(9 * SAMPLE_RATE, dtype=np.float32), 48000)
+        self.assertEqual(sample_rate, sidecar.SPEECH_SAMPLE_RATE)
+        self.assertEqual([len(piece) for piece in pieces], [int(1.5 * SAMPLE_RATE), int(1.5 * SAMPLE_RATE)], "cut at the gap's centre, in samples")
+        self.assertEqual(calls["resample"], ((1, 9 * SAMPLE_RATE), [9 * SAMPLE_RATE], 48000))
+        shape, lengths, vad_rate, options = calls["vad"]
+        self.assertEqual((shape, lengths, vad_rate), ((1, 3 * SAMPLE_RATE), [3 * SAMPLE_RATE], 16000))
+        self.assertEqual(
+            options["min_silence_duration_ms"] + 2 * options["speech_pad_ms"],
+            sidecar.MIN_PAUSE_MS,
+            "onnx-asr adds both pads to the silence it is given: the gap that ends a piece is MIN_PAUSE_MS",
+        )
+        self.assertGreater(options["max_speech_duration_s"], 3, "the VAD never cuts speech by its own length limit")
+
     def test_without_speech_detection_the_audio_is_cut_only_at_25_seconds(self):
         audio = tone(10.0)
         pieces, sample_rate = sidecar.split_without_pauses(audio, 48000)

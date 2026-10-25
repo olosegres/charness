@@ -133,7 +133,9 @@ env too.
 - **Chunking — every voice is cut at its pauses.** Audio is decoded with `soundfile` (libsndfile reads Telegram's
   OGG/Opus, no ffmpeg), downmixed to mono and resampled ONCE to 16 kHz with the model's own resampler. Silero VAD
   (`onnx_asr.load_vad("silero")`, one thread, in the request's handler thread) finds the speech; every gap of at least
-  **500 ms** between two speech segments is cut at its centre (`split_at_pauses`). The VAD only chooses where to cut:
+  **500 ms** between two speech segments it detects is cut at its centre (`split_at_pauses`; onnx-asr adds both
+  speech pads to the silence it is given, so it is asked for `500 − 2 × 100` ms). On the phrases it was tested with, a
+  real silence of 0.3 s already shows as a ≥ 0.5 s gap and is cut. The VAD only chooses where to cut:
   the pieces cover the whole file, nothing it calls silence is dropped — it misses some real speech entirely. A piece
   over 25 s (the model's limit) is cut again at the centre of the quietest 50 ms window in the last 8 s before each
   25 s boundary (`split_at_silences`). A VAD that cannot be loaded or raises falls back to those 25 s cuts alone at the

@@ -63,10 +63,14 @@ MAX_CHUNK_SECONDS = 25.0
 # The rate the model and the VAD work at: the upload is resampled to it once.
 SPEECH_SAMPLE_RATE = 16000
 VAD_MODEL_NAME = "silero"
-# A pause this long ends a piece. Measured on real speech: the model starts dropping phrases after pauses of
-# about 0.6 s, and a shorter limit splits continuous sentences more often without keeping more phrases.
+# A gap this long between two stretches of speech the VAD detects ends a piece. Measured on real speech (919 phrases,
+# pauses of 0.3-2 s): 11 phrases lost against 10 when decoding each phrase alone (39 in one pass), and it splits 56 of 356
+# continuous sentences with no loss of accuracy (4.91 % -> 4.86 % WER).
 MIN_PAUSE_MS = 500
 VAD_SPEECH_PAD_MS = 100
+# onnx-asr compares the raw gap with `min_silence_duration_ms + 2 * speech_pad_ms`: given this, a gap of
+# `MIN_PAUSE_MS` is what ends a piece.
+VAD_MIN_SILENCE_MS = MIN_PAUSE_MS - 2 * VAD_SPEECH_PAD_MS
 # The install check's 1 s of silence is at Telegram's Opus rate, so it runs the resampler too, and a VAD that fails
 # shows as pieces left at this rate (the fallback keeps the file's own rate).
 CHECK_SAMPLE_RATE = 48000
@@ -204,7 +208,7 @@ def make_model_pause_splitter(model, vad):
             audio[None],
             np.array([len(audio)], dtype=np.int64),
             SPEECH_SAMPLE_RATE,
-            min_silence_duration_ms=MIN_PAUSE_MS,
+            min_silence_duration_ms=VAD_MIN_SILENCE_MS,
             speech_pad_ms=VAD_SPEECH_PAD_MS,
             # Never let the VAD cut a long stretch of speech itself: `split_at_pauses` caps the pieces at a quiet spot.
             max_speech_duration_s=len(audio) / SPEECH_SAMPLE_RATE + 1,
