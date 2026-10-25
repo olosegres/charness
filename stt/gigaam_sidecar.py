@@ -898,6 +898,16 @@ def load_vad():
     return onnx_asr.load_vad(VAD_MODEL_NAME, sess_options=options)
 
 
+def create_audio_splitter(model, load_vad_model=load_vad):
+    """The request splitter `run_serve` uses: the pause cuts, or — when the VAD cannot be loaded — the 25 s cuts alone,
+    so the engine keeps working the old way instead of failing to start."""
+    try:
+        return make_model_pause_splitter(model, load_vad_model())
+    except Exception:
+        logger.error("the VAD could not be loaded, cutting at %.0f s only: %s", MAX_CHUNK_SECONDS, traceback.format_exc())
+        return split_without_pauses
+
+
 def run_check(args: argparse.Namespace) -> int:
     """Load the model and the VAD, recognise 1 s of silence through the pause splitter and print the versions —
     the installer's verify step (it also fetches both while the network is allowed)."""
@@ -962,11 +972,7 @@ def run_serve(args: argparse.Namespace, token: str) -> int:
         logger.error("model load failed: %s", traceback.format_exc())
         return EXIT_SETUP_FAILED
     logger.info("model loaded in %.2fs", time.monotonic() - loading_started)
-    try:
-        split_audio = make_model_pause_splitter(model, load_vad())
-    except Exception:
-        logger.error("the VAD could not be loaded, cutting at %.0f s only: %s", MAX_CHUNK_SECONDS, traceback.format_exc())
-        split_audio = split_without_pauses
+    split_audio = create_audio_splitter(model)
 
     pool = RecognitionPool(make_recognizer(model), args.workers)
     pool.start()

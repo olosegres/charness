@@ -27,6 +27,8 @@ jobs:
       # The flows drive real tmux sessions.
       - name: Install tmux
         run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
+      # The STT sidecar's Python unit tests run through uv (sttSidecarPython.test.ts).
+      - uses: astral-sh/setup-uv@v10
       - run: yarn typecheck
       - run: yarn build
       - run: yarn test

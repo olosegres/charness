@@ -14,7 +14,7 @@ gets. User-facing setup is in [`SETUP.md` § Voice input](../../SETUP.md#voice-i
 | `sttInstallReporter.ts`, `sttScreenPlan.ts` | The install progress as ONE edited message (or `[STT]` log lines), and the pure text of it |
 | `sttConfigEdit.ts`, `sttScreenPlan.ts` | The `/stt` brain, without Telegram: the edits to `stt.json` (validated like a hand edit), the screens as data, the callback codec (`stt_<action>_<arg>_<revision>`, ≤ 64 bytes), the key/address input decision and `reduceSttAction` (tap → show / save / arm input / effect). The buttons and the typed-input hooks are `connectors/telegram/commands/stt.ts` |
 | `sttRuntime.ts` | `stt.json` + the lifecycle facts resolved per call; the boot migration; the once-per-edit auto-install trigger |
-| `../../stt/gigaam_sidecar.py` | The recognition process (Python), shipped in the package's `stt/` dir; `../../stt/test_gigaam_sidecar.py` are its unit tests |
+| `../../stt/gigaam_sidecar.py` | The recognition process (Python), shipped in the package's `stt/` dir; `../../stt/test_gigaam_sidecar.py` are its unit tests (numpy and soundfile only, no model), run in `yarn test` by `sttSidecarPython.test.ts` through `uv` or a `python3` that has both |
 | `../utils/transcribeAudio.ts` | The ONE HTTP primitive: a multipart `POST` to an OpenAI-compatible `/audio/transcriptions`, with classified failures and the retry schedule |
 
 ## `stt.json` — the one source of truth

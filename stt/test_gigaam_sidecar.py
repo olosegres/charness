@@ -304,6 +304,52 @@ class PauseSplitterTest(unittest.TestCase):
         self.assertEqual((len(pieces), sample_rate), (1, 48000))
 
 
+class FakeLoadedModel:
+    """What `run_check` and `create_audio_splitter` need of the onnx-asr model: its resampler and `recognize`."""
+
+    def resampler(self, waveforms, lengths, sample_rate):
+        return waveforms[:, ::3], lengths // 3
+
+    def recognize(self, samples, sample_rate):
+        return ""
+
+
+class SetupTest(unittest.TestCase):
+    def test_a_vad_that_cannot_be_loaded_leaves_the_25_second_cuts(self):
+        def load_vad_model():
+            raise FileNotFoundError("silero_vad.onnx is not in the model cache")
+
+        with self.assertLogs(sidecar.logger, level="ERROR") as logs:
+            split = sidecar.create_audio_splitter(FakeLoadedModel(), load_vad_model)
+        self.assertIs(split, sidecar.split_without_pauses)
+        self.assertIn("the VAD could not be loaded", logs.output[0])
+
+    def test_a_loaded_vad_gives_the_pause_cuts(self):
+        class FakeVad:
+            def segment_batch(self, waveforms, lengths, sample_rate, **options):
+                return iter([iter([])])
+
+        split = sidecar.create_audio_splitter(FakeLoadedModel(), FakeVad)
+        pieces, sample_rate = split(np.zeros(48000, dtype=np.float32), 48000)
+        self.assertEqual((len(pieces), sample_rate), (1, sidecar.SPEECH_SAMPLE_RATE))
+
+    def test_the_install_check_fails_when_the_pause_detection_does_not_work(self):
+        class BrokenVad:
+            def segment_batch(self, waveforms, lengths, sample_rate, **options):
+                raise RuntimeError("the VAD session is broken")
+
+        output = io.StringIO()
+        with unittest.mock.patch.object(sidecar, "load_model", lambda threads: FakeLoadedModel()), \
+                unittest.mock.patch.object(sidecar, "load_vad", BrokenVad), \
+                self.assertLogs(sidecar.logger, level="ERROR"), \
+                contextlib.redirect_stdout(output):
+            exit_code = sidecar.run_check(argparse.Namespace(threads=1))
+        report = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertEqual(exit_code, sidecar.EXIT_SETUP_FAILED)
+        self.assertFalse(report["ok"])
+        self.assertIn("pause detection failed", report["error"])
+
+
 class MultipartTest(unittest.TestCase):
     def test_binary_file_survives_and_fields_are_text(self):
         # Every byte value, CR/LF runs and a trailing CRLF inside the payload: none may be eaten.
