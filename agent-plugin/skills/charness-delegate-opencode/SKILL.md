@@ -33,7 +33,10 @@ echo $! > "<run-dir>/pid"
 - `--auto` approves every request that is not denied — the deny rules are the only guard, the brief is not one.
   Never edit the global OpenCode permissions for this.
 - Without `--auto` the CLI refuses ordinary requests and the worker stalls.
-3. Record the session id — the top-level `sessionID` of the first JSON event in `events.jsonl` — with the
+3. Check the PID: `ps -o args= -p "$(cat <run-dir>/pid)"` must show `opencode run … --title <scope>`. If it does
+   not (the launcher handed over to a new process), take it from `pgrep -f "opencode.* run .*--title <scope>"` and
+   write that into the pid file — the watch check fires "worker exited" at once on a PID that is not the worker.
+4. Record the session id — the top-level `sessionID` of the first JSON event in `events.jsonl` — with the
    checkout and run directory in the plan, then arm the watch check from `charness-manager` with this PID and
    run directory.
 

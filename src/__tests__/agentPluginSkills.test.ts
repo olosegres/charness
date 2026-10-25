@@ -77,6 +77,16 @@ describe('agent-plugin', () => {
     assert.ok(text.includes(`\`${workerWatchPinArgument}\``), 'the silent pin: a normal finish fires the check');
   });
 
+  test('both delegate skills check the recorded PID is the worker before the watch is armed on it', () => {
+    // A launcher that hands over to another process leaves `$!` on a process that exits at once: the watch would fire
+    // "worker exited" right after the launch.
+    for (const folder of ['charness-delegate-claude', 'charness-delegate-opencode']) {
+      const text = fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');
+      assert.match(text, /Check the PID: `ps -o args= -p "\$\(cat <run-dir>\/pid\)"`/, folder);
+      assert.match(text, /`pgrep -f "/, `${folder}: the fallback that finds the worker`);
+    }
+  });
+
   test('no file holds a real-looking identifier', () => {
     for (const file of listFiles(pluginDir)) {
       const text = fs.readFileSync(file, 'utf8');
