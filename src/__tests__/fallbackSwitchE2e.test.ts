@@ -59,6 +59,7 @@ import {
   getFreePort,
   IsolatedCharness,
   listTmuxSessions,
+  readJsonLines,
   removeIsolatedInstanceSync,
   writeFakeClaudeLauncher,
   writeInstanceEnvFile,
@@ -150,21 +151,26 @@ async function restartWithState(edit: (state: PersistedState) => void): Promise<
   charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), edit);
 }
 
+/** The part of a frame of the fake agent's `stdout.jsonl` that tells a prompt, a tool result and the end of a turn apart. */
+interface AgentStreamFrame {
+  type?: string;
+  message?: { content?: string | Array<{ type: string }> };
+}
+
 /**
  * Whether the fake agent of a topic has ended its last turn: its stream carries a `result` after the last prompt it
- * echoed (a tool result is not a prompt).
+ * echoed (a tool result is not a prompt). Frames the agent is still writing are not read: `readJsonLines` takes only
+ * the lines a newline has ended.
  */
 function checkIsAgentIdle(threadId: number): boolean {
   const { stdoutFile } = getJsonStreamSessionPaths(resolveJsonStreamSessionDir(getLayout().dataDir, makeTelegramKey(group.id, threadId)));
-  let lastPromptLine = -1;
-  let lastResultLine = -1;
-  fs.readFileSync(stdoutFile, 'utf8').split('\n').forEach((line, lineIndex) => {
-    if (!line.trim()) return;
-    const frame = JSON.parse(line) as { type?: string; message?: { content?: unknown } };
-    if (frame.type === 'user' && typeof frame.message?.content === 'string') lastPromptLine = lineIndex;
-    if (frame.type === 'result') lastResultLine = lineIndex;
+  let lastPromptIndex = -1;
+  let lastResultIndex = -1;
+  readJsonLines<AgentStreamFrame>(stdoutFile).forEach((frame, frameIndex) => {
+    if (frame.type === 'user' && typeof frame.message?.content === 'string') lastPromptIndex = frameIndex;
+    if (frame.type === 'result') lastResultIndex = frameIndex;
   });
-  return lastResultLine > lastPromptLine;
+  return lastResultIndex > lastPromptIndex;
 }
 
 /** Send a labelled prompt whose first turn the fake agent ends on a usage limit that resets at {@link resetsAtIso}. */
