@@ -42,7 +42,7 @@ test('after the replay wait the prompt is routed again like a late prompt, not f
   const route = body.indexOf('await deliverLatePrompt({');
   assert.ok(wait > 0 && route > wait, 'the wait, then the late-prompt routing');
   assert.match(body.slice(route), /checkIsWindowOpen: \(\) => startupPromptBuffer\.checkIsStarting\(keyToString\(key\)\)/);
-  assert.match(body.slice(route), /forward: \(\) => forwardPromptToLiveAgent\(/);
+  assert.match(body.slice(route), /forward: async \(\) => \{\n\s*await forwardPromptToLiveAgent\([^\n]*\);\n\s*return 'forwarded';\n\s*\},/, 'the live forward answers `forwarded`');
   assert.equal(body.slice(wait, route).includes('forwardPromptToLiveAgent('), false, 'no forward between the wait and the routing');
 });
 

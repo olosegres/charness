@@ -182,6 +182,11 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
       }
       clearSavedRetryIfLive();
     });
+    if (delivery === 'noSession') {
+      // The nudge waited for a bot restart's replay and found no session left (the person was told): no turn started to watch.
+      console.warn(`[apiRetry] nudge for ${k}: no session was left to take it; the retry is spent and an open request is left to the wake-up engine`);
+      return;
+    }
     isNudgeBuffered = delivery === 'buffered';
     await deps.trackContinuation(key, {
       isCountersReset: entry.kind === 'usageLimit',

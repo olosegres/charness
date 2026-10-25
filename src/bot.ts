@@ -1106,6 +1106,22 @@ function trackTopicRequestTurn(key: SessionKey, opening: TopicRequestOpening): v
     console.warn(`[requests] tracking the turn of ${opening.requestId} failed:`, e instanceof Error ? e.message : e),
   );
 }
+
+/**
+ * @description The request's prompt came back from the prompt path with `delivery`: a prompt that reached a session (or
+ * waits behind its start) has its turn tracked; one that found NO session (a prompt that waited for a bot restart's replay —
+ * the person was told) closes the request it opened, so the wake-up engine never prods the agent for a turn that never started.
+ */
+async function settleTopicRequestAfterDelivery(key: SessionKey, opening: TopicRequestOpening, delivery: LatePromptOutcome): Promise<void> {
+  if (delivery !== 'noSession') {
+    trackTopicRequestTurn(key, opening);
+    return;
+  }
+  if (opening.requestId === null) return;
+  await topicRequestLedger?.closeRequest(opening.requestId, 'cancelled').catch((e) =>
+    console.warn(`[requests] closing the request ${opening.requestId} of a prompt that found no session failed:`, e instanceof Error ? e.message : e),
+  );
+}
 /** What the bot's own limit-wait answer needs (S5); set at boot next to the engine. */
 let requestLimitWaitAnswerDeps: LimitWaitAnswerDeps | null = null;
 
@@ -5435,7 +5451,10 @@ async function forwardPromptToAgent(
       await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadReplyQuote(key, text, options.replyContext)}`, true);
     },
     wake: () => wakeSleepingSessionForPrompt(key),
-    forward: () => forwardPromptToLiveAgent(key, getThreadAdapter(key), text, sentAtMs, options),
+    forward: async () => {
+      await forwardPromptToLiveAgent(key, getThreadAdapter(key), text, sentAtMs, options);
+      return 'forwarded';
+    },
     reportNoSession: async (isAlreadyTold) => {
       console.warn(`[adopt] ${keyToString(key)}: no session is left to take the prompt that waited for the replay; it is dropped`);
       if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
@@ -8737,8 +8756,8 @@ command('schedule', async (ctx, key, parsed) => {
 
   const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
   const opening = await openTopicRequest(key, wrappedPrompt, { source: 'schedule', requesterId: getTopicRequesterId(ctx.from) });
-  await deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting);
-  trackTopicRequestTurn(key, opening);
+  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting);
+  await settleTopicRequestAfterDelivery(key, opening, delivery);
 });
 
 const reminderWizards = new Map<string, ReminderWizardSession>();
@@ -9511,7 +9530,7 @@ async function downloadIncomingFile(
  */
 const promptDeliveryDeps: PromptDeliveryDeps = {
   startupBuffer: startupPromptBuffer,
-  forwardPrompt: async (key, text) => { await forwardPromptToAgent(key, getThreadAdapter(key), text); },
+  forwardPrompt: (key, text) => forwardPromptToAgent(key, getThreadAdapter(key), text),
   announceQueued: async (key) => {
     await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
   },
@@ -9582,8 +9601,8 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       try {
         const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId });
         const quotedPrompt = getPromptWithThreadReplyQuote(key, promptText, replyContext);
-        await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
-        trackTopicRequestTurn(key, opening);
+        const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
+        await settleTopicRequestAfterDelivery(key, opening, delivery);
       } catch (err) {
         console.error('[Bot] album flush failed:', err);
         await replyToThread(key, t('file.download_failed')).catch(() => {});
@@ -9683,8 +9702,8 @@ async function handleIncomingFile(
   const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) });
   // A file sent as a REPLY carries the message it answers, as a typed or spoken reply does.
   const quotedPrompt = getPromptWithThreadReplyQuote(key, promptText, getReplyQuoteBlock(key, ctx.message));
-  await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
-  trackTopicRequestTurn(key, opening);
+  const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
+  await settleTopicRequestAfterDelivery(key, opening, delivery);
 }
 
 bot.on(
@@ -10419,8 +10438,8 @@ async function deliverActivePrompt(
     }
     // Free-form text cancels the question and is a fresh prompt — a request (S7).
     const opening = await openTopicRequest(key, text, intake);
-    await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, replyContext, opening.header);
-    trackTopicRequestTurn(key, opening);
+    const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, replyContext, opening.header);
+    await settleTopicRequestAfterDelivery(key, opening, delivery);
     return null;
   }
 
@@ -10453,6 +10472,8 @@ async function deliverActivePrompt(
   // durable by the time the agent reads it.
   const opening = await openTopicRequest(key, text, intake);
   // Routed now, not when the message arrived: the idle stop may have begun or ended during the awaits since.
+  // The forward can itself end in no session — a prompt that waited for an adopt replay found the session gone and nothing to wake;
+  // it has told the person already (`forwardPromptToAgent`), so what is left here is the request this prompt opened.
   const outcome = await deliverLatePrompt({
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => adapter.checkIsActive(key),
@@ -10460,14 +10481,12 @@ async function deliverActivePrompt(
       await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadReplyQuote(key, text, replyContext)}`, true);
     },
     wake: () => wakeSleepingSessionForPrompt(key),
-    forward: async () => { await forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { replyContext, requestHeader: opening.header }); },
+    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { replyContext, requestHeader: opening.header }),
     reportNoSession: async (isAlreadyTold) => {
-      // The prompt reaches no agent: the request it opened would only wait for a turn that never comes.
-      if (opening.requestId !== null) await topicRequestLedger?.closeRequest(opening.requestId, 'cancelled');
       if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
     },
   });
-  if (outcome !== 'noSession') trackTopicRequestTurn(key, opening);
+  await settleTopicRequestAfterDelivery(key, opening, outcome);
   return outcome;
 }
 
@@ -10509,7 +10528,7 @@ async function cancelPendingQuestionAndForward(
   sentAtMs?: number,
   replyContext?: string,
   requestHeader?: string,
-): Promise<void> {
+): Promise<LatePromptOutcome> {
   // When the question bubble itself was relabelled to "❌ … cancelled", that IS the
   // cancellation notice — a second standalone "previous question cancelled" line is
   // pure noise (the reported triple message). The standalone notice is kept only
@@ -10529,7 +10548,7 @@ async function cancelPendingQuestionAndForward(
   if (!didLabelQuestionMessage) {
     await replyToThread(key, t('agent.question_cancelled_for_prompt'));
   }
-  await forwardPromptToAgent(key, adapter, text, sentAtMs, { replyContext, requestHeader });
+  return forwardPromptToAgent(key, adapter, text, sentAtMs, { replyContext, requestHeader });
 }
 
 /**
@@ -13198,8 +13217,8 @@ function createSessionPostDeps(): PostToSessionDeps {
       // A scheduled run in a topic with requests on is a request (S7); a tracker's
       // post arrives with its request already open and its header in the text.
       const opening = await openTopicRequest(key, text, { source: 'scheduledRun', requesterId: scheduledRunRequester });
-      await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey));
-      trackTopicRequestTurn(key, opening);
+      const delivery = await deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey));
+      await settleTopicRequestAfterDelivery(key, opening, delivery);
     },
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

@@ -4,23 +4,27 @@ import type { BufferedPromptSettled, StartupPromptBuffer } from '../startupPromp
 
 /**
  * @name PromptDeliveryDeps
- * @description What {@link deliverPromptOrBuffer} acts through. `announceQueued`
- * tells the person their prompt waits for the session to come up — a topic
- * message, so it is only called for a Telegram conversation.
+ * @description What {@link deliverPromptOrBuffer} acts through. `forwardPrompt` says where the
+ * forward put the prompt ({@link LatePromptOutcome}); `announceQueued` tells the person their
+ * prompt waits for the session to come up — a topic message, so it is only called for a
+ * Telegram conversation.
  */
 export interface PromptDeliveryDeps {
   startupBuffer: Pick<StartupPromptBuffer, 'addPrompt'>;
-  forwardPrompt: (key: SessionKey, text: string) => Promise<void>;
+  forwardPrompt: (key: SessionKey, text: string) => Promise<LatePromptOutcome>;
   announceQueued: (key: SessionKey) => Promise<void>;
 }
 
 /**
  * @name PromptDelivery
  * @description Where {@link deliverPromptOrBuffer} put the prompt: `forwarded` to the
- * session (done), or `buffered` behind a session start (it waits in memory until the
- * start ends — see `onBufferedSettled`).
+ * session (done), `buffered` behind a session start (it waits in memory until the
+ * start ends — see `onBufferedSettled`), or `noSession` — the forward found no session
+ * left to take it (a prompt that waited for a bot restart's replay; the person was
+ * told), so nothing will ever answer it: what the caller opened for it must not wait
+ * for a turn.
  */
-export type PromptDelivery = 'forwarded' | 'buffered';
+export type PromptDelivery = 'forwarded' | 'buffered' | 'noSession';
 
 /**
  * @description Deliver `text` to a conversation's agent while honouring the startup
@@ -54,8 +58,9 @@ export async function deliverPromptOrBuffer(
   onBufferedSettled?: BufferedPromptSettled,
 ): Promise<PromptDelivery> {
   if (!isStarting) {
-    await deps.forwardPrompt(key, text);
-    return 'forwarded';
+    // Only `noSession` is told apart: a forward that re-routed the prompt behind a stop window itself registered no
+    // `onBufferedSettled`, so it reads as forwarded, as it always did.
+    return (await deps.forwardPrompt(key, text)) === 'noSession' ? 'noSession' : 'forwarded';
   }
   const isFirstBuffered = deps.startupBuffer.addPrompt(keyToString(key), text, onBufferedSettled);
   if (isFirstBuffered && checkIsTelegramKey(key)) {
@@ -117,13 +122,15 @@ export interface LatePromptDeliveryPorts {
   checkIsSessionActive: () => boolean;
   buffer: () => Promise<void>;
   wake: () => Promise<LateWakeResult>;
-  forward: () => Promise<void>;
+  /** Where the forward put the prompt: `forwarded`, or what a forward that routes it again itself (a prompt that waited for an adopt replay) ended in — passed on as the answer. */
+  forward: () => Promise<LatePromptOutcome>;
   reportNoSession: (isAlreadyTold: boolean) => Promise<void>;
 }
 
 /**
- * @description Where {@link deliverLatePrompt} put the prompt; `noSession` — nowhere: nothing to deliver it to; `dropped` —
- * a technical prompt that found no live session, left alone on purpose (nothing buffered, woken or said).
+ * @description Where {@link deliverLatePrompt} put the prompt; `noSession` — nowhere: nothing to deliver it to (the wake found
+ * nothing to resume, or the forward itself ended so); `dropped` — a technical prompt that found no live session, left alone
+ * on purpose (nothing buffered, woken or said).
  */
 export type LatePromptOutcome = 'buffered' | 'forwarded' | 'noSession' | 'dropped';
 
@@ -146,6 +153,5 @@ export async function deliverLatePrompt(ports: LatePromptDeliveryPorts): Promise
       return 'noSession';
     }
   }
-  await ports.forward();
-  return 'forwarded';
+  return ports.forward();
 }

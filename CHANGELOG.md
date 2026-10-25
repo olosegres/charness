@@ -46,7 +46,9 @@ a turn that succeeded.
 bot reads what the agent wrote while it was down a moment after it starts; a prompt that reached the agent before that (the
 bot's own resume after a usage limit, a scheduled run, your message) reset the reply the replayed text still belonged to, so the
 old turn's text could end up inside the new reply's message, and an error of the old turn took the new turn's place — shown as
-a plain "Claude error" line and not retried. A prompt now waits for that replay (at most 30 s) before it is sent.
+a plain "Claude error" line and not retried. A prompt now waits for that replay (at most 30 s) before it is sent; if the agent is gone
+when the wait ends, the topic says so and the request the message opened is closed, instead of the bot later asking the agent about
+an answer it never started.
 
 **A usage limit that stopped the agent while the bot was down is now handled once after the restart.** The restarted bot found the
 limit error twice — once when it checked the agent's log at start (it resumes the topic at once when the window is over), and

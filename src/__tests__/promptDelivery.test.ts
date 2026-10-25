@@ -18,7 +18,7 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { StartupPromptBuffer, type BufferedPromptOutcome } from '../startupPromptBuffer';
-import { deliverLatePrompt, deliverPromptOrBuffer, getLatePromptRoute, type LatePromptDeliveryPorts, type PromptDeliveryDeps } from '../utils/promptDelivery';
+import { deliverLatePrompt, deliverPromptOrBuffer, getLatePromptRoute, type LatePromptDeliveryPorts, type LatePromptOutcome, type PromptDeliveryDeps } from '../utils/promptDelivery';
 
 const topicKey: SessionKey = makeTelegramKey(-1001234567890, 42);
 const issueKey: SessionKey = makeJiraKey('PROJ-7');
@@ -33,15 +33,21 @@ async function replayTexts(buffer: StartupPromptBuffer, key: SessionKey): Promis
 let startupBuffer: StartupPromptBuffer;
 let forwarded: Array<{ key: SessionKey; text: string }>;
 let announced: SessionKey[];
+/** Where the bot's forward puts a prompt (`forwardPromptToAgent`); only a prompt that waited for an adopt replay can come out as anything but `forwarded`. */
+let forwardOutcome: LatePromptOutcome;
 let deps: PromptDeliveryDeps;
 
 beforeEach(() => {
   startupBuffer = new StartupPromptBuffer();
   forwarded = [];
   announced = [];
+  forwardOutcome = 'forwarded';
   deps = {
     startupBuffer,
-    forwardPrompt: async (key, text) => { forwarded.push({ key, text }); },
+    forwardPrompt: async (key, text) => {
+      forwarded.push({ key, text });
+      return forwardOutcome;
+    },
     announceQueued: async (key) => { announced.push(key); },
   };
 });
@@ -54,6 +60,26 @@ describe('deliverPromptOrBuffer', () => {
     assert.deepEqual(forwarded, [{ key: topicKey, text: 'hello' }]);
     assert.deepEqual(announced, []);
     assert.deepEqual(await replayTexts(startupBuffer, topicKey), []);
+  });
+
+  it('a forward that finds no session (the prompt waited for a bot restart\'s replay) reads as noSession, so the caller opens no turn for it', async () => {
+    forwardOutcome = 'noSession';
+
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'hello', false), 'noSession');
+    assert.equal(await deliverPromptOrBuffer(deps, issueKey, 'the nudge', false), 'noSession', 'whatever the platform');
+  });
+
+  it('a forward that routed the prompt behind a stop window itself still reads as forwarded: no settle callback was registered for that buffer', async () => {
+    forwardOutcome = 'buffered';
+
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'hello', false), 'forwarded');
+  });
+
+  it('a prompt buffered for a starting session never reads as noSession — the forward is not reached', async () => {
+    forwardOutcome = 'noSession';
+
+    assert.equal(await deliverPromptOrBuffer(deps, topicKey, 'hello', true), 'buffered');
+    assert.deepEqual(forwarded, []);
   });
 
   it('buffers for a starting session instead of forwarding — it replays in arrival order once the session is up', async () => {
@@ -159,15 +185,48 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     // The race the re-ask flow hit: a tap read a live process, the idle stop ran during the tap's awaits, and the label
     // was forwarded to a session that was gone — dropped. The behaviour is `deliverLatePrompt`'s (below) and the e2e's.
     const deliver = botSource.slice(botSource.indexOf('async function deliverActivePrompt('), botSource.indexOf('async function cancelPendingQuestionAndForward('));
-    assert.match(deliver, /const opening = await openTopicRequest\(key, text, intake\);\n\s*\/\/[^\n]*\n\s*const outcome = await deliverLatePrompt\(\{/);
-    assert.ok(deliver.includes("if (outcome !== 'noSession') trackTopicRequestTurn(key, opening);"), 'a prompt that reached nothing opens no tracked turn');
-    assert.match(deliver, /reportNoSession: async \(isAlreadyTold\) => \{\n(?:\s*\/\/[^\n]*\n)*\s*if \(opening\.requestId !== null\) await topicRequestLedger\?\.closeRequest\(opening\.requestId, 'cancelled'\);\n\s*if \(!isAlreadyTold\) await replyToThread\(key, t\('agent\.no_session'\)\);/, 'the request it opened is closed and the topic told, as the re-ask handler tells it — once');
+    assert.match(deliver, /const opening = await openTopicRequest\(key, text, intake\);\n(?:\s*\/\/[^\n]*\n)+\s*const outcome = await deliverLatePrompt\(\{/);
+    assert.ok(deliver.includes('forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { replyContext, requestHeader: opening.header }),'), 'the forward\'s own outcome is the answer');
+    assert.match(deliver, /reportNoSession: async \(isAlreadyTold\) => \{\n\s*if \(!isAlreadyTold\) await replyToThread\(key, t\('agent\.no_session'\)\);\n\s*\},/, 'the topic is told once; the request is settled below, for the wake and the forward alike');
     assert.ok(deliver.includes('wake: () => wakeSleepingSessionForPrompt(key),'), 'the wake says whether its start already posted why it failed');
+    assert.doesNotMatch(deliver, /closeRequest|trackTopicRequestTurn/, 'the request is closed or tracked in one place');
+    assert.match(deliver, /\}\);\n\s*await settleTopicRequestAfterDelivery\(key, opening, outcome\);\n\s*return outcome;/);
+  });
+
+  it('the forward ports return where the prompt went, with no wrapper that throws the answer away', () => {
+    assert.ok(botSource.includes('forwardPrompt: (key, text) => forwardPromptToAgent(key, getThreadAdapter(key), text),'));
+    assert.doesNotMatch(botSource, /forwardPrompt: async \(key, text\) => \{ await forwardPromptToAgent/);
+    const cancel = botSource.slice(botSource.indexOf('async function cancelPendingQuestionAndForward('), botSource.indexOf('async function applyQuestionAnswer('));
+    assert.match(cancel, /\): Promise<LatePromptOutcome> \{/);
+    assert.ok(cancel.includes('return forwardPromptToAgent(key, adapter, text, sentAtMs, { replyContext, requestHeader });'));
+  });
+
+  it('a request is settled by where its prompt went: tracked, or closed when no session was left to take it', () => {
+    // The helper: a prompt that found no session (it waited for a bot restart's replay; the person was told) must not leave a request
+    // open, or the wake-up engine prods the agent later for a turn that never started.
+    const helper = botSource.slice(botSource.indexOf('async function settleTopicRequestAfterDelivery('), botSource.indexOf('let requestLimitWaitAnswerDeps'));
+    assert.match(helper, /if \(delivery !== 'noSession'\) \{\n\s*trackTopicRequestTurn\(key, opening\);\n\s*return;\n\s*\}/);
+    assert.match(helper, /if \(opening\.requestId === null\) return;\n\s*await topicRequestLedger\?\.closeRequest\(opening\.requestId, 'cancelled'\)/);
+    // Every site that opens a request and hands its prompt on settles it through the helper — the turn is never tracked directly,
+    // except for the prompt buffered at capture time, which cannot find a session gone.
+    assert.equal(botSource.match(/trackTopicRequestTurn\(key, opening\)/g)?.length, 2, 'the helper, and the capture-time buffer');
+    assert.match(botSource.slice(botSource.indexOf('async function bufferPromptDuringStartup(')), /^[^]*?await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{quotedText\}`, true\);\n\s*trackTopicRequestTurn\(key, opening\);/);
+    const sites: Array<{ name: string; call: string; count: number }> = [
+      { name: '/schedule', call: 'deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting)', count: 1 },
+      { name: 'an album and a file', call: 'deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting)', count: 2 },
+      { name: 'a scheduled run', call: 'deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey))', count: 1 },
+      { name: 'free text that cancels a pending question', call: 'cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, replyContext, opening.header)', count: 1 },
+    ];
+    for (const { name, call, count } of sites) {
+      const settled = new RegExp(`const delivery = await ${call.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')};\\n\\s*await settleTopicRequestAfterDelivery\\(key, opening, delivery\\);`, 'g');
+      assert.equal(botSource.match(settled)?.length, count, `${name} settles its request by where the prompt went`);
+    }
+    assert.equal(botSource.match(/await settleTopicRequestAfterDelivery\(key, opening, /g)?.length, 6, 'the five above and the text handler, no other');
   });
 });
 
 describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what the session is NOW', () => {
-  function createPorts(state: { isWindowOpen: boolean; isSessionActive: boolean; isWakeOk?: boolean; isWakeNoticePosted?: boolean; isTechnical?: boolean }): { ports: LatePromptDeliveryPorts; steps: string[] } {
+  function createPorts(state: { isWindowOpen: boolean; isSessionActive: boolean; isWakeOk?: boolean; isWakeNoticePosted?: boolean; isTechnical?: boolean; forwardOutcome?: LatePromptOutcome }): { ports: LatePromptDeliveryPorts; steps: string[] } {
     const steps: string[] = [];
     return {
       steps,
@@ -177,7 +236,10 @@ describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what t
         checkIsSessionActive: () => state.isSessionActive,
         buffer: async () => { steps.push('buffer'); },
         wake: async () => { steps.push('wake'); return { isAwake: state.isWakeOk ?? true, isNoticePosted: state.isWakeNoticePosted ?? false }; },
-        forward: async () => { steps.push('forward'); },
+        forward: async () => {
+          steps.push('forward');
+          return state.forwardOutcome ?? 'forwarded';
+        },
         reportNoSession: async (isAlreadyTold) => { steps.push(isAlreadyTold ? 'reportNoSession(alreadyTold)' : 'reportNoSession'); },
       },
     };
@@ -205,6 +267,14 @@ describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what t
     const { ports, steps } = createPorts({ isWindowOpen: false, isSessionActive: false, isWakeOk: false, isWakeNoticePosted: true });
     assert.equal(await deliverLatePrompt(ports), 'noSession');
     assert.deepEqual(steps, ['wake', 'reportNoSession(alreadyTold)']);
+  });
+
+  it('a forward that itself ends in no session (a prompt that waited for an adopt replay) is the answer — the wake report is not run for it', async () => {
+    for (const state of [{ isWindowOpen: false, isSessionActive: true }, { isWindowOpen: false, isSessionActive: false }]) {
+      const { ports, steps } = createPorts({ ...state, forwardOutcome: 'noSession' });
+      assert.equal(await deliverLatePrompt(ports), 'noSession', JSON.stringify(state));
+      assert.ok(!steps.includes('reportNoSession') && !steps.includes('reportNoSession(alreadyTold)'), `the forward told the person already: ${JSON.stringify(state)}`);
+    }
   });
 
   it('a live process: forwarded at once', async () => {

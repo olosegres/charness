@@ -27,7 +27,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { keyFromString, keyToString, type SessionKey } from '../sessionKey';
 import { StartupPromptBuffer } from '../startupPromptBuffer';
-import { deliverPromptOrBuffer } from '../utils/promptDelivery';
+import { deliverPromptOrBuffer, type LatePromptOutcome } from '../utils/promptDelivery';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import {
@@ -70,6 +70,8 @@ interface World {
   /** Runs while the nudge is being handed over (a recurrence, a user message, a crash). */
   duringDelivery: (() => void) | null;
   deliveryError: Error | null;
+  /** Where the bot's forward puts a prompt (`forwardPromptToAgent`): `noSession` = the session was gone after a restart's replay wait. */
+  forwardOutcome: LatePromptOutcome;
   untakenRequestPrompt: string | undefined;
   kicks: Array<Promise<void>>;
   /** The rungs the kick moved a topic onto (`resumeOnRung`), and whether that switch took (it ends the retry itself). */
@@ -102,7 +104,10 @@ function createKickDeps(): ApiRetryKickDeps {
       return deliverPromptOrBuffer(
         {
           startupBuffer: world.startupBuffer,
-          forwardPrompt: async (target, prompt) => { world.nudges.push({ key: keyToString(target), text: prompt }); },
+          forwardPrompt: async (target, prompt) => {
+            if (world.forwardOutcome !== 'noSession') world.nudges.push({ key: keyToString(target), text: prompt });
+            return world.forwardOutcome;
+          },
           announceQueued: async () => {},
         },
         key,
@@ -176,6 +181,7 @@ beforeEach(() => {
     ensureOutcome: { ok: true },
     duringDelivery: null,
     deliveryError: null,
+    forwardOutcome: 'forwarded',
     untakenRequestPrompt: undefined,
     kicks: [],
     resumes: [],
@@ -373,6 +379,23 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
       assert.equal(world.notices.length, isTelegram ? 1 : 0, 'the reason is not posted again');
       assert.deepEqual(world.nudges, []);
       assert.equal(rearmedAfterRestart, 0);
+    });
+
+    it('the forward found no session (it waited for a restart\'s replay): no turn is watched, and the spent retry is not fired again', async () => {
+      world.forwardOutcome = 'noSession';
+      const logged = mock.method(console, 'warn', () => {});
+      try {
+        saveRetry(key);
+        boot();
+        await runDueTimers();
+        assert.equal(logged.mock.calls.filter((call) => String(call.arguments[0]).includes('no session was left to take it')).length, 1, 'the dead end is logged once');
+      } finally {
+        logged.mock.restore();
+      }
+
+      assert.deepEqual(world.nudges, [], 'nothing reached an agent');
+      assert.deepEqual(world.continuations, [], 'a turn that never started is not watched, or the wake-up engine would prod the agent for it');
+      assert.equal(boot(), 0, 'the retry is spent: a restart arms nothing');
     });
 
     it('the delivery threw: the kick is spent too, so the restart does not repeat it', async () => {
@@ -613,7 +636,7 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     assert.doesNotMatch(kickPorts, /forwardPromptToAgent\(/, 'a direct forward hits an adapter that is not there yet');
     // The buffer-or-forward unit the whole bot shares: buffered text replays in order once the start finishes.
     assert.ok(getFunction('function deliverPromptOrBuffer(').includes('return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled);'));
-    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: async \(key, text\) => \{ await forwardPromptToAgent\(key, getThreadAdapter\(key\), text\); \},/);
+    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text\),/);
   });
 
   it('both ways out of a startup window settle what it held: the replay on a started session, the discard on a failed start', () => {
