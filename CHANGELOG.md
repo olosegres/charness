@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**A usage-limit resume that finds its session gone no longer says «resumed» right before «no session».** When the bot restarted while a
+topic waited for a limit's reset and the conversation was ended in the same moment, the topic read the pinned «work resumed» notice and
+then «no session». The «resumed» notice now goes out only after a session took the "continue" prompt.
+
 **A hot-mode bot no longer keeps running the old build after a big update because its TypeScript watcher went blind.** After a pull of
 dozens of commits followed by a dependency install, the watcher could miss the changed files (the operating system drops file-change
 events when too many arrive while the compiler is busy): it then reported errors that did not exist, or a clean build that emitted

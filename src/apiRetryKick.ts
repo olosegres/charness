@@ -103,9 +103,10 @@ export interface ApiRetryKickDeps {
  * an OpenCode `session.error` it still is, so `ensureSession` is a no-op and the
  * nudge lands in the SAME live session — context intact; a sleeping session is
  * resumed by its id, and only one with nothing to resume is started fresh via the
- * thread's last adapter), tell the topic we're resuming, then hand over a neutral
- * "continue" nudge. With no session to resume
- * the topic gets the reason instead and nothing is forwarded.
+ * thread's last adapter), hand over a neutral "continue" nudge, then tell the topic we're
+ * resuming — once a session has taken the nudge (or will: it waits in the startup buffer). With no session to resume
+ * the topic gets the reason instead and nothing is forwarded; a nudge that finds the session gone after a restart's
+ * replay wait gets no "resuming" line either.
  *
  * The saved record means ARMED, so once the kick has run its course — the nudge
  * forwarded to the session, no session to nudge, or a delivery that threw — the saved
@@ -167,11 +168,6 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
       if (checkIsTelegramKey(key)) deps.postTopicNotice(key, { kind: 'noSession', message: ensured.message });
       return;
     }
-    // Announced only once there is a session to resume: a pinned "resuming" over a start that failed would
-    // read as work under way. The notices are topic messages (a pin among them): a tracker issue hears about
-    // the wait from the request's own answer, and has no topic for the rest (R6).
-    // A conversation-tail retry follows its "continuing…" notice within seconds: a second line would only repeat it.
-    if (checkIsTelegramKey(key) && entry.kind !== 'conversationTail') deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
     // The nudge is NOT a request: the open request (if any) continues under it. A
     // request whose prompt never reached the agent — the wait held it (R23) — gets
     // that prompt instead (R21). Prompts held during the wait ride whichever it is.
@@ -183,10 +179,16 @@ export async function runApiRetryKick(deps: ApiRetryKickDeps, key: SessionKey): 
       clearSavedRetryIfLive();
     });
     if (delivery === 'noSession') {
-      // The nudge waited for a bot restart's replay and found no session left (the person was told): no turn started to watch.
+      // The nudge waited for a bot restart's replay and found no session left (the person was told): no turn started to watch,
+      // and no "resuming" notice either — it would read as work under way right above the "no session" line.
       console.warn(`[apiRetry] nudge for ${k}: no session was left to take it; the retry is spent and an open request is left to the wake-up engine`);
       return;
     }
+    // Announced only once a session took the nudge (or will: it waits in the startup buffer behind a start under way): a pinned
+    // "resuming" over a start that failed, or over a session that was gone, would read as work under way. The notices are topic
+    // messages (a pin among them): a tracker issue hears about the wait from the request's own answer, and has no topic for the
+    // rest (R6). A conversation-tail retry follows its "continuing…" notice within seconds: a second line would only repeat it.
+    if (checkIsTelegramKey(key) && entry.kind !== 'conversationTail') deps.postTopicNotice(key, { kind: 'resuming', retryKind: entry.kind });
     isNudgeBuffered = delivery === 'buffered';
     await deps.trackContinuation(key, {
       isCountersReset: entry.kind === 'usageLimit',

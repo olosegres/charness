@@ -394,6 +394,7 @@ for (const [label, key] of [['a Telegram topic', topicKey], ['a Jira issue', iss
       }
 
       assert.deepEqual(world.nudges, [], 'nothing reached an agent');
+      assert.deepEqual(world.notices, [], 'and the topic is not told the work resumed: the person already heard "no session", a pinned «resuming» above it would be a lie');
       assert.deepEqual(world.continuations, [], 'a turn that never started is not watched, or the wake-up engine would prod the agent for it');
       assert.equal(boot(), 0, 'the retry is spent: a restart arms nothing');
     });
