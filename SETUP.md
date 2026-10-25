@@ -587,7 +587,7 @@ next start and shows the progress in General (or in its log).
   recognised in parallel. A hot reload of the bot keeps a running recogniser; stopping or killing the bot takes it down.
 - **Russian only.** English words come out in Cyrillic or garbled; with a `language` other than `ru` set, the engine is
   skipped and the next one in the chain answers.
-- **Audio formats:** Telegram's OGG/Opus voice notes, and also MP3, M4A (AAC), WAV, FLAC and several OGG files joined into one — each is recognised to its last second.
+- **Voice message formats:** a voice message is normally OGG/Opus, but Telegram also lets one be an MP3 or an M4A (AAC), and some apps join several OGG files into one — the local engine recognises each of these to its last second. Only *voice messages* are transcribed: an audio file sent as a file or as an audio message goes to the agent, not to speech recognition.
 - It listens on `127.0.0.1` only, on a port the OS picks, and answers only a per-start secret token.
 - **Docker is not supported yet** (the image has no `python3-venv`).
 
