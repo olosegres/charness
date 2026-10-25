@@ -895,6 +895,26 @@ class HttpQueueTest(unittest.TestCase):
         self.assertEqual(self.recognize.order, [1])
 
 
+class RecognitionOsErrorTest(unittest.TestCase):
+    def test_an_os_error_of_the_recognition_itself_is_a_500_not_a_client_that_left(self):
+        def recognize(samples, sample_rate):
+            raise OSError("the model file could not be read")
+
+        pool = sidecar.RecognitionPool(recognize, workers=1)
+        pool.start()
+        server = sidecar.SidecarServer(("127.0.0.1", 0), sidecar.SidecarContext(TEST_TOKEN, pool, split_one_piece_per_second, 1, 900.0, 600.0))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with self.assertLogs(sidecar.logger, level="ERROR"):
+                response = raw_request(server.server_address[1], "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(1.0))
+            self.assertEqual(response.status, 500, "the bot must hear of a failure of ours, not of a hang-up it did not do")
+            self.assertIn("OSError", json.loads(response.body)["error"]["message"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            pool.stop()
+
+
 class QueueReportFailureTest(unittest.TestCase):
     def test_a_client_gone_before_the_interim_report_drops_the_voice(self):
         recognize = GatedRecognizer()
@@ -911,7 +931,7 @@ class QueueReportFailureTest(unittest.TestCase):
         def broken_report(seconds_ahead):
             raise BrokenPipeError("the client is gone")
 
-        handler._report_queue = broken_report
+        handler._write_queue_report = broken_report
         context = sidecar.SidecarContext(TEST_TOKEN, pool, split_one_piece_per_second, 1, 900.0, 600.0)
         with self.assertRaises(sidecar.ClientGone):
             handler._transcribe(context)

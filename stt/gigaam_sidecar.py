@@ -112,8 +112,8 @@ QUEUE_REPORT_STATUS = 102
 QUEUED_AUDIO_SECONDS_HEADER = "X-Charness-Queued-Audio-Seconds"
 # How often a waiting handler checks that its client is still connected, and whether the queue ahead grew.
 CLIENT_CHECK_SECONDS = 0.5
-# A waiting voice is told the queue ahead again when it has grown by more than this (a voice ahead whose length was
-# not known before it was decoded).
+# A waiting voice is told the queue ahead again when it has grown by more than this: a safeguard for a voice ahead whose
+# length was not yet known when this one was reported (a sub-millisecond window: lengths are read from the header).
 QUEUE_REPORT_GROWTH_SECONDS = 1.0
 HEALTH_PATH = "/health"
 RESPONSE_FORMATS = ("json", "text")
@@ -715,12 +715,12 @@ class SidecarHandler(http.server.BaseHTTPRequestHandler):
 
         try:
             self._report_queue(reported_seconds_ahead)
+            # A failing piece re-raises here; an OSError of the recognition itself is OUR failure and goes on to the 500.
             text = request.wait(context.max_seconds, self._is_client_gone, report_a_longer_queue)
-        except (ClientGone, OSError) as error:
-            if isinstance(error, OSError):  # the interim report could not even be written: the client is gone
-                request.fail(ClientGone())
+        except ClientGone:
+            request.fail(ClientGone())  # a report that could not be written ends the wait too (no-op once failed)
             logger.info("the client left while %.1fs of audio waited; dropped", audio_seconds)
-            raise ClientGone() from error
+            raise
         logger.info(
             "transcribed %.1fs of audio in %d chunk(s), %.2fs", audio_seconds, len(chunks), time.monotonic() - started
         )
@@ -730,7 +730,14 @@ class SidecarHandler(http.server.BaseHTTPRequestHandler):
             self._reply_json(200, {"text": text})
 
     def _report_queue(self, seconds_ahead: float) -> None:
-        """The interim 102: the voice is in line, with this much audio before it."""
+        """The interim 102: the voice is in line, with this much audio before it. A report that cannot be written means
+        the client is gone (`ClientGone`)."""
+        try:
+            self._write_queue_report(seconds_ahead)
+        except OSError as error:
+            raise ClientGone() from error
+
+    def _write_queue_report(self, seconds_ahead: float) -> None:
         self.send_response_only(QUEUE_REPORT_STATUS)
         self.send_header(QUEUED_AUDIO_SECONDS_HEADER, f"{seconds_ahead:.1f}")
         self.end_headers()

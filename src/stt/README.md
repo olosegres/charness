@@ -131,8 +131,11 @@ env too.
   included, or, for one still being decoded and cut, its length read from the file's header the moment it arrived
   (`soundfile.info`, under a millisecond — a 5-minute decode takes seconds, and a voice sent meanwhile was once told
   "0 s ahead" and timed out). Every 0.5 s while the voice waits, the handler sends another `102` when the queue ahead
-  has grown by more than 1 s (a header that could not be read), and checks that its client is still connected; a client that hung up (it timed out, the bot moved on) gets its request dropped: no
-  piece not yet handed out is recognised, nothing is answered, and the log says `the client left`.
+  has grown by more than 1 s — a safeguard for a voice ahead whose length was not yet known when this one was reported
+  (a sub-millisecond window: a file whose header cannot be read is refused before it is cut) — and checks that its
+  client is still connected; a client that hung up (it timed out, the bot moved on) — or a report that cannot be
+  written — gets its request dropped: no piece not yet handed out is recognised, nothing is answered, and the log says
+  `the client left`. An `OSError` of the recognition itself is the sidecar's own failure and answers 500.
 - **Chunking — every voice is cut at its pauses.** Audio is decoded with `soundfile` (libsndfile reads Telegram's
   OGG/Opus, no ffmpeg), downmixed to mono and resampled ONCE to 16 kHz with the model's own resampler. Silero VAD
   (`onnx_asr.load_vad("silero")`, one thread, in the request's handler thread) finds the speech; every gap of at least
