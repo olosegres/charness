@@ -82,9 +82,12 @@ describe('agent-plugin', () => {
     // "worker exited" right after the launch.
     for (const folder of ['charness-delegate-claude', 'charness-delegate-opencode']) {
       const text = fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');
-      assert.match(text, /Check the PID: `ps -o args= -p "\$\(cat <run-dir>\/pid\)"`/, folder);
-      assert.match(text, /`pgrep -f "/, `${folder}: the fallback that finds the worker`);
+      // The run dir quoted inside `$(…)` too: a path with a space would otherwise fail the check.
+      assert.match(text, /Check the PID: `ps -o args= -p "\$\(cat "<run-dir>\/pid"\)"`/, folder);
+      assert.match(text, /`pgrep (-n )?-f "/, `${folder}: the fallback that finds the worker`);
     }
+    // OpenCode's launcher may run the binary as a child: the fallback takes the newest match, one PID.
+    assert.match(fs.readFileSync(path.join(skillsDir, 'charness-delegate-opencode', 'SKILL.md'), 'utf8'), /`pgrep -n -f "opencode/);
   });
 
   test('no file holds a real-looking identifier', () => {

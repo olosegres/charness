@@ -48,7 +48,7 @@ echo $! > "<run-dir>/pid"
   turn early.
 - A checkout below the folder that holds `.claude/skills` does not see those skills: add
   `--add-dir "<that folder>"` and check that the `init` event's `skills` lists every skill the brief names.
-3. Check the PID: `ps -o args= -p "$(cat <run-dir>/pid)"` must show `claude -p … <uuid>`. If it does not (the CLI
+3. Check the PID: `ps -o args= -p "$(cat "<run-dir>/pid")"` must show `claude -p … <uuid>`. If it does not (the CLI
    handed over to a new process), take it from `pgrep -f "^claude -p .*<uuid>"` and write that into the pid file.
 4. Record the UUID, checkout and run directory in the plan, then arm the watch check from `charness-manager`
    with this PID and run directory.
