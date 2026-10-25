@@ -181,13 +181,17 @@ function checkIsStdoutLogHandled(): boolean {
 /**
  * Restart the instance once the previous bot has saved its whole log as handled, and check the adopted bot starts its
  * tail at the end of that log: a finished turn is never replayed, so the recovery under test is the only thing that
- * revisits it — a replayed error would be handled twice. Not for a restart that is MEANT to replay a turn in flight.
+ * revisits it — a replayed error would be handled twice. For a restart where the agent process is expected to survive;
+ * not for one that is MEANT to replay a turn in flight.
  */
 async function restartWithHandledLog(mutatePersisted: (persisted: PersistedState) => void): Promise<IsolatedCharness> {
   await getCharness().waitFor('the bot to save its whole stdout log as handled', replyTimeoutMs, checkIsStdoutLogHandled);
   const restarted = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), mutatePersisted);
   const adoptLine = adoptLogLineRegex.exec(restarted.output);
-  if (adoptLine) assert.equal(adoptLine[1], adoptLine[2], 'the adopted bot starts its tail at the end of the log: a finished turn is not replayed');
+  // Required, not optional: a restart that does not adopt (or a log line that changed its words) would pass an optional check
+  // without testing anything.
+  assert.ok(adoptLine, 'the restarted bot adopted the agent process that outlived it');
+  assert.equal(adoptLine[1], adoptLine[2], 'the adopted bot starts its tail at the end of the log: a finished turn is not replayed');
   return restarted;
 }
 
