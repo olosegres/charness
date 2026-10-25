@@ -139,6 +139,12 @@ To run your checkout as the global `charness` command instead of the npm package
 without re-installing; `npm install -g .` installs a copy instead. Configuration and launch are as in
 [SETUP.md](SETUP.md).
 
+`yarn test:unit` also runs the STT sidecar's Python tests (`sttSidecarPython.test.ts` → `stt/test_gigaam_sidecar.py`,
+no model needed). They want **`uv`** (an ephemeral environment with numpy and the pinned soundfile; the first run
+downloads them, so it needs the network once) or a **`python3` that has numpy and soundfile**. Without either, or when
+`uv` cannot reach the package index, a local run skips that test and says why; CI (`CI` set, uv installed by the
+workflow) fails instead.
+
 Node applies `--test-timeout` to a whole test FILE (a `describe`'s own `timeout` cannot extend it), so a file that
 hangs or leaves a process alive fails by name when its limit passes, instead of hanging the run. A long-running
 flow file must be named `*E2e.test.ts` to get the flows' limit; `live/*Live.test.ts` is run directly (CLAUDE.md).
