@@ -218,12 +218,16 @@ describe('Jira connector end to end — what the prompts carry: built charness, 
     const compactions = (): FakeCompaction[] => readFakeLog<FakeCompaction>(fakeClaudeLogFileNames.compactions);
     // The bot's: the agent asks for it (`compact_conversation`), the bot runs it when the turn ends.
     createIssue('PROJ-12', 'compact');
-    const compactionsBefore = compactions().length;
     const firstText = await handOverAndAwaitAnswer('PROJ-12');
     assert.ok(isWholePrompt(firstText));
-    await waitFor('PROJ-12\'s compaction ran', answerTimeoutMs, () => compactions().length > compactionsBefore);
+    // The conversation is told apart from every other issue's: an idle compaction of another one can land first.
+    const [firstTurn] = getTurns('PROJ-12');
+    const sessionId = getLaunchSessionId(getSessionLaunchOf(firstTurn.pid)?.argv ?? []);
+    assert.ok(sessionId, 'the first launch named the conversation');
+    const findCompaction = (): FakeCompaction | undefined => compactions().find((compaction) => compaction.sessionId === sessionId);
+    await waitFor('PROJ-12\'s compaction ran', answerTimeoutMs, () => findCompaction() !== undefined);
     // The agent-armed compaction asks for no closing section: the skills and the next-steps checklist end the summary.
-    const armedInstruction = compactions()[compactionsBefore].instruction;
+    const armedInstruction = findCompaction()?.instruction ?? '';
     assert.equal(armedInstruction, `${compactionSummaryGuidance}\n\n${compactionResumeGuidance}`, 'the summary guidance, then the loaded skills and the checklist');
     assert.ok(armedInstruction.endsWith(compactionChecklistGuidance), 'the checklist is the last thing the agent reads');
     await waitFor('the bot noted the reset', answerTimeoutMs, () => getCharness().output.includes('[jira] PROJ-12: its context was reset (compaction (manual))'));
