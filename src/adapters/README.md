@@ -269,7 +269,10 @@ restarts — every hot reload — never touch it. Per-thread host dir
 On boot, reattach ADOPTS a live `cjson-*` session (reopen fifo + resume the
 tail from the persisted offset → the downtime gap replays through the normal
 pipeline, in-flight turn delivered end-to-end, no recap posted; only a turn in
-flight at the restart is replayed — a finished one is not); a released
+flight at the restart is replayed — a finished one is not; a prompt forwarded
+meanwhile waits for the replay — `forwardPromptToAgent` →
+`utils/adoptReplayGate.ts`, bounded — or it would reset the answer/error state
+the replayed frames use); a released
 session (`/quit`/`/new` cleared the persisted id) is killed as an orphan, and
 a thread whose process is gone SLEEPS (lifecycle plan L4): nothing is re-spawned
 at boot — its next trigger resumes the conversation — and the downtime recap is

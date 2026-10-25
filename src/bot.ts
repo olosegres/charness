@@ -179,6 +179,7 @@ import { getPersistedConversations, getUnservedStateError } from './platform/uns
 import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
 import { postToSession, type PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
+import { waitForAdoptedReplay } from './utils/adoptReplayGate';
 import { deliverLatePrompt, deliverPromptOrBuffer as deliverPromptWithDeps, type LatePromptOutcome, type LateWakeResult, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
 import { restoreApiRetryTimers, restoreFiredLimitProbes, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
@@ -5184,6 +5185,10 @@ async function forwardPromptToAgent(
   sentAtMs?: number,
   options: { isRecoveryReplay?: boolean; isRequestReminder?: boolean; replyContext?: string; requestHeader?: string } = {},
 ): Promise<void> {
+  // An adopted session replays what its process wrote during the downtime first: a prompt written meanwhile would reset
+  // the answer and error state those frames still use, and the replayed text would join the new reply's message (the
+  // «new message» mark below would go to the replayed text).
+  await waitForAdoptedReplay(adapter, key);
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
   // Skip slash commands (not worth replaying), the recovery replay itself (keeps

@@ -200,6 +200,8 @@ export interface FakeClaudeTurn {
 
 /** One line of the fake's `prompts.jsonl`: a user message it read. */
 export interface FakeClaudePrompt {
+  /** When the fake read the message, `Date.now()` — comparable with the bot's own timestamps (same host). */
+  readAt: number;
   pid: number;
   issueKey: string;
   requestId: string | null;

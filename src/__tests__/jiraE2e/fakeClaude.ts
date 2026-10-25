@@ -918,7 +918,7 @@ async function main(): Promise<void> {
       return;
     }
     const promptIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
-    appendJsonLine(fakeClaudeLogFileNames.prompts, { pid: process.pid, issueKey: promptIssueKey, requestId: requestIdRe.exec(content)?.[0] ?? null, text: content });
+    appendJsonLine(fakeClaudeLogFileNames.prompts, { readAt: Date.now(), pid: process.pid, issueKey: promptIssueKey, requestId: requestIdRe.exec(content)?.[0] ?? null, text: content });
     if (fs.existsSync(path.join(getStateDir(), fakeClaudeCrashOnPromptFileName))) {
       // The message was read and neither echoed nor answered: the prompt never gets taken in.
       process.exit(1);

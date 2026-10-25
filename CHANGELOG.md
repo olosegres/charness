@@ -30,6 +30,12 @@ moment replayed the turn together with its error — a second notice or error li
 auto-retry. The turn's text is now sent first, and the bot saves where it stopped reading at the end of the turn, as it does for
 a turn that succeeded.
 
+**A message sent right after a bot restart no longer mixes with a turn that was running when the bot went down.** The restarted
+bot reads what the agent wrote while it was down a moment after it starts; a prompt that reached the agent before that (the
+bot's own resume after a usage limit, a scheduled run, your message) reset the reply the replayed text still belonged to, so the
+old turn's text could end up inside the new reply's message, and an error of the old turn took the new turn's place — shown as
+a plain "Claude error" line and not retried. A prompt now waits for that replay (at most 30 s) before it is sent.
+
 ## 3.6.0 — 2026-10-24
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process

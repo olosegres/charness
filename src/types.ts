@@ -726,6 +726,12 @@ export interface AgentAdapter extends EventEmitter {
    * already finishes at once (or only queues its teardown) omits it. `/quit` waits on it before it says «stopped».
    */
   stopSessionAndWait?(key: SessionKey): Promise<void>;
+  /**
+   * @description Resolves once an ADOPTED session (one that outlived a bot restart) has replayed what its process wrote
+   * while the bot was down — at once for any other session. A prompt forwarded before that would reset the answer and
+   * error state the replayed frames still use. Optional: only the json-stream Claude backend adopts a process and replays.
+   */
+  whenAdoptReplayed?(key: SessionKey): Promise<void>;
   checkIsActive(key: SessionKey): boolean;
 
   /**
