@@ -472,7 +472,10 @@ resumable in the other.
 - **The bot's skills.** Every agent launch — the json-stream spawn (start and resume), the tmux start and resume —
   carries `--plugin-dir <package>/agent-plugin` (`utils/agentPlugin.ts`; nothing when the folder is missing):
   Claude Code lists the skills as `charness:<folder>`, also under a Jira session's `--setting-sources project,local`.
-  `foreignKeyGate.test.ts` fails a launch path without it.
+  `foreignKeyGate.test.ts` fails a launch path without it. Two traps when editing a launch argv: a CLI older than
+  2.0.25 (`minPluginDirClaudeCodeVersion`) refuses to start with the flag, so it is left out there; and on
+  2.0.25–2.1.74 `--plugin-dir` takes several values, so an OPTION must follow it — never the free-text prompt or `args`,
+  which would be read as a second plugin folder (the same guard test checks the order).
 
 - **Effort.** Claude persists `/effort` GLOBALLY in its own settings, so a fresh TUI would inherit another
   topic's level. On every fresh spawn the tmux adapter arms the thread's stored level (`pendingEffortReapply`)
