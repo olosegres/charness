@@ -29,11 +29,12 @@ export function resolveAutoContinueOnLimitEnabled(
 }
 
 /**
- * @description Resolve whether the bot may switch a limited topic to ANOTHER Claude account profile by itself
- * (`/account` → auto-switch; the decisions live in `claudeLimitSwitch.ts`, which re-exports this). A per-thread
- * override wins; otherwise the instance default; unset everywhere ⇒ ON, with any number of signed-in accounts — a
- * limit should not strand the work while another account has room, and with a single account there is simply nothing
- * to switch to yet. An operator's explicit OFF (stored `false`) stays off. Kept beside its sibling so `state.ts`
+ * @description Resolve whether the bot may move a limited topic to the next entry of the fallback list by itself — another
+ * Claude account profile, or an OpenCode provider and model (`/limits_autoswitch`; the decisions live in `claudeLimitSwitch.ts`,
+ * which re-exports this). A per-thread override wins; otherwise the instance default; unset everywhere ⇒ ON, with any number of
+ * signed-in accounts — a limit should not strand the work while another entry has room, and with a single account and no list
+ * there is simply nothing to move to. An OpenCode entry hands the conversation over in compacted form, so an operator who does
+ * not want that turns this OFF or keeps OpenCode out of the list. An explicit OFF (stored `false`) stays off. Kept beside its sibling so `state.ts`
  * loads no more than it did.
  */
 export function resolveClaudeAutoSwitchOnLimitEnabled(

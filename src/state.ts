@@ -471,9 +471,9 @@ export interface StateV1 {
   claudeProfileOverrides?: Record<string, string>;
   /**
    * Auto-switch of the Claude account on a usage limit (`/account`, `utils/claudeLimitSwitch.ts`): whether a
-   * topic whose profile hits a limit is moved to another signed-in profile with room by itself. The same
-   * instance-default + per-thread-override pair as `autoContinueOnLimit*`; absent ⇒ ON (also with a single
-   * account), only an explicit `false` turns it off.
+   * topic whose profile hits a limit is moved to the next entry of the fallback list with room by itself (another signed-in
+   * profile, or an OpenCode entry). The same instance-default + per-thread-override pair as `autoContinueOnLimit*`; absent ⇒ ON
+   * (also with a single account), only an explicit `false` turns it off.
    */
   claudeAutoSwitchOnLimitEnabled?: boolean;
   claudeAutoSwitchOnLimitOverrides?: Record<string, boolean>;

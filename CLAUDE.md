@@ -151,7 +151,7 @@ per-backend controls are optional methods the bot checks before calling.
   + the recent `/model` picks) and edited from any topic with revision-baked buttons (`fbk_*`). `planFallbackSwitch`
   (from `handleApiError` → `announceUsageLimitOrSwitch`) marks the limited rung (`limitedUntil` /
   `openCodeModelLimits`) and takes the first AVAILABLE rung in chain order; a rung with `disabled: true` is never a candidate (a rebuild keeps it so); auto-switch ON (a `/limits_autoswitch`
-  setting, OFF by default; the wait setting beside it is the old `/auto_continue_limits` pair, a topic's three states are on / off / as General) switches by itself, OFF puts
+  setting, ON by default — also with a single account, a stored `false` keeps it off; the wait setting beside it is the old `/auto_continue_limits` pair, a topic's three states are on / off / as General) switches by itself, OFF puts
   `fbsw_<episode>_<index>` buttons on the notice (indexes into that episode's remembered candidates); no
   candidate ⇒ the wait — aimed, when every enabled rung incl. the current one is limited, at the rung whose limit resets
   EARLIEST (`pickEarliestResetRung`, `retargetLimitWait`): the persisted retry record carries `resumeOn`, and the kick

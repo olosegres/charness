@@ -425,7 +425,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
 
   /**
    * @description Set whether the bot moves a limited topic to the next rung by itself (ON by default: with one
-   * account there is nothing to switch to yet, and a second one takes over from its first limit) and RETURN the
+   * account and no list there is nothing to move to, and an account or an entry added later takes over from the first limit) and RETURN the
    * confirmation. General sets the instance default, a topic its override (`null` = follow General again).
    */
   async function applyAutoSwitch(key: SessionKey, isGeneral: boolean, enabled: boolean | null): Promise<string> {

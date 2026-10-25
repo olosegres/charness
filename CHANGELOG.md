@@ -14,11 +14,13 @@ word. The hot supervisor now compares the watcher with the sources every 30 s an
 restarts the watcher alone (when it reports errors, only after a fresh compile finds none) — the bot, its agents and the supervisor
 stay up, and the update reaches the worker like any other.
 
-**Switching to another account on a usage limit is now ON by default, also with a single signed-in account.** The «🔁 Auto switch»
-setting of `/limits_autoswitch` used to start OFF, so a limit stranded the work on the limit notice until someone tapped «Switch to …»
-even when another account had room. Now a topic whose account hits a limit moves to the next account with room by itself; with one
-account there is nothing to move to, so the bot waits for the reset as before and a second account added later is used from its
-first limit on. An instance where you turned it OFF (in General or for one topic) keeps your choice.
+**Switching to the next entry of the fallback list on a usage limit is now ON by default, also with a single signed-in account.** The
+«🔁 Auto switch» setting of `/limits_autoswitch` used to start OFF, so a limit stranded the work on the limit notice until someone
+tapped «Switch to …» even when another entry had room. Now a topic that hits a limit moves by itself to the first entry of the list
+with room — another Claude account, or an OpenCode provider and model, which hands the conversation over to a different agent in
+compacted form. With one account and no list there is nothing to move to, so the bot waits for the reset as before, and an account
+or an entry added later is used from the first limit on. An instance where you turned it OFF (in General or for one topic) keeps
+your choice; if you do not want conversations handed to OpenCode by themselves, turn it OFF or leave OpenCode out of the list.
 
 **Agents now get Charness's own orchestration skills.** Every agent session the bot starts — Claude Code in a topic or a Jira
 conversation (the stream and the tmux backend) and OpenCode — gets the bot's skills: `charness-manager` for driving work
