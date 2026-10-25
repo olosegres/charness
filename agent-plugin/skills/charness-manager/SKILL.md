@@ -93,8 +93,9 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
       verbatim, and the commit range — nothing else. Findings go back to a builder as rework, then a new review.
    2. Clean → a builder runs ALL test suites in full and fixes every failure.
    3. Any fixes in 2 → a separate reviewer reviews just those fixes; a change it makes sends you back to 2.
-   Each loop runs up to 3 cycles; more only while the findings are concrete local fixes, telling the user about
-   each extra cycle. A major or recurring finding: stop, leave the work for inspection, report.
+   Each loop runs up to 10 cycles while the findings are concrete local fixes, telling the user about each cycle
+   past the third — even when new findings keep landing in the same area. A major finding, or the 10 cycles used
+   up: stop, leave the work for inspection, report.
 4. **Push** only when the user allowed it (in chat or in their own instructions); otherwise report it ready to
    push — as a question the user will notice (below).
 
