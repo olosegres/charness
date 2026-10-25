@@ -214,55 +214,89 @@ class RecognizerTest(unittest.TestCase):
         self.assertEqual(calls, [SAMPLE_RATE])
 
 
+def submit_now(pool, chunks, sample_rate=SAMPLE_RATE):
+    """A request whose pieces are ready the moment it arrives."""
+    request = pool.open_request()
+    pool.submit(request, chunks, sample_rate)
+    return request
+
+
+def label_chunk(label):
+    return np.full(4, label, dtype=np.float32)
+
+
+class GatedRecognizer:
+    """Records the label of every piece it is given and holds each one until the gate opens."""
+
+    def __init__(self):
+        self.order = []
+        self.started = threading.Event()
+        self.gate = threading.Event()
+
+    def __call__(self, samples, sample_rate):
+        self.order.append(int(samples[0]))
+        self.started.set()
+        self.gate.wait(5)
+        return f"t{int(samples[0])}"
+
+
 class PoolTest(unittest.TestCase):
-    def test_a_short_request_overtakes_the_rest_of_a_long_one(self):
-        gate = threading.Event()
-        first_started = threading.Event()
-        order = []
-
-        def recognize(samples, sample_rate):
-            order.append(int(samples[0]))
-            first_started.set()
-            gate.wait(5)
-            return f"t{int(samples[0])}"
-
+    def test_a_short_request_waits_for_every_piece_of_a_long_one_that_arrived_before_it(self):
+        recognize = GatedRecognizer()
         pool = sidecar.RecognitionPool(recognize, workers=1)
         pool.start()
-        long_chunks = [np.full(4, 100 + index, dtype=np.float32) for index in range(12)]
-        long_request = pool.submit(long_chunks, SAMPLE_RATE)
-        self.assertTrue(first_started.wait(5), "the single worker took the long request's first chunk")
+        long_request = submit_now(pool, [label_chunk(100 + index) for index in range(12)])
+        self.assertTrue(recognize.started.wait(5), "the single worker took the long request's first piece")
         self.assertEqual(pool.queued_chunks(), 11)
-        short_request = pool.submit([np.full(4, 1, dtype=np.float32)], SAMPLE_RATE)
-        gate.set()
-        self.assertEqual(short_request.wait(5), "t1")
+        short_request = submit_now(pool, [label_chunk(1)])
+        self.assertEqual(pool.queued_chunks(), 12)
+        recognize.gate.set()
         long_text = long_request.wait(5)
+        self.assertEqual(short_request.wait(5), "t1")
         pool.stop()
 
-        self.assertEqual(order[0], 100)
-        self.assertEqual(order[1], 1, "the short request ran before the long one's remaining chunks")
-        self.assertEqual(order[2:], list(range(101, 112)), "the long request keeps its own order")
+        self.assertEqual(recognize.order, list(range(100, 112)) + [1], "arrival order: the short request runs last")
         self.assertEqual(long_text, " ".join(f"t{100 + index}" for index in range(12)))
 
-    def test_equal_priorities_keep_arrival_order(self):
-        order = []
-        gate = threading.Event()
-        started = threading.Event()
+    def test_an_earlier_request_still_cutting_its_audio_keeps_its_place(self):
+        recognize = GatedRecognizer()
+        recognize.gate.set()
+        pool = sidecar.RecognitionPool(recognize, workers=2)
+        pool.start()
+        slow_to_cut = pool.open_request()
+        quick = submit_now(pool, [label_chunk(2)])
+        self.assertFalse(quick.is_finished(), "nothing runs while the request that arrived first still prepares")
+        self.assertEqual(recognize.order, [])
+        pool.submit(slow_to_cut, [label_chunk(10), label_chunk(11)], SAMPLE_RATE)
+        self.assertEqual(slow_to_cut.wait(5), "t10 t11")
+        self.assertEqual(quick.wait(5), "t2")
+        pool.stop()
+        self.assertEqual(recognize.order[:2], [10, 11], "the earlier request's pieces are handed out first")
+        self.assertEqual(recognize.order[2], 2)
 
-        def recognize(samples, sample_rate):
-            order.append(int(samples[0]))
-            started.set()
-            gate.wait(5)
-            return ""
-
+    def test_a_request_cancelled_before_its_pieces_frees_the_requests_behind_it(self):
+        recognize = GatedRecognizer()
+        recognize.gate.set()
         pool = sidecar.RecognitionPool(recognize, workers=1)
         pool.start()
-        requests = [pool.submit([np.full(4, label, dtype=np.float32)], SAMPLE_RATE) for label in (1, 2, 3)]
-        self.assertTrue(started.wait(5))
-        gate.set()
+        undecodable = pool.open_request()
+        behind = submit_now(pool, [label_chunk(3)])
+        pool.cancel(undecodable)
+        self.assertEqual(behind.wait(5), "t3")
+        pool.stop()
+        self.assertEqual(recognize.order, [3])
+
+    def test_requests_run_in_arrival_order(self):
+        recognize = GatedRecognizer()
+        pool = sidecar.RecognitionPool(recognize, workers=1)
+        pool.start()
+        requests = [submit_now(pool, [label_chunk(label)]) for label in (1, 2, 3)]
+        self.assertTrue(recognize.started.wait(5))
+        recognize.gate.set()
         for request in requests:
             request.wait(5)
         pool.stop()
-        self.assertEqual(order, [1, 2, 3])
+        self.assertEqual(recognize.order, [1, 2, 3])
 
     def test_a_failing_chunk_fails_its_request_only(self):
         def recognize(samples, sample_rate):
@@ -272,35 +306,38 @@ class PoolTest(unittest.TestCase):
 
         pool = sidecar.RecognitionPool(recognize, workers=2)
         pool.start()
-        broken = pool.submit([np.full(4, 666, dtype=np.float32), np.full(4, 1, dtype=np.float32)], SAMPLE_RATE)
-        fine = pool.submit([np.full(4, 2, dtype=np.float32)], SAMPLE_RATE)
+        broken = submit_now(pool, [label_chunk(666), label_chunk(1)])
+        fine = submit_now(pool, [label_chunk(2)])
         with self.assertRaises(ValueError):
             broken.wait(5)
         self.assertEqual(fine.wait(5), "ok")
         pool.stop()
 
-    def test_a_timeout_drops_the_pending_chunks(self):
-        gate = threading.Event()
-        calls = []
-
-        def recognize(samples, sample_rate):
-            calls.append(1)
-            gate.wait(5)
-            return "late"
-
+    def test_a_timeout_drops_the_pending_chunks_and_the_next_request_runs(self):
+        recognize = GatedRecognizer()
         pool = sidecar.RecognitionPool(recognize, workers=1)
         pool.start()
-        request = pool.submit([np.zeros(4, dtype=np.float32) for _ in range(5)], SAMPLE_RATE)
+        request = submit_now(pool, [label_chunk(5) for _ in range(5)])
+        behind = submit_now(pool, [label_chunk(6)])
         with self.assertRaises(sidecar.RecognitionTimeout):
             request.wait(0.1)
-        gate.set()
+        recognize.gate.set()
+        self.assertEqual(behind.wait(5), "t6")
         pool.stop()
         for thread in pool._threads:
             thread.join(5)
-        self.assertEqual(len(calls), 1, "only the chunk already running was recognised")
+        self.assertEqual(recognize.order, [5, 6], "only the piece already running was recognised")
+
+    def test_a_request_with_no_pieces_is_empty_text_at_once(self):
+        pool = sidecar.RecognitionPool(GatedRecognizer(), workers=1)
+        pool.start()
+        self.assertEqual(submit_now(pool, []).wait(1), "")
+        pool.stop()
 
     def test_texts_are_joined_with_single_spaces_and_empty_ones_dropped(self):
-        request = sidecar.PoolRequest(4, SAMPLE_RATE)
+        pool = sidecar.RecognitionPool(GatedRecognizer(), workers=1)
+        request = pool.open_request()
+        request.attach_chunks([label_chunk(index) for index in range(4)], SAMPLE_RATE)
         for index, text in enumerate(["  one ", "", "two", " three  "]):
             request.complete_chunk(index, text)
         self.assertEqual(request.wait(1), "one two three")
@@ -470,6 +507,62 @@ class OwnerTest(unittest.TestCase):
         child.kill()
         child.wait()
         self.assertFalse(sidecar.is_owner_alive(child.pid, token))
+
+
+class HttpArrivalOrderTest(unittest.TestCase):
+    """The real handler: a voice takes its place when its upload is in, before it is cut."""
+
+    def test_a_voice_that_is_quicker_to_cut_does_not_overtake_one_that_arrived_first(self):
+        first_is_cutting = threading.Event()
+        release_first = threading.Event()
+        recognised = []
+
+        def split_audio(samples, sample_rate):
+            if len(samples) == 2 * SAMPLE_RATE:
+                first_is_cutting.set()
+                release_first.wait(5)
+            return [samples], sample_rate
+
+        def recognize(samples, sample_rate):
+            recognised.append(len(samples) // SAMPLE_RATE)
+            return f"{len(samples) // SAMPLE_RATE}s"
+
+        pool = sidecar.RecognitionPool(recognize, workers=2)
+        pool.start()
+        server = sidecar.SidecarServer(("127.0.0.1", 0), sidecar.SidecarContext(TEST_TOKEN, pool, split_audio, 2, 900.0, 600.0))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        replies = {}
+
+        def post(seconds):
+            wav = io.BytesIO()
+            import soundfile
+
+            soundfile.write(wav, tone(seconds), SAMPLE_RATE, format="WAV", subtype="PCM_16")
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+            connection.request("POST", sidecar.TRANSCRIPTIONS_PATH, build_multipart(wav.getvalue()), {
+                "Authorization": f"Bearer {TEST_TOKEN}", "Content-Type": f"multipart/form-data; boundary={BOUNDARY}"})
+            replies[seconds] = json.loads(connection.getresponse().read())["text"]
+            connection.close()
+
+        try:
+            first = threading.Thread(target=post, args=(2.0,))
+            first.start()
+            self.assertTrue(first_is_cutting.wait(5), "the first voice is being cut")
+            second = threading.Thread(target=post, args=(1.0,))
+            second.start()
+            second.join(1.0)
+            self.assertTrue(second.is_alive(), "the second voice waits while the first one is still being cut")
+            self.assertEqual(recognised, [])
+            release_first.set()
+            first.join(10)
+            second.join(10)
+            self.assertEqual(replies, {2.0: "2s", 1.0: "1s"})
+            self.assertEqual(recognised, [2, 1])
+        finally:
+            release_first.set()
+            server.shutdown()
+            server.server_close()
+            pool.stop()
 
 
 class HttpTest(unittest.TestCase):

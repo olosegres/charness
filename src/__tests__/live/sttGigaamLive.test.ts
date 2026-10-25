@@ -18,7 +18,7 @@
  *
  * Cases: scratch install · the Python unit tests under the venv interpreter · cold start · (b) a request
  * without the token is refused · (c) health · (a) the short clip through `transcribeWithEngines` · (e) the long
- * clip's time and peak memory · (f) a short voice overtakes a queued long one · (h) two sidecars, two ports · (g) the
+ * clip's time and peak memory · (f) a short voice waits for a long one that arrived first · (h) two sidecars, two ports · (g) the
  * owner dying takes the sidecar down · (d) the idle exit deletes the record.
  */
 
@@ -62,12 +62,12 @@ const longVoiceBudgetMs = 30_000;
 const longVoiceHardLimitMs = 85_000;
 const peakMemoryLimitKb = 1024 * 1024;
 /**
- * The short voice's wait must be well under what plain arrival order would cost it — waiting for ALL the long
- * voice's queued chunks, i.e. about the long reply's remaining time. A load-proof ratio instead of a fixed budget:
- * the same run takes 3.5–7 s on this box depending on what else it is doing.
+ * Arrival order: the short voice waits until every queued piece of the long one has gone to a worker, i.e. about the
+ * long reply's remaining time (only the long voice's last pieces, already running, may end after it). Overtaking would
+ * answer it within a few seconds. A load-proof ratio instead of a fixed budget: timings on this box vary with its load.
  */
-const maxShortWaitShareOfLongRemainder = 0.75;
-/** The long request counts as queued once this many of its ~15 chunks still wait for a worker. */
+const minShortWaitShareOfLongRemainder = 0.5;
+/** The long request counts as queued once this many of its pieces still wait for a worker. */
 const queuedChunksBeforeShortVoice = 6;
 const queueWaitBudgetMs = 30_000;
 const ownerDeathBudgetMs = 4_000;
@@ -281,13 +281,12 @@ describe('the local GigaAM engine (live)', { skip: skipReason }, () => {
     assert.ok(peakKb <= peakMemoryLimitKb, `peak ${peakKb} kB`);
   });
 
-  test('(f) priority: a short voice sent while a long voice is queued is answered first', { skip: longAudio ? undefined : 'STT_GIGAAM_LIVE_LONG_AUDIO is not set', timeout: longVoiceHardLimitMs + 30_000 }, async () => {
+  test('(f) arrival order: a short voice sent while a long voice is queued waits for the long one\'s pieces', { skip: longAudio ? undefined : 'STT_GIGAAM_LIVE_LONG_AUDIO is not set', timeout: longVoiceHardLimitMs + 30_000 }, async () => {
     const endpoint = { url: `http://127.0.0.1:${mainSidecar.port}/v1/audio/transcriptions`, apiKey: mainSidecar.token, model: 'gigaam' };
     const options = { timeoutMs: longVoiceHardLimitMs, retryDelaysMs: [] };
     const startedAt = Date.now();
     const longReply = transcribeAudio(longAudio ?? '', endpoint, options).then((result) => ({ result, atMs: Date.now() - startedAt }));
-    // Send the short voice only once the long one's chunks are queued: a short request that arrives while the long
-    // upload is still being decoded would go first even in plain arrival order, and prove nothing.
+    // Send the short voice only once the long one's pieces are queued, so the long one has certainly arrived first.
     while ((await getHealth(mainSidecar.port, mainSidecar.token)).queuedChunks < queuedChunksBeforeShortVoice) {
       assert.ok(Date.now() - startedAt < queueWaitBudgetMs, 'the long request never queued its chunks');
       await sleep(pollMs);
@@ -295,14 +294,13 @@ describe('the local GigaAM engine (live)', { skip: skipReason }, () => {
     const shortSentAt = Date.now() - startedAt;
     const shortReply = transcribeAudio(shortAudio ?? '', endpoint, options).then((result) => ({ result, atMs: Date.now() - startedAt }));
     const [long, short] = await Promise.all([longReply, shortReply]);
-    console.log(`[live] priority: short answered at ${short.atMs} ms (sent at ${shortSentAt}), long at ${long.atMs} ms`);
+    console.log(`[live] arrival order: short answered at ${short.atMs} ms (sent at ${shortSentAt}), long at ${long.atMs} ms`);
     assert.ok(long.result.ok && short.result.ok);
-    assert.ok(short.atMs < long.atMs, 'the short voice must be answered before the long one');
     const shortWaitMs = short.atMs - shortSentAt;
     const longRemainderMs = long.atMs - shortSentAt;
     assert.ok(
-      shortWaitMs < longRemainderMs * maxShortWaitShareOfLongRemainder,
-      `the short voice waited ${shortWaitMs} ms of the long one's ${longRemainderMs} ms remainder`,
+      shortWaitMs >= longRemainderMs * minShortWaitShareOfLongRemainder,
+      `the short voice overtook: it waited ${shortWaitMs} ms of the long one's ${longRemainderMs} ms remainder`,
     );
   });
 

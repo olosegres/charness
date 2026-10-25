@@ -134,9 +134,12 @@ env too.
   on 400 real-speech clips (919 phrases) one-pass decoding lost 39 phrases, the pause cuts 11 (decoding each phrase
   alone: 10), with no loss on continuous sentences. Short pieces are not merged back: GigaAM's own long-form recipe
   (merge VAD segments up to 15–22 s) would put a short voice back into one piece.
-- **Pool:** W threads over one `PriorityQueue` of `(chunk count of the request, arrival number, …)` — the shortest request
-  first, FIFO among equals — each calling `model.recognize` on the ONE shared onnxruntime session (one model in memory).
-  A failing chunk fails its request only. Texts are joined in order with single spaces.
+- **Pool — strict arrival order (FIFO).** A request takes its place when its upload has been read (`open_request`),
+  BEFORE it is decoded and cut, so a voice that is quicker to cut never overtakes an earlier one. W threads hand out the
+  pieces of the first unfinished request, in order, before any piece of the next request, and wait while that request
+  is still being cut; one whose decoding fails gives its place up (`cancel`). Each piece goes to `model.recognize` on
+  the ONE shared onnxruntime session (one model in memory). A failing piece fails its request only. Texts are joined in
+  order with single spaces.
 - **Idle exit:** a timer checks every 5 s. With no transcription in flight for `--idle-minutes` (0 = never) it stops
   accepting, re-checks that nothing slipped in (if one did, it keeps serving), then deletes `R` **only if R names its own
   pid** (never another generation's), and exits 0. A request that arrives after the exit is decided gets 503 and the bot
@@ -149,7 +152,7 @@ env too.
 ### Measured on a dev box (4 cores / 8 threads, no GPU, under load)
 
 Cold start (spawn → ready file) ≈ 2–2.4 s; an 18 s voice ≈ 1.5 s; a 300 s voice ≈ 18.6 s with 4 workers × 2 threads,
-peak RSS ≈ 780 MB; a short voice sent while a long one is queued is answered in ≈ 3.5 s.
+peak RSS ≈ 780 MB (before the pause cuts). Silero VAD adds ≈ 1–2 % of the voice's length and ≈ 25 MB.
 
 ## Lifecycle: who starts, adopts and stops the sidecar
 

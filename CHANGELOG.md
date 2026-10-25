@@ -85,6 +85,9 @@ voice. After this update the local engine re-installs itself once (about a minut
 progress shows in General); a voice sent meanwhile goes to the next engine in your list, or, with no other engine, the bot
 asks you to send it again when the engine is ready.
 
+**Voice notes are transcribed in the order they arrive.** The local recognition no longer lets a short voice jump ahead
+of a longer one that was sent before it.
+
 ## 3.6.0 — 2026-10-24
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process

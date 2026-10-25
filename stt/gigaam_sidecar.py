@@ -8,7 +8,7 @@ and it takes itself down when it has been idle (`--idle-minutes`) or when its ow
 Every voice is cut at the centre of each pause of at least 500 ms that Silero VAD finds (the model drops a whole
 phrase that follows a long pause when it decodes several phrases in one pass); no audio is ever discarded, and a
 piece longer than 25 s is cut again at its quietest 50 ms. The pieces are recognised in parallel on a pool of
-threads that share ONE onnxruntime session, shortest request first.
+threads that share ONE onnxruntime session, strictly in arrival order (a short voice never overtakes an earlier one).
 
 It claims the bot's record before it loads the model (an exclusive create, so a second start of the same engine
 exits instead of becoming an unrecorded orphan) and completes it with its port once it listens.
@@ -23,6 +23,7 @@ Protocol and layout: `src/stt/README.md`.
 from __future__ import annotations
 
 import argparse
+import collections
 import contextlib
 import datetime
 import email.parser
@@ -30,12 +31,10 @@ import email.policy
 import hmac
 import http.server
 import io
-import itertools
 import json
 import logging
 import logging.handlers
 import os
-import queue
 import signal
 import subprocess
 import sys
@@ -95,8 +94,6 @@ BEARER_PREFIX = "Bearer "
 TRANSCRIPTIONS_PATH = "/v1/audio/transcriptions"
 HEALTH_PATH = "/health"
 RESPONSE_FORMATS = ("json", "text")
-# The pool queue's last position: a stop sentinel sorts after every real request.
-STOP_PRIORITY = sys.maxsize
 
 logger = logging.getLogger("gigaam_sidecar")
 
@@ -235,12 +232,16 @@ def make_recognizer(model):
 
 
 class PoolRequest:
-    """One upload's chunks: collects their texts in order and tells the waiting handler when all are in."""
+    """One upload in the pool: its place in the arrival order, then its pieces once they are cut. Collects their
+    texts in order and tells the waiting handler when all are in."""
 
-    def __init__(self, chunk_count: int, sample_rate: int):
-        self.sample_rate = sample_rate
-        self._texts: list[str | None] = [None] * chunk_count
-        self._remaining = chunk_count
+    def __init__(self, on_finished):
+        self.sample_rate = 0
+        self._on_finished = on_finished
+        self._chunks: list[np.ndarray] | None = None
+        self._next_chunk = 0
+        self._texts: list[str | None] = []
+        self._remaining = 0
         self._error: Exception | None = None
         self._lock = threading.Lock()
         self._finished = threading.Event()
@@ -248,21 +249,52 @@ class PoolRequest:
     def is_finished(self) -> bool:
         return self._finished.is_set()
 
+    def attach_chunks(self, chunks: list[np.ndarray], sample_rate: int) -> None:
+        """The pieces are cut: from now on the pool hands them out. No pieces is empty text at once."""
+        with self._lock:
+            self.sample_rate = sample_rate
+            self._texts = [None] * len(chunks)
+            self._remaining = len(chunks)
+            self._chunks = list(chunks)
+            is_empty = not chunks
+            if is_empty:
+                self._finished.set()
+        if is_empty:
+            self._on_finished()
+
+    def has_unclaimed_chunk(self) -> bool:
+        return self._chunks is not None and self._next_chunk < len(self._chunks)
+
+    def count_unclaimed_chunks(self) -> int:
+        return len(self._chunks) - self._next_chunk if self._chunks is not None else 0
+
+    def claim_next_chunk(self) -> tuple[int, np.ndarray]:
+        """The next piece for a worker (the pool calls this under its own lock, so the pieces go out in order)."""
+        index = self._next_chunk
+        self._next_chunk += 1
+        return index, self._chunks[index]
+
     def complete_chunk(self, index: int, text: str) -> None:
         with self._lock:
             if self._finished.is_set():
                 return
             self._texts[index] = text
             self._remaining -= 1
-            if self._remaining == 0:
+            is_last = self._remaining == 0
+            if is_last:
                 self._finished.set()
+        if is_last:
+            self._on_finished()
 
     def fail(self, error: Exception) -> None:
-        """Fail the whole request; the pool drops its chunks that are still queued."""
+        """Fail the whole request; the pool drops its pieces that were not handed out yet."""
         with self._lock:
-            if not self._finished.is_set():
+            is_first_end = not self._finished.is_set()
+            if is_first_end:
                 self._error = error
                 self._finished.set()
+        if is_first_end:
+            self._on_finished()
 
     def wait(self, timeout_seconds: float) -> str:
         """The chunks' texts joined in order with single spaces; raises the first chunk error, or
@@ -274,15 +306,22 @@ class PoolRequest:
         return " ".join(text.strip() for text in self._texts if text and text.strip())
 
 
+class RequestCancelled(Exception):
+    """The upload never got its pieces (it could not be decoded): its place in the order is given up."""
+
+
 class RecognitionPool:
-    """W threads over one priority queue. A request's priority is its total chunk count, so a short voice
-    overtakes the rest of a long one; equal priorities keep arrival order."""
+    """W threads over the requests in strict arrival order (FIFO). A request takes its place when it arrives
+    (`open_request`, before its audio is decoded and cut), so a voice that is quicker to cut never overtakes one that
+    came earlier; the workers hand out the pieces of the first unfinished request, in order, before any piece of the
+    next one, and wait while that request is still being cut."""
 
     def __init__(self, recognize, workers: int):
         self._recognize = recognize
         self._workers = workers
-        self._queue: queue.PriorityQueue = queue.PriorityQueue()
-        self._sequence = itertools.count()
+        self._condition = threading.Condition()
+        self._requests: collections.deque[PoolRequest] = collections.deque()
+        self._is_stopping = False
         self._threads: list[threading.Thread] = []
 
     def start(self) -> None:
@@ -292,24 +331,54 @@ class RecognitionPool:
             self._threads.append(thread)
 
     def stop(self) -> None:
-        for _ in self._threads:
-            self._queue.put((STOP_PRIORITY, next(self._sequence), None, 0, None))
+        """The workers finish the piece they hold and leave; pieces not handed out yet are dropped."""
+        with self._condition:
+            self._is_stopping = True
+            self._condition.notify_all()
 
     def queued_chunks(self) -> int:
-        """Chunks waiting for a worker (approximate: the queue moves while it is read)."""
-        return self._queue.qsize()
+        """Pieces waiting for a worker."""
+        with self._condition:
+            return sum(request.count_unclaimed_chunks() for request in self._requests if not request.is_finished())
 
-    def submit(self, chunks: list[np.ndarray], sample_rate: int) -> PoolRequest:
-        request = PoolRequest(len(chunks), sample_rate)
-        for index, chunk in enumerate(chunks):
-            self._queue.put((len(chunks), next(self._sequence), request, index, chunk))
-        return request
+    def open_request(self) -> PoolRequest:
+        """Take the next place in the arrival order; `submit` or `cancel` must follow."""
+        with self._condition:
+            request = PoolRequest(self._wake_workers)
+            self._requests.append(request)
+            return request
+
+    def submit(self, request: PoolRequest, chunks: list[np.ndarray], sample_rate: int) -> None:
+        request.attach_chunks(chunks, sample_rate)
+        self._wake_workers()
+
+    def cancel(self, request: PoolRequest) -> None:
+        request.fail(RequestCancelled())
+
+    def _wake_workers(self) -> None:
+        with self._condition:
+            self._condition.notify_all()
+
+    def _take_next_chunk(self) -> tuple[PoolRequest, int, np.ndarray] | None:
+        with self._condition:
+            while not self._is_stopping:
+                while self._requests and self._requests[0].is_finished():
+                    self._requests.popleft()
+                head = self._requests[0] if self._requests else None
+                if head is not None and head.has_unclaimed_chunk():
+                    index, samples = head.claim_next_chunk()
+                    if not head.has_unclaimed_chunk():
+                        self._requests.popleft()
+                    return head, index, samples
+                self._condition.wait()
+            return None
 
     def _work(self) -> None:
         while True:
-            _, _, request, index, samples = self._queue.get()
-            if request is None:
+            taken = self._take_next_chunk()
+            if taken is None:
                 return
+            request, index, samples = taken
             if request.is_finished():
                 continue
             try:
@@ -520,9 +589,15 @@ class SidecarHandler(http.server.BaseHTTPRequestHandler):
         response_format = fields.get("response_format", "json")
         if response_format not in RESPONSE_FORMATS:
             raise RequestError(400, f"response_format must be one of {', '.join(RESPONSE_FORMATS)}")
-        samples, sample_rate = decode_audio(file_bytes)
-        chunks, chunk_sample_rate = context.split_audio(samples, sample_rate)
-        request = context.pool.submit(chunks, chunk_sample_rate)
+        # The upload is in: its place in the arrival order is taken before the decoding and the cutting.
+        request = context.pool.open_request()
+        try:
+            samples, sample_rate = decode_audio(file_bytes)
+            chunks, chunk_sample_rate = context.split_audio(samples, sample_rate)
+        except BaseException:
+            context.pool.cancel(request)
+            raise
+        context.pool.submit(request, chunks, chunk_sample_rate)
         text = request.wait(context.max_seconds)
         logger.info(
             "transcribed %.1fs of audio in %d chunk(s), %.2fs", len(samples) / sample_rate, len(chunks), time.monotonic() - started
