@@ -21,7 +21,7 @@
  * instance and tool it spawns) is its own, never the host's — where a live bot may run its agents.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 // Arms the Telegram and Jira SessionKeyCodecs for the whole suite: modules that
@@ -57,11 +57,16 @@ delete process.env.TMUX_PANE;
 
 // The dir is private to this process and read by nobody once it is gone; left alone it piles up
 // in the OS temp dir, one per test process, for good. An `exit` listener runs for a drained event
-// loop, `process.exit()` and an uncaught exception alike (a signal kill skips it). The private tmux
-// server, if a test left one running, is ended by its FULL socket path — never a bare `kill-server`.
+// loop, `process.exit()` and an uncaught exception alike (a signal kill skips it). Every tmux server
+// a test left running in the private folder — the default socket and any named one (`-L`) — is ended
+// by its FULL socket path (never a bare `kill-server`) before the folder goes: with its socket file
+// removed, a server could no longer be reached at all.
 process.on('exit', () => {
   rmSync(testDataDir, { recursive: true, force: true });
-  const testTmuxSocket = path.join(testTmuxDir, `tmux-${process.getuid?.() ?? 0}`, 'default');
-  if (existsSync(testTmuxSocket)) spawnSync('tmux', ['-S', testTmuxSocket, 'kill-server'], { stdio: 'ignore' });
+  const testTmuxSocketDir = path.join(testTmuxDir, `tmux-${process.getuid?.() ?? 0}`);
+  const socketNames = existsSync(testTmuxSocketDir) ? readdirSync(testTmuxSocketDir) : [];
+  for (const socketPath of socketNames.map((name) => path.join(testTmuxSocketDir, name))) {
+    if (lstatSync(socketPath).isSocket()) spawnSync('tmux', ['-S', socketPath, 'kill-server'], { stdio: 'ignore' });
+  }
   rmSync(testTmuxDir, { recursive: true, force: true });
 });
