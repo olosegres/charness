@@ -163,7 +163,8 @@ const checkTimeoutMs = 10_000;
 
 test('the worker watch recipe: silent while the worker lives and writes; fails when it stalls or exits — where kill -0 alone stays silent', async () => {
   await withTempDir(async (dir) => {
-    const runDir = path.join(dir, 'run');
+    // A space in the run dir's path: unquoted, `find` would read two folders and the check would fire at once.
+    const runDir = path.join(dir, 'worker run');
     fs.mkdirSync(runDir);
     const eventsFile = path.join(runDir, 'events.jsonl');
     fs.writeFileSync(eventsFile, '{}\n');
