@@ -50,6 +50,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { launchLine, UpdateFlowDriver } from './e2e/updateFlowDriver';
+import { tscWatchStaleGraceMs } from '../cli/tscWatchGuard';
 import { readHotSupervisorRecord } from '../selfUpdate/hotSupervisor';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
@@ -312,9 +313,11 @@ describe('Automatic updates, git checkout (hot mode): the real supervisor, tsc -
 
     // The watcher cannot read its events while it is frozen, so the burst overflows the queue and the change that follows is lost.
     process.kill(watcherPid, 'SIGSTOP');
+    let changedAtMs = 0;
     try {
       overflowInotifyQueue(path.join(fixture.checkoutDir, 'src'));
       replaceFileAtomically(botSourcePath, `${fs.readFileSync(botSourcePath, 'utf8')}\n${marker}\n`);
+      changedAtMs = Date.now();
     } finally {
       process.kill(watcherPid, 'SIGCONT');
     }
@@ -325,6 +328,10 @@ describe('Automatic updates, git checkout (hot mode): the real supervisor, tsc -
     assert.ok(!fs.readFileSync(botOutputPath, 'utf8').includes(marker), 'and rebuilt nothing');
 
     await getCharness().waitFor('the guard to restart the watcher', reloadTimeoutMs, () => getCharness().output.slice(outputStart).includes('the TypeScript watcher missed a source change'));
+    // The instance runs the guard on the flow's shortened windows (`CHARNESS_TEST_TIMINGS`, read by the SUPERVISOR). With the
+    // production ones it would wait a full grace after the change: this is what proves the supervisor reads them.
+    const restartedAfterMs = Date.now() - changedAtMs;
+    assert.ok(restartedAfterMs < tscWatchStaleGraceMs, `the guard acted ${restartedAfterMs} ms after the change; on the flow's shortened windows it acts well inside the production grace of ${tscWatchStaleGraceMs} ms`);
     await getCharness().waitFor('the new watcher to emit the change', reloadTimeoutMs, () => fs.readFileSync(botOutputPath, 'utf8').includes(marker));
     await getCharness().waitFor('a new worker on the rebuilt code', reloadTimeoutMs, () => flow.countBoots() > bootsBefore);
     const output = getCharness().output.slice(outputStart);

@@ -37,6 +37,7 @@ import {
   type TscWatchGuardPorts,
   type WatcherStatus,
 } from '../cli/tscWatchGuard';
+import { parseTestTimings, testTimingKeys, testTimingsEnvName } from '../testTimings';
 
 const graceMs = 60_000;
 const nowMs = 10_000_000;
@@ -212,9 +213,10 @@ describe('the guard', () => {
     await guard.check();
     await guard.check();
     assert.equal(restarts, 1, 'the second look finds a watcher that has not reported yet');
+    stale = [{ ...staleSource, sourceMtimeMs: staleSource.sourceMtimeMs + 1 }];
     guard.noteOutput(idleClean);
     await guard.check();
-    assert.equal(restarts, 2, 'it reported clean and the source is still stale');
+    assert.equal(restarts, 2, 'it reported clean and a source is still stale — another one than the restart was for');
   });
 
   test('errors with a stale source: a fresh compile decides — clean there restarts the watcher', async () => {
@@ -277,20 +279,75 @@ describe('the guard', () => {
     assert.equal(restarts, 1);
   });
 
-  test('a tree the guard cannot cure is restarted a few times and then reported once, not looped on', async () => {
+  test('a tree that keeps going stale is restarted a few times and then reported once, not looped on', async () => {
     const guard = createGuard();
-    stale = [staleSource];
-    for (let attempt = 0; attempt < tscWatchRestartBudget + 2; attempt += 1) {
+    let editCount = 0;
+    const editAndCheck = async (): Promise<void> => {
+      editCount += 1;
+      stale = [{ ...staleSource, sourceMtimeMs: staleSource.sourceMtimeMs + editCount }]; // a different edit each time: the set is never the same
       guard.noteOutput(idleClean);
       await guard.check();
-    }
+    };
+    for (let attempt = 0; attempt < tscWatchRestartBudget + 2; attempt += 1) await editAndCheck();
     assert.equal(restarts, tscWatchRestartBudget);
     assert.equal(logs.filter((line) => line.includes('already restarted')).length, 1, 'said once');
 
     clockMs += tscWatchRestartWindowMs + 1;
+    await editAndCheck();
+    assert.equal(restarts, tscWatchRestartBudget + 1, 'an hour later the budget is back');
+  });
+
+  test('a stale set a restart did not cure is reported once and not restarted for again — a source the watcher cannot emit is no loop', async () => {
+    const guard = createGuard();
+    stale = [staleSource];
     guard.noteOutput(idleClean);
     await guard.check();
-    assert.equal(restarts, tscWatchRestartBudget + 1, 'an hour later the budget is back');
+    assert.equal(restarts, 1);
+
+    // The fresh watcher compiled the whole tree and says clean, and the very same source is still newer than its output.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      guard.noteOutput(idleClean);
+      await guard.check();
+    }
+    assert.equal(restarts, 1, 'no second restart for the same set');
+    assert.equal(logs.filter((line) => line.includes('it cannot emit them')).length, 1, 'said once');
+    assert.match(logs.join(''), /src\/bot\.ts\).* after the TypeScript watcher was restarted for exactly these/);
+  });
+
+  test('another stale set is another case, and the latch lets go once the tree is in step', async () => {
+    const guard = createGuard();
+    stale = [staleSource];
+    guard.noteOutput(idleClean);
+    await guard.check();
+    guard.noteOutput(idleClean);
+    await guard.check(); // latched
+    assert.equal(restarts, 1);
+
+    stale = [{ ...staleSource, sourcePath: 'src/state.ts' }];
+    guard.noteOutput(idleClean);
+    await guard.check();
+    assert.equal(restarts, 2, 'a different source is judged on its own');
+
+    stale = [];
+    guard.noteOutput(idleClean);
+    await guard.check(); // the tree is in step: both latches let go
+    stale = [{ ...staleSource, sourcePath: 'src/state.ts' }];
+    guard.noteOutput(idleClean);
+    await guard.check();
+    assert.equal(restarts, 3, 'the same file stale again later is a new episode');
+  });
+
+  test('errors reported, a fresh compile clean, the watcher restarted — and the same set again: latched too, no second referee compile', async () => {
+    const guard = createGuard();
+    stale = [staleSource];
+    freshCompileResults = [true];
+    guard.noteOutput(idleBroken);
+    await guard.check();
+    assert.equal(restarts, 1);
+    guard.noteOutput(idleBroken);
+    await guard.check();
+    assert.equal(restarts, 1);
+    assert.equal(freshCompiles, 1, 'the latch comes before the referee');
   });
 
   describe('the check timer', () => {
@@ -320,6 +377,15 @@ describe('the guard', () => {
 });
 
 describe('the supervisor\'s two windows', () => {
+  test('they are read from the variable the seam validates, for exactly the keys the seam accepts', () => {
+    for (const key of ['tscWatchCheckIntervalMs', 'tscWatchStaleGraceMs'] as const) {
+      assert.ok(testTimingKeys.some((seamKey) => seamKey === key), `${key} is a key of the seam`);
+      assert.deepEqual(parseTestTimings(JSON.stringify({ [key]: 1000 })), { ok: true, timings: { [key]: 1000 } });
+    }
+    const timings = readTscWatchGuardTimings({ [testTimingsEnvName]: JSON.stringify({ tscWatchCheckIntervalMs: 700, tscWatchStaleGraceMs: 3000 }) });
+    assert.deepEqual(timings, { checkIntervalMs: 700, staleGraceMs: 3000 });
+  });
+
   test('production without the seam, with a blank one or with a broken one', () => {
     const production = { checkIntervalMs: tscWatchCheckIntervalMs, staleGraceMs: tscWatchStaleGraceMs };
     assert.deepEqual(readTscWatchGuardTimings({}), production);

@@ -181,8 +181,12 @@ export function createTscWatchGuard(ports: TscWatchGuardPorts, options: TscWatch
   let confirmedBrokenSignature: string | null = null;
   let restartTimesMs: number[] = [];
   let isBudgetReported = false;
+  /** The stale set the last restart was for, and a stale set a restart did not cure (the watcher cannot emit it): not restarted for again. */
+  let restartedForSignature: string | null = null;
+  let uncuredSignature: string | null = null;
 
-  const restartWatcher = (reason: string): void => {
+  /** Restart the watcher unless the hour's budget is spent; whether it did. */
+  const restartWatcher = (reason: string): boolean => {
     const nowMs = ports.getNowMs();
     restartTimesMs = restartTimesMs.filter((restartMs) => nowMs - restartMs < tscWatchRestartWindowMs);
     if (restartTimesMs.length >= tscWatchRestartBudget) {
@@ -190,7 +194,7 @@ export function createTscWatchGuard(ports: TscWatchGuardPorts, options: TscWatch
         isBudgetReported = true;
         ports.log(`charness hot: the TypeScript watcher is out of step with the sources (${reason}) but was already restarted ${restartTimesMs.length} times in the last hour — leaving it as it is\n`);
       }
-      return;
+      return false;
     }
     restartTimesMs.push(nowMs);
     isBudgetReported = false;
@@ -199,6 +203,7 @@ export function createTscWatchGuard(ports: TscWatchGuardPorts, options: TscWatch
     outputTail = '';
     confirmedBrokenSignature = null;
     ports.restartWatcher();
+    return true;
   };
 
   const check = async (): Promise<void> => {
@@ -208,21 +213,35 @@ export function createTscWatchGuard(ports: TscWatchGuardPorts, options: TscWatch
       const stale = ports.listStaleSources(options.staleGraceMs);
       if (stale.length === 0) {
         confirmedBrokenSignature = null;
+        restartedForSignature = null;
+        uncuredSignature = null;
         return;
       }
       const reason = formatStaleReason(stale);
-      const reportedErrors = status.errorCount;
-      if (reportedErrors === 0) {
-        restartWatcher(`${reason}, yet it reports 0 errors`);
+      const staleSignature = stale.map((source) => `${source.sourcePath}@${source.sourceMtimeMs}`).join(',');
+      if (staleSignature === uncuredSignature) return;
+      if (staleSignature === restartedForSignature) {
+        // A fresh watcher compiled the whole tree and these sources are STILL newer than their output: it cannot emit them (a
+        // modification time in the future, a path tsconfig excludes that the stale scan does not know) — restarting again is a loop.
+        uncuredSignature = staleSignature;
+        ports.log(`charness hot: ${reason} after the TypeScript watcher was restarted for exactly these — it cannot emit them; not restarting it for this again\n`);
         return;
       }
-      const signature = `${reportedErrors}|${stale.map((source) => `${source.sourcePath}@${source.sourceMtimeMs}`).join(',')}`;
+      const reportedErrors = status.errorCount;
+      if (reportedErrors === 0) {
+        if (restartWatcher(`${reason}, yet it reports 0 errors`)) restartedForSignature = staleSignature;
+        return;
+      }
+      const signature = `${reportedErrors}|${staleSignature}`;
       if (signature === confirmedBrokenSignature) return;
       const isCleanOnFreshCompile = await ports.runFreshCompile();
       // The watcher moved on while the compile ran (an edit, a rebuild): the next tick judges the new state.
       if (status.kind !== 'idle' || status.errorCount !== reportedErrors) return;
-      if (isCleanOnFreshCompile) restartWatcher(`${reason}; it reports ${reportedErrors} errors, a fresh compile of the same tree finds none`);
-      else confirmedBrokenSignature = signature;
+      if (isCleanOnFreshCompile) {
+        if (restartWatcher(`${reason}; it reports ${reportedErrors} errors, a fresh compile of the same tree finds none`)) restartedForSignature = staleSignature;
+      } else {
+        confirmedBrokenSignature = signature;
+      }
     } finally {
       isChecking = false;
     }

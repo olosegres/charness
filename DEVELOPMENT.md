@@ -111,7 +111,9 @@ keep when touching the restart path:
   new `tsc -w` does, and the worker keeps running the old build. Every 30 s the supervisor compares the idle watcher with the
   tree: a compiled source (`selfUpdate/emittedSource.ts`) a minute newer than its `dist/` output is a missed change — with "0
   errors" the WATCHER (not the supervisor, not the worker) is restarted at once, with errors a one-shot `tsc --noEmit` decides
-  (clean there = the watcher is wrong). At most 3 restarts an hour, then it only says so. The flow `selfUpdateHotE2e` freezes the
+  (clean there = the watcher is wrong). At most 3 restarts an hour, then it only says so; and a set of sources a restarted watcher still
+  leaves newer than their output (a modification time in the future, a path `tsconfig.json` excludes that `emittedSource.ts` does not know —
+  `emittedSource.test.ts` keeps the two lists equal) is reported once and not restarted for again. The flow `selfUpdateHotE2e` freezes the
   real `tsc -w`, overflows the queue and replaces a source: the change must still reach `dist/`.
 - **`update-pending.json` is written BEFORE the switch**; every boot counts itself in (`cli/bot.ts`, once the instance lock is held and before the bot
   module is imported), the boot after two unconfirmed ones rolls back, the running bot confirms 60 s after launch.
