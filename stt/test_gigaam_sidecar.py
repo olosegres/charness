@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 import unittest.mock
 
@@ -522,6 +523,78 @@ AUDIO_KINDS = {
     "a chained OGG/Vorbis": lambda: make_chained_ogg(("VORBIS", "VORBIS")),
     "a chained OGG whose parts differ in sample rate": lambda: make_chained_ogg(("OPUS", "VORBIS"), (48000, 22050)),
 }
+
+
+class FakeFfmpegContainer:
+    """What `decode_ffmpeg_stream` uses of an opened container: the audio streams and the decoded frames."""
+
+    def __init__(self, frames):
+        self.streams = types.SimpleNamespace(audio=[object()])
+        self._frames = frames
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exception):
+        return False
+
+    def decode(self, audio):
+        return iter(self._frames)
+
+
+def make_tone_frames(sample_rate: int, layout: str, pitch: float, seconds: float = 2.0, frame_seconds: float = 0.25) -> list:
+    """Decoded-looking frames (planar float, the way ffmpeg's decoders hand them over) of one steady tone."""
+    channels = 2 if layout == "stereo" else 1
+    time_axis = np.arange(int(seconds * sample_rate)) / sample_rate
+    tone = (0.4 * np.sin(2 * np.pi * pitch * time_axis)).astype(np.float32)
+    frames = []
+    for start in range(0, len(tone), int(frame_seconds * sample_rate)):
+        frame = av.AudioFrame.from_ndarray(np.stack([tone[start : start + int(frame_seconds * sample_rate)]] * channels), format="fltp", layout=layout)
+        frame.sample_rate = sample_rate
+        frames.append(frame)
+    return frames
+
+
+class FfmpegPartsTest(unittest.TestCase):
+    """ffmpeg's frames can change their rate or layout in the middle of a file; each part is resampled by its own setup.
+    (ffmpeg's MP3 decoder itself refuses a rate change inside one file, so the frames are made here.)"""
+
+    PART_SECONDS = 2.0
+    PARTS = {
+        "a stereo part and a mono part at other rates": [(44100, "stereo", 440.0), (48000, "mono", 700.0)],
+        "a part that needs no conversion, then a 44.1 kHz one": [(16000, "mono", 440.0), (44100, "mono", 700.0)],
+        "the same rate, mono and then stereo": [(44100, "mono", 440.0), (44100, "stereo", 700.0)],
+        "three parts": [(22050, "mono", 440.0), (48000, "stereo", 700.0), (16000, "mono", 1000.0)],
+    }
+
+    def test_every_part_is_decoded_at_its_own_rate_and_layout(self):
+        for name, parts in self.PARTS.items():
+            with self.subTest(name):
+                frames = [frame for rate, layout, pitch in parts for frame in make_tone_frames(rate, layout, pitch, self.PART_SECONDS)]
+                with unittest.mock.patch.object(sidecar, "open_ffmpeg_container", lambda data: FakeFfmpegContainer(frames)):
+                    samples, sample_rate = sidecar.decode_with_ffmpeg(b"parts")
+                self.assertEqual(sample_rate, sidecar.SPEECH_SAMPLE_RATE)
+                self.assertAlmostEqual(len(samples) / sample_rate, self.PART_SECONDS * len(parts), delta=0.1)
+                part_samples = int(self.PART_SECONDS * sample_rate)
+                for index, (_, _, pitch) in enumerate(parts):
+                    middle = samples[index * part_samples + part_samples // 4 : index * part_samples + part_samples * 3 // 4]
+                    self.assertAlmostEqual(get_dominant_pitch(middle, sample_rate), pitch, delta=PITCH_TOLERANCE_HZ, msg=f"part {index}")
+
+    def test_joined_mp3s_of_other_rates_are_never_decoded_wrong(self):
+        """ffmpeg's MP3 decoder refuses the second part (a 400, and the next engine answers); were it to decode it, the
+        audio must be whole and at the right pitch. What may not happen is a transcript of garbage."""
+        first = encode_with_av(make_pitch_clip(44100, seconds=10), 44100, "libmp3lame", "mp3")
+        second = encode_with_av(make_pitch_clip(48000, seconds=10, first_stretch=2), 48000, "libmp3lame", "mp3")
+        try:
+            samples, sample_rate = sidecar.decode_audio(first + second)
+        except sidecar.RequestError as error:
+            self.assertEqual(error.status, 400)
+            return
+        self.assertAlmostEqual(len(samples) / sample_rate, 20.0, delta=LENGTH_TOLERANCE_SECONDS)
+        for index in range(4):
+            start = index * 5 * sample_rate + 5 * sample_rate // 2
+            pitch = get_dominant_pitch(samples[start : start + 5 * sample_rate // 2], sample_rate)
+            self.assertAlmostEqual(pitch, get_stretch_pitch(index), delta=PITCH_TOLERANCE_HZ, msg=f"stretch {index}")
 
 
 class AudioFormatsTest(unittest.TestCase):

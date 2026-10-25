@@ -360,7 +360,9 @@ def get_mono_samples(frames) -> list[np.ndarray]:
 
 
 def decode_ffmpeg_stream(data: bytes) -> list[np.ndarray]:
-    """The first audio stream of one file as mono float32 arrays at `SPEECH_SAMPLE_RATE` (ffmpeg resamples)."""
+    """The first audio stream of one file as mono float32 arrays at `SPEECH_SAMPLE_RATE` (ffmpeg resamples). A resampler
+    is set up for the format, layout and rate of the frames in front of it and replaced when they change: it refuses a
+    frame that does not match its setup, and passes a frame through untouched when its first one needed no conversion."""
     import av
 
     pieces: list[np.ndarray] = []
@@ -368,9 +370,14 @@ def decode_ffmpeg_stream(data: bytes) -> list[np.ndarray]:
         if not container.streams.audio:
             raise RequestError(400, "the file has no audio")
         resampler = None
+        setup = None
         for frame in container.decode(audio=0):
-            if resampler is None:
+            frame_setup = (frame.format.name, frame.layout.name, frame.sample_rate)
+            if frame_setup != setup:
+                if resampler is not None:
+                    pieces.extend(get_mono_samples(resampler.resample(None)))  # the old setup's delay, before the new part
                 resampler = av.AudioResampler(format="fltp", layout=frame.layout.name, rate=SPEECH_SAMPLE_RATE)
+                setup = frame_setup
             pieces.extend(get_mono_samples(resampler.resample(frame)))
         if resampler is not None:
             pieces.extend(get_mono_samples(resampler.resample(None)))  # the resampler's delay
