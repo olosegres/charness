@@ -134,7 +134,7 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.doesNotMatch(picker?.text ?? '', /How it works|Auto switch|Wait for/, 'the settings are on the buttons, not repeated in the text');
     assert.deepEqual(usageRefreshes.at(-1), { maxAgeMs: 60_000 }, 'the usage is refreshed on demand (a minute\'s cache) when the screen opens');
     assert.deepEqual(harness.getKeyboardLabels(picker)[0], ['➕ Add', '🔄 Fill from connected']);
-    assert.deepEqual(harness.getKeyboardData(picker), [['fbk_add', 'fbk_prop'], ['fbk_asw_on'], ['fbk_wait_off']]);
+    assert.deepEqual(harness.getKeyboardData(picker), [['fbk_add', 'fbk_prop'], ['fbk_asw_off'], ['fbk_wait_off']], 'auto switch is ON by default (the button flips it off)');
   });
 
   it('«propose» on an empty chain drafts it from the detection: signed-in profiles, then the recent pick, then each provider\'s best', async () => {
@@ -155,7 +155,7 @@ describe('fallbackChain: /limits over its ports', () => {
     assert.equal(labels[2][0], '3. OpenCode · openai · gpt-5-mini');
     assert.match(labels[4][0], /^5\. OpenCode · google · gemini-2\.5-pro ⛔ /);
     assert.deepEqual(rows.at(-3), ['fbk_add', 'fbk_prop', 'fbk_clear']);
-    assert.deepEqual(rows.slice(-2), [['fbk_asw_on'], ['fbk_wait_off']]);
+    assert.deepEqual(rows.slice(-2), [['fbk_asw_off'], ['fbk_wait_off']]);
     for (const row of rows) for (const data of row) assert.ok(Buffer.byteLength(data) <= 64, data);
   });
 
@@ -339,10 +339,13 @@ describe('fallbackChain: /limits over its ports', () => {
   it('the switch toggle writes the shared setting (General: the instance default; a topic: its override)', async () => {
     await harness.runCommand('limits_autoswitch');
     const pickerId = harness.replies.at(-1)!.messageId!;
-    await harness.tapButton(pickerId, 'fbk_asw_on');
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), true, 'ON before anyone chose');
+    await harness.tapButton(pickerId, 'fbk_asw_off');
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false);
+    assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)).at(-2), ['fbk_asw_on']);
+    await harness.runCommand('fallback', 'autoswitch on'); // the old alias and verb
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), true);
-    assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)).at(-2), ['fbk_asw_off']);
-    await harness.runCommand('fallback', 'autoswitch off'); // the old alias and verb
+    await harness.runCommand('fallback', 'autoswitch off');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false);
     isGeneralTopic = false;
     await harness.runCommand('limits_autoswitch', 'switch on');

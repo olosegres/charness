@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**Switching to another account on a usage limit is now ON by default, also with a single signed-in account.** The «🔁 Auto switch»
+setting of `/limits_autoswitch` used to start OFF, so a limit stranded the work on the limit notice until someone tapped «Switch to …»
+even when another account had room. Now a topic whose account hits a limit moves to the next account with room by itself; with one
+account there is nothing to move to, so the bot waits for the reset as before and a second account added later is used from its
+first limit on. An instance where you turned it OFF (in General or for one topic) keeps your choice.
+
 **Agents now get Charness's own orchestration skills.** Every agent session the bot starts — Claude Code in a topic or a Jira
 conversation (the stream and the tmux backend) and OpenCode — gets the bot's skills: `charness-manager` for driving work
 through detached workers with the bot's own tools, and `charness-delegate-claude` / `charness-delegate-opencode` for

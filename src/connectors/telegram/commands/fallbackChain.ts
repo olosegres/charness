@@ -424,15 +424,15 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   }
 
   /**
-   * @description Set whether the bot moves a limited topic to the next rung by itself (OFF by default: moving
-   * work between accounts and providers is an operator decision) and RETURN the confirmation. General sets the
-   * instance default, a topic its override (`null` = follow General again).
+   * @description Set whether the bot moves a limited topic to the next rung by itself (ON by default: with one
+   * account there is nothing to switch to yet, and a second one takes over from its first limit) and RETURN the
+   * confirmation. General sets the instance default, a topic its override (`null` = follow General again).
    */
   async function applyAutoSwitch(key: SessionKey, isGeneral: boolean, enabled: boolean | null): Promise<string> {
     const what = t('limits.whatSwitch');
     if (isGeneral) {
-      await getState().setClaudeAutoSwitchOnLimitGlobalDefault(enabled ?? false);
-      return t('limits.setGlobal', { what, state: formatLimitSettingState(enabled ?? false) });
+      await getState().setClaudeAutoSwitchOnLimitGlobalDefault(enabled ?? true);
+      return t('limits.setGlobal', { what, state: formatLimitSettingState(enabled ?? true) });
     }
     await getState().setClaudeAutoSwitchOnLimitOverride(key, enabled);
     return enabled === null

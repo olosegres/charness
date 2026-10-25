@@ -1,7 +1,7 @@
 /**
  * @description Unit tests for {@link ../utils/claudeLimitSwitch} — the within-Claude account ranking a usage
  * limit falls back to when no fallback chain is configured (`utils/fallbackChain.ts` holds the chain, the
- * decision and the buttons): the opt-in toggle (OFF by default), who may take the work over (signed in, not
+ * decision and the buttons): the toggle (ON by default), who may take the work over (signed in, not
  * limited, fresh usage with room on the model's windows, never the limited profile itself) and the
  * limited-until mark.
  *
@@ -49,9 +49,9 @@ function buildProfile(name: string, patch: Partial<ClaudeProfileUsageView> = {})
   };
 }
 
-test('toggle: OFF when nothing is set — the auto-switch is opt-in', () => {
-  assert.equal(resolveClaudeAutoSwitchOnLimitEnabled(undefined, undefined), false);
-  assert.equal(resolveClaudeAutoSwitchOnLimitEnabled(true, undefined), true);
+test('toggle: ON when nothing is set — an explicit OFF is kept', () => {
+  assert.equal(resolveClaudeAutoSwitchOnLimitEnabled(undefined, undefined), true);
+  assert.equal(resolveClaudeAutoSwitchOnLimitEnabled(false, undefined), false, 'an instance where it was turned off stays off');
   assert.equal(resolveClaudeAutoSwitchOnLimitEnabled(true, false), false, 'a topic override wins');
   assert.equal(resolveClaudeAutoSwitchOnLimitEnabled(false, true), true);
 });

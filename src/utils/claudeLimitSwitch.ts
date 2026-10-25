@@ -4,8 +4,7 @@
  * headroom, and until when the exhausted one is marked limited. This ranking is what the fallback chain
  * (`utils/fallbackChain.ts`) falls back to when the operator configured no chain: the within-Claude
  * account→account switch as it existed before the chain. The auto / offer decision, the notice's buttons and
- * the auto-switch toggle (`/account`, `/fallback`; OFF by default — the operator opts in, because moving work
- * between subscriptions is an account-policy decision) live in the chain module.
+ * the auto-switch toggle (`/limits_autoswitch`; ON by default, also with one account) live in the chain module.
  *
  * No I/O, no `Date.now()`: the caller passes the clock and the profile views, so every rule is unit-tested.
  */

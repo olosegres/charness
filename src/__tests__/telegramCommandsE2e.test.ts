@@ -533,7 +533,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     assert.doesNotMatch(screen.text, /How it works|Fallback models —|Wait for the reset and continue/, 'the long prose is gone: the settings are on the buttons');
     assert.ok(screen.text.length < 300, `the screen stays a few lines (${screen.text.length} characters)`);
     assert.deepEqual(topic.getKeyboardData(screen).slice(-2), [['fbk_set_asw'], ['fbk_set_wait']]);
-    assert.deepEqual(topic.getKeyboardLabels(screen).slice(-2), [['🔁 Auto switch: OFF'], ['⏳ Wait for reset: ON']]);
+    assert.deepEqual(topic.getKeyboardLabels(screen).slice(-2), [['🔁 Auto switch: ON'], ['⏳ Wait for reset: ON']], 'auto switch is ON by default');
     await topic.sendAndAwaitReply('/auto_continue_limits', sources);
     await topic.sendAndAwaitReply('/fallback', sources);
     await topic.tapAndAwaitAnswer(screen, 'fbk_set_wait');

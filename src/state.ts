@@ -472,8 +472,8 @@ export interface StateV1 {
   /**
    * Auto-switch of the Claude account on a usage limit (`/account`, `utils/claudeLimitSwitch.ts`): whether a
    * topic whose profile hits a limit is moved to another signed-in profile with room by itself. The same
-   * instance-default + per-thread-override pair as `autoContinueOnLimit*`, but absent ⇒ OFF — the switch is an
-   * account-policy decision the operator opts into.
+   * instance-default + per-thread-override pair as `autoContinueOnLimit*`; absent ⇒ ON (also with a single
+   * account), only an explicit `false` turns it off.
    */
   claudeAutoSwitchOnLimitEnabled?: boolean;
   claudeAutoSwitchOnLimitOverrides?: Record<string, boolean>;
@@ -2027,9 +2027,9 @@ export class StateStore {
 
   // ── Claude account auto-switch on a usage limit (`/account`) ──
 
-  /** The instance-wide auto-switch default (driven from General). OFF when unset: the switch is opt-in. */
+  /** The instance-wide auto-switch default (driven from General). ON when unset; an explicit OFF is stored and kept. */
   getClaudeAutoSwitchOnLimitGlobalDefault(): boolean {
-    return this.state.claudeAutoSwitchOnLimitEnabled ?? false;
+    return this.state.claudeAutoSwitchOnLimitEnabled ?? true;
   }
 
   /** The per-thread auto-switch override, or `undefined` when the thread follows the instance default. */

@@ -139,7 +139,7 @@ describe('limitsBoard: /limits over its ports', () => {
     assert.equal(heading, 'Usage (% used)');
     assert.equal(perfLine, 'perf — ⏱ 5h 5% 🔄 in 3h · week 78% 🔄 in 4d');
     assert.match(defaultLine, /^default — ⛔ at its limit until (?:[A-Z][a-z]{2} )?\d{2}:\d{2}$/);
-    assert.equal(settingsLine, '🔁 Auto switch: OFF (as in General) · ⏳ Wait for reset: ON (as in General) — /limits_autoswitch');
+    assert.equal(settingsLine, '🔁 Auto switch: ON (as in General) · ⏳ Wait for reset: ON (as in General) — /limits_autoswitch');
     assert.equal(caption, 'Choose the active model:');
     assert.equal(board.text.split('\n').length, 7, 'nothing else: no legend, no ⚠️ line');
     assert.deepEqual(harness.getKeyboardLabels(harness.replies.at(-1)).map((row) => row.length), [1, 1, 1, 1, 1], 'one button per row');
@@ -169,19 +169,19 @@ describe('limitsBoard: /limits over its ports', () => {
     position = claudePerf();
     try {
       const board = await openBoard();
-      assert.equal(board.text, '🔁 Auto switch: OFF (as in General) · ⏳ Wait for reset: ON (as in General) — /limits_autoswitch\n\nChoose the active model:');
+      assert.equal(board.text, '🔁 Auto switch: ON (as in General) · ⏳ Wait for reset: ON (as in General) — /limits_autoswitch\n\nChoose the active model:');
     } finally {
       resetDetection();
     }
   });
 
   it('the settings line says where each value comes from: nothing after the topic\'s own value', async () => {
-    await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, true);
+    await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, false);
     await harness.state.setAutoContinueOnLimitOverride(harness.key, false);
     try {
-      assert.match((await openBoard()).text, /\n🔁 Auto switch: ON · ⏳ Wait for reset: OFF — \/limits_autoswitch\n/);
+      assert.match((await openBoard()).text, /\n🔁 Auto switch: OFF · ⏳ Wait for reset: OFF — \/limits_autoswitch\n/);
       await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, null);
-      assert.match((await openBoard()).text, /\n🔁 Auto switch: OFF \(as in General\) · ⏳ Wait for reset: OFF — \/limits_autoswitch\n/);
+      assert.match((await openBoard()).text, /\n🔁 Auto switch: ON \(as in General\) · ⏳ Wait for reset: OFF — \/limits_autoswitch\n/);
     } finally {
       await harness.state.setClaudeAutoSwitchOnLimitOverride(harness.key, null);
       await harness.state.setAutoContinueOnLimitOverride(harness.key, null);
@@ -332,7 +332,7 @@ describe('limitsBoard: /limits over its ports', () => {
       const board = await openBoard();
       const [heading, , , , settingsLine, , caption] = board.text.split('\n');
       assert.equal(heading, 'Usage (% used)', 'the usage block is on the General board too');
-      assert.equal(settingsLine, 'Defaults for all topics: 🔁 Auto switch: OFF · ⏳ Wait for reset: ON — /limits_autoswitch');
+      assert.equal(settingsLine, 'Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — /limits_autoswitch');
       assert.equal(caption, 'Choose the default Claude account:');
       assert.deepEqual(board.labels, ['Claude · perf', '✓ Claude · default', 'OpenCode · openai', 'OpenCode · openrouter', 'OpenCode · solo']);
       assert.equal(board.labels[1].startsWith('✓ Claude · default'), true, 'the default account carries the ✓');

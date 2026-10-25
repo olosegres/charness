@@ -10,7 +10,7 @@
  *   • `use <name>` in a topic sets the pick and moves the live session (the apply port's outcome is reported);
  *     in General it sets the instance default and moves every session; a logged-out profile is refused;
  *   • `remove`: default refused, the instance default refused, otherwise the picks that named it are dropped;
- *   • the auto-switch-on-limit toggle (OFF by default; its screen is /limits now): `autoswitch on|off` and the old buttons still work,
+ *   • the auto-switch-on-limit toggle (ON by default; its screen is /limits now): `autoswitch on|off` and the old buttons still work,
  *     General sets the instance default; a «switch to …» tap on a limit notice goes to its port and consumes the
  *     notice, a stale one only answers the callback.
  */
@@ -411,14 +411,14 @@ describe('claudeAccounts: /accounts over its ports', () => {
   });
 
   it('the auto-switch setting moved to /limits: the picker has no toggle button, only a pointer; the old buttons and the text verb still work', async () => {
-    assert.equal(harness.state.checkIsClaudeAutoSwitchOnLimitEnabled(harness.key), false);
+    assert.equal(harness.state.checkIsClaudeAutoSwitchOnLimitEnabled(harness.key), true);
     await harness.runCommand('account');
     const picker = harness.replies.at(-1);
     assert.match(picker?.text ?? '', /\/limits/);
     assert.equal(harness.getKeyboardData(picker).some((row) => row[0].startsWith('acct_autosw_')), false);
     await harness.tapButton(picker!.messageId!, 'acct_autosw_on'); // an old keyboard
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), true);
-    assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), false, 'a topic tap never touches the instance default');
+    assert.equal(harness.state.getClaudeAutoSwitchOnLimitGlobalDefault(), true, 'a topic tap never touches the instance default');
     await harness.runCommand('account', 'autoswitch off');
     assert.equal(harness.state.getClaudeAutoSwitchOnLimitOverride(harness.key), false);
     assert.match(harness.replies.at(-1)?.text ?? '', /auto switch OFF for this topic/, 'the verb goes through the /limits port');

@@ -88,19 +88,35 @@ describe('StateStore: Claude account profiles', () => {
     assert.equal(reloaded.resolveClaudeProfileName(topicA), 'default');
   });
 
-  it('auto-switch on limit: OFF everywhere by default; a topic override wins over the instance default; both survive a reload', async () => {
-    assert.equal(store.getClaudeAutoSwitchOnLimitGlobalDefault(), false);
-    assert.equal(store.checkIsClaudeAutoSwitchOnLimitEnabled(topicA), false);
-    await store.setClaudeAutoSwitchOnLimitGlobalDefault(true);
+  it('auto-switch on limit: ON everywhere by default; a topic override wins over the instance default; both survive a reload', async () => {
+    assert.equal(store.getClaudeAutoSwitchOnLimitGlobalDefault(), true);
     assert.equal(store.checkIsClaudeAutoSwitchOnLimitEnabled(topicA), true);
-    await store.setClaudeAutoSwitchOnLimitOverride(topicA, false);
+    await store.setClaudeAutoSwitchOnLimitGlobalDefault(false);
     assert.equal(store.checkIsClaudeAutoSwitchOnLimitEnabled(topicA), false);
-    assert.equal(store.checkIsClaudeAutoSwitchOnLimitEnabled(topicB), true);
+    await store.setClaudeAutoSwitchOnLimitOverride(topicA, true);
+    assert.equal(store.checkIsClaudeAutoSwitchOnLimitEnabled(topicA), true);
+    assert.equal(store.checkIsClaudeAutoSwitchOnLimitEnabled(topicB), false);
     await store.flush();
     const reloaded = new StateStore(dataDir);
     await reloaded.init();
-    assert.equal(reloaded.getClaudeAutoSwitchOnLimitGlobalDefault(), true);
-    assert.equal(reloaded.getClaudeAutoSwitchOnLimitOverride(topicA), false);
-    assert.equal(reloaded.checkIsClaudeAutoSwitchOnLimitEnabled(topicB), true);
+    assert.equal(reloaded.getClaudeAutoSwitchOnLimitGlobalDefault(), false, 'an explicit OFF survives a restart and stays off');
+    assert.equal(reloaded.getClaudeAutoSwitchOnLimitOverride(topicA), true);
+    assert.equal(reloaded.checkIsClaudeAutoSwitchOnLimitEnabled(topicB), false);
+  });
+
+  it('auto-switch on limit: a state file written before the default flipped (no stored value) reads ON, a stored false reads OFF', async () => {
+    await store.flush();
+    const statePath = path.join(dataDir, 'state.json');
+    const stored = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    delete stored.claudeAutoSwitchOnLimitEnabled;
+    fs.writeFileSync(statePath, JSON.stringify(stored));
+    const unset = new StateStore(dataDir);
+    await unset.init();
+    assert.equal(unset.checkIsClaudeAutoSwitchOnLimitEnabled(topicB), true);
+    stored.claudeAutoSwitchOnLimitEnabled = false;
+    fs.writeFileSync(statePath, JSON.stringify(stored));
+    const turnedOff = new StateStore(dataDir);
+    await turnedOff.init();
+    assert.equal(turnedOff.checkIsClaudeAutoSwitchOnLimitEnabled(topicB), false);
   });
 });

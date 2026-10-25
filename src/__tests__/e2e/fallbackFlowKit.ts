@@ -29,6 +29,8 @@ export interface PersistedState {
   /** The per-topic account picks, keyed by the topic. */
   claudeProfileOverrides?: Record<string, string>;
   fallbackChain?: FallbackChainEntry[];
+  /** The instance-wide auto-switch choice; absent until an operator chooses (then the default, ON, applies). */
+  claudeAutoSwitchOnLimitEnabled?: boolean;
   agents?: Record<string, AgentData>;
   /** The folder each topic is bound to, keyed by the topic. */
   bindings?: Record<string, BindingData>;

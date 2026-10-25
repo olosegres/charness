@@ -5,8 +5,9 @@
  * recording how every session is launched (the config directory = the account). The test plays the operator in
  * the General topic and in four bound topics. One flow, in order:
  *
- *   boot → the instance zone is set to UTC, auto switch is turned on in General by the button of `/limits_autoswitch`,
- *     four topics are bound (each message opens a request, as in the operator's own topics)
+ *   boot → the instance zone is set to UTC, auto switch reads ON in General and on the `/limits` board with the single
+ *     signed-in account and nobody having chosen it (nothing stored), four topics are bound (each message opens a request,
+ *     as in the operator's own topics)
  *   → a second account («work») and a one-rung chain are seeded while the bot is down (a sign-in cannot be driven
  *     without the real CLI), the bot starts again
  *   → topic A's agent hits its limit: ONE short notice names the account that hit it, the account the topic
@@ -29,6 +30,8 @@
  *   → topic C moves to «work», which hits its limit too while «default» is still limited: nothing can take over, a
  *     wait is armed. A tap on the first account on the `/limits` board then resumes the interrupted turn: the limit switch, its notice and the
  *     "continue" message
+ *   → an instance whose operator turned auto switch OFF keeps it OFF across a restart: the screens say so, and a limit with a
+ *     rung that has room posts the «🔁 Switch to …» offer instead of moving the topic
  *
  * What the unit tests cover instead: the board's rows, its model pages and its General face (`limitsBoard.test.ts`), an unknown reset, the deferred notice (a tmux Claude without a resumable
  * session) and every locale (`fallbackSwitchNotice.test.ts`); the switches to and from OpenCode are the other flow,
@@ -210,14 +213,15 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     assert.deepEqual(listTmuxSessions([]), defaultTmuxSessionsBefore, 'the default tmux server was not touched');
   });
 
-  it('boots, sets the instance zone to UTC, turns auto switch on in General with the button of /limits_autoswitch, binds the four topics and gives them the request view', async () => {
+  it('boots, sets the instance zone to UTC, shows auto switch ON with the single account nobody configured, binds the four topics and gives them the request view', async () => {
     await startCharness();
     await general.sendAndAwaitReply('/timezone UTC', 'Timezone: UTC');
     const setup = await general.sendAndAwaitReply('/limits_autoswitch', 'Defaults for all topics.');
-    assert.deepEqual(general.getKeyboardLabels(setup).slice(-2), [['🔁 Auto switch: OFF'], ['⏳ Wait for reset: ON']]);
-    const answer = await general.tapAndAwaitAnswer(setup, 'fbk_asw_on');
-    assert.match(answer, /Auto switch to a fallback model: ON for ALL topics/);
-    await getCharness().waitFor('the button to show the new value', replyTimeoutMs, () => general.getKeyboardLabels(setup).at(-2)?.[0] === '🔁 Auto switch: ON');
+    assert.deepEqual(general.getKeyboardLabels(setup).slice(-2), [['🔁 Auto switch: ON'], ['⏳ Wait for reset: ON']], 'ON by default, with one account and no chain');
+    const board = await openBoard(general, generalTopicThreadId);
+    assert.match(board.message.text, /Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — \/limits_autoswitch/);
+    assert.deepEqual(general.getKeyboardLabels(board.message).flat(), ['✓ Claude · default'], 'a single signed-in account');
+    assert.equal(readPersistedState(getLayout()).claudeAutoSwitchOnLimitEnabled, undefined, 'nobody chose it: ON is the default, not a stored value');
     // «Stream + answers»: each message opens a request, whose prompt is what the bot hands the agent again after the switch.
     await firstTopic.sendAndAwaitReply(`/bind ${firstFolder}`, `Bound to \`${firstFolder}\``);
     await firstTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
@@ -524,6 +528,29 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     assert.equal(getLaunchOfTurn(getLayout(), 'LIM-5', 1).claudeConfigDir, null, 'the continue message ran under the first account');
     assert.equal(getSessionLaunches(getLayout()).length, launchesBefore + 1);
     await getCharness().waitFor('the wait to be over', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries === undefined);
+  });
+
+  it('an operator\'s explicit OFF stays OFF across a restart: the screen says OFF and a limit offers «🔁 Switch to …» instead of moving the topic', async () => {
+    await restartWithState((persisted) => {
+      persisted.claudeAutoSwitchOnLimitEnabled = false;
+      persisted.fallbackChain = [{ backend: 'claude', profile: takeoverAccount, model: null }];
+      for (const profile of Object.values(persisted.claudeProfiles ?? {})) delete profile.limitedUntil;
+    });
+    const setup = await general.sendAndAwaitReply('/limits_autoswitch', 'Defaults for all topics.');
+    assert.deepEqual(general.getKeyboardLabels(setup).slice(-2), [['🔁 Auto switch: OFF'], ['⏳ Wait for reset: ON']]);
+
+    const noticesBefore = listSwitchNotices(thirdTopic).length;
+    askAgentToHitTheLimit(thirdTopicThreadId, 'LIM-9');
+    const offer = await thirdTopic.waitForMessage('the limit notice with the switch offer', (message) => thirdTopic.getKeyboardLabels(message).flat().some((label) => label.startsWith('🔁 Switch to')));
+    assert.deepEqual(thirdTopic.getKeyboardLabels(offer).flat(), [`🔁 Switch to Claude · ${takeoverAccount} · topic's model`], 'the rung with room is offered, not taken');
+    assert.equal(listSwitchNotices(thirdTopic).length, noticesBefore, 'the topic was not moved');
+    assert.equal(getAgentTurns(getLayout(), 'LIM-9').length, 1, 'no continue ran on another account');
+
+    // End the wait the way the operator does, so the next step starts clean.
+    const board = await openBoard(thirdTopic, thirdTopicThreadId);
+    const skipData = thirdTopic.getKeyboardData(board.message).flat().at(-1) ?? '';
+    await thirdTopic.tapAndAwaitAnswer(board.message, skipData);
+    await getCharness().waitFor('the wait to be skipped', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries === undefined);
   });
 
   it('a prompt sent while the previous turn\'s last text is still on its Bot API round trip: the reply is a message of its own, not an edit of the previous turn\'s', async () => {
