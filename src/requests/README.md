@@ -92,6 +92,9 @@ Numeric bounds are named constants in the files below; this README says only wha
 - Cancelling the conversation (`/esc`, `/c`, `/quit`, `/quit-all`, `/new`, a `/resume` pick, leaving the
   folder, switching to another agent or a shell) closes EVERY open request of the conversation `cancelled`
   (`cancelConversation`); a limit-wait stop and the counters reset of a "continue" nudge apply to every one too.
+- **A topic prompt settles its request by where it went** (`topicRequestSettle.ts`, over the engine and the ledger as ports): a prompt
+  that reached a session — or waits behind its start — has its turn tracked; one that found no session (it waited for a bot restart's
+  replay and the person was told) closes the request it opened `cancelled`, so no wake-up prods the agent for a turn that never started.
 
 ## The tail after a final answer (`answerTail.ts`, followed by the wake-up engine)
 

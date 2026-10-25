@@ -202,14 +202,15 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
   });
 
   it('a request is settled by where its prompt went: tracked, or closed when no session was left to take it', () => {
-    // The helper: a prompt that found no session (it waited for a bot restart's replay; the person was told) must not leave a request
-    // open, or the wake-up engine prods the agent later for a turn that never started.
-    const helper = botSource.slice(botSource.indexOf('async function settleTopicRequestAfterDelivery('), botSource.indexOf('let requestLimitWaitAnswerDeps'));
-    assert.match(helper, /if \(delivery !== 'noSession'\) \{\n\s*trackTopicRequestTurn\(key, opening\);\n\s*return;\n\s*\}/);
-    assert.match(helper, /if \(opening\.requestId === null\) return;\n\s*await topicRequestLedger\?\.closeRequest\(opening\.requestId, 'cancelled'\)/);
+    // The behaviour is `requests/topicRequestSettle.ts`'s (`topicRequestSettle.test.ts`): a prompt that found no session (it waited for
+    // a bot restart's replay; the person was told) must not leave a request open, or the wake-up engine prods the agent later for a
+    // turn that never started. Here: the bot wires the engine and the ledger into it, and every site settles through it.
+    assert.match(botSource, /const \{ trackTurn: trackTopicRequestTurn, settleAfterDelivery: settleTopicRequestAfterDelivery \} = createTopicRequestSettler\(\{/);
+    assert.ok(botSource.includes("await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });"), 'the engine watches the turn as a request prompt');
+    assert.ok(botSource.includes("await topicRequestLedger?.closeRequest(requestId, 'cancelled');"), 'the ledger closes the request as cancelled');
     // Every site that opens a request and hands its prompt on settles it through the helper — the turn is never tracked directly,
     // except for the prompt buffered at capture time, which cannot find a session gone.
-    assert.equal(botSource.match(/trackTopicRequestTurn\(key, opening\)/g)?.length, 2, 'the helper, and the capture-time buffer');
+    assert.equal(botSource.match(/trackTopicRequestTurn\(key, opening\)/g)?.length, 1, 'only the capture-time buffer; the settle module tracks for the rest');
     assert.match(botSource.slice(botSource.indexOf('async function bufferPromptDuringStartup(')), /^[^]*?await deliverPromptOrBuffer\(key, `\$\{opening\.header\}\$\{quotedText\}`, true\);\n\s*trackTopicRequestTurn\(key, opening\);/);
     const sites: Array<{ name: string; call: string; count: number }> = [
       { name: '/schedule', call: 'deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting)', count: 1 },

@@ -180,6 +180,7 @@ import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
 import { postToIdleSession, postToSession, type PostToSessionDeps } from './postToSession';
 import { getLimitResumeMessage } from './utils/limitHeldPrompts';
 import { waitForAdoptedReplay } from './utils/adoptReplayGate';
+import { createTopicRequestSettler } from './requests/topicRequestSettle';
 import { deliverLatePrompt, deliverPromptOrBuffer as deliverPromptWithDeps, type LatePromptOutcome, type LateWakeResult, type PromptDelivery, type PromptDeliveryDeps } from './utils/promptDelivery';
 import { restoreApiRetryTimers, restoreFiredLimitProbes, runApiRetryKick, type ApiRetryKickDeps, type ApiRetryTimerEntry } from './apiRetryKick';
 import { LimitHeldPromptQueue } from './utils/limitHeldPromptQueue';
@@ -1096,32 +1097,19 @@ async function openTopicRequest(key: SessionKey, text: string, intake: TopicRequ
 }
 
 /**
- * @description The request's prompt was handed to the prompt path (forwarded, or
- * buffered behind a session start — the turn probe holds a starting session, so
- * tracking now is right either way): the wake-up engine watches the turn.
+ * @description Where a topic request goes once its prompt came back from the prompt path (`requests/topicRequestSettle.ts`): the
+ * wake-up engine watches the turn of a prompt that reached a session (or waits behind its start), and a prompt that found no
+ * session closes the request it opened. Both ports are read at call time: the engine and the ledger are assigned at boot.
  */
-function trackTopicRequestTurn(key: SessionKey, opening: TopicRequestOpening): void {
-  if (opening.requestId === null) return;
-  void requestWakeUpEngine?.trackForwardedTurn(key, opening.requestId, { isRequestPrompt: true }).catch((e) =>
-    console.warn(`[requests] tracking the turn of ${opening.requestId} failed:`, e instanceof Error ? e.message : e),
-  );
-}
-
-/**
- * @description The request's prompt came back from the prompt path with `delivery`: a prompt that reached a session (or
- * waits behind its start) has its turn tracked; one that found NO session (a prompt that waited for a bot restart's replay —
- * the person was told) closes the request it opened, so the wake-up engine never prods the agent for a turn that never started.
- */
-async function settleTopicRequestAfterDelivery(key: SessionKey, opening: TopicRequestOpening, delivery: LatePromptOutcome): Promise<void> {
-  if (delivery !== 'noSession') {
-    trackTopicRequestTurn(key, opening);
-    return;
-  }
-  if (opening.requestId === null) return;
-  await topicRequestLedger?.closeRequest(opening.requestId, 'cancelled').catch((e) =>
-    console.warn(`[requests] closing the request ${opening.requestId} of a prompt that found no session failed:`, e instanceof Error ? e.message : e),
-  );
-}
+const { trackTurn: trackTopicRequestTurn, settleAfterDelivery: settleTopicRequestAfterDelivery } = createTopicRequestSettler({
+  trackTurn: async (key, requestId) => {
+    await requestWakeUpEngine?.trackForwardedTurn(key, requestId, { isRequestPrompt: true });
+  },
+  cancelRequest: async (requestId) => {
+    await topicRequestLedger?.closeRequest(requestId, 'cancelled');
+  },
+  warn: (message) => console.warn(message),
+});
 /** What the bot's own limit-wait answer needs (S5); set at boot next to the engine. */
 let requestLimitWaitAnswerDeps: LimitWaitAnswerDeps | null = null;
 
