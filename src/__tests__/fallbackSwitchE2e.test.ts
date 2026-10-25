@@ -95,6 +95,9 @@ const secondFolder = 'switch-second';
 const thirdFolder = 'switch-third';
 const fourthFolder = 'switch-fourth';
 const fifthFolder = 'switch-fifth';
+/** What the fake agent streams for the second prompt of the output-split subtest (`Working on <issue>.`). */
+const secondTurnText = 'Working on SLOW-2.';
+const firstTurnText = 'Working on SLOW-1.';
 /** The account the second one takes over from, and the one the chain names. */
 const exhaustedAccount = 'default';
 const takeoverAccount = 'work';
@@ -531,12 +534,14 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     // From the first held send on, every later send to the topic waits behind it (one send at a time per topic): so nothing
     // below waits for a message of this topic until the gates open — only for the bot's console and the fake agent's log.
     const firstTextGate = createGate();
-    fakeTelegram.holdNextResponse('sendMessage', firstTextGate.whenOpen, (payload) => String(payload.text) === 'Working on SLOW-1.');
+    fakeTelegram.holdNextResponse('sendMessage', firstTextGate.whenOpen, (payload) => String(payload.text) === firstTurnText);
     fakeTelegram.pushOperatorMessage(fifthTopicThreadId, 'SLOW-1 first question');
     const isStatusFrameOfTopic = (payload: Record<string, unknown>): boolean => payload.message_thread_id === fifthTopicThreadId && String(payload.text).startsWith('🔧');
     await getCharness().waitFor('the first turn\'s status frame', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').some((call) => isStatusFrameOfTopic(call.payload)));
+    // The turn has ended and its last text is ON the round trip — the call reached the Bot API, whose response is held —
+    // before the next prompt goes out: that send finishing after the prompt is what used to spend the prompt's mark.
+    await getCharness().waitFor('the first turn\'s last text on its Bot API round trip', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').some((call) => call.payload.message_thread_id === fifthTopicThreadId && String(call.payload.text) === firstTurnText));
     const streamOutputLines = (): number => getCharness().output.split('\n').filter((line) => line.startsWith(`[Bot] output ${group.id}:${fifthTopicThreadId} `) && line.includes('Working on ')).length;
-    await getCharness().waitFor('the first turn\'s text queued', agentStartTimeoutMs, () => streamOutputLines() >= 1);
     // The second turn's status frame is slow too, so nothing on screen marks the boundary when its text arrives.
     const secondStatusGate = createGate();
     fakeTelegram.holdNextResponse('sendMessage', secondStatusGate.whenOpen, isStatusFrameOfTopic);
@@ -546,9 +551,9 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     firstTextGate.open();
     secondStatusGate.open();
 
-    const listStreamTexts = (): string[] => fifthTopic.listMessages().map((message) => message.text).filter((text) => text.includes('Working on '));
-    await getCharness().waitFor('both turns\' texts in the topic', agentStartTimeoutMs, () => listStreamTexts().length >= 2);
-    assert.equal(listStreamTexts().length, 2, 'one message per turn');
-    for (const text of listStreamTexts()) assert.match(text, /^Working on \S+\.$/, 'a message holds one turn\'s text, never the two glued together');
+    const listTexts = (): string[] => fifthTopic.listMessages().map((message) => message.text);
+    await getCharness().waitFor('the second turn\'s text in the topic', agentStartTimeoutMs, () => listTexts().some((text) => text.includes(secondTurnText)));
+    assert.ok(listTexts().some((text) => text.startsWith(secondTurnText)), 'the second turn\'s text opens a message of its own');
+    assert.deepEqual(listTexts().filter((text) => text.includes('SLOW-1') && text.includes('SLOW-2')), [], 'no message holds both turns: the second turn\'s text is not an edit of the first turn\'s');
   });
 });
