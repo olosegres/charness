@@ -516,6 +516,19 @@ def make_chained_ogg(subtypes: tuple[str, str], sample_rates: tuple[int, int] = 
     return b"".join(encode_with_soundfile(half, rate, subtype) for half, rate, subtype in zip(halves, sample_rates, subtypes))
 
 
+@functools.cache
+def make_libsndfile_uploads() -> dict[str, bytes]:
+    """The 40 s files libsndfile reads exactly: they never go to ffmpeg."""
+    uploads = {}
+    for format_name in ("WAV", "FLAC"):
+        buffer = io.BytesIO()
+        soundfile.write(buffer, make_pitch_clip(16000), 16000, format=format_name)
+        uploads[format_name] = buffer.getvalue()
+    uploads["OGG/Opus"] = encode_with_soundfile(make_pitch_clip(48000), 48000, "OPUS")
+    uploads["OGG/Vorbis"] = encode_with_soundfile(make_pitch_clip(16000), 16000, "VORBIS")
+    return uploads
+
+
 def decode_upload(data: bytes):
     return sidecar.decode_audio(sidecar.inspect_audio(data))
 
@@ -612,10 +625,10 @@ class AudioFormatsTest(unittest.TestCase):
         self.assertAlmostEqual(len(samples) / sample_rate, CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
         stretch_samples = 5 * sample_rate
         for index in range(CLIP_STRETCHES):
-            start = index * stretch_samples + stretch_samples // 2  # the stretch's middle half: clear of the codec's edges
-            pitch = get_dominant_pitch(samples[start : start + stretch_samples // 2], sample_rate)
-            if index == 0:
-                continue  # the MP3 fixture's first stretch starts with noise
+            # From the middle of the stretch to its 90 %: past the MP3 fixture's noisy head (the first 2 s of the first
+            # stretch) and short of the next stretch, which a codec's delay shifts by a few milliseconds.
+            start = index * stretch_samples + stretch_samples // 2
+            pitch = get_dominant_pitch(samples[start : start + stretch_samples * 2 // 5], sample_rate)
             self.assertAlmostEqual(pitch, get_stretch_pitch(index), delta=PITCH_TOLERANCE_HZ, msg=f"stretch {index}")
 
     def test_the_whole_40_second_file_is_decoded(self):
@@ -637,23 +650,11 @@ class AudioFormatsTest(unittest.TestCase):
         self.assertAlmostEqual(read_upload_seconds(data), CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
 
     def test_what_libsndfile_reads_exactly_does_not_go_through_ffmpeg(self):
-        clip = make_pitch_clip(16000)
-        kinds = {
-            "WAV": soundfile.write,
-            "FLAC": soundfile.write,
-        }
-        uploads = []
-        for format_name in kinds:
-            buffer = io.BytesIO()
-            soundfile.write(buffer, clip, 16000, format=format_name)
-            uploads.append((format_name, buffer.getvalue()))
-        uploads.append(("OGG/Opus", encode_with_soundfile(make_pitch_clip(48000), 48000, "OPUS")))
-        uploads.append(("OGG/Vorbis", encode_with_soundfile(clip, 16000, "VORBIS")))
         with unittest.mock.patch.object(sidecar, "decode_with_ffmpeg", side_effect=AssertionError("went through ffmpeg")):
-            for name, data in uploads:
+            for name, data in make_libsndfile_uploads().items():
                 with self.subTest(name):
                     samples, sample_rate = decode_upload(data)
-                    self.assertAlmostEqual(len(samples) / sample_rate, CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
+                    self.assert_whole_clip(samples, sample_rate)
                     self.assertAlmostEqual(read_upload_seconds(data), CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
 
     def test_what_ffmpeg_cannot_turn_into_sound_is_a_400(self):
@@ -696,18 +697,10 @@ SDP_REFUSAL_BUDGET_SECONDS = 3.0
 
 class InspectAudioTest(unittest.TestCase):
     def test_what_libsndfile_reads_whole_keeps_its_header_length_and_the_rest_goes_to_ffmpeg(self):
-        clip = make_pitch_clip(16000, seconds=10)
-        libsndfile_uploads = {}
-        for format_name in ("WAV", "FLAC"):
-            buffer = io.BytesIO()
-            soundfile.write(buffer, clip, 16000, format=format_name)
-            libsndfile_uploads[format_name] = buffer.getvalue()
-        libsndfile_uploads["OGG/Opus"] = encode_with_soundfile(make_pitch_clip(48000, seconds=10), 48000, "OPUS")
-        libsndfile_uploads["OGG/Vorbis"] = encode_with_soundfile(clip, 16000, "VORBIS")
-        for name, data in libsndfile_uploads.items():
+        for name, data in make_libsndfile_uploads().items():
             with self.subTest(name):
                 upload = sidecar.inspect_audio(data)
-                self.assertAlmostEqual(upload.header_seconds, 10.0, delta=LENGTH_TOLERANCE_SECONDS)
+                self.assertAlmostEqual(upload.header_seconds, CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
                 self.assertEqual(upload.streams, [data])
         for kind, make in AUDIO_KINDS.items():
             with self.subTest(kind):
@@ -1387,9 +1380,7 @@ class HttpAudioFormatsTest(unittest.TestCase):
         info_calls = self.count_calls(soundfile, "info")
         walk_calls = self.count_calls(sidecar, "find_ogg_stream_starts")
         split_calls = self.count_calls(sidecar, "split_ogg_streams")
-        wav = io.BytesIO()
-        soundfile.write(wav, make_pitch_clip(16000, seconds=10), 16000, format="WAV")
-        uploads = {"a WAV": wav.getvalue(), **{kind: make() for kind, make in AUDIO_KINDS.items()}}
+        uploads = {**make_libsndfile_uploads(), **{kind: make() for kind, make in AUDIO_KINDS.items()}}
         for kind, data in uploads.items():
             with self.subTest(kind):
                 for calls in (info_calls, walk_calls, split_calls):
