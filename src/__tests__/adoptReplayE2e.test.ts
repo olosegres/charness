@@ -59,6 +59,7 @@ import { backdateTranscriptApiError, formatUtcResetClock } from './e2e/limitFlow
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
 import { buildJsonStreamTmuxSessionName, getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../utils/jsonStreamHost';
+import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
 import { fakeClaudeLogFileNames, getFakeClaudeTranscriptPath, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
@@ -390,8 +391,41 @@ describe('A prompt forwarded to an adopted session waits for the replay of its d
     await getCharness().waitFor('the turn to be running', agentStartTimeoutMs, () => checkIsAgentProcessAlive(adoptedStopTopicSpec) && getCharness().output.slice(outputStart).includes(`[Bot] status ${group.id}:${adoptedStopThreadId}:`));
     await getCharness().stop();
     charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
-    await adoptedStopTopic.waitForMessage('the answer of the turn that ran across the restart', (message) => message.text.includes('Working on ADOPT-2.'));
+    // The fake streams its text BEFORE the work, so the text proves nothing about the turn's end: the bot's usage line is logged when
+    // the turn's `result` frame is processed — by this bot, which was not running when the turn began.
+    const usageLine = `${claudeJsonStreamUsageLogPrefix}${group.id}:${adoptedStopThreadId}:`;
+    await getCharness().waitFor('the turn\'s end, taken in by the restarted bot', agentStartTimeoutMs, () => getCharness().output.includes(usageLine));
     await getCharness().waitFor('the per-turn stop after the turn', replyTimeoutMs, () => !checkIsAgentProcessAlive(adoptedStopTopicSpec));
+  });
+
+  it('a per-turn turn that ended while the bot was down: the process is still alive at the adopt and stopped by it, the next message resumes it and its own stop follows — no MCP heal left unhealed', async () => {
+    // The reported shape: the restart comes before the turn's stop lands. The turn is run to its end with the bot down, so its
+    // process is alive and idle, its end unread, when the bot comes back.
+    const { stdoutFile } = getTopicSessionPaths(adoptedStopTopicSpec);
+    const countResults = (): number => fs.readFileSync(stdoutFile, 'utf8').split('"type":"result"').length - 1;
+    const outputStart = getCharness().output.length;
+    fakeTelegram.pushOperatorMessage(adoptedStopThreadId, 'ADOPT-3 [work-ms:3000] hello');
+    await getCharness().waitFor('the turn to be running', agentStartTimeoutMs, () => checkIsAgentProcessAlive(adoptedStopTopicSpec) && getCharness().output.slice(outputStart).includes(`[Bot] status ${group.id}:${adoptedStopThreadId}:`));
+    const resultsBefore = countResults();
+    await getCharness().stop();
+    await new Promise<void>((resolve, reject) => {
+      const deadline = Date.now() + agentStartTimeoutMs;
+      const timer = setInterval(() => {
+        if (countResults() > resultsBefore) { clearInterval(timer); resolve(); }
+        else if (Date.now() > deadline) { clearInterval(timer); reject(new Error('the turn did not end while the bot was down')); }
+      }, 50);
+    });
+    assert.equal(checkIsAgentProcessAlive(adoptedStopTopicSpec), true, 'the process outlives the bot with its turn done and not yet stopped');
+
+    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+    const usageLine = `${claudeJsonStreamUsageLogPrefix}${group.id}:${adoptedStopThreadId}:`;
+    await getCharness().waitFor('the finished turn replayed by the restarted bot', agentStartTimeoutMs, () => getCharness().output.includes(usageLine));
+    await getCharness().waitFor('the adopted process stopped', replyTimeoutMs, () => !checkIsAgentProcessAlive(adoptedStopTopicSpec));
+
+    fakeTelegram.pushOperatorMessage(adoptedStopThreadId, 'ADOPT-4 hello');
+    await adoptedStopTopic.waitForMessage('the answer of the resumed conversation', (message) => message.text.includes('Working on ADOPT-4.'));
+    await getCharness().waitFor('the stop after the resumed turn', replyTimeoutMs, () => !checkIsAgentProcessAlive(adoptedStopTopicSpec));
+    assert.doesNotMatch(getCharness().output, new RegExp(`MCP heal: ${group.id}:${adoptedStopThreadId} left unhealed`), 'the status ask of the boot heal was answered');
   });
 
   it('a per-turn process that outlived the bot idle, its CLI version known from an earlier turn, is stopped at once when the adopt has replayed', async () => {
