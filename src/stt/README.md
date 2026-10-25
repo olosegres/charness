@@ -152,7 +152,9 @@ env too.
 ### Measured on a dev box (4 cores / 8 threads, no GPU, under load)
 
 Cold start (spawn → ready file) ≈ 2–2.4 s; an 18 s voice ≈ 1.5 s; a 300 s voice ≈ 18.6 s with 4 workers × 2 threads,
-peak RSS ≈ 780 MB (before the pause cuts). Silero VAD adds ≈ 1–2 % of the voice's length and ≈ 25 MB.
+peak RSS ≈ 780 MB (before the pause cuts). With the pause cuts, the same 300 s voice on the same box at a load
+average of ~30 took 52 s against 54 s for the 25 s cuts alone, and peaks at ≈ 920 MB instead of ≈ 790 MB: the whole
+voice is resampled to 16 kHz at once. Silero VAD itself costs ≈ 1–2 % of the voice's length.
 
 ## Lifecycle: who starts, adopts and stops the sidecar
 
