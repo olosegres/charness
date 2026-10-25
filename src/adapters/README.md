@@ -274,7 +274,8 @@ meanwhile waits for the replay — `forwardPromptToAgent` →
 `utils/adoptReplayGate.ts`, bounded — or it would reset the answer/error state
 the replayed frames use, and is routed again afterwards like a late prompt (the
 replayed turn's end may have opened the per-turn stop window: the prompt is
-buffered, not written to the process being stopped); a limit error read during the replay is flagged
+buffered, not written to the process being stopped — except a bot-made technical prompt, the todo list's standalone reminder,
+which is dropped where a session is not live and idle: never buffered, woken for or reported); a limit error read during the replay is flagged
 `isReplayed` and classified against the time its transcript entry records (a
 clock-only reset is the next occurrence after the error was written, not after the
 replay), and the bot leaves it to the boot recovery when that has armed the

@@ -75,17 +75,23 @@ export async function deliverPromptOrBuffer(
  * @name LatePromptRoute
  * @description How a prompt decided on when it ARRIVED is delivered once its handler is ready to forward it:
  * `buffer` — a start or the idle stop is under way (its window is open: the prompt waits there, and the stop resumes the
- * session for it); `wake` — the process is gone meanwhile (the conversation sleeps: wake it, then forward); `forward`.
+ * session for it); `wake` — the process is gone meanwhile (the conversation sleeps: wake it, then forward); `forward`;
+ * `drop` — only for a technical prompt that finds no live session without a window: nothing is done for it.
  */
-export type LatePromptRoute = 'buffer' | 'wake' | 'forward';
+export type LatePromptRoute = 'buffer' | 'wake' | 'forward' | 'drop';
 
 /**
  * @description The {@link LatePromptRoute} of a prompt, read at the moment it is forwarded. The idle stop posts a
  * re-asked question just before it stops the process, and a handler awaits between reading the session's state and the
  * forward (the tap's toast, the request it opens): written into a process being stopped the prompt was lost, and
  * into one already gone it was dropped.
+ *
+ * A bot-made TECHNICAL prompt (the todo list's standalone reminder) is posted only into a live session that is idle at
+ * this moment — never a resume, never held for a later one, never reported to the person: where a user's prompt would be
+ * buffered or wake the conversation, it is dropped.
  */
-export function getLatePromptRoute(input: { isWindowOpen: boolean; isSessionActive: boolean }): LatePromptRoute {
+export function getLatePromptRoute(input: { isWindowOpen: boolean; isSessionActive: boolean; isTechnical?: boolean }): LatePromptRoute {
+  if (input.isTechnical === true) return input.isWindowOpen || !input.isSessionActive ? 'drop' : 'forward';
   if (input.isWindowOpen) return 'buffer';
   return input.isSessionActive ? 'forward' : 'wake';
 }
@@ -105,6 +111,8 @@ export interface LateWakeResult {
  * already said why (`isAlreadyTold`), where a second, generic line would contradict it.
  */
 export interface LatePromptDeliveryPorts {
+  /** A bot-made technical prompt: dropped, not buffered or woken for, where a session is not live (see {@link getLatePromptRoute}). */
+  isTechnical?: boolean;
   checkIsWindowOpen: () => boolean;
   checkIsSessionActive: () => boolean;
   buffer: () => Promise<void>;
@@ -113,8 +121,11 @@ export interface LatePromptDeliveryPorts {
   reportNoSession: (isAlreadyTold: boolean) => Promise<void>;
 }
 
-/** @description Where {@link deliverLatePrompt} put the prompt; `noSession` — nowhere: nothing to deliver it to. */
-export type LatePromptOutcome = 'buffered' | 'forwarded' | 'noSession';
+/**
+ * @description Where {@link deliverLatePrompt} put the prompt; `noSession` — nowhere: nothing to deliver it to; `dropped` —
+ * a technical prompt that found no live session, left alone on purpose (nothing buffered, woken or said).
+ */
+export type LatePromptOutcome = 'buffered' | 'forwarded' | 'noSession' | 'dropped';
 
 /**
  * @description Deliver a prompt whose handler decided, when it arrived, that the session is live — routed again by
@@ -122,7 +133,8 @@ export type LatePromptOutcome = 'buffered' | 'forwarded' | 'noSession';
  * would show the topic as working while the adapter drops the text.
  */
 export async function deliverLatePrompt(ports: LatePromptDeliveryPorts): Promise<LatePromptOutcome> {
-  const route = getLatePromptRoute({ isWindowOpen: ports.checkIsWindowOpen(), isSessionActive: ports.checkIsSessionActive() });
+  const route = getLatePromptRoute({ isWindowOpen: ports.checkIsWindowOpen(), isSessionActive: ports.checkIsSessionActive(), isTechnical: ports.isTechnical });
+  if (route === 'drop') return 'dropped';
   if (route === 'buffer') {
     await ports.buffer();
     return 'buffered';

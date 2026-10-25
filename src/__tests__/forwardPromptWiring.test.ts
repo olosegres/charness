@@ -46,6 +46,16 @@ test('after the replay wait the prompt is routed again like a late prompt, not f
   assert.equal(body.slice(wait, route).includes('forwardPromptToLiveAgent('), false, 'no forward between the wait and the routing');
 });
 
+test('a technical prompt is routed as one after the wait, and the reminder that is dropped is not reported as posted', () => {
+  const body = getFunctionBody('forwardPromptToAgent');
+  const route = body.slice(body.indexOf('await deliverLatePrompt({'));
+  assert.match(route, /isTechnical: isTechnicalPrompt,/, 'the routing knows the prompt is technical (no buffer, no wake, no report)');
+  assert.match(route, /checkIsSessionActive: \(\) => adapter\.checkIsActive\(key\) && !\(isTechnicalPrompt && \(adapter\.checkIsBusy\?\.\(key\) \?\? false\)\),/, 'and wants a session that is idle as well as live');
+  const reminder = getFunctionBody('postTodoReminder');
+  assert.match(reminder, /=== 'dropped'/, 'the reminder reads the outcome');
+  assert.match(reminder, /return isPosted && !isDropped;/, 'a dropped reminder is not posted');
+});
+
 test('the live forward awaits nothing between its start and the write to the agent, except the OpenCode hooks', () => {
   // Merged code once put the todo board's read there (async); a stop queued in the caller's tick then began before the write.
   const body = getFunctionBody('forwardPromptToLiveAgent');

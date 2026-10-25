@@ -613,13 +613,13 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
     assert.doesNotMatch(kickPorts, /forwardPromptToAgent\(/, 'a direct forward hits an adapter that is not there yet');
     // The buffer-or-forward unit the whole bot shares: buffered text replays in order once the start finishes.
     assert.ok(getFunction('function deliverPromptOrBuffer(').includes('return deliverPromptWithDeps(promptDeliveryDeps, key, promptText, isStarting, onBufferedSettled);'));
-    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: \(key, text\) => forwardPromptToAgent\(key, getThreadAdapter\(key\), text\),/);
+    assert.match(botSource, /startupBuffer: startupPromptBuffer,\n\s*forwardPrompt: async \(key, text\) => \{ await forwardPromptToAgent\(key, getThreadAdapter\(key\), text\); \},/);
   });
 
   it('both ways out of a startup window settle what it held: the replay on a started session, the discard on a failed start', () => {
     // The kick keeps the saved record while its nudge waits in the buffer; only these two can end that wait.
     const replay = getFunction('async function replayBufferedPrompts(');
-    assert.match(replay, /await startupPromptBuffer\.replayPrompts\(keyToString\(key\), \{\n\s*isSessionActive,\n\s*forward: \(prompt\) => forwardPromptToAgent\(key, adapter, prompt\),\n\s*\}\);/);
+    assert.match(replay, /await startupPromptBuffer\.replayPrompts\(keyToString\(key\), \{\n\s*isSessionActive,\n\s*forward: async \(prompt\) => \{ await forwardPromptToAgent\(key, adapter, prompt\); \},\n\s*\}\);/);
     assert.match(getFunction('async function startAgentSession('), /startupPromptBuffer\.discardPrompts\(kStr\);/);
     assert.doesNotMatch(botSource, /startupPromptBuffer\s*\.drainPrompts\(/, 'a drain that settles nothing would leave a waiting nudge waiting for good');
   });

@@ -167,11 +167,12 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
 });
 
 describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what the session is NOW', () => {
-  function createPorts(state: { isWindowOpen: boolean; isSessionActive: boolean; isWakeOk?: boolean; isWakeNoticePosted?: boolean }): { ports: LatePromptDeliveryPorts; steps: string[] } {
+  function createPorts(state: { isWindowOpen: boolean; isSessionActive: boolean; isWakeOk?: boolean; isWakeNoticePosted?: boolean; isTechnical?: boolean }): { ports: LatePromptDeliveryPorts; steps: string[] } {
     const steps: string[] = [];
     return {
       steps,
       ports: {
+        isTechnical: state.isTechnical,
         checkIsWindowOpen: () => state.isWindowOpen,
         checkIsSessionActive: () => state.isSessionActive,
         buffer: async () => { steps.push('buffer'); },
@@ -211,6 +212,20 @@ describe('deliverLatePrompt: a prompt decided on at arrival, delivered by what t
     assert.equal(await deliverLatePrompt(ports), 'forwarded');
     assert.deepEqual(steps, ['forward']);
   });
+
+  it('a bot-made technical prompt (the todo reminder) that finds the stop window open or the session gone is dropped: no buffer, no wake, no report', async () => {
+    for (const state of [{ isWindowOpen: true, isSessionActive: true }, { isWindowOpen: false, isSessionActive: false }, { isWindowOpen: true, isSessionActive: false }]) {
+      const { ports, steps } = createPorts({ ...state, isTechnical: true });
+      assert.equal(await deliverLatePrompt(ports), 'dropped', JSON.stringify(state));
+      assert.deepEqual(steps, [], `nothing is done for it: ${JSON.stringify(state)}`);
+    }
+  });
+
+  it('a technical prompt that finds a live session with no window is forwarded as any prompt is', async () => {
+    const { ports, steps } = createPorts({ isWindowOpen: false, isSessionActive: true, isTechnical: true });
+    assert.equal(await deliverLatePrompt(ports), 'forwarded');
+    assert.deepEqual(steps, ['forward']);
+  });
 });
 
 describe('getLatePromptRoute: how a prompt decided on at arrival is delivered at forward time', () => {
@@ -222,5 +237,12 @@ describe('getLatePromptRoute: how a prompt decided on at arrival is delivered at
   it('no window, the process gone → wake the conversation; a live process → forward', () => {
     assert.equal(getLatePromptRoute({ isWindowOpen: false, isSessionActive: false }), 'wake');
     assert.equal(getLatePromptRoute({ isWindowOpen: false, isSessionActive: true }), 'forward');
+  });
+
+  it('a technical prompt is never buffered or woken for: forward into a live session with no window, else drop', () => {
+    assert.equal(getLatePromptRoute({ isWindowOpen: false, isSessionActive: true, isTechnical: true }), 'forward');
+    assert.equal(getLatePromptRoute({ isWindowOpen: true, isSessionActive: true, isTechnical: true }), 'drop');
+    assert.equal(getLatePromptRoute({ isWindowOpen: false, isSessionActive: false, isTechnical: true }), 'drop');
+    assert.equal(getLatePromptRoute({ isWindowOpen: true, isSessionActive: false, isTechnical: true }), 'drop');
   });
 });

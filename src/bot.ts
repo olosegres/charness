@@ -5369,7 +5369,7 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
   // like the API-error retry's nudge, hears whether it reached the session).
   await startupPromptBuffer.replayPrompts(keyToString(key), {
     isSessionActive,
-    forward: (prompt) => forwardPromptToAgent(key, adapter, prompt),
+    forward: async (prompt) => { await forwardPromptToAgent(key, adapter, prompt); },
   });
   if (!isSessionActive) return;
   // R23: prompts held during a usage-limit wait that ended with the previous
@@ -5401,6 +5401,10 @@ async function replayBufferedPrompts(key: SessionKey): Promise<void> {
  * `session.status=retry` will not read queued prompts until the provider retry
  * time, so a new prompt aborts that stale wait before using the current model.
  * An adapter without the method forwards directly.
+ *
+ * Resolves where the prompt went (`LatePromptOutcome`): `forwarded` to the session, `buffered` behind a stop window, `noSession`
+ * (nothing to take it; the person was told), `dropped` (a technical prompt found no live idle session). Only a prompt that waited
+ * for an adopt replay can come out as anything but `forwarded`; most callers have no use for the answer.
  */
 async function forwardPromptToAgent(
   key: SessionKey,
@@ -5408,21 +5412,25 @@ async function forwardPromptToAgent(
   text: string,
   sentAtMs?: number,
   options: PromptForwardOptions = {},
-): Promise<void> {
+): Promise<LatePromptOutcome> {
   // An adopted session replays what its process wrote during the downtime first: a prompt written meanwhile would reset
   // the answer and error state those frames still use, and the replayed text would join the new reply's message (the
   // «new message» mark would go to the replayed text). Nothing is awaited when no replay is pending: the forward then runs
   // in the caller's tick, as it always did — an await ahead of it would let a stop queued meanwhile begin first.
   if (!adapter.checkIsAdoptReplayPending?.(key)) {
     await forwardPromptToLiveAgent(key, adapter, text, sentAtMs, options);
-    return;
+    return 'forwarded';
   }
   await waitForAdoptedReplay(adapter, key);
   // The wait let the replay run: the replayed turn's end may have queued the per-turn stop, which holds the window open and
   // ends the process — a prompt written now would go to a process being killed and be lost. Routed again, as a late prompt is.
-  await deliverLatePrompt({
+  // A technical prompt (the standalone todo reminder) goes only into a session that is live and idle now, and is otherwise
+  // dropped without a word: never buffered, never a resume, never a "no session" line to the person.
+  const isTechnicalPrompt = options.isTechnicalPrompt === true;
+  const outcome = await deliverLatePrompt({
+    isTechnical: isTechnicalPrompt,
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
-    checkIsSessionActive: () => adapter.checkIsActive(key),
+    checkIsSessionActive: () => adapter.checkIsActive(key) && !(isTechnicalPrompt && (adapter.checkIsBusy?.(key) ?? false)),
     buffer: async () => {
       await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadReplyQuote(key, text, options.replyContext)}`, true);
     },
@@ -5433,6 +5441,8 @@ async function forwardPromptToAgent(
       if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
     },
   });
+  if (outcome === 'dropped') console.log(`[adopt] ${keyToString(key)}: the technical prompt found no live, idle session after the replay wait; it is dropped`);
+  return outcome;
 }
 
 /** What a forward may carry besides the text (see {@link forwardPromptToAgent}). */
@@ -5762,7 +5772,7 @@ const {
 } = createCompaction({
   ...botCore,
   startTypingLoader,
-  forwardPromptToAgent,
+  forwardPromptToAgent: async (key, adapter, text) => { await forwardPromptToAgent(key, adapter, text); },
   pendingQuestions,
   clearPendingQuestion,
   idleWindowMs: getAgentIdleMs(process.env.AGENT_IDLE_MINUTES),
@@ -9501,7 +9511,7 @@ async function downloadIncomingFile(
  */
 const promptDeliveryDeps: PromptDeliveryDeps = {
   startupBuffer: startupPromptBuffer,
-  forwardPrompt: (key, text) => forwardPromptToAgent(key, getThreadAdapter(key), text),
+  forwardPrompt: async (key, text) => { await forwardPromptToAgent(key, getThreadAdapter(key), text); },
   announceQueued: async (key) => {
     await replyToThread(key, t('agent.queued_starting', { label: getThreadAdapter(key).label }));
   },
@@ -10450,7 +10460,7 @@ async function deliverActivePrompt(
       await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadReplyQuote(key, text, replyContext)}`, true);
     },
     wake: () => wakeSleepingSessionForPrompt(key),
-    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { replyContext, requestHeader: opening.header }),
+    forward: async () => { await forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { replyContext, requestHeader: opening.header }); },
     reportNoSession: async (isAlreadyTold) => {
       // The prompt reaches no agent: the request it opened would only wait for a turn that never comes.
       if (opening.requestId !== null) await topicRequestLedger?.closeRequest(opening.requestId, 'cancelled');
@@ -13126,12 +13136,15 @@ const probeThreadTurn = createSessionTurnProbe({
  * that is idle right now — never a resume, never an interrupt (`postToIdleSession`). It opens no request and is never
  * replayed; in a Jira conversation it is no hand-over and nothing of its turn reaches the issue (D58).
  */
-function postTodoReminder(key: SessionKey, text: string): Promise<boolean> {
+async function postTodoReminder(key: SessionKey, text: string): Promise<boolean> {
   const adapter = getThreadAdapter(key);
-  return postToIdleSession({
+  // A reminder dropped after an adopt replay (the session was no longer live and idle) was not posted.
+  let isDropped = false;
+  const isPosted = await postToIdleSession({
     checkIsIdle: () => adapter.checkIsActive(key) && !(adapter.checkIsBusy?.(key) ?? false),
-    forward: () => forwardPromptToAgent(key, adapter, text, undefined, { isTechnicalPrompt: true }),
+    forward: async () => { isDropped = (await forwardPromptToAgent(key, adapter, text, undefined, { isTechnicalPrompt: true })) === 'dropped'; },
   });
+  return isPosted && !isDropped;
 }
 
 /**
