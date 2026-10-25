@@ -32,6 +32,8 @@ export const todoInboxMaxChars = 10_000;
 /** A session id names a file: only these characters, so no id can reach outside the inbox. */
 const sessionIdRe = /^[A-Za-z0-9_-]+$/;
 const inboxFileExtension = '.json';
+/** What the hook appends to the inbox it moves aside: its process id. */
+const takenCopySuffixRe = /^\d+$/;
 /** Private: what the agents work on. */
 const inboxFileMode = 0o600;
 
@@ -141,6 +143,25 @@ export function createTodoMidTurn(deps: TodoMidTurnDeps): TodoMidTurn {
     board.markSeenRevisions(pending.key, pending.revisions);
   }
 
+  /**
+   * A copy the hook moved aside and never removed (its `node` ended between the move and the removal) would keep the
+   * inbox dir non-empty: the session's own `<id>.json.<pid>` copies go. The bot's temp files (`….tmp`) are not such.
+   */
+  function removeTakenLeftovers(key: SessionKey): void {
+    const sessionId = getClaudeSessionId(key);
+    if (sessionId === null || !sessionIdRe.test(sessionId)) return;
+    const takenPrefix = `${sessionId}${inboxFileExtension}.`;
+    let names: string[];
+    try {
+      names = fs.readdirSync(inboxDir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (name.startsWith(takenPrefix) && takenCopySuffixRe.test(name.slice(takenPrefix.length))) fs.rmSync(path.join(inboxDir, name), { force: true });
+    }
+  }
+
   function writeInbox(filePath: string, text: string): void {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
     const tempPath = `${filePath}.${process.pid}.tmp`;
@@ -180,6 +201,7 @@ export function createTodoMidTurn(deps: TodoMidTurnDeps): TodoMidTurn {
     },
 
     discardInbox(key) {
+      removeTakenLeftovers(key);
       const conversationKey = keyToString(key);
       const pending = pendingInboxes.get(conversationKey);
       if (!pending) return;

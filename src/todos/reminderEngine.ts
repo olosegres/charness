@@ -40,8 +40,11 @@ export interface TodoReminderEngineDeps {
   /** Whether the shared lists are on at all; off, the poll does nothing. */
   checkIsEnabled: () => boolean;
   postReminder: (key: SessionKey, text: string) => Promise<boolean>;
-  /** Mid-turn delivery (D22): reconcile what the hooks took, and deliver to a busy session what changed. */
-  midTurn?: { reconcile(): void; deliverIfPending(key: SessionKey): Promise<void> };
+  /**
+   * Mid-turn delivery (D22): reconcile what the hooks took, deliver to a working session what changed, and withdraw a
+   * waiting inbox when no tool call can take it (a turn's end, a turn held open).
+   */
+  midTurn?: { reconcile(): void; deliverIfPending(key: SessionKey): Promise<void>; discardInbox(key: SessionKey): void };
   now?: () => number;
   pollIntervalMs?: number;
 }
@@ -112,8 +115,13 @@ export class TodoReminderEngine {
     const wasBusy = this.wasBusy.get(conversationKey) === true;
     this.wasBusy.set(conversationKey, probe.isBusy);
     if (probe.isBusy) {
-      // A turn held open (a question waiting for the operator, a compaction) is no work of the agent's.
-      if (!probe.isTurnEndBlocked) this.deps.registry.addTurnWork(key, elapsedMs);
+      // A turn held open (a question waiting for the operator, a compaction) is no work of the agent's, and makes no
+      // tool call that could take an inbox: the changes wait for the turn to go on.
+      if (probe.isTurnEndBlocked) {
+        this.discardInbox(key);
+        return;
+      }
+      this.deps.registry.addTurnWork(key, elapsedMs);
       await this.deps.midTurn?.deliverIfPending(key);
       return;
     }
@@ -139,8 +147,21 @@ export class TodoReminderEngine {
     await this.handleTurnEnd(key, probe, this.now(), this.deps.getIntervalMs());
   }
 
+  /**
+   * A waiting inbox is withdrawn: its changes stay unseen and ride the next prompt. So the inbox dir is empty between
+   * turns, and the hook starts no `node` for any other session's tool call meanwhile.
+   */
+  private discardInbox(key: SessionKey): void {
+    try {
+      this.deps.midTurn?.discardInbox(key);
+    } catch (e) {
+      console.warn(`[todos] ${keyToString(key)}: the mid-turn inbox could not be withdrawn:`, e instanceof Error ? e.message : e);
+    }
+  }
+
   private async handleTurnEnd(key: SessionKey, probe: SessionTurnProbe, nowMs: number, intervalMs: number | null): Promise<void> {
     const conversationKey = keyToString(key);
+    this.discardInbox(key);
     this.deps.registry.noteTurnEnd(key, nowMs);
     if (this.posting.has(conversationKey)) return;
     const decision = this.deps.registry.decideStandaloneReminder(key, intervalMs, { ...probe, ...this.deps.getGate(key) }, nowMs);

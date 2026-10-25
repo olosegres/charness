@@ -23,7 +23,8 @@
  *     board at once, «Automatic» brings it back; a topic on a folder that is no checkout joins A's project by hand;
  *     General's `/todo` lists the project with its topics
  *   → mid-turn (S4): while B works, A publishes; B gets A's change with its next tool result — the launch settings'
- *     `PostToolUse` hook prints B's inbox, as the real CLI runs it — and B's next prompt does not repeat it
+ *     `PostToolUse` hook prints B's inbox, as the real CLI runs it — and B's next prompt does not repeat it; a turn
+ *     that ends with no tool call after a change withdraws its inbox, and the next prompt carries the change
  *   → a prompt never waits for git: topic D on a new clone whose history walk git holds back (a `git` in the
  *     instance's bin folder) — its prompt reaches the agent at once, with no board, and B's fresh context gets its own
  *     list alone; once git answered, the whole board for both
@@ -543,6 +544,18 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
     });
     await publishThroughAgent(topicBThreadId, 'TODO-33', '[todo-touch]');
     assert.doesNotMatch(getPromptOf('TODO-33'), /Mid-turn item/);
+  });
+
+  it('a turn that ends with no tool call after the change withdraws the inbox: empty between turns, the next prompt carries it', async () => {
+    const inboxDir = path.join(getLayout().dataDir, 'todos', 'inbox');
+    const listInbox = (): string[] => (fs.existsSync(inboxDir) ? fs.readdirSync(inboxDir) : []);
+    fakeTelegram.pushOperatorMessage(topicBThreadId, `TODO-35 [work-ms:${midTurnToolDelayMs}]`);
+    await getCharness().waitFor('B working on TODO-35', turnTimeoutMs, () => readPrompts().some((prompt) => /\bTODO-35\b/.test(prompt.text)));
+    await publishThroughAgent(topicAThreadId, 'TODO-36', '[todo:queued:Untaken item]');
+    await getCharness().waitFor('B\'s inbox written while it works', turnTimeoutMs, () => listInbox().length > 0);
+    await getCharness().waitFor('the inbox withdrawn at B\'s turn end', turnTimeoutMs, () => listInbox().length === 0);
+    await publishThroughAgent(topicBThreadId, 'TODO-37', '[todo-touch]');
+    assert.match(getPromptOf('TODO-37'), /\[Project board — changes since \d\d:\d\d\]\n#topic 111 \(proj-a\)[\s\S]*Untaken item/, 'still unseen: the next prompt carries it');
   });
 
   // ── no prompt waits for git ───────────────────────────────────────────

@@ -181,9 +181,56 @@ describe('the inbox lifecycle', () => {
     await midTurn.deliverIfPending(topicKey);
     assert.equal(fs.existsSync(getTodoInboxDir(dataDir)), false);
   });
+  it('withdrawing an inbox also removes a copy the hook moved aside and never removed; another session\'s and a temp file stay', async () => {
+    const midTurn = createMidTurn();
+    const inboxDir = getTodoInboxDir(dataDir);
+    fs.mkdirSync(inboxDir, { recursive: true });
+    for (const name of [`${sessionId}.json.4242`, `another-session.json.4242`, `${sessionId}.json.4242.tmp`]) fs.writeFileSync(path.join(inboxDir, name), 'x');
+    midTurn.discardInbox(topicKey);
+    assert.deepEqual(fs.readdirSync(inboxDir).sort(), [`${sessionId}.json.4242.tmp`, 'another-session.json.4242'].sort());
+  });
 });
 
 describe('the poll drives the mid-turn delivery', () => {
+  it('a turn\'s end and a turn held open withdraw the inbox — the dir is empty between turns; a held turn is handed nothing', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-midpoll-'));
+    try {
+      const endingKey = makeTelegramKey(-1001111111111, 1);
+      const heldKey = makeTelegramKey(-1001111111111, 2);
+      const adapterEndKey = makeTelegramKey(-1001111111111, 3);
+      const delivered: string[] = [];
+      const discarded: string[] = [];
+      const busy: SessionTurnProbe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+      const probes = new Map<string, SessionTurnProbe>([
+        [keyToString(endingKey), busy],
+        [keyToString(heldKey), { ...busy, isTurnEndBlocked: true }],
+        [keyToString(adapterEndKey), { ...busy, isBusy: false }],
+      ]);
+      const engine = new TodoReminderEngine({
+        registry: createTodoRegistry({ store: new TodoStore(dataDir), getNowMs: Date.now }),
+        listConversations: (): SessionKey[] => [endingKey, heldKey],
+        probeTurn: (key) => probes.get(keyToString(key)) ?? { isActive: false, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: false },
+        getGate: () => ({ hasOpenRequest: false, isAnswerTailFollowed: false, isLimited: false, isApiBilled: false, isStoppingAfterTurn: false }),
+        getIntervalMs: () => null,
+        checkIsEnabled: () => true,
+        postReminder: async () => true,
+        midTurn: { reconcile: () => {}, deliverIfPending: async (key) => { delivered.push(keyToString(key)); }, discardInbox: (key) => { discarded.push(keyToString(key)); } },
+      });
+      await engine.poll();
+      assert.deepEqual(delivered, [keyToString(endingKey)], 'a held turn is handed nothing');
+      assert.deepEqual(discarded, [keyToString(heldKey)], 'its waiting inbox is withdrawn');
+      probes.set(keyToString(endingKey), { ...busy, isBusy: false });
+      discarded.length = 0;
+      await engine.poll();
+      assert.deepEqual(discarded, [keyToString(endingKey), keyToString(heldKey)], 'the busy → idle edge withdraws it');
+      discarded.length = 0;
+      await engine.noteAdapterTurnEnd(adapterEndKey);
+      assert.deepEqual(discarded, [keyToString(adapterEndKey)], 'and so does the adapter\'s own turn end');
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('only busy sessions are handed changes; it runs with the reminder off; not at all with the lists off', async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-midpoll-'));
     try {
@@ -204,7 +251,7 @@ describe('the poll drives the mid-turn delivery', () => {
         getIntervalMs: () => null,
         checkIsEnabled: () => isEnabled,
         postReminder: async () => true,
-        midTurn: { reconcile: () => { reconciled += 1; }, deliverIfPending: async (key) => { delivered.push(keyToString(key)); } },
+        midTurn: { reconcile: () => { reconciled += 1; }, deliverIfPending: async (key) => { delivered.push(keyToString(key)); }, discardInbox: () => {} },
       });
       await engine.poll();
       assert.deepEqual(delivered, [keyToString(busyKey)]);
