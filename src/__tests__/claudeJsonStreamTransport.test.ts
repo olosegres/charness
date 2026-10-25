@@ -467,6 +467,27 @@ describe('json-stream error-ended turn — the text it streamed goes out before 
     }
   });
 
+  it('an error read while the adopt\'s replay is pending is flagged replayed; one read after the replay is not', () => {
+    // The bot leaves a replayed copy of a limit error to the boot recovery, which already armed that episode: only an error
+    // the adopt reads from the downtime tail may carry the flag.
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-errorturn-replayed-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    const errors: Array<{ kind: string; isReplayed?: boolean }> = [];
+    adapter.on('apiError', (_k: SessionKey, error: { kind: string; isReplayed?: boolean }) => errors.push(error));
+    fs.writeFileSync(session.paths.stdoutFile, usageLimitResultLine);
+    session.adoptCatchUpOffset = Buffer.byteLength(usageLimitResultLine);
+
+    adapter['drainStdoutTail'](session);
+    adapter['settleAdoptCatchUp'](session, false);
+    assert.equal(session.adoptCatchUpOffset, null, 'the replay is over');
+    session.apiErrorFired = false; // the next turn
+    fs.appendFileSync(session.paths.stdoutFile, usageLimitResultLine);
+    adapter['drainStdoutTail'](session);
+
+    assert.deepEqual(errors.map((error) => error.isReplayed === true), [true, false]);
+  });
+
   it('a turn without text: the error alone, offset saved as before', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-errorturn-bare-'));
     const adapter = new ClaudeJsonStreamAdapter();

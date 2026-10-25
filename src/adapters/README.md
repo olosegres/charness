@@ -272,7 +272,10 @@ pipeline, in-flight turn delivered end-to-end, no recap posted; only a turn in
 flight at the restart is replayed — a finished one is not; a prompt forwarded
 meanwhile waits for the replay — `forwardPromptToAgent` →
 `utils/adoptReplayGate.ts`, bounded — or it would reset the answer/error state
-the replayed frames use); a released
+the replayed frames use; a limit error read during the replay is flagged
+`isReplayed`, and the bot leaves it to the boot recovery when that has armed the
+episode — it reads the error's own time off the transcript, which a replay cannot);
+a released
 session (`/quit`/`/new` cleared the persisted id) is killed as an orphan, and
 a thread whose process is gone SLEEPS (lifecycle plan L4): nothing is re-spawned
 at boot — its next trigger resumes the conversation — and the downtime recap is

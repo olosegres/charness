@@ -1717,6 +1717,13 @@ interface HandleApiErrorOptions {
  */
 function handleApiError(key: SessionKey, cls: AgentApiErrorClass, options: HandleApiErrorOptions = {}): void {
   const k = keyToString(key);
+  // The copy of a limit error that the adopt's replay reads: it ended a turn BEFORE this boot, and the boot recovery has armed
+  // that very episode (with the error's own time, which the replay cannot know). Handling it again announced a limit for a
+  // window that was over, and resumed the topic a second time.
+  if (cls.isReplayed === true && cls.kind === 'usageLimit' && limitEpisodesOwnedByRecovery.has(k)) {
+    console.log(`[limitRecovery] ${k}: the replayed limit error is the episode the recovery re-armed — not handled twice`);
+    return;
+  }
   // A used-up API credit balance: no wait refills it — the account is marked, and the chain or the operator takes over.
   if (cls.kind === 'usageLimit' && cls.isBalanceExhausted === true) {
     void handleBalanceExhausted(key, cls);
@@ -12380,6 +12387,12 @@ function readParkedErrorWrittenAtMs(key: SessionKey, claudeSessionId: string, er
 }
 
 /**
+ * @description The threads whose limit episode the boot recovery armed and whose adopt is still replaying the downtime tail
+ * ({@link handleApiError} leaves the replay's copy of that error alone). An entry lives until the replay is over.
+ */
+const limitEpisodesOwnedByRecovery = new Set<string>();
+
+/**
  * @description Recover a usage/session-limit episode that ENDED BEFORE this boot
  * and left no armed retry behind — the case {@link restoreApiRetries} cannot help
  * with, because there is nothing persisted to re-arm. It happens whenever the
@@ -12462,6 +12475,10 @@ function recoverLimitEpisodesFromDisk(): void {
     void state
       .setLimitEpisodeRecovered(key, log)
       .catch(e => console.error('[limitRecovery] marker persist failed:', e));
+    // This episode is the recovery's alone: the adopt replays the same error a moment later (the tail was read from the
+    // saved offset), and `handleApiError` leaves that copy out until the replay is over.
+    limitEpisodesOwnedByRecovery.add(keyStr);
+    void (getAdapter(agent.name).whenAdoptReplayed?.(key) ?? Promise.resolve()).then(() => limitEpisodesOwnedByRecovery.delete(keyStr));
     void withThreadLocale(key, () => handleApiError(key, decision.cls, { isRecoveredEpisode: true }));
     recovered += 1;
   }

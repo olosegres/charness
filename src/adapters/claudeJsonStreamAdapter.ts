@@ -5,6 +5,7 @@ import type {
   AgentAdapter,
   AgentSession,
   AgentRuntimeInfo,
+  AgentApiErrorClass,
   CompactionResult,
   DisplayPrefsReader,
   EffortSetOutcome,
@@ -2032,9 +2033,13 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     const classified = classifyAgentApiError(text, now);
     if (!classified) return false;
     const rejectedResetAtMs = session.rejectedResetAtMs;
-    const apiError = classified.kind === 'usageLimit' && rejectedResetAtMs !== null && rejectedResetAtMs > now
-      ? { ...classified, resetAt: rejectedResetAtMs }
-      : classified;
+    const apiError: AgentApiErrorClass = {
+      ...(classified.kind === 'usageLimit' && rejectedResetAtMs !== null && rejectedResetAtMs > now
+        ? { ...classified, resetAt: rejectedResetAtMs }
+        : classified),
+      // The downtime tail of an adopt is still being replayed: this error ended a turn before the bot started.
+      ...(session.adoptCatchUpOffset !== null ? { isReplayed: true } : {}),
+    };
     session.apiErrorFired = true;
     this.emit('apiError', session.key, apiError);
     return true;

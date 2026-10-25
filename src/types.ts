@@ -275,6 +275,12 @@ export interface AgentApiErrorClass {
    * wait-for-reset: the bot marks the account exhausted until the operator acts and moves along the fallback chain.
    */
   isBalanceExhausted?: boolean;
+  /**
+   * The error was read while an adopted session replayed the tail its process wrote while the bot was down: it ended a
+   * turn BEFORE this bot started, not just now. The boot recovery owns such an episode (it reads the error's own time off
+   * the transcript, where the replay can only read the clock); the bot must not handle its replayed copy again.
+   */
+  isReplayed?: boolean;
 }
 
 /**

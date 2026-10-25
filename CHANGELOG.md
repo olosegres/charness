@@ -36,6 +36,13 @@ bot's own resume after a usage limit, a scheduled run, your message) reset the r
 old turn's text could end up inside the new reply's message, and an error of the old turn took the new turn's place — shown as
 a plain "Claude error" line and not retried. A prompt now waits for that replay (at most 30 s) before it is sent.
 
+**A usage limit that stopped the agent while the bot was down is now handled once after the restart.** The restarted bot found the
+limit error twice — once when it checked the agent's log at start (it resumes the topic at once when the window is over), and
+once more when it read what the agent wrote during the downtime. The second copy was handled as a fresh limit: the topic got a
+"Usage limit reached" notice for a window that was already over (for a reset written as a clock time, a wait of up to a day),
+a second "work resumed" message, and the agent a second "Continue" prompt and a second turn. The first one now owns the
+episode and the replayed copy is left out.
+
 ## 3.6.0 — 2026-10-24
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process
