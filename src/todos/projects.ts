@@ -106,8 +106,8 @@ export type TodoProjectReadMode = 'wait' | 'knownOnly';
 
 /**
  * @name RepositoryRootCommitStore
- * @description Where the root commits outlive the process, by git common dir — a root commit never changes, and its
- * history walk is the one slow read.
+ * @description Where the root commits outlive the process, by git common dir: the LAST KNOWN answer, at once after a
+ * restart while the process walks the history again (the one slow read) — a rewritten history changes it.
  */
 export interface RepositoryRootCommitStore {
   load(): Record<string, string>;
