@@ -373,7 +373,7 @@ const expectedReplyLang: Record<string, string> = {
   uk: 'IN UKRAINIAN',
 };
 
-test('compact.closingSectionInstruction ends the closing section with the numbered next-steps checklist, in every locale', () => {
+test('compact.closingSectionInstruction makes the next-steps checklist the last part of the closing section, in every locale', () => {
   const startMarker = '<<<WHERE_WE_STOPPED>>>';
   const endMarker = '<<<END_WHERE_WE_STOPPED>>>';
   const enText = getKeyInLang('en' as Locale, 'compact.closingSectionInstruction');
@@ -400,11 +400,11 @@ test('compact.closingSectionInstruction ends the closing section with the number
     assert.ok(checklistAt < tailAt, `${loc}: the checklist comes before "write nothing after the end marker"`);
     assert.ok(rendered.endsWith('Write nothing after ' + endMarker + '.'), `${loc}: nothing may follow the end marker: "${rendered}"`);
 
-    const checklist = rendered.slice(checklistAt, tailAt);
-    assert.match(checklist, /numbered checklist/);
-    assert.match(checklist, /Item 1 is "load these skills" followed by the exact name of every skill that was loaded/);
-    assert.match(checklist, /if none was loaded, leave that item out/);
-    assert.match(checklist, /Invent no new steps/);
+    // The checklist's own wording lives once, in `compactionChecklistGuidance`; the section only places it.
+    assert.equal(
+      rendered.slice(checklistAt, tailAt),
+      `(3) as the LAST part of the section, right before ${endMarker}, the numbered what-to-do-next checklist that these instructions ask the summary to end with. `,
+    );
   }
 });
 

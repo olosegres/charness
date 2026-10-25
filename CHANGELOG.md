@@ -2,10 +2,12 @@
 
 ## Unreleased
 
-**The summary an idle compaction leaves now ends with a numbered checklist of what the agent does next, and its first item is to load the skills it had loaded.**
-After a compaction the continuing session often skipped reloading its skills and worked without them. The closing «where we stopped» section now
-finishes with a short numbered list: item 1 is «load these skills» with their exact names (no such item when none was loaded), then the next steps
-and the still-unanswered question, in that order. The list is the last thing in the summary.
+**Every compaction summary now ends with a numbered checklist of what the agent does next, and its first item is to load the skills it had loaded.**
+After a compaction the continuing session often skipped reloading its skills and worked without them. The checklist is now asked for on every path:
+the idle compaction, `/compact`, the compaction the agent arms itself (`compact_conversation`), and the one the agent CLI or OpenCode runs by
+itself when the context overflows. Item 1 is «load these skills» with their exact names (no such item when none was loaded), then the next steps the
+summary already records, in order — none invented. The list is the last thing in the summary; where the idle compaction asks for the closing
+«where we stopped» section, it is that section's last part.
 
 **A usage-limit resume that finds its session gone no longer says «resumed» right before «no session».** When the bot restarted while a
 topic waited for a limit's reset and the conversation was ended in the same moment, the topic read the pinned «work resumed» notice and

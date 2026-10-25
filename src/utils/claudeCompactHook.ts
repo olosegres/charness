@@ -16,8 +16,8 @@
  *
  * A bot-issued compaction already carries the same text, so the hook prints
  * nothing when the compaction's `custom_instructions` (part of the JSON the hook
- * reads on stdin) already contain the skills guidance — otherwise the model would
- * get the instruction twice.
+ * reads on stdin) already contain the resume guidance (the loaded skills and the
+ * next-steps checklist) — otherwise the model would get the instruction twice.
  *
  * The same launch settings carry the shared todo lists' `PostToolUse` hook
  * (`todos/midTurn.ts`): it prints the session's inbox — the project board's
@@ -28,7 +28,7 @@ import fs from 'fs';
 import path from 'path';
 import {
   buildCompactionInstruction,
-  compactionSkillsGuidance,
+  compactionResumeGuidance,
   compactionSummaryGuidance,
 } from './compactOnIdle';
 import { shellSingleQuote } from './tmuxExec';
@@ -45,15 +45,16 @@ export const claudeCompactHookSettingsFileName = 'claude-compact-hook.json';
 
 /**
  * @description The instruction the hook adds to a compaction the bot did not
- * issue: D3 + the loaded-skills guidance. No closing section — that one exists for
- * the bot's own idle-compaction report, which an overflow compaction never feeds.
+ * issue: D3 + the resume guidance. No closing section — that one exists for the
+ * bot's own idle-compaction report, which an overflow compaction never feeds; the
+ * checklist then ends the summary itself.
  */
 export function getHookCompactionInstruction(): string {
   return buildCompactionInstruction({
     bakesSummaryGuidance: false,
     summaryGuidance: compactionSummaryGuidance,
-    bakesSkillsGuidance: false,
-    skillsGuidance: compactionSkillsGuidance,
+    bakesResumeGuidance: false,
+    resumeGuidance: compactionResumeGuidance,
   }) ?? '';
 }
 
@@ -61,7 +62,7 @@ export function getHookCompactionInstruction(): string {
  * @description Build the hook's shell command: print `instruction` unless the
  * hook's stdin (the `PreCompact` input JSON) already contains `alreadySentMarker`.
  * The marker is matched as a fixed string against the raw JSON, so it must be text
- * JSON leaves unescaped — the caller passes the skills guidance, and a test pins
+ * JSON leaves unescaped — the caller passes the resume guidance, and a test pins
  * that it qualifies.
  */
 export function buildPreCompactHookCommand(input: {
@@ -106,7 +107,7 @@ export function prepareClaudeCompactHookFlags(dataDir: string, configDir: string
   const hookSettings = buildClaudeLaunchHookSettings({
     preCompact: buildPreCompactHookCommand({
       instruction: getHookCompactionInstruction(),
-      alreadySentMarker: compactionSkillsGuidance,
+      alreadySentMarker: compactionResumeGuidance,
     }),
     postToolUse: buildTodoInboxHookCommand(getTodoInboxDir(dataDir)),
   });

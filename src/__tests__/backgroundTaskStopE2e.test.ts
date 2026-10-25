@@ -79,6 +79,7 @@ import { enDict } from '../i18n/en';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
+import { compactionChecklistGuidance, compactionClosingEndMarker, compactionClosingStartMarker, compactionResumeGuidance } from '../utils/compactOnIdle';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 111;
@@ -138,8 +139,8 @@ function listTaskTurns(): Array<FakeClaudeTurn & { origin?: string }> {
   return readJsonLines<FakeClaudeTurn & { origin?: string }>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.turns)).filter((turn) => turn.origin === 'task-notification');
 }
 
-function listCompactions(): Array<{ sessionId: string; pid: number }> {
-  return readJsonLines<{ sessionId: string; pid: number }>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.compactions));
+function listCompactions(): Array<{ sessionId: string; pid: number; instruction: string }> {
+  return readJsonLines<{ sessionId: string; pid: number; instruction: string }>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.compactions));
 }
 
 /** Where in the bot's output `text` first appears after `fromIndex`; -1 when it does not. */
@@ -279,6 +280,13 @@ describe('The agent\'s own background work is never cut off by an automatic stop
 
     // The normal idle lifecycle: compacted in the same process first, stopped after.
     await getCharness().waitFor('the idle compaction of the adopted process', idleStopTimeoutMs, () => listCompactions().some((compaction) => compaction.sessionId === sessionId && compaction.pid === pid));
+    // What the idle compaction told the agent: the skills and the next-steps checklist, then the closing section whose last part is that checklist.
+    const idleInstruction = listCompactions().find((compaction) => compaction.sessionId === sessionId && compaction.pid === pid)?.instruction ?? '';
+    assert.ok(idleInstruction.includes(compactionResumeGuidance), `the idle compaction carries the skills and the checklist:\n${idleInstruction}`);
+    assert.ok(idleInstruction.includes(compactionChecklistGuidance), 'the checklist is in what the idle compaction asked for');
+    assert.ok(idleInstruction.indexOf(compactionResumeGuidance) < idleInstruction.indexOf(compactionClosingStartMarker), 'the checklist is asked for before the closing section');
+    assert.ok(idleInstruction.includes(`as the LAST part of the section, right before ${compactionClosingEndMarker}, the numbered what-to-do-next checklist`), 'the closing section ends with the checklist');
+    assert.ok(idleInstruction.endsWith(`Write nothing after ${compactionClosingEndMarker}.`), 'nothing follows the end marker');
     await getCharness().waitFor('the idle stop after the compaction', idleStopTimeoutMs, () => findOutput(stopLine, outputBeforeRelease) >= 0);
     assert.ok(!checkIsPidAlive(pid), 'the process is gone');
   });

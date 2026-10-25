@@ -20,6 +20,8 @@ import {
   prepareClaudeCompactHookFlags,
 } from '../utils/claudeCompactHook';
 import {
+  compactionChecklistGuidance,
+  compactionResumeGuidance,
   compactionSkillsGuidance,
   compactionSummaryGuidance,
 } from '../utils/compactOnIdle';
@@ -33,14 +35,15 @@ function runHook(command: string, hookInput: unknown): string {
 
 const hookCommand = buildPreCompactHookCommand({
   instruction: getHookCompactionInstruction(),
-  alreadySentMarker: compactionSkillsGuidance,
+  alreadySentMarker: compactionResumeGuidance,
 });
 
-test('getHookCompactionInstruction: D3 then the skills guidance, no closing section', () => {
+test('getHookCompactionInstruction: D3 then the resume guidance, no closing section — the checklist ends the summary', () => {
   assert.equal(
     getHookCompactionInstruction(),
-    `${compactionSummaryGuidance}\n\n${compactionSkillsGuidance}`,
+    `${compactionSummaryGuidance}\n\n${compactionResumeGuidance}`,
   );
+  assert.ok(getHookCompactionInstruction().endsWith(compactionChecklistGuidance));
 });
 
 test('PreCompact hook: an overflow compaction gets the instruction', () => {
@@ -50,13 +53,26 @@ test('PreCompact hook: an overflow compaction gets the instruction', () => {
     custom_instructions: null,
   });
   assert.equal(output, `${getHookCompactionInstruction()}\n`);
+  assert.ok(output.trimEnd().endsWith(compactionChecklistGuidance), 'the hook asks for the checklist that ends the summary');
 });
 
-test('PreCompact hook: a manual /compact with its own focus still gets the instruction', () => {
+test('PreCompact hook: a manual /compact with its own focus still gets the instruction, checklist included', () => {
   const output = runHook(hookCommand, {
     hook_event_name: 'PreCompact',
     trigger: 'manual',
     custom_instructions: 'focus on the test failures',
+  });
+  assert.equal(output, `${getHookCompactionInstruction()}\n`);
+  assert.ok(output.trimEnd().endsWith(compactionChecklistGuidance), 'the owner\'s own focus does not drop the checklist');
+});
+
+test('PreCompact hook: an instruction that carries only the skills sentence still gets the checklist', () => {
+  // The marker is the whole resume guidance, not the skills sentence alone: a compaction whose instruction names
+  // the skills but asks for no checklist must not be taken for one that already has everything.
+  const output = runHook(hookCommand, {
+    hook_event_name: 'PreCompact',
+    trigger: 'manual',
+    custom_instructions: compactionSkillsGuidance,
   });
   assert.equal(output, `${getHookCompactionInstruction()}\n`);
 });
@@ -65,14 +81,14 @@ test('PreCompact hook: prints nothing when the bot-issued instruction already ca
   const output = runHook(hookCommand, {
     hook_event_name: 'PreCompact',
     trigger: 'manual',
-    custom_instructions: `${compactionSummaryGuidance}\n\n${compactionSkillsGuidance}\n\nCLOSING`,
+    custom_instructions: `${compactionSummaryGuidance}\n\n${compactionResumeGuidance}\n\nCLOSING`,
   });
   assert.equal(output, '');
 });
 
-test('compactionSkillsGuidance: JSON leaves it unescaped, so the hook can match it in raw stdin', () => {
-  assert.equal(JSON.stringify(compactionSkillsGuidance), `"${compactionSkillsGuidance}"`);
-  assert.match(compactionSkillsGuidance, /^[\x20-\x7e]+$/);
+test('compactionResumeGuidance: JSON leaves it unescaped, so the hook can match it in raw stdin', () => {
+  assert.equal(JSON.stringify(compactionResumeGuidance), `"${compactionResumeGuidance}"`);
+  assert.match(compactionResumeGuidance, /^[\x20-\x7e]+$/);
 });
 
 test('buildClaudeLaunchHookSettings: one PreCompact and one PostToolUse command hook, neither with a matcher', () => {

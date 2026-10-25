@@ -785,13 +785,13 @@ async function askUserQuestion(): Promise<string> {
   return (await answered)[fakeAskQuestion.question] ?? 'no answer';
 }
 
-/** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. */
-function runCompactionTurn(sessionId: string): void {
+/** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. `instruction` is what followed `/compact` (the bot's summary guidance), recorded for the flows. */
+function runCompactionTurn(sessionId: string, instruction: string): void {
   writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: launchApiKeySource, tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'system', subtype: 'status', status: 'compacting', session_id: sessionId });
   writeStdout({ type: 'system', subtype: 'status', compact_result: 'success', session_id: sessionId });
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 25_600, post_tokens: 2_800 }, session_id: sessionId });
-  appendJsonLine(fakeClaudeLogFileNames.compactions, { sessionId, pid: process.pid });
+  appendJsonLine(fakeClaudeLogFileNames.compactions, { sessionId, pid: process.pid, instruction });
   // The real CLI's compaction result: an all-zero `usage`, the summary call only under `modelUsage`.
   writeStdout({ type: 'result', subtype: 'success', is_error: false, result: '', session_id: sessionId, usage: fakeCompactionResultUsage, modelUsage: fakeCompactionModelUsage, total_cost_usd: addConversationCost(fakeCompactionCostUsd) });
 }
@@ -1055,7 +1055,7 @@ async function main(): Promise<void> {
     const content = frame.message.content;
     // `/compact`, or `/compact <the bot's summary guidance>` (D3) — the real CLI parses either.
     if (content.trim() === compactCommandText || content.startsWith(`${compactCommandText} `)) {
-      turnChain = turnChain.then(() => runCompactionTurn(sessionId));
+      turnChain = turnChain.then(() => runCompactionTurn(sessionId, content.trim().slice(compactCommandText.length).trim()));
       return;
     }
     const promptIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';

@@ -15,7 +15,7 @@ import { type CompactCommandRoute, getCompactCommandRoute } from '../../../utils
 import {
   buildCompactionInstruction,
   compactionSummaryGuidance,
-  compactionSkillsGuidance,
+  compactionResumeGuidance,
   compactionClosingStartMarker,
   compactionClosingEndMarker,
   stripCompactionClosingMarkers,
@@ -43,12 +43,12 @@ const terminalAdapterName = 'terminal';
 
 /**
  * @description Compose the per-invocation compaction instruction for a thread's
- * backend (D3 summary guidance + the loaded-skills guidance + the optional F2
- * closing section). The general guidance is skipped for OpenCode (baked in its
- * fork prompt) and appended for the Claude backends; the skills guidance is
- * skipped when the backend's own compaction prompt already gets it (an OpenCode
- * server running the bot's compaction plugin); the closing-section directive
- * rides only when requested.
+ * backend (D3 summary guidance + the resume guidance — loaded skills and the
+ * next-steps checklist — + the optional F2 closing section). The general guidance
+ * is skipped for OpenCode (baked in its fork prompt) and appended for the Claude
+ * backends; the resume guidance is skipped when the backend's own compaction
+ * prompt already gets it (an OpenCode server running the bot's compaction
+ * plugin); the closing-section directive rides only when requested.
  */
 async function getCompactionInstruction(
   adapter: AgentAdapter,
@@ -58,8 +58,8 @@ async function getCompactionInstruction(
   return buildCompactionInstruction({
     bakesSummaryGuidance: adapter.name === openCodeAdapterName,
     summaryGuidance: compactionSummaryGuidance,
-    bakesSkillsGuidance: (await adapter.checkHasCompactionSkillsHook?.(key)) ?? false,
-    skillsGuidance: compactionSkillsGuidance,
+    bakesResumeGuidance: (await adapter.checkHasCompactionResumeHook?.(key)) ?? false,
+    resumeGuidance: compactionResumeGuidance,
     closingSectionInstruction: opts.withClosingSection
       ? t('compact.closingSectionInstruction', {
           startMarker: compactionClosingStartMarker,

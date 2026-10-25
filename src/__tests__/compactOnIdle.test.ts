@@ -21,6 +21,8 @@ import {
   buildCompactionInstruction,
   compactionSummaryGuidance,
   compactionSkillsGuidance,
+  compactionChecklistGuidance,
+  compactionResumeGuidance,
   stripCompactionClosingMarkers,
   checkShouldPostCompactionSummary,
   checkShouldAnnounceCompactionStart,
@@ -272,31 +274,44 @@ test('a pending question at idle still fires (D1): it is not "working"', () => {
   assert.equal(getIdleFireDecision({ ...fireBase, isWorking }).shouldCompact, true);
 });
 
-test('buildCompactionInstruction: Claude backends get the D3 + skills guidance, closing last', () => {
+test('buildCompactionInstruction: Claude backends get the D3 + resume guidance, closing last', () => {
   const closing = 'CLOSING';
   const claude = buildCompactionInstruction({
     bakesSummaryGuidance: false,
     summaryGuidance: compactionSummaryGuidance,
-    bakesSkillsGuidance: false,
-    skillsGuidance: compactionSkillsGuidance,
+    bakesResumeGuidance: false,
+    resumeGuidance: compactionResumeGuidance,
     closingSectionInstruction: closing,
   });
   assert.ok(claude);
   assert.ok(claude.includes(compactionSummaryGuidance), 'D3 guidance rides the Claude instruction');
-  assert.ok(claude.includes(compactionSkillsGuidance), 'skills guidance rides the Claude instruction');
+  assert.ok(claude.includes(compactionResumeGuidance), 'resume guidance rides the Claude instruction');
   assert.ok(claude.includes(closing), 'closing section is appended too');
   assert.ok(
-    claude.indexOf(compactionSummaryGuidance) < claude.indexOf(compactionSkillsGuidance),
-    'D3 guidance before skills guidance',
+    claude.indexOf(compactionSummaryGuidance) < claude.indexOf(compactionResumeGuidance),
+    'D3 guidance before resume guidance',
   );
   // The closing directive says "write nothing after the end marker", so it must
   // be the last instruction the model reads.
-  assert.ok(claude.indexOf(compactionSkillsGuidance) < claude.indexOf(closing), 'closing comes last');
+  assert.ok(claude.indexOf(compactionResumeGuidance) < claude.indexOf(closing), 'closing comes last');
 });
 
-test('buildCompactionInstruction: the idle compaction closes with the skills-first checklist, nothing after the end marker', () => {
-  // The real per-locale closing text, as `getCompactionInstruction` composes it. The skills sentence
-  // stays outside the section; the checklist is the LAST thing the model reads before the end marker.
+test('buildCompactionInstruction: a compaction with no closing section (manual, agent-armed) ends with the checklist guidance', () => {
+  // `/compact` and `compact_conversation` ask for no closing section: the checklist then ends the summary,
+  // so it must be the last thing the model reads.
+  const claude = buildCompactionInstruction({
+    bakesSummaryGuidance: false,
+    summaryGuidance: compactionSummaryGuidance,
+    bakesResumeGuidance: false,
+    resumeGuidance: compactionResumeGuidance,
+  });
+  assert.equal(claude, `${compactionSummaryGuidance}\n\n${compactionResumeGuidance}`);
+  assert.ok(claude.endsWith(compactionChecklistGuidance));
+});
+
+test('buildCompactionInstruction: the idle compaction asks for the checklist as the last part of the closing section', () => {
+  // The real per-locale closing text, as `getCompactionInstruction` composes it: the resume guidance (skills
+  // sentence + checklist) first, then the section whose last part, right before the end marker, is that checklist.
   const closing = t('compact.closingSectionInstruction', {
     startMarker: compactionClosingStartMarker,
     endMarker: compactionClosingEndMarker,
@@ -304,51 +319,55 @@ test('buildCompactionInstruction: the idle compaction closes with the skills-fir
   const instruction = buildCompactionInstruction({
     bakesSummaryGuidance: false,
     summaryGuidance: compactionSummaryGuidance,
-    bakesSkillsGuidance: false,
-    skillsGuidance: compactionSkillsGuidance,
+    bakesResumeGuidance: false,
+    resumeGuidance: compactionResumeGuidance,
     closingSectionInstruction: closing,
   });
   assert.ok(instruction);
-  assert.ok(instruction.endsWith(`Write nothing after ${compactionClosingEndMarker}.`));
-  const checklistAt = instruction.indexOf('a numbered checklist');
-  assert.ok(checklistAt > instruction.indexOf(compactionSkillsGuidance), 'the skills sentence precedes the closing section');
-  assert.ok(checklistAt > instruction.indexOf(compactionClosingStartMarker), 'the checklist is inside the closing section');
-  assert.ok(checklistAt < instruction.lastIndexOf(compactionClosingEndMarker), 'the checklist ends before the end marker');
-  assert.match(instruction.slice(checklistAt), /^a numbered checklist \(1\., 2\., 3\., one short item per line\) of what the continuing session does next\. Item 1 is "load these skills"/);
+  assert.ok(instruction.includes(compactionChecklistGuidance), 'the checklist guidance rides the idle compaction');
+  assert.ok(
+    instruction.indexOf(compactionChecklistGuidance) < instruction.indexOf(compactionClosingStartMarker),
+    'the checklist is asked for before the section it lands in',
+  );
+  assert.ok(
+    instruction.includes(`as the LAST part of the section, right before ${compactionClosingEndMarker}, the numbered what-to-do-next checklist`),
+    'the section names the checklist as its last part',
+  );
+  assert.ok(instruction.endsWith(`Write nothing after ${compactionClosingEndMarker}.`), 'nothing follows the end marker');
 });
 
-test('buildCompactionInstruction: OpenCode omits the baked D3 guidance but still gets the skills guidance', () => {
+test('buildCompactionInstruction: OpenCode omits the baked D3 guidance but still gets the resume guidance', () => {
   // OpenCode bakes D3 into its fork prompt, so re-sending it would duplicate the
-  // text. The skills guidance is baked nowhere, so even a plain manual /compact
+  // text. The resume guidance is baked nowhere, so even a plain manual /compact
   // (no closing) carries it.
   assert.equal(
     buildCompactionInstruction({
       bakesSummaryGuidance: true,
       summaryGuidance: compactionSummaryGuidance,
-      bakesSkillsGuidance: false,
-      skillsGuidance: compactionSkillsGuidance,
+      bakesResumeGuidance: false,
+      resumeGuidance: compactionResumeGuidance,
       closingSectionInstruction: undefined,
     }),
-    compactionSkillsGuidance,
+    compactionResumeGuidance,
   );
   const withClosing = buildCompactionInstruction({
     bakesSummaryGuidance: true,
     summaryGuidance: compactionSummaryGuidance,
-    bakesSkillsGuidance: false,
-    skillsGuidance: compactionSkillsGuidance,
+    bakesResumeGuidance: false,
+    resumeGuidance: compactionResumeGuidance,
     closingSectionInstruction: 'CLOSING',
   });
-  assert.equal(withClosing, `${compactionSkillsGuidance}\n\nCLOSING`, 'skills guidance, then the closing section');
+  assert.equal(withClosing, `${compactionResumeGuidance}\n\nCLOSING`, 'resume guidance, then the closing section');
 });
 
 test('buildCompactionInstruction: an OpenCode server with the compaction plugin gets neither guidance', () => {
-  // The plugin adds the skills guidance to every compaction prompt and cannot see
+  // The plugin adds the resume guidance to every compaction prompt and cannot see
   // this instruction, so sending it here as well would duplicate it.
   const base = {
     bakesSummaryGuidance: true,
     summaryGuidance: compactionSummaryGuidance,
-    bakesSkillsGuidance: true,
-    skillsGuidance: compactionSkillsGuidance,
+    bakesResumeGuidance: true,
+    resumeGuidance: compactionResumeGuidance,
   };
   assert.equal(buildCompactionInstruction({ ...base, closingSectionInstruction: 'CLOSING' }), 'CLOSING');
   assert.equal(buildCompactionInstruction(base), undefined);
@@ -359,12 +378,12 @@ test('buildCompactionInstruction: nothing to append → undefined', () => {
     buildCompactionInstruction({
       bakesSummaryGuidance: true,
       summaryGuidance: compactionSummaryGuidance,
-      bakesSkillsGuidance: false,
-      skillsGuidance: '  ',
+      bakesResumeGuidance: false,
+      resumeGuidance: '  ',
       closingSectionInstruction: '   ',
     }),
     undefined,
-    'whitespace-only skills guidance and closing are ignored',
+    'whitespace-only resume guidance and closing are ignored',
   );
 });
 
@@ -372,6 +391,22 @@ test('compactionSkillsGuidance: names the loaded skills and says to load them ag
   assert.match(compactionSkillsGuidance, /skill/);
   assert.match(compactionSkillsGuidance, /exact name/);
   assert.match(compactionSkillsGuidance, /MUST load each of these skills again and follow it/);
+});
+
+test('compactionChecklistGuidance: a skills-first numbered next-steps list that ends the summary, with no invented steps', () => {
+  assert.match(compactionChecklistGuidance, /numbered checklist \(1\., 2\., 3\., one short item per line\) of what the continuing session does next, as the very LAST thing/);
+  assert.match(compactionChecklistGuidance, /Item 1 is 'load these skills' followed by the exact name of every skill that was loaded/);
+  assert.match(compactionChecklistGuidance, /if none was loaded, leave that item out/);
+  assert.match(compactionChecklistGuidance, /next steps this summary already records, in order: invent no new steps/);
+  assert.match(compactionChecklistGuidance, /closing section between two marker lines, the checklist is the last part of that section, right before its end marker/);
+});
+
+test('compactionResumeGuidance: the skills sentence, then the checklist — the one text every compaction path carries', () => {
+  assert.equal(compactionResumeGuidance, `${compactionSkillsGuidance} ${compactionChecklistGuidance}`);
+  assert.ok(compactionResumeGuidance.endsWith(compactionChecklistGuidance), 'the checklist closes the guidance');
+  // The `PreCompact` hook matches it as a fixed string in the raw JSON on stdin: one line, nothing JSON would escape.
+  assert.equal(JSON.stringify(compactionResumeGuidance), `"${compactionResumeGuidance}"`);
+  assert.match(compactionResumeGuidance, /^[\x20-\x7e]+$/);
 });
 
 test('compactionSummaryGuidance: is maximally-complete + session-specific (D3)', () => {

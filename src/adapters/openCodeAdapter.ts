@@ -3230,11 +3230,11 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * @description Whether this thread's directory instance loaded the bot's
    * compaction plugin, read from its merged config (`GET /config`, directory
    * scoped). An instance created before the plugin was installed lacks it until
-   * it is recreated, and then the bot must keep sending the skills guidance
+   * it is recreated, and then the bot must keep sending the resume guidance
    * itself. A read failure answers `false`: the guidance then appears twice,
    * which beats not at all.
    */
-  async checkHasCompactionSkillsHook(key: SessionKey): Promise<boolean> {
+  async checkHasCompactionResumeHook(key: SessionKey): Promise<boolean> {
     const session = this.sessions.get(keyToString(key));
     if (!session?.isActive) return false;
     try {

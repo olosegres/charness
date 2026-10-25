@@ -36,7 +36,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { compactionSkillsGuidance } from './compactOnIdle';
+import { compactionResumeGuidance } from './compactOnIdle';
 import { formatDeprecation, warnLegacyNameOnce } from '../legacyNames';
 
 /** File name of the plugin in OpenCode's plugin folder; also how the bot recognises it in `GET /config`. */
@@ -57,10 +57,10 @@ export const legacyOpenCodeCompactPluginId = 'telegramcode-compaction';
  * @description The text the plugin adds to every compaction prompt. OpenCode
  * appends it AFTER the bot's per-invocation instruction, which may end with the
  * F2 closing-section directive ("write nothing after the end marker"), so the text
- * says outright that the skills list belongs inside the summary.
+ * says outright that the skills list and the checklist belong inside the summary.
  */
 export function getOpenCodeCompactPluginContext(): string {
-  return `Additional instruction for the summary itself (put it inside the summary, never after a closing section the instructions above require): ${compactionSkillsGuidance}`;
+  return `Additional instruction for the summary itself (put it inside the summary, never after a closing section the instructions above require): ${compactionResumeGuidance}`;
 }
 
 /** @description The plugin module source: a v1 plugin (`default` export with `id` + `server`). */

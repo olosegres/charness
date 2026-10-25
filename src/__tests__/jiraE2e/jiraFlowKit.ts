@@ -147,10 +147,11 @@ interface FakeLaunch {
   path: string;
 }
 
-/** A `/compact` turn the fake ran, with the session it compacted (`compactions.jsonl`). */
+/** A `/compact` turn the fake ran, with the session it compacted and the instruction that followed `/compact` (`compactions.jsonl`). */
 export interface FakeCompaction {
   sessionId: string;
   pid: number;
+  instruction: string;
 }
 
 /** Rewrite the persisted tool digests of the given conversations, as a bot build with other tools would find them (L4). */

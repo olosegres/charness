@@ -121,7 +121,7 @@ per-backend controls are optional methods the bot checks before calling.
   picker), so by default a compaction ends in one short line. A backend whose own compaction already
   reaches the topic sets `AgentAdapter.streamsCompactionSummary` (OpenCode) and the bot posts no copy;
   that streamed summary is tagged `OutboundHints.isCompactionSummary` and obeys the same switch. The
-  backends' OWN overflow compaction gets the same summary guidance (name the loaded skills, reload them):
+  backends' OWN overflow compaction gets the same summary guidance (name the loaded skills, reload them, end with a numbered next-steps checklist — one text, `compactionResumeGuidance`, on every compaction path):
   Claude through a `PreCompact` hook (`utils/claudeCompactHook.ts`, `--settings` file in `DATA_DIR`, which also
   carries the todo lists' `PostToolUse` inbox hook, `todos/midTurn.ts`),
   OpenCode through a bot-installed global plugin (`utils/openCodeCompactPlugin.ts`); at boot

@@ -107,11 +107,14 @@ watchdog with its re-ask, the full-summary post (`postCompactionSummary`) and th
 topic's override. Execution always goes through
 `runThreadCompaction`: only it marks the topic as compacting, so the summary a compaction produces is never
 counted as a turn (a manual compaction used to push the idle stamp back and be compacted again one window
-later). The idle compaction alone asks the agent for the closing section (`compact.closingSectionInstruction`, wrapped in the
-`<<<WHERE_WE_STOPPED>>>` markers); that section's LAST part, right before the end marker, is a numbered checklist of what the continuing
-session does next — item 1 "load these skills" with their exact names (left out when none was loaded), then the steps the section already
-asks for. The text is the same English in all 12 locales but for the reply language (`i18n.test.ts` pins that), and the Claude `PreCompact`
-hook and the OpenCode plugin carry only the shared skills sentence (`compactionSkillsGuidance`), having no closing section.
+later). EVERY compaction summary ends with a numbered «what to do next» checklist — item 1 «load these skills» with their exact names
+(left out when none was loaded), then the next steps the summary already records, none invented. ONE text asks for it
+(`compactionResumeGuidance` in `utils/compactOnIdle.ts`: the skills sentence + `compactionChecklistGuidance`) and every path carries that
+constant: `getCompactionInstruction` here (manual `/compact`, the agent's `compact_conversation`, the idle compaction), the Claude
+`PreCompact` hook and the OpenCode plugin (the CLI's / server's own overflow compactions). Only the idle compaction also asks for the
+closing section (`compact.closingSectionInstruction`, wrapped in the `<<<WHERE_WE_STOPPED>>>` markers), whose LAST part, right before the
+end marker, is that checklist; elsewhere the checklist ends the summary. The section text is the same English in all 12 locales but for
+the reply language (`i18n.test.ts` pins that).
 `bot.ts` calls the returned hooks from the prompt path (`noteThreadActivity`, `noteThreadUserActivity`),
 the output path (`markThreadTurnProducedOutput`) and the session lifecycle (`rearmThreadIdleTimer`,
 `clearThreadCompaction`), and reads `threadsCompacting` (the typing loop, the request probe) and

@@ -37,6 +37,7 @@ import {
 } from './jiraE2e/fakeClaudeContract';
 import { resolveThreadFilesDir } from '../botFileStorage';
 import { builtAgentPluginDir } from './e2e/isolatedCharness';
+import { compactionChecklistGuidance, compactionResumeGuidance, compactionSummaryGuidance } from '../utils/compactOnIdle';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import {
   answerTimeoutMs,
@@ -221,6 +222,10 @@ describe('Jira connector end to end — what the prompts carry: built charness, 
     const firstText = await handOverAndAwaitAnswer('PROJ-12');
     assert.ok(isWholePrompt(firstText));
     await waitFor('PROJ-12\'s compaction ran', answerTimeoutMs, () => compactions().length > compactionsBefore);
+    // The agent-armed compaction asks for no closing section: the skills and the next-steps checklist end the summary.
+    const armedInstruction = compactions()[compactionsBefore].instruction;
+    assert.equal(armedInstruction, `${compactionSummaryGuidance}\n\n${compactionResumeGuidance}`, 'the summary guidance, then the loaded skills and the checklist');
+    assert.ok(armedInstruction.endsWith(compactionChecklistGuidance), 'the checklist is the last thing the agent reads');
     await waitFor('the bot noted the reset', answerTimeoutMs, () => getCharness().output.includes('[jira] PROJ-12: its context was reset (compaction (manual))'));
     assert.ok(isWholePrompt(await handOverAndAwaitAnswer('PROJ-12')), 'after the bot\'s compaction the prompt is whole');
 

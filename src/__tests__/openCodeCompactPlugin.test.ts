@@ -25,7 +25,7 @@ import {
   resolveOpenCodeGlobalPluginDir,
 } from '../utils/openCodeCompactPlugin';
 import { resetLegacyNameState } from '../legacyNames';
-import { compactionSkillsGuidance } from '../utils/compactOnIdle';
+import { compactionChecklistGuidance, compactionResumeGuidance } from '../utils/compactOnIdle';
 
 type CompactingHook = (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => Promise<void>;
 
@@ -48,9 +48,10 @@ function silenceWarnings(run: () => void): void {
   }
 }
 
-test('getOpenCodeCompactPluginContext: carries the skills guidance and keeps it inside the summary', () => {
+test('getOpenCodeCompactPluginContext: carries the resume guidance (skills + the checklist that ends the summary) and keeps it inside the summary', () => {
   const context = getOpenCodeCompactPluginContext();
-  assert.ok(context.endsWith(compactionSkillsGuidance));
+  assert.ok(context.endsWith(compactionResumeGuidance));
+  assert.ok(context.endsWith(compactionChecklistGuidance));
   assert.match(context, /inside the summary, never after a closing section/);
 });
 
@@ -75,6 +76,7 @@ test('installOpenCodeCompactPlugin: the installed plugin pushes the guidance on 
     const output = { context: ['EARLIER'], prompt: undefined };
     await (hooks['experimental.session.compacting'] as CompactingHook)({ sessionID: 'ses_1' }, output);
     assert.deepEqual(output, { context: ['EARLIER', getOpenCodeCompactPluginContext()], prompt: undefined });
+    assert.ok(output.context[1].endsWith(compactionChecklistGuidance), 'the installed plugin asks for the checklist that ends the summary');
   });
 });
 
