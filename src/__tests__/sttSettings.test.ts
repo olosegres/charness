@@ -402,6 +402,12 @@ test('timeout math: 10 s plus 25 % of the voice by default — 30 s → 17.5 s, 
   assert.equal(getEngineTimeoutMs({ baseSeconds: 30, percentOfDuration: 25 }, 0), 45_000, 'the unknown-length budget follows the engine\'s own numbers');
 });
 
+test('timeout math: the audio queued ahead of the voice is budgeted at the same rate — 9 s behind 300 s → 87.25 s', () => {
+  assert.equal(getEngineTimeoutMs(defaultSttTimeout, 9, 300), 87_250);
+  assert.equal(getEngineTimeoutMs(defaultSttTimeout, 9, 0), getEngineTimeoutMs(defaultSttTimeout, 9));
+  assert.equal(getEngineTimeoutMs(defaultSttTimeout, undefined, 40), 35_000, 'an unknown length still counts as a minute, plus the queue');
+});
+
 test('the report: file errors say what the bot does instead, skipped engines say why, a disabled one is silent', () => {
   const config = createConfig({
     engines: [

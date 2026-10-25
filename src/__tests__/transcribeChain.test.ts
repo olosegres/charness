@@ -13,7 +13,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { transcribeWithEngines, type TranscribeFallbackInfo } from '../stt/transcribeChain';
 import { defaultSttTimeout, type ResolvedSttEngine, type SttTimeout } from '../stt/sttSettings';
-import type { TranscribeRetryInfo } from '../utils/transcribeAudio';
+import { queuedAudioSecondsHeader, type TranscribeRetryInfo } from '../utils/transcribeAudio';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
 
@@ -174,6 +174,24 @@ test('the timeout grows with the voice: a longer voice outlasts a delay that kil
   const longVoice = await runChain([createEngine('slow', first, fastTimeout), createEngine('second', second)], { durationSeconds: 5 });
   assert.deepEqual(longVoice.result, { ok: true, text: 'in time', engine: 'slow' });
   assert.deepEqual(longVoice.fallbacks, []);
+});
+
+test('the local engine\'s report of the audio queued ahead extends the budget by it: a voice waiting in line is not timed out', { timeout: noHangTestTimeoutMs }, async () => {
+  // 0.1 s + 100 % of the voice: a 0.1 s voice has 200 ms. Reported 0.4 s ahead → 0.1 + 0.5 = 600 ms, so the answer
+  // after 500 ms is in time; the same answer behind a report of nothing ahead is too late.
+  const answerAfterQueueReport = (queuedSeconds: string, delayMs: number, text: string): Handler => (_req, res) => {
+    // Node has no API for a 1xx with custom headers: the interim response goes straight to the socket, before writeHead.
+    res.socket?.write(`HTTP/1.1 102 Processing\r\n${queuedAudioSecondsHeader}: ${queuedSeconds}\r\n\r\n`);
+    setTimeout(() => { res.writeHead(200); res.end(JSON.stringify({ text })); }, delayMs);
+  };
+  reset([answerAfterQueueReport('0.4', 500, 'waited its turn')], [transcribed('never used')]);
+  const queued = await runChain([createEngine('local', first, fastTimeout), createEngine('second', second)], { durationSeconds: shortVoiceSeconds });
+  assert.deepEqual(queued.result, { ok: true, text: 'waited its turn', engine: 'local' });
+  assert.deepEqual(queued.fallbacks, []);
+
+  reset([answerAfterQueueReport('0.0', 500, 'too late')], [transcribed('rescued')]);
+  const nothingAhead = await runChain([createEngine('local', first, fastTimeout), createEngine('second', second)], { durationSeconds: shortVoiceSeconds });
+  assert.equal(nothingAhead.result.engine, 'second', 'with nothing ahead the voice keeps its own budget');
 });
 
 test('a voice whose Telegram duration is 0 (or missing) is of unknown length, not a 0-second voice: it gets the unknown-length budget', { timeout: noHangTestTimeoutMs }, async () => {

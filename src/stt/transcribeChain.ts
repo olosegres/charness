@@ -78,6 +78,8 @@ async function transcribeWithEngine(
   }
   return transcribeAudio(filePath, endpoint, {
     timeoutMs: getEngineTimeoutMs(engine.timeout, options.durationSeconds),
+    // The local engine names the audio in line before this voice: it is recognised first, so it is budgeted too.
+    getTimeoutMsForQueuedAudio: (queuedAudioSeconds) => getEngineTimeoutMs(engine.timeout, options.durationSeconds, queuedAudioSeconds),
     retryDelaysMs: isLast ? options.retryDelaysMs : noRetryDelaysMs,
     onRetry: options.onRetry,
     // A retry asks the engine again: the local one may have crashed or idled out and come back on another port.

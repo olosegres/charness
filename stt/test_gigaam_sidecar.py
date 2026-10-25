@@ -3,15 +3,16 @@ interpreter (it needs numpy):  <venv>/bin/python -I stt/test_gigaam_sidecar.py""
 
 import argparse
 import contextlib
-import http.client
 import io
 import json
 import logging
 import os
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import unittest.mock
 
@@ -44,6 +45,97 @@ def build_multipart(file_bytes: bytes, fields: dict | None = None) -> bytes:
     )
     parts.append(f"--{BOUNDARY}--\r\n".encode())
     return b"".join(parts)
+
+
+class RawResponse:
+    """A response read off a raw socket: the interim 1xx ones the sidecar sends first, then the final one."""
+
+    def __init__(self, status: int, headers: dict, body: bytes, interim: list):
+        self.status = status
+        self.headers = headers
+        self.body = body
+        self.interim = interim
+
+
+def parse_header_block(block: bytes) -> tuple[int, dict]:
+    lines = block.decode("latin-1").split("\r\n")
+    headers = {}
+    for line in lines[1:]:
+        name, _, value = line.partition(":")
+        headers[name.strip().lower()] = value.strip()
+    return int(lines[0].split(" ")[1]), headers
+
+
+def read_raw_response(sock) -> RawResponse:
+    """Read until the server closes (every sidecar response closes the connection) and split off the 1xx ones."""
+    data = b""
+    while True:
+        received = sock.recv(65536)
+        if not received:
+            break
+        data += received
+    interim = []
+    while True:
+        block, _, data = data.partition(b"\r\n\r\n")
+        status, headers = parse_header_block(block)
+        if 100 <= status < 200:
+            interim.append((status, headers))
+            continue
+        return RawResponse(status, headers, data, interim)
+
+
+def send_raw_request(port: int, method: str, path: str, headers: dict, body: bytes = b"", is_chunked: bool = False):
+    """A connected socket that has sent the request; with `is_chunked` the body is sent the way Node's form-data does."""
+    sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+    all_headers = {"Host": "127.0.0.1", **headers}
+    if is_chunked:
+        all_headers["Transfer-Encoding"] = "chunked"
+        pieces = [body[index:index + 700] for index in range(0, len(body), 700)]
+        body = b"".join(f"{len(piece):x}\r\n".encode() + piece + b"\r\n" for piece in pieces) + b"0\r\n\r\n"
+    elif "Content-Length" not in all_headers:
+        all_headers["Content-Length"] = str(len(body))
+    head = f"{method} {path} HTTP/1.1\r\n" + "".join(f"{name}: {value}\r\n" for name, value in all_headers.items()) + "\r\n"
+    sock.sendall(head.encode("latin-1") + body)
+    return sock
+
+
+def raw_request(port: int, method: str, path: str, headers: dict, body: bytes = b"", is_chunked: bool = False) -> RawResponse:
+    sock = send_raw_request(port, method, path, headers, body, is_chunked)
+    try:
+        return read_raw_response(sock)
+    finally:
+        sock.close()
+
+
+def read_interim_queue_report(sock) -> float:
+    """Read up to the end of the sidecar's interim 102 and return the queued seconds it reports."""
+    data = b""
+    while b"\r\n\r\n" not in data:
+        received = sock.recv(1)
+        if not received:
+            raise AssertionError("the connection closed before the interim response")
+        data += received
+    status, headers = parse_header_block(data[:-4])
+    assert status == sidecar.QUEUE_REPORT_STATUS, status
+    return float(headers[sidecar.QUEUED_AUDIO_SECONDS_HEADER.lower()])
+
+
+def wav_upload(seconds: float) -> bytes:
+    import soundfile
+
+    wav = io.BytesIO()
+    soundfile.write(wav, tone(seconds), SAMPLE_RATE, format="WAV", subtype="PCM_16")
+    return build_multipart(wav.getvalue())
+
+
+def upload_headers() -> dict:
+    return {"Authorization": f"Bearer {TEST_TOKEN}", "Content-Type": f"multipart/form-data; boundary={BOUNDARY}"}
+
+
+def split_one_piece_per_second(samples, sample_rate):
+    """A splitter for the handler tests: one piece per second of audio, labelled with the voice's length in seconds."""
+    seconds = len(samples) // sample_rate
+    return [np.full(sample_rate, seconds, dtype=np.float32) for _ in range(seconds)], sample_rate
 
 
 def tone(seconds: float, amplitude: float = 0.5) -> np.ndarray:
@@ -328,6 +420,45 @@ class PoolTest(unittest.TestCase):
             thread.join(5)
         self.assertEqual(recognize.order, [5, 6], "only the piece already running was recognised")
 
+    def test_a_request_is_told_the_audio_queued_ahead_of_it_and_nothing_behind_it(self):
+        recognize = GatedRecognizer()
+        pool = sidecar.RecognitionPool(recognize, workers=1)
+        pool.start()
+        running = submit_now(pool, [label_chunk(1) for _ in range(3)])
+        self.assertTrue(recognize.started.wait(5))
+        still_cutting = pool.open_request()
+        still_cutting.note_audio_seconds(7.5)
+        own = submit_now(pool, [label_chunk(2)])
+        behind = submit_now(pool, [label_chunk(3) for _ in range(5)])
+        piece_seconds = 4 / SAMPLE_RATE
+        self.assertAlmostEqual(pool.get_audio_seconds_ahead(running), 0.0)
+        self.assertAlmostEqual(pool.get_audio_seconds_ahead(own), 3 * piece_seconds + 7.5, msg="the running piece counts too")
+        self.assertAlmostEqual(pool.get_audio_seconds_ahead(behind), 3 * piece_seconds + 7.5 + piece_seconds)
+        pool.cancel(still_cutting)
+        recognize.gate.set()
+        for request in (running, own, behind):
+            request.wait(5)
+        self.assertAlmostEqual(pool.get_audio_seconds_ahead(behind), 0.0, msg="finished requests are not ahead")
+        pool.stop()
+
+    def test_a_waiting_request_whose_client_left_is_dropped(self):
+        recognize = GatedRecognizer()
+        pool = sidecar.RecognitionPool(recognize, workers=1)
+        pool.start()
+        running = submit_now(pool, [label_chunk(1)])
+        self.assertTrue(recognize.started.wait(5))
+        abandoned = submit_now(pool, [label_chunk(2) for _ in range(3)])
+        with self.assertRaises(sidecar.ClientGone):
+            abandoned.wait(5, is_abandoned=lambda: True)
+        self.assertTrue(abandoned.is_finished())
+        self.assertEqual(pool.queued_chunks(), 0, "its pieces are no longer waiting")
+        recognize.gate.set()
+        running.wait(5)
+        after = submit_now(pool, [label_chunk(3)])
+        self.assertEqual(after.wait(5), "t3")
+        pool.stop()
+        self.assertEqual(recognize.order, [1, 3], "no piece of the abandoned request was recognised")
+
     def test_a_request_with_no_pieces_is_empty_text_at_once(self):
         pool = sidecar.RecognitionPool(GatedRecognizer(), workers=1)
         pool.start()
@@ -534,15 +665,8 @@ class HttpArrivalOrderTest(unittest.TestCase):
         replies = {}
 
         def post(seconds):
-            wav = io.BytesIO()
-            import soundfile
-
-            soundfile.write(wav, tone(seconds), SAMPLE_RATE, format="WAV", subtype="PCM_16")
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
-            connection.request("POST", sidecar.TRANSCRIPTIONS_PATH, build_multipart(wav.getvalue()), {
-                "Authorization": f"Bearer {TEST_TOKEN}", "Content-Type": f"multipart/form-data; boundary={BOUNDARY}"})
-            replies[seconds] = json.loads(connection.getresponse().read())["text"]
-            connection.close()
+            response = raw_request(server.server_address[1], "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(seconds))
+            replies[seconds] = json.loads(response.body)["text"]
 
         try:
             first = threading.Thread(target=post, args=(2.0,))
@@ -563,6 +687,82 @@ class HttpArrivalOrderTest(unittest.TestCase):
             server.shutdown()
             server.server_close()
             pool.stop()
+
+
+class HttpQueueTest(unittest.TestCase):
+    """The real handler with a gated recognizer: what a waiting voice is told, and what happens when it is abandoned."""
+
+    def setUp(self):
+        self.recognize = GatedRecognizer()
+        self.pool = sidecar.RecognitionPool(self.recognize, workers=1)
+        self.pool.start()
+        self.server = sidecar.SidecarServer(
+            ("127.0.0.1", 0), sidecar.SidecarContext(TEST_TOKEN, self.pool, split_one_piece_per_second, 1, 900.0, 600.0)
+        )
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.recognize.gate.set()
+        self.server.shutdown()
+        self.server.server_close()
+        self.pool.stop()
+
+    def test_the_interim_response_reports_the_seconds_of_audio_queued_ahead(self):
+        first = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(3.0))
+        self.assertAlmostEqual(read_interim_queue_report(first), 0.0, msg="nothing is ahead of the first voice")
+        self.assertTrue(self.recognize.started.wait(5))
+        second = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(2.0))
+        self.assertAlmostEqual(read_interim_queue_report(second), 3.0, msg="all three seconds of the first voice, its running piece included")
+        self.recognize.gate.set()
+        first_reply, second_reply = read_raw_response(first), read_raw_response(second)
+        first.close()
+        second.close()
+        self.assertEqual((first_reply.status, json.loads(first_reply.body)["text"]), (200, "t3 t3 t3"))
+        self.assertEqual((second_reply.status, json.loads(second_reply.body)["text"]), (200, "t2 t2"))
+
+    def test_a_voice_whose_client_hung_up_is_dropped_and_its_pieces_are_never_recognised(self):
+        first = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(1.0))
+        self.assertTrue(self.recognize.started.wait(5))
+        abandoned = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(4.0))
+        read_interim_queue_report(abandoned)
+        self.assertEqual(self.pool.queued_chunks(), 4)
+        abandoned.close()
+        deadline = time.monotonic() + 5
+        while self.pool.queued_chunks() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(self.pool.queued_chunks(), 0, "the hung-up voice left the queue while the first one still runs")
+        self.recognize.gate.set()
+        self.assertEqual(read_raw_response(first).status, 200)
+        first.close()
+        self.assertEqual(self.recognize.order, [1])
+
+
+class QueueReportFailureTest(unittest.TestCase):
+    def test_a_client_gone_before_the_interim_report_drops_the_voice(self):
+        recognize = GatedRecognizer()
+        pool = sidecar.RecognitionPool(recognize, workers=1)
+        pool.start()
+        running = submit_now(pool, [label_chunk(1)])
+        self.assertTrue(recognize.started.wait(5))
+        handler = sidecar.SidecarHandler.__new__(sidecar.SidecarHandler)
+        handler.headers = {"Content-Type": f"multipart/form-data; boundary={BOUNDARY}"}
+        body = wav_upload(2.0)
+        handler.headers["Content-Length"] = str(len(body))
+        handler.rfile = io.BytesIO(body)
+
+        def broken_report(seconds_ahead):
+            raise BrokenPipeError("the client is gone")
+
+        handler._report_queue = broken_report
+        context = sidecar.SidecarContext(TEST_TOKEN, pool, split_one_piece_per_second, 1, 900.0, 600.0)
+        with self.assertRaises(sidecar.ClientGone):
+            handler._transcribe(context)
+        self.assertEqual(pool.queued_chunks(), 0, "the voice's pieces do not stay queued")
+        recognize.gate.set()
+        running.wait(5)
+        pool.stop()
+        self.assertEqual(recognize.order, [1])
 
 
 class HttpTest(unittest.TestCase):
@@ -605,15 +805,11 @@ class HttpTest(unittest.TestCase):
         cls.pool.stop()
 
     def request(self, method, path, body=None, headers=None, token=TEST_TOKEN):
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         all_headers = dict(headers or {})
         if token is not None:
             all_headers["Authorization"] = f"Bearer {token}"
-        connection.request(method, path, body=body, headers=all_headers)
-        response = connection.getresponse()
-        payload = response.read()
-        connection.close()
-        return response.status, payload
+        response = raw_request(self.port, method, path, all_headers, body or b"")
+        return response.status, response.body
 
     def make_upload(self):
         wav = io.BytesIO()
@@ -639,10 +835,14 @@ class HttpTest(unittest.TestCase):
         self.assertEqual(health["pid"], os.getpid())
 
     def test_a_transcription_returns_json_text_in_utf8(self):
-        body = self.make_upload()
-        status, payload = self.request("POST", sidecar.TRANSCRIPTIONS_PATH, body, self.multipart_headers())
-        self.assertEqual(status, 200)
-        self.assertEqual(json.loads(payload.decode("utf-8")), {"text": "привет мир"})
+        response = raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), self.make_upload())
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(response.body.decode("utf-8")), {"text": "привет мир"})
+        self.assertEqual(
+            [(status, headers[sidecar.QUEUED_AUDIO_SECONDS_HEADER.lower()]) for status, headers in response.interim],
+            [(102, "0.0")],
+            "the voice is first told that nothing is queued ahead of it",
+        )
 
     def test_the_pieces_of_the_splitter_are_recognised_at_its_rate_and_joined_in_order(self):
         self.split_requests.append(True)
@@ -660,19 +860,8 @@ class HttpTest(unittest.TestCase):
         self.assertEqual((status, payload.decode("utf-8")), (200, "привет мир"))
 
     def test_a_chunked_upload_like_nodes_is_accepted(self):
-        body = self.make_upload()
-        pieces = [body[index:index + 700] for index in range(0, len(body), 700)]
-        raw = b"".join(f"{len(piece):x}\r\n".encode() + piece + b"\r\n" for piece in pieces) + b"0\r\n\r\n"
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        connection.putrequest("POST", sidecar.TRANSCRIPTIONS_PATH)
-        connection.putheader("Authorization", f"Bearer {TEST_TOKEN}")
-        connection.putheader("Content-Type", f"multipart/form-data; boundary={BOUNDARY}")
-        connection.putheader("Transfer-Encoding", "chunked")
-        connection.endheaders()
-        connection.send(raw)
-        response = connection.getresponse()
-        self.assertEqual((response.status, json.loads(response.read())), (200, {"text": "привет мир"}))
-        connection.close()
+        response = raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), self.make_upload(), is_chunked=True)
+        self.assertEqual((response.status, json.loads(response.body)), (200, {"text": "привет мир"}))
 
     def test_bad_requests_are_refused_with_json_errors(self):
         headers = self.multipart_headers()
@@ -695,15 +884,8 @@ class HttpTest(unittest.TestCase):
         self.assertIn("decoded", json.loads(payload)["error"]["message"])
 
     def test_a_body_over_the_limit_is_a_413_before_it_is_read(self):
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        connection.putrequest("POST", sidecar.TRANSCRIPTIONS_PATH)
-        connection.putheader("Authorization", f"Bearer {TEST_TOKEN}")
-        connection.putheader("Content-Type", f"multipart/form-data; boundary={BOUNDARY}")
-        connection.putheader("Content-Length", str(sidecar.MAX_BODY_BYTES + 1))
-        connection.endheaders()
-        response = connection.getresponse()
-        self.assertEqual(response.status, 413)
-        connection.close()
+        headers = {**upload_headers(), "Content-Length": str(sidecar.MAX_BODY_BYTES + 1)}
+        self.assertEqual(raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, headers).status, 413)
 
     def test_busy_requests_counts_a_transcription_in_flight_and_refuses_after_the_exit_decision(self):
         self.delay.set()

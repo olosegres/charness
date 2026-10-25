@@ -85,8 +85,10 @@ voice. After this update the local engine re-installs itself once (about a minut
 progress shows in General); a voice sent meanwhile goes to the next engine in your list, or, with no other engine, the bot
 asks you to send it again when the engine is ready.
 
-**Voice notes are transcribed in the order they arrive.** The local recognition no longer lets a short voice jump ahead
-of a longer one that was sent before it.
+**Voice notes from different topics are transcribed in the order they were sent.** The local recognition used to let
+a short voice jump ahead of a longer one sent before it from another topic; now each voice waits its turn, and the bot
+waits for it as long as its turn takes instead of giving up after the time its own length needs. A voice the bot has
+stopped waiting for is no longer recognised in vain.
 
 ## 3.6.0 — 2026-10-24
 

@@ -493,8 +493,9 @@ export function getSttReportLines(resolved: ResolvedSttSettings): string[] {
  * Telegram reports for a note whose length it could not read — is "unknown", not a 0-second voice: it is
  * budgeted as {@link unknownVoiceDurationSeconds}, so a long voice without a length is not cut at the bare base.
  * Long voices stay on their engine, they just get more time.
+ * `queuedAudioSeconds` — the audio the local engine reports in line before this voice — is budgeted at the same rate.
  */
-export function getEngineTimeoutMs(timeout: SttTimeout, durationSeconds: number | undefined): number {
+export function getEngineTimeoutMs(timeout: SttTimeout, durationSeconds: number | undefined, queuedAudioSeconds = 0): number {
   const voiceSeconds = durationSeconds !== undefined && durationSeconds > 0 ? durationSeconds : unknownVoiceDurationSeconds;
-  return (timeout.baseSeconds + (timeout.percentOfDuration / percentDivisor) * voiceSeconds) * millisecondsPerSecond;
+  return (timeout.baseSeconds + (timeout.percentOfDuration / percentDivisor) * (voiceSeconds + queuedAudioSeconds)) * millisecondsPerSecond;
 }

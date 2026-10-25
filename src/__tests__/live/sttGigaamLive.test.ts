@@ -9,8 +9,8 @@
  *   STT_GIGAAM_LIVE_AUDIO         a short Russian voice clip (OGG/Opus like Telegram's)
  *   STT_GIGAAM_LIVE_EXPECT        optional: comma-separated words the short clip must contain; `word:N` = at least N
  *                                 times (a lost phrase that repeats a word of another one is caught only by its count)
- *   STT_GIGAAM_LIVE_LONG_AUDIO    optional: a ~5 minute clip — the chunking, the memory ceiling and the
- *                                 shortest-request-first proof run on it
+ *   STT_GIGAAM_LIVE_LONG_AUDIO    optional: a ~5 minute clip — the chunking, the memory ceiling, the arrival-order
+ *                                 proof and the drop of an abandoned voice run on it
  *
  * Run (the sidecar's owner is this test process; keep tmux out of it):
  *   env -u TMUX -u TMUX_PANE STT_GIGAAM_LIVE_DATA_DIR=... STT_GIGAAM_LIVE_AUDIO=... \
@@ -18,7 +18,8 @@
  *
  * Cases: scratch install · the Python unit tests under the venv interpreter · cold start · (b) a request
  * without the token is refused · (c) health · (a) the short clip through `transcribeWithEngines` · (e) the long
- * clip's time and peak memory · (f) a short voice waits for a long one that arrived first · (h) two sidecars, two ports · (g) the
+ * clip's time and peak memory · (f) a short voice waits for a long one that arrived first, within its production budget ·
+ * (j) a voice whose client gave up is dropped · (h) two sidecars, two ports · (g) the
  * owner dying takes the sidecar down · (d) the idle exit deletes the record.
  */
 
@@ -27,12 +28,12 @@ import * as assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as http from 'http';
+import FormData from 'form-data';
 import * as os from 'os';
 import * as path from 'path';
 import { getSidecarScriptPath, getSttPaths, runSttInstall, type SttInstallProgress } from '../../stt/sttInstall';
 import { defaultSttTimeout, type ResolvedSttEngine } from '../../stt/sttSettings';
 import { transcribeWithEngines } from '../../stt/transcribeChain';
-import { transcribeAudio } from '../../utils/transcribeAudio';
 
 const dataDir = process.env.STT_GIGAAM_LIVE_DATA_DIR;
 const shortAudio = process.env.STT_GIGAAM_LIVE_AUDIO;
@@ -67,6 +68,12 @@ const peakMemoryLimitKb = 1024 * 1024;
  * answer it within a few seconds. A load-proof ratio instead of a fixed budget: timings on this box vary with its load.
  */
 const minShortWaitShareOfLongRemainder = 0.5;
+/**
+ * (j): the client hangs up once this many pieces of the long voice wait, and they must be gone within the budget. The
+ * sidecar checks its client every 0.5 s; four workers recognising 20 pieces of up to 25 s take far longer than 1.5 s.
+ */
+const queuedChunksBeforeAbandoning = 20;
+const abandonedDropBudgetMs = 1_500;
 /** The long request counts as queued once this many of its pieces still wait for a worker. */
 const queuedChunksBeforeShortVoice = 6;
 const queueWaitBudgetMs = 30_000;
@@ -92,6 +99,7 @@ interface RunningSidecar {
   token: string;
   coldStartMs: number;
   recordFile: string;
+  logFile: string;
   exited: Promise<number | null>;
 }
 
@@ -118,11 +126,12 @@ async function startSidecar(options: { ownerPid: number; idleSecondsForTest?: nu
   const readyFile = path.join(scratchFiles, `ready-${label}.json`);
   const recordFile = path.join(scratchFiles, `record-${label}.json`);
   const token = `live-token-${label}`;
+  const logFile = path.join(scratchFiles, `sidecar-${label}.log`);
   const args = [
     '-I', getSidecarScriptPath(),
     '--ready-file', readyFile,
     '--record-file', recordFile,
-    '--log-file', path.join(scratchFiles, `sidecar-${label}.log`),
+    '--log-file', logFile,
     '--workers', String(workers),
     '--threads', String(threads),
     '--owner-pid', String(options.ownerPid),
@@ -153,7 +162,7 @@ async function startSidecar(options: { ownerPid: number; idleSecondsForTest?: nu
     { pid: ready.pid, startToken: getStartToken(ready.pid), port: ready.port, token, configHash: 'live-test-hash', ownerPid: options.ownerPid, ownerStartToken: getStartToken(options.ownerPid) },
   );
   assert.equal(fs.statSync(recordFile).mode & 0o777, 0o600, 'the record holds the token: owner only');
-  return { child, pid: ready.pid, port: ready.port, token, coldStartMs: Date.now() - startedAt, recordFile, exited };
+  return { child, pid: ready.pid, port: ready.port, token, coldStartMs: Date.now() - startedAt, recordFile, logFile, exited };
 }
 
 function createEngine(sidecar: RunningSidecar): ResolvedSttEngine {
@@ -164,6 +173,24 @@ function createEngine(sidecar: RunningSidecar): ResolvedSttEngine {
     timeout: defaultSttTimeout,
     getEndpoint: () => Promise.resolve({ url: `http://127.0.0.1:${sidecar.port}/v1/audio/transcriptions`, apiKey: sidecar.token, model: 'gigaam' }),
   };
+}
+
+/** An upload the test can hang up on (`destroy`), shaped like `transcribeAudio`'s. */
+function startUpload(audioPath: string, sidecar: RunningSidecar): http.ClientRequest {
+  const form = new FormData();
+  form.append('file', fs.createReadStream(audioPath), { filename: path.basename(audioPath), contentType: 'audio/ogg' });
+  form.append('model', 'gigaam');
+  const upload = http.request({
+    host: '127.0.0.1',
+    port: sidecar.port,
+    method: 'POST',
+    path: '/v1/audio/transcriptions',
+    headers: { ...form.getHeaders(), Authorization: `Bearer ${sidecar.token}` },
+  });
+  // The test hangs up on purpose: the reset that follows is expected.
+  upload.on('error', () => undefined);
+  form.pipe(upload);
+  return upload;
 }
 
 function getAudioSeconds(audioPath: string): number {
@@ -281,27 +308,51 @@ describe('the local GigaAM engine (live)', { skip: skipReason }, () => {
     assert.ok(peakKb <= peakMemoryLimitKb, `peak ${peakKb} kB`);
   });
 
-  test('(f) arrival order: a short voice sent while a long voice is queued waits for the long one\'s pieces', { skip: longAudio ? undefined : 'STT_GIGAAM_LIVE_LONG_AUDIO is not set', timeout: longVoiceHardLimitMs + 30_000 }, async () => {
-    const endpoint = { url: `http://127.0.0.1:${mainSidecar.port}/v1/audio/transcriptions`, apiKey: mainSidecar.token, model: 'gigaam' };
-    const options = { timeoutMs: longVoiceHardLimitMs, retryDelaysMs: [] };
+  test('(f) arrival order: a short voice sent while a long voice is queued waits for the long one\'s pieces, within its production budget', { skip: longAudio ? undefined : 'STT_GIGAAM_LIVE_LONG_AUDIO is not set', timeout: longVoiceHardLimitMs + 30_000 }, async () => {
+    // Both through the production chain: each voice's own timeout (10 s + 25 %), extended by the queue the sidecar reports.
+    const engines = [createEngine(mainSidecar)];
+    const transcribeVoice = (audioPath: string) => transcribeWithEngines(audioPath, engines, { durationSeconds: getAudioSeconds(audioPath), language: null, retryDelaysMs: [] });
     const startedAt = Date.now();
-    const longReply = transcribeAudio(longAudio ?? '', endpoint, options).then((result) => ({ result, atMs: Date.now() - startedAt }));
+    const longReply = transcribeVoice(longAudio ?? '').then((result) => ({ result, atMs: Date.now() - startedAt }));
     // Send the short voice only once the long one's pieces are queued, so the long one has certainly arrived first.
     while ((await getHealth(mainSidecar.port, mainSidecar.token)).queuedChunks < queuedChunksBeforeShortVoice) {
       assert.ok(Date.now() - startedAt < queueWaitBudgetMs, 'the long request never queued its chunks');
       await sleep(pollMs);
     }
     const shortSentAt = Date.now() - startedAt;
-    const shortReply = transcribeAudio(shortAudio ?? '', endpoint, options).then((result) => ({ result, atMs: Date.now() - startedAt }));
+    const shortReply = transcribeVoice(shortAudio ?? '').then((result) => ({ result, atMs: Date.now() - startedAt }));
     const [long, short] = await Promise.all([longReply, shortReply]);
     console.log(`[live] arrival order: short answered at ${short.atMs} ms (sent at ${shortSentAt}), long at ${long.atMs} ms`);
-    assert.ok(long.result.ok && short.result.ok);
+    assert.ok(long.result.ok, long.result.ok ? '' : long.result.error);
+    assert.ok(short.result.ok, `the short voice was not answered within its production budget: ${short.result.ok ? '' : short.result.error}`);
     const shortWaitMs = short.atMs - shortSentAt;
     const longRemainderMs = long.atMs - shortSentAt;
     assert.ok(
       shortWaitMs >= longRemainderMs * minShortWaitShareOfLongRemainder,
       `the short voice overtook: it waited ${shortWaitMs} ms of the long one's ${longRemainderMs} ms remainder`,
     );
+  });
+
+  test('(j) a voice whose client gave up is dropped: its queued pieces leave the queue at once instead of being recognised', { skip: longAudio ? undefined : 'STT_GIGAAM_LIVE_LONG_AUDIO is not set', timeout: longVoiceHardLimitMs }, async () => {
+    const startedAt = Date.now();
+    const upload = startUpload(longAudio ?? '', mainSidecar);
+    let queuedWhenAbandoned = 0;
+    while ((queuedWhenAbandoned = (await getHealth(mainSidecar.port, mainSidecar.token)).queuedChunks) < queuedChunksBeforeAbandoning) {
+      assert.ok(Date.now() - startedAt < queueWaitBudgetMs, 'the long request never queued its pieces');
+      await sleep(pollMs);
+    }
+    upload.destroy();
+    const abandonedAt = Date.now();
+    while ((await getHealth(mainSidecar.port, mainSidecar.token)).queuedChunks > 0) {
+      assert.ok(Date.now() - abandonedAt < abandonedDropBudgetMs, 'the abandoned voice\'s pieces were still queued');
+      await sleep(pollMs);
+    }
+    const drainMs = Date.now() - abandonedAt;
+    console.log(`[live] abandoned voice: ${queuedWhenAbandoned} pieces queued when the client hung up, none ${drainMs} ms later`);
+    while (!fs.readFileSync(mainSidecar.logFile, 'utf8').includes('the client left while')) {
+      assert.ok(Date.now() - abandonedAt < abandonedDropBudgetMs, 'the sidecar did not log the dropped voice');
+      await sleep(pollMs);
+    }
   });
 
   test('(h) two sidecars at once listen on different OS-chosen ports', { timeout: readyTimeoutMs + 5_000 }, async () => {

@@ -39,6 +39,11 @@ const firstServerErrorStatus = 500;
  */
 const retryableClientErrorStatuses: ReadonlySet<number> = new Set([408, 409]);
 const errorBodyPreviewLength = 500;
+/**
+ * The interim (1xx) response header in which the local engine names the seconds of audio queued ahead of this upload:
+ * it recognises voices strictly in arrival order, so a voice may wait in line before its own recognition starts.
+ */
+export const queuedAudioSecondsHeader = 'x-charness-queued-audio-seconds';
 
 /**
  * @description Where and how a voice note is transcribed.
@@ -92,6 +97,18 @@ export interface TranscribeAudioOptions {
    * rejection ends the attempts with its message.
    */
   refreshEndpoint?: () => Promise<TranscriptionEndpoint>;
+  /**
+   * The timeout once the engine reports the audio queued ahead of the upload ({@link queuedAudioSecondsHeader}), so the
+   * wait in line does not count against a budget sized for the voice alone. Without it a report changes nothing.
+   */
+  getTimeoutMsForQueuedAudio?: (queuedAudioSeconds: number) => number;
+}
+
+/** @description The seconds an interim response reports as queued ahead, or `null` when it reports nothing usable. */
+function getQueuedAudioSeconds(headers: http.IncomingHttpHeaders): number | null {
+  const header = headers[queuedAudioSecondsHeader];
+  const seconds = Number(Array.isArray(header) ? header[0] : header);
+  return header !== undefined && Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
 }
 
 /** @description The Groq Whisper endpoint for `apiKey`. */
@@ -163,6 +180,7 @@ async function transcribeAudioOnce(
   filePath: string,
   endpoint: TranscriptionEndpoint,
   timeoutMs: number,
+  getTimeoutMsForQueuedAudio?: (queuedAudioSeconds: number) => number,
 ): Promise<TranscribeAttemptResult> {
   // Detect a 0-byte download up-front: previously this would still be sent
   // to Whisper, which replies 400 with a generic "file is empty" body that
@@ -244,6 +262,10 @@ async function transcribeAudioOnce(
     req.setTimeout(timeoutMs, () => {
       req.destroy(new Error('transcription timed out'));
     });
+    req.on('information', (info) => {
+      const queuedAudioSeconds = getQueuedAudioSeconds(info.headers);
+      if (queuedAudioSeconds !== null && getTimeoutMsForQueuedAudio) req.setTimeout(getTimeoutMsForQueuedAudio(queuedAudioSeconds));
+    });
     req.on('error', (e) => {
       resolve({ ok: false, error: e instanceof Error ? e.message : String(e), failureKind: 'transient' });
     });
@@ -263,7 +285,7 @@ export async function transcribeAudio(
 ): Promise<TranscribeResult> {
   let currentEndpoint = endpoint;
   for (let retryIndex = 0; ; retryIndex++) {
-    const attempt = await transcribeAudioOnce(filePath, currentEndpoint, options.timeoutMs);
+    const attempt = await transcribeAudioOnce(filePath, currentEndpoint, options.timeoutMs, options.getTimeoutMsForQueuedAudio);
     if (attempt.ok) return attempt;
 
     const delayMs = getTranscribeRetryDelayMs({

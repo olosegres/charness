@@ -69,7 +69,10 @@ there and may reject.
 `getEngineTimeoutMs(timeout, durationSeconds) = (baseSeconds + percentOfDuration/100 × durationSeconds) × 1000`,
 default `{ 10, 25 }`: 30 s → 17.5 s, 5 min → 85 s; an unknown duration counts as 60 s. It is the socket
 inactivity timer of the request. A long voice is never routed away from its engine for being long — it just gets
-more time.
+more time. The local engine recognises voices strictly in arrival order, so a voice may wait in line: the sidecar
+names the seconds of audio queued ahead of it in an interim `102` (`X-Charness-Queued-Audio-Seconds`), and from then
+on the timeout is `getEngineTimeoutMs(timeout, durationSeconds, queuedAudioSeconds)` — the queue budgeted at the same
+rate as the voice (9 s behind 300 s → 87.25 s). Any other engine sends no such header and keeps the plain budget.
 
 ## The local engine: one sidecar process
 
@@ -121,7 +124,12 @@ env too.
   decoded). Fields: `file` (required), `model` / `language` (accepted, ignored), `response_format` `json` (default) or
   `text`. Replies `{"text": …}` in UTF-8, or errors `{"error": {"message": …}}`: 400 (bad body, undecodable audio,
   unsupported sample rate), 401, 404, 413 (body over 25 MB), 500, 503 (the idle exit is decided), 504 (over
-  `--max-seconds`; that request's queued chunks are dropped). Every response closes the connection.
+  `--max-seconds`; that request's queued chunks are dropped). Every response closes the connection. Once the voice is
+  cut and in line, BEFORE the final response, one interim `102` carries `X-Charness-Queued-Audio-Seconds: <s>` (one
+  decimal): the audio still to recognise ahead of it — the unfinished pieces of every earlier request, the running ones
+  included, or the decoded length of one still being cut. While the voice waits, the handler checks every 0.5 s that its
+  client is still connected; a client that hung up (it timed out, the bot moved on) gets its request dropped: no
+  piece not yet handed out is recognised, nothing is answered, and the log says `the client left`.
 - **Chunking — every voice is cut at its pauses.** Audio is decoded with `soundfile` (libsndfile reads Telegram's
   OGG/Opus, no ffmpeg), downmixed to mono and resampled ONCE to 16 kHz with the model's own resampler. Silero VAD
   (`onnx_asr.load_vad("silero")`, one thread, in the request's handler thread) finds the speech; every gap of at least
@@ -137,7 +145,10 @@ env too.
 - **Pool — strict arrival order (FIFO).** A request takes its place when its upload has been read (`open_request`),
   BEFORE it is decoded and cut, so a voice that is quicker to cut never overtakes an earlier one. W threads hand out the
   pieces of the first unfinished request, in order, before any piece of the next request, and wait while that request
-  is still being cut; one whose decoding fails gives its place up (`cancel`). Each piece goes to `model.recognize` on
+  is still being cut; one whose decoding fails gives its place up (`cancel`), and one whose client hung up is dropped.
+  A request stays listed until it is finished, so the queue a newcomer is told about counts the running pieces too.
+  Within one topic the bot already sends one voice at a time (`voiceQueue.ts`): this order matters BETWEEN topics,
+  where a voice now waits for the ones sent before it (and its timeout counts that wait). Each piece goes to `model.recognize` on
   the ONE shared onnxruntime session (one model in memory). A failing piece fails its request only. Texts are joined in
   order with single spaces.
 - **Idle exit:** a timer checks every 5 s. With no transcription in flight for `--idle-minutes` (0 = never) it stops

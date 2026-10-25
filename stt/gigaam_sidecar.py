@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import itertools
 import contextlib
 import datetime
 import email.parser
@@ -35,6 +36,8 @@ import json
 import logging
 import logging.handlers
 import os
+import select
+import socket
 import signal
 import subprocess
 import sys
@@ -92,6 +95,12 @@ CLAIM_ATTEMPTS = 3
 SECONDS_PER_MINUTE = 60.0
 BEARER_PREFIX = "Bearer "
 TRANSCRIPTIONS_PATH = "/v1/audio/transcriptions"
+# Once a voice is in line the sidecar answers an interim 102 naming the seconds of audio queued ahead of it, so the
+# bot's timeout can count the wait in line (voices are recognised strictly in arrival order).
+QUEUE_REPORT_STATUS = 102
+QUEUED_AUDIO_SECONDS_HEADER = "X-Charness-Queued-Audio-Seconds"
+# How often a waiting handler checks that its client is still connected.
+CLIENT_CHECK_SECONDS = 0.5
 HEALTH_PATH = "/health"
 RESPONSE_FORMATS = ("json", "text")
 
@@ -109,6 +118,10 @@ class RequestError(Exception):
 
 class RecognitionTimeout(Exception):
     """A request ran past `--max-seconds`."""
+
+
+class ClientGone(Exception):
+    """The client hung up while its voice waited (it timed out, or the bot moved on): nobody would read the text."""
 
 
 # ──────────────────────────────── audio ────────────────────────────────
@@ -240,6 +253,8 @@ class PoolRequest:
         self._on_finished = on_finished
         self._chunks: list[np.ndarray] | None = None
         self._next_chunk = 0
+        # The voice's length once decoded: what it counts for the requests behind it while it is still being cut.
+        self._audio_seconds = 0.0
         self._texts: list[str | None] = []
         self._remaining = 0
         self._error: Exception | None = None
@@ -261,6 +276,23 @@ class PoolRequest:
                 self._finished.set()
         if is_empty:
             self._on_finished()
+
+    def note_audio_seconds(self, seconds: float) -> None:
+        self._audio_seconds = seconds
+
+    def is_cut(self) -> bool:
+        return self._chunks is not None
+
+    def get_remaining_audio_seconds(self) -> float:
+        """Audio still to recognise: the pieces not finished (the running ones included), or the decoded length while
+        the voice is still being cut."""
+        with self._lock:
+            if self._finished.is_set():
+                return 0.0
+            if self._chunks is None:
+                return self._audio_seconds
+            samples = sum(len(chunk) for chunk, text in zip(self._chunks, self._texts) if text is None)
+            return samples / self.sample_rate if self.sample_rate else 0.0
 
     def has_unclaimed_chunk(self) -> bool:
         return self._chunks is not None and self._next_chunk < len(self._chunks)
@@ -296,11 +328,16 @@ class PoolRequest:
         if is_first_end:
             self._on_finished()
 
-    def wait(self, timeout_seconds: float) -> str:
-        """The chunks' texts joined in order with single spaces; raises the first chunk error, or
-        `RecognitionTimeout` after `timeout_seconds` (the pending chunks are then dropped)."""
-        if not self._finished.wait(timeout_seconds):
-            self.fail(RecognitionTimeout())
+    def wait(self, timeout_seconds: float, is_abandoned=lambda: False) -> str:
+        """The chunks' texts joined in order with single spaces; raises the first chunk error, `RecognitionTimeout`
+        after `timeout_seconds`, or `ClientGone` once `is_abandoned()` says the client hung up (checked every
+        `CLIENT_CHECK_SECONDS`); in both cases the pieces not handed out yet are dropped."""
+        deadline = time.monotonic() + timeout_seconds
+        while not self._finished.wait(max(0.0, min(CLIENT_CHECK_SECONDS, deadline - time.monotonic()))):
+            if is_abandoned():
+                self.fail(ClientGone())
+            elif time.monotonic() >= deadline:
+                self.fail(RecognitionTimeout())
         if self._error is not None:
             raise self._error
         return " ".join(text.strip() for text in self._texts if text and text.strip())
@@ -313,8 +350,9 @@ class RequestCancelled(Exception):
 class RecognitionPool:
     """W threads over the requests in strict arrival order (FIFO). A request takes its place when it arrives
     (`open_request`, before its audio is decoded and cut), so a voice that is quicker to cut never overtakes one that
-    came earlier; the workers hand out the pieces of the first unfinished request, in order, before any piece of the
-    next one, and wait while that request is still being cut."""
+    came earlier; the workers hand out the pieces of the first request with pieces left, in order, before any piece of
+    the next one, and wait while a request ahead is still being cut. A request stays listed until it is finished, so
+    the audio queued ahead of a voice counts the pieces still running too."""
 
     def __init__(self, recognize, workers: int):
         self._recognize = recognize
@@ -341,6 +379,12 @@ class RecognitionPool:
         with self._condition:
             return sum(request.count_unclaimed_chunks() for request in self._requests if not request.is_finished())
 
+    def get_audio_seconds_ahead(self, request: PoolRequest) -> float:
+        """Seconds of audio that will be recognised before `request`: everything unfinished that arrived earlier."""
+        with self._condition:
+            ahead = itertools.takewhile(lambda listed: listed is not request, self._requests)
+            return sum(listed.get_remaining_audio_seconds() for listed in ahead)
+
     def open_request(self) -> PoolRequest:
         """Take the next place in the arrival order; `submit` or `cancel` must follow."""
         with self._condition:
@@ -364,12 +408,14 @@ class RecognitionPool:
             while not self._is_stopping:
                 while self._requests and self._requests[0].is_finished():
                     self._requests.popleft()
-                head = self._requests[0] if self._requests else None
-                if head is not None and head.has_unclaimed_chunk():
-                    index, samples = head.claim_next_chunk()
-                    if not head.has_unclaimed_chunk():
-                        self._requests.popleft()
-                    return head, index, samples
+                for listed in self._requests:
+                    if listed.is_finished():
+                        continue
+                    if listed.has_unclaimed_chunk():
+                        index, samples = listed.claim_next_chunk()
+                        return listed, index, samples
+                    if not listed.is_cut():
+                        break  # still being cut: nothing behind it may go first
                 self._condition.wait()
             return None
 
@@ -568,6 +614,8 @@ class SidecarHandler(http.server.BaseHTTPRequestHandler):
             self._reply_error(error.status, error.message)
         except RecognitionTimeout:
             self._reply_error(504, "recognition took too long")
+        except ClientGone:
+            self.close_connection = True
         except Exception as error:
             logger.error("request failed: %s", traceback.format_exc())
             self._reply_error(500, f"recognition failed: {type(error).__name__}")
@@ -593,19 +641,44 @@ class SidecarHandler(http.server.BaseHTTPRequestHandler):
         request = context.pool.open_request()
         try:
             samples, sample_rate = decode_audio(file_bytes)
+            audio_seconds = len(samples) / sample_rate
+            request.note_audio_seconds(audio_seconds)
             chunks, chunk_sample_rate = context.split_audio(samples, sample_rate)
+            # The pieces hold what is needed: the decoded file would only take memory while the voice waits.
+            del samples, file_bytes, body
         except BaseException:
             context.pool.cancel(request)
             raise
         context.pool.submit(request, chunks, chunk_sample_rate)
-        text = request.wait(context.max_seconds)
+        try:
+            self._report_queue(context.pool.get_audio_seconds_ahead(request))
+            text = request.wait(context.max_seconds, self._is_client_gone)
+        except (ClientGone, OSError) as error:
+            if isinstance(error, OSError):  # the interim report could not even be written: the client is gone
+                request.fail(ClientGone())
+            logger.info("the client left while %.1fs of audio waited; dropped", audio_seconds)
+            raise ClientGone() from error
         logger.info(
-            "transcribed %.1fs of audio in %d chunk(s), %.2fs", len(samples) / sample_rate, len(chunks), time.monotonic() - started
+            "transcribed %.1fs of audio in %d chunk(s), %.2fs", audio_seconds, len(chunks), time.monotonic() - started
         )
         if response_format == "text":
             self._reply(200, text.encode("utf-8"), "text/plain; charset=utf-8")
         else:
             self._reply_json(200, {"text": text})
+
+    def _report_queue(self, seconds_ahead: float) -> None:
+        """The interim 102: the voice is in line, with this much audio before it."""
+        self.send_response_only(QUEUE_REPORT_STATUS)
+        self.send_header(QUEUED_AUDIO_SECONDS_HEADER, f"{seconds_ahead:.1f}")
+        self.end_headers()
+
+    def _is_client_gone(self) -> bool:
+        """The client closed its end (its request is fully read, so a readable socket with nothing to read is EOF)."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b""
+        except OSError:
+            return True
 
     def _reply_json(self, status: int, payload: dict) -> None:
         self._reply(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
