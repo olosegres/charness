@@ -578,7 +578,7 @@ next start and shows the progress in General (or in its log).
 
 - **Needs** `uv` (on `PATH` or in `~/.local/bin`), or `python3` ≥ 3.10 with the venv module (`apt install python3-venv`
   on Debian/Ubuntu). The install builds a private venv — your Python is left alone.
-- **Disk:** about 400 MB under `<DATA_DIR>/stt` (the model is 216 MB; the rest is the Python packages and their cache).
+- **Disk:** about 500 MB under `<DATA_DIR>/stt` (the model is 216 MB; the rest is the Python packages and their cache — about 100 MB of it is the ffmpeg libraries that read MP3, M4A and joined OGG files).
 - **RAM:** nothing while it is not running. The recogniser process starts with the first voice note that needs it (about
   +2–3 s once), uses about 0.5 GB for short voices and up to about 0.9 GB while a 5-minute voice is recognised with the
   default 4 workers, and exits by itself after 15 idle minutes (`gigaam.idleMinutes`, `0` = never). Idle time, workers,
@@ -587,6 +587,7 @@ next start and shows the progress in General (or in its log).
   recognised in parallel. A hot reload of the bot keeps a running recogniser; stopping or killing the bot takes it down.
 - **Russian only.** English words come out in Cyrillic or garbled; with a `language` other than `ru` set, the engine is
   skipped and the next one in the chain answers.
+- **Audio formats:** Telegram's OGG/Opus voice notes, and also MP3, M4A (AAC), WAV, FLAC and several OGG files joined into one — each is recognised to its last second.
 - It listens on `127.0.0.1` only, on a port the OS picks, and answers only a per-start secret token.
 - **Docker is not supported yet** (the image has no `python3-venv`).
 

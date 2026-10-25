@@ -1,8 +1,9 @@
 /**
  * @description The local engine's Python sidecar logic as part of `yarn test`: `stt/test_gigaam_sidecar.py` covers the
  * pause cuts, the arrival-order pool, the queue report, the drop of a voice whose client hung up and the HTTP
- * handler. It needs numpy and soundfile only, never the model: it runs through `uv` (an ephemeral environment with
- * the pinned soundfile; the first run downloads them), or else under a `python3` that already has both.
+ * handler, and the decoding of every audio format the engine accepts. It needs numpy, soundfile and av (ffmpeg's
+ * libraries) only, never the model: it runs through `uv` (an ephemeral environment with the pinned packages; the first
+ * run downloads them), or else under a `python3` that already has all three.
  *
  * Setting the environment up is a step of its own. Where it cannot be done — no `uv` and no such `python3`, or `uv`
  * cannot reach the package index (offline, a firewall) — a local run is SKIPPED with the reason, while CI (`CI` is
@@ -27,13 +28,14 @@ const setupTimeoutMs = 45_000;
 const pythonRunTimeoutMs = 50_000;
 const probeTimeoutMs = 5_000;
 /** Fewer tests than this means the file did not really run (an import that broke half of it), not a pass. */
-const minimumPythonTests = 60;
+const minimumPythonTests = 85;
 const outputTailLength = 3000;
 const isCi = process.env.CI === 'true' || process.env.CI === '1';
 const soundfileRequirement = gigaamPinnedRequirements.find((requirement) => requirement.startsWith('soundfile'));
-const importCheck = 'import numpy, soundfile';
+const avRequirement = gigaamPinnedRequirements.find((requirement) => requirement.startsWith('av=='));
+const importCheck = 'import numpy, soundfile, av';
 
-/** @description How to start a Python that has numpy and soundfile: the command and the arguments before the script's. */
+/** @description How to start a Python that has numpy, soundfile and av: the command and the arguments before the script's. */
 interface PythonRunner {
   command: string;
   prefixArgs: string[];
@@ -44,8 +46,11 @@ function checkIsCommandWorking(command: string, args: string[]): boolean {
 }
 
 function findPythonRunner(): PythonRunner | null {
-  if (soundfileRequirement && checkIsCommandWorking('uv', ['--version'])) {
-    return { command: 'uv', prefixArgs: ['run', '--no-project', '--quiet', '--with', 'numpy', '--with', soundfileRequirement, 'python'] };
+  if (soundfileRequirement && avRequirement && checkIsCommandWorking('uv', ['--version'])) {
+    return {
+      command: 'uv',
+      prefixArgs: ['run', '--no-project', '--quiet', '--with', 'numpy', '--with', soundfileRequirement, '--with', avRequirement, 'python'],
+    };
   }
   if (checkIsCommandWorking('python3', ['-c', importCheck])) return { command: 'python3', prefixArgs: [] };
   return null;
@@ -57,7 +62,7 @@ function getOutputTail(run: ReturnType<typeof spawnSync>): string {
 }
 
 const runner = findPythonRunner();
-const missingRunnerReason = 'needs uv, or a python3 with numpy and soundfile';
+const missingRunnerReason = 'needs uv, or a python3 with numpy, soundfile and av';
 
 test('the sidecar\'s Python unit tests pass', { skip: !runner && !isCi ? missingRunnerReason : undefined, timeout: setupTimeoutMs + pythonRunTimeoutMs }, (context) => {
   assert.ok(runner, missingRunnerReason);

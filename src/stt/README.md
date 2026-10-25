@@ -14,7 +14,7 @@ gets. User-facing setup is in [`SETUP.md` § Voice input](../../SETUP.md#voice-i
 | `sttInstallReporter.ts`, `sttScreenPlan.ts` | The install progress as ONE edited message (or `[STT]` log lines), and the pure text of it |
 | `sttConfigEdit.ts`, `sttScreenPlan.ts` | The `/stt` brain, without Telegram: the edits to `stt.json` (validated like a hand edit), the screens as data, the callback codec (`stt_<action>_<arg>_<revision>`, ≤ 64 bytes), the key/address input decision and `reduceSttAction` (tap → show / save / arm input / effect). The buttons and the typed-input hooks are `connectors/telegram/commands/stt.ts` |
 | `sttRuntime.ts` | `stt.json` + the lifecycle facts resolved per call; the boot migration; the once-per-edit auto-install trigger |
-| `../../stt/gigaam_sidecar.py` | The recognition process (Python), shipped in the package's `stt/` dir; `../../stt/test_gigaam_sidecar.py` are its unit tests (numpy and soundfile only, no model), run in `yarn test` by `sttSidecarPython.test.ts` through `uv` or a `python3` that has both |
+| `../../stt/gigaam_sidecar.py` | The recognition process (Python), shipped in the package's `stt/` dir; `../../stt/test_gigaam_sidecar.py` are its unit tests (numpy, soundfile and av only, no model), run in `yarn test` by `sttSidecarPython.test.ts` through `uv` or a `python3` that has all three |
 | `../utils/transcribeAudio.ts` | The ONE HTTP primitive: a multipart `POST` to an OpenAI-compatible `/audio/transcriptions`, with classified failures and the retry schedule |
 
 ## `stt.json` — the one source of truth
@@ -84,7 +84,7 @@ private Hugging Face cache live under `<DATA_DIR>/stt`.
 
 | Path | What |
 |------|------|
-| `venv/` | the private environment (`uv venv --python ">=3.10"`, else `python3 -m venv`) with the pinned `onnx-asr[cpu,hub]==0.12.0 soundfile==0.14.0` |
+| `venv/` | the private environment (`uv venv --python ">=3.10"`, else `python3 -m venv`) with the pinned `onnx-asr[cpu,hub]==0.12.0 soundfile==0.14.0 av==17.1.0` (`av` is ffmpeg's libraries in a wheel, ~35 MB to download, ~100 MB on disk; 17.1.0 is the last release for Python 3.10) |
 | `hf/` | `HF_HOME` — the model files (216 MiB for int8) and the Silero VAD (2.3 MB); the running sidecar is offline (`HF_HUB_OFFLINE=1`) |
 | `uv-cache/` | uv's cache, kept here so it stays off the root fs and is removed with the install (wheels are hard-linked, not doubled) |
 | `installed.json` | the marker `{ scriptVersion, pins, installedAt }`; "installed" means the marker matches this build AND `venv/bin/python` exists |
@@ -95,7 +95,7 @@ private Hugging Face cache live under `<DATA_DIR>/stt`.
 `runSttInstall` is idempotent (a current marker runs nothing; `force` rebuilds the venv but keeps the model cache),
 runs the sidecar's `--check` as the verify step (loads the model and the VAD, recognises a second of 48 kHz silence through
 the pause splitter — so the resampler and the VAD run too — checks libsndfile
-can read OGG/Opus, prints the versions as JSON — so a broken download is caught at install time), and polls the size
+can read OGG/Opus and `av` has the AAC, MP3, Vorbis and Opus decoders, prints the versions as JSON — so a broken download is caught at install time), and polls the size
 of `hf/` every 2 s for the download progress. Heavy writes follow `TMPDIR`.
 
 ### Sidecar protocol (`stt/gigaam_sidecar.py`)
@@ -129,15 +129,38 @@ env too.
   cut and in line, BEFORE the final response, an interim `102` carries `X-Charness-Queued-Audio-Seconds: <s>` (one
   decimal): the audio still to recognise ahead of it — the unfinished pieces of every earlier request, the running ones
   included, or, for one still being decoded and cut, its length read from the file's header the moment it arrived
-  (`soundfile.info`, under a millisecond — a 5-minute decode takes seconds, and a voice sent meanwhile was once told
-  "0 s ahead" and timed out). Every 0.5 s while the voice waits, the handler sends another `102` when the queue ahead
-  has grown by more than 1 s — a safeguard for a voice ahead whose length was not yet known when this one was reported
-  (a sub-millisecond window: a file whose header cannot be read is refused before it is cut) — and checks that its
+  (`read_audio_seconds`, a few milliseconds — a 5-minute decode takes seconds, and a voice sent meanwhile was once told
+  "0 s ahead" and timed out). A voice takes its place before its own length is read, so a newcomer first waits (at most
+  `SIZING_WAIT_SECONDS`, 2 s) until every voice ahead of it has its length noted. Every 0.5 s while the voice waits, the
+  handler sends another `102` when the queue ahead has grown by more than 1 s — a safeguard for a voice ahead whose
+  length was still unknown when this one was reported (the wait timed out; a file whose length cannot be read is refused
+  before it is cut) — and checks that its
   client is still connected; a client that hung up (it timed out, the bot moved on) — or a report that cannot be
   written — gets its request dropped: no piece not yet handed out is recognised, nothing is answered, and the log says
   `the client left`. An `OSError` of the recognition itself is the sidecar's own failure and answers 500.
-- **Chunking — every voice is cut at its pauses.** Audio is decoded with `soundfile` (libsndfile reads Telegram's
-  OGG/Opus, no ffmpeg), downmixed to mono and resampled ONCE to 16 kHz with the model's own resampler. Silero VAD
+- **Decoding — two decoders, by what the file is** (`decode_audio`; the filename and the content type are ignored).
+  `soundfile` (libsndfile) reads what it reads WHOLE: Telegram's OGG/Opus (the whole voice-note path, no ffmpeg
+  involved), one OGG stream, WAV, FLAC. Everything else goes to ffmpeg through the `av` package, in-process on the
+  uploaded bytes (no temporary file, no subprocess; an M4A with its index at the end needs a seekable input):
+  - **M4A / AAC** (an MP4 with sound) — libsndfile cannot open it.
+  - **MP3** always, even with a length header: libsndfile reads as many frames as the header says, and for an MP3 with
+    no Xing / Info / VBRI frame that is an estimate — the file size over the FIRST frame's bitrate (a 40 s file whose
+    first frame is 192 kbps and the rest 32 kbps is 160 KB: 160 KB × 8 / 192 kbps = 6.7 s) — so a variable-bitrate
+    file with a loud start was read for 6.7 s of 40.
+  - **Chained OGG** (two OGG files one after the other): libsndfile reads only the first stream, and a chained Vorbis
+    reports a length of 5.7e14 s. `find_ogg_stream_starts` walks the Ogg page headers (never the packet bytes) for the
+    first pages of the streams; `split_ogg_streams` cuts the file there and each stream is decoded on its own, so
+    streams that differ in codec or in rate still make one voice (ffmpeg itself cannot demux a chain that changes codec).
+  - A file neither can read, one with no audio stream, and one that decodes to nothing are a 400, as before.
+  - The upload's bytes pick ffmpeg's demuxer, and a text file in SDP form makes it open an RTP socket and wait 20 s for
+    packets (twice: the length read, then the decode), so every container is opened with ONLY the `crypto,data` protocols
+    (`FFMPEG_PROTOCOL_WHITELIST`): a file is handed over as bytes and needs none, and such an upload is refused at once.
+  The ffmpeg decoder returns mono float32 at 16 kHz (ffmpeg resamples; the channels are averaged as for libsndfile — ffmpeg's
+  own downmix is 3 dB louder), so the `unsupported sample rate` refusal applies to the libsndfile path only. The `av` import happens on the
+  first such file: a voice note never loads it. The upload's length for the queue comes from the same split: the
+  libsndfile header for what it reads whole, otherwise the sum of the packets' durations (a demux without decoding,
+  ~10 ms for 40 s; the container's own duration is an estimate for exactly the files that need ffmpeg).
+- **Chunking — every voice is cut at its pauses.** Audio is downmixed to mono and resampled ONCE to 16 kHz with the model's own resampler (a file the ffmpeg decoder returned is already at 16 kHz). Silero VAD
   (`onnx_asr.load_vad("silero")`, one thread, in the request's handler thread) finds the speech; every gap of at least
   **500 ms** between two speech segments it detects is cut at its centre (`split_at_pauses`; onnx-asr adds both
   speech pads to the silence it is given, so it is asked for `500 − 2 × 100` ms). On the phrases it was tested with, a

@@ -56,6 +56,14 @@ test('the sidecar script and the installer agree on the script version', () => {
   assert.equal(/^SCRIPT_VERSION = "(.+)"$/m.exec(script)?.[1], gigaamScriptVersion);
 });
 
+test('the pinned packages are the model runtime, libsndfile and ffmpeg, each at one exact version', () => {
+  assert.deepEqual(
+    gigaamPinnedRequirements.map((requirement) => requirement.split('==')[0]),
+    ['onnx-asr[cpu,hub]', 'soundfile', 'av'],
+  );
+  assert.ok(gigaamPinnedRequirements.every((requirement) => /==\d+(\.\d+)+$/.test(requirement)));
+});
+
 test('plan: uv is preferred and needs no ensurepip — a venv for Python >= 3.10, then the pinned packages', () => {
   const paths = getSttPaths(dataDir);
   const plan = planSttInstall(createFacts({ uvPath: '/home/user/.local/bin/uv', python3: goodPython3 }));

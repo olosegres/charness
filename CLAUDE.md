@@ -283,7 +283,7 @@ History was scrubbed of real operator identifiers — keep it that way:
 - `yarn typecheck` (strict `tsc` over ALL of `src/`, test code included, via `tsconfig.typecheck.json` — tests run
   through `tsx`, which checks no types) · `yarn build` (`tsc` → `dist/` from `tsconfig.json`, which leaves
   `src/__tests__` out) · `yarn test` (= `test:unit` then `test:flows`, node test runner + tsx; needs `dist/` — process-level tests spawn the built CLI;
-  the unit run also needs `uv`, or a `python3` with numpy + soundfile, for the STT sidecar's Python tests — network on uv's
+  the unit run also needs `uv`, or a `python3` with numpy + soundfile + av, for the STT sidecar's Python tests — network on uv's
   first run; without them it skips that test locally and fails in CI; Node applies `--test-timeout` to a
   whole FILE — 2 min for a unit file, 20 min for a `*E2e.test.ts` flow, whose own budget is that limit less its
   teardown (`getFlowDeadlineMs`) — so a hung or process-leaking file fails by name instead of hanging the run) ·

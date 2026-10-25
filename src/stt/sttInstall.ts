@@ -9,7 +9,7 @@ import { getErrnoCode } from '../configDirFile';
 
 /**
  * @description The install of the local speech engine: a private Python venv
- * under `<DATA_DIR>/stt` holding the pinned `onnx-asr` + `soundfile`, and the
+ * under `<DATA_DIR>/stt` holding the pinned `onnx-asr`, `soundfile` and `av` (ffmpeg's libraries), and the
  * GigaAM model fetched into a private Hugging Face cache — nothing is shared
  * with, or written into, the operator's Python. There is NO user-facing command:
  * the bot runs this from `/stt` ("Add engine → GigaAM (local)") or, when `stt.json`
@@ -17,10 +17,14 @@ import { getErrnoCode } from '../configDirFile';
  */
 
 /** Must equal `SCRIPT_VERSION` in `stt/gigaam_sidecar.py` (a unit test holds them together). */
-export const gigaamScriptVersion = '2';
+export const gigaamScriptVersion = '3';
 
-/** The one place the pinned packages are named. */
-export const gigaamPinnedRequirements: readonly string[] = ['onnx-asr[cpu,hub]==0.12.0', 'soundfile==0.14.0'];
+/**
+ * The one place the pinned packages are named. `av` carries its own ffmpeg: it decodes what libsndfile cannot read whole
+ * (M4A, an MP3 without a length header, chained OGG streams). 17.1.0 is the last release that runs on Python 3.10, the
+ * floor of the venv; later ones need 3.11 and then 3.12.
+ */
+export const gigaamPinnedRequirements: readonly string[] = ['onnx-asr[cpu,hub]==0.12.0', 'soundfile==0.14.0', 'av==17.1.0'];
 
 /** The Python the packages need. */
 const minimumPythonMajor = 3;

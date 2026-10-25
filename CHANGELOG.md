@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**The local speech recognition (GigaAM) now recognises a voice message to its last second also when it is an MP3, an M4A or two OGG files joined into one.**
+Before, an MP3 without a length header (a cut-out stream, or a variable-bitrate file) was read for only its first seconds — 6.7 s of a 40 s
+file — the second half of two OGG files joined into one was dropped, and an M4A (AAC) was refused, so the next engine in your list
+answered it or nothing did. Telegram's usual OGG/Opus voice notes are read exactly as before. The three formats are now decoded with
+`av` (ffmpeg's libraries) in the engine's private Python environment: after this update the local engine re-installs itself once (about
+a minute and a ~35 MB download, ~100 MB more disk; the model is not downloaded again, progress shows in General), and a voice sent
+meanwhile goes to the next engine in your list.
+
 **Every compaction summary now ends with a numbered checklist of what the agent does next, and its first item is to load the skills it had loaded.**
 After a compaction the continuing session often skipped reloading its skills and worked without them. The checklist is now asked for on every path:
 the idle compaction, `/compact`, the compaction the agent arms itself (`compact_conversation`), and the one the agent CLI or OpenCode runs by

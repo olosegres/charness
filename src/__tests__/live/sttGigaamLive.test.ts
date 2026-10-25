@@ -20,7 +20,8 @@
  * without the token is refused · (c) health · (a) the short clip through `transcribeWithEngines` · (e) the long
  * clip's time and peak memory · (k) two long clips at once under the same memory ceiling · (f) a short voice waits for a
  * long one that arrived first, within its production budget ·
- * (j) a voice whose client gave up is dropped · (h) two sidecars, two ports · (g) the
+ * (j) a voice whose client gave up is dropped · (l) the short clip as an M4A, as an MP3 without a length header and as two
+ * OGG files joined into one is recognised whole (needs `ffmpeg` to make them) · (h) two sidecars, two ports · (g) the
  * owner dying takes the sidecar down · (d) the idle exit deletes the record.
  */
 
@@ -80,6 +81,12 @@ const ownerDeathBudgetMs = 4_000;
 const idleSeconds = 3;
 const idleExitBudgetMs = 10_000;
 const fallbackDurationSeconds = 20;
+/** (l): a transcript of a re-encoded clip may differ in length from the reference by this share (codec noise, a word at an edge). */
+const formatLengthTolerance = 0.2;
+const ffmpegTimeoutMs = 60_000;
+const hasFfmpeg = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+/** A quality that makes the encoder choose the bitrate per frame, and no Xing / Info frame: the length is unknown to a reader. */
+const mp3WithoutLengthHeaderArguments = ['-c:a', 'libmp3lame', '-q:a', '9', '-write_xing', '0', '-id3v2_version', '0', '-write_id3v1', '0'];
 
 interface SidecarRecord {
   pid: number;
@@ -368,6 +375,53 @@ describe('the local GigaAM engine (live)', { skip: skipReason }, () => {
       await sleep(pollMs);
     }
   });
+
+  test(
+    '(l) the short clip as an M4A, as an MP3 without a length header and as two OGG files joined into one is recognised whole',
+    { skip: hasFfmpeg ? undefined : 'ffmpeg is not installed', timeout: 4 * 60_000 },
+    async () => {
+      const engines = [createEngine(mainSidecar)];
+      const transcribe = async (audioPath: string): Promise<string> => {
+        const result = await transcribeWithEngines(audioPath, engines, { durationSeconds: getAudioSeconds(audioPath), language: 'ru', retryDelaysMs: [] });
+        assert.ok(result.ok, `${path.basename(audioPath)}: ${result.ok ? '' : result.error}`);
+        assert.equal(result.engine, 'gigaam', `${path.basename(audioPath)} fell through to another engine`);
+        return result.text.toLowerCase();
+      };
+      const encode = (name: string, args: string[], input = shortAudio ?? ''): string => {
+        const output = path.join(scratchFiles, name);
+        const run = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', input, ...args, output], { encoding: 'utf8', timeout: ffmpegTimeoutMs });
+        assert.equal(run.status, 0, run.stderr);
+        return output;
+      };
+      const reference = await transcribe(shortAudio ?? '');
+      const referenceWordHits = expectedWords.map(({ word }) => reference.split(word).length - 1);
+      const m4a = encode('clip.m4a', ['-c:a', 'aac']);
+      const mp3 = encode('clip.mp3', mp3WithoutLengthHeaderArguments);
+      const mp3Bytes = fs.readFileSync(mp3);
+      assert.ok(!['Xing', 'Info', 'VBRI'].some((tag) => mp3Bytes.includes(tag)), 'the MP3 has a length header');
+      const oggPart = encode('part.ogg', ['-c:a', 'libopus']);
+      const chained = path.join(scratchFiles, 'chained.ogg');
+      fs.writeFileSync(chained, Buffer.concat([fs.readFileSync(oggPart), fs.readFileSync(oggPart)]));
+
+      for (const { name, audioPath, repeats } of [
+        { name: 'M4A', audioPath: m4a, repeats: 1 },
+        { name: 'MP3 without a length header', audioPath: mp3, repeats: 1 },
+        { name: 'two OGG files joined', audioPath: chained, repeats: 2 },
+      ]) {
+        const text = await transcribe(audioPath);
+        console.log(`[live] ${name}: ${text.length} chars against ${reference.length} of the plain clip${repeats > 1 ? ` (x${repeats})` : ''}`);
+        const expectedLength = reference.length * repeats;
+        assert.ok(
+          Math.abs(text.length - expectedLength) <= expectedLength * formatLengthTolerance,
+          `${name}: ${text.length} chars, expected about ${expectedLength}: "${text}"`,
+        );
+        expectedWords.forEach(({ word }, index) => {
+          const count = text.split(word).length - 1;
+          assert.ok(count >= referenceWordHits[index] * repeats, `${name}: "${word}" found ${count} time(s), expected at least ${referenceWordHits[index] * repeats} in "${text}"`);
+        });
+      }
+    },
+  );
 
   test('(h) two sidecars at once listen on different OS-chosen ports', { timeout: readyTimeoutMs + 5_000 }, async () => {
     const second = await startSidecar({ ownerPid: process.pid });

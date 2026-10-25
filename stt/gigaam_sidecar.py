@@ -48,7 +48,7 @@ import traceback
 import numpy as np
 
 # Bumped with every change of the sidecar's behaviour; the bot hashes it into the adoption check.
-SCRIPT_VERSION = "2"
+SCRIPT_VERSION = "3"
 MODEL_NAME = "gigaam-v3-e2e-rnnt"
 MODEL_QUANTIZATION = "int8"
 TOKEN_ENV_NAME = "CHARNESS_STT_SIDECAR_TOKEN"
@@ -87,6 +87,19 @@ SILENCE_WINDOW_SECONDS = 0.05
 MIN_CHUNK_SECONDS = 0.1
 # The sample rates onnx-asr resamples to 16 kHz itself.
 SUPPORTED_SAMPLE_RATES = (8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000)
+# The decoders the install check wants in the `av` package (ffmpeg): AAC (M4A), MP3, Vorbis and Opus.
+FFMPEG_REQUIRED_DECODERS = ("aac", "mp3", "vorbis", "opus")
+# The upload's bytes choose ffmpeg's demuxer, and a few of them open further inputs: a text file in SDP form makes it open
+# an RTP socket and wait for 20 s. A file handed over as bytes needs no protocol, so only the two that read nothing from
+# outside are allowed.
+FFMPEG_PROTOCOL_WHITELIST = "crypto,data"
+# Ogg page header: "OggS", version, a flags byte (bit 1 = first page of a stream), granule position, serial, sequence,
+# checksum, then the number of lace values, which are followed by that many bytes of lace values.
+OGG_CAPTURE_PATTERN = b"OggS"
+OGG_PAGE_HEADER_BYTES = 27
+OGG_FLAGS_OFFSET = 5
+OGG_LACE_COUNT_OFFSET = 26
+OGG_FIRST_PAGE_FLAG = 0x02
 
 MAX_BODY_BYTES = 25 * 1024 * 1024
 MAX_HEADER_LINE_BYTES = 8192
@@ -113,8 +126,11 @@ QUEUED_AUDIO_SECONDS_HEADER = "X-Charness-Queued-Audio-Seconds"
 # How often a waiting handler checks that its client is still connected, and whether the queue ahead grew.
 CLIENT_CHECK_SECONDS = 0.5
 # A waiting voice is told the queue ahead again when it has grown by more than this: a safeguard for a voice ahead whose
-# length was not yet known when this one was reported (a sub-millisecond window: lengths are read from the header).
+# length was still unknown when this one was reported (see `SIZING_WAIT_SECONDS`).
 QUEUE_REPORT_GROWTH_SECONDS = 1.0
+# A voice takes its place in line before its length is read (reading takes a few milliseconds, more for a long file with
+# no length header), so the voices behind it wait this long at most for that length before they report their queue.
+SIZING_WAIT_SECONDS = 2.0
 HEALTH_PATH = "/health"
 RESPONSE_FORMATS = ("json", "text")
 
@@ -249,19 +265,81 @@ def make_model_pause_splitter(model, vad):
     return make_pause_splitter(resample, find_speech)
 
 
-def read_audio_seconds(data: bytes) -> float:
-    """The upload's length from its header (under a millisecond, a 5-minute decode takes seconds), so the voices
-    behind it know their wait before it is decoded; 0 when the header cannot be read (the decode then refuses it)."""
+def find_ogg_stream_starts(data: bytes) -> list[int]:
+    """The offsets where each logical stream of an Ogg file begins: more than one means chained streams (two files one
+    after the other). Only the page headers are walked (a packet that happens to hold "OggS" is not read), so the cost
+    is a few bytes per page. Streams multiplexed side by side open with consecutive first pages and count once. Empty
+    when the data does not start with an Ogg page; a damaged page ends the walk, the rest counts as the last stream."""
+    starts: list[int] = []
+    is_in_opening_pages = False
+    offset = 0
+    while offset + OGG_PAGE_HEADER_BYTES <= len(data) and data.startswith(OGG_CAPTURE_PATTERN, offset):
+        lace_end = offset + OGG_PAGE_HEADER_BYTES + data[offset + OGG_LACE_COUNT_OFFSET]
+        if lace_end > len(data):
+            break
+        is_first_page = bool(data[offset + OGG_FLAGS_OFFSET] & OGG_FIRST_PAGE_FLAG)
+        if is_first_page and not is_in_opening_pages:
+            starts.append(offset)
+        is_in_opening_pages = is_first_page
+        offset = lace_end + sum(data[offset + OGG_PAGE_HEADER_BYTES : lace_end])
+    return starts
+
+
+def split_ogg_streams(data: bytes) -> list[bytes]:
+    """The streams of a chained Ogg file as separate files (the file itself when it holds one or is not Ogg)."""
+    starts = find_ogg_stream_starts(data)
+    if len(starts) < 2:
+        return [data]
+    return [data[start:end] for start, end in zip(starts, starts[1:] + [len(data)])]
+
+
+def is_read_whole_by_libsndfile(data: bytes) -> bool:
+    """Whether libsndfile reads this file to its end. It reads as many frames as the header says, which is exact for
+    WAV, FLAC and one Ogg stream. It is not for an MP3 without a Xing / Info / VBRI frame (the length is an estimate from
+    the first frame's bitrate, and the read stops there: a variable-bitrate file lost 33 s of 40) nor for chained Ogg
+    streams (only the first is read, and a chained Vorbis even reports an absurd length); and it cannot open M4A / AAC
+    at all. Those go to ffmpeg."""
     import soundfile
 
     try:
-        return float(soundfile.info(io.BytesIO(data)).duration)
+        info = soundfile.info(io.BytesIO(data))
     except Exception:  # soundfile raises its own LibsndfileError / RuntimeError
+        return False
+    if info.format == "MP3":
+        return False
+    return not (info.format == "OGG" and len(find_ogg_stream_starts(data)) > 1)
+
+
+def open_ffmpeg_container(data: bytes):
+    """The uploaded bytes as an ffmpeg container that cannot reach beyond them (see `FFMPEG_PROTOCOL_WHITELIST`)."""
+    import av
+
+    return av.open(io.BytesIO(data), options={"protocol_whitelist": FFMPEG_PROTOCOL_WHITELIST})
+
+
+def read_ffmpeg_stream_seconds(data: bytes) -> float:
+    """The length of one stream from its packets' durations: exact for MP3 without a length header and for M4A, no
+    decoding (the container's own duration is an estimate there)."""
+    with open_ffmpeg_container(data) as container:
+        stream = container.streams.audio[0]
+        return sum((float(packet.duration * packet.time_base) for packet in container.demux(stream) if packet.duration), 0.0)
+
+
+def read_audio_seconds(data: bytes) -> float:
+    """The upload's length from the file (a few milliseconds, a 5-minute decode takes seconds), so the voices behind it
+    know their wait before it is decoded; 0 when it cannot be read (the decode then refuses it)."""
+    import soundfile
+
+    try:
+        if is_read_whole_by_libsndfile(data):
+            return float(soundfile.info(io.BytesIO(data)).duration)
+        return sum(read_ffmpeg_stream_seconds(stream) for stream in split_ogg_streams(data))
+    except Exception:  # soundfile and av raise their own errors
         return 0.0
 
 
-def decode_audio(data: bytes) -> tuple[np.ndarray, int]:
-    """Decode an uploaded file (Telegram sends OGG/Opus) to mono float32 samples and their sample rate."""
+def decode_with_libsndfile(data: bytes) -> tuple[np.ndarray, int]:
+    """Mono float32 samples and the sample rate of a file libsndfile reads whole (Telegram's OGG/Opus, WAV, FLAC)."""
     import soundfile
 
     try:
@@ -273,6 +351,52 @@ def decode_audio(data: bytes) -> tuple[np.ndarray, int]:
     if sample_rate not in SUPPORTED_SAMPLE_RATES:
         raise RequestError(400, f"unsupported sample rate {sample_rate}")
     return np.ascontiguousarray(samples, dtype=np.float32), int(sample_rate)
+
+
+def get_mono_samples(frames) -> list[np.ndarray]:
+    """The channels of resampled planar float frames averaged into one, as for libsndfile (ffmpeg's own downmix is
+    3 dB louder)."""
+    return [frame.to_ndarray().mean(axis=0, dtype=np.float32) for frame in frames]
+
+
+def decode_ffmpeg_stream(data: bytes) -> list[np.ndarray]:
+    """The first audio stream of one file as mono float32 arrays at `SPEECH_SAMPLE_RATE` (ffmpeg resamples)."""
+    import av
+
+    pieces: list[np.ndarray] = []
+    with open_ffmpeg_container(data) as container:
+        if not container.streams.audio:
+            raise RequestError(400, "the file has no audio")
+        resampler = None
+        for frame in container.decode(audio=0):
+            if resampler is None:
+                resampler = av.AudioResampler(format="fltp", layout=frame.layout.name, rate=SPEECH_SAMPLE_RATE)
+            pieces.extend(get_mono_samples(resampler.resample(frame)))
+        if resampler is not None:
+            pieces.extend(get_mono_samples(resampler.resample(None)))  # the resampler's delay
+    return pieces
+
+
+def decode_with_ffmpeg(data: bytes) -> tuple[np.ndarray, int]:
+    """Decode with the ffmpeg libraries of the `av` package what libsndfile does not read whole (see
+    `is_read_whole_by_libsndfile`). Chained Ogg streams are decoded one by one and joined, so streams that differ in
+    codec or rate still make one voice. Always mono float32 at `SPEECH_SAMPLE_RATE`."""
+    try:
+        pieces = [piece for stream in split_ogg_streams(data) for piece in decode_ffmpeg_stream(stream)]
+    except RequestError:
+        raise
+    except Exception as error:  # av raises its own FFmpegError subclasses
+        raise RequestError(400, "the audio file could not be decoded") from error
+    if not pieces:
+        raise RequestError(400, "the audio file could not be decoded")
+    return np.ascontiguousarray(np.concatenate(pieces), dtype=np.float32), SPEECH_SAMPLE_RATE
+
+
+def decode_audio(data: bytes) -> tuple[np.ndarray, int]:
+    """Decode an uploaded file (Telegram sends OGG/Opus) to mono float32 samples and their sample rate."""
+    if is_read_whole_by_libsndfile(data):
+        return decode_with_libsndfile(data)
+    return decode_with_ffmpeg(data)
 
 
 def make_recognizer(model):
@@ -299,8 +423,10 @@ class PoolRequest:
         self._on_finished = on_finished
         self._chunks: list[np.ndarray] | None = None
         self._next_chunk = 0
-        # The voice's length once decoded: what it counts for the requests behind it while it is still being cut.
+        # The voice's length once read from the file, then once decoded: what it counts for the requests behind it while
+        # it is still being cut. `_is_sized` is set when the first of them is known (or the request ended).
         self._audio_seconds = 0.0
+        self._is_sized = threading.Event()
         self._texts: list[str | None] = []
         self._remaining = 0
         self._error: Exception | None = None
@@ -325,6 +451,11 @@ class PoolRequest:
 
     def note_audio_seconds(self, seconds: float) -> None:
         self._audio_seconds = seconds
+        self._is_sized.set()
+
+    def wait_until_sized(self, timeout_seconds: float) -> None:
+        """Block until the length is noted or the request ended — at most `timeout_seconds`."""
+        self._is_sized.wait(timeout_seconds)
 
     def is_cut(self) -> bool:
         return self._chunks is not None
@@ -371,6 +502,7 @@ class PoolRequest:
             if is_first_end:
                 self._error = error
                 self._finished.set()
+            self._is_sized.set()
         if is_first_end:
             self._on_finished()
 
@@ -436,6 +568,15 @@ class RecognitionPool:
         with self._condition:
             ahead = itertools.takewhile(lambda listed: listed is not request, self._requests)
             return sum(listed.get_remaining_audio_seconds() for listed in ahead)
+
+    def wait_until_sized_ahead(self, request: PoolRequest, timeout_seconds: float) -> None:
+        """Wait (at most `timeout_seconds` in all) until every voice that arrived before `request` has its length
+        noted, so the queue reported to `request` counts it. A voice takes its place before its length is read."""
+        with self._condition:
+            ahead = list(itertools.takewhile(lambda listed: listed is not request, self._requests))
+        deadline = time.monotonic() + timeout_seconds
+        for listed in ahead:
+            listed.wait_until_sized(max(0.0, deadline - time.monotonic()))
 
     def open_request(self) -> PoolRequest:
         """Take the next place in the arrival order; `submit` or `cancel` must follow."""
@@ -704,6 +845,7 @@ class SidecarHandler(http.server.BaseHTTPRequestHandler):
             context.pool.cancel(request)
             raise
         context.pool.submit(request, chunks, chunk_sample_rate)
+        context.pool.wait_until_sized_ahead(request, SIZING_WAIT_SECONDS)
         reported_seconds_ahead = context.pool.get_audio_seconds_ahead(request)
 
         def report_a_longer_queue() -> None:
@@ -946,6 +1088,17 @@ def create_audio_splitter(model, load_vad_model=load_vad):
         return split_without_pauses
 
 
+def check_ffmpeg_decoder(name: str) -> bool:
+    """Whether the ffmpeg inside the `av` wheel has the decoder `name`."""
+    import av
+
+    try:
+        av.Codec(name, "r")
+    except av.codec.codec.UnknownCodecError:
+        return False
+    return True
+
+
 def run_check(args: argparse.Namespace) -> int:
     """Load the model and the VAD, recognise 1 s of silence through the pause splitter and print the versions —
     the installer's verify step (it also fetches both while the network is allowed)."""
@@ -966,6 +1119,9 @@ def run_check(args: argparse.Namespace) -> int:
         is_opus_readable = "OPUS" in soundfile.available_subtypes("OGG")
         if not is_opus_readable:
             raise RuntimeError("libsndfile cannot read OGG/Opus")
+        missing_decoders = [name for name in FFMPEG_REQUIRED_DECODERS if not check_ffmpeg_decoder(name)]
+        if missing_decoders:
+            raise RuntimeError(f"ffmpeg (the av package) lacks the decoders {', '.join(missing_decoders)}")
         report = {
             "ok": True,
             "scriptVersion": SCRIPT_VERSION,
@@ -975,6 +1131,7 @@ def run_check(args: argparse.Namespace) -> int:
             "onnxruntime": metadata.version("onnxruntime"),
             "soundfile": metadata.version("soundfile"),
             "libsndfile": soundfile.__libsndfile_version__,
+            "av": metadata.version("av"),
             "numpy": metadata.version("numpy"),
             "silenceText": text,
         }
