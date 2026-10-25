@@ -82,7 +82,7 @@ private Hugging Face cache live under `<DATA_DIR>/stt`.
 | Path | What |
 |------|------|
 | `venv/` | the private environment (`uv venv --python ">=3.10"`, else `python3 -m venv`) with the pinned `onnx-asr[cpu,hub]==0.12.0 soundfile==0.14.0` |
-| `hf/` | `HF_HOME` — the model files (216 MiB for int8); the running sidecar is offline (`HF_HUB_OFFLINE=1`) |
+| `hf/` | `HF_HOME` — the model files (216 MiB for int8) and the Silero VAD (2.3 MB); the running sidecar is offline (`HF_HUB_OFFLINE=1`) |
 | `uv-cache/` | uv's cache, kept here so it stays off the root fs and is removed with the install (wheels are hard-linked, not doubled) |
 | `installed.json` | the marker `{ scriptVersion, pins, installedAt }`; "installed" means the marker matches this build AND `venv/bin/python` exists |
 | `install.lock/` | a `mkdir` lock with an `owner` file (`pid` and start token). Held for as long as that process lives — a slow model download can take far longer than any timeout — so age never frees it; a lock with no owner file (its taker died between `mkdir` and the write) goes stale after a minute |
@@ -90,7 +90,8 @@ private Hugging Face cache live under `<DATA_DIR>/stt`.
 | `install-progress.json` | JSON lines `{phase, detail, bytesDownloaded[, error, logTail]}` — `creatingEnvironment` → `installingPackages` → `downloadingModel` → `checking` → `done` / `failed`; truncated when a run takes the lock |
 
 `runSttInstall` is idempotent (a current marker runs nothing; `force` rebuilds the venv but keeps the model cache),
-runs the sidecar's `--check` as the verify step (loads the model, recognises a second of silence, checks libsndfile
+runs the sidecar's `--check` as the verify step (loads the model and the VAD, recognises a second of 48 kHz silence through
+the pause splitter — so the resampler and the VAD run too — checks libsndfile
 can read OGG/Opus, prints the versions as JSON — so a broken download is caught at install time), and polls the size
 of `hf/` every 2 s for the download progress. Heavy writes follow `TMPDIR`.
 
@@ -121,10 +122,18 @@ env too.
   `text`. Replies `{"text": …}` in UTF-8, or errors `{"error": {"message": …}}`: 400 (bad body, undecodable audio,
   unsupported sample rate), 401, 404, 413 (body over 25 MB), 500, 503 (the idle exit is decided), 504 (over
   `--max-seconds`; that request's queued chunks are dropped). Every response closes the connection.
-- **Chunking:** audio is decoded with `soundfile` (libsndfile reads Telegram's OGG/Opus, no ffmpeg), downmixed to mono, and
-  — when longer than 25 s — cut so every piece is ≤ 25 s, each cut at the centre of the quietest 50 ms window in the last
-  8 s before the boundary. Pieces go to the model at the file's own sample rate (onnx-asr resamples 8–48 kHz to 16 kHz).
-  A piece under 0.1 s is empty text: the encoder cannot take it.
+- **Chunking — every voice is cut at its pauses.** Audio is decoded with `soundfile` (libsndfile reads Telegram's
+  OGG/Opus, no ffmpeg), downmixed to mono and resampled ONCE to 16 kHz with the model's own resampler. Silero VAD
+  (`onnx_asr.load_vad("silero")`, one thread, in the request's handler thread) finds the speech; every gap of at least
+  **500 ms** between two speech segments is cut at its centre (`split_at_pauses`). The VAD only chooses where to cut:
+  the pieces cover the whole file, nothing it calls silence is dropped — it misses some real speech entirely. A piece
+  over 25 s (the model's limit) is cut again at the centre of the quietest 50 ms window in the last 8 s before each
+  25 s boundary (`split_at_silences`). A VAD that cannot be loaded or raises falls back to those 25 s cuts alone at the
+  file's own rate, with one log line. A piece under 0.1 s is empty text: the encoder cannot take it. Why: GigaAM v3
+  `e2e_rnnt` drops a whole phrase that follows a long pause (≈0.6–2 s) when it decodes several phrases in one pass —
+  on 400 real-speech clips (919 phrases) one-pass decoding lost 39 phrases, the pause cuts 11 (decoding each phrase
+  alone: 10), with no loss on continuous sentences. Short pieces are not merged back: GigaAM's own long-form recipe
+  (merge VAD segments up to 15–22 s) would put a short voice back into one piece.
 - **Pool:** W threads over one `PriorityQueue` of `(chunk count of the request, arrival number, …)` — the shortest request
   first, FIFO among equals — each calling `model.recognize` on the ONE shared onnxruntime session (one model in memory).
   A failing chunk fails its request only. Texts are joined in order with single spaces.

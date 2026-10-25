@@ -17,7 +17,7 @@ import { getErrnoCode } from '../configDirFile';
  */
 
 /** Must equal `SCRIPT_VERSION` in `stt/gigaam_sidecar.py` (a unit test holds them together). */
-export const gigaamScriptVersion = '1';
+export const gigaamScriptVersion = '2';
 
 /** The one place the pinned packages are named. */
 export const gigaamPinnedRequirements: readonly string[] = ['onnx-asr[cpu,hub]==0.12.0', 'soundfile==0.14.0'];

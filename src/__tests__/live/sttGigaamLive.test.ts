@@ -7,7 +7,8 @@
  *   STT_GIGAAM_LIVE_DATA_DIR      an EMPTY scratch dir (never an instance's DATA_DIR): the install goes
  *                                 to `<dir>/stt`; an already installed one is reused
  *   STT_GIGAAM_LIVE_AUDIO         a short Russian voice clip (OGG/Opus like Telegram's)
- *   STT_GIGAAM_LIVE_EXPECT        optional: comma-separated words the short clip must contain
+ *   STT_GIGAAM_LIVE_EXPECT        optional: comma-separated words the short clip must contain; `word:N` = at least N
+ *                                 times (a lost phrase that repeats a word of another one is caught only by its count)
  *   STT_GIGAAM_LIVE_LONG_AUDIO    optional: a ~5 minute clip — the chunking, the memory ceiling and the
  *                                 shortest-request-first proof run on it
  *
@@ -36,7 +37,19 @@ import { transcribeAudio } from '../../utils/transcribeAudio';
 const dataDir = process.env.STT_GIGAAM_LIVE_DATA_DIR;
 const shortAudio = process.env.STT_GIGAAM_LIVE_AUDIO;
 const longAudio = process.env.STT_GIGAAM_LIVE_LONG_AUDIO;
-const expectedWords = (process.env.STT_GIGAAM_LIVE_EXPECT ?? '').split(',').map((word) => word.trim().toLowerCase()).filter(Boolean);
+/** @description A word the short clip's text must contain at least `minCount` times. */
+interface ExpectedWord {
+  word: string;
+  minCount: number;
+}
+const expectedWords: ExpectedWord[] = (process.env.STT_GIGAAM_LIVE_EXPECT ?? '')
+  .split(',')
+  .map((entry) => entry.trim().toLowerCase())
+  .filter(Boolean)
+  .map((entry) => {
+    const [word, countText] = entry.split(':');
+    return { word, minCount: countText === undefined ? 1 : Number(countText) };
+  });
 const skipReason = dataDir && shortAudio ? undefined : 'set STT_GIGAAM_LIVE_DATA_DIR and STT_GIGAAM_LIVE_AUDIO to run';
 
 const tokenEnvName = 'CHARNESS_STT_SIDECAR_TOKEN';
@@ -249,7 +262,10 @@ describe('the local GigaAM engine (live)', { skip: skipReason }, () => {
     assert.ok(result.ok, result.ok ? '' : result.error);
     assert.equal(result.engine, 'gigaam');
     const text = result.text.toLowerCase();
-    for (const word of expectedWords) assert.ok(text.includes(word), `expected "${word}" in "${text}"`);
+    for (const { word, minCount } of expectedWords) {
+      const count = text.split(word).length - 1;
+      assert.ok(count >= minCount, `expected "${word}" at least ${minCount} time(s) in "${text}", found ${count}`);
+    }
     assert.ok(elapsedMs < shortVoiceBudgetMs, `took ${elapsedMs} ms`);
   });
 

@@ -5,8 +5,10 @@ ONE process: it loads the model at start, binds 127.0.0.1 on an OS-chosen port a
 `POST /v1/audio/transcriptions` plus `GET /health`. The bot starts it on demand, adopts it across hot reloads,
 and it takes itself down when it has been idle (`--idle-minutes`) or when its owner process is gone.
 
-Long audio is cut at the quietest 50 ms inside the last 8 s before every 25 s boundary; the chunks are
-recognised in parallel on a pool of threads that share ONE onnxruntime session, shortest request first.
+Every voice is cut at the centre of each pause of at least 500 ms that Silero VAD finds (the model drops a whole
+phrase that follows a long pause when it decodes several phrases in one pass); no audio is ever discarded, and a
+piece longer than 25 s is cut again at its quietest 50 ms. The pieces are recognised in parallel on a pool of
+threads that share ONE onnxruntime session, shortest request first.
 
 It claims the bot's record before it loads the model (an exclusive create, so a second start of the same engine
 exits instead of becoming an unrecorded orphan) and completes it with its port once it listens.
@@ -44,7 +46,7 @@ import traceback
 import numpy as np
 
 # Bumped with every change of the sidecar's behaviour; the bot hashes it into the adoption check.
-SCRIPT_VERSION = "1"
+SCRIPT_VERSION = "2"
 MODEL_NAME = "gigaam-v3-e2e-rnnt"
 MODEL_QUANTIZATION = "int8"
 TOKEN_ENV_NAME = "CHARNESS_STT_SIDECAR_TOKEN"
@@ -56,6 +58,16 @@ EXIT_USAGE = 2
 EXIT_DUPLICATE = 4
 
 MAX_CHUNK_SECONDS = 25.0
+# The rate the model and the VAD work at: the upload is resampled to it once.
+SPEECH_SAMPLE_RATE = 16000
+VAD_MODEL_NAME = "silero"
+# A pause this long ends a piece. Measured on real speech: the model starts dropping phrases after pauses of
+# about 0.6 s, and a shorter limit splits continuous sentences more often without keeping more phrases.
+MIN_PAUSE_MS = 500
+VAD_SPEECH_PAD_MS = 100
+# The install check's 1 s of silence is at Telegram's Opus rate, so it runs the resampler too, and a VAD that fails
+# shows as pieces left at this rate (the fallback keeps the file's own rate).
+CHECK_SAMPLE_RATE = 48000
 SILENCE_SEARCH_SECONDS = 8.0
 SILENCE_WINDOW_SECONDS = 0.05
 # The encoder fails on fewer than ~25 ms of audio; a piece this short holds no word anyway.
@@ -130,6 +142,66 @@ def split_at_silences(
         start = cut
     pieces.append(audio[start:])
     return pieces
+
+
+def split_at_pauses(audio: np.ndarray, speech_segments: list[tuple[int, int]], sample_rate: int) -> list[np.ndarray]:
+    """Cut `audio` at the centre of the gap between every two consecutive speech segments (sample offsets, in
+    order), then cut any piece longer than `MAX_CHUNK_SECONDS` with `split_at_silences`. The segments only choose
+    where to cut: the pieces joined give back `audio` exactly, so speech the detector missed is still recognised."""
+    cuts = [0]
+    for (_, previous_end), (next_start, _) in zip(speech_segments, speech_segments[1:]):
+        cut = (previous_end + next_start) // 2
+        if cuts[-1] < cut < len(audio):
+            cuts.append(cut)
+    cuts.append(len(audio))
+    pieces: list[np.ndarray] = []
+    for start, end in zip(cuts, cuts[1:]):
+        pieces.extend(split_at_silences(audio[start:end], sample_rate))
+    return pieces
+
+
+def split_without_pauses(samples: np.ndarray, sample_rate: int) -> tuple[list[np.ndarray], int]:
+    """The splitter without a VAD: only the 25 s cuts, at the file's own rate."""
+    return split_at_silences(samples, sample_rate), sample_rate
+
+
+def make_pause_splitter(resample, find_speech):
+    """The request splitter: `resample(samples, rate)` to `SPEECH_SAMPLE_RATE`, then `find_speech(audio)` → speech
+    segments, then `split_at_pauses`. Returns the pieces and their rate. A failing resample or VAD falls back to
+    `split_without_pauses`: the voice is still transcribed, only cut the old way."""
+
+    def split(samples: np.ndarray, sample_rate: int) -> tuple[list[np.ndarray], int]:
+        try:
+            audio = resample(samples, sample_rate)
+            speech_segments = find_speech(audio)
+        except Exception:
+            logger.error("pause detection failed, cutting at %.0f s only: %s", MAX_CHUNK_SECONDS, traceback.format_exc())
+            return split_without_pauses(samples, sample_rate)
+        return split_at_pauses(audio, speech_segments, SPEECH_SAMPLE_RATE), SPEECH_SAMPLE_RATE
+
+    return split
+
+
+def make_model_pause_splitter(model, vad):
+    """`make_pause_splitter` over the loaded model's own resampler and the Silero VAD."""
+
+    def resample(samples: np.ndarray, sample_rate: int) -> np.ndarray:
+        waveforms, lengths = model.resampler(samples[None], np.array([len(samples)], dtype=np.int64), sample_rate)
+        return np.ascontiguousarray(waveforms[0][: int(lengths[0])], dtype=np.float32)
+
+    def find_speech(audio: np.ndarray) -> list[tuple[int, int]]:
+        (segments,) = vad.segment_batch(
+            audio[None],
+            np.array([len(audio)], dtype=np.int64),
+            SPEECH_SAMPLE_RATE,
+            min_silence_duration_ms=MIN_PAUSE_MS,
+            speech_pad_ms=VAD_SPEECH_PAD_MS,
+            # Never let the VAD cut a long stretch of speech itself: `split_at_pauses` caps the pieces at a quiet spot.
+            max_speech_duration_s=len(audio) / SPEECH_SAMPLE_RATE + 1,
+        )
+        return [(int(start), int(end)) for start, end in segments]
+
+    return make_pause_splitter(resample, find_speech)
 
 
 def decode_audio(data: bytes) -> tuple[np.ndarray, int]:
@@ -317,10 +389,20 @@ class SidecarContext:
     """What the handlers and the monitors share."""
 
     def __init__(
-        self, token: str, pool: RecognitionPool, workers: int, idle_seconds: float, max_seconds: float, clock=time.monotonic
+        self,
+        token: str,
+        pool: RecognitionPool,
+        split_audio,
+        workers: int,
+        idle_seconds: float,
+        max_seconds: float,
+        clock=time.monotonic,
     ):
+        """`split_audio(samples, sample_rate)` → (pieces, their sample rate): `make_model_pause_splitter`, or
+        `split_without_pauses` when the VAD could not be loaded."""
         self.token = token
         self.pool = pool
+        self.split_audio = split_audio
         self.workers = workers
         self.idle_seconds = idle_seconds
         self.max_seconds = max_seconds
@@ -439,8 +521,8 @@ class SidecarHandler(http.server.BaseHTTPRequestHandler):
         if response_format not in RESPONSE_FORMATS:
             raise RequestError(400, f"response_format must be one of {', '.join(RESPONSE_FORMATS)}")
         samples, sample_rate = decode_audio(file_bytes)
-        chunks = split_at_silences(samples, sample_rate)
-        request = context.pool.submit(chunks, sample_rate)
+        chunks, chunk_sample_rate = context.split_audio(samples, sample_rate)
+        request = context.pool.submit(chunks, chunk_sample_rate)
         text = request.wait(context.max_seconds)
         logger.info(
             "transcribed %.1fs of audio in %d chunk(s), %.2fs", len(samples) / sample_rate, len(chunks), time.monotonic() - started
@@ -625,8 +707,20 @@ def load_model(threads: int):
     return onnx_asr.load_model(MODEL_NAME, quantization=MODEL_QUANTIZATION, sess_options=options)
 
 
+def load_vad():
+    """Silero VAD on one thread: it runs once per request, in that request's handler thread."""
+    import onnx_asr
+    import onnxruntime
+
+    options = onnxruntime.SessionOptions()
+    options.intra_op_num_threads = 1
+    options.inter_op_num_threads = 1
+    return onnx_asr.load_vad(VAD_MODEL_NAME, sess_options=options)
+
+
 def run_check(args: argparse.Namespace) -> int:
-    """Load the model, recognise 1 s of silence and print the versions — the installer's verify step."""
+    """Load the model and the VAD, recognise 1 s of silence through the pause splitter and print the versions —
+    the installer's verify step (it also fetches both while the network is allowed)."""
     from importlib import metadata
     import platform
 
@@ -634,8 +728,13 @@ def run_check(args: argparse.Namespace) -> int:
         import soundfile
 
         model = load_model(args.threads)
-        silence = np.zeros(16000, dtype=np.float32)
-        text = make_recognizer(model)(silence, 16000)
+        split = make_model_pause_splitter(model, load_vad())
+        silence = np.zeros(CHECK_SAMPLE_RATE, dtype=np.float32)
+        pieces, piece_sample_rate = split(silence, CHECK_SAMPLE_RATE)
+        if piece_sample_rate != SPEECH_SAMPLE_RATE:
+            raise RuntimeError("the pause detection failed (its traceback is above, on stderr)")
+        recognize = make_recognizer(model)
+        text = " ".join(recognize(piece, piece_sample_rate) for piece in pieces).strip()
         is_opus_readable = "OPUS" in soundfile.available_subtypes("OGG")
         if not is_opus_readable:
             raise RuntimeError("libsndfile cannot read OGG/Opus")
@@ -683,10 +782,15 @@ def run_serve(args: argparse.Namespace, token: str) -> int:
         logger.error("model load failed: %s", traceback.format_exc())
         return EXIT_SETUP_FAILED
     logger.info("model loaded in %.2fs", time.monotonic() - loading_started)
+    try:
+        split_audio = make_model_pause_splitter(model, load_vad())
+    except Exception:
+        logger.error("the VAD could not be loaded, cutting at %.0f s only: %s", MAX_CHUNK_SECONDS, traceback.format_exc())
+        split_audio = split_without_pauses
 
     pool = RecognitionPool(make_recognizer(model), args.workers)
     pool.start()
-    context = SidecarContext(token, pool, args.workers, args.idle_seconds, args.max_seconds)
+    context = SidecarContext(token, pool, split_audio, args.workers, args.idle_seconds, args.max_seconds)
     try:
         server = SidecarServer(("127.0.0.1", 0), context)
     except OSError:

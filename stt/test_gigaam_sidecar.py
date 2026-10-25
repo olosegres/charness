@@ -27,6 +27,8 @@ sidecar.logger.addHandler(logging.NullHandler())
 SAMPLE_RATE = 16000
 TEST_TOKEN = "test-token-0123456789"
 BOUNDARY = "----formboundary7MA4YWxkTrZu0gW"
+# The rate the HTTP tests' halving splitter reports, so the fake recognizer can tell its pieces apart.
+HALVING_SPLITTER_RATE = 8000
 
 
 def build_multipart(file_bytes: bytes, fields: dict | None = None) -> bytes:
@@ -86,6 +88,72 @@ class SplitAtSilencesTest(unittest.TestCase):
         for piece in pieces:
             self.assertLessEqual(len(piece), 25 * sample_rate)
         self.assertEqual(sum(len(piece) for piece in pieces), len(audio))
+
+
+class SplitAtPausesTest(unittest.TestCase):
+    def test_every_cut_lands_at_the_centre_of_a_pause_and_the_pieces_add_up(self):
+        audio = tone(10.0)
+        segments = [(int(0.5 * SAMPLE_RATE), int(2.5 * SAMPLE_RATE)), (int(3.5 * SAMPLE_RATE), int(6.0 * SAMPLE_RATE)),
+                    (int(6.8 * SAMPLE_RATE), int(9.0 * SAMPLE_RATE))]
+        pieces = sidecar.split_at_pauses(audio, segments, SAMPLE_RATE)
+        self.assertEqual([len(piece) for piece in pieces[:-1]], [int(3.0 * SAMPLE_RATE), int(3.4 * SAMPLE_RATE)])
+        self.assertTrue(np.array_equal(np.concatenate(pieces), audio), "no sample is dropped, not even the pauses")
+
+    def test_audio_before_the_first_and_after_the_last_speech_is_kept(self):
+        audio = tone(6.0)
+        pieces = sidecar.split_at_pauses(audio, [(int(2.0 * SAMPLE_RATE), int(3.0 * SAMPLE_RATE))], SAMPLE_RATE)
+        self.assertEqual(len(pieces), 1)
+        self.assertEqual(len(pieces[0]), len(audio))
+
+    def test_no_speech_found_is_one_piece_of_the_whole_audio(self):
+        audio = tone(4.0)
+        pieces = sidecar.split_at_pauses(audio, [], SAMPLE_RATE)
+        self.assertEqual(len(pieces), 1)
+        self.assertTrue(np.array_equal(pieces[0], audio))
+
+    def test_a_piece_longer_than_the_model_takes_is_cut_again_at_most_every_25_seconds(self):
+        audio = tone(70.0)
+        segments = [(0, int(60.0 * SAMPLE_RATE)), (int(61.0 * SAMPLE_RATE), int(70.0 * SAMPLE_RATE))]
+        pieces = sidecar.split_at_pauses(audio, segments, SAMPLE_RATE)
+        self.assertGreaterEqual(len(pieces), 4)
+        for piece in pieces:
+            self.assertLessEqual(len(piece), sidecar.MAX_CHUNK_SECONDS * SAMPLE_RATE)
+        self.assertTrue(np.array_equal(np.concatenate(pieces), audio))
+
+
+class PauseSplitterTest(unittest.TestCase):
+    def test_the_audio_is_resampled_once_and_cut_where_speech_detection_finds_pauses(self):
+        calls = []
+
+        def resample(samples, sample_rate):
+            calls.append(("resample", len(samples), sample_rate))
+            return samples[::3].copy()
+
+        def find_speech(audio):
+            calls.append(("speech", len(audio)))
+            return [(0, SAMPLE_RATE), (2 * SAMPLE_RATE, 3 * SAMPLE_RATE)]
+
+        split = sidecar.make_pause_splitter(resample, find_speech)
+        pieces, sample_rate = split(np.zeros(3 * 3 * SAMPLE_RATE, dtype=np.float32), 48000)
+        self.assertEqual(sample_rate, sidecar.SPEECH_SAMPLE_RATE)
+        self.assertEqual([len(piece) for piece in pieces], [int(1.5 * SAMPLE_RATE), int(1.5 * SAMPLE_RATE)])
+        self.assertEqual(calls, [("resample", 9 * SAMPLE_RATE, 48000), ("speech", 3 * SAMPLE_RATE)])
+
+    def test_a_failing_speech_detection_falls_back_to_the_25_second_cuts_of_the_original_audio(self):
+        def find_speech(audio):
+            raise RuntimeError("vad broke")
+
+        split = sidecar.make_pause_splitter(lambda samples, sample_rate: samples, find_speech)
+        audio = tone(30.0)
+        pieces, sample_rate = split(audio, SAMPLE_RATE)
+        self.assertEqual(sample_rate, SAMPLE_RATE)
+        self.assertEqual(len(pieces), 2)
+        self.assertTrue(np.array_equal(np.concatenate(pieces), audio))
+
+    def test_without_speech_detection_the_audio_is_cut_only_at_25_seconds(self):
+        audio = tone(10.0)
+        pieces, sample_rate = sidecar.split_without_pauses(audio, 48000)
+        self.assertEqual((len(pieces), sample_rate), (1, 48000))
 
 
 class MultipartTest(unittest.TestCase):
@@ -412,14 +480,26 @@ class HttpTest(unittest.TestCase):
         cls.texts = []
         cls.delay = threading.Event()
 
+        cls.split_requests = []
+
         def recognize(samples, sample_rate):
             if cls.delay.is_set():
                 threading.Event().wait(2)
+            if sample_rate == HALVING_SPLITTER_RATE:
+                return f"кусок {len(samples)}@{sample_rate}"
             return "привет мир"
 
+        def split_audio(samples, sample_rate):
+            if not cls.split_requests:
+                return sidecar.split_without_pauses(samples, sample_rate)
+            cls.split_requests.pop()
+            half = len(samples) // 2
+            return [samples[:half], samples[half:]], HALVING_SPLITTER_RATE
+
+        cls.split_audio = split_audio
         cls.pool = sidecar.RecognitionPool(recognize, workers=2)
         cls.pool.start()
-        cls.context = sidecar.SidecarContext(TEST_TOKEN, cls.pool, 2, 900.0, 600.0)
+        cls.context = sidecar.SidecarContext(TEST_TOKEN, cls.pool, cls.split_audio, 2, 900.0, 600.0)
         cls.server = sidecar.SidecarServer(("127.0.0.1", 0), cls.context)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -470,6 +550,12 @@ class HttpTest(unittest.TestCase):
         status, payload = self.request("POST", sidecar.TRANSCRIPTIONS_PATH, body, self.multipart_headers())
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(payload.decode("utf-8")), {"text": "привет мир"})
+
+    def test_the_pieces_of_the_splitter_are_recognised_at_its_rate_and_joined_in_order(self):
+        self.split_requests.append(True)
+        status, payload = self.request("POST", sidecar.TRANSCRIPTIONS_PATH, self.make_upload(), self.multipart_headers())
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(payload.decode("utf-8")), {"text": f"кусок {SAMPLE_RATE // 2}@{HALVING_SPLITTER_RATE} кусок {SAMPLE_RATE // 2}@{HALVING_SPLITTER_RATE}"})
 
     def test_the_text_format_is_plain_text(self):
         wav = io.BytesIO()
@@ -565,7 +651,7 @@ class IdleExitTest(unittest.TestCase):
     def setUp(self):
         self.now = [1000.0]
         self.calls = []
-        self.context = sidecar.SidecarContext(TEST_TOKEN, None, 2, 60.0, 600.0, clock=lambda: self.now[0])
+        self.context = sidecar.SidecarContext(TEST_TOKEN, None, sidecar.split_without_pauses, 2, 60.0, 600.0, clock=lambda: self.now[0])
 
     def decide(self, between=None):
         def stop_accepting():

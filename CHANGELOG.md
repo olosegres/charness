@@ -78,6 +78,13 @@ when it is done; `/todo` in a topic shows the list. It belongs to the topic, so 
 a restart keep it, and a final answer while the list still shows unfinished work reminds the agent to update it. Jira
 conversations publish the same way.
 
+**Voice notes with pauses no longer lose phrases.** The local recognition (GigaAM) now cuts every voice at its pauses and
+recognises the parts separately, so a phrase said after a pause is no longer dropped or merged into the previous one
+(for example, "…купи хлеб? … и ещё молоко" could come out as just "…купи хлеб"). Nothing is cut away: the parts cover the whole
+voice. After this update the local engine re-installs itself once (about a minute, the model is not downloaded again, the
+progress shows in General); a voice sent meanwhile goes to the next engine in your list, or, with no other engine, the bot
+asks you to send it again when the engine is ready.
+
 ## 3.6.0 — 2026-10-24
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process
