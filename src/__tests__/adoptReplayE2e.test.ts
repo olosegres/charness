@@ -58,13 +58,16 @@ import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 121;
+const perTurnThreadId = 122;
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const topicFolder = 'replay-topic';
+const perTurnFolder = 'replay-per-turn';
 const seedLabel = 'SEED-1';
 const downtimeLabel = 'DOWN-1';
+const perTurnDowntimeLabel = 'PT-2';
 
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
@@ -77,15 +80,25 @@ const usageLimitText = "You've hit your session limit";
 /** The start of the bot's resume prompt (`apiRetry.continueNudge`). */
 const resumePromptStart = 'Continue from where you left off';
 const traceFilePrefix = 'output-trace-';
+const perTurnAdapterName = 'claude-per-turn';
 const limitNoticeMark = '🚧';
 const resumedNoticeText = 'The limit window has reset';
 /** How long before the bot came back the clock-only reset passed, and how long before that the error was written. */
 const errorAgoMs = 60 * msPerMinute;
 
+/** A topic of the flow: its thread and the folder it is bound to. */
+interface TopicSpec {
+  threadId: number;
+  folder: string;
+}
+const mainTopicSpec: TopicSpec = { threadId: topicThreadId, folder: topicFolder };
+const perTurnTopicSpec: TopicSpec = { threadId: perTurnThreadId, folder: perTurnFolder };
+
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
 let fakeTelegram: FakeTelegram;
 let topic: TopicDriver;
+let perTurnTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 
 function getLayout(): IsolatedInstanceLayout {
@@ -102,13 +115,13 @@ function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
 
-function getTopicSessionPaths(): ReturnType<typeof getJsonStreamSessionPaths> {
-  return getJsonStreamSessionPaths(resolveJsonStreamSessionDir(getLayout().dataDir, makeTelegramKey(group.id, topicThreadId)));
+function getTopicSessionPaths(spec: TopicSpec = mainTopicSpec): ReturnType<typeof getJsonStreamSessionPaths> {
+  return getJsonStreamSessionPaths(resolveJsonStreamSessionDir(getLayout().dataDir, makeTelegramKey(group.id, spec.threadId)));
 }
 
 /** Write a user turn to the agent's stdin the way the bot does — while the bot is down, so nobody read its output. */
-function writeTurnToAgentStdin(content: string): void {
-  const fifoFd = fs.openSync(getTopicSessionPaths().stdinFifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+function writeTurnToAgentStdin(content: string, spec: TopicSpec = mainTopicSpec): void {
+  const fifoFd = fs.openSync(getTopicSessionPaths(spec).stdinFifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
   try {
     fs.writeSync(fifoFd, `${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`);
   } finally {
@@ -133,15 +146,15 @@ function listResumePrompts(): FakeClaudePrompt[] {
 }
 
 /** Count the topic's Bot API sends whose text satisfies `isMatch` — read off the call log, so a message deleted later still counts. */
-function countSentToTopic(isMatch: (text: string) => boolean): number {
+function countSentToTopic(isMatch: (text: string) => boolean, spec: TopicSpec = mainTopicSpec): number {
   return fakeTelegram.listCalls('sendMessage')
-    .filter((call) => call.payload.message_thread_id === topicThreadId)
+    .filter((call) => call.payload.message_thread_id === spec.threadId)
     .filter((call) => isMatch(typeof call.payload.text === 'string' ? call.payload.text : ''))
     .length;
 }
 
-function countUsageLimitResultsInLog(): number {
-  return fs.readFileSync(getTopicSessionPaths().stdoutFile, 'utf8').split(usageLimitText).length - 1;
+function countUsageLimitResultsInLog(spec: TopicSpec): number {
+  return fs.readFileSync(getTopicSessionPaths(spec).stdoutFile, 'utf8').split(usageLimitText).length - 1;
 }
 
 /**
@@ -150,32 +163,32 @@ function countUsageLimitResultsInLog(): number {
  * turn's `[limit-resets:…]` token says; `backdateErrorTo` moves the transcript's API-error entry back (for a clock-only reset
  * that only reads as over against the moment the error happened).
  */
-async function runLimitedTurnWhileBotIsDown(label: string, resetClause: string, backdateErrorTo?: Date): Promise<void> {
-  const key = keyToString(makeTelegramKey(group.id, topicThreadId));
-  const { stdoutFile } = getTopicSessionPaths();
+async function runLimitedTurnWhileBotIsDown(label: string, resetClause: string, backdateErrorTo?: Date, spec: TopicSpec = mainTopicSpec): Promise<void> {
+  const key = keyToString(makeTelegramKey(group.id, spec.threadId));
+  const { stdoutFile } = getTopicSessionPaths(spec);
   // Everything so far is handled and saved: the next bot replays only what is written from here on.
   await getCharness().waitFor('the log saved as handled', replyTimeoutMs, () => (readPersistedState(getLayout()).agents?.[key]?.jsonStreamTail?.offsetBytes ?? 0) >= fs.statSync(stdoutFile).size);
   const sessionId = readPersistedState(getLayout()).agents?.[key]?.claudeSessionId ?? '';
   await getCharness().stop();
 
-  const limitResultsBefore = countUsageLimitResultsInLog();
-  writeTurnToAgentStdin(`${label} [fake:usage-limit-once] [limit-resets:${resetClause}] written while the bot is down`);
+  const limitResultsBefore = countUsageLimitResultsInLog(spec);
+  writeTurnToAgentStdin(`${label} [fake:usage-limit-once] [limit-resets:${resetClause}] written while the bot is down`, spec);
   await new Promise<void>((resolve, reject) => {
     const deadline = Date.now() + agentStartTimeoutMs;
     const timer = setInterval(() => {
-      if (countUsageLimitResultsInLog() > limitResultsBefore) { clearInterval(timer); resolve(); }
+      if (countUsageLimitResultsInLog(spec) > limitResultsBefore) { clearInterval(timer); resolve(); }
       else if (Date.now() > deadline) { clearInterval(timer); reject(new Error('the agent did not run the turn written while the bot was down')); }
     }, 50);
   });
   if (backdateErrorTo) {
-    backdateTranscriptApiError(getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, topicFolder), sessionId }), backdateErrorTo);
+    backdateTranscriptApiError(getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, spec.folder), sessionId }), backdateErrorTo);
   }
 }
 
 describe('A prompt forwarded to an adopted session waits for the replay of its downtime tail: built charness, fake Bot API, fake claude', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-adoptreplay-', [topicFolder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-adoptreplay-', [topicFolder, perTurnFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
@@ -184,6 +197,8 @@ describe('A prompt forwarded to an adopted session waits for the replay of its d
 
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
+    // A resume through the stop window starts a new process: allow a start's time.
+    perTurnTopic = new TopicDriver(fakeTelegram, getCharness, perTurnThreadId, agentStartTimeoutMs);
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
@@ -253,6 +268,27 @@ describe('A prompt forwarded to an adopted session waits for the replay of its d
       continuePrompts: listResumePrompts().length - before.continuePrompts,
     };
   }
+
+  it('on the per-turn backend the resume prompt that reaches the adopted session at the boot is not lost to the stop the replayed turn end starts', async () => {
+    // A per-turn topic whose process is alive when the bot goes down (started, no turn yet — the per-turn stop comes at a turn's
+    // end). The turn written while the bot is down ends the way the stop gate allows, so the replay of its end finds the stop
+    // permitted and queues it — at the very moment the boot recovery's resume prompt, waiting for that replay, is let through.
+    const key = keyToString(makeTelegramKey(group.id, perTurnThreadId));
+    await perTurnTopic.sendAndAwaitReply(`/bind ${perTurnFolder}`, `Bound to \`${perTurnFolder}\``);
+    await perTurnTopic.sendAndAwaitReply('/claude', 'ready in');
+    const picker = await perTurnTopic.sendAndAwaitReply('/claude_mode', 'Claude Code backend — current:');
+    await perTurnTopic.tapAndAwaitAnswer(picker, `ccmode_${perTurnAdapterName}`);
+    await perTurnTopic.waitForMessage('the switch to the per-turn backend', (message) => message.text.includes('Switched to'));
+    await getCharness().waitFor('the per-turn backend persisted', replyTimeoutMs, () => readPersistedState(getLayout()).agents?.[key]?.name === perTurnAdapterName);
+
+    await runLimitedTurnWhileBotIsDown(perTurnDowntimeLabel, new Date(Date.now() - resetAgoMs).toISOString(), undefined, perTurnTopicSpec);
+    const resumeMessagesBefore = countSentToTopic((text) => text.includes(resumedNoticeText), perTurnTopicSpec);
+    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+
+    // The resume prompt has no issue label: the fake answers it "Working on unknown.", which only the resumed turn produces here.
+    await perTurnTopic.waitForMessage('the resumed turn\'s answer', (message) => message.text === 'Working on unknown.');
+    assert.equal(countSentToTopic((text) => text.includes(resumedNoticeText), perTurnTopicSpec) - resumeMessagesBefore, 1, 'the topic was told once that the work resumed');
+  });
 
   it('a limit that ended a turn while the bot was down (a reset named as an instant) is handled once: no notice for a window that is over, one resume, one "Continue"', async () => {
     await runLimitedTurnWhileBotIsDown('DOWN-2', new Date(Date.now() - resetAgoMs).toISOString());

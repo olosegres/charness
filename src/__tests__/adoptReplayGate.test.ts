@@ -66,9 +66,11 @@ describe('the wait before a prompt reaches an adopted session', () => {
   it('an adapter that never adopts, and a session that was not adopted, forward at once', async () => {
     await waitForAdoptedReplay({}, key);
     const adapter = new ClaudeJsonStreamAdapter();
+    assert.equal(adapter.checkIsAdoptReplayPending(key), false, 'no session');
     await waitForAdoptedReplay(adapter, key); // no session
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-adoptgate-plain-'));
     adapter['sessions'].set(keyToString(key), createStreamSessionFixture({ key, paths: getJsonStreamSessionPaths(dir) }));
+    assert.equal(adapter.checkIsAdoptReplayPending(key), false, 'not adopted');
     await waitForAdoptedReplay(adapter, key); // not adopted
   });
 
@@ -78,6 +80,7 @@ describe('the wait before a prompt reaches an adopted session', () => {
     adapter.on('output', (_k: SessionKey, text: string) => events.push(`output:${text}`));
     adapter.on('apiError', (_k: SessionKey, error: { kind: string }) => events.push(`apiError:${error.kind}`));
 
+    assert.equal(adapter.checkIsAdoptReplayPending(key), true, 'the replay is pending: a forward goes through the wait');
     let isForwarded = false;
     const forwarded = waitForAdoptedReplay(adapter, key).then(() => { events.push('forward'); isForwarded = true; });
     await settleMicrotasks();
@@ -86,6 +89,7 @@ describe('the wait before a prompt reaches an adopted session', () => {
 
     pollTick();
     await forwarded;
+    assert.equal(adapter.checkIsAdoptReplayPending(key), false, 'the replay is over: a forward runs in its own tick again');
 
     assert.deepEqual(events, ['output:old text', 'apiError:usageLimit', 'forward'], 'the replayed turn is done before the prompt is let through');
   });

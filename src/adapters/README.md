@@ -272,7 +272,9 @@ pipeline, in-flight turn delivered end-to-end, no recap posted; only a turn in
 flight at the restart is replayed — a finished one is not; a prompt forwarded
 meanwhile waits for the replay — `forwardPromptToAgent` →
 `utils/adoptReplayGate.ts`, bounded — or it would reset the answer/error state
-the replayed frames use; a limit error read during the replay is flagged
+the replayed frames use, and is routed again afterwards like a late prompt (the
+replayed turn's end may have opened the per-turn stop window: the prompt is
+buffered, not written to the process being stopped); a limit error read during the replay is flagged
 `isReplayed`, and the bot leaves it to the boot recovery when that has armed the
 episode — it reads the error's own time off the transcript, which a replay cannot);
 a released

@@ -738,6 +738,8 @@ export interface AgentAdapter extends EventEmitter {
    * error state the replayed frames still use. Optional: only the json-stream Claude backend adopts a process and replays.
    */
   whenAdoptReplayed?(key: SessionKey): Promise<void>;
+  /** Whether an adopted session is still replaying the downtime tail — {@link whenAdoptReplayed} would wait. */
+  checkIsAdoptReplayPending?(key: SessionKey): boolean;
   checkIsActive(key: SessionKey): boolean;
 
   /**

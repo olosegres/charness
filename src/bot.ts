@@ -5191,12 +5191,50 @@ async function forwardPromptToAgent(
   adapter: AgentAdapter,
   text: string,
   sentAtMs?: number,
-  options: { isRecoveryReplay?: boolean; isRequestReminder?: boolean; replyContext?: string; requestHeader?: string } = {},
+  options: PromptForwardOptions = {},
 ): Promise<void> {
   // An adopted session replays what its process wrote during the downtime first: a prompt written meanwhile would reset
   // the answer and error state those frames still use, and the replayed text would join the new reply's message (the
-  // «new message» mark below would go to the replayed text).
+  // «new message» mark would go to the replayed text). Nothing is awaited when no replay is pending: the forward then runs
+  // in the caller's tick, as it always did — an await ahead of it would let a stop queued meanwhile begin first.
+  if (!adapter.checkIsAdoptReplayPending?.(key)) {
+    await forwardPromptToLiveAgent(key, adapter, text, sentAtMs, options);
+    return;
+  }
   await waitForAdoptedReplay(adapter, key);
+  // The wait let the replay run: the replayed turn's end may have queued the per-turn stop, which holds the window open and
+  // ends the process — a prompt written now would go to a process being killed and be lost. Routed again, as a late prompt is.
+  await deliverLatePrompt({
+    checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
+    checkIsSessionActive: () => adapter.checkIsActive(key),
+    buffer: async () => {
+      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadReplyQuote(key, text, options.replyContext)}`, true);
+    },
+    wake: () => wakeSleepingSessionForPrompt(key),
+    forward: () => forwardPromptToLiveAgent(key, getThreadAdapter(key), text, sentAtMs, options),
+    reportNoSession: async (isAlreadyTold) => {
+      console.warn(`[adopt] ${keyToString(key)}: no session is left to take the prompt that waited for the replay; it is dropped`);
+      if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
+    },
+  });
+}
+
+/** What a forward may carry besides the text (see {@link forwardPromptToAgent}). */
+interface PromptForwardOptions {
+  isRecoveryReplay?: boolean;
+  isRequestReminder?: boolean;
+  replyContext?: string;
+  requestHeader?: string;
+}
+
+/** @description The forward itself, for a session that is ready to take the prompt: {@link forwardPromptToAgent} minus the replay wait. */
+async function forwardPromptToLiveAgent(
+  key: SessionKey,
+  adapter: AgentAdapter,
+  text: string,
+  sentAtMs?: number,
+  options: PromptForwardOptions = {},
+): Promise<void> {
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
   // Skip slash commands (not worth replaying), the recovery replay itself (keeps

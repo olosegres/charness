@@ -79,7 +79,7 @@ test('every route folds the block with the one rule', () => {
   // The live forward and the finished-text helper end in the same agent-facing
   // shape only while they share the pure fold; an inline copy is how one of them
   // drifts (or loses the shell guard).
-  for (const name of ['getPromptWithThreadReplyQuote', 'forwardPromptToAgent']) {
+  for (const name of ['getPromptWithThreadReplyQuote', 'forwardPromptToLiveAgent']) {
     assert.match(getFunctionBody(name), /getPromptWithReplyQuote\(/, `${name} must fold through getPromptWithReplyQuote`);
     assert.match(getFunctionBody(name), /isShellInput:\s*[^,\n]*\.name\s*===\s*'terminal'/, `${name} must keep the block out of a terminal`);
   }

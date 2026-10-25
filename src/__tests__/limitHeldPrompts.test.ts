@@ -215,7 +215,7 @@ describe('the bot holds and releases them (R23)', () => {
   });
 
   it('they ride the next prompt forwarded to a live session — the operator\'s message, the resume\'s nudge — and a recovery replays them', () => {
-    const forward = getFunction('async function forwardPromptToAgent(');
+    const forward = getFunction('async function forwardPromptToLiveAgent(');
     assert.match(forward, /const textWithHeld = isReplayable && adapter\.checkIsActive\(key\) \? limitHeldPrompts\.releaseWithForward\(key, text\) : text;/);
     const fold = forward.indexOf('limitHeldPrompts.releaseWithForward');
     const cache = forward.indexOf('lastForwardedPrompt.set(keyToString(key), body);');

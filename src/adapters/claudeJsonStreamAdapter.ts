@@ -1025,6 +1025,12 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return true;
   }
 
+  /** Whether an adopted session's tail still has downtime frames to replay — {@link whenAdoptReplayed} would wait. */
+  checkIsAdoptReplayPending(key: SessionKey): boolean {
+    const session = this.sessions.get(keyToString(key));
+    return session !== undefined && session.adoptCatchUpOffset !== null;
+  }
+
   /**
    * @description Resolves once an ADOPTED session's tail has consumed what its
    * stdout held at the adopt — the replayed frames have rebuilt the live state
