@@ -327,6 +327,17 @@ export function readProcessErrorStdout(error: unknown): string {
   return '';
 }
 
+/**
+ * @description Why a child process (the CLI's `auth status` probe) gave no answer, for one log line: killed by the
+ * caller's timeout, the exit code, or the spawn error's code — never its output, which may name the account.
+ */
+export function getProcessFailureReason(error: unknown, timeoutMs: number): string {
+  if (!error || typeof error !== 'object') return 'unknown failure';
+  if ('killed' in error && error.killed === true) return `timed out after ${timeoutMs} ms`;
+  if ('code' in error && (typeof error.code === 'number' || typeof error.code === 'string')) return `exit ${error.code}`;
+  return 'unknown failure';
+}
+
 export type ClaudeAccountKind = 'personal' | 'corporate' | 'unknown';
 
 /** Personal (`pro`, `max`) versus corporate (`team`, `enterprise`) subscription, from the CLI's `subscriptionType`. */

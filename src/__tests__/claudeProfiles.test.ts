@@ -3,7 +3,7 @@
  * (`utils/claudeAccountPickerPlan.ts`): the name gate, the on-disk layout (0700 directory, the shared entries
  * symlinked into `~/.claude`, idempotent, removal that never follows a link), the resolver's fallback to
  * `default` for an unknown pick, the `claude auth status` parser, the `CLAUDE_CONFIG_DIR` recovery from a
- * command line, and the callback codecs with their 64-byte budget.
+ * command line, why a probe gave no answer, and the callback codecs with their 64-byte budget.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -21,6 +21,7 @@ import {
   createClaudeProfileLayout,
   defaultClaudeProfileName,
   getClaudeAccountKind,
+  getProcessFailureReason,
   normaliseClaudeProfileName,
   parseClaudeAuthStatus,
   parseClaudeConfigDirFromCommand,
@@ -213,5 +214,23 @@ describe('checkIsSameClaudeConfigDir', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('getProcessFailureReason: why the auth status probe gave no answer, never its output', () => {
+  const probeTimeoutMs = 5000;
+
+  it('a probe its caller killed at the timeout', () => {
+    assert.equal(getProcessFailureReason({ killed: true, signal: 'SIGTERM', stdout: 'secret' }, probeTimeoutMs), 'timed out after 5000 ms');
+  });
+
+  it('an exit code, or a spawn error\'s code', () => {
+    assert.equal(getProcessFailureReason({ killed: false, code: 2, stdout: 'secret' }, probeTimeoutMs), 'exit 2');
+    assert.equal(getProcessFailureReason({ code: 'ENOENT' }, probeTimeoutMs), 'exit ENOENT');
+  });
+
+  it('anything else', () => {
+    assert.equal(getProcessFailureReason(null, probeTimeoutMs), 'unknown failure');
+    assert.equal(getProcessFailureReason({}, probeTimeoutMs), 'unknown failure');
   });
 });

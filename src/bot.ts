@@ -412,7 +412,7 @@ import { answerCallbackWithFittedText, answerCallbackWithWholeText } from './con
 import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
-import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
+import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
@@ -7325,7 +7325,13 @@ async function readClaudeAuthStatusUnder(configDir: string | null): Promise<Clau
     return parseClaudeAuthStatus(stdout);
   } catch (e) {
     // A logged-out directory makes the CLI exit non-zero WITH its JSON on stdout: that is the answer.
-    return parseClaudeAuthStatus(readProcessErrorStdout(e));
+    const status = parseClaudeAuthStatus(readProcessErrorStdout(e));
+    // No answer at all (a probe killed by its timeout on a loaded host, a CLI that did not start): one line, so a
+    // missing status can be told from a signed-out one.
+    if (status === null) {
+      console.log(`[accounts] the auth status probe under ${configDir ?? 'the default directory'} gave no status: ${getProcessFailureReason(e, claudeAuthStatusProbeTimeoutMs)}`);
+    }
+    return status;
   }
 }
 
