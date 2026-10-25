@@ -124,7 +124,8 @@ per-backend controls are optional methods the bot checks before calling.
   backends' OWN overflow compaction gets the same summary guidance (name the loaded skills, reload them, end with a numbered next-steps checklist — one text, `compactionResumeGuidance`, on every compaction path):
   Claude through a `PreCompact` hook (`utils/claudeCompactHook.ts`, `--settings` file in `DATA_DIR`, which also
   carries the todo lists' `PostToolUse` inbox hook, `todos/midTurn.ts`),
-  OpenCode through a bot-installed global plugin (`utils/openCodeCompactPlugin.ts`); at boot
+  OpenCode through a bot-installed global plugin (`utils/openCodeCompactPlugin.ts`; its file name carries a hash of its
+  text, so an instance that loaded an older text does not count as loaded and is recreated); at boot
   `activateCompactionPluginForActiveSessions` recreates idle directory instances that lack it BEFORE the
   scheduler-MCP reconcile (recreating drops the runtime MCP registration). A `telegramBot` registration or
   reconcile that fails on OpenCode is retried (`schedulerMcpRetryDelaysMs`), reading `GET /mcp` first.

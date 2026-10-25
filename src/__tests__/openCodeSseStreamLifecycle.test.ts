@@ -576,6 +576,47 @@ describe('compaction plugin activation at boot', () => {
     assert.equal(adapter['registeredSchedulerMcpDirs'].has(busyDir), true, 'an untouched directory keeps its gate');
   });
 
+  it('an idle directory whose instance loaded an OLDER plugin text is recreated as well; a busy one is left alone', async () => {
+    const adapter = createAdapter();
+    const outdatedIdleDir = '/work/outdated-idle';
+    const outdatedBusyDir = '/work/outdated-busy';
+    const pluginsUrl = `file://${configHome}/opencode/plugins`;
+    adapter['sessions'].set('-100:1', makeSession(makeTelegramKey(-100, 1), 'ses_1', outdatedIdleDir));
+    adapter['sessions'].set('-100:2', makeSession(makeTelegramKey(-100, 2), 'ses_2', outdatedBusyDir));
+    const posts = stubServer(adapter, {
+      // The first release's name and another content hash: what an instance reports that loaded a text older than the current one.
+      [outdatedIdleDir]: { plugin: [`${pluginsUrl}/charness-compaction.js`], status: {} },
+      [outdatedBusyDir]: { plugin: [`${pluginsUrl}/charness-compaction-00000000.js`], status: { ses_2: { type: 'busy' } } },
+    });
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await adapter.activateCompactionPluginForActiveSessions();
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.deepEqual(posts, [`/instance/dispose?directory=${encodeURIComponent(outdatedIdleDir)}`]);
+  });
+
+  it('the bot sends the resume guidance itself unless the directory\'s instance loaded the CURRENT plugin', async () => {
+    const adapter = createAdapter();
+    const key = makeTelegramKey(-100, 1);
+    const workDir = '/work/hook';
+    adapter['sessions'].set('-100:1', makeSession(key, 'ses_1', workDir));
+    const pluginsUrl = `file://${configHome}/opencode/plugins`;
+    const stubPlugins = (plugin: string[]): void => {
+      adapter['apiRequest'] = (async () => ({ plugin })) as OpenCodeAdapter['apiRequest'];
+    };
+
+    stubPlugins([`${pluginsUrl}/${openCodeCompactPluginFileName}`]);
+    assert.equal(await adapter.checkHasCompactionResumeHook(key), true, 'the current plugin carries the guidance');
+    stubPlugins([`${pluginsUrl}/charness-compaction.js`]);
+    assert.equal(await adapter.checkHasCompactionResumeHook(key), false, 'a plugin of an older text lacks the checklist');
+    stubPlugins([`${pluginsUrl}/charness-compaction-00000000.js`]);
+    assert.equal(await adapter.checkHasCompactionResumeHook(key), false, 'a plugin of another content hash is an older text');
+  });
+
   it('does nothing — not even the install — without an active session', async () => {
     const adapter = createAdapter();
     const posts = stubServer(adapter, {});

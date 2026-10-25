@@ -7,7 +7,10 @@ After a compaction the continuing session often skipped reloading its skills and
 the idle compaction, `/compact`, the compaction the agent arms itself (`compact_conversation`), and the one the agent CLI or OpenCode runs by
 itself when the context overflows. Item 1 is «load these skills» with their exact names (no such item when none was loaded), then the next steps the
 summary already records, in order — none invented. The list is the last thing in the summary; where the idle compaction asks for the closing
-«where we stopped» section, it is that section's last part.
+«where we stopped» section, it is that section's last part. An OpenCode server that was already running gets the new text too: the plugin file in
+OpenCode's plugin folder now carries a hash of its text in its name (`charness-compaction-<hash>.js`), so at the bot's next start a project folder
+whose instance loaded an older text is recreated (when nothing runs in it; a working one is retried at the next start) and the older copies of the
+file are removed.
 
 **A usage-limit resume that finds its session gone no longer says «resumed» right before «no session».** When the bot restarted while a
 topic waited for a limit's reset and the conversation was ended in the same moment, the topic read the pinned «work resumed» notice and

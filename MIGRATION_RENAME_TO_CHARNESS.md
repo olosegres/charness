@@ -130,4 +130,5 @@ you next rebuild the image:
 - `[deprecated] TELEGRAMCODE_HOT_RELOAD … the running charness hot supervisor still sets it`: restart the
   supervisor (above).
 - The OpenCode compaction plugin is reinstalled under its new name and the old file is deleted; a folder whose
-  OpenCode instance already loaded the old plugin keeps it until OpenCode is restarted.
+  OpenCode instance already loaded the old plugin is recreated at the bot's next start when nothing runs in it
+  (a working one keeps the old plugin until a later start finds it idle).
