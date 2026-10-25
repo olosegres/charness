@@ -18,7 +18,8 @@
  *
  * Cases: scratch install · the Python unit tests under the venv interpreter · cold start · (b) a request
  * without the token is refused · (c) health · (a) the short clip through `transcribeWithEngines` · (e) the long
- * clip's time and peak memory · (f) a short voice waits for a long one that arrived first, within its production budget ·
+ * clip's time and peak memory · (k) two long clips at once under the same memory ceiling · (f) a short voice waits for a
+ * long one that arrived first, within its production budget ·
  * (j) a voice whose client gave up is dropped · (h) two sidecars, two ports · (g) the
  * owner dying takes the sidecar down · (d) the idle exit deletes the record.
  */
@@ -305,6 +306,17 @@ describe('the local GigaAM engine (live)', { skip: skipReason }, () => {
     console.log(`[live] long clip (${seconds.toFixed(0)}s of audio): ${elapsedMs} ms, ${result.ok ? result.text.length : 0} chars, peak RSS ${(peakKb / 1024).toFixed(0)} MB`);
     assert.ok(result.ok && result.text.length > 0, result.ok ? 'empty text' : result.error);
     assert.ok(elapsedMs <= longVoiceBudgetMs, `took ${elapsedMs} ms, the budget is ${longVoiceBudgetMs} ms`);
+    assert.ok(peakKb <= peakMemoryLimitKb, `peak ${peakKb} kB`);
+  });
+
+  test('(k) two long voices at once (two topics): both recognised, peak memory still under 1 GB', { skip: longAudio ? undefined : 'STT_GIGAAM_LIVE_LONG_AUDIO is not set', timeout: 2 * longVoiceHardLimitMs + 30_000 }, async () => {
+    const seconds = getAudioSeconds(longAudio ?? '');
+    const engines = [createEngine(mainSidecar)];
+    const startedAt = Date.now();
+    const results = await Promise.all([0, 1].map(() => transcribeWithEngines(longAudio ?? '', engines, { durationSeconds: seconds, language: null, retryDelaysMs: [] })));
+    const peakKb = getPeakMemoryKb(mainSidecar.pid);
+    console.log(`[live] two long clips at once: ${Date.now() - startedAt} ms, peak RSS ${(peakKb / 1024).toFixed(0)} MB`);
+    for (const result of results) assert.ok(result.ok && result.text.length > 0, result.ok ? 'empty text' : result.error);
     assert.ok(peakKb <= peakMemoryLimitKb, `peak ${peakKb} kB`);
   });
 

@@ -269,6 +269,35 @@ class PauseSplitterTest(unittest.TestCase):
         )
         self.assertGreater(options["max_speech_duration_s"], 3, "the VAD never cuts speech by its own length limit")
 
+    def test_windowed_resampling_joins_into_the_one_pass_result(self):
+        calls = []
+
+        def decimate(samples, sample_rate):
+            # A stand-in that, like a real resampler, needs the samples around each output: a 3-tap average, then ::3.
+            calls.append(len(samples))
+            smoothed = np.convolve(samples, np.ones(3, dtype=np.float32) / 3, mode="same")
+            return smoothed[::3].astype(np.float32)
+
+        rng = np.random.default_rng(1)
+        audio = rng.standard_normal(int(75.3 * 48000)).astype(np.float32)
+        windowed = sidecar.resample_in_windows(decimate, audio, 48000)
+        one_pass = decimate(audio, 48000)
+        self.assertEqual(len(windowed), len(one_pass))
+        self.assertTrue(np.allclose(windowed, one_pass, atol=1e-6), "the margins hide every window edge")
+        self.assertEqual(len(calls), 1 + 3, "three windows of at most 30 s (plus the one-pass reference)")
+        self.assertLessEqual(max(calls[:3]), (sidecar.RESAMPLE_WINDOW_SECONDS + 2 * sidecar.RESAMPLE_MARGIN_SECONDS) * 48000)
+
+    def test_every_supported_rate_trims_the_margins_off_at_a_whole_16_khz_sample(self):
+        for sample_rate in sidecar.SUPPORTED_SAMPLE_RATES:
+            for seconds in (sidecar.RESAMPLE_WINDOW_SECONDS, sidecar.RESAMPLE_MARGIN_SECONDS):
+                samples = seconds * sample_rate
+                self.assertEqual(samples, int(samples), f"{seconds} s at {sample_rate} Hz")
+                self.assertEqual(samples * sidecar.SPEECH_SAMPLE_RATE % sample_rate, 0, f"{seconds} s at {sample_rate} Hz")
+
+    def test_audio_already_at_16_khz_is_not_resampled(self):
+        audio = tone(40.0)
+        self.assertIs(sidecar.resample_in_windows(lambda samples, sample_rate: self.fail("resampled"), audio, SAMPLE_RATE), audio)
+
     def test_without_speech_detection_the_audio_is_cut_only_at_25_seconds(self):
         audio = tone(10.0)
         pieces, sample_rate = sidecar.split_without_pauses(audio, 48000)

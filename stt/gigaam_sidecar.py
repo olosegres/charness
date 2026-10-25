@@ -71,6 +71,13 @@ VAD_SPEECH_PAD_MS = 100
 # onnx-asr compares the raw gap with `min_silence_duration_ms + 2 * speech_pad_ms`: given this, a gap of
 # `MIN_PAUSE_MS` is what ends a piece.
 VAD_MIN_SILENCE_MS = MIN_PAUSE_MS - 2 * VAD_SPEECH_PAD_MS
+# The upload is resampled to 16 kHz window by window: onnxruntime keeps the largest buffer a session ever needed, and
+# a 5-minute voice resampled at once raised the peak by ~240 MB (profiled; 30 s windows: ~66 MB). The margin on each
+# side is trimmed away again; with it the joined windows are identical to a one-pass resample on every sample, except
+# that the last one may be dropped (the trims round, the model rounds up: at most 63 µs; measured at every supported
+# rate). Both are whole seconds, so their length at 16 kHz is a whole number of samples for every supported rate.
+RESAMPLE_WINDOW_SECONDS = 30
+RESAMPLE_MARGIN_SECONDS = 1
 # The install check's 1 s of silence is at Telegram's Opus rate, so it runs the resampler too, and a VAD that fails
 # shows as pieces left at this rate (the fallback keeps the file's own rate).
 CHECK_SAMPLE_RATE = 48000
@@ -196,12 +203,33 @@ def make_pause_splitter(resample, find_speech):
     return split
 
 
+def resample_in_windows(resample_once, samples: np.ndarray, sample_rate: int) -> np.ndarray:
+    """`resample_once(samples, rate)` → 16 kHz, applied to `RESAMPLE_WINDOW_SECONDS` windows that each read
+    `RESAMPLE_MARGIN_SECONDS` beyond both ends; the margins are cut off the output again and the windows joined."""
+    if sample_rate == SPEECH_SAMPLE_RATE:
+        return samples
+    ratio = SPEECH_SAMPLE_RATE / sample_rate
+    window = RESAMPLE_WINDOW_SECONDS * sample_rate
+    margin = RESAMPLE_MARGIN_SECONDS * sample_rate
+    parts = []
+    for start in range(0, len(samples), window):
+        end = min(start + window, len(samples))
+        read_from = max(0, start - margin)
+        resampled = resample_once(samples[read_from : min(len(samples), end + margin)], sample_rate)
+        keep_from = round((start - read_from) * ratio)
+        parts.append(resampled[keep_from : keep_from + round((end - start) * ratio)])
+    return np.concatenate(parts) if parts else samples[:0]
+
+
 def make_model_pause_splitter(model, vad):
     """`make_pause_splitter` over the loaded model's own resampler and the Silero VAD."""
 
-    def resample(samples: np.ndarray, sample_rate: int) -> np.ndarray:
+    def resample_once(samples: np.ndarray, sample_rate: int) -> np.ndarray:
         waveforms, lengths = model.resampler(samples[None], np.array([len(samples)], dtype=np.int64), sample_rate)
         return np.ascontiguousarray(waveforms[0][: int(lengths[0])], dtype=np.float32)
+
+    def resample(samples: np.ndarray, sample_rate: int) -> np.ndarray:
+        return resample_in_windows(resample_once, samples, sample_rate)
 
     def find_speech(audio: np.ndarray) -> list[tuple[int, int]]:
         (segments,) = vad.segment_batch(
