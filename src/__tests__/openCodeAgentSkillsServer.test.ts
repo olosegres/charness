@@ -119,6 +119,20 @@ describe('activateAgentSkillsForServer', () => {
     }
   });
 
+  it('says nothing when no server listens at all (a Claude-only instance, OpenCode not started yet) — no line on every boot', async () => {
+    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'none' } });
+    const lines: string[] = [];
+    const originalLog = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      await adapter.activateAgentSkillsForServer();
+    } finally {
+      console.log = originalLog;
+    }
+    assert.deepEqual(forcedRestarts, []);
+    assert.deepEqual(lines.filter((line) => line.startsWith('[OpenCode]')), []);
+  });
+
   it('never replaces a server when the folder it would get cannot be prepared — the new one would lack the skills too', async () => {
     fs.mkdirSync(path.join(getOpenCodeAgentConfigDir(dataDir), 'skills'), { recursive: true });
     const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: null, isOwnedByBot: true } });

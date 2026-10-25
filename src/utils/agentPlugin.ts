@@ -137,11 +137,13 @@ export function getOpenCodeAgentConfigEnv(env: NodeJS.ProcessEnv, dataDir: strin
 
 /**
  * @name OpenCodeServerLaunchReading
- * @description What the bot can read about the running OpenCode server's launch: `unknown` — the listener is not a
- * process it can identify as `opencode … serve` (a server elsewhere, a test's stand-in, no `/proc`); otherwise the
+ * @description What the bot can read about the running OpenCode server's launch: `none` — nothing listens on its
+ * loopback endpoint (a Claude-only instance, OpenCode not started yet); `unknown` — the listener is not a process it
+ * can identify as `opencode … serve` (a server elsewhere, a test's stand-in, no `/proc`); otherwise the
  * `OPENCODE_CONFIG_DIR` it was started with (null: none) and whether the bot owns it (its process record).
  */
 export type OpenCodeServerLaunchReading =
+  | { kind: 'none' }
   | { kind: 'unknown' }
   | { kind: 'openCodeServe'; configDir: string | null; isOwnedByBot: boolean };
 
@@ -175,15 +177,15 @@ export function getExpectedOpenCodeAgentConfigDir(env: NodeJS.ProcessEnv, dataDi
 
 /**
  * @name OpenCodeAgentSkillsServerAction
- * @description What the boot step does about the running server: nothing (it offers the skills, or the bot offers
- * none); replace it (an `opencode serve` the bot owns, started without the folder); or leave it and say why — a server
+ * @description What the boot step does about the running server: nothing (no server runs, it offers the skills, or
+ * the bot offers none); replace it (an `opencode serve` the bot owns, started without the folder); or leave it and say why — a server
  * the bot does not own (locked decision D5: never touched), or a listener it cannot identify.
  */
 export type OpenCodeAgentSkillsServerAction = 'none' | 'replace' | 'skipNotOwned' | 'skipUnidentified';
 
 /** @description Decide the boot step's action from the server's launch and the folder the bot now offers. */
 export function getOpenCodeAgentSkillsServerAction(reading: OpenCodeServerLaunchReading, expectedConfigDir: string | null): OpenCodeAgentSkillsServerAction {
-  if (expectedConfigDir === null) return 'none';
+  if (expectedConfigDir === null || reading.kind === 'none') return 'none';
   if (reading.kind === 'unknown') return 'skipUnidentified';
   if (reading.configDir === expectedConfigDir) return 'none';
   return reading.isOwnedByBot ? 'replace' : 'skipNotOwned';
