@@ -273,7 +273,9 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     const allLaunchesBefore = getAllLaunches(getLayout()).length;
     await topic.sendAndAwaitReply(`/accounts use ${keyAccount}`, `Claude account for this topic: ${keyAccount}`);
     const probe = getAllLaunches(getLayout()).slice(allLaunchesBefore).find((launch) => launch.argv.includes('status') && launch.claudeConfigDir === keyDir);
-    assert.ok(probe, 'the account was probed under its directory');
+    // Named in full on a failure: every launch since, and the bot's own lines about it — a probe that never logged a launch
+    // (killed by its timeout before the fake started) reads differently from one under the wrong directory.
+    assert.ok(probe, `the account was probed under its directory; launches since: ${JSON.stringify(getAllLaunches(getLayout()).slice(allLaunchesBefore).map((launch) => ({ argv: launch.argv, claudeConfigDir: launch.claudeConfigDir })))}`);
     assert.equal(probe?.isHelperKeyPlausible, true, 'the probe carries the account\'s apiKeyHelper');
 
     await waitForSessionRespawn(getCharness(), getLayout(), 'the session under the key account', keyDir, sessionId, launchesBefore);

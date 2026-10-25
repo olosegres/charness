@@ -16,8 +16,12 @@
  * `openCodeResumeModel.testSetup.ts`) imports AFTER this module and reassigns
  * `process.env.DATA_DIR`, so it still wins. Matches neither the `*.test.ts` nor
  * `*.e2e.ts` runner globs, so it is never executed as a test itself.
+ *
+ * The same for tmux: `TMUX_TMPDIR` points at a private folder, so the "default" tmux server of the suite (and of every
+ * instance and tool it spawns) is its own, never the host's — where a live bot may run its agents.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 // Arms the Telegram and Jira SessionKeyCodecs for the whole suite: modules that
@@ -43,7 +47,21 @@ for (const handshakeName of [hotReloadEnvName, openCodeProcessFileEnvName]) {
   delete process.env[handshakeName.legacy];
 }
 
+// The tmux server this process and everything it spawns reaches without a socket of its own: a private one, never the
+// host's default server — a live bot may run its agents there, and a suite started from that host's shell would see
+// (and could touch) them. A test that needs a server of its own still names its own `TMUX_TMPDIR` or socket.
+const testTmuxDir = mkdtempSync(path.join(os.tmpdir(), 'charness-test-tmux-'));
+process.env.TMUX_TMPDIR = testTmuxDir;
+delete process.env.TMUX;
+delete process.env.TMUX_PANE;
+
 // The dir is private to this process and read by nobody once it is gone; left alone it piles up
 // in the OS temp dir, one per test process, for good. An `exit` listener runs for a drained event
-// loop, `process.exit()` and an uncaught exception alike (a signal kill skips it).
-process.on('exit', () => rmSync(testDataDir, { recursive: true, force: true }));
+// loop, `process.exit()` and an uncaught exception alike (a signal kill skips it). The private tmux
+// server, if a test left one running, is ended by its FULL socket path — never a bare `kill-server`.
+process.on('exit', () => {
+  rmSync(testDataDir, { recursive: true, force: true });
+  const testTmuxSocket = path.join(testTmuxDir, `tmux-${process.getuid?.() ?? 0}`, 'default');
+  if (existsSync(testTmuxSocket)) spawnSync('tmux', ['-S', testTmuxSocket, 'kill-server'], { stdio: 'ignore' });
+  rmSync(testTmuxDir, { recursive: true, force: true });
+});

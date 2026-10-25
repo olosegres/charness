@@ -299,7 +299,8 @@ History was scrubbed of real operator identifiers — keep it that way:
   whatever `TMUX_TMPDIR` says. A test's own servers are private (`TMUX_SOCKET_NAME` + a `TMUX_TMPDIR` inside
   a temp dir) and are ended only by the FULL socket path (`tmux -S <path> kill-server`). Compare a read-only
   `tmux ls` before and after a suite — a session that disappears is a suite bug.
-- **Tests and agents run with a private `TMUX_TMPDIR`** — the default tmux server may host a live bot's sessions.
+- **Tests and agents run with a private `TMUX_TMPDIR`** — the default tmux server may host a live bot's sessions. The
+  test runs get it from `globalTestSetup.ts` (and their `TMUX` / `TMUX_PANE` unset); an agent's own commands set it.
 - **A guard that protects real state** (processes, tmux servers, files, accounts) is proven load-bearing only against
   a decoy the test itself creates — never by disabling it while the guarded action can reach the real thing.
 - **The self-update flows** (`selfUpdate{Npm,Checkout,Hot,Entrypoint}E2e.test.ts`, minutes each, part of `yarn test`) run the real
