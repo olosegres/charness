@@ -5,8 +5,9 @@
  * the pinned soundfile; the first run downloads them), or else under a `python3` that already has both.
  *
  * Setting the environment up is a step of its own. Where it cannot be done — no `uv` and no such `python3`, or `uv`
- * cannot reach the package index (offline, a firewall) — a local run is SKIPPED with the reason, while CI (`CI` is `true` or `1`)
- * fails: there the suite must run. Once the environment is up, any failure of the suite fails the test everywhere.
+ * cannot reach the package index (offline, a firewall) — a local run is SKIPPED with the reason, while CI (`CI` is
+ * `true` or `1`) fails: there the suite must run. Once the environment is up, any failure of the suite fails the test
+ * everywhere.
  * CI installs uv (`.github/workflows/test.yml`); the live test runs the same file under the engine's own venv.
  */
 
