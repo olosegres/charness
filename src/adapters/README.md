@@ -275,8 +275,10 @@ meanwhile waits for the replay — `forwardPromptToAgent` →
 the replayed frames use, and is routed again afterwards like a late prompt (the
 replayed turn's end may have opened the per-turn stop window: the prompt is
 buffered, not written to the process being stopped); a limit error read during the replay is flagged
-`isReplayed`, and the bot leaves it to the boot recovery when that has armed the
-episode — it reads the error's own time off the transcript, which a replay cannot);
+`isReplayed` and classified against the time its transcript entry records (a
+clock-only reset is the next occurrence after the error was written, not after the
+replay), and the bot leaves it to the boot recovery when that has armed the
+episode — which reads the error's time the same way);
 a released
 session (`/quit`/`/new` cleared the persisted id) is killed as an orphan, and
 a thread whose process is gone SLEEPS (lifecycle plan L4): nothing is re-spawned

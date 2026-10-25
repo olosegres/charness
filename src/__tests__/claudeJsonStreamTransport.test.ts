@@ -34,6 +34,8 @@ import { type JsonStreamTailOffset } from '../types';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { createStreamSessionFixture } from './claudeJsonStreamSessionFixture';
+import { formatUtcResetClock } from './e2e/limitFlowKit';
+import { getClaudeTranscriptPath } from '../adapters/claudeCliAdapter';
 
 // A key no live thread uses — cleanup paths derived from it are guaranteed no-ops.
 const key: SessionKey = makeTelegramKey(-100999777, 55);
@@ -486,6 +488,44 @@ describe('json-stream error-ended turn — the text it streamed goes out before 
     adapter['drainStdoutTail'](session);
 
     assert.deepEqual(errors.map((error) => error.isReplayed === true), [true, false]);
+  });
+
+  it('a replayed clock-only reset is read against the moment the error was written (the transcript\'s time), a live one against now', () => {
+    // "resets 10:20am" is the NEXT occurrence of that clock. Written an hour ago with the clock half an hour behind us, the
+    // window is over; read against the replay's clock the same words name tomorrow — the account stayed limited for a day.
+    const originalHome = process.env.HOME;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-errortime-home-'));
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-errortime-'));
+    process.env.HOME = home;
+    try {
+      const adapter = new ClaudeJsonStreamAdapter();
+      const session = createSessionInDir(adapter, dir);
+      const msPerMinute = 60 * 1000;
+      const resetMs = Math.floor((Date.now() - 30 * msPerMinute) / msPerMinute) * msPerMinute;
+      const errorText = `You've hit your session limit · resets ${formatUtcResetClock(resetMs)}`;
+      const resultLine = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: errorText }) + '\n';
+      const transcriptPath = getClaudeTranscriptPath(session.workDir, session.sessionId);
+      fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+      fs.writeFileSync(transcriptPath, `${JSON.stringify({ type: 'assistant', isApiErrorMessage: true, timestamp: new Date(Date.now() - 60 * msPerMinute).toISOString(), message: { content: [{ type: 'text', text: errorText }] } })}\n`);
+      const errors: Array<{ resetAt?: number; isReplayed?: boolean }> = [];
+      adapter.on('apiError', (_k: SessionKey, error: { resetAt?: number; isReplayed?: boolean }) => errors.push(error));
+
+      fs.writeFileSync(session.paths.stdoutFile, resultLine);
+      session.adoptCatchUpOffset = Buffer.byteLength(resultLine);
+      adapter['drainStdoutTail'](session);
+      adapter['settleAdoptCatchUp'](session, false);
+      session.apiErrorFired = false;
+      fs.appendFileSync(session.paths.stdoutFile, resultLine);
+      adapter['drainStdoutTail'](session);
+
+      assert.deepEqual(errors.map((error) => error.isReplayed === true), [true, false]);
+      assert.equal(errors[0].resetAt, resetMs, 'replayed: the next occurrence of the clock after the error was written — half an hour ago');
+      assert.ok((errors[1].resetAt ?? 0) > Date.now(), 'live: the next occurrence after now — tomorrow');
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('a turn without text: the error alone, offset saved as before', () => {

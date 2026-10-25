@@ -25,6 +25,7 @@ import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import type { OpenCodePendingQuestion } from './openCodeAdapter';
 import { classifyAgentApiError } from '../apiErrorRetry';
+import { readTranscriptErrorWrittenAtMs } from '../utils/transcriptErrorTime';
 import { checkIsInstalled, installTool } from '../installManager';
 import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
@@ -2029,6 +2030,20 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   }
 
   /**
+   * When a replayed error was written: the transcript's own timestamp of its API-error entry, else the stdout log's mtime
+   * (the boot recovery's rule), else `null`.
+   */
+  private getReplayedErrorWrittenAtMs(session: StreamSession, text: string): number | null {
+    const fromTranscript = readTranscriptErrorWrittenAtMs(getClaudeTranscriptPath(session.workDir, session.sessionId), text);
+    if (fromTranscript !== null) return fromTranscript;
+    try {
+      return fs.statSync(session.paths.stdoutFile).mtimeMs;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Classify + emit an `apiError` once per episode; returns whether it fired. A usage limit takes the reset of the window
    * that rejected the request when one is still ahead — exact, where the text's is a parse of whatever this release
    * prints. (The same rejection marks the profile limited, which is what confirms an `isUnconfirmed` wording.)
@@ -2036,7 +2051,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
   private maybeEmitApiError(session: StreamSession, text: string): boolean {
     if (session.apiErrorFired) return false;
     const now = Date.now();
-    const classified = classifyAgentApiError(text, now);
+    const isReplayed = session.adoptCatchUpOffset !== null;
+    // An error read from the downtime tail ended a turn when it was WRITTEN: a reset named by its clock ("resets 10:20am") is
+    // the next occurrence after that moment, not after the replay's — read against the replay it became tomorrow's.
+    const classified = classifyAgentApiError(text, isReplayed ? this.getReplayedErrorWrittenAtMs(session, text) ?? now : now);
     if (!classified) return false;
     const rejectedResetAtMs = session.rejectedResetAtMs;
     const apiError: AgentApiErrorClass = {
@@ -2044,7 +2062,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
         ? { ...classified, resetAt: rejectedResetAtMs }
         : classified),
       // The downtime tail of an adopt is still being replayed: this error ended a turn before the bot started.
-      ...(session.adoptCatchUpOffset !== null ? { isReplayed: true } : {}),
+      ...(isReplayed ? { isReplayed: true } : {}),
     };
     session.apiErrorFired = true;
     this.emit('apiError', session.key, apiError);

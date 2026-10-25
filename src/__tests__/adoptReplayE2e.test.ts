@@ -48,7 +48,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getAllAgentTurns, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getAllAgentTurns, getStatePath, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { backdateTranscriptApiError, formatUtcResetClock } from './e2e/limitFlowKit';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
@@ -59,15 +59,19 @@ import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 121;
 const perTurnThreadId = 122;
+const limitsOffThreadId = 123;
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const topicFolder = 'replay-topic';
 const perTurnFolder = 'replay-per-turn';
+const limitsOffFolder = 'replay-limits-off';
 const seedLabel = 'SEED-1';
 const downtimeLabel = 'DOWN-1';
 const perTurnDowntimeLabel = 'PT-2';
+const limitsOffSeedLabel = 'OFF-0';
+const limitsOffDowntimeLabel = 'OFF-1';
 
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
@@ -85,6 +89,7 @@ const limitNoticeMark = '🚧';
 const resumedNoticeText = 'The limit window has reset';
 /** How long before the bot came back the clock-only reset passed, and how long before that the error was written. */
 const errorAgoMs = 60 * msPerMinute;
+const msPerHour = 60 * msPerMinute;
 
 /** A topic of the flow: its thread and the folder it is bound to. */
 interface TopicSpec {
@@ -93,12 +98,14 @@ interface TopicSpec {
 }
 const mainTopicSpec: TopicSpec = { threadId: topicThreadId, folder: topicFolder };
 const perTurnTopicSpec: TopicSpec = { threadId: perTurnThreadId, folder: perTurnFolder };
+const limitsOffTopicSpec: TopicSpec = { threadId: limitsOffThreadId, folder: limitsOffFolder };
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
 let fakeTelegram: FakeTelegram;
 let topic: TopicDriver;
 let perTurnTopic: TopicDriver;
+let limitsOffTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 
 function getLayout(): IsolatedInstanceLayout {
@@ -188,7 +195,7 @@ async function runLimitedTurnWhileBotIsDown(label: string, resetClause: string, 
 describe('A prompt forwarded to an adopted session waits for the replay of its downtime tail: built charness, fake Bot API, fake claude', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-adoptreplay-', [topicFolder, perTurnFolder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-adoptreplay-', [topicFolder, perTurnFolder, limitsOffFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
@@ -199,6 +206,7 @@ describe('A prompt forwarded to an adopted session waits for the replay of its d
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
     // A resume through the stop window starts a new process: allow a start's time.
     perTurnTopic = new TopicDriver(fakeTelegram, getCharness, perTurnThreadId, agentStartTimeoutMs);
+    limitsOffTopic = new TopicDriver(fakeTelegram, getCharness, limitsOffThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
@@ -298,5 +306,35 @@ describe('A prompt forwarded to an adopted session waits for the replay of its d
   it('the same for a clock-only reset (`resets 10:20am (UTC)`): read against the moment the error was written it is over; read against the replay it would be tomorrow', async () => {
     await runLimitedTurnWhileBotIsDown('DOWN-3', formatUtcResetClock(Date.now() - resetAgoMs), new Date(Date.now() - errorAgoMs));
     assert.deepEqual(await restartAndCountWhatTheLimitedTurnCaused('SENT-3'), { limitNotices: 0, resumeNotices: 1, continuePrompts: 1 });
+  });
+
+  it('a replayed limit error on a topic the recovery does not own (waiting for the reset is off) is read against the moment it was written, not the replay\'s clock', async () => {
+    // The recovery leaves a topic with the wait off alone, so the error reaches the bot only through the replay — handled as a
+    // live one, which marks the topic's account limited until the error's reset. A clock-only reset ("resets 10:20am") is the
+    // NEXT occurrence of that clock: after the moment the error was written it is half an hour ago (the window is over), after
+    // the replay's clock it is tomorrow — and the account stayed limited for a day.
+    const key = keyToString(makeTelegramKey(group.id, limitsOffThreadId));
+    await limitsOffTopic.sendAndAwaitReply(`/bind ${limitsOffFolder}`, `Bound to \`${limitsOffFolder}\``);
+    await limitsOffTopic.sendAndAwaitReply('/claude', 'ready in');
+    fakeTelegram.pushOperatorMessage(limitsOffThreadId, `${limitsOffSeedLabel} hello`);
+    await limitsOffTopic.waitForMessage('the first answer', (message) => message.text.includes(`Working on ${limitsOffSeedLabel}.`));
+    await runLimitedTurnWhileBotIsDown(limitsOffDowntimeLabel, formatUtcResetClock(Date.now() - resetAgoMs), new Date(Date.now() - errorAgoMs), limitsOffTopicSpec);
+    const persisted = readPersistedState(getLayout());
+    // The account carries no limit mark of an earlier step: the wait below then proves THIS restart set it (the state file is saved a
+    // moment after a change, and an old mark would satisfy the wait at once).
+    const { limitedUntil: _earlierMark, ...defaultProfile } = persisted.claudeProfiles?.default ?? { createdAt: new Date().toISOString() };
+    fs.writeFileSync(getStatePath(getLayout()), JSON.stringify({
+      ...persisted,
+      claudeProfiles: { ...persisted.claudeProfiles, default: defaultProfile },
+      autoContinueOnLimitOverrides: { ...(persisted.autoContinueOnLimitOverrides as Record<string, boolean> | undefined), [key]: false },
+    }));
+    const noticesBefore = countSentToTopic((text) => text.startsWith(limitNoticeMark), limitsOffTopicSpec);
+
+    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+
+    await getCharness().waitFor('the replayed limit error handled (the wait-is-off notice)', agentStartTimeoutMs, () => countSentToTopic((text) => text.startsWith(limitNoticeMark), limitsOffTopicSpec) > noticesBefore);
+    await getCharness().waitFor('the account marked limited', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.default?.limitedUntil !== undefined);
+    const limitedUntilMs = Date.parse(readPersistedState(getLayout()).claudeProfiles?.default?.limitedUntil ?? '');
+    assert.ok(limitedUntilMs - Date.now() < 2 * msPerHour, `the account is limited for a short while at most (the window was over), not until tomorrow: ${new Date(limitedUntilMs).toISOString()}`);
   });
 });

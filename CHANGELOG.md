@@ -48,6 +48,12 @@ running agent of a per-turn topic for a leftover and deleted its output log and 
 could neither read the rest of the turn nor write to the agent: the answer never reached the topic. The daily cleanup did the same to
 a turn that happened to be running then. The cleanup now knows both Claude lifecycles.
 
+**After a restart, a usage limit that ended a turn while the bot was down no longer keeps the account marked limited for a day.** When the
+restarted bot read that limit error from what the agent wrote during the downtime, it worked out a reset named by its clock
+("resets 10:20am") from the moment it read the error, not from the moment the error happened: a window that had closed half an
+hour before was taken as closing tomorrow, and the account stayed limited — shown so on `/limits`, passed over by the account
+switch — for up to a day. The reset is now worked out from the time the agent's transcript recorded the error.
+
 ## 3.6.0 — 2026-10-24
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process

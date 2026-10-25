@@ -379,9 +379,9 @@ import {
 import {
   decideLimitEpisodeRecovery,
   getLastTerminalErrorText,
-  getParkedErrorWrittenAtMs,
   limitEpisodeTailMaxBytes,
 } from './utils/limitEpisodeRecovery';
+import { readTranscriptErrorWrittenAtMs } from './utils/transcriptErrorTime';
 import {
   parseSkipArmedRetryCallbackData,
   getArmedRetrySkipDecision,
@@ -12409,20 +12409,13 @@ function markLimitEpisodeSettled(key: SessionKey): void {
 
 /**
  * @description When the parked `errorText` of a json-stream conversation was written, from its Claude transcript's
- * API-error entry ({@link getParkedErrorWrittenAtMs}); `null` when the transcript tail cannot be read or holds no such
+ * API-error entry ({@link readTranscriptErrorWrittenAtMs}); `null` when the transcript tail cannot be read or holds no such
  * entry — the recovery then goes by the stdout log's mtime.
  */
 function readParkedErrorWrittenAtMs(key: SessionKey, claudeSessionId: string, errorText: string): number | null {
   const workDirDecision = getWorkDirStartDecision(key);
   if (!workDirDecision.ok) return null;
-  const transcriptPath = getClaudeTranscriptPath(workDirDecision.workDir, claudeSessionId);
-  try {
-    const sizeBytes = fs.statSync(transcriptPath).size;
-    const tail = readFileByteRange(transcriptPath, Math.max(0, sizeBytes - limitEpisodeTailMaxBytes), sizeBytes);
-    return getParkedErrorWrittenAtMs(tail.toString('utf8'), errorText);
-  } catch {
-    return null; // no transcript on disk — the mtime decides
-  }
+  return readTranscriptErrorWrittenAtMs(getClaudeTranscriptPath(workDirDecision.workDir, claudeSessionId), errorText);
 }
 
 /**
