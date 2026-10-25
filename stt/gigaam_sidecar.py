@@ -26,6 +26,7 @@ import argparse
 import collections
 import itertools
 import contextlib
+import dataclasses
 import datetime
 import email.parser
 import email.policy
@@ -293,21 +294,33 @@ def split_ogg_streams(data: bytes) -> list[bytes]:
     return [data[start:end] for start, end in zip(starts, starts[1:] + [len(data)])]
 
 
-def is_read_whole_by_libsndfile(data: bytes) -> bool:
-    """Whether libsndfile reads this file to its end. It reads as many frames as the header says, which is exact for
-    WAV, FLAC and one Ogg stream. It is not for an MP3 without a Xing / Info / VBRI frame (the length is an estimate from
+@dataclasses.dataclass(frozen=True)
+class AudioUpload:
+    """An uploaded file and the route it takes, decided ONCE by `inspect_audio` and handed to the length read and the
+    decode: `header_seconds` is libsndfile's own length when libsndfile reads the file whole, None when ffmpeg decodes it;
+    `streams` are what ffmpeg is given (the file, or the streams of a chained Ogg apart)."""
+
+    data: bytes
+    header_seconds: float | None
+    streams: list[bytes]
+
+
+def inspect_audio(data: bytes) -> AudioUpload:
+    """Decide how an upload is read. libsndfile reads as many frames as the file's header says, which is exact for WAV,
+    FLAC and one Ogg stream. It is not for an MP3 without a Xing / Info / VBRI frame (the length is an estimate from
     the first frame's bitrate, and the read stops there: a variable-bitrate file lost 33 s of 40) nor for chained Ogg
     streams (only the first is read, and a chained Vorbis even reports an absurd length); and it cannot open M4A / AAC
     at all. Those go to ffmpeg."""
     import soundfile
 
+    streams = split_ogg_streams(data)
     try:
         info = soundfile.info(io.BytesIO(data))
     except Exception:  # soundfile raises its own LibsndfileError / RuntimeError
-        return False
-    if info.format == "MP3":
-        return False
-    return not (info.format == "OGG" and len(find_ogg_stream_starts(data)) > 1)
+        return AudioUpload(data, None, streams)
+    if info.format == "MP3" or len(streams) > 1:
+        return AudioUpload(data, None, streams)
+    return AudioUpload(data, float(info.duration), streams)
 
 
 def open_ffmpeg_container(data: bytes):
@@ -325,16 +338,15 @@ def read_ffmpeg_stream_seconds(data: bytes) -> float:
         return sum((float(packet.duration * packet.time_base) for packet in container.demux(stream) if packet.duration), 0.0)
 
 
-def read_audio_seconds(data: bytes) -> float:
+def read_audio_seconds(upload: AudioUpload) -> float:
     """The upload's length from the file (a few milliseconds, a 5-minute decode takes seconds), so the voices behind it
-    know their wait before it is decoded; 0 when it cannot be read (the decode then refuses it)."""
-    import soundfile
-
+    know their wait before it is decoded; 0 when it cannot be read (the decode then refuses it). What ffmpeg decodes is
+    demuxed here without decoding and once more by the decode: the early, cheap pass is the point."""
+    if upload.header_seconds is not None:
+        return upload.header_seconds
     try:
-        if is_read_whole_by_libsndfile(data):
-            return float(soundfile.info(io.BytesIO(data)).duration)
-        return sum(read_ffmpeg_stream_seconds(stream) for stream in split_ogg_streams(data))
-    except Exception:  # soundfile and av raise their own errors
+        return sum(read_ffmpeg_stream_seconds(stream) for stream in upload.streams)
+    except Exception:  # av raises its own FFmpegError subclasses
         return 0.0
 
 
@@ -384,12 +396,12 @@ def decode_ffmpeg_stream(data: bytes) -> list[np.ndarray]:
     return pieces
 
 
-def decode_with_ffmpeg(data: bytes) -> tuple[np.ndarray, int]:
-    """Decode with the ffmpeg libraries of the `av` package what libsndfile does not read whole (see
-    `is_read_whole_by_libsndfile`). Chained Ogg streams are decoded one by one and joined, so streams that differ in
-    codec or rate still make one voice. Always mono float32 at `SPEECH_SAMPLE_RATE`."""
+def decode_with_ffmpeg(streams: list[bytes]) -> tuple[np.ndarray, int]:
+    """Decode with the ffmpeg libraries of the `av` package what libsndfile does not read whole (see `inspect_audio`).
+    The streams of a chained Ogg are decoded one by one and joined, so streams that differ in codec or rate still make one
+    voice. Always mono float32 at `SPEECH_SAMPLE_RATE`."""
     try:
-        pieces = [piece for stream in split_ogg_streams(data) for piece in decode_ffmpeg_stream(stream)]
+        pieces = [piece for stream in streams for piece in decode_ffmpeg_stream(stream)]
     except RequestError:
         raise
     except Exception as error:  # av raises its own FFmpegError subclasses
@@ -399,11 +411,11 @@ def decode_with_ffmpeg(data: bytes) -> tuple[np.ndarray, int]:
     return np.ascontiguousarray(np.concatenate(pieces), dtype=np.float32), SPEECH_SAMPLE_RATE
 
 
-def decode_audio(data: bytes) -> tuple[np.ndarray, int]:
+def decode_audio(upload: AudioUpload) -> tuple[np.ndarray, int]:
     """Decode an uploaded file (Telegram sends OGG/Opus) to mono float32 samples and their sample rate."""
-    if is_read_whole_by_libsndfile(data):
-        return decode_with_libsndfile(data)
-    return decode_with_ffmpeg(data)
+    if upload.header_seconds is not None:
+        return decode_with_libsndfile(upload.data)
+    return decode_with_ffmpeg(upload.streams)
 
 
 def make_recognizer(model):
@@ -841,13 +853,14 @@ class SidecarHandler(http.server.BaseHTTPRequestHandler):
         # The upload is in: its place in the arrival order is taken before the decoding and the cutting.
         request = context.pool.open_request()
         try:
-            request.note_audio_seconds(read_audio_seconds(file_bytes))
-            samples, sample_rate = decode_audio(file_bytes)
+            upload = inspect_audio(file_bytes)
+            request.note_audio_seconds(read_audio_seconds(upload))
+            samples, sample_rate = decode_audio(upload)
             audio_seconds = len(samples) / sample_rate
             request.note_audio_seconds(audio_seconds)
             chunks, chunk_sample_rate = context.split_audio(samples, sample_rate)
             # The pieces hold what is needed: the decoded file would only take memory while the voice waits.
-            del samples, file_bytes, body
+            del samples, file_bytes, body, upload
         except BaseException:
             context.pool.cancel(request)
             raise

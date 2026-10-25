@@ -138,7 +138,8 @@ env too.
   client is still connected; a client that hung up (it timed out, the bot moved on) — or a report that cannot be
   written — gets its request dropped: no piece not yet handed out is recognised, nothing is answered, and the log says
   `the client left`. An `OSError` of the recognition itself is the sidecar's own failure and answers 500.
-- **Decoding — two decoders, by what the file is** (`decode_audio`; the filename and the content type are ignored).
+- **Decoding — two decoders, by what the file is** (`inspect_audio` decides ONCE per upload — one `soundfile.info`, one walk of the Ogg pages —
+  and hands the result to the length read and to `decode_audio`; the filename and the content type are ignored).
   `soundfile` (libsndfile) reads what it reads WHOLE: Telegram's OGG/Opus (the whole voice-note path, no ffmpeg
   involved), one OGG stream, WAV, FLAC. Everything else goes to ffmpeg through the `av` package, in-process on the
   uploaded bytes (no temporary file, no subprocess; an M4A with its index at the end needs a seekable input):
@@ -157,9 +158,12 @@ env too.
     (`FFMPEG_PROTOCOL_WHITELIST`): a file is handed over as bytes and needs none, and such an upload is refused at once.
   The ffmpeg decoder returns mono float32 at 16 kHz (ffmpeg resamples; the channels are averaged as for libsndfile — ffmpeg's
   own downmix is 3 dB louder), so the `unsupported sample rate` refusal applies to the libsndfile path only. The `av` import happens on the
-  first such file: a voice note never loads it. The upload's length for the queue comes from the same split: the
+  first such file: a voice note never loads it. The upload's length for the queue comes from the same inspection: the
   libsndfile header for what it reads whole, otherwise the sum of the packets' durations (a demux without decoding,
-  ~10 ms for 40 s; the container's own duration is an estimate for exactly the files that need ffmpeg).
+  ~10 ms for 40 s, before the decode's own pass; the container's own duration is an estimate for exactly the files that
+  need ffmpeg). The frames ffmpeg hands over may change their rate or layout inside a file: each run of equal frames has
+  its own resampler (a resampler refuses a frame of another setup, and passes frames through untouched when its first one
+  needed no conversion).
 - **Chunking — every voice is cut at its pauses.** Audio is downmixed to mono and resampled ONCE to 16 kHz with the model's own resampler (a file the ffmpeg decoder returned is already at 16 kHz). Silero VAD
   (`onnx_asr.load_vad("silero")`, one thread, in the request's handler thread) finds the speech; every gap of at least
   **500 ms** between two speech segments it detects is cut at its centre (`split_at_pauses`; onnx-asr adds both

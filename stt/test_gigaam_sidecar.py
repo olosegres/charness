@@ -516,6 +516,14 @@ def make_chained_ogg(subtypes: tuple[str, str], sample_rates: tuple[int, int] = 
     return b"".join(encode_with_soundfile(half, rate, subtype) for half, rate, subtype in zip(halves, sample_rates, subtypes))
 
 
+def decode_upload(data: bytes):
+    return sidecar.decode_audio(sidecar.inspect_audio(data))
+
+
+def read_upload_seconds(data: bytes) -> float:
+    return sidecar.read_audio_seconds(sidecar.inspect_audio(data))
+
+
 AUDIO_KINDS = {
     "an M4A (AAC)": make_m4a,
     "an MP3 without a length header": make_mp3_without_length_header,
@@ -572,7 +580,7 @@ class FfmpegPartsTest(unittest.TestCase):
             with self.subTest(name):
                 frames = [frame for rate, layout, pitch in parts for frame in make_tone_frames(rate, layout, pitch, self.PART_SECONDS)]
                 with unittest.mock.patch.object(sidecar, "open_ffmpeg_container", lambda data: FakeFfmpegContainer(frames)):
-                    samples, sample_rate = sidecar.decode_with_ffmpeg(b"parts")
+                    samples, sample_rate = sidecar.decode_with_ffmpeg([b"parts"])
                 self.assertEqual(sample_rate, sidecar.SPEECH_SAMPLE_RATE)
                 self.assertAlmostEqual(len(samples) / sample_rate, self.PART_SECONDS * len(parts), delta=0.1)
                 part_samples = int(self.PART_SECONDS * sample_rate)
@@ -586,7 +594,7 @@ class FfmpegPartsTest(unittest.TestCase):
         first = encode_with_av(make_pitch_clip(44100, seconds=10), 44100, "libmp3lame", "mp3")
         second = encode_with_av(make_pitch_clip(48000, seconds=10, first_stretch=2), 48000, "libmp3lame", "mp3")
         try:
-            samples, sample_rate = sidecar.decode_audio(first + second)
+            samples, sample_rate = decode_upload(first + second)
         except sidecar.RequestError as error:
             self.assertEqual(error.status, 400)
             return
@@ -613,20 +621,20 @@ class AudioFormatsTest(unittest.TestCase):
     def test_the_whole_40_second_file_is_decoded(self):
         for kind, make in AUDIO_KINDS.items():
             with self.subTest(kind):
-                samples, sample_rate = sidecar.decode_audio(make())
+                samples, sample_rate = decode_upload(make())
                 self.assertIn(sample_rate, sidecar.SUPPORTED_SAMPLE_RATES)
                 self.assert_whole_clip(samples, sample_rate)
 
     def test_the_length_read_before_the_decode_is_the_whole_length(self):
         for kind, make in AUDIO_KINDS.items():
             with self.subTest(kind):
-                self.assertAlmostEqual(sidecar.read_audio_seconds(make()), CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
+                self.assertAlmostEqual(read_upload_seconds(make()), CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
 
     def test_a_normal_mp3_is_decoded_whole_too(self):
         data = encode_with_av(make_pitch_clip(44100), 44100, "libmp3lame", "mp3", channels=2)
-        samples, sample_rate = sidecar.decode_audio(data)
+        samples, sample_rate = decode_upload(data)
         self.assert_whole_clip(samples, sample_rate)
-        self.assertAlmostEqual(sidecar.read_audio_seconds(data), CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
+        self.assertAlmostEqual(read_upload_seconds(data), CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
 
     def test_what_libsndfile_reads_exactly_does_not_go_through_ffmpeg(self):
         clip = make_pitch_clip(16000)
@@ -644,9 +652,9 @@ class AudioFormatsTest(unittest.TestCase):
         with unittest.mock.patch.object(sidecar, "decode_with_ffmpeg", side_effect=AssertionError("went through ffmpeg")):
             for name, data in uploads:
                 with self.subTest(name):
-                    samples, sample_rate = sidecar.decode_audio(data)
+                    samples, sample_rate = decode_upload(data)
                     self.assertAlmostEqual(len(samples) / sample_rate, CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
-                    self.assertAlmostEqual(sidecar.read_audio_seconds(data), CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
+                    self.assertAlmostEqual(read_upload_seconds(data), CLIP_SECONDS, delta=LENGTH_TOLERANCE_SECONDS)
 
     def test_what_ffmpeg_cannot_turn_into_sound_is_a_400(self):
         video = io.BytesIO()
@@ -667,9 +675,9 @@ class AudioFormatsTest(unittest.TestCase):
         for name, data in uploads:
             with self.subTest(name):
                 with self.assertRaises(sidecar.RequestError) as caught:
-                    sidecar.decode_audio(data)
+                    decode_upload(data)
                 self.assertEqual(caught.exception.status, 400)
-                self.assertEqual(sidecar.read_audio_seconds(data), 0.0)
+                self.assertEqual(read_upload_seconds(data), 0.0)
 
 
 OGG_FIRST_PAGE = 0x02
@@ -686,12 +694,39 @@ SDP_TEXT = b"v=0\no=- 0 0 IN IP4 127.0.0.1\ns=x\nc=IN IP4 127.0.0.1\nt=0 0\nm=au
 SDP_REFUSAL_BUDGET_SECONDS = 3.0
 
 
+class InspectAudioTest(unittest.TestCase):
+    def test_what_libsndfile_reads_whole_keeps_its_header_length_and_the_rest_goes_to_ffmpeg(self):
+        clip = make_pitch_clip(16000, seconds=10)
+        libsndfile_uploads = {}
+        for format_name in ("WAV", "FLAC"):
+            buffer = io.BytesIO()
+            soundfile.write(buffer, clip, 16000, format=format_name)
+            libsndfile_uploads[format_name] = buffer.getvalue()
+        libsndfile_uploads["OGG/Opus"] = encode_with_soundfile(make_pitch_clip(48000, seconds=10), 48000, "OPUS")
+        libsndfile_uploads["OGG/Vorbis"] = encode_with_soundfile(clip, 16000, "VORBIS")
+        for name, data in libsndfile_uploads.items():
+            with self.subTest(name):
+                upload = sidecar.inspect_audio(data)
+                self.assertAlmostEqual(upload.header_seconds, 10.0, delta=LENGTH_TOLERANCE_SECONDS)
+                self.assertEqual(upload.streams, [data])
+        for kind, make in AUDIO_KINDS.items():
+            with self.subTest(kind):
+                self.assertIsNone(sidecar.inspect_audio(make()).header_seconds)
+        self.assertIsNone(sidecar.inspect_audio(b"not audio at all").header_seconds)
+
+    def test_the_streams_of_a_chained_ogg_are_split_once_for_both_readers(self):
+        upload = sidecar.inspect_audio(make_chained_ogg(("OPUS", "OPUS")))
+        self.assertEqual(len(upload.streams), 2)
+        self.assertEqual(b"".join(upload.streams), upload.data)
+        self.assertEqual(len(sidecar.inspect_audio(make_m4a()).streams), 1)
+
+
 class FfmpegContainmentTest(unittest.TestCase):
     def test_an_upload_cannot_make_ffmpeg_open_a_network_socket(self):
         started = time.monotonic()
-        self.assertEqual(sidecar.read_audio_seconds(SDP_TEXT), 0.0)
+        self.assertEqual(read_upload_seconds(SDP_TEXT), 0.0)
         with self.assertRaises(sidecar.RequestError) as caught:
-            sidecar.decode_audio(SDP_TEXT)
+            decode_upload(SDP_TEXT)
         self.assertEqual(caught.exception.status, 400)
         self.assertLess(time.monotonic() - started, SDP_REFUSAL_BUDGET_SECONDS, "ffmpeg waited on a socket the upload named")
 
@@ -1186,8 +1221,8 @@ class HttpQueueTest(unittest.TestCase):
         release = threading.Event()
         decode = sidecar.decode_audio
 
-        def held_decode(data):
-            samples, sample_rate = decode(data)
+        def held_decode(upload):
+            samples, sample_rate = decode(upload)
             if abs(len(samples) - seconds * sample_rate) <= tolerance_seconds * sample_rate:
                 release.wait(5)
             return samples, sample_rate
@@ -1238,7 +1273,7 @@ class HttpQueueTest(unittest.TestCase):
 
     def test_a_waiting_voice_is_told_again_when_the_queue_ahead_turns_out_longer(self):
         release_first = self.hold_the_decoding_of(3)
-        patcher = unittest.mock.patch.object(sidecar, "read_audio_seconds", lambda data: 0.0)
+        patcher = unittest.mock.patch.object(sidecar, "read_audio_seconds", lambda upload: 0.0)
         patcher.start()
         self.addCleanup(patcher.stop)
         first = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(3.0))
@@ -1289,6 +1324,37 @@ class HttpAudioFormatsTest(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         cls.pool.stop()
+
+    def count_calls(self, owner, name):
+        real = getattr(owner, name)
+        calls = []
+
+        def counted(*arguments, **options):
+            calls.append(name)
+            return real(*arguments, **options)
+
+        patcher = unittest.mock.patch.object(owner, name, counted)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def test_an_upload_is_inspected_once_however_many_steps_read_it(self):
+        """The route (libsndfile or ffmpeg) is decided once per upload and handed to the length read and the decode."""
+        info_calls = self.count_calls(soundfile, "info")
+        walk_calls = self.count_calls(sidecar, "find_ogg_stream_starts")
+        split_calls = self.count_calls(sidecar, "split_ogg_streams")
+        wav = io.BytesIO()
+        soundfile.write(wav, make_pitch_clip(16000, seconds=10), 16000, format="WAV")
+        uploads = {"a WAV": wav.getvalue(), **{kind: make() for kind, make in AUDIO_KINDS.items()}}
+        for kind, data in uploads.items():
+            with self.subTest(kind):
+                for calls in (info_calls, walk_calls, split_calls):
+                    calls.clear()
+                response = raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), build_multipart(data))
+                self.assertEqual(response.status, 200, response.body)
+                self.assertEqual(len(info_calls), 1, "libsndfile was asked about the file more than once")
+                self.assertLessEqual(len(walk_calls), 1, "the Ogg pages were walked more than once")
+                self.assertLessEqual(len(split_calls), 1, "the file was split into streams more than once")
 
     def test_a_40_second_file_of_each_kind_is_recognised_to_its_last_second(self):
         for kind, make in AUDIO_KINDS.items():
