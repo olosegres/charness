@@ -194,6 +194,19 @@ test('the local engine\'s report of the audio queued ahead extends the budget by
   assert.equal(nothingAhead.result.engine, 'second', 'with nothing ahead the voice keeps its own budget');
 });
 
+test('a later report of a longer queue extends the budget again: the voice ahead turned out longer than first known', { timeout: noHangTestTimeoutMs }, async () => {
+  // 0.1 s voice: 200 ms after the first report (0 ahead). The second report, 150 ms in, names 0.6 s ahead → 800 ms from
+  // then on, so the answer at 600 ms is in time; had only the first report counted, it would time out at 350 ms.
+  const reportTwiceThenAnswer: Handler = (_req, res) => {
+    res.socket?.write(`HTTP/1.1 102 Processing\r\n${queuedAudioSecondsHeader}: 0.0\r\n\r\n`);
+    setTimeout(() => res.socket?.write(`HTTP/1.1 102 Processing\r\n${queuedAudioSecondsHeader}: 0.6\r\n\r\n`), 150);
+    setTimeout(() => { res.writeHead(200); res.end(JSON.stringify({ text: 'after the longer queue' })); }, 600);
+  };
+  reset([reportTwiceThenAnswer], [transcribed('never used')]);
+  const result = await runChain([createEngine('local', first, fastTimeout), createEngine('second', second)], { durationSeconds: shortVoiceSeconds });
+  assert.deepEqual(result.result, { ok: true, text: 'after the longer queue', engine: 'local' });
+});
+
 test('a voice whose Telegram duration is 0 (or missing) is of unknown length, not a 0-second voice: it gets the unknown-length budget', { timeout: noHangTestTimeoutMs }, async () => {
   const answerAfter = (delayMs: number, text: string): Handler => (_req, res) => {
     setTimeout(() => { res.writeHead(200); res.end(JSON.stringify({ text })); }, delayMs);

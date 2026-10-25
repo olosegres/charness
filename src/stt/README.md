@@ -118,17 +118,20 @@ env too.
   `2` bad usage (a missing token included) · `4` another live sidecar already holds the record (a duplicate start).
 - **Logs** go to `L` only (5 MB, one rotation); stdio is pointed at `/dev/null` because the process is externally
   parented. Transcripts are never logged — only audio length, chunk count and timing.
-- `GET /health` (Bearer token, else 401) → `{status, busyRequests, queuedChunks, workers, idleMinutes, version, pid}`. A
+- `GET /health` (Bearer token, else 401) → `{status, busyRequests, queuedChunks, cuttingRequests, workers, idleMinutes, version, pid}` (`cuttingRequests`:
+  voices in line that are still being decoded and cut). A
   health call is not activity: opening a status screen never keeps the process alive.
 - `POST /v1/audio/transcriptions`, multipart (`email.parser`, not `cgi`; Node's chunked, Content-Length-less uploads are
   decoded). Fields: `file` (required), `model` / `language` (accepted, ignored), `response_format` `json` (default) or
   `text`. Replies `{"text": …}` in UTF-8, or errors `{"error": {"message": …}}`: 400 (bad body, undecodable audio,
   unsupported sample rate), 401, 404, 413 (body over 25 MB), 500, 503 (the idle exit is decided), 504 (over
   `--max-seconds`; that request's queued chunks are dropped). Every response closes the connection. Once the voice is
-  cut and in line, BEFORE the final response, one interim `102` carries `X-Charness-Queued-Audio-Seconds: <s>` (one
+  cut and in line, BEFORE the final response, an interim `102` carries `X-Charness-Queued-Audio-Seconds: <s>` (one
   decimal): the audio still to recognise ahead of it — the unfinished pieces of every earlier request, the running ones
-  included, or the decoded length of one still being cut. While the voice waits, the handler checks every 0.5 s that its
-  client is still connected; a client that hung up (it timed out, the bot moved on) gets its request dropped: no
+  included, or, for one still being decoded and cut, its length read from the file's header the moment it arrived
+  (`soundfile.info`, under a millisecond — a 5-minute decode takes seconds, and a voice sent meanwhile was once told
+  "0 s ahead" and timed out). Every 0.5 s while the voice waits, the handler sends another `102` when the queue ahead
+  has grown by more than 1 s (a header that could not be read), and checks that its client is still connected; a client that hung up (it timed out, the bot moved on) gets its request dropped: no
   piece not yet handed out is recognised, nothing is answered, and the log says `the client left`.
 - **Chunking — every voice is cut at its pauses.** Audio is decoded with `soundfile` (libsndfile reads Telegram's
   OGG/Opus, no ffmpeg), downmixed to mono and resampled ONCE to 16 kHz with the model's own resampler. Silero VAD

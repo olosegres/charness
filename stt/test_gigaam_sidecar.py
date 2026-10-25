@@ -823,6 +823,61 @@ class HttpQueueTest(unittest.TestCase):
         self.assertEqual((first_reply.status, json.loads(first_reply.body)["text"]), (200, "t3 t3 t3"))
         self.assertEqual((second_reply.status, json.loads(second_reply.body)["text"]), (200, "t2 t2"))
 
+    def hold_the_decoding_of(self, seconds):
+        """Patch the decoder so that the voice of `seconds` blocks until the returned event is set."""
+        release = threading.Event()
+        decode = sidecar.decode_audio
+
+        def held_decode(data):
+            samples, sample_rate = decode(data)
+            if len(samples) == seconds * sample_rate:
+                release.wait(5)
+            return samples, sample_rate
+
+        patcher = unittest.mock.patch.object(sidecar, "decode_audio", held_decode)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(release.set)
+        return release
+
+    def wait_for_cutting_requests(self, count):
+        deadline = time.monotonic() + 5
+        while self.pool.count_cutting_requests() < count:
+            self.assertLess(time.monotonic(), deadline, "the voice never got in line")
+            time.sleep(0.01)
+
+    def test_a_voice_behind_one_still_being_decoded_is_told_its_whole_length(self):
+        release_first = self.hold_the_decoding_of(3)
+        first = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(3.0))
+        self.wait_for_cutting_requests(1)
+        second = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(2.0))
+        self.assertAlmostEqual(
+            read_interim_queue_report(second), 3.0, msg="the first voice's length is known from its header before it is decoded"
+        )
+        release_first.set()
+        self.recognize.gate.set()
+        self.assertEqual(json.loads(read_raw_response(first).body)["text"], "t3 t3 t3")
+        self.assertEqual(json.loads(read_raw_response(second).body)["text"], "t2 t2")
+        first.close()
+        second.close()
+
+    def test_a_waiting_voice_is_told_again_when_the_queue_ahead_turns_out_longer(self):
+        release_first = self.hold_the_decoding_of(3)
+        patcher = unittest.mock.patch.object(sidecar, "read_audio_seconds", lambda data: 0.0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        first = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(3.0))
+        self.wait_for_cutting_requests(1)
+        second = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(2.0))
+        self.assertAlmostEqual(read_interim_queue_report(second), 0.0, msg="a length the header did not give is not known yet")
+        release_first.set()
+        self.assertAlmostEqual(read_interim_queue_report(second), 3.0, msg="once decoded, the longer queue is reported again")
+        self.recognize.gate.set()
+        self.assertEqual(json.loads(read_raw_response(second).body)["text"], "t2 t2")
+        read_raw_response(first)
+        first.close()
+        second.close()
+
     def test_a_voice_whose_client_hung_up_is_dropped_and_its_pieces_are_never_recognised(self):
         first = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(1.0))
         self.assertTrue(self.recognize.started.wait(5))
@@ -934,6 +989,7 @@ class HttpTest(unittest.TestCase):
         health = json.loads(payload)
         self.assertEqual((health["status"], health["workers"], health["idleMinutes"]), ("ok", 2, 15.0))
         self.assertEqual(health["queuedChunks"], 0)
+        self.assertEqual(health["cuttingRequests"], 0)
         self.assertEqual(health["pid"], os.getpid())
 
     def test_a_transcription_returns_json_text_in_utf8(self):

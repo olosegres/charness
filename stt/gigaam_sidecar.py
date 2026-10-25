@@ -110,8 +110,11 @@ TRANSCRIPTIONS_PATH = "/v1/audio/transcriptions"
 # bot's timeout can count the wait in line (voices are recognised strictly in arrival order).
 QUEUE_REPORT_STATUS = 102
 QUEUED_AUDIO_SECONDS_HEADER = "X-Charness-Queued-Audio-Seconds"
-# How often a waiting handler checks that its client is still connected.
+# How often a waiting handler checks that its client is still connected, and whether the queue ahead grew.
 CLIENT_CHECK_SECONDS = 0.5
+# A waiting voice is told the queue ahead again when it has grown by more than this (a voice ahead whose length was
+# not known before it was decoded).
+QUEUE_REPORT_GROWTH_SECONDS = 1.0
 HEALTH_PATH = "/health"
 RESPONSE_FORMATS = ("json", "text")
 
@@ -246,6 +249,17 @@ def make_model_pause_splitter(model, vad):
     return make_pause_splitter(resample, find_speech)
 
 
+def read_audio_seconds(data: bytes) -> float:
+    """The upload's length from its header (under a millisecond, a 5-minute decode takes seconds), so the voices
+    behind it know their wait before it is decoded; 0 when the header cannot be read (the decode then refuses it)."""
+    import soundfile
+
+    try:
+        return float(soundfile.info(io.BytesIO(data)).duration)
+    except Exception:  # soundfile raises its own LibsndfileError / RuntimeError
+        return 0.0
+
+
 def decode_audio(data: bytes) -> tuple[np.ndarray, int]:
     """Decode an uploaded file (Telegram sends OGG/Opus) to mono float32 samples and their sample rate."""
     import soundfile
@@ -360,12 +374,13 @@ class PoolRequest:
         if is_first_end:
             self._on_finished()
 
-    def wait(self, timeout_seconds: float, is_abandoned=lambda: False) -> str:
+    def wait(self, timeout_seconds: float, is_abandoned=lambda: False, on_tick=lambda: None) -> str:
         """The chunks' texts joined in order with single spaces; raises the first chunk error, `RecognitionTimeout`
         after `timeout_seconds`, or `ClientGone` once `is_abandoned()` says the client hung up (checked every
-        `CLIENT_CHECK_SECONDS`); in both cases the pieces not handed out yet are dropped."""
+        `CLIENT_CHECK_SECONDS`, when `on_tick()` also runs); in both cases the pieces not handed out yet are dropped."""
         deadline = time.monotonic() + timeout_seconds
         while not self._finished.wait(max(0.0, min(CLIENT_CHECK_SECONDS, deadline - time.monotonic()))):
+            on_tick()
             if is_abandoned():
                 self.fail(ClientGone())
             elif time.monotonic() >= deadline:
@@ -410,6 +425,11 @@ class RecognitionPool:
         """Pieces waiting for a worker."""
         with self._condition:
             return sum(request.count_unclaimed_chunks() for request in self._requests if not request.is_finished())
+
+    def count_cutting_requests(self) -> int:
+        """Requests in line whose audio is still being decoded and cut."""
+        with self._condition:
+            return sum(1 for request in self._requests if not request.is_finished() and not request.is_cut())
 
     def get_audio_seconds_ahead(self, request: PoolRequest) -> float:
         """Seconds of audio that will be recognised before `request`: everything unfinished that arrived earlier."""
@@ -623,6 +643,7 @@ class SidecarHandler(http.server.BaseHTTPRequestHandler):
                 "status": "ok",
                 "busyRequests": context.busy_requests,
                 "queuedChunks": context.pool.queued_chunks(),
+                "cuttingRequests": context.pool.count_cutting_requests(),
                 "workers": context.workers,
                 "idleMinutes": context.idle_seconds / SECONDS_PER_MINUTE,
                 "version": SCRIPT_VERSION,
@@ -672,6 +693,7 @@ class SidecarHandler(http.server.BaseHTTPRequestHandler):
         # The upload is in: its place in the arrival order is taken before the decoding and the cutting.
         request = context.pool.open_request()
         try:
+            request.note_audio_seconds(read_audio_seconds(file_bytes))
             samples, sample_rate = decode_audio(file_bytes)
             audio_seconds = len(samples) / sample_rate
             request.note_audio_seconds(audio_seconds)
@@ -682,9 +704,18 @@ class SidecarHandler(http.server.BaseHTTPRequestHandler):
             context.pool.cancel(request)
             raise
         context.pool.submit(request, chunks, chunk_sample_rate)
+        reported_seconds_ahead = context.pool.get_audio_seconds_ahead(request)
+
+        def report_a_longer_queue() -> None:
+            nonlocal reported_seconds_ahead
+            seconds_ahead = context.pool.get_audio_seconds_ahead(request)
+            if seconds_ahead > reported_seconds_ahead + QUEUE_REPORT_GROWTH_SECONDS:
+                self._report_queue(seconds_ahead)
+                reported_seconds_ahead = seconds_ahead
+
         try:
-            self._report_queue(context.pool.get_audio_seconds_ahead(request))
-            text = request.wait(context.max_seconds, self._is_client_gone)
+            self._report_queue(reported_seconds_ahead)
+            text = request.wait(context.max_seconds, self._is_client_gone, report_a_longer_queue)
         except (ClientGone, OSError) as error:
             if isinstance(error, OSError):  # the interim report could not even be written: the client is gone
                 request.fail(ClientGone())

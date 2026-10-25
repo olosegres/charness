@@ -75,8 +75,6 @@ const minShortWaitShareOfLongRemainder = 0.5;
  */
 const queuedChunksBeforeAbandoning = 20;
 const abandonedDropBudgetMs = 1_500;
-/** The long request counts as queued once this many of its pieces still wait for a worker. */
-const queuedChunksBeforeShortVoice = 6;
 const queueWaitBudgetMs = 30_000;
 const ownerDeathBudgetMs = 4_000;
 const idleSeconds = 3;
@@ -218,6 +216,7 @@ interface SidecarHealth {
   pid: number;
   busyRequests: number;
   queuedChunks: number;
+  cuttingRequests: number;
 }
 
 function getHealth(port: number, token: string): Promise<SidecarHealth> {
@@ -320,15 +319,18 @@ describe('the local GigaAM engine (live)', { skip: skipReason }, () => {
     assert.ok(peakKb <= peakMemoryLimitKb, `peak ${peakKb} kB`);
   });
 
-  test('(f) arrival order: a short voice sent while a long voice is queued waits for the long one\'s pieces, within its production budget', { skip: longAudio ? undefined : 'STT_GIGAAM_LIVE_LONG_AUDIO is not set', timeout: longVoiceHardLimitMs + 30_000 }, async () => {
+  test('(f) arrival order: a short voice sent while the long voice ahead is still being decoded waits for it, within its production budget', { skip: longAudio ? undefined : 'STT_GIGAAM_LIVE_LONG_AUDIO is not set', timeout: longVoiceHardLimitMs + 30_000 }, async () => {
     // Both through the production chain: each voice's own timeout (10 s + 25 %), extended by the queue the sidecar reports.
     const engines = [createEngine(mainSidecar)];
-    const transcribeVoice = (audioPath: string) => transcribeWithEngines(audioPath, engines, { durationSeconds: getAudioSeconds(audioPath), language: null, retryDelaysMs: [] });
+    // Measured up front: the probe is a blocking child process, and the short voice must go out without delay.
+    const durations = new Map([longAudio ?? '', shortAudio ?? ''].map((audioPath) => [audioPath, getAudioSeconds(audioPath)]));
+    const transcribeVoice = (audioPath: string) => transcribeWithEngines(audioPath, engines, { durationSeconds: durations.get(audioPath), language: null, retryDelaysMs: [] });
     const startedAt = Date.now();
     const longReply = transcribeVoice(longAudio ?? '').then((result) => ({ result, atMs: Date.now() - startedAt }));
-    // Send the short voice only once the long one's pieces are queued, so the long one has certainly arrived first.
-    while ((await getHealth(mainSidecar.port, mainSidecar.token)).queuedChunks < queuedChunksBeforeShortVoice) {
-      assert.ok(Date.now() - startedAt < queueWaitBudgetMs, 'the long request never queued its chunks');
+    // The short voice goes out the moment the long one is in line and still being decoded and cut: the window in which a
+    // newcomer used to be told that nothing was queued ahead of it.
+    while ((await getHealth(mainSidecar.port, mainSidecar.token)).cuttingRequests < 1) {
+      assert.ok(Date.now() - startedAt < queueWaitBudgetMs, 'the long voice never got in line');
       await sleep(pollMs);
     }
     const shortSentAt = Date.now() - startedAt;
