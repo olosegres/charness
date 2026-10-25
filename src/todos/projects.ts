@@ -98,13 +98,6 @@ function checkIsReadFresh<TValue>(cached: CachedRead<TValue> | undefined, nowMs:
 }
 
 /**
- * @name TodoProjectReadMode
- * @description How a caller learns the projects: `wait` for git (a tool call, `/todo`), or `knownOnly` — what is
- * known now, never waiting (a prompt, the mid-turn poll); a folder never read yet makes the grouping unknown.
- */
-export type TodoProjectReadMode = 'wait' | 'knownOnly';
-
-/**
  * @name RepositoryRootCommitStore
  * @description Where the root commits outlive the process, by git common dir: the LAST KNOWN answer, at once after a
  * restart while the process walks the history again (the one slow read) — a rewritten history changes it.

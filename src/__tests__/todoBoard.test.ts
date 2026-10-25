@@ -27,7 +27,6 @@ import {
   type RunGit,
   type TodoProject,
   type TodoProjectMember,
-  type TodoProjectReadMode,
 } from '../todos/projects';
 import { boardMaxChars, createTodoBoard, formatTodoAge, formatTodoBoardBlocks, formatTodoBoardPeerBlock, type TodoSessionActivity } from '../todos/board';
 import { TodoStore, createEmptyTodoTopicFile } from '../todos/store';
@@ -368,7 +367,8 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
   const activities = new Map<string, TodoSessionActivity>();
   let boardShownKeys: string[] = [];
   let isGroupingKnown: boolean;
-  let readModes: TodoProjectReadMode[] = [];
+  /** Which reads the board made: `knownOnly` (a peek, never waiting for git) or `wait`. */
+  let readModes: Array<'knownOnly' | 'wait'> = [];
   beforeEach(() => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-board-'));
     clockMs = nowMs;
@@ -384,9 +384,13 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
     const registry = createTodoRegistry({ store, getNowMs: () => clockMs });
     const board = createTodoBoard({
       store,
-      getProjectOf: async (_key, readMode) => {
-        readModes.push(readMode);
-        return readMode === 'knownOnly' && !isGroupingKnown ? undefined : project;
+      getProjectOf: async () => {
+        readModes.push('wait');
+        return project;
+      },
+      peekProjectOf: () => {
+        readModes.push('knownOnly');
+        return isGroupingKnown ? project : undefined;
       },
       getPeerLabel: (conversationKey) => (conversationKey === keyToString(issue1) ? 'PROJ-1 «Export to PDF»' : `#${conversationKey.split(':')[1]}`),
       getSessionActivity: (conversationKey) => activities.get(conversationKey) ?? 'idle',
@@ -448,6 +452,17 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
     await tools.read(topicA, {});
     await tools.read(topicA, { scope: 'project' });
     assert.deepEqual(readModes, ['knownOnly', 'knownOnly', 'knownOnly', 'knownOnly', 'knownOnly', 'wait', 'wait']);
+  });
+
+  it('a prompt\'s board and a mid-turn peek are taken without yielding: nothing awaited between the forward\'s decision and its write', () => {
+    // An await there lets a stop queued in the same tick (the per-turn stop at a turn's end) begin first and take the prompt with it.
+    const { registry, board } = createServices();
+    registry.updateTodos(topicB, { items: [{ title: 'Fix the footer', status: 'inWork' }] });
+    const peeked = board.peekChanges(topicA);
+    assert.notEqual(Promise.resolve(peeked), peeked, 'the peek is not a promise');
+    const taken = board.takePromptBoard(topicA);
+    assert.notEqual(Promise.resolve(taken), taken, 'the prompt board is not a promise');
+    assert.match(taken ?? '', /^\[Project board · charness · 1 other topic\]/);
   });
 
   it('todo_update and todo_read answer the own list and the delta; the project scope the whole board', async () => {

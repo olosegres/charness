@@ -86,7 +86,9 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
   read, the grouping is unknown and the prompt carries no board (a fresh context still gets its own list) — nothing
   counts as seen, so the next one carries it.
   The reads start at boot and at every bind, so only a new repository's first walk can leave a prompt without its
-  board. A `todo_*` tool and `/todo` wait for git.
+  board. A `todo_*` tool and `/todo` wait for git. The `knownOnly` read is SYNCHRONOUS (`peekProjectOf` →
+  `takePromptBoard` / `peekChanges` return no promise): it runs between the forward's decision and its write to the
+  agent, where an await would let a stop queued in the same tick take the prompt with it.
 - **Jira** (D57): a conversation's project lists `repos` in `jira.json`; conversations that share a name are one
   board, and a topic whose repository folder has that name joins it. The name joins the union ONLY when a Jira
   conversation names it, so unrelated repositories with one folder name never meet. No `repos` → one shared board.

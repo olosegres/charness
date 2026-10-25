@@ -46,6 +46,15 @@ test('after the replay wait the prompt is routed again like a late prompt, not f
   assert.equal(body.slice(wait, route).includes('forwardPromptToLiveAgent('), false, 'no forward between the wait and the routing');
 });
 
+test('the live forward awaits nothing between its start and the write to the agent, except the OpenCode hooks', () => {
+  // Merged code once put the todo board's read there (async); a stop queued in the caller's tick then began before the write.
+  const body = getFunctionBody('forwardPromptToLiveAgent');
+  const beforeWrite = body.slice(0, body.indexOf('adapter.sendInput('));
+  assert.ok(beforeWrite.length > 0, 'the write is in the live forward');
+  const awaited = beforeWrite.split('\n').map((line) => line.trim()).filter((line) => !line.startsWith('//') && line.includes('await'));
+  assert.deepEqual(awaited, ['await adapter.interruptAndWaitIdle(key);', 'await adapter.detachRunningSubagents(key);']);
+});
+
 test('a prompt that finds no session after the wait is answered with the no-session reply, unless the wake already said why', () => {
   const body = getFunctionBody('forwardPromptToAgent');
   const report = body.slice(body.indexOf('reportNoSession: async (isAlreadyTold) => {'));

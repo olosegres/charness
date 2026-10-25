@@ -100,7 +100,7 @@ export function buildTodoInboxHookOutput(text: string): string {
  */
 export interface TodoMidTurnDeps {
   board: {
-    peekChanges(key: SessionKey): Promise<TodoBoardChanges | null>;
+    peekChanges(key: SessionKey): TodoBoardChanges | null;
     markSeenRevisions(key: SessionKey, revisions: Readonly<Record<string, number>>): void;
   };
   inboxDir: string;
@@ -183,7 +183,7 @@ export function createTodoMidTurn(deps: TodoMidTurnDeps): TodoMidTurn {
       const conversationKey = keyToString(key);
       const pending = pendingInboxes.get(conversationKey);
       if (pending) reconcileOne(conversationKey, pending);
-      const changes = await board.peekChanges(key);
+      const changes = board.peekChanges(key);
       if (changes === null) return;
       const sessionId = getClaudeSessionId(key);
       if (sessionId === null) {

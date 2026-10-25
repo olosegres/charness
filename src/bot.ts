@@ -357,7 +357,7 @@ import { createTodoRegistry, type TodoReadArgs, type TodoRegistry } from './todo
 import type { TodoUpdateArgs } from './todos/merge';
 import { getTodoReminderIntervalMs } from './todos/nag';
 import { TodoReminderEngine } from './todos/reminderEngine';
-import { createRepositoryIdentityReader, createRepositoryRootCommitFile, groupTodoProjects, runGitInFolder, type RepositoryIdentity, type RepositoryIdentityReader, type TodoProject, type TodoProjectMember, type TodoProjectReadMode } from './todos/projects';
+import { createRepositoryIdentityReader, createRepositoryRootCommitFile, groupTodoProjects, runGitInFolder, type RepositoryIdentityReader, type TodoProject, type TodoProjectMember } from './todos/projects';
 import { createTodoBoard, type TodoBoard, type TodoSessionActivity } from './todos/board';
 import { createTodoTools, type TodoTools } from './todos/tools';
 import { createTodoMidTurn, getTodoInboxDir, type TodoMidTurn } from './todos/midTurn';
@@ -1176,52 +1176,65 @@ function getTodoRepositories(): RepositoryIdentityReader {
 let todoJiraConversations: Pick<JiraConnector, 'getConversationRepositoryNames' | 'getConversationTitle'> | null = null;
 
 /**
- * Every bound conversation as the project grouping sees it, in binding order; `getIdentity` names a bound folder's
- * repository, `undefined` = not known yet.
+ * A bound conversation as the project grouping sees it before git is asked: complete (a Jira issue, a folder that does
+ * not resolve), or still needing its folder's repository.
  */
-async function listTodoProjectMembersBy(
-  getIdentity: (workDir: string) => Promise<RepositoryIdentity | null | undefined>,
-): Promise<Array<TodoProjectMember | undefined>> {
-  return Promise.all(state.listBindings().map(async ({ key, data }): Promise<TodoProjectMember | undefined> => {
-    const conversationKey = keyToString(key);
-    if (key.platform === 'jira') {
-      return { conversationKey, workDir: null, identity: null, jiraRepositoryNames: todoJiraConversations?.getConversationRepositoryNames(key) ?? null };
-    }
-    const decision = resolveBoundWorkDir(ENV.workRoot, data);
-    const workDir = decision.kind === 'proceed' ? decision.workDir : null;
-    if (workDir === null) return { conversationKey, workDir, identity: null };
-    const identity = await getIdentity(workDir);
-    return identity === undefined ? undefined : { conversationKey, workDir, identity };
-  }));
+function describeTodoProjectMember({ key, data }: ReturnType<typeof state.listBindings>[number]): { member: TodoProjectMember } | { conversationKey: string; workDir: string } {
+  const conversationKey = keyToString(key);
+  if (key.platform === 'jira') {
+    return { member: { conversationKey, workDir: null, identity: null, jiraRepositoryNames: todoJiraConversations?.getConversationRepositoryNames(key) ?? null } };
+  }
+  const decision = resolveBoundWorkDir(ENV.workRoot, data);
+  return decision.kind === 'proceed' ? { conversationKey, workDir: decision.workDir } : { member: { conversationKey, workDir: null, identity: null } };
 }
 
 /** The instance's project boards (D15, D16, D57), waiting for git where a folder's read is due. */
 async function listTodoProjects(): Promise<TodoProject[]> {
   const repositories = getTodoRepositories();
-  const members = await listTodoProjectMembersBy((workDir) => repositories.read(workDir));
+  const members = await Promise.all(state.listBindings().map(async (binding): Promise<TodoProjectMember | undefined> => {
+    const described = describeTodoProjectMember(binding);
+    if ('member' in described) return described.member;
+    const identity = await repositories.read(described.workDir);
+    return identity === undefined ? undefined : { ...described, identity };
+  }));
   return groupTodoProjects(members.filter((member) => member !== undefined), state.getTodoProjectOverrides());
 }
 
 /**
- * The project boards as known NOW, never waiting for git (a prompt, the mid-turn poll): `null` while a bound folder
- * was never read — its read starts now, with every other one due.
+ * The project boards as known NOW, never waiting for git and never yielding (a prompt, the mid-turn poll): `null` while a
+ * bound folder was never read — its read starts now, with every other one due.
  */
-async function peekTodoProjects(): Promise<TodoProject[] | null> {
+function peekTodoProjects(): TodoProject[] | null {
   const repositories = getTodoRepositories();
-  const members = await listTodoProjectMembersBy(async (workDir) => repositories.peek(workDir));
+  const members = state.listBindings().map((binding): TodoProjectMember | undefined => {
+    const described = describeTodoProjectMember(binding);
+    if ('member' in described) return described.member;
+    const identity = repositories.peek(described.workDir);
+    return identity === undefined ? undefined : { ...described, identity };
+  });
   return members.every((member) => member !== undefined) ? groupTodoProjects(members, state.getTodoProjectOverrides()) : null;
 }
 
 /** The bound folders' due repository reads start in the background (boot, a bind), so the next prompts find the grouping known. */
 function warmTodoProjects(): void {
   if (!readTodoSettings().isEnabled) return;
-  void peekTodoProjects().catch((e: unknown) => console.error('[todos] the bound folders\' repositories could not be read:', e instanceof Error ? e.message : e));
+  try {
+    peekTodoProjects();
+  } catch (e) {
+    console.error('[todos] the bound folders\' repositories could not be read:', e instanceof Error ? e.message : e);
+  }
 }
 
-/** The project of `key`'s conversation; `null` = in none, `undefined` = not known without waiting (`knownOnly`). */
-async function getTodoProjectOf(key: SessionKey, readMode: TodoProjectReadMode): Promise<TodoProject | null | undefined> {
+/** The project of `key`'s conversation, waiting for git; `null` = in none. */
+async function getTodoProjectOf(key: SessionKey): Promise<TodoProject | null> {
   const conversationKey = keyToString(key);
-  const projects = readMode === 'wait' ? await listTodoProjects() : await peekTodoProjects();
+  return (await listTodoProjects()).find((project) => project.memberKeys.includes(conversationKey)) ?? null;
+}
+
+/** The project of `key`'s conversation as known now; `null` = in none, `undefined` = not known without waiting. */
+function peekTodoProjectOf(key: SessionKey): TodoProject | null | undefined {
+  const conversationKey = keyToString(key);
+  const projects = peekTodoProjects();
   return projects === null ? undefined : (projects.find((project) => project.memberKeys.includes(conversationKey)) ?? null);
 }
 
@@ -1252,6 +1265,7 @@ function getTodoBoard(): TodoBoard {
   todoBoard ??= createTodoBoard({
     store: getTodoRegistry().getStore(),
     getProjectOf: getTodoProjectOf,
+    peekProjectOf: peekTodoProjectOf,
     getPeerLabel: getTodoConversationLabel,
     getSessionActivity: getTodoSessionActivity,
     getNowMs: Date.now,
@@ -1301,11 +1315,14 @@ function discardTodoInbox(key: SessionKey): void {
   }
 }
 
-/** The board block a prompt forwarded now carries (D20), or `null`; taking it counts as seen. A failure never stops the prompt. */
-async function takeTodoPromptBoard(key: SessionKey): Promise<string | null> {
+/**
+ * The board block a prompt forwarded now carries (D20), or `null`; taking it counts as seen. A failure never stops the prompt.
+ * Synchronous: it sits between the forward's decision and the write (see `TodoBoard.takePromptBoard`).
+ */
+function takeTodoPromptBoard(key: SessionKey): string | null {
   if (!readTodoSettings().isEnabled) return null;
   try {
-    return await getTodoBoard().takePromptBoard(key);
+    return getTodoBoard().takePromptBoard(key);
   } catch (e) {
     console.error(`[todos] ${keyToString(key)}: the project board could not be built:`, e instanceof Error ? e.message : e);
     return null;
@@ -5499,7 +5516,7 @@ async function forwardPromptToLiveAgent(
   // command or a shell line; the reminder never rides the standalone reminder itself.
   const isTodoDecorated = !checkShouldSkipPreambleForText(text) && adapter.name !== 'terminal';
   if (isTodoDecorated) discardTodoInbox(key);
-  const todoBoardBlock = isTodoDecorated ? await takeTodoPromptBoard(key) : null;
+  const todoBoardBlock = isTodoDecorated ? takeTodoPromptBoard(key) : null;
   if (todoBoardBlock !== null) promptText = `${promptText}\n\n${todoBoardBlock}`;
   const todoReminderLine = isTodoDecorated && !isTechnicalPrompt ? takeTodoPromptReminder(key) : null;
   if (todoReminderLine !== null) promptText = `${promptText}\n\n${todoReminderLine}`;

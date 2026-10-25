@@ -125,7 +125,7 @@ describe('the inbox lifecycle', () => {
 
   function createMidTurn() {
     return createTodoMidTurn({
-      board: { peekChanges: async () => changes, markSeenRevisions: (_key, revisions) => { seen.push({ ...revisions }); } },
+      board: { peekChanges: () => changes, markSeenRevisions: (_key, revisions) => { seen.push({ ...revisions }); } },
       inboxDir: getTodoInboxDir(dataDir),
       getClaudeSessionId: () => claudeSessionId,
       postRunningTurnNote: async (_key, text) => { runningTurnNotes.push(text); return isNoteAccepted; },
