@@ -142,7 +142,7 @@ without re-installing; `npm install -g .` installs a copy instead. Configuration
 `yarn test:unit` also runs the STT sidecar's Python tests (`sttSidecarPython.test.ts` → `stt/test_gigaam_sidecar.py`,
 no model needed). They want **`uv`** (an ephemeral environment with numpy and the pinned soundfile; the first run
 downloads them, so it needs the network once) or a **`python3` that has numpy and soundfile**. Without either, or when
-`uv` cannot reach the package index, a local run skips that test and says why; CI (`CI` set, uv installed by the
+`uv` cannot reach the package index, a local run skips that test and says why; CI (`CI=true`, uv installed by the
 workflow) fails instead.
 
 Node applies `--test-timeout` to a whole test FILE (a `describe`'s own `timeout` cannot extend it), so a file that

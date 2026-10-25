@@ -5,7 +5,7 @@
  * the pinned soundfile; the first run downloads them), or else under a `python3` that already has both.
  *
  * Setting the environment up is a step of its own. Where it cannot be done — no `uv` and no such `python3`, or `uv`
- * cannot reach the package index (offline, a firewall) — a local run is SKIPPED with the reason, while CI (`CI` set)
+ * cannot reach the package index (offline, a firewall) — a local run is SKIPPED with the reason, while CI (`CI` is `true` or `1`)
  * fails: there the suite must run. Once the environment is up, any failure of the suite fails the test everywhere.
  * CI installs uv (`.github/workflows/test.yml`); the live test runs the same file under the engine's own venv.
  */
@@ -17,15 +17,18 @@ import * as path from 'path';
 import { getSidecarScriptPath, gigaamPinnedRequirements } from '../stt/sttInstall';
 
 const pythonTestsPath = path.join(path.dirname(getSidecarScriptPath()), 'test_gigaam_sidecar.py');
-/** Setting up the environment: a first `uv` run downloads numpy and soundfile; a dropped connection must end in time. */
-const setupTimeoutMs = 60_000;
-/** The suite itself takes a few seconds. */
+/**
+ * Setting up the environment (a first `uv` run downloads numpy and soundfile; a dropped connection must end in time),
+ * then the suite (a few seconds), then the module-level probes (two at most): together under the unit runner's 2-minute
+ * limit per file, so a slow setup ends as a clear skip or failure, never as a whole-file timeout.
+ */
+const setupTimeoutMs = 45_000;
 const pythonRunTimeoutMs = 50_000;
-const probeTimeoutMs = 10_000;
+const probeTimeoutMs = 5_000;
 /** Fewer tests than this means the file did not really run (an import that broke half of it), not a pass. */
 const minimumPythonTests = 60;
 const outputTailLength = 3000;
-const isCi = Boolean(process.env.CI);
+const isCi = process.env.CI === 'true' || process.env.CI === '1';
 const soundfileRequirement = gigaamPinnedRequirements.find((requirement) => requirement.startsWith('soundfile'));
 const importCheck = 'import numpy, soundfile';
 
@@ -55,7 +58,7 @@ function getOutputTail(run: ReturnType<typeof spawnSync>): string {
 const runner = findPythonRunner();
 const missingRunnerReason = 'needs uv, or a python3 with numpy and soundfile';
 
-test('the sidecar\'s Python unit tests pass', { skip: !runner && !isCi ? missingRunnerReason : undefined, timeout: setupTimeoutMs + pythonRunTimeoutMs + probeTimeoutMs }, (context) => {
+test('the sidecar\'s Python unit tests pass', { skip: !runner && !isCi ? missingRunnerReason : undefined, timeout: setupTimeoutMs + pythonRunTimeoutMs }, (context) => {
   assert.ok(runner, missingRunnerReason);
   const setup = spawnSync(runner.command, [...runner.prefixArgs, '-I', '-c', importCheck], { encoding: 'utf8', timeout: setupTimeoutMs });
   if (setup.status !== 0) {

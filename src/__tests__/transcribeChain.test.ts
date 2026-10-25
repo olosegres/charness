@@ -207,6 +207,27 @@ test('a later report of a longer queue extends the budget again: the voice ahead
   assert.deepEqual(result.result, { ok: true, text: 'after the longer queue', engine: 'local' });
 });
 
+test('an absurdly long reported queue is capped at the longest timer Node can hold', { timeout: noHangTestTimeoutMs }, async () => {
+  // Node cannot hold a timer over 2^31-1 ms: it warns (TimeoutOverflowWarning) and shortens it to 1 ms.
+  const warnings: string[] = [];
+  const recordWarning = (warning: Error) => { warnings.push(warning.name); };
+  process.on('warning', recordWarning);
+  const reportHugeQueueThenAnswer: Handler = (_req, res) => {
+    res.socket?.write(`HTTP/1.1 102 Processing\r\n${queuedAudioSecondsHeader}: 1e12\r\n\r\n`);
+    setTimeout(() => { res.writeHead(200); res.end(JSON.stringify({ text: 'after a huge queue' })); }, 100);
+  };
+  try {
+    reset([reportHugeQueueThenAnswer], [transcribed('never used')]);
+    const result = await runChain([createEngine('local', first, fastTimeout), createEngine('second', second)], { durationSeconds: 5 });
+    assert.deepEqual(result.result, { ok: true, text: 'after a huge queue', engine: 'local' });
+    // A warning is emitted on the next tick: let it arrive before checking.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(warnings.filter((name) => name === 'TimeoutOverflowWarning'), []);
+  } finally {
+    process.off('warning', recordWarning);
+  }
+});
+
 test('a voice whose Telegram duration is 0 (or missing) is of unknown length, not a 0-second voice: it gets the unknown-length budget', { timeout: noHangTestTimeoutMs }, async () => {
   const answerAfter = (delayMs: number, text: string): Handler => (_req, res) => {
     setTimeout(() => { res.writeHead(200); res.end(JSON.stringify({ text })); }, delayMs);

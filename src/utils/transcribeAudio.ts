@@ -44,6 +44,8 @@ const errorBodyPreviewLength = 500;
  * it recognises voices strictly in arrival order, so a voice may wait in line before its own recognition starts.
  */
 export const queuedAudioSecondsHeader = 'x-charness-queued-audio-seconds';
+/** The longest timer Node holds (2^31 − 1 ms, ~24.8 days); a longer one is cut to 1 ms with a warning. */
+const maxTimerMs = 2 ** 31 - 1;
 
 /**
  * @description Where and how a voice note is transcribed.
@@ -264,7 +266,9 @@ async function transcribeAudioOnce(
     });
     req.on('information', (info) => {
       const queuedAudioSeconds = getQueuedAudioSeconds(info.headers);
-      if (queuedAudioSeconds !== null && getTimeoutMsForQueuedAudio) req.setTimeout(getTimeoutMsForQueuedAudio(queuedAudioSeconds));
+      if (queuedAudioSeconds !== null && getTimeoutMsForQueuedAudio) {
+        req.setTimeout(Math.min(getTimeoutMsForQueuedAudio(queuedAudioSeconds), maxTimerMs));
+      }
     });
     req.on('error', (e) => {
       resolve({ ok: false, error: e instanceof Error ? e.message : String(e), failureKind: 'transient' });
