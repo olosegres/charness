@@ -58,7 +58,7 @@ function createAdapter(options: { launch: OpenCodeServerLaunchReading; isSession
     checkIsServerRunning: async () => true,
     ensureServer: unexpected,
     restartServer: unexpected,
-    readServerLaunch: () => options.launch,
+    readServerLaunch: async () => options.launch,
   };
   adapter['serverRestartOps'] = ops;
   const forcedRestarts: boolean[] = [];

@@ -173,7 +173,7 @@ function scriptServerRestart(
       const error = getStartError();
       if (error) throw error;
     },
-    readServerLaunch: () => ({ kind: 'unknown' }),
+    readServerLaunch: async () => ({ kind: 'unknown' }),
   };
   adapter['serverRestartOps'] = ops;
   adapter['serverRestartRetryDelaysMs'] = testRetryDelaysMs;

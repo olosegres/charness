@@ -1474,7 +1474,7 @@ export interface OpenCodeServerRestartOps {
   /** Stop the current server generation and start a new one (never adopts). */
   restartServer(): Promise<void>;
   /** How the running server was launched — whether it carries the bot's skills folder. */
-  readServerLaunch(): OpenCodeServerLaunchReading;
+  readServerLaunch(): Promise<OpenCodeServerLaunchReading>;
 }
 
 const defaultOpenCodeServerRestartOps: OpenCodeServerRestartOps = {
@@ -3685,7 +3685,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   async activateAgentSkillsForServer(): Promise<void> {
     try {
       const expectedConfigDir = getExpectedOpenCodeAgentConfigDir(process.env, resolveDataDir());
-      const action = getOpenCodeAgentSkillsServerAction(this.serverRestartOps.readServerLaunch(), expectedConfigDir);
+      const action = getOpenCodeAgentSkillsServerAction(await this.serverRestartOps.readServerLaunch(), expectedConfigDir);
       if (action === 'skipNotOwned' || action === 'skipUnidentified') {
         if (!this.isAgentSkillsSkipAnnounced) {
           this.isAgentSkillsSkipAnnounced = true;

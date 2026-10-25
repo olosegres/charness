@@ -137,15 +137,24 @@ export function getOpenCodeAgentConfigEnv(env: NodeJS.ProcessEnv, dataDir: strin
 
 /**
  * @name OpenCodeServerLaunchReading
- * @description What the bot can read about the running OpenCode server's launch: `none` — nothing listens on its
- * loopback endpoint (a Claude-only instance, OpenCode not started yet); `unknown` — the listener is not a process it
- * can identify as `opencode … serve` (a server elsewhere, a test's stand-in, no `/proc`); otherwise the
+ * @description What the bot can read about the running OpenCode server's launch: `none` — no server answers on its
+ * endpoint (a Claude-only instance, OpenCode not started yet); `unknown` — a server answers but is not a process it
+ * can identify as `opencode … serve` (a server elsewhere, a test's stand-in, no `/proc`, a listener whose PID it
+ * cannot read — another user's, or no `lsof` / `ss`); otherwise the
  * `OPENCODE_CONFIG_DIR` it was started with (null: none) and whether the bot owns it (its process record).
  */
 export type OpenCodeServerLaunchReading =
   | { kind: 'none' }
   | { kind: 'unknown' }
   | { kind: 'openCodeServe'; configDir: string | null; isOwnedByBot: boolean };
+
+/**
+ * @description The reading when no listener PID could be found: `none` only if no server answers its health check —
+ * a PID that cannot be read (another user's process, no `lsof` / `ss`) does not prove there is no server.
+ */
+export function getPidlessServerLaunchReading(isServerAnswering: boolean): OpenCodeServerLaunchReading {
+  return isServerAnswering ? { kind: 'unknown' } : { kind: 'none' };
+}
 
 /** @description What the `/proc` entries of a server's process say, before the bot's own record of who started it. */
 export type OpenCodeServeProcessReading = { kind: 'unknown' } | { kind: 'openCodeServe'; configDir: string | null };

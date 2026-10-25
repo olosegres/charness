@@ -19,6 +19,7 @@ import {
   getOpenCodeAgentConfigDir,
   getOpenCodeAgentConfigEnv,
   getOpenCodeAgentSkillsServerAction,
+  getPidlessServerLaunchReading,
   openCodeConfigDirEnvName,
   parseOpenCodeServerLaunch,
   prepareOpenCodeAgentConfigDir,
@@ -174,5 +175,10 @@ describe('reading a running server\'s launch', () => {
     assert.equal(getOpenCodeAgentSkillsServerAction(started(null), null), 'none', 'the bot offers no folder');
     assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'unknown' }, null), 'none');
     assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'none' }, expected), 'none', 'no server listens: nothing to replace, nothing to say');
+  });
+
+  test('no listener PID found: `none` only when no server answers — an unreadable PID with a server answering stays `unknown`', () => {
+    assert.deepEqual(getPidlessServerLaunchReading(false), { kind: 'none' });
+    assert.deepEqual(getPidlessServerLaunchReading(true), { kind: 'unknown' }, 'another user\'s server, or no lsof / ss: still said once');
   });
 });
