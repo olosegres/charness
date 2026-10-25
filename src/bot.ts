@@ -351,7 +351,7 @@ import { schedulerMcpServerName } from './scheduler/injection';
 import { runSessionBootPhase, startSchedulerMcpForBoot } from './scheduler/mcpBoot';
 import { RequestLedger } from './requests/requestLedger';
 import { answerRequest } from './requests/answerRequest';
-import { TodoStore, todosDirName } from './todos/store';
+import { TodoStore, getTodosDir } from './todos/store';
 import { createTodoRegistry, type TodoReadArgs, type TodoRegistry } from './todos/registry';
 import type { TodoUpdateArgs } from './todos/merge';
 import { getTodoReminderIntervalMs } from './todos/nag';
@@ -1165,7 +1165,7 @@ let todoRepositories: RepositoryIdentityReader | null = null;
 function getTodoRepositories(): RepositoryIdentityReader {
   todoRepositories ??= createRepositoryIdentityReader({
     runGit: runGitInFolder,
-    rootCommitStore: createRepositoryRootCommitFile(path.join(getDataDir(), todosDirName)),
+    rootCommitStore: createRepositoryRootCommitFile(getTodosDir(getDataDir())),
   });
   return todoRepositories;
 }

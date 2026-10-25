@@ -16,7 +16,9 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { applyTodoUpdate } from '../todos/merge';
 import { getTodoItemsInOrder } from '../todos/order';
-import { createEmptyTodoTopicFile, todoArchiveAfterMs, TodoStore } from '../todos/store';
+import { createEmptyTodoTopicFile, getTodosDir, todoArchiveAfterMs, TodoStore } from '../todos/store';
+import { getTodoInboxDir } from '../todos/midTurn';
+import { createRepositoryRootCommitFile } from '../todos/projects';
 import { formatOwnTodoList, getTodoListView, getTrimmedTodoTitle } from '../todos/format';
 import { createTodoRegistry, todoHistoryMaxItems } from '../todos/registry';
 import type { TodoTopicFile } from '../todos/types';
@@ -131,6 +133,15 @@ describe('the file store', () => {
   let dataDir: string;
   beforeEach(() => { dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todos-')); });
   afterEach(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+
+  it('one dir holds it all — the lists, the mid-turn inboxes, the repositories\' first commits: DATA_DIR/todos', () => {
+    const todosDir = getTodosDir(dataDir);
+    assert.equal(todosDir, path.join(dataDir, 'todos'));
+    new TodoStore(dataDir, () => nowMs).saveTopic(jiraKey, getUpdated(createEmptyTodoTopicFile(jiraKey), { items: [{ title: 'Export to PDF' }] }));
+    createRepositoryRootCommitFile(todosDir).save({ '/w/example-repo/.git': 'aaa' });
+    assert.equal(path.dirname(getTodoInboxDir(dataDir)), todosDir);
+    assert.deepEqual(fs.readdirSync(todosDir).sort(), ['jira_PROJ_PROJ-7.json', 'repositories.json']);
+  });
 
   it('saves a conversation\'s list atomically as private JSON and reads it back in a fresh store', () => {
     const store = new TodoStore(dataDir, () => nowMs);

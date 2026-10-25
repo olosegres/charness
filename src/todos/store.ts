@@ -18,7 +18,7 @@ import { todoSources, todoStatuses, type TodoItem, type TodoTopicFile } from './
  */
 
 /** The store's directory under `DATA_DIR`. */
-export const todosDirName = 'todos';
+const todosDirName = 'todos';
 /** Where archived items go, under the store's directory. */
 const archiveDirName = 'archive';
 /** `:` is illegal in a file name on some filesystems; the slug uses this instead. */
@@ -61,6 +61,11 @@ const todoTopicFileSchema = z.object({
   boardSeen: z.object({ revisions: z.record(z.string(), z.number()), at: z.number() }).optional(),
 });
 
+/** @description `DATA_DIR/todos`: the lists, their archive, the mid-turn inboxes and the repositories' first commits. */
+export function getTodosDir(dataDir: string): string {
+  return path.join(dataDir, todosDirName);
+}
+
 /** @description The empty record of a conversation that never published anything. */
 export function createEmptyTodoTopicFile(key: SessionKey): TodoTopicFile {
   return { version: 1, conversationKey: keyToString(key), nextItemNumber: 1, items: [], revision: 0 };
@@ -85,7 +90,7 @@ export class TodoStore {
   constructor(private readonly dataDir: string, private readonly getNowMs: () => number = Date.now) {}
 
   private getDir(): string {
-    return path.join(this.dataDir, todosDirName);
+    return getTodosDir(this.dataDir);
   }
 
   private getFilePath(key: SessionKey): string {

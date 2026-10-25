@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { shellSingleQuote } from '../utils/tmuxExec';
-import { todosDirName } from './store';
+import { getTodosDir } from './store';
 import type { TodoBoardChanges } from './board';
 
 /**
@@ -39,7 +39,7 @@ const inboxFileMode = 0o600;
 
 /** @description Where the inboxes live: `DATA_DIR/todos/inbox`. */
 export function getTodoInboxDir(dataDir: string): string {
-  return path.join(dataDir, todosDirName, inboxDirName);
+  return path.join(getTodosDir(dataDir), inboxDirName);
 }
 
 /**
