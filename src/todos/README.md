@@ -83,7 +83,8 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
   restart it answers at once, while the process still walks each repository once in the background — a rewritten
   history (or a folder re-initialised at the same path) is corrected and logged; a failed walk keeps the stored one. A prompt and the mid-turn poll take only what is
   known (`knownOnly`): a folder's last answer, kept past its TTL while it is read again; while a bound folder was never
-  read, the grouping is unknown and the prompt carries no board — nothing counts as seen, so the next one carries it.
+  read, the grouping is unknown and the prompt carries no board (a fresh context still gets its own list) — nothing
+  counts as seen, so the next one carries it.
   The reads start at boot and at every bind, so only a new repository's first walk can leave a prompt without its
   board. A `todo_*` tool and `/todo` wait for git.
 - **Jira** (D57): a conversation's project lists `repos` in `jira.json`; conversations that share a name are one

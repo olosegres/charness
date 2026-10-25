@@ -37,10 +37,10 @@ export type TodoSessionActivity = 'working' | 'idle' | 'asleep';
 export interface TodoBoardDeps {
   store: TodoStore;
   /**
-   * The project `key`'s conversation belongs to; `null` when it is in none (unbound) — or, `knownOnly`, while the
-   * grouping is not known without waiting for git.
+   * The project `key`'s conversation belongs to; `null` when it is in none (unbound); `undefined` — only `knownOnly` —
+   * while the grouping is not known without waiting for git.
    */
-  getProjectOf: (key: SessionKey, readMode: TodoProjectReadMode) => Promise<TodoProject | null>;
+  getProjectOf: (key: SessionKey, readMode: TodoProjectReadMode) => Promise<TodoProject | null | undefined>;
   /** How a peer is named on a board: `#topic (folder)`, `PROJ-123 «summary»`. */
   getPeerLabel: (conversationKey: string) => string;
   getSessionActivity: (conversationKey: string) => TodoSessionActivity;
@@ -59,7 +59,10 @@ export interface TodoBoardChanges {
 
 /** @name TodoBoard @description The board's deliveries; each one counts as seen. */
 export interface TodoBoard {
-  /** The block a bot-made turn start carries (D20), or `null` when nothing is due — or the grouping is not known without waiting for git. */
+  /**
+   * The block a bot-made turn start carries (D20), or `null` when nothing is due. While the grouping is not known
+   * without waiting for git, no board: a fresh context gets its own list alone, and nothing counts as seen.
+   */
   takePromptBoard(key: SessionKey): Promise<string | null>;
   /** What a `todo_*` result adds after the agent's own list: the delta, or that nothing changed (D4). */
   takeToolBoard(key: SessionKey): Promise<string>;
@@ -145,10 +148,10 @@ export function formatTodoBoardBlocks(header: string, blocks: ReadonlyArray<{ te
 export function createTodoBoard(deps: TodoBoardDeps): TodoBoard {
   const { store, getProjectOf, getPeerLabel, getSessionActivity, getNowMs } = deps;
 
-  /** The peers of `key`'s project with a list to show, and their revisions now. */
-  async function getPeers(key: SessionKey, readMode: TodoProjectReadMode): Promise<{ projectName: string; peers: Array<{ conversationKey: string; file: TodoTopicFile }> } | null> {
+  /** The peers of `key`'s project with a list to show, and their revisions now; `null` = no project, `undefined` = not known yet. */
+  async function getPeers(key: SessionKey, readMode: TodoProjectReadMode): Promise<{ projectName: string; peers: Array<{ conversationKey: string; file: TodoTopicFile }> } | null | undefined> {
     const project = await getProjectOf(key, readMode);
-    if (project === null) return null;
+    if (project === null || project === undefined) return project;
     const ownKey = keyToString(key);
     const peers = project.memberKeys.flatMap((conversationKey) => {
       if (conversationKey === ownKey) return [];
@@ -187,13 +190,15 @@ export function createTodoBoard(deps: TodoBoardDeps): TodoBoard {
 
   return {
     async takePromptBoard(key) {
-      // A prompt never waits for git: while the grouping is unknown, it carries no board and nothing counts as seen.
+      // A prompt never waits for git: while the grouping is unknown it carries no board, and nothing counts as seen.
       const located = await getPeers(key, 'knownOnly');
       if (located === null) return null;
       const nowMs = getNowMs();
       const own = store.getTopic(key);
+      const ownList = own.boardSeen === undefined && !checkIsTodoListViewEmpty(getTodoListView(own.items, nowMs)) ? formatOwnTodoList(own.items, nowMs) : null;
+      // A fresh context still gets its own list: that needs no grouping.
+      if (located === undefined) return ownList;
       if (own.boardSeen === undefined) {
-        const ownList = checkIsTodoListViewEmpty(getTodoListView(own.items, nowMs)) ? null : formatOwnTodoList(own.items, nowMs);
         const board = located.peers.length === 0 ? null : formatFullBoard(located.projectName, located.peers, nowMs, boardMaxChars);
         markSeen(key, located.peers, nowMs);
         const parts = [board, ownList].filter((part): part is string => part !== null);
@@ -209,7 +214,7 @@ export function createTodoBoard(deps: TodoBoardDeps): TodoBoard {
 
     async takeToolBoard(key) {
       const located = await getPeers(key, 'wait');
-      if (located === null) return 'This topic is in no project (no folder bound).';
+      if (!located) return 'This topic is in no project (no folder bound).';
       const nowMs = getNowMs();
       const seen = store.getTopic(key).boardSeen;
       if (seen === undefined) {
@@ -227,7 +232,7 @@ export function createTodoBoard(deps: TodoBoardDeps): TodoBoard {
 
     async takeProjectBoard(key) {
       const located = await getPeers(key, 'wait');
-      if (located === null) return 'This topic is in no project (no folder bound).';
+      if (!located) return 'This topic is in no project (no folder bound).';
       const nowMs = getNowMs();
       const text = formatFullBoard(located.projectName, located.peers, nowMs, boardReadMaxChars);
       markSeen(key, located.peers, nowMs);
@@ -238,7 +243,7 @@ export function createTodoBoard(deps: TodoBoardDeps): TodoBoard {
       const seen = store.getTopic(key).boardSeen;
       if (seen === undefined) return null;
       const located = await getPeers(key, 'knownOnly');
-      if (located === null) return null;
+      if (!located) return null;
       const changed = getChangedPeers(key, located.peers);
       if (changed.length === 0) return null;
       return {

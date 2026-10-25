@@ -386,7 +386,7 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
       store,
       getProjectOf: async (_key, readMode) => {
         readModes.push(readMode);
-        return readMode === 'knownOnly' && !isGroupingKnown ? null : project;
+        return readMode === 'knownOnly' && !isGroupingKnown ? undefined : project;
       },
       getPeerLabel: (conversationKey) => (conversationKey === keyToString(issue1) ? 'PROJ-1 «Export to PDF»' : `#${conversationKey.split(':')[1]}`),
       getSessionActivity: (conversationKey) => activities.get(conversationKey) ?? 'idle',
@@ -435,9 +435,11 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
     const { registry, board, tools } = createServices();
     registry.updateTodos(topicB, { items: [{ title: 'Fix the footer' }] });
     isGroupingKnown = false;
-    assert.equal(await board.takePromptBoard(topicA), null, 'no board while the grouping is unknown');
+    assert.equal(await board.takePromptBoard(topicA), null, 'no board while the grouping is unknown, and no own list to show');
+    registry.updateTodos(topicA, { items: [{ title: 'Speed up flows', status: 'inWork' }] });
+    assert.match(await board.takePromptBoard(topicA) ?? '', /^Your published todo list:\n▶ in work:\n {2}t1 Speed up flows/, 'a fresh context still gets its own list');
     isGroupingKnown = true;
-    assert.match(await board.takePromptBoard(topicA) ?? '', /^\[Project board · charness · 1 other topic\]/, 'still the whole board: nothing was marked seen');
+    assert.match(await board.takePromptBoard(topicA) ?? '', /^\[Project board · charness · 1 other topic\][\s\S]*\n\nYour published todo list:/, 'still the whole board: nothing was marked seen');
     registry.updateTodos(topicB, { items: [{ title: 'Fix the header' }] });
     isGroupingKnown = false;
     assert.equal(await board.peekChanges(topicA), null);
@@ -445,7 +447,7 @@ describe('what each agent has seen (D19, D20) and the todo_* results (D4)', () =
     assert.match((await board.peekChanges(topicA))?.text ?? '', /Fix the header/);
     await tools.read(topicA, {});
     await tools.read(topicA, { scope: 'project' });
-    assert.deepEqual(readModes, ['knownOnly', 'knownOnly', 'knownOnly', 'knownOnly', 'wait', 'wait']);
+    assert.deepEqual(readModes, ['knownOnly', 'knownOnly', 'knownOnly', 'knownOnly', 'knownOnly', 'wait', 'wait']);
   });
 
   it('todo_update and todo_read answer the own list and the delta; the project scope the whole board', async () => {

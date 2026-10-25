@@ -25,7 +25,8 @@
  *   → mid-turn (S4): while B works, A publishes; B gets A's change with its next tool result — the launch settings'
  *     `PostToolUse` hook prints B's inbox, as the real CLI runs it — and B's next prompt does not repeat it
  *   → a prompt never waits for git: topic D on a new clone whose history walk git holds back (a `git` in the
- *     instance's bin folder) — its prompt reaches the agent at once, with no board; once git answered, the whole board
+ *     instance's bin folder) — its prompt reaches the agent at once, with no board, and B's fresh context gets its own
+ *     list alone; once git answered, the whole board for both
  *
  * Nothing leaves the machine: the Bot API and the bot MCP are on loopback, the agent is the fake. Everything the test
  * starts is stopped in `after`.
@@ -558,10 +559,19 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
     await getCharness().waitFor('D\'s prompt while git walks its history', promptPastHeldGitMs, () => readPrompts().some((prompt) => /\bTODO-41\b/.test(prompt.text)));
     assert.ok(readGitWalkLog().includes(`start ${folderPathD}`) && !readGitWalkLog().includes(`end ${folderPathD}`), 'the walk was still held when the prompt went through');
     assert.doesNotMatch(getPromptOf('TODO-41'), /Project board/, 'no board while the grouping is unknown');
+    // Every board waits for the grouping; a fresh context still gets its own list.
+    await sendAndAwaitReply(topicBThreadId, '/new', 'ready in');
+    fakeTelegram.pushOperatorMessage(topicBThreadId, 'TODO-43');
+    await getCharness().waitFor('B\'s prompt on a fresh context', promptPastHeldGitMs, () => readPrompts().some((prompt) => /\bTODO-43\b/.test(prompt.text)));
+    assert.doesNotMatch(getPromptOf('TODO-43'), /Project board/);
+    assert.match(getPromptOf('TODO-43'), /\n\nYour published todo list:\n▶ in work:\n {2}t1 Fix the footer/);
     fs.rmSync(holdPath);
     await getCharness().waitFor('git answered', turnTimeoutMs, () => readGitWalkLog().includes(`end ${folderPathD}`));
     fakeTelegram.pushOperatorMessage(topicDThreadId, 'TODO-42');
     await getCharness().waitFor('D\'s next prompt', turnTimeoutMs, () => readPrompts().some((prompt) => /\bTODO-42\b/.test(prompt.text)));
     assert.match(getPromptOf('TODO-42'), /\[Project board · proj-a · 2 other topics\]/, 'nothing was marked seen: the whole board');
+    fakeTelegram.pushOperatorMessage(topicBThreadId, 'TODO-44');
+    await getCharness().waitFor('B\'s next prompt', turnTimeoutMs, () => readPrompts().some((prompt) => /\bTODO-44\b/.test(prompt.text)));
+    assert.match(getPromptOf('TODO-44'), /\[Project board · proj-a · 1 other topic\]/, 'B\'s fresh context gets the whole board now');
   });
 });

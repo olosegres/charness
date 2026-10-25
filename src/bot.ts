@@ -1216,10 +1216,11 @@ function warmTodoProjects(): void {
   void peekTodoProjects().catch((e: unknown) => console.error('[todos] the bound folders\' repositories could not be read:', e instanceof Error ? e.message : e));
 }
 
-async function getTodoProjectOf(key: SessionKey, readMode: TodoProjectReadMode): Promise<TodoProject | null> {
+/** The project of `key`'s conversation; `null` = in none, `undefined` = not known without waiting (`knownOnly`). */
+async function getTodoProjectOf(key: SessionKey, readMode: TodoProjectReadMode): Promise<TodoProject | null | undefined> {
   const conversationKey = keyToString(key);
   const projects = readMode === 'wait' ? await listTodoProjects() : await peekTodoProjects();
-  return projects?.find((project) => project.memberKeys.includes(conversationKey)) ?? null;
+  return projects === null ? undefined : (projects.find((project) => project.memberKeys.includes(conversationKey)) ?? null);
 }
 
 /** How a conversation is named on a board and in the picker: `#topic (folder)`, or the issue `PROJ-123 «summary»` (D55). */
