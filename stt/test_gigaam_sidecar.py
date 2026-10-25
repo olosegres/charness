@@ -1271,6 +1271,50 @@ class HttpQueueTest(unittest.TestCase):
         first.close()
         second.close()
 
+    def hold_the_first_length_read(self):
+        """Patch the length read so that the first voice's blocks until the returned event is set."""
+        release = threading.Event()
+        reads = []
+        read = sidecar.read_audio_seconds
+
+        def held_read(upload):
+            reads.append(upload)
+            if len(reads) == 1:
+                release.wait(5)
+            return read(upload)
+
+        patcher = unittest.mock.patch.object(sidecar, "read_audio_seconds", held_read)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(release.set)
+        return release
+
+    def test_a_voice_arriving_while_the_one_ahead_is_still_being_sized_waits_for_its_length(self):
+        """A voice takes its place in line before its length is read; the handler of the next one waits for that length
+        before it reports its queue, so the first report is not the 0 s of a length nobody has noted yet."""
+        entered_the_wait = threading.Event()
+        wait = self.pool.wait_until_sized_ahead
+
+        def spied_wait(request, timeout_seconds):
+            entered_the_wait.set()
+            wait(request, timeout_seconds)
+
+        patcher = unittest.mock.patch.object(self.pool, "wait_until_sized_ahead", spied_wait)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        release_first_read = self.hold_the_first_length_read()
+        first = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(3.0))
+        self.wait_for_cutting_requests(1)
+        second = send_raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), wav_upload(2.0))
+        self.assertTrue(entered_the_wait.wait(5), "the second voice reported its queue without waiting for the first one's length")
+        release_first_read.set()
+        self.assertAlmostEqual(read_interim_queue_report(second), 3.0, msg="the first voice's length, noted while the second one waited")
+        self.recognize.gate.set()
+        read_raw_response(first)
+        read_raw_response(second)
+        first.close()
+        second.close()
+
     def test_a_waiting_voice_is_told_again_when_the_queue_ahead_turns_out_longer(self):
         release_first = self.hold_the_decoding_of(3)
         patcher = unittest.mock.patch.object(sidecar, "read_audio_seconds", lambda upload: 0.0)
