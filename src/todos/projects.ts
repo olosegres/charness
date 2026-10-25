@@ -169,35 +169,45 @@ export interface RepositoryIdentityReader {
 }
 
 /**
+ * What the caches say of a folder now: a `fresh` answer; a `stored` one — the root commit a previous process walked,
+ * the last known answer until this process walks the history once; or a read is `due` (`lastIdentity` = the last
+ * answer, `undefined` when there never was one).
+ */
+type KnownRepositoryIdentity =
+  | { kind: 'fresh' | 'stored'; identity: RepositoryIdentity | null }
+  | { kind: 'due'; lastIdentity: RepositoryIdentity | null | undefined };
+
+/**
  * @description A reader of folders' repository identities. Two cheap-to-expensive steps, cached apart: a folder's
  * git common dir (`git rev-parse --git-common-dir`, resolved against the folder — no `--path-format`, which needs git
- * 2.31) for {@link repositoryIdentityTtlMs}, and the repository's root commit by its common dir (the history walk runs
- * once per repository — and, with a {@link RepositoryRootCommitStore}, once per data dir: a root commit never
- * changes). Two reads of one folder at once share one git run. A failed read is tried again after
+ * 2.31) for {@link repositoryIdentityTtlMs}, and the repository's root commit by its common dir: the history walk
+ * runs once per repository and process, shared by every folder of it. With a {@link RepositoryRootCommitStore}, the
+ * root commit a previous process walked answers at once while this process walks again in the background — a
+ * rewritten history (or a folder re-initialised at the same path) is corrected by the next process, and logged.
+ * Two reads of one folder at once share one git run. A failed read is tried again after
  * {@link failedRepositoryReadRetryMs}, and a failure on a folder that IS a checkout (it has `.git`) is logged once.
  */
 export function createRepositoryIdentityReader(deps: RepositoryIdentityReaderDeps): RepositoryIdentityReader {
   const { runGit, getNowMs = Date.now, logWarning = (line: string) => console.warn(line), rootCommitStore } = deps;
   const commonDirs = new Map<string, CachedRead<string>>();
-  const rootCommits = new Map<string, CachedRead<string>>();
+  /** The root commits THIS process walked, by common dir (a failure is kept for the retry window). */
+  const walkedRootCommits = new Map<string, CachedRead<string>>();
+  /** Every root commit known by common dir — the store's, then this process's walks; what the store gets back. */
+  let knownRootCommits: Map<string, string> | null = null;
   const lastIdentities = new Map<string, RepositoryIdentity | null>();
   const readsInProgress = new Map<string, Promise<RepositoryIdentity | null>>();
+  const walksInProgress = new Map<string, Promise<void>>();
   const warnedFolders = new Set<string>();
-  let isStoreLoaded = false;
 
-  function loadStoredRootCommits(): void {
-    if (isStoreLoaded || !rootCommitStore) return;
-    isStoreLoaded = true;
-    for (const [commonDir, rootCommit] of Object.entries(rootCommitStore.load())) {
-      rootCommits.set(commonDir, { value: rootCommit, readAt: getNowMs() });
-    }
+  function getKnownRootCommits(): Map<string, string> {
+    knownRootCommits ??= new Map(Object.entries(rootCommitStore?.load() ?? {}));
+    return knownRootCommits;
   }
 
   function storeRootCommits(): void {
     if (!rootCommitStore) return;
-    const known = Object.fromEntries([...rootCommits].flatMap(([commonDir, cached]) => (cached.value === null ? [] : [[commonDir, cached.value]])));
     try {
-      rootCommitStore.save(known);
+      rootCommitStore.save(Object.fromEntries(getKnownRootCommits()));
     } catch (e) {
       logWarning(`[todos] the repositories' first commits could not be stored: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -209,45 +219,67 @@ export function createRepositoryIdentityReader(deps: RepositoryIdentityReaderDep
     logWarning(`[todos] git could not read ${what} of ${workDir}: its topic is a project of its own until it can`);
   }
 
-  /** The folder's identity from the cache alone; `undefined` when a step must ask git. */
-  function getCachedIdentity(workDir: string): RepositoryIdentity | null | undefined {
+  function getKnownIdentity(workDir: string): KnownRepositoryIdentity {
     const nowMs = getNowMs();
     const commonDir = commonDirs.get(workDir);
-    if (!checkIsReadFresh(commonDir, nowMs, repositoryIdentityTtlMs)) return undefined;
-    if (commonDir.value === null) return null;
-    const rootCommit = rootCommits.get(commonDir.value);
-    if (!checkIsReadFresh(rootCommit, nowMs, Number.POSITIVE_INFINITY)) return undefined;
-    return rootCommit.value === null ? null : { rootCommit: rootCommit.value, repositoryName: getRepositoryNameFromCommonDir(commonDir.value) };
+    if (!checkIsReadFresh(commonDir, nowMs, repositoryIdentityTtlMs)) return { kind: 'due', lastIdentity: lastIdentities.get(workDir) };
+    if (commonDir.value === null) return { kind: 'fresh', identity: null };
+    const walked = walkedRootCommits.get(commonDir.value);
+    const isWalked = checkIsReadFresh(walked, nowMs, Number.POSITIVE_INFINITY);
+    // A walk that failed leaves the last known root in place: a slow or broken git never splits a known repository.
+    const rootCommit = walked?.value ?? getKnownRootCommits().get(commonDir.value) ?? null;
+    const identity = rootCommit === null ? null : { rootCommit, repositoryName: getRepositoryNameFromCommonDir(commonDir.value) };
+    if (isWalked) return { kind: 'fresh', identity };
+    return identity === null ? { kind: 'due', lastIdentity: lastIdentities.get(workDir) } : { kind: 'stored', identity };
+  }
+
+  /** The history walk of one repository, shared by its folders while it runs. */
+  function walkRootCommit(commonDir: string, workDir: string): Promise<void> {
+    const inProgress = walksInProgress.get(commonDir);
+    if (inProgress) return inProgress;
+    const walk = (async () => {
+      const roots = await runGit(workDir, ['rev-list', '--max-parents=0', 'HEAD'], gitHistoryQueryTimeoutMs);
+      const firstRoot = roots?.split('\n').map((line) => line.trim()).filter((line) => line !== '').sort()[0] ?? null;
+      walkedRootCommits.set(commonDir, { value: firstRoot, readAt: getNowMs() });
+      if (firstRoot === null) {
+        warnOnceIfCheckout(workDir, 'the first commit');
+        return;
+      }
+      const previous = getKnownRootCommits().get(commonDir);
+      if (previous === firstRoot) return;
+      if (previous !== undefined) logWarning(`[todos] the first commit of ${commonDir} changed (its history was rewritten): its topics are grouped by the new one`);
+      getKnownRootCommits().set(commonDir, firstRoot);
+      storeRootCommits();
+    })().finally(() => walksInProgress.delete(commonDir));
+    walksInProgress.set(commonDir, walk);
+    return walk;
   }
 
   async function readFromGit(workDir: string): Promise<RepositoryIdentity | null> {
-    const nowMs = getNowMs();
     let commonDir = commonDirs.get(workDir);
-    if (!checkIsReadFresh(commonDir, nowMs, repositoryIdentityTtlMs)) {
+    if (!checkIsReadFresh(commonDir, getNowMs(), repositoryIdentityTtlMs)) {
       const output = await runGit(workDir, ['rev-parse', '--git-common-dir'], gitQuickQueryTimeoutMs);
       commonDir = { value: output ? path.resolve(workDir, output) : null, readAt: getNowMs() };
       commonDirs.set(workDir, commonDir);
       if (commonDir.value === null) warnOnceIfCheckout(workDir, 'the repository');
     }
-    if (commonDir.value !== null && !checkIsReadFresh(rootCommits.get(commonDir.value), nowMs, Number.POSITIVE_INFINITY)) {
-      const roots = await runGit(workDir, ['rev-list', '--max-parents=0', 'HEAD'], gitHistoryQueryTimeoutMs);
-      const firstRoot = roots?.split('\n').map((line) => line.trim()).filter((line) => line !== '').sort()[0] ?? null;
-      rootCommits.set(commonDir.value, { value: firstRoot, readAt: getNowMs() });
-      if (firstRoot === null) warnOnceIfCheckout(workDir, 'the first commit');
-      else storeRootCommits();
+    if (commonDir.value !== null && !checkIsReadFresh(walkedRootCommits.get(commonDir.value), getNowMs(), Number.POSITIVE_INFINITY)) {
+      const repositoryDir = commonDir.value;
+      const walk = walkRootCommit(repositoryDir, workDir);
+      // A stored root answers now; the walk corrects it in the background.
+      if (getKnownRootCommits().has(repositoryDir)) {
+        void walk.catch((e: unknown) => logWarning(`[todos] the history of ${repositoryDir} could not be walked: ${e instanceof Error ? e.message : String(e)}`));
+      } else {
+        await walk;
+      }
     }
-    const identity = getCachedIdentity(workDir) ?? null;
+    const known = getKnownIdentity(workDir);
+    const identity = known.kind === 'due' ? null : known.identity;
     lastIdentities.set(workDir, identity);
     return identity;
   }
 
-  function read(workDir: string): Promise<RepositoryIdentity | null> {
-    loadStoredRootCommits();
-    const cached = getCachedIdentity(workDir);
-    if (cached !== undefined) {
-      lastIdentities.set(workDir, cached);
-      return Promise.resolve(cached);
-    }
+  function startRead(workDir: string): Promise<RepositoryIdentity | null> {
     const inProgress = readsInProgress.get(workDir);
     if (inProgress) return inProgress;
     const started = readFromGit(workDir).finally(() => readsInProgress.delete(workDir));
@@ -255,14 +287,22 @@ export function createRepositoryIdentityReader(deps: RepositoryIdentityReaderDep
     return started;
   }
 
+  function startReadInBackground(workDir: string): void {
+    void startRead(workDir).catch((e: unknown) => logWarning(`[todos] the repository of ${workDir} could not be read: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
   return {
-    read,
+    read(workDir) {
+      const known = getKnownIdentity(workDir);
+      if (known.kind === 'due') return startRead(workDir);
+      lastIdentities.set(workDir, known.identity);
+      if (known.kind === 'stored') startReadInBackground(workDir);
+      return Promise.resolve(known.identity);
+    },
     peek(workDir) {
-      loadStoredRootCommits();
-      const cached = getCachedIdentity(workDir);
-      if (cached !== undefined) return cached;
-      void read(workDir).catch((e: unknown) => logWarning(`[todos] the repository of ${workDir} could not be read: ${e instanceof Error ? e.message : String(e)}`));
-      return lastIdentities.get(workDir);
+      const known = getKnownIdentity(workDir);
+      if (known.kind !== 'fresh') startReadInBackground(workDir);
+      return known.kind === 'due' ? known.lastIdentity : known.identity;
     },
   };
 }

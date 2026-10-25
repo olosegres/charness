@@ -264,25 +264,62 @@ describe('repository identity off the prompt path (no prompt waits for git)', ()
     await git.releaseAll();
   });
 
-  it('the root commits persist by repository: a new process walks no history for one it knows; a broken file is read as empty', async () => {
+  it('two folders of one new repository at once walk its history once', async () => {
+    const git = createHeldGit(answerExampleRepo);
+    const { read } = createRepositoryIdentityReader({ runGit: git.runGit, getNowMs: () => nowMs });
+    const both = Promise.all([read('/w/example-repo'), read('/w/example-repo-wt')]);
+    await git.releaseAll();
+    assert.deepEqual(await both, [rootX, rootX]);
+    assert.deepEqual(git.asked.filter((command) => command === 'rev-list'), ['rev-list'], 'one walk per repository, not per folder');
+  });
+
+  it('a stored root commit answers at once, and this process still walks once: a rewritten history is corrected and logged', async () => {
     const todosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-roots-'));
     try {
-      const warnings: string[] = [];
-      const store = createRepositoryRootCommitFile(todosDir, (line) => warnings.push(line));
-      assert.deepEqual(await createRepositoryIdentityReader({ runGit: async (_dir, args) => answerExampleRepo(args), getNowMs: () => nowMs, rootCommitStore: store }).read('/w/example-repo'), rootX);
       const filePath = path.join(todosDir, 'repositories.json');
-      assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+      fs.writeFileSync(filePath, JSON.stringify({ version: 1, rootCommits: { '/w/example-repo/.git': 'old' } }));
+      const warnings: string[] = [];
+      let releaseWalk = (): void => {};
       const asked: string[] = [];
-      const counting: RunGit = async (_dir, args) => {
+      const runGit: RunGit = async (_dir, args) => {
         asked.push(args[0]);
-        return answerExampleRepo(args);
+        if (args[0] !== 'rev-list') return '/w/example-repo/.git';
+        await new Promise<void>((resolve) => { releaseWalk = resolve; });
+        return 'new';
       };
-      const next = createRepositoryIdentityReader({ runGit: counting, getNowMs: () => nowMs, rootCommitStore: createRepositoryRootCommitFile(todosDir) });
-      assert.deepEqual(await next.read('/w/example-repo-wt'), rootX);
-      assert.deepEqual(asked, ['rev-parse'], 'the history walk is not repeated');
+      const reader = createRepositoryIdentityReader({ runGit, getNowMs: () => nowMs, logWarning: (line) => warnings.push(line), rootCommitStore: createRepositoryRootCommitFile(todosDir) });
+      const stored = { rootCommit: 'old', repositoryName: 'example-repo' };
+      assert.deepEqual(await reader.read('/w/example-repo'), stored, 'the stored answer, without waiting for the walk');
+      assert.deepEqual(reader.peek('/w/example-repo'), stored);
+      assert.deepEqual(await reader.read('/w/example-repo-wt'), stored, 'another folder of the repository');
+      assert.deepEqual(asked.filter((command) => command === 'rev-list'), ['rev-list'], 'the walk runs once, in the background');
+      releaseWalk();
+      await new Promise((resolve) => setImmediate(resolve));
+      const walked = { rootCommit: 'new', repositoryName: 'example-repo' };
+      assert.deepEqual(reader.peek('/w/example-repo'), walked, 'what git says now');
+      assert.equal(warnings.length, 1, 'the changed first commit is logged once');
+      assert.deepEqual(JSON.parse(fs.readFileSync(filePath, 'utf8')).rootCommits, { '/w/example-repo/.git': 'new' });
+      assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+      await reader.read('/w/example-repo');
+      assert.deepEqual(asked.filter((command) => command === 'rev-list'), ['rev-list'], 'walked once per process');
+      const brokenWarnings: string[] = [];
       fs.writeFileSync(filePath, '{"version":1,"rootCommits":');
-      assert.deepEqual(store.load(), {});
-      assert.equal(warnings.length, 1, 'one warning for the broken file');
+      assert.deepEqual(createRepositoryRootCommitFile(todosDir, (line) => brokenWarnings.push(line)).load(), {});
+      assert.equal(brokenWarnings.length, 1, 'one warning for the broken file');
+    } finally {
+      fs.rmSync(todosDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a walk that fails keeps the stored root commit: a slow git never splits a known repository', async () => {
+    const todosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-roots-'));
+    try {
+      fs.writeFileSync(path.join(todosDir, 'repositories.json'), JSON.stringify({ version: 1, rootCommits: { '/w/example-repo/.git': 'aaa' } }));
+      const runGit: RunGit = async (_dir, args) => (args[0] === 'rev-list' ? null : '/w/example-repo/.git');
+      const reader = createRepositoryIdentityReader({ runGit, getNowMs: () => nowMs, logWarning: () => {}, rootCommitStore: createRepositoryRootCommitFile(todosDir) });
+      assert.deepEqual(await reader.read('/w/example-repo'), rootX);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(reader.peek('/w/example-repo'), rootX);
     } finally {
       fs.rmSync(todosDir, { recursive: true, force: true });
     }

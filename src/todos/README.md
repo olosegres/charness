@@ -78,8 +78,10 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
   name is its first member's repository folder name (a worktree or a submodule names its repository, a clone its own
   folder). A folder that is no checkout is a project of its folder. A failed read is tried again after 30 s, and a
   failure on a folder that has `.git` is logged once — the topic is a project of its own meanwhile.
-- **No prompt waits for git.** Two reads of one folder share one git run; the root commits persist by common dir in
-  `todos/repositories.json`, so a restart walks no history again. A prompt and the mid-turn poll take only what is
+- **No prompt waits for git.** Two reads of one folder share one git run, and one repository's folders share one
+  history walk. The root commits persist by common dir in `todos/repositories.json` as the LAST KNOWN answer: after a
+  restart it answers at once, while the process still walks each repository once in the background — a rewritten
+  history (or a folder re-initialised at the same path) is corrected and logged; a failed walk keeps the stored one. A prompt and the mid-turn poll take only what is
   known (`knownOnly`): a folder's last answer, kept past its TTL while it is read again; while a bound folder was never
   read, the grouping is unknown and the prompt carries no board — nothing counts as seen, so the next one carries it.
   The reads start at boot and at every bind, so only a new repository's first walk can leave a prompt without its
