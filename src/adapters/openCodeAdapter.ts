@@ -3229,8 +3229,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   /**
    * @description Whether this thread's directory instance loaded the bot's
    * compaction plugin, read from its merged config (`GET /config`, directory
-   * scoped). An instance created before the plugin was installed lacks it until
-   * it is recreated, and then the bot must keep sending the resume guidance
+   * scoped). An instance created before the plugin was installed, or one that
+   * loaded an older version of it, lacks the current text until it is recreated,
+   * and then the bot must keep sending the resume guidance
    * itself. A read failure answers `false`: the guidance then appears twice,
    * which beats not at all.
    */
@@ -3730,9 +3731,10 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
    * @description Boot step that makes every active directory's instance load the
    * bot's compaction plugin. OpenCode reads plugins once per directory instance,
    * so an instance created before the plugin file existed (a server that outlived
-   * the bot, actagent's included) never gets it on its own. Installs the file,
-   * then per directory (de-duped, concurrently) recreates the instance when it
-   * lacks the plugin and nothing in it is running. A recreated directory loses
+   * the bot, actagent's included) never gets it on its own, and one that loaded an
+   * older version keeps the older text. Installs the file, then per directory
+   * (de-duped, concurrently) recreates the instance when it lacks the current
+   * plugin and nothing in it is running. A recreated directory loses
    * its runtime `telegramBot` registration, so its Set gate is dropped here and
    * the boot caller reconciles the MCP right after.
    */

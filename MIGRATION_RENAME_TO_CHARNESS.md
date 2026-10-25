@@ -20,7 +20,7 @@ start the bot renames the config and data dirs itself, see [Automatic migration]
 | `~/.telegramCode` — the default `DATA_DIR` | `~/.charness` | used while `~/.charness` does not exist (or holds no `state.json` while the old dir does); an explicit `DATA_DIR` is never touched |
 | `TELEGRAMCODE_HOT_RELOAD`, `TELEGRAMCODE_OPENCODE_PROCESS_FILE` | `CHARNESS_HOT_RELOAD`, `CHARNESS_OPENCODE_PROCESS_FILE` | read when the new one is unset; `charness hot` sets both |
 | MCP header `x-telegramcode-mcp-client-id` | `x-charness-mcp-client-id` | the bot's MCP server accepts both |
-| OpenCode plugin `telegramcode-compaction.js` (id `telegramcode-compaction`) | `charness-compaction.js` (id `charness-compaction`) | the old file is removed when the new one is installed |
+| OpenCode plugin `telegramcode-compaction.js` (id `telegramcode-compaction`) | `charness-compaction-<hash>.js` (id `charness-compaction`; the hash is of the plugin's text) | the old file is removed when the new one is installed |
 | Docker image `telegramcode`, service `telegramcode`, container `telegramcode-main` | `charness`, `charness`, `charness-main` | a container of the old image keeps running as it is |
 | `/opt/telegramcode`, `/home/telegramcode`, `/srv/telegramcode/…` (Docker mounts and host paths) | `/opt/charness`, `/home/charness`, `/srv/charness/…` | the new image's entrypoint accepts the old mount points |
 | `telegramcode-restart-bot` | `charness-restart-bot` | the old name is a link in the new image and says so |

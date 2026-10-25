@@ -863,7 +863,8 @@ export interface AgentAdapter extends EventEmitter {
   /**
    * Make every active OpenCode directory's instance load the bot's compaction
    * plugin (`utils/openCodeCompactPlugin.ts`): install the plugin file, then
-   * recreate each IDLE directory instance that predates it. Recreating drops the
+   * recreate each IDLE directory instance that predates it or loaded an older
+   * version of it. Recreating drops the
    * directory's runtime MCP registrations, so the boot caller must run
    * {@link reconcileSchedulerMcpForActiveSessions} AFTER this resolves. Best-effort,
    * never rejects; a busy directory is left for the next boot.
@@ -954,7 +955,7 @@ export interface AgentAdapter extends EventEmitter {
    * resume guidance (the loaded skills and the next-steps checklist) for this
    * thread's session, so the bot must leave it
    * out of the `compactContext` instruction. OpenCode: true when the server
-   * loaded the bot's compaction plugin (`utils/openCodeCompactPlugin.ts`), which
+   * loaded the CURRENT bot compaction plugin (`utils/openCodeCompactPlugin.ts`), which
    * cannot see the instruction and so cannot skip a duplicate itself. Optional —
    * absent means "no", and the Claude backends leave it unset because their
    * `PreCompact` hook skips a compaction that already carries the guidance.
