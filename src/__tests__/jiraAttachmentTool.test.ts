@@ -28,6 +28,8 @@ const apiToken = 'token-value-never-echoed';
 const expectedAuthorization = `Basic ${Buffer.from(`${email}:${apiToken}`).toString('base64')}`;
 const key = makeJiraKey('PROJ-1');
 const stallTimeoutMs = 250;
+/** The stall bound of a download that is slow only because the host is: a 40 MB stream must not be taken for a stuck connection. */
+const largeDownloadStallTimeoutMs = 10_000;
 
 interface Served {
   attachments: Array<{ id: string; filename: string; mimeType: string; size: number; author?: { accountId: string; accountType?: string } }>;
@@ -95,8 +97,8 @@ describe('fetchIssueAttachment (C10)', () => {
     fs.rmSync(path.resolve(downloadDir, '..', '..'), { recursive: true, force: true });
   });
 
-  const fetchAttachment = (attachmentId: string, trust: JiraTrust | null = null): ReturnType<typeof fetchIssueAttachment> => fetchIssueAttachment({
-    client: createJiraClient({ baseUrl: siteUrl, email, apiToken, downloadStallTimeoutMs: stallTimeoutMs }),
+  const fetchAttachment = (attachmentId: string, trust: JiraTrust | null = null, downloadStallTimeoutMs = stallTimeoutMs): ReturnType<typeof fetchIssueAttachment> => fetchIssueAttachment({
+    client: createJiraClient({ baseUrl: siteUrl, email, apiToken, downloadStallTimeoutMs }),
     getDownloadDir: () => downloadDir,
     trust,
   }, key, attachmentId);
@@ -274,7 +276,7 @@ describe('fetchIssueAttachment (C10)', () => {
       };
       writeNext();
     };
-    const result = await fetchAttachment('5');
+    const result = await fetchAttachment('5', null, largeDownloadStallTimeoutMs);
     assert.ok(result.ok, JSON.stringify(result));
     assert.equal(fs.statSync(path.join(downloadDir, '5-big.mov')).size, chunk.length * chunkCount);
     assert.match(result.message, new RegExp(`${chunk.length * chunkCount} bytes`));

@@ -35,7 +35,10 @@ let receivedRequests: Array<{ authorization?: string; body: string }> = [];
 let audioPath = '';
 let emptyAudioPath = '';
 
+/** The client timeout of the tests whose server never answers: short, so the timeout fires within the test. */
 const testTimeoutMs = 300;
+/** The client timeout of every other test: a response that is merely slow (a starved CPU) must not be taken for a timeout and retried. */
+const answeredTimeoutMs = 10_000;
 const testRetryDelaysMs = [10, 20];
 const splitWriteGapMs = 30;
 /** Guards the no-hang tests: a pending promise must fail the test, not stall the suite. */
@@ -111,10 +114,10 @@ function transcribedSplitMidCharacter(text: string): AttemptHandler {
   };
 }
 
-function runTranscription(filePath = audioPath) {
+function runTranscription(filePath = audioPath, timeoutMs = answeredTimeoutMs) {
   const retries: TranscribeRetryInfo[] = [];
   const resultPromise = transcribeAudio(filePath, endpoint, {
-    timeoutMs: testTimeoutMs,
+    timeoutMs,
     retryDelaysMs: testRetryDelaysMs,
     onRetry: (info) => { retries.push(info); },
   });
@@ -181,9 +184,9 @@ test('succeeds on the first attempt: sends the key and model, no retry', async (
 
 test('the language hint is a form field only when it is set', async () => {
   resetServer([transcribed('with language'), transcribed('without language')]);
-  const withLanguage = await transcribeAudio(audioPath, { ...endpoint, language: 'ru' }, { timeoutMs: testTimeoutMs });
+  const withLanguage = await transcribeAudio(audioPath, { ...endpoint, language: 'ru' }, { timeoutMs: answeredTimeoutMs });
   assert.deepEqual(withLanguage, { ok: true, text: 'with language' });
-  const withoutLanguage = await transcribeAudio(audioPath, endpoint, { timeoutMs: testTimeoutMs });
+  const withoutLanguage = await transcribeAudio(audioPath, endpoint, { timeoutMs: answeredTimeoutMs });
   assert.deepEqual(withoutLanguage, { ok: true, text: 'without language' });
   assert.match(receivedRequests[0].body, /name="language"\r\n\r\nru\r\n/);
   assert.doesNotMatch(receivedRequests[1].body, /name="language"/);
@@ -191,14 +194,14 @@ test('the language hint is a form field only when it is set', async () => {
 
 test('a keyless custom server gets no Authorization header', async () => {
   resetServer([transcribed('no key')]);
-  const keyless = await transcribeAudio(audioPath, { url: endpoint.url, model: endpoint.model }, { timeoutMs: testTimeoutMs });
+  const keyless = await transcribeAudio(audioPath, { url: endpoint.url, model: endpoint.model }, { timeoutMs: answeredTimeoutMs });
   assert.deepEqual(keyless, { ok: true, text: 'no key' });
   assert.equal(receivedRequests[0].authorization, undefined);
 });
 
 test('recovers after a TIMEOUT (the reported symptom) and announces the retry', async () => {
   resetServer([hangWithoutResponse, transcribed('after timeout')]);
-  const { resultPromise, retries } = runTranscription();
+  const { resultPromise, retries } = runTranscription(audioPath, testTimeoutMs);
   assert.deepEqual(await resultPromise, { ok: true, text: 'after timeout' });
   assert.deepEqual(retries, [{ attemptNumber: 1, error: 'transcription timed out', delayMs: 10 }]);
 });
@@ -277,7 +280,7 @@ test('a 2xx with no text or a malformed body fails at once, without a retry', as
 
 test('gives up after 3 attempts and reports the last error with the attempt count', async () => {
   resetServer([hangWithoutResponse, respondWith(500, 'down'), respondWith(503, 'still down')]);
-  const { resultPromise, retries } = runTranscription();
+  const { resultPromise, retries } = runTranscription(audioPath, testTimeoutMs);
   assert.deepEqual(await resultPromise, { ok: false, error: 'HTTP 503: still down (after 3 attempts)' });
   assert.equal(receivedRequests.length, 3);
   assert.equal(retries.length, 2);
@@ -304,7 +307,7 @@ test('refreshEndpoint is asked before every retry, never before the first attemp
   resetServer([respondWith(503, 'busy'), respondWith(503, 'busy'), transcribed('third time')]);
   const asked: number[] = [];
   const result = await transcribeAudio(audioPath, endpoint, {
-    timeoutMs: testTimeoutMs,
+    timeoutMs: answeredTimeoutMs,
     retryDelaysMs: testRetryDelaysMs,
     refreshEndpoint: async () => {
       asked.push(receivedRequests.length);
@@ -319,7 +322,7 @@ test('refreshEndpoint is asked before every retry, never before the first attemp
 test('a refreshEndpoint that rejects ends the attempts with its message', async () => {
   resetServer([respondWith(503, 'busy'), transcribed('never reached')]);
   const result = await transcribeAudio(audioPath, endpoint, {
-    timeoutMs: testTimeoutMs,
+    timeoutMs: answeredTimeoutMs,
     retryDelaysMs: testRetryDelaysMs,
     refreshEndpoint: async () => { throw new Error('the engine is gone'); },
   });

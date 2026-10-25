@@ -256,6 +256,20 @@ async function waitForTestServerHealth(url: string): Promise<void> {
   throw new Error(`Test server did not become healthy at ${url}`);
 }
 
+/**
+ * The first pid a fixture wrote to its log. The log exists from the moment the fixture opens it for appending, a
+ * moment before the pid is in it, so waiting for the file alone can read an empty log.
+ */
+async function waitForSpawnedPid(spawnLogPath: string): Promise<number> {
+  const deadline = Date.now() + processExitTimeoutMs;
+  while (Date.now() < deadline && getSpawnedPids(spawnLogPath).length === 0) {
+    await new Promise<void>((resolve) => setTimeout(resolve, processExitPollMs));
+  }
+  const [spawnedPid] = getSpawnedPids(spawnLogPath);
+  assert.ok(spawnedPid, `Expected a pid in ${spawnLogPath}`);
+  return spawnedPid;
+}
+
 async function waitForTestFile(filePath: string): Promise<void> {
   const deadline = Date.now() + processExitTimeoutMs;
   while (Date.now() < deadline && !fs.existsSync(filePath)) {
@@ -533,9 +547,7 @@ test(
         },
       );
       assert.equal(checkIsTestProcessAlive(server.pid), true);
-      await waitForTestFile(descendantLogPath);
-      [descendantPid] = getSpawnedPids(descendantLogPath);
-      assert.ok(descendantPid);
+      descendantPid = await waitForSpawnedPid(descendantLogPath);
       assert.equal(checkIsTestProcessAlive(descendantPid), true);
 
       const ownerExit = new Promise<void>((resolve) => owner.once('exit', () => resolve()));
