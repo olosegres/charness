@@ -144,8 +144,9 @@ describe('A worker watch end to end: built charness, fake Bot API, a fake orches
     await getCharness().waitFor('the agent to arm the watch', agentTimeoutMs, () => getToolCalls('schedule_create').length === 1);
     const [created] = getToolCalls('schedule_create');
     assert.doesNotMatch(created.outcome, /^error:/, created.outcome);
+    // `state.json` is written a moment after the change (the save is debounced): wait for the record, do not read it at once.
+    await getCharness().waitFor('the watch to be persisted', replyTimeoutMs, () => readPersistedSchedules().some((record) => record.name === fakeWatchJobName));
     const [watch] = readPersistedSchedules().filter((record) => record.name === fakeWatchJobName);
-    assert.ok(watch, 'the watch is persisted');
     assert.equal(watch.deliveryKind, 'check');
     assert.equal(watch.isPinSilent, true);
   });
@@ -167,6 +168,6 @@ describe('A worker watch end to end: built charness, fake Bot API, a fake orches
     await getCharness().waitFor('the alert to be unpinned', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(alertMessageId));
     const unpins = fakeTelegram.pinEvents.filter((event) => event.kind === 'unpin');
     assert.deepEqual(unpins.map((event) => event.messageId), [alertMessageId], 'that alert and nothing else');
-    assert.deepEqual(readPersistedSchedules().filter((record) => record.name === fakeWatchJobName), [], 'the watch is gone');
+    await getCharness().waitFor('the watch to be gone from the persisted state', replyTimeoutMs, () => readPersistedSchedules().every((record) => record.name !== fakeWatchJobName));
   });
 });
