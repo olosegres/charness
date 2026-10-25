@@ -129,6 +129,8 @@ export class TodoReminderEngine {
     if (!isTurnEnd) {
       // A turn whose end is held (a question, a compaction, unread input) ends at a later poll.
       if (wasBusy && probe.isActive) this.wasBusy.set(conversationKey, true);
+      // A session that ended mid-turn (a stop, a crash) makes no more tool calls.
+      if (wasBusy && !probe.isActive) this.discardInbox(key);
       return;
     }
     await this.handleTurnEnd(key, probe, nowMs, intervalMs);

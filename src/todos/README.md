@@ -130,8 +130,9 @@ Jira: the platform-specific parts (the `/todo` view, a topic's name) are injecte
   the changes count as seen only once it was accepted. An idle or sleeping session gets nothing (D21). The poll runs
   while the lists are on, the staleness reminder off or not.
 - A waiting inbox is withdrawn (`discardInbox`) wherever no tool call can take it any more — at a turn start the bot
-  makes (its prompt carries the changes), at a turn's end (the busy → idle edge, the adapter's `turnEnded`) and while
-  a turn is held open (a question waiting, a compaction: no work, so nothing is delivered then either). The changes
-  stay unseen and ride the next prompt, and the inbox dir is empty between turns, so the hook starts no `node` for
-  anyone. A copy the hook moved aside and never removed (`<id>.json.<pid>`) goes with it. The boot clears every
-  inbox: this process does not know what an old one carries, and what it carried is still unseen.
+  makes (its prompt carries the changes), at a turn's end (the busy → idle edge, the adapter's `turnEnded`), while a
+  turn is held open (a question waiting, a compaction: no work, so nothing is delivered then either) and when the
+  session starts, stops or ends (`clearThreadContextMarker`, and the poll's busy → inactive edge). The changes stay
+  unseen and ride the next prompt, and the inbox dir is empty between turns, so the hook starts no `node` for anyone.
+  A copy the hook moved aside and never removed (`<id>.json.<pid>`) goes too. The boot clears every inbox: this
+  process does not know what an old one carries, and what it carried is still unseen.

@@ -231,6 +231,33 @@ describe('the poll drives the mid-turn delivery', () => {
     }
   });
 
+  it('a session that ends mid-turn (busy → inactive) withdraws its inbox; a session that stays gone is no new edge', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-midpoll-'));
+    try {
+      const endedKey = makeTelegramKey(-1001111111111, 1);
+      const discarded: string[] = [];
+      let probe: SessionTurnProbe = { isActive: true, isBusy: true, hasUnconsumedInput: false, isTurnEndBlocked: false };
+      const engine = new TodoReminderEngine({
+        registry: createTodoRegistry({ store: new TodoStore(dataDir), getNowMs: Date.now }),
+        listConversations: (): SessionKey[] => [endedKey],
+        probeTurn: () => probe,
+        getGate: () => ({ hasOpenRequest: false, isAnswerTailFollowed: false, isLimited: false, isApiBilled: false, isStoppingAfterTurn: false }),
+        getIntervalMs: () => null,
+        checkIsEnabled: () => true,
+        postReminder: async () => true,
+        midTurn: { reconcile: () => {}, deliverIfPending: async () => {}, discardInbox: (key) => { discarded.push(keyToString(key)); } },
+      });
+      await engine.poll();
+      probe = { isActive: false, isBusy: false, hasUnconsumedInput: null, isTurnEndBlocked: false };
+      await engine.poll();
+      assert.deepEqual(discarded, [keyToString(endedKey)], 'withdrawn when the session is gone');
+      await engine.poll();
+      assert.deepEqual(discarded, [keyToString(endedKey)], 'once: an asleep session is no new edge');
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('only busy sessions are handed changes; it runs with the reminder off; not at all with the lists off', async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-todo-midpoll-'));
     try {

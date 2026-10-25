@@ -2770,8 +2770,10 @@ const threadContextMarkers = new Map<string, string>();
  */
 function clearThreadContextMarker(key: SessionKey): void {
   threadContextMarkers.delete(keyToString(key));
-  // The same boundary for the project board: the next turn start carries it whole (D20).
+  // The same boundary for the project board: the next turn start carries it whole (D20), and an inbox no tool call of
+  // this session will take is withdrawn.
   noteTodoFreshContext(key);
+  discardTodoInbox(key);
 }
 
 function getThreadMessageState(key: SessionKey): ThreadMessageState {

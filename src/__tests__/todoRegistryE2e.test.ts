@@ -24,7 +24,8 @@
  *     General's `/todo` lists the project with its topics
  *   → mid-turn (S4): while B works, A publishes; B gets A's change with its next tool result — the launch settings'
  *     `PostToolUse` hook prints B's inbox, as the real CLI runs it — and B's next prompt does not repeat it; a turn
- *     that ends with no tool call after a change withdraws its inbox, and the next prompt carries the change
+ *     that ends with no tool call after a change withdraws its inbox, and so does a session stopped mid-turn (`/quit`);
+ *     the next prompt carries the change
  *   → a prompt never waits for git: topic D on a new clone whose history walk git holds back (a `git` in the
  *     instance's bin folder) — its prompt reaches the agent at once, with no board, and B's fresh context gets its own
  *     list alone; once git answered, the whole board for both
@@ -99,6 +100,8 @@ const reminderPollMs = 500;
 const longTurnWorkMs = 5000;
 /** How long into its turn B makes the tool call whose hook delivers A's change (A publishes meanwhile). */
 const midTurnToolDelayMs = 8000;
+/** A turn long enough to be stopped by `/quit` while it works. */
+const stoppedTurnWorkMs = 30 * 1000;
 /** What the agent reads in a reminder, either form. */
 const reminderMarker = '[Todo] Your published todo list was last updated';
 
@@ -269,6 +272,12 @@ function writeHoldingGit(instance: IsolatedInstanceLayout): void {
     `exec '${realGit}' "$@"`,
     '',
   ].join('\n'), { mode: 0o755 });
+}
+
+/** What waits in the instance's mid-turn inbox dir. */
+function listInboxFiles(): string[] {
+  const inboxDir = path.join(getLayout().dataDir, 'todos', 'inbox');
+  return fs.existsSync(inboxDir) ? fs.readdirSync(inboxDir) : [];
 }
 
 function readGitWalkLog(): string {
@@ -547,15 +556,25 @@ describe('Shared todo registry end to end: built charness, fake Bot API, fake cl
   });
 
   it('a turn that ends with no tool call after the change withdraws the inbox: empty between turns, the next prompt carries it', async () => {
-    const inboxDir = path.join(getLayout().dataDir, 'todos', 'inbox');
-    const listInbox = (): string[] => (fs.existsSync(inboxDir) ? fs.readdirSync(inboxDir) : []);
     fakeTelegram.pushOperatorMessage(topicBThreadId, `TODO-35 [work-ms:${midTurnToolDelayMs}]`);
     await getCharness().waitFor('B working on TODO-35', turnTimeoutMs, () => readPrompts().some((prompt) => /\bTODO-35\b/.test(prompt.text)));
     await publishThroughAgent(topicAThreadId, 'TODO-36', '[todo:queued:Untaken item]');
-    await getCharness().waitFor('B\'s inbox written while it works', turnTimeoutMs, () => listInbox().length > 0);
-    await getCharness().waitFor('the inbox withdrawn at B\'s turn end', turnTimeoutMs, () => listInbox().length === 0);
+    await getCharness().waitFor('B\'s inbox written while it works', turnTimeoutMs, () => listInboxFiles().length > 0);
+    await getCharness().waitFor('the inbox withdrawn at B\'s turn end', turnTimeoutMs, () => listInboxFiles().length === 0);
     await publishThroughAgent(topicBThreadId, 'TODO-37', '[todo-touch]');
     assert.match(getPromptOf('TODO-37'), /\[Project board — changes since \d\d:\d\d\]\n#topic 111 \(proj-a\)[\s\S]*Untaken item/, 'still unseen: the next prompt carries it');
+  });
+
+  it('a session stopped mid-turn while its inbox waits withdraws it; the new session\'s whole board carries the change', async () => {
+    fakeTelegram.pushOperatorMessage(topicBThreadId, `TODO-38 [work-ms:${stoppedTurnWorkMs}]`);
+    await getCharness().waitFor('B working on TODO-38', turnTimeoutMs, () => readPrompts().some((prompt) => /\bTODO-38\b/.test(prompt.text)));
+    await publishThroughAgent(topicAThreadId, 'TODO-39', '[todo:queued:Stopped-turn item]');
+    await getCharness().waitFor('B\'s inbox written while it works', turnTimeoutMs, () => listInboxFiles().length > 0);
+    await sendAndAwaitReply(topicBThreadId, '/quit', 'stopped');
+    await getCharness().waitFor('the inbox withdrawn when B\'s session stopped', replyTimeoutMs, () => listInboxFiles().length === 0);
+    await sendAndAwaitReply(topicBThreadId, '/claude', 'ready in');
+    await publishThroughAgent(topicBThreadId, 'TODO-40', '[todo-touch]');
+    assert.match(getPromptOf('TODO-40'), /\[Project board · proj-a · 1 other topic\][\s\S]*Stopped-turn item/, 'a fresh context carries the whole board, the change made while B worked included');
   });
 
   // ── no prompt waits for git ───────────────────────────────────────────
