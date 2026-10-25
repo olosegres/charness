@@ -43,6 +43,11 @@ once more when it read what the agent wrote during the downtime. The second copy
 a second "work resumed" message, and the agent a second "Continue" prompt and a second turn. The first one now owns the
 episode and the replayed copy is left out.
 
+**A bot restart in the middle of a per-turn topic's turn no longer wipes that turn's working files.** The cleanup at start took the
+running agent of a per-turn topic for a leftover and deleted its output log and pipes while the agent was still working, so the bot
+could neither read the rest of the turn nor write to the agent: the answer never reached the topic. The daily cleanup did the same to
+a turn that happened to be running then. The cleanup now knows both Claude lifecycles.
+
 ## 3.6.0 — 2026-10-24
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process

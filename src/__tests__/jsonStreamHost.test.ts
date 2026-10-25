@@ -28,6 +28,7 @@ import * as path from 'path';
 
 import {
   buildJsonStreamTmuxSessionName,
+  checkIsJsonStreamHostOwned,
   checkIsPidAlive,
   resolveAdoptedTail,
   buildWrapperScript,
@@ -46,13 +47,16 @@ import {
   parseJsonStreamTmuxSessionName,
   readExitCodeFile,
   readPidFile,
+  resolveJsonStreamRoot,
   resolveJsonStreamSessionDir,
+  sweepOrphanJsonStreamDirs,
   waitForPidExit,
   waitForPidExitOrKill,
   wrapperCdFailExitCode,
   writeFifoText,
 } from '../utils/jsonStreamHost';
 import { parseClaudeConfigDirFromCommand } from '../utils/claudeProfiles';
+import { claudeJsonStreamAdapterName, claudePerTurnAdapterName } from '../adapters/adapterNames';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
@@ -78,6 +82,37 @@ describe('json-stream host layout codecs', () => {
     assert.deepEqual(parseJsonStreamTmuxSessionName(name), key);
     // The scrape backend's names must never parse as ours (no adopt cross-talk).
     assert.equal(parseJsonStreamTmuxSessionName('claude--1001111111111-4242'), null);
+  });
+});
+
+describe('which threads own a json-stream host dir (the orphan sweep keeps them)', () => {
+  const sessionId = 'sess-owned';
+
+  it('a live session in either lifecycle, or a persisted json-stream row with a conversation, owns it; anything else does not', () => {
+    assert.equal(checkIsJsonStreamHostOwned({ isSessionActive: true, agent: undefined }), true, 'a live session');
+    assert.equal(checkIsJsonStreamHostOwned({ isSessionActive: false, agent: { name: claudeJsonStreamAdapterName, claudeSessionId: sessionId } }), true);
+    assert.equal(checkIsJsonStreamHostOwned({ isSessionActive: false, agent: { name: claudePerTurnAdapterName, claudeSessionId: sessionId } }), true, 'the per-turn row too: its process outlives a restart that came mid-turn');
+    assert.equal(checkIsJsonStreamHostOwned({ isSessionActive: false, agent: { name: claudePerTurnAdapterName } }), false, 'no conversation to resume');
+    assert.equal(checkIsJsonStreamHostOwned({ isSessionActive: false, agent: { name: 'opencode', claudeSessionId: sessionId } }), false, 'another backend');
+    assert.equal(checkIsJsonStreamHostOwned({ isSessionActive: false, agent: undefined }), false, 'no thread row');
+  });
+
+  it('the sweep removes the dir of a thread nothing owns and leaves a per-turn thread\'s (a live process may be in it)', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-sweep-'));
+    try {
+      const perTurnKey = makeTelegramKey(-100999777, 71);
+      const orphanKey = makeTelegramKey(-100999777, 72);
+      fs.mkdirSync(resolveJsonStreamSessionDir(dataDir, perTurnKey), { recursive: true });
+      fs.mkdirSync(resolveJsonStreamSessionDir(dataDir, orphanKey), { recursive: true });
+      const removed = await sweepOrphanJsonStreamDirs(resolveJsonStreamRoot(dataDir), (key) => checkIsJsonStreamHostOwned({
+        isSessionActive: false,
+        agent: key.thread === perTurnKey.thread ? { name: claudePerTurnAdapterName, claudeSessionId: sessionId } : undefined,
+      }));
+      assert.equal(removed, 1);
+      assert.deepEqual(fs.readdirSync(resolveJsonStreamRoot(dataDir)), [path.basename(resolveJsonStreamSessionDir(dataDir, perTurnKey))]);
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });
 

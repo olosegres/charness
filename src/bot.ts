@@ -331,6 +331,7 @@ import {
 } from './botFileStorage';
 import {
   resolveJsonStreamRoot,
+  checkIsJsonStreamHostOwned,
   sweepOrphanJsonStreamDirs,
   resolveJsonStreamSessionDir,
   getJsonStreamSessionPaths,
@@ -13715,11 +13716,10 @@ export async function startBot(): Promise<void> {
     // thread that no longer owns a json-stream session (the normal stop /
     // release paths delete the dir themselves; reattach's adopt/orphan-kill
     // covers live tmux sessions — this covers their dirs).
-    void sweepOrphanJsonStreamDirs(resolveJsonStreamRoot(getDataDir()), (key) => {
-      if (getAdapter(claudeJsonStreamAdapterName).checkIsActive(key)) return true;
-      const agent = state.getAgent(key);
-      return agent?.name === claudeJsonStreamAdapterName && !!agent.claudeSessionId;
-    })
+    void sweepOrphanJsonStreamDirs(resolveJsonStreamRoot(getDataDir()), (key) => checkIsJsonStreamHostOwned({
+      isSessionActive: [claudeJsonStreamAdapterName, claudePerTurnAdapterName].some((name) => getAdapter(name).checkIsActive(key)),
+      agent: state.getAgent(key),
+    }))
       .then((removedCount) => {
         if (removedCount > 0) console.log(`[fileSweep] removed ${removedCount} orphan jsonstream dirs`);
       })

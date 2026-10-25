@@ -32,6 +32,7 @@ import type { ClaudeBackgroundTask } from './claudeStreamJson';
 import type { ScheduledJob } from './claudeScheduledJobs';
 import { setTimeout as sleep } from 'timers/promises';
 import { keyToSlug, tryKeyFromSlug, type SessionKey } from '../sessionKey';
+import { checkIsJsonStreamBackend } from '../adapters/adapterNames';
 import type { JsonStreamTailOffset } from '../types';
 import { buildTmuxSessionName, parseTmuxSessionName } from './tmuxSessionName';
 import { shellSingleQuote } from './tmuxExec';
@@ -529,6 +530,17 @@ export function decodeStdoutTailChunk(state: StdoutTailState, chunk: Buffer): st
  */
 export function getStdoutLineBoundaryOffset(state: StdoutTailState, pendingLineText: string): number {
   return state.consumedBytes - state.decoderRetainedBytes - Buffer.byteLength(pendingLineText, 'utf8');
+}
+
+/**
+ * @description Whether a thread still owns its json-stream host dir (what {@link sweepOrphanJsonStreamDirs} keeps): a live
+ * session in EITHER json-stream lifecycle — they are two adapter instances over the same host dir, and the per-turn one is
+ * the one a process outlives a restart in when a turn was running — or a persisted json-stream agent row (both backends)
+ * with a conversation to resume.
+ */
+export function checkIsJsonStreamHostOwned(input: { isSessionActive: boolean; agent: { name: string; claudeSessionId?: string } | null | undefined }): boolean {
+  if (input.isSessionActive) return true;
+  return !!input.agent && checkIsJsonStreamBackend(input.agent.name) && !!input.agent.claudeSessionId;
 }
 
 /**
