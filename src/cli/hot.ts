@@ -25,6 +25,7 @@ import { migrateLegacyNamesUnderLock } from '../legacyMigration';
 import { getLaunchEnvironment } from '../selfUpdate/launchEnvironment';
 import { createDefaultReexecDeps, getReexecProblems, getReexecTarget, reexecProcess } from '../selfUpdate/restart';
 import { collectLoadedDistModules, supervisorReexecSignal, writeHotSupervisorRecord } from '../selfUpdate/hotSupervisor';
+import { createTscWatchGuard, listStaleSources, readTscWatchGuardTimings, runFreshTscCompile } from './tscWatchGuard';
 
 interface HotOpenCodeDeps {
   checkIsInstalled: (toolName: string) => boolean;
@@ -38,6 +39,8 @@ type HotChildName = 'tsc' | 'nodemon';
 const tscWatchCompleteMarker = 'Watching for file changes.';
 const tscWatchReadyMarker = `Found 0 errors. ${tscWatchCompleteMarker}`;
 const tscWatchTailLength = tscWatchReadyMarker.length - 1;
+/** How long a `tsc -w` asked to stop for a restart gets before it is killed outright (a hung watcher must not block its replacement). */
+const tscStopGraceMs = 5000;
 
 /**
  * @description Wrapper-entry for `charness hot` — hot-reload mode for
@@ -71,6 +74,11 @@ const tscWatchTailLength = tscWatchReadyMarker.length - 1;
  * token to the worker (`buildHotWorkerEnv`), the sidecar dies with it (its own watchdog covers a SIGKILL), and
  * the supervisor's shutdown stops the recorded one. A reload of the worker leaves it running for the next
  * worker to adopt.
+ *
+ * **A blind watcher.** `tsc -w` learns of a changed source only from file-system events, which a burst (a pull of dozens of
+ * commits, then `yarn install`) can overflow and drop — it then keeps the old text of the files it missed and the worker keeps
+ * running the old build, silently. A guard (`tscWatchGuard.ts`) compares the watcher with the tree and restarts the WATCHER
+ * (not the supervisor, not the worker) when a compiled source stays newer than its output while the watcher is idle.
  *
  * **Failure modes handled:**
  *   - fresh checkout → nodemon waits until `tsc -w` produces the worker entry;
@@ -173,7 +181,10 @@ export async function runHot(): Promise<void> {
   // resolves normally and Node exits with the recorded code. Re-raising
   // would mask the underlying child exit code.
   const children = new Set<ChildProcess>();
+  /** The `tsc -w` processes stopped on purpose to be replaced by a fresh one (a restart is no exit to shut down on). */
+  const plannedTscStops = new Set<ChildProcess>();
   let nodemonChild: ChildProcess | null = null;
+  let tscWatcher: ChildProcess | null = null;
   let shuttingDown = false;
   let isReexecuting = false;
   let isSidecarStopped = false;
@@ -190,6 +201,7 @@ export async function runHot(): Promise<void> {
   const forwardSignal = (sig: NodeJS.Signals, options: { isReexec?: boolean } = {}) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    tscWatchGuard.stop();
     isReexecuting = options.isReexec === true;
     for (const child of children) {
       if (child.killed || child.exitCode !== null) continue;
@@ -239,6 +251,10 @@ export async function runHot(): Promise<void> {
       if (error) {
         process.stderr.write(`charness hot: child error (${childName}): ${error.message}\n`);
         if (!shuttingDown && finalCode === 0) finalCode = 1;
+      } else if (plannedTscStops.delete(child)) {
+        process.stderr.write(`charness hot: tsc -w stopped to be restarted (code=${code ?? 'null'}, signal=${signal ?? 'null'})\n`);
+        checkShouldResolveChildren();
+        return;
       } else {
         const label = childName === 'tsc' ? 'tsc -w' : 'nodemon';
         process.stderr.write(
@@ -268,37 +284,67 @@ export async function runHot(): Promise<void> {
 
   // Keep stdout piped so tsc does not clear the terminal between rebuilds and
   // so nodemon can be gated on the first completed watch compile.
-  const tscChild = spawn(process.execPath, [tscBin, '-w'], {
-    cwd: projectRoot,
-    stdio: ['ignore', 'pipe', 'inherit'],
-  });
-  registerChild(tscChild, 'tsc');
   let tscOutputTail = '';
-  tscChild.stdout?.on('data', (chunk: Buffer) => {
-    const output = chunk.toString();
-    process.stdout.write(output);
-    const inspectionText = tscOutputTail + output;
-    const isWatchComplete = inspectionText.includes(tscWatchCompleteMarker);
-    const isWatchReady = checkIsTscWatchReady(inspectionText);
-    tscOutputTail = inspectionText.slice(-tscWatchTailLength);
-    if (!isWatchComplete || nodemonChild !== null || shuttingDown) return;
-    tscOutputTail = '';
-    if (!isWatchReady) {
+  const startTscWatcher = () => {
+    const tscChild = spawn(process.execPath, [tscBin, '-w'], {
+      cwd: projectRoot,
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    tscWatcher = tscChild;
+    registerChild(tscChild, 'tsc');
+    tscChild.stdout?.on('data', (chunk: Buffer) => {
+      const output = chunk.toString();
+      process.stdout.write(output);
+      tscWatchGuard.noteOutput(output);
+      const inspectionText = tscOutputTail + output;
+      const isWatchComplete = inspectionText.includes(tscWatchCompleteMarker);
+      const isWatchReady = checkIsTscWatchReady(inspectionText);
+      tscOutputTail = inspectionText.slice(-tscWatchTailLength);
+      if (!isWatchComplete || nodemonChild !== null || shuttingDown) return;
+      tscOutputTail = '';
+      if (!isWatchReady) {
+        process.stderr.write(
+          'charness hot: compile has TypeScript errors; nodemon is waiting for a clean build. ' +
+            'Fix the errors and save.\n',
+        );
+        return;
+      }
+      if (fs.existsSync(distEntry)) {
+        startNodemon();
+        return;
+      }
       process.stderr.write(
-        'charness hot: compile has TypeScript errors; nodemon is waiting for a clean build. ' +
-          'Fix the errors and save.\n',
+        'charness hot: clean compile produced no dist worker entry. ' +
+          'Check the TypeScript output path and save; nodemon will keep waiting.\n',
       );
-      return;
-    }
-    if (fs.existsSync(distEntry)) {
-      startNodemon();
-      return;
-    }
-    process.stderr.write(
-      'charness hot: clean compile produced no dist worker entry. ' +
-        'Check the TypeScript output path and save; nodemon will keep waiting.\n',
-    );
-  });
+    });
+  };
+  // The guard restarts the WATCHER only: the supervisor, nodemon and the worker stay. The fresh `tsc -w` compiles the whole
+  // tree again and emits it, which nodemon turns into one worker reload.
+  const restartTscWatcher = () => {
+    const stopping = tscWatcher;
+    if (shuttingDown || stopping === null) return;
+    plannedTscStops.add(stopping);
+    const killTimer = setTimeout(() => stopping.kill('SIGKILL'), tscStopGraceMs);
+    stopping.once('exit', () => {
+      clearTimeout(killTimer);
+      if (!shuttingDown) startTscWatcher();
+    });
+    tscOutputTail = '';
+    stopping.kill('SIGTERM');
+  };
+  const tscWatchGuard = createTscWatchGuard(
+    {
+      getNowMs: () => Date.now(),
+      listStaleSources: (graceMs) => listStaleSources(projectRoot, Date.now(), graceMs),
+      runFreshCompile: () => runFreshTscCompile(projectRoot, tscBin),
+      restartWatcher: restartTscWatcher,
+      log: (message) => process.stderr.write(message),
+    },
+    readTscWatchGuardTimings(process.env),
+  );
+  startTscWatcher();
+  tscWatchGuard.start();
 
   await childrenStopped;
 

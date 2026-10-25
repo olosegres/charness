@@ -13,6 +13,11 @@
  *     replace the worker — the update asks for the reload itself (touching the worker entry), the new worker announces it, and the
  *     build deadline never rolls the good pull back
  *
+ *   → a `tsc -w` that lost the file events of a change (frozen while a burst overflowed the inotify queue, then resumed — what a
+ *     pull of dozens of commits followed by `yarn install` does to a busy watcher) stays blind to it: nothing is rebuilt. The
+ *     supervisor's guard sees a compiled source newer than its output while the watcher is idle, restarts the WATCHER (a new
+ *     `tsc -w`, the same supervisor), and the change reaches `dist/` and a new worker
+ *
  * The supervisor also owns an OpenCode server (a fake `opencode serve` it spawned and a fake server answering on its port): the
  * re-executed supervisor adopts that very server — no second one is spawned and the first one lives on.
  *
@@ -23,7 +28,7 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
@@ -60,6 +65,13 @@ const replyTimeoutMs = 20 * 1000;
 /** A pull, `tsc -w`'s rebuild, nodemon's reload and the new worker's boot. */
 const reloadTimeoutMs = 4 * 60 * 1000;
 const tscTimeoutMs = 5 * 60 * 1000;
+/** The guard's windows, shortened through the timing seam (production: 30 s and 1 min). */
+const guardCheckIntervalMs = 1000;
+const guardStaleGraceMs = 5000;
+const inotifyQueueLimitPath = '/proc/sys/fs/inotify/max_queued_events';
+const inotifyQueueLimitFallback = 16384;
+/** More files than the queue holds; each is created and removed, two events a file. */
+const maxFloodFiles = 300_000;
 const fakeOpenCodeVersion = '1.17.11';
 const defaultOpenCodeModel = 'anthropic/claude-sonnet-4-6';
 
@@ -107,6 +119,32 @@ async function startCharness(): Promise<void> {
   charness = new IsolatedCharness(getLayout(), { cliPath: fixture.cliPath, cliArgs: ['hot'] });
   const pollsBefore = fakeTelegram.listCalls('getUpdates').length;
   await charness.start(hotBootTimeoutMs, (runOutput) => runOutput.includes(launchLine) && fakeTelegram.listCalls('getUpdates').length > pollsBefore);
+}
+
+/** The pid of the supervisor's `tsc -w` (its child), `null` when there is none. */
+function findTscWatcherPid(supervisorPid: number): number | null {
+  const children = execFileSync('ps', ['-o', 'pid=,args=', '--ppid', supervisorPid.toString()], { encoding: 'utf8' }).split('\n').filter(Boolean);
+  const watcher = children.find((line) => /\btsc -w\b/.test(line));
+  return watcher ? Number(watcher.trim().split(/\s+/)[0]) : null;
+}
+
+/**
+ * Queue more file-system events in `directory` than the kernel's inotify queue holds (`max_queued_events`): the events past it are
+ * dropped, silently, for every watcher of the process that is not reading — the state a busy `tsc -w` is in during a big pull.
+ */
+function overflowInotifyQueue(directory: string): void {
+  const queueLimit = fs.existsSync(inotifyQueueLimitPath) ? Number(fs.readFileSync(inotifyQueueLimitPath, 'utf8')) : inotifyQueueLimitFallback;
+  assert.ok(Number.isInteger(queueLimit) && queueLimit > 0 && queueLimit <= maxFloodFiles, `precondition: the inotify queue (${queueLimit} events) can be overflowed by a test`);
+  const floodFiles = Array.from({ length: queueLimit }, (_, index) => path.join(directory, `inotify-flood-${index}.txt`));
+  for (const file of floodFiles) fs.writeFileSync(file, '');
+  for (const file of floodFiles) fs.unlinkSync(file);
+}
+
+/** Replace a file the way `git` does: a new file renamed over the old one (a new inode). */
+function replaceFileAtomically(filePath: string, content: string): void {
+  const replacement = `${filePath}.replacement`;
+  fs.writeFileSync(replacement, content);
+  fs.renameSync(replacement, filePath);
 }
 
 function addChangelogEntry(headline: string): (previous: string) => string {
@@ -159,7 +197,7 @@ describe('Automatic updates, git checkout (hot mode): the real supervisor, tsc -
       CLAUDE_BIN: writeFakeClaudeLauncher(getLayout(), null),
       OPENCODE_URL: `http://127.0.0.1:${openCodePort}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
-      ...getTelegramFlowTestTimingsEnv(),
+      ...getTelegramFlowTestTimingsEnv({ tscWatchCheckIntervalMs: guardCheckIntervalMs, tscWatchStaleGraceMs: guardStaleGraceMs }),
     });
   });
 
@@ -262,5 +300,39 @@ describe('Automatic updates, git checkout (hot mode): the real supervisor, tsc -
     assert.equal(getCharness().output.split('re-executing the supervisor').length - 1, reexecutionsBefore, 'a docs-only change never re-executes the supervisor');
     assert.equal(general.listMessages().some((message) => message.text.startsWith('⚠️ Automatic update to')), false, 'no failure line: nothing was rolled back');
     await flow.openScreen(`· git @ ${docsCommit} · hot`);
+  });
+  it('a tsc -w that lost the file events of a change is restarted by the supervisor: the change reaches dist and a new worker, without a pull', async () => {
+    const watcherPid = findTscWatcherPid(supervisorPid);
+    assert.ok(watcherPid, 'the supervisor has a tsc -w');
+    const botSourcePath = path.join(fixture.checkoutDir, 'src', 'bot.ts');
+    const botOutputPath = path.join(fixture.checkoutDir, 'dist', 'bot.js');
+    const marker = '// a change the watcher never heard of';
+    const bootsBefore = flow.countBoots();
+    const outputStart = getCharness().output.length;
+
+    // The watcher cannot read its events while it is frozen, so the burst overflows the queue and the change that follows is lost.
+    process.kill(watcherPid, 'SIGSTOP');
+    try {
+      overflowInotifyQueue(path.join(fixture.checkoutDir, 'src'));
+      replaceFileAtomically(botSourcePath, `${fs.readFileSync(botSourcePath, 'utf8')}\n${marker}\n`);
+    } finally {
+      process.kill(watcherPid, 'SIGCONT');
+    }
+
+    // Blind: it has not seen the change, so it neither compiles nor emits — the grace is not over yet either.
+    await new Promise((resolve) => setTimeout(resolve, 2 * guardCheckIntervalMs));
+    assert.ok(!getCharness().output.slice(outputStart).includes('File change detected'), 'the resumed watcher heard of nothing');
+    assert.ok(!fs.readFileSync(botOutputPath, 'utf8').includes(marker), 'and rebuilt nothing');
+
+    await getCharness().waitFor('the guard to restart the watcher', reloadTimeoutMs, () => getCharness().output.slice(outputStart).includes('the TypeScript watcher missed a source change'));
+    await getCharness().waitFor('the new watcher to emit the change', reloadTimeoutMs, () => fs.readFileSync(botOutputPath, 'utf8').includes(marker));
+    await getCharness().waitFor('a new worker on the rebuilt code', reloadTimeoutMs, () => flow.countBoots() > bootsBefore);
+    const output = getCharness().output.slice(outputStart);
+    assert.ok(output.includes('charness hot: tsc -w stopped to be restarted'), 'the old watcher was stopped on purpose, not lost');
+    assert.ok(/src\/bot\.ts\)[^\n]*yet it reports 0 errors/.test(output), 'the log names the source and what the watcher claimed');
+    assert.equal(getCharness().pid, supervisorPid, 'the same supervisor');
+    const newWatcherPid = findTscWatcherPid(supervisorPid);
+    assert.ok(newWatcherPid && newWatcherPid !== watcherPid, 'a new tsc -w');
+    assert.ok(!checkIsProcessAlive(watcherPid), 'the blind one is gone');
   });
 });

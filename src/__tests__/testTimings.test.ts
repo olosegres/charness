@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 import { formatTestTimingsBootLine, parseTestTimings, testTimingKeys, testTimingsEnvName, type TestTimings } from '../testTimings';
+import { tscWatchCheckIntervalMs, tscWatchStaleGraceMs } from '../cli/tscWatchGuard';
 import { minFireIntervalMs } from '../scheduler/recurrence';
 import { openCodeServerRestartRetryBudgetMs } from '../adapters/openCodeAdapter';
 import { unconfirmedLimitProbeDelayMs } from '../apiErrorRetry';
@@ -40,7 +41,11 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['todoReminderPollMs', todoReminderPollMs],
   ['todoReminderIntervalMs', todoReminderDefaultMinutes * 60 * 1000],
   ['scheduleMinFireIntervalMs', minFireIntervalMs],
+  ['tscWatchCheckIntervalMs', tscWatchCheckIntervalMs],
+  ['tscWatchStaleGraceMs', tscWatchStaleGraceMs],
 ];
+/** The keys the hot supervisor (`charness hot`) reads, not the bot: its guard over `tsc -w` (`cli/tscWatchGuard.ts`). */
+const supervisorTimingKeys = ['tscWatchCheckIntervalMs', 'tscWatchStaleGraceMs'];
 /** One past the longest delay Node's timers keep: a longer one fires after 1 ms. */
 const beyondTimerMaxMs = 2_147_483_648;
 
@@ -106,6 +111,14 @@ describe('the composition root hands every key to its consumer', () => {
   it('bot.ts reads each key the seam accepts from the parsed timings — a key parsed but wired nowhere would shorten nothing', () => {
     const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
     assert.ok(testTimingKeys.length >= productionWindowsMs.length, 'the walk is not vacuous');
-    assert.deepEqual(testTimingKeys.filter((key) => !botSource.includes(`ENV.testTimings.${key}`)), []);
+    assert.deepEqual(testTimingKeys.filter((key) => !supervisorTimingKeys.includes(key) && !botSource.includes(`ENV.testTimings.${key}`)), []);
+  });
+
+  it('the hot supervisor reads the keys that are its own, from the same variable the seam validates', () => {
+    const hotSource = fs.readFileSync(path.join(__dirname, '..', 'cli', 'hot.ts'), 'utf8');
+    assert.ok(hotSource.includes('readTscWatchGuardTimings(process.env)'));
+    for (const key of supervisorTimingKeys) assert.ok(testTimingKeys.some((seamKey) => seamKey === key), `${key} is a key of the seam`);
+    const guardSource = fs.readFileSync(path.join(__dirname, '..', 'cli', 'tscWatchGuard.ts'), 'utf8');
+    assert.ok(guardSource.includes(`'${testTimingsEnvName}'`), 'the guard names the seam\'s variable');
   });
 });

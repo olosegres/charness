@@ -364,7 +364,9 @@ safe to run blindly:
   changed;
 - a hot-mode instance (`charness hot`) rebuilds and restarts the worker
   by itself (after a dependency install the script touches `tsconfig.json`
-  so `tsc -w` recompiles with the new modules); a non-hot instance gets
+  so `tsc -w` recompiles with the new modules; should the watcher miss the pulled files anyway — its file-system events can
+  be dropped under the load of a big pull — the supervisor notices a source newer than its build and restarts the watcher by
+  itself); a non-hot instance gets
   `yarn build` — the script never kills processes (the bot's updater restarts it);
 - changes to the hot supervisor itself (`src/cli.ts`, `src/cli/hot.ts`,
   `nodemon.json`) are flagged with a warning: with the bot's updater the supervisor

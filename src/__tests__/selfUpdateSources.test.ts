@@ -15,7 +15,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { CommandOptions, CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
 import { hostLockStaleMs, installTimeoutMs, queryTimeoutMs } from '../selfUpdate/constants';
-import { checkChangesEmittedSource, checkIsEmittedSource, createGitSource, parseGitCheck, parseScriptKeys } from '../selfUpdate/gitSource';
+import { checkIsEmittedSource } from '../selfUpdate/emittedSource';
+import { checkChangesEmittedSource, createGitSource, parseGitCheck, parseScriptKeys } from '../selfUpdate/gitSource';
 import { acquireHostLock, type HostLockDeps } from '../selfUpdate/hostLock';
 import { createNpmSource, getHostLockPath, getNpmBinary, parseNpmViewOutput, UpdateSourceError } from '../selfUpdate/npmSource';
 

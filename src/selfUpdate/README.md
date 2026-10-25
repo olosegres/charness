@@ -52,7 +52,11 @@ Restart and rollback:
   start the supervisor writes `DATA_DIR/hot-supervisor.json` (pid, start token, hash of every `dist/` module it loaded); a worker
   that finds one changed signals it with `SIGUSR2` — only when the pid still has that start token — and the supervisor stops
   `tsc -w` and nodemon, leaves the OpenCode server and the speech sidecar alone, and re-executes itself. A supervisor that predates
-  this has no record and no handler: it is never signalled (an unhandled `SIGUSR2` kills a process).
+  this has no record and no handler: it is never signalled (an unhandled `SIGUSR2` kills a process). The supervisor also guards
+  its `tsc -w` (`cli/tscWatchGuard.ts`): the watcher learns of a change only from file-system events, a big pull can overflow the
+  inotify queue and drop them, and `touch tsconfig.json` does not make it re-read the files — so a compiled source (`emittedSource.ts`
+  names which) that stays newer than its `dist/` output while the watcher is idle gets the WATCHER restarted (with errors reported,
+  after a fresh `tsc --noEmit` finds none).
 - `updatePending.ts` + `bootRollback.ts` — `DATA_DIR/update-pending.json` is written BEFORE the switch. Each boot of an unconfirmed
   version counts itself in (in `cli/bot.ts`, once the instance lock is held and before the bot module is imported — a start that loses
   the lock is not a boot) — except a boot that asks the hot supervisor to

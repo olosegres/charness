@@ -104,6 +104,15 @@ keep when touching the restart path:
   sends `SIGUSR2` — only when pid and start token match. The supervisor stops `tsc -w` and nodemon, leaves the OpenCode
   server and the speech sidecar alone and `execve`s `cli.js hot`. A supervisor that predates this has no record and is
   never signalled (an unhandled `SIGUSR2` kills a process).
+- **The hot supervisor guards its watcher** (`cli/tscWatchGuard.ts`). `tsc -w` learns of a changed source only from file-system
+  events, and a burst — a pull of dozens of commits, then `yarn install` — overflows the inotify queue (`max_queued_events`,
+  16384) while the compiler is busy: the dropped events leave the watcher with the OLD text of the files it missed (errors where an
+  old definition meets new callers, or a clean report that emitted nothing); `touch tsconfig.json` re-reads none of them, only a
+  new `tsc -w` does, and the worker keeps running the old build. Every 30 s the supervisor compares the idle watcher with the
+  tree: a compiled source (`selfUpdate/emittedSource.ts`) a minute newer than its `dist/` output is a missed change — with "0
+  errors" the WATCHER (not the supervisor, not the worker) is restarted at once, with errors a one-shot `tsc --noEmit` decides
+  (clean there = the watcher is wrong). At most 3 restarts an hour, then it only says so. The flow `selfUpdateHotE2e` freezes the
+  real `tsc -w`, overflows the queue and replaces a source: the change must still reach `dist/`.
 - **`update-pending.json` is written BEFORE the switch**; every boot counts itself in (`cli/bot.ts`, once the instance lock is held and before the bot
   module is imported), the boot after two unconfirmed ones rolls back, the running bot confirms 60 s after launch.
 
@@ -158,7 +167,8 @@ below the 10 s floor of `jira.json`, `requestTurnPollMs` — the wake-up engine'
 `requestSweepIntervalMs` and `requestFirstPostRetryDelayMs` — the wake-up engine's minutes, `limitProbeDelayMs` — the two-minute probe of an unconfirmed usage limit, `stateSaveDebounceMs` — `state.json`'s
 500 ms save debounce, `openCodeServerUpBudgetMs` — the OpenCode server's 60 s of retries, `backgroundHoldMaxMs` — the 6 h the
 agent's own pending work holds a json-stream process, `todoReminderPollMs` and `todoReminderIntervalMs` — the todo
-reminder's 10 s poll and the interval `settings.json` sets, `scheduleMinFireIntervalMs` — the 5 min minimum between cron fires).
+reminder's 10 s poll and the interval `settings.json` sets, `scheduleMinFireIntervalMs` — the 5 min minimum between cron fires, `tscWatchCheckIntervalMs` and `tscWatchStaleGraceMs` — the
+hot supervisor's 30 s check of its `tsc -w` and the minute a source may stay newer than its output; the supervisor reads these two, the bot the rest).
 It is the ONE test-only timing seam,
 never a setting: unset, every window is the production one; a value may only shorten its window (each key is capped at its
 production value); set, the boot prints `[test-timings] … overrides active`, and

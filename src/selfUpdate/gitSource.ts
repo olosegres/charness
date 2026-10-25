@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getOutputTail, type CommandRunner } from './commandRunner';
 import { installTimeoutMs, queryTimeoutMs } from './constants';
+import { checkIsEmittedSource } from './emittedSource';
 import { UpdateSourceError } from './npmSource';
 import type { GitCheckStatus, GitSkipReason } from './types';
 import type { GitCheck } from './updatePolicy';
@@ -9,11 +10,6 @@ import type { GitCheck } from './updatePolicy';
 const selfUpdateScriptRelativePath = path.join('scripts', 'self-update.sh');
 const changelogFileName = 'CHANGELOG.md';
 const manifestFileNames = ['yarn.lock', 'package.json'];
-/** What `tsc -w` turns into files under `dist/` — and so into a worker reload by nodemon (which watches nothing else). */
-const emittedSourceRoot = 'src/';
-const unemittedSourcePrefixes = ['src/__tests__/', 'src/release/'];
-const emittedSourceExtension = '.ts';
-const declarationFileExtension = '.d.ts';
 /** The worker's own entry under `dist/`: a file nodemon watches, whose mtime alone makes it replace the worker. */
 const hotWorkerEntryRelativePath = path.join('dist', 'cli', 'botEntry.js');
 /** Enough context lines that the diff of CHANGELOG.md holds the whole file (an entry's `###` heading included). */
@@ -44,20 +40,6 @@ export interface GitSource {
   getChangedFiles: (from: string, to: string) => Promise<string[]>;
   /** Hot mode: make nodemon replace the worker though `dist/` got no new content (it only watches `dist/`). */
   reloadHotWorker: () => Promise<void>;
-}
-
-/**
- * @description Whether a change to `filePath` makes `tsc -w` write a file under `dist/` — a TypeScript source it compiles (tests,
- * the release tooling and declaration files excluded). Everything else — docs, the CHANGELOG, scripts, the manifests, a tsconfig
- * edit that changes no output — leaves `dist/` as it is, so nothing would replace a hot worker by itself.
- */
-export function checkIsEmittedSource(filePath: string): boolean {
-  return (
-    filePath.startsWith(emittedSourceRoot) &&
-    filePath.endsWith(emittedSourceExtension) &&
-    !filePath.endsWith(declarationFileExtension) &&
-    !unemittedSourcePrefixes.some((prefix) => filePath.startsWith(prefix))
-  );
 }
 
 /** @description Whether a pull of these paths is followed by a rebuild — and so by nodemon replacing the hot worker. */

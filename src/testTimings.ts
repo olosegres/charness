@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { openCodeServerRestartRetryBudgetMs } from './adapters/openCodeAdapter';
 import { unconfirmedLimitProbeDelayMs } from './apiErrorRetry';
+import { tscWatchCheckIntervalMs, tscWatchStaleGraceMs } from './cli/tscWatchGuard';
 import { jiraPollIntervalMinSeconds } from './connectors/jira/config';
 import { globalSendIntervalMs } from './rateLimiter';
 import { unwatchedSweepMs, watchedTurnPollMs } from './requests/wakeUpEngine';
@@ -68,6 +69,10 @@ const testTimingsSchema = z.strictObject({
   todoReminderIntervalMs: createShorterWindowSchema(todoReminderDefaultMinutes * 60 * msPerSecond).optional(),
   /** The shortest gap between two fires of a cron schedule (production: `minFireIntervalMs`, 5 min). */
   scheduleMinFireIntervalMs: createShorterWindowSchema(minFireIntervalMs).optional(),
+  /** How often the hot supervisor compares its `tsc -w` with the sources (production: `tscWatchCheckIntervalMs`, 30 s). Read by `charness hot`, not by the bot. */
+  tscWatchCheckIntervalMs: createShorterWindowSchema(tscWatchCheckIntervalMs).optional(),
+  /** How long a source may stay newer than its output before the hot supervisor blames its `tsc -w` (production: `tscWatchStaleGraceMs`, 1 min). Read by `charness hot`, not by the bot. */
+  tscWatchStaleGraceMs: createShorterWindowSchema(tscWatchStaleGraceMs).optional(),
 });
 
 /** @name TestTimings @description The overrides in force; an absent key keeps its production window. */

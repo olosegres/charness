@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**A hot-mode bot no longer keeps running the old build after a big update because its TypeScript watcher went blind.** After a pull of
+dozens of commits followed by a dependency install, the watcher could miss the changed files (the operating system drops file-change
+events when too many arrive while the compiler is busy): it then reported errors that did not exist, or a clean build that emitted
+nothing, `touch tsconfig.json` did not help and only a full service restart did, while the bot kept serving the old code without a
+word. The hot supervisor now compares the watcher with the sources every 30 s and, when a source stays a minute newer than the build,
+restarts the watcher alone (when it reports errors, only after a fresh compile finds none) — the bot, its agents and the supervisor
+stay up, and the update reaches the worker like any other.
+
 **Switching to another account on a usage limit is now ON by default, also with a single signed-in account.** The «🔁 Auto switch»
 setting of `/limits_autoswitch` used to start OFF, so a limit stranded the work on the limit notice until someone tapped «Switch to …»
 even when another account had room. Now a topic whose account hits a limit moves to the next account with room by itself; with one

@@ -160,6 +160,8 @@ if pgrep -f "$repoDir/node_modules/.bin/tsc" >/dev/null 2>&1; then
   if [ "$manifestChanged" = 1 ]; then
     # tsc -w does not re-resolve modules installed after a failed compile;
     # touching tsconfig forces a full reconfigure+recompile with the new deps.
+    # It does NOT make the watcher re-read sources whose file events it lost (a big pull + install can overflow the inotify
+    # queue): the hot supervisor's guard (src/cli/tscWatchGuard.ts) restarts the watcher for that.
     touch tsconfig.json
     log "nudged tsc -w (touch tsconfig.json) to recompile with the new dependencies"
   fi
