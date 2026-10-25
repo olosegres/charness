@@ -1049,7 +1049,7 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
     ...getOpenCodeAgentConfigEnv(process.env, process.env.DATA_DIR || resolveDefaultDataDir()),
   };
   // The bot's compaction plugin, so an overflow compaction (which never gets the
-  // bot's per-invocation instruction) still names the loaded skills. Installed
+  // bot's per-invocation instruction) still gets the resume guidance. Installed
   // before the spawn so the new server's first folder instance already loads it.
   installOpenCodeCompactPlugin();
   let startupChild: ChildProcess | null = null;

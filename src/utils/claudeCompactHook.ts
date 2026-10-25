@@ -6,8 +6,10 @@
  * WHY this exists: a bot-issued compaction carries its instruction as
  * `/compact <instruction>`, but the overflow-triggered (auto) compaction is started
  * by the CLI itself and has no argument the bot could fill. It summarised with the
- * default prompt: the loaded skills were not named, and the continuing session
- * silently stopped following them. Claude Code runs `PreCompact` hooks before
+ * default prompt: the loaded skills were not named and no next-steps checklist
+ * closed the summary, so the continuing session silently stopped following those
+ * skills. The hook adds the resume guidance (`compactionResumeGuidance`: the skills
+ * to load again, then that checklist). Claude Code runs `PreCompact` hooks before
  * EVERY compaction (`trigger` `auto` and `manual`) and appends a hook's stdout to
  * that compaction's custom instructions — measured on v2.1.289: an
  * overflow-triggered compaction's summary opened with the line the hook printed.
