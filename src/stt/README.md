@@ -165,6 +165,9 @@ env too.
 ### Measured on a dev box (4 cores / 8 threads, no GPU, under load)
 
 Cold start (spawn → ready file) ≈ 2–2.4 s; an 18 s voice ≈ 1.5 s; a 300 s voice ≈ 18.6 s with 4 workers × 2 threads.
+With the pause cuts, at a load average of 3–5: a 300 s voice takes 14.1–15.8 s against 12.4–12.7 s for the 25 s cuts
+alone (three runs each, alternating) — the cutting runs before the first piece reaches a worker, and the voice has 37
+pieces instead of 14.
 Peak RSS with the pause cuts: one 300 s voice ≈ 690 MB, two at once ≈ 886 MB (the 25 s cuts alone: ≈ 790–810 MB for
 one). Profiled per step: resampling a 300 s voice to 16 kHz in one pass raised the peak by ≈ 240 MB, which
 onnxruntime keeps, so it is resampled in 30 s windows (≈ 66 MB). Silero VAD itself costs ≈ 1–2 % of the voice's length.
