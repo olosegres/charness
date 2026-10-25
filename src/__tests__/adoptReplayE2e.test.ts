@@ -22,6 +22,11 @@
  *     the finished window, a second resume, a second prompt). Both for a reset named as an instant and for a clock-only
  *     reset (`resets 10:20am (UTC)`), which only the error's own time — not the replay's — reads as already over.
  *
+ *   → a per-turn process that outlived the bot is stopped the way the backend promises, in the three shapes an adopt meets: idle
+ *     with its CLI version known (stopped as soon as the adopt has replayed), idle before any turn (the version is unknown, so
+ *     it is kept and the stop comes at the end of its next turn), and in the middle of a turn (the turn is delivered through
+ *     the adopt, the stop follows its end). Each stop is read off the instance's private tmux server, not off the bot's log.
+ *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped in
  * `after`.
  */
@@ -41,6 +46,7 @@ import {
   getFlowDeadlineMs,
   getFreeFixedPort,
   getFreePort,
+  getTmuxEnv,
   IsolatedCharness,
   listTmuxSessions,
   removeIsolatedInstanceSync,
@@ -52,7 +58,7 @@ import { getAllAgentTurns, getStatePath, readPersistedState, startCharnessOnInst
 import { backdateTranscriptApiError, formatUtcResetClock } from './e2e/limitFlowKit';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { keyToString } from '../sessionKey';
-import { getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../utils/jsonStreamHost';
+import { buildJsonStreamTmuxSessionName, getJsonStreamSessionPaths, resolveJsonStreamSessionDir } from '../utils/jsonStreamHost';
 import { fakeClaudeLogFileNames, getFakeClaudeTranscriptPath, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
@@ -60,6 +66,8 @@ const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 121;
 const perTurnThreadId = 122;
 const limitsOffThreadId = 123;
+const adoptedStopThreadId = 124;
+const knownVersionThreadId = 125;
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
@@ -67,6 +75,8 @@ const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const topicFolder = 'replay-topic';
 const perTurnFolder = 'replay-per-turn';
 const limitsOffFolder = 'replay-limits-off';
+const adoptedStopFolder = 'replay-adopted-stop';
+const knownVersionFolder = 'replay-known-version';
 const seedLabel = 'SEED-1';
 const downtimeLabel = 'DOWN-1';
 const perTurnDowntimeLabel = 'PT-2';
@@ -99,6 +109,8 @@ interface TopicSpec {
 const mainTopicSpec: TopicSpec = { threadId: topicThreadId, folder: topicFolder };
 const perTurnTopicSpec: TopicSpec = { threadId: perTurnThreadId, folder: perTurnFolder };
 const limitsOffTopicSpec: TopicSpec = { threadId: limitsOffThreadId, folder: limitsOffFolder };
+const adoptedStopTopicSpec: TopicSpec = { threadId: adoptedStopThreadId, folder: adoptedStopFolder };
+const knownVersionTopicSpec: TopicSpec = { threadId: knownVersionThreadId, folder: knownVersionFolder };
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -106,6 +118,8 @@ let fakeTelegram: FakeTelegram;
 let topic: TopicDriver;
 let perTurnTopic: TopicDriver;
 let limitsOffTopic: TopicDriver;
+let adoptedStopTopic: TopicDriver;
+let knownVersionTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 
 function getLayout(): IsolatedInstanceLayout {
@@ -164,6 +178,12 @@ function countUsageLimitResultsInLog(spec: TopicSpec): number {
   return fs.readFileSync(getTopicSessionPaths(spec).stdoutFile, 'utf8').split(usageLimitText).length - 1;
 }
 
+/** Whether the topic's agent process is alive in the instance's private tmux server — the json-stream host's, on the server's default socket (one name serves every process of the topic). */
+function checkIsAgentProcessAlive(spec: TopicSpec): boolean {
+  const sessionName = buildJsonStreamTmuxSessionName(makeTelegramKey(group.id, spec.threadId));
+  return listTmuxSessions([], getTmuxEnv(getLayout().tmuxTmpDir)).includes(sessionName);
+}
+
 /**
  * Stop the bot and, while it is down, run a turn on the agent that ends on a usage limit: the turn is written to the agent's
  * stdin and the call returns once its limit result is in the log. The bot is NOT started again. `resetClause` is what the
@@ -195,7 +215,7 @@ async function runLimitedTurnWhileBotIsDown(label: string, resetClause: string, 
 describe('A prompt forwarded to an adopted session waits for the replay of its downtime tail: built charness, fake Bot API, fake claude', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-adoptreplay-', [topicFolder, perTurnFolder, limitsOffFolder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-adoptreplay-', [topicFolder, perTurnFolder, limitsOffFolder, adoptedStopFolder, knownVersionFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
 
     process.on('exit', removeInstanceSync);
@@ -207,6 +227,8 @@ describe('A prompt forwarded to an adopted session waits for the replay of its d
     // A resume through the stop window starts a new process: allow a start's time.
     perTurnTopic = new TopicDriver(fakeTelegram, getCharness, perTurnThreadId, agentStartTimeoutMs);
     limitsOffTopic = new TopicDriver(fakeTelegram, getCharness, limitsOffThreadId, replyTimeoutMs);
+    adoptedStopTopic = new TopicDriver(fakeTelegram, getCharness, adoptedStopThreadId, agentStartTimeoutMs);
+    knownVersionTopic = new TopicDriver(fakeTelegram, getCharness, knownVersionThreadId, agentStartTimeoutMs);
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
@@ -336,5 +358,62 @@ describe('A prompt forwarded to an adopted session waits for the replay of its d
     await getCharness().waitFor('the account marked limited', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.default?.limitedUntil !== undefined);
     const limitedUntilMs = Date.parse(readPersistedState(getLayout()).claudeProfiles?.default?.limitedUntil ?? '');
     assert.ok(limitedUntilMs - Date.now() < 2 * msPerHour, `the account is limited for a short while at most (the window was over), not until tomorrow: ${new Date(limitedUntilMs).toISOString()}`);
+  });
+
+  it('a per-turn process that outlived the bot before any turn (its CLI version unknown) is kept at the adopt, and the stop comes at the end of its next turn', async () => {
+    // Started on the per-turn backend, no turn yet: the per-turn stop comes at a turn's end, so the process is alive and idle when
+    // the bot goes down. Its CLI version is reported by a turn's `init`, so the adopt cannot tell it may be stopped.
+    const key = keyToString(makeTelegramKey(group.id, adoptedStopThreadId));
+    await adoptedStopTopic.sendAndAwaitReply(`/bind ${adoptedStopFolder}`, `Bound to \`${adoptedStopFolder}\``);
+    const picker = await adoptedStopTopic.sendAndAwaitReply('/claude_mode', 'Claude Code backend — current:');
+    await adoptedStopTopic.tapAndAwaitAnswer(picker, `ccmode_${perTurnAdapterName}`);
+    await adoptedStopTopic.waitForMessage('the per-turn pick', (message) => message.text.includes('applies on next start'));
+    await adoptedStopTopic.sendAndAwaitReply('/claude', 'ready in');
+    await getCharness().waitFor('the per-turn backend persisted', replyTimeoutMs, () => readPersistedState(getLayout()).agents?.[key]?.name === perTurnAdapterName);
+    await getCharness().waitFor('the per-turn process to be up', agentStartTimeoutMs, () => checkIsAgentProcessAlive(adoptedStopTopicSpec));
+
+    await getCharness().stop();
+    assert.equal(checkIsAgentProcessAlive(adoptedStopTopicSpec), true, 'the process outlives the bot');
+    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+
+    assert.match(getCharness().output, new RegExp(`\\[reattach\\] ${group.id}:${adoptedStopThreadId}: the adopted process is kept \\(the per-turn lifecycle\\)`));
+    assert.equal(checkIsAgentProcessAlive(adoptedStopTopicSpec), true, 'kept: nothing stops it before a turn reports the version');
+
+    fakeTelegram.pushOperatorMessage(adoptedStopThreadId, 'ADOPT-1 hello');
+    await adoptedStopTopic.waitForMessage('the answer of the adopted process', (message) => message.text.includes('Working on ADOPT-1.'));
+    await getCharness().waitFor('the per-turn stop after the turn', replyTimeoutMs, () => !checkIsAgentProcessAlive(adoptedStopTopicSpec));
+  });
+
+  it('a per-turn process in the middle of a turn when the bot restarts: the turn is delivered through the adopt and the process is stopped at its end', async () => {
+    const outputStart = getCharness().output.length;
+    fakeTelegram.pushOperatorMessage(adoptedStopThreadId, 'ADOPT-2 [work-ms:6000] hello');
+    await getCharness().waitFor('the turn to be running', agentStartTimeoutMs, () => checkIsAgentProcessAlive(adoptedStopTopicSpec) && getCharness().output.slice(outputStart).includes(`[Bot] status ${group.id}:${adoptedStopThreadId}:`));
+    await getCharness().stop();
+    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+    await adoptedStopTopic.waitForMessage('the answer of the turn that ran across the restart', (message) => message.text.includes('Working on ADOPT-2.'));
+    await getCharness().waitFor('the per-turn stop after the turn', replyTimeoutMs, () => !checkIsAgentProcessAlive(adoptedStopTopicSpec));
+  });
+
+  it('a per-turn process that outlived the bot idle, its CLI version known from an earlier turn, is stopped at once when the adopt has replayed', async () => {
+    // A process that ran a turn and is still alive (the idle backend's) — put on the per-turn backend while the bot is down, the way
+    // a pick reaches a conversation whose process outlived the change.
+    const key = keyToString(makeTelegramKey(group.id, knownVersionThreadId));
+    await knownVersionTopic.sendAndAwaitReply(`/bind ${knownVersionFolder}`, `Bound to \`${knownVersionFolder}\``);
+    await knownVersionTopic.sendAndAwaitReply('/claude', 'ready in');
+    fakeTelegram.pushOperatorMessage(knownVersionThreadId, 'KNOWN-1 hello');
+    await knownVersionTopic.waitForMessage('the first answer', (message) => message.text.includes('Working on KNOWN-1.'));
+    const { stdoutFile } = getTopicSessionPaths(knownVersionTopicSpec);
+    await getCharness().waitFor('the log saved as handled', replyTimeoutMs, () => (readPersistedState(getLayout()).agents?.[key]?.jsonStreamTail?.offsetBytes ?? 0) >= fs.statSync(stdoutFile).size);
+    await getCharness().stop();
+    const persisted = readPersistedState(getLayout());
+    const agent = persisted.agents?.[key];
+    assert.ok(agent, 'the conversation is persisted');
+    assert.ok(agent.jsonStreamTail?.claudeCodeVersion, 'the record carries the CLI version');
+    fs.writeFileSync(getStatePath(getLayout()), JSON.stringify({ ...persisted, agents: { ...persisted.agents, [key]: { ...agent, name: perTurnAdapterName } } }));
+    assert.equal(checkIsAgentProcessAlive(knownVersionTopicSpec), true, 'the process outlives the bot');
+    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+
+    await getCharness().waitFor('the adopted per-turn process to be stopped', replyTimeoutMs, () => !checkIsAgentProcessAlive(knownVersionTopicSpec));
+    assert.match(getCharness().output, new RegExp(`\\[reattach\\] ${group.id}:${knownVersionThreadId}: stopping the adopted process \\(the per-turn lifecycle\\)`));
   });
 });
