@@ -104,6 +104,8 @@ const weeklyResetAheadMs = 3 * 24 * 60 * 60 * 1000;
 const limitNoticeMark = '🚧';
 const resumedNoticeText = 'The limit window has reset';
 const recoveryLogLine = 're-arming a limit wait left over from before the restart';
+/** What the fake agent streams as a turn's text (`Working on <issue>.`) before it hits the limit. */
+const streamedTextPrefix = `Working on ${requestLabel}`;
 /** The adopt line of the json-stream adapter: where the adopted bot starts reading the stdout log, and how long the log is. */
 const adoptLogLineRegex = /\[ClaudeJson\] adopt: re-attaching to \S+ in \S+ \(pid=\d+, tail=(\d+)\/(\d+)\)/;
 
@@ -186,10 +188,9 @@ function listSentLimitNotices(): string[] {
 }
 
 /**
- * Whether the bot has recorded the topic's whole stdout log as handled. The offset moves past a turn's text only once
- * its 350 ms batch is out, so a restart right after a turn lands inside that window: the adopted bot then replays the
- * turn from the older offset — by design, so no text is lost — and with it the turn's limit error, a second episode
- * that is announced or armed a poll later and races whatever the flow does next.
+ * Whether the bot has saved the topic's whole stdout log as handled. A finished turn moves the offset to the end of the
+ * log at its end (an error-ended turn too: its text is flushed before the error), but `state.json` is written a moment
+ * after the change.
  */
 function checkIsStdoutLogHandled(): boolean {
   const key = makeTelegramKey(group.id, topicThreadId);
@@ -199,15 +200,15 @@ function checkIsStdoutLogHandled(): boolean {
 }
 
 /**
- * Restart the instance once nothing of the previous bot's log is left to replay (see {@link checkIsStdoutLogHandled}),
- * so the recovery under test is the only thing that revisits a finished episode. Not for a restart that is MEANT to
- * replay a turn in flight.
+ * Restart the instance once the previous bot has saved its whole log as handled, and check the adopted bot starts its
+ * tail at the end of that log: a finished turn is never replayed, so the recovery under test is the only thing that
+ * revisits it — a replayed error would be handled twice. Not for a restart that is MEANT to replay a turn in flight.
  */
 async function restartWithHandledLog(mutatePersisted: (persisted: PersistedState) => void): Promise<IsolatedCharness> {
-  await getCharness().waitFor('the bot to record its whole stdout log as handled', replyTimeoutMs, checkIsStdoutLogHandled);
+  await getCharness().waitFor('the bot to save its whole stdout log as handled', replyTimeoutMs, checkIsStdoutLogHandled);
   const restarted = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), mutatePersisted);
   const adoptLine = adoptLogLineRegex.exec(restarted.output);
-  if (adoptLine) assert.equal(adoptLine[1], adoptLine[2], 'the adopted bot starts its tail at the end of the log: nothing of an earlier turn is replayed');
+  if (adoptLine) assert.equal(adoptLine[1], adoptLine[2], 'the adopted bot starts its tail at the end of the log: a finished turn is not replayed');
   return restarted;
 }
 
@@ -265,6 +266,10 @@ describe('The boot recovery of a parked usage limit end to end: built charness, 
     assert.match(liveNotice.text, /will auto-resume after reset/, 'the plain wait notice (no request answers it)');
     assert.equal(listSentLimitNotices().length, 1, 'the call log sees the notice the topic shows');
     assert.equal(getAgentTurns(getLayout(), requestLabel).length, 1, 'the agent stopped on its first turn');
+    // The turn streamed its text before the limit hit: the text is on the topic, ABOVE the notice (stream order) — it used to
+    // wait in the answer batch and come after the notice (or, across a restart, be replayed with the error).
+    const streamedText = await topic.waitForMessage('the text the limited turn streamed', (message) => message.text.startsWith(streamedTextPrefix));
+    assert.ok(streamedText.message_id < liveNotice.message_id, `the turn's text (${streamedText.message_id}) comes before the notice (${liveNotice.message_id})`);
   });
 
   it('after a restart with the window already reset, the parked topic resumes at once — no "usage limit reached" for a limit that is over', async () => {

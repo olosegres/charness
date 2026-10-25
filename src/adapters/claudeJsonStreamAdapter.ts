@@ -1955,6 +1955,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     session.swallowNextAbortError = false;
 
     if (action.isError && action.errorText) {
+      // The turn is over, whatever it ended on: the text it streamed goes out FIRST and at once (a debounced flush would
+      // let the notice overtake it), and the saved offset moves past the turn. A text left in the 350 ms batch held the
+      // offset back — a restart in that window replayed the turn together with its error, already handled.
+      this.flushAnswer(session, true);
       // Our own interrupt produced this error result — relay nothing (no bogus
       // "Claude error", no spurious retry). A REAL provider error arriving
       // WITHOUT a preceding interrupt still classifies / surfaces normally.

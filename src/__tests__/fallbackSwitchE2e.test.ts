@@ -523,31 +523,28 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     await getCharness().waitFor('the wait to be over', replyTimeoutMs, () => readPersistedState(getLayout()).apiRetries === undefined);
   });
 
-  it('a move that continues the work while the interrupted turn\'s text is still on its Bot API round trip: the resumed turn\'s text is a message of its own, not an edit of the interrupted turn\'s', async () => {
-    // «work» is available again and the chain names it; topic E runs on «default», so its limit moves it by itself.
-    await restartWithState((persisted) => {
-      persisted.fallbackChain = [{ backend: 'claude', profile: takeoverAccount, model: null }];
-      delete persisted.claudeProfiles?.[takeoverAccount]?.limitedUntil;
-    });
+  it('a prompt sent while the previous turn\'s last text is still on its Bot API round trip: the reply is a message of its own, not an edit of the previous turn\'s', async () => {
     await fifthTopic.sendAndAwaitReply(`/bind ${fifthFolder}`, `Bound to \`${fifthFolder}\``);
     await fifthTopic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
     await fifthTopic.sendAndAwaitReply('/claude', 'ready in');
 
     // From the first held send on, every later send to the topic waits behind it (one send at a time per topic): so nothing
     // below waits for a message of this topic until the gates open — only for the bot's console and the fake agent's log.
-    const interruptedTextGate = createGate();
-    fakeTelegram.holdNextResponse('sendMessage', interruptedTextGate.whenOpen, (payload) => String(payload.text) === 'Working on LIM-9.');
-    askAgentToHitTheLimit(fifthTopicThreadId, 'LIM-9');
+    const firstTextGate = createGate();
+    fakeTelegram.holdNextResponse('sendMessage', firstTextGate.whenOpen, (payload) => String(payload.text) === 'Working on SLOW-1.');
+    fakeTelegram.pushOperatorMessage(fifthTopicThreadId, 'SLOW-1 first question');
     const isStatusFrameOfTopic = (payload: Record<string, unknown>): boolean => payload.message_thread_id === fifthTopicThreadId && String(payload.text).startsWith('🔧');
-    await getCharness().waitFor('the interrupted turn\'s status frame', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').some((call) => isStatusFrameOfTopic(call.payload)));
-    // The resumed turn's status frame is slow too, so nothing on screen marks the boundary when its text arrives.
-    const resumedStatusGate = createGate();
-    fakeTelegram.holdNextResponse('sendMessage', resumedStatusGate.whenOpen, isStatusFrameOfTopic);
-
+    await getCharness().waitFor('the first turn\'s status frame', agentStartTimeoutMs, () => fakeTelegram.listCalls('sendMessage').some((call) => isStatusFrameOfTopic(call.payload)));
     const streamOutputLines = (): number => getCharness().output.split('\n').filter((line) => line.startsWith(`[Bot] output ${group.id}:${fifthTopicThreadId} `) && line.includes('Working on ')).length;
-    await getCharness().waitFor('the resumed turn\'s text queued', agentStartTimeoutMs, () => streamOutputLines() >= 2);
-    interruptedTextGate.open();
-    resumedStatusGate.open();
+    await getCharness().waitFor('the first turn\'s text queued', agentStartTimeoutMs, () => streamOutputLines() >= 1);
+    // The second turn's status frame is slow too, so nothing on screen marks the boundary when its text arrives.
+    const secondStatusGate = createGate();
+    fakeTelegram.holdNextResponse('sendMessage', secondStatusGate.whenOpen, isStatusFrameOfTopic);
+
+    fakeTelegram.pushOperatorMessage(fifthTopicThreadId, 'SLOW-2 second question');
+    await getCharness().waitFor('the second turn\'s text queued', agentStartTimeoutMs, () => streamOutputLines() >= 2);
+    firstTextGate.open();
+    secondStatusGate.open();
 
     const listStreamTexts = (): string[] => fifthTopic.listMessages().map((message) => message.text).filter((text) => text.includes('Working on '));
     await getCharness().waitFor('both turns\' texts in the topic', agentStartTimeoutMs, () => listStreamTexts().length >= 2);

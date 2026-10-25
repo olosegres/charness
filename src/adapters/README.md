@@ -246,7 +246,9 @@ restarts — every hot reload — never touch it. Per-thread host dir
   reader/classifier; deltas keep landing while the bot is down. The consumed
   line-boundary byte offset persists in `state.json` (`agents[key].jsonStreamTail`)
   but only once batched answer text has actually been EMITTED — an offset past
-  un-emitted text would skip it on replay (live seam-loss 2026-07-05).
+  un-emitted text would skip it on replay (live seam-loss 2026-07-05). A turn's end
+  emits what its batch holds (an error-ended turn's text too, ahead of its error), so
+  a finished turn leaves the offset at the end of the log.
   The record also carries the background-task list (ids, and `backgroundTasks`
   with descriptions), a turn-in-flight flag, the outstanding tool calls, the
   pending notification turn, the hold's start, the `CronCreate` jobs and a
@@ -266,7 +268,8 @@ restarts — every hot reload — never touch it. Per-thread host dir
 
 On boot, reattach ADOPTS a live `cjson-*` session (reopen fifo + resume the
 tail from the persisted offset → the downtime gap replays through the normal
-pipeline, in-flight turn delivered end-to-end, no recap posted); a released
+pipeline, in-flight turn delivered end-to-end, no recap posted; only a turn in
+flight at the restart is replayed — a finished one is not); a released
 session (`/quit`/`/new` cleared the persisted id) is killed as an orphan, and
 a thread whose process is gone SLEEPS (lifecycle plan L4): nothing is re-spawned
 at boot — its next trigger resumes the conversation — and the downtime recap is

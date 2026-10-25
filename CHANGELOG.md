@@ -23,6 +23,13 @@ last text could finish sending after the next prompt had gone to the agent, and 
 to that message by an edit instead of starting its own. The "new message" mark now belongs to the first text queued after it,
 and text still waiting when your next prompt goes out is no longer pulled into the new reply's message.
 
+**The text a turn streamed before it failed now arrives before the error notice, and a restart no longer repeats an error already handled.**
+A turn that ended on an error (a usage limit, an API error, an interrupt) kept its last text in the answer batch while the notice
+went out at once: the text showed up below the limit notice, the switch offer and the usage board, and a bot restart in that
+moment replayed the turn together with its error — a second notice or error line for a limit that was already announced, or a lost
+auto-retry. The turn's text is now sent first, and the bot saves where it stopped reading at the end of the turn, as it does for
+a turn that succeeded.
+
 ## 3.6.0 — 2026-10-24
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process

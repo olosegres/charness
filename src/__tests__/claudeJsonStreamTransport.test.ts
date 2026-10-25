@@ -390,6 +390,96 @@ const toolUseLine =
 const toolResultLine =
   JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'done' }] } }) + '\n';
 
+/** A turn refused for a usage limit, the way the CLI ends it: an error `result` whose text names the window. */
+const usageLimitResultLine =
+  JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your session limit · resets 10:20am (UTC)" }) + '\n';
+
+describe('json-stream error-ended turn — the text it streamed goes out before the error, and the offset moves past the turn', () => {
+  let dir: string;
+  afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
+
+  /** What an adapter emitted while `run` executed, in order, plus the tail records it saved. */
+  function recordEmissions(adapter: ClaudeJsonStreamAdapter, run: () => void): { events: string[]; finalFlags: boolean[]; tailWrites: JsonStreamTailOffset[] } {
+    const events: string[] = [];
+    const finalFlags: boolean[] = [];
+    const tailWrites: JsonStreamTailOffset[] = [];
+    adapter.on('output', (_k: SessionKey, text: string, meta?: { isFinal?: boolean }) => { events.push(`output:${text}`); finalFlags.push(meta?.isFinal === true); });
+    adapter.on('apiError', (_k: SessionKey, error: { kind: string }) => { events.push(`apiError:${error.kind}`); });
+    adapter.setJsonStreamTailWriter((_k, tail) => tailWrites.push(tail));
+    run();
+    return { events, finalFlags, tailWrites };
+  }
+
+  it('a classified error (a usage limit): the text, then the error — and the tail offset is saved at the end of the log', () => {
+    // Before: the turn's last text sat in the 350 ms batch while the error went out at once — the topic read the notice
+    // before the text, and the saved offset stayed behind the turn, so a restart in that window replayed the turn together
+    // with its (already handled) error.
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-errorturn-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    const log = textDeltaLine + usageLimitResultLine;
+    fs.writeFileSync(session.paths.stdoutFile, log);
+
+    try {
+      const { events, finalFlags, tailWrites } = recordEmissions(adapter, () => { assert.equal(adapter['drainStdoutTail'](session), true); });
+
+      assert.deepEqual(events, ['output:hi', 'apiError:usageLimit'], 'stream order: the text first');
+      assert.deepEqual(finalFlags, [true], 'the turn is over: its last text goes out at once, not after the debounce (which the notice would overtake)');
+      assert.equal(tailWrites.at(-1)?.offsetBytes, Buffer.byteLength(log), 'the saved offset is the end of the log: nothing of the handled turn is replayed');
+      assert.equal(session.outputTimer, null, 'no batch timer is left to flush the text later');
+    } finally {
+      adapter['clearTimers'](session);
+    }
+  });
+
+  it('an unclassified error: the text, then the "Claude error" line', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-errorturn-raw-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    const log = textDeltaLine + abortErrorResultLine;
+    fs.writeFileSync(session.paths.stdoutFile, log);
+
+    try {
+      const { events, tailWrites } = recordEmissions(adapter, () => { adapter['drainStdoutTail'](session); });
+
+      assert.deepEqual(events, ['output:hi', 'output:Claude error: API error']);
+      assert.equal(tailWrites.at(-1)?.offsetBytes, Buffer.byteLength(log));
+    } finally {
+      adapter['clearTimers'](session);
+    }
+  });
+
+  it('an interrupt-aborted turn: the text it streamed still goes out, the swallowed error does not, and the offset moves past the turn', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-errorturn-abort-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    const log = textDeltaLine + abortErrorResultLine;
+    fs.writeFileSync(session.paths.stdoutFile, log);
+    adapter.sendSignal(session.key, 'SIGINT');
+
+    try {
+      const { events, tailWrites } = recordEmissions(adapter, () => { adapter['drainStdoutTail'](session); });
+
+      assert.deepEqual(events, ['output:hi']);
+      assert.equal(tailWrites.at(-1)?.offsetBytes, Buffer.byteLength(log));
+    } finally {
+      adapter['clearTimers'](session);
+    }
+  });
+
+  it('a turn without text: the error alone, offset saved as before', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonstream-errorturn-bare-'));
+    const adapter = new ClaudeJsonStreamAdapter();
+    const session = createSessionInDir(adapter, dir);
+    fs.writeFileSync(session.paths.stdoutFile, usageLimitResultLine);
+
+    const { events, tailWrites } = recordEmissions(adapter, () => { adapter['drainStdoutTail'](session); });
+
+    assert.deepEqual(events, ['apiError:usageLimit']);
+    assert.equal(tailWrites.at(-1)?.offsetBytes, Buffer.byteLength(usageLimitResultLine));
+  });
+});
+
 describe('json-stream idle watchdog — the stuck-busy / hung-typing backstop', () => {
   let dir: string;
   afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
