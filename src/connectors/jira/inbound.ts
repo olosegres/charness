@@ -160,7 +160,7 @@ export interface JiraInboundDeps {
   /** A mention over the run budget: the park notice, no hand-back (the answer side). */
   parkMention: (issueKey: string) => Promise<void>;
   /** The bot's one cap on task agents and its wait list; a mention request bypasses it. */
-  slots: Pick<TaskAgentSlots, 'checkIn' | 'noteStarted' | 'releaseReservation' | 'dropWaiting' | 'pruneWaiting' | 'onSlotFreed'>;
+  slots: Pick<TaskAgentSlots, 'checkIn' | 'noteStarted' | 'noteStartFailed' | 'dropWaiting' | 'pruneWaiting' | 'onSlotFreed'>;
   /** A hand-over that has to wait for a slot: the short comment saying so (the answer side). Never rejects. */
   postQueuedNotice: (issueKey: string, queue: Extract<TaskAgentSlotDecision, { kind: 'queued' }>) => Promise<void>;
 }
@@ -380,7 +380,7 @@ export class JiraInbound {
       deps.slots.noteStarted(key);
       return decision;
     } catch (error) {
-      deps.slots.releaseReservation(key);
+      deps.slots.noteStartFailed(key);
       throw error;
     }
   }

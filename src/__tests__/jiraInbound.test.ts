@@ -1717,6 +1717,70 @@ describe('JiraInbound', () => {
       assert.deepEqual([...await inbound.pollOnce()], [['PROJ-1', 'request']], 'the slot was not left reserved by the failure');
     });
 
+    /** A client whose issue `brokenIssueKey` cannot be read for its prompt (its comments fail), so its request cannot open. */
+    function createClientWithBrokenIssue(brokenIssueKey: string, isBroken: () => boolean): JiraInboundDeps['client'] {
+      let pageIndex = 0;
+      return {
+        searchIssues: async () => searchPages[pageIndex++] ?? { issues: [] },
+        getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
+        getIssue: async (issueKey) => createIssue(issueKey),
+        getComments: async (issueKey) => {
+          if (issueKey === brokenIssueKey && isBroken()) throw new Error('Jira 503');
+          return [];
+        },
+        getRecentComments: async () => [],
+        getRemoteLinks: async () => [],
+      };
+    }
+
+    it('a waiting issue that fails to open does not hold up the one behind it: with the free slot, the next in line starts in the SAME poll', async () => {
+      searchPages = [
+        { issues: [createIssue('PROJ-1'), createIssue('PROJ-2'), createIssue('PROJ-3')] },
+        { issues: [createIssue('PROJ-1'), createIssue('PROJ-2'), createIssue('PROJ-3')] },
+        { issues: [createIssue('PROJ-1'), createIssue('PROJ-2'), createIssue('PROJ-3')] },
+      ];
+      const inbound = createCappedInbound({ client: createClientWithBrokenIssue('PROJ-2', () => true) });
+      await inbound.pollOnce();
+      await flushPosts();
+      assert.deepEqual(kit.getWaitList().map((entry) => entry.conversationKey.split(':').at(-1)), ['PROJ-2', 'PROJ-3']);
+      closeHandOver('PROJ-1');
+      const warn = console.warn;
+      console.warn = () => {};
+      try {
+        assert.deepEqual([...await inbound.pollOnce()], [['PROJ-1', 'seen'], ['PROJ-2', 'failed'], ['PROJ-3', 'request']]);
+      } finally {
+        console.warn = warn;
+      }
+      await flushPosts();
+      assert.equal(requestCount, 2, 'PROJ-1 and PROJ-3 opened a request; PROJ-2 could not');
+      assert.deepEqual(kit.getWaitList().map((entry) => entry.conversationKey.split(':').at(-1)), ['PROJ-2'], 'PROJ-2 keeps its place; PROJ-3 left the list');
+    });
+
+    it('the failing issue keeps its place, is tried again at the next poll and starts once it can', async () => {
+      let isBroken = true;
+      searchPages = [
+        { issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] },
+        { issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] },
+        { issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] },
+      ];
+      kit = createTestSlots({ maxConcurrent: 2 });
+      const inbound = createCappedInbound({ client: createClientWithBrokenIssue('PROJ-2', () => isBroken) });
+      kit.setOpenRequests([{ key: createJiraConversationKey('PROJ-8'), kind: 'trackerEvent' }, { key: createJiraConversationKey('PROJ-9'), kind: 'trackerEvent' }]);
+      await inbound.pollOnce();
+      await flushPosts();
+      assert.deepEqual(kit.getWaitList().map((entry) => entry.conversationKey.split(':').at(-1)), ['PROJ-1', 'PROJ-2']);
+      kit.setOpenRequests([]);
+      const warn = console.warn;
+      console.warn = () => {};
+      try {
+        assert.deepEqual([...await inbound.pollOnce()], [['PROJ-1', 'request'], ['PROJ-2', 'failed']]);
+        isBroken = false;
+        assert.deepEqual([...await inbound.pollOnce()], [['PROJ-1', 'seen'], ['PROJ-2', 'request']]);
+      } finally {
+        console.warn = warn;
+      }
+    });
+
     it('a hand-over over the run budget is parked before it asks for a slot — it never queues, and an untrusted one neither', async () => {
       triggerLog.record({ issueKey: 'PROJ-2', triggerId: 'a', outcome: 'request', at: nowMs - 2 * 60 * 60 * 1000 });
       triggerLog.record({ issueKey: 'PROJ-2', triggerId: 'b', outcome: 'request', at: nowMs - 60 * 60 * 1000 });

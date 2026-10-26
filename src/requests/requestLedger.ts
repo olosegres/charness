@@ -123,6 +123,11 @@ export interface RequestLedgerDeps {
    * the open set at once. The task-agent slots use it to start the next waiting task. Must not throw.
    */
   onRequestClosed?: (record: ClosedRequestRecord) => void;
+  /**
+   * Told once when the wake-up rules give up on an open request (`isWakeStopped` turns true): it stays open, but nothing wakes it
+   * again, so the task-agent slots treat it as no longer working. Runs after the change is applied. Must not throw.
+   */
+  onRequestWakeStopped?: (key: SessionKey, request: OpenRequestState) => void;
   history?: RotatingJsonlFile<ClosedRequestRecord>;
   now?: () => number;
   closedIndexMaxSize?: number;
@@ -226,6 +231,7 @@ export class RequestLedger {
   private readonly onRequestCreated: ((key: SessionKey, request: OpenRequestState) => void) | undefined;
   private readonly onPromptSettled: ((key: SessionKey, requestId: string, outcome: RequestPromptOutcome) => void) | undefined;
   private readonly onRequestClosed: ((record: ClosedRequestRecord) => void) | undefined;
+  private readonly onRequestWakeStopped: ((key: SessionKey, request: OpenRequestState) => void) | undefined;
   /** Request ids whose alert release is under way, so two paths never release one twice at once. */
   private readonly alertReleasesInFlight = new Set<string>();
   /** Insertion order = close order, so the first key is always the oldest. */
@@ -246,6 +252,7 @@ export class RequestLedger {
     this.onRequestCreated = deps.onRequestCreated;
     this.onPromptSettled = deps.onPromptSettled;
     this.onRequestClosed = deps.onRequestClosed;
+    this.onRequestWakeStopped = deps.onRequestWakeStopped;
   }
 
   /**
@@ -543,14 +550,17 @@ export class RequestLedger {
     if (!entry) return null;
     let updated: OpenRequestState | null = null;
     let isTakenInNow = false;
+    let isWakeStoppedNow = false;
     await this.store.updateOpenRequest(entry.group, (current) => {
       if (current?.id !== id) return current;
       const next: OpenRequestState = { ...current, ...(typeof update === 'function' ? update(current) : update) };
       isTakenInNow = current.isPromptTakenIn !== true && next.isPromptTakenIn === true;
+      isWakeStoppedNow = !current.isWakeStopped && next.isWakeStopped;
       updated = next;
       return next;
     });
     if (isTakenInNow) this.notePromptSettled(entry.key, [{ requestId: id, outcome: 'takenIn' }]);
+    if (isWakeStoppedNow && updated) this.onRequestWakeStopped?.(entry.key, updated);
     return updated;
   }
 

@@ -8,6 +8,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  checkIsTaskAgentLimitRaised,
   checkIsTaskAgentsMaxConcurrent,
   defaultTaskAgentsMaxConcurrent,
   parseTaskAgentLimitArgument,
@@ -78,5 +79,20 @@ describe('parseTaskAgentLimitArgument', () => {
     for (const text of [`${taskAgentsMaxConcurrentUpperBound + 1}`, '-3', '+3', '2.5', '1e2', 'twelve', 'on', '5 10', '0x10']) {
       assert.deepEqual(parseTaskAgentLimitArgument(text), { kind: 'invalid' }, text);
     }
+  });
+});
+
+describe('checkIsTaskAgentLimitRaised', () => {
+  it('a bigger number is a raise; the same, a smaller one and the first read after «no limit» are not', () => {
+    assert.equal(checkIsTaskAgentLimitRaised(5, 6), true);
+    assert.equal(checkIsTaskAgentLimitRaised(5, 5), false);
+    assert.equal(checkIsTaskAgentLimitRaised(5, 4), false);
+    assert.equal(checkIsTaskAgentLimitRaised(taskAgentsNoLimit, 4), false, 'from no limit down');
+    assert.equal(checkIsTaskAgentLimitRaised(taskAgentsNoLimit, taskAgentsNoLimit), false);
+  });
+
+  it('«no limit» after a number is the biggest raise there is', () => {
+    assert.equal(checkIsTaskAgentLimitRaised(5, taskAgentsNoLimit), true);
+    assert.equal(checkIsTaskAgentLimitRaised(taskAgentsMaxConcurrentUpperBound, taskAgentsNoLimit), true);
   });
 });

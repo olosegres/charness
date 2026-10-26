@@ -1,8 +1,8 @@
 import { keyToString, tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
 import type { RequestLedger } from '../requests/requestLedger';
-import type { ClosedRequestRecord, RequestOriginKind } from '../requests/types';
+import type { ClosedRequestRecord, OpenRequestState, RequestOriginKind } from '../requests/types';
 import type { StateStore } from '../state';
-import { taskAgentsNoLimit } from './taskAgentLimit';
+import { checkIsTaskAgentLimitRaised, taskAgentsNoLimit } from './taskAgentLimit';
 import type { TaskAgentWaitEntry } from './types';
 
 /**
@@ -18,14 +18,21 @@ import type { TaskAgentWaitEntry } from './types';
  *
  * A connector asks {@link TaskAgentSlots.checkIn} before it opens a hand-over request. `granted` — it may open it now, and the
  * slot is RESERVED until the connector says the request is open ({@link TaskAgentSlots.noteStarted}) or gave up
- * ({@link TaskAgentSlots.releaseReservation}), so two connectors polling at once never share the last free slot. `queued` — no
+ * ({@link TaskAgentSlots.noteStartFailed}), so two connectors polling at once never share the last free slot. `queued` — no
  * slot is free (or someone waits ahead): the conversation joins the list, oldest first, and asks again at its next poll. It is
  * granted only when it is within the free slots counted from the HEAD of the list, so the order of the list is the order of
  * the starts, whatever order a poll happens to return the issues in.
+ *
+ * A place whose last start FAILED (the issue could not be fetched, the folder not bound) does not count as ahead of the places
+ * behind it, so one broken issue never holds the others up; after {@link taskAgentStartFailureLimit} failed starts in a row it
+ * moves to the end of the list.
  */
 
 /** The request origin that holds a slot. */
 const slotHoldingOriginKind: RequestOriginKind = 'trackerEvent';
+
+/** How many starts of one waiting issue may fail in a row before it moves to the end of the wait list. */
+export const taskAgentStartFailureLimit = 3;
 
 /**
  * @name TaskAgentSlotDecision
@@ -59,6 +66,10 @@ export class TaskAgentSlots {
   private readonly now: () => number;
   /** Conversations a `granted` answer was given to and whose request is not open yet; memory only. */
   private readonly reservedConversationKeys = new Set<string>();
+  /** Per waiting conversation, how many starts failed in a row (absent = none); memory only, so a restart gives every place a fresh start. */
+  private readonly failedStartCounts = new Map<string, number>();
+  /** The cap as the last read saw it; `null` before the first read. */
+  private lastReadMaxConcurrent: number | null = null;
   private readonly slotFreedListeners = new Set<() => void>();
 
   constructor(private readonly deps: TaskAgentSlotsDeps) {
@@ -86,11 +97,14 @@ export class TaskAgentSlots {
    */
   async checkIn(key: SessionKey, triggerId: string): Promise<TaskAgentSlotDecision> {
     const conversationKey = keyToString(key);
-    const maxConcurrent = this.deps.getMaxConcurrent();
+    // A check-in is made by the poll that deals with every waiting issue, so a raised cap needs no wake-up here.
+    const maxConcurrent = this.readMaxConcurrent(false);
     const occupied = this.getOccupiedConversationKeys();
     const waiting = this.getWaitingEntries(occupied);
     const ownIndex = waiting.findIndex((entry) => entry.conversationKey === conversationKey);
-    const position = ownIndex === -1 ? waiting.length : ownIndex;
+    const placesAhead = ownIndex === -1 ? waiting : waiting.slice(0, ownIndex);
+    // A place whose last start failed does not hold up the ones behind it.
+    const position = placesAhead.filter((entry) => !this.failedStartCounts.has(entry.conversationKey)).length;
     const freeCount = maxConcurrent === taskAgentsNoLimit ? Number.POSITIVE_INFINITY : maxConcurrent - occupied.size;
     if (occupied.has(conversationKey) || position < freeCount) {
       this.reservedConversationKeys.add(conversationKey);
@@ -120,9 +134,25 @@ export class TaskAgentSlots {
     this.removeWaiting((entry) => entry.conversationKey === conversationKey);
   }
 
-  /** @description The granted conversation could not open its request: the slot goes back, its place in the list (if any) stays. */
-  releaseReservation(key: SessionKey): void {
-    this.reservedConversationKeys.delete(keyToString(key));
+  /**
+   * @description The granted conversation could not open its request: the slot goes back and a place in the list (if any) stays, but
+   * the place no longer holds up the ones behind it. The {@link taskAgentStartFailureLimit}th failure in a row moves it to the end
+   * of the list (logged once) and gives it a fresh start there. A conversation with no place has nothing to move: it asks again at its next poll.
+   */
+  noteStartFailed(key: SessionKey): void {
+    const conversationKey = keyToString(key);
+    this.reservedConversationKeys.delete(conversationKey);
+    const waitList = this.deps.store.getTaskAgentWaitList();
+    const place = waitList.find((entry) => entry.conversationKey === conversationKey);
+    if (!place) return;
+    const failedCount = (this.failedStartCounts.get(conversationKey) ?? 0) + 1;
+    if (failedCount < taskAgentStartFailureLimit) {
+      this.failedStartCounts.set(conversationKey, failedCount);
+      return;
+    }
+    this.failedStartCounts.delete(conversationKey);
+    this.deps.store.setTaskAgentWaitList([...waitList.filter((entry) => entry !== place), place]);
+    console.warn(`[tasks] ${conversationKey} failed to start ${taskAgentStartFailureLimit} times in a row; it moves to the end of the wait list`);
   }
 
   /** @description The conversation no longer waits (its hand-over was withdrawn, refused or handled another way): drop its place. */
@@ -153,13 +183,41 @@ export class TaskAgentSlots {
   private removeWaiting(checkIsRemoved: (entry: TaskAgentWaitEntry) => boolean): void {
     const waitList = this.deps.store.getTaskAgentWaitList();
     const kept = waitList.filter((entry) => !checkIsRemoved(entry));
-    if (kept.length !== waitList.length) this.deps.store.setTaskAgentWaitList(kept);
+    if (kept.length === waitList.length) return;
+    for (const entry of waitList) {
+      if (checkIsRemoved(entry)) this.failedStartCounts.delete(entry.conversationKey);
+    }
+    this.deps.store.setTaskAgentWaitList(kept);
   }
 
-  /** @description The cap, the conversations working and the conversations waiting. */
+  /**
+   * @description The cap, the conversations working and the conversations waiting. Reading the cap here notices a raise like any read
+   * outside a poll (see {@link TaskAgentSlots.noteLimitMayHaveChanged}).
+   */
   getStatus(): TaskAgentSlotStatus {
+    const maxConcurrent = this.readMaxConcurrent(true);
     const occupied = this.getOccupiedConversationKeys();
-    return { maxConcurrent: this.deps.getMaxConcurrent(), runningCount: occupied.size, waitingCount: this.getWaitingEntries(occupied).length };
+    return { maxConcurrent, runningCount: occupied.size, waitingCount: this.getWaitingEntries(occupied).length };
+  }
+
+  /**
+   * The cap in force. `isWakingOnRaise`: when it went up since the last read and somebody waits, the listeners are woken — a raise
+   * is room for the waiting issues, found by whoever reads it first (the `/task_agents` screen, a hand edit of `settings.json`).
+   */
+  private readMaxConcurrent(isWakingOnRaise: boolean): number {
+    const maxConcurrent = this.deps.getMaxConcurrent();
+    const previous = this.lastReadMaxConcurrent;
+    this.lastReadMaxConcurrent = maxConcurrent;
+    if (isWakingOnRaise && previous !== null && checkIsTaskAgentLimitRaised(previous, maxConcurrent)) this.wakeListenersWhileWaiting();
+    return maxConcurrent;
+  }
+
+  /**
+   * @description The cap may have changed — General's value was just written: read it, and wake the listeners when it went up while
+   * somebody waits. A hand edit of `settings.json` is noticed the same way, by the first read that is not a poll's own check-in.
+   */
+  noteLimitMayHaveChanged(): void {
+    this.readMaxConcurrent(true);
   }
 
   /**
@@ -180,6 +238,19 @@ export class TaskAgentSlots {
    */
   noteRequestClosed(closed: ClosedRequestRecord): void {
     if (closed.origin.kind !== slotHoldingOriginKind || closed.closeReason === 'superseded') return;
+    this.wakeListenersWhileWaiting();
+  }
+
+  /**
+   * @description The request ledger's word that the wake-up engine gave up on a request (it stays open, but holds no slot any more):
+   * the same wake-up as a close.
+   */
+  noteRequestWakeStopped(request: Pick<OpenRequestState, 'origin'>): void {
+    if (request.origin.kind !== slotHoldingOriginKind) return;
+    this.wakeListenersWhileWaiting();
+  }
+
+  private wakeListenersWhileWaiting(): void {
     if (this.deps.store.getTaskAgentWaitList().length === 0) return;
     for (const listener of this.slotFreedListeners) {
       try {

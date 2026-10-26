@@ -7391,6 +7391,8 @@ registerBotSkillsCommands();
 const { registerTaskAgentsCommands, registerTaskAgentsCallbacks } = createTaskAgents({
   ...botCore,
   readTaskAgentLimit: () => readTaskAgentLimit(taskAgentLimitSources),
+  // A General value just written may raise the cap: the waiting issues start at once.
+  noteTaskAgentLimitChanged: () => taskAgentSlots?.noteLimitMayHaveChanged(),
   // The slots decide nothing on an instance that serves no tracker: its screen says nothing of them.
   readTaskAgentStatus: () => ([...ENV.servedPlatforms].some((platform) => platform !== 'telegram') ? taskAgentSlots?.getStatus() ?? null : null),
 });
@@ -13765,6 +13767,8 @@ export async function startBot(): Promise<void> {
     onPromptSettled: (key, requestId, outcome) => connectorConversationHooks.get(key.platform)?.onPromptSettled(key, requestId, outcome),
     // D10: a closed hand-over may free a task-agent slot for a waiting issue.
     onRequestClosed: (record) => taskAgentSlots?.noteRequestClosed(record),
+    // D10: a request the wake-up engine gave up on no longer holds a slot either.
+    onRequestWakeStopped: (_key, request) => taskAgentSlots?.noteRequestWakeStopped(request),
   });
   await requestLedger.load();
   const slots = new TaskAgentSlots({

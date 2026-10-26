@@ -86,14 +86,16 @@ cap for every project and every tracker connector (`trackers/README.md`). Only a
 (an untrusted or over-budget hand-over never waits for a slot) and before the issue is fetched:
 
 - `checkIn` → `granted`: the request opens (the slot is reserved until it does) and `noteStarted` drops the issue's place;
-  a failure while opening it gives the reservation back and keeps the place.
+  a failure while opening it (`noteStartFailed`) gives the reservation back and keeps the place — which no longer holds up the issues
+  behind it, so the free slot goes to the next in line even in the same poll; the third failure in a row moves the place to the end.
 - `queued`: the issue joins the bot's ONE persisted FIFO list (`state.json` `taskAgentWaitList`) and gets ONE short comment
   (`answerSink.ts` `postQueuedNotice` — no hand-back, the issue stays the AI's). Its trigger is NOT recorded: every poll decides
   it again (`waiting`, silent) and it starts when it is within the free slots counted from the head of the list. A newer
   hand-over of a waiting issue keeps its place.
 - An issue that left the results of a complete poll, or no longer matches, leaves the list at once (`pruneWaiting`, `dropWaiting`).
-- A slot freeing — the ledger's `onRequestClosed` — wakes the poll at once (`pollSoon`: a poll under way is not interrupted, the
-  next one follows it immediately; a failing Jira keeps its backoff).
+- A slot freeing — the ledger's `onRequestClosed`, or `onRequestWakeStopped` when the wake-up engine gives up on a request — and a raised
+  cap wake the poll at once (`pollSoon`: a poll under way is not interrupted, the next one follows it immediately; a failing Jira keeps
+  its backoff).
 
 ### An @-mention wakes the AI — it answers only (`inbound.ts` `getMentionDecisions`)
 

@@ -10,6 +10,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { keyToString } from '../sessionKey';
 import type { ClosedRequestRecord, RequestCloseReason, RequestOriginKind } from '../requests/types';
+import { taskAgentStartFailureLimit } from '../trackers/taskAgentSlots';
 import { createJiraConversationKey, createTestSlots, createWaitEntry } from './taskAgentSlotsTestKit';
 
 const first = createJiraConversationKey('PROJ-1');
@@ -166,7 +167,7 @@ describe('TaskAgentSlots', () => {
     it('a grant that could not open its request gives the slot back and keeps its place in the list', async () => {
       const kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-1', 1)] });
       assert.deepEqual(await kit.slots.checkIn(first, 'trigger'), { kind: 'granted' });
-      kit.slots.releaseReservation(first);
+      kit.slots.noteStartFailed(first);
       assert.deepEqual(kit.getWaitList().map((entry) => entry.conversationKey), [keyToString(first)], 'its place stays');
       assert.deepEqual(await kit.slots.checkIn(first, 'trigger'), { kind: 'granted' }, 'and it is first in line again');
     });
@@ -177,6 +178,132 @@ describe('TaskAgentSlots', () => {
       kit.slots.noteStarted(first);
       assert.deepEqual(kit.getWaitList(), []);
       assert.equal(kit.slots.getStatus().runningCount, 0, 'the ledger counts it from here, not the slots');
+    });
+  });
+
+  describe('a waiting issue that fails to start does not hold up the ones behind it', () => {
+    /** Everything `console.warn` is told while `run` runs. */
+    async function collectWarnings(run: () => Promise<void> | void): Promise<string[]> {
+      const warn = console.warn;
+      const warnings: string[] = [];
+      console.warn = (line: string) => {
+        warnings.push(line);
+      };
+      try {
+        await run();
+      } finally {
+        console.warn = warn;
+      }
+      return warnings;
+    }
+
+    it('B behind a failing A starts in the SAME poll when A is asked first: A\'s failure gives the slot back and A no longer stands ahead', async () => {
+      const kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-1', 1), createWaitEntry('PROJ-2', 2)] });
+      assert.deepEqual(await kit.slots.checkIn(first, 'trigger'), { kind: 'granted' });
+      kit.slots.noteStartFailed(first);
+      assert.deepEqual(await kit.slots.checkIn(second, 'trigger'), { kind: 'granted' });
+    });
+
+    it('B asked before A in a poll waits for the next one; there A, whose last start failed, no longer holds it up', async () => {
+      const kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-1', 1), createWaitEntry('PROJ-2', 2)] });
+      assert.equal((await kit.slots.checkIn(second, 'trigger')).kind, 'queued', 'poll 1: A is ahead and has not failed yet');
+      assert.deepEqual(await kit.slots.checkIn(first, 'trigger'), { kind: 'granted' });
+      kit.slots.noteStartFailed(first);
+      assert.deepEqual(await kit.slots.checkIn(second, 'trigger'), { kind: 'granted' }, 'poll 2: B takes the free slot');
+    });
+
+    it('a newcomer is not held up by a place whose last start failed either', async () => {
+      const kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-1', 1)] });
+      await kit.slots.checkIn(first, 'trigger');
+      kit.slots.noteStartFailed(first);
+      assert.deepEqual(await kit.slots.checkIn(third, 'trigger'), { kind: 'granted' });
+    });
+
+    it('A keeps its place and is retried while it is the only one waiting; a start that works clears the failures', async () => {
+      const kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-1', 1)] });
+      for (let attempt = 0; attempt < taskAgentStartFailureLimit - 1; attempt += 1) {
+        assert.deepEqual(await kit.slots.checkIn(first, 'trigger'), { kind: 'granted' }, `attempt ${attempt + 1}`);
+        kit.slots.noteStartFailed(first);
+      }
+      assert.deepEqual(kit.getWaitList().map((entry) => entry.conversationKey), [keyToString(first)], 'two failures: still its place');
+      await kit.slots.checkIn(first, 'trigger');
+      kit.slots.noteStarted(first);
+      assert.deepEqual(kit.getWaitList(), []);
+      // Back in the list, its failures start from zero: it takes the full number of failures again to move.
+      await kit.slots.checkIn(third, 'trigger');
+      kit.setOpenRequests([{ key: third, kind: 'trackerEvent' }]);
+      await kit.slots.checkIn(first, 'trigger-2');
+      await kit.slots.checkIn(second, 'trigger-3');
+      kit.setOpenRequests([]);
+      for (let attempt = 0; attempt < taskAgentStartFailureLimit - 1; attempt += 1) {
+        await kit.slots.checkIn(first, 'trigger-2');
+        kit.slots.noteStartFailed(first);
+      }
+      assert.deepEqual(kit.getWaitList().map((entry) => entry.conversationKey), [keyToString(first), keyToString(second)], 'the earlier failures were forgotten');
+    });
+
+    it('a start that keeps failing moves to the END of the list on its third failure in a row — logged once — and the others are ahead of it from then on', async () => {
+      const kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-1', 1), createWaitEntry('PROJ-2', 2), createWaitEntry('PROJ-3', 3)] });
+      const warnings = await collectWarnings(async () => {
+        for (let attempt = 0; attempt < taskAgentStartFailureLimit; attempt += 1) {
+          assert.deepEqual(await kit.slots.checkIn(first, 'trigger'), { kind: 'granted' }, `attempt ${attempt + 1}`);
+          kit.slots.noteStartFailed(first);
+          if (attempt < taskAgentStartFailureLimit - 1) {
+            assert.deepEqual(kit.getWaitList().map((entry) => entry.conversationKey), [first, second, third].map((key) => keyToString(key)), `still first after ${attempt + 1} failures`);
+          }
+        }
+      });
+      assert.equal(taskAgentStartFailureLimit, 3);
+      assert.deepEqual(kit.getWaitList().map((entry) => entry.conversationKey), [second, third, first].map((key) => keyToString(key)), 'moved behind the others');
+      assert.deepEqual(warnings, [`[tasks] ${keyToString(first)} failed to start 3 times in a row; it moves to the end of the wait list`], 'said once');
+      // The second starts now (and holds the slot); a newcomer queues behind the third AND the moved first.
+      assert.deepEqual(await kit.slots.checkIn(second, 'trigger'), { kind: 'granted' });
+      assert.deepEqual(await kit.slots.checkIn(fourth, 'trigger'), { kind: 'queued', isNewlyQueued: true, aheadCount: 2, maxConcurrent: 1 });
+    });
+
+    it('with several slots free, the failing A does not use one up: B and C start beside it', async () => {
+      const kit = createTestSlots({ maxConcurrent: 2, waitList: [createWaitEntry('PROJ-1', 1), createWaitEntry('PROJ-2', 2), createWaitEntry('PROJ-3', 3)] });
+      assert.deepEqual(await kit.slots.checkIn(first, 'trigger'), { kind: 'granted' });
+      kit.slots.noteStartFailed(first);
+      assert.deepEqual(await kit.slots.checkIn(second, 'trigger'), { kind: 'granted' });
+      kit.slots.noteStarted(second);
+      kit.setOpenRequests([{ key: second, kind: 'trackerEvent' }]);
+      assert.deepEqual(await kit.slots.checkIn(third, 'trigger'), { kind: 'granted' });
+    });
+
+    it('a place that leaves the list forgets its failures: joining again, it takes the full number of failures to move', async () => {
+      const kit = createTestSlots({ maxConcurrent: 2 });
+      const occupy = (): void => kit.setOpenRequests([third, fourth].map((key) => ({ key, kind: 'trackerEvent' })));
+      occupy();
+      await kit.slots.checkIn(first, 'trigger');
+      kit.setOpenRequests([]);
+      for (let attempt = 0; attempt < taskAgentStartFailureLimit - 1; attempt += 1) {
+        await kit.slots.checkIn(first, 'trigger');
+        kit.slots.noteStartFailed(first);
+      }
+      kit.slots.dropWaiting(first);
+      occupy();
+      assert.equal((await kit.slots.checkIn(first, 'trigger')).kind, 'queued', 'a new place');
+      kit.setOpenRequests([]);
+      const warnings = await collectWarnings(async () => {
+        for (let attempt = 0; attempt < taskAgentStartFailureLimit - 1; attempt += 1) {
+          await kit.slots.checkIn(first, 'trigger');
+          kit.slots.noteStartFailed(first);
+        }
+      });
+      assert.deepEqual(warnings, [], 'two failures since it joined again: not moved');
+    });
+
+    it('a failed start with no place has nothing to move: nothing is logged, and nothing is kept against it', async () => {
+      const kit = createTestSlots({ maxConcurrent: 2 });
+      const warnings = await collectWarnings(async () => {
+        for (let attempt = 0; attempt < taskAgentStartFailureLimit + 1; attempt += 1) {
+          assert.deepEqual(await kit.slots.checkIn(first, 'trigger'), { kind: 'granted' });
+          kit.slots.noteStartFailed(first);
+        }
+      });
+      assert.deepEqual(warnings, []);
+      assert.deepEqual(kit.getWaitList(), []);
     });
   });
 
@@ -232,6 +359,73 @@ describe('TaskAgentSlots', () => {
       kit.slots.noteRequestClosed(createClosedRecord('trackerMention', 'final'));
       kit.slots.noteRequestClosed(createClosedRecord('message', 'final'));
       assert.equal(wakes, 0);
+    });
+
+    it('the wake-up engine giving up on a hand-over wakes them while somebody waits — a mention, a Telegram request or nobody waiting does not', () => {
+      const kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-2', 1)] });
+      let wakes = 0;
+      kit.slots.onSlotFreed(() => {
+        wakes += 1;
+      });
+      kit.slots.noteRequestWakeStopped(createClosedRecord('trackerEvent', 'final'));
+      assert.equal(wakes, 1);
+      kit.slots.noteRequestWakeStopped(createClosedRecord('trackerMention', 'final'));
+      kit.slots.noteRequestWakeStopped(createClosedRecord('message', 'final'));
+      assert.equal(wakes, 1);
+      const idle = createTestSlots({ maxConcurrent: 1 });
+      idle.slots.onSlotFreed(() => {
+        wakes += 1;
+      });
+      idle.slots.noteRequestWakeStopped(createClosedRecord('trackerEvent', 'final'));
+      assert.equal(wakes, 1);
+    });
+
+    it('a raised cap wakes them while somebody waits: found by a read outside a poll (the screen\'s status, the note after /task_agents) — not by a check-in, which is the poll itself', async () => {
+      const kit = createTestSlots({ maxConcurrent: 2, waitList: [createWaitEntry('PROJ-2', 1)] });
+      let wakes = 0;
+      kit.slots.onSlotFreed(() => {
+        wakes += 1;
+      });
+      kit.slots.getStatus();
+      assert.equal(wakes, 0, 'the first read only learns the cap');
+      kit.setMaxConcurrent(3);
+      kit.slots.getStatus();
+      assert.equal(wakes, 1, 'raised, seen by the screen');
+      kit.slots.getStatus();
+      assert.equal(wakes, 1, 'once: the raise is known now');
+      kit.setMaxConcurrent(5);
+      await kit.slots.checkIn(createJiraConversationKey('PROJ-8'), 'trigger');
+      assert.equal(wakes, 1, 'a poll\'s own check-in reads the new cap without waking itself');
+      kit.setMaxConcurrent(6);
+      kit.slots.noteLimitMayHaveChanged();
+      assert.equal(wakes, 2, 'raised again, told by the note');
+    });
+
+    it('a lowered cap, an unchanged one and a raise with nobody waiting wake nobody; «no limit» after a number is a raise', () => {
+      const kit = createTestSlots({ maxConcurrent: 5, waitList: [createWaitEntry('PROJ-2', 1)] });
+      let wakes = 0;
+      kit.slots.onSlotFreed(() => {
+        wakes += 1;
+      });
+      kit.slots.noteLimitMayHaveChanged();
+      kit.setMaxConcurrent(3);
+      kit.slots.noteLimitMayHaveChanged();
+      kit.slots.noteLimitMayHaveChanged();
+      assert.equal(wakes, 0);
+      kit.setMaxConcurrent(0);
+      kit.slots.noteLimitMayHaveChanged();
+      assert.equal(wakes, 1, 'no limit is room');
+      kit.setMaxConcurrent(7);
+      kit.slots.noteLimitMayHaveChanged();
+      assert.equal(wakes, 1, 'from no limit down is not a raise');
+      const idle = createTestSlots({ maxConcurrent: 1 });
+      idle.slots.onSlotFreed(() => {
+        wakes += 1;
+      });
+      idle.slots.noteLimitMayHaveChanged();
+      idle.setMaxConcurrent(9);
+      idle.slots.noteLimitMayHaveChanged();
+      assert.equal(wakes, 1, 'nobody waits: nobody is woken');
     });
 
     it('the function onSlotFreed returns stops the listening; a listener that throws does not stop the others', () => {

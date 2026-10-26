@@ -765,3 +765,42 @@ describe('onRequestClosed — what the task-agent slots hear (D10)', () => {
     assert.deepEqual(reloaded, [], 'indexing the history at boot closes nothing');
   });
 });
+
+describe('onRequestWakeStopped — the wake-up engine giving up (D10)', () => {
+  async function createLedgerRecordingGiveUps(giveUps: string[]): Promise<RequestLedger> {
+    const ledger = new RequestLedger({
+      store: await createStore(),
+      history: new RotatingJsonlFile(historyPath, requestHistoryMaxBytes),
+      onRequestWakeStopped: (key, request) => giveUps.push(`${keyToString(key)} ${request.id} ${request.origin.kind} ${request.isWakeStopped}`),
+    });
+    await ledger.load();
+    return ledger;
+  }
+
+  it('reported once, when isWakeStopped turns true — by a patch or by a function — with the request as it now stands; the request stays open', async () => {
+    const giveUps: string[] = [];
+    const ledger = await createLedgerRecordingGiveUps(giveUps);
+    const byPatch = await ledger.createRequest(topicKey, trackerOrigin, { createPrompt: () => 'p' });
+    await ledger.updateOpenRequest(byPatch.id, { isWakeStopped: true, nextWakeAt: undefined });
+    assert.deepEqual(giveUps, [`${keyToString(topicKey)} ${byPatch.id} trackerEvent true`]);
+    assert.ok(ledger.getOpenRequestById(byPatch.id), 'given up, not closed');
+    const byFunction = await ledger.createRequest(otherTopicKey, trackerOrigin, { createPrompt: () => 'p' });
+    await ledger.updateOpenRequest(byFunction.id, () => ({ isWakeStopped: true }));
+    assert.equal(giveUps.length, 2);
+  });
+
+  it('other updates, a second give-up of the same request and an update of a closed request report nothing', async () => {
+    const giveUps: string[] = [];
+    const ledger = await createLedgerRecordingGiveUps(giveUps);
+    const request = await ledger.createRequest(topicKey, trackerOrigin, { createPrompt: () => 'p' });
+    await ledger.updateOpenRequest(request.id, { silentTurnCount: 1 });
+    await ledger.updateOpenRequest(request.id, { isWakeStopped: false });
+    assert.deepEqual(giveUps, []);
+    await ledger.updateOpenRequest(request.id, { isWakeStopped: true });
+    await ledger.updateOpenRequest(request.id, { isWakeStopped: true, wakeCount: 3 });
+    assert.equal(giveUps.length, 1, 'only the change reports');
+    await ledger.closeRequest(request.id, 'cancelled');
+    await ledger.updateOpenRequest(request.id, { isWakeStopped: true });
+    assert.equal(giveUps.length, 1);
+  });
+});

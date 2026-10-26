@@ -73,3 +73,9 @@ export function parseTaskAgentLimitArgument(argument: string): TaskAgentLimitArg
   const value = Number.parseInt(text, 10);
   return checkIsTaskAgentsMaxConcurrent(value) ? { kind: 'number', value } : { kind: 'invalid' };
 }
+
+/** @description Did the cap go UP between two reads — a bigger number, or «no limit» after a number? Going down, or staying, is not. */
+export function checkIsTaskAgentLimitRaised(previousMaxConcurrent: number, currentMaxConcurrent: number): boolean {
+  if (previousMaxConcurrent === taskAgentsNoLimit) return false;
+  return currentMaxConcurrent === taskAgentsNoLimit || currentMaxConcurrent > previousMaxConcurrent;
+}

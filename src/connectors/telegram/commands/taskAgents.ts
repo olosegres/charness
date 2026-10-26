@@ -22,11 +22,13 @@ const taskAgentsCallbackPrefix = 'tka_';
 /** Picker buttons per row. */
 const pickerButtonsPerRow = 3;
 
-/** What the module needs from the bot: the shared core and the two readings only the composition root has. */
+/** What the module needs from the bot: the shared core and the readings and the signal only the composition root has. */
 export interface TaskAgentsPorts
   extends Pick<BotCore, 'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'> {
   /** The cap in force and the layer it comes from (General's own value, `settings.json`'s seed, the built-in default). */
   readTaskAgentLimit: () => TaskAgentLimit;
+  /** Told after General's value was written: the cap may have gone up, which starts the waiting issues at once. */
+  noteTaskAgentLimitChanged: () => void;
   /** The slots in use and the places waiting; `null` while this instance serves no tracker, where the cap decides nothing. */
   readTaskAgentStatus: () => TaskAgentSlotStatus | null;
 }
@@ -37,7 +39,7 @@ export interface TaskAgentsPorts
  * topic the screen only reports the value in force and where to change it.
  */
 export function createTaskAgents(ports: TaskAgentsPorts) {
-  const { bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, readTaskAgentLimit, readTaskAgentStatus } = ports;
+  const { bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, readTaskAgentLimit, readTaskAgentStatus, noteTaskAgentLimitChanged } = ports;
 
   const sourceKeys: Record<TaskAgentLimitSource, string> = {
     general: 'taskAgents.sourceGeneral',
@@ -75,6 +77,7 @@ export function createTaskAgents(ports: TaskAgentsPorts) {
   /** Write General's value and RETURN the confirmation — the one write path behind the typed number and the buttons. */
   async function applyTaskAgentsLimit(maxConcurrent: number): Promise<string> {
     await getState().setTaskAgentsMaxConcurrentGlobalValue(maxConcurrent);
+    noteTaskAgentLimitChanged();
     return t('taskAgents.setConfirmation', { value: formatLimit(maxConcurrent) });
   }
 

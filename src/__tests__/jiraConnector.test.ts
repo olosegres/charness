@@ -874,6 +874,8 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     const slotsCreated = startBody.indexOf('const slots = new TaskAgentSlots({');
     assert.ok(ledgerCreated > 0 && slotsCreated > startBody.indexOf('await requestLedger.load();'), 'built over the loaded ledger');
     assert.match(startBody, /onRequestClosed: \(record\) => taskAgentSlots\?\.noteRequestClosed\(record\),/);
+    assert.match(startBody, /onRequestWakeStopped: \(_key, request\) => taskAgentSlots\?\.noteRequestWakeStopped\(request\),/);
+    assert.match(botSource, /noteTaskAgentLimitChanged: \(\) => taskAgentSlots\?\.noteLimitMayHaveChanged\(\),/);
     assert.match(startBody, /getMaxConcurrent: \(\) => readTaskAgentLimit\(taskAgentLimitSources\)\.maxConcurrent,/);
     assert.match(startBody, /slots\.dropUnserved\(\(key\) => checkIsServedConversation\(key, ENV\.servedPlatforms\)\);/);
     const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));

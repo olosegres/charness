@@ -23,6 +23,8 @@ let harness: CommandHarness;
 /** `settings.json`'s `taskAgents.maxConcurrent` as the reader sees it, and the slots of the instance (`null`: it serves no tracker). */
 let settingsValue: number | null = null;
 let slotStatus: TaskAgentSlotStatus | null = null;
+/** How many times the module told the bot the cap may have changed. */
+let limitChangedNotes = 0;
 /** The id of the bot message each test's taps sit on. */
 let nextPickerMessageId = 900;
 
@@ -58,6 +60,9 @@ describe('taskAgents: /task_agents over its ports', () => {
       ...harness.core,
       readTaskAgentLimit: () => readTaskAgentLimit(sources),
       readTaskAgentStatus: () => slotStatus,
+      noteTaskAgentLimitChanged: () => {
+        limitChangedNotes += 1;
+      },
     });
     taskAgents.registerTaskAgentsCommands();
     taskAgents.registerTaskAgentsCallbacks();
@@ -109,8 +114,10 @@ describe('taskAgents: /task_agents over its ports', () => {
     it('a tap writes General\'s value, answers the tap and edits the picker into its confirmation — keyboard gone', async () => {
       const picker = pushPicker();
       const answersBefore = harness.fakeTelegram.callbackAnswers.length;
+      const notesBefore = limitChangedNotes;
       await harness.tapButton(picker, 'tka_20');
       assert.equal(harness.state.getTaskAgentsMaxConcurrentGlobalValue(), 20, 'General\'s own value now beats the file\'s 15');
+      assert.equal(limitChangedNotes, notesBefore + 1, 'the bot is told after the write: a raise starts the waiting issues at once');
       assert.equal(harness.fakeTelegram.callbackAnswers.length, answersBefore + 1);
       const edit = lastEdit();
       assert.equal(edit.messageId, picker);
@@ -132,8 +139,10 @@ describe('taskAgents: /task_agents over its ports', () => {
     });
 
     it('the number typed after the command applies at once with the same confirmation — a number no button shows, with no ✓ anywhere', async () => {
+      const notesBefore = limitChangedNotes;
       await harness.runCommand('task_agents', '12');
       assert.equal(harness.state.getTaskAgentsMaxConcurrentGlobalValue(), 12);
+      assert.equal(limitChangedNotes, notesBefore + 1, 'told after the typed number too');
       assert.match(lastReply().text, /^✅ Task agents at once: 12, for the whole bot\./);
       assert.equal(harness.getKeyboardData(lastReply()).length, 0, 'a confirmation, not a picker');
       await harness.runCommand('task_agents');
@@ -153,11 +162,13 @@ describe('taskAgents: /task_agents over its ports', () => {
 
     it('anything else is refused with the range, and changes nothing: over the bound, negative, a decimal, a word, two numbers', async () => {
       await harness.runCommand('task_agents', '8');
+      const notesBefore = limitChangedNotes;
       for (const text of [`${taskAgentsMaxConcurrentUpperBound + 1}`, '-3', '2.5', 'many', '5 10']) {
         await harness.runCommand('task_agents', text);
         assert.equal(lastReply().text, `⚠️ Send a whole number from 0 to ${taskAgentsMaxConcurrentUpperBound} (0 or off — no limit).`, text);
         assert.equal(harness.state.getTaskAgentsMaxConcurrentGlobalValue(), 8, `${text} changed nothing`);
       }
+      assert.equal(limitChangedNotes, notesBefore, 'a refusal tells nobody');
     });
   });
 
@@ -177,9 +188,11 @@ describe('taskAgents: /task_agents over its ports', () => {
     });
 
     it('a number typed there is refused, and changes nothing', async () => {
+      const notesBeforeTopic = limitChangedNotes;
       await harness.runCommand('task_agents', '3');
       assert.equal(lastReply().text, '⚠️ The limit is one for the whole bot — change it in General.');
       assert.equal(harness.state.getTaskAgentsMaxConcurrentGlobalValue(), 10);
+      assert.equal(limitChangedNotes, notesBeforeTopic, 'nothing was written, nobody is told');
     });
 
     it('a tap that lands in a topic (an old picker) changes nothing and says where to change it', async () => {

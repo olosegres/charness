@@ -6,7 +6,7 @@
 It opens a one-shot picker (5 / 10 / 15 / 20 / 30 / No limit, the value in force marked ✓) whose tap turns it into its confirmation;
 `/task_agents 12` sets any whole number from 1 to 100, and `0` or `off` means no limit (a number over 100, a decimal or a word is refused with the
 range). The screen names where the value comes from — set in General, `settings.json`, or the built-in default — and, on an instance that serves
-Jira, how many agents work now and how many wait. General's own value beats `settings.json`'s once it is set; in a topic the command only reports
+Jira, how many agents work now and how many wait. General's own value beats `settings.json`'s once it is set, and a higher number starts the issues waiting for a slot at once; in a topic the command only reports
 the value and says it is changed in General. The texts are in all 12 languages. General's `/help` also names it, and escapes the underscores of
 its command names, so a pair of them can no longer be read as italics.
 
@@ -19,8 +19,11 @@ request is cancelled, or when the wake-up engine gave up on it and handed the is
 slot, and an @-mention (answer only) never takes one or waits. An issue over the cap gets ONE short comment — «⏳ The AI is working on 5 tasks at
 once, its limit, so this issue is queued (2 issues are ahead of it). It starts by itself when a slot frees up» — and stays assigned to the AI. The
 waiting issues are one first-in-first-out list for the whole bot, kept in `state.json` so a restart keeps the order; the first one starts the
-moment a slot frees (the poll runs at once, not at its next interval), and an issue moved away from the AI while it waits leaves the list. A
-lower cap never stops an agent that is already working. A mistyped `taskAgents` is logged once as
+moment a slot frees — an agent hands its issue back, a request is cancelled, the wake-up engine gives up on one, or the cap is raised with
+`/task_agents` — because the Jira poll then runs at once instead of at its next interval (a raise made by editing `settings.json` is noticed when
+the bot next reads the file, at the latest at the next poll). An issue moved away from the AI while it waits leaves the list; an issue whose
+start fails (its text cannot be read, say) keeps its place but no longer holds up the ones behind it, and after three failed starts in a row it
+moves to the end of the list. A lower cap never stops an agent that is already working. A mistyped `taskAgents` is logged once as
 `[Settings] settings.json taskAgents.maxConcurrent: …` and the built-in 5 applies.
 
 **The "↩️ Resumed — last 3 messages" preview no longer shows what Claude Code records for itself: a `/compact` you ran there shows as just `/compact`.**

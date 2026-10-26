@@ -58,6 +58,7 @@ import {
   releaseHeldTurn,
   requester,
   restartPollWaitMs,
+  resumeTimeoutMs,
   startCharness,
   waitFor,
 } from './jiraE2e/jiraFlowKit';
@@ -237,6 +238,30 @@ describe('The cap on task agents on a Jira-only instance: built charness, fake J
     assert.notEqual(resumedTurn.pid, earlierTurn.pid, 'a new process');
     assert.deepEqual(getFlagValues(getSessionLaunchOf(resumedTurn.pid)?.argv ?? [], '--resume'), [getLaunchSessionId(getSessionLaunchOf(earlierTurn.pid)?.argv ?? [])], 'the same conversation, resumed');
     assert.ok(resumedTurn.requestId !== null && fakeJira.getIssue('PROJ-6').assignee?.accountId === requester.accountId, 'it started when PROJ-6 handed back');
+  });
+
+  it('a hand-over the wake-up engine gives up on holds no slot any more: the alert is out, the issue is handed back, and the issue waiting for the slot starts', async () => {
+    // PROJ-2 still holds one slot; PROJ-7 never answers (every turn ends silent) and takes the other, so PROJ-8 has to wait.
+    createIssue('PROJ-7', 'silent');
+    createIssue('PROJ-8', 'answer');
+    handIssueToAi('PROJ-7', requester);
+    await waitFor('PROJ-7\'s first turn', answerTimeoutMs, () => getTurns('PROJ-7').length >= 1);
+    handIssueToAi('PROJ-8', requester);
+    await waitFor('PROJ-8\'s queued comment', answerTimeoutMs, () => fakeJira.getIssue('PROJ-8').comments.length === 1);
+    assert.deepEqual(getTurns('PROJ-8'), [], 'PROJ-8 waits while PROJ-7 holds the slot');
+
+    // The rules give up after two turns without an answer: the alert is the comment, the issue goes back — and the slot is free.
+    await waitFor('PROJ-7\'s alert and hand-back', resumeTimeoutMs, () =>
+      getCommentTexts(fakeJira.getIssue('PROJ-7')).some((text) => text.startsWith('⚠️ The AI could not finish request'))
+      && fakeJira.getIssue('PROJ-7').assignee?.accountId === requester.accountId);
+    await waitFor('PROJ-8 answered and handed back', answerTimeoutMs, () => fakeJira.getIssue('PROJ-8').assignee?.accountId === requester.accountId);
+    assert.deepEqual(getCommentTexts(fakeJira.getIssue('PROJ-8')), [buildJiraQueuedText(maxConcurrent, 0), 'Fake final answer for PROJ-8 (answer, turn 1).']);
+    // The given-up request is still open — nothing closed it — and it is what freed the slot.
+    await waitFor('the given-up request marked in state.json', answerTimeoutMs, () =>
+      readOpenRequests().some((request) => request.origin.attributes.issueKey === 'PROJ-7' && request.isWakeStopped));
+    const [gaveUp] = readOpenRequests().filter((request) => request.origin.attributes.issueKey === 'PROJ-7');
+    const eighth = getRequestOf('PROJ-8');
+    assert.ok(eighth.createdAt >= gaveUp.createdAt, 'PROJ-8 started after PROJ-7\'s request opened');
   });
 
   itHoldsTheInstanceInvariants();
