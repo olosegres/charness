@@ -11,7 +11,7 @@ command, image notes, messages from another session — as is an entry that is o
 entries left out do not count: the preview still shows the last three real messages. A message of yours is shown whole, also when it pastes or
 mentions one of these tags; only a `<system-reminder>` block that a hook appended to it is cut. The same goes for the recap after a bot restart
 and for the titles in the `/sessions` list. When a limit moves a topic to another agent, the summary of the conversation's earlier compaction
-(Claude json-stream topics) is handed over as context, labelled as such, and never as something you said.
+(Claude topics) is handed over as context, labelled as such, and never as something you said.
 
 **The skills Charness gives its agents can now be switched off — `/bot_skills` in General for the whole instance, in a topic for that topic only.**
 A deployment whose workspace instructions name skills of their own (a Jira-only instance, say) no longer has to live with the bot's

@@ -198,7 +198,6 @@ async function tapAccountInPicker(driver: TopicDriver, threadId: number, profile
   return driver.tapAndAwaitAnswer(picker, `acct_use_${profile}`);
 }
 
-/** The OpenCode session the fake created for the topic's folder (the newest one). */
 /** What the CLI writes into the transcript when it compacts a conversation: the boundary, then the summary as a flagged `user` entry. */
 function appendCompactionSummary(folder: string, sessionId: string): void {
   const transcriptPath = getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, folder), sessionId });
@@ -214,6 +213,7 @@ function appendCompactionSummary(folder: string, sessionId: string): void {
   fs.appendFileSync(transcriptPath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
 }
 
+/** The OpenCode session the fake created for the topic's folder (the newest one). */
 function getOpenCodeSessionOf(folder: string): { id: string } {
   const folderPath = path.join(getLayout().workRoot, folder);
   const session = [...fakeOpenCode.sessions.values()].filter((candidate) => candidate.directory === folderPath).at(-1);

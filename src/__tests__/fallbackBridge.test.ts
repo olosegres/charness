@@ -41,6 +41,8 @@ test('bridge: without a reset the clause is omitted; without turns the agent is 
   assert.ok(!prompt.includes('it resets at'));
   assert.match(prompt, /No turns of the previous agent are available/);
   assert.ok(!prompt.includes('--- Last'));
+  assert.match(prompt, /1\. Find out the task and where it stopped; none of the previous conversation is available below\./);
+  assert.ok(!prompt.includes('Read the recent turns'), 'step 1 does not point at turns that are not there');
 });
 
 test('bridge: an over-long turn keeps its head and tail with a cut marker', () => {
@@ -75,9 +77,11 @@ test('bridge: the earlier compaction\'s summary goes in under its own heading, b
   assert.ok(!prompt.includes(`User:\n${summary}`) && !prompt.includes('User:\nThis session is being continued'), 'never told as the user\'s');
 });
 
-test('bridge: a summary with no turns is still handed over, and is not called "no turns"', () => {
+test('bridge: a summary with no turns is still handed over, is not called "no turns", and step 1 does not send the agent to turns that are not there', () => {
   const prompt = buildFallbackBridgePrompt({ ...base, resetsAtText: null, turns: [], compactionSummary: 'Summary: the release is half done.' });
   assert.match(prompt, summaryHeading);
+  assert.match(prompt, /1\. Read the summary of the earlier conversation below to understand the task/);
+  assert.ok(!prompt.includes('recent turns'), 'no turns section follows, so none is mentioned');
   assert.ok(prompt.includes('Summary: the release is half done.'));
   assert.ok(!prompt.includes('No turns of the previous agent are available'));
   assert.ok(!prompt.includes('--- Last'));

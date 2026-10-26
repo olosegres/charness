@@ -433,9 +433,10 @@ fallback bridge, the `/sessions` titles — decides what is a real message throu
   The one exception is a closed `<system-reminder>` block at its start or end, which hooks append to typed prompts.
 
 Skipped entries take none of the preview's slots. The compaction summary is no turn, but the fallback bridge still hands
-it to the next agent (`AgentAdapter.getSessionCompactionSummary`, json-stream only: the tmux backend is frozen) under its
-own heading, as context, never as something the user said. A new tag or text the CLI injects goes into that one module;
-what makes a poor TITLE (a bare «yes», the wrapper-less `Set model to …` echo) stays in `utils/claudeSessionTitle.ts`.
+it to the next agent (`AgentAdapter.getSessionCompactionSummary`, on both Claude backends, read by
+`utils/claudeCompactSummary.ts`) under its own heading, as context, never as something the user said. A new tag or
+text the CLI injects goes into that one module; what makes a poor TITLE (a bare «yes», the wrapper-less
+`Set model to …` echo) stays in `utils/claudeSessionTitle.ts`.
 
 ## OpenCode (`openCodeAdapter.ts`)
 

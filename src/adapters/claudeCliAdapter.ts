@@ -46,6 +46,7 @@ import { resolveDataDir } from '../state';
 import { threadContextPreambleHeader } from '../threadContextPreamble';
 import { getSessionTitleCandidate } from '../utils/claudeSessionTitle';
 import { checkIsCliWrittenUserEntry, getClaudeUserEntryDisplayText } from '../utils/claudeUserEntry';
+import { readLatestCompactSummaryFromTranscript } from '../utils/claudeCompactSummary';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
 import { claudeLoginPastePromptRe } from '../utils/claudeAuthLogin';
 import { claudeConfigDirVariableName, parseClaudeConfigDirFromCommand } from '../utils/claudeProfiles';
@@ -4050,6 +4051,10 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
   async getRecentTurns(_key: SessionKey, workDir: string, sessionId: string, limit: number): Promise<RecentTurn[]> {
     const filePath = getClaudeTranscriptPath(workDir, sessionId);
     return readRecentClaudeTurns(filePath, limit);
+  }
+
+  async getSessionCompactionSummary(_key: SessionKey, workDir: string, sessionId: string): Promise<string | null> {
+    return readLatestCompactSummaryFromTranscript(getClaudeTranscriptPath(workDir, sessionId));
   }
 
   /**

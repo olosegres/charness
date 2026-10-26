@@ -45,11 +45,17 @@ export function buildFallbackBridgePrompt(input: {
   const why = input.reason === 'limit'
     ? `which hit a usage limit${input.resetsAtText ? ` (it resets at ${input.resetsAtText})` : ''}`
     : "because the operator switched this topic's agent";
+  const readableParts: string[] = [];
+  if (input.compactionSummary) readableParts.push('the summary of the earlier conversation');
+  if (input.turns.length > 0) readableParts.push('the recent turns');
+  const readStep = readableParts.length > 0
+    ? `Read ${readableParts.join(' and ')} below to understand the task and where it stopped.`
+    : 'Find out the task and where it stopped; none of the previous conversation is available below.';
   const lines: string[] = [
     `${bridgeMarker} You (${input.toLabel}) are taking this conversation over from ${input.fromLabel}, ${why}. You work in the same project folder, but you cannot see its transcript.`,
     '',
     'Do this now:',
-    `1. Read ${input.compactionSummary ? 'the summary of the earlier conversation and ' : ''}the recent turns below to understand the task and where it stopped.`,
+    `1. ${readStep}`,
     '2. Establish the real state of the work from the project itself (git status, git diff, git log, the files mentioned) — trust the folder over the transcript when they disagree.',
     `3. Reply IN ${input.replyLanguage} with ONE short message: the task as you understand it, what is already done, what remains.`,
     '4. Then continue the work from where it stopped, without redoing what is done.',

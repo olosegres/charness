@@ -34,6 +34,7 @@ import { getClaudePlatformEnvironment, getClaudePlatformFlags } from './claudePl
 import { getClaudeAgentPluginFlags } from '../utils/agentPlugin';
 import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import { resolveDataDir } from '../state';
+import { readLatestCompactSummaryFromTranscript } from '../utils/claudeCompactSummary';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
 import { getDefaultDisplayPrefs } from '../utils/displayVerbosity';
 import { t } from '../i18n';
@@ -2433,45 +2434,6 @@ function buildTailRecord(session: StreamSession, offsetBytes: number): JsonStrea
 function checkIsEmitCaughtUp(session: StreamSession): boolean {
   return session.currentResponseText.length === session.emittedLength
     && session.childResponseText.length === session.childEmittedLength;
-}
-
-/**
- * @description Extract the newest compaction summary from a Claude on-disk
- * transcript: the last JSONL line with `isCompactSummary === true`, whose
- * `message.content` (a string, or `{type:'text'}` blocks) holds the summary the
- * `/compact` turn produced. Returns `null` for an unreadable file or when no
- * summary line is present. Reads the whole file — cheap enough for the
- * once-per-idle-compaction call.
- */
-export function readLatestCompactSummaryFromTranscript(filePath: string): string | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(filePath, 'utf8');
-  } catch {
-    return null;
-  }
-  let summary: string | null = null;
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let obj: unknown;
-    try { obj = JSON.parse(trimmed); } catch { continue; }
-    if (!checkIsStreamRecord(obj) || obj.isCompactSummary !== true) continue;
-    const message = checkIsStreamRecord(obj.message) ? obj.message : null;
-    const content = message?.content;
-    if (typeof content === 'string' && content.trim()) {
-      summary = content;
-    } else if (Array.isArray(content)) {
-      const chunks: string[] = [];
-      for (const block of content) {
-        if (checkIsStreamRecord(block) && block.type === 'text' && typeof block.text === 'string') {
-          chunks.push(block.text);
-        }
-      }
-      if (chunks.join('').trim()) summary = chunks.join('');
-    }
-  }
-  return summary;
 }
 
 /** Spawn-fail diagnostics: the wrapper's exit code + a stderr excerpt (the
