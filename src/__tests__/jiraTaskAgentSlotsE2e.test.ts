@@ -16,6 +16,9 @@
  *     once
  *   → a conversation handed over again after its idle stop (cap back to two, both slots held): queued like any other, and
  *     when a slot frees it RESUMES its own session
+ *   → an agent the wake-up engine gives up on (every turn ends silent) frees its slot: the alert is out, the issue is handed back,
+ *     and the issue waiting for the slot starts at once — the instance restarted with the poll at ten minutes, so no regular poll
+ *     can be what starts it; only the give-up's own wake-up (the poll back at 2 s afterwards)
  *   → every session launch carried the Jira flags; no Telegram path was reached
  *
  * The General picker and the typed number are `taskAgentsE2e.test.ts`; the queue's logic is `taskAgentSlots.test.ts` and
@@ -32,6 +35,7 @@ import { fakeJiraSearchRequest } from './jiraE2e/fakeJira';
 import { getPolledDecisions } from './jiraE2e/charnessLog';
 import { isolatedBaselineSettings, isolatedSettingsFileName } from './e2e/isolatedCharness';
 import { buildJiraQueuedText } from '../connectors/jira/answerSink';
+import { jiraPollIntervalMaxSeconds } from '../connectors/jira/config';
 import { getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import type { ClosedRequestRecord, OpenRequestState } from '../requests/types';
 import type { TaskAgentWaitEntry } from '../trackers/types';
@@ -60,12 +64,18 @@ import {
   restartPollWaitMs,
   resumeTimeoutMs,
   startCharness,
+  startCharnessWithPoll,
   waitFor,
 } from './jiraE2e/jiraFlowKit';
 
 const maxConcurrent = 2;
 /** How many polls a queued issue must stay untouched through before the step believes it waits: a poll is 2 s here. */
 const quietPollCount = 3;
+/** The poll of the give-up step: `jira.json`'s longest, so no regular poll comes within the step — only a wake-up can start the waiting issue. */
+const stretchedPollSeconds = jiraPollIntervalMaxSeconds;
+/** What «at once» means against that poll: a wake-up's poll runs, opens the request and starts the agent well inside this. */
+const wakeStartMaxMs = 30 * 1000;
+const giveUpAlertPrefix = '⚠️ The AI could not finish request';
 
 function getSettingsFilePath(): string {
   return path.join(path.dirname(getLayout().envFile), isolatedSettingsFileName);
@@ -240,28 +250,41 @@ describe('The cap on task agents on a Jira-only instance: built charness, fake J
     assert.ok(resumedTurn.requestId !== null && fakeJira.getIssue('PROJ-6').assignee?.accountId === requester.accountId, 'it started when PROJ-6 handed back');
   });
 
-  it('a hand-over the wake-up engine gives up on holds no slot any more: the alert is out, the issue is handed back, and the issue waiting for the slot starts', async () => {
-    // PROJ-2 still holds one slot; PROJ-7 never answers (every turn ends silent) and takes the other, so PROJ-8 has to wait.
+  it('a hand-over the wake-up engine gives up on holds no slot any more: the alert is out, the issue is handed back, and the issue waiting for the slot starts AT ONCE, the next regular poll being ten minutes away', async () => {
+    // PROJ-2 still holds one slot; PROJ-7 never answers (every turn ends silent) and takes the other, so PROJ-8 has to wait. Both are
+    // handed over while the bot is down, PROJ-7 first (the poll takes the oldest first): the boot poll starts the one and queues the
+    // other, and the poll after it is `stretchedPollSeconds` off — only the give-up's wake can start PROJ-8 within this step's waits.
     createIssue('PROJ-7', 'silent');
     createIssue('PROJ-8', 'answer');
+    await getCharness().stop();
     handIssueToAi('PROJ-7', requester);
-    await waitFor('PROJ-7\'s first turn', answerTimeoutMs, () => getTurns('PROJ-7').length >= 1);
     handIssueToAi('PROJ-8', requester);
-    await waitFor('PROJ-8\'s queued comment', answerTimeoutMs, () => fakeJira.getIssue('PROJ-8').comments.length === 1);
-    assert.deepEqual(getTurns('PROJ-8'), [], 'PROJ-8 waits while PROJ-7 holds the slot');
+    await startCharnessWithPoll(stretchedPollSeconds);
+    try {
+      await waitFor('PROJ-8\'s queued comment', answerTimeoutMs, () => fakeJira.getIssue('PROJ-8').comments.length === 1);
+      await waitFor('PROJ-7\'s first turn', answerTimeoutMs, () => getTurns('PROJ-7').length >= 1);
+      assert.deepEqual(getTurns('PROJ-8'), [], 'PROJ-8 waits while PROJ-7 holds the slot');
 
-    // The rules give up after two turns without an answer: the alert is the comment, the issue goes back — and the slot is free.
-    await waitFor('PROJ-7\'s alert and hand-back', resumeTimeoutMs, () =>
-      getCommentTexts(fakeJira.getIssue('PROJ-7')).some((text) => text.startsWith('⚠️ The AI could not finish request'))
-      && fakeJira.getIssue('PROJ-7').assignee?.accountId === requester.accountId);
-    await waitFor('PROJ-8 answered and handed back', answerTimeoutMs, () => fakeJira.getIssue('PROJ-8').assignee?.accountId === requester.accountId);
-    assert.deepEqual(getCommentTexts(fakeJira.getIssue('PROJ-8')), [buildJiraQueuedText(maxConcurrent, 0), 'Fake final answer for PROJ-8 (answer, turn 1).']);
-    // The given-up request is still open — nothing closed it — and it is what freed the slot.
-    await waitFor('the given-up request marked in state.json', answerTimeoutMs, () =>
-      readOpenRequests().some((request) => request.origin.attributes.issueKey === 'PROJ-7' && request.isWakeStopped));
-    const [gaveUp] = readOpenRequests().filter((request) => request.origin.attributes.issueKey === 'PROJ-7');
-    const eighth = getRequestOf('PROJ-8');
-    assert.ok(eighth.createdAt >= gaveUp.createdAt, 'PROJ-8 started after PROJ-7\'s request opened');
+      // The rules give up after two turns without an answer: the alert is the comment, the issue goes back — and the slot is free.
+      await waitFor('PROJ-7\'s alert and hand-back', resumeTimeoutMs, () =>
+        getCommentTexts(fakeJira.getIssue('PROJ-7')).some((text) => text.startsWith(giveUpAlertPrefix))
+        && fakeJira.getIssue('PROJ-7').assignee?.accountId === requester.accountId);
+      await waitFor('PROJ-8 answered and handed back', answerTimeoutMs, () => fakeJira.getIssue('PROJ-8').assignee?.accountId === requester.accountId);
+      assert.deepEqual(getCommentTexts(fakeJira.getIssue('PROJ-8')), [buildJiraQueuedText(maxConcurrent, 0), 'Fake final answer for PROJ-8 (answer, turn 1).']);
+      // The given-up request is still open — nothing closed it — and it is what freed the slot.
+      await waitFor('the given-up request marked in state.json', answerTimeoutMs, () =>
+        readOpenRequests().some((request) => request.origin.attributes.issueKey === 'PROJ-7' && request.isWakeStopped));
+
+      // No regular poll was due for ten minutes, so the start came from the give-up's own wake-up: it follows the alert within seconds.
+      const alertIndex = getCommentTexts(fakeJira.getIssue('PROJ-7')).findIndex((text) => text.startsWith(giveUpAlertPrefix));
+      const alertedAt = Date.parse(fakeJira.getIssue('PROJ-7').comments[alertIndex].created);
+      const startedAt = getRequestOf('PROJ-8').createdAt;
+      assert.ok(startedAt - alertedAt < wakeStartMaxMs, `PROJ-8 started ${startedAt - alertedAt} ms after the give-up's alert`);
+    } finally {
+      // The steps after this one hand issues over and wait on polls of seconds.
+      await getCharness().stop();
+      await startCharnessWithPoll(null);
+    }
   });
 
   itHoldsTheInstanceInvariants();

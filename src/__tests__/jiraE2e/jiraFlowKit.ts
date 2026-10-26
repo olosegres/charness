@@ -89,6 +89,15 @@ const jiraFlowTestTimings = {
   requestSweepIntervalMs: 10_000,
   requestFirstPostRetryDelayMs: 10_000,
 } satisfies TestTimings;
+/** What `CHARNESS_TEST_TIMINGS` carries: the shortened windows above and the flow's own; with a stretched poll, not the seam's poll interval. */
+function getFlowTestTimings(extraTimings: TestTimings | undefined, pollSeconds: number | null): TestTimings {
+  const { jiraPollIntervalMs, ...otherTimings } = jiraFlowTestTimings;
+  return { ...(pollSeconds === null ? { jiraPollIntervalMs } : {}), ...otherTimings, ...extraTimings };
+}
+/** The poll interval the instance logs at its boot: `jira.json`'s own when a flow stretched it, else the seam's. */
+function getLoggedPollSeconds(pollSeconds: number | null): number {
+  return pollSeconds ?? jiraFlowTestTimings.jiraPollIntervalMs / 1000;
+}
 /** The `slow-once` turn: longer than a stop plus a boot of the instance (each a few seconds), so its process is adopted mid-turn. */
 const slowTurnMs = 20_000;
 /** The cap of an `answer-after-queued` turn: five polls, by which the hand-over made mid-turn has long become a request. */
@@ -275,14 +284,25 @@ export function waitFor(description: string, timeoutMs: number, check: () => boo
  * Ready = the poll started, which the boot does only after the bot MCP is up on its fixed port, and its JQL is
  * logged: the connector logs that line right after the "polling" one, and a read between the two sees only the first.
  */
-export async function startCharness(): Promise<void> {
+export async function startCharness(pollSeconds: number | null = null): Promise<void> {
   charness ??= new IsolatedCharness(getLayout());
   const outputStart = charness.output.length;
   await charness.start(
     bootTimeoutMs,
-    (runOutput) => runOutput.includes(`[jira] polling PROJ every ${jiraFlowTestTimings.jiraPollIntervalMs / 1000} s`) && getPollJqlProjectKeys(runOutput).length > 0,
+    (runOutput) => runOutput.includes(`[jira] polling PROJ every ${getLoggedPollSeconds(pollSeconds)} s`) && getPollJqlProjectKeys(runOutput).length > 0,
   );
   assertMcpListeningOn(charness.output.slice(outputStart), botMcpPort);
+}
+
+/**
+ * @description Start charness with its Jira poll at `pollSeconds` — `jira.json`'s own interval, the test seam's 2 s dropped — or,
+ * `null`, back at the seam's 2 s. The instance's files are rewritten first, so the call goes between a stop and a start. With a
+ * poll that long, only a wake-up (`pollSoon`) can start a waiting issue before the test gives up on it.
+ */
+export async function startCharnessWithPoll(pollSeconds: number | null): Promise<void> {
+  if (!instanceFiles) throw new Error('the instance files are not written yet');
+  writeInstanceFiles(instanceFiles.ports, instanceFiles.config, pollSeconds);
+  await startCharness(pollSeconds);
 }
 
 /** E7: a file well beyond what a prompt or a buffered download would hold. */
@@ -309,7 +329,7 @@ let jiraBaseUrl = '';
 let projectRepositoryNames: string[] | null = null;
 
 /** Write `jira.json` for the instance; `adapter` is the json-stream lifecycle its sessions run on, `trustedGroup` the group that filters whose text counts. */
-export function writeJiraConfig(adapter: 'claude-json-stream' | 'claude-per-turn', trustedGroup?: string): void {
+export function writeJiraConfig(adapter: 'claude-json-stream' | 'claude-per-turn', trustedGroup?: string, pollSeconds: number = pollIntervalSeconds): void {
   fs.writeFileSync(path.join(getLayout().dataDir, 'jira.json'), JSON.stringify({
     site: 'example.atlassian.net',
     baseUrl: jiraBaseUrl,
@@ -317,7 +337,7 @@ export function writeJiraConfig(adapter: 'claude-json-stream' | 'claude-per-turn
     apiToken: `\${${instanceTokenEnvName}}`,
     accountId: aiAccount.accountId,
     projects: { PROJ: { folder: projectFolder, triggerStatuses: [inProgress.name], ...(projectRepositoryNames === null ? {} : { repos: projectRepositoryNames }) } },
-    pollIntervalSeconds,
+    pollIntervalSeconds: pollSeconds,
     adapter,
     ...(trustedGroup === undefined ? {} : { trustedGroup }),
     // E9: a name found on no PATH of the box, mapped to a stub; the agents must find it by name.
@@ -335,10 +355,19 @@ export interface JiraFlowConfig {
   extraTimings?: TestTimings;
 }
 
-function writeInstanceFiles(ports: { openCode: number; botMcp: number }, config: JiraFlowConfig): void {
+/** What the flow's files were written from: a restart that changes the poll writes them again from the same. */
+let instanceFiles: { ports: InstancePorts; config: JiraFlowConfig } | null = null;
+
+interface InstancePorts {
+  openCode: number;
+  botMcp: number;
+}
+
+function writeInstanceFiles(ports: InstancePorts, config: JiraFlowConfig, pollSeconds: number | null = null): void {
   const instance = getLayout();
+  instanceFiles = { ports, config };
   projectRepositoryNames = config.repos ?? null;
-  writeJiraConfig(config.adapter, config.trustedGroup);
+  writeJiraConfig(config.adapter, config.trustedGroup, pollSeconds ?? pollIntervalSeconds);
 
   const claudeBin = writeFakeClaudeLauncher(instance, 'jira', { slowTurnMs, queuedWaitMaxMs });
   writeInstanceEnvFile(instance, {
@@ -352,7 +381,7 @@ function writeInstanceFiles(ports: { openCode: number; botMcp: number }, config:
     SCHEDULER_MCP_PORT: ports.botMcp.toString(),
     REQUEST_BACKSTOP_MINUTES: backstopMinutes,
     AGENT_IDLE_MINUTES: idleMinutes,
-    [testTimingsEnvName]: JSON.stringify({ ...jiraFlowTestTimings, ...config.extraTimings }),
+    [testTimingsEnvName]: JSON.stringify(getFlowTestTimings(config.extraTimings, pollSeconds)),
     [instanceTokenEnvName]: aiCredentials.apiToken,
   });
 }
