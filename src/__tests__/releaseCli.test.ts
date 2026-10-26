@@ -5,20 +5,27 @@
  * write to `$GITHUB_OUTPUT` and change on disk. The child runs with its own HOME and git config and never
  * touches the checkout's repository.
  *
+ * The CLI is transpiled ONCE per file and every case runs the plain JavaScript with `node`: a `tsx` start costs ~0.35 s
+ * of CPU, and ~60 cases starting it summed to most of the file's work — a loaded machine stretched that past the unit
+ * runner's per-file limit. Only the `npm version` case starts the CLI through `tsx`, the way the workflow and the
+ * `version` script do.
+ *
  * Test case: N/A — Charness has no Jira tracker.
  */
 
-import { afterEach, beforeEach, describe, test } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as ts from 'typescript';
 import { getReleaseDate } from '../release/releasePlan';
 
 const tsxCliPath = require.resolve('tsx/cli');
-const releaseCliPath = path.resolve(__dirname, '..', 'release', 'cli.ts');
+const sourceRootDir = path.resolve(__dirname, '..');
+const releaseCliPath = path.join(sourceRootDir, 'release', 'cli.ts');
 const lastTag = 'v3.2.0';
 const cliTimeoutMs = 90_000;
 
@@ -46,10 +53,39 @@ const initialChangelog = [
   '',
 ].join('\n');
 
+let transpiledDir: string;
+let transpiledCliPath: string;
 let sandboxDir: string;
 let repoDir: string;
 let homeDir: string;
 let githubOutputPath: string;
+
+function getTranspiledPath(sourcePath: string): string {
+  return path.join(transpiledDir, path.relative(sourceRootDir, sourcePath)).replace(/\.ts$/, '.js');
+}
+
+/** A module and every relative import under it as plain JavaScript (CommonJS like the build), laid out as in `src/` so the imports resolve. */
+function transpileModuleTree(sourcePath: string, writtenPaths: Set<string> = new Set()): void {
+  if (writtenPaths.has(sourcePath)) return;
+  writtenPaths.add(sourcePath);
+  const source = fs.readFileSync(sourcePath, 'utf8');
+  const { outputText } = ts.transpileModule(source, {
+    fileName: sourcePath,
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
+  });
+  const outputPath = getTranspiledPath(sourcePath);
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(outputPath, outputText);
+  for (const { fileName: specifier } of ts.preProcessFile(source).importedFiles) {
+    if (specifier.startsWith('.')) transpileModuleTree(path.resolve(path.dirname(sourcePath), `${specifier}.ts`), writtenPaths);
+  }
+}
+
+function transpileReleaseCli(): void {
+  transpiledDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-release-cli-'));
+  transpileModuleTree(releaseCliPath);
+  transpiledCliPath = getTranspiledPath(releaseCliPath);
+}
 
 /** The environment of the CLI under test: no git identity, so the identity the CLI itself sets is what a commit shows. */
 function createChildEnv(): NodeJS.ProcessEnv {
@@ -94,7 +130,7 @@ function commitFile(relativePath: string, content: string, message: string): voi
 }
 
 function runCli(...args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [tsxCliPath, releaseCliPath, ...args], {
+  const result = spawnSync(process.execPath, [transpiledCliPath, ...args], {
     cwd: repoDir,
     env: createChildEnv(),
     encoding: 'utf8',
@@ -112,6 +148,12 @@ function readGithubOutput(): Record<string, string> {
     .map((line): [string, string] => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]);
   return Object.fromEntries(entries);
 }
+
+before(transpileReleaseCli);
+
+after(() => {
+  fs.rmSync(transpiledDir, { recursive: true, force: true });
+});
 
 beforeEach(() => {
   sandboxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-release-'));
@@ -380,7 +422,7 @@ describe('check-publish', () => {
     const outputFile = path.join(binDir, 'npm-output.txt');
     fs.writeFileSync(outputFile, output);
     fs.writeFileSync(path.join(binDir, 'npm'), `#!/bin/sh\ncat '${outputFile}' >&2\nexit ${exitCode}\n`, { mode: 0o755 });
-    const result = spawnSync(process.execPath, [tsxCliPath, releaseCliPath, 'check-publish'], {
+    const result = spawnSync(process.execPath, [transpiledCliPath, 'check-publish'], {
       cwd: repoDir,
       env: { ...createChildEnv(), PATH: `${binDir}${path.delimiter}${process.env.PATH}` },
       encoding: 'utf8',
@@ -501,7 +543,7 @@ describe('test-gate', () => {
   /** The server answers from THIS process, so the CLI is an async child (spawnSync would block the server it asks). */
   function runGateCli(...args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
     return new Promise((resolve) => {
-      const child = spawn(process.execPath, [tsxCliPath, releaseCliPath, 'test-gate', ...args], {
+      const child = spawn(process.execPath, [transpiledCliPath, 'test-gate', ...args], {
         cwd: repoDir,
         env: { ...createChildEnv(), GITHUB_API_URL: apiUrl, GITHUB_REPOSITORY: 'example-owner/example-repo', GITHUB_TOKEN: 'fake-token-for-the-loopback-api', GITHUB_STEP_SUMMARY: path.join(sandboxDir, 'summary') },
         stdio: ['ignore', 'pipe', 'pipe'],
