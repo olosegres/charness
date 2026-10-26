@@ -690,7 +690,7 @@ export const ruDict: Record<string, string> = {
   'cb.effort_same': 'Как в General: {level}',
   'cb.claudeMode_already': 'Уже активно',
   'cb.claudeMode_switching': 'Переключаю…',
-  'claudeMode.pick': '⚙️ Режим Claude Code — сейчас: {label}\nВыбери бэкенд (переключение сохраняет тот же диалог):',
+  'claudeMode.pick': '⚙️ Режим Claude Code — сейчас: {label}\n{hint}\nВыбери бэкенд (переключение сохраняет тот же диалог):',
   'claudeMode.not_claude': 'Этот топик не на Claude Code — /claude_mode переключает только бэкенд Claude.',
   'claudeMode.already': 'Уже {label}.',
   'claudeMode.set_idle': '⚙️ Бэкенд Claude: {label} — применится при следующем старте.',

@@ -686,7 +686,7 @@ export const hiDict: Record<string, string> = {
   'cb.effort_same': 'General जैसा: {level}',
   'cb.claudeMode_already': 'पहले से सक्रिय',
   'cb.claudeMode_switching': 'स्विच कर रहा है…',
-  'claudeMode.pick': '⚙️ Claude Code बैकएंड — वर्तमान: {label}\nएक बैकएंड चुनें (स्विच वही बातचीत बनाए रखता है):',
+  'claudeMode.pick': '⚙️ Claude Code बैकएंड — वर्तमान: {label}\n{hint}\nएक बैकएंड चुनें (स्विच वही बातचीत बनाए रखता है):',
   'claudeMode.not_claude': "यह टॉपिक Claude Code पर नहीं है — /claude_mode केवल Claude का बैकएंड बदलता है।",
   'claudeMode.already': 'पहले से {label}।',
   'claudeMode.set_idle': '⚙️ Claude बैकएंड: {label} — अगली शुरुआत पर लागू।',

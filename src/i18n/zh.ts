@@ -686,7 +686,7 @@ export const zhDict: Record<string, string> = {
   'cb.effort_same': '同 General：{level}',
   'cb.claudeMode_already': '已激活',
   'cb.claudeMode_switching': '切换中…',
-  'claudeMode.pick': '⚙️ Claude Code 后端 — 当前: {label}\n选择后端（切换保持同一对话）：',
+  'claudeMode.pick': '⚙️ Claude Code 后端 — 当前: {label}\n{hint}\n选择后端（切换保持同一对话）：',
   'claudeMode.not_claude': "此话题不在 Claude Code 上 — /claude_mode 仅切换 Claude 的后端。",
   'claudeMode.already': '已是 {label}。',
   'claudeMode.set_idle': '⚙️ Claude 后端: {label} — 下次启动时应用。',

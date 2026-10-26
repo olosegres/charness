@@ -41,7 +41,8 @@
  *   → `/claude_mode`: a conversation whose CLI is below the lifecycle gate is
  *     refused the per-turn backend (L-D10) by the picker's tap and by the typed
  *     argument alike; the picker labels its tmux option deprecated and points to the
- *     recommended backend; the picker's third option (per-turn, lifecycle plan L5), a
+ *     recommended backend, as do a switch to tmux, «already» and `/status` (the pick goes
+ *     back to json-stream); the picker's third option (per-turn, lifecycle plan L5), a
  *     tap persists it, `/claude` opens it, a message runs one turn and the
  *     process is stopped right after its result, the next message resumes the
  *     same conversation in a new process
@@ -141,6 +142,8 @@ const perTurnStopTimeoutMs = 15 * 1000;
 /** A command whose reply is fixed and changes nothing: a barrier — the bot answers it after everything it was doing. */
 const barrierCommand = '/timezone Not/AZone';
 const perTurnAdapterName = 'claude-per-turn';
+/** The one-line deprecation hint of the tmux backend (English), with the recommended backend it names. */
+const tmuxDeprecatedHintPattern = /The tmux backend is deprecated: it is frozen and no longer developed\. Recommended: ⚡ JSON-stream\./;
 /** The last Claude Code version WITHOUT the background-task list: a conversation that ran on it is refused per-turn (L-D10). */
 const belowGateClaudeCodeVersion = '2.1.286';
 /** The prompt that makes the old-version process report its version (the fake reports it on the first turn's `init`). */
@@ -1095,7 +1098,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     }
   });
 
-  it('/claude_mode labels the tmux option deprecated, keeps it selectable and points to the recommended backend', async () => {
+  it('/claude_mode and /status mark the tmux backend deprecated and point to the recommended one', async () => {
     const picker = await topic.sendAndAwaitReply('/claude_mode', 'Claude Code backend — current:');
     const callbackData = topic.getKeyboardData(picker).flat();
     const buttonLabels = topic.getKeyboardLabels(picker).flat();
@@ -1109,7 +1112,24 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     for (const recommendedOption of ['ccmode_claude-json-stream', `ccmode_${perTurnAdapterName}`]) {
       assert.doesNotMatch(getOptionLabel(recommendedOption), /deprecated/i, `${recommendedOption} is not marked deprecated`);
     }
-    assert.match(picker.text, /The tmux backend is deprecated: it is frozen and no longer developed\. Recommended: ⚡ JSON-stream\./, 'the one-line hint names the recommended backend');
+    assert.match(picker.text, tmuxDeprecatedHintPattern, 'the one-line hint names the recommended backend');
+    assert.match(picker.text, /Recommended: ⚡ JSON-stream\.\nPick a backend/, 'the hint sits above the line that introduces the buttons');
+
+    // The topic is idle here (the step before ends with `/quit`), so a switch only records the pick: no session starts.
+    const switchReply = await topic.sendAndAwaitReply('/claude_mode tmux', 'applies on next start');
+    assert.match(switchReply.text, tmuxDeprecatedHintPattern, 'the switch notice carries the hint');
+    assert.doesNotMatch(switchReply.text, /tmux \(deprecated\)/, 'the notice names the backend plainly: the hint is the one place that says it');
+
+    const statusReply = await topic.sendAndAwaitReply('/status', 'Agent:');
+    assert.match(statusReply.text, /Agent: Claude Code \(claude\) — tmux backend, deprecated/, '/status flags a topic on the tmux backend');
+
+    const alreadyReply = await topic.sendAndAwaitReply('/claude_mode tmux', 'Already');
+    assert.match(alreadyReply.text, tmuxDeprecatedHintPattern, '«already» carries the hint too');
+
+    // Back to the default, so the next step starts from json-stream; the hint belongs to tmux only.
+    const backReply = await topic.sendAndAwaitReply('/claude_mode json', 'applies on next start');
+    assert.doesNotMatch(backReply.text, /deprecated/i, 'a switch to a maintained backend carries no hint');
+    await getCharness().waitFor('the json-stream pick persisted', replyTimeoutMs, () => readPersistedState().agents?.[threadKeyString]?.name === 'claude-json-stream');
   });
 
   it('/claude_mode shows the third option; a tap persists the per-turn backend for the topic', async () => {

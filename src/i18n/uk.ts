@@ -692,7 +692,7 @@ export const ukDict: Record<string, string> = {
   'cb.effort_same': 'Як у General: {level}',
   'cb.claudeMode_already': 'Вже активно',
   'cb.claudeMode_switching': 'Переключаю…',
-  'claudeMode.pick': '⚙️ Бекенд Claude Code — зараз: {label}\nОбери бекенд (переключення зберігає той самий діалог):',
+  'claudeMode.pick': '⚙️ Бекенд Claude Code — зараз: {label}\n{hint}\nОбери бекенд (переключення зберігає той самий діалог):',
   'claudeMode.not_claude': 'Цей топік не на Claude Code — /claude_mode переключає лише бекенд Claude.',
   'claudeMode.already': 'Вже {label}.',
   'claudeMode.set_idle': '⚙️ Бекенд Claude: {label} — застосується при наступному старті.',

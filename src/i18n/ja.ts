@@ -686,7 +686,7 @@ export const jaDict: Record<string, string> = {
   'cb.effort_same': 'General と同じ: {level}',
   'cb.claudeMode_already': '既にアクティブ',
   'cb.claudeMode_switching': '切り替え中…',
-  'claudeMode.pick': '⚙️ Claude Code バックエンド — 現在: {label}\nバックエンドを選択（切り替えで同じ会話を維持）:',
+  'claudeMode.pick': '⚙️ Claude Code バックエンド — 現在: {label}\n{hint}\nバックエンドを選択（切り替えで同じ会話を維持）:',
   'claudeMode.not_claude': "このトピックは Claude Code ではありません — /claude_mode は Claude のバックエンドのみ切り替えます。",
   'claudeMode.already': '既に {label} です。',
   'claudeMode.set_idle': '⚙️ Claude バックエンド: {label} — 次回起動時に適用されます。',

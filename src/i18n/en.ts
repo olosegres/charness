@@ -699,7 +699,7 @@ export const enDict: Record<string, string> = {
   'cb.effort_same': 'As in General: {level}',
   'cb.claudeMode_already': 'Already active',
   'cb.claudeMode_switching': 'Switching…',
-  'claudeMode.pick': '⚙️ Claude Code backend — current: {label}\nPick a backend (switching keeps the same conversation):',
+  'claudeMode.pick': '⚙️ Claude Code backend — current: {label}\n{hint}\nPick a backend (switching keeps the same conversation):',
   'claudeMode.not_claude': "This topic isn't on Claude Code — /claude_mode only switches Claude's backend.",
   'claudeMode.already': 'Already {label}.',
   'claudeMode.set_idle': '⚙️ Claude backend: {label} — applies on next start.',

@@ -686,7 +686,7 @@ export const uzDict: Record<string, string> = {
   'cb.effort_same': 'General kabi: {level}',
   'cb.claudeMode_already': 'Allaqachon faol',
   'cb.claudeMode_switching': 'Almashtirilmoqda…',
-  'claudeMode.pick': '⚙️ Claude Code backend — joriy: {label}\nBackend tanlang (almashtirish bir xil suhbatni saqlaydi):',
+  'claudeMode.pick': '⚙️ Claude Code backend — joriy: {label}\n{hint}\nBackend tanlang (almashtirish bir xil suhbatni saqlaydi):',
   'claudeMode.not_claude': "Bu mavzu Claude Code da emas — /claude_mode faqat Claude backend ini almashtiradi.",
   'claudeMode.already': 'Allaqachon {label}.',
   'claudeMode.set_idle': '⚙️ Claude backend: {label} — keyingi boshlashda qo‘llanadi.',

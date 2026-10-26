@@ -686,7 +686,7 @@ export const frDict: Record<string, string> = {
   'cb.effort_same': 'Comme dans General : {level}',
   'cb.claudeMode_already': 'Déjà actif',
   'cb.claudeMode_switching': 'Basculement…',
-  'claudeMode.pick': '⚙️ Backend Claude Code — actuel : {label}\nChoisissez un backend (le basculement garde la même conversation) :',
+  'claudeMode.pick': '⚙️ Backend Claude Code — actuel : {label}\n{hint}\nChoisissez un backend (le basculement garde la même conversation) :',
   'claudeMode.not_claude': "Ce topic n'est pas sur Claude Code — /claude_mode ne bascule que le backend de Claude.",
   'claudeMode.already': 'Déjà {label}.',
   'claudeMode.set_idle': '⚙️ Backend Claude : {label} — s\'appliquera au prochain démarrage.',

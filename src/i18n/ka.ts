@@ -686,7 +686,7 @@ export const kaDict: Record<string, string> = {
   'cb.effort_same': 'როგორც General-ში: {level}',
   'cb.claudeMode_already': 'უკვე აქტიურია',
   'cb.claudeMode_switching': 'გადართვა…',
-  'claudeMode.pick': '⚙️ Claude Code ბექენდი — მიმდინარე: {label}\nაირჩიეთ ბექენდი (გადართვა ინარჩუნებს იგივე საუბარს):',
+  'claudeMode.pick': '⚙️ Claude Code ბექენდი — მიმდინარე: {label}\n{hint}\nაირჩიეთ ბექენდი (გადართვა ინარჩუნებს იგივე საუბარს):',
   'claudeMode.not_claude': "ეს თემა Claude Code-ზე არ არის — /claude_mode მხოლოდ Claude-ის ბექენდს ცვლის.",
   'claudeMode.already': 'უკვე {label}.',
   'claudeMode.set_idle': '⚙️ Claude ბექენდი: {label} — მოქმედებს შემდეგ გაშვებაზე.',

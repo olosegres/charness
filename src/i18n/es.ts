@@ -686,7 +686,7 @@ export const esDict: Record<string, string> = {
   'cb.effort_same': 'Como en General: {level}',
   'cb.claudeMode_already': 'Ya activo',
   'cb.claudeMode_switching': 'Cambiando…',
-  'claudeMode.pick': '⚙️ Backend de Claude Code — actual: {label}\nElige un backend (el cambio mantiene la misma conversación):',
+  'claudeMode.pick': '⚙️ Backend de Claude Code — actual: {label}\n{hint}\nElige un backend (el cambio mantiene la misma conversación):',
   'claudeMode.not_claude': "Este topic no está en Claude Code — /claude_mode solo cambia el backend de Claude.",
   'claudeMode.already': 'Ya {label}.',
   'claudeMode.set_idle': '⚙️ Backend de Claude: {label} — se aplicará en el próximo inicio.',

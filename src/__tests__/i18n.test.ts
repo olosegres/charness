@@ -611,10 +611,14 @@ test('the deprecated-tmux texts exist in every locale, are translated and keep t
     const label = runWithLocale(locale, () => t('claudeMode.tmuxButtonLabel'));
     const hint = runWithLocale(locale, () => t('claudeMode.tmuxDeprecatedHint', { recommended }));
     const statusLine = runWithLocale(locale, () => t('status.thread_agentTmuxDeprecated', { agent }));
+    const pickLines = runWithLocale(locale, () => t('claudeMode.pick', { label: '⚡ JSON-stream', hint })).split('\n');
     assert.ok(label.includes('tmux'), `${locale}: the label names the backend: "${label}"`);
     if (locale !== 'en') assert.notEqual(label, englishLabel, `${locale}: the label is still English`);
     assert.ok(hint.includes(recommended) && !hint.includes('{recommended}'), `${locale}: the hint names the recommended backend: "${hint}"`);
     assert.ok(statusLine.includes(agent) && !statusLine.includes('{agent}'), `${locale}: the status line keeps the agent: "${statusLine}"`);
+    // The picker text ends with the line that introduces the buttons, so the hint goes above it.
+    assert.equal(pickLines.length, 3, `${locale}: the picker text is the current line, the hint and the prompt: ${JSON.stringify(pickLines)}`);
+    assert.equal(pickLines[1], hint, `${locale}: the hint sits between the current line and the prompt`);
   }
 });
 

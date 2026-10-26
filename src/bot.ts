@@ -7188,12 +7188,17 @@ command('terminal', (_ctx, key, parsed) => handleStartCommand(parsed, key, 'term
 registerProviderCommands();
 
 /** Human label for a Claude backend name (the adapters share `label`
- *  "Claude Code", so the picker/notices need a distinguishing name). The tmux
- *  backend is deprecated, and its label says so wherever a user reads it. */
+ *  "Claude Code", so the picker/notices need a distinguishing name). */
 function getClaudeBackendLabel(name: string): string {
   if (name === claudeJsonStreamAdapterName) return '⚡ JSON-stream';
   if (name === claudePerTurnAdapterName) return '🔁 Per-turn';
-  return t('claudeMode.tmuxButtonLabel');
+  return '🖥 tmux';
+}
+
+/** The `/claude_mode` button text of a backend: its label, the deprecated tmux backend marked as such. A notice
+ *  keeps the plain label instead — the deprecation hint under it already says it. */
+function getClaudeBackendButtonLabel(name: string): string {
+  return name === claudeTmuxAdapterName ? t('claudeMode.tmuxButtonLabel') : getClaudeBackendLabel(name);
 }
 
 /** The one-line hint that the tmux backend is deprecated and which backend to use instead. */
@@ -7211,7 +7216,7 @@ function appendTmuxDeprecatedHint(backendName: string, text: string): string {
 function buildClaudeModeKeyboard(current: string) {
   const buttons = [claudeJsonStreamAdapterName, claudePerTurnAdapterName, claudeTmuxAdapterName].map((name) =>
     Markup.button.callback(
-      name === current ? `${getClaudeBackendLabel(name)} ✓` : getClaudeBackendLabel(name),
+      name === current ? `${getClaudeBackendButtonLabel(name)} ✓` : getClaudeBackendButtonLabel(name),
       `ccmode_${name}`,
     ),
   );
@@ -7225,7 +7230,7 @@ function buildClaudeModeKeyboard(current: string) {
  * an idle thread just records the pick for its next start. Returns the localized
  * notice to show. Assumes the thread is already on a Claude backend (callers gate).
  */
-async function runClaudeBackendSwitch(key: SessionKey, target: string): Promise<string> {
+async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promise<string> {
   const label = getClaudeBackendLabel(target);
   if (target === claudePerTurnAdapterName) {
     const refusal = getPerTurnRefusal(key);
@@ -7260,11 +7265,6 @@ async function runClaudeBackendSwitch(key: SessionKey, target: string): Promise<
   return `${msg || t('claudeMode.switched_fresh', { label })}${backgroundStoppedSuffix}`;
 }
 
-/** The notice of a `/claude_mode` switch (see {@link runClaudeBackendSwitch}), with the deprecation hint under it when the target is tmux. */
-async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promise<string> {
-  return appendTmuxDeprecatedHint(target, await runClaudeBackendSwitch(key, target));
-}
-
 command('claude_mode', async (_ctx, key, parsed) => {
   if (checkIsGeneral(key)) { await replyToThread(key, t('error.start_in_general')); return; }
 
@@ -7286,12 +7286,12 @@ command('claude_mode', async (_ctx, key, parsed) => {
     return;
   }
   if (action.kind === 'switch') {
-    await replyToThread(key, await applyClaudeBackendSwitch(key, action.backendName));
+    await replyToThread(key, appendTmuxDeprecatedHint(action.backendName, await applyClaudeBackendSwitch(key, action.backendName)));
     return;
   }
   await replyToThread(
     key,
-    `${t('claudeMode.pick', { label: getClaudeBackendLabel(action.currentBackendName) })}\n${getTmuxDeprecatedHint()}`,
+    t('claudeMode.pick', { label: getClaudeBackendLabel(action.currentBackendName), hint: getTmuxDeprecatedHint() }),
     buildClaudeModeKeyboard(action.currentBackendName),
   );
 });
@@ -10260,7 +10260,7 @@ bot.action(/^ccmode_(.+)$/, async (ctx) => {
   const current = resolveClaudeBackendName(key);
   if (target === current) { await ctx.answerCbQuery(t('cb.claudeMode_already')); return; }
   await ctx.answerCbQuery(t('cb.claudeMode_switching'));
-  await replyToThread(key, await applyClaudeBackendSwitch(key, target));
+  await replyToThread(key, appendTmuxDeprecatedHint(target, await applyClaudeBackendSwitch(key, target)));
   // Re-render the picker so the `✓` follows the new backend (mirrors effort_cb).
   const cbMsg = ctx.callbackQuery?.message as Message | undefined;
   if (cbMsg) {

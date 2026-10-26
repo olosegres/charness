@@ -686,7 +686,7 @@ export const deDict: Record<string, string> = {
   'cb.effort_same': 'Wie in General: {level}',
   'cb.claudeMode_already': 'Bereits aktiv',
   'cb.claudeMode_switching': 'Wechsle…',
-  'claudeMode.pick': '⚙️ Claude Code Backend — aktuell: {label}\nWähle ein Backend (Wechsel behält denselben Dialog):',
+  'claudeMode.pick': '⚙️ Claude Code Backend — aktuell: {label}\n{hint}\nWähle ein Backend (Wechsel behält denselben Dialog):',
   'claudeMode.not_claude': "Dieses Topic ist nicht auf Claude Code — /claude_mode wechselt nur Claude's Backend.",
   'claudeMode.already': 'Bereits {label}.',
   'claudeMode.set_idle': '⚙️ Claude-Backend: {label} — wird beim nächsten Start angewendet.',

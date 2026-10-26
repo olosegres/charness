@@ -686,7 +686,7 @@ export const ptDict: Record<string, string> = {
   'cb.effort_same': 'Como em General: {level}',
   'cb.claudeMode_already': 'Já ativo',
   'cb.claudeMode_switching': 'A trocar…',
-  'claudeMode.pick': '⚙️ Backend do Claude Code — atual: {label}\nEscolhe um backend (a troca mantém a mesma conversa):',
+  'claudeMode.pick': '⚙️ Backend do Claude Code — atual: {label}\n{hint}\nEscolhe um backend (a troca mantém a mesma conversa):',
   'claudeMode.not_claude': "Este tópico não está no Claude Code — /claude_mode só troca o backend do Claude.",
   'claudeMode.already': 'Já {label}.',
   'claudeMode.set_idle': '⚙️ Backend do Claude: {label} — aplica-se no próximo início.',
