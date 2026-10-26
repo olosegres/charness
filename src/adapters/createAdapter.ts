@@ -17,6 +17,7 @@ export { checkIsClaudeBackend };
 type AdapterFactory = () => AgentAdapter;
 
 const adapterFactories: Record<string, AdapterFactory> = {
+  // Deprecated and frozen tmux-scrape backend: kept for topics already on it and for a `/claude_mode` pick.
   claude: () => new ClaudeCliAdapter(),
   opencode: () => new OpenCodeAdapter(),
   terminal: () => new TerminalAdapter(),

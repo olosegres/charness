@@ -13,7 +13,7 @@ The per-topic folder layout is in [SETUP.md](SETUP.md) under
 Routing key is `(chatId, threadId)` everywhere. Per-thread state lives in
 `${DATA_DIR}/state.json` (atomic writes with `fsync`, archived on
 corruption). Bot-owned tmux sessions are named per backend —
-`claude-<chatId>-<threadId>` (Claude tmux-scrape), `cjson-…` (the Claude
+`claude-<chatId>-<threadId>` (Claude tmux-scrape, deprecated), `cjson-…` (the Claude
 json-stream host process), `term-…` (terminal) — see
 `src/utils/tmuxSessionName.ts`; opencode sessions are keyed by the same
 `<chatId>:<threadId>` string. Two topics on the same folder stay independent.
@@ -27,7 +27,7 @@ tracker or Teams surface means adding a directory under `src/connectors/`, not
 editing the core.
 
 ```
-Telegram  <->  connectors/telegram/  <->  bot.ts  <->  AgentAdapter <-> { Claude CLI (tmux scrape) |
+Telegram  <->  connectors/telegram/  <->  bot.ts  <->  AgentAdapter <-> { Claude CLI (tmux scrape, deprecated) |
                  inbound.ts               (core)          │              Claude CLI (stream-json) |
                  outbound.ts + output/      │             │              OpenCode (HTTP+SSE)      |
                  sessionKeyCodec.ts         │             │              Terminal ($SHELL in tmux) }

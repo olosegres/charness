@@ -8,9 +8,16 @@ what is NOT discoverable from the code or public docs: the reverse-engineered st
 control protocol behind `claudeJsonStreamAdapter`, then the traps of the other
 backends.
 
+**The tmux-scrape backend (`claudeCliAdapter.ts`, adapter name `claude`) is deprecated and frozen** (2026-10-25): no new
+features and no new-feature tests on it, only fixes that keep a topic already on it working. It stays selectable through
+`/claude_mode` — labelled «deprecated» in the picker, with a hint pointing to json-stream, and flagged on the `/status`
+agent line — and nothing migrates an existing topic off it. The adapter's entry points carry a JSDoc `@deprecated`.
+Transcript readers it exports (`readRecentClaudeTurns`, `listClaudeSessionsForWorkDir`, …) are shared with the
+json-stream adapter and are not frozen with it.
+
 ## `claude-json-stream` — driving the CLI over stream-json
 
-An experimental alternative to the tmux `claude` backend: instead of
+An experimental alternative to the deprecated tmux `claude` backend: instead of
 screen-scraping a TUI, it spawns the `claude` binary in headless streaming mode
 and exchanges structured JSON over the child's stdio. Min version: `claude`
 2.1.201.
@@ -346,7 +353,7 @@ This is the **DEFAULT** Claude backend (`getDefaultClaudeBackendName` /
 `resolveClaudeBackendName`): ▶️ Claude / `/claude` open it unless the thread
 explicitly picked another. `/claude_mode` switches a topic between the three
 Claude backends on the fly — json-stream (`json`, `jsonstream`, `json-stream`,
-`stream`), per-turn (`perturn`, `per-turn`, `oneshot`), tmux-scrape (`tmux`,
+`stream`), per-turn (`perturn`, `per-turn`, `oneshot`), the deprecated tmux-scrape (`tmux`,
 `scrape`, `terminal`, `classic`; `parseClaudeBackendArg`) — the pick
 persists as the thread's adapter name and the switch RESUMES the same
 conversation (see "Shared session store"; `switchThreadAdapter` keeps

@@ -1,3 +1,11 @@
+/**
+ * @description The tmux-scrape Claude Code backend (`claude`): the interactive TUI driven with `tmux send-keys`,
+ * its output scraped from the pane. DEPRECATED and FROZEN (owner decision, 2026-10-25): no new features and no
+ * new-feature tests land here; only fixes that keep an existing topic on it working. It stays selectable through
+ * `/claude_mode` (labelled deprecated there) and nothing migrates a topic off it. New Claude work goes to
+ * `claudeJsonStreamAdapter.ts`. Several helpers exported below (transcript readers, session listing) are shared
+ * with that adapter and are NOT deprecated.
+ */
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
@@ -2977,6 +2985,10 @@ export function getResumeSeedDecision(state: ResumeSeedState): { keepSeeding: bo
   return { keepSeeding: !reachedCap && !stableNonEmpty };
 }
 
+/**
+ * @deprecated The tmux-scrape backend is frozen (no new features, no new-feature tests); use
+ * `ClaudeJsonStreamAdapter`. It stays for the topics that already run on it and for a `/claude_mode` pick.
+ */
 export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
   readonly name = 'claude';
   readonly label = 'Claude Code';
@@ -3382,6 +3394,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
+  /** @deprecated Entry point of the frozen tmux-scrape backend — see {@link ClaudeCliAdapter}. */
   async startSession(
     key: SessionKey,
     workDir: string,
@@ -4079,6 +4092,8 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
    *    §13.1, fix to claudeCliAdapter.ts:455). If Claude can't find the UUID
    *    (history pruned, different machine), it just starts a new session;
    *    we surface that to the user (T8 in plan §16.3).
+   *
+   * @deprecated Entry point of the frozen tmux-scrape backend — see {@link ClaudeCliAdapter}.
    */
   async resumeSession(key: SessionKey, workDir: string, sessionId: string, options?: ResumeSessionOptions): Promise<void> {
     await this.stopSessionInternal(key);

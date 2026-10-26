@@ -34,7 +34,7 @@ same core serves a second surface — Jira issues (`CONNECTORS=jira`) — throug
   it through `ensureAgentSession`; a process is never stopped while it works (`checkIsWorking`: its turn, or its own
   background tasks / `CronCreate` jobs within a 6 h hold after its last turn — `utils/jsonStreamPendingWork.ts`; work
   that dies with a process anyway is told to the agent once — `utils/lostWork.ts`), and only a CLI
-  ≥ 2.1.287 is auto-stopped (`claudeCodeVersion.ts`). `claude` (tmux-scrape) drives the interactive TUI with
+  ≥ 2.1.287 is auto-stopped (`claudeCodeVersion.ts`). `claude` (tmux-scrape, **deprecated and frozen**) drives the interactive TUI with
   `tmux send-keys` and scrapes it with adaptive `capture-pane` polling (300 ms while the pane changes, backing
   off to 1.5 s). `CLAUDE_SCRAPE_DEBUG=1` logs raw/filtered scrape chunks.
 - **OpenCode** — a local HTTP server: prompts POST to `/session/:id/prompt_async` (with a
@@ -208,7 +208,7 @@ per-backend controls are optional methods the bot checks before calling.
 | `outputTrace.ts`, `diagLog.ts`, `instanceLock.ts`, `shutdown.ts`, `bootClassifier.ts` | Always-on trace (`/trace`) + diagnostic log; single-instance lock; ordered graceful shutdown; hot-reload vs cold-start decision |
 | `stt/` | Voice recognition: `stt.json` settings (UI-first, one source of truth), the engine chain with fallback and a timeout proportional to the voice, the local GigaAM engine's installer; its Python sidecar is `stt/gigaam_sidecar.py` at the package root (shipped in `files`). README: contracts and the sidecar protocol |
 | `botFileStorage.ts`, `voiceQueue.ts`, `agentTrigger.ts`, `sendErrorClassifier.ts` | File-intake dirs + janitor; per-thread voice queue; natural-language agent trigger; send-failure classes |
-| `adapters/` | Backends behind `AgentAdapter`: `claudeJsonStreamAdapter`, `claudeCliAdapter` (tmux scrape), `openCodeAdapter`, `terminalAdapter`; `createAdapter.ts` (factory + DI hub), `adapterEventRouting.ts` (foreign-platform event gate), `claudePlatformFlags.ts`, `sessionLaunchDefaults.ts`. README: protocol + traps |
+| `adapters/` | Backends behind `AgentAdapter`: `claudeJsonStreamAdapter`, `claudeCliAdapter` (tmux scrape, deprecated), `openCodeAdapter`, `terminalAdapter`; `createAdapter.ts` (factory + DI hub), `adapterEventRouting.ts` (foreign-platform event gate), `claudePlatformFlags.ts`, `sessionLaunchDefaults.ts`. README: protocol + traps |
 | `connectors/telegram/` | All code that touches the Telegram library: inbound/outbound translation, HTML, splitting, file intake + send gateway, answer sink, pickers, call guard, `output/` (`CHAT_MODE` transports) |
 | `connectors/jira/` | Jira Cloud connector: config, REST client, poller, trigger rules, prompt, answer sink, ADF |
 | `connectors/test/` | Capability-configurable test double; TESTS ONLY, no production import |
@@ -226,6 +226,8 @@ must guard against a foreign (Jira) key. Details: `src/platform/README.md`.
 
 ## Conventions and pitfalls
 
+- **The tmux-scrape Claude backend (`claude`, `claudeCliAdapter.ts`) is deprecated and frozen (2026-10-25):** no new features and no
+  new-feature tests on it — new Claude work goes to json-stream; only fixes that keep existing tmux topics working. The UI marks it «deprecated».
 - **Add a command:** register via the group-gated `command()` wrapper in `bot.ts`; user text in `i18n.ts` —
   add the key to `en.ts` first, then mirror it in EVERY locale; add the name (and aliases) to the
   `botCommands` set, or the `message('text')` handler re-forwards the slash to the agent; branch on the
