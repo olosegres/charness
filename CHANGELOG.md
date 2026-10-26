@@ -2,14 +2,18 @@
 
 ## Unreleased
 
-**The skills Charness gives its agents can now be switched off — for a whole instance with `"botSkills": "off"` in `settings.json`.**
+**The skills Charness gives its agents can now be switched off — `/bot_skills` in General for the whole instance, in a topic for that topic only.**
 A deployment whose workspace instructions name skills of their own (a Jira-only instance, say) no longer has to live with the bot's
-`charness-manager` and delegate skills beside them, nor with the hint in the bot MCP's instructions to load the manager. With the switch off,
-a Claude conversation starts and resumes without the bot's skills folder, the hint is gone from its instructions (the worker-watch recipe in
-`schedule_create` stays: it is a tool fact, not a skill), and the OpenCode server — one server for every topic, so the instance value alone
-counts — is replaced at the bot's next start, once nothing works in it, by one started without the folder (turning it back on replaces it the
-same way). A running agent keeps its skills until its next start (the idle stop and resume, or a model change). Nothing set means ON, exactly
-as before; `settings.json` is read without a restart, a mistyped value is logged once as `[Settings] settings.json botSkills: …` and ON applies.
+`charness-manager` and delegate skills beside them, nor with the hint in the bot MCP's instructions to load the manager. `/bot_skills` opens a
+one-shot picker: in General On / Off for the instance, in a topic On / Off / «As in General» with the current choice marked; a tap turns the picker
+into its confirmation (the texts are in all 12 languages). An instance without General sets the default with `"botSkills": "on" | "off"` in
+`settings.json` (read without a restart; General's own choice beats it once made; nothing set means ON, exactly as before). With the switch off a
+Claude conversation starts and resumes without the bot's skills folder, and the hint is gone from its instructions (the worker-watch recipe in
+`schedule_create` stays: it is a tool fact, not a skill). A running agent keeps its skills until its next start (the idle stop and resume, a new
+session or a model change). OpenCode has one server for every topic, so only the instance value counts there: the server is replaced at the
+bot's next start, once nothing works in it, by one started without (or, when turned back on, with) the skills folder, and a topic's own choice
+changes only its hint — its screen says the listed skills stay. A mistyped `botSkills` is logged once as `[Settings] settings.json botSkills: …`
+and ON applies.
 
 **The tmux backend for Claude Code is now marked deprecated: it is frozen and no longer developed, and `/claude_mode` says so.**
 Before, nothing told you that, so you could pick a backend that gets no new features. The `/claude_mode` picker now shows it as

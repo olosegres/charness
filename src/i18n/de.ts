@@ -77,6 +77,7 @@ export const deDict: Record<string, string> = {
     '/quitall — jeden laufenden Agent beenden\n' +
     '/stt — Spracherkennung einstellen\n' +
     '/update — Bot-Updates: automatisch, nur benachrichtigen, aus\n' +
+    '/bot_skills — Skills des Bots für Agenten: ein / aus\n' +
     '/todo — die Aufgabenlisten der Agenten aller Projekte; ihre Einstellungen\n' +
     '/topic — weiteren Thread auf einem Ordner öffnen\n' +
     '/whoami /version — Debug\n\n' +
@@ -96,6 +97,7 @@ export const deDict: Record<string, string> = {
     '/quit /status /output — Steuerung\n' +
     '/compact — Agent-Kontext komprimieren\n' +
     '/compact_on_idle — bei Leerlauf automatisch komprimieren (Umschalter)\n' +
+    '/bot_skills — Skills des Bots für Agenten (ein / aus für dieses Thema)\n' +
     '/todo — die veröffentlichte Aufgabenliste des Agenten und sein Projekt\n' +
     '/limits — Verbrauch aller Konten und Provider; tippe auf eines, um dieses Thema umzustellen\n' +
     '/limits_autoswitch — automatischer Modellwechsel bei Nutzungslimit (Ersatzliste, Wechsel, Warten)\n' +
@@ -490,6 +492,22 @@ export const deDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ Zusammenfassung der Komprimierung: {state} für dieses Thema.',
   'compactSummary.setGlobal': '✅ Zusammenfassung der Komprimierung: {state} für ALLE Themen (themenspezifische Überschreibungen gelten weiter).',
   'compactSummary.unsupported': 'Eine Shell hat keinen Kontext zum Komprimieren, also gibt es keine Zusammenfassung zu posten.',
+
+  'botSkills.on': 'EIN',
+  'botSkills.off': 'AUS',
+  'botSkills.titleGeneral': '🧰 Bot-Skills für ALLE Themen: {state}',
+  'botSkills.titleTopic': '🧰 Bot-Skills in diesem Thema: {state} — {source}',
+  'botSkills.sourceGeneral': 'wie in General',
+  'botSkills.sourceTopic': 'für dieses Thema gesetzt',
+  'botSkills.explanationText': 'Die Skills, die Charness seinen Agenten mitgibt (der Manager und die zwei Skills zum Delegieren an Worker), und der Hinweis in den Anweisungen des Bots, den Manager zu laden. Ein laufender Agent behält seine Skills bis zu seinem nächsten Start — Leerlauf-Stopp und Fortsetzung, eine neue Sitzung oder ein Modellwechsel.',
+  'botSkills.generalScopeNote': 'Das ist der Standard jedes Themas ohne eigene Wahl. OpenCode läuft mit einem Server für alle Themen: Er übernimmt diesen Wert beim nächsten Start des Bots.',
+  'botSkills.openCodeTopicNote': 'Dieses Thema läuft auf OpenCode: Dessen einziger Server bedient alle Themen, deshalb bleiben die Skills hier gelistet — der Schalter ändert nur den Hinweis, den Manager zu laden.',
+  'botSkills.onButton': 'Ein',
+  'botSkills.offButton': 'Aus',
+  'botSkills.sameAsGeneralButton': 'Wie in General ({state})',
+  'botSkills.setGeneralConfirmation': '✅ Bot-Skills: {state} für ALLE Themen (die eigene Wahl eines Themas gilt weiter). Ein laufender Agent behält seine Skills bis zu seinem nächsten Start; der OpenCode-Server übernimmt den Wert beim nächsten Start des Bots.',
+  'botSkills.setTopicConfirmation': '✅ Bot-Skills: {state} für dieses Thema. Ein laufender Agent behält seine Skills bis zu seinem nächsten Start.',
+  'botSkills.followGeneralConfirmation': '✅ Bot-Skills in diesem Thema folgen wieder General: {state}. Ein laufender Agent behält seine Skills bis zu seinem nächsten Start.',
 
   'autoContinueLimits.on': 'AN',
   'autoContinueLimits.off': 'AUS',

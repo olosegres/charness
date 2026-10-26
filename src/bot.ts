@@ -413,6 +413,7 @@ import { createModelProviders, type PendingProviderConnect } from './connectors/
 import { answerCallbackWithFittedText, answerCallbackWithWholeText } from './connectors/telegram/commands/callbackToast';
 import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
+import { createBotSkills } from './connectors/telegram/commands/botSkills';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
 import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
@@ -7360,6 +7361,15 @@ const {
 
 registerAutoContinueLimitsCommands();
 
+// ── «Bot skills» switch (`/bot_skills`): `connectors/telegram/commands/botSkills.ts`, `utils/botSkills.ts` ──
+const { registerBotSkillsCommands, registerBotSkillsCallbacks } = createBotSkills({
+  ...botCore,
+  readBotSkills: botSkillsReader,
+  checkIsOpenCodeTopic: (key) => (getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name) === openCodeAdapterName,
+});
+
+registerBotSkillsCommands();
+
 // ── Claude account profiles (`/account`): `utils/claudeProfiles.ts`, `commands/claudeAccounts.ts` ──
 
 /**
@@ -8881,7 +8891,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'bot_skills', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update',
 ]);
 
@@ -10188,6 +10198,7 @@ registerModelCallbacks();
 registerCompactionCallbacks();
 
 registerAutoContinueLimitsCallbacks();
+registerBotSkillsCallbacks();
 registerBackendSwitchCallbacks();
 registerClaudeAccountCallbacks();
 registerFallbackChainCallbacks();
@@ -12112,6 +12123,7 @@ export const COMMANDS_MENU = [
   { command: 'compact', description: '🧹 Compact agent context' },
   { command: 'compact_on_idle', description: '🧹 Auto-compact after idle (toggle)' },
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
+  { command: 'bot_skills', description: '🧰 The bot\'s own skills for agents (on/off)' },
   { command: 'accounts', description: '👤 Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)' },
   { command: 'limits', description: '🚧 Usage limits — switch this topic' },
   { command: 'limits_autoswitch', description: '🔁 Automatic switching on a usage limit' },

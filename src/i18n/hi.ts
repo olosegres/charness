@@ -77,6 +77,7 @@ export const hiDict: Record<string, string> = {
     '/quitall — हर चल रहे एजेंट को बंद करें\n' +
     '/stt — वॉइस रिकग्निशन सेटिंग्स\n' +
     '/update — बॉट अपडेट: ऑटोमैटिक, सिर्फ़ सूचना, बंद\n' +
+    '/bot_skills — एजेंटों के लिए बॉट के skills: चालू / बंद\n' +
     '/todo — हर प्रोजेक्ट के एजेंटों की कार्य सूचियाँ; उनकी सेटिंग्स\n' +
     '/topic — किसी फ़ोल्डर पर एक और थ्रेड खोलें\n' +
     '/whoami /version — डिबग\n\n' +
@@ -96,6 +97,7 @@ export const hiDict: Record<string, string> = {
     '/quit /status /output — नियंत्रण\n' +
     '/compact — एजेंट संदर्भ संक्षिप्त करें\n' +
     '/compact_on_idle — निष्क्रियता के बाद स्वतः संक्षेपण (टॉगल)\n' +
+    '/bot_skills — एजेंटों के लिए बॉट के skills (इस विषय के लिए चालू / बंद)\n' +
     '/todo — एजेंट की प्रकाशित कार्य सूची और उसका प्रोजेक्ट\n' +
     '/limits — हर खाते और प्रदाता का उपयोग; इस टॉपिक को बदलने के लिए किसी पर टैप करें\n' +
     '/limits_autoswitch — उपयोग-सीमा पर मॉडल का स्वचालित स्विच (वैकल्पिक सूची, स्विच, प्रतीक्षा)\n' +
@@ -490,6 +492,22 @@ export const hiDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ संक्षेपण का सारांश: इस विषय के लिए {state}।',
   'compactSummary.setGlobal': '✅ संक्षेपण का सारांश: सभी विषयों के लिए {state} (प्रति-विषय बदलाव फिर भी लागू रहते हैं)।',
   'compactSummary.unsupported': 'शेल के पास संक्षिप्त करने योग्य संदर्भ नहीं है, इसलिए पोस्ट करने के लिए कोई सारांश नहीं है।',
+
+  'botSkills.on': 'चालू',
+  'botSkills.off': 'बंद',
+  'botSkills.titleGeneral': '🧰 बॉट के skills, सभी विषयों के लिए: {state}',
+  'botSkills.titleTopic': '🧰 इस विषय में बॉट के skills: {state} — {source}',
+  'botSkills.sourceGeneral': 'General जैसा',
+  'botSkills.sourceTopic': 'इस विषय के लिए तय',
+  'botSkills.explanationText': 'वे skills जो Charness अपने एजेंटों को देता है (मैनेजर और वर्कर को काम सौंपने वाले दो skills) और बॉट के निर्देशों में मैनेजर को लोड करने का संकेत। चल रहा एजेंट अपने अगले आरंभ तक अपने skills रखता है — निष्क्रियता पर रुकना और फिर शुरू होना, नया सत्र या मॉडल बदलना।',
+  'botSkills.generalScopeNote': 'यह हर उस विषय का डिफ़ॉल्ट है जिसकी अपनी कोई पसंद नहीं है। OpenCode सभी विषयों के लिए एक ही सर्वर चलाता है: वह बॉट के अगले आरंभ पर यह मान अपनाएगा।',
+  'botSkills.openCodeTopicNote': 'यह विषय OpenCode पर चलता है: उसका एकमात्र सर्वर सभी विषयों को सेवा देता है, इसलिए skills यहाँ सूची में बने रहते हैं — यह स्विच केवल मैनेजर को लोड करने का संकेत बदलता है।',
+  'botSkills.onButton': 'चालू',
+  'botSkills.offButton': 'बंद',
+  'botSkills.sameAsGeneralButton': 'General जैसा ({state})',
+  'botSkills.setGeneralConfirmation': '✅ बॉट के skills: सभी विषयों के लिए {state} (विषय की अपनी पसंद फिर भी लागू रहती है)। चल रहा एजेंट अपने अगले आरंभ तक अपने skills रखता है; OpenCode सर्वर बॉट के अगले आरंभ पर यह मान अपनाएगा।',
+  'botSkills.setTopicConfirmation': '✅ बॉट के skills: इस विषय के लिए {state}। चल रहा एजेंट अपने अगले आरंभ तक अपने skills रखता है।',
+  'botSkills.followGeneralConfirmation': '✅ इस विषय में बॉट के skills फिर से General जैसे हैं: {state}। चल रहा एजेंट अपने अगले आरंभ तक अपने skills रखता है।',
 
   'autoContinueLimits.on': 'चालू',
   'autoContinueLimits.off': 'बंद',

@@ -77,6 +77,7 @@ export const zhDict: Record<string, string> = {
     '/quitall — 退出所有运行中的代理\n' +
     '/stt — 语音识别设置\n' +
     '/update — 机器人更新：自动、仅通知、关闭\n' +
+    '/bot_skills — 机器人提供给智能体的技能：开启 / 关闭\n' +
     '/todo — 所有项目中智能体的任务列表及其设置\n' +
     '/topic — 在某个文件夹上再开一个话题\n' +
     '/whoami /version — 调试\n\n' +
@@ -96,6 +97,7 @@ export const zhDict: Record<string, string> = {
     '/quit /status /output — 控制\n' +
     '/compact — 压缩代理上下文\n' +
     '/compact_on_idle — 空闲后自动压缩（开关）\n' +
+    '/bot_skills — 机器人提供给智能体的技能（本话题开启 / 关闭）\n' +
     '/todo — 智能体发布的任务列表及其所在项目\n' +
     '/limits — 各账号和提供方的用量；点按其中一个即可切换此话题\n' +
     '/limits_autoswitch — 达到用量上限时自动切换模型（备用列表、切换、等待）\n' +
@@ -490,6 +492,22 @@ export const zhDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ 压缩摘要：本话题 {state}。',
   'compactSummary.setGlobal': '✅ 压缩摘要：所有话题 {state}（各话题的覆盖设置仍然有效）。',
   'compactSummary.unsupported': 'shell 没有可压缩的上下文，因此没有摘要可发布。',
+
+  'botSkills.on': '开启',
+  'botSkills.off': '关闭',
+  'botSkills.titleGeneral': '🧰 机器人技能（所有话题）：{state}',
+  'botSkills.titleTopic': '🧰 机器人技能（本话题）：{state} — {source}',
+  'botSkills.sourceGeneral': '同 General',
+  'botSkills.sourceTopic': '本话题单独设置',
+  'botSkills.explanationText': 'Charness 提供给其智能体的 skills（管理者和两个向 worker 委派任务的 skill），以及机器人指令中要求加载管理者的提示。正在运行的智能体会保留其 skills，直到下次启动：空闲停止后的恢复、新会话或更换模型。',
+  'botSkills.generalScopeNote': '这是所有未单独设置的话题的默认值。OpenCode 的所有话题共用一个服务器：它会在机器人下次启动时采用此值。',
+  'botSkills.openCodeTopicNote': '本话题运行在 OpenCode 上：它的唯一服务器为所有话题服务，因此 skills 仍会在此列出——此开关只改变加载管理者的提示。',
+  'botSkills.onButton': '开启',
+  'botSkills.offButton': '关闭',
+  'botSkills.sameAsGeneralButton': '同 General（{state}）',
+  'botSkills.setGeneralConfirmation': '✅ 机器人技能：所有话题 {state}（各话题的单独设置仍然有效）。正在运行的智能体会保留其 skills，直到下次启动；OpenCode 服务器会在机器人下次启动时采用该值。',
+  'botSkills.setTopicConfirmation': '✅ 机器人技能：本话题 {state}。正在运行的智能体会保留其 skills，直到下次启动。',
+  'botSkills.followGeneralConfirmation': '✅ 本话题的机器人技能再次与 General 一致：{state}。正在运行的智能体会保留其 skills，直到下次启动。',
 
   'autoContinueLimits.on': '开',
   'autoContinueLimits.off': '关',

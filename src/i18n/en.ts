@@ -81,6 +81,7 @@ export const enDict: Record<string, string> = {
     '/quitall — quit every running agent\n' +
     '/stt — voice recognition settings\n' +
     '/update — bot updates: automatic, notify only, off\n' +
+    '/bot_skills — the bot\'s own skills for agents: on / off\n' +
     '/todo — the agents\' todo lists of every project; their settings\n' +
     '/topic — open another topic on a folder\n' +
     '/whoami /version — debug\n\n' +
@@ -100,6 +101,7 @@ export const enDict: Record<string, string> = {
     '/quit /status /output — control\n' +
     '/compact — compact agent context\n' +
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
+    '/bot_skills — the bot\'s own skills for agents (on / off for this topic)\n' +
     '/todo — the agent\'s published todo list and the project it shares a board with\n' +
     '/limits — usage of every account and provider; tap one to switch this topic\n' +
     '/limits_autoswitch — automatic model switching on a usage limit (fallback list, switch, wait)\n' +
@@ -501,6 +503,22 @@ export const enDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ Compaction summary: {state} for this topic.',
   'compactSummary.setGlobal': '✅ Compaction summary: {state} for ALL topics (per-topic overrides still apply).',
   'compactSummary.unsupported': 'A shell has no context to compact, so there is no summary to post.',
+
+  'botSkills.on': 'ON',
+  'botSkills.off': 'OFF',
+  'botSkills.titleGeneral': '🧰 Bot skills for ALL topics: {state}',
+  'botSkills.titleTopic': '🧰 Bot skills in this topic: {state} — {source}',
+  'botSkills.sourceGeneral': 'as in General',
+  'botSkills.sourceTopic': 'set for this topic',
+  'botSkills.explanationText': 'The skills Charness gives its agents (the manager and the two worker-delegation skills) and the hint in the bot\'s instructions to load the manager. A running agent keeps its skills until its next start — its idle stop and resume, a new session or a model change.',
+  'botSkills.generalScopeNote': 'This is the default of every topic without a choice of its own. OpenCode runs one server for all topics: it follows this value at the bot\'s next start.',
+  'botSkills.openCodeTopicNote': 'This topic runs on OpenCode: its one server serves every topic, so its skills stay listed here — this switch only changes the hint to load the manager.',
+  'botSkills.onButton': 'On',
+  'botSkills.offButton': 'Off',
+  'botSkills.sameAsGeneralButton': 'As in General ({state})',
+  'botSkills.setGeneralConfirmation': '✅ Bot skills: {state} for ALL topics (a topic\'s own choice still applies). A running agent keeps its skills until its next start; OpenCode\'s server follows at the bot\'s next start.',
+  'botSkills.setTopicConfirmation': '✅ Bot skills: {state} for this topic. A running agent keeps its skills until its next start.',
+  'botSkills.followGeneralConfirmation': '✅ Bot skills in this topic follow General again: {state}. A running agent keeps its skills until its next start.',
 
   'autoContinueLimits.on': 'ON',
   'autoContinueLimits.off': 'OFF',

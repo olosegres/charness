@@ -77,6 +77,7 @@ export const ptDict: Record<string, string> = {
     '/quitall — parar todos os agentes em execução\n' +
     '/stt — configurações de reconhecimento de voz\n' +
     '/update — atualizações do bot: automáticas, só avisar, desligadas\n' +
+    '/bot_skills — skills do bot para os agentes: ligar / desligar\n' +
     '/todo — as listas de tarefas dos agentes de cada projeto; suas configurações\n' +
     '/topic — abrir outro tópico numa pasta\n' +
     '/whoami /version — depuração\n\n' +
@@ -96,6 +97,7 @@ export const ptDict: Record<string, string> = {
     '/quit /status /output — controlo\n' +
     '/compact — compactar o contexto do agente\n' +
     '/compact_on_idle — compactar automaticamente após inatividade (alternar)\n' +
+    '/bot_skills — skills do bot para os agentes (ligar / desligar neste tópico)\n' +
     '/todo — a lista de tarefas publicada do agente e o seu projeto\n' +
     '/limits — uso de cada conta e fornecedor; toca num para trocar este tópico\n' +
     '/limits_autoswitch — troca automática de modelo ao atingir um limite de uso (lista de reserva, troca, espera)\n' +
@@ -490,6 +492,22 @@ export const ptDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ Resumo da compactação: {state} para este tópico.',
   'compactSummary.setGlobal': '✅ Resumo da compactação: {state} para TODOS os tópicos (as sobreposições por tópico continuam a aplicar-se).',
   'compactSummary.unsupported': 'Uma shell não tem contexto para compactar, portanto não há resumo para publicar.',
+
+  'botSkills.on': 'LIGADO',
+  'botSkills.off': 'DESLIGADO',
+  'botSkills.titleGeneral': '🧰 Skills do bot para TODOS os tópicos: {state}',
+  'botSkills.titleTopic': '🧰 Skills do bot neste tópico: {state} — {source}',
+  'botSkills.sourceGeneral': 'como em General',
+  'botSkills.sourceTopic': 'definido para este tópico',
+  'botSkills.explanationText': 'Os skills que o Charness dá aos seus agentes (o gestor e os dois skills para delegar em workers) e a indicação, nas instruções do bot, de carregar o gestor. Um agente em execução mantém os seus skills até ao próximo arranque: a paragem por inatividade e a retoma, uma sessão nova ou uma mudança de modelo.',
+  'botSkills.generalScopeNote': 'É o valor por omissão de todos os tópicos sem escolha própria. O OpenCode usa um único servidor para todos os tópicos: aplica este valor no próximo arranque do bot.',
+  'botSkills.openCodeTopicNote': 'Este tópico corre no OpenCode: o seu único servidor serve todos os tópicos, por isso os skills continuam listados aqui; este interruptor só muda a indicação de carregar o gestor.',
+  'botSkills.onButton': 'Ligar',
+  'botSkills.offButton': 'Desligar',
+  'botSkills.sameAsGeneralButton': 'Como em General ({state})',
+  'botSkills.setGeneralConfirmation': '✅ Skills do bot: {state} para TODOS os tópicos (a escolha própria de cada tópico continua a aplicar-se). Um agente em execução mantém os seus skills até ao próximo arranque; o servidor do OpenCode aplica o valor no próximo arranque do bot.',
+  'botSkills.setTopicConfirmation': '✅ Skills do bot: {state} para este tópico. Um agente em execução mantém os seus skills até ao próximo arranque.',
+  'botSkills.followGeneralConfirmation': '✅ Os skills do bot neste tópico voltam a seguir General: {state}. Um agente em execução mantém os seus skills até ao próximo arranque.',
 
   'autoContinueLimits.on': 'LIGADO',
   'autoContinueLimits.off': 'DESLIGADO',

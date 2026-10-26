@@ -77,6 +77,7 @@ export const uzDict: Record<string, string> = {
     '/quitall — har bir ishlayotgan agentni to‘xtating\n' +
     '/stt — ovozni aniqlash sozlamalari\n' +
     '/update — bot yangilanishlari: avtomatik, faqat xabar, o‘chiq\n' +
+    '/bot_skills — botning agentlar uchun skills’lari: yoqish / o‘chirish\n' +
     '/todo — barcha loyihalar agentlarining vazifa ro\'yxatlari; ularning sozlamalari\n' +
     '/topic — papkada yana bitta mavzu ochish\n' +
     '/whoami /version — debugging\n\n' +
@@ -96,6 +97,7 @@ export const uzDict: Record<string, string> = {
     '/quit /status /output — boshqaruv\n' +
     '/compact — agent kontekstini siqish\n' +
     '/compact_on_idle — bo‘sh turgandan keyin avtosiqish (almashtirgich)\n' +
+    '/bot_skills — botning agentlar uchun skills’lari (bu mavzu uchun yoqish / o‘chirish)\n' +
     '/todo — agentning e\'lon qilingan vazifalar ro\'yxati va uning loyihasi\n' +
     '/limits — har bir hisob va provayderning sarfi; bu mavzuni almashtirish uchun birini bosing\n' +
     '/limits_autoswitch — foydalanish limitida modelni avtomatik almashtirish (zaxira ro‘yxat, almashtirish, kutish)\n' +
@@ -490,6 +492,22 @@ export const uzDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ Siqish xulosasi: bu mavzu uchun {state}.',
   'compactSummary.setGlobal': '✅ Siqish xulosasi: BARCHA mavzular uchun {state} (mavzu bo‘yicha almashtirishlar kuchda qoladi).',
   'compactSummary.unsupported': 'Shellda siqiladigan kontekst yo‘q, shuning uchun joylanadigan xulosa ham yo‘q.',
+
+  'botSkills.on': 'YONIQ',
+  'botSkills.off': 'O‘CHIQ',
+  'botSkills.titleGeneral': '🧰 Botning skills’lari BARCHA mavzular uchun: {state}',
+  'botSkills.titleTopic': '🧰 Botning skills’lari bu mavzuda: {state} — {source}',
+  'botSkills.sourceGeneral': 'General kabi',
+  'botSkills.sourceTopic': 'bu mavzu uchun belgilangan',
+  'botSkills.explanationText': 'Charness o‘z agentlariga beradigan skills (menejer va workerlarga vazifa topshiradigan ikkita skill) hamda bot ko‘rsatmalaridagi menejerni yuklash haqidagi eslatma. Ishlayotgan agent o‘z skills’ini keyingi ishga tushishigacha saqlaydi — bo‘sh turib to‘xtatilgandan keyingi davom, yangi seans yoki modelni almashtirish.',
+  'botSkills.generalScopeNote': 'Bu o‘z tanlovi yo‘q har bir mavzuning standart qiymati. OpenCode barcha mavzular uchun bitta serverda ishlaydi: u bu qiymatni botning keyingi ishga tushishida qo‘llaydi.',
+  'botSkills.openCodeTopicNote': 'Bu mavzu OpenCode’da ishlaydi: uning yagona serveri barcha mavzularga xizmat qiladi, shuning uchun skills bu yerda ham ro‘yxatda qoladi — bu almashtirgich faqat menejerni yuklash haqidagi eslatmani o‘zgartiradi.',
+  'botSkills.onButton': 'Yoqish',
+  'botSkills.offButton': 'O‘chirish',
+  'botSkills.sameAsGeneralButton': 'General kabi ({state})',
+  'botSkills.setGeneralConfirmation': '✅ Botning skills’lari: BARCHA mavzular uchun {state} (mavzuning o‘z tanlovi kuchda qoladi). Ishlayotgan agent o‘z skills’ini keyingi ishga tushishigacha saqlaydi; OpenCode serveri qiymatni botning keyingi ishga tushishida qo‘llaydi.',
+  'botSkills.setTopicConfirmation': '✅ Botning skills’lari: bu mavzu uchun {state}. Ishlayotgan agent o‘z skills’ini keyingi ishga tushishigacha saqlaydi.',
+  'botSkills.followGeneralConfirmation': '✅ Botning skills’lari bu mavzuda yana General’ga ergashadi: {state}. Ishlayotgan agent o‘z skills’ini keyingi ishga tushishigacha saqlaydi.',
 
   'autoContinueLimits.on': 'YONIQ',
   'autoContinueLimits.off': 'O‘CHIQ',

@@ -77,6 +77,7 @@ export const jaDict: Record<string, string> = {
     '/quitall — 実行中の全エージェントを終了\n' +
     '/stt — 音声認識の設定\n' +
     '/update — ボットの更新：自動、通知のみ、オフ\n' +
+    '/bot_skills — エージェント向けボットのスキル：オン / オフ\n' +
     '/todo — 全プロジェクトのエージェントのタスクリストと設定\n' +
     '/topic — フォルダ上に別のトピックを開く\n' +
     '/whoami /version — デバッグ\n\n' +
@@ -96,6 +97,7 @@ export const jaDict: Record<string, string> = {
     '/quit /status /output — 制御\n' +
     '/compact — エージェントのコンテキストを圧縮\n' +
     '/compact_on_idle — アイドル後に自動圧縮（切り替え）\n' +
+    '/bot_skills — エージェント向けボットのスキル（このトピックのオン / オフ）\n' +
     '/todo — エージェントが公開したタスクリストとそのプロジェクト\n' +
     '/limits — 各アカウントとプロバイダーの使用状況。タップするとこのトピックを切り替えます\n' +
     '/limits_autoswitch — 使用量上限でのモデル自動切り替え（予備リスト、切り替え、待機）\n' +
@@ -490,6 +492,22 @@ export const jaDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ 圧縮の要約: このトピックで {state}。',
   'compactSummary.setGlobal': '✅ 圧縮の要約: すべてのトピックで {state}（トピックごとの上書きは引き続き有効）。',
   'compactSummary.unsupported': 'シェルには圧縮するコンテキストがないため、投稿する要約もありません。',
+
+  'botSkills.on': 'オン',
+  'botSkills.off': 'オフ',
+  'botSkills.titleGeneral': '🧰 ボットのスキル（すべてのトピック）：{state}',
+  'botSkills.titleTopic': '🧰 ボットのスキル（このトピック）：{state} — {source}',
+  'botSkills.sourceGeneral': 'General と同じ',
+  'botSkills.sourceTopic': 'このトピックで設定',
+  'botSkills.explanationText': 'Charness がエージェントに渡すスキル（マネージャーと、ワーカーに任せるための 2 つのスキル）と、ボットの指示にあるマネージャーを読み込むよう促すヒントです。実行中のエージェントは次の起動まで自分のスキルを保ちます（アイドル停止後の再開、新しいセッション、モデル変更）。',
+  'botSkills.generalScopeNote': 'これは、独自の選択を持たないすべてのトピックの既定値です。OpenCode はすべてのトピックで 1 つのサーバーを使うため、ボットの次の起動時にこの値に従います。',
+  'botSkills.openCodeTopicNote': 'このトピックは OpenCode で動いています。サーバーは 1 つで全トピックを担当するため、スキルはここでも一覧に残り、この切り替えが変えるのはマネージャーを読み込むヒントだけです。',
+  'botSkills.onButton': 'オン',
+  'botSkills.offButton': 'オフ',
+  'botSkills.sameAsGeneralButton': 'General に合わせる（{state}）',
+  'botSkills.setGeneralConfirmation': '✅ ボットのスキル: すべてのトピックで {state}（トピックごとの選択は引き続き有効）。実行中のエージェントは次の起動まで自分のスキルを保ちます。OpenCode のサーバーはボットの次の起動時にこの値に従います。',
+  'botSkills.setTopicConfirmation': '✅ ボットのスキル: このトピックで {state}。実行中のエージェントは次の起動まで自分のスキルを保ちます。',
+  'botSkills.followGeneralConfirmation': '✅ このトピックのボットのスキルは再び General に従います：{state}。実行中のエージェントは次の起動まで自分のスキルを保ちます。',
 
   'autoContinueLimits.on': 'オン',
   'autoContinueLimits.off': 'オフ',

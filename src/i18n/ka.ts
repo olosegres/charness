@@ -77,6 +77,7 @@ export const kaDict: Record<string, string> = {
     '/quitall — ყველა მომუშავე აგენტის გამორთვა\n' +
     '/stt — ხმის ამოცნობის პარამეტრები\n' +
     '/update — ბოტის განახლებები: ავტომატური, მხოლოდ შეტყობინება, გამორთული\n' +
+    '/bot_skills — ბოტის skills აგენტებისთვის: ჩართვა / გამორთვა\n' +
     '/todo — ყველა პროექტის აგენტების ამოცანების სიები; მათი პარამეტრები\n' +
     '/topic — კიდევ ერთი თემის გახსნა საქაღალდეზე\n' +
     '/whoami /version — გამართვა\n\n' +
@@ -96,6 +97,7 @@ export const kaDict: Record<string, string> = {
     '/quit /status /output — კონტროლი\n' +
     '/compact — აგენტის კონტექსტის შეკუმშვა\n' +
     '/compact_on_idle — უმოქმედობის შემდეგ ავტო-შეკუმშვა (გადამრთველი)\n' +
+    '/bot_skills — ბოტის skills აგენტებისთვის (ჩართვა / გამორთვა ამ თემისთვის)\n' +
     '/todo — აგენტის გამოქვეყნებული ამოცანების სია და მისი პროექტი\n' +
     '/limits — ყველა ანგარიშისა და პროვაიდერის გამოყენება; ამ თემის გადასართავად დააჭირეთ ერთ-ერთს\n' +
     '/limits_autoswitch — მოდელის ავტომატური გადართვა გამოყენების ლიმიტზე (სარეზერვო სია, გადართვა, ლოდინი)\n' +
@@ -490,6 +492,22 @@ export const kaDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ შეკუმშვის შეჯამება: {state} ამ თემისთვის.',
   'compactSummary.setGlobal': '✅ შეკუმშვის შეჯამება: {state} ყველა თემისთვის (თემების ინდივიდუალური პარამეტრები კვლავ მოქმედებს).',
   'compactSummary.unsupported': 'გარსს არ აქვს შესაკუმში კონტექსტი, ამიტომ გამოსაქვეყნებელი შეჯამებაც არ არსებობს.',
+
+  'botSkills.on': 'ჩართული',
+  'botSkills.off': 'გამორთული',
+  'botSkills.titleGeneral': '🧰 ბოტის skills ყველა თემისთვის: {state}',
+  'botSkills.titleTopic': '🧰 ბოტის skills ამ თემაში: {state} — {source}',
+  'botSkills.sourceGeneral': 'როგორც General-ში',
+  'botSkills.sourceTopic': 'დაყენებულია ამ თემისთვის',
+  'botSkills.explanationText': 'skills, რომლებსაც Charness თავის აგენტებს აძლევს (მენეჯერი და worker-ებისთვის დავალების გადაცემის ორი skill) და ბოტის ინსტრუქციებში მენეჯერის ჩატვირთვის მინიშნება. მომუშავე აგენტი თავის skills-ს შეინარჩუნებს შემდეგ გაშვებამდე — უქმობის გამო გაჩერებისა და გაგრძელების, ახალი სესიის ან მოდელის შეცვლის შემდეგ.',
+  'botSkills.generalScopeNote': 'ეს არის ყველა იმ თემის ნაგულისხმევი მნიშვნელობა, რომელსაც საკუთარი არჩევანი არ აქვს. OpenCode ყველა თემისთვის ერთ სერვერზე მუშაობს: ის ამ მნიშვნელობას ბოტის შემდეგ გაშვებაზე გამოიყენებს.',
+  'botSkills.openCodeTopicNote': 'ეს თემა OpenCode-ზე მუშაობს: მისი ერთადერთი სერვერი ყველა თემას ემსახურება, ამიტომ skills აქაც სიაში რჩება — ეს გადამრთველი მხოლოდ მენეჯერის ჩატვირთვის მინიშნებას ცვლის.',
+  'botSkills.onButton': 'ჩართვა',
+  'botSkills.offButton': 'გამორთვა',
+  'botSkills.sameAsGeneralButton': 'როგორც General-ში ({state})',
+  'botSkills.setGeneralConfirmation': '✅ ბოტის skills: {state} ყველა თემისთვის (თემის საკუთარი არჩევანი კვლავ მოქმედებს). მომუშავე აგენტი თავის skills-ს შეინარჩუნებს შემდეგ გაშვებამდე; OpenCode-ის სერვერი ამ მნიშვნელობას ბოტის შემდეგ გაშვებაზე გამოიყენებს.',
+  'botSkills.setTopicConfirmation': '✅ ბოტის skills: {state} ამ თემისთვის. მომუშავე აგენტი თავის skills-ს შეინარჩუნებს შემდეგ გაშვებამდე.',
+  'botSkills.followGeneralConfirmation': '✅ ბოტის skills ამ თემაში ისევ General-ს მიჰყვება: {state}. მომუშავე აგენტი თავის skills-ს შეინარჩუნებს შემდეგ გაშვებამდე.',
 
   'autoContinueLimits.on': 'ჩართ.',
   'autoContinueLimits.off': 'გამორთ.',

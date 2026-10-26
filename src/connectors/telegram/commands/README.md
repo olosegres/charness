@@ -134,6 +134,18 @@ a keyboard-less confirmation. The usage-limit notice appends the shared pointer 
 `appendAutoContinueLimitsHint` and its own «skip once» button consumes the picker through the returned
 `consumeAutoContinueLimitsPicker`.
 
+## `botSkills.ts`
+
+`/bot_skills` and the buttons `bsk_on` / `bsk_off` / `bsk_same`: the «Bot skills» switch (`utils/botSkills.ts` holds the precedence
+and what OFF does). In General the picker is On / Off for the instance — the value shown is the one in force, `settings.json`'s
+seed while General never chose; in a topic On / Off / «As in General (value)», the ✓ on the topic's own choice or on «As in General».
+A ONE-SHOT picker: a tap writes the choice (`setBotSkillsGlobalValue` / `setBotSkillsOverride`, `null` drops the topic's) and EDITS the
+message into its confirmation (keyboard gone, through `editThreadMessage`); the typed `on` / `off` (and `general` in a topic) apply at
+once. Not gated on an adapter or a session — a topic may choose before its agent starts. Ports beyond the core: `readBotSkills`
+(the reader `bot.ts` builds from `state.json` + `settings.json`) and `checkIsOpenCodeTopic`, which adds the «its listed skills stay»
+note to an OpenCode topic's screen and confirmations (one OpenCode server serves every topic). The confirmation says a running agent
+keeps its skills until its next start. The screen's text names no slash command (Telegram auto-links one, and a tap would run it).
+
 ## `backendSwitch.ts`
 
 The question before a MANUAL switch of a topic between the two agent backends (`bsw_ok` / `bsw_no`): «🔁 Switch this

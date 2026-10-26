@@ -77,6 +77,7 @@ export const frDict: Record<string, string> = {
     '/quitall — arrêter tous les agents en cours\n' +
     '/stt — réglages de la reconnaissance vocale\n' +
     '/update — mises à jour du bot : automatiques, notifier seulement, désactivées\n' +
+    '/bot_skills — skills du bot pour les agents : activer / désactiver\n' +
     '/todo — les listes de tâches des agents de chaque projet ; leurs réglages\n' +
     '/topic — ouvrir un autre fil sur un dossier\n' +
     '/whoami /version — débogage\n\n' +
@@ -96,6 +97,7 @@ export const frDict: Record<string, string> = {
     '/quit /status /output — contrôle\n' +
     '/compact — compacter le contexte de l\'agent\n' +
     '/compact_on_idle — compactage auto après inactivité (bascule)\n' +
+    '/bot_skills — skills du bot pour les agents (activer / désactiver pour ce sujet)\n' +
     '/todo — la liste de tâches publiée de l\'agent et son projet\n' +
     '/limits — usage de chaque compte et fournisseur ; touchez-en un pour y basculer ce sujet\n' +
     '/limits_autoswitch — bascule automatique de modèle en cas de limite d’usage (liste de secours, bascule, attente)\n' +
@@ -490,6 +492,22 @@ export const frDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ Résumé du compactage : {state} pour ce sujet.',
   'compactSummary.setGlobal': '✅ Résumé du compactage : {state} pour TOUS les sujets (les remplacements par sujet s\'appliquent toujours).',
   'compactSummary.unsupported': 'Un shell n\'a pas de contexte à compacter, donc il n\'y a aucun résumé à publier.',
+
+  'botSkills.on': 'ACTIVÉ',
+  'botSkills.off': 'DÉSACTIVÉ',
+  'botSkills.titleGeneral': '🧰 Skills du bot pour TOUS les sujets : {state}',
+  'botSkills.titleTopic': '🧰 Skills du bot dans ce sujet : {state} — {source}',
+  'botSkills.sourceGeneral': 'comme dans General',
+  'botSkills.sourceTopic': 'défini pour ce sujet',
+  'botSkills.explanationText': 'Les skills que Charness donne à ses agents (le gestionnaire et les deux skills de délégation aux workers) et l’indication, dans les instructions du bot, de charger le gestionnaire. Un agent en cours d’exécution garde ses skills jusqu’à son prochain démarrage : arrêt pour inactivité et reprise, nouvelle session ou changement de modèle.',
+  'botSkills.generalScopeNote': 'C’est la valeur par défaut de chaque sujet sans choix propre. OpenCode n’a qu’un seul serveur pour tous les sujets : il appliquera cette valeur au prochain démarrage du bot.',
+  'botSkills.openCodeTopicNote': 'Ce sujet tourne sur OpenCode : son unique serveur dessert tous les sujets, donc ses skills restent listés ici ; ce réglage ne change que l’indication de charger le gestionnaire.',
+  'botSkills.onButton': 'Activer',
+  'botSkills.offButton': 'Désactiver',
+  'botSkills.sameAsGeneralButton': 'Comme dans General ({state})',
+  'botSkills.setGeneralConfirmation': '✅ Skills du bot : {state} pour TOUS les sujets (le choix propre d’un sujet continue de s’appliquer). Un agent en cours garde ses skills jusqu’à son prochain démarrage ; le serveur OpenCode appliquera la valeur au prochain démarrage du bot.',
+  'botSkills.setTopicConfirmation': '✅ Skills du bot : {state} pour ce sujet. Un agent en cours garde ses skills jusqu’à son prochain démarrage.',
+  'botSkills.followGeneralConfirmation': '✅ Les skills du bot suivent de nouveau General dans ce sujet : {state}. Un agent en cours garde ses skills jusqu’à son prochain démarrage.',
 
   'autoContinueLimits.on': 'ACTIVÉ',
   'autoContinueLimits.off': 'DÉSACTIVÉ',
