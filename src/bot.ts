@@ -37,7 +37,7 @@ import {
   getClaudeModeAction,
 } from './adapters/createAdapter';
 import { ClaudeJsonStreamAdapter } from './adapters/claudeJsonStreamAdapter';
-import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsJsonStreamBackend, openCodeAdapterName } from './adapters/adapterNames';
+import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, claudeTmuxAdapterName, checkIsJsonStreamBackend, openCodeAdapterName } from './adapters/adapterNames';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
 import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, RecentTurn, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
 import type { PlatformId, SessionKey } from './sessionKey';
@@ -5946,6 +5946,12 @@ command('start', async (_ctx, key) => {
   );
 });
 
+/** The `/status` agent line (`Claude Code (claude)`), flagged when the backend is the deprecated tmux one. */
+function formatStatusAgentLine(label: string, adapterName: string): string {
+  const agentLine = `${label} (${adapterName})`;
+  return adapterName === claudeTmuxAdapterName ? t('status.thread_agentTmuxDeprecated', { agent: agentLine }) : agentLine;
+}
+
 command('status', async (_ctx, key) => {
   // In General the per-thread status is meaningless (no binding ever) — so
   // we promote /status to a workspace-wide overview there. Topical threads
@@ -5972,7 +5978,7 @@ command('status', async (_ctx, key) => {
   const adapter = getThreadAdapter(key);
   const isActive = adapter.checkIsActive(key);
   const adapterName = getThreadAdapterNameRaw(key);
-  const agentLine = adapterName ? `${adapter.label} (${adapterName})` : t('status.thread_no_agent');
+  const agentLine = adapterName ? formatStatusAgentLine(adapter.label, adapterName) : t('status.thread_no_agent');
   const binding = state.getBinding(key);
   const subdir = binding?.subdir ?? t('status.thread_no_binding');
   let workDir: string | null = null;
@@ -7121,8 +7127,8 @@ async function handleAgentStart(
     await replyToThread(key, t('thread.no_binding'), extra);
     return;
   }
-  // "Claude Code" is one user-facing choice with two backends (tmux-scrape vs
-  // json-stream); open the thread's picked backend, default tmux-scrape (for now).
+  // "Claude Code" is one user-facing choice with several backends (json-stream,
+  // per-turn, the deprecated tmux-scrape); open the thread's picked backend, else the default.
   if (adapterName === 'claude') adapterName = resolveClaudeBackendName(key);
   // The other backend, with a conversation to hand over: ask first; the answer makes the switch.
   const targetFamily = getBackendFamily(adapterName);
@@ -7181,18 +7187,29 @@ command('terminal', (_ctx, key, parsed) => handleStartCommand(parsed, key, 'term
 
 registerProviderCommands();
 
-/** Human label for a Claude backend name (the two adapters share `label`
- *  "Claude Code", so the picker/notices need a distinguishing name). */
+/** Human label for a Claude backend name (the adapters share `label`
+ *  "Claude Code", so the picker/notices need a distinguishing name). The tmux
+ *  backend is deprecated, and its label says so wherever a user reads it. */
 function getClaudeBackendLabel(name: string): string {
   if (name === claudeJsonStreamAdapterName) return '⚡ JSON-stream';
   if (name === claudePerTurnAdapterName) return '🔁 Per-turn';
-  return '🖥 Terminal-scrape';
+  return t('claudeMode.tmuxButtonLabel');
+}
+
+/** The one-line hint that the tmux backend is deprecated and which backend to use instead. */
+function getTmuxDeprecatedHint(): string {
+  return t('claudeMode.tmuxDeprecatedHint', { recommended: getClaudeBackendLabel(getDefaultClaudeBackendName()) });
+}
+
+/** `text` with the tmux deprecation hint under it when `backendName` is the tmux backend; unchanged otherwise. */
+function appendTmuxDeprecatedHint(backendName: string, text: string): string {
+  return backendName === claudeTmuxAdapterName ? `${text}\n${getTmuxDeprecatedHint()}` : text;
 }
 
 /** Build the `/claude_mode` picker: one button per Claude backend, `✓` on the
  *  current one. Callback data `ccmode_<adapterName>`. */
 function buildClaudeModeKeyboard(current: string) {
-  const buttons = [claudeJsonStreamAdapterName, claudePerTurnAdapterName, 'claude'].map((name) =>
+  const buttons = [claudeJsonStreamAdapterName, claudePerTurnAdapterName, claudeTmuxAdapterName].map((name) =>
     Markup.button.callback(
       name === current ? `${getClaudeBackendLabel(name)} ✓` : getClaudeBackendLabel(name),
       `ccmode_${name}`,
@@ -7208,7 +7225,7 @@ function buildClaudeModeKeyboard(current: string) {
  * an idle thread just records the pick for its next start. Returns the localized
  * notice to show. Assumes the thread is already on a Claude backend (callers gate).
  */
-async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promise<string> {
+async function runClaudeBackendSwitch(key: SessionKey, target: string): Promise<string> {
   const label = getClaudeBackendLabel(target);
   if (target === claudePerTurnAdapterName) {
     const refusal = getPerTurnRefusal(key);
@@ -7243,6 +7260,11 @@ async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promis
   return `${msg || t('claudeMode.switched_fresh', { label })}${backgroundStoppedSuffix}`;
 }
 
+/** The notice of a `/claude_mode` switch (see {@link runClaudeBackendSwitch}), with the deprecation hint under it when the target is tmux. */
+async function applyClaudeBackendSwitch(key: SessionKey, target: string): Promise<string> {
+  return appendTmuxDeprecatedHint(target, await runClaudeBackendSwitch(key, target));
+}
+
 command('claude_mode', async (_ctx, key, parsed) => {
   if (checkIsGeneral(key)) { await replyToThread(key, t('error.start_in_general')); return; }
 
@@ -7260,7 +7282,7 @@ command('claude_mode', async (_ctx, key, parsed) => {
   });
   if (action.kind === 'notClaude') { await replyToThread(key, t('claudeMode.not_claude')); return; }
   if (action.kind === 'already') {
-    await replyToThread(key, t('claudeMode.already', { label: getClaudeBackendLabel(action.backendName) }));
+    await replyToThread(key, appendTmuxDeprecatedHint(action.backendName, t('claudeMode.already', { label: getClaudeBackendLabel(action.backendName) })));
     return;
   }
   if (action.kind === 'switch') {
@@ -7269,7 +7291,7 @@ command('claude_mode', async (_ctx, key, parsed) => {
   }
   await replyToThread(
     key,
-    t('claudeMode.pick', { label: getClaudeBackendLabel(action.currentBackendName) }),
+    `${t('claudeMode.pick', { label: getClaudeBackendLabel(action.currentBackendName) })}\n${getTmuxDeprecatedHint()}`,
     buildClaudeModeKeyboard(action.currentBackendName),
   );
 });
@@ -12062,7 +12084,7 @@ export const COMMANDS_MENU = [
   { command: 'claude', description: '▶️ Start Claude Code' },
   { command: 'opencode', description: '▶️ Start OpenCode' },
   { command: 'terminal', description: '🖥 Open a raw shell in the bound folder' },
-  { command: 'claude_mode', description: '🔀 Claude backend: json-stream ⇄ per-turn ⇄ tmux-scrape' },
+  { command: 'claude_mode', description: '🔀 Claude backend: json-stream ⇄ per-turn ⇄ tmux (deprecated)' },
   { command: 'new', description: '🆕 Restart session (alias /clear_session)' },
   { command: 'clear_session', description: '🆕 Restart session (alias /new)' },
   { command: 'model', description: '🧠 Switch model' },

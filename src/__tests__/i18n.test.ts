@@ -600,6 +600,24 @@ test('status.thread_report substitutes agent / subdir / session placeholders', (
   assert.ok(!out.includes('{'), `placeholders not substituted: "${out}"`);
 });
 
+test('the deprecated-tmux texts exist in every locale, are translated and keep their placeholders', () => {
+  const recommended = '⚡ JSON-stream';
+  const agent = 'Claude Code (claude)';
+  const englishLabel = runWithLocale('en', () => t('claudeMode.tmuxButtonLabel'));
+  for (const code of ['claudeMode.tmuxButtonLabel', 'claudeMode.tmuxDeprecatedHint', 'status.thread_agentTmuxDeprecated']) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+  }
+  for (const locale of localeCodes) {
+    const label = runWithLocale(locale, () => t('claudeMode.tmuxButtonLabel'));
+    const hint = runWithLocale(locale, () => t('claudeMode.tmuxDeprecatedHint', { recommended }));
+    const statusLine = runWithLocale(locale, () => t('status.thread_agentTmuxDeprecated', { agent }));
+    assert.ok(label.includes('tmux'), `${locale}: the label names the backend: "${label}"`);
+    if (locale !== 'en') assert.notEqual(label, englishLabel, `${locale}: the label is still English`);
+    assert.ok(hint.includes(recommended) && !hint.includes('{recommended}'), `${locale}: the hint names the recommended backend: "${hint}"`);
+    assert.ok(statusLine.includes(agent) && !statusLine.includes('{agent}'), `${locale}: the status line keeps the agent: "${statusLine}"`);
+  }
+});
+
 test('status.thread_started substitutes the {started} timestamp', () => {
   const out = t('status.thread_started', { started: '2026-06-27T19:42:10+04:00' });
   assert.ok(out.includes('2026-06-27T19:42:10+04:00'), `expected the timestamp in "${out}"`);

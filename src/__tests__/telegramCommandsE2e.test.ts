@@ -40,7 +40,8 @@
  *     with no usable engine names the cause); a second `/login` is torn down by `/quit` (its pty ends)
  *   → `/claude_mode`: a conversation whose CLI is below the lifecycle gate is
  *     refused the per-turn backend (L-D10) by the picker's tap and by the typed
- *     argument alike; the picker's third option (per-turn, lifecycle plan L5), a
+ *     argument alike; the picker labels its tmux option deprecated and points to the
+ *     recommended backend; the picker's third option (per-turn, lifecycle plan L5), a
  *     tap persists it, `/claude` opens it, a message runs one turn and the
  *     process is stopped right after its result, the next message resumes the
  *     same conversation in a new process
@@ -1092,6 +1093,23 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     } finally {
       fs.rmSync(versionOverridePath, { force: true });
     }
+  });
+
+  it('/claude_mode labels the tmux option deprecated, keeps it selectable and points to the recommended backend', async () => {
+    const picker = await topic.sendAndAwaitReply('/claude_mode', 'Claude Code backend — current:');
+    const callbackData = topic.getKeyboardData(picker).flat();
+    const buttonLabels = topic.getKeyboardLabels(picker).flat();
+    const getOptionLabel = (optionData: string): string => {
+      const optionIndex = callbackData.indexOf(optionData);
+      assert.notEqual(optionIndex, -1, `the picker offers ${optionData}`);
+      return buttonLabels[optionIndex];
+    };
+
+    assert.match(getOptionLabel('ccmode_claude'), /tmux \(deprecated\)/, 'the tmux option says it is deprecated and stays selectable');
+    for (const recommendedOption of ['ccmode_claude-json-stream', `ccmode_${perTurnAdapterName}`]) {
+      assert.doesNotMatch(getOptionLabel(recommendedOption), /deprecated/i, `${recommendedOption} is not marked deprecated`);
+    }
+    assert.match(picker.text, /The tmux backend is deprecated: it is frozen and no longer developed\. Recommended: ⚡ JSON-stream\./, 'the one-line hint names the recommended backend');
   });
 
   it('/claude_mode shows the third option; a tap persists the per-turn backend for the topic', async () => {

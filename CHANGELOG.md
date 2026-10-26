@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**The tmux backend for Claude Code is now marked deprecated: it is frozen and no longer developed, and `/claude_mode` says so.**
+Before, nothing told you that, so you could pick a backend that gets no new features. The `/claude_mode` picker now shows it as
+«🖥 tmux (deprecated)» with a line pointing to the recommended json-stream backend, the same hint follows a switch to it, `/status`
+flags a topic that runs on it, and the command's menu text says «tmux (deprecated)». Nothing else changes: it stays selectable, a topic
+already on it keeps working exactly as before and nothing is migrated for you. The texts are in all 12 languages.
+
 **The local speech recognition (GigaAM) now recognises a voice message to its last second also when it is an MP3, an M4A or two OGG files joined into one.**
 Before, an MP3 without a length header (a cut-out stream, or a variable-bitrate file) was read for only its first seconds — 6.7 s of a 40 s
 file — the second half of two OGG files joined into one was dropped, and an M4A (AAC) was refused, so the next engine in your list

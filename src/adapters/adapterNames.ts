@@ -18,6 +18,13 @@ export const openCodeAdapterName = 'opencode';
  */
 export const claudePerTurnAdapterName = 'claude-per-turn';
 
+/**
+ * The tmux-scrape Claude Code backend (the interactive TUI driven by keystrokes, output scraped from the pane).
+ * DEPRECATED and frozen: no new work and no new-feature tests on it. It stays selectable (`/claude_mode`) and
+ * existing topics on it keep working, but {@link claudeJsonStreamAdapterName} is the recommended backend.
+ */
+export const claudeTmuxAdapterName = 'claude';
+
 /** Both backends that run the json-stream host (one process per conversation at a time). */
 export function checkIsJsonStreamBackend(name: string): boolean {
   return name === claudeJsonStreamAdapterName || name === claudePerTurnAdapterName;
