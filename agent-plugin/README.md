@@ -18,6 +18,9 @@ conversations, Claude Code and OpenCode. The operator's own sessions outside the
   bot-owned folder whose `skills` is a symlink to this folder's `skills/`. OpenCode adds those skills to the
   project's and the user's own; it writes files (`.gitignore`) into that folder, which is why it is not this
   folder. An operator who set `OPENCODE_CONFIG_DIR` keeps it, and OpenCode topics then go without these skills.
+- **Switched off:** the «Bot skills» switch (`/bot_skills`, `botSkills` in `settings.json`; `src/utils/botSkills.ts`) drops
+  the `--plugin-dir` of a Claude conversation at its next start or resume, and the hint to load `charness-manager` from the
+  bot MCP's instructions; the OpenCode server follows the instance value only (replaced at the bot's next start).
 
 ## Rules for a skill here
 

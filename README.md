@@ -775,6 +775,15 @@ outside the bot do not get these. For Claude Code the bot passes
 naming a folder in `DATA_DIR` — if you set `OPENCODE_CONFIG_DIR` yourself, yours
 is kept and OpenCode topics go without these skills. They update with the bot.
 
+They can be switched off. The value is read in this order, the first that is set wins: the topic's own choice, General's
+value, `"botSkills"` in [`settings.json`](SETUP.md#instance-settings-settingsjson) (the way an instance without General — a
+Jira-only one — sets it), then **on**. A Jira conversation has no choice of its own: it follows the instance value. With the
+skills off a Claude conversation starts and resumes without `--plugin-dir`, and the bot MCP's instructions no longer tell its agent to
+load `charness-manager` (the worker-watch recipe stays in `schedule_create`'s description); a running agent keeps its skills until its
+next start. OpenCode has ONE server for every topic, so only the instance value counts there: the server is replaced at the bot's next
+start, once nothing works in it, by one started without (or, when turned back on, with) the folder; a topic's own choice changes
+that topic's instructions only.
+
 ### Restart behaviour
 
 Bot restarts are designed to be invisible: agents run in external

@@ -9,6 +9,7 @@ import {
   type ConfigValidation,
 } from './configDirFile';
 import { claudeEffortLevels, type ClaudeEffortLevel } from './effortLevels';
+import { botSkillsSettingValues, type BotSkillsSetting } from './utils/botSkills';
 import { autoUpdateModes, defaultAutoUpdateMode, defaultWhatsNew, type AutoUpdateMode, type UpdateSettings } from './selfUpdate/updateModes';
 import { todoReminderDefaultMinutes, type TodoReminderSettings } from './todos/nag';
 
@@ -16,8 +17,9 @@ import { todoReminderDefaultMinutes, type TodoReminderSettings } from './todos/n
  * @description The instance-wide settings: ONE JSON file, `settings.json`, in the charness config directory
  * (beside the instance's real `.env`, like `stt.json`). `/effort` in the General topic writes it; an operator may
  * hand-edit it and the next read sees the edit (the load is cached by file stamp, no restart). More instance
- * settings will move here later; today it holds `defaultEffort`, `autoUpdate`, `whatsNew` and `todo` (the shared todo
- * lists: on / off and the staleness reminder's interval — also the way an instance without General sets them).
+ * settings will move here later; today it holds `defaultEffort`, `autoUpdate`, `whatsNew`, `botSkills` (whether the bot's
+ * own skills reach the agents: the way an instance without General sets it) and `todo` (the shared todo lists: on / off
+ * and the staleness reminder's interval — also the way an instance without General sets them).
  *
  * Validation is strict and all-or-nothing, like `stt.json`: a typo is an error that NAMES the field. Unlike
  * `stt.json`, an invalid file is NOT served from its last good copy — the built-in defaults apply and one error
@@ -38,6 +40,8 @@ export interface InstanceSettings {
   autoUpdate: AutoUpdateMode | null;
   /** Whether the list of changes is posted after a version change; `null` = yes. */
   whatsNew: boolean | null;
+  /** The instance default of the «Bot skills» switch (`/bot_skills`) for an instance whose General never chose; `null` = `on`. */
+  botSkills: BotSkillsSetting | null;
   /** The shared todo lists (`todos/`); a field that is `null` = its default (on, a reminder every hour). */
   todo: { isEnabled: boolean | null; reminderMinutes: number | null };
 }
@@ -49,6 +53,7 @@ const rawSettingsSchema = z.strictObject({
   defaultEffort: z.enum(claudeEffortLevels).optional(),
   autoUpdate: z.enum(autoUpdateModes).optional(),
   whatsNew: z.boolean().optional(),
+  botSkills: z.enum(botSkillsSettingValues).optional(),
   todo: z.strictObject({
     isEnabled: z.boolean().optional(),
     /** `0` = no staleness reminder. */
@@ -58,7 +63,7 @@ const rawSettingsSchema = z.strictObject({
 
 /** @description The settings of an instance that has no `settings.json`: nothing set. */
 export function createEmptyInstanceSettings(): InstanceSettings {
-  return { defaultEffort: null, autoUpdate: null, whatsNew: null, todo: { isEnabled: null, reminderMinutes: null } };
+  return { defaultEffort: null, autoUpdate: null, whatsNew: null, botSkills: null, todo: { isEnabled: null, reminderMinutes: null } };
 }
 
 /**
@@ -79,6 +84,7 @@ export function validateInstanceSettings(parsedJson: object): ConfigValidation<I
       defaultEffort: parsed.data.defaultEffort ?? null,
       autoUpdate: parsed.data.autoUpdate ?? null,
       whatsNew: parsed.data.whatsNew ?? null,
+      botSkills: parsed.data.botSkills ?? null,
       todo: { isEnabled: parsed.data.todo?.isEnabled ?? null, reminderMinutes: parsed.data.todo?.reminderMinutes ?? null },
     },
   };
@@ -114,6 +120,7 @@ export function saveInstanceSettings(filePath: string, settings: InstanceSetting
     ...(settings.defaultEffort === null ? {} : { defaultEffort: settings.defaultEffort }),
     ...(settings.autoUpdate === null ? {} : { autoUpdate: settings.autoUpdate }),
     ...(settings.whatsNew === null ? {} : { whatsNew: settings.whatsNew }),
+    ...(settings.botSkills === null ? {} : { botSkills: settings.botSkills }),
     ...(settings.todo.isEnabled === null && settings.todo.reminderMinutes === null
       ? {}
       : {
@@ -204,6 +211,15 @@ export function createUpdateSettingsReader(getFilePath: () => string, logError: 
     autoUpdate: settings.autoUpdate ?? defaultAutoUpdateMode,
     whatsNew: settings.whatsNew ?? defaultWhatsNew,
   }));
+}
+
+/**
+ * @description The reader of the «Bot skills» default the file seeds (`utils/botSkills.ts`): `botSkills`, re-read when the
+ * file changes — a hand edit applies to the next agent start. `null` = the file does not say. An invalid file reads as `null`,
+ * and `logError` gets ONE line per distinct broken state (not one per read).
+ */
+export function createBotSkillsSettingsReader(getFilePath: () => string, logError: (line: string) => void): () => BotSkillsSetting | null {
+  return createSettingsPartReader(getFilePath, logError, (settings) => settings.botSkills);
 }
 
 /**

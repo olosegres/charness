@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  createBotSkillsSettingsReader,
   createEmptyInstanceSettings,
   createInstanceDefaultEffortReader,
   createUpdateSettingsReader,
@@ -215,4 +216,41 @@ test('the update settings reader fills the defaults in (on, shown), follows a ha
   assert.match(errors[0], /autoUpdate/);
   writeRaw('{"autoUpdate":"off"}');
   assert.deepEqual(read(), { autoUpdate: 'off', whatsNew: true });
+});
+
+test('botSkills takes on / off and is "not set" in an empty file; a wrong value is an error naming the field', () => {
+  for (const value of ['on', 'off'] as const) {
+    assert.deepEqual(validateInstanceSettings({ botSkills: value }), { ok: true, config: createSettings({ botSkills: value }) });
+  }
+  assert.equal(createEmptyInstanceSettings().botSkills, null);
+  assert.deepEqual(validateInstanceSettings({}), { ok: true, config: createEmptyInstanceSettings() });
+  for (const wrong of ['yes', true, 'OFF']) {
+    const bad = validateInstanceSettings({ botSkills: wrong });
+    assert.equal(bad.ok, false, String(wrong));
+    assert.match(bad.ok ? '' : bad.errors.join('\n'), /^settings\.json botSkills: /);
+  }
+});
+
+test('botSkills is written only when set and a change keeps it', () => {
+  saveInstanceSettings(settingsPath, createSettings({ botSkills: 'off', autoUpdate: 'off' }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { autoUpdate: 'off', botSkills: 'off' });
+  saveInstanceSettings(settingsPath, { ...loadInstanceSettingsForUpdate(settingsPath), defaultEffort: 'high' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { defaultEffort: 'high', autoUpdate: 'off', botSkills: 'off' });
+});
+
+test('the bot-skills reader: null with no file or field, the file\'s value, a hand edit with no restart, a broken file as null with ONE named error', () => {
+  const errors: string[] = [];
+  const read = createBotSkillsSettingsReader(() => settingsPath, (line) => errors.push(line));
+  assert.equal(read(), null, 'no file');
+  writeRaw('{"autoUpdate":"off"}');
+  assert.equal(read(), null, 'the field left out');
+  writeRaw('{"botSkills":"off"}');
+  assert.equal(read(), 'off');
+  writeRaw('{"botSkills":"on"}');
+  assert.equal(read(), 'on');
+  writeRaw('{"botSkills":"maybe"}');
+  assert.equal(read(), null, 'a broken file says nothing');
+  read();
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /botSkills/);
 });

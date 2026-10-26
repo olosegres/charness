@@ -424,6 +424,14 @@ export interface StateV1 {
   compactSummaryEnabled?: boolean;
   compactSummaryOverrides?: Record<string, boolean>;
   /**
+   * «Bot skills» switch (`/bot_skills`, `utils/botSkills.ts`): whether the skills and the manager hint the bot ships reach an
+   * agent. Same pair as the `compactOnIdle*` one, except that `botSkillsEnabled` — the General value — has NO default here:
+   * absent means General never chose, and then `settings.json`'s `botSkills` and finally ON apply (an instance without
+   * General sets it in the file). `botSkillsOverrides` holds the topics' own choices keyed by {@link SessionKey} string.
+   */
+  botSkillsEnabled?: boolean;
+  botSkillsOverrides?: Record<string, boolean>;
+  /**
    * Threads whose compact-on-idle user-LATCH is spent (D2). A thread lands here
    * the instant an idle-compaction FIRES and is removed only by the next genuine
    * USER message — so idle compaction runs at most once per user-active period,
@@ -2007,7 +2015,7 @@ export class StateStore {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       if (enabled === null) {
-        this.dropLimitOverride(this.state.autoContinueOnLimitOverrides, k, () => { delete this.state.autoContinueOnLimitOverrides; });
+        this.dropToggleOverride(this.state.autoContinueOnLimitOverrides, k, () => { delete this.state.autoContinueOnLimitOverrides; });
         return;
       }
       if (this.state.autoContinueOnLimitOverrides?.[k] === enabled) {
@@ -2019,11 +2027,50 @@ export class StateStore {
   }
 
   /** Remove one thread's override from a toggle map (`null` enabled = back to the instance default); drops an emptied map. */
-  private dropLimitOverride(map: Record<string, boolean> | undefined, k: string, dropMap: () => void): void {
+  private dropToggleOverride(map: Record<string, boolean> | undefined, k: string, dropMap: () => void): void {
     if (!map || !(k in map)) return;
     delete map[k];
     if (Object.keys(map).length === 0) dropMap();
     this.scheduleSave();
+  }
+
+  // ── «Bot skills» switch (`/bot_skills`) ──
+
+  /**
+   * @description The General value of the switch, or `undefined` while General never chose (then `settings.json` and the
+   * built-in ON apply: `utils/botSkills.ts` holds the whole precedence).
+   */
+  getBotSkillsGlobalValue(): boolean | undefined {
+    return this.state.botSkillsEnabled;
+  }
+
+  /** @description The topic's own choice, or `undefined` when it follows General. A present value (true OR false) wins. */
+  getBotSkillsOverride(key: SessionKey): boolean | undefined {
+    return this.state.botSkillsOverrides?.[keyToString(key)];
+  }
+
+  /**
+   * @description Set the General value (from General). Stored EXPLICITLY (`false` included), so a choice is durable and stays
+   * distinguishable from «never chose», which lets `settings.json` decide. Debounced.
+   */
+  async setBotSkillsGlobalValue(enabled: boolean): Promise<void> {
+    if (this.state.botSkillsEnabled === enabled) return;
+    this.state.botSkillsEnabled = enabled;
+    this.scheduleSave();
+  }
+
+  /** @description Set the topic's own choice (`null` = follow General again; an emptied map is dropped). Debounced. */
+  async setBotSkillsOverride(key: SessionKey, enabled: boolean | null): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (enabled === null) {
+        this.dropToggleOverride(this.state.botSkillsOverrides, k, () => { delete this.state.botSkillsOverrides; });
+        return;
+      }
+      if (this.state.botSkillsOverrides?.[k] === enabled) return;
+      (this.state.botSkillsOverrides ??= {})[k] = enabled;
+      this.scheduleSave();
+    });
   }
 
   // ── Claude account auto-switch on a usage limit (`/account`) ──
@@ -2058,7 +2105,7 @@ export class StateStore {
     const k = keyToString(key);
     await this.withLock(key, async () => {
       if (enabled === null) {
-        this.dropLimitOverride(this.state.claudeAutoSwitchOnLimitOverrides, k, () => { delete this.state.claudeAutoSwitchOnLimitOverrides; });
+        this.dropToggleOverride(this.state.claudeAutoSwitchOnLimitOverrides, k, () => { delete this.state.claudeAutoSwitchOnLimitOverrides; });
         return;
       }
       if (this.state.claudeAutoSwitchOnLimitOverrides?.[k] === enabled) return;

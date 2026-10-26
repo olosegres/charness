@@ -308,11 +308,11 @@ describe('the tool set per platform (Jira connector plan J2, D18)', () => {
   });
 
   it('C10: the tool changes the digest a Jira session connects to — an adopted process reconnects at idle (L4) — and no other platform\'s', () => {
-    const withTool = handle.getToolDigest('jira');
-    const telegram = handle.getToolDigest('telegram');
+    const withTool = handle.getToolDigest('jira', true);
+    const telegram = handle.getToolDigest('telegram', true);
     isJiraAttachmentOffered = false;
-    assert.notEqual(handle.getToolDigest('jira'), withTool);
-    assert.equal(handle.getToolDigest('telegram'), telegram);
+    assert.notEqual(handle.getToolDigest('jira', true), withTool);
+    assert.equal(handle.getToolDigest('telegram', true), telegram);
   });
 
   it('a Telegram session and an OpenCode folder session keep every tool', async () => {

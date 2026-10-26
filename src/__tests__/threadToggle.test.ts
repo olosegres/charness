@@ -1,9 +1,9 @@
 /**
  * @description The resolution rule shared by every per-thread toggle
- * (`utils/threadToggle`), plus each of its three named wrappers — two fall back to
+ * (`utils/threadToggle`), plus each of its named wrappers — all but `/compact_summary` fall back to
  * ON when nothing is set, `/compact_summary` to OFF.
  *
- * Load-bearing intent (per `.claude/rules/tests.md`): the three wrappers are thin
+ * Load-bearing intent (per `.claude/rules/tests.md`): the wrappers are thin
  * by design, and a thin wrapper is exactly what silently stops matching its
  * siblings when someone edits one. So each is asserted to produce the SAME verdict
  * as the shared rule on the same inputs — not merely to be callable.
@@ -21,11 +21,14 @@ import * as assert from 'node:assert/strict';
 import { resolveDefaultOnThreadToggle, resolveThreadToggle } from '../utils/threadToggle';
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from '../utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled } from '../utils/autoContinueOnLimit';
+import { resolveBotSkillsEnabled } from '../utils/botSkills';
 
 /** Every wrapper over the shared rule, by the setting it resolves, with the value it falls back to. */
 const wrappers = {
   '/compact_on_idle': { resolve: resolveCompactOnIdleEnabled, unsetValue: true },
   '/auto_continue_limits': { resolve: resolveAutoContinueOnLimitEnabled, unsetValue: true },
+  // The skills shipped unconditionally before the switch existed.
+  '/bot_skills': { resolve: resolveBotSkillsEnabled, unsetValue: true },
   // A compaction ends in one short line unless the summary is turned on.
   '/compact_summary': { resolve: resolveCompactSummaryEnabled, unsetValue: false },
 };
@@ -68,7 +71,7 @@ test('resolveThreadToggle: only the all-unset case reads the fallback', () => {
   }
 });
 
-test('all three named wrappers resolve identically to the shared rule with their own fallback', () => {
+test('every named wrapper resolves identically to the shared rule with their own fallback', () => {
   for (const [name, { resolve, unsetValue }] of Object.entries(wrappers)) {
     for (const [globalDefault, threadOverride] of cases) {
       assert.equal(

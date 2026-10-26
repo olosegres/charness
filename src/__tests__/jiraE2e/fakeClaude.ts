@@ -48,7 +48,7 @@ import {
   getFakeBackgroundTaskDescription,
   getFakeBackgroundTaskFinishedText,
 } from './fakeClaudeContract';
-import { fakeCancelWatchToken, fakeGoneWorkerPid, fakeWatchJobName } from './fakeClaudeContract';
+import { fakeCancelWatchToken, fakeGoneWorkerPid, fakeWatchJobName, getBotMcpServer, type McpServerConfig } from './fakeClaudeContract';
 import { workerWatchCheckCommand } from '../../scheduler/workerWatch';
 import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent';
 import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost';
@@ -378,12 +378,6 @@ interface KnownRequest extends RequestTurnState {
   requestId: string;
 }
 
-interface McpServerConfig {
-  type?: string;
-  url?: string;
-  headers?: Record<string, string>;
-}
-
 /** A type alias, not an interface: the MCP client takes the arguments as a string-keyed record. */
 type AnswerRequestArgs = {
   requestId: string;
@@ -573,16 +567,6 @@ function listKnownRequests(issueKey: string): KnownRequest[] {
 function getMode(text: string, issueKey: string): FakeClaudeMode {
   const named = modeRe.exec(text)?.[1];
   return fakeModes.find((mode) => mode === named) ?? listKnownRequests(issueKey)[0]?.mode ?? 'answer';
-}
-
-/** The bot MCP server: the `http` entry of the `--mcp-config` files. */
-function getBotMcpServer(argv: readonly string[]): McpServerConfig | null {
-  for (const configPath of getFlagValues(argv, '--mcp-config')) {
-    const config: { mcpServers?: Record<string, McpServerConfig> } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const server = Object.values(config.mcpServers ?? {}).find((candidate) => candidate.type === 'http' && candidate.url);
-    if (server) return server;
-  }
-  return null;
 }
 
 async function callBotTool(server: McpServerConfig, toolName: string, args: Record<string, unknown>): Promise<string> {

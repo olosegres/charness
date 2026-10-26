@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { sleep } from './utils';
 import { installOpenCodeCompactPlugin } from './utils/openCodeCompactPlugin';
+import { checkIsBotSkillsEnabled } from './utils/botSkills';
 import { getOpenCodeAgentConfigEnv, getPidlessServerLaunchReading, parseOpenCodeServerLaunch, type OpenCodeServeProcessReading, type OpenCodeServerLaunchReading } from './utils/agentPlugin';
 import {
   hotReloadEnvName,
@@ -1045,8 +1046,8 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
     // back when it finishes). Without this the whole session is locked for the
     // entire sub-agent run and the topic looks hung.
     OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: 'true',
-    // The skills the bot gives its agents (`utils/agentPlugin.ts`); OpenCode reads the folder once, at start.
-    ...getOpenCodeAgentConfigEnv(process.env, process.env.DATA_DIR || resolveDefaultDataDir()),
+    // The skills the bot gives its agents (`utils/agentPlugin.ts`) while the instance's «Bot skills» switch is on; OpenCode reads the folder once, at start.
+    ...getOpenCodeAgentConfigEnv(process.env, process.env.DATA_DIR || resolveDefaultDataDir(), checkIsBotSkillsEnabled(null)),
   };
   // The bot's compaction plugin, so an overflow compaction (which never gets the
   // bot's per-invocation instruction) still gets the resume guidance. Installed

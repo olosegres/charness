@@ -86,4 +86,7 @@ constants in the code; this README keeps what the code cannot say.
   fires it too; the job remembers the alerts it pinned (`alertPinMessageIds`) and `schedule_cancel` unpins them, so a
   finished worker leaves no pin once its watch is cancelled. The `schedule_create` description carries the full recipe; the Telegram instructions point at the
   `charness-manager` skill (`agent-plugin/`, which carries it verbatim — `agentPluginSkills.test.ts` holds them equal)
-  and at that description; the tracker instructions only at the skill.
+  and at that description; the tracker instructions only at the skill. With the scope's «Bot skills» switch off
+  (`utils/botSkills.ts`) the pointer at the skill is dropped — a Telegram bullet keeps the recipe, a tracker bullet goes
+  with it. A `dir:` scope (OpenCode) keeps the pointer while any topic bound to the folder has the skills on; a folder with
+  none bound follows the instance value. The tool digest takes the switch too (`getToolDigest(platform, isBotSkillsEnabled)`).

@@ -13,6 +13,7 @@ import {
 import { z } from 'zod';
 import type { StateStore } from '../state';
 import { keyFromString, tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
+import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import type { ClaudeProfilesReport } from '../utils/claudeUsage';
 import type { SendFilesToThread } from '../utils/fileSendService';
 import { formatIsoLocalOffset } from '../utils/isoTimestamp';
@@ -135,10 +136,25 @@ const answerRequestInstruction =
 /** The shared todo registry's bullet (D7) — Telegram topics and Jira issues publish alike. */
 const todoInstruction =
   '• BEFORE you start any task (fixes you found yourself included: a failing test, a leak) → todo_update adds it as inWork, naming the area concretely (files, tests). Check the returned board for overlap with other agents. Take the queue top-down; mark items done / dropped at once. A ticket you create in a tracker gets an item with its key in `ref`.';
-const trackerOrchestrationInstruction = `• You orchestrate detached workers (a \`claude -p\` / \`opencode run\` builder, reviewer, researcher) → ${managerSkillInstruction}.`;
-const telegramOrchestrationInstruction =
-  `• You orchestrate detached workers (a \`claude -p\` / \`opencode run\` builder, reviewer, researcher) → ${managerSkillInstruction}. ` +
-  `Watch EACH worker with schedule_create — its description has the recipe (checkCommand, cron, \`${workerWatchPinArgument}\`); never \`kill -0\` alone: it never fires on a hung worker.`;
+const orchestrationInstructionHead = '• You orchestrate detached workers (a `claude -p` / `opencode run` builder, reviewer, researcher) →';
+/** What the worker-watch recipe says once a tool is named: shared by both wordings of the Telegram bullet. */
+const workerWatchRecipeText =
+  `its description has the recipe (checkCommand, cron, \`${workerWatchPinArgument}\`); never \`kill -0\` alone: it never fires on a hung worker.`;
+
+/**
+ * The orchestration bullet of a conversation on a tracker, which has no scheduling tools: only the manager-skill hint, so
+ * with the bot's skills off (`/bot_skills`) there is nothing left of it and `null` drops it.
+ */
+function buildTrackerOrchestrationInstruction(isBotSkillsEnabled: boolean): string | null {
+  return isBotSkillsEnabled ? `${orchestrationInstructionHead} ${managerSkillInstruction}.` : null;
+}
+
+/** The orchestration bullet of a Telegram topic: the manager-skill hint (dropped with the skills off) and the worker-watch recipe, which is a tool fact and stays. */
+function buildTelegramOrchestrationInstruction(isBotSkillsEnabled: boolean): string {
+  return isBotSkillsEnabled
+    ? `${orchestrationInstructionHead} ${managerSkillInstruction}. Watch EACH worker with schedule_create — ${workerWatchRecipeText}`
+    : `${orchestrationInstructionHead} schedule_create to watch EACH worker — ${workerWatchRecipeText}`;
+}
 const claudeProfilesInstruction =
   '• Before you start a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one with the most headroom (`recommended`). Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits.';
 
@@ -157,7 +173,7 @@ function getOptionalBotTools(deps: SchedulerMcpDeps): OptionalBotTools {
   return { isJiraAttachmentToolOffered: deps.fetchJiraAttachment !== undefined, isTodoToolOffered: deps.todos !== undefined };
 }
 
-function buildTelegramInstructions(isTodoToolOffered: boolean): string {
+function buildTelegramInstructions(isTodoToolOffered: boolean, isBotSkillsEnabled: boolean): string {
   return `This MCP lets the agent act on its own Telegram topic.
 
 When to use it:
@@ -167,7 +183,7 @@ When to use it:
 ${compactConversationInstruction}
 ${isTodoToolOffered ? `${todoInstruction}\n` : ''}• You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
 • You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron). The bot runs the command in this folder on schedule, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive bot restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart and then fails silently.
-${telegramOrchestrationInstruction}
+${buildTelegramOrchestrationInstruction(isBotSkillsEnabled)}
 ${answerRequestInstruction} The requester may not see your plain text, so anything they must read goes through answer_request. Your plain text is relayed into the topic too, so after answer_request end the turn WITHOUT a plain-text recap of what you answered — it would show up twice.
 ${claudeProfilesInstruction}
 
@@ -179,7 +195,7 @@ const jiraAttachmentInstruction =
   '• The issue lists a file (an attachment id in the attachments list, or in a placeholder such as "[image: shot.png — attachment 10234]") you need to look at → jira_get_attachment with that id; it saves the original file and returns its path.';
 
 /** For a conversation on a tracker: the requester sees nothing but the answers; `extraInstructions` name the platform's own tools. */
-function buildTrackerInstructions(extraInstructions: readonly string[]): string {
+function buildTrackerInstructions(extraInstructions: readonly string[], isBotSkillsEnabled: boolean): string {
   return `This MCP connects the agent to the conversation that asked for its work.
 
 When to use it:
@@ -188,8 +204,8 @@ ${[
   ...extraInstructions,
   compactConversationInstruction,
   claudeProfilesInstruction,
-  trackerOrchestrationInstruction,
-].join('\n')}
+  buildTrackerOrchestrationInstruction(isBotSkillsEnabled),
+].filter((instruction) => instruction !== null).join('\n')}
 
 Each tool's own description has the exact argument recipe.`;
 }
@@ -204,15 +220,16 @@ Each tool's own description has the exact argument recipe.`;
  * @description The connect-time instructions for a session of `platform`: only
  * a Telegram session has the scheduling and send-to-topic tools, so only its
  * instructions name them (Jira connector plan J2, D18); an optional tool is named
- * only where it is offered.
+ * only where it is offered. With the bot's skills off for the session
+ * (`isBotSkillsEnabled`, `/bot_skills`) the orchestration bullet no longer tells it to load `charness-manager`.
  */
-export function buildMcpServerInstructions(platform: PlatformId | null, offered: OptionalBotTools): string {
-  if (platform === 'telegram') return buildTelegramInstructions(offered.isTodoToolOffered);
-  if (platform !== 'jira') return buildTrackerInstructions([]);
+export function buildMcpServerInstructions(platform: PlatformId | null, offered: OptionalBotTools, isBotSkillsEnabled: boolean): string {
+  if (platform === 'telegram') return buildTelegramInstructions(offered.isTodoToolOffered, isBotSkillsEnabled);
+  if (platform !== 'jira') return buildTrackerInstructions([], isBotSkillsEnabled);
   return buildTrackerInstructions([
     ...(offered.isJiraAttachmentToolOffered ? [jiraAttachmentInstruction] : []),
     ...(offered.isTodoToolOffered ? [todoInstruction] : []),
-  ]);
+  ], isBotSkillsEnabled);
 }
 
 /** Max characters of a free-text job name / prompt accepted by a tool (defensive bound). */
@@ -443,8 +460,8 @@ export interface SchedulerMcpHandle {
   stop(): Promise<void>;
   /** The bound port, available after `start` resolves. */
   readonly port: number;
-  /** The digest of the tool definitions a session of `platform` connects to (see {@link getBotMcpToolDigest}). */
-  getToolDigest(platform: PlatformId | null): string;
+  /** The digest of the tool definitions and instructions a session of `platform` connects to (see {@link getBotMcpToolDigest}). */
+  getToolDigest(platform: PlatformId | null, isBotSkillsEnabled: boolean): string;
 }
 
 /** The parts of a tool definition an MCP client sees at connect, as {@link McpServer.registerTool} takes them. */
@@ -500,8 +517,8 @@ const digestScope: SchedulerScope = { kind: 'dir', directory: '' };
  * a tool added, renamed, re-described or re-shaped changes it and nothing else
  * has to be kept in step by hand.
  */
-export function getBotMcpToolDigest(deps: SchedulerMcpDeps, platform: PlatformId | null): string {
-  return buildBotMcpToolDigest(buildMcpServerInstructions(platform, getOptionalBotTools(deps)), getBotMcpToolDefinitions(deps, platform));
+export function getBotMcpToolDigest(deps: SchedulerMcpDeps, platform: PlatformId | null, isBotSkillsEnabled: boolean): string {
+  return buildBotMcpToolDigest(buildMcpServerInstructions(platform, getOptionalBotTools(deps), isBotSkillsEnabled), getBotMcpToolDefinitions(deps, platform));
 }
 
 /**
@@ -1569,6 +1586,17 @@ export function createSchedulerMcpCancellationLifecycle(
 }
 
 /**
+ * @description Whether the bot's skills are on for the conversations a scope reaches (`utils/botSkills.ts`). A `thread:`
+ * scope is one conversation. A `dir:` scope (OpenCode) serves every topic bound to the folder from ONE registration, so it
+ * keeps the manager hint while any of them has the skills on; a folder no topic is bound to gets the instance value.
+ */
+function checkIsBotSkillsEnabledForScope(deps: SchedulerMcpDeps, scope: SchedulerScope): boolean {
+  const threadKeys = scope.kind === 'thread' ? [scope.threadKey] : deps.getThreadsForDirectory(scope.directory);
+  const keys = threadKeys.map(tryKeyFromString).filter((key) => key !== null);
+  return keys.length === 0 ? checkIsBotSkillsEnabled(null) : keys.some((key) => checkIsBotSkillsEnabled(key));
+}
+
+/**
  * @description Build a fresh {@link McpServer} for one request, registering the
  * scope-bound scheduler tools plus the `send_file_to_user` tool. The SDK binds one server
  * per transport per connection, so a new instance is built (and closed) per
@@ -1582,7 +1610,7 @@ function buildRequestServer(
   const platform = getSchedulerScopePlatform(scope);
   const server = new McpServer(
     { name: mcpServerName, version: mcpServerVersion },
-    { instructions: buildMcpServerInstructions(platform, getOptionalBotTools(deps)) },
+    { instructions: buildMcpServerInstructions(platform, getOptionalBotTools(deps), checkIsBotSkillsEnabledForScope(deps, scope)) },
   );
   registerBotTools(server, deps, scope, platform, requestSignal);
   return server;
@@ -1880,7 +1908,7 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
   return {
     start,
     stop,
-    getToolDigest: (platform) => getBotMcpToolDigest(deps, platform),
+    getToolDigest: (platform, isBotSkillsEnabled) => getBotMcpToolDigest(deps, platform, isBotSkillsEnabled),
     get port() {
       return boundPort;
     },

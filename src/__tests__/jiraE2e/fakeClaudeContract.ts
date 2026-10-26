@@ -5,6 +5,7 @@
  * executable script, which starts running when it is loaded.
  */
 
+import * as fs from 'fs';
 import * as path from 'path';
 import { agentEnvironmentNames } from '../../utils/agentEnvironment';
 import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost';
@@ -267,6 +268,23 @@ export function checkHasFlag(argv: readonly string[], flag: readonly string[]): 
 /** @description The value after every occurrence of the single-value option `name`. */
 export function getFlagValues(argv: readonly string[], name: string): string[] {
   return argv.flatMap((arg, index) => (arg === name && index + 1 < argv.length ? [argv[index + 1]] : []));
+}
+
+/** One server of an `--mcp-config` file, as the fake and the process-level tests read it. */
+export interface McpServerConfig {
+  type?: string;
+  url?: string;
+  headers?: Record<string, string>;
+}
+
+/** The bot MCP server: the `http` entry of the `--mcp-config` files of a launch's `argv`. */
+export function getBotMcpServer(argv: readonly string[]): McpServerConfig | null {
+  for (const configPath of getFlagValues(argv, '--mcp-config')) {
+    const config: { mcpServers?: Record<string, McpServerConfig> } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const server = Object.values(config.mcpServers ?? {}).find((candidate) => candidate.type === 'http' && candidate.url);
+    if (server) return server;
+  }
+  return null;
 }
 
 /** @description The conversation a session launch runs: its `--session-id`, or the `--resume` id. */

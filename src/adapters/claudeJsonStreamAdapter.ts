@@ -32,6 +32,7 @@ import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
 import type { ClaudeConfigDirApplyResult, ClaudeConfigDirReader, ClaudeRateLimitSink, ClaudeTurnCostSink } from './claudeConfigDir';
 import { getClaudePlatformEnvironment, getClaudePlatformFlags } from './claudePlatformFlags';
 import { getClaudeAgentPluginFlags } from '../utils/agentPlugin';
+import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import { resolveDataDir } from '../state';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
 import { getDefaultDisplayPrefs } from '../utils/displayVerbosity';
@@ -587,7 +588,7 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
       '--include-partial-messages',
       '--verbose',
       // Followed by an option on purpose: `--plugin-dir` takes several values on Claude Code 2.0.25–2.1.74.
-      ...(await getClaudeAgentPluginFlags(this.claudePath)),
+      ...(await getClaudeAgentPluginFlags(this.claudePath, checkIsBotSkillsEnabled(key))),
       '--replay-user-messages',
       // Bypass ALL permission checks (tmux-backend parity) so the operator's own
       // agent never stalls on a permission prompt. `--dangerously-skip-permissions`

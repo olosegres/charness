@@ -464,7 +464,12 @@ resumable in the other.
   at start, so the boot step `activateAgentSkillsForServer` replaces a server started without it (the controlled
   restart that restores the sessions) — only when the bot owns it (its process record for the endpoint), `/proc`
   shows the listener is an `opencode … serve` process, the folder it would get is prepared, and no session works; a
-  server the bot does not own or cannot identify is left as is (one log line).
+  server the bot does not own or cannot identify is left as is (one log line). The «Bot skills» switch (`utils/botSkills.ts`)
+  decides whether the server gets the folder: only its INSTANCE value counts (one server serves every topic), read when the
+  server is started and by the same boot step, which replaces a server started the other way (`getOpenCodeAgentSkillsExpectation`:
+  `offered` / `withheld` / `unmanaged`) — a topic's own choice never reaches the server. The hot supervisor pre-starts the
+  server before any state is loaded, so it starts on the built-in ON; with the instance value OFF that one server is
+  replaced by this boot step at the cold start (a hot reload leaves the server alone).
 - **Naming.** Bot-created sessions get NO title, so OpenCode auto-titles them from the first prompt; a title
   passed at creation (`/opencode <args>`) counts as user-set and is never auto-renamed (`isAutoNamePending`).
 - **Effort** rides the prompt as `body.variant`, clamped to the model's variants; a thread with no pick of its own
@@ -479,7 +484,8 @@ resumable in the other.
 ## Claude, every backend
 
 - **The bot's skills.** Every agent launch — the json-stream spawn (start and resume), the tmux start and resume —
-  carries `--plugin-dir <package>/agent-plugin` (`utils/agentPlugin.ts`; nothing when the folder is missing):
+  carries `--plugin-dir <package>/agent-plugin` (`utils/agentPlugin.ts`; nothing when the folder is missing or the
+  conversation's «Bot skills» switch is off — read through `checkIsBotSkillsEnabled(key)` at every spawn):
   Claude Code lists the skills as `charness:<folder>`, also under a Jira session's `--setting-sources project,local`.
   `foreignKeyGate.test.ts` fails a launch path without it. Two traps when editing a launch argv: a CLI older than
   2.0.25 (`minPluginDirClaudeCodeVersion`) refuses to start with the flag, so it is left out there; and on

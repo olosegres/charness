@@ -1,7 +1,8 @@
 /**
  * @description The skills Charness gives every agent session it starts (`agent-plugin/` at the package root, a
  * Claude Code plugin named `charness`): `charness-manager` and the two worker-delegation skills, which name the
- * bot's own tools. The operator's own sessions outside the bot never get them.
+ * bot's own tools. The operator's own sessions outside the bot never get them. The «Bot skills» switch
+ * (`utils/botSkills.ts`, `/bot_skills`) turns them off: per conversation for Claude, for the whole instance for OpenCode.
  *
  *  - Claude Code loads the folder through `--plugin-dir` on every bot launch of an agent session — also under
  *    `--setting-sources project,local` (a Jira session), probed on 2.1.310 — and lists the skills as
@@ -11,7 +12,8 @@
  *    project's and the user's own (probed on the installed build; `OPENCODE_CONFIG_CONTENT` was no option: its
  *    `skills` list REPLACES the project's). The folder is a bot-owned one in `DATA_DIR` whose `skills` links to the
  *    package's, because OpenCode writes files (`.gitignore`) into it — inside the package they would dirty a checkout
- *    the bot runs from.
+ *    the bot runs from. One server serves every topic, so only the INSTANCE value of the switch decides whether it gets the
+ *    folder; a server started the other way round is replaced at the boot step ({@link getOpenCodeAgentSkillsServerAction}).
  */
 
 import { execFile } from 'child_process';
@@ -59,15 +61,17 @@ let isOldClaudeAnnounced = false;
 
 /**
  * @description The Claude Code flags that load the bot's skills into an agent session: `--plugin-dir <folder>` — none
- * when the folder is missing, or when the CLI is older than the flag or its version cannot be read (announced once):
- * an unknown option would stop the launch itself.
+ * when the conversation has the skills switched off (`isBotSkillsEnabled`, read at every launch and resume), when the
+ * folder is missing, or when the CLI is older than the flag or its version cannot be read (announced once): an unknown
+ * option would stop the launch itself.
  */
 export async function getClaudeAgentPluginFlags(
   claudeBinary: string,
+  isBotSkillsEnabled: boolean,
   pluginDir: string | null = resolveAgentPluginDir(),
   readVersion: (binary: string) => Promise<string | null> = readClaudeCodeVersion,
 ): Promise<string[]> {
-  if (pluginDir === null) return [];
+  if (!isBotSkillsEnabled || pluginDir === null) return [];
   const version = await readVersion(claudeBinary);
   if (!checkIsClaudePluginDirSupported(version)) {
     if (!isOldClaudeAnnounced) {
@@ -120,10 +124,11 @@ let isOperatorConfigDirAnnounced = false;
 
 /**
  * @description What the `opencode serve` the bot starts gets on top of its environment: `OPENCODE_CONFIG_DIR` naming the
- * bot's folder — nothing when the operator set the variable (theirs is kept; announced once) or the folder cannot be
- * prepared.
+ * bot's folder — nothing when the instance has the skills switched off (`isBotSkillsEnabled`, the instance value), the
+ * operator set the variable (theirs is kept; announced once) or the folder cannot be prepared.
  */
-export function getOpenCodeAgentConfigEnv(env: NodeJS.ProcessEnv, dataDir: string): Record<string, string> {
+export function getOpenCodeAgentConfigEnv(env: NodeJS.ProcessEnv, dataDir: string, isBotSkillsEnabled: boolean): Record<string, string> {
+  if (!isBotSkillsEnabled) return {};
   if (env[openCodeConfigDirEnvName]) {
     if (!isOperatorConfigDirAnnounced) {
       isOperatorConfigDirAnnounced = true;
@@ -174,28 +179,42 @@ export function parseOpenCodeServerLaunch(cmdline: string, environ: string): Ope
 }
 
 /**
- * @description The folder a server must have been started with to offer the bot's skills — prepared here, so it is
- * the folder a new server WOULD get — or null when the bot offers none: the operator's own `OPENCODE_CONFIG_DIR`, no
- * plugin folder, or a folder that cannot be prepared. Then no server is ever replaced for the skills: its replacement
- * would come up without them too, and the next boot would replace it again.
+ * @name OpenCodeAgentSkillsExpectation
+ * @description What the boot step expects of the running server's launch: `unmanaged` — the bot offers no folder and never
+ * replaces a server for the skills (the operator's own `OPENCODE_CONFIG_DIR`, no plugin folder, a folder that cannot be
+ * prepared: a replacement would come up the same way and the next boot would replace it again); `offered` — the server must
+ * have been started with `configDir`; `withheld` — the instance switched the skills off, so the server must NOT carry the
+ * bot's `configDir`.
  */
-export function getExpectedOpenCodeAgentConfigDir(env: NodeJS.ProcessEnv, dataDir: string): string | null {
-  if (env[openCodeConfigDirEnvName]) return null;
-  return prepareOpenCodeAgentConfigDir(dataDir);
+export type OpenCodeAgentSkillsExpectation =
+  | { kind: 'unmanaged' }
+  | { kind: 'offered'; configDir: string }
+  | { kind: 'withheld'; configDir: string };
+
+/**
+ * @description The expectation for a server of the instance whose switch reads `isBotSkillsEnabled`. The folder an
+ * `offered` server must carry is prepared here, so it is the folder a new server WOULD get.
+ */
+export function getOpenCodeAgentSkillsExpectation(env: NodeJS.ProcessEnv, dataDir: string, isBotSkillsEnabled: boolean): OpenCodeAgentSkillsExpectation {
+  if (env[openCodeConfigDirEnvName]) return { kind: 'unmanaged' };
+  if (!isBotSkillsEnabled) return { kind: 'withheld', configDir: getOpenCodeAgentConfigDir(dataDir) };
+  const configDir = prepareOpenCodeAgentConfigDir(dataDir);
+  return configDir === null ? { kind: 'unmanaged' } : { kind: 'offered', configDir };
 }
 
 /**
  * @name OpenCodeAgentSkillsServerAction
- * @description What the boot step does about the running server: nothing (no server runs, it offers the skills, or
- * the bot offers none); replace it (an `opencode serve` the bot owns, started without the folder); or leave it and say why — a server
- * the bot does not own (locked decision D5: never touched), or a listener it cannot identify.
+ * @description What the boot step does about the running server: nothing (no server runs, it was started the way the
+ * switch says, or the bot manages nothing); replace it (an `opencode serve` the bot owns, started the other way); or leave
+ * it and say why — a server the bot does not own (locked decision D5: never touched), or a listener it cannot identify.
  */
 export type OpenCodeAgentSkillsServerAction = 'none' | 'replace' | 'skipNotOwned' | 'skipUnidentified';
 
-/** @description Decide the boot step's action from the server's launch and the folder the bot now offers. */
-export function getOpenCodeAgentSkillsServerAction(reading: OpenCodeServerLaunchReading, expectedConfigDir: string | null): OpenCodeAgentSkillsServerAction {
-  if (expectedConfigDir === null || reading.kind === 'none') return 'none';
+/** @description Decide the boot step's action from the server's launch and what the switch expects of it. */
+export function getOpenCodeAgentSkillsServerAction(reading: OpenCodeServerLaunchReading, expectation: OpenCodeAgentSkillsExpectation): OpenCodeAgentSkillsServerAction {
+  if (expectation.kind === 'unmanaged' || reading.kind === 'none') return 'none';
   if (reading.kind === 'unknown') return 'skipUnidentified';
-  if (reading.configDir === expectedConfigDir) return 'none';
+  const isCarryingBotFolder = reading.configDir === expectation.configDir;
+  if (isCarryingBotFolder === (expectation.kind === 'offered')) return 'none';
   return reading.isOwnedByBot ? 'replace' : 'skipNotOwned';
 }

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**The skills Charness gives its agents can now be switched off — for a whole instance with `"botSkills": "off"` in `settings.json`.**
+A deployment whose workspace instructions name skills of their own (a Jira-only instance, say) no longer has to live with the bot's
+`charness-manager` and delegate skills beside them, nor with the hint in the bot MCP's instructions to load the manager. With the switch off,
+a Claude conversation starts and resumes without the bot's skills folder, the hint is gone from its instructions (the worker-watch recipe in
+`schedule_create` stays: it is a tool fact, not a skill), and the OpenCode server — one server for every topic, so the instance value alone
+counts — is replaced at the bot's next start, once nothing works in it, by one started without the folder (turning it back on replaces it the
+same way). A running agent keeps its skills until its next start (the idle stop and resume, or a model change). Nothing set means ON, exactly
+as before; `settings.json` is read without a restart, a mistyped value is logged once as `[Settings] settings.json botSkills: …` and ON applies.
+
 **The tmux backend for Claude Code is now marked deprecated: it is frozen and no longer developed, and `/claude_mode` says so.**
 Before, nothing told you that, so you could pick a backend that gets no new features. The `/claude_mode` picker now shows it as
 «🖥 tmux (deprecated)» with a line pointing to the recommended json-stream backend, the same hint follows a switch to it, `/status`

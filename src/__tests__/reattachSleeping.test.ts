@@ -30,7 +30,7 @@ describe('reattach: json-stream (L4)', () => {
   });
 
   it('an adopted process with a stale tool list is only logged: no early stop, the idle lifecycle refreshes it', () => {
-    assert.match(reattachJsonStream, /checkIsAdoptedToolListStale\(\{ persistedDigest: agent\.mcpToolDigest, currentDigest: botMcpToolDigestReader\?\.\(key\.platform\) \?\? '' \}\)/);
+    assert.match(reattachJsonStream, /checkIsAdoptedToolListStale\(\{ persistedDigest: agent\.mcpToolDigest, currentDigest: botMcpToolDigestReader\?\.\(key\) \?\? '' \}\)/);
     assert.ok(reattachJsonStream.includes('adopted with a stale tool list; it gets the current tools when it resumes after its idle stop'));
     // Neither a stale tool list nor a changed account profile stops the adopted process early any more.
     assert.ok(!reattachJsonStream.includes("'the stale tool list'") && !reattachJsonStream.includes("'the account profile'"));
@@ -60,7 +60,7 @@ describe('reattach: json-stream (L4)', () => {
   it('every json-stream (re)start persists the digest of the tools it connected to', () => {
     const persist = botSource.slice(botSource.indexOf('async function persistSessionStart('), botSource.indexOf('\n}\n', botSource.indexOf('async function persistSessionStart(')));
     assert.ok(persist.includes('await persistAdapterSessionIds(key, adapter, state);'));
-    assert.ok(persist.includes('await state.setAgentMcpToolDigest(key, botMcpToolDigestReader(key.platform));'));
+    assert.ok(persist.includes('await state.setAgentMcpToolDigest(key, botMcpToolDigestReader(key));'));
     assert.equal(botSource.split('await persistAdapterSessionIds(').length - 1, 1, 'the helper is the only caller: no (re)start bypasses the digest');
   });
 });

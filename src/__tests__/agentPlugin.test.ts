@@ -15,7 +15,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   getClaudeAgentPluginFlags,
-  getExpectedOpenCodeAgentConfigDir,
+  getOpenCodeAgentSkillsExpectation,
   getOpenCodeAgentConfigDir,
   getOpenCodeAgentConfigEnv,
   getOpenCodeAgentSkillsServerAction,
@@ -36,13 +36,13 @@ describe('agentPlugin', () => {
 
   test('Claude Code gets --plugin-dir with that folder; nothing when it is missing, for a CLI older than the flag or of unreadable version', async () => {
     const reportVersion = (version: string | null) => async (): Promise<string | null> => version;
-    assert.deepEqual(await getClaudeAgentPluginFlags('claude', undefined, reportVersion('2.1.310 (Claude Code)')), ['--plugin-dir', repoAgentPluginDir]);
-    assert.deepEqual(await getClaudeAgentPluginFlags('claude', undefined, reportVersion('2.0.25 (Claude Code)')), ['--plugin-dir', repoAgentPluginDir], 'the first version with the flag');
+    assert.deepEqual(await getClaudeAgentPluginFlags('claude', true, undefined, reportVersion('2.1.310 (Claude Code)')), ['--plugin-dir', repoAgentPluginDir]);
+    assert.deepEqual(await getClaudeAgentPluginFlags('claude', true, undefined, reportVersion('2.0.25 (Claude Code)')), ['--plugin-dir', repoAgentPluginDir], 'the first version with the flag');
     const originalLog = console.log;
     console.log = () => {};
     try {
-      assert.deepEqual(await getClaudeAgentPluginFlags('claude', undefined, reportVersion('2.0.24 (Claude Code)')), [], 'it would exit «unknown option»');
-      assert.deepEqual(await getClaudeAgentPluginFlags('claude', undefined, reportVersion(null)), []);
+      assert.deepEqual(await getClaudeAgentPluginFlags('claude', true, undefined, reportVersion('2.0.24 (Claude Code)')), [], 'it would exit «unknown option»');
+      assert.deepEqual(await getClaudeAgentPluginFlags('claude', true, undefined, reportVersion(null)), []);
     } finally {
       console.log = originalLog;
     }
@@ -51,8 +51,19 @@ describe('agentPlugin', () => {
       isVersionRead = true;
       return '2.1.310 (Claude Code)';
     };
-    assert.deepEqual(await getClaudeAgentPluginFlags('claude', null, recordRead), []);
+    assert.deepEqual(await getClaudeAgentPluginFlags('claude', true, null, recordRead), []);
     assert.equal(isVersionRead, false, 'no folder, no version read');
+  });
+
+  test('a conversation with the bot\'s skills switched off gets no --plugin-dir, and the CLI is not even asked its version', async () => {
+    let isVersionRead = false;
+    const recordRead = async (): Promise<string | null> => {
+      isVersionRead = true;
+      return '2.1.310 (Claude Code)';
+    };
+    assert.deepEqual(await getClaudeAgentPluginFlags('claude', false, undefined, recordRead), []);
+    assert.equal(isVersionRead, false);
+    assert.deepEqual(await getClaudeAgentPluginFlags('claude', true, undefined, recordRead), ['--plugin-dir', repoAgentPluginDir], 'the same call with the skills on loads them');
   });
 
   test('the CLI version is read once per binary; a failed read is not remembered', async () => {
@@ -120,16 +131,23 @@ describe('the OpenCode config folder', () => {
   });
 
   test('the server gets OPENCODE_CONFIG_DIR with the folder; an operator\'s own variable is kept and nothing is added', () => {
-    assert.deepEqual(getOpenCodeAgentConfigEnv({}, dataDir), { [openCodeConfigDirEnvName]: getOpenCodeAgentConfigDir(dataDir) });
+    assert.deepEqual(getOpenCodeAgentConfigEnv({}, dataDir, true), { [openCodeConfigDirEnvName]: getOpenCodeAgentConfigDir(dataDir) });
     const originalLog = console.log;
     console.log = () => {};
     try {
-      assert.deepEqual(getOpenCodeAgentConfigEnv({ [openCodeConfigDirEnvName]: '/operator/own' }, dataDir), {});
+      assert.deepEqual(getOpenCodeAgentConfigEnv({ [openCodeConfigDirEnvName]: '/operator/own' }, dataDir, true), {});
     } finally {
       console.log = originalLog;
     }
-    assert.equal(getExpectedOpenCodeAgentConfigDir({ [openCodeConfigDirEnvName]: '/operator/own' }, dataDir), null);
-    assert.equal(getExpectedOpenCodeAgentConfigDir({}, dataDir), getOpenCodeAgentConfigDir(dataDir));
+    assert.deepEqual(getOpenCodeAgentSkillsExpectation({ [openCodeConfigDirEnvName]: '/operator/own' }, dataDir, true), { kind: 'unmanaged' });
+    assert.deepEqual(getOpenCodeAgentSkillsExpectation({}, dataDir, true), { kind: 'offered', configDir: getOpenCodeAgentConfigDir(dataDir) });
+  });
+
+  test('with the instance\'s skills switched off the server gets no folder, and none is prepared for it', () => {
+    assert.deepEqual(getOpenCodeAgentConfigEnv({}, dataDir, false), {});
+    assert.equal(fs.existsSync(getOpenCodeAgentConfigDir(dataDir)), false, 'nothing is linked for a server that is not to offer it');
+    assert.deepEqual(getOpenCodeAgentSkillsExpectation({}, dataDir, false), { kind: 'withheld', configDir: getOpenCodeAgentConfigDir(dataDir) });
+    assert.deepEqual(getOpenCodeAgentSkillsExpectation({ [openCodeConfigDirEnvName]: '/operator/own' }, dataDir, false), { kind: 'unmanaged' }, 'the operator\'s own variable is theirs either way');
   });
 
   test('a folder that cannot be prepared is no expected folder: no server is replaced for skills it would not get', () => {
@@ -137,7 +155,7 @@ describe('the OpenCode config folder', () => {
     const originalWarn = console.warn;
     console.warn = () => {};
     try {
-      assert.equal(getExpectedOpenCodeAgentConfigDir({}, dataDir), null);
+      assert.deepEqual(getOpenCodeAgentSkillsExpectation({}, dataDir, true), { kind: 'unmanaged' });
     } finally {
       console.warn = originalWarn;
     }
@@ -164,17 +182,30 @@ describe('reading a running server\'s launch', () => {
   });
 
   test('the boot step replaces only an opencode serve the bot owns, started without the folder it now offers', () => {
-    const expected = '/home/user/.charness/opencode-config';
+    const botFolder = '/home/user/.charness/opencode-config';
+    const offered = { kind: 'offered' as const, configDir: botFolder };
     const started = (configDir: string | null, isOwnedByBot = true) => ({ kind: 'openCodeServe' as const, configDir, isOwnedByBot });
-    assert.equal(getOpenCodeAgentSkillsServerAction(started(null), expected), 'replace');
-    assert.equal(getOpenCodeAgentSkillsServerAction(started('/old'), expected), 'replace');
-    assert.equal(getOpenCodeAgentSkillsServerAction(started(expected), expected), 'none');
-    assert.equal(getOpenCodeAgentSkillsServerAction(started(null, false), expected), 'skipNotOwned', 'D5: never a server the bot does not own');
-    assert.equal(getOpenCodeAgentSkillsServerAction(started(expected, false), expected), 'none', 'it already offers them');
-    assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'unknown' }, expected), 'skipUnidentified');
-    assert.equal(getOpenCodeAgentSkillsServerAction(started(null), null), 'none', 'the bot offers no folder');
-    assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'unknown' }, null), 'none');
-    assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'none' }, expected), 'none', 'no server listens: nothing to replace, nothing to say');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(null), offered), 'replace');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started('/old'), offered), 'replace');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(botFolder), offered), 'none');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(null, false), offered), 'skipNotOwned', 'D5: never a server the bot does not own');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(botFolder, false), offered), 'none', 'it already offers them');
+    assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'unknown' }, offered), 'skipUnidentified');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(null), { kind: 'unmanaged' }), 'none', 'the bot offers no folder');
+    assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'unknown' }, { kind: 'unmanaged' }), 'none');
+    assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'none' }, offered), 'none', 'no server listens: nothing to replace, nothing to say');
+  });
+
+  test('with the instance\'s skills off, the boot step replaces an owned server that carries the bot\'s folder — and only that', () => {
+    const botFolder = '/home/user/.charness/opencode-config';
+    const withheld = { kind: 'withheld' as const, configDir: botFolder };
+    const started = (configDir: string | null, isOwnedByBot = true) => ({ kind: 'openCodeServe' as const, configDir, isOwnedByBot });
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(botFolder), withheld), 'replace');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(null), withheld), 'none', 'it already offers nothing');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started('/operator/own'), withheld), 'none', 'a folder of the operator\'s is not the bot\'s to take away');
+    assert.equal(getOpenCodeAgentSkillsServerAction(started(botFolder, false), withheld), 'skipNotOwned', 'D5: never a server the bot does not own');
+    assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'unknown' }, withheld), 'skipUnidentified');
+    assert.equal(getOpenCodeAgentSkillsServerAction({ kind: 'none' }, withheld), 'none');
   });
 
   test('no listener PID found: `none` only when no server answers — an unreadable PID with a server answering stays `unknown`', () => {

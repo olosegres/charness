@@ -49,10 +49,11 @@ import {
   installOpenCodeCompactPlugin,
 } from '../utils/openCodeCompactPlugin';
 import {
-  getExpectedOpenCodeAgentConfigDir,
+  getOpenCodeAgentSkillsExpectation,
   getOpenCodeAgentSkillsServerAction,
   type OpenCodeServerLaunchReading,
 } from '../utils/agentPlugin';
+import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import {
   checkIsSimpleApiMethod,
   checkProviderHasAuthCatalogEntry,
@@ -3676,17 +3677,18 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   /**
    * @description Boot step for the skills the bot gives its agents (`utils/agentPlugin.ts`). OpenCode reads its
-   * `OPENCODE_CONFIG_DIR` once, at start, so a server started without the bot's folder — by an older bot, adopted ever
-   * since — never offers them. Such a server is replaced through the controlled restart that restores the sessions,
-   * but only when the bot owns it (its process record) AND `/proc` shows it is an `opencode … serve` (a server the bot
-   * does not own, or a listener it cannot identify, is left as is — one log line per process), the folder it would get is
-   * ready, and no session is working: a busy directory, or a status it cannot read, leaves it for the next boot.
-   * Best-effort, never rejects.
+   * `OPENCODE_CONFIG_DIR` once, at start, so a server started the other way than the instance's «Bot skills» switch says —
+   * without the bot's folder while the switch is ON (an older bot, adopted ever since; the switch turned on since), with it
+   * while the switch is OFF — keeps offering the wrong thing. Such a server is replaced through the controlled restart that
+   * restores the sessions, but only when the bot owns it (its process record) AND `/proc` shows it is an `opencode … serve`
+   * (a server the bot does not own, or a listener it cannot identify, is left as is — one log line per process), the folder
+   * it would get is ready, and no session is working: a busy directory, or a status it cannot read, leaves it for the next
+   * boot. Only the INSTANCE value counts: one server serves every topic. Best-effort, never rejects.
    */
   async activateAgentSkillsForServer(): Promise<void> {
     try {
-      const expectedConfigDir = getExpectedOpenCodeAgentConfigDir(process.env, resolveDataDir());
-      const action = getOpenCodeAgentSkillsServerAction(await this.serverRestartOps.readServerLaunch(), expectedConfigDir);
+      const expectation = getOpenCodeAgentSkillsExpectation(process.env, resolveDataDir(), checkIsBotSkillsEnabled(null));
+      const action = getOpenCodeAgentSkillsServerAction(await this.serverRestartOps.readServerLaunch(), expectation);
       if (action === 'skipNotOwned' || action === 'skipUnidentified') {
         if (!this.isAgentSkillsSkipAnnounced) {
           this.isAgentSkillsSkipAnnounced = true;
@@ -3696,11 +3698,12 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         return;
       }
       if (action === 'none') return;
+      const startedWith = expectation.kind === 'offered' ? `without the bot's skills` : `with the bot's skills, which the instance switched off`;
       if (!(await this.checkIsEveryActiveSessionIdle())) {
-        console.log(`[OpenCode] the server was started without the bot's skills; a session is working, the next boot retries`);
+        console.log(`[OpenCode] the server was started ${startedWith}; a session is working, the next boot retries`);
         return;
       }
-      console.log(`[OpenCode] the server was started without the bot's skills; replacing it`);
+      console.log(`[OpenCode] the server was started ${startedWith}; replacing it`);
       await this.restartServer(true);
     } catch (e) {
       console.warn(`[OpenCode] could not check the server for the bot's skills:`, e instanceof Error ? e.message : e);

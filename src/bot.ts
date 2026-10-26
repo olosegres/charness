@@ -291,7 +291,8 @@ import {
 } from './utils/claudeLivenessAction';
 import { formatIsoLocalOffset } from './utils/isoTimestamp';
 import { getThreadEffortView, setInstanceDefaultEffortReader, type ThreadEffortView } from './effortLevels';
-import { createInstanceDefaultEffortReader, createTodoSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath } from './instanceSettings';
+import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createTodoSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath } from './instanceSettings';
+import { checkIsBotSkillsEnabled, createBotSkillsReader, setBotSkillsReader } from './utils/botSkills';
 import { quietPeriodMs } from './selfUpdate/constants';
 import { getLaunchEnvironment } from './selfUpdate/launchEnvironment';
 import { createDefaultReexecDeps, reexecProcess } from './selfUpdate/restart';
@@ -1140,6 +1141,16 @@ function getTodoRegistry(): TodoRegistry {
   todoRegistry ??= createTodoRegistry({ store: new TodoStore(getDataDir()), getNowMs: Date.now });
   return todoRegistry;
 }
+
+/**
+ * The «Bot skills» switch (`/bot_skills`, `utils/botSkills.ts`): the topic's own choice, else General's value, else `settings.json`'s
+ * `botSkills` (re-read when the file changes), else ON. `state` is read when asked, so the reader is registered once it is loaded.
+ */
+const botSkillsReader = createBotSkillsReader({
+  getGeneralValue: () => state.getBotSkillsGlobalValue(),
+  getTopicOverride: (key) => state.getBotSkillsOverride(key),
+  getSettingsValue: createBotSkillsSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line)),
+});
 
 /** `settings.json`'s `todo` (on / off, the reminder's interval), re-read when the file changes. */
 const readTodoSettings = createTodoSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line));
@@ -4877,10 +4888,10 @@ export function getStartReadyMessage(
 }
 
 /**
- * The bot-MCP tool digest per platform, from the scheduler handle once it is wired
- * at boot; `null` before that (no digest is persisted, which reads as stale).
+ * The bot-MCP tool digest of a conversation (its platform's tools, its «Bot skills» instructions), from the scheduler handle
+ * once it is wired at boot; `null` before that (no digest is persisted, which reads as stale).
  */
-let botMcpToolDigestReader: ((platform: PlatformId) => string) | null = null;
+let botMcpToolDigestReader: ((key: SessionKey) => string) | null = null;
 
 /**
  * @description The conversation's last known Claude Code version (L-D10): the one
@@ -4919,7 +4930,7 @@ function getPerTurnRefusal(key: SessionKey): { version: string } | null {
 async function persistSessionStart(key: SessionKey, adapter: AgentAdapter): Promise<void> {
   await persistAdapterSessionIds(key, adapter, state);
   if (checkIsJsonStreamBackend(adapter.name) && botMcpToolDigestReader) {
-    await state.setAgentMcpToolDigest(key, botMcpToolDigestReader(key.platform));
+    await state.setAgentMcpToolDigest(key, botMcpToolDigestReader(key));
   }
 }
 
@@ -12469,7 +12480,7 @@ async function reattachExistingSessions(
               // A per-turn process that outlived the bot is stopped as soon as its turn (if any) ends (L5).
               stopAdoptedPerTurnSessionWhenIdle(key, ownerAdapter);
             }
-            if (checkIsAdoptedToolListStale({ persistedDigest: agent.mcpToolDigest, currentDigest: botMcpToolDigestReader?.(key.platform) ?? '' })) {
+            if (checkIsAdoptedToolListStale({ persistedDigest: agent.mcpToolDigest, currentDigest: botMcpToolDigestReader?.(key) ?? '' })) {
               console.log(`[reattach] ${keyToString(key)}: adopted with a stale tool list; it gets the current tools when it resumes after its idle stop`);
             }
             // The surviving process keeps the account it was spawned with. A switch the user picked while it worked is
@@ -13656,6 +13667,8 @@ export async function startBot(): Promise<void> {
   //     It starts polling once the sessions are restored.
   // Every Claude spawn from here on reads the conversation's account profile (`/account`).
   registerClaudeConfigDirReader(resolveThreadClaudeConfigDir);
+  // The «Bot skills» switch (`/bot_skills`): every agent start, the OpenCode server's start and the bot MCP's instructions read it.
+  setBotSkillsReader(botSkillsReader);
   registerClaudeRateLimitSink(onClaudeRateLimitEvent);
   registerClaudeTurnCostSink(onClaudeTurnCost);
   if (ENV.testTimings.openCodeServerUpBudgetMs !== undefined) registerOpenCodeServerUpBudgetMs(ENV.testTimings.openCodeServerUpBudgetMs);
@@ -13950,7 +13963,7 @@ export async function startBot(): Promise<void> {
   });
   // Known before any session starts or is adopted: every json-stream start persists the digest of the
   // tools it connected to, and the reattach compares an adopted process's against it (L4).
-  botMcpToolDigestReader = (platform) => schedulerMcpHandle.getToolDigest(platform);
+  botMcpToolDigestReader = (key) => schedulerMcpHandle.getToolDigest(key.platform, checkIsBotSkillsEnabled(key));
   const isSchedulerMcpStarted = await runSessionBootPhase({
     startBotMcp: () =>
       startSchedulerMcpForBoot({

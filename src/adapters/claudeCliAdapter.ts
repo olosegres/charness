@@ -41,6 +41,7 @@ import { prepareMcpFlags, cleanupMcpTempFiles } from '../mcpConfig';
 import { prepareClaudeCompactHookFlags } from '../utils/claudeCompactHook';
 import { getClaudePlatformFlags } from './claudePlatformFlags';
 import { getClaudeAgentPluginFlags } from '../utils/agentPlugin';
+import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import { resolveDataDir } from '../state';
 import { threadContextPreambleHeader } from '../threadContextPreamble';
 import { getSessionTitleCandidate } from '../utils/claudeSessionTitle';
@@ -3464,7 +3465,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       ...claudePermissionArgs,
       // Followed by an option on purpose: `--plugin-dir` takes several values on Claude Code 2.0.25–2.1.74, so the
       // free-text `args` at the end would otherwise be read as a second plugin folder.
-      ...(await getClaudeAgentPluginFlags(claudePath)),
+      ...(await getClaudeAgentPluginFlags(claudePath, checkIsBotSkillsEnabled(key))),
       '--session-id', claudeSessionId,
       ...mcpFlagsArr,
       ...prepareClaudeCompactHookFlags(resolveDataDir(), configDir),
@@ -4126,7 +4127,7 @@ export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
       ...getClaudePlatformFlags(key),
       ...claudePermissionArgs,
       // Followed by an option on purpose (see `startSession`): `--plugin-dir` takes several values on older CLIs.
-      ...(await getClaudeAgentPluginFlags(claudePath)),
+      ...(await getClaudeAgentPluginFlags(claudePath, checkIsBotSkillsEnabled(key))),
       '--resume', sessionId,
       ...mcpFlagsArr,
       ...prepareClaudeCompactHookFlags(resolveDataDir(), configDir),

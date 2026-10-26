@@ -1,6 +1,8 @@
 /**
  * @description `OpenCodeAdapter.activateAgentSkillsForServer` (bot-shipped skills, D5): an `opencode serve` the bot
- * OWNS, started without its skills folder, is replaced through the controlled restart — only when nothing works in it; a
+ * OWNS, started the other way than the INSTANCE value of the «Bot skills» switch says — without its skills folder while
+ * the switch is on, with it while the switch is off (a topic's own choice never counts: one server serves every topic) —
+ * is replaced through the controlled restart — only when nothing works in it; a
  * busy session, a busy or unreadable directory status, a server the bot does not own or a listener it cannot
  * identify (both said once in the log), a server that already has the folder, a folder that cannot be prepared (its
  * replacement would lack it too: a restart at every boot) and an operator's own `OPENCODE_CONFIG_DIR` all leave it.
@@ -17,6 +19,7 @@ import { OpenCodeAdapter, type OpenCodeServerRestartOps } from '../adapters/open
 import { keyToString } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { getOpenCodeAgentConfigDir, openCodeConfigDirEnvName, type OpenCodeServerLaunchReading } from '../utils/agentPlugin';
+import { setBotSkillsReader } from '../utils/botSkills';
 import { createOpenCodeSessionFixture } from './openCodeSessionFixture';
 import { useStubbedOpenCodeServer, type JsonValue } from './openCodeServerStub';
 
@@ -37,6 +40,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setBotSkillsReader(() => true);
   if (originalDataDir === undefined) delete process.env.DATA_DIR;
   else process.env.DATA_DIR = originalDataDir;
   if (originalConfigDir === undefined) delete process.env[openCodeConfigDirEnvName];
@@ -159,5 +163,54 @@ describe('activateAgentSkillsForServer', () => {
     const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: '/operator/own-old', isOwnedByBot: true } });
     await runQuietly(adapter);
     assert.deepEqual(forcedRestarts, []);
+  });
+
+  describe('with the instance\'s bot skills switched off', () => {
+    beforeEach(() => {
+      setBotSkillsReader(() => false);
+    });
+
+    it('replaces an idle server that still carries the bot\'s folder, once, forced', async () => {
+      const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: getOpenCodeAgentConfigDir(dataDir), isOwnedByBot: true } });
+      await runQuietly(adapter);
+      assert.deepEqual(forcedRestarts, [true]);
+    });
+
+    it('leaves a server that was started without it, and one started with an operator\'s own folder', async () => {
+      for (const configDir of [null, '/operator/own']) {
+        const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir, isOwnedByBot: true } });
+        await runQuietly(adapter);
+        assert.deepEqual(forcedRestarts, [], String(configDir));
+      }
+    });
+
+    it('prepares nothing for it: no folder appears in DATA_DIR', async () => {
+      const { adapter } = createAdapter({ launch: { kind: 'openCodeServe', configDir: null, isOwnedByBot: true } });
+      await runQuietly(adapter);
+      assert.equal(fs.existsSync(getOpenCodeAgentConfigDir(dataDir)), false);
+    });
+
+    it('waits for the next boot while a session works, and never touches a server the bot does not own', async () => {
+      const busy = createAdapter({ launch: { kind: 'openCodeServe', configDir: getOpenCodeAgentConfigDir(dataDir), isOwnedByBot: true }, isSessionBusy: true });
+      await runQuietly(busy.adapter);
+      assert.deepEqual(busy.forcedRestarts, []);
+      const foreign = createAdapter({ launch: { kind: 'openCodeServe', configDir: getOpenCodeAgentConfigDir(dataDir), isOwnedByBot: false } });
+      await runQuietly(foreign.adapter);
+      assert.deepEqual(foreign.forcedRestarts, []);
+    });
+
+    it('a topic that chose ON for itself keeps nothing: the server follows the instance value only', async () => {
+      setBotSkillsReader((key) => key !== null);
+      const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: getOpenCodeAgentConfigDir(dataDir), isOwnedByBot: true } });
+      await runQuietly(adapter);
+      assert.deepEqual(forcedRestarts, [true]);
+    });
+  });
+
+  it('with the instance ON, a topic that chose OFF for itself does not stop the replacement of a server started without the folder', async () => {
+    setBotSkillsReader((key) => key === null);
+    const { adapter, forcedRestarts } = createAdapter({ launch: { kind: 'openCodeServe', configDir: null, isOwnedByBot: true } });
+    await runQuietly(adapter);
+    assert.deepEqual(forcedRestarts, [true]);
   });
 });

@@ -174,29 +174,29 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
 
   it('is stable for one platform, differs between the Telegram and the neutral tool set, and is what the handle reports', () => {
     const deps = createDigestDeps();
-    const telegram = getBotMcpToolDigest(deps, 'telegram');
-    assert.equal(getBotMcpToolDigest(deps, 'telegram'), telegram, 'deterministic');
-    assert.notEqual(getBotMcpToolDigest(deps, 'jira'), telegram, 'an issue gets the two neutral tools only');
+    const telegram = getBotMcpToolDigest(deps, 'telegram', true);
+    assert.equal(getBotMcpToolDigest(deps, 'telegram', true), telegram, 'deterministic');
+    assert.notEqual(getBotMcpToolDigest(deps, 'jira', true), telegram, 'an issue gets the two neutral tools only');
     // The one difference from the neutral set: a Jira session's answer_request takes the comments it replies to.
-    assert.notEqual(getBotMcpToolDigest(deps, 'jira'), getBotMcpToolDigest(deps, null), 'a Jira session\'s answer_request has the reply field');
-    assert.equal(getBotMcpToolDigest(deps, 'test'), getBotMcpToolDigest(deps, null), 'any other platform gets the neutral set');
-    assert.equal(createSchedulerMcpServer(deps).getToolDigest('telegram'), telegram);
+    assert.notEqual(getBotMcpToolDigest(deps, 'jira', true), getBotMcpToolDigest(deps, null, true), 'a Jira session\'s answer_request has the reply field');
+    assert.equal(getBotMcpToolDigest(deps, 'test', true), getBotMcpToolDigest(deps, null, true), 'any other platform gets the neutral set');
+    assert.equal(createSchedulerMcpServer(deps).getToolDigest('telegram', true), telegram);
   });
 
   it('C10: with the Jira connector\'s attachment port a Jira session gets its own tool set — its digest differs from the neutral one, no other platform\'s moves', () => {
     const without = createDigestDeps();
     const withPort: SchedulerMcpDeps = { ...without, fetchJiraAttachment: async () => ({ ok: false, error: 'unused' }) };
-    assert.notEqual(getBotMcpToolDigest(withPort, 'jira'), getBotMcpToolDigest(without, 'jira'));
-    assert.notEqual(getBotMcpToolDigest(withPort, 'jira'), getBotMcpToolDigest(withPort, null));
-    assert.equal(getBotMcpToolDigest(withPort, 'telegram'), getBotMcpToolDigest(without, 'telegram'));
-    assert.equal(getBotMcpToolDigest(withPort, null), getBotMcpToolDigest(without, null));
+    assert.notEqual(getBotMcpToolDigest(withPort, 'jira', true), getBotMcpToolDigest(without, 'jira', true));
+    assert.notEqual(getBotMcpToolDigest(withPort, 'jira', true), getBotMcpToolDigest(withPort, null, true));
+    assert.equal(getBotMcpToolDigest(withPort, 'telegram', true), getBotMcpToolDigest(without, 'telegram', true));
+    assert.equal(getBotMcpToolDigest(withPort, null, true), getBotMcpToolDigest(without, null, true));
   });
 
   it('the claude_profiles port adds its tool on EVERY platform (a child process is launched the same way everywhere), so each digest moves', () => {
     const without = createDigestDeps();
     const withPort: SchedulerMcpDeps = { ...without, listClaudeProfiles: async (model) => ({ model, relevantBuckets: [], recommended: null, profiles: [] }) };
     for (const platform of ['telegram', 'jira', null] as const) {
-      assert.notEqual(getBotMcpToolDigest(withPort, platform), getBotMcpToolDigest(without, platform), `${platform ?? 'neutral'} digest`);
+      assert.notEqual(getBotMcpToolDigest(withPort, platform, true), getBotMcpToolDigest(without, platform, true), `${platform ?? 'neutral'} digest`);
     }
   });
 
@@ -211,7 +211,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
 
   it('a tracker conversation is pointed at the manager skill but gets no scheduling recipe — it has no scheduling tools', () => {
     for (const platform of ['jira', null] as const) {
-      const instructions = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: false, isTodoToolOffered: false });
+      const instructions = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: false, isTodoToolOffered: false }, true);
       assert.ok(instructions.includes('`charness-manager`'), `${platform ?? 'neutral'}`);
       assert.ok(!instructions.includes(workerWatchCheckCommand), `${platform ?? 'neutral'}`);
       assert.doesNotMatch(instructions, /schedule_create/);

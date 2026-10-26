@@ -90,6 +90,8 @@ per-backend controls are optional methods the bot checks before calling.
   session gets `charness-manager` + the two delegate skills — Claude through `--plugin-dir` on every launch path,
   OpenCode through the server's `OPENCODE_CONFIG_DIR` (a `DATA_DIR` folder linking to the skills). Folder = frontmatter
   `name` = `charness-<role>`: OpenCode has no namespaces, an unprefixed name replaces a project's own skill there.
+  The «Bot skills» switch (`/bot_skills`; topic → General → `settings.json` `botSkills` → ON, `utils/botSkills.ts`) turns them, and
+  the bot MCP's hint to load the manager, off per Claude conversation; the one OpenCode server follows the instance value only.
 - **Scheduler** (`src/scheduler/`). `/schedule` hands free text to the agent, which calls `schedule_*`;
   `/reminders` is the bot-local twin (buttons only, the bot posts and pins itself, no agent, works in ANY
   topic, unbound/General included). One `schedules` store, split by `deliveryKind`. A `checkCommand` job is
