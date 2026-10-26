@@ -77,7 +77,8 @@ export const frDict: Record<string, string> = {
     '/quitall — arrêter tous les agents en cours\n' +
     '/stt — réglages de la reconnaissance vocale\n' +
     '/update — mises à jour du bot : automatiques, notifier seulement, désactivées\n' +
-    '/bot_skills — skills du bot pour les agents : activer / désactiver\n' +
+    '/bot\\_skills — skills du bot pour les agents : activer / désactiver\n' +
+    '/task\\_agents — combien d’agents de tâches du tracker peuvent travailler en même temps\n' +
     '/todo — les listes de tâches des agents de chaque projet ; leurs réglages\n' +
     '/topic — ouvrir un autre fil sur un dossier\n' +
     '/whoami /version — débogage\n\n' +
@@ -512,6 +513,19 @@ export const frDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Skills du bot : {state} pour TOUS les sujets (le choix propre d’un sujet continue de s’appliquer). Un agent en cours garde ses skills jusqu’à son prochain démarrage ; le serveur OpenCode appliquera la valeur au prochain démarrage du bot.',
   'botSkills.setTopicConfirmation': '✅ Skills du bot : {state} pour ce sujet.',
   'botSkills.followGeneralConfirmation': '✅ Les skills du bot suivent de nouveau General dans ce sujet : {state}.',
+  'taskAgents.noLimitValue': 'sans limite',
+  'taskAgents.title': '🧵 Agents de tâches en même temps, pour tout le bot : {value} — {source}',
+  'taskAgents.sourceGeneral': 'défini dans General',
+  'taskAgents.sourceSettingsFile': 'depuis settings.json',
+  'taskAgents.sourceBuiltIn': 'la valeur par défaut',
+  'taskAgents.explanationText': 'Le nombre maximal d’agents qui peuvent travailler en même temps sur des tâches du tracker (tickets Jira). Une tâche au-delà de la limite attend dans une file unique et démarre toute seule quand un agent rend sa tâche. Les réponses aux mentions ne comptent pas.',
+  'taskAgents.statusText': 'Maintenant : {running} au travail, {waiting} en attente d’une place libre.',
+  'taskAgents.manualEntryText': 'Choisissez un nombre ci-dessous, ou envoyez cette commande suivie d’un autre nombre (0 signifie sans limite).',
+  'taskAgents.topicNote': 'C’est une seule limite pour tout le bot — elle se change dans General.',
+  'taskAgents.noLimitButton': 'Sans limite',
+  'taskAgents.setConfirmation': '✅ Agents de tâches en même temps : {value}, pour tout le bot. Les agents déjà au travail ne sont pas arrêtés ; une limite plus basse retient les tâches suivantes.',
+  'taskAgents.invalidArgumentText': '⚠️ Envoyez un nombre entier de 0 à {max} (0 ou off : sans limite).',
+  'taskAgents.generalOnlyText': '⚠️ La limite est unique pour tout le bot — changez-la dans General.',
 
   'autoContinueLimits.on': 'ACTIVÉ',
   'autoContinueLimits.off': 'DÉSACTIVÉ',

@@ -83,7 +83,8 @@ export const ukDict: Record<string, string> = {
     '/quitall — завершити всіх агентів\n' +
     '/stt — налаштування розпізнавання голосу\n' +
     '/update — оновлення бота: автоматично, лише сповіщати, вимк\n' +
-    '/bot_skills — скіли бота для агентів: увімк / вимк\n' +
+    '/bot\\_skills — скіли бота для агентів: увімк / вимк\n' +
+    '/task\\_agents — скільки агентів за задачами трекера можуть працювати одночасно\n' +
     '/todo — списки завдань агентів усіх проєктів; їхні налаштування\n' +
     '/topic — відкрити ще один тред на папці\n' +
     '/whoami /version — debug\n\n' +
@@ -518,6 +519,19 @@ export const ukDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Скіли бота: {state} для ВСІХ топіків (власний вибір топіка й далі діє). Працюючий агент зберігає свої скіли до наступного запуску; сервер OpenCode застосує значення під час наступного запуску бота.',
   'botSkills.setTopicConfirmation': '✅ Скіли бота: {state} для цього топіка.',
   'botSkills.followGeneralConfirmation': '✅ Скіли бота в цьому топіку знову як у General: {state}.',
+  'taskAgents.noLimitValue': 'без обмеження',
+  'taskAgents.title': '🧵 Агентів за задачами одночасно, на весь бот: {value} — {source}',
+  'taskAgents.sourceGeneral': 'задано в General',
+  'taskAgents.sourceSettingsFile': 'з settings.json',
+  'taskAgents.sourceBuiltIn': 'типове значення',
+  'taskAgents.explanationText': 'Найбільша кількість агентів, які можуть одночасно працювати над задачами трекера (задачі Jira). Задача понад ліміт чекає в одній спільній черзі й стартує сама, коли якийсь агент поверне свою задачу. Відповіді на згадки не рахуються.',
+  'taskAgents.statusText': 'Зараз: {running} працюють, {waiting} чекають на вільне місце.',
+  'taskAgents.manualEntryText': 'Оберіть число нижче або надішліть цю команду з іншим числом після неї (0 — без обмеження).',
+  'taskAgents.topicNote': 'Ліміт один на весь бот — змінюється в General.',
+  'taskAgents.noLimitButton': 'Без обмеження',
+  'taskAgents.setConfirmation': '✅ Агентів за задачами одночасно: {value}, на весь бот. Агенти, що вже працюють, не зупиняються; менший ліміт притримає наступні задачі.',
+  'taskAgents.invalidArgumentText': '⚠️ Надішліть ціле число від 0 до {max} (0 або off — без обмеження).',
+  'taskAgents.generalOnlyText': '⚠️ Ліміт один на весь бот — змінюйте його в General.',
 
   'autoContinueLimits.on': 'УВІМК',
   'autoContinueLimits.off': 'ВИМК',

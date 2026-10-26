@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**`/task_agents` in General sets how many task agents may work at once — a number from the picker or any number you type.**
+It opens a one-shot picker (5 / 10 / 15 / 20 / 30 / No limit, the value in force marked ✓) whose tap turns it into its confirmation;
+`/task_agents 12` sets any whole number from 1 to 100, and `0` or `off` means no limit (a number over 100, a decimal or a word is refused with the
+range). The screen names where the value comes from — set in General, `settings.json`, or the built-in default — and, on an instance that serves
+Jira, how many agents work now and how many wait. General's own value beats `settings.json`'s once it is set; in a topic the command only reports
+the value and says it is changed in General. The texts are in all 12 languages. General's `/help` also names it, and escapes the underscores of
+its command names, so a pair of them can no longer be read as italics.
+
 **The agents that work on Jira issues now run under ONE cap for the whole bot — 5 at once by default — and an issue over it waits in a queue and starts by itself.**
 Before, every issue handed to the AI account started its agent at once, with nothing limiting how many ran together. Now the number of
 tracker task agents working at the same time is capped for all projects together: `"taskAgents": { "maxConcurrent": 5 }` in

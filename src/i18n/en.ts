@@ -81,7 +81,8 @@ export const enDict: Record<string, string> = {
     '/quitall — quit every running agent\n' +
     '/stt — voice recognition settings\n' +
     '/update — bot updates: automatic, notify only, off\n' +
-    '/bot_skills — the bot\'s own skills for agents: on / off\n' +
+    '/bot\\_skills — the bot\'s own skills for agents: on / off\n' +
+    '/task\\_agents — how many tracker task agents may work at once\n' +
     '/todo — the agents\' todo lists of every project; their settings\n' +
     '/topic — open another topic on a folder\n' +
     '/whoami /version — debug\n\n' +
@@ -523,6 +524,19 @@ export const enDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Bot skills: {state} for ALL topics (a topic\'s own choice still applies). A running agent keeps its skills until its next start; OpenCode\'s server follows at the bot\'s next start.',
   'botSkills.setTopicConfirmation': '✅ Bot skills: {state} for this topic.',
   'botSkills.followGeneralConfirmation': '✅ Bot skills in this topic follow General again: {state}.',
+  'taskAgents.noLimitValue': 'no limit',
+  'taskAgents.title': '🧵 Task agents working at once, for the whole bot: {value} — {source}',
+  'taskAgents.sourceGeneral': 'set in General',
+  'taskAgents.sourceSettingsFile': 'from settings.json',
+  'taskAgents.sourceBuiltIn': 'the built-in default',
+  'taskAgents.explanationText': 'The most agents that may work on tracker tasks (Jira issues) at once. A task over the limit waits in one queue and starts by itself when an agent hands its task back. Replies to mentions do not count.',
+  'taskAgents.statusText': 'Now: {running} working, {waiting} waiting for a free slot.',
+  'taskAgents.manualEntryText': 'Pick a number below, or send this command with another number after it (0 means no limit).',
+  'taskAgents.topicNote': 'It is one limit for the whole bot — change it in General.',
+  'taskAgents.noLimitButton': 'No limit',
+  'taskAgents.setConfirmation': '✅ Task agents at once: {value}, for the whole bot. Agents already working are not stopped; a lower limit holds back the tasks that come next.',
+  'taskAgents.invalidArgumentText': '⚠️ Send a whole number from 0 to {max} (0 or off — no limit).',
+  'taskAgents.generalOnlyText': '⚠️ The limit is one for the whole bot — change it in General.',
 
   'autoContinueLimits.on': 'ON',
   'autoContinueLimits.off': 'OFF',

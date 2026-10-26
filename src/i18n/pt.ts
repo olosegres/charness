@@ -77,7 +77,8 @@ export const ptDict: Record<string, string> = {
     '/quitall — parar todos os agentes em execução\n' +
     '/stt — configurações de reconhecimento de voz\n' +
     '/update — atualizações do bot: automáticas, só avisar, desligadas\n' +
-    '/bot_skills — skills do bot para os agentes: ligar / desligar\n' +
+    '/bot\\_skills — skills do bot para os agentes: ligar / desligar\n' +
+    '/task\\_agents — quantos agentes de tarefas do tracker podem trabalhar ao mesmo tempo\n' +
     '/todo — as listas de tarefas dos agentes de cada projeto; suas configurações\n' +
     '/topic — abrir outro tópico numa pasta\n' +
     '/whoami /version — depuração\n\n' +
@@ -512,6 +513,19 @@ export const ptDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Skills do bot: {state} para TODOS os tópicos (a escolha própria de cada tópico continua a aplicar-se). Um agente em execução mantém os seus skills até ao próximo arranque; o servidor do OpenCode aplica o valor no próximo arranque do bot.',
   'botSkills.setTopicConfirmation': '✅ Skills do bot: {state} para este tópico.',
   'botSkills.followGeneralConfirmation': '✅ Os skills do bot neste tópico voltam a seguir General: {state}.',
+  'taskAgents.noLimitValue': 'sem limite',
+  'taskAgents.title': '🧵 Agentes de tarefas trabalhando ao mesmo tempo, em todo o bot: {value} — {source}',
+  'taskAgents.sourceGeneral': 'definido em General',
+  'taskAgents.sourceSettingsFile': 'de settings.json',
+  'taskAgents.sourceBuiltIn': 'o padrão embutido',
+  'taskAgents.explanationText': 'O máximo de agentes que podem trabalhar ao mesmo tempo em tarefas do tracker (issues do Jira). Uma tarefa acima do limite espera em uma única fila e começa sozinha quando um agente devolve a sua tarefa. Respostas a menções não contam.',
+  'taskAgents.statusText': 'Agora: {running} trabalhando, {waiting} esperando uma vaga livre.',
+  'taskAgents.manualEntryText': 'Escolha um número abaixo ou envie este comando com outro número depois (0 significa sem limite).',
+  'taskAgents.topicNote': 'É um único limite para todo o bot — altere em General.',
+  'taskAgents.noLimitButton': 'Sem limite',
+  'taskAgents.setConfirmation': '✅ Agentes de tarefas ao mesmo tempo: {value}, em todo o bot. Os agentes que já trabalham não são interrompidos; um limite menor segura as próximas tarefas.',
+  'taskAgents.invalidArgumentText': '⚠️ Envie um número inteiro de 0 a {max} (0 ou off — sem limite).',
+  'taskAgents.generalOnlyText': '⚠️ O limite é único para todo o bot — altere em General.',
 
   'autoContinueLimits.on': 'LIGADO',
   'autoContinueLimits.off': 'DESLIGADO',

@@ -77,7 +77,8 @@ export const uzDict: Record<string, string> = {
     '/quitall — har bir ishlayotgan agentni to‘xtating\n' +
     '/stt — ovozni aniqlash sozlamalari\n' +
     '/update — bot yangilanishlari: avtomatik, faqat xabar, o‘chiq\n' +
-    '/bot_skills — botning agentlar uchun skills’lari: yoqish / o‘chirish\n' +
+    '/bot\\_skills — botning agentlar uchun skills’lari: yoqish / o‘chirish\n' +
+    '/task\\_agents — tracker vazifalari bo‘yicha nechta agent bir vaqtda ishlashi mumkin\n' +
     '/todo — barcha loyihalar agentlarining vazifa ro\'yxatlari; ularning sozlamalari\n' +
     '/topic — papkada yana bitta mavzu ochish\n' +
     '/whoami /version — debugging\n\n' +
@@ -512,6 +513,19 @@ export const uzDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ Botning skills’lari: BARCHA mavzular uchun {state} (mavzuning o‘z tanlovi kuchda qoladi). Ishlayotgan agent o‘z skills’ini keyingi ishga tushishigacha saqlaydi; OpenCode serveri qiymatni botning keyingi ishga tushishida qo‘llaydi.',
   'botSkills.setTopicConfirmation': '✅ Botning skills’lari: bu mavzu uchun {state}.',
   'botSkills.followGeneralConfirmation': '✅ Botning skills’lari bu mavzuda yana General’ga ergashadi: {state}.',
+  'taskAgents.noLimitValue': 'cheklovsiz',
+  'taskAgents.title': '🧵 Bir vaqtda ishlaydigan vazifa agentlari, butun bot uchun: {value} — {source}',
+  'taskAgents.sourceGeneral': 'General’da belgilangan',
+  'taskAgents.sourceSettingsFile': 'settings.json’dan',
+  'taskAgents.sourceBuiltIn': 'o‘rnatilgan standart',
+  'taskAgents.explanationText': 'Tracker vazifalari (Jira issue’lari) ustida bir vaqtda ishlashi mumkin bo‘lgan agentlarning eng ko‘p soni. Limitdan oshgan vazifa bitta umumiy navbatda kutadi va biror agent o‘z vazifasini qaytarishi bilan o‘zi boshlanadi. Eslatmalarga javoblar hisobga olinmaydi.',
+  'taskAgents.statusText': 'Hozir: {running} ta ishlayapti, {waiting} ta bo‘sh joyni kutyapti.',
+  'taskAgents.manualEntryText': 'Quyidan raqamni tanlang yoki shu buyruqni boshqa raqam bilan birga yuboring (0 — cheklovsiz).',
+  'taskAgents.topicNote': 'Bu butun bot uchun yagona limit — uni General’da o‘zgartiring.',
+  'taskAgents.noLimitButton': 'Cheklovsiz',
+  'taskAgents.setConfirmation': '✅ Bir vaqtda ishlaydigan vazifa agentlari: {value}, butun bot uchun. Allaqachon ishlayotgan agentlar to‘xtatilmaydi; pastroq limit keyingi vazifalarni ushlab turadi.',
+  'taskAgents.invalidArgumentText': '⚠️ 0 dan {max} gacha butun son yuboring (0 yoki off — cheklovsiz).',
+  'taskAgents.generalOnlyText': '⚠️ Limit butun bot uchun yagona — uni General’da o‘zgartiring.',
 
   'autoContinueLimits.on': 'YONIQ',
   'autoContinueLimits.off': 'O‘CHIQ',

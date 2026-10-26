@@ -77,7 +77,8 @@ export const kaDict: Record<string, string> = {
     '/quitall — ყველა მომუშავე აგენტის გამორთვა\n' +
     '/stt — ხმის ამოცნობის პარამეტრები\n' +
     '/update — ბოტის განახლებები: ავტომატური, მხოლოდ შეტყობინება, გამორთული\n' +
-    '/bot_skills — ბოტის skills აგენტებისთვის: ჩართვა / გამორთვა\n' +
+    '/bot\\_skills — ბოტის skills აგენტებისთვის: ჩართვა / გამორთვა\n' +
+    '/task\\_agents — რამდენ ტრეკერის ამოცანის აგენტს შეუძლია ერთდროულად მუშაობა\n' +
     '/todo — ყველა პროექტის აგენტების ამოცანების სიები; მათი პარამეტრები\n' +
     '/topic — კიდევ ერთი თემის გახსნა საქაღალდეზე\n' +
     '/whoami /version — გამართვა\n\n' +
@@ -512,6 +513,19 @@ export const kaDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ ბოტის skills: {state} ყველა თემისთვის (თემის საკუთარი არჩევანი კვლავ მოქმედებს). მომუშავე აგენტი თავის skills-ს შეინარჩუნებს შემდეგ გაშვებამდე; OpenCode-ის სერვერი ამ მნიშვნელობას ბოტის შემდეგ გაშვებაზე გამოიყენებს.',
   'botSkills.setTopicConfirmation': '✅ ბოტის skills: {state} ამ თემისთვის.',
   'botSkills.followGeneralConfirmation': '✅ ბოტის skills ამ თემაში ისევ General-ს მიჰყვება: {state}.',
+  'taskAgents.noLimitValue': 'შეზღუდვის გარეშე',
+  'taskAgents.title': '🧵 ერთდროულად მომუშავე ამოცანის აგენტები მთელ ბოტზე: {value} — {source}',
+  'taskAgents.sourceGeneral': 'დაყენებულია General-ში',
+  'taskAgents.sourceSettingsFile': 'settings.json-იდან',
+  'taskAgents.sourceBuiltIn': 'ჩაშენებული ნაგულისხმევი',
+  'taskAgents.explanationText': 'აგენტების მაქსიმალური რაოდენობა, რომელსაც შეუძლია ერთდროულად იმუშაოს ტრეკერის ამოცანებზე (Jira-ს issue-ები). ლიმიტს გადაჭარბებული ამოცანა ერთ საერთო რიგში ელოდება და თავისით იწყება, როცა რომელიმე აგენტი თავის ამოცანას დააბრუნებს. ხსენებებზე პასუხები არ ითვლება.',
+  'taskAgents.statusText': 'ახლა: {running} მუშაობს, {waiting} თავისუფალ ადგილს ელოდება.',
+  'taskAgents.manualEntryText': 'აირჩიეთ რიცხვი ქვემოდან ან გამოაგზავნეთ ეს ბრძანება სხვა რიცხვით (0 ნიშნავს შეზღუდვის გარეშე).',
+  'taskAgents.topicNote': 'ეს ერთი ლიმიტია მთელ ბოტზე — იცვლება General-ში.',
+  'taskAgents.noLimitButton': 'შეზღუდვის გარეშე',
+  'taskAgents.setConfirmation': '✅ ერთდროულად მომუშავე ამოცანის აგენტები: {value}, მთელ ბოტზე. უკვე მომუშავე აგენტები არ ჩერდება; უფრო დაბალი ლიმიტი მომდევნო ამოცანებს აჩერებს.',
+  'taskAgents.invalidArgumentText': '⚠️ გამოაგზავნეთ მთელი რიცხვი 0-დან {max}-მდე (0 ან off — შეზღუდვის გარეშე).',
+  'taskAgents.generalOnlyText': '⚠️ ლიმიტი ერთია მთელ ბოტზე — შეცვალეთ General-ში.',
 
   'autoContinueLimits.on': 'ჩართ.',
   'autoContinueLimits.off': 'გამორთ.',

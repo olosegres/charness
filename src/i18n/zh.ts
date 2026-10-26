@@ -77,7 +77,8 @@ export const zhDict: Record<string, string> = {
     '/quitall — 退出所有运行中的代理\n' +
     '/stt — 语音识别设置\n' +
     '/update — 机器人更新：自动、仅通知、关闭\n' +
-    '/bot_skills — 机器人提供给智能体的技能：开启 / 关闭\n' +
+    '/bot\\_skills — 机器人提供给智能体的技能：开启 / 关闭\n' +
+    '/task\\_agents — 可同时工作的跟踪器任务智能体数量\n' +
     '/todo — 所有项目中智能体的任务列表及其设置\n' +
     '/topic — 在某个文件夹上再开一个话题\n' +
     '/whoami /version — 调试\n\n' +
@@ -512,6 +513,19 @@ export const zhDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ 机器人技能：所有话题 {state}（各话题的单独设置仍然有效）。正在运行的智能体会保留其 skills，直到下次启动；OpenCode 服务器会在机器人下次启动时采用该值。',
   'botSkills.setTopicConfirmation': '✅ 机器人技能：本话题 {state}。',
   'botSkills.followGeneralConfirmation': '✅ 本话题的机器人技能再次与 General 一致：{state}。',
+  'taskAgents.noLimitValue': '不限',
+  'taskAgents.title': '🧵 同时工作的任务智能体数量（整个机器人）：{value} — {source}',
+  'taskAgents.sourceGeneral': '在 General 中设置',
+  'taskAgents.sourceSettingsFile': '来自 settings.json',
+  'taskAgents.sourceBuiltIn': '内置默认值',
+  'taskAgents.explanationText': '可同时处理跟踪器任务（Jira 工单）的智能体上限。超出上限的任务在同一个队列中等待，某个智能体交回任务后会自动开始。对提及的回复不计入。',
+  'taskAgents.statusText': '当前：{running} 个在工作，{waiting} 个在等待空位。',
+  'taskAgents.manualEntryText': '请在下方选择数字，或发送此命令并在后面加上其他数字（0 表示不限）。',
+  'taskAgents.topicNote': '这是整个机器人共用的一个上限——请在 General 中修改。',
+  'taskAgents.noLimitButton': '不限',
+  'taskAgents.setConfirmation': '✅ 同时工作的任务智能体：{value}（整个机器人）。已在工作的智能体不会被停止；调低上限只会让之后的任务排队等待。',
+  'taskAgents.invalidArgumentText': '⚠️ 请发送 0 到 {max} 之间的整数（0 或 off 表示不限）。',
+  'taskAgents.generalOnlyText': '⚠️ 上限是整个机器人共用的——请在 General 中修改。',
 
   'autoContinueLimits.on': '开',
   'autoContinueLimits.off': '关',

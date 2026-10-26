@@ -5,10 +5,11 @@ passes a `SessionKey` and gets a decision.
 
 ## The cap (`taskAgentLimit.ts`)
 
-`settings.json` `taskAgents.maxConcurrent` sets how many tracker conversations may work on a hand-over at once, for the WHOLE bot. One value,
-read in this order, the first that is set wins: General's value (`state.json` `taskAgentsMaxConcurrent`, written from General), `settings.json`,
-the built-in default `5`. `0` = no limit (a value, not «never chose»); a typed or hand-edited number is a whole number up to
-`taskAgentsMaxConcurrentUpperBound` (100). The cap is read at every question, so a change applies at the next hand-over with no restart.
+`/task_agents` (General) and `settings.json` `taskAgents.maxConcurrent` set how many tracker conversations may work on a hand-over at
+once, for the WHOLE bot. One value, read in this order, the first that is set wins: General's value (`state.json`
+`taskAgentsMaxConcurrent`), `settings.json`, the built-in default `5`. `0` = no limit (a value, not «never chose»); a typed or hand-edited
+number is a whole number up to `taskAgentsMaxConcurrentUpperBound` (100). The cap is read at every question, so a change applies at the
+next hand-over with no restart.
 
 ## The slots and the wait list (`taskAgentSlots.ts`)
 
@@ -28,4 +29,5 @@ the built-in default `5`. `0` = no limit (a value, not «never chose»); a typed
   somebody waits; a connector polls at once instead of at its next interval. A hand-over merely replaced by a newer one of its conversation
   frees nothing.
 
-Wired in `bot.ts` once the request ledger is loaded; the Jira side is `connectors/jira/README.md` («The cap on task agents»).
+Wired in `bot.ts` once the request ledger is loaded; the Jira side is `connectors/jira/README.md` («The cap on task agents»), the screen
+`connectors/telegram/commands/README.md` (`taskAgents.ts`).

@@ -77,7 +77,8 @@ export const jaDict: Record<string, string> = {
     '/quitall — 実行中の全エージェントを終了\n' +
     '/stt — 音声認識の設定\n' +
     '/update — ボットの更新：自動、通知のみ、オフ\n' +
-    '/bot_skills — エージェント向けボットのスキル：オン / オフ\n' +
+    '/bot\\_skills — エージェント向けボットのスキル：オン / オフ\n' +
+    '/task\\_agents — トラッカーのタスクエージェントを同時に動かせる数\n' +
     '/todo — 全プロジェクトのエージェントのタスクリストと設定\n' +
     '/topic — フォルダ上に別のトピックを開く\n' +
     '/whoami /version — デバッグ\n\n' +
@@ -512,6 +513,19 @@ export const jaDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ ボットのスキル: すべてのトピックで {state}（トピックごとの選択は引き続き有効）。実行中のエージェントは次の起動まで自分のスキルを保ちます。OpenCode のサーバーはボットの次の起動時にこの値に従います。',
   'botSkills.setTopicConfirmation': '✅ ボットのスキル: このトピックで {state}。',
   'botSkills.followGeneralConfirmation': '✅ このトピックのボットのスキルは再び General に従います：{state}。',
+  'taskAgents.noLimitValue': '無制限',
+  'taskAgents.title': '🧵 同時に動くタスクエージェント（ボット全体）：{value} — {source}',
+  'taskAgents.sourceGeneral': 'General で設定',
+  'taskAgents.sourceSettingsFile': 'settings.json から',
+  'taskAgents.sourceBuiltIn': '組み込みの既定値',
+  'taskAgents.explanationText': 'トラッカーのタスク（Jira の課題）に同時に取り組めるエージェントの最大数です。上限を超えたタスクは 1 つの待ち行列で待ち、エージェントがタスクを返すと自動的に始まります。メンションへの返信は数えません。',
+  'taskAgents.statusText': '現在：{running} 件が作業中、{waiting} 件が空きを待っています。',
+  'taskAgents.manualEntryText': '下の数字を選ぶか、このコマンドの後ろに別の数字を付けて送ってください（0 は無制限）。',
+  'taskAgents.topicNote': '上限はボット全体で 1 つです。変更は General で行います。',
+  'taskAgents.noLimitButton': '無制限',
+  'taskAgents.setConfirmation': '✅ 同時に動くタスクエージェント：{value}（ボット全体）。すでに作業中のエージェントは止まりません。上限を下げると、次のタスクが待たされます。',
+  'taskAgents.invalidArgumentText': '⚠️ 0 から {max} までの整数を送ってください（0 または off で無制限）。',
+  'taskAgents.generalOnlyText': '⚠️ 上限はボット全体で 1 つです。General で変更してください。',
 
   'autoContinueLimits.on': 'オン',
   'autoContinueLimits.off': 'オフ',

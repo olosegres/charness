@@ -147,6 +147,18 @@ confirmations carry the OpenCode note INSTEAD of the Claude agent's «keeps its 
 stay (one server serves every topic), the hint changes only when the OpenCode server next restarts, and the OpenCode topics of
 the folder share it. The screen's text names no slash command (Telegram auto-links one, and a tap would run it).
 
+## `taskAgents.ts`
+
+`/task_agents` and the buttons `tka_5` / `tka_10` / `tka_15` / `tka_20` / `tka_30` / `tka_0`: the cap on tracker task agents (`trackers/` holds
+the precedence and the slots). ONE value for the whole bot, so it is changed in General only — the callback data IS the number, so an old
+keyboard can only set a number it shows. In General the screen reports the value in force and its source (General's own value, `settings.json`'s
+seed, the built-in default), what the cap limits, the slots in use (only on an instance that serves a tracker: the `readTaskAgentStatus` port is
+`null` otherwise) and how to type another number; the picker is a ONE-SHOT picker (a tap writes `setTaskAgentsMaxConcurrentGlobalValue` and EDITS the
+message into its confirmation) with ✓ on the number in force (a number typed by hand is on no button, so none is marked). The typed form takes digits
+only, `0` or `off` for no limit, up to the bound; anything else is refused with the range and changes nothing. In a topic the screen only reports
+the value and says it is changed in General; a typed number or an old picker's tap there is refused. Not gated on an adapter or a session. The text
+names no slash command (Telegram would auto-link it).
+
 ## `backendSwitch.ts`
 
 The question before a MANUAL switch of a topic between the two agent backends (`bsw_ok` / `bsw_no`): «🔁 Switch this

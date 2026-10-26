@@ -77,7 +77,8 @@ export const hiDict: Record<string, string> = {
     '/quitall — हर चल रहे एजेंट को बंद करें\n' +
     '/stt — वॉइस रिकग्निशन सेटिंग्स\n' +
     '/update — बॉट अपडेट: ऑटोमैटिक, सिर्फ़ सूचना, बंद\n' +
-    '/bot_skills — एजेंटों के लिए बॉट के skills: चालू / बंद\n' +
+    '/bot\\_skills — एजेंटों के लिए बॉट के skills: चालू / बंद\n' +
+    '/task\\_agents — ट्रैकर के कितने टास्क एजेंट एक साथ काम कर सकते हैं\n' +
     '/todo — हर प्रोजेक्ट के एजेंटों की कार्य सूचियाँ; उनकी सेटिंग्स\n' +
     '/topic — किसी फ़ोल्डर पर एक और थ्रेड खोलें\n' +
     '/whoami /version — डिबग\n\n' +
@@ -512,6 +513,19 @@ export const hiDict: Record<string, string> = {
   'botSkills.setGeneralConfirmation': '✅ बॉट के skills: सभी विषयों के लिए {state} (विषय की अपनी पसंद फिर भी लागू रहती है)। चल रहा एजेंट अपने अगले आरंभ तक अपने skills रखता है; OpenCode सर्वर बॉट के अगले आरंभ पर यह मान अपनाएगा।',
   'botSkills.setTopicConfirmation': '✅ बॉट के skills: इस विषय के लिए {state}।',
   'botSkills.followGeneralConfirmation': '✅ इस विषय में बॉट के skills फिर से General जैसे हैं: {state}।',
+  'taskAgents.noLimitValue': 'कोई सीमा नहीं',
+  'taskAgents.title': '🧵 एक साथ काम करने वाले टास्क एजेंट, पूरे बॉट के लिए: {value} — {source}',
+  'taskAgents.sourceGeneral': 'General में तय',
+  'taskAgents.sourceSettingsFile': 'settings.json से',
+  'taskAgents.sourceBuiltIn': 'अंतर्निहित डिफ़ॉल्ट',
+  'taskAgents.explanationText': 'ट्रैकर के टास्क (Jira इश्यू) पर एक साथ काम कर सकने वाले एजेंटों की अधिकतम संख्या। सीमा से ऊपर का टास्क एक साझा कतार में इंतज़ार करता है और किसी एजेंट के अपना टास्क लौटाते ही अपने-आप शुरू हो जाता है। उल्लेख (mention) के जवाब गिने नहीं जाते।',
+  'taskAgents.statusText': 'अभी: {running} काम में, {waiting} खाली जगह का इंतज़ार कर रहे हैं।',
+  'taskAgents.manualEntryText': 'नीचे से कोई संख्या चुनें, या इसी कमांड के बाद कोई और संख्या लिखकर भेजें (0 का मतलब कोई सीमा नहीं)।',
+  'taskAgents.topicNote': 'यह पूरे बॉट की एक ही सीमा है — इसे General में बदलें।',
+  'taskAgents.noLimitButton': 'कोई सीमा नहीं',
+  'taskAgents.setConfirmation': '✅ एक साथ काम करने वाले टास्क एजेंट: {value}, पूरे बॉट के लिए। जो एजेंट पहले से काम कर रहे हैं वे रोके नहीं जाते; कम सीमा अगले टास्क को रोककर रखती है।',
+  'taskAgents.invalidArgumentText': '⚠️ 0 से {max} तक की पूर्ण संख्या भेजें (0 या off — कोई सीमा नहीं)।',
+  'taskAgents.generalOnlyText': '⚠️ सीमा पूरे बॉट की एक ही है — इसे General में बदलें।',
 
   'autoContinueLimits.on': 'चालू',
   'autoContinueLimits.off': 'बंद',

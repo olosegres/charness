@@ -534,6 +534,17 @@ test('/topic keys exist in every locale and keep their placeholders', () => {
   }
 });
 
+test('General\'s help is sent as legacy Markdown: every underscore in it is escaped, and it names /task_agents in every locale', () => {
+  for (const locale of localeCodes) {
+    const help = getKeyInLang(locale, 'help.general') ?? '';
+    // An unescaped underscore pairs up with the next one into italics (eating both) or, alone, fails the whole message;
+    // inside a `code span` (`WORK_ROOT`) it is literal.
+    assert.ok(!help.replace(/`[^`]*`/g, '').replace(/\\_/g, '').includes('_'), `help.general in ${locale} has an unescaped underscore`);
+    assert.ok(help.includes('/task\\_agents — '), `help.general in ${locale} does not name /task_agents`);
+    assert.ok(help.includes('/bot\\_skills — '), `help.general in ${locale} does not name /bot_skills`);
+  }
+});
+
 test('/topic is named by the help of a bound topic and of General in every locale', () => {
   for (const locale of localeCodes) {
     for (const code of ['help.general', 'help.thread_bound']) {
