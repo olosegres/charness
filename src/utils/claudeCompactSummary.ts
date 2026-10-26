@@ -1,7 +1,7 @@
 /**
- * @description Reads the summary a Claude compaction left in the conversation's on-disk transcript. Shared by both
- * Claude backends (`getLatestCompactionSummary` for the idle-compaction notice, `getSessionCompactionSummary` for the
- * context bridge), so it lives apart from the adapters, one of which imports the other.
+ * @description Reads the summary a Claude compaction left in the conversation's on-disk transcript. Read by the
+ * json-stream adapter's `getLatestCompactionSummary` (the idle-compaction notice) and by both Claude adapters'
+ * `getSessionCompactionSummary` (the context bridge), so it lives apart from the adapters, one of which imports the other.
  */
 
 import * as fs from 'fs';
