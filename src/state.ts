@@ -28,6 +28,7 @@ import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbac
 import type { TodoProjectOverride } from './todos/projects';
 import type { ScheduleRecord } from './scheduler/types';
 import type { OpenRequestState, UnreleasedRequestAlert } from './requests/types';
+import type { TaskAgentWaitEntry } from './trackers/types';
 import type { LostWorkRecord } from './utils/lostWork';
 import { requestGroupKeyToString, type RequestGroupKey } from './requests/requestGroup';
 import type { Locale } from './i18n';
@@ -431,6 +432,17 @@ export interface StateV1 {
    */
   botSkillsEnabled?: boolean;
   botSkillsOverrides?: Record<string, boolean>;
+  /**
+   * The cap on tracker task agents running at once (`/task_agents`, `trackers/taskAgentLimit.ts`): the General value, `0` = no
+   * limit. Absent means General never chose — then `settings.json`'s `taskAgents.maxConcurrent` and finally the built-in default
+   * apply (an instance without General sets it in the file). One cap for the whole bot, so there are no per-topic overrides.
+   */
+  taskAgentsMaxConcurrent?: number;
+  /**
+   * The tracker conversations waiting for a task-agent slot, oldest first (`trackers/taskAgentSlots.ts`): ONE list for every
+   * tracker connector, so a restart keeps the order. Optional — absent when nobody waits.
+   */
+  taskAgentWaitList?: TaskAgentWaitEntry[];
   /**
    * Threads whose compact-on-idle user-LATCH is spent (D2). A thread lands here
    * the instant an idle-compaction FIRES and is removed only by the next genuine
@@ -2071,6 +2083,32 @@ export class StateStore {
       (this.state.botSkillsOverrides ??= {})[k] = enabled;
       this.scheduleSave();
     });
+  }
+
+  // ── The cap on tracker task agents (`/task_agents`) and its wait list ──
+
+  /** @description The General value of the cap (`0` = no limit), or `undefined` while General never chose (then `settings.json` and the built-in default apply). */
+  getTaskAgentsMaxConcurrentGlobalValue(): number | undefined {
+    return this.state.taskAgentsMaxConcurrent;
+  }
+
+  /** @description Set the General value (from General). Stored explicitly (`0` included), so it stays distinguishable from «never chose». Debounced. */
+  async setTaskAgentsMaxConcurrentGlobalValue(maxConcurrent: number): Promise<void> {
+    if (this.state.taskAgentsMaxConcurrent === maxConcurrent) return;
+    this.state.taskAgentsMaxConcurrent = maxConcurrent;
+    this.scheduleSave();
+  }
+
+  /** @description The tracker conversations waiting for a slot, oldest first (a copy). */
+  getTaskAgentWaitList(): TaskAgentWaitEntry[] {
+    return (this.state.taskAgentWaitList ?? []).map((entry) => ({ ...entry }));
+  }
+
+  /** @description Replace the wait list (an empty one drops the field, so an idle bot leaves a clean `state.json`). Debounced: the caller flushes where a restart right after must not lose it. */
+  setTaskAgentWaitList(waitList: readonly TaskAgentWaitEntry[]): void {
+    if (waitList.length === 0) delete this.state.taskAgentWaitList;
+    else this.state.taskAgentWaitList = waitList.map((entry) => ({ ...entry }));
+    this.scheduleSave();
   }
 
   // ── Claude account auto-switch on a usage limit (`/account`) ──

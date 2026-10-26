@@ -10,6 +10,7 @@ import {
 } from './configDirFile';
 import { claudeEffortLevels, type ClaudeEffortLevel } from './effortLevels';
 import { botSkillsSettingValues, type BotSkillsSetting } from './utils/botSkillsSetting';
+import { taskAgentsMaxConcurrentUpperBound } from './trackers/taskAgentLimit';
 import { autoUpdateModes, defaultAutoUpdateMode, defaultWhatsNew, type AutoUpdateMode, type UpdateSettings } from './selfUpdate/updateModes';
 import { todoReminderDefaultMinutes, type TodoReminderSettings } from './todos/nag';
 
@@ -18,8 +19,9 @@ import { todoReminderDefaultMinutes, type TodoReminderSettings } from './todos/n
  * (beside the instance's real `.env`, like `stt.json`). `/effort` in the General topic writes it; an operator may
  * hand-edit it and the next read sees the edit (the load is cached by file stamp, no restart). More instance
  * settings will move here later; today it holds `defaultEffort`, `autoUpdate`, `whatsNew`, `botSkills` (whether the bot's
- * own skills reach the agents: the way an instance without General sets it) and `todo` (the shared todo lists: on / off
- * and the staleness reminder's interval — also the way an instance without General sets them).
+ * own skills reach the agents: the way an instance without General sets it), `taskAgents` (the cap on tracker task agents
+ * running at once — the way an instance without General sets it) and `todo` (the shared todo lists: on / off and the
+ * staleness reminder's interval — also the way an instance without General sets them).
  *
  * Validation is strict and all-or-nothing, like `stt.json`: a typo is an error that NAMES the field. Unlike
  * `stt.json`, an invalid file is NOT served from its last good copy — the built-in defaults apply and one error
@@ -42,6 +44,8 @@ export interface InstanceSettings {
   whatsNew: boolean | null;
   /** The instance default of the «Bot skills» switch (`/bot_skills`) for an instance whose General never chose; `null` = `on`. */
   botSkills: BotSkillsSetting | null;
+  /** The tracker task agents (`trackers/`): `maxConcurrent` is the cap for the whole bot, `0` = no limit; `null` = not set, the built-in default (5). */
+  taskAgents: { maxConcurrent: number | null };
   /** The shared todo lists (`todos/`); a field that is `null` = its default (on, a reminder every hour). */
   todo: { isEnabled: boolean | null; reminderMinutes: number | null };
 }
@@ -54,6 +58,10 @@ const rawSettingsSchema = z.strictObject({
   autoUpdate: z.enum(autoUpdateModes).optional(),
   whatsNew: z.boolean().optional(),
   botSkills: z.enum(botSkillsSettingValues).optional(),
+  taskAgents: z.strictObject({
+    /** `0` = no limit. */
+    maxConcurrent: z.number().int().min(0).max(taskAgentsMaxConcurrentUpperBound).optional(),
+  }).optional(),
   todo: z.strictObject({
     isEnabled: z.boolean().optional(),
     /** `0` = no staleness reminder. */
@@ -63,7 +71,7 @@ const rawSettingsSchema = z.strictObject({
 
 /** @description The settings of an instance that has no `settings.json`: nothing set. */
 export function createEmptyInstanceSettings(): InstanceSettings {
-  return { defaultEffort: null, autoUpdate: null, whatsNew: null, botSkills: null, todo: { isEnabled: null, reminderMinutes: null } };
+  return { defaultEffort: null, autoUpdate: null, whatsNew: null, botSkills: null, taskAgents: { maxConcurrent: null }, todo: { isEnabled: null, reminderMinutes: null } };
 }
 
 /**
@@ -85,6 +93,7 @@ export function validateInstanceSettings(parsedJson: object): ConfigValidation<I
       autoUpdate: parsed.data.autoUpdate ?? null,
       whatsNew: parsed.data.whatsNew ?? null,
       botSkills: parsed.data.botSkills ?? null,
+      taskAgents: { maxConcurrent: parsed.data.taskAgents?.maxConcurrent ?? null },
       todo: { isEnabled: parsed.data.todo?.isEnabled ?? null, reminderMinutes: parsed.data.todo?.reminderMinutes ?? null },
     },
   };
@@ -121,6 +130,7 @@ export function saveInstanceSettings(filePath: string, settings: InstanceSetting
     ...(settings.autoUpdate === null ? {} : { autoUpdate: settings.autoUpdate }),
     ...(settings.whatsNew === null ? {} : { whatsNew: settings.whatsNew }),
     ...(settings.botSkills === null ? {} : { botSkills: settings.botSkills }),
+    ...(settings.taskAgents.maxConcurrent === null ? {} : { taskAgents: { maxConcurrent: settings.taskAgents.maxConcurrent } }),
     ...(settings.todo.isEnabled === null && settings.todo.reminderMinutes === null
       ? {}
       : {
@@ -220,6 +230,15 @@ export function createUpdateSettingsReader(getFilePath: () => string, logError: 
  */
 export function createBotSkillsSettingsReader(getFilePath: () => string, logError: (line: string) => void): () => BotSkillsSetting | null {
   return createSettingsPartReader(getFilePath, logError, (settings) => settings.botSkills);
+}
+
+/**
+ * @description The reader of the cap on tracker task agents the file seeds (`trackers/taskAgentLimit.ts`): `taskAgents.maxConcurrent`,
+ * re-read when the file changes — a hand edit applies to the next hand-over. `null` = the file does not say. An invalid file reads
+ * as `null`, and `logError` gets ONE line per distinct broken state (not one per read).
+ */
+export function createTaskAgentsMaxConcurrentReader(getFilePath: () => string, logError: (line: string) => void): () => number | null {
+  return createSettingsPartReader(getFilePath, logError, (settings) => settings.taskAgents.maxConcurrent);
 }
 
 /**

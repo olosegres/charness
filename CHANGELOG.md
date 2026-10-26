@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+**The agents that work on Jira issues now run under ONE cap for the whole bot — 5 at once by default — and an issue over it waits in a queue and starts by itself.**
+Before, every issue handed to the AI account started its agent at once, with nothing limiting how many ran together. Now the number of
+tracker task agents working at the same time is capped for all projects together: `"taskAgents": { "maxConcurrent": 5 }` in
+`settings.json` (`0` = no limit, 100 the most; read without a restart; nothing set means 5, so an instance gets the cap with this update).
+An agent takes a slot when its issue is handed over and gives it back when it hands the issue back (a question or the final answer), when its
+request is cancelled, or when the wake-up engine gave up on it and handed the issue back; an issue with several hand-overs open still holds one
+slot, and an @-mention (answer only) never takes one or waits. An issue over the cap gets ONE short comment — «⏳ The AI is working on 5 tasks at
+once, its limit, so this issue is queued (2 issues are ahead of it). It starts by itself when a slot frees up» — and stays assigned to the AI. The
+waiting issues are one first-in-first-out list for the whole bot, kept in `state.json` so a restart keeps the order; the first one starts the
+moment a slot frees (the poll runs at once, not at its next interval), and an issue moved away from the AI while it waits leaves the list. A
+lower cap never stops an agent that is already working. A mistyped `taskAgents` is logged once as
+`[Settings] settings.json taskAgents.maxConcurrent: …` and the built-in 5 applies.
+
 **The "↩️ Resumed — last 3 messages" preview no longer shows what Claude Code records for itself: a `/compact` you ran there shows as just `/compact`.**
 Before, resuming a conversation whose last entries were a command run in Claude Code itself printed the raw `<local-command-caveat>`,
 `<command-name>… <command-args>…` (with the whole, often very long, argument text) and `<local-command-stdout>` entries as if they were your

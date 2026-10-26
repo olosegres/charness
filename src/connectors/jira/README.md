@@ -45,7 +45,9 @@ Operator-facing setup steps: the public `SETUP.md` § "Jira setup".
    a trigger status, else the creation; changelog pages are read newest first, only as far as needed) →
    already seen? (`triggerLog.ts`) → self-authored? → with `trustedGroup`: is the HAND-OVER backed by the group?
    (see below; if not, `untrusted`: a fixed notice, the issue handed back, no request) → run budget (over it the
-   issue is `parked` with a notice and handed back) → fetch the issue's context (`issueContext.ts`: the issue with
+   issue is `parked` with a notice and handed back) → a task-agent slot (see "The cap on task agents" below; an issue
+   with no free slot is `queued`, told so once, and decided again by every poll until it is first in the list and a slot is
+   free) → fetch the issue's context (`issueContext.ts`: the issue with
    its fields and the project's `extraFields`, ALL its comments page by page, its remote links, an epic's children by `parent = KEY`) → bind the conversation to the project's folder → open a request
    (origin `trackerEvent`) → post, NOT awaited (a busy session may take minutes) → RECORD the trigger once the
    post has settled, also when it failed (the open request then belongs to the wake-up engine). The origin names
@@ -75,6 +77,23 @@ Operator-facing setup steps: the public `SETUP.md` § "Jira setup".
 5. Setup problems refuse the start (bad config, refused token, unknown project or status, another account's
    token); an outage (no answer, 5xx, 429) does not — a mixed Telegram+Jira instance never loses Telegram to a
    Jira outage (`checkIsTransientJiraFailure`, `connector.ts`).
+
+### The cap on task agents (`inbound.ts`, `trackers/taskAgentSlots.ts`)
+
+The bot runs at most `taskAgents.maxConcurrent` (`settings.json`, default 5, `0` = no limit) tracker conversations at once — ONE
+cap for every project and every tracker connector (`trackers/README.md`). Only a hand-over takes a slot (an open request of origin
+`trackerEvent`); a mention request bypasses the cap and joins no list. The gate stands after the trust check and the run budget
+(an untrusted or over-budget hand-over never waits for a slot) and before the issue is fetched:
+
+- `checkIn` → `granted`: the request opens (the slot is reserved until it does) and `noteStarted` drops the issue's place;
+  a failure while opening it gives the reservation back and keeps the place.
+- `queued`: the issue joins the bot's ONE persisted FIFO list (`state.json` `taskAgentWaitList`) and gets ONE short comment
+  (`answerSink.ts` `postQueuedNotice` — no hand-back, the issue stays the AI's). Its trigger is NOT recorded: every poll decides
+  it again (`waiting`, silent) and it starts when it is within the free slots counted from the head of the list. A newer
+  hand-over of a waiting issue keeps its place.
+- An issue that left the results of a complete poll, or no longer matches, leaves the list at once (`pruneWaiting`, `dropWaiting`).
+- A slot freeing — the ledger's `onRequestClosed` — wakes the poll at once (`pollSoon`: a poll under way is not interrupted, the
+  next one follows it immediately; a failing Jira keeps its backoff).
 
 ### An @-mention wakes the AI — it answers only (`inbound.ts` `getMentionDecisions`)
 

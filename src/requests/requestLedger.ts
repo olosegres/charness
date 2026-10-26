@@ -117,6 +117,12 @@ export interface RequestLedgerDeps {
    * Must not throw.
    */
   onPromptSettled?: (key: SessionKey, requestId: string, outcome: RequestPromptOutcome) => void;
+  /**
+   * Told of every request that leaves the open set, whatever the reason (an answer, a supersede, a cancel). It runs INSIDE the
+   * close, before the open entry is dropped from the store, so a listener must only schedule what it wants to do, never read
+   * the open set at once. The task-agent slots use it to start the next waiting task. Must not throw.
+   */
+  onRequestClosed?: (record: ClosedRequestRecord) => void;
   history?: RotatingJsonlFile<ClosedRequestRecord>;
   now?: () => number;
   closedIndexMaxSize?: number;
@@ -219,6 +225,7 @@ export class RequestLedger {
   private readonly releaseAlert: ((alert: UnreleasedRequestAlert) => Promise<void>) | undefined;
   private readonly onRequestCreated: ((key: SessionKey, request: OpenRequestState) => void) | undefined;
   private readonly onPromptSettled: ((key: SessionKey, requestId: string, outcome: RequestPromptOutcome) => void) | undefined;
+  private readonly onRequestClosed: ((record: ClosedRequestRecord) => void) | undefined;
   /** Request ids whose alert release is under way, so two paths never release one twice at once. */
   private readonly alertReleasesInFlight = new Set<string>();
   /** Insertion order = close order, so the first key is always the oldest. */
@@ -238,6 +245,7 @@ export class RequestLedger {
     this.releaseAlert = deps.releaseAlert;
     this.onRequestCreated = deps.onRequestCreated;
     this.onPromptSettled = deps.onPromptSettled;
+    this.onRequestClosed = deps.onRequestClosed;
   }
 
   /**
@@ -357,6 +365,7 @@ export class RequestLedger {
     if (record.alertRef !== undefined) {
       this.queueAlertRelease(record.id, { conversationKey: record.conversationKey, alertRef: record.alertRef });
     }
+    this.onRequestClosed?.(closing);
   }
 
   /**

@@ -35,6 +35,7 @@ import { jiraCommentSpillMinChars } from '../connectors/jira/promptSpill';
 import { JiraContextLedger } from '../connectors/jira/contextLedger';
 import { getClaudePlatformEnvironment } from '../adapters/claudePlatformFlags';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
+import { createUnlimitedSlots } from './taskAgentSlotsTestKit';
 
 const aiAccountId = 'ai-account';
 const isolatedOpenCodeUrl = 'http://127.0.0.1:4196';
@@ -89,6 +90,8 @@ const issue = {
     histories: [{ id: '100', created: '2026-10-03T09:00:00.000+0000', author: { accountId: 'requester-account', accountType: 'atlassian' }, items: [{ field: 'assignee', to: aiAccountId }] }],
   },
 };
+
+const unlimitedSlots = createUnlimitedSlots();
 
 describe('prepareJiraConnector', () => {
   let dataDir = '';
@@ -240,6 +243,7 @@ describe('prepareJiraConnector', () => {
       bindConversation: async () => {},
       createRequest: async () => ({ id: 'req_1' }),
       listOpenRequests: () => [],
+      slots: unlimitedSlots,
       postRequest: async (_key, _requestId, prompt) => {
         prompts.push(prompt.buildText({ isFresh: true }));
       },
@@ -254,6 +258,7 @@ describe('prepareJiraConnector', () => {
       bindConversation: async () => {},
       createRequest: async () => ({ id: 'req_1' }),
       listOpenRequests: () => [],
+      slots: unlimitedSlots,
       postRequest: async (_key, _requestId, prompt) => resolve(prompt.buildText({ isFresh: true })),
     });
   });
@@ -270,6 +275,7 @@ describe('prepareJiraConnector', () => {
         },
         createRequest: async () => ({ id: 'req_1' }),
         listOpenRequests: () => [],
+        slots: unlimitedSlots,
         postRequest: async (key, requestId, prompt) => resolve(`${keyToString(key)} ${requestId} ${prompt.fullText.split('\n')[0]}`),
       });
     });
@@ -476,7 +482,7 @@ describe('prepareJiraConnector', () => {
         warnings.mock.restore();
       }
       const isPosted = new Promise<boolean>((resolve) => {
-        connector?.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], postRequest: async () => resolve(true) });
+        connector?.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], slots: unlimitedSlots, postRequest: async () => resolve(true) });
         setTimeout(() => {
           groupMemberStatus = 200;
         }, 50);
@@ -664,7 +670,7 @@ describe('prepareJiraConnector', () => {
         // Meanwhile the group is deleted: the next check reaches Jira and comes back refused.
         siteGroups = [];
         groupMemberStatus = 200;
-        connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], postRequest: async () => {} });
+        connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], slots: unlimitedSlots, postRequest: async () => {} });
         await waitUntil(() => errors.mock.calls.some((call) => String(call.arguments[0]).startsWith('[jira] polling NOT started:')));
         const refusedReason = 'jira.json trustedGroup: the site has no group named "ai-trusted"';
         assert.deepEqual(errors.mock.calls.map((call) => String(call.arguments[0])), [`[jira] polling NOT started: ${refusedReason}`]);
@@ -714,7 +720,7 @@ describe('prepareJiraConnector', () => {
         const errors = mock.method(console, 'error', () => {});
         try {
           let isPosted = false;
-          connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], postRequest: async () => { isPosted = true; } });
+          connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], slots: unlimitedSlots, postRequest: async () => { isPosted = true; } });
           await new Promise((resolve) => setTimeout(resolve, 150));
           assert.deepEqual(errors.mock.calls.map((call) => String(call.arguments[0])), [
             '[jira] polling STOPPED: the trusted group "ai-trusted" no longer exists on the site',
@@ -737,7 +743,7 @@ describe('prepareJiraConnector', () => {
         groupMemberStatus = 503;
         const warnings = mock.method(console, 'warn', () => {});
         try {
-          connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], postRequest: async () => {} });
+          connector.start({ bindConversation: async () => {}, createRequest: async () => ({ id: 'req_1' }), listOpenRequests: () => [], slots: unlimitedSlots, postRequest: async () => {} });
           await new Promise((resolve) => setTimeout(resolve, 200));
           assert.ok(warnings.mock.calls.some((call) => String(call.arguments[0]).startsWith('[jira] poll failed (1 in a row)')));
           assert.ok(!requestPaths.includes('POST /rest/api/3/search/jql'), 'nothing was searched on the stale list');
@@ -784,6 +790,7 @@ describe('prepareJiraConnector', () => {
         bindConversation: async () => {},
         createRequest: async () => ({ id: 'req_1' }),
         listOpenRequests: () => [],
+        slots: unlimitedSlots,
         postRequest: async () => resolve(true),
       });
     });
@@ -846,7 +853,7 @@ describe('bot.ts wires the Jira connector (J5)', () => {
     const bootPhase = startBody.indexOf('await runSessionBootPhase(');
     assert.ok(prepared > 0 && launchDefaults > prepared && bootPhase > launchDefaults, 'prepared and its defaults registered before the boot phase');
     const restored = startBody.slice(startBody.indexOf('onSessionsRestored: () => {'), startBody.indexOf('healActiveSessions:'));
-    assert.match(restored, /jiraConnector\?\.start\(createJiraSessionDeps\(requestLedger, jiraConnector\.adapterName\)\);/);
+    assert.match(restored, /jiraConnector\?\.start\(createJiraSessionDeps\(requestLedger, slots, jiraConnector\.adapterName\)\);/);
     assert.match(startBody.slice(startBody.indexOf('cleanupTimers: () => {')), /jiraConnector\?\.stop\(\);/);
   });
 
@@ -860,6 +867,17 @@ describe('bot.ts wires the Jira connector (J5)', () => {
   it('a mention is judged against the ledger: the connector lists the open requests of an issue\'s conversation from it', () => {
     const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
     assert.ok(deps.includes('listOpenRequests: (key) => requestLedger.listOpenRequestsOf(key),'));
+  });
+
+  it('D10: one TaskAgentSlots over the loaded ledger serves the connector; a closed request wakes it; a connector no longer served loses its places', () => {
+    const ledgerCreated = startBody.indexOf('const requestLedger = new RequestLedger({');
+    const slotsCreated = startBody.indexOf('const slots = new TaskAgentSlots({');
+    assert.ok(ledgerCreated > 0 && slotsCreated > startBody.indexOf('await requestLedger.load();'), 'built over the loaded ledger');
+    assert.match(startBody, /onRequestClosed: \(record\) => taskAgentSlots\?\.noteRequestClosed\(record\),/);
+    assert.match(startBody, /getMaxConcurrent: \(\) => readTaskAgentLimit\(taskAgentLimitSources\)\.maxConcurrent,/);
+    assert.match(startBody, /slots\.dropUnserved\(\(key\) => checkIsServedConversation\(key, ENV\.servedPlatforms\)\);/);
+    const deps = botSource.slice(botSource.indexOf('function createJiraSessionDeps('), botSource.indexOf('export async function startBot('));
+    assert.match(deps, /return \{\n\s+slots,/, 'the connector is handed the slots');
   });
 
   it('C4: the request ledger tells the connector of the conversation what became of each prompt', () => {

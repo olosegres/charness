@@ -18,6 +18,7 @@ import {
   buildJiraAlertText,
   buildJiraMentionParkText,
   buildJiraParkText,
+  buildJiraQueuedText,
   buildJiraReplyLeftOutWarning,
   buildJiraUntrustedText,
   createJiraAnswerSink,
@@ -369,6 +370,37 @@ describe('alert and park notice', () => {
         'so no new request was opened. Assign it to the AI again later, or ask the operator to raise the limit.',
     );
     assert.ok(jira.calls.includes('assign PROJ-12 requester-account'));
+  });
+
+  describe('the queued notice (D10)', () => {
+    it('says every slot is busy and the issue starts by itself — one comment, and NO hand-back: the issue stays the AI\'s', async () => {
+      await sink().postQueuedNotice(issueKey, { kind: 'queued', isNewlyQueued: true, aheadCount: 2, maxConcurrent: 5 });
+      assert.deepEqual(jira.postedTexts, [buildJiraQueuedText(5, 2)]);
+      assert.equal(
+        jira.postedTexts[0],
+        '⏳ The AI is working on 5 tasks at once, its limit, so this issue is queued (2 issues are ahead of it). ' +
+          'It starts by itself when a slot frees up; nothing is needed from you.',
+      );
+      assert.deepEqual(jira.calls, ['comment PROJ-12'], 'nothing is handed back');
+    });
+
+    it('the wording follows the numbers: the next in line, one issue ahead, a cap of one', () => {
+      assert.match(buildJiraQueuedText(5, 0), /\(it is next in line\)/);
+      assert.match(buildJiraQueuedText(5, 1), /\(1 issue is ahead of it\)/);
+      assert.match(buildJiraQueuedText(1, 3), /working on 1 task at once/);
+    });
+
+    it('a notice Jira refused is a warning, never a throw — the poll goes on', async () => {
+      jira.postOutcomes = [new Error('Jira POST failed with 403')];
+      const warnings = mock.method(console, 'warn', () => {});
+      try {
+        await sink().postQueuedNotice(issueKey, { kind: 'queued', isNewlyQueued: true, aheadCount: 0, maxConcurrent: 5 });
+        assert.equal(warnings.mock.calls.length, 1);
+        assert.match(String(warnings.mock.calls[0].arguments[0]), /^\[jira\] PROJ-12: queued notice not posted: Jira did not take the comment/);
+      } finally {
+        warnings.mock.restore();
+      }
+    });
   });
 
   describe('the notice of a hand-over the trusted group does not back (T1)', () => {

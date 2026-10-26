@@ -26,13 +26,14 @@ import {
 import { JiraTriggerLog, jiraTriggerLogFileName } from '../connectors/jira/triggerLog';
 import { JiraContextLedger } from '../connectors/jira/contextLedger';
 import { createTestComment } from './jiraIssueTestData';
+import { createJiraConversationKey, createTestSlots, createUnlimitedSlots, createWaitEntry, type TestOpenRequest, type TestSlots } from './taskAgentSlotsTestKit';
 import { JiraAuthError, jiraChangelogPageSize, type JiraAccount, type JiraChangelogHistory, type JiraChangelogPage, type JiraComment, type JiraIssue, type JiraRemoteLink, type JiraSearchRequest, type JiraSearchResult } from '../connectors/jira/client';
 import { convertMarkdownToAdf, type AdfDocument } from '../connectors/jira/adf';
 import { jiraCommentSpillMinChars, jiraPromptMaxChars } from '../connectors/jira/promptSpill';
 import { requestPromptMaxLength } from '../requests/requestLedger';
 import { createdTriggerId } from '../connectors/jira/trigger';
 import { keyToString } from '../sessionKey';
-import type { RequestOrigin } from '../requests/types';
+import type { ClosedRequestRecord, RequestOrigin } from '../requests/types';
 import { buildSupersededRequestsLine } from '../requests/requestHeader';
 import { createJiraTrust, JiraTrustedGroupGoneError, type JiraTrust } from '../connectors/jira/trustedGroup';
 
@@ -87,6 +88,8 @@ interface Recorded {
   untrusted: Array<{ issueKey: string; requester: JiraAccount | null; groupName: string }>;
   /** Each mention over the run budget that got its park notice. */
   mentionParked: string[];
+  /** Each hand-over that waits for a task-agent slot and got its queued notice. */
+  queued: Array<{ issueKey: string; aheadCount: number; maxConcurrent: number }>;
 }
 
 describe('JiraInbound', () => {
@@ -107,7 +110,7 @@ describe('JiraInbound', () => {
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jira-inbound-'));
-    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [], untrusted: [], mentionParked: [] };
+    recorded = { calls: [], searches: [], issueReads: [], origins: [], prompts: [], storedPrompts: [], parked: [], untrusted: [], mentionParked: [], queued: [] };
     searchPages = [];
     changelogPages = new Map();
     triggerLog = await createLoadedTriggerLog();
@@ -202,6 +205,11 @@ describe('JiraInbound', () => {
       refuseUntrusted: async (issueKey, refusedRequester, groupName) => {
         recorded.calls.push(`untrusted ${issueKey}`);
         recorded.untrusted.push({ issueKey, requester: refusedRequester, groupName });
+      },
+      slots: createUnlimitedSlots(),
+      postQueuedNotice: async (issueKey, queue) => {
+        recorded.calls.push(`queued ${issueKey}`);
+        recorded.queued.push({ issueKey, aheadCount: queue.aheadCount, maxConcurrent: queue.maxConcurrent });
       },
       ...overrides,
     });
@@ -1265,6 +1273,17 @@ describe('JiraInbound', () => {
       assert.deepEqual(recorded.untrusted, []);
     });
 
+    it('D10: a mention bypasses the cap on task agents — with every slot busy the mention still opens its answer-only request, and joins no list', async () => {
+      const busySlots = createTestSlots({ maxConcurrent: 1 });
+      busySlots.setOpenRequests([{ key: createJiraConversationKey('PROJ-77'), kind: 'trackerEvent' }]);
+      comments = [createMentionComment('10240', member)];
+      const decisions = await createMentionInbound({ slots: busySlots.slots }).pollOnce();
+      assert.deepEqual([...decisions], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'request']]);
+      assert.equal(recorded.origins[0].kind, 'trackerMention');
+      assert.deepEqual(busySlots.getWaitList(), []);
+      assert.deepEqual(recorded.queued, []);
+    });
+
     it('the same comment at the next poll is seen — and an issue whose `updated` did not move costs no comment read at all', async () => {
       comments = [createMentionComment('10240', member)];
       const inbound = createMentionInbound();
@@ -1516,6 +1535,307 @@ describe('JiraInbound', () => {
       const inbound = createMentionInbound({ client: createMentionClient(() => [createUnhandedIssue('OTHER-1')]) });
       assert.deepEqual([...await inbound.pollOnce()], [['OTHER-1', 'notAllowed']]);
       assert.equal(countCommentReads(), 0);
+    });
+  });
+
+  describe('the one cap on task agents (D10)', () => {
+    const closedHandOver = (issueKey: string): ClosedRequestRecord => ({
+      id: 'req_closed',
+      origin: { kind: 'trackerEvent', attributes: { issueKey } },
+      createdAt: 1,
+      progressAnswerCount: 0,
+      silentTurnCount: 0,
+      wakeCount: 0,
+      isWakeStopped: false,
+      conversationKey: keyToString(createJiraConversationKey(issueKey)),
+      closedAt: 2,
+      closeReason: 'final',
+    });
+    let kit: TestSlots;
+    /** The requests the ledger holds open: the ones the inbound opened, less the ones a test closed. */
+    let openRequests: TestOpenRequest[];
+    const waitMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+    beforeEach(() => {
+      kit = createTestSlots({ maxConcurrent: 1 });
+      openRequests = [];
+    });
+
+    /** An inbound whose requests land in the (scripted) ledger the slots count, as the real ledger does. */
+    function createCappedInbound(overrides: Partial<JiraInboundDeps> = {}): JiraInbound {
+      return createInbound({
+        slots: kit.slots,
+        createRequest: async (key, origin, createPrompt) => {
+          requestCount += 1;
+          recorded.origins.push(origin);
+          recorded.calls.push(`create ${keyToString(key)}`);
+          recorded.storedPrompts.push(createPrompt(`req_${requestCount}`, []));
+          openRequests = [...openRequests.filter((open) => keyToString(open.key) !== keyToString(key)), { key, kind: origin.kind }];
+          kit.setOpenRequests(openRequests);
+          return { id: `req_${requestCount}` };
+        },
+        ...overrides,
+      });
+    }
+
+    /** The agent of `issueKey` handed back: its request closes and frees its slot. */
+    function closeHandOver(issueKey: string): void {
+      openRequests = openRequests.filter((open) => open.key.thread !== issueKey);
+      kit.setOpenRequests(openRequests);
+    }
+
+    it('under the cap an issue starts; past it the next one is QUEUED: told so once, its trigger unrecorded, no request', async () => {
+      searchPages = [{ issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] }];
+      const decisions = await createCappedInbound().pollOnce();
+      await flushPosts();
+      assert.deepEqual([...decisions], [['PROJ-1', 'request'], ['PROJ-2', 'queued']]);
+      assert.deepEqual(recorded.queued, [{ issueKey: 'PROJ-2', aheadCount: 0, maxConcurrent: 1 }]);
+      assert.equal(requestCount, 1, 'only PROJ-1 opened a request');
+      assert.equal(triggerLog.checkIsSeen('PROJ-2', '100'), false, 'the trigger waits unrecorded: every poll decides it again');
+      assert.deepEqual(kit.getWaitList().map((entry) => entry.conversationKey), [keyToString(createJiraConversationKey('PROJ-2'))]);
+      assert.ok(!recorded.calls.includes('getIssue PROJ-2'), 'nothing of the queued issue is fetched');
+    });
+
+    it('a queued issue is skipped by the polls that follow — no second notice, no request, and no line in the poll log — until a slot frees', async () => {
+      searchPages = [{ issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] }, { issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] }];
+      const inbound = createCappedInbound();
+      await inbound.pollOnce();
+      await flushPosts();
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-1', 'seen'], ['PROJ-2', 'waiting']]);
+      assert.equal(recorded.queued.length, 1, 'told once');
+      assert.equal(requestCount, 1);
+    });
+
+    it('the freed slot goes to the issue that waited: it starts, is no longer in the list, and its trigger is recorded with its post', async () => {
+      searchPages = [{ issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] }, { issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] }];
+      const inbound = createCappedInbound();
+      await inbound.pollOnce();
+      await flushPosts();
+      closeHandOver('PROJ-1');
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-1', 'seen'], ['PROJ-2', 'request']]);
+      await flushPosts();
+      assert.equal(requestCount, 2);
+      assert.deepEqual(kit.getWaitList(), []);
+      assert.equal(triggerLog.checkIsSeen('PROJ-2', '100'), true);
+      assert.equal(recorded.queued.length, 1, 'it was told it waited, never again');
+    });
+
+    it('FIFO: of two waiting issues the one that queued first starts first, although the search returns the other first', async () => {
+      searchPages = [
+        { issues: [createIssue('PROJ-1'), createIssue('PROJ-2'), createIssue('PROJ-3')] },
+        { issues: [createIssue('PROJ-3'), createIssue('PROJ-2')] },
+      ];
+      const inbound = createCappedInbound();
+      await inbound.pollOnce();
+      await flushPosts();
+      assert.deepEqual(recorded.queued.map((entry) => [entry.issueKey, entry.aheadCount]), [['PROJ-2', 0], ['PROJ-3', 1]]);
+      closeHandOver('PROJ-1');
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-3', 'waiting'], ['PROJ-2', 'request']]);
+    });
+
+    it('a NEW hand-over of an issue that already holds a slot supersedes its request even at the cap — it is not queued behind itself', async () => {
+      const reassigned = createIssue('PROJ-1', {
+        histories: [createHistory('100', 0, [{ field: 'assignee', to: aiAccountId }]), createHistory('110', 30, [{ field: 'assignee', to: aiAccountId }])],
+      });
+      searchPages = [{ issues: [createIssue('PROJ-1')] }, { issues: [reassigned] }];
+      const inbound = createCappedInbound();
+      await inbound.pollOnce();
+      await flushPosts();
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-1', 'request']]);
+      assert.deepEqual(recorded.queued, []);
+    });
+
+    it('a waiting issue that left the hand-over statuses is dropped from the list — whoever waits behind it moves up', async () => {
+      searchPages = [
+        { issues: [createIssue('PROJ-1'), createIssue('PROJ-2'), createIssue('PROJ-3')] },
+        { issues: [createIssue('PROJ-1'), createIssue('PROJ-3')] },
+        { issues: [createIssue('PROJ-3')] },
+      ];
+      const inbound = createCappedInbound();
+      await inbound.pollOnce();
+      await flushPosts();
+      await inbound.pollOnce();
+      assert.deepEqual(kit.getWaitList().map((entry) => entry.conversationKey), [keyToString(createJiraConversationKey('PROJ-3'))], 'PROJ-2 was not returned: no longer handed over');
+      closeHandOver('PROJ-1');
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-3', 'request']]);
+    });
+
+    it('an issue returned but no longer matching (re-assigned away while it waited) is dropped from the list too', async () => {
+      searchPages = [{ issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] }, { issues: [createIssue('PROJ-1'), createIssue('PROJ-2', { assigneeId: 'someone-else' })] }];
+      const inbound = createCappedInbound();
+      await inbound.pollOnce();
+      await flushPosts();
+      assert.equal(kit.getWaitList().length, 1);
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-1', 'seen'], ['PROJ-2', 'notMatching']]);
+      assert.deepEqual(kit.getWaitList(), []);
+    });
+
+    it('a poll that fails keeps the list as it was: nothing is pruned on a partial read', async () => {
+      searchPages = [{ issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] }];
+      const inbound = createCappedInbound();
+      await inbound.pollOnce();
+      await flushPosts();
+      const failing = createCappedInbound({
+        client: {
+          searchIssues: async () => {
+            throw new Error('Jira 503');
+          },
+          getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
+          getIssue: async (issueKey) => createIssue(issueKey),
+          ...emptyIssueContext,
+        },
+      });
+      await assert.rejects(failing.pollOnce(), /Jira 503/);
+      assert.equal(kit.getWaitList().length, 1);
+    });
+
+    it('a request that fails to open gives the slot back and keeps its place: the next poll opens it', async () => {
+      searchPages = [{ issues: [createIssue('PROJ-1')] }, { issues: [createIssue('PROJ-1')] }];
+      let isCommentReadFailing = true;
+      const inbound = createCappedInbound({
+        client: {
+          searchIssues: async () => searchPages.shift() ?? { issues: [] },
+          getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
+          getIssue: async (issueKey) => createIssue(issueKey),
+          getComments: async () => {
+            if (isCommentReadFailing) throw new Error('Jira 503');
+            return [];
+          },
+          getRecentComments: async () => [],
+          getRemoteLinks: async () => [],
+        },
+      });
+      const warn = console.warn;
+      console.warn = () => {};
+      try {
+        assert.deepEqual([...await inbound.pollOnce()], [['PROJ-1', 'failed']]);
+      } finally {
+        console.warn = warn;
+      }
+      assert.equal(requestCount, 0);
+      isCommentReadFailing = false;
+      assert.deepEqual([...await inbound.pollOnce()], [['PROJ-1', 'request']], 'the slot was not left reserved by the failure');
+    });
+
+    it('a hand-over over the run budget is parked before it asks for a slot — it never queues, and an untrusted one neither', async () => {
+      triggerLog.record({ issueKey: 'PROJ-2', triggerId: 'a', outcome: 'request', at: nowMs - 2 * 60 * 60 * 1000 });
+      triggerLog.record({ issueKey: 'PROJ-2', triggerId: 'b', outcome: 'request', at: nowMs - 60 * 60 * 1000 });
+      searchPages = [{ issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] }];
+      assert.deepEqual([...await createCappedInbound().pollOnce()], [['PROJ-1', 'request'], ['PROJ-2', 'parked']]);
+      assert.deepEqual(recorded.queued, []);
+      assert.deepEqual(kit.getWaitList(), []);
+    });
+
+    it('a slot freeing wakes the poll at once (pollSoon) — the waiting issue starts without waiting out the interval; nobody waiting, nobody woken', async () => {
+      searchPages = [{ issues: [createIssue('PROJ-1'), createIssue('PROJ-2')] }];
+      const searches: number[] = [];
+      const inbound = createCappedInbound({
+        // An interval the test would never wait out: only the wake-up can start the second poll in time.
+        pollIntervalMs: 60 * 60 * 1000,
+        client: {
+          searchIssues: async () => {
+            searches.push(searches.length);
+            return searches.length === 1
+              ? { issues: [createIssue('PROJ-1'), createIssue('PROJ-2')], isLast: true }
+              : { issues: [createIssue('PROJ-2')], isLast: true };
+          },
+          getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
+          getIssue: async (issueKey) => createIssue(issueKey),
+          ...emptyIssueContext,
+        },
+      });
+      inbound.start();
+      try {
+        for (let attempt = 0; attempt < 200 && searches.length < 1; attempt += 1) await waitMs(5);
+        await flushPosts();
+        assert.equal(searches.length, 1);
+        assert.equal(kit.getWaitList().length, 1, 'PROJ-2 waits');
+        closeHandOver('PROJ-1');
+        kit.slots.noteRequestClosed(closedHandOver('PROJ-1'));
+        for (let attempt = 0; attempt < 200 && requestCount < 2; attempt += 1) await waitMs(5);
+        assert.equal(requestCount, 2, 'PROJ-2 started by the second poll');
+        assert.equal(searches.length, 2);
+        // The list is empty now: a close wakes nobody, so no third poll follows.
+        kit.slots.noteRequestClosed(closedHandOver('PROJ-2'));
+        await waitMs(50);
+        assert.equal(searches.length, 2);
+      } finally {
+        inbound.stop();
+      }
+    });
+
+    it('a slot freed while a poll that FAILS is under way does not skip the backoff: a failing Jira is not hammered', async () => {
+      kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-9', 1)] });
+      let releaseSearch: () => void = () => {};
+      const searchGate = new Promise<void>((resolve) => {
+        releaseSearch = resolve;
+      });
+      const searches: number[] = [];
+      const baseIntervalMs = 400;
+      const inbound = createCappedInbound({
+        pollIntervalMs: baseIntervalMs,
+        client: {
+          searchIssues: async () => {
+            searches.push(searches.length);
+            await searchGate;
+            throw new Error('Jira 503');
+          },
+          getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
+          getIssue: async (issueKey) => createIssue(issueKey),
+          ...emptyIssueContext,
+        },
+      });
+      const warn = console.warn;
+      console.warn = () => {};
+      inbound.start();
+      try {
+        for (let attempt = 0; attempt < 200 && searches.length < 1; attempt += 1) await waitMs(5);
+        kit.slots.noteRequestClosed(closedHandOver('PROJ-1'));
+        releaseSearch();
+        // The next attempt waits the doubled interval (800 ms), not zero: a repoll right after the failure would be a second search by now.
+        await waitMs(baseIntervalMs / 2);
+        assert.equal(searches.length, 1, 'no immediate repoll after a failed poll');
+      } finally {
+        inbound.stop();
+        console.warn = warn;
+      }
+    });
+
+    it('a slot freed while a poll is under way: the next poll follows it at once; stop() ends the listening', async () => {
+      kit = createTestSlots({ maxConcurrent: 1, waitList: [createWaitEntry('PROJ-9', 1)] });
+      let releaseSearch: () => void = () => {};
+      const searchGate = new Promise<void>((resolve) => {
+        releaseSearch = resolve;
+      });
+      const searches: number[] = [];
+      const inbound = createCappedInbound({
+        pollIntervalMs: 60 * 60 * 1000,
+        client: {
+          searchIssues: async () => {
+            searches.push(searches.length);
+            if (searches.length === 1) await searchGate;
+            return { issues: [], isLast: true };
+          },
+          getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
+          getIssue: async (issueKey) => createIssue(issueKey),
+          ...emptyIssueContext,
+        },
+      });
+      inbound.start();
+      try {
+        for (let attempt = 0; attempt < 200 && searches.length < 1; attempt += 1) await waitMs(5);
+        kit.slots.noteRequestClosed(closedHandOver('PROJ-1'));
+        assert.equal(searches.length, 1, 'the poll under way is not interrupted');
+        releaseSearch();
+        for (let attempt = 0; attempt < 200 && searches.length < 2; attempt += 1) await waitMs(5);
+        assert.equal(searches.length, 2, 'and the next poll followed it at once');
+      } finally {
+        inbound.stop();
+      }
+      const searchesAtStop = searches.length;
+      kit.slots.noteRequestClosed(closedHandOver('PROJ-1'));
+      await waitMs(30);
+      assert.equal(searches.length, searchesAtStop, 'a stopped inbound is not woken');
     });
   });
 

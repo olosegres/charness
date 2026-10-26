@@ -610,6 +610,7 @@ a hand edit applies to the next session start, no restart.
 | `autoUpdate` | What the instance does about a new charness version: `on` installs it by itself when the bot is idle, `notify` says it is out and offers a button, `off` never looks. Set it from **`/update` in General**, or by hand. Leave it out and `on` applies ([Updating](#updating)) |
 | `whatsNew` | `true` (default): after an update General lists the CHANGELOG entries it brought; `false`: only the «Updated a → b» line. Set from `/update` in General, or by hand |
 | `botSkills` | Whether the skills Charness ships with its agents (`charness-manager`, the two delegate skills) and the hint to load the manager reach them ([README](README.md#skills-the-bot-gives-its-agents)): `"on"` or `"off"`. The default of an instance whose **General** never chose — a Jira-only instance, which has no General, sets it here; `/bot_skills` in General overrides it for the instance once used; leave it out and `on` applies. A running agent keeps its skills until its next start |
+| `taskAgents` | The cap on tracker task agents ([Jira setup](#jira-setup)): `{ "maxConcurrent": 5 }` — how many conversations of a connected tracker (Jira issues) may work on a hand-over at once, for the whole bot; an issue over it waits in a queue and starts by itself. `0` = no limit, 100 the most. The way an instance without a General topic — a Jira-only instance — sets it. Leave it out and `5` applies |
 | `todo` | The shared todo lists ([README](README.md#shared-todo-lists-todo)): `{ "isEnabled": true, "reminderMinutes": 60 }`. `isEnabled: false` turns the feature off (agents are not offered the tools); `reminderMinutes` is how long an agent may work without updating its list before it is reminded, `0` = never. Set both from **`/todo` in General → Settings**, or by hand — the way for an instance without a General topic (a Jira-only one). Leave it out and on / 60 apply |
 
 What a new Claude session starts with, first that exists: the topic's own `/effort` pick, the platform's default
@@ -784,6 +785,12 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    example `{ "ffmpeg": "/opt/tools/ffmpeg" }` — which is checked at start and put on the agents' PATH. `adapter` is `claude-json-stream` (the default — the agent process is stopped when an issue
    idles) or `claude-per-turn` (stopped after every answer); either way the issue's conversation sleeps between
    requests and the next request resumes it.
+
+   **How many agents run at once.** The AI works on at most 5 issues at the same time, all projects together — set
+   `taskAgents.maxConcurrent` in [`settings.json`](#instance-settings-settingsjson) (`0` = no limit; read without a
+   restart). An issue handed over beyond that gets one comment saying it is queued, stays assigned to the AI and starts by
+   itself when an agent hands its issue back, the one that waited longest first — also across a restart. An @-mention
+   (answer only) is never held back, and a lower number never stops an agent that is already working.
 
 5. Start it with a clean environment, so nothing of the calling shell reaches it:
 

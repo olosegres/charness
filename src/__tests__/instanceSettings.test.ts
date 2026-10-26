@@ -13,6 +13,7 @@ import {
   createBotSkillsSettingsReader,
   createEmptyInstanceSettings,
   createInstanceDefaultEffortReader,
+  createTaskAgentsMaxConcurrentReader,
   createUpdateSettingsReader,
   getInstanceSettingsPath,
   instanceSettingsFileName,
@@ -23,6 +24,7 @@ import {
   validateInstanceSettings,
   type InstanceSettings,
 } from '../instanceSettings';
+import { taskAgentsMaxConcurrentUpperBound } from '../trackers/taskAgentLimit';
 import { claudeEffortLevels, defaultEffortLevel, getInstanceDefaultEffort, setInstanceDefaultEffortReader } from '../effortLevels';
 
 let configDir = '';
@@ -253,4 +255,46 @@ test('the bot-skills reader: null with no file or field, the file\'s value, a ha
   read();
   assert.equal(errors.length, 1);
   assert.match(errors[0], /botSkills/);
+});
+
+test('taskAgents.maxConcurrent takes 0 (no limit) up to the bound and is "not set" in an empty file; anything else is an error naming the field', () => {
+  assert.equal(createEmptyInstanceSettings().taskAgents.maxConcurrent, null);
+  for (const value of [0, 1, 5, taskAgentsMaxConcurrentUpperBound]) {
+    assert.deepEqual(validateInstanceSettings({ taskAgents: { maxConcurrent: value } }), { ok: true, config: createSettings({ taskAgents: { maxConcurrent: value } }) }, String(value));
+  }
+  assert.deepEqual(validateInstanceSettings({ taskAgents: {} }), { ok: true, config: createEmptyInstanceSettings() }, 'a section without the field says nothing');
+  for (const wrong of [-1, 1.5, taskAgentsMaxConcurrentUpperBound + 1, '5', true]) {
+    const bad = validateInstanceSettings({ taskAgents: { maxConcurrent: wrong } });
+    assert.equal(bad.ok, false, String(wrong));
+    assert.match(bad.ok ? '' : bad.errors.join('\n'), /^settings\.json taskAgents\.maxConcurrent: /);
+  }
+  const unknownKey = validateInstanceSettings({ taskAgents: { maxConcurent: 3 } });
+  assert.equal(unknownKey.ok, false, 'a typo in the key is an error, not silently the default');
+  assert.match(unknownKey.ok ? '' : unknownKey.errors.join('\n'), /^settings\.json taskAgents: /);
+});
+
+test('taskAgents is written only when set — 0 included — and a change keeps it', () => {
+  saveInstanceSettings(settingsPath, createSettings({ taskAgents: { maxConcurrent: 0 }, autoUpdate: 'off' }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { autoUpdate: 'off', taskAgents: { maxConcurrent: 0 } });
+  saveInstanceSettings(settingsPath, { ...loadInstanceSettingsForUpdate(settingsPath), defaultEffort: 'high' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { defaultEffort: 'high', autoUpdate: 'off', taskAgents: { maxConcurrent: 0 } });
+  saveInstanceSettings(settingsPath, createSettings({}));
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), {}, 'not set: left out');
+});
+
+test('the task-agents reader: null with no file or field, the file\'s value (0 included), a hand edit with no restart, a broken file as null with ONE named error', () => {
+  const errors: string[] = [];
+  const read = createTaskAgentsMaxConcurrentReader(() => settingsPath, (line) => errors.push(line));
+  assert.equal(read(), null, 'no file');
+  writeRaw('{"autoUpdate":"off"}');
+  assert.equal(read(), null, 'the field left out');
+  writeRaw('{"taskAgents":{"maxConcurrent":3}}');
+  assert.equal(read(), 3);
+  writeRaw('{"taskAgents":{"maxConcurrent":0}}');
+  assert.equal(read(), 0, 'no limit is a value, not «not set»');
+  writeRaw('{"taskAgents":{"maxConcurrent":"many"}}');
+  assert.equal(read(), null, 'a broken file says nothing');
+  read();
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /taskAgents\.maxConcurrent/);
 });

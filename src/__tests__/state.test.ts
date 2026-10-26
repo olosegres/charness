@@ -1128,3 +1128,41 @@ test('the update engine record and the last-run version survive a restart; an ol
   assert.deepEqual(reopened.getSelfUpdateRecord().failedTargets, ['3.4.1']);
   assert.equal(reopened.getSelfUpdateRecord().isFeatureAnnounced, true);
 });
+
+test('the task-agent cap: no General value until one is set; 0 (no limit) is a value; it survives a restart', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await store.init();
+  assert.equal(store.getTaskAgentsMaxConcurrentGlobalValue(), undefined, 'never chose: settings.json and the default decide');
+  await store.setTaskAgentsMaxConcurrentGlobalValue(12);
+  await store.flush();
+  const reloaded = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await reloaded.init();
+  assert.equal(reloaded.getTaskAgentsMaxConcurrentGlobalValue(), 12);
+  await reloaded.setTaskAgentsMaxConcurrentGlobalValue(0);
+  await reloaded.flush();
+  const reloadedAgain = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await reloadedAgain.init();
+  assert.equal(reloadedAgain.getTaskAgentsMaxConcurrentGlobalValue(), 0, 'no limit is kept as chosen, not read as «never chose»');
+});
+
+test('the task-agent wait list: empty by default, kept in order across a restart, and dropped from the file when emptied', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await store.init();
+  assert.deepEqual(store.getTaskAgentWaitList(), []);
+  const waitList = [
+    { conversationKey: 'jira:PROJ:PROJ-2', triggerId: '100', queuedAt: 10 },
+    { conversationKey: 'jira:PROJ:PROJ-3', triggerId: '101', queuedAt: 20 },
+  ];
+  store.setTaskAgentWaitList(waitList);
+  await store.flush();
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')).taskAgentWaitList, waitList);
+  const reloaded = new StateStore(dataDir, { saveDebounceMs: 20 });
+  await reloaded.init();
+  assert.deepEqual(reloaded.getTaskAgentWaitList(), waitList);
+  const copy = reloaded.getTaskAgentWaitList();
+  copy[0].triggerId = 'changed';
+  assert.equal(reloaded.getTaskAgentWaitList()[0].triggerId, '100', 'a read is a copy');
+  reloaded.setTaskAgentWaitList([]);
+  await reloaded.flush();
+  assert.ok(!('taskAgentWaitList' in JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'))), 'an idle bot leaves a clean state.json');
+});

@@ -44,6 +44,9 @@ Numeric bounds are named constants in the files below; this README says only wha
   restart or a limit wait re-delivers the real prompt — a bare reminder would name a request the agent never
   read. It is never written to the closed history.
 - Closed ids stay known only up to `closedRequestIndexMaxSize`; an older one reads as unknown.
+- **`onRequestClosed`** reports every request that leaves the open set (an answer, a cancel, a supersede), from inside the close — a
+  listener only schedules. The task-agent slots (`trackers/`) read the open set for their count and use the report to wake a
+  connector's poll when somebody waits for a slot.
 
 ## Header (`requestHeader.ts`)
 

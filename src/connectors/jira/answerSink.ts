@@ -18,6 +18,7 @@ import { mentionTriggerIdPrefix, checkIsPersonAccount } from './trigger';
 import { checkIsCommentTrusted } from './issueBlocks';
 import type { JiraContextLedger } from './contextLedger';
 import type { JiraTrust } from './trustedGroup';
+import type { TaskAgentSlotDecision } from '../../trackers/taskAgentSlots';
 
 /**
  * @description The Jira connector's answer sink (plan J6, D20, R18): an answer
@@ -73,6 +74,16 @@ export function buildJiraParkText(runBudgetPer24h: number): string {
 export function buildJiraMentionParkText(runBudgetPer24h: number): string {
   return `⏸ The AI was asked about this issue ${runBudgetPer24h} times in the last 24 hours (hand-overs and mentions together), ` +
     'its limit, so this mention was not answered. Mention it again later, or ask the operator to raise the limit.';
+}
+
+/**
+ * @description The queued notice (D10): every task-agent slot of the bot is busy, so this hand-over waits and starts by itself.
+ * Posted once, when the issue joins the list; `aheadCount` is how many issues were in front of it then.
+ */
+export function buildJiraQueuedText(maxConcurrent: number, aheadCount: number): string {
+  const place = aheadCount === 0 ? 'it is next in line' : `${aheadCount} ${aheadCount === 1 ? 'issue is' : 'issues are'} ahead of it`;
+  return `⏳ The AI is working on ${maxConcurrent} ${maxConcurrent === 1 ? 'task' : 'tasks'} at once, its limit, so this issue is queued (${place}). ` +
+    'It starts by itself when a slot frees up; nothing is needed from you.';
 }
 
 /**
@@ -146,6 +157,8 @@ export interface JiraAnswerSink extends AnswerSink {
   parkIssue(issueKey: string, requester: JiraAccount | null): Promise<void>;
   /** A mention over the run budget (D10): the park notice, no hand-back (nothing was handed over). Never rejects. */
   parkMention(issueKey: string): Promise<void>;
+  /** A hand-over that waits for a task-agent slot (D10): the notice saying so, no hand-back — the issue stays the AI's. Never rejects. */
+  postQueuedNotice(issueKey: string, queue: Extract<TaskAgentSlotDecision, { kind: 'queued' }>): Promise<void>;
   /** A hand-over the trusted group `groupName` does not back: the fixed notice, then the hand-back. Never rejects. */
   refuseUntrusted(issueKey: string, requester: JiraAccount | null, groupName: string): Promise<void>;
 }
@@ -296,7 +309,7 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
   }
 
   /** A notice the bot writes itself; `false` (and a warning) when it did not land. */
-  async function postNotice(issueKey: string, notice: AdfDocument, noticeKind: 'park' | 'untrusted' | 'mention park'): Promise<boolean> {
+  async function postNotice(issueKey: string, notice: AdfDocument, noticeKind: 'park' | 'untrusted' | 'mention park' | 'queued'): Promise<boolean> {
     const posted = await postComments(issueKey, [notice], null);
     if (posted.postedCount === 0 && posted.failure) {
       console.warn(`[jira] ${issueKey}: ${noticeKind} notice not posted: ${getNothingPostedError(posted.failure)}`);
@@ -384,6 +397,10 @@ export function createJiraAnswerSink(deps: JiraAnswerSinkDeps): JiraAnswerSink {
 
     parkMention: async (issueKey) => {
       await postNotice(issueKey, convertMarkdownToAdf(buildJiraMentionParkText(deps.runBudgetPer24h)), 'mention park');
+    },
+
+    postQueuedNotice: async (issueKey, queue) => {
+      await postNotice(issueKey, convertMarkdownToAdf(buildJiraQueuedText(queue.maxConcurrent, queue.aheadCount)), 'queued');
     },
 
     refuseUntrusted: (issueKey, requester, groupName) =>

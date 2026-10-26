@@ -32,7 +32,7 @@ export class JiraConnectorStartError extends Error {
 }
 
 /** What the connector needs from the core to open and post requests. */
-export type JiraConnectorSessionDeps = Pick<JiraInboundDeps, 'bindConversation' | 'createRequest' | 'postRequest' | 'listOpenRequests'>;
+export type JiraConnectorSessionDeps = Pick<JiraInboundDeps, 'bindConversation' | 'createRequest' | 'postRequest' | 'listOpenRequests' | 'slots'>;
 
 export interface JiraConnector {
   /** The backend Jira sessions run on (D16, R14). */
@@ -281,6 +281,7 @@ export async function prepareJiraConnector(context: {
       parkIssue: (issueKey, requester) => answerSink.parkIssue(issueKey, requester),
       refuseUntrusted: (issueKey, requester, groupName) => answerSink.refuseUntrusted(issueKey, requester, groupName),
       parkMention: (issueKey) => answerSink.parkMention(issueKey),
+      postQueuedNotice: (issueKey, queue) => answerSink.postQueuedNotice(issueKey, queue),
       noteShownSummary: (issueKey, summary) => shownSummaries.set(issueKey, summary),
     });
     inbound.start();

@@ -14,13 +14,15 @@ import type { JiraContextLedger } from './contextLedger';
 import type { SessionPromptText } from '../../postToSession';
 import { fitBlocksToPrompt, standInRequestId } from './promptSpill';
 import { JiraTrustedGroupGoneError, type JiraTrust } from './trustedGroup';
+import type { TaskAgentSlotDecision, TaskAgentSlots } from '../../trackers/taskAgentSlots';
 
 /**
  * @description The Jira connector's inbound side (plan J5, D12/D13/D15/D21): a
  * poll loop, one search per cycle, and per issue the decision chain
  *
  *   allowlist → still matching → no post in flight → trigger (newest changelog pages first) → seen before → self-authored
- *     → hand-over backed by the trusted group (only with `trustedGroup`) → run budget → fetch the issue → bind
+ *     → hand-over backed by the trusted group (only with `trustedGroup`) → run budget → a free task-agent slot (else the
+ *     issue waits in the bot's one list, with a comment saying so) → fetch the issue → bind
  *     → open a request → post (not awaited)
  *     → RECORD the trigger once the post settled
  *
@@ -31,8 +33,9 @@ import { JiraTrustedGroupGoneError, type JiraTrust } from './trustedGroup';
  * leaving a request the agent never saw. Only a crash in the instant between a
  * finished post and its record can post a trigger twice. While a post is in
  * flight the issue is skipped, so one process never posts two requests of an
- * issue at once. A Jira event never cancels an armed usage-limit wait — the
- * ledger's create hook tells the new request about it (core S5).
+ * issue at once. A waiting issue's trigger is NOT recorded: the next poll decides it again, and it starts when it is
+ * first in the list and a slot is free (`trackers/taskAgentSlots.ts`; a slot freeing wakes the poll at once, `pollSoon`).
+ * A Jira event never cancels an armed usage-limit wait — the ledger's create hook tells the new request about it (core S5).
  *
  * With mention wakes on (a trusted group is set), the same poll also finds a comment that @-mentions the AI
  * account — on an issue that is NOT handed to it — and opens a request that answers only:
@@ -91,6 +94,8 @@ export interface JiraProjectTrigger {
  *  - `notMatching` — no longer assigned to the AI account, or not in a trigger status.
  *  - `posting`     — the post of its last request has not settled yet (skipped).
  *  - `seen`        — its trigger was decided before.
+ *  - `queued`      — no task-agent slot was free: it joined the bot's wait list and was told so (once). `waiting` — it is
+ *    still in the list (skipped; nothing is posted again).
  *  - `selfAuthored`, `parked`, `untrusted`, `covered`, `request` — the recorded outcomes; `untrusted` — the
  *    hand-over was made by someone the trusted group does not back (a notice and the hand-back, no request; for
  *    a mention: silent, nothing posted); `covered` — a mention by the requester of the issue's open hand-over
@@ -98,10 +103,16 @@ export interface JiraProjectTrigger {
  *  - `failed`      — an error stopped it; the next poll tries again.
  */
 export type JiraIssueDecision =
-  | 'notAllowed' | 'notMatching' | 'posting' | 'seen' | 'selfAuthored' | 'parked' | 'untrusted' | 'covered' | 'request' | 'failed';
+  | 'notAllowed' | 'notMatching' | 'posting' | 'seen' | 'selfAuthored' | 'parked' | 'untrusted' | 'covered' | 'queued' | 'waiting' | 'request' | 'failed';
 
 /** Decisions that change nothing, left out of the poll's log line. */
-const quietDecisions: ReadonlySet<JiraIssueDecision> = new Set(['notMatching', 'posting', 'seen']);
+const quietDecisions: ReadonlySet<JiraIssueDecision> = new Set(['notMatching', 'posting', 'seen', 'waiting']);
+
+/**
+ * Decisions that end an issue's wait for a slot: its hand-over is gone, was refused or was handled without one. `notAllowed` is not
+ * one: that issue never waited, and its key may not even be an issue key (`makeJiraKey` would throw).
+ */
+const waitEndingDecisions: ReadonlySet<JiraIssueDecision> = new Set(['notMatching', 'seen', 'selfAuthored', 'parked', 'untrusted']);
 
 export interface JiraInboundDeps {
   client: Pick<JiraClient, 'searchIssues' | 'getChangelogPage' | 'getIssue' | 'getComments' | 'getRecentComments' | 'getRemoteLinks'>;
@@ -148,6 +159,10 @@ export interface JiraInboundDeps {
   refuseUntrusted: (issueKey: string, requester: JiraAccount | null, groupName: string) => Promise<void>;
   /** A mention over the run budget: the park notice, no hand-back (the answer side). */
   parkMention: (issueKey: string) => Promise<void>;
+  /** The bot's one cap on task agents and its wait list; a mention request bypasses it. */
+  slots: Pick<TaskAgentSlots, 'checkIn' | 'noteStarted' | 'releaseReservation' | 'dropWaiting' | 'pruneWaiting' | 'onSlotFreed'>;
+  /** A hand-over that has to wait for a slot: the short comment saying so (the answer side). Never rejects. */
+  postQueuedNotice: (issueKey: string, queue: Extract<TaskAgentSlotDecision, { kind: 'queued' }>) => Promise<void>;
 }
 
 /**
@@ -169,6 +184,11 @@ export function buildJiraTriggerJql(projects: ReadonlyMap<string, JiraProjectTri
 export class JiraInbound {
   private timer: NodeJS.Timeout | null = null;
   private isRunning = false;
+  /** A poll is under way (the timer's own, not a direct {@link pollOnce}). */
+  private isPolling = false;
+  /** A slot freed while a poll was under way: the next poll follows at once. */
+  private isRepollRequested = false;
+  private stopListeningForSlots: (() => void) | null = null;
   /** Polls in a row that failed — the backoff's exponent (R22). */
   private failureCount = 0;
   /** Issues whose last request's post has not settled yet. */
@@ -182,6 +202,7 @@ export class JiraInbound {
   start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
+    this.stopListeningForSlots = this.deps.slots.onSlotFreed(() => this.pollSoon());
     this.scheduleNext(0);
   }
 
@@ -189,6 +210,22 @@ export class JiraInbound {
     this.isRunning = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    this.stopListeningForSlots?.();
+    this.stopListeningForSlots = null;
+  }
+
+  /**
+   * @description Poll at once, without waiting out the interval: a task-agent slot freed, and an issue waits for it. A poll that
+   * is under way is not interrupted — the next one follows it immediately. Polls still never overlap.
+   */
+  pollSoon(): void {
+    if (!this.isRunning) return;
+    if (this.isPolling) {
+      this.isRepollRequested = true;
+      return;
+    }
+    if (this.timer) clearTimeout(this.timer);
+    this.scheduleNext(0);
   }
 
   private scheduleNext(delayMs: number): void {
@@ -199,6 +236,7 @@ export class JiraInbound {
   }
 
   private async runScheduledPoll(): Promise<void> {
+    this.isPolling = true;
     try {
       await this.pollOnce();
       this.failureCount = 0;
@@ -213,8 +251,13 @@ export class JiraInbound {
       // R22: a Jira outage never stops polling — the next attempt just waits longer.
       this.failureCount += 1;
       console.warn(`[jira] poll failed (${this.failureCount} in a row): ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.isPolling = false;
     }
-    if (this.isRunning) this.scheduleNext(getJiraRetryDelayMs(this.deps.pollIntervalMs, this.failureCount));
+    // A failing Jira is never hammered: the backoff stands, whatever freed meanwhile.
+    const isRepollDue = this.isRepollRequested && this.failureCount === 0;
+    this.isRepollRequested = false;
+    if (this.isRunning) this.scheduleNext(isRepollDue ? 0 : getJiraRetryDelayMs(this.deps.pollIntervalMs, this.failureCount));
   }
 
   /**
@@ -252,6 +295,8 @@ export class JiraInbound {
     for (const issueKey of this.lastUpdatedByIssue.keys()) {
       if (!returnedIssueKeys.has(issueKey)) this.lastUpdatedByIssue.delete(issueKey);
     }
+    // Only after a complete poll: an issue that is no longer handed to the AI does not wait for a slot (and holds nobody up).
+    this.deps.slots.pruneWaiting('jira', (key) => returnedIssueKeys.has(key.thread));
     const acted = [...decisions].filter(([, decision]) => !quietDecisions.has(decision));
     if (acted.length > 0) console.log(`[jira] poll: ${acted.map(([issueKey, decision]) => `${issueKey} ${decision}`).join(', ')}`);
     return decisions;
@@ -282,8 +327,10 @@ export class JiraInbound {
     }
   }
 
-  private getDecisionSafely(issue: JiraIssue): Promise<JiraIssueDecision> {
-    return this.runOrWarn(issue.key, '', () => this.getDecision(issue), 'failed');
+  private async getDecisionSafely(issue: JiraIssue): Promise<JiraIssueDecision> {
+    const decision = await this.runOrWarn(issue.key, '', () => this.getDecision(issue), 'failed');
+    if (waitEndingDecisions.has(decision)) this.deps.slots.dropWaiting(makeJiraKey(issue.key));
+    return decision;
   }
 
   private async getDecision(issue: JiraIssue): Promise<JiraIssueDecision> {
@@ -319,7 +366,23 @@ export class JiraInbound {
       await deps.parkIssue(issue.key, requester);
       return 'parked';
     }
-    return this.openRequest(issue, project, trigger, requester, at);
+    // D10: one cap on the task agents of the whole bot. Past it the issue waits — its trigger stays unrecorded, so every poll
+    // decides it again and it starts when it is first in the list and a slot is free.
+    const key = makeJiraKey(issue.key);
+    const slot = await deps.slots.checkIn(key, trigger.triggerId);
+    if (slot.kind === 'queued') {
+      if (!slot.isNewlyQueued) return 'waiting';
+      await deps.postQueuedNotice(issue.key, slot);
+      return 'queued';
+    }
+    try {
+      const decision = await this.openRequest(issue, project, trigger, requester, at);
+      deps.slots.noteStarted(key);
+      return decision;
+    } catch (error) {
+      deps.slots.releaseReservation(key);
+      throw error;
+    }
   }
 
   private getMentionDecisionsSafely(issue: JiraIssue): Promise<Map<string, JiraIssueDecision>> {

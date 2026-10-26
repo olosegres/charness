@@ -291,7 +291,9 @@ import {
 } from './utils/claudeLivenessAction';
 import { formatIsoLocalOffset } from './utils/isoTimestamp';
 import { getThreadEffortView, setInstanceDefaultEffortReader, type ThreadEffortView } from './effortLevels';
-import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createTodoSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath } from './instanceSettings';
+import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createTaskAgentsMaxConcurrentReader, createTodoSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath } from './instanceSettings';
+import { readTaskAgentLimit, type TaskAgentLimitSources } from './trackers/taskAgentLimit';
+import { TaskAgentSlots } from './trackers/taskAgentSlots';
 import { checkIsBotSkillsEnabled, createBotSkillsReader, readBotSkillsInstanceValue, setBotSkillsReader, type BotSkillsSources } from './utils/botSkills';
 import { quietPeriodMs } from './selfUpdate/constants';
 import { getLaunchEnvironment } from './selfUpdate/launchEnvironment';
@@ -1153,6 +1155,18 @@ const botSkillsSources: BotSkillsSources = {
   getSettingsValue: createBotSkillsSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line)),
 };
 const botSkillsReader = createBotSkillsReader(botSkillsSources);
+
+/**
+ * The cap on tracker task agents (`trackers/taskAgentLimit.ts`): General's value, else `settings.json`'s
+ * `taskAgents.maxConcurrent` (re-read when the file changes), else the built-in default. `state` is read when asked.
+ */
+const taskAgentLimitSources: TaskAgentLimitSources = {
+  getGeneralValue: () => state.getTaskAgentsMaxConcurrentGlobalValue(),
+  getSettingsValue: createTaskAgentsMaxConcurrentReader(() => getInstanceSettingsPath(), (line) => console.error(line)),
+};
+
+/** The slots of the tracker task agents and their wait list; built at boot, once the request ledger is loaded. */
+let taskAgentSlots: TaskAgentSlots | null = null;
 
 /** `settings.json`'s `todo` (on / off, the reminder's interval), re-read when the file changes. */
 const readTodoSettings = createTodoSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line));
@@ -13635,10 +13649,11 @@ async function prepareJiraConnectorOrExit(): Promise<JiraConnector> {
  * J5): the issue's binding, the request ledger, and the shared session post —
  * after which the wake-up engine watches the turn the request started.
  */
-function createJiraSessionDeps(requestLedger: RequestLedger, adapterName: string): Parameters<JiraConnector['start']>[0] {
+function createJiraSessionDeps(requestLedger: RequestLedger, slots: TaskAgentSlots, adapterName: string): Parameters<JiraConnector['start']>[0] {
   // D5: one conversation per issue — a session that sleeps between requests is resumed by the ensure (L-D4).
   const sessionPostDeps = createSessionPostDeps();
   return {
+    slots,
     bindConversation: async (key, folder) => {
       if (state.getBinding(key)?.subdir !== folder) await state.setBinding(key, folder);
     },
@@ -13735,8 +13750,18 @@ export async function startBot(): Promise<void> {
     onRequestCreated: (key) => announceLimitWaitToNewRequest(key),
     // C4: a connector counts what a prompt carried as sent only once its agent took it in.
     onPromptSettled: (key, requestId, outcome) => connectorConversationHooks.get(key.platform)?.onPromptSettled(key, requestId, outcome),
+    // D10: a closed hand-over may free a task-agent slot for a waiting issue.
+    onRequestClosed: (record) => taskAgentSlots?.noteRequestClosed(record),
   });
   await requestLedger.load();
+  const slots = new TaskAgentSlots({
+    getMaxConcurrent: () => readTaskAgentLimit(taskAgentLimitSources).maxConcurrent,
+    ledger: requestLedger,
+    store: state,
+  });
+  // A place held for a connector this process no longer serves could never start, and would hold up the others.
+  slots.dropUnserved((key) => checkIsServedConversation(key, ENV.servedPlatforms));
+  taskAgentSlots = slots;
   topicRequestLedger = requestLedger;
   // The wake-up engine (S4) watches the turns requests start. It is created now
   // but started only once the sessions are restored (its sweep reads them).
@@ -14045,7 +14070,7 @@ export async function startBot(): Promise<void> {
       // From here the engine can tell a live turn from a dead session.
       requestWakeUpEngine?.start();
       todoReminderEngine?.start();
-      jiraConnector?.start(createJiraSessionDeps(requestLedger, jiraConnector.adapterName));
+      jiraConnector?.start(createJiraSessionDeps(requestLedger, slots, jiraConnector.adapterName));
     },
     healActiveSessions: () => {
       // When this boot ADOPTED an already-running opencode, that server may

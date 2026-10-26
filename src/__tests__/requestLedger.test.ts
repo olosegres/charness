@@ -722,3 +722,46 @@ describe('what became of a request\'s prompt (Jira prompt context C4)', () => {
   });
 });
 
+
+describe('onRequestClosed — what the task-agent slots hear (D10)', () => {
+  async function createLedgerRecordingCloses(closed: string[]): Promise<RequestLedger> {
+    const ledger = new RequestLedger({
+      store: await createStore(),
+      history: new RotatingJsonlFile(historyPath, requestHistoryMaxBytes),
+      onRequestClosed: (record) => closed.push(`${record.id} ${record.origin.kind} ${record.closeReason}`),
+    });
+    await ledger.load();
+    return ledger;
+  }
+
+  it('every way a request leaves the open set is reported once — an answer, a question, a cancel and a supersede', async () => {
+    const closed: string[] = [];
+    const ledger = await createLedgerRecordingCloses(closed);
+    const answered = await ledger.createRequest(topicKey, trackerOrigin, { createPrompt: () => 'p' });
+    await ledger.closeRequest(answered.id, 'final');
+    const asked = await ledger.createRequest(topicKey, trackerOrigin, { createPrompt: () => 'p' });
+    await ledger.closeRequest(asked.id, 'question');
+    const cancelled = await ledger.createRequest(topicKey, trackerOrigin, { createPrompt: () => 'p' });
+    await ledger.closeRequest(cancelled.id, 'cancelled');
+    const replaced = await ledger.createRequest(otherTopicKey, operatorOrigin, { createPrompt: () => 'p' });
+    await ledger.createRequest(otherTopicKey, operatorOrigin, { createPrompt: () => 'p' });
+    assert.deepEqual(closed, [
+      `${answered.id} trackerEvent final`,
+      `${asked.id} trackerEvent question`,
+      `${cancelled.id} trackerEvent cancelled`,
+      `${replaced.id} message superseded`,
+    ]);
+  });
+
+  it('a request that is not open, and the reload at boot, report nothing', async () => {
+    const closed: string[] = [];
+    const ledger = await createLedgerRecordingCloses(closed);
+    const request = await ledger.createRequest(topicKey, trackerOrigin, { createPrompt: () => 'p' });
+    await ledger.closeRequest(request.id, 'final');
+    assert.equal(await ledger.closeRequest(request.id, 'final'), null);
+    assert.equal(closed.length, 1, 'closed twice, reported once');
+    const reloaded: string[] = [];
+    await createLedgerRecordingCloses(reloaded);
+    assert.deepEqual(reloaded, [], 'indexing the history at boot closes nothing');
+  });
+});
