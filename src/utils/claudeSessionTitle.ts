@@ -15,6 +15,7 @@
  */
 
 import { stripThreadContextPreamble } from '../threadContextPreamble';
+import { classifyClaudeUserEntry } from './claudeUserEntry';
 
 /**
  * @description Leading `[Scheduled run "<name>"]` marker a scheduled run glues
@@ -26,18 +27,14 @@ const scheduledRunMarkerRe = /^\[Scheduled run "[^"]*"\]\n/;
 /**
  * @description Prompt prefixes that mark a stored user turn as bot/tooling
  * plumbing rather than a real topic — never a session title. Matched after the
- * preamble/marker is stripped and whitespace collapsed.
+ * preamble/marker is stripped and whitespace collapsed. (The CLI's own tagged
+ * entries are told apart by `classifyClaudeUserEntry`.)
  */
 const noisePromptPrefixes = [
   '[Telegram thread context]', // a preamble with no prompt after it (strip failed)
   '[Telegram file]',
   '[Telegram album]',
   '[Request interrupted',
-  '<local-command-', // stdout / stderr / caveat wrappers around a slash command
-  '<command-',
-  '<task-notification>',
-  '<system-reminder>',
-  '<tool-use-',
   'Base directory for this skill:',
   'Caveat: The messages below',
 ];
@@ -78,10 +75,13 @@ function checkIsNoisePrompt(line: string): boolean {
 
 /**
  * @description A session-title candidate from ONE stored prompt: the stripped
- * single-line topic, or `null` when the prompt is empty or tooling noise.
+ * single-line topic, or `null` when the prompt is empty, a slash command run in
+ * the CLI, text the CLI injected, or other tooling noise.
  */
 export function getSessionTitleCandidate(rawPrompt: string): string | null {
-  const line = getSessionTitleLine(rawPrompt);
+  const entry = classifyClaudeUserEntry(rawPrompt);
+  if (entry.kind !== 'message') return null;
+  const line = getSessionTitleLine(entry.text);
   if (!line) return null;
   if (checkIsNoisePrompt(line)) return null;
   return line;

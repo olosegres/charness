@@ -422,6 +422,12 @@ Both Claude backends drive the same `claude` binary against
 tmux adapter's readers are reused) and a session started in one backend is
 resumable in the other.
 
+The CLI also records a slash command run directly in it (`/compact`, …) and the text it injects (`<system-reminder>`,
+`<task-notification>`) as `user` entries, tags and all. Everything that shows a transcript's user entries — the
+"Resumed" preview, the reattach recap, the fallback bridge, the `/sessions` titles — reads them through
+`utils/claudeUserEntry.ts`: a command shows as its bare name (no arguments), an entry made only of injected tags is
+skipped and takes none of the preview's slots. A new tag the CLI injects goes into that one list.
+
 ## OpenCode (`openCodeAdapter.ts`)
 
 - **One `/global/event` stream for the whole server**, opened with the first active session anywhere and closed

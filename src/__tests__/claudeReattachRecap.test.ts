@@ -128,6 +128,22 @@ describe('readClaudeReattachTranscript', () => {
     assert.equal(missedCount, 2);
   });
 
+  it('shows the recap body like the resume preview does: a command as its name, the entries around it skipped and not counted', () => {
+    const filePath = path.join(dir, 'compacted.jsonl');
+    fs.writeFileSync(filePath, seenText + serialize([
+      { type: 'user', message: { role: 'user', content: '<local-command-caveat>run directly in Claude Code</local-command-caveat>' } },
+      { type: 'user', message: { role: 'user', content: '<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args>keep it all</command-args>' } },
+      { type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted</local-command-stdout>' } },
+    ]));
+    const { missedCount, turns } = readClaudeReattachTranscript(filePath, offset, limit);
+    assert.equal(missedCount, 0, 'no assistant turn was appended');
+    assert.deepEqual(turns, [
+      { role: 'user', text: 'old prompt' },
+      { role: 'assistant', text: 'old answer (already seen)' },
+      { role: 'user', text: '/compact' },
+    ]);
+  });
+
   it('returns an empty recap for a missing file', () => {
     const result = readClaudeReattachTranscript(path.join(dir, 'nope.jsonl'), 0, limit);
     assert.deepEqual(result, { missedCount: 0, turns: [] });

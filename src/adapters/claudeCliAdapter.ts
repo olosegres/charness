@@ -45,6 +45,7 @@ import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import { resolveDataDir } from '../state';
 import { threadContextPreambleHeader } from '../threadContextPreamble';
 import { getSessionTitleCandidate } from '../utils/claudeSessionTitle';
+import { getClaudeUserEntryDisplayText } from '../utils/claudeUserEntry';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
 import { claudeLoginPastePromptRe } from '../utils/claudeAuthLogin';
 import { claudeConfigDirVariableName, parseClaudeConfigDirFromCommand } from '../utils/claudeProfiles';
@@ -2262,7 +2263,11 @@ function extractAssistantText(message: unknown): string | null {
  * both apply the EXACT same renderability rule: a `type:'user'` /
  * `type:'assistant'` entry whose message yields non-empty text (via
  * {@link extractUserText} / {@link extractAssistantText}); `summary` and other
- * meta lines, and assistant entries that are tool_use-only, yield `null`. Never
+ * meta lines, and assistant entries that are tool_use-only, yield `null`. A user
+ * entry shows what a person sees (`getClaudeUserEntryDisplayText`): a slash
+ * command as just its name, and an entry made only of CLI-injected tags (the
+ * caveat and stdout around a command, a reminder) yields `null` — so it never
+ * takes one of the `limit` slots of the preview. Never
  * throws — a torn / half-written line (offset landing mid-record) fails
  * `JSON.parse` and yields `null`.
  */
@@ -2277,7 +2282,8 @@ function parseClaudeTurnLine(line: string): RecentTurn | null {
   }
   if (!checkIsRecord(entry)) return null;
   if (entry.type === 'user') {
-    const text = extractUserText(entry.message);
+    const rawText = extractUserText(entry.message);
+    const text = rawText === null ? null : getClaudeUserEntryDisplayText(rawText);
     return text ? { role: 'user', text } : null;
   }
   if (entry.type === 'assistant') {

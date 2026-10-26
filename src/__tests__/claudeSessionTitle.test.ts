@@ -83,6 +83,20 @@ describe('getSessionTitleCandidate — reject tooling noise, return the topic', 
     });
   }
 
+  it('keeps the typed topic of a prompt that carries an injected block', () => {
+    assert.equal(
+      getSessionTitleCandidate('<system-reminder>be brief</system-reminder>\n\nfix the session picker'),
+      'fix the session picker',
+    );
+  });
+
+  it('rejects a slash command run in the CLI, whatever its argument text says', () => {
+    assert.equal(
+      getSessionTitleCandidate('<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args>keep the login bug fix</command-args>'),
+      null,
+    );
+  });
+
   it('rejects a preamble with no prompt after it (empty topic)', () => {
     assert.equal(getSessionTitleCandidate('[Telegram thread context]\nthread: -100:1 | folder: f'), null);
   });

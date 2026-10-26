@@ -94,6 +94,48 @@ describe('readRecentClaudeTurns', () => {
     ]);
   });
 
+  it('shows a slash command run in the CLI as just its name, and skips the caveat and stdout entries around it without letting them take a slot', () => {
+    const filePath = path.join(dir, 'compacted.jsonl');
+    writeTranscript(filePath, [
+      { type: 'user', message: { role: 'user', content: 'older prompt' } },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'older answer' }] } },
+      { type: 'user', message: { role: 'user', content: 'Run the tests' } },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'All tests pass.' }] } },
+      {
+        type: 'user',
+        isMeta: true,
+        message: { role: 'user', content: '<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request.</local-command-caveat>' },
+      },
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: '<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args>Make the summary MAXIMALLY COMPLETE: keep every decision.</command-args>',
+        },
+      },
+      { type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted PreCompact [grep -qF -e \'x\'] completed successfully</local-command-stdout>' } },
+    ]);
+
+    // The window is the last 3 REAL entries: the three skipped ones are not among them.
+    assert.deepEqual(readRecentClaudeTurns(filePath, limit), [
+      { role: 'user', text: 'Run the tests' },
+      { role: 'assistant', text: 'All tests pass.' },
+      { role: 'user', text: '/compact' },
+    ]);
+  });
+
+  it('skips user entries made only of injected tags, in either content shape, and cuts an injected block out of a typed message', () => {
+    const filePath = path.join(dir, 'injected.jsonl');
+    writeTranscript(filePath, [
+      { type: 'user', message: { role: 'user', content: '<system-reminder>be careful</system-reminder>' } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '<task-notification>\n<task-id>abc</task-id>\n</task-notification>' }] } },
+      { type: 'user', message: { role: 'user', content: '<local-command-stderr>boom</local-command-stderr>' } },
+      { type: 'user', message: { role: 'user', content: '<system-reminder>be brief</system-reminder>\n\nfinal user turn' } },
+    ]);
+
+    assert.deepEqual(readRecentClaudeTurns(filePath, limit), [{ role: 'user', text: 'final user turn' }]);
+  });
+
   it('tolerates a half-written trailing line without dropping earlier turns', () => {
     const filePath = path.join(dir, 'truncated.jsonl');
     const good = [

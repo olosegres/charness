@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**The "↩️ Resumed — last 3 messages" preview no longer shows the Claude Code command tags: a `/compact` you ran directly in Claude Code shows as just `/compact`.**
+Before, resuming a conversation whose last entries were a command run in Claude Code itself printed the raw `<local-command-caveat>`,
+`<command-name>… <command-args>…` (with the whole, often very long, argument text) and `<local-command-stdout>` entries as if they were your
+messages. Now a command shows as its name only, the caveat and the output entries around it are left out, and so is any other entry made only of
+text the CLI injected itself (`<system-reminder>`, a `<task-notification>`). The entries left out do not count: the preview still shows the last
+three real messages. The same goes for the recap after a bot restart, for the context handed over when a limit moves a topic to another agent, and
+for the titles in the `/sessions` list.
+
 **The skills Charness gives its agents can now be switched off — `/bot_skills` in General for the whole instance, in a topic for that topic only.**
 A deployment whose workspace instructions name skills of their own (a Jira-only instance, say) no longer has to live with the bot's
 `charness-manager` and delegate skills beside them, nor with the hint in the bot MCP's instructions to load the manager. `/bot_skills` opens a
