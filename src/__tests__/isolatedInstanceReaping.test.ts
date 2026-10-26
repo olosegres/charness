@@ -4,7 +4,10 @@
  * process group, which no `exit` handler sees — once left its server and five
  * fake agents running for six hours. Two guards: a detached reaper that ends
  * the instance when its owner dies, and the next run's sweep of a provably
- * dead earlier instance of the same prefix (and only such: a live one is kept).
+ * dead earlier instance of the same prefix (and only such: a live one is kept). The teardown itself must not lean on the
+ * agents' goodwill either: a fake `claude` that a test told to ignore its stop signals (`ignore-stop-signals`), left so by a
+ * run that ended mid-step, outlived its tmux server and its folder for a day and a half — the teardown ends what the
+ * instance started whatever its agents do with their signals, and fails the file when a fake agent it launched still runs.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -16,8 +19,11 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
+import { fakeClaudeLogFileNames } from './jiraE2e/fakeClaudeContract';
 import {
+  checkIsProcessRunning,
   createIsolatedInstanceLayout,
+  fakeClaudePath,
   getProcessStartTicks,
   getTmuxEnv,
   getTmuxSocketDir,
@@ -36,6 +42,16 @@ const reaperWaitMs = 15 * 1000;
 const waitStepMs = 250;
 const isolatedCharnessPath = path.join(__dirname, 'e2e', 'isolatedCharness.ts');
 const tsxLoaderPath = path.join(__dirname, '..', '..', 'node_modules', 'tsx', 'dist', 'loader.mjs');
+
+/** An agent a test left deaf to its stop signals: it writes its pid to `process.argv[2]`, ignores a hang-up and a terminate, and idles. */
+const stopSignalIgnoringAgentCode = [
+  `require('fs').writeFileSync(process.argv[2], String(process.pid));`,
+  `process.on('SIGHUP', () => {});`,
+  `process.on('SIGTERM', () => {});`,
+  `setInterval(() => {}, 1000);`,
+].join('\n');
+/** A pid this test names as a long-gone fake agent: no such process runs (the kernel's pid space ends far below it). */
+const gonePid = 2 ** 22 + 1;
 
 const createdRoots: string[] = [];
 
@@ -150,8 +166,65 @@ describe('a private tmux server of a process-level test never outlives the test'
   it('a normal removal leaves nothing for the reaper or the next run', async () => {
     const layout = createIsolatedInstanceLayout(prefix, []);
     createdRoots.push(layout.testRoot);
+    // The launch log names a gone process and a running one that is no fake agent (a reused pid): neither is a survivor.
+    fs.writeFileSync(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.launches), [gonePid, process.pid].map((pid) => `${JSON.stringify({ pid })}\n`).join(''));
+    const exitCodeBefore = process.exitCode;
     removeIsolatedInstanceSync(layout, null);
+    assert.equal(process.exitCode, exitCodeBefore, 'nothing was reported');
     assert.ok(!fs.existsSync(layout.testRoot));
     assert.deepEqual(reapDeadIsolatedInstances(prefix), []);
+  });
+
+  it('a teardown ends an agent that ignores its hang-up and its terminate, and one that ran without a tmux server of its own', async () => {
+    const layout = createIsolatedInstanceLayout(prefix, []);
+    createdRoots.push(layout.testRoot);
+    const agentPath = path.join(layout.testRoot, 'agent.js');
+    fs.writeFileSync(agentPath, stopSignalIgnoringAgentCode);
+    // The agent as the instance's tmux server hosts it: a pane of the private server, with the instance's HOME.
+    const pidPaths = ['tmux-agent.pid', 'outside-agent.pid'].map((fileName) => path.join(layout.testRoot, fileName));
+    const started = spawnSync('tmux', ['-L', layout.tmuxSocketName, 'new-session', '-d', '-s', 'agent', `env HOME='${layout.instanceHome}' '${process.execPath}' '${agentPath}' '${pidPaths[0]}'`], { env: getTmuxEnv(layout.tmuxTmpDir), encoding: 'utf8' });
+    assert.equal(started.status, 0, `the private server started the agent: ${started.stderr}`);
+    // And one the instance started outside its tmux server (an orphan of an earlier teardown, a respawn after the server's death).
+    const outsideAgent = spawn(process.execPath, [agentPath, pidPaths[1]], { env: { ...process.env, HOME: layout.instanceHome }, detached: true, stdio: 'ignore' });
+    outsideAgent.unref();
+    await waitUntil('both agents to run', reaperWaitMs, () => pidPaths.every((pidPath) => fs.existsSync(pidPath) && fs.readFileSync(pidPath, 'utf8') !== ''));
+    const agentPids = pidPaths.map((pidPath) => Number(fs.readFileSync(pidPath, 'utf8')));
+    try {
+      for (const pid of agentPids) assert.ok(checkIsProcessRunning(pid), `${pid} runs before the teardown`);
+      removeIsolatedInstanceSync(layout, null);
+      await waitUntil('the agents to end', reaperWaitMs, () => agentPids.every((pid) => !checkIsProcessRunning(pid)));
+      assert.ok(!fs.existsSync(layout.testRoot), 'the folder is gone');
+    } finally {
+      for (const pid of agentPids) {
+        if (checkIsProcessRunning(pid)) process.kill(pid, 'SIGKILL');
+      }
+    }
+  });
+
+  it('a fake agent the teardown cannot end fails the file: it names the pid and the run exits non-zero', async () => {
+    // Started with another HOME than the instance's, so the sweep does not know it; the launch log still names it.
+    const survivor = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', fakeClaudePath], { detached: true, stdio: 'ignore' });
+    survivor.unref();
+    assert.ok(survivor.pid, 'the survivor started');
+    // The teardown runs in a process of its own: it must fail THAT process, not this test.
+    const childCode = [
+      `const helperModule = await import(${JSON.stringify(pathToFileURL(isolatedCharnessPath).href)});`,
+      `const { createIsolatedInstanceLayout, removeIsolatedInstanceSync } = helperModule.default ?? helperModule;`,
+      `const fs = await import('fs');`,
+      `const path = await import('path');`,
+      `const layout = createIsolatedInstanceLayout(${JSON.stringify(prefix)}, []);`,
+      `fs.writeFileSync(path.join(layout.fakeLogDir, ${JSON.stringify(fakeClaudeLogFileNames.launches)}), JSON.stringify({ pid: Number(process.env.SURVIVOR_PID) }) + '\\n');`,
+      `removeIsolatedInstanceSync(layout, null);`,
+    ].join('\n');
+    try {
+      const teardown = spawnSync(process.execPath, ['--import', pathToFileURL(tsxLoaderPath).href, '--input-type=module', '--eval', childCode], {
+        encoding: 'utf8',
+        env: { ...process.env, SURVIVOR_PID: survivor.pid.toString() },
+      });
+      assert.equal(teardown.status, 1, `the file's process exits non-zero: ${teardown.stderr}`);
+      assert.match(teardown.stderr, new RegExp(`still running after the teardown.*${survivor.pid}`));
+    } finally {
+      process.kill(survivor.pid, 'SIGKILL');
+    }
   });
 });

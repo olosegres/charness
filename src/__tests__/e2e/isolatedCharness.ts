@@ -15,6 +15,13 @@
  * owner is gone, and every new layout first reaps the dead instances of its own
  * prefix left in the temp dir (`reapDeadIsolatedInstances`).
  *
+ * The sweep does not lean on the agents' goodwill: killing the tmux server only
+ * hangs its panes up, and a fake `claude` a test told to ignore its stop signals
+ * (`ignore-stop-signals`) outlived a run that ended mid-step — and its folder —
+ * for a day and a half. So the sweep also SIGKILLs every process that runs with
+ * the instance's own HOME, then checks the fake's own launch log: a fake agent
+ * that still runs fails the test file (`process.exitCode`).
+ *
  * Nothing here knows which connector a test serves: the test writes the env
  * file and chooses the readiness line.
  */
@@ -27,7 +34,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
-import { fakeClaudePlatformEnvName, fakeClaudeQueuedWaitMaxMsEnvName, fakeClaudeSlowTurnMsEnvName, fakeClaudeTuiLaunchesEnvName, type FakeClaudePlatform } from '../jiraE2e/fakeClaudeContract';
+import { fakeClaudeLogFileNames, fakeClaudePlatformEnvName, fakeClaudeQueuedWaitMaxMsEnvName, fakeClaudeSlowTurnMsEnvName, fakeClaudeTuiLaunchesEnvName, type FakeClaudePlatform } from '../jiraE2e/fakeClaudeContract';
 import type { ClosedRequestRecord } from '../../requests/types';
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
@@ -65,15 +72,39 @@ export interface IsolatedInstanceOwner {
 /** `/proc/<pid>/stat` fields start after the parenthesised command name; `starttime` is field 22 of the whole line. */
 const procStatStartTimeFieldIndex = 22;
 const procStatFieldsBeforeCommandEnd = 2;
+/** The state letter of a process that exited and waits for its parent to collect it. */
+const procStatZombieState = 'Z';
+
+/** The fields of `/proc/<pid>/stat` after the parenthesised command name (field 3, the state, first); `null` without `/proc` or for a gone pid. */
+function readProcStatFieldsAfterCommand(pid: number): string[] | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/);
+  } catch {
+    return null;
+  }
+}
 
 /** @description A process's start time in clock ticks since boot (field 22 of `/proc/<pid>/stat`); `null` without `/proc` or for a gone pid. */
 export function getProcessStartTicks(pid: number): number | null {
-  const statPath = `/proc/${pid}/stat`;
-  if (!fs.existsSync(statPath)) return null;
-  const stat = fs.readFileSync(statPath, 'utf8');
-  const afterCommand = stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/);
+  const afterCommand = readProcStatFieldsAfterCommand(pid);
+  if (afterCommand === null) return null;
   const startTicks = Number(afterCommand[procStatStartTimeFieldIndex - procStatFieldsBeforeCommandEnd - 1]);
   return Number.isInteger(startTicks) ? startTicks : null;
+}
+
+/** @description Whether `pid` still runs: a process that exited and waits to be collected (a zombie) does not. Without `/proc`, a signal-0 probe. */
+export function checkIsProcessRunning(pid: number): boolean {
+  if (!fs.existsSync('/proc/self')) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const afterCommand = readProcStatFieldsAfterCommand(pid);
+  return afterCommand !== null && afterCommand[0] !== procStatZombieState;
 }
 
 /** @description Whether the owning process still runs — the same process, not another one under a reused pid. */
@@ -135,12 +166,51 @@ function listInstanceTmuxSocketPaths(tmuxTmpDir: string, tmuxSocketName: string)
   ];
 }
 
-/** Kill the instance's own tmux servers (which ends the agents in them) and remove its folder. */
+/** How long the teardown waits for a SIGKILLed process to be gone, and how often it looks. */
+const killTakesEffectWaitMs = 2000;
+const killTakesEffectPollMs = 20;
+
+/** The instance's HOME folder inside its root: what `run-isolated.sh` hands the bot and every agent launch hands its agent. */
+const instanceHomeFolderName = 'home';
+
+/** The value of one variable of a running process's environment (Linux `/proc`); `null` when it is unset or the process cannot be read (gone, or not ours). */
+function readProcessEnvironmentValue(pid: number, name: string): string | null {
+  try {
+    const entryPrefix = `${name}=`;
+    const entry = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').find((candidate) => candidate.startsWith(entryPrefix));
+    return entry === undefined ? null : entry.slice(entryPrefix.length);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * SIGKILL every process that runs with the instance's own HOME — the bot, its tmux server, the agents, whatever hosts them,
+ * `env -i` launches included (their allowlist carries HOME). A hang-up from a killed tmux server is a request an agent can
+ * ignore; this is not. Nothing else has that HOME: it is a folder inside the instance's own temp root, so the root is
+ * required to be a direct child of the temp dir before anything is killed by it.
+ */
+function killInstanceProcessesSync(testRoot: string): void {
+  if (!fs.existsSync('/proc/self') || path.dirname(testRoot) !== fs.realpathSync(os.tmpdir())) return;
+  const instanceHome = path.join(testRoot, instanceHomeFolderName);
+  for (const entry of fs.readdirSync('/proc')) {
+    const pid = Number(entry);
+    if (!Number.isInteger(pid) || pid === process.pid || readProcessEnvironmentValue(pid, 'HOME') !== instanceHome) continue;
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Gone meanwhile.
+    }
+  }
+}
+
+/** Kill the instance's own tmux servers (which hangs up the agents in them), then every process of the instance that did not hang up, and remove its folder. */
 function killInstanceTmuxServersAndFolderSync(testRoot: string, tmuxTmpDir: string, tmuxSocketName: string): void {
   // Every kill names its socket by FULL PATH (`-S`), which tmux never swaps for the server `$TMUX` names.
   for (const socketPath of listInstanceTmuxSocketPaths(tmuxTmpDir, tmuxSocketName)) {
     spawnSync('tmux', ['-S', socketPath, 'kill-server'], { env: getTmuxEnv(null) });
   }
+  killInstanceProcessesSync(testRoot);
   fs.rmSync(path.join(getTmuxSocketDir('/tmp'), tmuxSocketName), { force: true });
   fs.rmSync(testRoot, { recursive: true, force: true });
 }
@@ -412,7 +482,7 @@ export function createIsolatedInstanceLayout(prefix: string, projectFolders: rea
   const testRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   const layout: IsolatedInstanceLayout = {
     testRoot,
-    instanceHome: path.join(testRoot, 'home'),
+    instanceHome: path.join(testRoot, instanceHomeFolderName),
     dataDir: path.join(testRoot, 'data'),
     workRoot: path.join(testRoot, 'work'),
     fakeLogDir: path.join(testRoot, 'fake-claude-log'),
@@ -623,8 +693,39 @@ export class IsolatedCharness {
 export function removeIsolatedInstanceSync(layout: IsolatedInstanceLayout | null, charness: IsolatedCharness | null): void {
   charness?.killSync();
   if (!layout) return;
+  // Read before the folder goes: the fake's own log is the ground truth of which agents the instance started.
+  const launchedAgentPids = readJsonLines<{ pid: number }>(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.launches)).map(({ pid }) => pid);
   // The folder's removal is also what ends the layout's detached reaper.
   killInstanceTmuxServersAndFolderSync(layout.testRoot, layout.tmuxTmpDir, layout.tmuxSocketName);
+  failOnRunningFakeAgents(launchedAgentPids);
+}
+
+/** Whether `pid` is a running fake agent: alive, and its command line names the fake (a pid that another process reused is not one). */
+function checkIsFakeAgentRunning(pid: number): boolean {
+  if (!checkIsProcessRunning(pid)) return false;
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(fakeClaudePath);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A fake agent that outlived the teardown is a leak that would run for days: it fails the test file. Never by a throw — the
+ * teardown runs in `after` hooks that still have servers to stop and in `exit` handlers; a non-zero exit code fails the file
+ * from either.
+ */
+function failOnRunningFakeAgents(launchedPids: readonly number[]): void {
+  // A SIGKILL takes effect a moment after the call, and the check runs where nothing asynchronous can: a bounded synchronous wait.
+  const deadline = Date.now() + killTakesEffectWaitMs;
+  let runningPids = launchedPids.filter(checkIsFakeAgentRunning);
+  while (runningPids.length > 0 && Date.now() < deadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0, killTakesEffectPollMs);
+    runningPids = runningPids.filter(checkIsFakeAgentRunning);
+  }
+  if (runningPids.length === 0) return;
+  console.error(`[isolated] fake agents still running after the teardown (pids ${runningPids.join(', ')}): they outlive this run`);
+  process.exitCode = 1;
 }
 
 /** A signal ends the run through `exit`, whose handler cleans up (a signal's default action would skip it). */
