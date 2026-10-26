@@ -10,14 +10,15 @@
  *  4. ON.
  *
  * Read by the layers that start an agent (both Claude adapters, the OpenCode server's start, the bot MCP's instructions),
- * which must not reach `state.ts` or `bot.ts`: the composition root registers the reader once at boot.
+ * which must not reach `state.ts` or `bot.ts`: the composition root registers the reader once at boot. Until then — the hot
+ * supervisor starts the OpenCode server before any state is loaded — the reader knows only `settings.json`.
  */
 import type { SessionKey } from '../sessionKey';
+import { createBotSkillsSettingsReader, getInstanceSettingsPath } from '../instanceSettings';
+import type { BotSkillsSetting } from './botSkillsSetting';
 import { resolveDefaultOnThreadToggle } from './threadToggle';
 
-/** The values `settings.json`'s `botSkills` takes. */
-export const botSkillsSettingValues = ['on', 'off'] as const;
-export type BotSkillsSetting = (typeof botSkillsSettingValues)[number];
+export type { BotSkillsSetting };
 
 /**
  * @description Resolve the switch from the topic's choice and the instance default. A topic choice (true OR false) wins;
@@ -44,22 +45,45 @@ export interface BotSkillsSources {
  */
 export type BotSkillsReader = (key: SessionKey | null) => boolean;
 
-/** The instance default: General's value, else `settings.json`'s (read only when General never chose); `undefined` = neither says. */
-function getInstanceDefault(sources: BotSkillsSources): boolean | undefined {
+/** Where the instance value comes from: General's own choice, `settings.json`'s seed, or the built-in ON. */
+export type BotSkillsInstanceSource = 'general' | 'settingsFile' | 'builtInDefault';
+
+/** @name BotSkillsInstanceValue @description The instance value and the layer that gave it. */
+export interface BotSkillsInstanceValue {
+  isEnabled: boolean;
+  source: BotSkillsInstanceSource;
+}
+
+/**
+ * @description The instance value — what a conversation without a choice of its own gets: General's value, else
+ * `settings.json`'s (read only when General never chose), else ON.
+ */
+export function readBotSkillsInstanceValue(sources: Pick<BotSkillsSources, 'getGeneralValue' | 'getSettingsValue'>): BotSkillsInstanceValue {
   const generalValue = sources.getGeneralValue();
-  if (generalValue !== undefined) return generalValue;
+  if (generalValue !== undefined) return { isEnabled: generalValue, source: 'general' };
   const settingsValue = sources.getSettingsValue();
-  return settingsValue === null ? undefined : settingsValue === 'on';
+  if (settingsValue !== null) return { isEnabled: settingsValue === 'on', source: 'settingsFile' };
+  return { isEnabled: true, source: 'builtInDefault' };
 }
 
 /** @description The reader over the layers of {@link BotSkillsSources}: topic choice → General → `settings.json` → ON. */
 export function createBotSkillsReader(sources: BotSkillsSources): BotSkillsReader {
-  return (key) => resolveBotSkillsEnabled(getInstanceDefault(sources), key === null ? undefined : sources.getTopicOverride(key));
+  return (key) => resolveBotSkillsEnabled(readBotSkillsInstanceValue(sources).isEnabled, key === null ? undefined : sources.getTopicOverride(key));
 }
 
-let botSkillsReader: BotSkillsReader = () => true;
+/**
+ * @description The reader in force before the bot registers its own: `settings.json` alone (it needs no state), so a start
+ * that comes first — the hot supervisor's pre-start of the OpenCode server — already follows the file.
+ */
+export const settingsOnlyBotSkillsReader: BotSkillsReader = createBotSkillsReader({
+  getGeneralValue: () => undefined,
+  getTopicOverride: () => undefined,
+  getSettingsValue: createBotSkillsSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line)),
+});
 
-/** @description Register where {@link checkIsBotSkillsEnabled} reads from (the bot, once, at start-up). Until then the skills are ON. */
+let botSkillsReader: BotSkillsReader = settingsOnlyBotSkillsReader;
+
+/** @description Register where {@link checkIsBotSkillsEnabled} reads from (the bot, once, at start-up). Until then {@link settingsOnlyBotSkillsReader} answers. */
 export function setBotSkillsReader(reader: BotSkillsReader): void {
   botSkillsReader = reader;
 }

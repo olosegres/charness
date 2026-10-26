@@ -2,8 +2,9 @@
  * @description What the «Bot skills» switch (`/bot_skills`) does to the bot MCP's instructions — the hint to load
  * `charness-manager` — per scope, over the REAL server (HTTP + the SDK client, the way an agent connects): a Telegram
  * topic with the skills off loses the hint but keeps the worker-watch recipe (a tool fact); a tracker conversation, whose
- * bullet is the hint alone, loses the bullet; a `dir:` scope (OpenCode, one registration for every topic bound to the
- * folder) keeps the hint while any of them has the skills on. The digest an adopted process is compared by moves with it.
+ * bullet is the hint alone, loses the bullet; a `dir:` scope (the OpenCode registration of a folder) counts the folder's
+ * OpenCode topics alone — a Claude topic bound to the same folder has its own scope — and keeps the hint while any of
+ * them has the skills on. The digest an adopted process is compared by moves with it.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -27,11 +28,13 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { setBotSkillsReader } from '../utils/botSkills';
 import { workerWatchPinArgument } from '../scheduler/workerWatch';
+import { claudeJsonStreamAdapterName, openCodeAdapterName } from '../adapters/adapterNames';
 
 const secret = 'e'.repeat(64);
 const skillsOnTopic = makeTelegramKey(-1001111111111, 41);
 const skillsOffTopic = makeTelegramKey(-1001111111111, 42);
 const sharedFolderTopic = makeTelegramKey(-1001111111111, 43);
+const claudeSharedFolderTopic = makeTelegramKey(-1001111111111, 44);
 const jiraConversation = makeJiraKey('PROJ-12');
 const sharedFolder = '/home/user/projects/shared';
 const lonelyFolder = '/home/user/projects/lonely';
@@ -46,8 +49,9 @@ let clients: Client[];
 /** The conversations whose skills are off, and the instance value (key null) the readers fall back to. */
 let skillsOffKeys: Set<string>;
 let isInstanceValueOn: boolean;
-/** The topics bound to each folder, as `getThreadsForDirectory` reports them. */
+/** The topics bound to each folder, as `getThreadsForDirectory` reports them, and the backend each one last ran on. */
 let topicsByFolder: Map<string, SessionKey[]>;
+let adapterNameByTopic: Map<string, string>;
 
 function buildDeps(): SchedulerMcpDeps {
   return {
@@ -55,7 +59,7 @@ function buildDeps(): SchedulerMcpDeps {
     armJob: () => {},
     disarmJob: () => {},
     getThreadsForDirectory: (directory) => (topicsByFolder.get(directory) ?? []).map(keyToString),
-    getThreadAdapterName: () => 'claude',
+    getThreadAdapterName: (threadKey) => adapterNameByTopic.get(threadKey),
     unpinMessages: async () => {},
     sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
     sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
@@ -71,6 +75,7 @@ beforeEach(async () => {
   skillsOffKeys = new Set([keyToString(skillsOffTopic)]);
   isInstanceValueOn = true;
   topicsByFolder = new Map();
+  adapterNameByTopic = new Map();
   clients = [];
   setBotSkillsReader((key) => (key === null ? isInstanceValueOn : !skillsOffKeys.has(keyToString(key))));
   handle = createSchedulerMcpServer(buildDeps());
@@ -160,17 +165,31 @@ describe('the instructions a connecting agent gets, per scope', () => {
     assert.ok((await readInstructions(threadScope(jiraConversation))).includes(orchestrationBullet));
   });
 
-  it('a dir scope keeps the hint while any topic of the folder has the skills on, and drops it when every one is off', async () => {
+  it('a dir scope keeps the hint while any OpenCode topic of the folder has the skills on, and drops it when every one is off', async () => {
     topicsByFolder.set(sharedFolder, [skillsOffTopic, sharedFolderTopic]);
+    for (const topic of topicsByFolder.get(sharedFolder) ?? []) adapterNameByTopic.set(keyToString(topic), openCodeAdapterName);
     assert.ok((await readInstructions({ kind: 'dir', directory: sharedFolder })).includes(managerSkillHint), 'one of the two still wants it');
     skillsOffKeys.add(keyToString(sharedFolderTopic));
     assert.ok(!(await readInstructions({ kind: 'dir', directory: sharedFolder })).includes(managerSkillHint), 'both are off');
   });
 
-  it('a dir scope with no topic bound follows the instance value', async () => {
+  it('a Claude topic bound to the same folder does not hold the OpenCode hint on — its skills have a scope of their own', async () => {
+    topicsByFolder.set(sharedFolder, [skillsOffTopic, claudeSharedFolderTopic]);
+    adapterNameByTopic.set(keyToString(skillsOffTopic), openCodeAdapterName);
+    adapterNameByTopic.set(keyToString(claudeSharedFolderTopic), claudeJsonStreamAdapterName);
+    assert.ok(!(await readInstructions({ kind: 'dir', directory: sharedFolder })).includes(managerSkillHint), 'the Claude topic has the skills on, the folder\'s only OpenCode topic does not');
+    assert.ok((await readInstructions(threadScope(claudeSharedFolderTopic))).includes(managerSkillHint), 'and the Claude topic still gets its own hint');
+  });
+
+  it('a dir scope with no OpenCode topic bound — no topic at all, or only Claude ones — follows the instance value', async () => {
     topicsByFolder.set(lonelyFolder, []);
-    assert.ok((await readInstructions({ kind: 'dir', directory: lonelyFolder })).includes(managerSkillHint));
-    isInstanceValueOn = false;
-    assert.ok(!(await readInstructions({ kind: 'dir', directory: lonelyFolder })).includes(managerSkillHint));
+    topicsByFolder.set(sharedFolder, [skillsOffTopic]);
+    adapterNameByTopic.set(keyToString(skillsOffTopic), claudeJsonStreamAdapterName);
+    for (const directory of [lonelyFolder, sharedFolder]) {
+      isInstanceValueOn = true;
+      assert.ok((await readInstructions({ kind: 'dir', directory })).includes(managerSkillHint), directory);
+      isInstanceValueOn = false;
+      assert.ok(!(await readInstructions({ kind: 'dir', directory })).includes(managerSkillHint), directory);
+    }
   });
 });

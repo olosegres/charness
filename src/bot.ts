@@ -292,7 +292,7 @@ import {
 import { formatIsoLocalOffset } from './utils/isoTimestamp';
 import { getThreadEffortView, setInstanceDefaultEffortReader, type ThreadEffortView } from './effortLevels';
 import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createTodoSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath } from './instanceSettings';
-import { checkIsBotSkillsEnabled, createBotSkillsReader, setBotSkillsReader } from './utils/botSkills';
+import { checkIsBotSkillsEnabled, createBotSkillsReader, readBotSkillsInstanceValue, setBotSkillsReader, type BotSkillsSources } from './utils/botSkills';
 import { quietPeriodMs } from './selfUpdate/constants';
 import { getLaunchEnvironment } from './selfUpdate/launchEnvironment';
 import { createDefaultReexecDeps, reexecProcess } from './selfUpdate/restart';
@@ -1147,11 +1147,12 @@ function getTodoRegistry(): TodoRegistry {
  * The «Bot skills» switch (`/bot_skills`, `utils/botSkills.ts`): the topic's own choice, else General's value, else `settings.json`'s
  * `botSkills` (re-read when the file changes), else ON. `state` is read when asked, so the reader is registered once it is loaded.
  */
-const botSkillsReader = createBotSkillsReader({
+const botSkillsSources: BotSkillsSources = {
   getGeneralValue: () => state.getBotSkillsGlobalValue(),
   getTopicOverride: (key) => state.getBotSkillsOverride(key),
   getSettingsValue: createBotSkillsSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line)),
-});
+};
+const botSkillsReader = createBotSkillsReader(botSkillsSources);
 
 /** `settings.json`'s `todo` (on / off, the reminder's interval), re-read when the file changes. */
 const readTodoSettings = createTodoSettingsReader(() => getInstanceSettingsPath(), (line) => console.error(line));
@@ -7365,6 +7366,7 @@ registerAutoContinueLimitsCommands();
 const { registerBotSkillsCommands, registerBotSkillsCallbacks } = createBotSkills({
   ...botCore,
   readBotSkills: botSkillsReader,
+  readBotSkillsInstanceValue: () => readBotSkillsInstanceValue(botSkillsSources),
   checkIsOpenCodeTopic: (key) => (getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name) === openCodeAdapterName,
 });
 

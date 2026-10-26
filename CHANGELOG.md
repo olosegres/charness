@@ -11,8 +11,10 @@ into its confirmation (the texts are in all 12 languages). An instance without G
 Claude conversation starts and resumes without the bot's skills folder, and the hint is gone from its instructions (the worker-watch recipe in
 `schedule_create` stays: it is a tool fact, not a skill). A running agent keeps its skills until its next start (the idle stop and resume, a new
 session or a model change). OpenCode has one server for every topic, so only the instance value counts there: the server is replaced at the
-bot's next start, once nothing works in it, by one started without (or, when turned back on, with) the skills folder, and a topic's own choice
-changes only its hint — its screen says the listed skills stay. A mistyped `botSkills` is logged once as `[Settings] settings.json botSkills: …`
+bot's next start, once nothing works in it, by one started without (or, when turned back on, with) the skills folder — a `settings.json` that says
+`off` is followed already by the server the hot supervisor starts first — and a topic's own choice changes only its hint — its screen says the listed skills stay, that the hint changes when the OpenCode server next restarts and that the
+OpenCode topics of one folder share it. General's screen names where the value comes from (set in General, `settings.json`, or the built-in
+default). A mistyped `botSkills` is logged once as `[Settings] settings.json botSkills: …`
 and ON applies.
 
 **The tmux backend for Claude Code is now marked deprecated: it is frozen and no longer developed, and `/claude_mode` says so.**

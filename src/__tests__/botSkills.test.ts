@@ -17,17 +17,20 @@ import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import {
   checkIsBotSkillsEnabled,
   createBotSkillsReader,
+  readBotSkillsInstanceValue,
   resolveBotSkillsEnabled,
   setBotSkillsReader,
+  settingsOnlyBotSkillsReader,
   type BotSkillsSetting,
 } from '../utils/botSkills';
+import { resetInstanceSettingsCache } from '../instanceSettings';
 
 const topic = makeTelegramKey(-1001111111111, 42);
 const otherTopic = makeTelegramKey(-1001111111111, 43);
 const jiraConversation = makeJiraKey('PROJ-1');
 
 afterEach(() => {
-  setBotSkillsReader(() => true);
+  setBotSkillsReader(settingsOnlyBotSkillsReader);
 });
 
 describe('resolveBotSkillsEnabled', () => {
@@ -123,10 +126,50 @@ describe('the reader over its layers: topic choice → General → settings.json
   });
 });
 
+describe('the instance value and its source', () => {
+  function read(general: boolean | undefined, settings: BotSkillsSetting | null) {
+    return readBotSkillsInstanceValue({ getGeneralValue: () => general, getSettingsValue: () => settings });
+  }
+
+  it('names the layer that gave it: General\'s own choice, else the settings file, else the built-in default', () => {
+    assert.deepEqual(read(false, 'on'), { isEnabled: false, source: 'general' });
+    assert.deepEqual(read(true, 'off'), { isEnabled: true, source: 'general' });
+    assert.deepEqual(read(undefined, 'off'), { isEnabled: false, source: 'settingsFile' });
+    assert.deepEqual(read(undefined, 'on'), { isEnabled: true, source: 'settingsFile' });
+    assert.deepEqual(read(undefined, null), { isEnabled: true, source: 'builtInDefault' });
+  });
+});
+
 describe('the registered reader', () => {
-  it('is ON until one is registered, then answers for every caller', () => {
-    assert.equal(checkIsBotSkillsEnabled(topic), true);
-    assert.equal(checkIsBotSkillsEnabled(null), true);
+  let configDir = '';
+  let originalEnvFile: string | undefined;
+
+  beforeEach(() => {
+    configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-bot-skills-config-'));
+    originalEnvFile = process.env.ENV_FILE;
+    process.env.ENV_FILE = path.join(configDir, 'instance.env');
+    resetInstanceSettingsCache();
+  });
+
+  afterEach(() => {
+    if (originalEnvFile === undefined) delete process.env.ENV_FILE;
+    else process.env.ENV_FILE = originalEnvFile;
+    resetInstanceSettingsCache();
+    fs.rmSync(configDir, { recursive: true, force: true });
+  });
+
+  it('before the bot registers its own, settings.json decides — a start that comes first (the hot supervisor\'s OpenCode pre-start) follows the file', () => {
+    assert.equal(checkIsBotSkillsEnabled(null), true, 'no file: ON');
+    fs.writeFileSync(path.join(configDir, 'settings.json'), '{ "botSkills": "off" }\n');
+    assert.equal(checkIsBotSkillsEnabled(null), false, 'the seed off');
+    assert.equal(checkIsBotSkillsEnabled(topic), false, 'a conversation follows the instance value too');
+    fs.writeFileSync(path.join(configDir, 'settings.json'), '{ "botSkills": "on" }\n');
+    assert.equal(checkIsBotSkillsEnabled(null), true, 'a hand edit applies without a restart');
+  });
+
+  it('is replaced by the one the bot registers, which answers for every caller', () => {
+    fs.writeFileSync(path.join(configDir, 'settings.json'), '{ "botSkills": "off" }\n');
+    assert.equal(checkIsBotSkillsEnabled(topic), false);
     setBotSkillsReader((key) => key !== null && key.thread !== topic.thread);
     assert.equal(checkIsBotSkillsEnabled(topic), false);
     assert.equal(checkIsBotSkillsEnabled(otherTopic), true);

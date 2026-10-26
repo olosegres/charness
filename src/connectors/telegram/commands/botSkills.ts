@@ -6,7 +6,7 @@
 import { Markup, type Context } from 'telegraf';
 import type { SessionKey } from '../../../sessionKey';
 import { t } from '../../../i18n';
-import type { BotSkillsReader } from '../../../utils/botSkills';
+import type { BotSkillsInstanceSource, BotSkillsInstanceValue, BotSkillsReader } from '../../../utils/botSkills';
 import type { BotCore } from './botCore';
 import { getCallbackMessageId } from './callbackMessage';
 
@@ -26,6 +26,8 @@ export interface BotSkillsPorts
   extends Pick<BotCore, 'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'> {
   /** Whether the switch is on for a conversation; `null` asks for the instance value (General's, else `settings.json`'s, else ON). */
   readBotSkills: BotSkillsReader;
+  /** The instance value with the layer it comes from (General's own choice, the settings file, the built-in default). */
+  readBotSkillsInstanceValue: () => BotSkillsInstanceValue;
   /** Whether the topic's backend is OpenCode, whose one server serves every topic and so cannot hide the skills from one. */
   checkIsOpenCodeTopic: (key: SessionKey) => boolean;
 }
@@ -35,12 +37,22 @@ export interface BotSkillsPorts
  * and edits the picker into its confirmation (a one-shot picker, like `/language`): the menu is gone once a choice is made.
  */
 export function createBotSkills(ports: BotSkillsPorts) {
-  const { bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, readBotSkills, checkIsOpenCodeTopic } = ports;
+  const { bot, command, getState, replyToThread, editThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, readBotSkills, readBotSkillsInstanceValue, checkIsOpenCodeTopic } = ports;
 
   const formatState = (isEnabled: boolean): string => (isEnabled ? t('botSkills.on') : t('botSkills.off'));
 
-  /** The OpenCode topic's note: its server is shared, so this switch cannot take the listed skills away from it. */
-  const getOpenCodeNote = (key: SessionKey): string[] => (checkIsOpenCodeTopic(key) ? [t('botSkills.openCodeTopicNote')] : []);
+  /**
+   * What the topic is told about the agent it has: a Claude agent keeps its skills until its next start; an OpenCode topic's
+   * skills stay listed (one server serves every topic) and only the hint changes, when that server next restarts — and it is
+   * shared with the OpenCode topics of the same folder.
+   */
+  const getAgentNote = (key: SessionKey): string => (checkIsOpenCodeTopic(key) ? t('botSkills.openCodeTopicNote') : t('botSkills.runningAgentNote'));
+
+  const instanceSourceKeys: Record<BotSkillsInstanceSource, string> = {
+    general: 'botSkills.instanceSourceGeneral',
+    settingsFile: 'botSkills.instanceSourceSettingsFile',
+    builtInDefault: 'botSkills.instanceSourceBuiltIn',
+  };
 
   /**
    * @description Write a choice and RETURN the confirmation — the one write path behind the typed form and the buttons.
@@ -55,16 +67,19 @@ export function createBotSkills(ports: BotSkillsPorts) {
     await getState().setBotSkillsOverride(key, choice);
     const state = formatState(readBotSkills(key));
     const confirmation = choice === null ? t('botSkills.followGeneralConfirmation', { state }) : t('botSkills.setTopicConfirmation', { state });
-    return [confirmation, ...getOpenCodeNote(key)].join('\n\n');
+    // A Claude topic's note continues the confirmation's line; the OpenCode one is a paragraph of its own.
+    return checkIsOpenCodeTopic(key) ? `${confirmation}\n\n${getAgentNote(key)}` : `${confirmation} ${getAgentNote(key)}`;
   }
 
-  /** The screen's text: the value in force and where it comes from, what the switch is, and for OpenCode what it cannot do. */
+  /** The screen's text: the value in force and where it comes from, what the switch is, and what it means for the agent. */
   function buildScreenText(key: SessionKey, isGeneral: boolean): string {
     if (isGeneral) {
-      return [t('botSkills.titleGeneral', { state: formatState(readBotSkills(null)) }), t('botSkills.explanationText'), t('botSkills.generalScopeNote')].join('\n\n');
+      const instance = readBotSkillsInstanceValue();
+      const title = t('botSkills.titleGeneral', { state: formatState(instance.isEnabled), source: t(instanceSourceKeys[instance.source]) });
+      return [title, t('botSkills.explanationText'), t('botSkills.runningAgentNote'), t('botSkills.generalScopeNote')].join('\n\n');
     }
     const source = getState().getBotSkillsOverride(key) === undefined ? t('botSkills.sourceGeneral') : t('botSkills.sourceTopic');
-    return [t('botSkills.titleTopic', { state: formatState(readBotSkills(key)), source }), t('botSkills.explanationText'), ...getOpenCodeNote(key)].join('\n\n');
+    return [t('botSkills.titleTopic', { state: formatState(readBotSkills(key)), source }), t('botSkills.explanationText'), getAgentNote(key)].join('\n\n');
   }
 
   /**

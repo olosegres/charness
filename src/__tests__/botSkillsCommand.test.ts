@@ -3,12 +3,14 @@
  * telegraf instance against the fake Bot API, the real state store, recording topic sends):
  *
  *   • WIRING — the command and its three buttons;
- *   • General — the instance value (settings.json's seed while General never chose), On / Off with the current one marked,
- *     a tap that writes General's value and edits the picker into its confirmation (keyboard gone);
+ *   • General — the instance value and where it comes from (the built-in default, settings.json's seed while General never
+ *     chose, General's own choice), On / Off with the current one marked, a tap that writes General's value and edits the
+ *     picker into its confirmation (keyboard gone);
  *   • a topic — On / Off / «As in General (value)» with the topic's own choice marked, the same one-shot taps, «As in
  *     General» dropping the topic's choice, and neither side touching the other;
  *   • the typed forms (`on`, `off`, `general`) and what an unknown word does;
- *   • an OpenCode topic — the screen and the confirmation say the listed skills stay.
+ *   • an OpenCode topic — the screen and the confirmation say the listed skills stay, that the hint changes when the
+ *     OpenCode server next restarts and that the OpenCode topics of the folder share it (not the Claude agent's «next start»).
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -16,7 +18,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createBotSkills } from '../connectors/telegram/commands/botSkills';
-import { createBotSkillsReader, type BotSkillsSetting } from '../utils/botSkills';
+import { createBotSkillsReader, readBotSkillsInstanceValue, type BotSkillsSetting, type BotSkillsSources } from '../utils/botSkills';
 import { createCommandHarness, type CommandHarness } from './commandModuleHarness';
 
 let harness: CommandHarness;
@@ -25,6 +27,8 @@ let settingsValue: BotSkillsSetting | null = null;
 let isOpenCodeTopic = false;
 /** The id of the bot message each test's taps sit on. */
 let nextPickerMessageId = 900;
+/** What a Claude topic is told about its running agent. */
+const runningAgentNote = 'A running agent keeps its skills until its next start (after an idle stop, in a new session or on a model change).';
 
 function pushPicker(): number {
   nextPickerMessageId += 1;
@@ -48,13 +52,15 @@ function lastEdit() {
 describe('botSkills: /bot_skills over its ports', () => {
   before(async () => {
     harness = await createCommandHarness();
+    const sources: BotSkillsSources = {
+      getGeneralValue: () => harness.state.getBotSkillsGlobalValue(),
+      getTopicOverride: (key) => harness.state.getBotSkillsOverride(key),
+      getSettingsValue: () => settingsValue,
+    };
     const botSkills = createBotSkills({
       ...harness.core,
-      readBotSkills: createBotSkillsReader({
-        getGeneralValue: () => harness.state.getBotSkillsGlobalValue(),
-        getTopicOverride: (key) => harness.state.getBotSkillsOverride(key),
-        getSettingsValue: () => settingsValue,
-      }),
+      readBotSkills: createBotSkillsReader(sources),
+      readBotSkillsInstanceValue: () => readBotSkillsInstanceValue(sources),
       checkIsOpenCodeTopic: () => isOpenCodeTopic,
     });
     botSkills.registerBotSkillsCommands();
@@ -75,10 +81,10 @@ describe('botSkills: /bot_skills over its ports', () => {
       harness.isGeneral = true;
     });
 
-    it('shows the instance value — ON when nothing says otherwise — with On / Off and the ✓ on the one in force', async () => {
+    it('shows the instance value — ON by the built-in default when nothing says otherwise — with On / Off and the ✓ on the one in force', async () => {
       await harness.runCommand('bot_skills');
       const picker = lastReply();
-      assert.match(picker.text, /^🧰 Bot skills for ALL topics: ON\n\n/);
+      assert.match(picker.text, /^🧰 Bot skills for ALL topics: ON — the built-in default\n\n/);
       assert.match(picker.text, /A running agent keeps its skills until its next start/);
       assert.match(picker.text, /default of every topic without a choice of its own/);
       assert.deepEqual(harness.getKeyboardData(picker), [['bsk_on', 'bsk_off']]);
@@ -88,7 +94,7 @@ describe('botSkills: /bot_skills over its ports', () => {
     it('while General never chose, settings.json\'s seed is the value shown', async () => {
       settingsValue = 'off';
       await harness.runCommand('bot_skills');
-      assert.match(lastReply().text, /^🧰 Bot skills for ALL topics: OFF\n/);
+      assert.match(lastReply().text, /^🧰 Bot skills for ALL topics: OFF — from settings\.json\n/);
       assert.deepEqual(harness.getKeyboardLabels(lastReply()), [['On', 'Off ✓']]);
       assert.equal(harness.state.getBotSkillsGlobalValue(), undefined, 'looking writes nothing');
     });
@@ -111,7 +117,7 @@ describe('botSkills: /bot_skills over its ports', () => {
       assert.equal(harness.state.getBotSkillsGlobalValue(), false);
       assert.match(lastEdit().text, /^✅ Bot skills: OFF for ALL topics/);
       await harness.runCommand('bot_skills');
-      assert.match(lastReply().text, /^🧰 Bot skills for ALL topics: OFF\n/);
+      assert.match(lastReply().text, /^🧰 Bot skills for ALL topics: OFF — set in General\n/, 'General\'s own choice is named as the source, whatever the file says');
     });
 
     it('the typed forms apply at once with the same confirmation; «general» means nothing here and opens the picker', async () => {
@@ -157,7 +163,7 @@ describe('botSkills: /bot_skills over its ports', () => {
       assert.equal(harness.state.getBotSkillsGlobalValue(), true, 'General keeps its value');
       const edit = lastEdit();
       assert.equal(edit.messageId, picker);
-      assert.equal(edit.text, '✅ Bot skills: OFF for this topic. A running agent keeps its skills until its next start.');
+      assert.equal(edit.text, `✅ Bot skills: OFF for this topic. ${runningAgentNote}`);
       assert.equal(edit.hasKeyboard, false);
 
       await harness.runCommand('bot_skills');
@@ -178,7 +184,7 @@ describe('botSkills: /bot_skills over its ports', () => {
       await harness.state.setBotSkillsGlobalValue(false);
       await harness.tapButton(pushPicker(), 'bsk_same');
       assert.equal(harness.state.getBotSkillsOverride(harness.key), undefined, 'the choice is gone from the state, not only from the screen');
-      assert.equal(lastEdit().text, '✅ Bot skills in this topic follow General again: OFF. A running agent keeps its skills until its next start.');
+      assert.equal(lastEdit().text, `✅ Bot skills in this topic follow General again: OFF. ${runningAgentNote}`);
       await harness.runCommand('bot_skills');
       assert.match(lastReply().text, /^🧰 Bot skills in this topic: OFF — as in General\n/);
       assert.deepEqual(harness.getKeyboardLabels(lastReply()), [['On', 'Off'], ['As in General (OFF) ✓']]);
@@ -195,17 +201,24 @@ describe('botSkills: /bot_skills over its ports', () => {
       assert.match(lastReply().text, /^✅ Bot skills in this topic follow General again: OFF\./);
     });
 
-    it('an OpenCode topic is told its listed skills stay — on the screen and in every confirmation', async () => {
+    it('an OpenCode topic is told its listed skills stay and when the hint changes — not the Claude agent\'s «next start» — on the screen and in every confirmation', async () => {
       isOpenCodeTopic = true;
-      const note = 'its one server serves every topic, so its skills stay listed here';
+      const notes = [
+        'its one server serves every topic, so its skills stay listed here',
+        'only when the OpenCode server next restarts',
+        'OpenCode topics that share this folder share the hint: it stays while any of them has the skills on',
+      ];
       await harness.runCommand('bot_skills');
-      assert.ok(lastReply().text.includes(note), lastReply().text);
+      for (const note of notes) assert.ok(lastReply().text.includes(note), lastReply().text);
+      assert.ok(!lastReply().text.includes(runningAgentNote), 'the Claude agent\'s sentence is not said of an OpenCode topic');
       await harness.tapButton(pushPicker(), 'bsk_off');
-      assert.ok(lastEdit().text.includes(note), lastEdit().text);
-      assert.match(lastEdit().text, /^✅ Bot skills: OFF for this topic\./);
+      for (const note of notes) assert.ok(lastEdit().text.includes(note), lastEdit().text);
+      assert.ok(!lastEdit().text.includes(runningAgentNote));
+      assert.match(lastEdit().text, /^✅ Bot skills: OFF for this topic\.\n\nThis topic runs on OpenCode/);
       isOpenCodeTopic = false;
       await harness.runCommand('bot_skills', 'general');
-      assert.ok(!lastReply().text.includes(note));
+      assert.ok(!lastReply().text.includes('OpenCode server next restarts'));
+      assert.ok(lastReply().text.includes(runningAgentNote), 'a Claude topic gets its own sentence back');
     });
   });
 });

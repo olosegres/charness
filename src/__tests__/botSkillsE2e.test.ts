@@ -6,9 +6,10 @@
  *
  *   boot → two topics bound to folders
  *   → ON is the default: a topic's session launches with the bot's skills folder and its MCP instructions carry the hint
- *     to load `charness-manager`; General's screen says ON, nothing is written until a tap
+ *     to load `charness-manager`; General's screen says ON by the built-in default, nothing is written until a tap
  *   → settings.json's `botSkills: "off"` seeds an instance whose General never chose: the next start is without, and
- *     General's screen says OFF; General's own tap on «On» beats the file from then on
+ *     General's screen says OFF «from settings.json»; General's own tap on «On» beats the file from then on and the screen
+ *     says «set in General»
  *   → a topic's picker: «Off» becomes the confirmation (keyboard gone), the topic's next start is without while the other
  *     topic, started with the skills, keeps them and is not restarted by the change
  *   → «As in General» hands the topic back to General's value; a General «Off» reaches every topic without a choice of its
@@ -61,6 +62,8 @@ const launchLine = 'Launching Telegraf bot (long polling';
 /** The hint to load the manager, and the part of the bullet that stays with the skills off. */
 const managerSkillHint = '`charness-manager`';
 const workerWatchRecipe = 'schedule_create to watch EACH worker';
+/** What a Claude topic's confirmation says of its running agent. */
+const runningAgentNote = 'A running agent keeps its skills until its next start (after an idle stop, in a new session or on a model change).';
 
 const bootTimeoutMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
@@ -217,7 +220,7 @@ describe('The bot-skills switch end to end: built charness, fake Bot API', () =>
   });
 
   it('ON is the default: General\'s screen says ON, and a topic\'s session launches with the skills and the hint in its instructions', async () => {
-    const screen = await general.sendAndAwaitReply('/bot_skills', '🧰 Bot skills for ALL topics: ON');
+    const screen = await general.sendAndAwaitReply('/bot_skills', '🧰 Bot skills for ALL topics: ON — the built-in default');
     assert.deepEqual(general.getKeyboardData(screen), [['bsk_on', 'bsk_off']]);
     assert.deepEqual(general.getKeyboardLabels(screen), [['On ✓', 'Off']]);
     assert.deepEqual(JSON.parse(fs.readFileSync(getSettingsFilePath(), 'utf8')), isolatedBaselineSettings, 'looking changes nothing');
@@ -230,18 +233,19 @@ describe('The bot-skills switch end to end: built charness, fake Bot API', () =>
     writeSettingsFileByHand({ ...isolatedBaselineSettings, botSkills: 'off' });
     await restartSession(first);
     assertSkillsOff(await askAgentAndReadSession(firstThreadId), 'the seed');
-    const screen = await general.sendAndAwaitReply('/bot_skills', '🧰 Bot skills for ALL topics: OFF');
+    const screen = await general.sendAndAwaitReply('/bot_skills', '🧰 Bot skills for ALL topics: OFF — from settings.json');
     assert.deepEqual(general.getKeyboardLabels(screen), [['On', 'Off ✓']]);
   });
 
   it('General\'s own tap beats the file from then on, answers, and turns the picker into its confirmation', async () => {
-    const picker = await general.sendAndAwaitReply('/bot_skills', '🧰 Bot skills for ALL topics: OFF');
+    const picker = await general.sendAndAwaitReply('/bot_skills', '🧰 Bot skills for ALL topics: OFF — from settings.json');
     const answer = await general.tapAndAwaitAnswer(picker, 'bsk_on');
     assert.equal(answer, '', 'the tap is answered without a toast');
     await general.waitForMessageText('the picker turned into its confirmation', picker, (text) => text.startsWith('✅ Bot skills: ON for ALL topics'));
     assert.match(picker.text, /A running agent keeps its skills until its next start; OpenCode's server follows at the bot's next start\.$/);
     assert.deepEqual(general.getKeyboardData(picker), [], 'a one-shot picker: the menu is gone');
     assert.equal(JSON.parse(fs.readFileSync(getSettingsFilePath(), 'utf8')).botSkills, 'off', 'the file is the operator\'s: the tap does not rewrite it');
+    await general.sendAndAwaitReply('/bot_skills', '🧰 Bot skills for ALL topics: ON — set in General');
 
     await restartSession(first);
     assertSkillsOn(await askAgentAndReadSession(firstThreadId), 'General\'s ON over the file\'s off');
@@ -254,7 +258,7 @@ describe('The bot-skills switch end to end: built charness, fake Bot API', () =>
     assert.deepEqual(second.getKeyboardData(screen), [['bsk_on', 'bsk_off'], ['bsk_same']]);
     assert.deepEqual(second.getKeyboardLabels(screen), [['On', 'Off'], ['As in General (ON) ✓']]);
     await second.tapAndAwaitAnswer(screen, 'bsk_off');
-    await second.waitForMessageText('the picker turned into its confirmation', screen, (text) => text === '✅ Bot skills: OFF for this topic. A running agent keeps its skills until its next start.');
+    await second.waitForMessageText('the picker turned into its confirmation', screen, (text) => text === `✅ Bot skills: OFF for this topic. ${runningAgentNote}`);
     assert.deepEqual(second.getKeyboardData(screen), []);
     assert.equal(getSessionLaunches().length, launchesBefore, 'the change launches nothing');
 
@@ -273,7 +277,7 @@ describe('The bot-skills switch end to end: built charness, fake Bot API', () =>
 
   it('«As in General» hands the topic back to General\'s value — its next start has the skills again', async () => {
     const picker = await pickInTopic(second, 'bsk_same');
-    assert.equal(picker.text, '✅ Bot skills in this topic follow General again: ON. A running agent keeps its skills until its next start.');
+    assert.equal(picker.text, `✅ Bot skills in this topic follow General again: ON. ${runningAgentNote}`);
     await restartSession(second);
     assertSkillsOn(await askAgentAndReadSession(secondThreadId), 'following General');
   });

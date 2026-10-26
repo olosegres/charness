@@ -9,7 +9,7 @@ import {
   type ConfigValidation,
 } from './configDirFile';
 import { claudeEffortLevels, type ClaudeEffortLevel } from './effortLevels';
-import { botSkillsSettingValues, type BotSkillsSetting } from './utils/botSkills';
+import { botSkillsSettingValues, type BotSkillsSetting } from './utils/botSkillsSetting';
 import { autoUpdateModes, defaultAutoUpdateMode, defaultWhatsNew, type AutoUpdateMode, type UpdateSettings } from './selfUpdate/updateModes';
 import { todoReminderDefaultMinutes, type TodoReminderSettings } from './todos/nag';
 

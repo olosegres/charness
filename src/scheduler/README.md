@@ -88,5 +88,6 @@ constants in the code; this README keeps what the code cannot say.
   `charness-manager` skill (`agent-plugin/`, which carries it verbatim — `agentPluginSkills.test.ts` holds them equal)
   and at that description; the tracker instructions only at the skill. With the scope's «Bot skills» switch off
   (`utils/botSkills.ts`) the pointer at the skill is dropped — a Telegram bullet keeps the recipe, a tracker bullet goes
-  with it. A `dir:` scope (OpenCode) keeps the pointer while any topic bound to the folder has the skills on; a folder with
-  none bound follows the instance value. The tool digest takes the switch too (`getToolDigest(platform, isBotSkillsEnabled)`).
+  with it. A `dir:` scope — the OpenCode registration of a folder, made once per folder and server run — counts the folder's
+  OpenCode topics alone (a Claude topic bound to the same folder has its own `thread:` scope) and keeps the pointer while any
+  of them has the skills on; a folder with no OpenCode topic follows the instance value. The tool digest takes the switch too (`getToolDigest(platform, isBotSkillsEnabled)`).

@@ -782,8 +782,9 @@ Jira-only one — sets it), then **on**. A Jira conversation has no choice of it
 skills off a Claude conversation starts and resumes without `--plugin-dir`, and the bot MCP's instructions no longer tell its agent to
 load `charness-manager` (the worker-watch recipe stays in `schedule_create`'s description); a running agent keeps its skills until its
 next start. OpenCode has ONE server for every topic, so only the instance value counts there: the server is replaced at the bot's next
-start, once nothing works in it, by one started without (or, when turned back on, with) the folder; a topic's own choice changes
-that topic's instructions only.
+start, once nothing works in it, by one started without (or, when turned back on, with) the folder. A topic's own choice changes the
+manager hint of its OpenCode folder only when the OpenCode server next restarts, and OpenCode topics sharing a folder share the hint
+(it stays while any of them has the skills on).
 
 ### Restart behaviour
 

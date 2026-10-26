@@ -12,6 +12,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { StateStore } from '../state';
+import { openCodeAdapterName } from '../adapters/adapterNames';
 import { keyFromString, tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
 import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import type { ClaudeProfilesReport } from '../utils/claudeUsage';
@@ -1587,11 +1588,15 @@ export function createSchedulerMcpCancellationLifecycle(
 
 /**
  * @description Whether the bot's skills are on for the conversations a scope reaches (`utils/botSkills.ts`). A `thread:`
- * scope is one conversation. A `dir:` scope (OpenCode) serves every topic bound to the folder from ONE registration, so it
- * keeps the manager hint while any of them has the skills on; a folder no topic is bound to gets the instance value.
+ * scope is one conversation. A `dir:` scope is the OpenCode registration of a folder — ONE per folder and server run, read
+ * at connect — so it serves the folder's OpenCode topics alone (a Claude topic bound to the same folder has its own
+ * `thread:` scope) and keeps the manager hint while any of them has the skills on; a folder with no OpenCode topic gets the
+ * instance value.
  */
 function checkIsBotSkillsEnabledForScope(deps: SchedulerMcpDeps, scope: SchedulerScope): boolean {
-  const threadKeys = scope.kind === 'thread' ? [scope.threadKey] : deps.getThreadsForDirectory(scope.directory);
+  const threadKeys = scope.kind === 'thread'
+    ? [scope.threadKey]
+    : deps.getThreadsForDirectory(scope.directory).filter((threadKey) => deps.getThreadAdapterName(threadKey) === openCodeAdapterName);
   const keys = threadKeys.map(tryKeyFromString).filter((key) => key !== null);
   return keys.length === 0 ? checkIsBotSkillsEnabled(null) : keys.some((key) => checkIsBotSkillsEnabled(key));
 }

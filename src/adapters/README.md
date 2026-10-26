@@ -468,8 +468,13 @@ resumable in the other.
   decides whether the server gets the folder: only its INSTANCE value counts (one server serves every topic), read when the
   server is started and by the same boot step, which replaces a server started the other way (`getOpenCodeAgentSkillsExpectation`:
   `offered` / `withheld` / `unmanaged`) — a topic's own choice never reaches the server. The hot supervisor pre-starts the
-  server before any state is loaded, so it starts on the built-in ON; with the instance value OFF that one server is
-  replaced by this boot step at the cold start (a hot reload leaves the server alone).
+  server before any state is loaded, so there the instance value is `settings.json`'s `botSkills` alone
+  (`settingsOnlyBotSkillsReader`, the reader in force until the bot registers its own — no change to `cli.ts`, `cli/hot.ts` or
+  `nodemon.json`): a seed of `off` starts the server without the folder at once. Only a General «Off» (state, unknown there)
+  still starts it with the folder, and this boot step then replaces it once at that cold start (a hot reload leaves the server
+  alone). The supervisor loads `installManager.ts` and `utils/botSkills.ts` at ITS start, so it follows the file only after a
+  full service restart. The bot MCP is registered with OpenCode once per folder and server run and its instructions are read
+  at connect, so a topic's switch reaches an OpenCode agent's hint only when the server next restarts.
 - **Naming.** Bot-created sessions get NO title, so OpenCode auto-titles them from the first prompt; a title
   passed at creation (`/opencode <args>`) counts as user-set and is never auto-renamed (`isAutoNamePending`).
 - **Effort** rides the prompt as `body.variant`, clamped to the model's variants; a thread with no pick of its own
