@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.6.1 — 2026-10-26
+
 **An agent @-mentioned on a Jira issue that is already assigned to it no longer asks to be assigned.** When the issue
 is assigned to the AI account but sits in a status the project does not hand work over in, the agent now says the
 status is what is missing and names the statuses it works in for that project; on an issue assigned to someone else
