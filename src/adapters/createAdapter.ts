@@ -7,7 +7,7 @@ import { OpenCodeAdapter } from './openCodeAdapter';
 import type { OpenCodePendingQuestion } from './openCodeAdapter';
 import { TerminalAdapter } from './terminalAdapter';
 import { ClaudeJsonStreamAdapter } from './claudeJsonStreamAdapter';
-import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, checkIsClaudeBackend } from './adapterNames';
+import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, claudeTmuxAdapterName, checkIsClaudeBackend } from './adapterNames';
 import type { SessionLaunchDefaultsReader } from './sessionLaunchDefaults';
 import type { ClaudeConfigDirReader, ClaudeRateLimitSink, ClaudeTurnCostSink } from './claudeConfigDir';
 
@@ -18,7 +18,7 @@ type AdapterFactory = () => AgentAdapter;
 
 const adapterFactories: Record<string, AdapterFactory> = {
   // Deprecated and frozen tmux-scrape backend: kept for topics already on it and for a `/claude_mode` pick.
-  claude: () => new ClaudeCliAdapter(),
+  [claudeTmuxAdapterName]: () => new ClaudeCliAdapter(),
   opencode: () => new OpenCodeAdapter(),
   terminal: () => new TerminalAdapter(),
   [claudeJsonStreamAdapterName]: () => new ClaudeJsonStreamAdapter({ lifecycle: 'idle', backgroundHoldMs: pendingWorkHoldMs ?? undefined }),
@@ -461,7 +461,7 @@ export function resolveClaudeBackendName(key: SessionKey): string {
 export function parseClaudeBackendArg(arg: string): string | null {
   if (['json', 'jsonstream', 'json-stream', 'stream'].includes(arg)) return claudeJsonStreamAdapterName;
   if (['perturn', 'per-turn', 'oneshot'].includes(arg)) return claudePerTurnAdapterName;
-  if (['tmux', 'scrape', 'terminal', 'classic'].includes(arg)) return 'claude';
+  if (['tmux', 'scrape', 'terminal', 'classic'].includes(arg)) return claudeTmuxAdapterName;
   return null;
 }
 

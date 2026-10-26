@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { sleep } from '../utils';
+import { claudeTmuxAdapterName } from './adapterNames';
 import type {
   AgentAdapter,
   AgentApiErrorClass,
@@ -2990,7 +2991,7 @@ export function getResumeSeedDecision(state: ResumeSeedState): { keepSeeding: bo
  * `ClaudeJsonStreamAdapter`. It stays for the topics that already run on it and for a `/claude_mode` pick.
  */
 export class ClaudeCliAdapter extends EventEmitter implements AgentAdapter {
-  readonly name = 'claude';
+  readonly name = claudeTmuxAdapterName;
   readonly label = 'Claude Code';
   readonly outputsDeltas = true;
   // The TUI prints its own banner to the topic — the bot suppresses `agent.ready`

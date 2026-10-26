@@ -43,5 +43,5 @@ export function checkIsJsonStreamBackend(name: string): boolean {
  * `/claude_mode` flips a thread between them.
  */
 export function checkIsClaudeBackend(name: string): boolean {
-  return name === 'claude' || checkIsJsonStreamBackend(name);
+  return name === claudeTmuxAdapterName || checkIsJsonStreamBackend(name);
 }

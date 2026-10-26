@@ -13,6 +13,7 @@ import {
   type ThreadDisplayPrefs,
 } from './types';
 import { keyToString, tryKeyFromString, type SessionKey } from './sessionKey';
+import { claudeTmuxAdapterName } from './adapters/adapterNames';
 import { resolveDefaultDataDir } from './legacyNames';
 import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './utils/displayVerbosity';
 import { defaultTopicView, parseTopicView } from './utils/topicView';
@@ -1232,7 +1233,7 @@ export class StateStore {
       const existing = this.state.agents[k];
       this.state.agents[k] = existing
         ? { ...existing, claudeSessionId: uuid }
-        : { name: 'claude', claudeSessionId: uuid };
+        : { name: claudeTmuxAdapterName, claudeSessionId: uuid };
       this.scheduleSave();
     });
   }
