@@ -24,6 +24,8 @@ import {
   checkIsProcessRunning,
   createIsolatedInstanceLayout,
   fakeClaudePath,
+  fakeClaudeTuiPath,
+  getFakeClaudeTuiLaunchesPath,
   getProcessStartTicks,
   getTmuxEnv,
   getTmuxSocketDir,
@@ -50,6 +52,25 @@ const stopSignalIgnoringAgentCode = [
   `process.on('SIGTERM', () => {});`,
   `setInterval(() => {}, 1000);`,
 ].join('\n');
+/**
+ * A bot that is still running when the teardown starts (the reaper's case): it keeps starting children, which carry its HOME.
+ * A teardown that reads the process list once cannot see a child started after it.
+ */
+const childSpawningBotCode = [
+  `const { spawn } = require('child_process');`,
+  `setInterval(() => {`,
+  `  for (let started = 0; started < 5; started += 1) spawn('sleep', ['60'], { stdio: 'ignore', detached: true }).unref();`,
+  `}, 1);`,
+].join('\n');
+/** How many processes of the instance run before the teardown begins: the bot is in full swing. */
+const botProcessesBeforeTeardown = 20;
+
+/** The two fake agents the teardown checks, with the launch log each one writes. */
+const fakeAgentKinds = [
+  { name: 'stream-json', scriptPath: fakeClaudePath, launchLog: 'streamJson' },
+  { name: 'tmux TUI', scriptPath: fakeClaudeTuiPath, launchLog: 'tui' },
+] as const;
+
 /** A pid this test names as a long-gone fake agent: no such process runs (the kernel's pid space ends far below it). */
 const gonePid = 2 ** 22 + 1;
 
@@ -83,6 +104,18 @@ function createStaleLayout(owner: Omit<IsolatedInstanceOwner, 'tmuxTmpDir' | 'tm
 /** Whether a tmux server answers at `socketPath` (a read-only probe). */
 function checkIsServerRunning(socketPath: string): boolean {
   return spawnSync('tmux', ['-S', socketPath, 'list-sessions'], { env: getTmuxEnv(null) }).status === 0;
+}
+
+/** The processes that run with `home` as their HOME: what every process of an instance carries. */
+function listRunningProcessesWithHome(home: string): number[] {
+  return fs.readdirSync('/proc').map(Number).filter((pid) => {
+    if (!Number.isInteger(pid) || !checkIsProcessRunning(pid)) return false;
+    try {
+      return fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').includes(`HOME=${home}`);
+    } catch {
+      return false;
+    }
+  });
 }
 
 async function waitUntil(description: string, timeoutMs: number, check: () => boolean): Promise<void> {
@@ -167,7 +200,9 @@ describe('a private tmux server of a process-level test never outlives the test'
     const layout = createIsolatedInstanceLayout(prefix, []);
     createdRoots.push(layout.testRoot);
     // The launch log names a gone process and a running one that is no fake agent (a reused pid): neither is a survivor.
-    fs.writeFileSync(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.launches), [gonePid, process.pid].map((pid) => `${JSON.stringify({ pid })}\n`).join(''));
+    const notSurvivorLaunches = [gonePid, process.pid].map((pid) => `${JSON.stringify({ pid })}\n`).join('');
+    fs.writeFileSync(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.launches), notSurvivorLaunches);
+    fs.writeFileSync(getFakeClaudeTuiLaunchesPath(layout), notSurvivorLaunches);
     const exitCodeBefore = process.exitCode;
     removeIsolatedInstanceSync(layout, null);
     assert.equal(process.exitCode, exitCodeBefore, 'nothing was reported');
@@ -201,30 +236,49 @@ describe('a private tmux server of a process-level test never outlives the test'
     }
   });
 
-  it('a fake agent the teardown cannot end fails the file: it names the pid and the run exits non-zero', async () => {
-    // Started with another HOME than the instance's, so the sweep does not know it; the launch log still names it.
-    const survivor = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', fakeClaudePath], { detached: true, stdio: 'ignore' });
-    survivor.unref();
-    assert.ok(survivor.pid, 'the survivor started');
-    // The teardown runs in a process of its own: it must fail THAT process, not this test.
-    const childCode = [
-      `const helperModule = await import(${JSON.stringify(pathToFileURL(isolatedCharnessPath).href)});`,
-      `const { createIsolatedInstanceLayout, removeIsolatedInstanceSync } = helperModule.default ?? helperModule;`,
-      `const fs = await import('fs');`,
-      `const path = await import('path');`,
-      `const layout = createIsolatedInstanceLayout(${JSON.stringify(prefix)}, []);`,
-      `fs.writeFileSync(path.join(layout.fakeLogDir, ${JSON.stringify(fakeClaudeLogFileNames.launches)}), JSON.stringify({ pid: Number(process.env.SURVIVOR_PID) }) + '\\n');`,
-      `removeIsolatedInstanceSync(layout, null);`,
-    ].join('\n');
+  it('a child the instance starts while the teardown reads the process list is ended by a later pass', async () => {
+    const layout = createIsolatedInstanceLayout(prefix, []);
+    createdRoots.push(layout.testRoot);
+    const botPath = path.join(layout.testRoot, 'bot.js');
+    fs.writeFileSync(botPath, childSpawningBotCode);
+    const bot = spawn(process.execPath, [botPath], { env: { ...process.env, HOME: layout.instanceHome }, detached: true, stdio: 'ignore' });
+    bot.unref();
     try {
-      const teardown = spawnSync(process.execPath, ['--import', pathToFileURL(tsxLoaderPath).href, '--input-type=module', '--eval', childCode], {
-        encoding: 'utf8',
-        env: { ...process.env, SURVIVOR_PID: survivor.pid.toString() },
-      });
-      assert.equal(teardown.status, 1, `the file's process exits non-zero: ${teardown.stderr}`);
-      assert.match(teardown.stderr, new RegExp(`still running after the teardown.*${survivor.pid}`));
+      await waitUntil('the bot to be starting children', reaperWaitMs, () => listRunningProcessesWithHome(layout.instanceHome).length >= botProcessesBeforeTeardown);
+      removeIsolatedInstanceSync(layout, null);
+      await waitUntil('nothing of the instance to run any more, the children started during the teardown included', reaperWaitMs, () => listRunningProcessesWithHome(layout.instanceHome).length === 0);
     } finally {
-      process.kill(survivor.pid, 'SIGKILL');
+      for (const pid of listRunningProcessesWithHome(layout.instanceHome)) process.kill(pid, 'SIGKILL');
     }
   });
+
+  for (const { name, scriptPath, launchLog } of fakeAgentKinds) {
+    it(`a ${name} fake agent the teardown cannot end fails the file: it names the pid and the run exits non-zero`, async () => {
+      // Started with another HOME than the instance's, so the sweep does not know it; the launch log still names it.
+      const survivor = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', scriptPath], { detached: true, stdio: 'ignore' });
+      survivor.unref();
+      assert.ok(survivor.pid, 'the survivor started');
+      // The teardown runs in a process of its own: it must fail THAT process, not this test.
+      const childCode = [
+        `const helperModule = await import(${JSON.stringify(pathToFileURL(isolatedCharnessPath).href)});`,
+        `const { createIsolatedInstanceLayout, getFakeClaudeTuiLaunchesPath, removeIsolatedInstanceSync } = helperModule.default ?? helperModule;`,
+        `const fs = await import('fs');`,
+        `const path = await import('path');`,
+        `const layout = createIsolatedInstanceLayout(${JSON.stringify(prefix)}, []);`,
+        `const launchLogPath = process.env.LAUNCH_LOG === 'tui' ? getFakeClaudeTuiLaunchesPath(layout) : path.join(layout.fakeLogDir, ${JSON.stringify(fakeClaudeLogFileNames.launches)});`,
+        `fs.writeFileSync(launchLogPath, JSON.stringify({ pid: Number(process.env.SURVIVOR_PID) }) + '\\n');`,
+        `removeIsolatedInstanceSync(layout, null);`,
+      ].join('\n');
+      try {
+        const teardown = spawnSync(process.execPath, ['--import', pathToFileURL(tsxLoaderPath).href, '--input-type=module', '--eval', childCode], {
+          encoding: 'utf8',
+          env: { ...process.env, SURVIVOR_PID: survivor.pid.toString(), LAUNCH_LOG: launchLog },
+        });
+        assert.equal(teardown.status, 1, `the file's process exits non-zero: ${teardown.stderr}`);
+        assert.match(teardown.stderr, new RegExp(`still running after the teardown.*${survivor.pid}`));
+      } finally {
+        process.kill(survivor.pid, 'SIGKILL');
+      }
+    });
+  }
 });

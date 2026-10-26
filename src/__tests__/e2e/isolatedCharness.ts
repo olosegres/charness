@@ -19,8 +19,9 @@
  * hangs its panes up, and a fake `claude` a test told to ignore its stop signals
  * (`ignore-stop-signals`) outlived a run that ended mid-step — and its folder —
  * for a day and a half. So the sweep also SIGKILLs every process that runs with
- * the instance's own HOME, then checks the fake's own launch log: a fake agent
- * that still runs fails the test file (`process.exitCode`).
+ * the instance's own HOME, then checks the fakes' own launch logs (the stream-json
+ * fake's and the tmux TUI fake's): a fake agent that still runs fails the test file
+ * (`process.exitCode`).
  *
  * Nothing here knows which connector a test serves: the test writes the env
  * file and chooses the readiness line.
@@ -44,7 +45,7 @@ export const builtAgentPluginDir = path.join(fs.realpathSync(repoRoot), 'agent-p
 const runIsolatedPath = path.join(repoRoot, 'scripts', 'run-isolated.sh');
 export const fakeClaudePath = path.join(__dirname, '..', 'jiraE2e', 'fakeClaude.ts');
 /** The fake interactive Claude Code TUI (the tmux backend's agent). */
-const fakeClaudeTuiPath = path.join(__dirname, '..', 'tmuxE2e', 'fakeClaudeTui.ts');
+export const fakeClaudeTuiPath = path.join(__dirname, '..', 'tmuxE2e', 'fakeClaudeTui.ts');
 const tsxLoaderPath = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
 const reaperPath = path.join(__dirname, 'isolatedInstanceReaper.ts');
 
@@ -184,24 +185,38 @@ function readProcessEnvironmentValue(pid: number, name: string): string | null {
   }
 }
 
-/**
- * SIGKILL every process that runs with the instance's own HOME — the bot, its tmux server, the agents, whatever hosts them,
- * `env -i` launches included (their allowlist carries HOME). A hang-up from a killed tmux server is a request an agent can
- * ignore; this is not. Nothing else has that HOME: it is a folder inside the instance's own temp root, so the root is
- * required to be a direct child of the temp dir before anything is killed by it.
- */
-function killInstanceProcessesSync(testRoot: string): void {
-  if (!fs.existsSync('/proc/self') || path.dirname(testRoot) !== fs.realpathSync(os.tmpdir())) return;
-  const instanceHome = path.join(testRoot, instanceHomeFolderName);
+/** The most passes over the process list the teardown makes: each one catches what the one before it could not see yet. */
+const killPassMaxCount = 10;
+
+/** One pass over the process list: SIGKILL every process that runs with `instanceHome`, and return how many were found. */
+function killProcessesWithHomeSync(instanceHome: string): number {
+  let foundCount = 0;
   for (const entry of fs.readdirSync('/proc')) {
     const pid = Number(entry);
     if (!Number.isInteger(pid) || pid === process.pid || readProcessEnvironmentValue(pid, 'HOME') !== instanceHome) continue;
+    foundCount += 1;
     try {
       process.kill(pid, 'SIGKILL');
     } catch {
       // Gone meanwhile.
     }
   }
+  return foundCount;
+}
+
+/**
+ * SIGKILL every process that runs with the instance's own HOME — the bot, its tmux server, the agents, whatever hosts them,
+ * `env -i` launches included (their allowlist carries HOME). A hang-up from a killed tmux server is a request an agent can
+ * ignore; this is not. Nothing else has that HOME: it is a folder inside the instance's own temp root, so the root is
+ * required to be a direct child of the temp dir before anything is killed by it. The list is read once per pass, and a bot
+ * that is still running (the reaper's case) can start a child after it: passes repeat until one finds nothing, up to
+ * {@link killPassMaxCount}.
+ */
+function killInstanceProcessesSync(testRoot: string): void {
+  if (!fs.existsSync('/proc/self') || path.dirname(testRoot) !== fs.realpathSync(os.tmpdir())) return;
+  const instanceHome = path.join(testRoot, instanceHomeFolderName);
+  let passCount = 0;
+  while (passCount < killPassMaxCount && killProcessesWithHomeSync(instanceHome) > 0) passCount += 1;
 }
 
 /** Kill the instance's own tmux servers (which hangs up the agents in them), then every process of the instance that did not hang up, and remove its folder. */
@@ -693,18 +708,22 @@ export class IsolatedCharness {
 export function removeIsolatedInstanceSync(layout: IsolatedInstanceLayout | null, charness: IsolatedCharness | null): void {
   charness?.killSync();
   if (!layout) return;
-  // Read before the folder goes: the fake's own log is the ground truth of which agents the instance started.
-  const launchedAgentPids = readJsonLines<{ pid: number }>(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.launches)).map(({ pid }) => pid);
+  // Read before the folder goes: the fakes' own logs are the ground truth of which agents the instance started.
+  const launchedAgentPids = [
+    ...readJsonLines<{ pid: number }>(path.join(layout.fakeLogDir, fakeClaudeLogFileNames.launches)),
+    ...readJsonLines<{ pid: number }>(getFakeClaudeTuiLaunchesPath(layout)),
+  ].map(({ pid }) => pid);
   // The folder's removal is also what ends the layout's detached reaper.
   killInstanceTmuxServersAndFolderSync(layout.testRoot, layout.tmuxTmpDir, layout.tmuxSocketName);
   failOnRunningFakeAgents(launchedAgentPids);
 }
 
-/** Whether `pid` is a running fake agent: alive, and its command line names the fake (a pid that another process reused is not one). */
+/** Whether `pid` is a running fake agent: alive, and its command line names one of the fakes (a pid that another process reused is not one). */
 function checkIsFakeAgentRunning(pid: number): boolean {
   if (!checkIsProcessRunning(pid)) return false;
   try {
-    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(fakeClaudePath);
+    const commandLine = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+    return [fakeClaudePath, fakeClaudeTuiPath].some((fakePath) => commandLine.includes(fakePath));
   } catch {
     return false;
   }
