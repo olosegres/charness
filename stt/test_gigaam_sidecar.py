@@ -1388,8 +1388,8 @@ class HttpAudioFormatsTest(unittest.TestCase):
                 response = raw_request(self.port, "POST", sidecar.TRANSCRIPTIONS_PATH, upload_headers(), build_multipart(data))
                 self.assertEqual(response.status, 200, response.body)
                 self.assertEqual(len(info_calls), 1, "libsndfile was asked about the file more than once")
-                self.assertLessEqual(len(walk_calls), 1, "the Ogg pages were walked more than once")
-                self.assertLessEqual(len(split_calls), 1, "the file was split into streams more than once")
+                self.assertEqual(len(walk_calls), 1, "the Ogg pages were not walked exactly once")
+                self.assertEqual(len(split_calls), 1, "the file was not split into streams exactly once")
 
     def test_a_40_second_file_of_each_kind_is_recognised_to_its_last_second(self):
         for kind, make in AUDIO_KINDS.items():
