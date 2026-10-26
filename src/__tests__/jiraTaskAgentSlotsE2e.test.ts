@@ -73,8 +73,6 @@ const maxConcurrent = 2;
 const quietPollCount = 3;
 /** The poll of the give-up step: `jira.json`'s longest, so no regular poll comes within the step — only a wake-up can start the waiting issue. */
 const stretchedPollSeconds = jiraPollIntervalMaxSeconds;
-/** What «at once» means against that poll: a wake-up's poll runs, opens the request and starts the agent well inside this. */
-const wakeStartMaxMs = 30 * 1000;
 const giveUpAlertPrefix = '⚠️ The AI could not finish request';
 
 function getSettingsFilePath(): string {
@@ -260,6 +258,8 @@ describe('The cap on task agents on a Jira-only instance: built charness, fake J
     handIssueToAi('PROJ-7', requester);
     handIssueToAi('PROJ-8', requester);
     await startCharnessWithPoll(stretchedPollSeconds);
+    const bootedAt = Date.now();
+    let isStepPassed = false;
     try {
       await waitFor('PROJ-8\'s queued comment', answerTimeoutMs, () => fakeJira.getIssue('PROJ-8').comments.length === 1);
       await waitFor('PROJ-7\'s first turn', answerTimeoutMs, () => getTurns('PROJ-7').length >= 1);
@@ -269,21 +269,26 @@ describe('The cap on task agents on a Jira-only instance: built charness, fake J
       await waitFor('PROJ-7\'s alert and hand-back', resumeTimeoutMs, () =>
         getCommentTexts(fakeJira.getIssue('PROJ-7')).some((text) => text.startsWith(giveUpAlertPrefix))
         && fakeJira.getIssue('PROJ-7').assignee?.accountId === requester.accountId);
+      // The proof that the give-up's own wake-up starts PROJ-8: this wait is `answerTimeoutMs` (a minute) and the next regular poll
+      // is `stretchedPollSeconds` (ten minutes) after the boot poll, so only the wake-up can start PROJ-8 inside it.
       await waitFor('PROJ-8 answered and handed back', answerTimeoutMs, () => fakeJira.getIssue('PROJ-8').assignee?.accountId === requester.accountId);
+      assert.ok(Date.now() - bootedAt < stretchedPollSeconds * 1000, 'PROJ-8 was answered before the next regular poll was due');
       assert.deepEqual(getCommentTexts(fakeJira.getIssue('PROJ-8')), [buildJiraQueuedText(maxConcurrent, 0), 'Fake final answer for PROJ-8 (answer, turn 1).']);
       // The given-up request is still open — nothing closed it — and it is what freed the slot.
       await waitFor('the given-up request marked in state.json', answerTimeoutMs, () =>
         readOpenRequests().some((request) => request.origin.attributes.issueKey === 'PROJ-7' && request.isWakeStopped));
 
-      // No regular poll was due for ten minutes, so the start came from the give-up's own wake-up: it follows the alert within seconds.
-      const alertIndex = getCommentTexts(fakeJira.getIssue('PROJ-7')).findIndex((text) => text.startsWith(giveUpAlertPrefix));
-      const alertedAt = Date.parse(fakeJira.getIssue('PROJ-7').comments[alertIndex].created);
-      const startedAt = getRequestOf('PROJ-8').createdAt;
-      assert.ok(startedAt - alertedAt < wakeStartMaxMs, `PROJ-8 started ${startedAt - alertedAt} ms after the give-up's alert`);
+      isStepPassed = true;
     } finally {
-      // The steps after this one hand issues over and wait on polls of seconds.
-      await getCharness().stop();
-      await startCharnessWithPoll(null);
+      // The steps after this one hand issues over and wait on polls of seconds. A restart that fails must not hide why the step
+      // failed: its error is reported only by a step that passed.
+      try {
+        await getCharness().stop();
+        await startCharnessWithPoll(null);
+      } catch (restoreError) {
+        if (isStepPassed) throw restoreError;
+        console.error(`the poll was not restored after the failed step: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+      }
     }
   });
 
