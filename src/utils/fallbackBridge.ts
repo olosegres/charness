@@ -19,6 +19,9 @@ export const fallbackBridgeTurnLimit = 6;
 /** A single turn longer than this is cut in the middle — the bridge is a hand-over, not a transcript copy. */
 export const fallbackBridgeTurnMaxChars = 2500;
 
+/** The compaction summary of the earlier conversation is cut the same way above this: it is the longest text a bridge carries. */
+export const fallbackBridgeSummaryMaxChars = 8000;
+
 const bridgeMarker = '[Backend switch]';
 
 /**
@@ -26,6 +29,8 @@ const bridgeMarker = '[Backend switch]';
  * `reason` is why the agent changes: `limit` (the previous one hit a usage limit; `resetsAtText` names when it
  * comes back, omitted when unknown) or `manual` (the operator switched the topic's backend by hand).
  * `userMessage` is text the operator sent together with a manual switch (`/opencode do X`), passed on as it is.
+ * `compactionSummary` is the summary the previous agent's own compaction left of the earlier conversation: it goes in
+ * under its own heading, as context, never as a turn of the user.
  */
 export function buildFallbackBridgePrompt(input: {
   fromLabel: string;
@@ -34,6 +39,7 @@ export function buildFallbackBridgePrompt(input: {
   reason: 'limit' | 'manual';
   resetsAtText: string | null;
   userMessage?: string;
+  compactionSummary?: string | null;
   replyLanguage: string;
 }): string {
   const why = input.reason === 'limit'
@@ -43,14 +49,17 @@ export function buildFallbackBridgePrompt(input: {
     `${bridgeMarker} You (${input.toLabel}) are taking this conversation over from ${input.fromLabel}, ${why}. You work in the same project folder, but you cannot see its transcript.`,
     '',
     'Do this now:',
-    '1. Read the recent turns below to understand the task and where it stopped.',
+    `1. Read ${input.compactionSummary ? 'the summary of the earlier conversation and ' : ''}the recent turns below to understand the task and where it stopped.`,
     '2. Establish the real state of the work from the project itself (git status, git diff, git log, the files mentioned) — trust the folder over the transcript when they disagree.',
     `3. Reply IN ${input.replyLanguage} with ONE short message: the task as you understand it, what is already done, what remains.`,
     '4. Then continue the work from where it stopped, without redoing what is done.',
   ];
   if (input.userMessage) lines.push('', 'The operator also wrote, together with the switch:', input.userMessage);
+  if (input.compactionSummary) {
+    lines.push('', '--- Summary of the earlier conversation (written by the previous agent\'s own compaction; not a message of the user) ---', truncateTurnText(input.compactionSummary.trim(), fallbackBridgeSummaryMaxChars), '--- End of the summary ---');
+  }
   if (input.turns.length === 0) {
-    lines.push('', 'No turns of the previous agent are available: start from the project state and ask the user what the task is if it is not evident.');
+    if (!input.compactionSummary) lines.push('', 'No turns of the previous agent are available: start from the project state and ask the user what the task is if it is not evident.');
     return lines.join('\n');
   }
   lines.push('', `--- Last ${input.turns.length} turn(s) of ${input.fromLabel} (oldest first) ---`);

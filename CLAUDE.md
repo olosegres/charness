@@ -161,7 +161,7 @@ per-backend controls are optional methods the bot checks before calling.
   runs `switchTopicToFallbackEntry` onto it before the continue nudge. The list is edited from every topic. `switchTopicToFallbackEntry`: within a backend the conversation is kept
   (profile apply re-spawn / OpenCode `setModel`), across backends it is the `switchThreadAdapter` path — the
   leaving family's session id is PARKED (`parkedSessions`, restored on the way back, released with the ids) and
-  the first prompt is the context bridge (`utils/fallbackBridge.ts`: the old adapter's `getRecentTurns`) instead
+  the first prompt is the context bridge (`utils/fallbackBridge.ts`: the old adapter's `getRecentTurns`, plus its `getSessionCompactionSummary` as labelled context) instead
   of the continue nudge; both end in `cancelApiRetry` → `deliverPromptOrBuffer`. Never switched back by itself.
   OpenCode quota codes (`insufficient_quota`, a `RESOURCE_EXHAUSTED` that names a day/week/month quota, …) classify as
   `usageLimit` ahead of the 429 transient branch; a short-window throttle (per minute, concurrency, a stated reset within

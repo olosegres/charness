@@ -110,10 +110,11 @@ describe('listClaudeSessionsForWorkDir', () => {
       ),
     ]);
 
-    // F: the CLI's own `isMeta` entries (a message from another session, a loaded skill's body) come BEFORE the first
-    //    typed prompt. They carry no tag and no prefix the text rules know, so only the CLI's mark tells them apart:
-    //    the title must be the typed prompt after them.
+    // F: the CLI's own entries (a compaction summary, a message from another session, a loaded skill's body) come
+    //    BEFORE the first typed prompt. They carry no tag and no prefix the text rules know, so only the CLI's flags
+    //    tell them apart: the title must be the typed prompt after them.
     writeTranscript(slugDir, validUuidF, [
+      { ...userLine(workDir, '2026-05-30T12:39:00.000Z', 'msg-f-0', 'This session is being continued from a previous conversation that ran out of context.'), isCompactSummary: true, isVisibleInTranscriptOnly: true },
       { ...userLine(workDir, '2026-05-30T12:40:00.000Z', 'msg-f-1', 'Another Claude session sent a message: please look at the build'), isMeta: true },
       { ...userLine(workDir, '2026-05-30T12:41:00.000Z', 'msg-f-2', 'Base directory for this skill: /example/skills/commit'), isMeta: true },
       userLine(workDir, '2026-05-30T12:42:00.000Z', 'msg-f-3', 'tidy the release notes'),
@@ -174,7 +175,7 @@ describe('listClaudeSessionsForWorkDir', () => {
     assert.equal(byId.get(validUuidE)?.title, validUuidE);
   });
 
-  it('skips the entries the CLI marked isMeta: the title is the first prompt somebody typed', () => {
+  it('skips the entries the CLI flagged as its own: the title is the first prompt somebody typed', () => {
     const result = listClaudeSessionsForWorkDir(projectsRoot, workDir);
     assert.equal(result.find(session => session.id === validUuidF)?.title, 'tidy the release notes');
   });

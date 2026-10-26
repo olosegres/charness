@@ -6,10 +6,12 @@
 Before, resuming a conversation whose last entries were a command run in Claude Code itself printed the raw `<local-command-caveat>`,
 `<command-name>… <command-args>…` (with the whole, often very long, argument text) and `<local-command-stdout>` entries as if they were your
 messages, and a skill loaded in the last turn flooded the topic with its whole text. Now a command shows as its name only (a `!` shell command as
-`!ls`), and everything Claude Code wrote itself is left out — the caveat and output around a command, a loaded skill's text, image notes, messages
-from another session, reminders and task notifications. The entries left out do not count: the preview still shows the last three real messages,
-and a message of yours that merely mentions such a tag is shown whole. The same goes for the recap after a bot restart, for the context handed
-over when a limit moves a topic to another agent, and for the titles in the `/sessions` list.
+`!ls`), and the entries Claude Code flags as its own are left out — the summary a compaction leaves, a loaded skill's text, the caveat before a
+command, image notes, messages from another session — as is an entry that is only a command's output, a reminder or a task notification. The
+entries left out do not count: the preview still shows the last three real messages. A message of yours is shown whole, also when it pastes or
+mentions one of these tags; only a `<system-reminder>` block that a hook appended to it is cut. The same goes for the recap after a bot restart
+and for the titles in the `/sessions` list. When a limit moves a topic to another agent, the summary of the conversation's earlier compaction
+(Claude json-stream topics) is handed over as context, labelled as such, and never as something you said.
 
 **The skills Charness gives its agents can now be switched off — `/bot_skills` in General for the whole instance, in a topic for that topic only.**
 A deployment whose workspace instructions name skills of their own (a Jira-only instance, say) no longer has to live with the bot's

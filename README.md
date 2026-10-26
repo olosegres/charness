@@ -471,7 +471,9 @@ and the two settings (auto switch, wait for the reset):
   (Claude ↔ OpenCode) the topic's agent changes: the old session is stopped
   and its id parked, the new one is started (or resumed, when the topic ran on
   that backend before) and its first prompt is a **context bridge** — why it
-  takes over, the previous agent's last turns verbatim, and the instruction to
+  takes over, the previous agent's last turns verbatim (and, for a Claude
+  conversation that was compacted, the summary of that compaction as context,
+  never as something you said), and the instruction to
   check the project state (git status / diff / log) before carrying on and to
   report in one short message what the task is, what is done and what remains.
   A later `/claude` or `/opencode` returns to the parked conversation; `/new`

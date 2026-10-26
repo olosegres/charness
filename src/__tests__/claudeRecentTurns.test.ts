@@ -101,6 +101,14 @@ describe('readRecentClaudeTurns', () => {
       { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'older answer' }] } },
       { type: 'user', message: { role: 'user', content: 'Run the tests' } },
       { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'All tests pass.' }] } },
+      // What the real CLI writes for a /compact: the boundary, then the summary (flagged, but not isMeta), then the three entries.
+      { type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', compactMetadata: { trigger: 'manual', preTokens: 123456 } },
+      {
+        type: 'user',
+        isCompactSummary: true,
+        isVisibleInTranscriptOnly: true,
+        message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request and Intent: run the tests.' },
+      },
       {
         type: 'user',
         isMeta: true,
@@ -116,7 +124,7 @@ describe('readRecentClaudeTurns', () => {
       { type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted PreCompact [grep -qF -e \'x\'] completed successfully</local-command-stdout>' } },
     ]);
 
-    // The window is the last 3 REAL entries: the three skipped ones are not among them.
+    // The window is the last 3 REAL entries: the four skipped ones (summary, caveat, stdout and the boundary) are not among them.
     assert.deepEqual(readRecentClaudeTurns(filePath, limit), [
       { role: 'user', text: 'Run the tests' },
       { role: 'assistant', text: 'All tests pass.' },
@@ -153,6 +161,18 @@ describe('readRecentClaudeTurns', () => {
       { role: 'user', text: 'Commit the work' },
       { role: 'assistant', text: 'Loading the commit skill.' },
     ]);
+  });
+
+  it('skips a compaction summary by either of its flags, and shows a pasted tag whole', () => {
+    const filePath = path.join(dir, 'summary-flags.jsonl');
+    const pasted = 'this looks wrong:\n<local-command-stdout>Compacted PreCompact completed successfully</local-command-stdout>';
+    writeTranscript(filePath, [
+      { type: 'user', isCompactSummary: true, message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context.' } },
+      { type: 'user', isVisibleInTranscriptOnly: true, message: { role: 'user', content: 'The earlier part of this session was compacted.' } },
+      { type: 'user', message: { role: 'user', content: pasted } },
+    ]);
+
+    assert.deepEqual(readRecentClaudeTurns(filePath, limit), [{ role: 'user', text: pasted }]);
   });
 
   it('skips a skill body that the CLI wrote without its isMeta mark', () => {

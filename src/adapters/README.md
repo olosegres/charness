@@ -423,13 +423,19 @@ tmux adapter's readers are reused) and a session started in one backend is
 resumable in the other.
 
 The CLI also records what it did itself as `user` entries: a slash command or a `!` shell command run directly in it,
-their output, a loaded skill's body, text it injects in tags (`<system-reminder>`, `<task-notification>`). Everything that
-shows a transcript's user entries — the "Resumed" preview, the reattach recap, the fallback bridge, the `/sessions`
-titles — decides what is a real message through `utils/claudeUserEntry.ts`: an entry the CLI marked `isMeta` is skipped; a
-command shows as its bare name (`/compact`, `!ls`; never the arguments); an entry that is only injected blocks or one of
-the CLI's untagged texts is skipped. Only properly CLOSED blocks at the START or END of an entry are cut, so a typed
-message that merely mentions a tag stays whole. Skipped entries take none of the preview's slots. A new tag or text the
-CLI injects goes into that one module; what makes a poor TITLE (a bare «yes») stays in `utils/claudeSessionTitle.ts`.
+their output, a loaded skill's body, the summary a compaction leaves, text it injects in tags (`<system-reminder>`,
+`<task-notification>`). Everything that shows a transcript's user entries — the "Resumed" preview, the reattach recap, the
+fallback bridge, the `/sessions` titles — decides what is a real message through `utils/claudeUserEntry.ts`:
+- an entry the CLI flagged as its own (`isMeta`, `isCompactSummary`, `isVisibleInTranscriptOnly`) is skipped;
+- an entry that is NOTHING BUT closed known tag blocks is a command (`/compact`, `!ls`; never the arguments) or skipped;
+  so is one of the CLI's few untagged texts (a skill body, an interrupted turn, the old caveat);
+- anything else is the person's own message and is shown whole, tags included — also when it pastes or mentions a tag.
+  The one exception is a closed `<system-reminder>` block at its start or end, which hooks append to typed prompts.
+
+Skipped entries take none of the preview's slots. The compaction summary is no turn, but the fallback bridge still hands
+it to the next agent (`AgentAdapter.getSessionCompactionSummary`, json-stream only: the tmux backend is frozen) under its
+own heading, as context, never as something the user said. A new tag or text the CLI injects goes into that one module;
+what makes a poor TITLE (a bare «yes», the wrapper-less `Set model to …` echo) stays in `utils/claudeSessionTitle.ts`.
 
 ## OpenCode (`openCodeAdapter.ts`)
 

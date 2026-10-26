@@ -5,10 +5,11 @@
  * with the entries the real CLI writes. One flow:
  *
  *   boot → a topic is bound and its agent started
- *   → a conversation whose owner ran `/compact` directly in the CLI (a caveat entry, the command entry with its long
- *     argument text, the command's stdout entry): `/sessions` lists it under its first real prompt, and a tap resumes
- *     it — the preview shows the last THREE real messages: the user's, the agent's and the command as just `/compact`;
- *     no tags, no argument text, no caveat, no stdout, and the entries it skips do not count toward the three
+ *   → a conversation whose owner ran `/compact` directly in the CLI (the compaction boundary and summary the CLI writes,
+ *     a caveat entry, the command entry with its long argument text, the command's stdout entry): `/sessions` lists it
+ *     under its first real prompt, and a tap resumes it — the preview shows the last THREE real messages: the user's, the
+ *     agent's and the command as just `/compact`; no tags, no argument text, no summary, no caveat, no stdout, and the
+ *     entries it skips do not count toward the three
  *   → a conversation whose last turn loaded a skill (the skill's body, an image note and a message from another session
  *     are `isMeta` entries) and ran a `!` shell command (an input and an output entry): the preview shows the shell
  *     command as `!git status` and none of the skill's text, the image note or the output
@@ -68,6 +69,9 @@ const lastPrompt = 'Run the tests';
 const lastAnswer = 'All tests pass.';
 /** A word of the `/compact` argument text, which the preview must not show. */
 const commandArgumentMarker = 'MAXIMALLY COMPLETE';
+/** The compaction summary the CLI writes into the transcript as a `user` entry; a long text, which the preview must not show. */
+const compactionSummaryStart = 'This session is being continued from a previous conversation that ran out of context.';
+const compactionSummaryMarker = 'Primary Request and Intent';
 
 /** The skill conversation: its last real turns, and words of what it loaded and ran, which the preview must not show. */
 const skillFirstPrompt = 'Plan the release';
@@ -121,8 +125,10 @@ function writeTranscript(sessionId: string, entries: object[]): void {
 }
 
 /**
- * The transcript of a conversation whose owner ran `/compact` directly in the CLI: a caveat entry (`isMeta`), the
- * command entry (name, message and the long argument text) and the command's stdout entry, after four real messages.
+ * The transcript of a conversation whose owner ran `/compact` directly in the CLI, as the real CLI writes it after four
+ * real messages: the `compact_boundary` entry, the compaction summary (a `user` entry flagged `isCompactSummary` and
+ * `isVisibleInTranscriptOnly`, not `isMeta`), the caveat entry (`isMeta`), the command entry (name, message and the long
+ * argument text) and the command's stdout entry.
  */
 function writeCompactedTranscript(): void {
   const { user, assistant } = createEntryFactory(compactSessionId);
@@ -131,6 +137,11 @@ function writeCompactedTranscript(): void {
     assistant(firstAnswer),
     user(lastPrompt),
     assistant(lastAnswer),
+    { type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', compactMetadata: { trigger: 'manual', preTokens: 123456 }, cwd: getWorkDir(), sessionId: compactSessionId, timestamp: new Date().toISOString() },
+    user(
+      `${compactionSummaryStart} The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. ${compactionSummaryMarker}: fix the login bug, then run the tests.`,
+      { isCompactSummary: true, isVisibleInTranscriptOnly: true },
+    ),
     user(
       '<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It\'s recorded here as context for later messages.</local-command-caveat>',
       { isMeta: true },
@@ -251,7 +262,7 @@ describe('The resumed-conversation preview, end to end: built charness, fake Bot
       ].join('\n\n'),
       'the preview is the last three real messages, the command as just its name',
     );
-    assertNeverPosted(postedTexts, ['local-command', commandArgumentMarker, 'Compacted PreCompact', 'run directly in Claude Code']);
+    assertNeverPosted(postedTexts, ['local-command', commandArgumentMarker, 'Compacted PreCompact', 'run directly in Claude Code', compactionSummaryStart, compactionSummaryMarker]);
   });
 
   it('previews a conversation whose last turn loaded a skill: the shell command as `!git status`, and none of the skill\'s text, the image note, the other session\'s message or the command\'s output', async () => {

@@ -5,7 +5,9 @@
  *  - OpenCode: `getLatestOpenCodeCompactionSummary` over `GET /message` records
  *    (the assistant message stored with `summary:true`).
  *  - Claude json-stream: `readLatestCompactSummaryFromTranscript` over the
- *    on-disk transcript's `isCompactSummary:true` line.
+ *    on-disk transcript's `isCompactSummary:true` line, and the adapter's
+ *    `getSessionCompactionSummary` (the context bridge's read, whatever the
+ *    session's state).
  *
  * Plus the WIRING of `AgentAdapter.streamsCompactionSummary`, the one field that
  * decides whether the bot posts the summary itself: the pure gate rule is covered in
@@ -22,11 +24,13 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import { OpenCodeAdapter, getLatestOpenCodeCompactionSummary } from '../adapters/openCodeAdapter';
 import { ClaudeJsonStreamAdapter, readLatestCompactSummaryFromTranscript } from '../adapters/claudeJsonStreamAdapter';
-import { ClaudeCliAdapter } from '../adapters/claudeCliAdapter';
+import { ClaudeCliAdapter, getClaudeTranscriptPath } from '../adapters/claudeCliAdapter';
 import { type AgentAdapter } from '../types';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
 test('getLatestOpenCodeCompactionSummary: returns the newest summary:true assistant text', () => {
   const records = [
@@ -84,6 +88,37 @@ test('readLatestCompactSummaryFromTranscript: reads the isCompactSummary line co
 
 test('readLatestCompactSummaryFromTranscript: unreadable file → null', () => {
   assert.equal(readLatestCompactSummaryFromTranscript('/no/such/transcript.jsonl'), null);
+});
+
+test('ClaudeJsonStreamAdapter.getSessionCompactionSummary: the newest summary of a conversation that is not running — and it is not among the conversation\'s turns', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cjson-home-'));
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const key = makeTelegramKey(-1001111111111, 111);
+    const workDir = '/example/work/project';
+    const sessionId = randomUUID();
+    const transcriptPath = getClaudeTranscriptPath(workDir, sessionId);
+    fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        { type: 'user', message: { role: 'user', content: 'hello' } },
+        { type: 'user', isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: 'user', content: 'old summary' } },
+        { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } },
+        { type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted' },
+        { type: 'user', isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: 'user', content: 'new summary' } },
+      ].map((entry) => `${JSON.stringify(entry)}\n`).join(''),
+    );
+    const adapter = new ClaudeJsonStreamAdapter();
+    assert.equal(await adapter.getSessionCompactionSummary(key, workDir, sessionId), 'new summary');
+    assert.deepEqual((await adapter.getRecentTurns(key, workDir, sessionId, 6)).map((turn) => turn.text), ['hello', 'ok'], 'the summary is no turn');
+    assert.equal(await adapter.getSessionCompactionSummary(key, workDir, randomUUID()), null, 'a conversation with no transcript has none');
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('streamsCompactionSummary is declared ONLY by the backend whose summary already reaches the topic', () => {

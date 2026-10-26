@@ -7748,19 +7748,25 @@ function readRunningModelBeforeMove(key: SessionKey, from: FallbackChainEntry | 
   return from?.backend === 'claude' && to.backend === 'claude' ? getThreadClaudeModel(key) : null;
 }
 
+/** Where the topic's agent keeps its conversation: its adapter, the bound folder (`null` when unbound) and the persisted session id (`null` when it holds none yet). */
+function getConversationSource(key: SessionKey): { adapter: AgentAdapter; workDir: string | null; sessionId: string | null } {
+  const adapter = getThreadAdapter(key);
+  const decision = getWorkDirStartDecision(key);
+  const sessionId = getPersistedSessionIdForAdapter(state.getAgent(key) ?? null, adapter.name, checkIsClaudeBackend(adapter.name));
+  return { adapter, workDir: decision.ok ? decision.workDir : null, sessionId };
+}
+
 /**
  * @description The last `limit` turns (oldest first) of the conversation the topic's agent holds, off its own
  * transcript. `[]` when it has none yet (no session id persisted); `null` when they cannot be read (no bound
  * folder, an adapter without a transcript reader, a read that failed).
  */
 async function readConversationTurns(key: SessionKey, limit: number): Promise<RecentTurn[] | null> {
-  const adapter = getThreadAdapter(key);
-  const decision = getWorkDirStartDecision(key);
-  const sessionId = getPersistedSessionIdForAdapter(state.getAgent(key) ?? null, adapter.name, checkIsClaudeBackend(adapter.name));
+  const { adapter, workDir, sessionId } = getConversationSource(key);
   if (!sessionId) return [];
-  if (!decision.ok || !adapter.getRecentTurns) return null;
+  if (workDir === null || !adapter.getRecentTurns) return null;
   try {
-    return await adapter.getRecentTurns(key, decision.workDir, sessionId, limit);
+    return await adapter.getRecentTurns(key, workDir, sessionId, limit);
   } catch (e) {
     console.warn(`[fallback] ${keyToString(key)}: the previous agent's turns are unreadable:`, e instanceof Error ? e.message : e);
     return null;
@@ -7768,8 +7774,24 @@ async function readConversationTurns(key: SessionKey, limit: number): Promise<Re
 }
 
 /**
+ * @description The summary the topic's agent's own compaction left in its conversation (`AgentAdapter.getSessionCompactionSummary`),
+ * for the context bridge to hand on beside the turns; `null` when it has none, the backend keeps none, or it cannot be read.
+ */
+async function readConversationCompactionSummary(key: SessionKey): Promise<string | null> {
+  const { adapter, workDir, sessionId } = getConversationSource(key);
+  if (!sessionId || workDir === null || !adapter.getSessionCompactionSummary) return null;
+  try {
+    return await adapter.getSessionCompactionSummary(key, workDir, sessionId);
+  } catch (e) {
+    console.warn(`[fallback] ${keyToString(key)}: the previous agent's compaction summary is unreadable:`, e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/**
  * @description The context bridge for a cross-backend switch (`utils/fallbackBridge.ts`), built BEFORE the old
- * adapter is stopped: its last turns off its own transcript (an unreadable one yields a bridge without turns).
+ * adapter is stopped: its last turns off its own transcript (an unreadable one yields a bridge without turns) and the
+ * summary of its own earlier compaction, if any.
  * `reason` is why the agent changes — a usage limit or the operator's own switch.
  */
 async function buildFallbackBridge(
@@ -7777,7 +7799,8 @@ async function buildFallbackBridge(
   input: { fromLabel: string; toLabel: string; reason: 'limit' | 'manual'; resetsAtText: string | null; userMessage?: string },
 ): Promise<string> {
   const turns = await readConversationTurns(key, fallbackBridgeTurnLimit) ?? [];
-  return buildFallbackBridgePrompt({ ...input, turns, replyLanguage: getLocaleEndonym(getActiveLang()) });
+  const compactionSummary = await readConversationCompactionSummary(key);
+  return buildFallbackBridgePrompt({ ...input, turns, compactionSummary, replyLanguage: getLocaleEndonym(getActiveLang()) });
 }
 
 /** The backend the topic's agent runs on, by name (`Claude` / `OpenCode`), for a label whose rung is unknown. */

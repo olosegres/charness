@@ -8,7 +8,8 @@
  *   A  Claude → OpenCode: the Claude agent, a background task of its own still running, hits a subscription limit, the
  *      chain's rung is an OpenCode model. The notice names the account that hit it and `OpenCode openai/gpt-5`; the
  *      OpenCode session is created in the topic's folder and its first prompt is the context bridge, led by the note
- *      about the task the switch cut off; the Claude conversation is parked with that loss. A `/claude`
+ *      about the task the switch cut off and carrying the summary of the conversation's earlier compaction under its own
+ *      heading (context, never a user turn); the Claude conversation is parked with that loss. A `/claude`
  *      by hand then ASKS first (the conversation is handed over in compacted form): ✖️ Cancel changes nothing,
  *      ✅ Continue resumes the PARKED Claude conversation (same id) under the first account, the bridge being its
  *      first prompt — with the note, so its own agent hears about the task too.
@@ -44,7 +45,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { getFakeBackgroundTaskDescription, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
+import { getFakeBackgroundTaskDescription, getFakeClaudeTranscriptPath, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
 import { FakeOpenCodeServer, writeFakeOpenCodeBinary } from './openCodeE2e/fakeOpenCodeServer';
 import {
   builtCliPath,
@@ -102,6 +103,9 @@ const chainOpenCodeModel = 'openai/gpt-5';
 const chainOpenCodeModelAlternative = 'google/gemini-2.5-pro';
 const sameProviderOpenCodeModel = 'openai/gpt-5-mini';
 const openCodeModels = [defaultOpenCodeModel, chainOpenCodeModel, chainOpenCodeModelAlternative, sameProviderOpenCodeModel] as const;
+/** The summary the CLI wrote when it compacted the Claude conversation, and a word of its body. */
+const compactionSummaryStart = 'This session is being continued from a previous conversation that ran out of context.';
+const compactionSummaryMarker = 'Primary Request and Intent';
 const exhaustedAccount = 'default';
 const takeoverAccount = 'work';
 /** The first line of the question before a manual switch, and the line every such confirmation ends with. */
@@ -195,6 +199,21 @@ async function tapAccountInPicker(driver: TopicDriver, threadId: number, profile
 }
 
 /** The OpenCode session the fake created for the topic's folder (the newest one). */
+/** What the CLI writes into the transcript when it compacts a conversation: the boundary, then the summary as a flagged `user` entry. */
+function appendCompactionSummary(folder: string, sessionId: string): void {
+  const transcriptPath = getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: path.join(getLayout().workRoot, folder), sessionId });
+  const entries = [
+    { type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', compactMetadata: { trigger: 'auto', preTokens: 123456 } },
+    {
+      type: 'user',
+      isCompactSummary: true,
+      isVisibleInTranscriptOnly: true,
+      message: { role: 'user', content: `${compactionSummaryStart} The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. ${compactionSummaryMarker}: carry on with the release.` },
+    },
+  ];
+  fs.appendFileSync(transcriptPath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
+}
+
 function getOpenCodeSessionOf(folder: string): { id: string } {
   const folderPath = path.join(getLayout().workRoot, folder);
   const session = [...fakeOpenCode.sessions.values()].filter((candidate) => candidate.directory === folderPath).at(-1);
@@ -279,6 +298,8 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     fakeTelegram.pushOperatorMessage(claudeToOpenCode.threadId, 'BGA-1 [fake:background-notify] start a watcher');
     await getCharness().waitFor('the bot to see the Claude agent\'s background task', agentStartTimeoutMs, () =>
       readAgent(claudeToOpenCode.threadId)?.jsonStreamTail?.backgroundTasks?.some((task) => task.description === backgroundTaskName) === true);
+    // The conversation was compacted before: the CLI left the summary in its transcript (which the first turn created).
+    appendCompactionSummary(claudeToOpenCode.folder, claudeSessionId);
     fakeTelegram.pushOperatorMessage(claudeToOpenCode.threadId, `LIM-A [fake:usage-limit-once] [limit-resets:${resetsAtIso}] please carry on`);
 
     const notice = await claudeTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
@@ -295,6 +316,13 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     assert.match(bridge.text, /\[Backend switch\] You \(OpenCode · openai\/gpt-5\) are taking this conversation over from Claude · default/, 'the first prompt is the context bridge');
     // The task the switch cut off is told to the agent the topic moves to, in that first prompt.
     assert.ok(bridge.text.includes(`${lostWorkNoteStart} (the conversation moved to another backend)`) && bridge.text.includes(`«${backgroundTaskName}»`), bridge.text);
+    // The earlier compaction's summary is carried over as context under its own heading, never as a user turn.
+    assert.match(
+      bridge.text,
+      new RegExp(`--- Summary of the earlier conversation[^\\n]*---\\n${compactionSummaryStart}[\\s\\S]*${compactionSummaryMarker}[\\s\\S]*--- End of the summary ---`),
+      'the bridge carries the compaction summary under its own heading',
+    );
+    assert.ok(!bridge.text.includes(`User:\n${compactionSummaryStart}`), 'the summary is not told as a user turn');
     assert.deepEqual(fakeOpenCode.mcpRegistrations.get(path.join(getLayout().workRoot, claudeToOpenCode.folder)), ['telegramBot'], 'the bot registered its MCP server in the folder\'s instance');
 
     await getCharness().waitFor('the switch to reach state.json', replyTimeoutMs, () => readAgent(claudeToOpenCode.threadId)?.name === openCodeAdapterName);

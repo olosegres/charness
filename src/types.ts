@@ -1048,6 +1048,15 @@ export interface AgentAdapter extends EventEmitter {
   getRecentTurns?(key: SessionKey, workDir: string, sessionId: string, limit: number): Promise<RecentTurn[]>;
 
   /**
+   * @description The summary the backend's own compaction left in the conversation `sessionId` (the newest one), read
+   * from its transcript whether or not the session runs; `null` when it holds none or cannot be read. Never part of
+   * {@link getRecentTurns} — it is not something the user said — so the surfaces that show turns do not show it. Used
+   * by the context bridge of a cross-backend switch, which hands it to the next agent as context. Optional: only a
+   * backend whose transcript carries the summary implements it.
+   */
+  getSessionCompactionSummary?(key: SessionKey, workDir: string, sessionId: string): Promise<string | null>;
+
+  /**
    * @description Assemble the post-restart recap for `sessionId`: how many
    * assistant messages were produced while the bot was down (vs the persisted
    * {@link SeenWatermark}) plus the last few turns and a best-effort

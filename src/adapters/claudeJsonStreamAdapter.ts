@@ -2209,6 +2209,10 @@ export class ClaudeJsonStreamAdapter extends EventEmitter implements AgentAdapte
     return readRecentClaudeTurns(filePath, limit);
   }
 
+  async getSessionCompactionSummary(_key: SessionKey, workDir: string, sessionId: string): Promise<string | null> {
+    return readLatestCompactSummaryFromTranscript(getClaudeTranscriptPath(workDir, sessionId));
+  }
+
   async getReattachRecap(key: SessionKey, workDir: string, sessionId: string, watermark: SeenWatermark | null): Promise<ReattachRecap> {
     const filePath = getClaudeTranscriptPath(workDir, sessionId);
     const offset = watermark?.claudeTranscriptOffset;

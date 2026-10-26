@@ -1,13 +1,14 @@
 /**
  * @description Unit tests for {@link ../utils/fallbackBridge} — the first prompt a cross-backend fallback switch
  * hands the new agent: why it takes over, the reply-language directive, the previous agent's last turns
- * verbatim (the forwarded thread-context glue stripped from user turns), over-long turns cut in the middle,
+ * verbatim (the forwarded thread-context glue stripped from user turns), the summary of an earlier compaction
+ * under its own heading (context, never a turn), over-long turns cut in the middle,
  * and the turn-less shape when the old transcript could not be read.
  */
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { buildFallbackBridgePrompt, checkIsFallbackBridgePrompt, fallbackBridgeTurnMaxChars, truncateTurnText } from '../utils/fallbackBridge';
+import { buildFallbackBridgePrompt, checkIsFallbackBridgePrompt, fallbackBridgeSummaryMaxChars, fallbackBridgeTurnMaxChars, truncateTurnText } from '../utils/fallbackBridge';
 import { buildThreadContextPreamble } from '../threadContextPreamble';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 
@@ -52,6 +53,49 @@ test('bridge: an over-long turn keeps its head and tail with a cut marker', () =
   assert.equal(truncateTurnText('short'), 'short');
   const prompt = buildFallbackBridgePrompt({ ...base, resetsAtText: null, turns: [{ role: 'assistant', text: long }] });
   assert.match(prompt, /characters cut/);
+});
+
+const summaryHeading = /--- Summary of the earlier conversation \([^)]*not a message of the user\) ---/;
+
+test('bridge: the earlier compaction\'s summary goes in under its own heading, before the turns, and is not a user turn', () => {
+  const summary = 'This session is being continued from a previous conversation that ran out of context.\n\nSummary:\n1. Primary Request and Intent: ship the release.';
+  const prompt = buildFallbackBridgePrompt({
+    ...base,
+    resetsAtText: null,
+    compactionSummary: summary,
+    turns: [{ role: 'user', text: 'Run the tests' }, { role: 'assistant', text: 'All tests pass.' }],
+  });
+  assert.match(prompt, summaryHeading);
+  assert.match(prompt, /1\. Read the summary of the earlier conversation and the recent turns below/);
+  const headingIndex = prompt.search(summaryHeading);
+  const summaryIndex = prompt.indexOf(summary);
+  const endIndex = prompt.indexOf('--- End of the summary ---');
+  const turnsIndex = prompt.indexOf('--- Last 2 turn(s)');
+  assert.ok(headingIndex >= 0 && summaryIndex > headingIndex && endIndex > summaryIndex && turnsIndex > endIndex, 'heading, summary, its end, then the turns');
+  assert.ok(!prompt.includes(`User:\n${summary}`) && !prompt.includes('User:\nThis session is being continued'), 'never told as the user\'s');
+});
+
+test('bridge: a summary with no turns is still handed over, and is not called "no turns"', () => {
+  const prompt = buildFallbackBridgePrompt({ ...base, resetsAtText: null, turns: [], compactionSummary: 'Summary: the release is half done.' });
+  assert.match(prompt, summaryHeading);
+  assert.ok(prompt.includes('Summary: the release is half done.'));
+  assert.ok(!prompt.includes('No turns of the previous agent are available'));
+  assert.ok(!prompt.includes('--- Last'));
+});
+
+test('bridge: no summary (none, or an empty one) leaves the prompt as it was', () => {
+  for (const compactionSummary of [undefined, null, '']) {
+    const prompt = buildFallbackBridgePrompt({ ...base, resetsAtText: null, compactionSummary, turns: [{ role: 'user', text: 'Run the tests' }] });
+    assert.ok(!prompt.includes('Summary of the earlier conversation'));
+    assert.match(prompt, /1\. Read the recent turns below/);
+  }
+});
+
+test('bridge: an over-long summary keeps its head and tail with a cut marker', () => {
+  const long = `${'s'.repeat(fallbackBridgeSummaryMaxChars + 500)}END`;
+  const prompt = buildFallbackBridgePrompt({ ...base, resetsAtText: null, turns: [], compactionSummary: long });
+  assert.match(prompt, /characters cut/);
+  assert.ok(prompt.includes('END\n--- End of the summary ---'));
 });
 
 test('bridge marker: only a bridge starts with it', () => {

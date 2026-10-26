@@ -46,6 +46,12 @@ const noiseExactPrompts = new Set([
 ]);
 
 /**
+ * Effort / model slash-command stdout that lost its `<local-command-*>` wrapper. Not a topic, but a message somebody
+ * may type ("Set model to … in the config"), so only the titles skip it.
+ */
+const commandEchoRe = /^set (effort level|model) /i;
+
+/**
  * @description Strip the bot's service wrappers (thread-context preamble first —
  * it is the outermost, then the scheduled-run marker) off a stored prompt and
  * collapse it to a single display line. No noise filtering — the raw topic line.
@@ -62,6 +68,7 @@ function checkIsNoisePrompt(line: string): boolean {
   const lower = line.toLowerCase();
   if (noiseExactPrompts.has(lower)) return true;
   if (/^\.+$/.test(line)) return true; // pure dots ("continue" signal)
+  if (commandEchoRe.test(line)) return true;
   return noisePromptPrefixes.some(prefix => line.startsWith(prefix));
 }
 
