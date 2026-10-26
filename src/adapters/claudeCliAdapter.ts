@@ -45,7 +45,7 @@ import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import { resolveDataDir } from '../state';
 import { threadContextPreambleHeader } from '../threadContextPreamble';
 import { getSessionTitleCandidate } from '../utils/claudeSessionTitle';
-import { getClaudeUserEntryDisplayText } from '../utils/claudeUserEntry';
+import { checkIsMetaUserEntry, getClaudeUserEntryDisplayText } from '../utils/claudeUserEntry';
 import { resolveClaudeBinary } from '../utils/resolveBinary';
 import { claudeLoginPastePromptRe } from '../utils/claudeAuthLogin';
 import { claudeConfigDirVariableName, parseClaudeConfigDirFromCommand } from '../utils/claudeProfiles';
@@ -2192,7 +2192,7 @@ function parseClaudeTranscript(filePath: string): ParsedTranscript {
     if (result.firstTimestamp === null && typeof entry.timestamp === 'string') {
       result.firstTimestamp = entry.timestamp;
     }
-    if (entry.type === 'user' && result.firstMeaningfulPrompt === null) {
+    if (entry.type === 'user' && result.firstMeaningfulPrompt === null && !checkIsMetaUserEntry(entry)) {
       const userText = extractUserText(entry.message);
       if (userText) {
         const candidate = getSessionTitleCandidate(userText);
@@ -2264,10 +2264,11 @@ function extractAssistantText(message: unknown): string | null {
  * `type:'assistant'` entry whose message yields non-empty text (via
  * {@link extractUserText} / {@link extractAssistantText}); `summary` and other
  * meta lines, and assistant entries that are tool_use-only, yield `null`. A user
- * entry shows what a person sees (`getClaudeUserEntryDisplayText`): a slash
- * command as just its name, and an entry made only of CLI-injected tags (the
- * caveat and stdout around a command, a reminder) yields `null` — so it never
- * takes one of the `limit` slots of the preview. Never
+ * entry shows what a person sees (`getClaudeUserEntryDisplayText`): a command as
+ * just its name; an entry the CLI marked `isMeta` (a loaded skill's body, the
+ * caveat before a command) or made only of injected tags (a command's output, a
+ * reminder) yields `null` — so it never takes one of the `limit` slots of the
+ * preview. Never
  * throws — a torn / half-written line (offset landing mid-record) fails
  * `JSON.parse` and yields `null`.
  */
@@ -2282,6 +2283,7 @@ function parseClaudeTurnLine(line: string): RecentTurn | null {
   }
   if (!checkIsRecord(entry)) return null;
   if (entry.type === 'user') {
+    if (checkIsMetaUserEntry(entry)) return null;
     const rawText = extractUserText(entry.message);
     const text = rawText === null ? null : getClaudeUserEntryDisplayText(rawText);
     return text ? { role: 'user', text } : null;

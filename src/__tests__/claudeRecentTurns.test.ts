@@ -136,6 +136,60 @@ describe('readRecentClaudeTurns', () => {
     assert.deepEqual(readRecentClaudeTurns(filePath, limit), [{ role: 'user', text: 'final user turn' }]);
   });
 
+  it('skips the entries the CLI marked isMeta — a loaded skill\'s body, an image note, a message from another session — and they take no slot', () => {
+    const filePath = path.join(dir, 'skill-loaded.jsonl');
+    writeTranscript(filePath, [
+      { type: 'user', message: { role: 'user', content: 'older prompt' } },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'older answer' }] } },
+      { type: 'user', message: { role: 'user', content: 'Commit the work' } },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Loading the commit skill.' }] } },
+      { type: 'user', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: /example/skills/commit\n\n# Commit\nStep one.' }] } },
+      { type: 'user', isMeta: true, message: { role: 'user', content: '[Image: original 800x600, displayed at 400x300]' } },
+      { type: 'user', isMeta: true, message: { role: 'user', content: 'Another Claude session sent a message: look at the build' } },
+    ]);
+
+    assert.deepEqual(readRecentClaudeTurns(filePath, limit), [
+      { role: 'assistant', text: 'older answer' },
+      { role: 'user', text: 'Commit the work' },
+      { role: 'assistant', text: 'Loading the commit skill.' },
+    ]);
+  });
+
+  it('skips a skill body that the CLI wrote without its isMeta mark', () => {
+    const filePath = path.join(dir, 'skill-unmarked.jsonl');
+    writeTranscript(filePath, [
+      { type: 'user', message: { role: 'user', content: 'Commit the work' } },
+      { type: 'user', message: { role: 'user', content: 'Base directory for this skill: /example/skills/commit\n\n# Commit' } },
+      { type: 'user', message: { role: 'user', content: '[Request interrupted by user]' } },
+    ]);
+
+    assert.deepEqual(readRecentClaudeTurns(filePath, limit), [{ role: 'user', text: 'Commit the work' }]);
+  });
+
+  it('shows a shell command run in the CLI as `!` + the command, and skips its output', () => {
+    const filePath = path.join(dir, 'shell-mode.jsonl');
+    writeTranscript(filePath, [
+      { type: 'user', message: { role: 'user', content: '<bash-input>git status</bash-input>' } },
+      { type: 'user', message: { role: 'user', content: '<bash-stdout>On branch main\nnothing to commit</bash-stdout><bash-stderr></bash-stderr>' } },
+    ]);
+
+    assert.deepEqual(readRecentClaudeTurns(filePath, limit), [{ role: 'user', text: '!git status' }]);
+  });
+
+  it('never cuts a typed message that only talks about a tag', () => {
+    const filePath = path.join(dir, 'mentions-tag.jsonl');
+    const typed = 'why does the preview show <system-reminder> blocks to me? please fix the renderer too';
+    writeTranscript(filePath, [
+      { type: 'user', message: { role: 'user', content: typed } },
+      { type: 'user', message: { role: 'user', content: '<task-notification> is what the agent got, why?' } },
+    ]);
+
+    assert.deepEqual(readRecentClaudeTurns(filePath, limit), [
+      { role: 'user', text: typed },
+      { role: 'user', text: '<task-notification> is what the agent got, why?' },
+    ]);
+  });
+
   it('tolerates a half-written trailing line without dropping earlier turns', () => {
     const filePath = path.join(dir, 'truncated.jsonl');
     const good = [

@@ -25,18 +25,14 @@ import { classifyClaudeUserEntry } from './claudeUserEntry';
 const scheduledRunMarkerRe = /^\[Scheduled run "[^"]*"\]\n/;
 
 /**
- * @description Prompt prefixes that mark a stored user turn as bot/tooling
- * plumbing rather than a real topic — never a session title. Matched after the
- * preamble/marker is stripped and whitespace collapsed. (The CLI's own tagged
- * entries are told apart by `classifyClaudeUserEntry`.)
+ * @description Prompt prefixes that mark a stored user turn as bot-generated rather than a real topic — never a
+ * session title, though the turn is a real message. Matched after the preamble/marker is stripped and whitespace
+ * collapsed. (What the CLI itself injects is told apart by `classifyClaudeUserEntry`.)
  */
 const noisePromptPrefixes = [
   '[Telegram thread context]', // a preamble with no prompt after it (strip failed)
   '[Telegram file]',
   '[Telegram album]',
-  '[Request interrupted',
-  'Base directory for this skill:',
-  'Caveat: The messages below',
 ];
 
 /**
@@ -48,9 +44,6 @@ const noiseExactPrompts = new Set([
   'да', 'нет', 'ага', 'угу', 'давай', 'да, давай', 'да, давай.',
   'commit', 'commit.', 'push', 'пуш', 'коммить', 'коммит', 'обнови my',
 ]);
-
-/** Effort / model slash-command stdout that lost its `<local-command-*>` wrapper. */
-const commandEchoRe = /^set (effort level|model) /i;
 
 /**
  * @description Strip the bot's service wrappers (thread-context preamble first —
@@ -69,7 +62,6 @@ function checkIsNoisePrompt(line: string): boolean {
   const lower = line.toLowerCase();
   if (noiseExactPrompts.has(lower)) return true;
   if (/^\.+$/.test(line)) return true; // pure dots ("continue" signal)
-  if (commandEchoRe.test(line)) return true;
   return noisePromptPrefixes.some(prefix => line.startsWith(prefix));
 }
 

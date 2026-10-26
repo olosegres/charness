@@ -1,18 +1,19 @@
 /**
  * @description Unit tests for the pure classifier of a Claude transcript `user` entry
  * (`utils/claudeUserEntry.ts`) — the one place that decides what a surface shows of the entries the CLI records for a
- * slash command run directly in it and of the text it injects.
+ * command run directly in it and of the text it injects.
  *
- * Load-bearing intent: a command shows as its bare name (never its argument text), an entry made only of injected tags
- * shows nothing, and a typed message — also one that carries an injected block — keeps what the person typed. Fixtures
- * are the shapes the real CLI writes.
+ * Load-bearing intent: a command shows as its bare name (never its argument text), an entry made only of injected
+ * blocks shows nothing, and a message somebody typed is never cut: only CLOSED blocks at the START or END of an entry
+ * go, so a message that merely talks about a tag — unclosed, or in the middle — stays whole. Fixtures are the shapes
+ * the real CLI writes.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyClaudeUserEntry, getClaudeUserEntryDisplayText } from '../utils/claudeUserEntry';
+import { checkIsMetaUserEntry, classifyClaudeUserEntry, getClaudeUserEntryDisplayText } from '../utils/claudeUserEntry';
 
 const caveatEntry = '<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It\'s recorded here as context for later messages.</local-command-caveat>';
 const compactEntry = '<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args>Make the summary MAXIMALLY COMPLETE: keep every decision.</command-args>';
@@ -22,7 +23,7 @@ describe('classifyClaudeUserEntry — a slash command run in the CLI', () => {
     assert.deepEqual(classifyClaudeUserEntry(compactEntry), { kind: 'command', command: '/compact' });
   });
 
-  it('is found when the CLI writes the message tag before the name', () => {
+  it('is found when the CLI writes the message block before the name', () => {
     const entry = '<command-message>effort</command-message>\n<command-name>/effort</command-name>\n<command-args>high</command-args>';
     assert.deepEqual(classifyClaudeUserEntry(entry), { kind: 'command', command: '/effort' });
   });
@@ -31,14 +32,38 @@ describe('classifyClaudeUserEntry — a slash command run in the CLI', () => {
     assert.deepEqual(classifyClaudeUserEntry(`\n  ${compactEntry}  \n`), { kind: 'command', command: '/compact' });
   });
 
-  it('is injected when the entry carries command tags but no name', () => {
+  it('is injected when the entry carries command blocks but no name', () => {
     assert.deepEqual(classifyClaudeUserEntry('<command-message>compact</command-message>'), { kind: 'injected' });
     assert.deepEqual(classifyClaudeUserEntry('<command-name>  </command-name>'), { kind: 'injected' });
   });
 
   it('is not guessed from a message that merely mentions the tag', () => {
-    const text = 'why does <command-name>/compact</command-name> show up in my preview?';
-    assert.deepEqual(classifyClaudeUserEntry(text), { kind: 'message', text });
+    for (const text of [
+      'why does <command-name>/compact</command-name> show up in my preview?', // closed, in the middle
+      '<command-name> is shown wrongly in the preview', // unclosed, at the start
+      'the preview shows <command-name> for a command', // unclosed, in the middle
+    ]) {
+      assert.deepEqual(classifyClaudeUserEntry(text), { kind: 'message', text });
+    }
+  });
+});
+
+describe('classifyClaudeUserEntry — a shell command run in the CLI', () => {
+  it('is the command behind a `!`', () => {
+    assert.deepEqual(classifyClaudeUserEntry('<bash-input>git status</bash-input>'), { kind: 'command', command: '!git status' });
+  });
+
+  it('has an output that shows nothing', () => {
+    for (const entry of [
+      '<bash-stdout>On branch main\nnothing to commit</bash-stdout><bash-stderr></bash-stderr>',
+      '<bash-stdout></bash-stdout><bash-stderr>fatal: not a git repository</bash-stderr>',
+    ]) {
+      assert.deepEqual(classifyClaudeUserEntry(entry), { kind: 'injected' });
+    }
+  });
+
+  it('is injected when the input is empty', () => {
+    assert.deepEqual(classifyClaudeUserEntry('<bash-input></bash-input>'), { kind: 'injected' });
   });
 });
 
@@ -49,10 +74,15 @@ describe('classifyClaudeUserEntry — text the CLI injected', () => {
     ['a command\'s empty stdout', '<local-command-stdout></local-command-stdout>'],
     ['a command\'s stderr', '<local-command-stderr>boom</local-command-stderr>'],
     ['a system reminder', '<system-reminder>Be careful with the build.</system-reminder>'],
-    ['a pure task notification', '<task-notification>\n<task-id>abc123</task-id>\n<output>done</output>\n</task-notification>'],
-    ['a task notification cut off before its closing tag', '<task-notification>\n<task-id>abc123</task-id>\n<output>done</output>'],
-    ['a caveat cut off before its closing tag', '<local-command-caveat>Caveat: The messages below were generated by the user while running local commands.'],
+    ['a task notification', '<task-notification>\n<task-id>abc123</task-id>\n<output>done</output>\n</task-notification>'],
+    ['a fork\'s boilerplate', '<fork-boilerplate>You are a forked worker.</fork-boilerplate>'],
     ['several blocks in a row', `${caveatEntry}\n\n<system-reminder>x</system-reminder>`],
+    ['the body of a loaded skill', 'Base directory for this skill: /example/skills/commit\n\n# Commit\nStep one.'],
+    ['the caveat of an older CLI, written without a tag', 'Caveat: The messages below were generated by the user while running local commands. DO NOT respond.'],
+    ['the marker of an interrupted turn', '[Request interrupted by user]'],
+    ['the marker of an interrupted tool use', '[Request interrupted by user for tool use]'],
+    ['the stdout of /effort that lost its wrapper', 'Set effort level to xhigh (saved as your default)'],
+    ['the stdout of /model that lost its wrapper', 'Set model to Fable 5'],
     ['whitespace only', '  \n '],
   ] as const) {
     it(`shows nothing for ${name}`, () => {
@@ -72,21 +102,61 @@ describe('classifyClaudeUserEntry — a message somebody typed', () => {
     assert.deepEqual(classifyClaudeUserEntry(text), { kind: 'message', text });
   });
 
-  it('keeps what was typed when an injected block leads or trails it', () => {
+  it('keeps a bot-forwarded file note, which is something the user sent', () => {
+    const text = '[Telegram file] photo saved to: /files/photo.png (12 KB)';
+    assert.deepEqual(classifyClaudeUserEntry(text), { kind: 'message', text });
+  });
+
+  it('keeps what was typed when a closed injected block leads or trails it', () => {
     assert.deepEqual(classifyClaudeUserEntry('<system-reminder>be brief</system-reminder>\n\nrun the tests'), { kind: 'message', text: 'run the tests' });
     assert.deepEqual(classifyClaudeUserEntry('run the tests\n\n<system-reminder>be brief</system-reminder>'), { kind: 'message', text: 'run the tests' });
+    assert.deepEqual(
+      classifyClaudeUserEntry('<system-reminder>be brief</system-reminder>\nrun the tests\n<system-reminder>and be kind</system-reminder>'),
+      { kind: 'message', text: 'run the tests' },
+    );
+  });
+
+  it('is never cut where it only MENTIONS a tag: unclosed, at the start, in the middle', () => {
+    for (const text of [
+      'why does the preview show <system-reminder> blocks to me? please fix the renderer too', // unclosed, in the middle
+      'Compare <local-command-stdout> and <local-command-stderr> handling, then fix it', // two unclosed
+      '<system-reminder> blocks are noisy, fix the renderer', // unclosed, at the start
+      '<task-notification> is what the agent got, why?', // unclosed, at the start
+      'Compare <local-command-stdout>x</local-command-stdout> handling, then fix it', // closed, in the middle
+      'fix the renderer for </system-reminder> closing tags', // a closing tag alone
+      'what is a <bash-input> block', // unclosed, a shell tag
+      'also <fork-boilerplate> shows up', // unclosed, the boilerplate tag
+    ]) {
+      assert.deepEqual(classifyClaudeUserEntry(text), { kind: 'message', text });
+    }
   });
 
   it('keeps tags it does not know', () => {
     const text = 'is <div>a block</div> allowed here?';
     assert.deepEqual(classifyClaudeUserEntry(text), { kind: 'message', text });
   });
+
+  it('keeps a message that merely starts like an untagged CLI text', () => {
+    for (const text of ['Base directory layout of the repo, please', 'Set the effort level for me', 'Caveats of the plan: none']) {
+      assert.deepEqual(classifyClaudeUserEntry(text), { kind: 'message', text });
+    }
+  });
 });
 
 describe('getClaudeUserEntryDisplayText', () => {
-  it('is the message, the bare command name, or null', () => {
+  it('is the message, the command, or null', () => {
     assert.equal(getClaudeUserEntryDisplayText('Run the tests'), 'Run the tests');
     assert.equal(getClaudeUserEntryDisplayText(compactEntry), '/compact');
+    assert.equal(getClaudeUserEntryDisplayText('<bash-input>ls</bash-input>'), '!ls');
     assert.equal(getClaudeUserEntryDisplayText(caveatEntry), null);
+  });
+});
+
+describe('checkIsMetaUserEntry — the CLI\'s own mark', () => {
+  it('is set only by a literal isMeta: true', () => {
+    assert.equal(checkIsMetaUserEntry({ type: 'user', isMeta: true }), true);
+    assert.equal(checkIsMetaUserEntry({ type: 'user', isMeta: false }), false);
+    assert.equal(checkIsMetaUserEntry({ type: 'user', isMeta: 'true' }), false);
+    assert.equal(checkIsMetaUserEntry({ type: 'user' }), false);
   });
 });

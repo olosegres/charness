@@ -422,11 +422,14 @@ Both Claude backends drive the same `claude` binary against
 tmux adapter's readers are reused) and a session started in one backend is
 resumable in the other.
 
-The CLI also records a slash command run directly in it (`/compact`, …) and the text it injects (`<system-reminder>`,
-`<task-notification>`) as `user` entries, tags and all. Everything that shows a transcript's user entries — the
-"Resumed" preview, the reattach recap, the fallback bridge, the `/sessions` titles — reads them through
-`utils/claudeUserEntry.ts`: a command shows as its bare name (no arguments), an entry made only of injected tags is
-skipped and takes none of the preview's slots. A new tag the CLI injects goes into that one list.
+The CLI also records what it did itself as `user` entries: a slash command or a `!` shell command run directly in it,
+their output, a loaded skill's body, text it injects in tags (`<system-reminder>`, `<task-notification>`). Everything that
+shows a transcript's user entries — the "Resumed" preview, the reattach recap, the fallback bridge, the `/sessions`
+titles — decides what is a real message through `utils/claudeUserEntry.ts`: an entry the CLI marked `isMeta` is skipped; a
+command shows as its bare name (`/compact`, `!ls`; never the arguments); an entry that is only injected blocks or one of
+the CLI's untagged texts is skipped. Only properly CLOSED blocks at the START or END of an entry are cut, so a typed
+message that merely mentions a tag stays whole. Skipped entries take none of the preview's slots. A new tag or text the
+CLI injects goes into that one module; what makes a poor TITLE (a bare «yes») stays in `utils/claudeSessionTitle.ts`.
 
 ## OpenCode (`openCodeAdapter.ts`)
 

@@ -1,19 +1,21 @@
 /**
  * @description The "↩️ Resumed — last N messages" preview of a resumed Claude conversation, at PROCESS level: the BUILT
  * charness started the way an isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API of
- * `telegramE2e/fakeTelegram.ts`, with the fake `claude` (`jiraE2e/fakeClaude.ts`) resuming a transcript the test seeded
- * with the entries the real CLI writes when the owner runs `/compact` directly in it (a caveat entry, the command entry
- * with its long argument text, the command's stdout entry). One flow:
+ * `telegramE2e/fakeTelegram.ts`, with the fake `claude` (`jiraE2e/fakeClaude.ts`) resuming transcripts the test seeded
+ * with the entries the real CLI writes. One flow:
  *
  *   boot → a topic is bound and its agent started
- *   → `/sessions` lists the seeded conversation under its first real prompt (not under any of the CLI's own entries)
- *   → a tap on it resumes the conversation, and the preview shows the last THREE real messages: the user's, the agent's
- *     and the command as just `/compact` — no tags, no argument text, no caveat, no stdout; the entries it skips do not
- *     count toward the three
+ *   → a conversation whose owner ran `/compact` directly in the CLI (a caveat entry, the command entry with its long
+ *     argument text, the command's stdout entry): `/sessions` lists it under its first real prompt, and a tap resumes
+ *     it — the preview shows the last THREE real messages: the user's, the agent's and the command as just `/compact`;
+ *     no tags, no argument text, no caveat, no stdout, and the entries it skips do not count toward the three
+ *   → a conversation whose last turn loaded a skill (the skill's body, an image note and a message from another session
+ *     are `isMeta` entries) and ran a `!` shell command (an input and an output entry): the preview shows the shell
+ *     command as `!git status` and none of the skill's text, the image note or the output
  *
  * What the unit tests cover instead: the entry classification (`claudeUserEntry.test.ts`), the turn reader over every
- * shape (`claudeRecentTurns.test.ts`), the silent-reattach recap's body (`reattachRecap.test.ts`), the picker's titles
- * (`claudeSessionTitle.test.ts`).
+ * shape (`claudeRecentTurns.test.ts`), the silent-reattach recap's body (`claudeReattachRecap.test.ts`), the picker's
+ * titles (`claudeSessionTitle.test.ts`, `claudeCliAdapter.sessions.test.ts`).
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`.
@@ -26,7 +28,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { FakeTelegram } from './telegramE2e/fakeTelegram';
+import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import { getFakeClaudeTranscriptPath, getFlagValues } from './jiraE2e/fakeClaudeContract';
 import {
@@ -59,7 +61,7 @@ const replyTimeoutMs = 20 * 1000;
 /** The start of the `/sessions` list's header (`session.list_header` up to the backend's label). */
 const sessionsListHeader = 'Sessions to resume';
 
-/** The conversation's first real prompt: what `/sessions` lists it under. */
+/** The `/compact` conversation's first real prompt: what `/sessions` lists it under. */
 const firstPrompt = 'Fix the login bug';
 const firstAnswer = 'I fixed the login bug in the auth module.';
 const lastPrompt = 'Run the tests';
@@ -67,13 +69,23 @@ const lastAnswer = 'All tests pass.';
 /** A word of the `/compact` argument text, which the preview must not show. */
 const commandArgumentMarker = 'MAXIMALLY COMPLETE';
 
+/** The skill conversation: its last real turns, and words of what it loaded and ran, which the preview must not show. */
+const skillFirstPrompt = 'Plan the release';
+const skillFirstAnswer = 'The plan is ready.';
+const skillLastPrompt = 'Commit the work';
+const skillLastAnswer = 'Loading the commit skill.';
+const skillBodyMarker = 'Step one of the commit skill';
+const shellCommand = 'git status';
+const shellOutputMarker = 'nothing to commit';
+
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
 let fakeTelegram: FakeTelegram;
 let topic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
-/** The seeded conversation. */
-const sessionId = randomUUID();
+/** The seeded conversations. */
+const compactSessionId = randomUUID();
+const skillSessionId = randomUUID();
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -93,31 +105,89 @@ function getWorkDir(): string {
   return path.join(getLayout().workRoot, projectFolder);
 }
 
-/**
- * The transcript of a conversation whose owner ran `/compact` directly in the CLI, shaped as the real CLI writes it:
- * a caveat entry, the command entry (name, message and the long argument text) and the command's stdout entry, each a
- * `user` entry with a bare string.
- */
-function writeCompactedTranscript(): void {
-  const userEntry = (content: string, extra: object = {}) => ({ type: 'user', cwd: getWorkDir(), sessionId, timestamp: new Date().toISOString(), message: { role: 'user', content }, ...extra });
-  const assistantEntry = (text: string) => ({ type: 'assistant', cwd: getWorkDir(), sessionId, timestamp: new Date().toISOString(), message: { role: 'assistant', content: [{ type: 'text', text }] } });
-  const entries = [
-    userEntry(firstPrompt),
-    assistantEntry(firstAnswer),
-    userEntry(lastPrompt),
-    assistantEntry(lastAnswer),
-    userEntry(
-      '<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It\'s recorded here as context for later messages.</local-command-caveat>',
-      { isMeta: true },
-    ),
-    userEntry(
-      `<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args>Make the summary ${commandArgumentMarker}: keep every decision, every open question and every file path, in the order they came up.</command-args>`,
-    ),
-    userEntry('<local-command-stdout>Compacted PreCompact [grep -qF -e \'summary\' || printf \'%s\' \'hook\'] completed successfully</local-command-stdout>'),
-  ];
+/** Entries shaped as the real CLI writes them: a `user` entry with a bare string or a text-block array, an `assistant` entry with text blocks. */
+function createEntryFactory(sessionId: string) {
+  const base = () => ({ cwd: getWorkDir(), sessionId, timestamp: new Date().toISOString() });
+  return {
+    user: (content: string | object[], extra: object = {}) => ({ type: 'user', ...base(), message: { role: 'user', content }, ...extra }),
+    assistant: (text: string) => ({ type: 'assistant', ...base(), message: { role: 'assistant', content: [{ type: 'text', text }] } }),
+  };
+}
+
+function writeTranscript(sessionId: string, entries: object[]): void {
   const transcriptPath = getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir: getWorkDir(), sessionId });
   fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
   fs.writeFileSync(transcriptPath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
+}
+
+/**
+ * The transcript of a conversation whose owner ran `/compact` directly in the CLI: a caveat entry (`isMeta`), the
+ * command entry (name, message and the long argument text) and the command's stdout entry, after four real messages.
+ */
+function writeCompactedTranscript(): void {
+  const { user, assistant } = createEntryFactory(compactSessionId);
+  writeTranscript(compactSessionId, [
+    user(firstPrompt),
+    assistant(firstAnswer),
+    user(lastPrompt),
+    assistant(lastAnswer),
+    user(
+      '<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It\'s recorded here as context for later messages.</local-command-caveat>',
+      { isMeta: true },
+    ),
+    user(
+      `<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args>Make the summary ${commandArgumentMarker}: keep every decision, every open question and every file path, in the order they came up.</command-args>`,
+    ),
+    user('<local-command-stdout>Compacted PreCompact [grep -qF -e \'summary\' || printf \'%s\' \'hook\'] completed successfully</local-command-stdout>'),
+  ]);
+}
+
+/**
+ * The transcript of a conversation whose last turn loaded a skill and ran a shell command: the skill's body (a
+ * text-block array), an image note and a message from another session — all `isMeta` — then the `!` command's input
+ * and its output entry.
+ */
+function writeSkillLoadedTranscript(): void {
+  const { user, assistant } = createEntryFactory(skillSessionId);
+  writeTranscript(skillSessionId, [
+    user(skillFirstPrompt),
+    assistant(skillFirstAnswer),
+    user(skillLastPrompt),
+    assistant(skillLastAnswer),
+    user([{ type: 'text', text: `Base directory for this skill: /example/skills/commit\n\n# Commit\n${skillBodyMarker}: look at the diff.` }], { isMeta: true }),
+    user('[Image: original 800x600, displayed at 400x300]', { isMeta: true }),
+    user('Another Claude session sent a message: look at the build', { isMeta: true }),
+    user(`<bash-input>${shellCommand}</bash-input>`),
+    user(`<bash-stdout>On branch main\n${shellOutputMarker}</bash-stdout><bash-stderr></bash-stderr>`),
+  ]);
+}
+
+/**
+ * `/sessions`, a tap on the conversation listed under `title`, and what the bot posts after it: the titles the list
+ * showed, the preview of the resumed conversation, and the text of every message posted from the list on.
+ */
+async function resumeThroughSessionsList(title: string, sessionId: string): Promise<{ listedTitles: string[]; preview: FakeTelegramMessage; postedTexts: string }> {
+  const list = await topic.sendAndAwaitReply('/sessions', sessionsListHeader);
+  const listedTitles = topic.getKeyboardLabels(list).flat();
+  const pickedIndex = listedTitles.findIndex((label) => label.startsWith(title));
+  assert.notEqual(pickedIndex, -1, `the conversation is listed under its first real prompt "${title}": ${listedTitles.join(' | ')}`);
+
+  const launchesBefore = getSessionLaunches(getLayout()).length;
+  await topic.tapAndAwaitAnswer(list, topic.getKeyboardData(list).flat()[pickedIndex]);
+  const preview = await topic.waitForMessage(
+    'the preview of the resumed conversation',
+    (message) => message.message_id > list.message_id && message.text.includes('Resumed — last'),
+  );
+  const resumedLaunch = getSessionLaunches(getLayout()).slice(launchesBefore).find((launch) => getFlagValues(launch.argv, '--resume').includes(sessionId));
+  assert.ok(resumedLaunch, 'the agent was started again on the seeded conversation');
+  const postedTexts = topic.listMessages().filter((message) => message.message_id > list.message_id).map((message) => message.text).join('\n');
+  return { listedTitles, preview, postedTexts };
+}
+
+function assertNeverPosted(postedTexts: string, leakedFragments: string[]): void {
+  for (const leaked of ['<', '&lt;', ...leakedFragments]) {
+    assert.ok(!postedTexts.includes(leaked), `the topic never shows "${leaked}": ${postedTexts}`);
+  }
 }
 
 describe('The resumed-conversation preview, end to end: built charness, fake Bot API, fake claude', () => {
@@ -165,19 +235,12 @@ describe('The resumed-conversation preview, end to end: built charness, fake Bot
     await topic.sendAndAwaitReply('/claude', 'ready in');
   });
 
-  it('lists the conversation under its first real prompt and, on a tap, resumes it and previews the last three REAL messages: the command as just `/compact`, no caveat, no stdout, no tags', async () => {
+  it('lists the /compact conversation under its first real prompt and, on a tap, resumes it and previews the last three REAL messages: the command as just `/compact`, no caveat, no stdout, no tags', async () => {
     writeCompactedTranscript();
 
-    const list = await topic.sendAndAwaitReply('/sessions', sessionsListHeader);
-    const pickLabels = topic.getKeyboardLabels(list).flat();
-    assert.equal(pickLabels.length, 1, `only the seeded conversation is listed: ${pickLabels.join(' | ')}`);
-    assert.ok(pickLabels[0].startsWith(firstPrompt), `the conversation is listed under its first real prompt: ${pickLabels[0]}`);
+    const { listedTitles, preview, postedTexts } = await resumeThroughSessionsList(firstPrompt, compactSessionId);
 
-    const launchesBefore = getSessionLaunches(getLayout()).length;
-    const messagesBefore = topic.listMessages().length;
-    await topic.tapAndAwaitAnswer(list, topic.getKeyboardData(list)[0][0]);
-    const preview = await topic.waitForMessage('the preview of the resumed conversation', (message) => message.text.includes('Resumed — last'));
-
+    assert.equal(listedTitles.length, 1, `only the seeded conversation is listed: ${listedTitles.join(' | ')}`);
     assert.equal(
       preview.text,
       [
@@ -188,12 +251,24 @@ describe('The resumed-conversation preview, end to end: built charness, fake Bot
       ].join('\n\n'),
       'the preview is the last three real messages, the command as just its name',
     );
+    assertNeverPosted(postedTexts, ['local-command', commandArgumentMarker, 'Compacted PreCompact', 'run directly in Claude Code']);
+  });
 
-    const resumedLaunch = getSessionLaunches(getLayout()).slice(launchesBefore).find((launch) => getFlagValues(launch.argv, '--resume').includes(sessionId));
-    assert.ok(resumedLaunch, 'the agent was started again on the seeded conversation');
-    const newTexts = topic.listMessages().slice(messagesBefore).map((message) => message.text).join('\n');
-    for (const leaked of ['<', '&lt;', 'local-command', commandArgumentMarker, 'Compacted PreCompact', 'run directly in Claude Code']) {
-      assert.ok(!newTexts.includes(leaked), `the topic never shows "${leaked}": ${newTexts}`);
-    }
+  it('previews a conversation whose last turn loaded a skill: the shell command as `!git status`, and none of the skill\'s text, the image note, the other session\'s message or the command\'s output', async () => {
+    writeSkillLoadedTranscript();
+
+    const { preview, postedTexts } = await resumeThroughSessionsList(skillFirstPrompt, skillSessionId);
+
+    assert.equal(
+      preview.text,
+      [
+        enDict['resume.context_header'].replace('{count}', '3'),
+        `${enDict['resume.context_user_label']} ${skillLastPrompt}`,
+        `${enDict['resume.context_assistant_label']} ${skillLastAnswer}`,
+        `${enDict['resume.context_user_label']} !${shellCommand}`,
+      ].join('\n\n'),
+      'the preview is the last three real messages: the shell command stands for its entries, the skill loaded takes no slot',
+    );
+    assertNeverPosted(postedTexts, ['Base directory for this skill', skillBodyMarker, '[Image:', 'Another Claude session', shellOutputMarker, 'bash-']);
   });
 });
