@@ -17,16 +17,23 @@ import * as assert from 'node:assert/strict';
 import { spawnSync } from 'child_process';
 import * as path from 'path';
 import { getSidecarScriptPath, gigaamPinnedRequirements } from '../stt/sttInstall';
+import { getTestFileTimeoutMs } from './e2e/isolatedCharness';
 
 const pythonTestsPath = path.join(path.dirname(getSidecarScriptPath()), 'test_gigaam_sidecar.py');
 /**
- * Setting up the environment (a first `uv` run downloads numpy and soundfile; a dropped connection must end in time),
- * then the suite (a few seconds), then the module-level probes (two at most): together under the unit runner's 2-minute
- * limit per file, so a slow setup ends as a clear skip or failure, never as a whole-file timeout.
+ * The suite's own work is ~10 s of CPU plus ~10 s of real waits (the in-flight windows of the handler tests), so its time
+ * scales with the load of the machine and no fixed number fits every box. The run therefore gets the whole file limit
+ * (`--test-timeout`, the unit runner's 2 minutes unless the file is run by hand without one) less the setup's actual
+ * time and a reserve to report: a slow or loaded box has the time its limit allows, and a hang still fails by name with
+ * the test it stuck in, before the runner's bare "timed out".
  */
+const defaultFileLimitMs = 2 * 60 * 1000;
+const reportReserveMs = 5_000;
+/** A first `uv` run downloads numpy and soundfile; a dropped connection must end in time, not take the whole file limit. */
 const setupTimeoutMs = 45_000;
-const pythonRunTimeoutMs = 50_000;
 const probeTimeoutMs = 5_000;
+const processStartMs = Date.now() - process.uptime() * 1000;
+const fileDeadlineMs = processStartMs + (getTestFileTimeoutMs() ?? defaultFileLimitMs) - reportReserveMs;
 /** Fewer tests than this means the file did not really run (an import that broke half of it), not a pass. */
 const minimumPythonTests = 85;
 const outputTailLength = 3000;
@@ -64,7 +71,7 @@ function getOutputTail(run: ReturnType<typeof spawnSync>): string {
 const runner = findPythonRunner();
 const missingRunnerReason = 'needs uv, or a python3 with numpy, soundfile and av';
 
-test('the sidecar\'s Python unit tests pass', { skip: !runner && !isCi ? missingRunnerReason : undefined, timeout: setupTimeoutMs + pythonRunTimeoutMs }, (context) => {
+test('the sidecar\'s Python unit tests pass', { skip: !runner && !isCi ? missingRunnerReason : undefined }, (context) => {
   assert.ok(runner, missingRunnerReason);
   const setup = spawnSync(runner.command, [...runner.prefixArgs, '-I', '-c', importCheck], { encoding: 'utf8', timeout: setupTimeoutMs });
   if (setup.status !== 0) {
@@ -73,8 +80,12 @@ test('the sidecar\'s Python unit tests pass', { skip: !runner && !isCi ? missing
     context.skip(reason);
     return;
   }
-  const run = spawnSync(runner.command, [...runner.prefixArgs, '-I', pythonTestsPath], { encoding: 'utf8', timeout: pythonRunTimeoutMs });
+  const runBudgetMs = Math.floor(fileDeadlineMs - Date.now());
+  assert.ok(runBudgetMs > 0, 'no time of the file limit is left for the Python tests after the environment was set up');
+  // `-v` names each test as it starts, so a run that stops at the deadline says which one it was in.
+  const run = spawnSync(runner.command, [...runner.prefixArgs, '-I', pythonTestsPath, '-v'], { encoding: 'utf8', timeout: runBudgetMs });
   const output = getOutputTail(run);
+  assert.ok(run.error === undefined, `the Python tests did not finish within the ${Math.round(runBudgetMs / 1000)} s left of the file limit (${run.error?.message}); the last of their output:\n${output}`);
   const ranCount = Number(/^Ran (\d+) tests?/m.exec(output)?.[1] ?? '0');
   assert.ok(ranCount >= minimumPythonTests, `only ${ranCount} Python tests ran (exit ${run.status}):\n${output}`);
   assert.equal(run.status, 0, output);
