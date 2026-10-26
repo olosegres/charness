@@ -49,8 +49,8 @@ const emptyIssueContext: Pick<JiraInboundDeps['client'], 'getComments' | 'getRec
   getRemoteLinks: async () => [],
 };
 const projects: ReadonlyMap<string, JiraProjectTrigger> = new Map([
-  ['PROJ', { folder: 'proj-work', triggerStatusIds: new Set(['10001']), extraFields: [] }],
-  ['OPS', { folder: 'ops-work', triggerStatusIds: new Set(['20001']), extraFields: [] }],
+  ['PROJ', { folder: 'proj-work', triggerStatusIds: new Set(['10001']), triggerStatusNames: ['To Do'], extraFields: [] }],
+  ['OPS', { folder: 'ops-work', triggerStatusIds: new Set(['20001']), triggerStatusNames: ['Doing'], extraFields: [] }],
 ]);
 
 function createHistory(id: string, minute: number, items: JiraChangelogHistory['items'], author: JiraAccount = requester): JiraChangelogHistory {
@@ -471,6 +471,7 @@ describe('JiraInbound', () => {
         ['PROJ', {
           folder: 'proj-work',
           triggerStatusIds: new Set(['10001']),
+          triggerStatusNames: ['To Do'],
           extraFields: [{ id: 'customfield_10042', name: 'Acceptance criteria' }, { id: 'customfield_10043', name: 'Story points' }],
         }],
       ]);
@@ -1258,6 +1259,9 @@ describe('JiraInbound', () => {
       assert.match(recorded.prompts[0], /^\[Request req_1 · from: PROJ-30: you were mentioned by Member in comment 10240\]/);
       assert.ok(recorded.prompts[0].includes(
         'You were mentioned in comment 10240 by Member. The issue is not handed to you (assignee: Owner, status: Backlog). Answer only:',
+      ));
+      assert.ok(recorded.prompts[0].includes(
+        'answer that the issue has to be assigned to you in a status you work in (in this project: "To Do") for that.',
       ));
       assert.ok(recorded.prompts[0].includes('Requester (your answers go to them): Member'));
       assert.equal(triggerLog.checkIsSeen(issueKey, 'mention:10240'), true, 'recorded once the post settled');

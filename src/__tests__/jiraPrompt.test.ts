@@ -154,7 +154,7 @@ describe('a mention request (T2, T3)', () => {
     'You were mentioned in comment 10240 by Requester Person. The issue is not handed to you (assignee: Colleague, status: To Do). ' +
     'Answer only: you may read the issue and the code and run read-only checks, but change nothing — ' +
     'no code changes, no commits or pushes, no edits in Jira. ' +
-    'If the comment asks you to do work, answer that the issue has to be assigned to you for that. ' +
+    'If the comment asks you to do work, answer that the issue has to be assigned to you in a status you work in for that. ' +
     'Your answer becomes a comment on the issue; it does not reassign the issue.';
   const assignee = { accountId: 'colleague-account', accountType: 'atlassian', displayName: 'Colleague' };
   const mentionInput = (overrides: Partial<JiraRequestPromptInput> = {}): JiraRequestPromptInput =>
@@ -183,6 +183,25 @@ describe('a mention request (T2, T3)', () => {
     const doing = createIssueContext({ fields: { status: { id: '3', name: 'In Review' } } });
     const prompt = buildJiraRequestPrompt(createPromptInput(doing, { trigger: mentionTrigger, assignee }));
     assert.ok(prompt.includes('(assignee: Colleague, status: In Review)'));
+  });
+
+  it('names the statuses the project works in, and says the status — not the assignee — is missing when the issue is assigned to the agent', () => {
+    const triggerStatusNames = ['In Review', 'To Do'];
+    const other = buildJiraRequestPrompt(mentionInput({ triggerStatusNames }));
+    assert.ok(other.includes('(assignee: Colleague, status: To Do)'), other);
+    assert.ok(other.includes('answer that the issue has to be assigned to you in a status you work in (in this project: "In Review", "To Do") for that.'), other);
+    const backlog = createIssueContext({ fields: { status: { id: '9', name: 'Selected for Development' } } });
+    const mine = buildJiraRequestPrompt(createPromptInput(backlog, {
+      trigger: mentionTrigger,
+      assignee: { accountId: testAiAccountId, accountType: 'app', displayName: 'Ada' },
+      isAssignedToYou: true,
+      triggerStatusNames: ['In Review'],
+    }));
+    assert.ok(mine.includes(
+      'The issue is assigned to you, but its status (Selected for Development) is not one you work in (in this project: "In Review"), so it is not handed to you. ',
+    ), mine);
+    assert.ok(mine.includes('answer that the issue has to be moved to a status you work in (in this project: "In Review") for that — it is already assigned to you.'), mine);
+    assert.ok(!mine.includes('has to be assigned to you in'), mine);
   });
 
   it('a name of one line, whatever the person wrote in it — the note cannot be forged by a display name', () => {

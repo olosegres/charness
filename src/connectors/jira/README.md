@@ -79,7 +79,8 @@ Operator-facing setup steps: the public `SETUP.md` § "Jira setup".
 With a `trustedGroup` (and `wakeOnMention` not `false`) a comment that @-mentions the AI account starts a request
 on an issue that is NOT handed to it — any assignee, any status. The agent may read the issue and the code and
 run read-only checks; it changes nothing, and asked to do work it answers that the issue has to be assigned to
-it. That is an instruction in the prompt, like the agent's other rules, not a technical lock: the agent still runs
+it in one of the project's trigger statuses, which the note lists — or, when the issue is already assigned to the
+AI account in another status, that only the status is missing. That is an instruction in the prompt, like the agent's other rules, not a technical lock: the agent still runs
 with the instance's rights.
 
 - **Finding it.** Jira's `comment ~ currentUser()`, run as the AI account, matches a comment that holds a

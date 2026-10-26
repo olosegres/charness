@@ -152,7 +152,12 @@ async function checkJiraSetup(client: JiraClient, config: JiraConfig, now: () =>
     }
     const { extraFields, unknownFieldIds } = resolveExtraFields(project.extraFieldIds, fieldDefinitions);
     if (unknownFieldIds.length > 0) unknownExtraFieldIds.set(projectKey, unknownFieldIds);
-    projects.set(projectKey, { folder: project.folder, triggerStatusIds: new Set(resolved.statusIds), extraFields });
+    projects.set(projectKey, {
+      folder: project.folder,
+      triggerStatusIds: new Set(resolved.statusIds),
+      triggerStatusNames: project.triggerStatusNames,
+      extraFields,
+    });
   });
   if (reasons.length > 0) return { kind: 'refused', reasons };
   if (transientDetails.length > 0) return { kind: 'unreachable', detail: transientDetails.join('; ') };
