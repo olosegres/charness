@@ -44,7 +44,8 @@ function printUsage(): void {
       `                               in-flight agent sessions are reattached)\n` +
       `  charness claude-profiles  Claude account profiles + usage from the bot's cache;\n` +
       `                              --best prints the CLAUDE_CONFIG_DIR to launch under\n` +
-      `                              (empty = default), --model <name>, --json\n` +
+      `                              (empty = default), --model <name>, --json,\n` +
+      `                              --current <name> [--stopped-by-limit] for a resumed session\n` +
       `  charness --help, -h       Show this help\n` +
       `  charness --version, -v    Print the version\n` +
       `\n` +

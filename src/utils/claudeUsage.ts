@@ -606,6 +606,26 @@ export function getClaudeLaunchPick(input: ClaudeLaunchPickOptions & {
 }
 
 /**
+ * @description The pick in words, for the first line of the `claude_profiles` answer and the CLI: why the account was chosen
+ * (`stays on the warm account`, `moved: <name> stopped on a limit`, `soonest weekly reset`), or that nothing is usable
+ * and which account frees up when. `currentProfile` is the account the caller passed for a resumed session.
+ */
+export function describeClaudeLaunchOutcome(report: Pick<ClaudeProfilesReport, 'pickReason' | 'nextAvailable'>, currentProfile: string | null): string {
+  switch (report.pickReason) {
+    case 'warm':
+      return 'stays on the warm account';
+    case 'movedFromLimited':
+      return `moved: ${currentProfile ?? 'the warm account'} stopped on a limit`;
+    case 'soonestWeeklyReset':
+      return 'soonest weekly reset';
+    case 'none':
+      return report.nextAvailable === null
+        ? 'none usable — no account names a time it frees up'
+        : `none usable — next: ${report.nextAvailable.profile} at ${report.nextAvailable.at}`;
+  }
+}
+
+/**
  * @description The report of every profile for a launch of `model`, with the pick of {@link getClaudeLaunchPick}
  * (`options`: the warm account, the limit stop, the switched-off accounts). `isEligible` is the strict reading — signed in,
  * not marked limited, its API credits not used up, not at 100 % on a relevant window as recorded — which the explicit
@@ -671,15 +691,21 @@ export function buildClaudeProfileUsageViews(input: {
   return [...(isDefaultRemoved ? [] : [toView('default', input.records.default)]), ...added.map(([name, record]) => toView(name, record))];
 }
 
-/** The profile registry as `state.json` holds it — the CLI's read, no `StateStore` (which would migrate and lock). */
-export function readClaudeProfileRecordsFromStateFile(dataDir: string): Readonly<Record<string, ClaudeProfileRecord>> {
+/** `state.json` as a plain object — the CLI's read, no `StateStore` (which would migrate and lock a live bot's file); `{}` when it is missing or broken. */
+export function readStateFileObject(dataDir: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
   } catch {
     return {};
   }
-  const records = checkIsRecord(parsed) && checkIsRecord(parsed.claudeProfiles) ? parsed.claudeProfiles : {};
+  return checkIsRecord(parsed) ? parsed : {};
+}
+
+/** The profile registry as `state.json` holds it — the CLI's read. */
+export function readClaudeProfileRecordsFromStateFile(dataDir: string): Readonly<Record<string, ClaudeProfileRecord>> {
+  const registry = readStateFileObject(dataDir).claudeProfiles;
+  const records = checkIsRecord(registry) ? registry : {};
   const result: Record<string, ClaudeProfileRecord> = {};
   for (const [name, record] of Object.entries(records)) {
     if (checkIsRecord(record) && typeof record.createdAt === 'string') result[name] = record as unknown as ClaudeProfileRecord;

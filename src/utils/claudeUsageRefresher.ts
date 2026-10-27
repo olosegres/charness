@@ -145,3 +145,16 @@ export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): Clau
 
   return { refreshAll, refreshOne, noteStreamWindows, start, stop };
 }
+
+/**
+ * @description The readings behind a launch pick (`claude_profiles`): when the session being resumed was STOPPED BY A
+ * LIMIT, its account is re-read first, unconditionally — its cached figures may lag the limit that just hit — then every
+ * other profile whose snapshot is older than `maxAgeMs`.
+ */
+export async function refreshClaudeUsageForLaunch(
+  refresher: Pick<ClaudeUsageRefresher, 'refreshOne' | 'refreshAll'>,
+  options: { currentProfile: string | null; isStoppedByLimit: boolean; maxAgeMs: number },
+): Promise<void> {
+  if (options.isStoppedByLimit && options.currentProfile !== null) await refresher.refreshOne(options.currentProfile);
+  await refresher.refreshAll({ maxAgeMs: options.maxAgeMs });
+}

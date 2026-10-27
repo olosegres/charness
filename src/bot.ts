@@ -357,6 +357,7 @@ import {
   createSchedulerMcpServer,
   getSchedulerMcpPort,
   resolveSchedulerMcpPort,
+  type ClaudeProfilesQuery,
   type SchedulerMcpHandle,
 } from './scheduler/mcpSurface';
 import { schedulerMcpServerName } from './scheduler/injection';
@@ -427,7 +428,7 @@ import { createTaskAgents } from './connectors/telegram/commands/taskAgents';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
 import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
-import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher } from './utils/claudeUsageRefresher';
+import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
 import { pickClaudeLimitSwitchCandidates, resolveClaudeLimitedUntil } from './utils/claudeLimitSwitch';
@@ -439,6 +440,7 @@ import {
   buildFallbackSwitchCallbackData,
   buildOpenCodeModelLabel,
   decideFallbackSwitch,
+  getDisabledClaudeProfileNames,
   formatFallbackEntryLabel,
   getFallbackModelToPin,
   getFallbackSwitchTapDecision,
@@ -7901,7 +7903,7 @@ function notePersonActivity(key: SessionKey): void {
  * marked limited until the reset the error named (a Claude profile: else its session window, else the retry's
  * blind delay; an OpenCode model: else the blind delay), the usage snapshots are brought up to date, and the
  * chain's AVAILABLE rungs are listed in priority order. Without a configured chain a Claude topic falls back to
- * the within-Claude headroom ranking (`utils/claudeLimitSwitch.ts`) — the behaviour before the chain existed. An
+ * the within-Claude ranking by the soonest weekly reset (`utils/claudeLimitSwitch.ts`) — the behaviour before the chain existed. An
  * offer is remembered per thread under its episode so only ITS buttons can act on it. `none` for a non-Telegram
  * conversation, a topic with no account to switch from, or when no rung can take over.
  */
@@ -8384,13 +8386,18 @@ async function takeFallbackSwitchOffer(key: SessionKey, episodeId: number, index
   return notice;
 }
 
-/** The `claude_profiles` MCP tool's answer: snapshots refreshed on demand (a minute's cache), then the ranking. */
-async function listClaudeProfilesForAgent(model: string | null): Promise<ClaudeProfilesReport> {
-  await claudeUsageRefresher.refreshAll({ maxAgeMs: claudeUsageOnDemandMaxAgeMs });
+/**
+ * The `claude_profiles` MCP tool's answer: snapshots refreshed on demand (a minute's cache; the account a resumed session
+ * was stopped on is re-read at once), then the launch pick — a new agent, or the session's own account when it is warm.
+ * The accounts the operator switched off in the `/limits` list are never picked for a new agent.
+ */
+async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<ClaudeProfilesReport> {
+  await refreshClaudeUsageForLaunch(claudeUsageRefresher, { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, maxAgeMs: claudeUsageOnDemandMaxAgeMs });
   return buildClaudeProfilesReport(
     buildClaudeProfileUsageViews({ dataDir: resolveDataDir(), records: state.getAllClaudeProfileInfos() }),
-    model,
+    query.model,
     Date.now(),
+    { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, excludedNames: getDisabledClaudeProfileNames(state.getFallbackChain()) },
   );
 }
 

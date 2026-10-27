@@ -55,6 +55,7 @@ import {
   schedulerMcpClientIdHeader,
   schedulerMcpPendingCancellationMax,
   schedulerMcpPendingCancellationTtlMs,
+  type ClaudeProfilesQuery,
   type SchedulerScope,
   type SchedulerMcpHandle,
   type SchedulerMcpDeps,
@@ -194,7 +195,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
 
   it('the claude_profiles port adds its tool on EVERY platform (a child process is launched the same way everywhere), so each digest moves', () => {
     const without = createDigestDeps();
-    const withPort: SchedulerMcpDeps = { ...without, listClaudeProfiles: async (model) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }) };
+    const withPort: SchedulerMcpDeps = { ...without, listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }) };
     for (const platform of ['telegram', 'jira', null] as const) {
       assert.notEqual(getBotMcpToolDigest(withPort, platform, true), getBotMcpToolDigest(without, platform, true), `${platform ?? 'neutral'} digest`);
     }
@@ -222,7 +223,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     const deps: SchedulerMcpDeps = {
       ...createDigestDeps(),
       fetchJiraAttachment: async () => ({ ok: false, error: 'unused' }),
-      listClaudeProfiles: async (model) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }),
+      listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }),
     };
     const offered = new Set((['telegram', 'jira'] as const).flatMap((platform) => getBotMcpToolDefinitions(deps, platform).map((definition) => definition.name)));
     const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
@@ -756,8 +757,8 @@ interface ServerFixture {
   fileSendHandler: { current: SendFilesToThread };
   messageSendCalls: Array<{ threadKey: string; options: SendMessagesToThreadOptions }>;
   messageSendHandler: { current: SendMessagesToThread };
-  /** The `model` each `claude_profiles` call asked for (`null` = omitted). */
-  claudeProfilesCalls: Array<string | null>;
+  /** What each `claude_profiles` call asked for (`null` = omitted). */
+  claudeProfilesCalls: ClaudeProfilesQuery[];
   /** Every `unpinMessages` call the surface made (schedule_cancel of a check that pinned alerts). */
   unpinCalls: Array<{ threadKey: string; messageIds: number[] }>;
 }
@@ -962,7 +963,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     // MCP-layer mapping in registerMessageSendTool (`as_file`→`asFile`, dir-scope
     // `authorizedWorkDir` injection) is observable at this boundary.
     const messageSendCalls: Array<{ threadKey: string; options: SendMessagesToThreadOptions }> = [];
-    const claudeProfilesCalls: Array<string | null> = [];
+    const claudeProfilesCalls: ClaudeProfilesQuery[] = [];
     const unpinCalls: Array<{ threadKey: string; messageIds: number[] }> = [];
     const defaultSendMessagesToThread: SendMessagesToThread = async (threadKey, options) => {
       if (threadKey !== threadAKey) return { ok: false, error: `invalid threadKey "${threadKey}"` };
@@ -989,18 +990,23 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       answerRequest: async () => ({ ok: false, error: 'unused' }),
       whenSessionsRestored: async () => {},
       getSecret: async () => secret,
-      // `claude_profiles`: a canned report that records the model it was asked for.
-      listClaudeProfiles: async (model) => {
-        claudeProfilesCalls.push(model);
+      // `claude_profiles`: a canned report that records what it was asked for — the pick follows the query the way the
+      // real one does (a warm session stays, one stopped by a limit moves, the model `exhausted` has nothing usable).
+      listClaudeProfiles: async (query) => {
+        claudeProfilesCalls.push(query);
+        const { model, currentProfile, isStoppedByLimit } = query;
+        const isNothingUsable = model === 'exhausted';
+        const pickReason = isNothingUsable ? 'none' : currentProfile === null ? 'soonestWeeklyReset' : isStoppedByLimit ? 'movedFromLimited' : 'warm';
+        const recommended = isNothingUsable ? null : pickReason === 'warm' ? currentProfile : model === 'fable' ? 'work' : 'default';
         return {
           model,
           relevantBuckets: ['session', model === 'fable' ? 'weekly_scoped' : 'weekly_all'],
-          recommended: model === 'fable' ? 'work' : 'default',
-          pickReason: 'soonestWeeklyReset',
-          nextAvailable: null,
+          recommended,
+          pickReason,
+          nextAvailable: isNothingUsable ? { profile: 'work', at: '2026-10-20T10:00:00.000Z' } : null,
           profiles: [
-            { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, isEligible: true, headroomPercent: 19, isRecommended: model !== 'fable' },
-            { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, isEligible: true, headroomPercent: 90, isRecommended: model === 'fable' },
+            { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, isEligible: true, headroomPercent: 19, isRecommended: recommended === 'default' },
+            { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, isEligible: true, headroomPercent: 90, isRecommended: recommended === 'work' },
           ],
         };
       },
@@ -1160,27 +1166,51 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     }
   });
 
-  it('claude_profiles: listed for a thread AND a directory scope, passes the model through, answers a verdict line + the report JSON', async () => {
+  it('claude_profiles: listed for a thread AND a directory scope, passes the query through, answers a verdict line + the report JSON', async () => {
+    const callProfiles = async (client: Awaited<ReturnType<typeof buildClient>>, args: Record<string, string | boolean>): Promise<string> =>
+      ((await client.callTool({ name: 'claude_profiles', arguments: args })).content as Array<{ type: string; text: string }>)[0].text;
     for (const scope of [{ kind: 'thread' as const, threadKey: threadAKey }, { kind: 'dir' as const, directory: fixture.fileWorkDir }]) {
       const client = await buildClient(fixture.handle.port, buildSchedulerMcpToken(secret, scope));
       try {
         const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'claude_profiles');
         assert.ok(tool, `claude_profiles is offered to a ${scope.kind} scope`);
         assert.match(tool.description ?? '', /CLAUDE_CONFIG_DIR/);
-        const result = await client.callTool({ name: 'claude_profiles', arguments: { model: 'fable' } });
-        const text = (result.content as Array<{ type: string; text: string }>)[0].text;
-        const [verdict, ...rest] = text.split('\n');
-        assert.equal(verdict, 'recommended: work → CLAUDE_CONFIG_DIR=/data/profiles/work');
-        const report = JSON.parse(rest.join('\n')) as { model: string | null; recommended: string | null; profiles: Array<{ name: string }> };
+        assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ['currentProfile', 'isStoppedByLimit', 'model']);
+        const [verdict, ...rest] = (await callProfiles(client, { model: 'fable' })).split('\n');
+        assert.equal(verdict, 'recommended: work → CLAUDE_CONFIG_DIR=/data/profiles/work (soonest weekly reset)');
+        const report = JSON.parse(rest.join('\n')) as { model: string | null; recommended: string | null; pickReason: string; nextAvailable: unknown; profiles: Array<{ name: string }> };
         assert.equal(report.model, 'fable');
+        assert.equal(report.pickReason, 'soonestWeeklyReset');
         assert.deepEqual(report.profiles.map((profile) => profile.name), ['default', 'work']);
-        const noModel = await client.callTool({ name: 'claude_profiles', arguments: {} });
-        assert.match((noModel.content as Array<{ type: string; text: string }>)[0].text, /^recommended: default → default profile, set no CLAUDE_CONFIG_DIR\n/);
+        assert.match(await callProfiles(client, {}), /^recommended: default → default profile, set no CLAUDE_CONFIG_DIR \(soonest weekly reset\)\n/);
+        assert.match(
+          await callProfiles(client, { currentProfile: 'work' }),
+          /^recommended: work → CLAUDE_CONFIG_DIR=\/data\/profiles\/work \(stays on the warm account\)\n/,
+          'a warm session stays on its account',
+        );
+        assert.match(
+          await callProfiles(client, { currentProfile: ' work ', isStoppedByLimit: true }),
+          /^recommended: default → default profile, set no CLAUDE_CONFIG_DIR \(moved: work stopped on a limit\)\n/,
+          'a session stopped by a limit moves, and the name is trimmed',
+        );
+        const none = await callProfiles(client, { model: 'exhausted' });
+        assert.equal(none.split('\n')[0], 'none usable — next: work at 2026-10-20T10:00:00.000Z');
+        const noneReport = JSON.parse(none.split('\n').slice(1).join('\n')) as { recommended: string | null; nextAvailable: { profile: string; at: string } | null };
+        assert.equal(noneReport.recommended, null);
+        assert.deepEqual(noneReport.nextAvailable, { profile: 'work', at: '2026-10-20T10:00:00.000Z' }, 'nextAvailable rides in the JSON');
       } finally {
         await client.close();
       }
     }
-    assert.deepEqual(fixture.claudeProfilesCalls, ['fable', null, 'fable', null]);
+    assert.deepEqual(fixture.claudeProfilesCalls.slice(0, 6), [
+      { model: 'fable', currentProfile: null, isStoppedByLimit: false },
+      { model: null, currentProfile: null, isStoppedByLimit: false },
+      { model: null, currentProfile: 'work', isStoppedByLimit: false },
+      { model: null, currentProfile: 'work', isStoppedByLimit: true },
+      { model: 'exhausted', currentProfile: null, isStoppedByLimit: false },
+      { model: 'fable', currentProfile: null, isStoppedByLimit: false },
+    ]);
+    assert.equal(fixture.claudeProfilesCalls.length, 10);
   });
 
   it('send_messages_to_user routes each message to the scope-resolved thread', async () => {

@@ -102,36 +102,103 @@ test('removed `bot` worker entry is an unknown command', () => {
   assert.match(stderr, /Usage:/);
 });
 
-test('claude-profiles reads the bot cache off DATA_DIR/state.json: --best prints the dir to launch under (empty for default), --json the report, a bad flag exits 2', () => {
-  const soon = new Date(Date.now() + 3_600_000).toISOString();
-  const bucket = (kind: string, percent: number, scopeModel: string | null = null) => ({ kind, percent, resetsAt: soon, scopeModel });
+const hourMs = 3_600_000;
+/** An ISO instant `hours` from now — whole seconds, so it survives the ISO round trip of the report unchanged. */
+const inHours = (hours: number): string => new Date(Math.floor((Date.now() + hours * hourMs) / 1000) * 1000).toISOString();
+const usageBucket = (kind: string, percent: number, resetsAt: string, scopeModel: string | null = null) => ({ kind, percent, resetsAt, scopeModel });
+
+/** A `state.json` with the two profiles' usage snapshots (and the fallback chain, when given). */
+function writeProfilesState(profiles: { default: unknown[]; work: unknown[] }, fallbackChain: unknown[] = []): void {
+  const record = (createdAt: string, email: string, subscriptionType: string, buckets: unknown[]) => ({
+    createdAt, loggedIn: true, email, subscriptionType, usage: { fetchedAt: new Date().toISOString(), source: 'api', buckets },
+  });
   fs.writeFileSync(path.join(tmpRoot, 'state.json'), JSON.stringify({
     claudeProfiles: {
-      default: { createdAt: '2026-10-01T00:00:00.000Z', loggedIn: true, email: 'me@example.com', subscriptionType: 'max',
-        usage: { fetchedAt: soon, source: 'api', buckets: [bucket('session', 20), bucket('weekly_all', 30), bucket('weekly_scoped', 95, 'Fable')] } },
-      work: { createdAt: '2026-10-02T00:00:00.000Z', loggedIn: true, email: 'w@example.com', subscriptionType: 'pro',
-        usage: { fetchedAt: soon, source: 'api', buckets: [bucket('session', 30), bucket('weekly_all', 40), bucket('weekly_scoped', 10, 'Fable')] } },
+      default: record('2026-10-01T00:00:00.000Z', 'me@example.com', 'max', profiles.default),
+      work: record('2026-10-02T00:00:00.000Z', 'w@example.com', 'pro', profiles.work),
     },
+    fallbackChain,
   }));
+}
+
+test('claude-profiles reads the bot cache off DATA_DIR/state.json: --best prints the dir of the account whose weekly limit resets soonest (empty for default), --json the report, a bad flag exits 2', () => {
+  writeProfilesState({
+    // «default» resets first but has less room; Fable's own window is exhausted there.
+    default: [usageBucket('session', 20, inHours(1)), usageBucket('weekly_all', 70, inHours(48)), usageBucket('weekly_scoped', 100, inHours(48), 'Fable')],
+    work: [usageBucket('session', 30, inHours(1)), usageBucket('weekly_all', 40, inHours(120)), usageBucket('weekly_scoped', 10, inHours(120), 'Fable')],
+  });
   const fable = runCli(['claude-profiles', '--best', '--model', 'fable']);
   assert.equal(fable.status, 0, fable.stderr);
-  assert.equal(fable.stdout, `${path.join(tmpRoot, 'claude-profiles', 'work')}\n`);
+  assert.equal(fable.stdout, `${path.join(tmpRoot, 'claude-profiles', 'work')}\n`, 'Fable: default\'s Fable window is at 100 %');
   const opus = runCli(['claude-profiles', '--best', '--model=opus']);
   assert.equal(opus.status, 0, opus.stderr);
-  assert.equal(opus.stdout, '\n', 'the default profile is an empty line: set no CLAUDE_CONFIG_DIR');
+  assert.equal(opus.stdout, '\n', 'opus: «default» resets in 2 d, «work» in 5 d — the default profile is an empty line: set no CLAUDE_CONFIG_DIR');
   const json = runCli(['claude-profiles', '--json', '--model', 'fable']);
   assert.equal(json.status, 0, json.stderr);
-  const report = JSON.parse(json.stdout) as { recommended: string; profiles: Array<{ name: string; configDir: string | null; headroomPercent: number | null }> };
+  const report = JSON.parse(json.stdout) as { recommended: string; pickReason: string; nextAvailable: unknown; profiles: Array<{ name: string; configDir: string | null; headroomPercent: number | null }> };
   assert.equal(report.recommended, 'work');
-  assert.deepEqual(report.profiles.map((profile) => [profile.name, profile.configDir === null, profile.headroomPercent]), [['default', true, 5], ['work', false, 60]], 'Fable: default is at 95 % on Fable\'s own window, work at 40 % on the shared weekly one');
+  assert.equal(report.pickReason, 'soonestWeeklyReset');
+  assert.equal(report.nextAvailable, null);
+  assert.deepEqual(report.profiles.map((profile) => [profile.name, profile.configDir === null, profile.headroomPercent]), [['default', true, 0], ['work', false, 60]], 'Fable: default is at 100 % on Fable\'s own window, work at 40 % on the shared weekly one');
   const human = runCli(['claude-profiles']);
   assert.equal(human.status, 0, human.stderr);
   assert.match(human.stdout, /✓ default .*5h 20% 🔄 /);
   assert.match(human.stdout, /• work .*Fable 10% 🔄 /);
-  assert.match(human.stdout, /recommended for any model: default/);
+  assert.match(human.stdout, /recommended for any model: default \(soonest weekly reset\)/);
   const bad = runCli(['claude-profiles', '--frob']);
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /unknown option: --frob/);
+});
+
+test('claude-profiles --current keeps a resumed session on its account; --stopped-by-limit moves it, naming why; the flags are checked', () => {
+  writeProfilesState({
+    default: [usageBucket('session', 20, inHours(1)), usageBucket('weekly_all', 70, inHours(48))],
+    work: [usageBucket('session', 95, inHours(1)), usageBucket('weekly_all', 40, inHours(120))],
+  });
+  const workDir = path.join(tmpRoot, 'claude-profiles', 'work');
+  const warm = runCli(['claude-profiles', '--best', '--current', 'work']);
+  assert.equal(warm.stdout, `${workDir}\n`, 'warm: the five-hour ceiling does not apply to the session already on «work»');
+  const newAgent = runCli(['claude-profiles', '--best']);
+  assert.equal(newAgent.stdout, '\n', 'a new agent skips «work» (five-hour window at 95 %)');
+  const moved = runCli(['claude-profiles', '--best', '--current=work', '--stopped-by-limit']);
+  assert.equal(moved.status, 0, moved.stderr);
+  assert.equal(moved.stdout, '\n', 'stopped by a limit: «work» is left out whatever its figures say');
+  const human = runCli(['claude-profiles', '--current', 'work', '--stopped-by-limit']);
+  assert.match(human.stdout, /recommended for any model: default \(moved: work stopped on a limit\)/);
+  assert.match(runCli(['claude-profiles', '--current', 'work']).stdout, /recommended for any model: work \(stays on the warm account\)/);
+  const withoutCurrent = runCli(['claude-profiles', '--stopped-by-limit']);
+  assert.equal(withoutCurrent.status, 2);
+  assert.match(withoutCurrent.stderr, /--stopped-by-limit needs --current <name>/);
+  const noValue = runCli(['claude-profiles', '--current']);
+  assert.equal(noValue.status, 2);
+  assert.match(noValue.stderr, /--current needs a profile name/);
+});
+
+test('claude-profiles with nothing usable: --best exits 1 and names the account that frees up first; an account switched off in the list is never picked', () => {
+  const sessionResetsAt = inHours(0.5);
+  writeProfilesState({
+    default: [usageBucket('session', 95, inHours(1)), usageBucket('weekly_all', 10, inHours(48))],
+    work: [usageBucket('session', 100, sessionResetsAt), usageBucket('weekly_all', 10, inHours(120))],
+  });
+  const best = runCli(['claude-profiles', '--best']);
+  assert.equal(best.status, 1);
+  assert.equal(best.stdout, '');
+  assert.ok(best.stderr.includes(`no usable Claude profile: none usable — next: work at ${sessionResetsAt}`), best.stderr);
+  const json = runCli(['claude-profiles', '--json']);
+  assert.equal(json.status, 0, json.stderr);
+  assert.deepEqual((JSON.parse(json.stdout) as { recommended: null; pickReason: string; nextAvailable: unknown }).nextAvailable, { profile: 'work', at: sessionResetsAt });
+  assert.ok(runCli(['claude-profiles']).stdout.includes(`recommended for any model: none (none usable — next: work at ${sessionResetsAt})`));
+
+  writeProfilesState(
+    {
+      default: [usageBucket('session', 10, inHours(1)), usageBucket('weekly_all', 10, inHours(24))],
+      work: [usageBucket('session', 10, inHours(1)), usageBucket('weekly_all', 10, inHours(120))],
+    },
+    [{ backend: 'claude', profile: 'default', model: null, disabled: true }, { backend: 'claude', profile: 'work', model: null }],
+  );
+  const switchedOff = runCli(['claude-profiles', '--best']);
+  assert.equal(switchedOff.stdout, `${path.join(tmpRoot, 'claude-profiles', 'work')}\n`, '«default» resets first, but the operator switched it off');
+  assert.equal(runCli(['claude-profiles', '--best', '--current', 'default']).stdout, '\n', 'a session already on it stays');
 });
 
 test('claude-profiles with no state file: default is the only profile, with unknown usage, and is recommended', () => {

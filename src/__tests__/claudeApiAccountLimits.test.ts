@@ -99,8 +99,8 @@ describe('classification: the balance is no window', () => {
   });
 });
 
-describe('ranking: an API account is never recommended', () => {
-  it('a subscription with headroom wins; an API account is listed with its billing but never recommended', () => {
+describe('ranking: an API account is never picked for a new agent', () => {
+  it('a subscription with headroom wins; an API account is listed with its billing but never picked', () => {
     const report = buildClaudeProfilesReport([buildView('default', { usage: buildUsage(80) }), apiView()], null, nowMs);
     assert.equal(report.recommended, 'default');
     const api = report.profiles.find((entry) => entry.name === 'console');
@@ -224,11 +224,11 @@ describe('what the screens say', () => {
     assert.deepEqual(lines, ['Account: default · me@example.com · 💸 credits used up']);
   });
 
-  it('`charness claude-profiles` says the account pays per use and is never recommended', () => {
+  it('`charness claude-profiles` says the account pays per use and is never picked for a new agent', () => {
     const report = buildClaudeProfilesReport([apiView({ creditExhaustedAt: inHours(-1) })], null, nowMs);
     assert.equal(
       formatClaudeProfileCliLine(report.profiles[0], nowMs),
-      '✗ console  /home/user/.charness/claude-profiles/console  console@example.com API billing (pay per use, never recommended)  no windows  CREDITS USED UP',
+      '✗ console  /home/user/.charness/claude-profiles/console  console@example.com API billing (pay per use, never picked for a new agent)  no windows  CREDITS USED UP',
     );
   });
 });

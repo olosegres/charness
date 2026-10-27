@@ -1,14 +1,17 @@
 /**
- * @description `charness claude-profiles [--best] [--model <name>] [--json]` — the command-line twin of the
- * `claude_profiles` MCP tool, for a worker that has no MCP (a shell script, a child started by hand): which
- * Claude account profile a new process should run on. It reads the bot's cache off `DATA_DIR/state.json`
- * (`utils/claudeUsage.ts`; the bot polls every profile's usage on a timer, so the figures are at most a poll
- * old) and never opens the `StateStore` (that would migrate and lock a live bot's file) nor the network.
+ * @description `charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit]] [--json]` — the
+ * command-line twin of the `claude_profiles` MCP tool, for a worker that has no MCP (a shell script, a child started by
+ * hand): which Claude account profile a process should run on — a new one goes to the account whose weekly limit resets
+ * soonest. It reads the bot's cache off `DATA_DIR/state.json` (`utils/claudeUsage.ts`; the bot polls every profile's usage
+ * on a timer, so the figures are at most a poll old) and never opens the `StateStore` (that would migrate and lock a live
+ * bot's file) nor the network — so `--stopped-by-limit` can only leave the account out, not re-read its usage.
  *
  *   --best         print ONLY the recommended profile's config directory — an EMPTY line for the default
  *                  profile (set nothing) — so `CLAUDE_CONFIG_DIR="$(charness claude-profiles --best)"`
- *                  works as is; exit 1 when no profile is eligible
+ *                  works as is; exit 1 when no profile is usable (stderr then says which frees up first)
  *   --model <name> the model the child will run (`fable` → the Fable weekly window counts besides the shared ones)
+ *   --current <name>  the profile the session being RESUMED last ran on: it stays there while it can
+ *   --stopped-by-limit  that session broke off on a usage limit: leave `--current` out of the answer
  *   --json         the full report as JSON (the MCP tool's shape)
  *
  * Without a flag: one human line per profile. `DATA_DIR` comes from the environment the bot itself reads
@@ -17,11 +20,14 @@
 
 import { loadEnvFiles } from './envLoader';
 import { resolveDataDir } from '../state';
+import { getDisabledClaudeProfileNames, normaliseFallbackChain } from '../utils/fallbackChain';
 import {
   buildClaudeProfileUsageViews,
   buildClaudeProfilesReport,
+  describeClaudeLaunchOutcome,
   formatClaudeUsageBucket,
   readClaudeProfileRecordsFromStateFile,
+  readStateFileObject,
   type ClaudeProfileReportEntry,
   type ClaudeUsageBucketKind,
 } from '../utils/claudeUsage';
@@ -30,24 +36,43 @@ export interface ClaudeProfilesCliArgs {
   isBest: boolean;
   isJson: boolean;
   model: string | null;
+  currentProfile: string | null;
+  isStoppedByLimit: boolean;
+}
+
+const usageLine = 'Usage: charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit]] [--json]';
+
+/** The value of a flag spelled `--name value` or `--name=value`; `null` when argument `index` is not that flag, `undefined` when it has no value. */
+function readFlagValue(argv: readonly string[], index: number, name: string): { value: string | undefined; consumed: number } | null {
+  const arg = argv[index];
+  if (arg === name) {
+    const value = argv[index + 1];
+    return value === undefined || value.startsWith('--') ? { value: undefined, consumed: 0 } : { value, consumed: 1 };
+  }
+  return arg.startsWith(`${name}=`) ? { value: arg.slice(name.length + 1), consumed: 0 } : null;
 }
 
 /** Parse the subcommand's flags; `null` with a message for anything unknown. */
 export function parseClaudeProfilesCliArgs(argv: readonly string[]): { ok: true; args: ClaudeProfilesCliArgs } | { ok: false; error: string } {
-  const args: ClaudeProfilesCliArgs = { isBest: false, isJson: false, model: null };
+  const args: ClaudeProfilesCliArgs = { isBest: false, isJson: false, model: null, currentProfile: null, isStoppedByLimit: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
+    const model = readFlagValue(argv, i, '--model');
+    const current = readFlagValue(argv, i, '--current');
     if (arg === '--best') args.isBest = true;
     else if (arg === '--json') args.isJson = true;
-    else if (arg === '--model') {
-      const value = argv[i + 1];
-      if (value === undefined || value.startsWith('--')) return { ok: false, error: '--model needs a value' };
-      args.model = value;
-      i += 1;
-    } else if (arg.startsWith('--model=')) args.model = arg.slice('--model='.length);
-    else return { ok: false, error: `unknown option: ${arg}` };
+    else if (arg === '--stopped-by-limit') args.isStoppedByLimit = true;
+    else if (model !== null) {
+      if (model.value === undefined || model.value.trim() === '') return { ok: false, error: '--model needs a value' };
+      args.model = model.value;
+      i += model.consumed;
+    } else if (current !== null) {
+      if (current.value === undefined || current.value.trim() === '') return { ok: false, error: '--current needs a profile name' };
+      args.currentProfile = current.value;
+      i += current.consumed;
+    } else return { ok: false, error: `unknown option: ${arg}` };
   }
-  if (args.model !== null && args.model.trim() === '') return { ok: false, error: '--model needs a value' };
+  if (args.isStoppedByLimit && args.currentProfile === null) return { ok: false, error: '--stopped-by-limit needs --current <name>' };
   return { ok: true, args };
 }
 
@@ -61,7 +86,7 @@ export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowM
   const account = entry.loggedIn === false
     ? 'not signed in'
     : isApi
-      ? `${entry.email ?? 'API key'} API billing (pay per use, never recommended)`
+      ? `${entry.email ?? 'API key'} API billing (pay per use, never picked for a new agent)`
       : entry.loggedIn === null && entry.email === null
         ? 'not probed yet (open /account once)'
         : `${entry.email ?? '?'} ${entry.kind} ${entry.subscriptionType ?? '?'}`;
@@ -94,7 +119,7 @@ export async function runClaudeProfilesCli(
   const stderr = io.stderr ?? ((text: string) => process.stderr.write(text));
   const parsed = parseClaudeProfilesCliArgs(argv);
   if (!parsed.ok) {
-    stderr(`${parsed.error}\nUsage: charness claude-profiles [--best] [--model <name>] [--json]\n`);
+    stderr(`${parsed.error}\n${usageLine}\n`);
     return 2;
   }
   const { args } = parsed;
@@ -102,14 +127,19 @@ export async function runClaudeProfilesCli(
   const dataDir = resolveDataDir();
   const nowMs = (io.now ?? Date.now)();
   const records = readClaudeProfileRecordsFromStateFile(dataDir);
-  const report = buildClaudeProfilesReport(buildClaudeProfileUsageViews({ dataDir, records }), args.model, nowMs);
+  const report = buildClaudeProfilesReport(buildClaudeProfileUsageViews({ dataDir, records }), args.model, nowMs, {
+    currentProfile: args.currentProfile,
+    isStoppedByLimit: args.isStoppedByLimit,
+    excludedNames: getDisabledClaudeProfileNames(normaliseFallbackChain(readStateFileObject(dataDir).fallbackChain)),
+  });
+  const outcome = describeClaudeLaunchOutcome(report, args.currentProfile);
   if (args.isJson) {
     stdout(`${JSON.stringify(report, null, 2)}\n`);
     return report.recommended === null && args.isBest ? 1 : 0;
   }
   if (args.isBest) {
     if (report.recommended === null) {
-      stderr('no eligible Claude profile: every signed-in account is limited or at 100 % on a relevant window\n');
+      stderr(`no usable Claude profile: ${outcome}\n`);
       return 1;
     }
     const entry = report.profiles.find((profile) => profile.name === report.recommended);
@@ -117,6 +147,6 @@ export async function runClaudeProfilesCli(
     return 0;
   }
   stdout(`${report.profiles.map((entry) => formatClaudeProfileCliLine(entry, nowMs)).join('\n')}\n`);
-  stdout(`recommended for ${args.model ?? 'any model'}: ${report.recommended ?? 'none'}\n`);
+  stdout(`recommended for ${args.model ?? 'any model'}: ${report.recommended ?? 'none'} (${outcome})\n`);
   return 0;
 }

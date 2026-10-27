@@ -5,7 +5,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createClaudeUsageRefresher, type ClaudeUsageRefresherDeps, type ClaudeUsageRefresherProfile } from '../utils/claudeUsageRefresher';
+import { createClaudeUsageRefresher, refreshClaudeUsageForLaunch, type ClaudeUsageRefresherDeps, type ClaudeUsageRefresherProfile } from '../utils/claudeUsageRefresher';
 import type { ClaudeUsageBucket, ClaudeUsageFetchResult, ClaudeUsageSnapshot } from '../utils/claudeUsage';
 
 const session = (percent: number): ClaudeUsageBucket => ({ kind: 'session', percent, resetsAt: '2026-10-12T13:00:00.000Z', scopeModel: null });
@@ -150,6 +150,33 @@ describe('noteStreamWindows', () => {
     await h.refresher.refreshAll();
     h.refresher.noteStreamWindows('default', [{ name: 'five_hour', utilization: 0.5, resetsAtMs: 1791810000000 }]);
     assert.deepEqual(h.snapshots.get('default')!.buckets.map((bucket) => [bucket.kind, bucket.percent]), [['session', 50], ['weekly_all', 70]]);
+  });
+});
+
+describe('refreshClaudeUsageForLaunch', () => {
+  const maxAgeMs = 60_000;
+  const freshSnapshot = (): ClaudeUsageSnapshot => ({ fetchedAt: '2026-10-12T09:59:30.000Z', source: 'api', buckets: [session(10)] });
+
+  it('a resume that was NOT stopped by a limit reads only what is older than the cache allows', async () => {
+    const h = createHarness({ profiles: [defaultProfile, workProfile], snapshots: { default: freshSnapshot(), work: freshSnapshot() } });
+    await refreshClaudeUsageForLaunch(h.refresher, { currentProfile: 'work', isStoppedByLimit: false, maxAgeMs });
+    assert.deepEqual(h.fetched, [], 'both snapshots are younger than a minute');
+  });
+
+  it('a session stopped by a limit has its account re-read first and at once, even though its snapshot is fresh; the rest follows the cache', async () => {
+    const h = createHarness({ profiles: [defaultProfile, workProfile], snapshots: { work: freshSnapshot() } });
+    await refreshClaudeUsageForLaunch(h.refresher, { currentProfile: 'work', isStoppedByLimit: true, maxAgeMs });
+    assert.deepEqual(h.fetched, ['tok-/p/work', 'tok-default'], 'work is forced first; default has no snapshot and is due');
+    assert.equal(h.snapshots.get('work')?.buckets[0].percent, 42, 'the forced read replaced the cached figure');
+  });
+
+  it('nothing to force without a current profile, or for a name that is no profile', async () => {
+    const withoutCurrent = createHarness({ profiles: [defaultProfile, workProfile], snapshots: { default: freshSnapshot(), work: freshSnapshot() } });
+    await refreshClaudeUsageForLaunch(withoutCurrent.refresher, { currentProfile: null, isStoppedByLimit: true, maxAgeMs });
+    assert.deepEqual(withoutCurrent.fetched, []);
+    const unknown = createHarness({ profiles: [defaultProfile, workProfile], snapshots: { default: freshSnapshot(), work: freshSnapshot() } });
+    await refreshClaudeUsageForLaunch(unknown.refresher, { currentProfile: 'gone', isStoppedByLimit: true, maxAgeMs });
+    assert.deepEqual(unknown.fetched, []);
   });
 });
 

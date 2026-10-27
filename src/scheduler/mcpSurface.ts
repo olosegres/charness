@@ -15,7 +15,7 @@ import type { StateStore } from '../state';
 import { openCodeAdapterName } from '../adapters/adapterNames';
 import { keyFromString, tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
 import { checkIsBotSkillsEnabled } from '../utils/botSkills';
-import type { ClaudeProfilesReport } from '../utils/claudeUsage';
+import { describeClaudeLaunchOutcome, type ClaudeProfilesReport } from '../utils/claudeUsage';
 import type { SendFilesToThread } from '../utils/fileSendService';
 import { formatIsoLocalOffset } from '../utils/isoTimestamp';
 import {
@@ -157,7 +157,16 @@ function buildTelegramOrchestrationInstruction(isBotSkillsEnabled: boolean): str
     : `${orchestrationInstructionHead} schedule_create to watch EACH worker — ${workerWatchRecipeText}`;
 }
 const claudeProfilesInstruction =
-  '• Before you start a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one with the most headroom (`recommended`). Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits.';
+  '• Before you start or resume a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one to run on (`recommended`: the account whose weekly limit resets soonest is spent first). A new child: no `currentProfile`; a resumed one: the profile it last ran on, plus `isStoppedByLimit: true` when it broke off on a usage limit. Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits. `recommended: null` → nothing is usable now: schedule one resume at `nextAvailable.at`.';
+
+/** What the `claude_profiles` tool asks the bot: the model, and for a resumed session the account it last ran on. */
+export interface ClaudeProfilesQuery {
+  model: string | null;
+  /** The profile the resumed session last ran on; `null` for a new agent. */
+  currentProfile: string | null;
+  /** The resumed session broke off on a usage limit of `currentProfile`. */
+  isStoppedByLimit: boolean;
+}
 
 /**
  * @name OptionalBotTools
@@ -416,12 +425,12 @@ export interface SchedulerMcpDeps {
    */
   fetchJiraAttachment?: (threadKey: string, attachmentId: string) => Promise<{ ok: true; message: string } | { ok: false; error: string }>;
   /**
-   * `claude_profiles`: the signed-in Claude account profiles with their usage windows and the one a new
-   * process of `model` should run on (`utils/claudeUsage.ts`); the bot refreshes the snapshots on demand
-   * before answering. Offered on every platform (a child process is launched the same way everywhere); the
+   * `claude_profiles`: the signed-in Claude account profiles with their usage windows and the one a process of
+   * `query.model` should run on (`getClaudeLaunchPick`, `utils/claudeUsage.ts`); the bot refreshes the snapshots on
+   * demand before answering. Offered on every platform (a child process is launched the same way everywhere); the
    * tool is absent when the port is.
    */
-  listClaudeProfiles?: (model: string | null) => Promise<ClaudeProfilesReport>;
+  listClaudeProfiles?: (query: ClaudeProfilesQuery) => Promise<ClaudeProfilesReport>;
   /**
    * `todo_update` / `todo_read`: the conversation's published todo list (`todos/registry.ts`). Offered to Telegram
    * and Jira sessions; absent = the tools are not offered.
@@ -1644,6 +1653,15 @@ function registerBotTools(
   if (deps.listClaudeProfiles) registerClaudeProfilesTool(server, deps.listClaudeProfiles);
 }
 
+/** The first line of the `claude_profiles` answer: the pick with how to launch it and why, or that nothing is usable and when something is. */
+function buildClaudeProfilesVerdict(report: ClaudeProfilesReport, currentProfile: string | null): string {
+  const outcome = describeClaudeLaunchOutcome(report, currentProfile);
+  if (report.recommended === null) return outcome;
+  const dir = report.profiles.find((profile) => profile.name === report.recommended)?.configDir ?? null;
+  const launch = dir === null ? 'default profile, set no CLAUDE_CONFIG_DIR' : `CLAUDE_CONFIG_DIR=${dir}`;
+  return `recommended: ${report.recommended} → ${launch} (${outcome})`;
+}
+
 /**
  * `claude_profiles`: which Claude account a child process should run on. Reads the bot's per-profile usage
  * cache (refreshed on demand by the port); touches no conversation, so it needs no scope resolution. The
@@ -1656,32 +1674,41 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
       title: 'Claude accounts and their usage',
       description:
         'The Claude account profiles signed in on this host, each with its usage windows — session (5 h), weekly ' +
-        '(all models) and weekly Fable — as percent used + reset instant, and `recommended`: the profile with the most ' +
-        'headroom for the model you pass (the session window and the shared weekly window bound every model, Fable ' +
-        'included; Fable also drains its own weekly window; signed-out and limited profiles are skipped). An account with ' +
-        '`billing: "api"` pays per request from a Claude Console balance: it has no windows and is NEVER recommended — do ' +
-        'not launch a child on it unless the operator asked you to. Call it BEFORE ' +
-        'launching a child `claude` and start the child with CLAUDE_CONFIG_DIR=<configDir> in its environment — ' +
-        'configDir null means the default profile: set nothing. Without the variable the child inherits the account ' +
-        'of this very session.',
+        '(all models) and weekly Fable — as percent used + reset instant, and `recommended`: the account a process of ' +
+        'the model you pass should run on. A NEW agent (omit `currentProfile`) goes to the usable account whose weekly ' +
+        'limit resets SOONEST — what burns soonest is spent first; an account whose five-hour window is at 90 % or more ' +
+        'is skipped until it resets. A session you RESUME (pass `currentProfile`, the profile it last ran on) stays on ' +
+        'it unless that account is signed out, limited or at 100 % on a window the model drains; when it broke off on a ' +
+        'usage limit pass `isStoppedByLimit: true` and resume the SAME session at once on the answer. The session ' +
+        'window and the shared weekly window bound every model, Fable included; Fable also drains its own weekly ' +
+        'window; signed-out, limited and operator-switched-off accounts are skipped. An account with `billing: "api"` ' +
+        'pays per request from a Claude Console balance: it has no windows and is NEVER picked for a new agent — do ' +
+        'not launch a child on it unless the operator asked you to. `recommended: null` means nothing is usable now: ' +
+        '`nextAvailable` names the account and instant that frees up first — schedule ONE resume at that time instead ' +
+        'of retrying. Call it BEFORE launching or resuming a child `claude` and start the child with ' +
+        'CLAUDE_CONFIG_DIR=<configDir> in its environment — configDir null means the default profile: set nothing. ' +
+        'Without the variable the child inherits the account of this very session.',
       inputSchema: {
         model: z
           .string()
           .max(64)
           .optional()
           .describe('The model the child will run (e.g. "fable", "opus", "sonnet"); decides whether the Fable weekly window counts besides the shared ones. Omit for the shared windows.'),
+        currentProfile: z
+          .string()
+          .max(32)
+          .optional()
+          .describe('The profile the session you RESUME last ran on (the `name` you recorded at its launch); omit for a new agent.'),
+        isStoppedByLimit: z
+          .boolean()
+          .optional()
+          .describe('The resumed session broke off on a usage limit of `currentProfile`: that account is left out of this answer. Needs `currentProfile`.'),
       },
     },
     async (args) => {
-      const report = await listClaudeProfiles(args.model?.trim() || null);
-      const verdict = report.recommended === null
-        ? 'No eligible subscription profile: every signed-in one is limited or at 100 % on a relevant window (an account billed to API credits is never recommended).'
-        : (() => {
-            const entry = report.profiles.find((profile) => profile.name === report.recommended);
-            const dir = entry?.configDir ?? null;
-            return `recommended: ${report.recommended} → ${dir === null ? 'default profile, set no CLAUDE_CONFIG_DIR' : `CLAUDE_CONFIG_DIR=${dir}`}`;
-          })();
-      return textResult(`${verdict}\n${JSON.stringify(report, null, 1)}`);
+      const currentProfile = args.currentProfile?.trim() || null;
+      const report = await listClaudeProfiles({ model: args.model?.trim() || null, currentProfile, isStoppedByLimit: args.isStoppedByLimit === true });
+      return textResult(`${buildClaudeProfilesVerdict(report, currentProfile)}\n${JSON.stringify(report, null, 1)}`);
     },
   );
 }
