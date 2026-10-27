@@ -18,6 +18,9 @@ A worker is `claude -p`: one turn per process, the conversation kept between run
   - investigator (a cause still unclear after a builder failed on it twice): `--model opus --effort high`;
   - reviewer: `--model opus --effort high`; a small or mechanical diff (docs, tests only): `--effort medium`;
   - planner and the research feeding a plan: `--model opus --effort high`, `xhigh` for a large feature.
+- Never Sonnet for work on data persistence (storage, DB schema and migrations, sync, merge and conflict
+  resolution, backups — anything that can lose or corrupt user data): every role runs on Opus, a builder at
+  `--model opus --effort xhigh` (`max` for a deep investigation). This beats the role defaults above.
 - Never Fable for a worker: it drains the shared session and weekly limits fastest.
 - The first `system`/`init` event must name the requested model; on a mismatch stop the worker and tell the user.
 
