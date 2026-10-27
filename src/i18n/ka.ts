@@ -8,7 +8,6 @@ export const kaDict: Record<string, string> = {
     '📁 ეს თემა არ არის დაკავშირებული საქაღალდესთან. გამოიყენეთ /bind <subdir> ან აირჩიეთ სიიდან.',
   'thread.bind_required':
     '📁 ჯერ დააკავშირეთ საქაღალდე: /bind <subdir>. აგენტი მუშაობს მხოლოდ დაკავშირებულ საქაღალდეში.',
-  'thread.bound': '📁 დაკავშირებულია `{subdir}`-თან.\nგაუშვით /claude ან /opencode.',
   'thread.unbound': '📁 კავშირი მოხსნილია.',
   'thread.general_no_agent':
     'General არ არის დაკავშირებული საქაღალდესთან — გადადით თემატურ თემაში აგენტთან სასაუბროდ.',

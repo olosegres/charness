@@ -8,7 +8,6 @@ export const frDict: Record<string, string> = {
     '📁 Ce fil n\'est pas lié à un dossier. Utilisez /bind <subdir> ou choisissez dans la liste.',
   'thread.bind_required':
     '📁 Liez d\'abord un dossier : /bind <subdir>. L\'agent ne fonctionne que dans le dossier lié.',
-  'thread.bound': '📁 Lié à `{subdir}`.\nLancez /claude ou /opencode.',
   'thread.unbound': '📁 Lien effacé.',
   'thread.general_no_agent':
     'General n\'est pas lié à un dossier — passez à un fil thématique pour parler à un agent.',

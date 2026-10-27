@@ -6213,16 +6213,19 @@ command('timezone', async (_ctx, key, parsed) => {
  * @description Persist a `key → subdir` binding and report the outcome.
  *
  * Shared between the `/bind <subdir>` command and the `bind_<subdir>`
- * inline-callback so both paths apply identical validation, collision
+ * inline-callback so both paths apply identical validation and collision
  * checks (plan §11 Этап 4 — warn when other threads already use the same
- * folder, decision D7) and acknowledgement formatting.
+ * folder, decision D7).
  *
- * Returns `{ ok: true, subdir }` on success, plus a localised
- * acknowledgement string. Callers send the message themselves so they
- * can stack additional content (rich welcome, etc.) underneath.
+ * Returns `{ ok: true, subdir, collisionNotice }` on success: the notice is
+ * the localised shared-folder warning, `null` when no other thread uses the
+ * folder. There is no plain «bound» acknowledgement — the rich welcome
+ * ({@link sendBindingWelcome}) is the one message announcing the binding.
+ * On failure `message` is the localised refusal. Callers post the outcome
+ * with {@link replyToBindResult}.
  */
 type ApplyBindingResult =
-  | { ok: true;  message: string; subdir: string }
+  | { ok: true;  collisionNotice: string | null; subdir: string }
   | { ok: false; message: string };
 
 async function applyBinding(
@@ -6250,12 +6253,12 @@ async function applyBinding(
   await state.setBinding(key, subdir, options.topicName !== undefined ? { topicName: options.topicName } : {});
   warmTodoProjects();
 
-  const message = peers.length > 0
+  const collisionNotice = peers.length > 0
     ? t('thread.bind_collision', {
         subdir,
         threads: peers.map(k => `\`${keyToString(k)}\``).join(', '),
       })
-    : t('thread.bound', { subdir });
+    : null;
 
   // Rebind resume (S8): a thread that was unbound paused its schedules; binding
   // it again (this thread, possibly a different folder) resumes them. Best
@@ -6264,7 +6267,22 @@ async function applyBinding(
     console.warn(`[scheduler] resume-on-rebind failed for ${keyToString(key)}:`, e),
   );
 
-  return { ok: true, message, subdir };
+  return { ok: true, collisionNotice, subdir };
+}
+
+/**
+ * @description Answer a bind attempt in the topic: the refusal's message, or — once bound — the shared-folder warning
+ * (only when other topics use the folder; the welcome does not say so) and then the rich welcome, which is the one
+ * message announcing the binding. Shared by `/bind <subdir>`, the `bind_<subdir>` picker button and the picker's
+ * «create new folder».
+ */
+async function replyToBindResult(key: SessionKey, result: ApplyBindingResult): Promise<void> {
+  if (!result.ok) {
+    await replyToThread(key, result.message);
+    return;
+  }
+  if (result.collisionNotice !== null) await replyToThread(key, result.collisionNotice);
+  await sendBindingWelcome(key, result.subdir);
 }
 
 /**
@@ -6412,9 +6430,7 @@ async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ 
   if (folder.outcome === 'invalid') return { ok: false };
   if (folder.outcome === 'failed') return { ok: true };
 
-  const result = await applyBinding(key, folder.subdir);
-  await replyToThread(key, result.message);
-  if (result.ok) await sendBindingWelcome(key, result.subdir);
+  await replyToBindResult(key, await applyBinding(key, folder.subdir));
   return { ok: true };
 }
 
@@ -6457,9 +6473,7 @@ command('bind', async (_ctx, key, parsed) => {
     await replyToThread(key, usage, buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, !!binding));
     return;
   }
-  const result = await applyBinding(key, arg);
-  await replyToThread(key, result.message);
-  if (result.ok) await sendBindingWelcome(key, result.subdir);
+  await replyToBindResult(key, await applyBinding(key, arg));
 });
 
 /**
@@ -10114,9 +10128,7 @@ bot.action(/^bind_(.+)$/, async (ctx) => {
   }
   const subdir = ctx.match[1];
   await ctx.answerCbQuery(t('cb.binding_to', { subdir }));
-  const result = await applyBinding(key, subdir);
-  await replyToThread(key, result.message);
-  if (result.ok) await sendBindingWelcome(key, result.subdir);
+  await replyToBindResult(key, await applyBinding(key, subdir));
 });
 
 // ─── /language inline picker callbacks ───────────────────────────────────────

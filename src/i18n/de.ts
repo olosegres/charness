@@ -8,7 +8,6 @@ export const deDict: Record<string, string> = {
     '📁 Dieser Thread ist nicht mit einem Ordner verknüpft. Verwende /bind <subdir> oder wähle aus der Liste.',
   'thread.bind_required':
     '📁 Verknüpfe zuerst einen Ordner: /bind <subdir>. Der Agent läuft nur im verknüpften Ordner.',
-  'thread.bound': '📁 Verknüpft mit `{subdir}`.\nStarte /claude oder /opencode.',
   'thread.unbound': '📁 Verknüpfung aufgehoben.',
   'thread.general_no_agent':
     'General ist nicht mit einem Ordner verknüpft — wechsle in einen thematischen Thread, um mit einem Agent zu sprechen.',

@@ -8,7 +8,6 @@ export const jaDict: Record<string, string> = {
     '📁 このスレッドはフォルダにバインドされていません。/bind <subdir> を使うかリストから選んでください。',
   'thread.bind_required':
     '📁 まずフォルダをバインドしてください: /bind <subdir>。エージェントはバインドされたフォルダ内でのみ動作します。',
-  'thread.bound': '📁 `{subdir}` にバインドしました。\n/claude または /opencode を実行してください。',
   'thread.unbound': '📁 バインドを解除しました。',
   'thread.general_no_agent':
     'General はフォルダにバインドされていません — エージェントと話すにはトピックスレッドに切り替えてください。',

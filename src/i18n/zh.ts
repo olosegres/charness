@@ -8,7 +8,6 @@ export const zhDict: Record<string, string> = {
     '📁 该话题未绑定文件夹。使用 /bind <subdir> 或从列表中选择。',
   'thread.bind_required':
     '📁 请先绑定文件夹：/bind <subdir>。代理仅在已绑定的文件夹中运行。',
-  'thread.bound': '📁 已绑定到 `{subdir}`。\n运行 /claude 或 /opencode。',
   'thread.unbound': '📁 绑定已解除。',
   'thread.general_no_agent':
     'General 未绑定文件夹 — 切换到主题话题与代理对话。',

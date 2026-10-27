@@ -13,7 +13,6 @@ export const ukDict: Record<string, string> = {
     '📁 Цей тред не прив\'язаний до папки. Використай /bind <subdir> або обери зі списку.',
   'thread.bind_required':
     '📁 Спершу прив\'яжи папку: /bind <subdir>. Агент запускається лише в прив\'язаній папці.',
-  'thread.bound': '📁 Прив\'язано до `{subdir}`.\nЗапусти /claude або /opencode.',
   'thread.unbound': '📁 Прив\'язку знято.',
   'thread.general_no_agent':
     'General не прив\'язаний до папки — перейди в тематичний тред, щоб поговорити з агентом.',

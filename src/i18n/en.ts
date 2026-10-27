@@ -12,7 +12,6 @@ export const enDict: Record<string, string> = {
     '📁 This thread is not bound to a folder. Use /bind <subdir> or pick from the list.',
   'thread.bind_required':
     '📁 Bind a folder first: /bind <subdir>. The agent only ever runs inside the bound folder.',
-  'thread.bound': '📁 Bound to `{subdir}`.\nRun /claude or /opencode.',
   'thread.unbound': '📁 Binding cleared.',
   'thread.general_no_agent':
     'General is not bound to a folder — switch to a topical thread to talk to an agent.',

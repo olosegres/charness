@@ -8,7 +8,6 @@ export const hiDict: Record<string, string> = {
     '📁 यह थ्रेड किसी फ़ोल्डर से बाउंड नहीं है। /bind <subdir> का उपयोग करें या सूची से चुनें।',
   'thread.bind_required':
     '📁 पहले फ़ोल्डर बाइंड करें: /bind <subdir>। एजेंट केवल बाउंड फ़ोल्डर में चलता है।',
-  'thread.bound': '📁 `{subdir}` से बाउंड।\n/claude या /opencode चलाएँ।',
   'thread.unbound': '📁 बाइंडिंग हटाई गई।',
   'thread.general_no_agent':
     'General किसी फ़ोल्डर से बाउंड नहीं है — एजेंट से बात करने के लिए एक विषय-वस्तु थ्रेड पर स्विच करें।',

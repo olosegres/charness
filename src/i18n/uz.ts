@@ -8,7 +8,6 @@ export const uzDict: Record<string, string> = {
     '📁 Bu mavzu papkaga bog‘lanmagan. /bind <subdir> ishlating yoki ro‘yxatdan tanlang.',
   'thread.bind_required':
     '📁 Avval papkani bog‘lang: /bind <subdir>. Agent faqat bog‘langan papkada ishlaydi.',
-  'thread.bound': '📁 `{subdir}` ga bog‘landi.\n/claude yoki /opencode ni ishga tushiring.',
   'thread.unbound': '📁 Bog‘lanish olib tashlandi.',
   'thread.general_no_agent':
     'General papkaga bog‘lanmagan — agent bilan gaplashish uchun mavzu mavzusiga o‘ting.',

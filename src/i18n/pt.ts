@@ -8,7 +8,6 @@ export const ptDict: Record<string, string> = {
     '📁 Este tópico não está vinculado a uma pasta. Usa /bind <subdir> ou escolhe da lista.',
   'thread.bind_required':
     '📁 Vincula primeiro uma pasta: /bind <subdir>. O agente só funciona na pasta vinculada.',
-  'thread.bound': '📁 Vinculado a `{subdir}`.\nInicia /claude ou /opencode.',
   'thread.unbound': '📁 Vínculo removido.',
   'thread.general_no_agent':
     'General não está vinculado a uma pasta — muda para um tópico temático para falar com um agente.',

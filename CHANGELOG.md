@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**Picking a folder with `/bind` now leaves ONE message in the topic — the full welcome with the folder's facts and the start buttons.**
+Before, the pick also posted a short «📁 Bound to `x`. Run /claude or /opencode.» just before the welcome, and it stayed in the topic as a
+second, plainer copy of the same news. It is gone for all three ways of binding — `/bind <folder>`, a folder tapped in the picker and
+«create new folder»; a refused folder still says why, and a folder other topics already use still gets its warning next to the welcome. The
+short acknowledgement's text is removed from all 12 languages.
+
 **`/task_agents` in General sets how many task agents may work at once — a number from the picker or any number you type.**
 It opens a one-shot picker (5 / 10 / 15 / 20 / 30 / No limit, the value in force marked ✓) whose tap turns it into its confirmation;
 `/task_agents 12` sets any whole number from 1 to 100, and `0` or `off` means no limit (a number over 100, a decimal or a word is refused with the

@@ -7,7 +7,7 @@
  *
  * Design choices:
  *
- * 1. **Codes, not English-as-key.** `'thread.bound'` instead of
+ * 1. **Codes, not English-as-key.** `'binding.welcome.header'` instead of
  *    `'📁 Bound to {subdir}'` so renames don't ripple through `t()` calls
  *    and so translators see semantic intent.
  * 2. **No external library.** A handful of strings and one fallback rule

@@ -11,7 +11,6 @@ export const ruDict: Record<string, string> = {
     '📁 Этот тред не привязан к папке. Используй /bind <subdir> или выбери из списка.',
   'thread.bind_required':
     '📁 Сначала привяжи папку: /bind <subdir>. Агент запускается только в привязанной папке.',
-  'thread.bound': '📁 Привязано к `{subdir}`.\nЗапусти /claude или /opencode.',
   'thread.unbound': '📁 Привязка снята.',
   'thread.general_no_agent':
     'General не привязан к папке — перейди в тематический тред для разговора с агентом.',

@@ -8,7 +8,6 @@ export const esDict: Record<string, string> = {
     '📁 Este hilo no está vinculado a una carpeta. Usa /bind <subdir> o elige de la lista.',
   'thread.bind_required':
     '📁 Vincula primero una carpeta: /bind <subdir>. El agente solo funciona en la carpeta vinculada.',
-  'thread.bound': '📁 Vinculado a `{subdir}`.\nEjecuta /claude o /opencode.',
   'thread.unbound': '📁 Vínculo eliminado.',
   'thread.general_no_agent':
     'General no está vinculado a una carpeta — cambia a un hilo temático para hablar con un agente.',
