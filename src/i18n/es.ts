@@ -696,6 +696,7 @@ export const esDict: Record<string, string> = {
 
   'cb.access_denied': 'Acceso denegado',
   'cb.bind_only_topical': '/bind solo funciona en hilos temáticos',
+  'cb.bind_already_bound': 'Ya está vinculada.',
   'cb.binding_to': 'Vinculando a {subdir}…',
   'cb.no_active_session': 'Sin sesión activa',
   'cb.model_error': 'Error: {error}',

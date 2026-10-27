@@ -1,23 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatSharedTopicList, getSharedTopicLabel } from '../connectors/telegram/bindingWelcome';
+import { formatSharedTopicList } from '../connectors/telegram/bindingWelcome';
 
-test('a topic is called by its stored name, trimmed', () => {
-  assert.equal(getSharedTopicLabel('  Release notes ', '-1001111111111:191'), 'Release notes');
+const releaseNotesLink = 'https://t.me/c/1111111111/191';
+
+test('a topic with a name is that name as inline code, trimmed', () => {
+  assert.equal(formatSharedTopicList([{ name: '  Release notes ', link: releaseNotesLink }]), '`Release notes`');
 });
 
-test('a topic with no stored name, or a blank one, is called by its key', () => {
-  assert.equal(getSharedTopicLabel(undefined, '-1001111111111:191'), '-1001111111111:191');
-  assert.equal(getSharedTopicLabel('   ', '-1001111111111:191'), '-1001111111111:191');
+test('a topic with no name, or a blank one, is its bare link', () => {
+  assert.equal(formatSharedTopicList([{ name: undefined, link: releaseNotesLink }]), releaseNotesLink);
+  assert.equal(formatSharedTopicList([{ name: '   ', link: releaseNotesLink }]), releaseNotesLink);
 });
 
-test('the labels are inline code, comma-separated', () => {
-  assert.equal(formatSharedTopicList(['Release notes', '-1001111111111:191']), '`Release notes`, `-1001111111111:191`');
+test('names and links are comma-separated in the order given', () => {
+  assert.equal(
+    formatSharedTopicList([{ name: 'Release notes', link: releaseNotesLink }, { name: undefined, link: 'https://t.me/c/1111111111/192' }]),
+    '`Release notes`, https://t.me/c/1111111111/192',
+  );
 });
 
 test('markdown characters of a name are safe inside the code span; a backtick, which cannot be escaped there, becomes an apostrophe', () => {
-  assert.equal(formatSharedTopicList(['Bind_Auto *x* [y]']), '`Bind_Auto *x* [y]`');
-  assert.equal(formatSharedTopicList(['the `fix` topic']), "`the 'fix' topic`");
+  assert.equal(formatSharedTopicList([{ name: 'Bind_Auto *x* [y]', link: releaseNotesLink }]), '`Bind_Auto *x* [y]`');
+  assert.equal(formatSharedTopicList([{ name: 'the `fix` topic', link: releaseNotesLink }]), "`the 'fix' topic`");
 });
 
 test('no other topic gives an empty list', () => {

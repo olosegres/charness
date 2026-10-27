@@ -8,12 +8,16 @@ in the picker or «create new folder») added a short «📁 Bound to `x`. Run /
 itself because its name matches a folder got a separate 👋 «auto-bound» greeting, a folder other topics already use got a separate ⚠️ warning, and
 «create new folder» given the name of an existing folder added a «Folder already exists» note.
 Now only the welcome is posted: a row in it says the bot bound the topic because its name matches the folder, another says the folder was there
-already, and another names the topics that already use the folder — by their topic names, also when the bot bound the topic by itself. A folder
-that does not exist still just gets its reason. `/topic`'s «create new folder» still tells the topic you typed the name in that the folder existed.
-The `/bind` picker is now one-shot: once a folder is bound through it (a tap or «create new folder») its buttons are removed, so an old tap
-cannot rebind the topic; a refused pick, paging and the create-folder prompt leave them in place. When the bot binds a non-admin's topic on an
-admin's first message there, a plain message is answered by the welcome alone, without the extra «bound, run /claude» hint, and a start phrase
-like `claude` still starts the agent. The removed texts are gone from all 12 languages, the three new rows are in all 12.
+already, and another names the topics that already use the folder — also when the bot bound the topic by itself. A topic is named there by the name
+the bot saw it made with (or an admin renamed it to), else by a link that opens it; the name a non-admin gave a topic is not kept on its binding, since
+the agent's thread context would repeat it. A folder that does not exist still just gets its reason. `/topic`'s «create new folder» still tells the topic
+you typed the name in that the folder existed.
+The `/bind` picker is now one-shot: once a folder is bound through it (a tap or «create new folder»), or «Leave current dir» is used, the picker message
+is deleted — its «not bound, pick from the list» text would no longer be true — so an old tap cannot rebind the topic, and a second tap landing while the
+first is still binding is told «Already bound.» instead of getting a second welcome; a refused pick, paging and the create-folder prompt leave it in
+place. When the bot binds a non-admin's topic on an admin's first message there, a plain message is answered by the welcome alone, without the extra
+«bound, run /claude» hint, and a start phrase like `claude` still starts the agent. The removed texts are gone from all 12 languages, the new rows and
+the toast are in all 12.
 
 **`/task_agents` in General sets how many task agents may work at once — a number from the picker or any number you type.**
 It opens a one-shot picker (5 / 10 / 15 / 20 / 30 / No limit, the value in force marked ✓) whose tap turns it into its confirmation;

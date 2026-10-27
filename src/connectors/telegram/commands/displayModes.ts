@@ -3,15 +3,11 @@
  * row — their pickers and their buttons. A preference is never sent to the agent. See README.md in this folder.
  */
 import { Markup, type Context } from 'telegraf';
-import type { Message } from 'telegraf/typings/core/types/typegram';
 import { getThreadAdapter } from '../../../adapters/createAdapter';
 import type { DisplayVerbosityMode, ResolvedThreadDisplayPrefs, TopicView } from '../../../types';
 import type { SessionKey } from '../../../sessionKey';
-import { getTelegramChatId } from '../sessionKeyCodec';
 import { OpenCodeAdapter } from '../../../adapters/openCodeAdapter';
-import { enqueueSend } from '../../../rateLimiter';
 import { t } from '../../../i18n';
-import { checkIsApiError, getErrorDescription } from '../../../sendErrorClassifier';
 import { displayVerbosityModeOptions, normalizeDisplayVerbosityMode } from '../../../utils/displayVerbosity';
 import { getUniformVerbosityLevel } from '../../../utils/verbosityRender';
 import {
@@ -21,6 +17,7 @@ import {
   topicViewArguments,
 } from '../../../utils/topicView';
 import type { BotCore } from './botCore';
+import { getCallbackMessageId } from './callbackMessage';
 import { createWholeTextAnswerer } from './callbackToast';
 
 // ── /thinking — per-topic chain-of-thought verbosity (both backends, S5) ─────
@@ -132,11 +129,11 @@ interface DisplayModeCallbackConfig {
  */
 export type DisplayModesPorts = Pick<
   BotCore,
-  'bot' | 'command' | 'getState' | 'replyToThread' | 'authoriseContext' | 'cancelConversationRequest'
+  'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadKeyboard' | 'authoriseContext' | 'cancelConversationRequest'
 >;
 
 export function createDisplayModes(ports: DisplayModesPorts) {
-  const { bot, command, getState, replyToThread, authoriseContext, cancelConversationRequest } = ports;
+  const { bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, cancelConversationRequest } = ports;
   const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
   /**
@@ -206,8 +203,7 @@ export function createDisplayModes(ports: DisplayModesPorts) {
 
   /**
    * @description Re-render a picker message's inline keyboard after a button
-   * press so its ✓ follows the new state (mirrors effort_cb). "Message is not
-   * modified" is the no-change case, not a failure; anything else is logged.
+   * press so its ✓ follows the new state (mirrors effort_cb).
    */
   async function rerenderPickerKeyboard(
     ctx: Context,
@@ -215,21 +211,8 @@ export function createDisplayModes(ports: DisplayModesPorts) {
     keyboard: ReturnType<typeof buildDisplayModeKeyboard>,
     logTag: string,
   ): Promise<void> {
-    const cbMsg = ctx.callbackQuery?.message as Message | undefined;
-    if (!cbMsg) return;
-    try {
-      await enqueueSend(
-        key,
-        () => bot.telegram.editMessageReplyMarkup(
-          getTelegramChatId(key), cbMsg.message_id, undefined, keyboard.reply_markup,
-        ),
-      );
-    } catch (e) {
-      const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
-      if (!/message is not modified/i.test(desc)) {
-        console.warn(`[${logTag}] keyboard re-render failed:`, desc || e);
-      }
-    }
+    const pickerMessageId = getCallbackMessageId(ctx);
+    if (pickerMessageId !== null) await editThreadKeyboard(key, pickerMessageId, keyboard.reply_markup, logTag);
   }
 
   /**

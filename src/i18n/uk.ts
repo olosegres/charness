@@ -702,6 +702,7 @@ export const ukDict: Record<string, string> = {
 
   'cb.access_denied': 'Доступ заборонено',
   'cb.bind_only_topical': '/bind працює лише в тематичних тредах',
+  'cb.bind_already_bound': 'Вже прив\'язано.',
   'cb.binding_to': 'Прив\'язую до {subdir}…',
   'cb.no_active_session': 'Немає активної сесії',
   'cb.model_error': 'Помилка: {error}',

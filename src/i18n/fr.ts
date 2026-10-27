@@ -696,6 +696,7 @@ export const frDict: Record<string, string> = {
 
   'cb.access_denied': 'Accès refusé',
   'cb.bind_only_topical': '/bind ne fonctionne que dans les fils thématiques',
+  'cb.bind_already_bound': 'Déjà lié.',
   'cb.binding_to': 'Liaison à {subdir}…',
   'cb.no_active_session': 'Aucune session active',
   'cb.model_error': 'Erreur : {error}',

@@ -9,6 +9,9 @@ functions where the handlers used to be registered. A module never imports `bot.
 - **Registration order is part of the contract.** Commands go through the neutral router, so only their names
   matter; telegraf runs the FIRST matching `action` / `on`, so a `register…Callbacks()` call keeps the position
   of its old registrations, and a module's patterns must stay disjoint from the ones registered after it.
+- **A picker's keyboard is edited through the port `editThreadKeyboard`** (the paced send queue; a no-change edit is no
+  failure, any other is logged under the module's tag), never through a module's own `try`/`catch` around
+  `editMessageReplyMarkup`; `null` removes the keyboard.
 - **`state` is assigned at boot, after registration:** read it through `getState()` when a handler RUNS, never
   copy it out of the ports.
 - **State `bot.ts` also touches is passed in** (a map or set it owns); state private to a feature lives in its

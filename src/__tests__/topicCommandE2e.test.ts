@@ -77,6 +77,8 @@ const otherFolderLabel = enDict['topic.otherFolderButton'];
 const createFolderLabel = enDict['bind.create_button'];
 const cancelLabel = enDict['topic.cancelButton'];
 const escHint = enDict['login.esc_hint'];
+/** The start of the welcome's shared-folder row, up to where the other topics are named. */
+const sharedRowStart = enDict['binding.welcome.shared'].split('{threads}')[0];
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -225,7 +227,7 @@ describe('/topic end to end: built charness, fake Bot API', () => {
     // second greeting. A second round trip is the barrier: every send the service message's handler queued went out first.
     await newTopic.sendAndAwaitReply('/bind', enDict['bind.current'].replace('{subdir}', folders.current));
     assert.equal(newTopic.listMessages().filter((message) => message.text.includes(enDict['binding.welcome.start_prompt'])).length, 1, 'one welcome');
-    assert.ok(!newTopic.listMessages().some((message) => message.text.includes('already used by threads')), 'no warning about the folder\'s other topic: the person asked for it');
+    assert.ok(!newTopic.listMessages().some((message) => message.text.includes(sharedRowStart)), `no "also used by" row about the folder's other topic, in the welcome or beside it: the person asked for that folder (${JSON.stringify(newTopic.listMessages().map((message) => message.text))})`);
     assert.ok(!newTopic.listMessages().some((message) => message.text === enDict['thread.welcome_pick']), 'no folder picker in the new topic');
     assert.ok(!getCharness().output.includes('[security] forum_topic_created'), 'the bot\'s own topic is no foreign creation to warn about');
     assert.equal(getSessionLaunches(getLayout()).length, 0, 'no agent was started');

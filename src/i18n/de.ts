@@ -696,6 +696,7 @@ export const deDict: Record<string, string> = {
 
   'cb.access_denied': 'Zugriff verweigert',
   'cb.bind_only_topical': '/bind funktioniert nur in thematischen Threads',
+  'cb.bind_already_bound': 'Bereits verknüpft.',
   'cb.binding_to': 'Verknüpfe mit {subdir}…',
   'cb.no_active_session': 'Keine aktive Session',
   'cb.model_error': 'Fehler: {error}',

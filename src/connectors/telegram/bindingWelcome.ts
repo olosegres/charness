@@ -1,21 +1,28 @@
 /**
- * The pure parts of a binding's welcome that name OTHER topics: how a topic that shares the folder is called in the
+ * The pure parts of a binding's welcome that name OTHER topics: how a topic that shares the folder is written in the
  * welcome's «also used by» row. A leaf module (no `bot.ts`, no environment), so a test can reach it.
  */
 
 /**
- * @description What stands for a topic in the shared-folder row: the name stored on its binding (what the person sees in the
- * group's topic list), else its session key — a topic bound before its name was known, or by a command that does not carry it.
+ * A topic bound to the same folder. `name`: what the bot saw the topic made with (or renamed to by an admin), when it
+ * saw it. `link`: the link that opens the topic, which a person can always follow.
  */
-export function getSharedTopicLabel(topicName: string | undefined, sessionKey: string): string {
-  return topicName !== undefined && topicName.trim() !== '' ? topicName.trim() : sessionKey;
+export interface SharedTopic {
+  name: string | undefined;
+  link: string;
 }
 
 /**
- * @description The row's list: every label as inline code, comma-separated. The welcome is sent as Markdown, where nothing
- * inside a code span can be escaped, so a backtick in a topic name (a name is free text) would end the span early — it
- * becomes an apostrophe instead.
+ * @description The row's list, comma-separated: a topic with a name is that name as inline code, one without is its bare
+ * link (Telegram makes it tappable; it is digits and slashes only, so Markdown has nothing to mangle). The welcome is sent
+ * as Markdown, where nothing inside a code span can be escaped, so a backtick in a name (a name is free text) would end the
+ * span early — it becomes an apostrophe instead.
  */
-export function formatSharedTopicList(labels: readonly string[]): string {
-  return labels.map((label) => `\`${label.replaceAll('`', "'")}\``).join(', ');
+export function formatSharedTopicList(topics: readonly SharedTopic[]): string {
+  return topics
+    .map(({ name, link }) => {
+      const label = name?.trim();
+      return label ? `\`${label.replaceAll('`', "'")}\`` : link;
+    })
+    .join(', ');
 }

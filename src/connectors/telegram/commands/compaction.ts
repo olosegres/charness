@@ -1,5 +1,5 @@
 import { Markup, type Context } from 'telegraf';
-import type { InlineKeyboardMarkup, Message } from 'telegraf/typings/core/types/typegram';
+import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { getThreadAdapter } from '../../../adapters/createAdapter';
 // Decides whether the D3 summary guidance rides the compaction instruction: OpenCode bakes it into its fork
 // compaction prompt (covering auto/overflow compaction too), the Claude backends need it every time.
@@ -7,10 +7,8 @@ import { claudePerTurnAdapterName, openCodeAdapterName } from '../../../adapters
 import type { AgentAdapter, PendingQuestionState, OpenCodeQuestion } from '../../../types';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
-import { checkIsTelegramKey, getTelegramChatId } from '../sessionKeyCodec';
-import { enqueueSend } from '../../../rateLimiter';
+import { checkIsTelegramKey } from '../sessionKeyCodec';
 import { t } from '../../../i18n';
-import { checkIsApiError, getErrorDescription } from '../../../sendErrorClassifier';
 import { type CompactCommandRoute, getCompactCommandRoute } from '../../../utils/compactCommandRoute';
 import {
   buildCompactionInstruction,
@@ -33,6 +31,7 @@ import {
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from '../questionKeyboards';
 import { splitMessage, MAX_MESSAGE_LEN } from '../messageSplit';
 import type { BotCore } from './botCore';
+import { getCallbackMessageId } from './callbackMessage';
 
 /** The literal slash command forwarded to backends whose own CLI parses it. */
 const compactCommandText = '/compact';
@@ -155,7 +154,7 @@ function buildCompactOnIdleKeyboard(picker: CompactOnIdlePickerState) {
 export interface CompactionPorts
   extends Pick<
     BotCore,
-    'bot' | 'command' | 'getState' | 'replyToThread' | 'deleteThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral' | 'wakeSleepingSession'
+    'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadKeyboard' | 'deleteThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral' | 'wakeSleepingSession'
   > {
   startTypingLoader: (key: SessionKey) => void;
   forwardPromptToAgent: (key: SessionKey, adapter: AgentAdapter, text: string) => Promise<void>;
@@ -180,7 +179,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, bot, command, getState, replyToThread, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, bot, command, getState, replyToThread, editThreadKeyboard, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * Threads with a compaction IN FLIGHT (via {@link runThreadCompaction}). While a
@@ -837,18 +836,10 @@ export function createCompaction(ports: CompactionPorts) {
     await ctx.answerCbQuery();
     await withThreadLocale(key, () => apply(key, isGeneral));
     // Re-render the picker keyboard so the ✓ follows the new state.
-    const cbMsg = ctx.callbackQuery?.message as Message | undefined;
-    if (cbMsg) {
+    const pickerMessageId = getCallbackMessageId(ctx);
+    if (pickerMessageId !== null) {
       const keyboard = withThreadLocale(key, () => buildCompactOnIdleKeyboard(getCompactOnIdlePickerState(key, isGeneral)));
-      try {
-        await enqueueSend(
-          key,
-          () => bot.telegram.editMessageReplyMarkup(getTelegramChatId(key), cbMsg.message_id, undefined, keyboard.reply_markup),
-        );
-      } catch (e) {
-        const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
-        if (!/message is not modified/i.test(desc)) console.warn('[coi_cb] keyboard re-render failed:', desc || e);
-      }
+      await editThreadKeyboard(key, pickerMessageId, keyboard.reply_markup, 'coi_cb');
     }
   }
 
@@ -893,19 +884,8 @@ export function createCompaction(ports: CompactionPorts) {
     await withThreadLocale(key, async () => {
       await replyToThread(key, await applyCompactSummary(key, isGeneral, enabled));
     });
-    const cbMsg = ctx.callbackQuery?.message as Message | undefined;
-    if (cbMsg) {
-      const keyboard = buildCompactSummaryKeyboard(enabled);
-      try {
-        await enqueueSend(
-          key,
-          () => bot.telegram.editMessageReplyMarkup(getTelegramChatId(key), cbMsg.message_id, undefined, keyboard.reply_markup),
-        );
-      } catch (e) {
-        const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
-        if (!/message is not modified/i.test(desc)) console.warn('[csum_cb] keyboard re-render failed:', desc || e);
-      }
-    }
+    const pickerMessageId = getCallbackMessageId(ctx);
+    if (pickerMessageId !== null) await editThreadKeyboard(key, pickerMessageId, buildCompactSummaryKeyboard(enabled).reply_markup, 'csum_cb');
   }
 
   function registerCompactionCommands(): void {

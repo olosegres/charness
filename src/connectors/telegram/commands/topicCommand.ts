@@ -90,7 +90,7 @@ export function checkIsMissingTopicRightsError(error: unknown): boolean {
  */
 export type WorkFolderResult = { outcome: 'invalid' } | { outcome: 'failed' } | { outcome: 'ready'; subdir: string; alreadyExisted: boolean };
 
-export interface TopicCommandPorts extends Pick<BotCore, 'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'authoriseContext'> {
+export interface TopicCommandPorts extends Pick<BotCore, 'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'editThreadKeyboard' | 'authoriseContext'> {
   /** Whether the key is the owner's private chat — it has no topics to create. */
   checkIsDmKey: (key: SessionKey) => boolean;
   /** End `/bind`'s own «create new folder» question of the topic — two readers of the next plain message would race for it. */
@@ -143,7 +143,7 @@ export function getPublicChatUsername(chat: Chat | undefined): string | null {
  */
 export function createTopicCommand(ports: TopicCommandPorts) {
   const {
-    bot, command, getState, replyToThread, editThreadMessage, authoriseContext, checkIsDmKey,
+    bot, command, getState, replyToThread, editThreadMessage, editThreadKeyboard, authoriseContext, checkIsDmKey,
     disarmFolderCreation, listAvailableSubdirs, createWorkFolder, bindNewTopic,
   } = ports;
 
@@ -420,12 +420,7 @@ export function createTopicCommand(ports: TopicCommandPorts) {
       const wizard = await takeWizardTap(ctx, ctx.match[1]);
       if (!wizard) return;
       const keyboard = buildBindKeyboard(wizard.folders, Number(ctx.match[2]), BIND_PAGE_SIZE, false, buildTopicPickerCallbacks(wizard.id));
-      try {
-        await ctx.editMessageReplyMarkup(keyboard.reply_markup);
-      } catch (error) {
-        const description = checkIsApiError(error) ? getErrorDescription(error) : '';
-        if (!/message is not modified/i.test(description)) console.warn('[topic] picker page edit failed:', description || error);
-      }
+      if (wizard.messageId !== null) await editThreadKeyboard(wizard.originKey, wizard.messageId, keyboard.reply_markup, 'topic');
     });
 
     bot.action(topicCreateFolderCallbackRe, async (ctx) => {

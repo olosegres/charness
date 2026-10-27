@@ -2,11 +2,10 @@
  * `/reminders` — bot-LOCAL reminders (buttons only, zero agent involvement): the hub, the four-step wizard, the
  * list, the card and delete. See README.md in this folder.
  */
-import { Markup, type Context } from 'telegraf';
+import { Markup } from 'telegraf';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
 import { t } from '../../../i18n';
-import { checkIsApiError, getErrorDescription } from '../../../sendErrorClassifier';
 import type { SchedulerEngine } from '../../../scheduler/engine';
 import { checkIsReminderSchedule } from '../../../scheduler/deliveryKind';
 import { maxRemindersPerThread, createScheduleForThread } from '../../../scheduler/store';
@@ -289,24 +288,12 @@ function buildReminderWizardScreen(
   };
 }
 
-/** Drop the keyboard of a tapped DEAD screen, swallowing a benign no-op edit. */
-async function stripReminderKeyboard(ctx: Context): Promise<void> {
-  try {
-    await ctx.editMessageReplyMarkup(undefined);
-  } catch (e) {
-    const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
-    if (!/message is not modified/i.test(desc)) {
-      console.warn('[reminders] keyboard strip failed:', desc || e);
-    }
-  }
-}
-
 /**
  * What the `/reminders` flow needs from the bot: the shared core, the in-flight wizards (the bot drops one when
  * its topic is gone), and the scheduler engine, which exists only after the boot built it.
  */
 export interface RemindersPorts
-  extends Pick<BotCore, 'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'authoriseContext'> {
+  extends Pick<BotCore, 'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'editThreadKeyboard' | 'authoriseContext'> {
   reminderWizards: Map<string, ReminderWizardSession>;
   getSchedulerEngine: () => SchedulerEngine | null;
 }
@@ -316,7 +303,7 @@ export interface RemindersPorts
  * the flow — the text-capture hooks of the wizard's last step and its cancel — and the two `register…()` calls.
  */
 export function createReminders(ports: RemindersPorts) {
-  const { reminderWizards, getSchedulerEngine, bot, command, getState, replyToThread, editThreadMessage, authoriseContext } = ports;
+  const { reminderWizards, getSchedulerEngine, bot, command, getState, replyToThread, editThreadMessage, editThreadKeyboard, authoriseContext } = ports;
 
   /** The thread's reminders — its agent-prompt schedules filtered out. */
   function getThreadReminders(key: SessionKey): ScheduleRecord[] {
@@ -686,7 +673,8 @@ export function createReminders(ports: RemindersPorts) {
         getReminderWizardTapRoute({ liveWizardId: session.state.wizardId, callbackData }) === 'foreign'
       ) {
         await ctx.answerCbQuery(t('reminders.wizardExpiredCbAnswer'));
-        await stripReminderKeyboard(ctx);
+        const deadScreenId = getCallbackMessageId(ctx);
+        if (deadScreenId !== null) await editThreadKeyboard(key, deadScreenId, null, 'reminders');
         return;
       }
 

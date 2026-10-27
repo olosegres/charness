@@ -4,7 +4,7 @@
  * members it uses (`Pick<BotCore, …>`), and `bot.ts` builds the one object that satisfies them all.
  */
 import type { Context, NarrowedContext, Telegraf } from 'telegraf';
-import type { Message, Update } from 'telegraf/typings/core/types/typegram';
+import type { InlineKeyboardMarkup, Message, Update } from 'telegraf/typings/core/types/typegram';
 import type { InboundCommand } from '../../../platform/inbound';
 import type { SessionKey } from '../../../sessionKey';
 import type { StateStore } from '../../../state';
@@ -30,6 +30,11 @@ export interface BotCore {
   replyToThread: (key: SessionKey, text: string, extra?: object, options?: { unpaced?: boolean }) => Promise<number | null>;
   /** Edit a message of the topic in place; `false` when the edit failed. */
   editThreadMessage: (key: SessionKey, messageId: number, text: string, extra?: object) => Promise<boolean>;
+  /**
+   * Replace the inline keyboard of a message of the topic through the paced send queue (`null` removes it). A no-change
+   * edit is no failure; any other failure is logged under `logTag` and answered with `false`.
+   */
+  editThreadKeyboard: (key: SessionKey, messageId: number, keyboard: InlineKeyboardMarkup | null, logTag: string) => Promise<boolean>;
   deleteThreadMessage: (key: SessionKey, messageId: number) => Promise<void>;
   /** Gate a callback or message to an admin of the served group; the topic's key, or `null` when it is refused. */
   authoriseContext: (ctx: Context) => Promise<SessionKey | null>;

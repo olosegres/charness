@@ -92,6 +92,16 @@ export class CommandHarness {
         this.edits.push({ messageId, text, extra });
         return true;
       },
+      // Straight to the fake Bot API, so a test counts the keyboard edits the way it counts any other call; a refused edit
+      // is `false`, as the bot's own helper answers it (the ids the harness gives its sends are no messages of the fake).
+      editThreadKeyboard: async (_key, messageId, keyboard) => {
+        try {
+          await bot.telegram.editMessageReplyMarkup(harnessGroup.id, messageId, undefined, keyboard ?? undefined);
+          return true;
+        } catch {
+          return false;
+        }
+      },
       deleteThreadMessage: async (_key, messageId) => {
         this.deletedMessageIds.push(messageId);
       },
@@ -187,6 +197,7 @@ export function createInertBotCore(): BotCore {
     },
     replyToThread: async () => null,
     editThreadMessage: async () => false,
+    editThreadKeyboard: async () => false,
     deleteThreadMessage: async () => {},
     authoriseContext: async () => null,
     withThreadLocale: (_key, run) => run(),
