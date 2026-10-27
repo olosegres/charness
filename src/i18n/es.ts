@@ -150,6 +150,7 @@ export const esDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• Vinculado automáticamente: el nombre del hilo coincide con la carpeta',
   'binding.welcome.existed': '• La carpeta ya existía — vinculada a ella',
   'binding.welcome.shared': '• ⚠️ También la usan los hilos: {threads} — las sesiones siguen siendo independientes',
+  'binding.welcome.sharedElsewhere': '+{count} en otro lugar',
   'binding.welcome.start_prompt': 'Inicia una conversación:',
 
   'mcp.header': '🔌 *Servidores MCP para este hilo:*',

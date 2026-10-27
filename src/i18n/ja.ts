@@ -150,6 +150,7 @@ export const jaDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• 自動バインド: スレッド名がフォルダと一致',
   'binding.welcome.existed': '• フォルダは既に存在していたため、そこにバインドしました',
   'binding.welcome.shared': '• ⚠️ 他のスレッドでも使用中: {threads} — セッションは独立しています',
+  'binding.welcome.sharedElsewhere': 'ほか {count} 件は別の場所',
   'binding.welcome.start_prompt': '会話を開始:',
 
   'mcp.header': '🔌 *このスレッドの MCP サーバー:*',

@@ -15,7 +15,8 @@ itself because its name matches a folder got a separate 👋 «auto-bound» gree
 Now only the welcome is posted: a row in it says the bot bound the topic because its name matches the folder, another says the folder was there
 already, and another names the topics that already use the folder — also when the bot bound the topic by itself. A topic is named there by the name
 the bot saw it made with (or an admin renamed it to), else by a link that opens it; the name a non-admin gave a topic is not kept on its binding, since
-the agent's thread context would repeat it. A folder that does not exist still just gets its reason. `/topic`'s «create new folder» still tells the topic
+the agent's thread context would repeat it. Only topics of the SAME chat are named: topics of other chats the bot serves (another group, a private chat) are
+only counted, «+2 elsewhere», so one chat never learns what another calls its topics. A folder that does not exist still just gets its reason. `/topic`'s «create new folder» still tells the topic
 you typed the name in that the folder existed.
 The `/bind` picker is now one-shot: once a folder is bound through it (a tap or «create new folder»), or «Leave current dir» is used, the picker message
 is deleted — its «not bound, pick from the list» text would no longer be true — so an old tap cannot rebind the topic, and a second tap landing while the

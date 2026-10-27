@@ -136,7 +136,7 @@ import {
 import { recomputeSchedulesForTimezoneChange } from './scheduler/timezoneRecompute';
 import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir } from './validation';
 import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bindPageNoopCallback, buildBindKeyboard, checkIsBindPickerExtra } from './connectors/telegram/bindPicker';
-import { OpenBindMessages } from './connectors/telegram/openBindMessages';
+import { OpenBindMessages, splitByDeleteWindow } from './connectors/telegram/openBindMessages';
 import { buildTopicLink, createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
 import { getCallbackMessageId } from './connectors/telegram/commands/callbackMessage';
 import { answerCallbackQuerySafely } from './connectors/telegram/commands/callbackToast';
@@ -230,7 +230,7 @@ import { checkShouldKeepTyping as checkShouldKeepTypingDecision } from './utils/
 import { checkIsTypingStuckByLeak } from './utils/typingLoopBackstop';
 import { getOutputFlushTiming } from './utils/outputFlushTiming';
 import { getOutputDebounceMs as resolveOutputDebounceMs } from './utils/outputDebounce';
-import { checkIsStaleAnswerCallbackQueryError } from './utils/telegramError';
+import { checkIsMessageNotFoundError, checkIsStaleAnswerCallbackQueryError } from './utils/telegramError';
 import {
   flushTraceBufferSyncOnExit,
   installCallApiTrace,
@@ -3765,7 +3765,7 @@ async function replyToThread(
   const trackSent = async (sent: unknown): Promise<number> => {
     const messageId = (sent as { message_id: number }).message_id;
     await state.pushMessageId(key, messageId);
-    if (checkIsBindPickerExtra(extra)) openBindMessages.remember(keyToString(key), messageId);
+    if (checkIsBindPickerExtra(extra)) openBindMessages.remember(keyToString(key), messageId, Date.now());
     return messageId;
   };
 
@@ -3891,16 +3891,54 @@ async function editThreadKeyboard(
 }
 
 /**
- * @description Delete a message of the thread. Resolves `false` when it stayed — older than 48 hours or already gone (both
- * expected, so nothing is logged), or no Telegram topic's key — which a caller that needs it gone can act on.
+ * @description How a delete of a thread message ended: `deleted`; `gone` — it was not there (the person deleted it by hand,
+ * say): nothing left to tidy; `stayed` — Telegram refused (older than 48 hours, no right), or no Telegram topic's key: the
+ * message is still there. None of them is logged: all are expected.
+ */
+type ThreadMessageDeletion = 'deleted' | 'gone' | 'stayed';
+
+async function deleteThreadMessageDetailed(
+  key: SessionKey,
+  messageId: number,
+): Promise<ThreadMessageDeletion> {
+  if (!checkIsTelegramPrimitiveKey(key, 'deleteThreadMessage')) return 'stayed';
+  try {
+    await enqueueSend(key, () => bot.telegram.deleteMessage(getTelegramChatId(key), messageId));
+    return 'deleted';
+  } catch (e) {
+    return checkIsMessageNotFoundError(e) ? 'gone' : 'stayed';
+  }
+}
+
+/**
+ * @description Delete a message of the thread. Resolves `false` when it is still there — older than 48 hours, refused, or no
+ * Telegram topic's key — which a caller that needs it gone can act on.
  */
 async function deleteThreadMessage(
   key: SessionKey,
   messageId: number,
 ): Promise<boolean> {
-  if (!checkIsTelegramPrimitiveKey(key, 'deleteThreadMessage')) return false;
+  return (await deleteThreadMessageDetailed(key, messageId)) === 'deleted';
+}
+
+/** The most message ids one `deleteMessages` call takes (the Bot API documents 1-100). */
+const deleteMessagesPerCallLimit = 100;
+
+/**
+ * @description Delete several messages of the thread in ONE paced send (`deleteMessages`: «if some of the specified messages
+ * can't be found, they are skipped»). Resolves `true` when the call went through; `false` when Telegram refused it — the docs do
+ * not say what it does with a message that is there but may not be deleted — and the caller tries the messages one by one.
+ */
+async function deleteThreadMessages(
+  key: SessionKey,
+  messageIds: readonly number[],
+): Promise<boolean> {
+  if (!checkIsTelegramPrimitiveKey(key, 'deleteThreadMessages')) return false;
   try {
-    await enqueueSend(key, () => bot.telegram.deleteMessage(getTelegramChatId(key), messageId));
+    for (let start = 0; start < messageIds.length; start += deleteMessagesPerCallLimit) {
+      const chunk = messageIds.slice(start, start + deleteMessagesPerCallLimit);
+      await enqueueSend(key, () => bot.telegram.deleteMessages(getTelegramChatId(key), chunk));
+    }
     return true;
   } catch {
     return false;
@@ -6278,28 +6316,29 @@ command('timezone', async (_ctx, key, parsed) => {
  * authorised user gave the topic while it was unbound ({@link getTrustedPendingTopicName}) — never a name only another
  * member gave, which would reach the agent unchecked.
  *
- * Returns `{ ok: true, subdir, sharedWith }` on success: `sharedWith` names every OTHER Telegram thread bound to the
- * folder — by its stored topic name, else by the link that opens it ({@link describeSharedTopic}); empty when none. There
+ * Returns `{ ok: true, subdir, sharedWith, sharedElsewhere }` on success: `sharedWith` names every OTHER topic of THIS chat
+ * bound to the folder — by its stored topic name, else by the link that opens it ({@link describeSharedTopic}); the topics of
+ * other chats are only counted, `sharedElsewhere`. There
  * is no acknowledgement text — the rich welcome ({@link sendBindingWelcome}) is the one message announcing the binding, and
  * it carries the shared-folder warning as a row when its caller passes `sharedWith` on (`/topic` does not: the person
  * asked for that folder). On failure `message` is the localised refusal. Callers post the outcome with
  * {@link replyToBindResult} or {@link sendBindingWelcome}.
  */
 type ApplyBindingResult =
-  | { ok: true;  subdir: string; sharedWith: SharedTopic[] }
+  | { ok: true;  subdir: string; sharedWith: SharedTopic[]; sharedElsewhere: number }
   | { ok: false; message: string };
 
 /**
- * @description How the welcome's shared-folder row writes `peerKey`: by the name stored on its binding, else by the link
- * that opens the topic (a person can follow it; a session key means nothing to them). The link is the numeric `t.me/c/…` form,
- * which opens the topic for any member of the group; it is a bare number only for a chat id no forum supergroup has.
+ * @description How the welcome's shared-folder row writes `peerKey`, a topic of the SAME chat as the one being bound: by the
+ * name stored on its binding, else by the link that opens it (a person can follow it; a session key means nothing to them).
+ * The link is the numeric `t.me/c/…` form, which opens a topic for any member of the group. `null` for a topic that can be
+ * neither named nor linked (a thread of a private chat, say) — it is only counted, never shown as an id.
  */
-function describeSharedTopic(peerKey: SessionKey): SharedTopic {
-  const threadId = getTelegramThreadId(peerKey);
-  return {
-    name: state.getBinding(peerKey)?.topicName,
-    link: buildTopicLink({ chatId: getTelegramChatId(peerKey), username: null }, threadId) ?? `#${threadId}`,
-  };
+function describeSharedTopic(peerKey: SessionKey): SharedTopic | null {
+  const name = state.getBinding(peerKey)?.topicName;
+  const link = buildTopicLink({ chatId: getTelegramChatId(peerKey), username: null }, getTelegramThreadId(peerKey));
+  if (name === undefined && link === null) return null;
+  return { name, link: link ?? '' };
 }
 
 async function applyBinding(
@@ -6334,7 +6373,15 @@ async function applyBinding(
   bindPickerMessageIds.delete(boundKey);
   warmTodoProjects();
 
-  const sharedWith = peers.map(describeSharedTopic);
+  // Only topics of THIS chat are named: a member of one group is not told what another group (or a private chat) calls its
+  // topics. The rest — and a topic of this chat that can be neither named nor linked — are counted.
+  const sharedWith: SharedTopic[] = [];
+  let sharedElsewhere = 0;
+  for (const peerKey of peers) {
+    const described = peerKey.space === key.space ? describeSharedTopic(peerKey) : null;
+    if (described === null) sharedElsewhere += 1;
+    else sharedWith.push(described);
+  }
 
   // Rebind resume (S8): a thread that was unbound paused its schedules; binding
   // it again (this thread, possibly a different folder) resumes them. Best
@@ -6343,7 +6390,7 @@ async function applyBinding(
     console.warn(`[scheduler] resume-on-rebind failed for ${keyToString(key)}:`, e),
   );
 
-  return { ok: true, subdir, sharedWith };
+  return { ok: true, subdir, sharedWith, sharedElsewhere };
 }
 
 /**
@@ -6357,7 +6404,7 @@ async function replyToBindResult(key: SessionKey, result: ApplyBindingResult, no
     await replyToThread(key, result.message);
     return;
   }
-  await sendBindingWelcome(key, result.subdir, { ...notes, sharedWith: result.sharedWith });
+  await sendBindingWelcome(key, result.subdir, { ...notes, sharedWith: result.sharedWith, sharedElsewhere: result.sharedElsewhere });
 }
 
 /**
@@ -6369,7 +6416,8 @@ async function replyToBindResult(key: SessionKey, result: ApplyBindingResult, no
  */
 async function removeBindPicker(key: SessionKey, pickerMessageId: number): Promise<void> {
   openBindMessages.forget(keyToString(key), pickerMessageId);
-  if (!await deleteThreadMessage(key, pickerMessageId)) await editThreadKeyboard(key, pickerMessageId, null, 'bind');
+  // A message that is gone has no buttons to strip (and Telegram would only answer «not found»).
+  if (await deleteThreadMessageDetailed(key, pickerMessageId) === 'stayed') await editThreadKeyboard(key, pickerMessageId, null, 'bind');
 }
 
 /**
@@ -6378,9 +6426,21 @@ async function removeBindPicker(key: SessionKey, pickerMessageId: number): Promi
  * prompt — once the topic is bound or has left its folder, whichever way that happened (a tap, a typed `/bind <folder>`, the
  * bot's own auto-bind, a leave): their text is no longer true, and a tap on a stale one would rebind the topic. A message
  * the bot has no record of (sent before a restart) is not touched.
+ *
+ * ONE bulk call deletes them (each single delete is a paced send, and there can be dozens). A message too old for Telegram to
+ * delete loses its buttons instead, and so does each one of a bulk call Telegram refused, tried one by one. Never rejects:
+ * the callers that do not wait for it ({@link sendBindingWelcome}) have nothing to catch.
  */
 async function closeOpenBindMessages(key: SessionKey): Promise<void> {
-  for (const messageId of openBindMessages.take(keyToString(key))) await removeBindPicker(key, messageId);
+  try {
+    const { deletable, tooOld } = splitByDeleteWindow(openBindMessages.take(keyToString(key)), Date.now());
+    if (deletable.length > 0 && !await deleteThreadMessages(key, deletable)) {
+      for (const messageId of deletable) await removeBindPicker(key, messageId);
+    }
+    for (const messageId of tooOld) await editThreadKeyboard(key, messageId, null, 'bind');
+  } catch (e) {
+    console.warn(`[bind] closing the open pickers of ${keyToString(key)} failed:`, e);
+  }
 }
 
 /**
@@ -6528,11 +6588,16 @@ async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ 
 
   const kStr = keyToString(key);
   // Read before the bind: a bind drops it (and the wait) itself; deleted here for a refused one, which does not.
-  const pickerMessageId = bindPickerMessageIds.get(kStr);
-  const result = await applyBinding(key, folder.subdir);
-  bindPickerMessageIds.delete(kStr);
-  if (result.ok && pickerMessageId !== undefined) await removeBindPicker(key, pickerMessageId);
-  await replyToBindResult(key, result, { isExistingFolder: folder.alreadyExisted });
+  const pickerMessageId = bindPickerMessageIds.get(kStr) ?? null;
+  // The picker this name was asked on is held for the whole bind, like a tap on a folder holds it: a tap on it that lands
+  // behind the typed name is told the picker was used, instead of binding the topic a second time (and welcoming it again).
+  await bindPickerClaims.runClaimed(key, pickerMessageId, async () => {
+    const result = await applyBinding(key, folder.subdir);
+    bindPickerMessageIds.delete(kStr);
+    if (result.ok && pickerMessageId !== null) await removeBindPicker(key, pickerMessageId);
+    await replyToBindResult(key, result, { isExistingFolder: folder.alreadyExisted });
+    return result.ok;
+  });
   return { ok: true };
 }
 
@@ -6562,7 +6627,7 @@ async function autoBindTopicByName(key: SessionKey, subdirName: string, topicNam
     console.warn(`[auto-bind] "${subdirName}" refused for ${keyToString(key)}: ${result.message}`);
     return false;
   }
-  await sendBindingWelcome(key, result.subdir, { isAutoBound: true, sharedWith: result.sharedWith });
+  await sendBindingWelcome(key, result.subdir, { isAutoBound: true, sharedWith: result.sharedWith, sharedElsewhere: result.sharedElsewhere });
   return true;
 }
 
@@ -7006,13 +7071,15 @@ function buildStartAgentKeyboard() {
 /**
  * @description What a binding's welcome says besides the folder's facts. `isAutoBound`: the bot bound the topic by
  * itself because its name matches the folder. `isExistingFolder`: the folder was there when «create new folder» asked for it.
- * `sharedWith`: the other topics bound to the same folder ({@link describeSharedTopic}).
+ * `sharedWith`: the other topics of this chat bound to the same folder ({@link describeSharedTopic}); `sharedElsewhere`: how many of other chats.
  */
 interface BindingWelcomeNotes {
   isAutoBound?: boolean;
   /** «Create new folder» was given the name of a folder that already existed. */
   isExistingFolder?: boolean;
   sharedWith?: readonly SharedTopic[];
+  /** How many topics of OTHER chats are on the folder too: counted, never named. */
+  sharedElsewhere?: number;
 }
 
 /**
@@ -7055,8 +7122,10 @@ async function sendBindingWelcome(key: SessionKey, subdir: string, notes: Bindin
   } else if (fs.existsSync(path.join(workDir, '.git')) === false) {
     lines.push(t('binding.welcome.git_none'));
   }
-  if (notes.sharedWith && notes.sharedWith.length > 0) {
-    lines.push(t('binding.welcome.shared', { threads: formatSharedTopicList(notes.sharedWith) }));
+  const sharedElsewhere = notes.sharedElsewhere ?? 0;
+  if ((notes.sharedWith && notes.sharedWith.length > 0) || sharedElsewhere > 0) {
+    const elsewhereLabel = sharedElsewhere > 0 ? t('binding.welcome.sharedElsewhere', { count: sharedElsewhere }) : null;
+    lines.push(t('binding.welcome.shared', { threads: formatSharedTopicList(notes.sharedWith ?? [], elsewhereLabel) }));
   }
   lines.push('');
   lines.push(t('binding.welcome.start_prompt'));
@@ -7065,9 +7134,9 @@ async function sendBindingWelcome(key: SessionKey, subdir: string, notes: Bindin
     parse_mode: 'Markdown',
     ...buildStartAgentKeyboard(),
   });
-  // Every bind ends in this welcome, so every bind sweeps here — after the welcome, whose appearance must not wait for the
-  // deletions (each is a paced send): whatever pickers are still open in the topic are stale now.
-  await closeOpenBindMessages(key);
+  // Every bind ends in this welcome, so every bind sweeps here — after the welcome, and NOT waited for: what follows a bind
+  // (an agent start, when the first message was a start phrase) must not hang on the deletions, which are paced sends.
+  void closeOpenBindMessages(key);
 }
 
 // `open_sessions` callback wires the [📋 Resume…] button to the `/sessions`
@@ -10241,14 +10310,14 @@ bot.action(bindCreateFolderCallback, async (ctx) => {
   const pickerMessageId = getCallbackMessageId(ctx);
   // A picker a bind (or a leave) holds is spent: a name asked for now would bind a second time.
   if (pickerMessageId !== null && bindPickerClaims.has(key, pickerMessageId)) {
-    await ctx.answerCbQuery(t('cb.bind_picker_used'));
+    await answerCallbackQuerySafely(ctx, t('cb.bind_picker_used'));
     return;
   }
   await ctx.answerCbQuery(t('bind.create_cb'));
   armFolderCreation(key, pickerMessageId);
   // Remembered like a picker: the bind this question leads to deletes it (a refused name keeps it, the question stays open).
   const promptMessageId = await replyToThread(key, t('bind.create_prompt'));
-  if (promptMessageId !== null) openBindMessages.remember(keyToString(key), promptMessageId);
+  if (promptMessageId !== null) openBindMessages.remember(keyToString(key), promptMessageId, Date.now());
 });
 
 // «Leave current dir» — the folded-in `/unbind`, shown only in a bound topic.
@@ -10270,7 +10339,7 @@ bot.action(bindLeaveCurrentCallback, async (ctx) => {
     await closeOpenBindMessages(key);
     return true;
   });
-  if (run === 'busy') await ctx.answerCbQuery(t('cb.bind_picker_used'));
+  if (run === 'busy') await answerCallbackQuerySafely(ctx, t('cb.bind_picker_used'));
 });
 
 // `/topic`'s buttons: patterns of their own (`topic_…`), disjoint from the `bind_<subdir>` regex below.
@@ -10300,7 +10369,7 @@ bot.action(/^bind_(.+)$/, async (ctx) => {
     await replyToBindResult(key, result);
     return true;
   });
-  if (run === 'busy') await ctx.answerCbQuery(t('cb.bind_picker_used'));
+  if (run === 'busy') await answerCallbackQuerySafely(ctx, t('cb.bind_picker_used'));
 });
 
 // ─── /language inline picker callbacks ───────────────────────────────────────

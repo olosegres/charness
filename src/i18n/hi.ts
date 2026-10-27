@@ -150,6 +150,7 @@ export const hiDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• स्वतः बाउंड: थ्रेड नाम फ़ोल्डर से मेल खाता है',
   'binding.welcome.existed': '• फ़ोल्डर पहले से मौजूद था — उससे बाउंड किया गया',
   'binding.welcome.shared': '• ⚠️ इसका उपयोग इन थ्रेड्स में भी हो रहा है: {threads} — सत्र स्वतंत्र रहते हैं',
+  'binding.welcome.sharedElsewhere': '+{count} अन्यत्र',
   'binding.welcome.start_prompt': 'एक बातचीत शुरू करें:',
 
   'mcp.header': '🔌 *इस थ्रेड के लिए MCP सर्वर:*',

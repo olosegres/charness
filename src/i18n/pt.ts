@@ -150,6 +150,7 @@ export const ptDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• Vinculado automaticamente: o nome do tópico corresponde à pasta',
   'binding.welcome.existed': '• A pasta já existia — vinculada a ela',
   'binding.welcome.shared': '• ⚠️ Também usada pelos tópicos: {threads} — as sessões mantêm-se independentes',
+  'binding.welcome.sharedElsewhere': '+{count} noutro lugar',
   'binding.welcome.start_prompt': 'Inicia uma conversa:',
 
   'mcp.header': '🔌 *Servidores MCP para este tópico:*',

@@ -28,3 +28,13 @@ test('markdown characters of a name are safe inside the code span; a backtick, w
 test('no other topic gives an empty list', () => {
   assert.equal(formatSharedTopicList([]), '');
 });
+
+test('topics of other chats are only counted: the label the caller gives is the last item, after the named ones', () => {
+  assert.equal(formatSharedTopicList([{ name: 'Release notes', link: releaseNotesLink }], '+2 elsewhere'), '`Release notes`, +2 elsewhere');
+  assert.equal(formatSharedTopicList([{ name: undefined, link: releaseNotesLink }], '+1 elsewhere'), `${releaseNotesLink}, +1 elsewhere`);
+});
+
+test('with no topic of this chat the count stands alone; with none at all there is no list', () => {
+  assert.equal(formatSharedTopicList([], '+3 elsewhere'), '+3 elsewhere');
+  assert.equal(formatSharedTopicList([], null), '');
+});

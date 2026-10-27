@@ -113,6 +113,8 @@ export interface FakeTelegramOptions {
 const longPollHoldMs = 2_000;
 /** The cap the Bot API enforces on `getUpdates` `limit`. */
 const maxUpdatesPerPoll = 100;
+/** The most ids one `deleteMessages` call takes (the Bot API documents 1-100). */
+const maxDeleteMessagesPerCall = 100;
 /** The icon colour every topic made in the fake group has (Telegram's first preset). */
 const topicIconColor = 0x6FB9F0;
 
@@ -446,10 +448,24 @@ export class FakeTelegram {
       }
       case 'deleteMessage': {
         if (this.isMessageDeletionRefused) return { ok: false, error_code: 400, description: 'Bad Request: message can\'t be deleted' };
-        const message = this.getMessageOrError(payload);
-        if ('ok' in message) return message;
+        const message = this.messages.get(Number(payload.message_id));
+        // The Bot API's own wording for a message that is not there (any more), which is not the one of an edit.
+        if (!message || message.isDeleted) return { ok: false, error_code: 400, description: 'Bad Request: message to delete not found' };
         message.isDeleted = true;
         this.pinnedMessageIds.delete(message.message_id);
+        return { ok: true, result: true };
+      }
+      case 'deleteMessages': {
+        if (this.isMessageDeletionRefused) return { ok: false, error_code: 400, description: 'Bad Request: message can\'t be deleted' };
+        // «If some of the specified messages can't be found, they are skipped.» — the Bot API's own words.
+        const messageIds = Array.isArray(payload.message_ids) ? payload.message_ids.map(Number) : [];
+        if (messageIds.length < 1 || messageIds.length > maxDeleteMessagesPerCall) return { ok: false, error_code: 400, description: 'Bad Request: message identifiers are invalid' };
+        for (const messageId of messageIds) {
+          const message = this.messages.get(messageId);
+          if (!message || message.isDeleted) continue;
+          message.isDeleted = true;
+          this.pinnedMessageIds.delete(messageId);
+        }
         return { ok: true, result: true };
       }
       case 'pinChatMessage': {

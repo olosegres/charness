@@ -32,7 +32,13 @@
  *     unbound topic posts a new one), whichever way it happens — a tap, a typed `/bind <folder>`, the bot's own auto-bind, a
  *     leave — and the «send the folder name» prompt of «create new folder» goes with a bind, but stays while a name is refused
  *   → a topic an admin made with a name no folder has yet remembers it: once the bot has made such a folder, the admin's next
- *     message there binds the topic.
+ *     message there binds the topic
+ *   → the sweep of the open pickers is ONE bulk delete the welcome and an agent start never wait for, and a picker Telegram will
+ *     not delete (the bulk call fails) is tried one by one and loses its buttons
+ *   → the shared-folder row names only topics of the SAME chat; topics of other chats are a count, never a name, a link or an id
+ *   → a typed folder name followed at once by a tap on the same picker: the name binds, the tap is told the picker was used
+ *   → a toast refused as too late is survived on every «picker was already used» answer; a picker the person deleted by hand
+ *     is not asked to lose its buttons.
  *
  * What the unit tests cover instead: the picker's layout (`bindKeyboard.test.ts`), the folder-name rules (`folderName.test.ts`),
  * what a `forum_topic_created` leads to (`forumTopicCreated.test.ts`). `/topic`'s own greeting: `topicCommandE2e.test.ts`.
@@ -63,7 +69,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getSessionLaunches, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getSessionLaunches, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { bindCreateFolderCallback, bindLeaveCurrentCallback } from '../connectors/telegram/bindPicker';
 import type { BindingData } from '../state';
 import { t } from '../i18n';
@@ -84,9 +90,23 @@ const folders = {
   first: 'bind-first', second: 'bind-second', auto: 'bind-auto', deferred: 'bind-deferred', phrase: 'bind-phrase', phantom: 'bind-phantom', named: 'bind-named', quiet: 'bind-quiet',
   late: 'bind-late', waiting: 'bind-waiting', leaving: 'bind-leaving', undeletable: 'bind-undeletable',
   sweepTyped: 'bind-sweep-typed', sweepTap: 'bind-sweep-tap', sweepLeave: 'bind-sweep-leave', sweepAuto: 'bind-sweep-auto',
+  sweepSlow: 'bind-sweep-slow', gone: 'bind-gone',
 } as const;
 /** A folder no instance folder list has when the topics that wait for it are made: the bot makes it during the flow. */
 const laterFolderName = 'bind-later';
+/** The folder a typed name makes right before a tap on the picker it was asked on lands. */
+const typedBeforeTapFolderName = 'bind-typed-before-tap';
+/** A folder other chats' bindings sit on, made on disk by the step that needs it (a typed `/bind` finds it without the picker). */
+const sharedAcrossChatsFolderName = 'bind-shared';
+/** The instance also keeps the bindings of other chats: a second group's topic and the operator's private chat. */
+const foreignGroupKey = '-1002222222222:5';
+const privateChatKey = '424242:0';
+const foreignTopicName = 'Secret topic of another group';
+const privateTopicName = 'Private chat thread';
+/** What the bot logs when a toast reaches Telegram too late and the handler goes on regardless. */
+const lateToastLogLine = '[callback] the tap was answered after its query expired';
+/** The agent must start long before a response the flow holds back is released: this is how long the flow waits to see it. */
+const startWhileSweepHeldTimeoutMs = 20 * 1000;
 /** The id the group has in `t.me/c/<id>/…` links: the Bot API id without its `-100`. */
 const groupLinkId = '1111111111';
 /** Names that match no folder: an admin's topic with one is offered the picker, a non-admin's waits for the admin's bind. */
@@ -170,6 +190,8 @@ interface ExpectedWelcome {
   isExistingFolder?: boolean;
   /** How the row writes each other topic bound to the folder: {@link byName} or {@link byLink}. */
   sharedWith?: string[];
+  /** The row's list written out as the welcome shows it — for a list that also counts topics of other chats. */
+  sharedWithText?: string;
   /** An agent starts next to the bind, and its own «ready in <folder>» notice names the folder too. */
   isAgentStarting?: boolean;
 }
@@ -199,8 +221,8 @@ async function assertOneBoundMessage(driver: TopicDriver, afterMessageId: number
   assert.equal(welcome.text.includes(t('binding.welcome.auto_bound')), expected.isAutoBound === true, `the welcome says why the bot bound it only when the bot did: ${JSON.stringify(welcome.text)}`);
   assert.equal(welcome.text.includes(t('binding.welcome.existed')), expected.isExistingFolder === true, `the welcome says the folder was there already only when it was: ${JSON.stringify(welcome.text)}`);
   const sharedWith = expected.sharedWith ?? [];
-  if (sharedWith.length > 0) {
-    const sharedRow = t('binding.welcome.shared', { threads: sharedWith.join(', ') });
+  if (expected.sharedWithText !== undefined || sharedWith.length > 0) {
+    const sharedRow = t('binding.welcome.shared', { threads: expected.sharedWithText ?? sharedWith.join(', ') });
     assert.ok(welcome.text.includes(sharedRow), `the welcome names the topics sharing the folder: ${JSON.stringify(welcome.text)}`);
   } else {
     assert.ok(!welcome.text.includes(sharedRowStart), 'a folder nobody else uses has no shared-folder row');
@@ -364,7 +386,7 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     assert.ok(!mainTopic.listMessages().some((message) => message.message_id > refusal.message_id && message.text.includes(enDict['binding.welcome.start_prompt'])), 'no welcome after a refusal');
   });
 
-  it('two taps on the same folder of the picker, back to back: bound once, ONE welcome, the second tap is told it is bound already', async () => {
+  it('two taps on the same folder of the picker, back to back: bound once, ONE welcome, the second tap is told «This picker was already used.»', async () => {
     const picker = await openPicker(mainTopic, folders.first);
     const folderButton = mainTopic.getButtonData(picker, `📁 ${folders.second}`);
     const answersBefore = fakeTelegram.callbackAnswers.length;
@@ -464,6 +486,16 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     }
     await waitForPickerDeleted(picker);
     assert.equal(await lateTopic.tapAndAwaitAnswer(picker, folderButton), t('cb.bind_picker_used'), 'a retap on the spent picker is told so');
+
+    // The «already used» answer itself may come too late as well: that is survived like any other late toast, not left to the error handler.
+    const lateLogsBefore = getCharness().output.split(lateToastLogLine).length;
+    fakeTelegram.isCallbackAnswerExpired = true;
+    try {
+      fakeTelegram.pushCallback(picker.message_id, folderButton);
+      await getCharness().waitFor('the late «already used» answer survived', replyTimeoutMs, () => getCharness().output.split(lateToastLogLine).length > lateLogsBefore);
+    } finally {
+      fakeTelegram.isCallbackAnswerExpired = false;
+    }
   });
 
   it('«create new folder» tapped and then a folder tapped: bound, and the next plain message is nobody\'s folder name; the spent picker refuses «create new folder» and «Leave current dir»', async () => {
@@ -486,6 +518,16 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     const messagesBefore = waitingTopic.listMessages().length;
     assert.equal(await waitingTopic.tapAndAwaitAnswer(picker, bindCreateFolderCallback), t('cb.bind_picker_used'));
     assert.equal(await waitingTopic.tapAndAwaitAnswer(picker, bindLeaveCurrentCallback), t('cb.bind_picker_used'));
+    // The same two refusals, with their toasts too late: survived, not thrown at the error handler.
+    const lateLogsBefore = getCharness().output.split(lateToastLogLine).length;
+    fakeTelegram.isCallbackAnswerExpired = true;
+    try {
+      fakeTelegram.pushCallback(picker.message_id, bindCreateFolderCallback);
+      fakeTelegram.pushCallback(picker.message_id, bindLeaveCurrentCallback);
+      await getCharness().waitFor('both late refusals survived', replyTimeoutMs, () => getCharness().output.split(lateToastLogLine).length >= lateLogsBefore + 2);
+    } finally {
+      fakeTelegram.isCallbackAnswerExpired = false;
+    }
     await openPicker(waitingTopic, folders.waiting);
     assert.equal(readBinding(threadId)?.subdir, folders.waiting, '«Leave current dir» on a spent picker leaves nothing');
     assert.equal(waitingTopic.listMessages().filter((message) => message.text === enDict['bind.create_prompt']).length, 0, 'the first prompt went with the bind, and «create new folder» on the spent picker asked for no second name');
@@ -583,5 +625,98 @@ describe('/bind end to end: built charness, fake Bot API', () => {
 
     const sentId = fakeTelegram.pushOperatorMessage(threadId, 'is the folder there now?');
     await assertOneBoundMessage(waitingTopic, sentId, laterFolderName, { isAutoBound: true, sharedWith: [byName('Folder maker')] });
+  });
+
+  it('an agent start after an auto-bind does not wait for the sweep of the open pickers: they go in ONE bulk call, and the response to it may take as long as it likes', async () => {
+    const { threadId, topic: sweptTopic } = await makeTopicAsStranger('Bind Sweep Slow');
+    const pickers: FakeTelegramMessage[] = [];
+    for (let count = 0; count < 3; count += 1) pickers.push(await sweptTopic.sendAndAwaitReply('/bind', enDict['bind.current_none']));
+    assert.equal(new Set(pickers.map((picker) => picker.message_id)).size, 3, 'three pickers are open');
+
+    // Whatever call deletes them, its response is held back until the flow says so: a start that waited for it never begins.
+    let releaseDeletes: () => void = () => {};
+    const deletesReleased = new Promise<void>((resolve) => { releaseDeletes = resolve; });
+    fakeTelegram.holdNextResponse('deleteMessages', deletesReleased);
+    fakeTelegram.holdNextResponse('deleteMessage', deletesReleased);
+    const bulkCallsBefore = fakeTelegram.listCalls('deleteMessages').length;
+    const launchesBefore = getSessionLaunches(getLayout()).length;
+    const sentId = fakeTelegram.pushOperatorMessage(threadId, 'claude');
+    try {
+      await getCharness().waitFor('the agent to start while the sweep\'s response is still held', startWhileSweepHeldTimeoutMs, () => getSessionLaunches(getLayout()).length > launchesBefore);
+    } finally {
+      releaseDeletes();
+    }
+    for (const picker of pickers) await waitForPickerDeleted(picker);
+    const bulkCalls = fakeTelegram.listCalls('deleteMessages').slice(bulkCallsBefore);
+    assert.equal(bulkCalls.length, 1, 'ONE bulk call, not a delete per picker');
+    assert.deepEqual(bulkCalls[0].payload.message_ids, pickers.map((picker) => picker.message_id), 'with every open picker in it, oldest first');
+    await assertOneBoundMessage(sweptTopic, sentId, folders.sweepSlow, { isAutoBound: true, isAgentStarting: true });
+  });
+
+  it('pickers Telegram will not delete (the bulk call is refused) are tried one by one and each loses its buttons: no stale tap can rebind the topic', async () => {
+    const { threadId, topic: stuckTopic, pickers } = await openTopicWithStalePickers('Sweep refused', ['a first plain note', 'a second plain note']);
+    fakeTelegram.isMessageDeletionRefused = true;
+    try {
+      const sentId = fakeTelegram.pushOperatorMessage(threadId, `/bind ${folders.gone}`);
+      await assertOneBoundMessage(stuckTopic, sentId, folders.gone);
+      for (const picker of pickers) await getCharness().waitFor('the picker\'s buttons removed', replyTimeoutMs, () => stuckTopic.getKeyboardData(picker).flat().length === 0);
+    } finally {
+      fakeTelegram.isMessageDeletionRefused = false;
+    }
+    for (const picker of pickers) assert.notEqual(fakeTelegram.getMessage(picker.message_id)?.isDeleted, true, 'the messages themselves stayed');
+  });
+
+  it('a tap on a picker the person had already deleted by hand binds the topic, and does not try to strip buttons from a message that is gone', async () => {
+    const { topic: goneTopic, picker } = await openFreshPicker('Gone picker');
+    const folderButton = goneTopic.getButtonData(picker, `📁 ${folders.sweepTap}`);
+    const pickerMessage = fakeTelegram.getMessage(picker.message_id);
+    assert.ok(pickerMessage, 'the picker is a message of the fake');
+    pickerMessage.isDeleted = true; // deleted by hand, with its keyboard still on screen when the tap lands
+    const editsOfPicker = () => fakeTelegram.listCalls('editMessageReplyMarkup').filter((call) => call.payload.message_id === picker.message_id);
+    const editsBefore = editsOfPicker().length;
+    fakeTelegram.pushCallback(picker.message_id, folderButton);
+    await goneTopic.waitForMessage('the welcome', (message) => message.message_id > picker.message_id && message.text.includes(enDict['binding.welcome.start_prompt']));
+    await goneTopic.sendAndAwaitReply('/bind', enDict['bind.current'].replace('{subdir}', folders.sweepTap));
+    assert.equal(editsOfPicker().length, editsBefore, 'no edit of a message that is gone');
+    assert.ok(!getCharness().output.includes('[bind] keyboard edit failed'), 'and nothing logged about one');
+  });
+
+  it('a typed folder name with a tap on the same picker right behind it: the name binds, the tap is told the picker was used — ONE welcome, no rebind to the tapped folder', async () => {
+    const { threadId, topic: raceTopic, picker } = await openFreshPicker('Name then tap');
+    await raceTopic.tapAndAwaitAnswer(picker, bindCreateFolderCallback);
+    await raceTopic.waitForMessage('the folder-name prompt', (message) => message.message_id > picker.message_id && message.text === enDict['bind.create_prompt']);
+    const answersBefore = fakeTelegram.callbackAnswers.length;
+    const sentId = fakeTelegram.pushOperatorMessage(threadId, typedBeforeTapFolderName);
+    fakeTelegram.pushCallback(picker.message_id, raceTopic.getButtonData(picker, `📁 ${folders.first}`));
+    await getCharness().waitFor('the tap answered', replyTimeoutMs, () => fakeTelegram.callbackAnswers.length > answersBefore);
+    assert.equal(fakeTelegram.callbackAnswers[answersBefore], t('cb.bind_picker_used'), 'the picker was spent by the typed name');
+    await assertOneBoundMessage(raceTopic, sentId, typedBeforeTapFolderName);
+    assert.deepEqual(listBoundMessages(raceTopic, sentId, folders.first), [], 'the tap bound nothing');
+    assert.equal(readBinding(threadId)?.subdir, typedBeforeTapFolderName, 'the topic stays on the folder the name made');
+  });
+
+  it('the shared-folder row names only topics of the SAME chat: those of other chats are a count — never a name, a link or an id', async () => {
+    fs.mkdirSync(path.join(getLayout().workRoot, sharedAcrossChatsFolderName));
+    // The instance keeps other chats' bindings too (a second group, the operator's private chat); both are on the folder, named.
+    const now = new Date().toISOString();
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      persisted.bindings = {
+        ...persisted.bindings,
+        [foreignGroupKey]: { subdir: sharedAcrossChatsFolderName, createdAt: now, topicName: foreignTopicName },
+        [privateChatKey]: { subdir: sharedAcrossChatsFolderName, createdAt: now, topicName: privateTopicName },
+      };
+    });
+    const elsewhere = t('binding.welcome.sharedElsewhere', { count: 2 });
+
+    const firstSentId = fakeTelegram.pushOperatorMessage(peerThreadId, `/bind ${sharedAcrossChatsFolderName}`);
+    const firstWelcome = await assertOneBoundMessage(peerTopic, firstSentId, sharedAcrossChatsFolderName, { sharedWithText: elsewhere });
+    // A topic of THIS chat is named (here: by its link, it has no name) next to the count.
+    const secondSentId = fakeTelegram.pushOperatorMessage(mainThreadId, `/bind ${sharedAcrossChatsFolderName}`);
+    const secondWelcome = await assertOneBoundMessage(mainTopic, secondSentId, sharedAcrossChatsFolderName, { sharedWithText: `${byLink(peerThreadId)}, ${elsewhere}` });
+    for (const welcome of [firstWelcome, secondWelcome]) {
+      for (const secret of [foreignTopicName, privateTopicName, '2222222222', '#5', '424242']) {
+        assert.ok(!welcome.text.includes(secret), `nothing of another chat shows in the row: "${secret}" in ${JSON.stringify(welcome.text)}`);
+      }
+    }
   });
 });

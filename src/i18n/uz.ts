@@ -150,6 +150,7 @@ export const uzDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• Avtomatik bog‘landi: mavzu nomi papkaga mos keldi',
   'binding.welcome.existed': '• Papka allaqachon mavjud edi — unga bog‘landi',
   'binding.welcome.shared': '• ⚠️ Bu papkani boshqa mavzular ham ishlatadi: {threads} — seanslar mustaqil',
+  'binding.welcome.sharedElsewhere': '+{count} boshqa joyda',
   'binding.welcome.start_prompt': 'Suhbatni boshlang:',
 
   'mcp.header': '🔌 *Ushbu mavzu uchun MCP serverlar:*',
