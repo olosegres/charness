@@ -3,7 +3,7 @@
  * isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API of `telegramE2e/fakeTelegram.ts`, with
  * the fake `claude` (`jiraE2e/fakeClaude.ts`) refusing a turn for a subscription limit (`usage-limit-once`) and
  * recording how every session is launched (the config directory = the account). The test plays the operator in
- * the General topic and in four bound topics. One flow, in order:
+ * the General topic and in four bound topics (three more are bound in the last step). One flow, in order:
  *
  *   boot → the instance zone is set to UTC, auto switch reads ON in General and on the `/limits` board with the single
  *     signed-in account and nobody having chosen it (nothing stored), four topics are bound (each message opens a request,
@@ -32,6 +32,9 @@
  *     "continue" message
  *   → an instance whose operator turned auto switch OFF keeps it OFF across a restart: the screens say so, and a limit with a
  *     rung that has room posts the «🔁 Switch to …» offer instead of moving the topic
+ *   → with an EMPTY list and a THIRD signed-in account, the topic that hits its limit continues on the account whose weekly window
+ *     resets SOONEST — not on the one with the most headroom (an account's figures reach the bot the way they do from a real
+ *     process: the `rate_limit_event` frame its agent streams; the isolated instance has no sign-in to poll with)
  *
  * What the unit tests cover instead: the board's rows, its model pages and its General face (`limitsBoard.test.ts`), an unknown reset, the deferred notice (a tmux Claude without a resumable
  * session) and every locale (`fallbackSwitchNotice.test.ts`); the switches to and from OpenCode are the other flow,
@@ -49,7 +52,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { getFlagValues, getLaunchSessionId } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeUsageWindowsFileName, getFlagValues, getLaunchSessionId, type FakeClaudeUsageWindows } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -92,6 +95,9 @@ const secondTopicThreadId = 112;
 const thirdTopicThreadId = 113;
 const fourthTopicThreadId = 114;
 const fifthTopicThreadId = 115;
+const sixthTopicThreadId = 116;
+const seventhTopicThreadId = 117;
+const eighthTopicThreadId = 118;
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
@@ -101,12 +107,17 @@ const secondFolder = 'switch-second';
 const thirdFolder = 'switch-third';
 const fourthFolder = 'switch-fourth';
 const fifthFolder = 'switch-fifth';
+const sixthFolder = 'switch-sixth';
+const seventhFolder = 'switch-seventh';
+const eighthFolder = 'switch-eighth';
 /** What the fake agent streams for the second prompt of the output-split subtest (`Working on <issue>.`). */
 const secondTurnText = 'Working on SLOW-2.';
 const firstTurnText = 'Working on SLOW-1.';
 /** The account the second one takes over from, and the one the chain names. */
 const exhaustedAccount = 'default';
 const takeoverAccount = 'work';
+/** The third account of the last step: the soonest weekly reset, the least headroom. */
+const soonestResetAccount = 'spare';
 
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
@@ -121,6 +132,9 @@ let secondTopic: TopicDriver;
 let thirdTopic: TopicDriver;
 let fourthTopic: TopicDriver;
 let fifthTopic: TopicDriver;
+let sixthTopic: TopicDriver;
+let seventhTopic: TopicDriver;
+let eighthTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 /** When the fake says the limit resets (an ISO instant, a few days ahead so the notice carries the date). */
 let resetsAtIso = '';
@@ -194,7 +208,7 @@ async function openBoard(driver: TopicDriver, threadId: number): Promise<{ messa
 describe('The usage-limit switch notice end to end: built charness, fake Bot API, fake claude', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-fbswitch-', [firstFolder, secondFolder, thirdFolder, fourthFolder, fifthFolder], getFlowDeadlineMs());
+    layout = createIsolatedInstanceLayout('charness-fbswitch-', [firstFolder, secondFolder, thirdFolder, fourthFolder, fifthFolder, sixthFolder, seventhFolder, eighthFolder], getFlowDeadlineMs());
     defaultTmuxSessionsBefore = listTmuxSessions([]);
     resetsAtIso = computeResetsAtIso(takeoverDaysAhead);
 
@@ -209,6 +223,9 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     thirdTopic = new TopicDriver(fakeTelegram, getCharness, thirdTopicThreadId, replyTimeoutMs);
     fourthTopic = new TopicDriver(fakeTelegram, getCharness, fourthTopicThreadId, replyTimeoutMs);
     fifthTopic = new TopicDriver(fakeTelegram, getCharness, fifthTopicThreadId, replyTimeoutMs);
+    sixthTopic = new TopicDriver(fakeTelegram, getCharness, sixthTopicThreadId, replyTimeoutMs);
+    seventhTopic = new TopicDriver(fakeTelegram, getCharness, seventhTopicThreadId, replyTimeoutMs);
+    eighthTopic = new TopicDriver(fakeTelegram, getCharness, eighthTopicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(layout, {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
@@ -610,5 +627,69 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     await getCharness().waitFor('the second turn\'s text in the topic', agentStartTimeoutMs, () => listTexts().some((text) => text.includes(secondTurnText)));
     assert.ok(listTexts().some((text) => text.startsWith(secondTurnText)), 'the second turn\'s text opens a message of its own');
     assert.deepEqual(listTexts().filter((text) => text.includes('SLOW-1') && text.includes('SLOW-2')), [], 'no message holds both turns: the second turn\'s text is not an edit of the first turn\'s');
+  });
+
+  it('with an EMPTY list and three signed-in accounts, the topic that hits its limit continues on the account whose weekly window resets soonest — not the one with the most headroom', async () => {
+    const hoursAhead = (hours: number): string => new Date(Date.now() + hours * 3_600_000).toISOString();
+    for (const [topic, folder] of [[sixthTopic, sixthFolder], [seventhTopic, seventhFolder], [eighthTopic, eighthFolder]] as const) {
+      await topic.sendAndAwaitReply(`/bind ${folder}`, `Bound to \`${folder}\``);
+      await topic.sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
+    }
+    // The previous steps leave the agents of the fifth topic answering; a restart inside a turn is another scenario.
+    await getCharness().waitFor('the fifth topic\'s agent to end its last turn', replyTimeoutMs, () => checkIsAgentIdle(fifthTopicThreadId));
+    createClaudeProfileLayout({ dataDir: getLayout().dataDir, name: soonestResetAccount, homeClaudeDir: path.join(getLayout().instanceHome, '.claude') });
+    await restartWithState((persisted) => {
+      delete persisted.claudeAutoSwitchOnLimitEnabled;
+      persisted.fallbackChain = [];
+      persisted.claudeProfiles = {
+        ...persisted.claudeProfiles,
+        [soonestResetAccount]: { createdAt: new Date().toISOString(), loggedIn: true, email: 'spare@example.com', subscriptionType: 'max' },
+      };
+      // No leftover mark or reading of the earlier steps: every figure below comes from the agents' frames.
+      for (const profile of Object.values(persisted.claudeProfiles)) {
+        delete profile.limitedUntil;
+        delete profile.usage;
+      }
+      persisted.claudeProfileOverrides = {
+        ...persisted.claudeProfileOverrides,
+        [`${group.id}:${seventhTopicThreadId}`]: takeoverAccount,
+        [`${group.id}:${eighthTopicThreadId}`]: soonestResetAccount,
+      };
+    });
+    // «work» has the most headroom and the latest reset, «spare» the least headroom and the soonest reset.
+    const windows: FakeClaudeUsageWindows = {
+      [exhaustedAccount]: { sessionPercent: 10, sessionResetsAt: hoursAhead(3), weeklyPercent: 50, weeklyResetsAt: hoursAhead(72) },
+      [takeoverAccount]: { sessionPercent: 20, sessionResetsAt: hoursAhead(3), weeklyPercent: 10, weeklyResetsAt: hoursAhead(6 * 24) },
+      [soonestResetAccount]: { sessionPercent: 30, sessionResetsAt: hoursAhead(3), weeklyPercent: 70, weeklyResetsAt: hoursAhead(24) },
+    };
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeUsageWindowsFileName), JSON.stringify(windows));
+
+    // The topic that will hit the limit gets its session first: the other accounts' figures must be less than a minute old
+    // when the limit lands (the bot re-reads an older one, and with no sign-in to read it marks it stale).
+    await sixthTopic.sendAndAwaitReply('/claude', 'ready in');
+    await seventhTopic.sendAndAwaitReply('/claude', 'ready in');
+    await eighthTopic.sendAndAwaitReply('/claude', 'ready in');
+    fakeTelegram.pushOperatorMessage(seventhTopicThreadId, 'USAGE-1 report your windows');
+    fakeTelegram.pushOperatorMessage(eighthTopicThreadId, 'USAGE-2 report your windows');
+    const checkIsReportedByStream = (account: string): boolean => {
+      const usage = readPersistedState(getLayout()).claudeProfiles?.[account]?.usage;
+      return usage?.source === 'stream' && usage.isStale !== true;
+    };
+    await getCharness().waitFor('the other two accounts\' windows to reach the bot', agentStartTimeoutMs, () => checkIsReportedByStream(takeoverAccount) && checkIsReportedByStream(soonestResetAccount));
+
+    askAgentToHitTheLimit(sixthTopicThreadId, 'LIM-10');
+    const notice = await sixthTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
+    assert.equal(
+      notice.text,
+      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${soonestResetAccount}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
+      'the soonest weekly reset wins over the headroom of «work»',
+    );
+    await getCharness().waitFor('the conversation to continue under the soonest-reset account', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-10').length === 2);
+    assert.equal(getLaunchOfTurn(getLayout(), 'LIM-10', 0).claudeConfigDir, null, 'the limit was hit on the first account');
+    assert.equal(getLaunchOfTurn(getLayout(), 'LIM-10', 1).claudeConfigDir, getAccountConfigDir(getLayout(), soonestResetAccount), 'the conversation continues under the soonest-reset account');
+    assert.equal(listSwitchNotices(sixthTopic).length, 1);
+    const profiles = readPersistedState(getLayout()).claudeProfiles;
+    assert.equal(profiles?.[takeoverAccount]?.limitedUntil, undefined, 'the account it did not take is not marked');
+    assert.equal(profiles?.[exhaustedAccount]?.limitedUntil, resetsAtIso, 'the exhausted account is marked until the reset the error named');
   });
 });

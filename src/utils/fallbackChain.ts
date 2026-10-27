@@ -10,9 +10,9 @@
  * This module is the pure layer: the chain shape, its edit operations, the draft, the ranking, the
  * auto / offer / none decision and the `callback_data` codecs. The chain lives in `state.json`
  * (`StateStore.getFallbackChain`), the detection and the switch itself in `bot.ts`, the `/limits` screen in
- * `connectors/telegram/commands/fallbackChain.ts`. The within-Claude ranking by headroom
- * (`claudeLimitSwitch.ts`) is what an EMPTY chain falls back to, so a bot without a configured chain behaves
- * exactly as before.
+ * `connectors/telegram/commands/fallbackChain.ts`. The within-Claude ranking by the soonest weekly reset
+ * (`claudeLimitSwitch.ts`) is what an EMPTY chain falls back to, so a bot without a configured chain still moves a
+ * topic to another account on a limit.
  *
  * No I/O, no `Date.now()`: the caller passes the clock and the detection views, so every rule is unit-tested.
  */
@@ -186,6 +186,22 @@ export function checkIsMixedFallbackChain(chain: readonly FallbackChainEntry[]):
 /** Whether the rung is excluded from automatic switching. */
 export function checkIsFallbackEntryDisabled(entry: FallbackChainEntry): boolean {
   return entry.disabled === true;
+}
+
+/**
+ * @description The Claude accounts the operator switched off: every rung of the account is excluded from automatic
+ * switching. An account with no rung at all is not among them — and an empty chain switches nobody off — so the launch
+ * pick (`getClaudeLaunchPick`) leaves out only what the operator explicitly turned off.
+ */
+export function getDisabledClaudeProfileNames(chain: readonly FallbackChainEntry[]): Set<string> {
+  const listedProfiles = new Set<string>();
+  const enabledProfiles = new Set<string>();
+  for (const rung of chain) {
+    if (rung.backend !== 'claude') continue;
+    listedProfiles.add(rung.profile);
+    if (!checkIsFallbackEntryDisabled(rung)) enabledProfiles.add(rung.profile);
+  }
+  return new Set([...listedProfiles].filter((profile) => !enabledProfiles.has(profile)));
 }
 
 /** Flip the rung at `index` between included and excluded (a NEW chain). */

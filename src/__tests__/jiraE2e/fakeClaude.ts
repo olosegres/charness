@@ -21,6 +21,8 @@ import {
   fakeClaudeApiErrorOnceFileName,
   fakeClaudeLoginFileName,
   fakeClaudeLoginUrl,
+  fakeClaudeUsageWindowsFileName,
+  fakeDefaultAccountName,
   fakeConsoleLogin,
   fakeClaudePlatformEnvName,
   fakeClaudeQueuedWaitMaxMsEnvName,
@@ -28,6 +30,7 @@ import {
   fakeClaudeVersion,
   fakeCompactionCostUsd,
   fakeTurnCostUsd,
+  type FakeClaudeUsageWindows,
   fakeCompactionModelUsage,
   fakeCompactionResultUsage,
   fakeTurnUsage,
@@ -144,6 +147,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - (while `fakeClaudeAlwaysUsageLimitFileName` exists in the state dir, EVERY turn ends on a limit, whatever its mode;
  *    `fakeClaudeApiErrorOnceFileName` ends the NEXT turn on the API error its content spells, after the delay in
  *    `fakeClaudeApiErrorDelayFileName` while that exists);
+ *  - while `fakeClaudeUsageWindowsFileName` exists in the state dir, every turn starts with the `rate_limit_event` frame the
+ *    real CLI streams: the usage windows the file lists for the account the process runs on;
  *  - `arm-watch`   — an orchestrator watching a worker the way `charness-manager` says: `schedule_create` with the real
  *    worker-watch recipe (`scheduler/workerWatch.ts`) on a worker that is gone, cron every minute, `isPinSilent:
  *    true`, a prompt carrying `cancel-watch`; then ends the turn. `cancel-watch` — the check's wake: `schedule_list`,
@@ -719,6 +724,29 @@ async function runBackgroundTaskTurn(argv: readonly string[], sessionId: string,
   writeStdout({ type: 'result', subtype: 'success', is_error: false, result: text, origin: { kind: 'task-notification', producer: 'session-task' }, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(fakeTurnCostUsd) });
 }
 
+/** The `rate_limit_event` a real turn starts with: the windows {@link fakeClaudeUsageWindowsFileName} lists for this process's account (none listed, none sent). */
+function emitUsageWindows(sessionId: string): void {
+  const windowsPath = path.join(getStateDir(), fakeClaudeUsageWindowsFileName);
+  if (!fs.existsSync(windowsPath)) return;
+  const configDir = process.env.CLAUDE_CONFIG_DIR;
+  const windows = (JSON.parse(fs.readFileSync(windowsPath, 'utf8')) as FakeClaudeUsageWindows)[configDir ? path.basename(configDir) : fakeDefaultAccountName];
+  if (!windows) return;
+  // The frame's `resetsAt` is epoch SECONDS, `utilization` 0..1 (measured on the real CLI).
+  const toWindow = (percent: number, resetsAt: string) => ({ utilization: percent / 100, resetsAt: Math.floor(Date.parse(resetsAt) / 1000) });
+  writeStdout({
+    type: 'rate_limit_event',
+    rate_limit_info: {
+      status: 'allowed',
+      rateLimitType: 'five_hour',
+      unifiedWindows: {
+        five_hour: toWindow(windows.sessionPercent, windows.sessionResetsAt),
+        seven_day: toWindow(windows.weeklyPercent, windows.weeklyResetsAt),
+      },
+    },
+    session_id: sessionId,
+  });
+}
+
 function endTurn(sessionId: string, resultText: string): void {
   writeStdout({ type: 'result', subtype: 'success', is_error: false, result: resultText, session_id: sessionId, usage: fakeTurnUsage, total_cost_usd: addConversationCost(fakeTurnCostUsd) });
 }
@@ -789,6 +817,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   recordTranscriptMessage(sessionId, content);
   writeTurnStart(argv, sessionId);
   writeStdout({ type: 'user', message: { role: 'user', content }, session_id: sessionId });
+  emitUsageWindows(sessionId);
   const apiErrorOncePath = path.join(getStateDir(), fakeClaudeApiErrorOnceFileName);
   if (fs.existsSync(apiErrorOncePath)) {
     const errorText = fs.readFileSync(apiErrorOncePath, 'utf8').trim();

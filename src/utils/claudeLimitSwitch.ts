@@ -1,24 +1,34 @@
 /**
  * @description Pure decisions behind SWITCHING A TOPIC TO ANOTHER CLAUDE ACCOUNT when its own hits a usage
- * limit (`utils/claudeProfiles.ts`, `utils/claudeUsage.ts`): which profiles may take the work over, ranked by
- * headroom, and until when the exhausted one is marked limited. This ranking is what the fallback chain
- * (`utils/fallbackChain.ts`) falls back to when the operator configured no chain: the within-Claude
- * account→account switch as it existed before the chain. The auto / offer decision, the notice's buttons and
- * the auto-switch toggle (`/limits_autoswitch`; ON by default, also with one account) live in the chain module.
+ * limit (`utils/claudeProfiles.ts`, `utils/claudeUsage.ts`): which profiles may take the work over, ranked like a
+ * new agent's launch (the soonest weekly reset first), and until when the exhausted one is marked limited.
+ * This ranking is what the fallback chain (`utils/fallbackChain.ts`) falls back to when the operator configured no
+ * chain: the within-Claude account→account switch as it existed before the chain. The auto / offer decision, the
+ * notice's buttons and the auto-switch toggle (`/limits_autoswitch`; ON by default, also with one account) live in
+ * the chain module.
  *
  * No I/O, no `Date.now()`: the caller passes the clock and the profile views, so every rule is unit-tested.
  */
 
-import { buildClaudeProfilesReport, getClaudeUsageBucket, type ClaudeProfileUsageView, type ClaudeUsageSnapshot } from './claudeUsage';
+import {
+  checkIsClaudeProfileLaunchable,
+  getClaudeUsageBucket,
+  getRelevantClaudeUsageKinds,
+  sortClaudeProfilesByLaunchRank,
+  type ClaudeProfileUsageView,
+  type ClaudeUsageSnapshot,
+} from './claudeUsage';
 
 /** The toggle's resolver (OFF when unset) lives beside `/auto_continue_limits`'s, where `state.ts` reads it. */
 export { resolveClaudeAutoSwitchOnLimitEnabled } from './autoContinueOnLimit';
 
 /**
  * @description The profiles that may take a topic's work over, best first: signed in, not marked limited, with
- * KNOWN and fresh usage that leaves headroom on the windows `model` drains, and not the profile that just hit
- * the limit. A profile whose usage is unknown or stale is left out on purpose — the switch is sold as "this
- * one has room", and a guess could land the topic in a second limit. An account billed to API credits is never
+ * KNOWN and fresh usage that leaves room on the windows `model` drains — below 100 % on each, and the five-hour window
+ * below the launch ceiling (`checkIsClaudeProfileLaunchable`) — and not the profile that just hit the limit. The order is
+ * the launch pick's: the account whose weekly window resets soonest first (`sortClaudeProfilesByLaunchRank`), the one
+ * ranking a new agent's account too. A profile whose usage is unknown or stale is left out on purpose — the switch is sold
+ * as "this one has room", and a guess could land the topic in a second limit. An account billed to API credits is never
  * one of them: it has no windows to have room on, and only the operator decides to spend money (the chain's rung).
  */
 export function pickClaudeLimitSwitchCandidates(input: {
@@ -28,13 +38,13 @@ export function pickClaudeLimitSwitchCandidates(input: {
   model: string | null;
   nowMs: number;
 }): string[] {
-  const report = buildClaudeProfilesReport(input.profiles, input.model, input.nowMs);
-  return report.profiles
-    .filter((entry) => entry.name !== input.currentName && entry.billing !== 'api')
-    .filter((entry) => entry.isEligible && entry.loggedIn === true && !entry.isUsageStale)
-    .filter((entry) => entry.headroomPercent !== null && entry.headroomPercent > 0)
-    .sort((a, b) => (b.headroomPercent ?? 0) - (a.headroomPercent ?? 0))
-    .map((entry) => entry.name);
+  const kinds = getRelevantClaudeUsageKinds(input.model);
+  const candidates = input.profiles.filter((profile) => profile.name !== input.currentName
+    && profile.loggedIn === true
+    && profile.usage?.isStale !== true
+    && kinds.some((kind) => getClaudeUsageBucket(profile.usage, kind) !== null)
+    && checkIsClaudeProfileLaunchable(profile, input.model, input.nowMs));
+  return sortClaudeProfilesByLaunchRank(candidates, input.model, input.nowMs).map((profile) => profile.name);
 }
 
 /**

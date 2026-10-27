@@ -89,6 +89,28 @@ export const fakeClaudeCrashOnPromptFileName = 'crash-on-prompt';
 export const fakeClaudeAlwaysUsageLimitFileName = 'always-usage-limit';
 
 /**
+ * A file in the fake's state dir (JSON, {@link FakeClaudeUsageWindows}) that makes every turn start the way a real one does:
+ * ONE `rate_limit_event` frame carrying the usage windows of the account the process runs on (the account its
+ * `CLAUDE_CONFIG_DIR` names, `default` for none). A flow needs it because an isolated instance has no sign-in: the bot's own
+ * poller finds no token and marks every snapshot stale, so a frame is the only way an account's figures are fresh.
+ */
+export const fakeClaudeUsageWindowsFileName = 'usage-windows.json';
+
+/** The account name of a process started without `CLAUDE_CONFIG_DIR`. */
+export const fakeDefaultAccountName = 'default';
+
+/** The five-hour and weekly windows one account reports; the reset instants are ISO strings. */
+export interface FakeClaudeAccountWindows {
+  sessionPercent: number;
+  sessionResetsAt: string;
+  weeklyPercent: number;
+  weeklyResetsAt: string;
+}
+
+/** What {@link fakeClaudeUsageWindowsFileName} holds, by account name. */
+export type FakeClaudeUsageWindows = Record<string, FakeClaudeAccountWindows>;
+
+/**
  * A file in the fake's state dir that makes the NEXT turn end on an API error whose text is the file's content — any
  * provider wording a flow needs — and is removed by that turn.
  */

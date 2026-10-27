@@ -39,6 +39,7 @@ import {
   formatFallbackEntryLabel,
   getFallbackChainRevision,
   getFallbackEntryAvailability,
+  getDisabledClaudeProfileNames,
   getFallbackSwitchTapDecision,
   listOpenCodeModelsOfProvider,
   listOpenCodeProviders,
@@ -506,6 +507,19 @@ test('a list is mixed when its enabled rungs span both backends', () => {
   assert.equal(checkIsMixedFallbackChain([claude('default'), claude('work')]), false);
   assert.equal(checkIsMixedFallbackChain([claude('default'), openCode('openai', 'gpt-5')]), true);
   assert.equal(checkIsMixedFallbackChain([claude('default'), { ...openCode('openai', 'gpt-5'), disabled: true }]), false, 'a left-out rung never receives a topic');
+});
+
+test('the accounts switched off are those whose every Claude rung is left out — an empty list or an unlisted account switches nobody off', () => {
+  assert.deepEqual([...getDisabledClaudeProfileNames([])], [], 'an empty list: the implicit chain, nobody is switched off');
+  const chain: FallbackChainEntry[] = [
+    { ...claude('off'), disabled: true },
+    { ...claude('partly'), disabled: true },
+    { ...claude('partly', 'fable') },
+    claude('on'),
+    { ...openCode('openai', 'gpt-5'), disabled: true },
+  ];
+  assert.deepEqual([...getDisabledClaudeProfileNames(chain)], ['off'], 'one enabled rung of the account is enough to keep it in; an OpenCode rung is no Claude account; an account not in the list is not switched off');
+  assert.deepEqual([...getDisabledClaudeProfileNames([{ ...claude('off'), disabled: true }, { ...claude('off', 'opus'), disabled: true }])], ['off']);
 });
 
 test('the confirmation buttons of the new-backend question bake the list revision (toggle also its index) and round-trip', () => {
