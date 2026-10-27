@@ -21,6 +21,7 @@ import {
   checkIsClaudeProfileLaunchable,
   checkIsClaudeTokenExpired,
   fetchClaudeUsage,
+  getClaudeProfileRecordsFromState,
   formatClaudeUsageBucket,
   formatClaudeUsageRelativeReset,
   formatClaudeUsageResetAt,
@@ -30,7 +31,6 @@ import {
   mergeClaudeUsageSnapshot,
   parseClaudeUsageResponse,
   readClaudeOAuthToken,
-  readClaudeProfileRecordsFromStateFile,
   sortClaudeProfilesByLaunchRank,
   type ClaudeProfileUsageView,
   type ClaudeUsageSnapshot,
@@ -431,17 +431,12 @@ describe('the views off the registry and the state file', () => {
     assert.equal(buildClaudeProfileUsageViews({ dataDir: '/tmp/data', records: {} })[0].name, 'default', 'default is always listed');
   });
 
-  it('readClaudeProfileRecordsFromStateFile reads the registry off state.json and tolerates a missing or broken file', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-usage-'));
-    try {
-      assert.deepEqual(readClaudeProfileRecordsFromStateFile(dir), {});
-      fs.writeFileSync(path.join(dir, 'state.json'), '{not json');
-      assert.deepEqual(readClaudeProfileRecordsFromStateFile(dir), {});
-      fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ claudeProfiles: { work: { createdAt: '2026-10-01T00:00:00Z', loggedIn: true }, broken: { loggedIn: true } }, other: 1 }));
-      assert.deepEqual(Object.keys(readClaudeProfileRecordsFromStateFile(dir)), ['work']);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+  it('getClaudeProfileRecordsFromState picks the registry out of a state file already read: entries without a creation time are dropped, a missing or odd registry is empty', () => {
+    assert.deepEqual(getClaudeProfileRecordsFromState({}), {});
+    assert.deepEqual(getClaudeProfileRecordsFromState({ claudeProfiles: 'nope' }), {});
+    assert.deepEqual(getClaudeProfileRecordsFromState({ claudeProfiles: ['work'] }), {});
+    const state = { claudeProfiles: { work: { createdAt: '2026-10-01T00:00:00Z', loggedIn: true }, broken: { loggedIn: true }, text: 'x' }, other: 1 };
+    assert.deepEqual(Object.keys(getClaudeProfileRecordsFromState(state)), ['work']);
   });
 });
 

@@ -20,14 +20,14 @@
 
 import { loadEnvFiles } from './envLoader';
 import { resolveDataDir } from '../state';
+import { readStateFileObject } from '../stateFile';
 import { getDisabledClaudeProfileNames, normaliseFallbackChain } from '../utils/fallbackChain';
 import {
   buildClaudeProfileUsageViews,
   buildClaudeProfilesReport,
   describeClaudeLaunchOutcome,
   formatClaudeUsageBucket,
-  readClaudeProfileRecordsFromStateFile,
-  readStateFileObject,
+  getClaudeProfileRecordsFromState,
   type ClaudeProfileReportEntry,
   type ClaudeUsageBucketKind,
 } from '../utils/claudeUsage';
@@ -126,11 +126,12 @@ export async function runClaudeProfilesCli(
   loadEnvFiles();
   const dataDir = resolveDataDir();
   const nowMs = (io.now ?? Date.now)();
-  const records = readClaudeProfileRecordsFromStateFile(dataDir);
+  const stateFile = readStateFileObject(dataDir);
+  const records = getClaudeProfileRecordsFromState(stateFile);
   const report = buildClaudeProfilesReport(buildClaudeProfileUsageViews({ dataDir, records }), args.model, nowMs, {
     currentProfile: args.currentProfile,
     isStoppedByLimit: args.isStoppedByLimit,
-    excludedNames: getDisabledClaudeProfileNames(normaliseFallbackChain(readStateFileObject(dataDir).fallbackChain)),
+    excludedNames: getDisabledClaudeProfileNames(normaliseFallbackChain(stateFile.fallbackChain)),
   });
   const outcome = describeClaudeLaunchOutcome(report, args.currentProfile);
   if (args.isJson) {

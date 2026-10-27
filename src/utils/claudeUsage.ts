@@ -691,20 +691,9 @@ export function buildClaudeProfileUsageViews(input: {
   return [...(isDefaultRemoved ? [] : [toView('default', input.records.default)]), ...added.map(([name, record]) => toView(name, record))];
 }
 
-/** `state.json` as a plain object — the CLI's read, no `StateStore` (which would migrate and lock a live bot's file); `{}` when it is missing or broken. */
-export function readStateFileObject(dataDir: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-  } catch {
-    return {};
-  }
-  return checkIsRecord(parsed) ? parsed : {};
-}
-
-/** The profile registry as `state.json` holds it — the CLI's read. */
-export function readClaudeProfileRecordsFromStateFile(dataDir: string): Readonly<Record<string, ClaudeProfileRecord>> {
-  const registry = readStateFileObject(dataDir).claudeProfiles;
+/** The profile registry out of a `state.json` already read (`stateFile.ts`): entries without a creation time are dropped. */
+export function getClaudeProfileRecordsFromState(stateFile: Readonly<Record<string, unknown>>): Readonly<Record<string, ClaudeProfileRecord>> {
+  const registry = stateFile.claudeProfiles;
   const records = checkIsRecord(registry) ? registry : {};
   const result: Record<string, ClaudeProfileRecord> = {};
   for (const [name, record] of Object.entries(records)) {
