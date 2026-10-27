@@ -33,6 +33,7 @@ import {
   checkIsClaudeBackend,
   checkIsSameConversationSwitch,
   resolveClaudeBackendName,
+  resolveStartAdapterName,
   parseClaudeBackendArg,
   getClaudeModeAction,
 } from './adapters/createAdapter';
@@ -7287,7 +7288,7 @@ async function handleAgentStart(
   }
   // "Claude Code" is one user-facing choice with several backends (json-stream,
   // per-turn, the deprecated tmux-scrape); open the thread's picked backend, else the default.
-  if (adapterName === 'claude') adapterName = resolveClaudeBackendName(key);
+  adapterName = resolveStartAdapterName(key, adapterName);
   // The other backend, with a conversation to hand over: ask first; the answer makes the switch.
   const targetFamily = getBackendFamily(adapterName);
   if (targetFamily !== null && await askBeforeCrossBackendSwitch(key, targetFamily, args)) return;
@@ -9339,12 +9340,13 @@ bot.on(message('text'), async (ctx) => {
       const requestedFamily = getBackendFamily(startMatch.adapterName);
       if (requestedFamily !== null && state.getBinding(key) && await askBeforeCrossBackendSwitch(key, requestedFamily, startMatch.args)) return;
       // The shared `ensureAgentSession` does the bind-check + switch + start.
-      // The explicit matched adapter wins (`preferredAdapterName`); the phrase's
-      // trailing args ride along. On `unbound` we keep this path's own reply:
-      // the folder picker (plan §11 Этап 4 — starting without a binding would
-      // silently launch against WORK_ROOT, which is almost never wanted).
+      // The explicit matched adapter wins (`preferredAdapterName`), named the way
+      // `/claude` names it: `claude` is the topic's Claude backend, never the bare
+      // tmux one. The phrase's trailing args ride along. On `unbound` we keep this
+      // path's own reply: the folder picker (plan §11 Этап 4 — starting without a
+      // binding would silently launch against WORK_ROOT, which is almost never wanted).
       const result = await ensureAgentSession(key, {
-        preferredAdapterName: startMatch.adapterName,
+        preferredAdapterName: resolveStartAdapterName(key, startMatch.adapterName),
         args: startMatch.args,
       });
       if (!result.ok && result.reason === 'unbound') {
@@ -9576,7 +9578,7 @@ async function processVoiceJob(
         // Same choke point as the text trigger (L-D4): a sleeping conversation is
         // woken, never replaced by a fresh start; `unbound` keeps the folder picker.
         const result = await ensureAgentSession(key, {
-          preferredAdapterName: startMatch.adapterName,
+          preferredAdapterName: resolveStartAdapterName(key, startMatch.adapterName),
           args: startMatch.args,
         });
         if (!result.ok && result.reason === 'unbound') {

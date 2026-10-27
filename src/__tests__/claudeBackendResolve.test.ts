@@ -16,6 +16,7 @@ import {
   checkIsClaudeBackend,
   checkIsSameConversationSwitch,
   resolveClaudeBackendName,
+  resolveStartAdapterName,
   getThreadAdapterNameRaw,
   setThreadAdapter,
   parseClaudeBackendArg,
@@ -83,6 +84,33 @@ test('resolveClaudeBackendName: a non-Claude pick falls to the json-stream defau
   const k = key(4);
   setThreadAdapter(k, 'opencode');
   assert.equal(resolveClaudeBackendName(k), claudeJsonStreamAdapterName);
+});
+
+// ── what a start choice opens ("claude" is one choice, several backends) ──
+//
+// `/claude`, the ▶️ Claude button and the spoken / typed start phrases (`claude`, `клод`) all name the user-facing choice
+// "claude"; the bare name is the DEPRECATED tmux backend's own adapter name, so each of them must resolve it to the
+// topic's backend first.
+
+test('resolveStartAdapterName: "claude" opens the default json-stream backend of a topic with no pick', () => {
+  assert.equal(resolveStartAdapterName(key(5), 'claude'), claudeJsonStreamAdapterName);
+});
+
+test('resolveStartAdapterName: "claude" opens the Claude backend the topic picked', () => {
+  const perTurn = key(6);
+  setThreadAdapter(perTurn, claudePerTurnAdapterName);
+  assert.equal(resolveStartAdapterName(perTurn, 'claude'), claudePerTurnAdapterName);
+  const tmux = key(7);
+  setThreadAdapter(tmux, 'claude');
+  assert.equal(resolveStartAdapterName(tmux, 'claude'), 'claude', 'an explicit tmux pick is still honoured');
+});
+
+test('resolveStartAdapterName: another agent is opened as named, whatever the topic ran before', () => {
+  const k = key(8);
+  setThreadAdapter(k, claudePerTurnAdapterName);
+  assert.equal(resolveStartAdapterName(k, 'opencode'), 'opencode');
+  assert.equal(resolveStartAdapterName(k, 'terminal'), 'terminal');
+  assert.equal(resolveStartAdapterName(k, claudeJsonStreamAdapterName), claudeJsonStreamAdapterName, 'a backend named in full is left alone');
 });
 
 // ── /claude_mode decision (live bug 2026-07-06) ─────────────────

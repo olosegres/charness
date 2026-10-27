@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**Typing or saying «claude» (or `клод`) to start the agent now opens the same backend `/claude` does — json-stream by default, or the one the topic picked — not the deprecated tmux one.**
+Before, a start phrase — in a text message or a voice note — handed the bare name `claude` on, which is the tmux backend's own name, so the phrase quietly
+started the frozen tmux backend while `/claude` and the ▶️ Claude button opened the topic's backend. All three now open the same backend;
+`opencode` and `terminal` are unchanged, and a topic that picked the tmux backend with `/claude_mode` still gets it.
+
 **Binding a topic to a folder now leaves ONE message in the topic — the full welcome with the folder's facts and the start buttons — whichever way it happens.**
 Before, a bind also posted extra messages that stayed in the topic as plainer copies of the same news: picking a folder with `/bind` (typed, tapped
 in the picker or «create new folder») added a short «📁 Bound to `x`. Run /claude or /opencode.» just before the welcome, a topic the bot bound by

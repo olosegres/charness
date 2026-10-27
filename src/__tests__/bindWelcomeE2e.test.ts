@@ -58,7 +58,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getAllLaunches, getSessionLaunches, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getSessionLaunches, readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { bindCreateFolderCallback, bindLeaveCurrentCallback } from '../connectors/telegram/bindPicker';
 import type { BindingData } from '../state';
 import { t } from '../i18n';
@@ -99,8 +99,6 @@ const greetingMark = '👋';
 const startButtonsData = [['agent_claude', 'agent_opencode'], ['open_sessions']];
 /** The start of the welcome's shared-folder row, up to where the topics are named. */
 const sharedRowStart = enDict['binding.welcome.shared'].split('{threads}')[0];
-/** The flag every FRESH agent start carries, whichever Claude backend runs it (a resume carries `--resume` instead). */
-const freshSessionFlag = '--session-id';
 /** The log line of the bot setting a non-admin's topic name aside. */
 const nameCachedLogLine = '[security] forum_topic_created';
 const replyTimeoutMs = 20 * 1000;
@@ -380,9 +378,8 @@ describe('/bind end to end: built charness, fake Bot API', () => {
   });
 
   it('a start phrase as the admin\'s first message in a non-admin-made topic binds it AND starts the agent: one welcome, one session', async () => {
-    // Counted by the flag of a fresh start, not by `getSessionLaunches`: that one knows the stream-json launch only, and the
-    // phrase starts whichever backend `ensureAgentSession` is given for the name `claude`.
-    const listAgentStarts = () => getAllLaunches(getLayout()).filter((launch) => launch.argv.includes(freshSessionFlag));
+    // The phrase opens the topic's backend, json-stream by default (as `/claude` does), which is a stream-json launch.
+    const listAgentStarts = () => getSessionLaunches(getLayout());
     const startsBefore = listAgentStarts().length;
     const { threadId, topic: phraseTopic } = await makeTopicAsStranger(folders.phrase);
     const sentId = fakeTelegram.pushOperatorMessage(threadId, 'claude');

@@ -622,7 +622,7 @@ describe('the bot wires the kick and the restore, and keeps the saved record mea
 
   it('a spoken "start claude" goes through the same ensure as the typed one (L-D4): a sleeping conversation is woken, never replaced', () => {
     const voiceJob = getFunction('async function processVoiceJob(');
-    assert.ok(voiceJob.includes('preferredAdapterName: startMatch.adapterName,'), 'the matched adapter is the ensure\'s preferred pick');
+    assert.ok(voiceJob.includes('preferredAdapterName: resolveStartAdapterName(key, startMatch.adapterName),'), 'the matched adapter, named the way /claude names it (the topic\'s backend, never the bare tmux name), is the ensure\'s preferred pick');
     assert.ok(!voiceJob.includes('startAgentSession(key, startMatch.args)'), 'no direct fresh start over a sleeping session');
     assert.ok(voiceJob.includes('await deliverActivePrompt(key, getThreadAdapter(key), transcript'), 'the adapter is read after the wake');
   });
