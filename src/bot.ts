@@ -13978,7 +13978,7 @@ export async function startBot(): Promise<void> {
   console.log(`Available agents: ${getAvailableAdapters().map(a => a.name).join(', ')}`);
 
   // 1. State store. The `[startup] DATA_DIR=` shape is load-bearing: the
-  // README's two-instances troubleshooting tells the operator to compare this
+  // docs/troubleshooting.md's two-instances section tells the operator to compare this
   // exact line across instances.
   state = await getStateStore({ saveDebounceMs: ENV.testTimings.stateSaveDebounceMs });
   console.log(`[startup] DATA_DIR=${path.dirname(state.stateFilePath)}`);

@@ -48,7 +48,7 @@ cleanup.
 
 ## Agent → user file sending
 
-User-visible behaviour (limits, albums, cancellation, `deliveryUnknown`) is in the public `README.md`. What a
+User-visible behaviour (limits, albums, cancellation, `deliveryUnknown`) is in the public `docs/backends.md` (Bot-injected agent tools). What a
 maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendService.ts`, `fileSendPlan.ts`):
 
 - The service pins ONE canonical root for the whole operation and, on Linux, traverses from a root descriptor

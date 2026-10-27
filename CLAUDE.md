@@ -2,7 +2,8 @@
 
 > **Keep this file a short map. Module behaviour goes to the module's `README.md`; do not add per-change notes here.**
 
-> User-facing behaviour (commands, env vars, features) is in the public `README.md`, the architecture diagram in
+> User-facing behaviour is in the public `README.md` (overview, use cases, feature map) and `docs/` (`commands.md`: one
+> section per command; `backends.md`; `troubleshooting.md`), setup and env vars in `SETUP.md`, the architecture diagram in
 > `DEVELOPMENT.md`, per-function detail in the code's own comments and tests.
 
 > **Naming:** the product in prose is **Charness** (formerly TelegramCode; the repository is

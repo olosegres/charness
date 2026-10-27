@@ -143,7 +143,7 @@ WantedBy=default.target
 ```
 
 `nvm.sh` puts the nvm Node — and so `charness`, `claude` and `opencode` — on the service's `PATH`, which a service does not
-inherit from your shell. `KillMode=process` is the one [Restart behaviour](README.md#restart-behaviour) asks for: systemd's
+inherit from your shell. `KillMode=process` is the one [Restart behaviour](docs/backends.md#restart-behaviour) asks for: systemd's
 default would kill the agents' tmux and `opencode serve` with the bot, and while systemd marks `process` «not recommended»
 ([systemd.kill](https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html)), leaving them running is exactly
 what lets a bot restart keep its agents. Enable it and let the user manager start without a login:
@@ -229,7 +229,7 @@ stopped; this is not confirmed on current WSL. If the bot stops after you log in
 **Known risks.**
 
 - A Windows restart, a Windows Update reboot or `wsl --shutdown` ends the agents' processes, like a container restart:
-  each conversation resumes with its next message ([Restart behaviour](README.md#restart-behaviour)).
+  each conversation resumes with its next message ([Restart behaviour](docs/backends.md#restart-behaviour)).
 - **If a Windows program that the bot calls fails, run `wsl --update` in PowerShell first** and try again: the known
   failures below were fixed in newer WSL. The details, for whoever helps you: Windows `.exe` interop from a systemd service
   has failed in some WSL versions. WSL 2.0.5–2.0.13 could not run a Windows program stored in the Linux filesystem from a
@@ -304,7 +304,7 @@ hostnames: their ports and tmux servers are their own.
 **The bot updates itself.** With `autoUpdate` on (the default) an instance checks for a new version every hour (the first
 check 10 minutes after it starts), installs it when nobody is using the bot, restarts **in place** — the same process id, so
 systemd, pm2, `nohup` or a terminal see nothing, and every agent keeps running (what survives:
-[Restart behaviour](README.md#restart-behaviour)) — and says in General what changed:
+[Restart behaviour](docs/backends.md#restart-behaviour)) — and says in General what changed:
 
 ```
 🔄 Charness updated: 3.4.0 → 3.5.0
@@ -450,7 +450,7 @@ visible topic list, per-topic names/icons, quick agent switching — but it is
 4. **Remove the bot from the group and add it again.** Telegram caches the
    privacy-mode flag on join; without re-adding, the bot keeps private-mode and
    ignores free-form messages (see
-   [Troubleshooting → Bot doesn't see text](README.md#bot-doesnt-see-text-telegram)).
+   [Troubleshooting → Bot doesn't see text](docs/troubleshooting.md#bot-doesnt-see-text-telegram)).
 
 <p>
   <img src="docs/images/02-enable-topics.png" width="360" alt="Group settings → Topics toggle enabled (Forum mode)" />
@@ -609,9 +609,9 @@ a hand edit applies to the next session start, no restart.
 | `defaultEffort` | The reasoning effort of every topic that has no `/effort` pick of its own: `low`, `medium`, `high`, `xhigh`, `max`, `auto` or `ultracode`. Set it from **`/effort` in the General topic** (a tap writes the file), or by hand. Leave it out and the built-in default, `medium`, applies |
 | `autoUpdate` | What the instance does about a new charness version: `on` installs it by itself when the bot is idle, `notify` says it is out and offers a button, `off` never looks. Set it from **`/update` in General**, or by hand. Leave it out and `on` applies ([Updating](#updating)) |
 | `whatsNew` | `true` (default): after an update General lists the CHANGELOG entries it brought; `false`: only the «Updated a → b» line. Set from `/update` in General, or by hand |
-| `botSkills` | Whether the skills Charness ships with its agents (`charness-manager`, the two delegate skills) and the hint to load the manager reach them ([README](README.md#skills-the-bot-gives-its-agents)): `"on"` or `"off"`. The default of an instance whose **General** never chose — a Jira-only instance, which has no General, sets it here; `/bot_skills` in General overrides it for the instance once used; leave it out and `on` applies. A running agent keeps its skills until its next start |
+| `botSkills` | Whether the skills Charness ships with its agents (`charness-manager`, the two delegate skills) and the hint to load the manager reach them ([Commands](docs/commands.md#skills-the-bot-gives-its-agents)): `"on"` or `"off"`. The default of an instance whose **General** never chose — a Jira-only instance, which has no General, sets it here; `/bot_skills` in General overrides it for the instance once used; leave it out and `on` applies. A running agent keeps its skills until its next start |
 | `taskAgents` | The cap on tracker task agents ([Jira setup](#jira-setup)): `{ "maxConcurrent": 5 }` — how many conversations of a connected tracker (Jira issues) may work on a hand-over at once, for the whole bot; an issue over it waits in a queue and starts by itself. `0` = no limit, 100 the most. The default of an instance whose **General** never chose — a Jira-only instance, which has no General, sets it here; **`/task_agents` in General** overrides it for the instance once used (a picker, or any number typed after the command). Leave it out and `5` applies |
-| `todo` | The shared todo lists ([README](README.md#shared-todo-lists-todo)): `{ "isEnabled": true, "reminderMinutes": 60 }`. `isEnabled: false` turns the feature off (agents are not offered the tools); `reminderMinutes` is how long an agent may work without updating its list before it is reminded, `0` = never. Set both from **`/todo` in General → Settings**, or by hand — the way for an instance without a General topic (a Jira-only one). Leave it out and on / 60 apply |
+| `todo` | The shared todo lists ([Commands](docs/commands.md#shared-todo-lists)): `{ "isEnabled": true, "reminderMinutes": 60 }`. `isEnabled: false` turns the feature off (agents are not offered the tools); `reminderMinutes` is how long an agent may work without updating its list before it is reminded, `0` = never. Set both from **`/todo` in General → Settings**, or by hand — the way for an instance without a General topic (a Jira-only one). Leave it out and on / 60 apply |
 
 What a new Claude session starts with, first that exists: the topic's own `/effort` pick, the platform's default
 (a Jira conversation: `effort` in `jira.json`, `high` when absent — Jira never reads `defaultEffort`), `defaultEffort`,
@@ -779,7 +779,7 @@ connector behaves is described in [`src/connectors/jira/README.md`](src/connecto
    none by default) names fields by id (`customfield_…`, or a system one like `duedate`) the agent should see next to the standard
    ones, shown under their site name; an id the site does not list is logged at start and left out. `repos`
    (optional) lists the repositories the project's issues work on, by folder name (`["example-repo"]`): the
-   [shared todo lists](README.md#shared-todo-lists-todo) put the conversations of projects that share a name on one
+   [shared todo lists](docs/commands.md#shared-todo-lists) put the conversations of projects that share a name on one
    board, together with the Telegram topics on a repository folder of that name; projects without `repos` share one
    board for the whole instance. `agentBinaries` (optional, host runtime) maps a tool name to the absolute path of an executable — for
    example `{ "ffmpeg": "/opt/tools/ffmpeg" }` — which is checked at start and put on the agents' PATH. `adapter` is `claude-json-stream` (the default — the agent process is stopped when an issue

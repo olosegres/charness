@@ -3,7 +3,7 @@
   "version": "3.6.0",
   "license": "MIT",
   "author": "Sergei Solo",
-  "description": "Charness (formerly TelegramCode): Telegram forum-supergroup bot for Claude Code / OpenCode — one topic per task, isolated sessions, per-thread MCP",
+  "description": "Harness for running Claude Code / OpenCode agents in the cloud or on your laptop, controlled from Telegram or Jira.",
   "keywords": [
     "charness",
     "telegramcode",
@@ -20,7 +20,13 @@
     "cli",
     "remote-development",
     "vps",
-    "tmux"
+    "vds",
+    "tmux",
+    "jira",
+    "background-tasks",
+    "cron-jobs",
+    "scheduled-agents",
+    "recurring-tasks"
   ],
   "files": [
     "dist/",

@@ -7,21 +7,24 @@ Charness (formerly TelegramCode) turns Telegram into a terminal for agentic codi
 ## Project
 
 - [GitHub repository](https://github.com/olosegres/charness): source, issues, and releases (MIT license).
-- [README](https://github.com/olosegres/charness#readme): full feature list, quick start, commands, and troubleshooting.
+- [README](https://github.com/olosegres/charness#readme): what Charness is, use cases, quick start, FAQ and the feature map.
+- [Commands](https://github.com/olosegres/charness/blob/main/docs/commands.md): every command, one section each.
+- [Agent backends](https://github.com/olosegres/charness/blob/main/docs/backends.md): Claude Code and OpenCode backends, restart behaviour, the tools the bot injects into agents.
+- [Troubleshooting](https://github.com/olosegres/charness/blob/main/docs/troubleshooting.md): known problems and their fixes.
 - [npm package](https://www.npmjs.com/package/charness): install with `npm install -g charness` (Node 22.12+).
 - [DEVELOPMENT.md](https://github.com/olosegres/charness/blob/main/DEVELOPMENT.md): architecture and local development.
 
 ## Key features
 
-- [Two agent backends](https://github.com/olosegres/charness#common-any-surface): OpenCode (native server API over HTTP+SSE) and Claude Code (tmux and json-stream backends).
+- [Two agent backends](https://github.com/olosegres/charness/blob/main/docs/backends.md): OpenCode (native server API over HTTP+SSE) and Claude Code (tmux and json-stream backends).
 - [One topic per project](https://github.com/olosegres/charness#two-surfaces-group-topics-bot-dm-or-both): forum topics act like terminal tabs, one isolated session each; two topics can share a folder for parallel work.
-- [Voice control](https://github.com/olosegres/charness#telegram): send a voice note, it is transcribed with Whisper and forwarded to the agent.
-- [Scheduled and self-driving runs](https://github.com/olosegres/charness#scheduler-schedule-telegram): `/schedule` arms cron, one-shot, or N-times jobs per topic, and the agent can schedule itself.
+- [Voice control](https://github.com/olosegres/charness/blob/main/docs/commands.md#stt): send a voice note, it is transcribed with Whisper and forwarded to the agent.
+- [Scheduled and self-driving runs](https://github.com/olosegres/charness/blob/main/docs/commands.md#schedule): `/schedule` arms cron, one-shot, or N-times jobs per topic, and the agent can schedule itself.
 - [Pinned question alerts](https://github.com/olosegres/charness#telegram): when the agent asks a question the bot pins it, so even a muted topic notifies you once.
-- [Raw terminal](https://github.com/olosegres/charness#raw-terminal-terminal-telegram): `/terminal` binds a topic to a real shell in the project folder.
-- [Restart-safe sessions](https://github.com/olosegres/charness#restart-behaviour): sessions survive both a bot restart and an agent-server restart.
-- [Agent-facing MCP tools](https://github.com/olosegres/charness#bot-injected-agent-tools): the agent can send files, images, and video back to you, post multiple messages, and schedule itself.
-- [Orchestration skills](https://github.com/olosegres/charness#skills-the-bot-gives-its-agents): every agent the bot starts gets a manager skill for driving work through detached workers, with a watch that fires when a worker exits or hangs.
+- [Raw terminal](https://github.com/olosegres/charness/blob/main/docs/commands.md#terminal): `/terminal` binds a topic to a real shell in the project folder.
+- [Restart-safe sessions](https://github.com/olosegres/charness/blob/main/docs/backends.md#restart-behaviour): sessions survive both a bot restart and an agent-server restart.
+- [Agent-facing MCP tools](https://github.com/olosegres/charness/blob/main/docs/backends.md#bot-injected-agent-tools): the agent can send files, images, and video back to you, post multiple messages, and schedule itself.
+- [Orchestration skills](https://github.com/olosegres/charness/blob/main/docs/commands.md#skills-the-bot-gives-its-agents): every agent the bot starts gets a manager skill for driving work through detached workers, with a watch that fires when a worker exits or hangs.
 
 ## Install
 

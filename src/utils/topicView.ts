@@ -25,7 +25,7 @@ export const defaultTopicView: TopicView = 'stream';
 
 /**
  * @description The typed `/verbosity` spelling of each view — the words the
- * public README documents (`/verbosity stream|stream_answers|answers`).
+ * public command reference (`docs/commands.md`) documents (`/verbosity stream|stream_answers|answers`).
  */
 export const topicViewArguments: Readonly<Record<TopicView, string>> = {
   stream: 'stream',
