@@ -70,6 +70,21 @@ export const bindPickerCallbacks: BindPickerCallbacks = {
  * `callbacks` re-targets the buttons (the `/topic` wizard's, which adds a «cancel» row at the bottom); the layout
  * stays the one `/bind` has.
  */
+/**
+ * The keyboards {@link buildBindKeyboard} built with `/bind`'s own callbacks, by identity of their `reply_markup`: a copy of
+ * the extra that carries one (a larger object spread from it) still holds the same markup, so a send is recognised as a
+ * `/bind` picker wherever it was composed.
+ */
+const bindPickerMarkups = new WeakSet<object>();
+
+/**
+ * @description Whether a send's `extra` carries a `/bind` picker — the keyboard of `/bind`, of the «not bound» replies and of
+ * the topic-created welcome — and not another keyboard, nor the `/topic` wizard's re-targeted copy of the same layout.
+ */
+export function checkIsBindPickerExtra(extra: object): boolean {
+  return 'reply_markup' in extra && typeof extra.reply_markup === 'object' && extra.reply_markup !== null && bindPickerMarkups.has(extra.reply_markup);
+}
+
 export function buildBindKeyboard(
   subdirs: readonly string[],
   page: number = 0,
@@ -114,5 +129,7 @@ export function buildBindKeyboard(
     rows.push([Markup.button.callback(callbacks.cancelButton.label, callbacks.cancelButton.callback)]);
   }
 
-  return Markup.inlineKeyboard(rows);
+  const keyboard = Markup.inlineKeyboard(rows);
+  if (callbacks === bindPickerCallbacks) bindPickerMarkups.add(keyboard.reply_markup);
+  return keyboard;
 }

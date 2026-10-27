@@ -135,7 +135,8 @@ import {
 } from './connectors/telegram/timezonePicker';
 import { recomputeSchedulesForTimezoneChange } from './scheduler/timezoneRecompute';
 import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir } from './validation';
-import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bindPageNoopCallback, buildBindKeyboard } from './connectors/telegram/bindPicker';
+import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bindPageNoopCallback, buildBindKeyboard, checkIsBindPickerExtra } from './connectors/telegram/bindPicker';
+import { OpenBindMessages } from './connectors/telegram/openBindMessages';
 import { buildTopicLink, createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
 import { getCallbackMessageId } from './connectors/telegram/commands/callbackMessage';
 import { answerCallbackQuerySafely } from './connectors/telegram/commands/callbackToast';
@@ -2786,6 +2787,12 @@ const awaitingFolderName = new Set<string>();
 const bindPickerMessageIds = new Map<string, number>();
 /** The `/bind` picker messages a bind or a leave holds (in flight or done), so a second tap on the same keyboard acts on nothing again. */
 const bindPickerClaims = new BindPickerClaims();
+/**
+ * The messages open in each topic that offer a bind or ask for a folder's name (every `/bind` picker, the «not bound» replies
+ * that carry one, the «create new folder» prompt): any bind or leave of the topic deletes them all — see
+ * {@link closeOpenBindMessages}. In memory: a picker sent before a restart is not known, and only its own tap removes it.
+ */
+const openBindMessages = new OpenBindMessages();
 
 /** Max sessions shown in a `/sessions` list (Telegram-friendly, plan S3). */
 const sessionsDisplayLimit = 10;
@@ -3754,11 +3761,16 @@ async function replyToThread(
     return options.unpaced ? sendUnpaced(key, send) : enqueueSend(key, send);
   };
 
-  try {
-    const sent = await sendOnce(buildSendExtra(key, extra));
+  // A sent message is tracked for `/clear_messages`, and a `/bind` picker is remembered to be closed by the next bind or leave.
+  const trackSent = async (sent: unknown): Promise<number> => {
     const messageId = (sent as { message_id: number }).message_id;
     await state.pushMessageId(key, messageId);
+    if (checkIsBindPickerExtra(extra)) openBindMessages.remember(keyToString(key), messageId);
     return messageId;
+  };
+
+  try {
+    return await trackSent(await sendOnce(buildSendExtra(key, extra)));
   } catch (e) {
     // Markdown parse failure fallback. Several `t(...)` templates interpolate
     // user-controlled content (subdir names, branch names, error strings)
@@ -3778,10 +3790,7 @@ async function replyToThread(
       const plainExtra = { ...(extra as Record<string, unknown>) };
       delete plainExtra.parse_mode;
       try {
-        const sent = await sendOnce(buildSendExtra(key, plainExtra));
-        const messageId = (sent as { message_id: number }).message_id;
-        await state.pushMessageId(key, messageId);
-        return messageId;
+        return await trackSent(await sendOnce(buildSendExtra(key, plainExtra)));
       } catch (e2) {
         await handleSendError(key, e2);
         return null;
@@ -6359,7 +6368,19 @@ async function replyToBindResult(key: SessionKey, result: ApplyBindingResult, no
  * resolved `false`: older than 48 hours, say) loses at least its buttons.
  */
 async function removeBindPicker(key: SessionKey, pickerMessageId: number): Promise<void> {
+  openBindMessages.forget(keyToString(key), pickerMessageId);
   if (!await deleteThreadMessage(key, pickerMessageId)) await editThreadKeyboard(key, pickerMessageId, null, 'bind');
+}
+
+/**
+ * @description Delete every message still open in the topic that offers a bind or asks for a folder's name — each `/bind`
+ * picker (every plain message in an unbound topic posted another), the «not bound» replies, the «send the folder name»
+ * prompt — once the topic is bound or has left its folder, whichever way that happened (a tap, a typed `/bind <folder>`, the
+ * bot's own auto-bind, a leave): their text is no longer true, and a tap on a stale one would rebind the topic. A message
+ * the bot has no record of (sent before a restart) is not touched.
+ */
+async function closeOpenBindMessages(key: SessionKey): Promise<void> {
+  for (const messageId of openBindMessages.take(keyToString(key))) await removeBindPicker(key, messageId);
 }
 
 /**
@@ -7044,6 +7065,9 @@ async function sendBindingWelcome(key: SessionKey, subdir: string, notes: Bindin
     parse_mode: 'Markdown',
     ...buildStartAgentKeyboard(),
   });
+  // Every bind ends in this welcome, so every bind sweeps here — after the welcome, whose appearance must not wait for the
+  // deletions (each is a paced send): whatever pickers are still open in the topic are stale now.
+  await closeOpenBindMessages(key);
 }
 
 // `open_sessions` callback wires the [📋 Resume…] button to the `/sessions`
@@ -10222,7 +10246,9 @@ bot.action(bindCreateFolderCallback, async (ctx) => {
   }
   await ctx.answerCbQuery(t('bind.create_cb'));
   armFolderCreation(key, pickerMessageId);
-  await replyToThread(key, t('bind.create_prompt'));
+  // Remembered like a picker: the bind this question leads to deletes it (a refused name keeps it, the question stays open).
+  const promptMessageId = await replyToThread(key, t('bind.create_prompt'));
+  if (promptMessageId !== null) openBindMessages.remember(keyToString(key), promptMessageId);
 });
 
 // «Leave current dir» — the folded-in `/unbind`, shown only in a bound topic.
@@ -10241,6 +10267,7 @@ bot.action(bindLeaveCurrentCallback, async (ctx) => {
     await answerCallbackQuerySafely(ctx);
     await unbindThread(key);
     if (pickerMessageId !== null) await removeBindPicker(key, pickerMessageId);
+    await closeOpenBindMessages(key);
     return true;
   });
   if (run === 'busy') await ctx.answerCbQuery(t('cb.bind_picker_used'));

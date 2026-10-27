@@ -21,10 +21,14 @@ The `/bind` picker is now one-shot: once a folder is bound through it (a tap or 
 is deleted — its «not bound, pick from the list» text would no longer be true — so an old tap cannot rebind the topic, and a second tap landing while the
 first is still binding (on a folder, «create new folder» or «Leave current dir») is told «This picker was already used.» instead of binding or unbinding
 twice; a refused pick, paging and the create-folder prompt leave it in place, and a tap whose answer reaches Telegram too late still does what it asked.
-A «create new folder» wait ends with the bind or the leave that follows it, so the next plain message is never taken for a folder name. When the bot binds a
-non-admin's topic on an admin's first message there, a plain message is answered by the welcome alone, without the extra «bound, run /claude» hint, and a
+A «create new folder» wait ends with the bind or the leave that follows it, so the next plain message is never taken for a folder name, and its «send the folder
+name» prompt is deleted with the bind (a refused name keeps it). Every plain message in an unbound topic posts a new folder picker, so a bind or a leave — by a tap,
+a typed `/bind <folder>` or the bot's own auto-bind — deletes ALL the pickers still open in that topic, not only the tapped one: no stale one is left to rebind it.
+When the bot binds a non-admin's topic on an admin's first message there, a plain message is answered by the welcome alone, without the extra «bound, run /claude» hint, and a
 start phrase like `claude` still starts the agent; the topic is then stored under the matched folder's own name, never under the member's spelling. The
 removed texts are gone from all 12 languages, the new rows and the toast are in all 12.
+A topic you create whose name matches no folder now remembers that name for 24 hours: the folder picker you bind it through keeps it (the «also used by» row of a
+later topic on that folder names it), and if a folder with that name appears meanwhile, your next message in the topic binds it by itself.
 
 **`/task_agents` in General sets how many task agents may work at once — a number from the picker or any number you type.**
 It opens a one-shot picker (5 / 10 / 15 / 20 / 30 / No limit, the value in force marked ✓) whose tap turns it into its confirmation;

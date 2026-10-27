@@ -13,7 +13,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { BIND_PAGE_SIZE, buildBindKeyboard, type BindPickerCallbacks } from '../connectors/telegram/bindPicker';
+import { BIND_PAGE_SIZE, buildBindKeyboard, checkIsBindPickerExtra, type BindPickerCallbacks } from '../connectors/telegram/bindPicker';
 
 /** Wire identifiers the `bot.action(...)` handlers match — must stay in lockstep. */
 const leaveCallback = 'bindLeaveCurrent';
@@ -106,5 +106,31 @@ describe('buildBindKeyboard — re-targeted callbacks (the /topic wizard)', () =
     assert.deepEqual(getRowCallbacks(withCancel, rows.length - 1), ['wiz_cancel']);
     assert.deepEqual(getRowCallbacks(withCancel, rows.length - 2), ['bind_page_noop', 'wiz_page_1'], 'the nav row stays above it');
     assert.ok(!getAllCallbacks(buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, false, wizardCallbacks)).includes('wiz_cancel'));
+  });
+});
+
+describe('checkIsBindPickerExtra — which sends are /bind pickers', () => {
+  const subdirs = ['alpha', 'beta'];
+
+  it('the keyboard /bind builds is one, as sent and as spread into a larger extra (the /help text sends it with a parse mode)', () => {
+    const keyboard = buildBindKeyboard(subdirs);
+    assert.equal(checkIsBindPickerExtra(keyboard), true);
+    assert.equal(checkIsBindPickerExtra({ parse_mode: 'Markdown', ...keyboard }), true);
+  });
+
+  it('the /topic wizard\'s picker is not: it belongs to the wizard, which edits and ends it itself', () => {
+    const wizardKeyboard = buildBindKeyboard(subdirs, 0, BIND_PAGE_SIZE, false, {
+      getFolderCallback: (_subdir, index) => `wiz_folder_${index}`,
+      getPageCallback: (page) => `wiz_page_${page}`,
+      createFolderCallback: 'wiz_create',
+    });
+    assert.equal(checkIsBindPickerExtra(wizardKeyboard), false);
+  });
+
+  it('a send with no keyboard, or another keyboard, is not', () => {
+    assert.equal(checkIsBindPickerExtra({}), false);
+    assert.equal(checkIsBindPickerExtra({ parse_mode: 'Markdown' }), false);
+    assert.equal(checkIsBindPickerExtra({ reply_markup: { inline_keyboard: [[{ text: 'x', callback_data: 'y' }]] } }), false);
+    assert.equal(checkIsBindPickerExtra({ reply_markup: null }), false);
   });
 });
