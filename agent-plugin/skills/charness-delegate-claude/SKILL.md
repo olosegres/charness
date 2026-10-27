@@ -10,8 +10,11 @@ A worker is `claude -p`: one turn per process, the conversation kept between run
 
 ## Account, model, effort
 
-- Call `claude_profiles` with the worker's model. Start the worker with `CLAUDE_CONFIG_DIR=<configDir>` of the
-  `recommended` profile (nothing when it is null); without it the worker drains YOUR account.
+- New worker: call `claude_profiles` with the worker's model and no `currentProfile`. Start the worker with
+  `CLAUDE_CONFIG_DIR=<configDir>` of the `recommended` profile (nothing when its `configDir` is null); without it
+  the worker drains YOUR account. The bot picks the account whose weekly limit resets soonest.
+- `recommended: null`: no account is usable now. Do not launch; `schedule_create` with `onceAt` = `nextAvailable.at`
+  and a prompt that stands on its own (plan path, scope, what to launch), then end the turn.
 - Confirm the login under that directory: `env -u ANTHROPIC_API_KEY claude auth status --text`.
 - Role defaults, unless the user names others:
   - builder (code, tests, debugging, live runs): `--model sonnet --effort xhigh`;
@@ -53,8 +56,8 @@ echo $! > "<run-dir>/pid"
   `--add-dir "<that folder>"` and check that the `init` event's `skills` lists every skill the brief names.
 3. Check the PID: `ps -o args= -p "$(cat "<run-dir>/pid")"` must show `claude -p … <uuid>`. If it does not (the CLI
    handed over to a new process), take it from `pgrep -f "^claude -p .*<uuid>"` and write that into the pid file.
-4. Record the UUID, checkout and run directory in the plan, then arm the watch check from `charness-manager`
-   with this PID and run directory.
+4. Record the UUID, the profile name you launched on, the checkout and the run directory in the plan, then arm the
+   watch check from `charness-manager` with this PID and run directory.
 
 ## Watch and finish
 
@@ -69,7 +72,11 @@ echo $! > "<run-dir>/pid"
 - Confirm the old PID is gone, then repeat the launch with `--resume "<uuid>"` instead of `--session-id`, a new
   brief and new log files (`events-2.jsonl`, …), and arm a new check. Never `--continue` or `--fork-session`.
 - Keep the model, effort and flags of the first run.
-- A run rejected on a usage limit ("You've hit your session limit"): resume the same session on the profile
-  `claude_profiles` recommends now, or after the reset.
+- The account: call `claude_profiles` with `currentProfile` = the profile name recorded at launch; the worker stays on
+  it unless it can no longer run. Launch under the `recommended` profile's `configDir`, record that name.
+- A run rejected on a usage limit ("You've hit your session limit"): call `claude_profiles` with `currentProfile` and
+  `isStoppedByLimit: true`, and resume the SAME session at once under the `recommended` profile — never wait while an
+  account is usable. `recommended: null` → `schedule_create` with `onceAt` = `nextAvailable.at` and a prompt that
+  stands on its own (resume this session, call `claude_profiles` again).
 - To stop a worker: confirm the PID is that worker (`ps -o args= -p <pid>`), `kill -TERM <pid>`, confirm it is
   gone. Never kill by name, never a process you did not start.

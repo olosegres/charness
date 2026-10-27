@@ -237,6 +237,24 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     assert.ok(offered.has('schedule_create') && offered.has('claude_profiles'), 'the tools the manager leans on');
   });
 
+  it('every claude_profiles input the shipped skills name is one the tool takes', () => {
+    const deps: SchedulerMcpDeps = {
+      ...createDigestDeps(),
+      listClaudeProfiles: async ({ model }) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }),
+    };
+    const takenInputs = getBotMcpToolDefinitions(deps, 'telegram').find((definition) => definition.name === 'claude_profiles')?.inputKeys ?? [];
+    assert.deepEqual(takenInputs, ['currentProfile', 'isStoppedByLimit', 'model']);
+    const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
+    const resumeInputs = takenInputs.filter((input) => input !== 'model');
+    const namedInputs = new Set<string>();
+    for (const folder of fs.readdirSync(skillsDir)) {
+      const text = fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');
+      for (const input of resumeInputs) if (text.includes(input)) namedInputs.add(input);
+      assert.doesNotMatch(text, /isStoppedBy(?!Limit)|currentProfil(?!e)/, `${folder} misspells a claude_profiles input`);
+    }
+    assert.deepEqual([...namedInputs].sort(), ['currentProfile', 'isStoppedByLimit'], 'the skills teach the resume inputs');
+  });
+
   it('changes when the instructions change or a tool is added, renamed, re-described or re-shaped; registration order does not matter', () => {
     const base = [
       { name: 'answer_request', title: 'Answer a request', description: 'Send your answer', inputKeys: ['body', 'kind', 'requestId'] },

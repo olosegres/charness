@@ -66,7 +66,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
   or plan path, PID, session id, run directory, and "read the result, decide, then cancel this check".
 - The first failure is ALSO the "worker finished" signal. On the wake read the worker's result first (its final
   event, its exit, the end of its log), then decide: finished → the next step of the loop; stalled → look at its
-  last tool call, stop it, resume the same session; stopped by a usage limit → resume it on another account.
+  last tool call, stop it, resume the same session; stopped by a usage limit → resume it at once on another account
+  (Accounts and usage limits).
 - Then cancel the check (`schedule_list` → `schedule_cancel`) — that also unpins its alert, so a finished worker
   leaves nothing pinned. A new run gets a new check.
 - Never build your own watcher: no sleep loop, `CronCreate`, `ScheduleWakeup`, background job or tmux pane. They
@@ -75,7 +76,7 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 ## Between wakes
 
 - After launching a worker and arming its check, write the worker state into the plan or draft (PID, session id,
-  run directory, scope, check name), then END your turn. The bot stops an idle agent process and resumes the
+  account profile name, run directory, scope, check name), then END your turn. The bot stops an idle agent process and resumes the
   conversation when the check wakes it; you lose nothing that is written down.
 - Start workers with `setsid nohup` (the delegate skills show the command), so stopping your own process never
   takes a worker down.
@@ -111,10 +112,14 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 ## Accounts and usage limits
 
 - Before every Claude worker launch call `claude_profiles` with the worker's model and start the worker with
-  `CLAUDE_CONFIG_DIR=<configDir>` (nothing when it is null). Never launch on an account billed to API credits
-  unless the user asked.
-- A worker stopped by a usage limit resumes its SAME session on the account `claude_profiles` now recommends, or
-  after the reset — never a fresh worker, which would redo the work.
+  `CLAUDE_CONFIG_DIR=<configDir>` of `recommended` (nothing when it is null). A new worker goes to the account whose
+  weekly limit resets soonest. Never launch on an account billed to API credits unless the user asked.
+- Record the profile name beside the worker's session id. Every resume calls `claude_profiles` with
+  `currentProfile` = that name, so a warm worker stays on its account.
+- A worker stopped by a usage limit resumes its SAME session at once, never a fresh worker (which would redo the
+  work): call `claude_profiles` with `currentProfile` and `isStoppedByLimit: true` and resume under the account it
+  recommends. `recommended: null` → nothing is usable: `schedule_create` a one-off resume (`onceAt` =
+  `nextAvailable.at`) whose prompt stands on its own.
 - Your own usage limit is the bot's business: it waits or switches and then wakes you.
 
 ## Talking to the user
