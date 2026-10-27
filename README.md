@@ -288,8 +288,9 @@ so one account's usage limit does not stop every topic.
   `⛔ at its limit until …` and is skipped by the recommendation below.
 - **Another account takes over on a limit.** When a topic's account hits a
   usage limit the bot looks at the [fallback chain](#usage-limits-and-the-fallback-models-limits-and-limits_autoswitch);
-  without one it ranks the other signed-in profiles by headroom on the windows
-  the topic's model drains (fresh figures, not marked limited). The limit
+  without one it moves the topic to the signed-in profile whose weekly limit resets
+  soonest (fresh figures, not marked limited, below 100 % on the windows the topic's model
+  drains and with the five-hour window under 90 % — the order a new agent's account is picked in, see below). The limit
   notice carries «🔁 Switch to <entry>» buttons, best first: a tap moves the
   topic there (the running session is restarted under the new account with the
   same conversation), drops the wait for the reset and tells the agent to
@@ -317,16 +318,33 @@ so one account's usage limit does not stop every topic.
 - **Which account for a child process.** An agent that launches a detached
   `claude` (a worker, a reviewer) asks the bot's `telegramBot` MCP tool
   `claude_profiles` — optionally with the model it will run — and gets every
-  profile with its windows plus `recommended`: the signed-in, unlimited profile
-  with the most headroom (the session window and the shared weekly window bound
-  every model; Fable additionally drains its own weekly window) — never an
-  account billed to API credits. It then
+  profile with its windows plus `recommended`. A **new** agent goes to the usable
+  profile whose weekly limit resets soonest, so what would burn soonest is spent
+  first; usable means signed in, not marked limited, below 100 % on the windows the
+  model drains (the session window and the shared weekly window bound every model;
+  Fable additionally drains its own weekly window, and Fable's window at 100 % takes
+  out Fable only) and the five-hour window under 90 % — a profile above that waits,
+  the next reset is taken. Resets less than a minute apart count as one moment and
+  the lower five-hour percent decides; an unknown reset ranks after every known
+  one. An account billed to API credits is never picked for a new agent, nor is one
+  whose entries in `/limits_autoswitch` are all left out. A **resumed** worker
+  passes `currentProfile` (the profile it last ran on) and stays on it unless the
+  account is signed out, marked limited, out of credits or at 100 % on a window
+  the model drains; the 90 % ceiling does not apply to it. One that broke off on a
+  usage limit passes `isStoppedByLimit` too: the bot re-reads that account's usage
+  and leaves it out whatever the figures say, and the worker resumes the same
+  session at once on the answer. With nothing usable `recommended` is `null` and
+  `nextAvailable` names the account and the instant that frees up first, for a
+  one-off resume. The first line of the answer states why. The agent then
   starts the child with `CLAUDE_CONFIG_DIR=<configDir>` (`null` = the default
   profile: set nothing). The same answer from a shell, for a worker without
-  MCP: `charness claude-profiles [--best] [--model <name>] [--json]` —
-  `--best` prints just the directory (an empty line for the default), so
+  MCP: `charness claude-profiles [--best] [--model <name>] [--current <name>
+  [--stopped-by-limit]] [--json]` —
+  `--best` prints just the directory (an empty line for the default; exit 1 and
+  `next: …` on stderr when nothing is usable), so
   `CLAUDE_CONFIG_DIR="$(charness claude-profiles --best --model fable)"`
-  works as is; it reads the bot's cache off `DATA_DIR/state.json`.
+  works as is; it reads the bot's cache off `DATA_DIR/state.json` and cannot
+  re-read an account's usage, so `--stopped-by-limit` only leaves the account out.
 
 #### An account billed to API credits (Claude Console)
 
@@ -368,7 +386,8 @@ balance), so the bot never uses it without you choosing it.
   subscription login shows as a subscription.
 - **Never used by itself.** It has no windows, so to every headroom rule it
   would look inexhaustible: the `claude_profiles` recommendation (and
-  `charness claude-profiles --best`) never names it, the within-Claude switch
+  `charness claude-profiles --best`) never picks it for a new agent (a worker
+  already running on it stays), the within-Claude switch
   never offers it, and «🔄 Fill from connected» in `/limits_autoswitch` puts it
   LAST in the fallback list and left out of automatic switching (🚫). To use it,
   tap it on the `/limits` board (`Claude · console 💳`) — or include its entry
@@ -433,7 +452,7 @@ and the two settings (auto switch, wait for the reset):
   automatic switching and from the notice's switch buttons. A connected
   provider (say OpenAI on OpenCode) can stay usable by hand through `/model`
   while the bot never moves a limited topic onto it. With an EMPTY chain the
-  bot still ranks the other signed-in Claude accounts by headroom; once the
+  bot still ranks the other signed-in Claude accounts by the soonest weekly reset; once the
   chain has entries, only its ✅ entries count — all of them left out means
   no switch, the wait stands.
 - **Entries.** A Claude account profile (`/accounts`) with an optional model

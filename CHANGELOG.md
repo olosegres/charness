@@ -227,6 +227,15 @@ a short voice jump ahead of a longer one sent before it from another topic; now 
 waits for it as long as its turn takes instead of giving up after the time its own length needs. A voice the bot has
 stopped waiting for is no longer recognised in vain.
 
+**Agents now launch workers on the Claude account whose weekly limit resets soonest, keep a resumed worker on its own account, and move a worker stopped by a limit to another account at once.**
+Before, a worker (or a topic whose account hit its limit, with no `/limits_autoswitch` list) went to the account with the most room left, so an account about to
+expire its week unused sat idle while the one with a fresh week took the work. Now a new worker starts on the usable account that resets its weekly window
+first (an account whose five-hour window is at 90 % or more waits; Fable's own window takes out only Fable), a resumed worker stays on the account it
+ran on, and one that broke off on a usage limit is resumed on another account straight away instead of waiting. When no account is usable the answer says
+which one frees up first and when, so the manager schedules a single resume for that moment. An account switched off in `/limits_autoswitch` is never picked
+for a new worker, and one billed to API credits never is either. `charness claude-profiles` takes `--current <name>` and `--stopped-by-limit` for the same,
+and a topic stopped by a limit with no list of its own now moves to the account that resets soonest rather than the roomiest.
+
 ## 3.6.0 — 2026-10-24
 
 **If the agent's background work is lost anyway, the agent is told and the topic gets one line.** When a Claude process
