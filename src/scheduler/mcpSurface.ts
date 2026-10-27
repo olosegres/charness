@@ -15,6 +15,7 @@ import type { StateStore } from '../state';
 import { openCodeAdapterName } from '../adapters/adapterNames';
 import { keyFromString, tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
 import { checkIsBotSkillsEnabled } from '../utils/botSkills';
+import { claudeProfileNameMaxLength } from '../utils/claudeProfiles';
 import { describeClaudeLaunchOutcome, type ClaudeProfilesReport } from '../utils/claudeUsage';
 import type { SendFilesToThread } from '../utils/fileSendService';
 import { formatIsoLocalOffset } from '../utils/isoTimestamp';
@@ -157,7 +158,7 @@ function buildTelegramOrchestrationInstruction(isBotSkillsEnabled: boolean): str
     : `${orchestrationInstructionHead} schedule_create to watch EACH worker — ${workerWatchRecipeText}`;
 }
 const claudeProfilesInstruction =
-  '• Before you start or resume a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one to run on (`recommended`: the account whose weekly limit resets soonest is spent first). A new child: no `currentProfile`; a resumed one: the profile it last ran on, plus `isStoppedByLimit: true` when it broke off on a usage limit. Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits. `recommended: null` → nothing is usable now: schedule one resume at `nextAvailable.at`.';
+  '• Before you start or resume a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one to run on (`recommended`: the account whose weekly limit resets soonest is spent first). A new child: no `currentProfile`; a resumed one: the profile it last ran on, plus `isStoppedByLimit: true` when it broke off on a usage limit. Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits. `recommended: null` → nothing is usable now: schedule one resume at `nextAvailable.at` (null too: tell the user, retry once in about 30 minutes).';
 
 /** What the `claude_profiles` tool asks the bot: the model, and for a resumed session the account it last ran on. */
 export interface ClaudeProfilesQuery {
@@ -1685,7 +1686,7 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
         'pays per request from a Claude Console balance: it has no windows and is NEVER picked for a new agent — do ' +
         'not launch a child on it unless the operator asked you to. `recommended: null` means nothing is usable now: ' +
         '`nextAvailable` names the account and instant that frees up first — schedule ONE resume at that time instead ' +
-        'of retrying. Call it BEFORE launching or resuming a child `claude` and start the child with ' +
+        'of retrying; when `nextAvailable` is null too, tell the user and retry once in about 30 minutes. Call it BEFORE launching or resuming a child `claude` and start the child with ' +
         'CLAUDE_CONFIG_DIR=<configDir> in its environment — configDir null means the default profile: set nothing. ' +
         'Without the variable the child inherits the account of this very session.',
       inputSchema: {
@@ -1696,7 +1697,7 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
           .describe('The model the child will run (e.g. "fable", "opus", "sonnet"); decides whether the Fable weekly window counts besides the shared ones. Omit for the shared windows.'),
         currentProfile: z
           .string()
-          .max(32)
+          .max(claudeProfileNameMaxLength)
           .optional()
           .describe('The profile the session you RESUME last ran on (the `name` you recorded at its launch); omit for a new agent.'),
         isStoppedByLimit: z
@@ -1707,6 +1708,9 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
     },
     async (args) => {
       const currentProfile = args.currentProfile?.trim() || null;
+      if (args.isStoppedByLimit === true && currentProfile === null) {
+        return errorResult('isStoppedByLimit needs currentProfile — the profile the session that hit the limit last ran on.');
+      }
       const report = await listClaudeProfiles({ model: args.model?.trim() || null, currentProfile, isStoppedByLimit: args.isStoppedByLimit === true });
       return textResult(`${buildClaudeProfilesVerdict(report, currentProfile)}\n${JSON.stringify(report, null, 1)}`);
     },

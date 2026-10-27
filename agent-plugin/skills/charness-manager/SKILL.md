@@ -119,7 +119,9 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 - A worker stopped by a usage limit resumes its SAME session at once, never a fresh worker (which would redo the
   work): call `claude_profiles` with `currentProfile` and `isStoppedByLimit: true` and resume under the account it
   recommends. `recommended: null` → nothing is usable: `schedule_create` a one-off resume (`onceAt` =
-  `nextAvailable.at`) whose prompt stands on its own.
+  `nextAvailable.at`) whose prompt stands on its own. `nextAvailable` null too → no account names a time it frees
+  up: ask the user a native question (nothing can run) and `schedule_create` the same one-off retry about 30
+  minutes ahead.
 - Your own usage limit is the bot's business: it waits or switches and then wakes you.
 
 ## Talking to the user

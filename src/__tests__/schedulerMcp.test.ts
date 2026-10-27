@@ -60,6 +60,7 @@ import {
   type SchedulerMcpHandle,
   type SchedulerMcpDeps,
 } from '../scheduler/mcpSurface';
+import { claudeProfileNameMaxLength } from '../utils/claudeProfiles';
 import { resetLegacyNameState } from '../legacyNames';
 import { request, type ClientRequest } from 'node:http';
 import { connect, Server } from 'node:net';
@@ -253,6 +254,16 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
       assert.doesNotMatch(text, /isStoppedBy(?!Limit)|currentProfil(?!e)/, `${folder} misspells a claude_profiles input`);
     }
     assert.deepEqual([...namedInputs].sort(), ['currentProfile', 'isStoppedByLimit'], 'the skills teach the resume inputs');
+  });
+
+  it('both manager skills say what to do when nothing is usable AND no account names when it frees up', () => {
+    const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
+    for (const folder of ['charness-delegate-claude', 'charness-manager']) {
+      const text = fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');
+      assert.match(text, /`nextAvailable`\s+(?:is\s+)?null\s+too/, `${folder} covers a null nextAvailable`);
+      assert.match(text, /native\s+question/, `${folder} sends the user a native question`);
+      assert.match(text, /30\s+minutes/, `${folder} schedules the retry`);
+    }
   });
 
   it('changes when the instructions change or a tool is added, renamed, re-described or re-shaped; registration order does not matter', () => {
@@ -1013,15 +1024,20 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       listClaudeProfiles: async (query) => {
         claudeProfilesCalls.push(query);
         const { model, currentProfile, isStoppedByLimit } = query;
-        const isNothingUsable = model === 'exhausted';
-        const pickReason = isNothingUsable ? 'none' : currentProfile === null ? 'soonestWeeklyReset' : isStoppedByLimit ? 'movedFromLimited' : 'warm';
+        const isNothingUsable = model === 'exhausted' || model === 'nowhere';
+        const isWarmAccountGone = model === 'gone';
+        const pickReason = isNothingUsable ? 'none'
+          : currentProfile === null ? 'soonestWeeklyReset'
+            : isStoppedByLimit ? 'movedFromLimited'
+              : isWarmAccountGone ? 'movedFromUnavailable'
+                : 'warm';
         const recommended = isNothingUsable ? null : pickReason === 'warm' ? currentProfile : model === 'fable' ? 'work' : 'default';
         return {
           model,
           relevantBuckets: ['session', model === 'fable' ? 'weekly_scoped' : 'weekly_all'],
           recommended,
           pickReason,
-          nextAvailable: isNothingUsable ? { profile: 'work', at: '2026-10-20T10:00:00.000Z' } : null,
+          nextAvailable: model === 'exhausted' ? { profile: 'work', at: '2026-10-20T10:00:00.000Z' } : null,
           profiles: [
             { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, isEligible: true, headroomPercent: 19, isRecommended: recommended === 'default' },
             { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, isEligible: true, headroomPercent: 90, isRecommended: recommended === 'work' },
@@ -1194,6 +1210,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         assert.ok(tool, `claude_profiles is offered to a ${scope.kind} scope`);
         assert.match(tool.description ?? '', /CLAUDE_CONFIG_DIR/);
         assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ['currentProfile', 'isStoppedByLimit', 'model']);
+        assert.equal((tool.inputSchema.properties?.currentProfile as { maxLength?: number } | undefined)?.maxLength, claudeProfileNameMaxLength, 'a profile name is never longer than the registry allows');
         const [verdict, ...rest] = (await callProfiles(client, { model: 'fable' })).split('\n');
         assert.equal(verdict, 'recommended: work → CLAUDE_CONFIG_DIR=/data/profiles/work (soonest weekly reset)');
         const report = JSON.parse(rest.join('\n')) as { model: string | null; recommended: string | null; pickReason: string; nextAvailable: unknown; profiles: Array<{ name: string }> };
@@ -1213,6 +1230,19 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         );
         const none = await callProfiles(client, { model: 'exhausted' });
         assert.equal(none.split('\n')[0], 'none usable — next: work at 2026-10-20T10:00:00.000Z');
+        assert.equal(
+          (await callProfiles(client, { model: 'gone', currentProfile: 'work' })).split('\n')[0],
+          'recommended: default → default profile, set no CLAUDE_CONFIG_DIR (moved: work can no longer run)',
+          'a warm session whose account can no longer run is reported as moved, not as a new agent',
+        );
+        assert.equal((await callProfiles(client, { model: 'nowhere' })).split('\n')[0], 'none usable — no account names a time it frees up');
+        for (const args of [{ isStoppedByLimit: true }, { isStoppedByLimit: true, currentProfile: '   ' }]) {
+          const refusal = await client.callTool({ name: 'claude_profiles', arguments: args });
+          assert.equal(refusal.isError, true, `${JSON.stringify(args)} is refused: a stop on a limit needs the account that was stopped`);
+          assert.match((refusal.content as Array<{ type: string; text: string }>)[0].text, /isStoppedByLimit needs currentProfile/);
+        }
+        const tooLong = await client.callTool({ name: 'claude_profiles', arguments: { currentProfile: 'x'.repeat(claudeProfileNameMaxLength + 1) } }).catch(() => ({ isError: true }));
+        assert.equal(tooLong.isError, true, 'a name over the registry\'s length is refused at the boundary');
         const noneReport = JSON.parse(none.split('\n').slice(1).join('\n')) as { recommended: string | null; nextAvailable: { profile: string; at: string } | null };
         assert.equal(noneReport.recommended, null);
         assert.deepEqual(noneReport.nextAvailable, { profile: 'work', at: '2026-10-20T10:00:00.000Z' }, 'nextAvailable rides in the JSON');
@@ -1220,15 +1250,16 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         await client.close();
       }
     }
-    assert.deepEqual(fixture.claudeProfilesCalls.slice(0, 6), [
+    const callsOfOneScope: ClaudeProfilesQuery[] = [
       { model: 'fable', currentProfile: null, isStoppedByLimit: false },
       { model: null, currentProfile: null, isStoppedByLimit: false },
       { model: null, currentProfile: 'work', isStoppedByLimit: false },
       { model: null, currentProfile: 'work', isStoppedByLimit: true },
       { model: 'exhausted', currentProfile: null, isStoppedByLimit: false },
-      { model: 'fable', currentProfile: null, isStoppedByLimit: false },
-    ]);
-    assert.equal(fixture.claudeProfilesCalls.length, 10);
+      { model: 'gone', currentProfile: 'work', isStoppedByLimit: false },
+      { model: 'nowhere', currentProfile: null, isStoppedByLimit: false },
+    ];
+    assert.deepEqual(fixture.claudeProfilesCalls, [...callsOfOneScope, ...callsOfOneScope], 'the refused calls never reached the port');
   });
 
   it('send_messages_to_user routes each message to the scope-resolved thread', async () => {

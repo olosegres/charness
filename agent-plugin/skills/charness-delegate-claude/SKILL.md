@@ -14,7 +14,9 @@ A worker is `claude -p`: one turn per process, the conversation kept between run
   `CLAUDE_CONFIG_DIR=<configDir>` of the `recommended` profile (nothing when its `configDir` is null); without it
   the worker drains YOUR account. The bot picks the account whose weekly limit resets soonest.
 - `recommended: null`: no account is usable now. Do not launch; `schedule_create` with `onceAt` = `nextAvailable.at`
-  and a prompt that stands on its own (plan path, scope, what to launch), then end the turn.
+  and a prompt that stands on its own (plan path, scope, what to launch), then end the turn. If `nextAvailable` is
+  null too, no account names a time it frees up: ask the user a native question (nothing can run, no time known) and
+  `schedule_create` a one-off retry about 30 minutes ahead, with such a prompt.
 - Confirm the login under that directory: `env -u ANTHROPIC_API_KEY claude auth status --text`.
 - Role defaults, unless the user names others:
   - builder (code, tests, debugging, live runs): `--model sonnet --effort xhigh`;
@@ -77,6 +79,7 @@ echo $! > "<run-dir>/pid"
 - A run rejected on a usage limit ("You've hit your session limit"): call `claude_profiles` with `currentProfile` and
   `isStoppedByLimit: true`, and resume the SAME session at once under the `recommended` profile — never wait while an
   account is usable. `recommended: null` → `schedule_create` with `onceAt` = `nextAvailable.at` and a prompt that
-  stands on its own (resume this session, call `claude_profiles` again).
+  stands on its own (resume this session, call `claude_profiles` again); `nextAvailable` null too → ask the user a
+  native question and `schedule_create` the same one-off retry about 30 minutes ahead.
 - To stop a worker: confirm the PID is that worker (`ps -o args= -p <pid>`), `kill -TERM <pid>`, confirm it is
   gone. Never kill by name, never a process you did not start.

@@ -335,7 +335,11 @@ so one account's usage limit does not stop every topic.
   and leaves it out whatever the figures say, and the worker resumes the same
   session at once on the answer. With nothing usable `recommended` is `null` and
   `nextAvailable` names the account and the instant that frees up first, for a
-  one-off resume. The first line of the answer states why. The agent then
+  one-off resume (an account a limit just stopped, whose figures show no blocker
+  yet, frees up at its five-hour reset); when no account names a time, the manager
+  asks you and retries in about 30 minutes. The first line of the answer states why:
+  it stays on the warm account, moved (the account stopped on a limit or can no
+  longer run), soonest weekly reset, or none usable. The agent then
   starts the child with `CLAUDE_CONFIG_DIR=<configDir>` (`null` = the default
   profile: set nothing). The same answer from a shell, for a worker without
   MCP: `charness claude-profiles [--best] [--model <name>] [--current <name>
