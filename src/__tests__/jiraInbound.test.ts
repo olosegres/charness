@@ -1968,13 +1968,17 @@ describe('JiraInbound', () => {
     });
 
     it('R22: a poll that succeeds again resets the backoff to the base interval', async () => {
+      // The first poll at once, three failures (the 10 ms base doubled: 20, 40, 80), then healthy polls at the base again.
+      // Without the reset the wait would stay at 80 ms.
+      const expectedWaitsMs = [0, 20, 40, 80, 10, 10];
+      /** Generous: the asked waits add up to ~170 ms; a loaded box may run them late, never asked differently. */
+      const backoffObservationBudgetMs = 10_000;
       let polls = 0;
       const recovering = createInbound({
         pollIntervalMs: 10,
         client: {
           searchIssues: async () => {
             polls += 1;
-            // Three failures (waits 20, 40, 80 ms), then healthy.
             if (polls <= 3) throw new Error('Jira 503');
             return { issues: [] };
           },
@@ -1983,11 +1987,19 @@ describe('JiraInbound', () => {
           ...emptyIssueContext,
         },
       });
+      // The waits the loop ASKS for are asserted, not the machine's scheduling of them (as in the test above): counting polls
+      // in a fixed wall-clock window failed under a loaded suite, when late timers left it at 10 polls instead of a dozen.
+      const requestedWaitsMs: number[] = [];
+      const scheduleNext = recovering['scheduleNext'].bind(recovering);
+      recovering['scheduleNext'] = (delayMs: number) => {
+        requestedWaitsMs.push(delayMs);
+        scheduleNext(delayMs);
+      };
       recovering.start();
-      await waitMs(400);
+      const deadline = Date.now() + backoffObservationBudgetMs;
+      while (requestedWaitsMs.length < expectedWaitsMs.length && Date.now() < deadline) await waitMs(5);
       recovering.stop();
-      // ~140 ms of backoff, then ~10 ms polls: well over a dozen. Without the reset it stays at 80 ms: about five.
-      assert.ok(polls >= 12, `${polls} polls`);
+      assert.deepEqual(requestedWaitsMs.slice(0, expectedWaitsMs.length), expectedWaitsMs);
     });
 
     it('a rejected token stops polling for good; any other failure retries at the next interval', async () => {
