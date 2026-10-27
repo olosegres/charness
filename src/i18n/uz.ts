@@ -696,7 +696,7 @@ export const uzDict: Record<string, string> = {
 
   'cb.access_denied': 'Kirish rad etildi',
   'cb.bind_only_topical': '/bind faqat mavzu mavzularida ishlaydi',
-  'cb.bind_already_bound': 'Allaqachon bog‘langan.',
+  'cb.bind_picker_used': 'Bu tanlov allaqachon ishlatilgan.',
   'cb.binding_to': '{subdir} ga bog‘lanmoqda…',
   'cb.no_active_session': 'Faol seans yo‘q',
   'cb.model_error': 'Xato: {error}',

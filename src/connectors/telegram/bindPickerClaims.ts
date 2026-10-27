@@ -9,7 +9,7 @@ import { buildMessageSnapshotKey } from './commands/callbackMessage';
 export const bindPickerClaimLimit = 200;
 
 /**
- * The `/bind` picker is spent by the bind it leads to, and a bind takes seconds (the folder's facts are probed, the sends
+ * The `/bind` picker is spent by the bind (or the leave) it leads to, and a bind takes seconds (the folder's facts are probed, the sends
  * are paced): a second tap on the same keyboard inside that time must not bind again. A handler claims the picker message
  * in the same synchronous step that decides to act, before its first await, so of two taps landing together exactly one wins;
  * a bind that is refused gives the claim back, and the picker works on.
@@ -32,8 +32,33 @@ export class BindPickerClaims {
     return true;
   }
 
+  /** @description Whether a bind (or a leave) holds the picker message: nothing else may act on it. */
+  has(key: SessionKey, messageId: number): boolean {
+    return this.claimed.has(buildMessageSnapshotKey(key, messageId));
+  }
+
   /** @description Give a claim back: the bind it was for was refused, so the picker stays usable. */
   release(key: SessionKey, messageId: number): void {
     this.claimed.delete(buildMessageSnapshotKey(key, messageId));
+  }
+
+  /**
+   * @description Run `work` holding the picker message. `'busy'`: a bind already holds it, `work` did not run. `'done'`: `work`
+   * resolved `true` — it did what the tap asked, and the picker stays claimed (it is spent). `'undone'`: it resolved `false`
+   * (a refused bind), or threw — the claim goes back and the picker works on, so nothing between the claim and a finished
+   * bind can leave it held for a bind that never happened. The claim is taken before the first await: call this straight
+   * from the handler, with no await in front of it. `messageId` is `null` for a tap Telegram attached no message to: the
+   * work runs, with nothing to claim.
+   */
+  async runClaimed(key: SessionKey, messageId: number | null, work: () => Promise<boolean>): Promise<'busy' | 'done' | 'undone'> {
+    if (messageId === null) return (await work()) ? 'done' : 'undone';
+    if (!this.claim(key, messageId)) return 'busy';
+    let isDone = false;
+    try {
+      isDone = await work();
+      return isDone ? 'done' : 'undone';
+    } finally {
+      if (!isDone) this.release(key, messageId);
+    }
   }
 }

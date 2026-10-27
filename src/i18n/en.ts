@@ -709,7 +709,7 @@ export const enDict: Record<string, string> = {
 
   'cb.access_denied': 'Access denied',
   'cb.bind_only_topical': '/bind only works in topical threads',
-  'cb.bind_already_bound': 'Already bound.',
+  'cb.bind_picker_used': 'This picker was already used.',
   'cb.binding_to': 'Binding to {subdir}…',
   'cb.no_active_session': 'No active session',
   'cb.model_error': 'Error: {error}',

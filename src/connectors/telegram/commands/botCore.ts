@@ -35,7 +35,8 @@ export interface BotCore {
    * edit is no failure; any other failure is logged under `logTag` and answered with `false`.
    */
   editThreadKeyboard: (key: SessionKey, messageId: number, keyboard: InlineKeyboardMarkup | null, logTag: string) => Promise<boolean>;
-  deleteThreadMessage: (key: SessionKey, messageId: number) => Promise<void>;
+  /** Delete a message of the topic; `false` when it stayed (older than 48 hours, already gone, not a topic of Telegram). */
+  deleteThreadMessage: (key: SessionKey, messageId: number) => Promise<boolean>;
   /** Gate a callback or message to an admin of the served group; the topic's key, or `null` when it is refused. */
   authoriseContext: (ctx: Context) => Promise<SessionKey | null>;
   /** Run `fn` with the topic's resolved locale for `t(…)`. */

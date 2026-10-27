@@ -700,7 +700,7 @@ export const ruDict: Record<string, string> = {
 
   'cb.access_denied': 'Доступ запрещён',
   'cb.bind_only_topical': '/bind работает только в тематических тредах',
-  'cb.bind_already_bound': 'Уже привязано.',
+  'cb.bind_picker_used': 'Этот список уже использован.',
   'cb.binding_to': 'Привязываю к {subdir}…',
   'cb.no_active_session': 'Нет активной сессии',
   'cb.model_error': 'Ошибка: {error}',

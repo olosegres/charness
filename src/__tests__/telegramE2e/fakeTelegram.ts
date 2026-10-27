@@ -134,6 +134,11 @@ export class FakeTelegram {
    * handler worked longer than Telegram keeps the query open): the tap's spinner never gets its toast.
    */
   isCallbackAnswerExpired = false;
+  /**
+   * While set, `deleteMessage` is refused the way the Bot API refuses a message it will not delete any more (older than
+   * 48 hours): the message stays.
+   */
+  isMessageDeletionRefused = false;
   /** Whether the bot may create topics (`can_manage_topics`); while unset, `createForumTopic` is refused as the Bot API refuses it. */
   canManageTopics = true;
   /**
@@ -440,6 +445,7 @@ export class FakeTelegram {
         return { ok: true, result: message };
       }
       case 'deleteMessage': {
+        if (this.isMessageDeletionRefused) return { ok: false, error_code: 400, description: 'Bad Request: message can\'t be deleted' };
         const message = this.getMessageOrError(payload);
         if ('ok' in message) return message;
         message.isDeleted = true;

@@ -696,7 +696,7 @@ export const zhDict: Record<string, string> = {
 
   'cb.access_denied': '访问被拒绝',
   'cb.bind_only_topical': '/bind 仅在主题话题中有效',
-  'cb.bind_already_bound': '已经绑定。',
+  'cb.bind_picker_used': '此选择已被使用。',
   'cb.binding_to': '正在绑定到 {subdir}…',
   'cb.no_active_session': '没有活跃会话',
   'cb.model_error': '错误：{error}',

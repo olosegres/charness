@@ -137,9 +137,10 @@ import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir } fr
 import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bindPageNoopCallback, buildBindKeyboard } from './connectors/telegram/bindPicker';
 import { buildTopicLink, createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
 import { getCallbackMessageId } from './connectors/telegram/commands/callbackMessage';
+import { answerCallbackQuerySafely } from './connectors/telegram/commands/callbackToast';
 import { formatSharedTopicList, type SharedTopic } from './connectors/telegram/bindingWelcome';
 import { BindPickerClaims } from './connectors/telegram/bindPickerClaims';
-import { getFreshPendingTopicName, getTrustedPendingTopicName, type PendingTopicName } from './connectors/telegram/pendingTopicName';
+import { getAutoBindTopicName, getFreshPendingTopicName, getTrustedPendingTopicName, type PendingTopicName } from './connectors/telegram/pendingTopicName';
 import { getForumTopicCreatedAction } from './connectors/telegram/forumTopicCreated';
 import {
   getDisconnectPickerKeysForThread,
@@ -2782,7 +2783,7 @@ const awaitingFolderName = new Set<string>();
  * leads to — so a leftover entry of an abandoned attempt is overwritten by the next tap.
  */
 const bindPickerMessageIds = new Map<string, number>();
-/** The `/bind` picker messages a bind in flight (or done) holds, so a second tap on the same keyboard binds nothing again. */
+/** The `/bind` picker messages a bind or a leave holds (in flight or done), so a second tap on the same keyboard acts on nothing again. */
 const bindPickerClaims = new BindPickerClaims();
 
 /** Max sessions shown in a `/sessions` list (Telegram-friendly, plan S3). */
@@ -3879,15 +3880,20 @@ async function editThreadKeyboard(
   }
 }
 
+/**
+ * @description Delete a message of the thread. Resolves `false` when it stayed — older than 48 hours or already gone (both
+ * expected, so nothing is logged), or no Telegram topic's key — which a caller that needs it gone can act on.
+ */
 async function deleteThreadMessage(
   key: SessionKey,
   messageId: number,
-): Promise<void> {
-  if (!checkIsTelegramPrimitiveKey(key, 'deleteThreadMessage')) return;
+): Promise<boolean> {
+  if (!checkIsTelegramPrimitiveKey(key, 'deleteThreadMessage')) return false;
   try {
     await enqueueSend(key, () => bot.telegram.deleteMessage(getTelegramChatId(key), messageId));
+    return true;
   } catch {
-    /* messages older than 48h or already deleted — silently ignore */
+    return false;
   }
 }
 
@@ -6310,8 +6316,12 @@ async function applyBinding(
   const peers = state.listKeysForSubdir(subdir).filter(k => checkIsTelegramKey(k) && keyToString(k) !== keyToString(key));
   const topicName = options.topicName ?? getTrustedPendingTopicName(pendingTopicNames.get(keyToString(key)), Date.now(), PENDING_TOPIC_NAME_TTL_MS);
   await state.setBinding(key, subdir, topicName !== undefined ? { topicName } : {});
-  // Bound: the set-aside name has done its part (an unbound topic is the only reader of it).
-  pendingTopicNames.delete(keyToString(key));
+  // Bound: the set-aside name has done its part (an unbound topic is the only reader of it), and a «create new folder» wait
+  // armed on a picker is over — the next plain message is nobody's folder name any more.
+  const boundKey = keyToString(key);
+  pendingTopicNames.delete(boundKey);
+  awaitingFolderName.delete(boundKey);
+  bindPickerMessageIds.delete(boundKey);
   warmTodoProjects();
 
   const sharedWith = peers.map(describeSharedTopic);
@@ -6344,15 +6354,11 @@ async function replyToBindResult(key: SessionKey, result: ApplyBindingResult, no
  * @description The `/bind` picker is one-shot (§ Inline keyboards): once a folder is bound through it — or the topic left its
  * folder from it — the message is deleted, since its text («not bound, pick from the list», «currently bound: …») is no
  * longer true and the welcome replaces it; a stale tap cannot rebind the topic either. A pick that bound nothing never gets
- * here, and paging or the create-folder prompt leave the picker alone. A message Telegram will not delete any more (older
- * than 48 hours) loses at least its buttons.
+ * here, and paging or the create-folder prompt leave the picker alone. A message that stayed ({@link deleteThreadMessage}
+ * resolved `false`: older than 48 hours, say) loses at least its buttons.
  */
 async function removeBindPicker(key: SessionKey, pickerMessageId: number): Promise<void> {
-  try {
-    await enqueueSend(key, () => bot.telegram.deleteMessage(getTelegramChatId(key), pickerMessageId));
-  } catch {
-    await editThreadKeyboard(key, pickerMessageId, null, 'bind');
-  }
+  if (!await deleteThreadMessage(key, pickerMessageId)) await editThreadKeyboard(key, pickerMessageId, null, 'bind');
 }
 
 /**
@@ -6498,9 +6504,10 @@ async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ 
   if (folder.outcome === 'invalid') return { ok: false };
   if (folder.outcome === 'failed') return { ok: true };
 
-  const result = await applyBinding(key, folder.subdir);
   const kStr = keyToString(key);
+  // Read before the bind: a bind drops it (and the wait) itself; deleted here for a refused one, which does not.
   const pickerMessageId = bindPickerMessageIds.get(kStr);
+  const result = await applyBinding(key, folder.subdir);
   bindPickerMessageIds.delete(kStr);
   if (result.ok && pickerMessageId !== undefined) await removeBindPicker(key, pickerMessageId);
   await replyToBindResult(key, result, { isExistingFolder: folder.alreadyExisted });
@@ -9249,9 +9256,9 @@ bot.on(message('text'), async (ctx) => {
       if (match) {
         try {
           pendingTopicNames.delete(kStr);
-          // The pending entry carries the topic name (cached at creation) — it rides on the binding for the
-          // thread-context preamble (S1).
-          isJustAutoBound = await autoBindTopicByName(key, match, pending.name);
+          // The name rides on the binding for the thread-context preamble (S1): an authorised user's as given, a member's
+          // replaced by the folder's own name — the match is all the bot vets of it.
+          isJustAutoBound = await autoBindTopicByName(key, match, getAutoBindTopicName(pending, match));
         } catch (e) {
           console.warn(`[deferred-autobind] failed for "${match}":`, e);
         }
@@ -10205,8 +10212,14 @@ bot.action(bindCreateFolderCallback, async (ctx) => {
     await ctx.answerCbQuery(t('cb.bind_only_topical'));
     return;
   }
+  const pickerMessageId = getCallbackMessageId(ctx);
+  // A picker a bind (or a leave) holds is spent: a name asked for now would bind a second time.
+  if (pickerMessageId !== null && bindPickerClaims.has(key, pickerMessageId)) {
+    await ctx.answerCbQuery(t('cb.bind_picker_used'));
+    return;
+  }
   await ctx.answerCbQuery(t('bind.create_cb'));
-  armFolderCreation(key, getCallbackMessageId(ctx));
+  armFolderCreation(key, pickerMessageId);
   await replyToThread(key, t('bind.create_prompt'));
 });
 
@@ -10220,10 +10233,15 @@ bot.action(bindLeaveCurrentCallback, async (ctx) => {
     await ctx.answerCbQuery(t('cb.bind_only_topical'));
     return;
   }
-  await ctx.answerCbQuery();
+  // Claimed like a bind: two taps in a row unbind once, and a picker a bind holds is no more a place to leave from.
   const pickerMessageId = getCallbackMessageId(ctx);
-  await unbindThread(key);
-  if (pickerMessageId !== null) await removeBindPicker(key, pickerMessageId);
+  const run = await bindPickerClaims.runClaimed(key, pickerMessageId, async () => {
+    await answerCallbackQuerySafely(ctx);
+    await unbindThread(key);
+    if (pickerMessageId !== null) await removeBindPicker(key, pickerMessageId);
+    return true;
+  });
+  if (run === 'busy') await ctx.answerCbQuery(t('cb.bind_picker_used'));
 });
 
 // `/topic`'s buttons: patterns of their own (`topic_…`), disjoint from the `bind_<subdir>` regex below.
@@ -10236,30 +10254,24 @@ bot.action(/^bind_(.+)$/, async (ctx) => {
     await ctx.answerCbQuery(t('cb.bind_only_topical'));
     return;
   }
-  // The picker is claimed in this synchronous step, before the first await below: a bind takes seconds (the folder's facts
-  // are probed, the sends are paced), and a second tap landing meanwhile must not bind — or welcome — a second time.
-  const pickerMessageId = getCallbackMessageId(ctx);
-  if (pickerMessageId !== null && !bindPickerClaims.claim(key, pickerMessageId)) {
-    await ctx.answerCbQuery(t('cb.bind_already_bound'));
-    return;
-  }
+  // The picker is claimed before any await: a bind takes seconds (the folder's facts are probed, the sends are paced), and a
+  // second tap landing meanwhile must not bind — or welcome — a second time. A bind that does not happen (a refused folder,
+  // a failure on the way) gives the picker back.
   const subdir = ctx.match[1];
-  await ctx.answerCbQuery(t('cb.binding_to', { subdir }));
-  let result: ApplyBindingResult;
-  try {
-    result = await applyBinding(key, subdir);
-  } catch (e) {
-    if (pickerMessageId !== null) bindPickerClaims.release(key, pickerMessageId);
-    throw e;
-  }
-  if (!result.ok) {
-    // Nothing is bound: the picker works on.
-    if (pickerMessageId !== null) bindPickerClaims.release(key, pickerMessageId);
+  const pickerMessageId = getCallbackMessageId(ctx);
+  const run = await bindPickerClaims.runClaimed(key, pickerMessageId, async () => {
+    // A toast that comes too late (the query expired) changes nothing about the bind the person asked for.
+    await answerCallbackQuerySafely(ctx, t('cb.binding_to', { subdir }));
+    const result = await applyBinding(key, subdir);
+    if (!result.ok) {
+      await replyToBindResult(key, result);
+      return false;
+    }
+    if (pickerMessageId !== null) await removeBindPicker(key, pickerMessageId);
     await replyToBindResult(key, result);
-    return;
-  }
-  if (pickerMessageId !== null) await removeBindPicker(key, pickerMessageId);
-  await replyToBindResult(key, result);
+    return true;
+  });
+  if (run === 'busy') await ctx.answerCbQuery(t('cb.bind_picker_used'));
 });
 
 // ─── /language inline picker callbacks ───────────────────────────────────────

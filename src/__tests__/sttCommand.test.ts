@@ -104,7 +104,7 @@ function createFeature(overrides: Partial<SttPorts> = {}) {
       return id;
     },
     editThreadMessage: async (_key, id, text, extra) => { edits.push({ id, text, buttons: buttonsOf(extra) }); return true; },
-    deleteThreadMessage: async (_key, id) => { deleted.push(id); },
+    deleteThreadMessage: async (_key, id) => { deleted.push(id); return true; },
     authoriseContext: async () => (isAuthorised ? key : null),
     withThreadLocale: (_key, fn) => fn(),
     getConfigPath: () => configPath,

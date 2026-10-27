@@ -21,7 +21,13 @@
  *     and a second tap landing while the first is still binding gets a short «already bound», no second welcome
  *   → «Leave current dir» removes the picker it was tapped on as well
  *   → the shared-folder row names a topic by the name the bot saw it made with, else by its link; a name only a non-admin
- *     gave is never written onto a binding (the agent's preamble would carry it).
+ *     gave is never written onto a binding (the agent's preamble would carry it) — not even when the bot binds the topic by
+ *     that name: it stores the folder's own name then
+ *   → a tap whose toast comes too late still binds, and leaves the picker neither held nor usable twice
+ *   → «create new folder» tapped and then a folder tapped (or «Leave current dir»): the folder-name wait is over, the next plain
+ *     message is nobody's folder name; a spent picker refuses «create new folder» and «Leave current dir» as well, and a
+ *     double tap on «Leave current dir» unbinds once
+ *   → a picker Telegram will not delete loses its buttons instead.
  *
  * What the unit tests cover instead: the picker's layout (`bindKeyboard.test.ts`), the folder-name rules (`folderName.test.ts`),
  * what a `forum_topic_created` leads to (`forumTopicCreated.test.ts`). `/topic`'s own greeting: `topicCommandE2e.test.ts`.
@@ -69,12 +75,19 @@ const mainThreadId = 191;
 const peerThreadId = 192;
 /** A group member who is no admin: the bot does not serve them, so a topic they make is not bound at once. */
 const stranger: TelegramUser = { id: 515151, is_bot: false, first_name: 'Stranger' };
-const folders = { first: 'bind-first', second: 'bind-second', auto: 'bind-auto', deferred: 'bind-deferred', phrase: 'bind-phrase', phantom: 'bind-phantom', named: 'bind-named', quiet: 'bind-quiet' } as const;
+const folders = {
+  first: 'bind-first', second: 'bind-second', auto: 'bind-auto', deferred: 'bind-deferred', phrase: 'bind-phrase', phantom: 'bind-phantom', named: 'bind-named', quiet: 'bind-quiet',
+  late: 'bind-late', waiting: 'bind-waiting', leaving: 'bind-leaving', undeletable: 'bind-undeletable',
+} as const;
 /** The id the group has in `t.me/c/<id>/…` links: the Bot API id without its `-100`. */
 const groupLinkId = '1111111111';
 /** Names that match no folder: an admin's topic with one is offered the picker, a non-admin's waits for the admin's bind. */
 const adminTopicName = 'Scratch notes';
 const strangerTopicName = 'Quiet notes <b>';
+/** Spellings of `folders.deferred` the bot's name match accepts (case and separators drift) that a non-admin may give a topic. */
+const strangerLooseNames = { first: 'BIND_Deferred', second: 'bind deferred' } as const;
+/** Plain messages of the operator — no start phrase, no command — that must be nobody's folder name; one per step, so a failed step leaves nothing for the next. */
+const plainNotes = { afterBind: 'noted-after-bind', afterLeave: 'noted-after-leave' } as const;
 /** An admin's topic named after `folders.auto` the loose way the bot's name match allows; shown by this name in a shared-folder row. */
 const autoTopicName = 'Bind_Auto';
 const madeFolderName = 'bind-made';
@@ -203,6 +216,14 @@ async function waitForPickerDeleted(picker: FakeTelegramMessage): Promise<void> 
   await getCharness().waitFor('the picker deleted', replyTimeoutMs, () => fakeTelegram.getMessage(picker.message_id)?.isDeleted === true);
 }
 
+/** An admin makes a topic named `name`, which matches no folder: it is offered the folder picker. Resolves the topic and its picker. */
+async function openFreshPicker(name: string): Promise<{ threadId: number; topic: TopicDriver; picker: FakeTelegramMessage }> {
+  const threadId = fakeTelegram.pushTopicCreated(name);
+  const topic = new TopicDriver(fakeTelegram, getCharness, threadId, replyTimeoutMs);
+  const picker = await topic.waitForMessage('the folder picker', (message) => message.text === enDict['thread.welcome_pick']);
+  return { threadId, topic, picker };
+}
+
 /**
  * A non-admin makes a topic named `name`: the bot does not bind it, it sets the name aside for the admin's first message
  * there. Resolves once the bot logged that (counted, because an earlier topic left the same line in the output).
@@ -323,7 +344,7 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     fakeTelegram.pushCallback(picker.message_id, folderButton);
     fakeTelegram.pushCallback(picker.message_id, folderButton);
     await getCharness().waitFor('both taps answered', replyTimeoutMs, () => fakeTelegram.callbackAnswers.length >= answersBefore + 2);
-    assert.deepEqual([...fakeTelegram.callbackAnswers.slice(answersBefore)].sort(), [t('cb.binding_to', { subdir: folders.second }), t('cb.bind_already_bound')].sort(), 'one tap binds, the other is told so');
+    assert.deepEqual([...fakeTelegram.callbackAnswers.slice(answersBefore)].sort(), [t('cb.binding_to', { subdir: folders.second }), t('cb.bind_picker_used')].sort(), 'one tap binds, the other is told so');
     // The peer topic is on that folder too (an earlier step), and is known by nothing but its link.
     await assertOneBoundMessage(mainTopic, picker.message_id, folders.second, { sharedWith: [byLink(peerThreadId)] });
     await waitForPickerDeleted(picker);
@@ -336,12 +357,14 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     assert.ok(!autoTopic.listMessages().some((message) => message.text === enDict['thread.welcome_pick']), 'no folder picker in a topic that was bound');
   });
 
-  it('a topic a non-admin makes is not bound at once; the admin\'s first message there binds it, with the one welcome', async () => {
-    const { threadId, topic: deferredTopic } = await makeTopicAsStranger(folders.deferred);
+  it('a topic a non-admin makes is not bound at once; the admin\'s first message there binds it, with the one welcome — and the binding keeps the FOLDER\'s name, not the member\'s spelling', async () => {
+    const { threadId, topic: deferredTopic } = await makeTopicAsStranger(strangerLooseNames.first);
     assert.deepEqual(deferredTopic.listMessages(), [], 'nothing is bound or offered for a non-admin\'s topic');
 
     const sentId = fakeTelegram.pushOperatorMessage(threadId, 'the first words in the new topic');
     await assertOneBoundMessage(deferredTopic, sentId, folders.deferred, { isAutoBound: true });
+    await getCharness().waitFor('the binding persisted', replyTimeoutMs, () => readBinding(threadId) !== undefined);
+    assert.equal(readBinding(threadId)?.topicName, folders.deferred, 'what the member typed is not stored; the folder it matched is');
   });
 
   it('an admin-made topic named after a folder another topic uses: the welcome also names that topic', async () => {
@@ -351,7 +374,7 @@ describe('/bind end to end: built charness, fake Bot API', () => {
   });
 
   it('a non-admin-made topic named after a folder another topic uses: the admin\'s first message binds it, the welcome also names that topic', async () => {
-    const { threadId, topic: sharingTopic } = await makeTopicAsStranger(folders.deferred);
+    const { threadId, topic: sharingTopic } = await makeTopicAsStranger(strangerLooseNames.second);
     const sentId = fakeTelegram.pushOperatorMessage(threadId, 'the first words in the sharing topic');
     await assertOneBoundMessage(sharingTopic, sentId, folders.deferred, { isAutoBound: true, sharedWith: [byName(folders.deferred)] });
   });
@@ -401,5 +424,89 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     await peerTopic.waitForMessage('the unbound notice', (message) => message.message_id > picker.message_id && message.text === enDict['thread.unbound']);
     await waitForPickerDeleted(picker);
     await getCharness().waitFor('the binding gone', replyTimeoutMs, () => readBinding(peerThreadId) === undefined);
+  });
+
+  it('a tap whose toast comes too late still binds the topic, once: the claim on the picker is neither lost nor left held for nothing', async () => {
+    const { topic: lateTopic, picker } = await openFreshPicker('Late tap');
+    const folderButton = lateTopic.getButtonData(picker, `📁 ${folders.late}`);
+    fakeTelegram.isCallbackAnswerExpired = true;
+    try {
+      fakeTelegram.pushCallback(picker.message_id, folderButton);
+      await assertOneBoundMessage(lateTopic, picker.message_id, folders.late);
+    } finally {
+      fakeTelegram.isCallbackAnswerExpired = false;
+    }
+    await waitForPickerDeleted(picker);
+    assert.equal(await lateTopic.tapAndAwaitAnswer(picker, folderButton), t('cb.bind_picker_used'), 'a retap on the spent picker is told so');
+  });
+
+  it('«create new folder» tapped and then a folder tapped: bound, and the next plain message is nobody\'s folder name; the spent picker refuses «create new folder» and «Leave current dir»', async () => {
+    const { threadId, topic: waitingTopic, picker } = await openFreshPicker('Waiting for a name');
+    await waitingTopic.tapAndAwaitAnswer(picker, bindCreateFolderCallback);
+    await waitingTopic.waitForMessage('the folder-name prompt', (message) => message.message_id > picker.message_id && message.text === enDict['bind.create_prompt']);
+    await waitingTopic.tapAndAwaitAnswer(picker, waitingTopic.getButtonData(picker, `📁 ${folders.waiting}`));
+    // No command in between, not even a barrier: a command ends the folder-name wait by itself and would hide the very bug.
+    const welcome = await waitingTopic.waitForMessage('the welcome', (message) => message.message_id > picker.message_id && message.text.includes(enDict['binding.welcome.start_prompt']));
+    await waitForPickerDeleted(picker);
+
+    const plainId = fakeTelegram.pushOperatorMessage(threadId, plainNotes.afterBind);
+    await waitingTopic.waitForMessage('the idle hint for the plain message', (message) => message.message_id > plainId && message.text === t('thread.no_agent_with_binding', { subdir: folders.waiting }));
+    assert.ok(!fs.existsSync(path.join(getLayout().workRoot, plainNotes.afterBind)), 'the plain message was not taken for a folder name');
+    assert.equal(readBinding(threadId)?.subdir, folders.waiting, 'and the topic keeps its folder');
+    assert.deepEqual(listBoundMessages(waitingTopic, picker.message_id, folders.waiting).map((message) => message.message_id), [welcome.message_id], 'one bound-folder message');
+
+    // The picker is spent: neither of its other buttons does anything any more.
+    const messagesBefore = waitingTopic.listMessages().length;
+    assert.equal(await waitingTopic.tapAndAwaitAnswer(picker, bindCreateFolderCallback), t('cb.bind_picker_used'));
+    assert.equal(await waitingTopic.tapAndAwaitAnswer(picker, bindLeaveCurrentCallback), t('cb.bind_picker_used'));
+    await openPicker(waitingTopic, folders.waiting);
+    assert.equal(readBinding(threadId)?.subdir, folders.waiting, '«Leave current dir» on a spent picker leaves nothing');
+    assert.equal(waitingTopic.listMessages().filter((message) => message.text === enDict['bind.create_prompt']).length, 1, 'and «create new folder» asks for no second name');
+    assert.equal(waitingTopic.listMessages().length, messagesBefore + 1, 'nothing was posted but the barrier\'s own answer');
+  });
+
+  it('«create new folder» tapped and then «Leave current dir»: the topic is unbound, and the next plain message is nobody\'s folder name', async () => {
+    const { threadId, topic: leavingTopic } = await openFreshPicker('Leaving');
+    const sentId = fakeTelegram.pushOperatorMessage(threadId, `/bind ${folders.leaving}`);
+    await assertOneBoundMessage(leavingTopic, sentId, folders.leaving);
+    const picker = await openPicker(leavingTopic, folders.leaving);
+    await leavingTopic.tapAndAwaitAnswer(picker, bindCreateFolderCallback);
+    await leavingTopic.waitForMessage('the folder-name prompt', (message) => message.message_id > picker.message_id && message.text === enDict['bind.create_prompt']);
+    await leavingTopic.tapAndAwaitAnswer(picker, bindLeaveCurrentCallback);
+    await leavingTopic.waitForMessage('the unbound notice', (message) => message.message_id > picker.message_id && message.text === enDict['thread.unbound']);
+
+    const plainId = fakeTelegram.pushOperatorMessage(threadId, plainNotes.afterLeave);
+    await leavingTopic.waitForMessage('the picker offered to an unbound topic', (message) => message.message_id > plainId && message.text === enDict['thread.no_binding']);
+    assert.ok(!fs.existsSync(path.join(getLayout().workRoot, plainNotes.afterLeave)), 'the plain message was not taken for a folder name');
+  });
+
+  it('two taps on «Leave current dir», back to back: unbound once, the second tap is told the picker was used', async () => {
+    const { threadId, topic: leavingTopic } = await openFreshPicker('Leaving twice');
+    const sentId = fakeTelegram.pushOperatorMessage(threadId, `/bind ${folders.leaving}`);
+    await assertOneBoundMessage(leavingTopic, sentId, folders.leaving);
+    const picker = await openPicker(leavingTopic, folders.leaving);
+    const answersBefore = fakeTelegram.callbackAnswers.length;
+    fakeTelegram.pushCallback(picker.message_id, bindLeaveCurrentCallback);
+    fakeTelegram.pushCallback(picker.message_id, bindLeaveCurrentCallback);
+    await getCharness().waitFor('both taps answered', replyTimeoutMs, () => fakeTelegram.callbackAnswers.length >= answersBefore + 2);
+    assert.deepEqual([...fakeTelegram.callbackAnswers.slice(answersBefore)].sort(), ['', t('cb.bind_picker_used')], 'one tap leaves, the other is told so');
+    await leavingTopic.waitForMessage('the unbound notice', (message) => message.message_id > picker.message_id && message.text === enDict['thread.unbound']);
+    await waitForPickerDeleted(picker);
+    await leavingTopic.sendAndAwaitReply('/bind', enDict['bind.current_none']);
+    assert.equal(leavingTopic.listMessages().filter((message) => message.message_id > picker.message_id && message.text === enDict['thread.unbound']).length, 1, 'one «Binding cleared.», not two');
+  });
+
+  it('a picker Telegram will not delete (too old) loses its buttons instead, so a stale tap cannot rebind the topic', async () => {
+    const { topic: undeletableTopic, picker } = await openFreshPicker('Undeletable');
+    const folderButton = undeletableTopic.getButtonData(picker, `📁 ${folders.undeletable}`);
+    fakeTelegram.isMessageDeletionRefused = true;
+    try {
+      await undeletableTopic.tapAndAwaitAnswer(picker, folderButton);
+      await assertOneBoundMessage(undeletableTopic, picker.message_id, folders.undeletable);
+      await getCharness().waitFor('the picker\'s buttons removed', replyTimeoutMs, () => undeletableTopic.getKeyboardData(picker).flat().length === 0);
+    } finally {
+      fakeTelegram.isMessageDeletionRefused = false;
+    }
+    assert.notEqual(fakeTelegram.getMessage(picker.message_id)?.isDeleted, true, 'the message itself stayed');
   });
 });

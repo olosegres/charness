@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getFreshPendingTopicName, getTrustedPendingTopicName, type PendingTopicName } from '../connectors/telegram/pendingTopicName';
+import { getAutoBindTopicName, getFreshPendingTopicName, getTrustedPendingTopicName, type PendingTopicName } from '../connectors/telegram/pendingTopicName';
 
 const ttlMs = 1000;
 const nowMs = 10_000;
@@ -24,4 +24,12 @@ test('a binding never carries a name only someone else gave: the agent\'s preamb
 test('an expired or missing name is no name', () => {
   assert.equal(getTrustedPendingTopicName({ ...adminName, ts: nowMs - ttlMs - 1 }, nowMs, ttlMs), undefined);
   assert.equal(getTrustedPendingTopicName(undefined, nowMs, ttlMs), undefined);
+});
+
+test('an auto-bind keeps the name an authorised user gave', () => {
+  assert.equal(getAutoBindTopicName(adminName, 'release-notes'), 'Release notes');
+});
+
+test('an auto-bind never keeps a name only someone else gave: the folder it matched names the topic instead', () => {
+  assert.equal(getAutoBindTopicName(strangerName, 'release-notes'), 'release-notes');
 });

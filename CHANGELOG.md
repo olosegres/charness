@@ -14,10 +14,12 @@ the agent's thread context would repeat it. A folder that does not exist still j
 you typed the name in that the folder existed.
 The `/bind` picker is now one-shot: once a folder is bound through it (a tap or «create new folder»), or «Leave current dir» is used, the picker message
 is deleted — its «not bound, pick from the list» text would no longer be true — so an old tap cannot rebind the topic, and a second tap landing while the
-first is still binding is told «Already bound.» instead of getting a second welcome; a refused pick, paging and the create-folder prompt leave it in
-place. When the bot binds a non-admin's topic on an admin's first message there, a plain message is answered by the welcome alone, without the extra
-«bound, run /claude» hint, and a start phrase like `claude` still starts the agent. The removed texts are gone from all 12 languages, the new rows and
-the toast are in all 12.
+first is still binding (on a folder, «create new folder» or «Leave current dir») is told «This picker was already used.» instead of binding or unbinding
+twice; a refused pick, paging and the create-folder prompt leave it in place, and a tap whose answer reaches Telegram too late still does what it asked.
+A «create new folder» wait ends with the bind or the leave that follows it, so the next plain message is never taken for a folder name. When the bot binds a
+non-admin's topic on an admin's first message there, a plain message is answered by the welcome alone, without the extra «bound, run /claude» hint, and a
+start phrase like `claude` still starts the agent; the topic is then stored under the matched folder's own name, never under the member's spelling. The
+removed texts are gone from all 12 languages, the new rows and the toast are in all 12.
 
 **`/task_agents` in General sets how many task agents may work at once — a number from the picker or any number you type.**
 It opens a one-shot picker (5 / 10 / 15 / 20 / 30 / No limit, the value in force marked ✓) whose tap turns it into its confirmation;

@@ -696,7 +696,7 @@ export const ptDict: Record<string, string> = {
 
   'cb.access_denied': 'Acesso negado',
   'cb.bind_only_topical': '/bind só funciona em tópicos temáticos',
-  'cb.bind_already_bound': 'Já vinculada.',
+  'cb.bind_picker_used': 'Esta seleção já foi usada.',
   'cb.binding_to': 'A vincular a {subdir}…',
   'cb.no_active_session': 'Sem sessão ativa',
   'cb.model_error': 'Erro: {error}',

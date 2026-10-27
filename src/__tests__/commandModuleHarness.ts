@@ -104,6 +104,7 @@ export class CommandHarness {
       },
       deleteThreadMessage: async (_key, messageId) => {
         this.deletedMessageIds.push(messageId);
+        return true;
       },
       authoriseContext: async () => this.foreignChatKey ?? this.key,
       withThreadLocale: (_key, run) => run(),
@@ -198,7 +199,7 @@ export function createInertBotCore(): BotCore {
     replyToThread: async () => null,
     editThreadMessage: async () => false,
     editThreadKeyboard: async () => false,
-    deleteThreadMessage: async () => {},
+    deleteThreadMessage: async () => false,
     authoriseContext: async () => null,
     withThreadLocale: (_key, run) => run(),
     checkIsGeneral: () => false,

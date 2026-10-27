@@ -696,7 +696,7 @@ export const kaDict: Record<string, string> = {
 
   'cb.access_denied': 'წვდომა უარყოფილია',
   'cb.bind_only_topical': '/bind მუშაობს მხოლოდ თემატურ თემებში',
-  'cb.bind_already_bound': 'უკვე დაკავშირებულია.',
+  'cb.bind_picker_used': 'ეს არჩევანი უკვე გამოყენებულია.',
   'cb.binding_to': 'დაკავშირება {subdir}-თან…',
   'cb.no_active_session': 'აქტიური სესია არ არის',
   'cb.model_error': 'შეცდომა: {error}',

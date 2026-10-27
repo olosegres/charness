@@ -180,7 +180,7 @@ export function buildClaudeAuthLoginArgs(profile: ClaudeLoginProfile | null): st
  */
 export interface AgentLoginPorts {
   replyToThread: (key: SessionKey, text: string) => Promise<number | null>;
-  deleteThreadMessage: (key: SessionKey, messageId: number) => Promise<void>;
+  deleteThreadMessage: (key: SessionKey, messageId: number) => Promise<boolean>;
   clearAuthNotice: (key: SessionKey) => void;
   execFileAsync: (
     file: string,

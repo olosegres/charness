@@ -109,6 +109,7 @@ function createRecordedPorts(statusStdout: string): RecordedPorts {
       },
       deleteThreadMessage: async (_key, messageId) => {
         recorded.deletedMessageIds.push(messageId);
+        return true;
       },
       clearAuthNotice: (clearedKey) => {
         recorded.clearedAuthNoticeKeys.push(clearedKey);

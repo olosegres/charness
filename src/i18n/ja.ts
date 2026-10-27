@@ -696,7 +696,7 @@ export const jaDict: Record<string, string> = {
 
   'cb.access_denied': 'アクセス拒否',
   'cb.bind_only_topical': '/bind はトピックスレッドでのみ動作します',
-  'cb.bind_already_bound': 'すでにバインド済みです。',
+  'cb.bind_picker_used': 'この選択はすでに使われました。',
   'cb.binding_to': '{subdir} にバインド中…',
   'cb.no_active_session': 'アクティブなセッションがありません',
   'cb.model_error': 'エラー: {error}',

@@ -696,7 +696,7 @@ export const hiDict: Record<string, string> = {
 
   'cb.access_denied': 'पहुँच अस्वीकृत',
   'cb.bind_only_topical': '/bind केवल विषय-वस्तु थ्रेड्स में काम करता है',
-  'cb.bind_already_bound': 'पहले से बाउंड है।',
+  'cb.bind_picker_used': 'यह चयन पहले ही उपयोग हो चुका है।',
   'cb.binding_to': '{subdir} से बाइंड हो रहा है…',
   'cb.no_active_session': 'कोई सक्रिय सत्र नहीं',
   'cb.model_error': 'त्रुटि: {error}',
