@@ -148,6 +148,7 @@ export const zhDict: Record<string, string> = {
   'binding.welcome.git_dirty': ', 有未提交的更改',
   'binding.welcome.git_none': '• git: 未初始化',
   'binding.welcome.auto_bound': '• 已自动绑定：话题名与文件夹匹配',
+  'binding.welcome.existed': '• 文件夹已存在 — 已绑定到它',
   'binding.welcome.shared': '• ⚠️ 以下话题也在使用：{threads} — 会话保持独立',
   'binding.welcome.start_prompt': '开始对话：',
 

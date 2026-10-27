@@ -84,8 +84,11 @@ export function checkIsMissingTopicRightsError(error: unknown): boolean {
   return checkIsApiError(error) && /not enough rights|CHAT_ADMIN_REQUIRED|administrator/i.test(getErrorDescription(error));
 }
 
-/** What `createWorkFolder` (the `/bind` «create new folder» mkdir) made of a typed name; it has already told the topic of a refusal. */
-export type WorkFolderResult = { outcome: 'invalid' } | { outcome: 'failed' } | { outcome: 'ready'; subdir: string };
+/**
+ * What `createWorkFolder` (the `/bind` «create new folder» mkdir) made of a typed name; it has already told the topic of a
+ * refusal. `alreadyExisted`: the folder was there before the name was typed, and is used as it is — the caller says so.
+ */
+export type WorkFolderResult = { outcome: 'invalid' } | { outcome: 'failed' } | { outcome: 'ready'; subdir: string; alreadyExisted: boolean };
 
 export interface TopicCommandPorts extends Pick<BotCore, 'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadMessage' | 'authoriseContext'> {
   /** Whether the key is the owner's private chat — it has no topics to create. */
@@ -307,6 +310,8 @@ export function createTopicCommand(ports: TopicCommandPorts) {
       forgetWizard(wizard);
       return;
     }
+    // The new topic's welcome is its own greeting: the note that the folder was there goes to the topic the name was typed in.
+    if (folder.alreadyExisted) await replyToThread(wizard.originKey, t('bind.create_exists', { subdir: folder.subdir }));
     await createTopic(wizard, folder.subdir);
   }
 

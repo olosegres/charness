@@ -148,6 +148,7 @@ export const esDict: Record<string, string> = {
   'binding.welcome.git_dirty': ', cambios sin confirmar',
   'binding.welcome.git_none': '• git: no inicializado',
   'binding.welcome.auto_bound': '• Vinculado automáticamente: el nombre del hilo coincide con la carpeta',
+  'binding.welcome.existed': '• La carpeta ya existía — vinculada a ella',
   'binding.welcome.shared': '• ⚠️ También la usan los hilos: {threads} — las sesiones siguen siendo independientes',
   'binding.welcome.start_prompt': 'Inicia una conversación:',
 

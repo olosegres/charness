@@ -148,6 +148,7 @@ export const ptDict: Record<string, string> = {
   'binding.welcome.git_dirty': ', alterações não confirmadas',
   'binding.welcome.git_none': '• git: não inicializado',
   'binding.welcome.auto_bound': '• Vinculado automaticamente: o nome do tópico corresponde à pasta',
+  'binding.welcome.existed': '• A pasta já existia — vinculada a ela',
   'binding.welcome.shared': '• ⚠️ Também usada pelos tópicos: {threads} — as sessões mantêm-se independentes',
   'binding.welcome.start_prompt': 'Inicia uma conversa:',
 

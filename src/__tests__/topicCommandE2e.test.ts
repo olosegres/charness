@@ -398,4 +398,22 @@ describe('/topic end to end: built charness, fake Bot API', () => {
     assert.equal(listCreatedTopics().length, 5, 'no topic was made from the folder\'s name');
     assert.ok(!originTopic.listMessages().some((message) => message.text === fillTemplate(enDict['topic.askFolder'], { name: bindFolderName })), 'the folder\'s name was not taken for a topic name');
   });
+
+  it('/topic\'s «create new folder» with the name of a folder that exists: the topic it was typed in is told, the new topic gets the one welcome', async () => {
+    const sentId = fakeTelegram.pushOperatorMessage(originThreadId, '/topic Known folder');
+    const question = await originTopic.waitForMessage('the folder question', (message) => message.message_id > sentId && message.text === fillTemplate(enDict['topic.askFolder'], { name: 'Known folder' }));
+    await originTopic.tapAndAwaitAnswer(question, originTopic.getButtonData(question, otherFolderLabel));
+    await originTopic.waitForMessageText('the picker', question, (text) => text === fillTemplate(enDict['topic.pickFolder'], { name: 'Known folder' }));
+    await originTopic.tapAndAwaitAnswer(question, originTopic.getButtonData(question, createFolderLabel));
+    await originTopic.waitForMessageText('the folder-name question', question, (text) => text === `${fillTemplate(enDict['topic.createFolderPrompt'], { name: 'Known folder' })}\n${escHint}`);
+
+    fakeTelegram.pushOperatorMessage(originThreadId, folders.other);
+    const created = await waitForTopicCount(6);
+    await originTopic.waitForMessage('the note that the folder was there', (message) => message.message_id > sentId && message.text === fillTemplate(enDict['bind.create_exists'], { subdir: folders.other }));
+    const newTopic = new TopicDriver(fakeTelegram, getCharness, created.threadId, replyTimeoutMs);
+    const welcome = await newTopic.waitForMessage('the welcome', (message) => message.text.includes(`Bound to \`${folders.other}\``));
+    await newTopic.sendAndAwaitReply('/bind', enDict['bind.current'].replace('{subdir}', folders.other));
+    assert.equal(newTopic.listMessages().filter((message) => message.text.includes(enDict['binding.welcome.start_prompt'])).length, 1, 'one welcome');
+    assert.ok(!welcome.text.includes(enDict['binding.welcome.existed']), 'the new topic\'s welcome leaves the note to the topic the folder was asked for in');
+  });
 });

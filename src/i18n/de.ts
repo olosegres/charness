@@ -148,6 +148,7 @@ export const deDict: Record<string, string> = {
   'binding.welcome.git_dirty': ', unbestätigte Änderungen',
   'binding.welcome.git_none': '• git: nicht initialisiert',
   'binding.welcome.auto_bound': '• Automatisch verknüpft: Thread-Name passt zum Ordner',
+  'binding.welcome.existed': '• Der Ordner existierte bereits — damit verknüpft',
   'binding.welcome.shared': '• ⚠️ Auch genutzt von: {threads} — Sessions bleiben unabhängig',
   'binding.welcome.start_prompt': 'Beginne eine Unterhaltung:',
 

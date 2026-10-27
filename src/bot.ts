@@ -136,6 +136,8 @@ import { recomputeSchedulesForTimezoneChange } from './scheduler/timezoneRecompu
 import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir } from './validation';
 import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bindPageNoopCallback, buildBindKeyboard } from './connectors/telegram/bindPicker';
 import { createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
+import { getCallbackMessageId } from './connectors/telegram/commands/callbackMessage';
+import { formatSharedTopicList, getSharedTopicLabel } from './connectors/telegram/bindingWelcome';
 import { getForumTopicCreatedAction } from './connectors/telegram/forumTopicCreated';
 import {
   getDisconnectPickerKeysForThread,
@@ -2772,6 +2774,12 @@ const awaitingSessionSelection = new Set<string>();
  * on an invalid name so the user can retry.
  */
 const awaitingFolderName = new Set<string>();
+/**
+ * The `/bind` picker message a «create new folder» tap came from, per thread: once the typed name is bound, that picker's
+ * keyboard is removed. Written only together with the arming of {@link awaitingFolderName}, and read only by the bind that
+ * arming leads to — so a leftover entry of an abandoned attempt is overwritten by the next tap.
+ */
+const bindPickerMessageIds = new Map<string, number>();
 
 /** Max sessions shown in a `/sessions` list (Telegram-friendly, plan S3). */
 const sessionsDisplayLimit = 10;
@@ -3275,6 +3283,7 @@ function clearInMemoryThreadState(key: SessionKey): void {
     disconnectProviderLists.delete(pickerKey);
   }
   awaitingFolderName.delete(k);
+  bindPickerMessageIds.delete(k);
   pinnedStatusTextCache.delete(k);
   statusCoalescers.delete(k);
   // `clearThreadQueues` → `finalizeInFlight` above already finalized any accumulated
@@ -6218,12 +6227,12 @@ command('timezone', async (_ctx, key, parsed) => {
  * validation, the same collision lookup (plan §11 Этап 4 — tell when other threads already use the same folder,
  * decision D7) and the same rebind side effects (the project warm-up, the schedules a rebind resumes).
  *
- * Returns `{ ok: true, subdir, sharedWith }` on success: `sharedWith` is the string key of every OTHER Telegram thread
- * bound to the folder (empty when none). There is no acknowledgement text — the rich welcome
- * ({@link sendBindingWelcome}) is the one message announcing the binding, and it carries the shared-folder warning as
- * a row when its caller passes `sharedWith` on (`/topic` does not: the person asked for that folder). On failure
- * `message` is the localised refusal. Callers post the outcome with {@link replyToBindResult} or
- * {@link sendBindingWelcome}.
+ * Returns `{ ok: true, subdir, sharedWith }` on success: `sharedWith` names every OTHER Telegram thread bound to the
+ * folder — by its stored topic name, else its string key ({@link getSharedTopicLabel}); empty when none. There is no
+ * acknowledgement text — the rich welcome ({@link sendBindingWelcome}) is the one message announcing the binding, and it
+ * carries the shared-folder warning as a row when its caller passes `sharedWith` on (`/topic` does not: the person asked
+ * for that folder). On failure `message` is the localised refusal. Callers post the outcome with
+ * {@link replyToBindResult} or {@link sendBindingWelcome}.
  */
 type ApplyBindingResult =
   | { ok: true;  subdir: string; sharedWith: string[] }
@@ -6254,7 +6263,7 @@ async function applyBinding(
   await state.setBinding(key, subdir, options.topicName !== undefined ? { topicName: options.topicName } : {});
   warmTodoProjects();
 
-  const sharedWith = peers.map(keyToString);
+  const sharedWith = peers.map((peerKey) => getSharedTopicLabel(state.getBinding(peerKey)?.topicName, keyToString(peerKey)));
 
   // Rebind resume (S8): a thread that was unbound paused its schedules; binding
   // it again (this thread, possibly a different folder) resumes them. Best
@@ -6268,15 +6277,30 @@ async function applyBinding(
 
 /**
  * @description Answer a bind attempt in the topic: the refusal's message, or — once bound — the rich welcome, the one
- * message announcing the binding (with the shared-folder row when other topics use the folder). Shared by
- * `/bind <subdir>`, the `bind_<subdir>` picker button and the picker's «create new folder».
+ * message announcing the binding (with the shared-folder row when other topics use the folder, and whatever else the
+ * caller knows of this bind: `notes`). Shared by `/bind <subdir>`, the `bind_<subdir>` picker button and the picker's
+ * «create new folder».
  */
-async function replyToBindResult(key: SessionKey, result: ApplyBindingResult): Promise<void> {
+async function replyToBindResult(key: SessionKey, result: ApplyBindingResult, notes: BindingWelcomeNotes = {}): Promise<void> {
   if (!result.ok) {
     await replyToThread(key, result.message);
     return;
   }
-  await sendBindingWelcome(key, result.subdir, { sharedWith: result.sharedWith });
+  await sendBindingWelcome(key, result.subdir, { ...notes, sharedWith: result.sharedWith });
+}
+
+/**
+ * @description The `/bind` picker is one-shot (§ Inline keyboards): once a folder is bound through it, its keyboard is removed,
+ * so a stale tap cannot rebind the topic. A pick that bound nothing never gets here, and paging or the create-folder
+ * prompt leave the buttons alone. A failed edit (the message is gone, say) is only logged.
+ */
+async function dropBindPickerKeyboard(key: SessionKey, pickerMessageId: number): Promise<void> {
+  try {
+    await enqueueSend(key, () => bot.telegram.editMessageReplyMarkup(getTelegramChatId(key), pickerMessageId, undefined, undefined));
+  } catch (e) {
+    const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
+    if (!/message is not modified/i.test(desc)) console.warn('[bind] removing the picker keyboard failed:', desc || e);
+  }
 }
 
 /**
@@ -6349,7 +6373,7 @@ async function resumeThreadSchedulesOnRebind(key: SessionKey): Promise<void> {
  * armed-mode branches in the text handler never overlap (only one armed
  * mode is active per thread at a time).
  */
-function armFolderCreation(key: SessionKey): void {
+function armFolderCreation(key: SessionKey, pickerMessageId: number | null): void {
   const kStr = keyToString(key);
   awaitingModelSelection.delete(kStr);
   awaitingSessionSelection.delete(kStr);
@@ -6359,6 +6383,7 @@ function armFolderCreation(key: SessionKey): void {
   // folder name as an answer to the old (pre-rebind) agent question.
   clearPendingQuestion(key);
   awaitingFolderName.add(kStr);
+  if (pickerMessageId !== null) bindPickerMessageIds.set(kStr, pickerMessageId);
 }
 
 /** Map a `validateNewFolderName` rejection to its localised reply. */
@@ -6376,10 +6401,10 @@ function mapNewFolderError(reason: NewFolderNameError): string {
 /**
  * @description Create a new folder under WORK_ROOT from a user-typed name:
  * validate the name first (no traversal/slashes/dots), then `mkdir` (recursive:
- * an already-existing folder is fine — the caller just uses it, and the topic is
- * told so). A refusal or a filesystem failure is reported to `key`'s topic here;
- * the outcome says which, so the caller knows whether a retry is still wanted
- * (`invalid`) or not (`failed`).
+ * an already-existing folder is fine — the caller just uses it, and says so in its
+ * own way: `alreadyExisted`). A refusal or a filesystem failure is reported to
+ * `key`'s topic here; the outcome says which, so the caller knows whether a retry
+ * is still wanted (`invalid`) or not (`failed`).
  */
 async function createWorkFolder(key: SessionKey, rawName: string): Promise<WorkFolderResult> {
   const validated = validateNewFolderName(rawName);
@@ -6403,10 +6428,7 @@ async function createWorkFolder(key: SessionKey, rawName: string): Promise<WorkF
   // next picker render includes the new folder.
   subdirCache.clear();
 
-  if (alreadyExisted) {
-    await replyToThread(key, t('bind.create_exists', { subdir: validated.name }));
-  }
-  return { outcome: 'ready', subdir: validated.name };
+  return { outcome: 'ready', subdir: validated.name, alreadyExisted };
 }
 
 /**
@@ -6424,7 +6446,12 @@ async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ 
   if (folder.outcome === 'invalid') return { ok: false };
   if (folder.outcome === 'failed') return { ok: true };
 
-  await replyToBindResult(key, await applyBinding(key, folder.subdir));
+  const result = await applyBinding(key, folder.subdir);
+  await replyToBindResult(key, result, { isExistingFolder: folder.alreadyExisted });
+  const kStr = keyToString(key);
+  const pickerMessageId = bindPickerMessageIds.get(kStr);
+  bindPickerMessageIds.delete(kStr);
+  if (result.ok && pickerMessageId !== undefined) await dropBindPickerKeyboard(key, pickerMessageId);
   return { ok: true };
 }
 
@@ -6442,20 +6469,31 @@ async function bindNewTopic(key: SessionKey, subdir: string, topicName: string):
 }
 
 /**
+ * @description How {@link autoBindTopicByName} ended: `refused` — nothing is bound; `welcomed` — bound, and its welcome is
+ * in the topic; `welcomeFailed` — bound, but the welcome could not be sent.
+ */
+type AutoBindOutcome = 'refused' | 'welcomed' | 'welcomeFailed';
+
+/**
  * @description Bind a topic the bot matched to the folder `subdirName` by the topic's own name, and welcome it. It goes
  * through {@link applyBinding} like every other bind (validation, the schedules a rebind resumes, the collision lookup), so
  * the welcome says why the bot did it AND names the topics already on the folder. The topic's name rides on the binding for
- * the thread-context preamble. Resolves whether the topic is bound: a refused folder is only logged, and the caller falls
- * back to the folder picker.
+ * the thread-context preamble. Only a `refused` folder (logged) sends the caller back to the folder picker: a topic whose
+ * welcome failed to send IS bound, and a picker asking for a folder there would contradict its binding.
  */
-async function autoBindTopicByName(key: SessionKey, subdirName: string, topicName: string): Promise<boolean> {
+async function autoBindTopicByName(key: SessionKey, subdirName: string, topicName: string): Promise<AutoBindOutcome> {
   const result = await applyBinding(key, subdirName, topicName ? { topicName } : {});
   if (!result.ok) {
     console.warn(`[auto-bind] "${subdirName}" refused for ${keyToString(key)}: ${result.message}`);
-    return false;
+    return 'refused';
   }
-  await sendBindingWelcome(key, result.subdir, { isAutoBound: true, sharedWith: result.sharedWith });
-  return true;
+  try {
+    await sendBindingWelcome(key, result.subdir, { isAutoBound: true, sharedWith: result.sharedWith });
+  } catch (e) {
+    console.warn(`[auto-bind] ${keyToString(key)} is bound to "${result.subdir}", but its welcome could not be sent:`, e);
+    return 'welcomeFailed';
+  }
+  return 'welcomed';
 }
 
 command('bind', async (_ctx, key, parsed) => {
@@ -6897,18 +6935,21 @@ function buildStartAgentKeyboard() {
 
 /**
  * @description What a binding's welcome says besides the folder's facts. `isAutoBound`: the bot bound the topic by
- * itself because its name matches the folder. `sharedWith`: the string keys of the other topics bound to the same folder.
+ * itself because its name matches the folder. `isExistingFolder`: the folder was there when «create new folder» asked for it.
+ * `sharedWith`: how the other topics bound to the same folder are called ({@link getSharedTopicLabel}).
  */
 interface BindingWelcomeNotes {
   isAutoBound?: boolean;
+  /** «Create new folder» was given the name of a folder that already existed. */
+  isExistingFolder?: boolean;
   sharedWith?: readonly string[];
 }
 
 /**
  * @description Compose and send the rich post-bind welcome described in
  * plan §20.5: header with the bound subdir, the optional rows (why it was bound
- * when the bot did it by itself, CLAUDE.md / .mcp.json / git, which other topics
- * use the folder), and an inline keyboard to start an agent. It is the ONE
+ * when the bot did it by itself, that the folder was there already, CLAUDE.md /
+ * .mcp.json / git, which other topics use the folder), and an inline keyboard to start an agent. It is the ONE
  * message every way of binding leaves in the topic. Falls back gracefully when
  * stats can't be probed.
  */
@@ -6931,6 +6972,7 @@ async function sendBindingWelcome(key: SessionKey, subdir: string, notes: Bindin
 
   const lines: string[] = [t('binding.welcome.header', { subdir })];
   if (notes.isAutoBound) lines.push(t('binding.welcome.auto_bound'));
+  if (notes.isExistingFolder) lines.push(t('binding.welcome.existed'));
   if (stats.claudeMdSize) lines.push(t('binding.welcome.claude_md', { size: stats.claudeMdSize }));
   if (stats.mcpServerCount !== null) {
     lines.push(t('binding.welcome.mcp_json', { count: stats.mcpServerCount }));
@@ -6944,7 +6986,7 @@ async function sendBindingWelcome(key: SessionKey, subdir: string, notes: Bindin
     lines.push(t('binding.welcome.git_none'));
   }
   if (notes.sharedWith && notes.sharedWith.length > 0) {
-    lines.push(t('binding.welcome.shared', { threads: notes.sharedWith.map(sharedKey => `\`${sharedKey}\``).join(', ') }));
+    lines.push(t('binding.welcome.shared', { threads: formatSharedTopicList(notes.sharedWith) }));
   }
   lines.push('');
   lines.push(t('binding.welcome.start_prompt'));
@@ -9167,7 +9209,7 @@ bot.on(message('text'), async (ctx) => {
           pendingTopicNames.delete(kStr);
           // The pending entry carries the topic name (cached at creation) — it rides on the binding for the
           // thread-context preamble (S1).
-          isJustAutoBound = await autoBindTopicByName(key, match, pending.name);
+          isJustAutoBound = await autoBindTopicByName(key, match, pending.name) === 'welcomed';
         } catch (e) {
           console.warn(`[deferred-autobind] failed for "${match}":`, e);
         }
@@ -9972,7 +10014,7 @@ bot.on(message('forum_topic_created'), async (ctx) => {
   if (match) {
     try {
       // The creation event carries the topic name — it rides on the binding for the thread-context preamble (S1).
-      if (await autoBindTopicByName(key, match, topicName)) return;
+      if (await autoBindTopicByName(key, match, topicName) !== 'refused') return;
     } catch (e) {
       console.warn(`[forum_topic_created] auto-bind failed for "${match}":`, e);
       // Fall through to picker.
@@ -10120,7 +10162,7 @@ bot.action(bindCreateFolderCallback, async (ctx) => {
     return;
   }
   await ctx.answerCbQuery(t('bind.create_cb'));
-  armFolderCreation(key);
+  armFolderCreation(key, getCallbackMessageId(ctx));
   await replyToThread(key, t('bind.create_prompt'));
 });
 
@@ -10150,7 +10192,10 @@ bot.action(/^bind_(.+)$/, async (ctx) => {
   }
   const subdir = ctx.match[1];
   await ctx.answerCbQuery(t('cb.binding_to', { subdir }));
-  await replyToBindResult(key, await applyBinding(key, subdir));
+  const result = await applyBinding(key, subdir);
+  await replyToBindResult(key, result);
+  const pickerMessageId = getCallbackMessageId(ctx);
+  if (result.ok && pickerMessageId !== null) await dropBindPickerKeyboard(key, pickerMessageId);
 });
 
 // ─── /language inline picker callbacks ───────────────────────────────────────

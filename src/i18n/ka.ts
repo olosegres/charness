@@ -148,6 +148,7 @@ export const kaDict: Record<string, string> = {
   'binding.welcome.git_dirty': ', დადასტურებული ცვლილებები',
   'binding.welcome.git_none': '• git: ინიციალიზებული არ არის',
   'binding.welcome.auto_bound': '• ავტომატურად დაკავშირდა: თემის სახელი ემთხვევა საქაღალდეს',
+  'binding.welcome.existed': '• საქაღალდე უკვე არსებობდა — დაკავშირდა მასთან',
   'binding.welcome.shared': '• ⚠️ ასევე გამოიყენება თემების მიერ: {threads} — სესიები დამოუკიდებელია',
   'binding.welcome.start_prompt': 'დაიწყეთ საუბარი:',
 

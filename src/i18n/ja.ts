@@ -148,6 +148,7 @@ export const jaDict: Record<string, string> = {
   'binding.welcome.git_dirty': ', 未コミットの変更',
   'binding.welcome.git_none': '• git: 初期化されていません',
   'binding.welcome.auto_bound': '• 自動バインド: スレッド名がフォルダと一致',
+  'binding.welcome.existed': '• フォルダは既に存在していたため、そこにバインドしました',
   'binding.welcome.shared': '• ⚠️ 他のスレッドでも使用中: {threads} — セッションは独立しています',
   'binding.welcome.start_prompt': '会話を開始:',
 

@@ -148,6 +148,7 @@ export const uzDict: Record<string, string> = {
   'binding.welcome.git_dirty': ', tasdiqlanmagan o‘zgarishlar',
   'binding.welcome.git_none': '• git: boshlanmagan',
   'binding.welcome.auto_bound': '• Avtomatik bog‘landi: mavzu nomi papkaga mos keldi',
+  'binding.welcome.existed': '• Papka allaqachon mavjud edi — unga bog‘landi',
   'binding.welcome.shared': '• ⚠️ Bu papkani boshqa mavzular ham ishlatadi: {threads} — seanslar mustaqil',
   'binding.welcome.start_prompt': 'Suhbatni boshlang:',
 

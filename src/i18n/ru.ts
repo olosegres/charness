@@ -152,6 +152,7 @@ export const ruDict: Record<string, string> = {
   'binding.welcome.git_dirty': ', изменения не закоммичены',
   'binding.welcome.git_none': '• git: не инициализирован',
   'binding.welcome.auto_bound': '• Привязано автоматически: имя треда совпало с папкой',
+  'binding.welcome.existed': '• Папка уже была — привязано к ней',
   'binding.welcome.shared': '• ⚠️ Папку используют и другие треды: {threads} — сессии независимы',
   'binding.welcome.start_prompt': 'Начни диалог:',
 

@@ -63,7 +63,9 @@ const mainThreadId = 191;
 const peerThreadId = 192;
 /** A group member who is no admin: the bot does not serve them, so a topic they make is not bound at once. */
 const stranger: TelegramUser = { id: 515151, is_bot: false, first_name: 'Stranger' };
-const folders = { first: 'bind-first', second: 'bind-second', auto: 'bind-auto', deferred: 'bind-deferred', phrase: 'bind-phrase' } as const;
+const folders = { first: 'bind-first', second: 'bind-second', auto: 'bind-auto', deferred: 'bind-deferred', phrase: 'bind-phrase', phantom: 'bind-phantom' } as const;
+/** An admin's topic named after `folders.auto` the loose way the bot's name match allows; shown by this name in a shared-folder row. */
+const autoTopicName = 'Bind_Auto';
 const madeFolderName = 'bind-made';
 const missingFolderName = 'bind-missing';
 /** The tail of the short acknowledgement and of the greeting the welcome made redundant. */
@@ -87,9 +89,6 @@ let fakeTelegram: FakeTelegram;
 let mainTopic: TopicDriver;
 let peerTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
-/** The topics the auto-bind tests made, which the later ones share a folder with. */
-let autoTopicThreadId = 0;
-let deferredTopicThreadId = 0;
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -122,26 +121,41 @@ async function openPicker(driver: TopicDriver, boundFolder: string): Promise<Fak
 interface ExpectedWelcome {
   /** The bot bound the topic by itself (its name matches the folder). */
   isAutoBound?: boolean;
-  /** The string keys of the other topics bound to the folder. */
+  /** The folder was there before the person asked to create it («create new folder» with an existing folder's name). */
+  isExistingFolder?: boolean;
+  /** How the row names the other topics bound to the folder: each one's topic name, else its key. */
   sharedWith?: string[];
+  /** An agent starts next to the bind, and its own «ready in <folder>» notice names the folder too. */
+  isAgentStarting?: boolean;
+}
+
+/** Resolves once a pinned message of the topic names `folder`: the status banner every bind pins, which is no announcement of the bind. */
+async function waitForStatusBanner(driver: TopicDriver, folder: string): Promise<void> {
+  await getCharness().waitFor(`the status banner of ${folder} pinned`, replyTimeoutMs, () => {
+    const pinnedIds = new Set(fakeTelegram.listPinnedMessageIds());
+    return driver.listMessages().some((message) => pinnedIds.has(message.message_id) && message.text.includes(folder));
+  });
 }
 
 /**
  * After a bind the topic shows ONE message announcing the folder — the full welcome with the start buttons, carrying the
- * auto-bound and shared-folder rows when they apply — and no trace of the short «Run /claude or /opencode» acknowledgement,
- * the 👋 greeting or a separate shared-folder warning. `afterMessageId` is the message that led to the bind.
+ * auto-bound, existing-folder and shared-folder rows when they apply — and nothing else that names the folder (the pinned
+ * status banner and the picker the check itself asks for aside): no short «Run /claude or /opencode» acknowledgement, no 👋
+ * greeting, no separate warning for a shared or an existing folder. `afterMessageId` is the message that led to the bind.
  */
 async function assertOneBoundMessage(driver: TopicDriver, afterMessageId: number, folder: string, expected: ExpectedWelcome = {}): Promise<FakeTelegramMessage> {
   const welcome = await driver.waitForMessage(`the welcome of ${folder}`, (message) => message.message_id > afterMessageId && message.text.includes(enDict['binding.welcome.start_prompt']));
-  await openPicker(driver, folder);
+  const barrier = await openPicker(driver, folder);
+  await waitForStatusBanner(driver, folder);
   const boundMessages = listBoundMessages(driver, afterMessageId, folder);
   assert.deepEqual(boundMessages.map((message) => message.message_id), [welcome.message_id], `one bound-folder message, the welcome: ${boundMessages.map((message) => JSON.stringify(message.text)).join(' | ')}`);
   assert.deepEqual(driver.getKeyboardData(welcome), startButtonsData, 'the welcome carries the start buttons');
 
   assert.equal(welcome.text.includes(t('binding.welcome.auto_bound')), expected.isAutoBound === true, `the welcome says why the bot bound it only when the bot did: ${JSON.stringify(welcome.text)}`);
+  assert.equal(welcome.text.includes(t('binding.welcome.existed')), expected.isExistingFolder === true, `the welcome says the folder was there already only when it was: ${JSON.stringify(welcome.text)}`);
   const sharedWith = expected.sharedWith ?? [];
   if (sharedWith.length > 0) {
-    const sharedRow = t('binding.welcome.shared', { threads: sharedWith.map((sharedKey) => `\`${sharedKey}\``).join(', ') });
+    const sharedRow = t('binding.welcome.shared', { threads: sharedWith.map((sharedName) => `\`${sharedName}\``).join(', ') });
     assert.ok(welcome.text.includes(sharedRow), `the welcome names the topics sharing the folder: ${JSON.stringify(welcome.text)}`);
   } else {
     assert.ok(!welcome.text.includes(sharedRowStart), 'a folder nobody else uses has no shared-folder row');
@@ -150,8 +164,17 @@ async function assertOneBoundMessage(driver: TopicDriver, afterMessageId: number
   const sinceBind = driver.listMessages().filter((message) => message.message_id > afterMessageId);
   assert.ok(!sinceBind.some((message) => message.text.includes(shortAckTail)), 'no short acknowledgement lingers in the topic');
   assert.ok(!sinceBind.some((message) => message.text.includes(greetingMark)), 'no separate greeting in the topic');
-  assert.deepEqual(sinceBind.filter((message) => message.message_id !== welcome.message_id && message.text.includes(sharedRowStart)), [], 'the shared-folder warning is no message of its own');
+  if (!expected.isAgentStarting) {
+    const pinnedIds = new Set(fakeTelegram.listPinnedMessageIds());
+    const otherMentions = sinceBind.filter((message) => message.message_id !== welcome.message_id && message.message_id !== barrier.message_id && !pinnedIds.has(message.message_id) && message.text.includes(folder));
+    assert.deepEqual(otherMentions.map((message) => message.text), [], 'nothing but the welcome (and the status banner) names the folder: no note of its own for a shared or an existing one');
+  }
   return welcome;
+}
+
+/** The /bind picker is one-shot: once a folder is bound through it, its keyboard is gone. */
+async function waitForPickerConsumed(driver: TopicDriver, picker: FakeTelegramMessage): Promise<void> {
+  await getCharness().waitFor('the picker\'s keyboard removed', replyTimeoutMs, () => driver.getKeyboardData(picker).flat().length === 0);
 }
 
 /**
@@ -216,8 +239,10 @@ describe('/bind end to end: built charness, fake Bot API', () => {
 
   it('a folder tapped in the /bind picker leaves the same single message', async () => {
     const picker = await openPicker(mainTopic, folders.first);
+    assert.ok(mainTopic.getKeyboardData(picker).flat().length > 0, 'the picker has its buttons until a folder is bound through it');
     await mainTopic.tapAndAwaitAnswer(picker, mainTopic.getButtonData(picker, `📁 ${folders.second}`));
     await assertOneBoundMessage(mainTopic, picker.message_id, folders.second);
+    await waitForPickerConsumed(mainTopic, picker);
   });
 
   it('a folder another topic already uses: the same single welcome, with a row naming that topic', async () => {
@@ -225,27 +250,47 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     await assertOneBoundMessage(peerTopic, sentId, folders.second, { sharedWith: [`${group.id}:${mainThreadId}`] });
   });
 
-  it('«create new folder» makes the folder and binds it with the same single message', async () => {
+  it('«create new folder» makes the folder and binds it with the same single message; the picker works until then and is gone after', async () => {
     const picker = await openPicker(mainTopic, folders.second);
     const toast = await mainTopic.tapAndAwaitAnswer(picker, bindCreateFolderCallback);
     assert.equal(toast, enDict['bind.create_cb']);
     await mainTopic.waitForMessage('the folder-name prompt', (message) => message.message_id > picker.message_id && message.text === enDict['bind.create_prompt']);
+    assert.ok(mainTopic.getKeyboardData(picker).flat().length > 0, 'the picker keeps its buttons while the folder name is awaited');
     const sentId = fakeTelegram.pushOperatorMessage(mainThreadId, madeFolderName);
     await assertOneBoundMessage(mainTopic, sentId, madeFolderName);
     assert.ok(fs.statSync(path.join(getLayout().workRoot, madeFolderName)).isDirectory(), 'the folder exists under WORK_ROOT');
+    await waitForPickerConsumed(mainTopic, picker);
+  });
+
+  it('«create new folder» with the name of a folder that exists binds to it: ONE message, the welcome, which says it was there already', async () => {
+    const picker = await openPicker(mainTopic, madeFolderName);
+    await mainTopic.tapAndAwaitAnswer(picker, bindCreateFolderCallback);
+    await mainTopic.waitForMessage('the folder-name prompt', (message) => message.message_id > picker.message_id && message.text === enDict['bind.create_prompt']);
+    const sentId = fakeTelegram.pushOperatorMessage(mainThreadId, folders.first);
+    await assertOneBoundMessage(mainTopic, sentId, folders.first, { isExistingFolder: true });
+    await waitForPickerConsumed(mainTopic, picker);
+  });
+
+  it('a tap on a folder that is gone is refused and the picker keeps its buttons: only a bind consumes it', async () => {
+    const picker = await openPicker(mainTopic, folders.first);
+    fs.rmSync(path.join(getLayout().workRoot, folders.phantom), { recursive: true });
+    await mainTopic.tapAndAwaitAnswer(picker, mainTopic.getButtonData(picker, `📁 ${folders.phantom}`));
+    await mainTopic.waitForMessage('the refusal', (message) => message.message_id > picker.message_id && message.text === t('bind.not_found', { subdir: folders.phantom, workRoot: getLayout().workRoot }));
+    // The barrier first: a keyboard edit queued behind the refusal would otherwise still be on its way when the check looks.
+    await openPicker(mainTopic, folders.first);
+    assert.ok(mainTopic.getKeyboardData(picker).flat().length > 0, 'a refused pick leaves the picker usable');
   });
 
   it('a folder that does not exist is refused: no welcome, and the topic keeps its binding', async () => {
     const sentId = fakeTelegram.pushOperatorMessage(mainThreadId, `/bind ${missingFolderName}`);
     const refusal = await mainTopic.waitForMessage('the refusal', (message) => message.message_id > sentId && message.text === t('bind.not_found', { subdir: missingFolderName, workRoot: getLayout().workRoot }));
-    await openPicker(mainTopic, madeFolderName);
+    await openPicker(mainTopic, folders.first);
     assert.deepEqual(listBoundMessages(mainTopic, sentId, missingFolderName), [], 'nothing announces a binding that was refused');
     assert.ok(!mainTopic.listMessages().some((message) => message.message_id > refusal.message_id && message.text.includes(enDict['binding.welcome.start_prompt'])), 'no welcome after a refusal');
   });
 
   it('a topic an admin makes with the name of a folder is bound by the bot: ONE message, the welcome, which says why', async () => {
-    const threadId = fakeTelegram.pushTopicCreated(folders.auto);
-    autoTopicThreadId = threadId;
+    const threadId = fakeTelegram.pushTopicCreated(autoTopicName);
     const autoTopic = new TopicDriver(fakeTelegram, getCharness, threadId, replyTimeoutMs);
     await assertOneBoundMessage(autoTopic, threadId, folders.auto, { isAutoBound: true });
     assert.ok(!autoTopic.listMessages().some((message) => message.text === enDict['thread.welcome_pick']), 'no folder picker in a topic that was bound');
@@ -253,7 +298,6 @@ describe('/bind end to end: built charness, fake Bot API', () => {
 
   it('a topic a non-admin makes is not bound at once; the admin\'s first message there binds it, with the one welcome', async () => {
     const { threadId, topic: deferredTopic } = await makeTopicAsStranger(folders.deferred);
-    deferredTopicThreadId = threadId;
     assert.deepEqual(deferredTopic.listMessages(), [], 'nothing is bound or offered for a non-admin\'s topic');
 
     const sentId = fakeTelegram.pushOperatorMessage(threadId, 'the first words in the new topic');
@@ -263,13 +307,13 @@ describe('/bind end to end: built charness, fake Bot API', () => {
   it('an admin-made topic named after a folder another topic uses: the welcome also names that topic', async () => {
     const threadId = fakeTelegram.pushTopicCreated(folders.auto);
     const sharingTopic = new TopicDriver(fakeTelegram, getCharness, threadId, replyTimeoutMs);
-    await assertOneBoundMessage(sharingTopic, threadId, folders.auto, { isAutoBound: true, sharedWith: [`${group.id}:${autoTopicThreadId}`] });
+    await assertOneBoundMessage(sharingTopic, threadId, folders.auto, { isAutoBound: true, sharedWith: [autoTopicName] });
   });
 
   it('a non-admin-made topic named after a folder another topic uses: the admin\'s first message binds it, the welcome also names that topic', async () => {
     const { threadId, topic: sharingTopic } = await makeTopicAsStranger(folders.deferred);
     const sentId = fakeTelegram.pushOperatorMessage(threadId, 'the first words in the sharing topic');
-    await assertOneBoundMessage(sharingTopic, sentId, folders.deferred, { isAutoBound: true, sharedWith: [`${group.id}:${deferredTopicThreadId}`] });
+    await assertOneBoundMessage(sharingTopic, sentId, folders.deferred, { isAutoBound: true, sharedWith: [folders.deferred] });
   });
 
   it('a start phrase as the admin\'s first message in a non-admin-made topic binds it AND starts the agent: one welcome, one session', async () => {
@@ -279,7 +323,7 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     const startsBefore = listAgentStarts().length;
     const { threadId, topic: phraseTopic } = await makeTopicAsStranger(folders.phrase);
     const sentId = fakeTelegram.pushOperatorMessage(threadId, 'claude');
-    await assertOneBoundMessage(phraseTopic, sentId, folders.phrase, { isAutoBound: true });
+    await assertOneBoundMessage(phraseTopic, sentId, folders.phrase, { isAutoBound: true, isAgentStarting: true });
     await getCharness().waitFor('the agent the phrase asked for to start', agentStartTimeoutMs, () => listAgentStarts().length > startsBefore);
     assert.equal(listAgentStarts().length, startsBefore + 1, 'exactly one session started');
   });

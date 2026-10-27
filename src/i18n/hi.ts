@@ -148,6 +148,7 @@ export const hiDict: Record<string, string> = {
   'binding.welcome.git_dirty': ', अप्रतिबद्ध परिवर्तन',
   'binding.welcome.git_none': '• git: प्रारंभ नहीं किया गया',
   'binding.welcome.auto_bound': '• स्वतः बाउंड: थ्रेड नाम फ़ोल्डर से मेल खाता है',
+  'binding.welcome.existed': '• फ़ोल्डर पहले से मौजूद था — उससे बाउंड किया गया',
   'binding.welcome.shared': '• ⚠️ इसका उपयोग इन थ्रेड्स में भी हो रहा है: {threads} — सत्र स्वतंत्र रहते हैं',
   'binding.welcome.start_prompt': 'एक बातचीत शुरू करें:',
 

@@ -50,7 +50,7 @@ let harness: CommandHarness;
 let topic: ReturnType<typeof createTopicCommand>;
 let isDirectChat = false;
 let workFolders: string[] = [];
-let folderOutcome: WorkFolderResult = { outcome: 'ready', subdir: 'made-up' };
+let folderOutcome: WorkFolderResult = { outcome: 'ready', subdir: 'made-up', alreadyExisted: false };
 let bindFailure: string | null = null;
 const createdFolderNames: string[] = [];
 const boundTopics: Array<{ key: SessionKey; subdir: string; topicName: string }> = [];
@@ -129,7 +129,7 @@ describe('topicCommand: /topic over its ports', () => {
     harness.isGeneral = false;
     isDirectChat = false;
     workFolders = [...otherFolders];
-    folderOutcome = { outcome: 'ready', subdir: 'made-up' };
+    folderOutcome = { outcome: 'ready', subdir: 'made-up', alreadyExisted: false };
     bindFailure = null;
     createdFolderNames.length = 0;
     boundTopics.length = 0;
@@ -340,12 +340,38 @@ describe('topicCommand: /topic over its ports', () => {
       assert.equal(topic.checkIsAwaitingTopicInput(harness.key), true, 'a refused name leaves the question open');
       assert.equal(harness.fakeTelegram.createdTopics.length, 0);
 
-      folderOutcome = { outcome: 'ready', subdir: 'fresh-folder' };
+      folderOutcome = { outcome: 'ready', subdir: 'fresh-folder', alreadyExisted: false };
       await topic.submitTopicInput(harness.key, 'fresh-folder');
       assert.deepEqual(createdFolderNames, ['../escape', 'fresh-folder']);
       assert.deepEqual(boundTopics.map((bound) => bound.subdir), ['fresh-folder']);
       assert.equal(harness.edits.at(-1)?.messageId, picker.messageId, 'the answer lands in the same message');
       assert.equal(topic.checkIsAwaitingTopicInput(harness.key), false);
+    });
+
+    it('a typed name of a folder that exists: the topic the wizard runs in is told so, and the topic is made on that folder', async () => {
+      await harness.state.removeBinding(harness.key);
+      await harness.runCommand('topic', 'Release notes');
+      const picker = getLastReply();
+      await harness.tapButton(picker.messageId ?? 0, buildTopicCreateFolderCallback(getWizardId(picker)));
+
+      folderOutcome = { outcome: 'ready', subdir: 'beta', alreadyExisted: true };
+      harness.replies.length = 0;
+      await topic.submitTopicInput(harness.key, 'beta');
+      assert.deepEqual(harness.replies.map((reply) => reply.text), [t('bind.create_exists', { subdir: 'beta' })], 'the note goes to the topic the name was typed in');
+      assert.deepEqual(boundTopics.map((bound) => bound.subdir), ['beta']);
+    });
+
+    it('a typed name of a new folder says nothing of an existing one', async () => {
+      await harness.state.removeBinding(harness.key);
+      await harness.runCommand('topic', 'Release notes');
+      const picker = getLastReply();
+      await harness.tapButton(picker.messageId ?? 0, buildTopicCreateFolderCallback(getWizardId(picker)));
+
+      folderOutcome = { outcome: 'ready', subdir: 'fresh-folder', alreadyExisted: false };
+      harness.replies.length = 0;
+      await topic.submitTopicInput(harness.key, 'fresh-folder');
+      assert.deepEqual(harness.replies.map((reply) => reply.text), []);
+      assert.deepEqual(boundTopics.map((bound) => bound.subdir), ['fresh-folder']);
     });
 
     it('a folder that cannot be created ends the wizard without a topic', async () => {

@@ -148,6 +148,7 @@ export const frDict: Record<string, string> = {
   'binding.welcome.git_dirty': ', modifications non validées',
   'binding.welcome.git_none': '• git : non initialisé',
   'binding.welcome.auto_bound': '• Lié automatiquement : le nom du fil correspond au dossier',
+  'binding.welcome.existed': '• Le dossier existait déjà — lié à celui-ci',
   'binding.welcome.shared': '• ⚠️ Aussi utilisé par les fils : {threads} — les sessions restent indépendantes',
   'binding.welcome.start_prompt': 'Démarrez une conversation :',
 

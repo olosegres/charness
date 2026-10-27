@@ -152,6 +152,7 @@ export const enDict: Record<string, string> = {
   'binding.welcome.git_dirty': ', uncommitted changes',
   'binding.welcome.git_none': '• git: not initialised',
   'binding.welcome.auto_bound': '• Auto-bound: the topic name matches the folder',
+  'binding.welcome.existed': '• The folder was already there — bound to it',
   'binding.welcome.shared': '• ⚠️ Also used by: {threads} — sessions stay independent',
   'binding.welcome.start_prompt': 'Start a conversation:',
 
