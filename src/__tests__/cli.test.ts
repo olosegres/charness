@@ -166,6 +166,14 @@ test('claude-profiles --current keeps a resumed session on its account; --stoppe
   const human = runCli(['claude-profiles', '--current', 'work', '--stopped-by-limit']);
   assert.match(human.stdout, /recommended for any model: default \(moved: work stopped on a limit\)/);
   assert.match(runCli(['claude-profiles', '--current', 'work']).stdout, /recommended for any model: work \(stays on the warm account\)/);
+  // A resumed worker whose account can no longer run (its weekly window is full) moves, and the line says so.
+  writeProfilesState({
+    default: [usageBucket('session', 20, inHours(1)), usageBucket('weekly_all', 70, inHours(48))],
+    work: [usageBucket('session', 10, inHours(1)), usageBucket('weekly_all', 100, inHours(120))],
+  });
+  const full = runCli(['claude-profiles', '--current', 'work']);
+  assert.match(full.stdout, /recommended for any model: default \(moved: work can no longer run\)/);
+  assert.equal(runCli(['claude-profiles', '--best', '--current', 'work']).stdout, '\n');
   const withoutCurrent = runCli(['claude-profiles', '--stopped-by-limit']);
   assert.equal(withoutCurrent.status, 2);
   assert.match(withoutCurrent.stderr, /--stopped-by-limit needs --current <name>/);

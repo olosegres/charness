@@ -20,6 +20,7 @@ import {
   checkIsClaudeModelClearOfLimit,
   checkIsClaudeProfileLaunchable,
   checkIsClaudeTokenExpired,
+  describeClaudeLaunchOutcome,
   fetchClaudeUsage,
   getClaudeProfileRecordsFromState,
   formatClaudeUsageBucket,
@@ -306,12 +307,13 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
       assert.deepEqual(pick([sooner, warm], { currentProfile: 'warm' }), { pick: 'warm', reason: 'warm', nextAvailable: null });
     });
 
-    it('leaves an account that is at 100 % on a window the model drains, marked limited or signed out — by the new-agent rule', () => {
+    it('leaves an account that is at 100 % on a window the model drains, marked limited, signed out or out of credits — by the new-agent rule, reported as a move', () => {
       const full = view('warm', usage({ session: 100, weekly: 80, weeklyResetsAt: days(6) }));
-      assert.deepEqual(pick([sooner, full], { currentProfile: 'warm' }), { pick: 'sooner', reason: 'soonestWeeklyReset', nextAvailable: null });
-      assert.equal(pick([sooner, view('warm', warm.usage, { limitedUntil: hours(2) })], { currentProfile: 'warm' }).pick, 'sooner');
-      assert.equal(pick([sooner, view('warm', warm.usage, { loggedIn: false })], { currentProfile: 'warm' }).pick, 'sooner');
-      assert.equal(pick([sooner, view('warm', warm.usage, { creditExhaustedAt: hours(-1) })], { currentProfile: 'warm' }).pick, 'sooner');
+      assert.deepEqual(pick([sooner, full], { currentProfile: 'warm' }), { pick: 'sooner', reason: 'movedFromUnavailable', nextAvailable: null });
+      for (const patch of [{ limitedUntil: hours(2) }, { loggedIn: false }, { creditExhaustedAt: hours(-1) }]) {
+        const result = pick([sooner, view('warm', warm.usage, patch)], { currentProfile: 'warm' });
+        assert.deepEqual([result.pick, result.reason], ['sooner', 'movedFromUnavailable'], JSON.stringify(patch));
+      }
     });
 
     it('Fable\'s own window at 100 % moves a Fable session, not a sonnet one', () => {
@@ -338,6 +340,7 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
     it('an unknown current account (removed, a typo) is a new agent', () => {
       assert.deepEqual(pick([warm, sooner], { currentProfile: 'gone' }), { pick: 'sooner', reason: 'soonestWeeklyReset', nextAvailable: null });
       assert.equal(pick([warm, sooner], { currentProfile: 'gone', isStoppedByLimit: true }).reason, 'soonestWeeklyReset', 'nothing to move away from');
+      assert.equal(describeClaudeLaunchOutcome(buildClaudeProfilesReport([warm, sooner], 'sonnet', nowMs, { currentProfile: 'gone' }), 'gone'), 'soonest weekly reset');
     });
 
     it('stays on its account although it is switched off in the /limits list', () => {
@@ -370,15 +373,33 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
       assert.deepEqual(pick([signedOut, api, credits, switchedOff, noReset], { excludedNames: new Set(['off']) }), { pick: null, reason: 'none', nextAvailable: null });
     });
 
-    it('a session stopped by a limit whose figures show a blocker is named too; one without a blocker is not', () => {
+    it('a session stopped by a limit whose figures show a blocker is named at that blocker\'s reset', () => {
       const stopped = view('stopped', usage({ session: 100, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: hours(2) }));
       const farther = view('farther', usage({ session: 100, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: hours(4) }));
       assert.equal(pick([stopped, farther], { currentProfile: 'stopped', isStoppedByLimit: true }).nextAvailable?.profile, 'stopped');
-      const lagging = view('stopped', usage({ session: 40, weekly: 0, weeklyResetsAt: days(4) }));
+    });
+
+    it('a session stopped by a limit whose figures lag it (no blocker) frees up at its five-hour reset — a single account is not left without a time to come back', () => {
+      const lagging = view('stopped', usage({ session: 40, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: hours(3) }));
       assert.deepEqual(
-        pick([lagging, farther], { currentProfile: 'stopped', isStoppedByLimit: true }),
-        { pick: null, reason: 'none', nextAvailable: { profile: 'farther', at: hours(4) } },
+        pick([lagging], { currentProfile: 'stopped', isStoppedByLimit: true }),
+        { pick: null, reason: 'none', nextAvailable: { profile: 'stopped', at: hours(3) } },
+        'the only account, stopped by a limit its figures do not show',
       );
+      const farther = view('farther', usage({ session: 100, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: hours(4) }));
+      assert.deepEqual(pick([lagging, farther], { currentProfile: 'stopped', isStoppedByLimit: true }).nextAvailable, { profile: 'stopped', at: hours(3) }, 'the earlier of the two');
+      const laggingLater = view('stopped', usage({ session: 40, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: hours(6) }));
+      assert.deepEqual(pick([laggingLater, farther], { currentProfile: 'stopped', isStoppedByLimit: true }).nextAvailable, { profile: 'farther', at: hours(4) });
+    });
+
+    it('the five-hour fallback is rolled forward when that reset has passed, and needs a known reset; it is for the stopped account only', () => {
+      const passed = view('stopped', usage({ session: 40, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: hours(-1) }));
+      assert.deepEqual(pick([passed], { currentProfile: 'stopped', isStoppedByLimit: true }).nextAvailable, { profile: 'stopped', at: hours(4) }, 'a reset an hour ago rolls to +5 h − 1 h');
+      const noReset = view('stopped', usage({ session: 40, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: null }));
+      assert.equal(pick([noReset], { currentProfile: 'stopped', isStoppedByLimit: true }).nextAvailable, null, 'no reset, no time');
+      assert.equal(pick([view('stopped', undefined)], { currentProfile: 'stopped', isStoppedByLimit: true }).nextAvailable, null, 'no snapshot, no time');
+      // Without the stop flag the same account is usable by its figures: it is the pick, not a "next".
+      assert.equal(pick([view('stopped', usage({ session: 40, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: hours(3) }))]).pick, 'stopped');
     });
   });
 
@@ -400,6 +421,19 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
       const api = view('console', undefined, { billing: 'api', subscriptionType: null });
       assert.equal(buildClaudeProfilesReport([soon, api], 'sonnet', nowMs).recommended, 'soon');
       assert.equal(buildClaudeProfilesReport([soon, api], 'sonnet', nowMs, { currentProfile: 'console' }).recommended, 'console');
+    });
+
+    it('the first line of an answer says why: stays, moved (stopped on a limit / can no longer run), soonest reset, or none usable with the next account', () => {
+      const soon = view('soon', usage({ session: 0, weekly: 0, weeklyResetsAt: days(1) }));
+      const late = view('late', usage({ session: 0, weekly: 0, weeklyResetsAt: days(5) }));
+      const words = (options: Parameters<typeof buildClaudeProfilesReport>[3]) => describeClaudeLaunchOutcome(buildClaudeProfilesReport([soon, late], 'sonnet', nowMs, options), options?.currentProfile ?? null);
+      assert.equal(words({}), 'soonest weekly reset');
+      assert.equal(words({ currentProfile: 'late' }), 'stays on the warm account');
+      assert.equal(words({ currentProfile: 'late', isStoppedByLimit: true }), 'moved: late stopped on a limit');
+      assert.equal(describeClaudeLaunchOutcome(buildClaudeProfilesReport([soon, view('late', usage({ session: 100, weekly: 0, weeklyResetsAt: days(5) }))], 'sonnet', nowMs, { currentProfile: 'late' }), 'late'), 'moved: late can no longer run');
+      const full = view('full', usage({ session: 100, weekly: 0, weeklyResetsAt: days(1), sessionResetsAt: hours(2) }));
+      assert.equal(describeClaudeLaunchOutcome(buildClaudeProfilesReport([full], 'sonnet', nowMs), null), `none usable — next: full at ${hours(2)}`);
+      assert.equal(describeClaudeLaunchOutcome(buildClaudeProfilesReport([view('out', undefined, { loggedIn: false })], 'sonnet', nowMs), null), 'none usable — no account names a time it frees up');
     });
 
     it('isEligible keeps its strict meaning: the figures as recorded, no ceiling, no roll-forward', () => {

@@ -397,8 +397,12 @@ export const claudeLaunchResetTieMs = 60_000;
 export const claudeWeeklyWindowMs = 7 * 24 * 3_600_000;
 export const claudeSessionWindowMs = 5 * 3_600_000;
 
-/** `warm`: the session stays on its account; `movedFromLimited`: it was stopped by a limit and goes elsewhere; `soonestWeeklyReset`: a new agent; `none`: nothing is usable. */
-export type ClaudeLaunchPickReason = 'warm' | 'movedFromLimited' | 'soonestWeeklyReset' | 'none';
+/**
+ * `warm`: the session stays on its account; `movedFromLimited`: it was stopped by a limit and goes elsewhere;
+ * `movedFromUnavailable`: its account can no longer run (signed out, marked limited, out of credits, a window full) and it
+ * goes elsewhere; `soonestWeeklyReset`: a new agent; `none`: nothing is usable.
+ */
+export type ClaudeLaunchPickReason = 'warm' | 'movedFromLimited' | 'movedFromUnavailable' | 'soonestWeeklyReset' | 'none';
 
 /** The account that frees up first and the ISO instant it does. */
 export interface ClaudeNextAvailable {
@@ -556,13 +560,31 @@ function getClaudeProfileFreeAtMs(profile: ClaudeProfileUsageView, model: string
   return freeAtMs;
 }
 
-/** The subscription account that frees up first, when nothing is usable now; `null` when no account names a time. */
-function getClaudeNextAvailable(profiles: readonly ClaudeProfileUsageView[], model: string | null, nowMs: number, excludedNames: ReadonlySet<string>): ClaudeNextAvailable | null {
+/** When the profile's five-hour window resets (as of `nowMs`); `null` when the snapshot has none or names no reset. */
+function getSessionResetMs(profile: ClaudeProfileUsageView, nowMs: number): number | null {
+  const session = getClaudeUsageBucket(profile.usage, 'session');
+  const resetMs = session === null ? Number.NaN : getBucketResetMs(readClaudeBucketAsOf(session, nowMs));
+  return Number.isFinite(resetMs) ? resetMs : null;
+}
+
+/**
+ * The subscription account that frees up first, when nothing is usable now; `null` when no account names a time. The
+ * account a limit just stopped (`stoppedName`) may show no blocker at all — its figures lag the limit — and is then
+ * taken to free up when its five-hour window resets, so a single account is never left without a time to come back.
+ */
+function getClaudeNextAvailable(
+  profiles: readonly ClaudeProfileUsageView[],
+  model: string | null,
+  nowMs: number,
+  excludedNames: ReadonlySet<string>,
+  stoppedName: string | null,
+): ClaudeNextAvailable | null {
   let next: { profile: string; atMs: number } | null = null;
   for (const profile of profiles) {
     // These never come back at a known time: switched off, signed out, API-billed, out of credits.
     if (excludedNames.has(profile.name) || profile.loggedIn === false || profile.billing === 'api' || profile.creditExhaustedAt !== null) continue;
-    const freeAtMs = getClaudeProfileFreeAtMs(profile, model, nowMs);
+    let freeAtMs = getClaudeProfileFreeAtMs(profile, model, nowMs);
+    if (profile.name === stoppedName && freeAtMs !== null && freeAtMs <= nowMs) freeAtMs = getSessionResetMs(profile, nowMs);
     if (freeAtMs === null || freeAtMs <= nowMs) continue;
     if (next === null || freeAtMs < next.atMs) next = { profile: profile.name, atMs: freeAtMs };
   }
@@ -581,7 +603,8 @@ function getClaudeNextAvailable(profiles: readonly ClaudeProfileUsageView[], mod
  * WARM session (`currentProfile` known): it stays on that account unless the account is signed out, marked limited, out
  * of API credits or at 100 % on a window the model drains — the ceiling does not apply, and an API-billed account the
  * session already works on is kept (the spend was approved). `isStoppedByLimit` takes `currentProfile` out of the answer
- * whatever the figures say (they may lag the limit); the rest follows the new-agent rule.
+ * whatever the figures say (they may lag the limit); the rest follows the new-agent rule, and the reason says the
+ * session moved (`movedFromLimited`, or `movedFromUnavailable` when the account could no longer run by its own figures).
  *
  * Nothing usable → `pick: null` and {@link ClaudeLaunchPick.nextAvailable}.
  */
@@ -592,22 +615,26 @@ export function getClaudeLaunchPick(input: ClaudeLaunchPickOptions & {
 }): ClaudeLaunchPick {
   const excludedNames = input.excludedNames ?? new Set<string>();
   const current = input.currentProfile ? input.profiles.find((profile) => profile.name === input.currentProfile) : undefined;
-  if (current && input.isStoppedByLimit !== true
+  const isStopped = current !== undefined && input.isStoppedByLimit === true;
+  if (current && !isStopped
     && checkIsClaudeProfileEligible(current, getRelevantClaudeBucketsAsOf(current, input.model, input.nowMs), input.nowMs)) {
     return { pick: current.name, reason: 'warm', nextAvailable: null };
   }
-  const movedFrom = current && input.isStoppedByLimit === true ? current.name : null;
+  const movedFrom = current?.name ?? null;
   const usable = input.profiles.filter((profile) => profile.name !== movedFrom
     && !excludedNames.has(profile.name)
     && checkIsClaudeProfileLaunchable(profile, input.model, input.nowMs));
   const [first] = sortClaudeProfilesByLaunchRank(usable, input.model, input.nowMs);
-  if (first) return { pick: first.name, reason: movedFrom === null ? 'soonestWeeklyReset' : 'movedFromLimited', nextAvailable: null };
-  return { pick: null, reason: 'none', nextAvailable: getClaudeNextAvailable(input.profiles, input.model, input.nowMs, excludedNames) };
+  if (first) {
+    const reason = movedFrom === null ? 'soonestWeeklyReset' : isStopped ? 'movedFromLimited' : 'movedFromUnavailable';
+    return { pick: first.name, reason, nextAvailable: null };
+  }
+  return { pick: null, reason: 'none', nextAvailable: getClaudeNextAvailable(input.profiles, input.model, input.nowMs, excludedNames, isStopped ? movedFrom : null) };
 }
 
 /**
  * @description The pick in words, for the first line of the `claude_profiles` answer and the CLI: why the account was chosen
- * (`stays on the warm account`, `moved: <name> stopped on a limit`, `soonest weekly reset`), or that nothing is usable
+ * (`stays on the warm account`, `moved: <name> stopped on a limit` / `can no longer run`, `soonest weekly reset`), or that nothing is usable
  * and which account frees up when. `currentProfile` is the account the caller passed for a resumed session.
  */
 export function describeClaudeLaunchOutcome(report: Pick<ClaudeProfilesReport, 'pickReason' | 'nextAvailable'>, currentProfile: string | null): string {
@@ -616,6 +643,8 @@ export function describeClaudeLaunchOutcome(report: Pick<ClaudeProfilesReport, '
       return 'stays on the warm account';
     case 'movedFromLimited':
       return `moved: ${currentProfile ?? 'the warm account'} stopped on a limit`;
+    case 'movedFromUnavailable':
+      return `moved: ${currentProfile ?? 'the warm account'} can no longer run`;
     case 'soonestWeeklyReset':
       return 'soonest weekly reset';
     case 'none':
