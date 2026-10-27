@@ -63,10 +63,10 @@ test('t substitutes single {name} placeholder', () => {
 });
 
 test('t substitutes multiple placeholders', () => {
-  // `thread.bind_collision` mentions `{subdir}` once + `{threads}` once.
-  const out = t('thread.bind_collision', { subdir: 'src', threads: '`a`, `b`' });
+  // `bind.not_found` mentions `{subdir}` once + `{workRoot}` once.
+  const out = t('bind.not_found', { subdir: 'src', workRoot: '/work' });
   assert.ok(out.includes('src'));
-  assert.ok(out.includes('`a`, `b`'));
+  assert.ok(out.includes('/work'));
 });
 
 test('bind.current resolves with the subdir in the active locale', () => {

@@ -11,12 +11,8 @@ export const uzDict: Record<string, string> = {
   'thread.unbound': '📁 Bog‘lanish olib tashlandi.',
   'thread.general_no_agent':
     'General papkaga bog‘lanmagan — agent bilan gaplashish uchun mavzu mavzusiga o‘ting.',
-  'thread.welcome_bound':
-    '👋 Mavzu yaratildi va `{subdir}` ga avtomatik bog‘landi (mavzu nomi quyi papkaga mos keldi).\n/claude yoki /opencode ni ishga tushiring.',
   'thread.welcome_pick':
     '👋 Mavzu yaratildi. Papkani bog‘lang: /bind <subdir>, yoki quyidan tanlang.',
-  'thread.bind_collision':
-    '⚠️ `{subdir}` papkasi allaqachon quyidagi mavzular tomonidan ishlatilmoqda: {threads}.\nBog‘lanish qo‘shildi; seanslar mustaqil qoladi (o‘z tmux/SSE).',
   'thread.no_agent_with_binding':
     '📁 `{subdir}` papkasi bog‘langan. Dialogni boshlash uchun /claude yoki /opencode ni ishga tushiring.',
 
@@ -151,6 +147,8 @@ export const uzDict: Record<string, string> = {
   'binding.welcome.git_clean': ', toza',
   'binding.welcome.git_dirty': ', tasdiqlanmagan o‘zgarishlar',
   'binding.welcome.git_none': '• git: boshlanmagan',
+  'binding.welcome.auto_bound': '• Avtomatik bog‘landi: mavzu nomi papkaga mos keldi',
+  'binding.welcome.shared': '• ⚠️ Bu papkani boshqa mavzular ham ishlatadi: {threads} — seanslar mustaqil',
   'binding.welcome.start_prompt': 'Suhbatni boshlang:',
 
   'mcp.header': '🔌 *Ushbu mavzu uchun MCP serverlar:*',

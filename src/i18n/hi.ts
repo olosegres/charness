@@ -11,12 +11,8 @@ export const hiDict: Record<string, string> = {
   'thread.unbound': '📁 बाइंडिंग हटाई गई।',
   'thread.general_no_agent':
     'General किसी फ़ोल्डर से बाउंड नहीं है — एजेंट से बात करने के लिए एक विषय-वस्तु थ्रेड पर स्विच करें।',
-  'thread.welcome_bound':
-    '👋 थ्रेड बनाया गया और स्वतः `{subdir}` से बाउंड किया गया (थ्रेड नाम एक सबफ़ोल्डर से मेल खाया)।\n/claude या /opencode चलाएँ।',
   'thread.welcome_pick':
     '👋 थ्रेड बनाया गया। फ़ोल्डर बाइंड करें: /bind <subdir>, या नीचे से चुनें।',
-  'thread.bind_collision':
-    '⚠️ फ़ोल्डर `{subdir}` पहले से थ्रेड्स द्वारा उपयोग में है: {threads}.\nबाइंडिंग जोड़ी गई; सत्र स्वतंत्र रहते हैं (अपना tmux/SSE)।',
   'thread.no_agent_with_binding':
     '📁 फ़ोल्डर `{subdir}` बाउंड है। संवाद शुरू करने के लिए /claude या /opencode चलाएँ।',
 
@@ -151,6 +147,8 @@ export const hiDict: Record<string, string> = {
   'binding.welcome.git_clean': ', स्वच्छ',
   'binding.welcome.git_dirty': ', अप्रतिबद्ध परिवर्तन',
   'binding.welcome.git_none': '• git: प्रारंभ नहीं किया गया',
+  'binding.welcome.auto_bound': '• स्वतः बाउंड: थ्रेड नाम फ़ोल्डर से मेल खाता है',
+  'binding.welcome.shared': '• ⚠️ इसका उपयोग इन थ्रेड्स में भी हो रहा है: {threads} — सत्र स्वतंत्र रहते हैं',
   'binding.welcome.start_prompt': 'एक बातचीत शुरू करें:',
 
   'mcp.header': '🔌 *इस थ्रेड के लिए MCP सर्वर:*',

@@ -11,12 +11,8 @@ export const esDict: Record<string, string> = {
   'thread.unbound': '📁 Vínculo eliminado.',
   'thread.general_no_agent':
     'General no está vinculado a una carpeta — cambia a un hilo temático para hablar con un agente.',
-  'thread.welcome_bound':
-    '👋 Hilo creado y vinculado automáticamente a `{subdir}` (el nombre del hilo coincidió con una subcarpeta).\nEjecuta /claude o /opencode.',
   'thread.welcome_pick':
     '👋 Hilo creado. Vincula una carpeta: /bind <subdir>, o elige una de la lista.',
-  'thread.bind_collision':
-    '⚠️ La carpeta `{subdir}` ya la usan los hilos: {threads}.\nVínculo añadido; las sesiones siguen siendo independientes (tmux/SSE propios).',
   'thread.no_agent_with_binding':
     '📁 La carpeta `{subdir}` está vinculada. Ejecuta /claude o /opencode para iniciar el diálogo.',
 
@@ -151,6 +147,8 @@ export const esDict: Record<string, string> = {
   'binding.welcome.git_clean': ', limpio',
   'binding.welcome.git_dirty': ', cambios sin confirmar',
   'binding.welcome.git_none': '• git: no inicializado',
+  'binding.welcome.auto_bound': '• Vinculado automáticamente: el nombre del hilo coincide con la carpeta',
+  'binding.welcome.shared': '• ⚠️ También la usan los hilos: {threads} — las sesiones siguen siendo independientes',
   'binding.welcome.start_prompt': 'Inicia una conversación:',
 
   'mcp.header': '🔌 *Servidores MCP para este hilo:*',

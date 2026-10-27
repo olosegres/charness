@@ -11,12 +11,8 @@ export const zhDict: Record<string, string> = {
   'thread.unbound': '📁 绑定已解除。',
   'thread.general_no_agent':
     'General 未绑定文件夹 — 切换到主题话题与代理对话。',
-  'thread.welcome_bound':
-    '👋 话题已创建并自动绑定到 `{subdir}`（话题名匹配了子文件夹）。\n运行 /claude 或 /opencode。',
   'thread.welcome_pick':
     '👋 话题已创建。绑定文件夹：/bind <subdir>，或从下方列表选择。',
-  'thread.bind_collision':
-    '⚠️ 文件夹 `{subdir}` 已被以下话题使用：{threads}。\n绑定已添加；会话保持独立（各自的 tmux/SSE）。',
   'thread.no_agent_with_binding':
     '📁 文件夹 `{subdir}` 已绑定。运行 /claude 或 /opencode 开始对话。',
 
@@ -151,6 +147,8 @@ export const zhDict: Record<string, string> = {
   'binding.welcome.git_clean': ', 干净',
   'binding.welcome.git_dirty': ', 有未提交的更改',
   'binding.welcome.git_none': '• git: 未初始化',
+  'binding.welcome.auto_bound': '• 已自动绑定：话题名与文件夹匹配',
+  'binding.welcome.shared': '• ⚠️ 以下话题也在使用：{threads} — 会话保持独立',
   'binding.welcome.start_prompt': '开始对话：',
 
   'mcp.header': '🔌 *此话题的 MCP 服务器：*',

@@ -11,12 +11,8 @@ export const frDict: Record<string, string> = {
   'thread.unbound': '📁 Lien effacé.',
   'thread.general_no_agent':
     'General n\'est pas lié à un dossier — passez à un fil thématique pour parler à un agent.',
-  'thread.welcome_bound':
-    '👋 Fil créé et lié automatiquement à `{subdir}` (nom du fil correspondait à un sous-dossier).\nLancez /claude ou /opencode.',
   'thread.welcome_pick':
     '👋 Fil créé. Liez un dossier : /bind <subdir>, ou choisissez-en un ci-dessous.',
-  'thread.bind_collision':
-    '⚠️ Le dossier `{subdir}` est déjà utilisé par les fils : {threads}.\nLien ajouté ; les sessions restent indépendantes (tmux/SSE séparés).',
   'thread.no_agent_with_binding':
     '📁 Le dossier `{subdir}` est lié. Lancez /claude ou /opencode pour commencer le dialogue.',
 
@@ -151,6 +147,8 @@ export const frDict: Record<string, string> = {
   'binding.welcome.git_clean': ', propre',
   'binding.welcome.git_dirty': ', modifications non validées',
   'binding.welcome.git_none': '• git : non initialisé',
+  'binding.welcome.auto_bound': '• Lié automatiquement : le nom du fil correspond au dossier',
+  'binding.welcome.shared': '• ⚠️ Aussi utilisé par les fils : {threads} — les sessions restent indépendantes',
   'binding.welcome.start_prompt': 'Démarrez une conversation :',
 
   'mcp.header': '🔌 *Serveurs MCP pour ce fil :*',

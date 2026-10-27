@@ -11,12 +11,8 @@ export const deDict: Record<string, string> = {
   'thread.unbound': '📁 Verknüpfung aufgehoben.',
   'thread.general_no_agent':
     'General ist nicht mit einem Ordner verknüpft — wechsle in einen thematischen Thread, um mit einem Agent zu sprechen.',
-  'thread.welcome_bound':
-    '👋 Thread erstellt und automatisch mit `{subdir}` verknüpft (Thread-Name passte zu einem Unterordner).\nStarte /claude oder /opencode.',
   'thread.welcome_pick':
     '👋 Thread erstellt. Verknüpfe einen Ordner: /bind <subdir>, oder wähle einen aus der Liste.',
-  'thread.bind_collision':
-    '⚠️ Ordner `{subdir}` wird bereits von Threads verwendet: {threads}.\nVerknüpfung hinzugefügt; Sessions bleiben unabhängig (eigene tmux/SSE).',
   'thread.no_agent_with_binding':
     '📁 Ordner `{subdir}` ist verknüpft. Starte /claude oder /opencode, um den Dialog zu beginnen.',
 
@@ -151,6 +147,8 @@ export const deDict: Record<string, string> = {
   'binding.welcome.git_clean': ', sauber',
   'binding.welcome.git_dirty': ', unbestätigte Änderungen',
   'binding.welcome.git_none': '• git: nicht initialisiert',
+  'binding.welcome.auto_bound': '• Automatisch verknüpft: Thread-Name passt zum Ordner',
+  'binding.welcome.shared': '• ⚠️ Auch genutzt von: {threads} — Sessions bleiben unabhängig',
   'binding.welcome.start_prompt': 'Beginne eine Unterhaltung:',
 
   'mcp.header': '🔌 *MCP-Server für diesen Thread:*',

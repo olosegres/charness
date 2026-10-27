@@ -103,15 +103,6 @@ function fillTemplate(template: string, values: Record<string, string>): string 
   return Object.entries(values).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, value), template);
 }
 
-/** The callback data of the button with this caption (the captions of a picker are unique). */
-function getButtonData(driver: TopicDriver, message: FakeTelegramMessage, label: string): string {
-  const labels = driver.getKeyboardLabels(message).flat();
-  const data = driver.getKeyboardData(message).flat();
-  const index = labels.indexOf(label);
-  if (index < 0) throw new Error(`no button «${label}» in ${labels.join(' | ')}`);
-  return data[index];
-}
-
 /** The binding the bot keeps for a topic of the group, read from `state.json`. */
 function readBinding(threadId: number): BindingData | undefined {
   return readPersistedState(getLayout()).bindings?.[`${group.id}:${threadId}`];
@@ -207,7 +198,7 @@ describe('/topic end to end: built charness, fake Bot API', () => {
     const question = await originTopic.waitForMessage('the folder question', (message) => message.text === fillTemplate(enDict['topic.askFolder'], { name: 'Release notes' }));
     assert.deepEqual(originTopic.getKeyboardLabels(question), [[sameFolderLabel], [otherFolderLabel], [cancelLabel]]);
     answeredQuestion = question;
-    answeredQuestionData = getButtonData(originTopic, question, sameFolderLabel);
+    answeredQuestionData = originTopic.getButtonData(question, sameFolderLabel);
 
     const ownTopicEventTaken = waitForOwnTopicEventTaken(1);
     // A timeout surfaces at the `await` below; the hold itself only waits for it to settle.
@@ -252,12 +243,12 @@ describe('/topic end to end: built charness, fake Bot API', () => {
     const question = await originTopic.waitForMessage('the folder question', (message) => message.message_id > sentId && message.text === fillTemplate(enDict['topic.askFolder'], { name: 'Second one' }));
     assert.ok(!originTopic.listMessages().some((message) => message.message_id > sentId && message.text.startsWith(enDict['topic.askName'])), 'the name was not asked');
 
-    await originTopic.tapAndAwaitAnswer(question, getButtonData(originTopic, question, otherFolderLabel));
+    await originTopic.tapAndAwaitAnswer(question, originTopic.getButtonData(question, otherFolderLabel));
     await originTopic.waitForMessageText('the picker', question, (text) => text === fillTemplate(enDict['topic.pickFolder'], { name: 'Second one' }));
     const labels = originTopic.getKeyboardLabels(question).flat();
     assert.deepEqual(labels, [createFolderLabel, `📁 ${folders.current}`, `📁 ${folders.other}`, cancelLabel], '/bind\'s own layout: the create row, then the folders, then the way out');
 
-    await originTopic.tapAndAwaitAnswer(question, getButtonData(originTopic, question, `📁 ${folders.other}`));
+    await originTopic.tapAndAwaitAnswer(question, originTopic.getButtonData(question, `📁 ${folders.other}`));
     const created = await waitForTopicCount(2);
     await originTopic.waitForMessageText('the answer', question, (text) => text === fillTemplate(enDict['topic.created'], { name: 'Second one', subdir: folders.other }));
     assert.deepEqual(originTopic.getKeyboardUrls(question), [`https://t.me/c/${groupLinkId}/${created.threadId}`]);
@@ -269,7 +260,7 @@ describe('/topic end to end: built charness, fake Bot API', () => {
     const picker = await generalTopic.waitForMessage('the picker', (message) => message.message_id > sentId && message.text === fillTemplate(enDict['topic.pickFolder'], { name: 'From General' }));
     assert.ok(!generalTopic.getKeyboardLabels(picker).flat().includes(otherFolderLabel), 'no «other folder» step');
 
-    await generalTopic.tapAndAwaitAnswer(picker, getButtonData(generalTopic, picker, `📁 ${folders.current}`));
+    await generalTopic.tapAndAwaitAnswer(picker, generalTopic.getButtonData(picker, `📁 ${folders.current}`));
     const created = await waitForTopicCount(3);
     await generalTopic.waitForMessageText('the answer', picker, (text) => text === fillTemplate(enDict['topic.created'], { name: 'From General', subdir: folders.current }));
     assert.deepEqual(generalTopic.getKeyboardUrls(picker), [`https://t.me/c/${groupLinkId}/${created.threadId}`]);
@@ -279,9 +270,9 @@ describe('/topic end to end: built charness, fake Bot API', () => {
   it('«create new folder» in the picker: a refused name keeps the question open; a good one makes the folder and the topic on it', async () => {
     const sentId = fakeTelegram.pushOperatorMessage(originThreadId, '/topic Fresh start');
     const question = await originTopic.waitForMessage('the folder question', (message) => message.message_id > sentId && message.text === fillTemplate(enDict['topic.askFolder'], { name: 'Fresh start' }));
-    await originTopic.tapAndAwaitAnswer(question, getButtonData(originTopic, question, otherFolderLabel));
+    await originTopic.tapAndAwaitAnswer(question, originTopic.getButtonData(question, otherFolderLabel));
     await originTopic.waitForMessageText('the picker', question, (text) => text === fillTemplate(enDict['topic.pickFolder'], { name: 'Fresh start' }));
-    await originTopic.tapAndAwaitAnswer(question, getButtonData(originTopic, question, createFolderLabel));
+    await originTopic.tapAndAwaitAnswer(question, originTopic.getButtonData(question, createFolderLabel));
     await originTopic.waitForMessageText('the folder-name question', question, (text) => text === `${fillTemplate(enDict['topic.createFolderPrompt'], { name: 'Fresh start' })}\n${escHint}`);
     assert.deepEqual(originTopic.getKeyboardData(question).flat(), [], 'the picker is consumed');
 
@@ -317,8 +308,8 @@ describe('/topic end to end: built charness, fake Bot API', () => {
   it('the «cancel» button ends the wizard at the folder question and in the picker: the message becomes the notice', async () => {
     const sentId = fakeTelegram.pushOperatorMessage(originThreadId, '/topic Cancelled by button');
     const question = await originTopic.waitForMessage('the folder question', (message) => message.message_id > sentId && message.text === fillTemplate(enDict['topic.askFolder'], { name: 'Cancelled by button' }));
-    const cancelData = getButtonData(originTopic, question, cancelLabel);
-    await originTopic.tapAndAwaitAnswer(question, getButtonData(originTopic, question, otherFolderLabel));
+    const cancelData = originTopic.getButtonData(question, cancelLabel);
+    await originTopic.tapAndAwaitAnswer(question, originTopic.getButtonData(question, otherFolderLabel));
     await originTopic.waitForMessageText('the picker', question, (text) => text === fillTemplate(enDict['topic.pickFolder'], { name: 'Cancelled by button' }));
     await originTopic.tapAndAwaitAnswer(question, cancelData);
     await originTopic.waitForMessageText('the notice', question, (text) => text === enDict['topic.cancelled']);
@@ -331,7 +322,7 @@ describe('/topic end to end: built charness, fake Bot API', () => {
   it('/esc at the folder question ends the wizard instead of interrupting the agent', async () => {
     const sentId = fakeTelegram.pushOperatorMessage(originThreadId, '/topic Cancelled by esc');
     const question = await originTopic.waitForMessage('the folder question', (message) => message.message_id > sentId && message.text === fillTemplate(enDict['topic.askFolder'], { name: 'Cancelled by esc' }));
-    const sameFolderData = getButtonData(originTopic, question, sameFolderLabel);
+    const sameFolderData = originTopic.getButtonData(question, sameFolderLabel);
     fakeTelegram.pushOperatorMessage(originThreadId, '/esc');
     await originTopic.waitForMessageText('the notice', question, (text) => text === enDict['topic.cancelled']);
     assert.deepEqual(originTopic.getKeyboardData(question).flat(), [], 'the keyboard is consumed');
@@ -356,7 +347,7 @@ describe('/topic end to end: built charness, fake Bot API', () => {
     try {
       const sentId = fakeTelegram.pushOperatorMessage(originThreadId, '/topic Denied');
       const question = await originTopic.waitForMessage('the folder question', (message) => message.message_id > sentId && message.text === fillTemplate(enDict['topic.askFolder'], { name: 'Denied' }));
-      await originTopic.tapAndAwaitAnswer(question, getButtonData(originTopic, question, sameFolderLabel));
+      await originTopic.tapAndAwaitAnswer(question, originTopic.getButtonData(question, sameFolderLabel));
       await originTopic.waitForMessageText('the hint', question, (text) => text === enDict['error.tg.perm.manage_topics']);
       assert.equal(listCreatedTopics().length, 4);
       assert.deepEqual(originTopic.getKeyboardUrls(question), []);
@@ -368,7 +359,7 @@ describe('/topic end to end: built charness, fake Bot API', () => {
   it('«create new folder» of a /topic picker ends /bind\'s own armed folder-name question: the plain message after it is the agent\'s', async () => {
     const sentId = fakeTelegram.pushOperatorMessage(originThreadId, '/topic Races the bind picker');
     const question = await originTopic.waitForMessage('the folder question', (message) => message.message_id > sentId && message.text === fillTemplate(enDict['topic.askFolder'], { name: 'Races the bind picker' }));
-    await originTopic.tapAndAwaitAnswer(question, getButtonData(originTopic, question, otherFolderLabel));
+    await originTopic.tapAndAwaitAnswer(question, originTopic.getButtonData(question, otherFolderLabel));
     await originTopic.waitForMessageText('the picker', question, (text) => text === fillTemplate(enDict['topic.pickFolder'], { name: 'Races the bind picker' }));
 
     // /bind's picker, and its «create new folder» tapped: the next plain message would be a folder name for /bind …
@@ -377,7 +368,7 @@ describe('/topic end to end: built charness, fake Bot API', () => {
     await originTopic.tapAndAwaitAnswer(bindPicker, bindCreateFolderData);
     await originTopic.waitForMessage('the /bind folder-name prompt', (message) => message.message_id > bindPicker.message_id && message.text === enDict['bind.create_prompt']);
     // … until the /topic picker's «create new folder» takes the next message for itself.
-    await originTopic.tapAndAwaitAnswer(question, getButtonData(originTopic, question, createFolderLabel));
+    await originTopic.tapAndAwaitAnswer(question, originTopic.getButtonData(question, createFolderLabel));
     await originTopic.waitForMessageText('the folder-name question', question, (text) => text === `${fillTemplate(enDict['topic.createFolderPrompt'], { name: 'Races the bind picker' })}\n${escHint}`);
 
     fakeTelegram.pushOperatorMessage(originThreadId, raceFolderName);

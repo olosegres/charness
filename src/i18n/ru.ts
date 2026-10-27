@@ -14,12 +14,8 @@ export const ruDict: Record<string, string> = {
   'thread.unbound': '📁 Привязка снята.',
   'thread.general_no_agent':
     'General не привязан к папке — перейди в тематический тред для разговора с агентом.',
-  'thread.welcome_bound':
-    '👋 Тред создан и автоматически привязан к `{subdir}` (имя треда совпало с подпапкой).\nЗапусти /claude или /opencode.',
   'thread.welcome_pick':
     '👋 Тред создан. Привяжи папку: /bind <subdir>, или выбери из списка ниже.',
-  'thread.bind_collision':
-    '⚠️ Папка `{subdir}` уже используется в тредах: {threads}.\nПривязка добавлена; сессии независимы (свой tmux/SSE).',
   'thread.no_agent_with_binding':
     '📁 Папка `{subdir}` привязана. Запусти /claude или /opencode чтобы начать диалог.',
 
@@ -155,6 +151,8 @@ export const ruDict: Record<string, string> = {
   'binding.welcome.git_clean': ', чисто',
   'binding.welcome.git_dirty': ', изменения не закоммичены',
   'binding.welcome.git_none': '• git: не инициализирован',
+  'binding.welcome.auto_bound': '• Привязано автоматически: имя треда совпало с папкой',
+  'binding.welcome.shared': '• ⚠️ Папку используют и другие треды: {threads} — сессии независимы',
   'binding.welcome.start_prompt': 'Начни диалог:',
 
   'mcp.header': '🔌 *MCP-серверы для этого треда:*',

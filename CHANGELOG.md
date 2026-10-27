@@ -2,11 +2,14 @@
 
 ## Unreleased
 
-**Picking a folder with `/bind` now leaves ONE message in the topic — the full welcome with the folder's facts and the start buttons.**
-Before, the pick also posted a short «📁 Bound to `x`. Run /claude or /opencode.» just before the welcome, and it stayed in the topic as a
-second, plainer copy of the same news. It is gone for all three ways of binding — `/bind <folder>`, a folder tapped in the picker and
-«create new folder»; a refused folder still says why, and a folder other topics already use still gets its warning next to the welcome. The
-short acknowledgement's text is removed from all 12 languages.
+**Binding a topic to a folder now leaves ONE message in the topic — the full welcome with the folder's facts and the start buttons — whichever way it happens.**
+Before, a bind also posted extra messages that stayed in the topic as plainer copies of the same news: picking a folder with `/bind` (typed, tapped
+in the picker or «create new folder») added a short «📁 Bound to `x`. Run /claude or /opencode.» just before the welcome, a topic the bot bound by
+itself because its name matches a folder got a separate 👋 «auto-bound» greeting, and a folder other topics already use got a separate ⚠️ warning.
+Now only the welcome is posted: a row in it says the bot bound the topic because its name matches the folder, and another names the topics that
+already use the folder. A folder that does not exist still just gets its reason. When the bot binds a non-admin's topic on an admin's first message
+there, that message is answered by the welcome alone, without the extra «bound, run /claude» hint. The removed texts are gone from all 12 languages,
+the two new rows are in all 12.
 
 **`/task_agents` in General sets how many task agents may work at once — a number from the picker or any number you type.**
 It opens a one-shot picker (5 / 10 / 15 / 20 / 30 / No limit, the value in force marked ✓) whose tap turns it into its confirmation;

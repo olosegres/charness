@@ -11,12 +11,8 @@ export const jaDict: Record<string, string> = {
   'thread.unbound': '📁 バインドを解除しました。',
   'thread.general_no_agent':
     'General はフォルダにバインドされていません — エージェントと話すにはトピックスレッドに切り替えてください。',
-  'thread.welcome_bound':
-    '👋 スレッドを作成し、`{subdir}` に自動バインドしました（スレッド名がサブフォルダと一致）。\n/claude または /opencode を実行してください。',
   'thread.welcome_pick':
     '👋 スレッドを作成しました。フォルダをバインド: /bind <subdir>、または下から選んでください。',
-  'thread.bind_collision':
-    '⚠️ フォルダ `{subdir}` は既にスレッドで使用中: {threads}。\nバインドを追加しました; セッションは独立しています（それぞれの tmux/SSE）。',
   'thread.no_agent_with_binding':
     '📁 フォルダ `{subdir}` がバインドされています。/claude または /opencode を実行してダイアログを開始してください。',
 
@@ -151,6 +147,8 @@ export const jaDict: Record<string, string> = {
   'binding.welcome.git_clean': ', クリーン',
   'binding.welcome.git_dirty': ', 未コミットの変更',
   'binding.welcome.git_none': '• git: 初期化されていません',
+  'binding.welcome.auto_bound': '• 自動バインド: スレッド名がフォルダと一致',
+  'binding.welcome.shared': '• ⚠️ 他のスレッドでも使用中: {threads} — セッションは独立しています',
   'binding.welcome.start_prompt': '会話を開始:',
 
   'mcp.header': '🔌 *このスレッドの MCP サーバー:*',

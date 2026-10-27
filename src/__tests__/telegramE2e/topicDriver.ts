@@ -66,6 +66,15 @@ export class TopicDriver {
     return (message.reply_markup?.inline_keyboard ?? []).map((row) => row.flatMap((button) => ('callback_data' in button ? [button.callback_data] : [])));
   }
 
+  /** @description The callback data of the keyboard button with this caption (the captions of a picker are unique). */
+  getButtonData(message: FakeTelegramMessage, label: string): string {
+    const labels = this.getKeyboardLabels(message).flat();
+    const data = this.getKeyboardData(message).flat();
+    const index = labels.indexOf(label);
+    if (index < 0) throw new Error(`no button «${label}» in ${labels.join(' | ')}`);
+    return data[index];
+  }
+
   /** @description The links of a message's keyboard, in order. */
   getKeyboardUrls(message: FakeTelegramMessage): string[] {
     return (message.reply_markup?.inline_keyboard ?? []).flat().flatMap((button) => ('url' in button ? [button.url] : []));

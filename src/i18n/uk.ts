@@ -16,12 +16,8 @@ export const ukDict: Record<string, string> = {
   'thread.unbound': '📁 Прив\'язку знято.',
   'thread.general_no_agent':
     'General не прив\'язаний до папки — перейди в тематичний тред, щоб поговорити з агентом.',
-  'thread.welcome_bound':
-    '👋 Тред створено й автоматично прив\'язано до `{subdir}` (назва теми збіглася з підпапкою).\nЗапусти /claude або /opencode.',
   'thread.welcome_pick':
     '👋 Тред створено. Прив\'яжи папку: /bind <subdir>, або обери одну нижче.',
-  'thread.bind_collision':
-    '⚠️ Папка `{subdir}` вже використовується в тредах: {threads}.\nПрив\'язку додано; сесії лишаються незалежними (власний tmux/SSE).',
   'thread.no_agent_with_binding':
     '📁 Папка `{subdir}` прив\'язана. Запусти /claude або /opencode, щоб почати діалог.',
 
@@ -157,6 +153,8 @@ export const ukDict: Record<string, string> = {
   'binding.welcome.git_clean': ', чисто',
   'binding.welcome.git_dirty': ', незакомічені зміни',
   'binding.welcome.git_none': '• git: не ініціалізовано',
+  'binding.welcome.auto_bound': '• Прив\'язано автоматично: назва теми збіглася з папкою',
+  'binding.welcome.shared': '• ⚠️ Папку використовують і інші треди: {threads} — сесії незалежні',
   'binding.welcome.start_prompt': 'Почни розмову:',
 
   'mcp.header': '🔌 *MCP-сервери для цього треда:*',

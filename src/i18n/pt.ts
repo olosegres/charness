@@ -11,12 +11,8 @@ export const ptDict: Record<string, string> = {
   'thread.unbound': '📁 Vínculo removido.',
   'thread.general_no_agent':
     'General não está vinculado a uma pasta — muda para um tópico temático para falar com um agente.',
-  'thread.welcome_bound':
-    '👋 Tópico criado e vinculado automaticamente a `{subdir}` (nome do tópico correspondeu a uma subpasta).\nInicia /claude ou /opencode.',
   'thread.welcome_pick':
     '👋 Tópico criado. Vincula uma pasta: /bind <subdir>, ou escolhe uma da lista.',
-  'thread.bind_collision':
-    '⚠️ A pasta `{subdir}` já é usada pelos tópicos: {threads}.\nVínculo adicionado; as sessões mantêm-se independentes (tmux/SSE próprios).',
   'thread.no_agent_with_binding':
     '📁 A pasta `{subdir}` está vinculada. Inicia /claude ou /opencode para começar o diálogo.',
 
@@ -151,6 +147,8 @@ export const ptDict: Record<string, string> = {
   'binding.welcome.git_clean': ', limpo',
   'binding.welcome.git_dirty': ', alterações não confirmadas',
   'binding.welcome.git_none': '• git: não inicializado',
+  'binding.welcome.auto_bound': '• Vinculado automaticamente: o nome do tópico corresponde à pasta',
+  'binding.welcome.shared': '• ⚠️ Também usada pelos tópicos: {threads} — as sessões mantêm-se independentes',
   'binding.welcome.start_prompt': 'Inicia uma conversa:',
 
   'mcp.header': '🔌 *Servidores MCP para este tópico:*',

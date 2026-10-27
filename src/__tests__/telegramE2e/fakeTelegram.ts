@@ -113,6 +113,8 @@ export interface FakeTelegramOptions {
 const longPollHoldMs = 2_000;
 /** The cap the Bot API enforces on `getUpdates` `limit`. */
 const maxUpdatesPerPoll = 100;
+/** The icon colour every topic made in the fake group has (Telegram's first preset). */
+const topicIconColor = 0x6FB9F0;
 
 /** `/command args` → the `bot_command` entity Telegram attaches to a typed command. */
 function getCommandEntities(text: string): FakeTelegramMessage['entities'] {
@@ -194,6 +196,16 @@ export class FakeTelegram {
     const message = this.storeMessage(threadId, text, from, { entities: getCommandEntities(text) });
     this.pushUpdate({ message });
     return message.message_id;
+  }
+
+  /**
+   * @description `from` (the operator by default) makes a topic named `name` by hand: the bot gets its `forum_topic_created`
+   * service message, the way a person creating a topic in the group app does. Resolves the topic's id.
+   */
+  pushTopicCreated(name: string, from: TelegramUser = this.options.operator): number {
+    const threadId = this.nextMessageId++;
+    this.pushTopicCreatedEvent(threadId, name, from);
+    return threadId;
   }
 
   /** @description Make a file downloadable: `getFile` answers its path, the file endpoint serves `bytes`. */
@@ -286,23 +298,25 @@ export class FakeTelegram {
 
   /** A topic's id is the id of its creation service message, so it comes from the one message sequence. */
   private createTopic(name: string): { message_thread_id: number; name: string; icon_color: number } {
-    const iconColor = 0x6FB9F0;
     const threadId = this.nextMessageId++;
     this.createdTopics.push({ threadId, name });
-    if (this.isOwnTopicEventDelivered) {
-      this.pushUpdate({
-        message: {
-          message_id: threadId,
-          date: Math.floor(Date.now() / 1000),
-          chat: this.chat,
-          message_thread_id: threadId,
-          is_topic_message: true,
-          from: this.options.botUser,
-          forum_topic_created: { name, icon_color: iconColor },
-        },
-      });
-    }
-    return { message_thread_id: threadId, name, icon_color: iconColor };
+    if (this.isOwnTopicEventDelivered) this.pushTopicCreatedEvent(threadId, name, this.options.botUser);
+    return { message_thread_id: threadId, name, icon_color: topicIconColor };
+  }
+
+  /** The `forum_topic_created` service message of topic `threadId`, as `from` made it. */
+  private pushTopicCreatedEvent(threadId: number, name: string, from: TelegramUser): void {
+    this.pushUpdate({
+      message: {
+        message_id: threadId,
+        date: Math.floor(Date.now() / 1000),
+        chat: this.chat,
+        message_thread_id: threadId,
+        is_topic_message: true,
+        from,
+        forum_topic_created: { name, icon_color: topicIconColor },
+      },
+    });
   }
 
   /** The message a request names, or the Bot API's own "message not found" error. */

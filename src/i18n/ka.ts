@@ -11,12 +11,8 @@ export const kaDict: Record<string, string> = {
   'thread.unbound': '📁 კავშირი მოხსნილია.',
   'thread.general_no_agent':
     'General არ არის დაკავშირებული საქაღალდესთან — გადადით თემატურ თემაში აგენტთან სასაუბროდ.',
-  'thread.welcome_bound':
-    '👋 თემა შეიქმნა და ავტომატურად დაკავშირდა `{subdir}`-თან (თემის სახელი ემთხვევა ქვესაქაღალდეს).\nგაუშვით /claude ან /opencode.',
   'thread.welcome_pick':
     '👋 თემა შეიქმნა. დააკავშირეთ საქაღალდე: /bind <subdir>, ან აირჩიეთ ქვემოდან.',
-  'thread.bind_collision':
-    '⚠️ საქაღალდე `{subdir}` უკვე გამოიყენება თემების მიერ: {threads}.\nკავშირი დამატებულია; სესიები დარჩენილია დამოუკიდებელი (საკუთარი tmux/SSE).',
   'thread.no_agent_with_binding':
     '📁 საქაღალდე `{subdir}` დაკავშირებულია. გაუშვით /claude ან /opencode დიალოგის დასაწყებად.',
 
@@ -151,6 +147,8 @@ export const kaDict: Record<string, string> = {
   'binding.welcome.git_clean': ', სუფთა',
   'binding.welcome.git_dirty': ', დადასტურებული ცვლილებები',
   'binding.welcome.git_none': '• git: ინიციალიზებული არ არის',
+  'binding.welcome.auto_bound': '• ავტომატურად დაკავშირდა: თემის სახელი ემთხვევა საქაღალდეს',
+  'binding.welcome.shared': '• ⚠️ ასევე გამოიყენება თემების მიერ: {threads} — სესიები დამოუკიდებელია',
   'binding.welcome.start_prompt': 'დაიწყეთ საუბარი:',
 
   'mcp.header': '🔌 *ამ თემისთვის MCP სერვერები:*',

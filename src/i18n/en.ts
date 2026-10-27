@@ -15,12 +15,8 @@ export const enDict: Record<string, string> = {
   'thread.unbound': '📁 Binding cleared.',
   'thread.general_no_agent':
     'General is not bound to a folder — switch to a topical thread to talk to an agent.',
-  'thread.welcome_bound':
-    '👋 Thread created and auto-bound to `{subdir}` (topic name matched a subfolder).\nRun /claude or /opencode.',
   'thread.welcome_pick':
     '👋 Thread created. Bind a folder: /bind <subdir>, or pick one below.',
-  'thread.bind_collision':
-    '⚠️ Folder `{subdir}` is already used by threads: {threads}.\nBinding added; sessions stay independent (own tmux/SSE).',
   'thread.no_agent_with_binding':
     '📁 Folder `{subdir}` is bound. Run /claude or /opencode to start the dialog.',
 
@@ -155,6 +151,8 @@ export const enDict: Record<string, string> = {
   'binding.welcome.git_clean': ', clean',
   'binding.welcome.git_dirty': ', uncommitted changes',
   'binding.welcome.git_none': '• git: not initialised',
+  'binding.welcome.auto_bound': '• Auto-bound: the topic name matches the folder',
+  'binding.welcome.shared': '• ⚠️ Also used by: {threads} — sessions stay independent',
   'binding.welcome.start_prompt': 'Start a conversation:',
 
   'mcp.header': '🔌 *MCP servers for this thread:*',

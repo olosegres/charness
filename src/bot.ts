@@ -6212,20 +6212,20 @@ command('timezone', async (_ctx, key, parsed) => {
 /**
  * @description Persist a `key → subdir` binding and report the outcome.
  *
- * Shared between the `/bind <subdir>` command and the `bind_<subdir>`
- * inline-callback so both paths apply identical validation and collision
- * checks (plan §11 Этап 4 — warn when other threads already use the same
- * folder, decision D7).
+ * Shared by every way of binding a topic to a picked or typed folder: the `/bind <subdir>` command, the `bind_<subdir>`
+ * inline-callback, the picker's «create new folder» ({@link createAndBindFolder}) and a topic `/topic` made
+ * ({@link bindNewTopic}), so all apply identical validation and the same collision lookup (plan §11 Этап 4 — tell
+ * when other threads already use the same folder, decision D7).
  *
- * Returns `{ ok: true, subdir, collisionNotice }` on success: the notice is
- * the localised shared-folder warning, `null` when no other thread uses the
- * folder. There is no plain «bound» acknowledgement — the rich welcome
- * ({@link sendBindingWelcome}) is the one message announcing the binding.
- * On failure `message` is the localised refusal. Callers post the outcome
- * with {@link replyToBindResult}.
+ * Returns `{ ok: true, subdir, sharedWith }` on success: `sharedWith` is the string key of every OTHER Telegram thread
+ * bound to the folder (empty when none). There is no acknowledgement text — the rich welcome
+ * ({@link sendBindingWelcome}) is the one message announcing the binding, and it carries the shared-folder warning as
+ * a row when its caller passes `sharedWith` on (`/topic` does not: the person asked for that folder). On failure
+ * `message` is the localised refusal. Callers post the outcome with {@link replyToBindResult} or
+ * {@link sendBindingWelcome}.
  */
 type ApplyBindingResult =
-  | { ok: true;  collisionNotice: string | null; subdir: string }
+  | { ok: true;  subdir: string; sharedWith: string[] }
   | { ok: false; message: string };
 
 async function applyBinding(
@@ -6253,12 +6253,7 @@ async function applyBinding(
   await state.setBinding(key, subdir, options.topicName !== undefined ? { topicName: options.topicName } : {});
   warmTodoProjects();
 
-  const collisionNotice = peers.length > 0
-    ? t('thread.bind_collision', {
-        subdir,
-        threads: peers.map(k => `\`${keyToString(k)}\``).join(', '),
-      })
-    : null;
+  const sharedWith = peers.map(keyToString);
 
   // Rebind resume (S8): a thread that was unbound paused its schedules; binding
   // it again (this thread, possibly a different folder) resumes them. Best
@@ -6267,22 +6262,20 @@ async function applyBinding(
     console.warn(`[scheduler] resume-on-rebind failed for ${keyToString(key)}:`, e),
   );
 
-  return { ok: true, collisionNotice, subdir };
+  return { ok: true, subdir, sharedWith };
 }
 
 /**
- * @description Answer a bind attempt in the topic: the refusal's message, or — once bound — the shared-folder warning
- * (only when other topics use the folder; the welcome does not say so) and then the rich welcome, which is the one
- * message announcing the binding. Shared by `/bind <subdir>`, the `bind_<subdir>` picker button and the picker's
- * «create new folder».
+ * @description Answer a bind attempt in the topic: the refusal's message, or — once bound — the rich welcome, the one
+ * message announcing the binding (with the shared-folder row when other topics use the folder). Shared by
+ * `/bind <subdir>`, the `bind_<subdir>` picker button and the picker's «create new folder».
  */
 async function replyToBindResult(key: SessionKey, result: ApplyBindingResult): Promise<void> {
   if (!result.ok) {
     await replyToThread(key, result.message);
     return;
   }
-  if (result.collisionNotice !== null) await replyToThread(key, result.collisionNotice);
-  await sendBindingWelcome(key, result.subdir);
+  await sendBindingWelcome(key, result.subdir, { sharedWith: result.sharedWith });
 }
 
 /**
@@ -6436,8 +6429,8 @@ async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ 
 
 /**
  * @description Bind a topic the bot has just created (`/topic`) to `subdir` and greet it with the usual binding welcome:
- * the folder's stats and the start buttons. No agent starts by itself: it is started there as in any bound topic. The binding's own notice
- * is left out: its warning about other topics on the folder would warn of what the person just asked for. The topic's name
+ * the folder's stats and the start buttons. No agent starts by itself: it is started there as in any bound topic. The welcome's
+ * shared-folder row is left out (`sharedWith` is not passed on): it would warn of what the person just asked for. The topic's name
  * rides on the binding for the thread-context preamble. Resolves why it could not bind, `null` once it is bound.
  */
 async function bindNewTopic(key: SessionKey, subdir: string, topicName: string): Promise<string | null> {
@@ -6885,12 +6878,23 @@ function buildStartAgentKeyboard() {
 }
 
 /**
- * @description Compose and send the rich post-bind welcome described in
- * plan §20.5: header with the bound subdir, three optional fact rows
- * (CLAUDE.md / .mcp.json / git), and an inline keyboard to start an agent.
- * Falls back gracefully when stats can't be probed.
+ * @description What a binding's welcome says besides the folder's facts. `isAutoBound`: the bot bound the topic by
+ * itself because its name matches the folder. `sharedWith`: the string keys of the other topics bound to the same folder.
  */
-async function sendBindingWelcome(key: SessionKey, subdir: string): Promise<void> {
+interface BindingWelcomeNotes {
+  isAutoBound?: boolean;
+  sharedWith?: readonly string[];
+}
+
+/**
+ * @description Compose and send the rich post-bind welcome described in
+ * plan §20.5: header with the bound subdir, the optional rows (why it was bound
+ * when the bot did it by itself, CLAUDE.md / .mcp.json / git, which other topics
+ * use the folder), and an inline keyboard to start an agent. It is the ONE
+ * message every way of binding leaves in the topic. Falls back gracefully when
+ * stats can't be probed.
+ */
+async function sendBindingWelcome(key: SessionKey, subdir: string, notes: BindingWelcomeNotes = {}): Promise<void> {
   // Pin the status banner first so the user sees it land near the top of
   // the thread before the slower stats probe finishes. Fire-and-forget —
   // a failed pin (missing permissions, closed topic) just logs a warning
@@ -6908,6 +6912,7 @@ async function sendBindingWelcome(key: SessionKey, subdir: string): Promise<void
   }
 
   const lines: string[] = [t('binding.welcome.header', { subdir })];
+  if (notes.isAutoBound) lines.push(t('binding.welcome.auto_bound'));
   if (stats.claudeMdSize) lines.push(t('binding.welcome.claude_md', { size: stats.claudeMdSize }));
   if (stats.mcpServerCount !== null) {
     lines.push(t('binding.welcome.mcp_json', { count: stats.mcpServerCount }));
@@ -6919,6 +6924,9 @@ async function sendBindingWelcome(key: SessionKey, subdir: string): Promise<void
     lines.push(t('binding.welcome.git', { branch: stats.gitBranch, detail }));
   } else if (fs.existsSync(path.join(workDir, '.git')) === false) {
     lines.push(t('binding.welcome.git_none'));
+  }
+  if (notes.sharedWith && notes.sharedWith.length > 0) {
+    lines.push(t('binding.welcome.shared', { threads: notes.sharedWith.map(sharedKey => `\`${sharedKey}\``).join(', ') }));
   }
   lines.push('');
   lines.push(t('binding.welcome.start_prompt'));
@@ -9139,8 +9147,10 @@ bot.on(message('text'), async (ctx) => {
           // copy it onto the binding for the thread-context preamble (S1).
           await state.setBinding(key, subdir, pending.name ? { topicName: pending.name } : {});
           pendingTopicNames.delete(kStr);
-          await replyToThread(key, t('thread.welcome_bound', { subdir }));
-          await sendBindingWelcome(key, subdir);
+          await sendBindingWelcome(key, subdir, { isAutoBound: true });
+          // The welcome answers this message: no agent runs in a topic bound just now, so going on would only add the
+          // «bound, run /claude» hint under it — a second message for one bind.
+          return;
         } catch (e) {
           console.warn(`[deferred-autobind] failed for "${match}":`, e);
           pendingTopicNames.delete(kStr);
@@ -9948,8 +9958,7 @@ bot.on(message('forum_topic_created'), async (ctx) => {
       // The creation event carries the topic name — persist it on the binding
       // for the thread-context preamble (S1).
       await state.setBinding(key, subdir, topicName ? { topicName } : {});
-      await replyToThread(key, t('thread.welcome_bound', { subdir }));
-      await sendBindingWelcome(key, subdir);
+      await sendBindingWelcome(key, subdir, { isAutoBound: true });
       return;
     } catch (e) {
       console.warn(`[forum_topic_created] auto-bind failed for "${match}":`, e);
