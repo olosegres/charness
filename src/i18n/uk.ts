@@ -156,7 +156,7 @@ export const ukDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• Прив\'язано автоматично: назва теми збіглася з папкою',
   'binding.welcome.existed': '• Папка вже була — прив\'язано до неї',
   'binding.welcome.shared': '• ⚠️ Папку використовують і інші треди: {threads} — сесії незалежні',
-  'binding.welcome.sharedElsewhere': '+{count} в інших чатах',
+  'binding.welcome.sharedMore': 'ще {count}',
   'binding.welcome.start_prompt': 'Почни розмову:',
 
   'mcp.header': '🔌 *MCP-сервери для цього треда:*',

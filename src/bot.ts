@@ -2795,6 +2795,12 @@ const bindPickerClaims = new BindPickerClaims();
  * {@link closeOpenBindMessages}. In memory: a picker sent before a restart is not known, and only its own tap removes it.
  */
 const openBindMessages = new OpenBindMessages();
+/**
+ * The welcome each topic last got (per topic, newest last): its ▶️ Claude / ▶️ OpenCode / 📋 Resume buttons act on the topic's
+ * CURRENT folder whatever the message says, so the next bind or a leave strips the buttons of the ones before. In memory, like
+ * {@link openBindMessages}: a welcome sent before a restart keeps its buttons.
+ */
+const openWelcomeMessages = new OpenBindMessages();
 
 /** Max sessions shown in a `/sessions` list (Telegram-friendly, plan S3). */
 const sessionsDisplayLimit = 10;
@@ -6318,16 +6324,16 @@ command('timezone', async (_ctx, key, parsed) => {
  * authorised user gave the topic while it was unbound ({@link getTrustedPendingTopicName}) — never a name only another
  * member gave, which would reach the agent unchecked.
  *
- * Returns `{ ok: true, subdir, sharedWith, sharedElsewhere }` on success: `sharedWith` names every OTHER topic of THIS chat
+ * Returns `{ ok: true, subdir, sharedWith, sharedMore }` on success: `sharedWith` names every OTHER topic of THIS chat
  * bound to the folder — by its stored topic name, else by the link that opens it ({@link describeSharedTopic}); the topics of
- * other chats are only counted, `sharedElsewhere`. There
+ * other chats, and any of this chat that has neither a name nor a link to show, are only counted, `sharedMore`. There
  * is no acknowledgement text — the rich welcome ({@link sendBindingWelcome}) is the one message announcing the binding, and
  * it carries the shared-folder warning as a row when its caller passes `sharedWith` on (`/topic` does not: the person
  * asked for that folder). On failure `message` is the localised refusal. Callers post the outcome with
  * {@link replyToBindResult} or {@link sendBindingWelcome}.
  */
 type ApplyBindingResult =
-  | { ok: true;  subdir: string; sharedWith: SharedTopic[]; sharedElsewhere: number }
+  | { ok: true;  subdir: string; sharedWith: SharedTopic[]; sharedMore: number }
   | { ok: false; message: string };
 
 /**
@@ -6378,10 +6384,10 @@ async function applyBinding(
   // Only topics of THIS chat are named: a member of one group is not told what another group (or a private chat) calls its
   // topics. The rest — and a topic of this chat that can be neither named nor linked — are counted.
   const sharedWith: SharedTopic[] = [];
-  let sharedElsewhere = 0;
+  let sharedMore = 0;
   for (const peerKey of peers) {
     const described = peerKey.space === key.space ? describeSharedTopic(peerKey) : null;
-    if (described === null) sharedElsewhere += 1;
+    if (described === null) sharedMore += 1;
     else sharedWith.push(described);
   }
 
@@ -6392,7 +6398,7 @@ async function applyBinding(
     console.warn(`[scheduler] resume-on-rebind failed for ${keyToString(key)}:`, e),
   );
 
-  return { ok: true, subdir, sharedWith, sharedElsewhere };
+  return { ok: true, subdir, sharedWith, sharedMore };
 }
 
 /**
@@ -6406,7 +6412,7 @@ async function replyToBindResult(key: SessionKey, result: ApplyBindingResult, no
     await replyToThread(key, result.message);
     return;
   }
-  await sendBindingWelcome(key, result.subdir, { ...notes, sharedWith: result.sharedWith, sharedElsewhere: result.sharedElsewhere });
+  await sendBindingWelcome(key, result.subdir, { ...notes, sharedWith: result.sharedWith, sharedMore: result.sharedMore });
 }
 
 /**
@@ -6435,14 +6441,33 @@ async function removeBindPicker(key: SessionKey, pickerMessageId: number): Promi
  */
 async function closeOpenBindMessages(key: SessionKey): Promise<void> {
   try {
-    const { deletable, tooOld } = splitByDeleteWindow(openBindMessages.take(keyToString(key)), Date.now());
-    if (deletable.length > 0 && !await deleteThreadMessages(key, deletable)) {
-      for (const messageId of deletable) await removeBindPicker(key, messageId);
-    }
-    for (const messageId of tooOld) await editThreadKeyboard(key, messageId, null, 'bind');
+    const entries = openBindMessages.take(keyToString(key));
+    // Claimed before the first await: from here on a tap on any of them is refused («already used»), whether or not its message
+    // goes — a delete in flight, a bulk call Telegram refused and the strip bound below would otherwise leave live buttons.
+    for (const { messageId } of entries) bindPickerClaims.claim(key, messageId);
+    const { deletable, tooOld } = splitByDeleteWindow(entries, Date.now());
+    // A refused bulk call is not retried as a delete per picker (two paced sends each, from the one gate of the whole bot):
+    // the buttons go instead, a bounded number of them.
+    if (deletable.length > 0 && !await deleteThreadMessages(key, deletable)) await stripStaleKeyboards(key, deletable, 'bind');
+    await stripStaleKeyboards(key, tooOld, 'bind');
   } catch (e) {
     console.warn(`[bind] closing the open pickers of ${keyToString(key)} failed:`, e);
   }
+}
+
+/**
+ * The most keyboards one sweep strips: each is a paced send of the whole bot's one gate, and the claim ({@link closeOpenBindMessages})
+ * already refuses a tap on the ones past the bound.
+ */
+const keyboardStripsPerSweepLimit = 10;
+
+/**
+ * @description Remove the keyboards of messages that can no longer be deleted or must stay as history, the newest
+ * {@link keyboardStripsPerSweepLimit} of them (`messageIds` oldest first: the newest sit nearest the bottom of the topic).
+ * Never rejects (an edit that fails is logged under `logTag`).
+ */
+async function stripStaleKeyboards(key: SessionKey, messageIds: readonly number[], logTag: string): Promise<void> {
+  for (const messageId of messageIds.slice(-keyboardStripsPerSweepLimit)) await editThreadKeyboard(key, messageId, null, logTag);
 }
 
 /**
@@ -6584,23 +6609,29 @@ async function createWorkFolder(key: SessionKey, rawName: string): Promise<WorkF
  * filesystem failure disarms it.
  */
 async function createAndBindFolder(key: SessionKey, rawName: string): Promise<{ ok: boolean }> {
-  const folder = await createWorkFolder(key, rawName);
-  if (folder.outcome === 'invalid') return { ok: false };
-  if (folder.outcome === 'failed') return { ok: true };
-
   const kStr = keyToString(key);
-  // Read before the bind: a bind drops it (and the wait) itself; deleted here for a refused one, which does not.
+  // Read before the bind: a bind drops it (and the wait) itself; deleted below for a refused one, which does not.
   const pickerMessageId = bindPickerMessageIds.get(kStr) ?? null;
-  // The picker this name was asked on is held for the whole bind, like a tap on a folder holds it: a tap on it that lands
-  // behind the typed name is told the picker was used, instead of binding the topic a second time (and welcoming it again).
-  await bindPickerClaims.runClaimed(key, pickerMessageId, async () => {
+  let isNameRefused = false;
+  // The picker this name was asked on is held from BEFORE the folder is made, for the whole bind, like a tap on a folder holds
+  // it: a tap on it that lands behind the typed name is told the picker was used instead of binding the topic a second time, and
+  // a name that arrives when a tap already holds the picker makes no (empty) folder — it is told so, not dropped in silence.
+  const run = await bindPickerClaims.runClaimed(key, pickerMessageId, async () => {
+    const folder = await createWorkFolder(key, rawName);
+    if (folder.outcome === 'invalid') {
+      isNameRefused = true;
+      return false;
+    }
+    if (folder.outcome === 'failed') return false;
+
     const result = await applyBinding(key, folder.subdir);
     bindPickerMessageIds.delete(kStr);
     if (result.ok && pickerMessageId !== null) await removeBindPicker(key, pickerMessageId);
     await replyToBindResult(key, result, { isExistingFolder: folder.alreadyExisted });
     return result.ok;
   });
-  return { ok: true };
+  if (run === 'busy') await replyToThread(key, t('cb.bind_picker_used'));
+  return { ok: !isNameRefused };
 }
 
 /**
@@ -6629,7 +6660,7 @@ async function autoBindTopicByName(key: SessionKey, subdirName: string, topicNam
     console.warn(`[auto-bind] "${subdirName}" refused for ${keyToString(key)}: ${result.message}`);
     return false;
   }
-  await sendBindingWelcome(key, result.subdir, { isAutoBound: true, sharedWith: result.sharedWith, sharedElsewhere: result.sharedElsewhere });
+  await sendBindingWelcome(key, result.subdir, { isAutoBound: true, sharedWith: result.sharedWith, sharedMore: result.sharedMore });
   return true;
 }
 
@@ -7073,15 +7104,15 @@ function buildStartAgentKeyboard() {
 /**
  * @description What a binding's welcome says besides the folder's facts. `isAutoBound`: the bot bound the topic by
  * itself because its name matches the folder. `isExistingFolder`: the folder was there when «create new folder» asked for it.
- * `sharedWith`: the other topics of this chat bound to the same folder ({@link describeSharedTopic}); `sharedElsewhere`: how many of other chats.
+ * `sharedWith`: the other topics of this chat bound to the same folder ({@link describeSharedTopic}); `sharedMore`: how many more are only counted.
  */
 interface BindingWelcomeNotes {
   isAutoBound?: boolean;
   /** «Create new folder» was given the name of a folder that already existed. */
   isExistingFolder?: boolean;
   sharedWith?: readonly SharedTopic[];
-  /** How many topics of OTHER chats are on the folder too: counted, never named. */
-  sharedElsewhere?: number;
+  /** How many more topics are on the folder too and are only counted: those of OTHER chats, and any here with nothing to show. */
+  sharedMore?: number;
 }
 
 /**
@@ -7093,6 +7124,9 @@ interface BindingWelcomeNotes {
  * stats can't be probed.
  */
 async function sendBindingWelcome(key: SessionKey, subdir: string, notes: BindingWelcomeNotes = {}): Promise<void> {
+  // The welcomes this topic got before are outdated the moment this one goes out: their buttons would act on the CURRENT folder.
+  const outdatedWelcomeIds = openWelcomeMessages.take(keyToString(key)).map((entry) => entry.messageId);
+
   // Pin the status banner first so the user sees it land near the top of
   // the thread before the slower stats probe finishes. Fire-and-forget —
   // a failed pin (missing permissions, closed topic) just logs a warning
@@ -7124,20 +7158,22 @@ async function sendBindingWelcome(key: SessionKey, subdir: string, notes: Bindin
   } else if (fs.existsSync(path.join(workDir, '.git')) === false) {
     lines.push(t('binding.welcome.git_none'));
   }
-  const sharedElsewhere = notes.sharedElsewhere ?? 0;
-  if ((notes.sharedWith && notes.sharedWith.length > 0) || sharedElsewhere > 0) {
-    const elsewhereLabel = sharedElsewhere > 0 ? t('binding.welcome.sharedElsewhere', { count: sharedElsewhere }) : null;
-    lines.push(t('binding.welcome.shared', { threads: formatSharedTopicList(notes.sharedWith ?? [], elsewhereLabel) }));
+  const sharedMore = notes.sharedMore ?? 0;
+  if ((notes.sharedWith && notes.sharedWith.length > 0) || sharedMore > 0) {
+    const moreLabel = sharedMore > 0 ? t('binding.welcome.sharedMore', { count: sharedMore }) : null;
+    lines.push(t('binding.welcome.shared', { threads: formatSharedTopicList(notes.sharedWith ?? [], moreLabel) }));
   }
   lines.push('');
   lines.push(t('binding.welcome.start_prompt'));
 
-  await replyToThread(key, lines.join('\n'), {
+  const welcomeMessageId = await replyToThread(key, lines.join('\n'), {
     parse_mode: 'Markdown',
     ...buildStartAgentKeyboard(),
   });
+  if (welcomeMessageId !== null) openWelcomeMessages.remember(keyToString(key), welcomeMessageId, Date.now());
   // Every bind ends in this welcome, so every bind sweeps here — after the welcome, and NOT waited for: what follows a bind
-  // (an agent start, when the first message was a start phrase) must not hang on the deletions, which are paced sends.
+  // (an agent start, when the first message was a start phrase) must not hang on the deletions and edits, which are paced sends.
+  void stripStaleKeyboards(key, outdatedWelcomeIds, 'welcome');
   void closeOpenBindMessages(key);
 }
 
@@ -10344,6 +10380,8 @@ bot.action(bindLeaveCurrentCallback, async (ctx) => {
     await unbindThread(key);
     if (pickerMessageId !== null) await removeBindPicker(key, pickerMessageId);
     await closeOpenBindMessages(key);
+    // The welcome's buttons have no folder to act on now.
+    await stripStaleKeyboards(key, openWelcomeMessages.take(keyToString(key)).map((entry) => entry.messageId), 'welcome');
     return true;
   });
   if (run === 'busy') await answerCallbackQuerySafely(ctx, t('cb.bind_picker_used'));

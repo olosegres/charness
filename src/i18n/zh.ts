@@ -150,7 +150,7 @@ export const zhDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• 已自动绑定：话题名与文件夹匹配',
   'binding.welcome.existed': '• 文件夹已存在 — 已绑定到它',
   'binding.welcome.shared': '• ⚠️ 以下话题也在使用：{threads} — 会话保持独立',
-  'binding.welcome.sharedElsewhere': '另有 {count} 个在别处',
+  'binding.welcome.sharedMore': '另有 {count} 个',
   'binding.welcome.start_prompt': '开始对话：',
 
   'mcp.header': '🔌 *此话题的 MCP 服务器：*',

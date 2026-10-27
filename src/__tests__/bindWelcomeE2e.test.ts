@@ -38,7 +38,12 @@
  *   → the shared-folder row names only topics of the SAME chat; topics of other chats are a count, never a name, a link or an id
  *   → a typed folder name followed at once by a tap on the same picker: the name binds, the tap is told the picker was used
  *   → a toast refused as too late is survived on every «picker was already used» answer; a picker the person deleted by hand
- *     is not asked to lose its buttons.
+ *     is not asked to lose its buttons
+ *   → every picker the sweep takes is claimed at once, so a tap on one the sweep could not delete (or strip, past its bound) is
+ *     refused; a refused bulk delete costs one keyboard edit per picker, at most a bounded number of them, no delete each
+ *   → a tap on a folder with a typed «create new folder» name right behind it: bound to the tapped folder, no folder made
+ *   → a rebind or a leave strips the buttons of the topic's previous welcome: its ▶️ Claude / ▶️ OpenCode / 📋 Resume act on the
+ *     topic's CURRENT folder, whatever the old welcome says.
  *
  * What the unit tests cover instead: the picker's layout (`bindKeyboard.test.ts`), the folder-name rules (`folderName.test.ts`),
  * what a `forum_topic_created` leads to (`forumTopicCreated.test.ts`). `/topic`'s own greeting: `topicCommandE2e.test.ts`.
@@ -96,6 +101,12 @@ const folders = {
 const laterFolderName = 'bind-later';
 /** The folder a typed name makes right before a tap on the picker it was asked on lands. */
 const typedBeforeTapFolderName = 'bind-typed-before-tap';
+/** The name typed right behind a tap on a folder: it must make no folder. */
+const tapThenNameFolderName = 'bind-tap-then-name';
+/** Folders the welcome steps bind to by a typed `/bind` (it finds them on disk; they need not be in a picker). */
+const welcomeStepFolders = { first: 'bind-welcome-first', second: 'bind-welcome-second', leaving: 'bind-welcome-leaving' } as const;
+/** How many stale keyboards one sweep strips at most (`keyboardStripsPerSweepLimit` in the bot); the pickers beyond it stay claimed. */
+const keyboardStripsPerSweepLimit = 10;
 /** A folder other chats' bindings sit on, made on disk by the step that needs it (a typed `/bind` finds it without the picker). */
 const sharedAcrossChatsFolderName = 'bind-shared';
 /** The instance also keeps the bindings of other chats: a second group's topic and the operator's private chat. */
@@ -706,17 +717,80 @@ describe('/bind end to end: built charness, fake Bot API', () => {
         [privateChatKey]: { subdir: sharedAcrossChatsFolderName, createdAt: now, topicName: privateTopicName },
       };
     });
-    const elsewhere = t('binding.welcome.sharedElsewhere', { count: 2 });
+    const more = t('binding.welcome.sharedMore', { count: 2 });
 
     const firstSentId = fakeTelegram.pushOperatorMessage(peerThreadId, `/bind ${sharedAcrossChatsFolderName}`);
-    const firstWelcome = await assertOneBoundMessage(peerTopic, firstSentId, sharedAcrossChatsFolderName, { sharedWithText: elsewhere });
+    const firstWelcome = await assertOneBoundMessage(peerTopic, firstSentId, sharedAcrossChatsFolderName, { sharedWithText: more });
     // A topic of THIS chat is named (here: by its link, it has no name) next to the count.
     const secondSentId = fakeTelegram.pushOperatorMessage(mainThreadId, `/bind ${sharedAcrossChatsFolderName}`);
-    const secondWelcome = await assertOneBoundMessage(mainTopic, secondSentId, sharedAcrossChatsFolderName, { sharedWithText: `${byLink(peerThreadId)}, ${elsewhere}` });
+    const secondWelcome = await assertOneBoundMessage(mainTopic, secondSentId, sharedAcrossChatsFolderName, { sharedWithText: `${byLink(peerThreadId)}, ${more}` });
     for (const welcome of [firstWelcome, secondWelcome]) {
       for (const secret of [foreignTopicName, privateTopicName, '2222222222', '#5', '424242']) {
         assert.ok(!welcome.text.includes(secret), `nothing of another chat shows in the row: "${secret}" in ${JSON.stringify(welcome.text)}`);
       }
     }
+  });
+
+  it('a tap on a folder with a typed «create new folder» name right behind it: the topic is bound to the tapped folder, and the name makes no folder', async () => {
+    const { threadId, topic: tapFirstTopic, picker } = await openFreshPicker('Tap then name');
+    await tapFirstTopic.tapAndAwaitAnswer(picker, bindCreateFolderCallback);
+    await tapFirstTopic.waitForMessage('the folder-name prompt', (message) => message.message_id > picker.message_id && message.text === enDict['bind.create_prompt']);
+    fakeTelegram.pushCallback(picker.message_id, tapFirstTopic.getButtonData(picker, `📁 ${folders.auto}`));
+    const nameId = fakeTelegram.pushOperatorMessage(threadId, tapThenNameFolderName);
+    // The name is answered either way — as an ordinary message of a bound topic, or, were it still taken for a name while the
+    // tap holds the picker, with «this picker was already used» — and never by a bind to the name.
+    await tapFirstTopic.waitForMessage('the answer to the typed name', (message) => message.message_id > nameId
+      && (message.text === t('thread.no_agent_with_binding', { subdir: folders.auto }) || message.text === t('cb.bind_picker_used')));
+    assert.ok(!fs.existsSync(path.join(getLayout().workRoot, tapThenNameFolderName)), 'the name made no (empty) folder');
+    assert.equal(readBinding(threadId)?.subdir, folders.auto, 'the topic stays on the tapped folder');
+    assert.deepEqual(listBoundMessages(tapFirstTopic, picker.message_id, tapThenNameFolderName), [], 'nothing announces a bind to the name');
+  });
+
+  it('every picker the sweep takes is claimed at once: when a refused bulk delete leaves some with their buttons (the strip is bounded), a tap on them is refused — and the fallback costs no delete per picker', async () => {
+    const notes = Array.from({ length: keyboardStripsPerSweepLimit + 2 }, (_, index) => `plain note ${index + 1}`);
+    const { threadId, topic: manyTopic, pickers } = await openTopicWithStalePickers('Sweep many', notes);
+    const oldest = pickers[0];
+    const oldestButton = manyTopic.getButtonData(oldest, `📁 ${folders.auto}`);
+    const singleDeletesBefore = fakeTelegram.listCalls('deleteMessage').length;
+    fakeTelegram.isMessageDeletionRefused = true;
+    try {
+      fs.mkdirSync(path.join(getLayout().workRoot, welcomeStepFolders.first), { recursive: true });
+      const sentId = fakeTelegram.pushOperatorMessage(threadId, `/bind ${welcomeStepFolders.first}`);
+      await manyTopic.waitForMessage('the welcome', (message) => message.message_id > sentId && message.text.includes(enDict['binding.welcome.start_prompt']));
+      const newest = pickers.slice(-keyboardStripsPerSweepLimit);
+      for (const picker of newest) await getCharness().waitFor('a picker\'s buttons stripped', replyTimeoutMs, () => manyTopic.getKeyboardData(picker).flat().length === 0);
+    } finally {
+      fakeTelegram.isMessageDeletionRefused = false;
+    }
+    assert.equal(fakeTelegram.listCalls('deleteMessage').length, singleDeletesBefore, 'no delete per picker: the fallback strips, it does not delete');
+    assert.ok(manyTopic.getKeyboardData(oldest).flat().length > 0, 'the oldest picker is past the bound: it keeps its buttons');
+    // …but a tap on it is refused: it was claimed with the rest.
+    assert.equal(await manyTopic.tapAndAwaitAnswer(oldest, oldestButton), t('cb.bind_picker_used'));
+    assert.equal(readBinding(threadId)?.subdir, welcomeStepFolders.first, 'the stale tap rebound nothing');
+  });
+
+  it('a rebind strips the buttons of the topic\'s previous welcome: its ▶️ Claude / ▶️ OpenCode / 📋 Resume would act on the NEW folder', async () => {
+    const { threadId, topic: rebindTopic } = await openFreshPicker('Welcome rebind');
+    fs.mkdirSync(path.join(getLayout().workRoot, welcomeStepFolders.second), { recursive: true });
+    const firstId = fakeTelegram.pushOperatorMessage(threadId, `/bind ${welcomeStepFolders.first}`);
+    const firstWelcome = await assertOneBoundMessage(rebindTopic, firstId, welcomeStepFolders.first, { sharedWith: [byName('Sweep many')] });
+    assert.deepEqual(rebindTopic.getKeyboardData(firstWelcome), startButtonsData, 'the first welcome has its buttons while it is the current one');
+
+    const secondId = fakeTelegram.pushOperatorMessage(threadId, `/bind ${welcomeStepFolders.second}`);
+    const secondWelcome = await assertOneBoundMessage(rebindTopic, secondId, welcomeStepFolders.second);
+    await getCharness().waitFor('the old welcome\'s buttons removed', replyTimeoutMs, () => rebindTopic.getKeyboardData(firstWelcome).flat().length === 0);
+    assert.deepEqual(rebindTopic.getKeyboardData(secondWelcome), startButtonsData, 'the new welcome keeps its buttons');
+    assert.notEqual(fakeTelegram.getMessage(firstWelcome.message_id)?.isDeleted, true, 'the old welcome stays as history: its facts are true of its time');
+  });
+
+  it('«Leave current dir» strips the buttons of the topic\'s welcome too: after a leave they have no folder to act on', async () => {
+    const { threadId, topic: leaveTopic } = await openFreshPicker('Welcome leave');
+    fs.mkdirSync(path.join(getLayout().workRoot, welcomeStepFolders.leaving), { recursive: true });
+    const sentId = fakeTelegram.pushOperatorMessage(threadId, `/bind ${welcomeStepFolders.leaving}`);
+    const welcome = await assertOneBoundMessage(leaveTopic, sentId, welcomeStepFolders.leaving);
+    assert.deepEqual(leaveTopic.getKeyboardData(welcome), startButtonsData);
+    const picker = await openPicker(leaveTopic, welcomeStepFolders.leaving);
+    await leaveTopic.tapAndAwaitAnswer(picker, bindLeaveCurrentCallback);
+    await getCharness().waitFor('the welcome\'s buttons removed', replyTimeoutMs, () => leaveTopic.getKeyboardData(welcome).flat().length === 0);
   });
 });

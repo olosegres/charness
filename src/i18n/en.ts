@@ -154,7 +154,7 @@ export const enDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• Auto-bound: the topic name matches the folder',
   'binding.welcome.existed': '• The folder was already there — bound to it',
   'binding.welcome.shared': '• ⚠️ Also used by: {threads} — sessions stay independent',
-  'binding.welcome.sharedElsewhere': '+{count} elsewhere',
+  'binding.welcome.sharedMore': '+{count} more',
   'binding.welcome.start_prompt': 'Start a conversation:',
 
   'mcp.header': '🔌 *MCP servers for this thread:*',

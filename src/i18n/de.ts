@@ -150,7 +150,7 @@ export const deDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• Automatisch verknüpft: Thread-Name passt zum Ordner',
   'binding.welcome.existed': '• Der Ordner existierte bereits — damit verknüpft',
   'binding.welcome.shared': '• ⚠️ Auch genutzt von: {threads} — Sessions bleiben unabhängig',
-  'binding.welcome.sharedElsewhere': '+{count} an anderer Stelle',
+  'binding.welcome.sharedMore': '+{count} weitere',
   'binding.welcome.start_prompt': 'Beginne eine Unterhaltung:',
 
   'mcp.header': '🔌 *MCP-Server für diesen Thread:*',

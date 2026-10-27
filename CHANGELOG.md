@@ -16,12 +16,12 @@ Now only the welcome is posted: a row in it says the bot bound the topic because
 already, and another names the topics that already use the folder — also when the bot bound the topic by itself. A topic is named there by the name
 the bot saw it made with (or an admin renamed it to), else by a link that opens it; the name a non-admin gave a topic is not kept on its binding, since
 the agent's thread context would repeat it. Only topics of the SAME chat are named: topics of other chats the bot serves (another group, a private chat) are
-only counted, «+2 elsewhere», so one chat never learns what another calls its topics. A folder that does not exist still just gets its reason. `/topic`'s «create new folder» still tells the topic
+only counted, «+2 more» (a topic of this chat that has no name and no link to show is counted too), so one chat never learns what another calls its topics. A folder that does not exist still just gets its reason. When a topic is bound again, or leaves its folder, the buttons of its previous welcome (▶️ Claude, ▶️ OpenCode, 📋 Resume) are removed: they act on the topic's CURRENT folder, whatever the old message says, so an old welcome can no longer start an agent from a folder the topic has left. `/topic`'s «create new folder» still tells the topic
 you typed the name in that the folder existed.
 The `/bind` picker is now one-shot: once a folder is bound through it (a tap or «create new folder»), or «Leave current dir» is used, the picker message
 is deleted — its «not bound, pick from the list» text would no longer be true — so an old tap cannot rebind the topic, and a second tap landing while the
 first is still binding (on a folder, «create new folder» or «Leave current dir») is told «This picker was already used.» instead of binding or unbinding
-twice; a refused pick, paging and the create-folder prompt leave it in place, and a tap whose answer reaches Telegram too late still does what it asked.
+twice; a refused pick, paging and the create-folder prompt leave it in place, and a tap whose answer reaches Telegram too late still does what it asked. Pickers the bot closes after a bind are refused at once, even those it could not delete, and a typed folder name that arrives while a tap holds the picker is told so instead of being dropped.
 A «create new folder» wait ends with the bind or the leave that follows it, so the next plain message is never taken for a folder name, and its «send the folder
 name» prompt is deleted with the bind (a refused name keeps it). Every plain message in an unbound topic posts a new folder picker, so a bind or a leave — by a tap,
 a typed `/bind <folder>` or the bot's own auto-bind — deletes ALL the pickers still open in that topic, not only the tapped one: no stale one is left to rebind it.

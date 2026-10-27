@@ -150,7 +150,7 @@ export const kaDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• ავტომატურად დაკავშირდა: თემის სახელი ემთხვევა საქაღალდეს',
   'binding.welcome.existed': '• საქაღალდე უკვე არსებობდა — დაკავშირდა მასთან',
   'binding.welcome.shared': '• ⚠️ ასევე გამოიყენება თემების მიერ: {threads} — სესიები დამოუკიდებელია',
-  'binding.welcome.sharedElsewhere': '+{count} სხვაგან',
+  'binding.welcome.sharedMore': '+{count} სხვა',
   'binding.welcome.start_prompt': 'დაიწყეთ საუბარი:',
 
   'mcp.header': '🔌 *ამ თემისთვის MCP სერვერები:*',

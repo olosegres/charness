@@ -154,7 +154,7 @@ export const ruDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• Привязано автоматически: имя треда совпало с папкой',
   'binding.welcome.existed': '• Папка уже была — привязано к ней',
   'binding.welcome.shared': '• ⚠️ Папку используют и другие треды: {threads} — сессии независимы',
-  'binding.welcome.sharedElsewhere': '+{count} в других чатах',
+  'binding.welcome.sharedMore': 'ещё {count}',
   'binding.welcome.start_prompt': 'Начни диалог:',
 
   'mcp.header': '🔌 *MCP-серверы для этого треда:*',

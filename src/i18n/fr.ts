@@ -150,7 +150,7 @@ export const frDict: Record<string, string> = {
   'binding.welcome.auto_bound': '• Lié automatiquement : le nom du fil correspond au dossier',
   'binding.welcome.existed': '• Le dossier existait déjà — lié à celui-ci',
   'binding.welcome.shared': '• ⚠️ Aussi utilisé par les fils : {threads} — les sessions restent indépendantes',
-  'binding.welcome.sharedElsewhere': '+{count} ailleurs',
+  'binding.welcome.sharedMore': '+{count} autres',
   'binding.welcome.start_prompt': 'Démarrez une conversation :',
 
   'mcp.header': '🔌 *Serveurs MCP pour ce fil :*',

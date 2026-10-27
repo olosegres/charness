@@ -14,17 +14,18 @@ export interface SharedTopic {
 
 /**
  * @description The row's list, comma-separated: a topic with a name is that name as inline code, one without is its bare
- * link (Telegram makes it tappable; it is digits and slashes only, so Markdown has nothing to mangle). `elsewhereLabel` —
- * the count of the topics of OTHER chats, already worded (`+2 elsewhere`) — is the last item: those are only counted, a
+ * link (Telegram makes it tappable; it is digits and slashes only, so Markdown has nothing to mangle). `moreLabel` —
+ * the count of the topics that are only counted, already worded (`+2 more`) — is the last item: those of OTHER chats, and any
+ * of this chat that has neither a name nor a link to show; a
  * member of one chat is not told the names, the links or the ids of another's. The welcome is sent as Markdown, where
  * nothing inside a code span can be escaped, so a backtick in a name (a name is free text) would end the span early — it
  * becomes an apostrophe instead.
  */
-export function formatSharedTopicList(topics: readonly SharedTopic[], elsewhereLabel: string | null = null): string {
+export function formatSharedTopicList(topics: readonly SharedTopic[], moreLabel: string | null = null): string {
   const items = topics.map(({ name, link }) => {
     const label = name?.trim();
     return label ? `\`${label.replaceAll('`', "'")}\`` : link;
   });
-  if (elsewhereLabel !== null) items.push(elsewhereLabel);
+  if (moreLabel !== null) items.push(moreLabel);
   return items.join(', ');
 }
