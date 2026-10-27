@@ -6212,10 +6212,11 @@ command('timezone', async (_ctx, key, parsed) => {
 /**
  * @description Persist a `key → subdir` binding and report the outcome.
  *
- * Shared by every way of binding a topic to a picked or typed folder: the `/bind <subdir>` command, the `bind_<subdir>`
- * inline-callback, the picker's «create new folder» ({@link createAndBindFolder}) and a topic `/topic` made
- * ({@link bindNewTopic}), so all apply identical validation and the same collision lookup (plan §11 Этап 4 — tell
- * when other threads already use the same folder, decision D7).
+ * Shared by every way of binding a topic to a folder: the `/bind <subdir>` command, the `bind_<subdir>`
+ * inline-callback, the picker's «create new folder» ({@link createAndBindFolder}), a topic `/topic` made
+ * ({@link bindNewTopic}) and a topic the bot binds by its name ({@link autoBindTopicByName}), so all apply identical
+ * validation, the same collision lookup (plan §11 Этап 4 — tell when other threads already use the same folder,
+ * decision D7) and the same rebind side effects (the project warm-up, the schedules a rebind resumes).
  *
  * Returns `{ ok: true, subdir, sharedWith }` on success: `sharedWith` is the string key of every OTHER Telegram thread
  * bound to the folder (empty when none). There is no acknowledgement text — the rich welcome
@@ -6438,6 +6439,23 @@ async function bindNewTopic(key: SessionKey, subdir: string, topicName: string):
   if (!result.ok) return result.message;
   await sendBindingWelcome(key, result.subdir);
   return null;
+}
+
+/**
+ * @description Bind a topic the bot matched to the folder `subdirName` by the topic's own name, and welcome it. It goes
+ * through {@link applyBinding} like every other bind (validation, the schedules a rebind resumes, the collision lookup), so
+ * the welcome says why the bot did it AND names the topics already on the folder. The topic's name rides on the binding for
+ * the thread-context preamble. Resolves whether the topic is bound: a refused folder is only logged, and the caller falls
+ * back to the folder picker.
+ */
+async function autoBindTopicByName(key: SessionKey, subdirName: string, topicName: string): Promise<boolean> {
+  const result = await applyBinding(key, subdirName, topicName ? { topicName } : {});
+  if (!result.ok) {
+    console.warn(`[auto-bind] "${subdirName}" refused for ${keyToString(key)}: ${result.message}`);
+    return false;
+  }
+  await sendBindingWelcome(key, result.subdir, { isAutoBound: true, sharedWith: result.sharedWith });
+  return true;
 }
 
 command('bind', async (_ctx, key, parsed) => {
@@ -9128,6 +9146,10 @@ bot.on(message('text'), async (ctx) => {
     return;
   }
 
+  // Set when this very message bound the topic: its welcome is already the answer, so the idle-thread hint at the end
+  // stays out — but the message itself is still read as what it is (a start phrase starts the agent).
+  let isJustAutoBound = false;
+
   // Audit S2 / #5: if `forum_topic_created` was emitted by a non-allowed
   // admin, we stashed the topic name in `pendingTopicNames` without
   // binding. Now that an allowed user is engaging this thread, retry the
@@ -9142,18 +9164,12 @@ bot.on(message('text'), async (ctx) => {
       const match = findAutobindSubdir(pending.name, listAvailableSubdirs(ENV.workRoot));
       if (match) {
         try {
-          const subdir = validateSubdir(ENV.workRoot, match);
-          // The pending entry carries the topic name (cached at creation) —
-          // copy it onto the binding for the thread-context preamble (S1).
-          await state.setBinding(key, subdir, pending.name ? { topicName: pending.name } : {});
           pendingTopicNames.delete(kStr);
-          await sendBindingWelcome(key, subdir, { isAutoBound: true });
-          // The welcome answers this message: no agent runs in a topic bound just now, so going on would only add the
-          // «bound, run /claude» hint under it — a second message for one bind.
-          return;
+          // The pending entry carries the topic name (cached at creation) — it rides on the binding for the
+          // thread-context preamble (S1).
+          isJustAutoBound = await autoBindTopicByName(key, match, pending.name);
         } catch (e) {
           console.warn(`[deferred-autobind] failed for "${match}":`, e);
-          pendingTopicNames.delete(kStr);
         }
       } else {
         pendingTopicNames.delete(kStr);
@@ -9329,6 +9345,7 @@ bot.on(message('text'), async (ctx) => {
     await replyToThread(key, t('thread.no_binding'), extra);
     return;
   }
+  if (isJustAutoBound) return;
   await replyToThread(key, t('thread.no_agent_with_binding', { subdir: binding.subdir }));
 });
 
@@ -9922,7 +9939,7 @@ bot.on(message('forum_topic_created'), async (ctx) => {
 
   // Already bound — service event arrived after the user's first message
   // (or on restart). Don't overwrite; quietly skip the welcome too, the
-  // user has already seen the binding ack.
+  // user has already seen the welcome.
   if (existing) return;
 
   // Audit S2 / #5: topic creation may be open to all members (group setting),
@@ -9954,12 +9971,8 @@ bot.on(message('forum_topic_created'), async (ctx) => {
   const match = findAutobindSubdir(topicName, subdirs);
   if (match) {
     try {
-      const subdir = validateSubdir(ENV.workRoot, match);
-      // The creation event carries the topic name — persist it on the binding
-      // for the thread-context preamble (S1).
-      await state.setBinding(key, subdir, topicName ? { topicName } : {});
-      await sendBindingWelcome(key, subdir, { isAutoBound: true });
-      return;
+      // The creation event carries the topic name — it rides on the binding for the thread-context preamble (S1).
+      if (await autoBindTopicByName(key, match, topicName)) return;
     } catch (e) {
       console.warn(`[forum_topic_created] auto-bind failed for "${match}":`, e);
       // Fall through to picker.

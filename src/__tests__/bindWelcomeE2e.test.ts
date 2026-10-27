@@ -13,7 +13,10 @@
  *   → a folder that does not exist: the refusal is shown, no welcome, the topic keeps its binding
  *   → a topic an admin makes with the name of a folder: bound by the bot, the welcome says why, in one message
  *   → a topic a non-admin makes with the name of a folder: nothing is bound; the admin's first message there binds it,
- *     again with the one welcome.
+ *     again with the one welcome
+ *   → the same two ways onto a folder another topic already uses: the welcome also names that topic
+ *   → the admin's first message in such a topic is still read as what it is: a start phrase (`claude`) starts the agent,
+ *     next to the one welcome.
  *
  * What the unit tests cover instead: the picker's layout (`bindKeyboard.test.ts`), the folder-name rules (`folderName.test.ts`),
  * what a `forum_topic_created` leads to (`forumTopicCreated.test.ts`). `/topic`'s own greeting: `topicCommandE2e.test.ts`.
@@ -44,7 +47,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { getSessionLaunches, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getAllLaunches, getSessionLaunches, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { bindCreateFolderCallback } from '../connectors/telegram/bindPicker';
 import { t } from '../i18n';
 import { enDict } from '../i18n/en';
@@ -60,7 +63,7 @@ const mainThreadId = 191;
 const peerThreadId = 192;
 /** A group member who is no admin: the bot does not serve them, so a topic they make is not bound at once. */
 const stranger: TelegramUser = { id: 515151, is_bot: false, first_name: 'Stranger' };
-const folders = { first: 'bind-first', second: 'bind-second', auto: 'bind-auto', deferred: 'bind-deferred' } as const;
+const folders = { first: 'bind-first', second: 'bind-second', auto: 'bind-auto', deferred: 'bind-deferred', phrase: 'bind-phrase' } as const;
 const madeFolderName = 'bind-made';
 const missingFolderName = 'bind-missing';
 /** The tail of the short acknowledgement and of the greeting the welcome made redundant. */
@@ -70,9 +73,13 @@ const greetingMark = '👋';
 const startButtonsData = [['agent_claude', 'agent_opencode'], ['open_sessions']];
 /** The start of the welcome's shared-folder row, up to where the topics are named. */
 const sharedRowStart = enDict['binding.welcome.shared'].split('{threads}')[0];
+/** The flag every FRESH agent start carries, whichever Claude backend runs it (a resume carries `--resume` instead). */
+const freshSessionFlag = '--session-id';
 /** The log line of the bot setting a non-admin's topic name aside. */
 const nameCachedLogLine = '[security] forum_topic_created';
 const replyTimeoutMs = 20 * 1000;
+/** A session start through the fake agent. */
+const agentStartTimeoutMs = 60 * 1000;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -80,6 +87,9 @@ let fakeTelegram: FakeTelegram;
 let mainTopic: TopicDriver;
 let peerTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
+/** The topics the auto-bind tests made, which the later ones share a folder with. */
+let autoTopicThreadId = 0;
+let deferredTopicThreadId = 0;
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -142,6 +152,17 @@ async function assertOneBoundMessage(driver: TopicDriver, afterMessageId: number
   assert.ok(!sinceBind.some((message) => message.text.includes(greetingMark)), 'no separate greeting in the topic');
   assert.deepEqual(sinceBind.filter((message) => message.message_id !== welcome.message_id && message.text.includes(sharedRowStart)), [], 'the shared-folder warning is no message of its own');
   return welcome;
+}
+
+/**
+ * A non-admin makes a topic named `name`: the bot does not bind it, it sets the name aside for the admin's first message
+ * there. Resolves once the bot logged that (counted, because an earlier topic left the same line in the output).
+ */
+async function makeTopicAsStranger(name: string): Promise<{ threadId: number; topic: TopicDriver }> {
+  const occurrencesBefore = getCharness().output.split(nameCachedLogLine).length;
+  const threadId = fakeTelegram.pushTopicCreated(name, stranger);
+  await getCharness().waitFor(`the name of the non-admin's topic "${name}" set aside`, replyTimeoutMs, () => getCharness().output.split(nameCachedLogLine).length > occurrencesBefore);
+  return { threadId, topic: new TopicDriver(fakeTelegram, getCharness, threadId, replyTimeoutMs) };
 }
 
 describe('/bind end to end: built charness, fake Bot API', () => {
@@ -224,18 +245,42 @@ describe('/bind end to end: built charness, fake Bot API', () => {
 
   it('a topic an admin makes with the name of a folder is bound by the bot: ONE message, the welcome, which says why', async () => {
     const threadId = fakeTelegram.pushTopicCreated(folders.auto);
+    autoTopicThreadId = threadId;
     const autoTopic = new TopicDriver(fakeTelegram, getCharness, threadId, replyTimeoutMs);
     await assertOneBoundMessage(autoTopic, threadId, folders.auto, { isAutoBound: true });
     assert.ok(!autoTopic.listMessages().some((message) => message.text === enDict['thread.welcome_pick']), 'no folder picker in a topic that was bound');
   });
 
   it('a topic a non-admin makes is not bound at once; the admin\'s first message there binds it, with the one welcome', async () => {
-    const threadId = fakeTelegram.pushTopicCreated(folders.deferred, stranger);
-    const deferredTopic = new TopicDriver(fakeTelegram, getCharness, threadId, replyTimeoutMs);
-    await getCharness().waitFor('the non-admin\'s topic name set aside', replyTimeoutMs, () => getCharness().output.includes(nameCachedLogLine));
+    const { threadId, topic: deferredTopic } = await makeTopicAsStranger(folders.deferred);
+    deferredTopicThreadId = threadId;
     assert.deepEqual(deferredTopic.listMessages(), [], 'nothing is bound or offered for a non-admin\'s topic');
 
     const sentId = fakeTelegram.pushOperatorMessage(threadId, 'the first words in the new topic');
     await assertOneBoundMessage(deferredTopic, sentId, folders.deferred, { isAutoBound: true });
+  });
+
+  it('an admin-made topic named after a folder another topic uses: the welcome also names that topic', async () => {
+    const threadId = fakeTelegram.pushTopicCreated(folders.auto);
+    const sharingTopic = new TopicDriver(fakeTelegram, getCharness, threadId, replyTimeoutMs);
+    await assertOneBoundMessage(sharingTopic, threadId, folders.auto, { isAutoBound: true, sharedWith: [`${group.id}:${autoTopicThreadId}`] });
+  });
+
+  it('a non-admin-made topic named after a folder another topic uses: the admin\'s first message binds it, the welcome also names that topic', async () => {
+    const { threadId, topic: sharingTopic } = await makeTopicAsStranger(folders.deferred);
+    const sentId = fakeTelegram.pushOperatorMessage(threadId, 'the first words in the sharing topic');
+    await assertOneBoundMessage(sharingTopic, sentId, folders.deferred, { isAutoBound: true, sharedWith: [`${group.id}:${deferredTopicThreadId}`] });
+  });
+
+  it('a start phrase as the admin\'s first message in a non-admin-made topic binds it AND starts the agent: one welcome, one session', async () => {
+    // Counted by the flag of a fresh start, not by `getSessionLaunches`: that one knows the stream-json launch only, and the
+    // phrase starts whichever backend `ensureAgentSession` is given for the name `claude`.
+    const listAgentStarts = () => getAllLaunches(getLayout()).filter((launch) => launch.argv.includes(freshSessionFlag));
+    const startsBefore = listAgentStarts().length;
+    const { threadId, topic: phraseTopic } = await makeTopicAsStranger(folders.phrase);
+    const sentId = fakeTelegram.pushOperatorMessage(threadId, 'claude');
+    await assertOneBoundMessage(phraseTopic, sentId, folders.phrase, { isAutoBound: true });
+    await getCharness().waitFor('the agent the phrase asked for to start', agentStartTimeoutMs, () => listAgentStarts().length > startsBefore);
+    assert.equal(listAgentStarts().length, startsBefore + 1, 'exactly one session started');
   });
 });
