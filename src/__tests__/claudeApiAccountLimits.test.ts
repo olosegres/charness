@@ -101,7 +101,7 @@ describe('classification: the balance is no window', () => {
 
 describe('ranking: an API account is never recommended', () => {
   it('a subscription with headroom wins; an API account is listed with its billing but never recommended', () => {
-    const report = buildClaudeProfilesReport([buildView('default', { usage: buildUsage(90) }), apiView()], null, nowMs);
+    const report = buildClaudeProfilesReport([buildView('default', { usage: buildUsage(80) }), apiView()], null, nowMs);
     assert.equal(report.recommended, 'default');
     const api = report.profiles.find((entry) => entry.name === 'console');
     assert.equal(api?.billing, 'api');

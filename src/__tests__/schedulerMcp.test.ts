@@ -194,7 +194,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
 
   it('the claude_profiles port adds its tool on EVERY platform (a child process is launched the same way everywhere), so each digest moves', () => {
     const without = createDigestDeps();
-    const withPort: SchedulerMcpDeps = { ...without, listClaudeProfiles: async (model) => ({ model, relevantBuckets: [], recommended: null, profiles: [] }) };
+    const withPort: SchedulerMcpDeps = { ...without, listClaudeProfiles: async (model) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }) };
     for (const platform of ['telegram', 'jira', null] as const) {
       assert.notEqual(getBotMcpToolDigest(withPort, platform, true), getBotMcpToolDigest(without, platform, true), `${platform ?? 'neutral'} digest`);
     }
@@ -222,7 +222,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     const deps: SchedulerMcpDeps = {
       ...createDigestDeps(),
       fetchJiraAttachment: async () => ({ ok: false, error: 'unused' }),
-      listClaudeProfiles: async (model) => ({ model, relevantBuckets: [], recommended: null, profiles: [] }),
+      listClaudeProfiles: async (model) => ({ model, relevantBuckets: [], recommended: null, pickReason: 'none', nextAvailable: null, profiles: [] }),
     };
     const offered = new Set((['telegram', 'jira'] as const).flatMap((platform) => getBotMcpToolDefinitions(deps, platform).map((definition) => definition.name)));
     const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
@@ -996,6 +996,8 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
           model,
           relevantBuckets: ['session', model === 'fable' ? 'weekly_scoped' : 'weekly_all'],
           recommended: model === 'fable' ? 'work' : 'default',
+          pickReason: 'soonestWeeklyReset',
+          nextAvailable: null,
           profiles: [
             { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, isEligible: true, headroomPercent: 19, isRecommended: model !== 'fable' },
             { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, isEligible: true, headroomPercent: 90, isRecommended: model === 'fable' },

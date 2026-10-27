@@ -18,17 +18,20 @@ import {
   checkHasHeadroomForClaudeModel,
   checkIsClaudeUsageExhausted,
   checkIsClaudeModelClearOfLimit,
+  checkIsClaudeProfileLaunchable,
   checkIsClaudeTokenExpired,
   fetchClaudeUsage,
   formatClaudeUsageBucket,
   formatClaudeUsageRelativeReset,
   formatClaudeUsageResetAt,
+  getClaudeLaunchPick,
   getRelevantClaudeUsageKinds,
   markClaudeUsageSnapshotStale,
   mergeClaudeUsageSnapshot,
   parseClaudeUsageResponse,
   readClaudeOAuthToken,
   readClaudeProfileRecordsFromStateFile,
+  sortClaudeProfilesByLaunchRank,
   type ClaudeProfileUsageView,
   type ClaudeUsageSnapshot,
 } from '../utils/claudeUsage';
@@ -134,18 +137,20 @@ describe('the ranking (claude_profiles)', () => {
     assert.deepEqual(getRelevantClaudeUsageKinds(null), ['session', 'weekly_all']);
   });
 
-  it('recommends the most headroom on the relevant windows, so the same two profiles rank differently per model', () => {
+  it('the report keeps the headroom figures per model, while the pick follows the weekly reset (see the launch pick below)', () => {
     const profiles = [view('default', snapshot(10, 20, 95)), view('work', snapshot(30, 40, 10))];
     const forFable = buildClaudeProfilesReport(profiles, 'fable', nowMs);
-    assert.equal(forFable.recommended, 'work', 'Fable: default is at 95 % on Fable\'s own window (headroom 5), work at 40 % on the shared weekly (headroom 60)');
-    assert.deepEqual(forFable.profiles.map((entry) => [entry.name, entry.headroomPercent, entry.isRecommended]), [['default', 5, false], ['work', 60, true]]);
+    assert.deepEqual(forFable.profiles.map((entry) => [entry.name, entry.headroomPercent]), [['default', 5], ['work', 60]], 'Fable: default is at 95 % on Fable\'s own window, work at 40 % on the shared weekly');
     assert.deepEqual(forFable.relevantBuckets, ['session', 'weekly_all', 'weekly_scoped']);
     const forOpus = buildClaudeProfilesReport(profiles, 'opus', nowMs);
-    assert.equal(forOpus.recommended, 'default', 'Opus never touches Fable\'s window: default has 80 % headroom (shared weekly 20 %), work 60');
-    assert.deepEqual(forOpus.profiles.map((entry) => entry.headroomPercent), [80, 60]);
+    assert.deepEqual(forOpus.profiles.map((entry) => entry.headroomPercent), [80, 60], 'Opus never touches Fable\'s window');
     assert.deepEqual(forOpus.relevantBuckets, ['session', 'weekly_all']);
     assert.equal(forOpus.profiles[0].configDir, null, 'the default profile launches with no CLAUDE_CONFIG_DIR');
     assert.equal(forOpus.profiles[1].configDir, '/data/profiles/work');
+    assert.equal(forOpus.recommended, 'default', 'no reset known on either: the lower five-hour percent decides');
+    assert.deepEqual(forOpus.profiles.map((entry) => entry.isRecommended), [true, false]);
+    assert.equal(forOpus.pickReason, 'soonestWeeklyReset');
+    assert.equal(forOpus.nextAvailable, null);
   });
 
   it('an exhausted SHARED weekly window stops a Fable launch too (Fable drains it as well); only an exhausted Fable window is Fable\'s alone', () => {
@@ -178,6 +183,233 @@ describe('the ranking (claude_profiles)', () => {
     const report = buildClaudeProfilesReport([view('default', snapshot(81, 76, 33)), corporate], 'fable', nowMs);
     assert.equal(report.recommended, 'corp');
     assert.equal(report.profiles[1].kind, 'corporate');
+  });
+});
+
+describe('the launch pick (getClaudeLaunchPick)', () => {
+  const hours = (count: number): string => new Date(nowMs + count * 3_600_000).toISOString();
+  const days = (count: number): string => hours(count * 24);
+  const usage = (input: {
+    session: number;
+    weekly: number;
+    weeklyResetsAt: string | null;
+    sessionResetsAt?: string | null;
+    fable?: number;
+    fableResetsAt?: string | null;
+  }): ClaudeUsageSnapshot => ({
+    fetchedAt: new Date(nowMs).toISOString(),
+    source: 'api',
+    buckets: [
+      { kind: 'session', percent: input.session, resetsAt: input.sessionResetsAt === undefined ? hours(2) : input.sessionResetsAt, scopeModel: null },
+      { kind: 'weekly_all', percent: input.weekly, resetsAt: input.weeklyResetsAt, scopeModel: null },
+      ...(input.fable === undefined ? [] : [{ kind: 'weekly_scoped' as const, percent: input.fable, resetsAt: input.fableResetsAt === undefined ? input.weeklyResetsAt : input.fableResetsAt, scopeModel: 'Fable' }]),
+    ],
+  });
+  const view = (name: string, snapshot: ClaudeUsageSnapshot | undefined, extra: Partial<ClaudeProfileUsageView> = {}): ClaudeProfileUsageView => ({
+    name, configDir: `/data/profiles/${name}`, loggedIn: true, email: `${name}@example.com`, subscriptionType: 'max', usage: snapshot, limitedUntil: null, billing: null, creditExhaustedAt: null, ...extra,
+  });
+  const pick = (profiles: ClaudeProfileUsageView[], extra: Partial<Parameters<typeof getClaudeLaunchPick>[0]> = {}) =>
+    getClaudeLaunchPick({ profiles, model: 'sonnet', nowMs, ...extra });
+
+  describe('a new agent', () => {
+    it('goes to the account whose weekly window resets soonest, whatever its headroom', () => {
+      const soon = view('soon', usage({ session: 10, weekly: 60, weeklyResetsAt: days(1) }));
+      const late = view('late', usage({ session: 0, weekly: 10, weeklyResetsAt: days(5) }));
+      assert.deepEqual(pick([late, soon]), { pick: 'soon', reason: 'soonestWeeklyReset', nextAvailable: null });
+    });
+
+    it('moves to a farther reset only when the five-hour window is at the 90 % launch ceiling', () => {
+      const late = view('late', usage({ session: 0, weekly: 10, weeklyResetsAt: days(5) }));
+      assert.equal(pick([view('soon', usage({ session: 92, weekly: 60, weeklyResetsAt: days(1) })), late]).pick, 'late');
+      assert.equal(pick([view('soon', usage({ session: 90, weekly: 60, weeklyResetsAt: days(1) })), late]).pick, 'late', 'the ceiling itself is out');
+      assert.equal(pick([view('soon', usage({ session: 89, weekly: 60, weeklyResetsAt: days(1) })), late]).pick, 'soon', 'just below it is in');
+    });
+
+    it('a weekly window at 100 % takes the account out; Fable\'s own window at 100 % takes out Fable only', () => {
+      const late = view('late', usage({ session: 0, weekly: 10, weeklyResetsAt: days(5), fable: 5 }));
+      assert.equal(pick([view('soon', usage({ session: 0, weekly: 100, weeklyResetsAt: days(1), fable: 5 })), late]).pick, 'late');
+      const fableFull = view('soon', usage({ session: 0, weekly: 60, weeklyResetsAt: days(1), fable: 100 }));
+      assert.equal(pick([fableFull, late], { model: 'fable' }).pick, 'late', 'Fable drains its own window');
+      assert.equal(pick([fableFull, late], { model: 'sonnet' }).pick, 'soon', 'sonnet never touches it');
+    });
+
+    it('Fable ranks on the earlier of the shared and its own weekly reset', () => {
+      const split = view('split', usage({ session: 0, weekly: 20, weeklyResetsAt: days(4), fable: 20, fableResetsAt: days(1) }));
+      const even = view('even', usage({ session: 0, weekly: 20, weeklyResetsAt: days(2), fable: 20, fableResetsAt: days(2) }));
+      assert.equal(pick([even, split], { model: 'fable' }).pick, 'split', 'Fable: the Fable-only window resets in 1 d');
+      assert.equal(pick([even, split], { model: 'sonnet' }).pick, 'even', 'sonnet: only the shared window (4 d vs 2 d) counts');
+    });
+
+    it('a window whose reset has passed counts as 0 % and rolls to the next period', () => {
+      const lateOk = view('late', usage({ session: 0, weekly: 10, weeklyResetsAt: days(8) }));
+      // Read 100 % an hour before its reset passed: since then it is a fresh week, resetting 7 d − 1 h from now.
+      const staleFull = view('stale', usage({ session: 95, weekly: 100, weeklyResetsAt: hours(-1), sessionResetsAt: hours(-1) }));
+      assert.deepEqual(pick([lateOk, staleFull]), { pick: 'stale', reason: 'soonestWeeklyReset', nextAvailable: null });
+      const earlier = view('earlier', usage({ session: 0, weekly: 10, weeklyResetsAt: days(6) }));
+      assert.equal(pick([staleFull, earlier]).pick, 'earlier', 'its rolled reset (6 d 23 h) ranks after a reset in 6 d');
+      // Several periods behind: rolled by whole weeks until it lies ahead.
+      const longStale = view('long', usage({ session: 0, weekly: 100, weeklyResetsAt: days(-15) }));
+      const ranked = sortClaudeProfilesByLaunchRank([view('d6', usage({ session: 0, weekly: 0, weeklyResetsAt: days(6.5) })), longStale], 'sonnet', nowMs);
+      assert.deepEqual(ranked.map((profile) => profile.name), ['long', 'd6'], 'a reset 15 d ago rolls three weeks forward to +6 d, before the +6.5 d one');
+    });
+
+    it('an unknown reset ranks after every known one, no snapshot at all last', () => {
+      const known = view('known', usage({ session: 50, weekly: 50, weeklyResetsAt: days(6) }));
+      const unknownReset = view('unknown', usage({ session: 0, weekly: 0, weeklyResetsAt: null }));
+      const noSnapshot = view('none', undefined);
+      assert.deepEqual(
+        sortClaudeProfilesByLaunchRank([noSnapshot, unknownReset, known], 'sonnet', nowMs).map((profile) => profile.name),
+        ['known', 'unknown', 'none'],
+      );
+      assert.equal(pick([noSnapshot]).pick, 'none', 'an account nobody has read is still usable when it is the only one');
+    });
+
+    it('resets within 60 s count as one moment — the lower five-hour percent wins, then the input order', () => {
+      const a = view('a', usage({ session: 40, weekly: 10, weeklyResetsAt: new Date(nowMs + 3 * 24 * 3_600_000).toISOString() }));
+      const b = view('b', usage({ session: 10, weekly: 10, weeklyResetsAt: new Date(nowMs + 3 * 24 * 3_600_000 + 45_000).toISOString() }));
+      assert.equal(pick([a, b]).pick, 'b', '45 s apart: a tie, b has the lower five-hour percent');
+      const c = view('c', usage({ session: 10, weekly: 10, weeklyResetsAt: new Date(nowMs + 3 * 24 * 3_600_000 + 61_000).toISOString() }));
+      assert.equal(pick([a, c]).pick, 'a', '61 s apart: not a tie, the sooner reset wins');
+      const d = view('d', usage({ session: 40, weekly: 10, weeklyResetsAt: new Date(nowMs + 3 * 24 * 3_600_000 + 30_000).toISOString() }));
+      assert.equal(pick([d, a]).pick, 'd', 'a full tie keeps the input order');
+    });
+
+    it('never picks an account billed to API credits, nor one switched off in the /limits list', () => {
+      const api = view('console', undefined, { billing: 'api', subscriptionType: null });
+      const switchedOff = view('off', usage({ session: 0, weekly: 0, weeklyResetsAt: days(1) }));
+      const later = view('later', usage({ session: 0, weekly: 0, weeklyResetsAt: days(6) }));
+      assert.equal(pick([api, switchedOff, later], { excludedNames: new Set(['off']) }).pick, 'later');
+      assert.equal(pick([api, switchedOff]).pick, 'off');
+      assert.deepEqual(pick([api], { excludedNames: new Set() }), { pick: null, reason: 'none', nextAvailable: null });
+    });
+
+    it('skips signed-out, limited and out-of-credits accounts', () => {
+      const ok = view('ok', usage({ session: 0, weekly: 0, weeklyResetsAt: days(6) }));
+      const soon = usage({ session: 0, weekly: 0, weeklyResetsAt: days(1) });
+      const profiles = [
+        view('out', soon, { loggedIn: false }),
+        view('limited', soon, { limitedUntil: hours(3) }),
+        view('credits', soon, { creditExhaustedAt: hours(-1) }),
+        view('expiredMark', soon, { limitedUntil: hours(-1) }),
+        ok,
+      ];
+      assert.equal(pick(profiles).pick, 'expiredMark', 'a mark in the past no longer excludes');
+      assert.equal(pick(profiles.slice(0, 3)).pick, null);
+    });
+  });
+
+  describe('a warm session', () => {
+    const warm = view('warm', usage({ session: 95, weekly: 80, weeklyResetsAt: days(6) }));
+    const sooner = view('sooner', usage({ session: 0, weekly: 0, weeklyResetsAt: days(1) }));
+
+    it('stays on its account — the launch ceiling does not apply to it', () => {
+      assert.deepEqual(pick([sooner, warm], { currentProfile: 'warm' }), { pick: 'warm', reason: 'warm', nextAvailable: null });
+    });
+
+    it('leaves an account that is at 100 % on a window the model drains, marked limited or signed out — by the new-agent rule', () => {
+      const full = view('warm', usage({ session: 100, weekly: 80, weeklyResetsAt: days(6) }));
+      assert.deepEqual(pick([sooner, full], { currentProfile: 'warm' }), { pick: 'sooner', reason: 'soonestWeeklyReset', nextAvailable: null });
+      assert.equal(pick([sooner, view('warm', warm.usage, { limitedUntil: hours(2) })], { currentProfile: 'warm' }).pick, 'sooner');
+      assert.equal(pick([sooner, view('warm', warm.usage, { loggedIn: false })], { currentProfile: 'warm' }).pick, 'sooner');
+      assert.equal(pick([sooner, view('warm', warm.usage, { creditExhaustedAt: hours(-1) })], { currentProfile: 'warm' }).pick, 'sooner');
+    });
+
+    it('Fable\'s own window at 100 % moves a Fable session, not a sonnet one', () => {
+      const fableFull = view('warm', usage({ session: 10, weekly: 20, weeklyResetsAt: days(6), fable: 100 }));
+      assert.equal(pick([sooner, fableFull], { currentProfile: 'warm', model: 'fable' }).pick, 'sooner');
+      assert.equal(pick([sooner, fableFull], { currentProfile: 'warm', model: 'sonnet' }).pick, 'warm');
+    });
+
+    it('stopped by a limit: left out whatever its figures say, the session goes to the new-agent pick', () => {
+      const fortyPercent = view('warm', usage({ session: 40, weekly: 40, weeklyResetsAt: hours(5) }));
+      assert.deepEqual(
+        pick([fortyPercent, view('other', usage({ session: 0, weekly: 0, weeklyResetsAt: days(6) }))], { currentProfile: 'warm', isStoppedByLimit: true }),
+        { pick: 'other', reason: 'movedFromLimited', nextAvailable: null },
+      );
+    });
+
+    it('stays on an API-billed account that still has credits (the spend was approved); not on one out of credits', () => {
+      const api = view('console', undefined, { billing: 'api', subscriptionType: null });
+      assert.deepEqual(pick([sooner, api], { currentProfile: 'console' }), { pick: 'console', reason: 'warm', nextAvailable: null });
+      const broke = view('console', undefined, { billing: 'api', subscriptionType: null, creditExhaustedAt: hours(-1) });
+      assert.equal(pick([sooner, broke], { currentProfile: 'console' }).pick, 'sooner');
+    });
+
+    it('an unknown current account (removed, a typo) is a new agent', () => {
+      assert.deepEqual(pick([warm, sooner], { currentProfile: 'gone' }), { pick: 'sooner', reason: 'soonestWeeklyReset', nextAvailable: null });
+      assert.equal(pick([warm, sooner], { currentProfile: 'gone', isStoppedByLimit: true }).reason, 'soonestWeeklyReset', 'nothing to move away from');
+    });
+
+    it('stays on its account although it is switched off in the /limits list', () => {
+      assert.equal(pick([sooner, warm], { currentProfile: 'warm', excludedNames: new Set(['warm']) }).pick, 'warm');
+    });
+  });
+
+  describe('nothing usable', () => {
+    it('is null with the account and instant that frees up first', () => {
+      const sessionFull = view('a', usage({ session: 95, weekly: 10, weeklyResetsAt: days(4), sessionResetsAt: hours(3) }));
+      const sessionFuller = view('b', usage({ session: 100, weekly: 10, weeklyResetsAt: days(4), sessionResetsAt: hours(1) }));
+      assert.deepEqual(pick([sessionFull, sessionFuller]), { pick: null, reason: 'none', nextAvailable: { profile: 'b', at: hours(1) } });
+    });
+
+    it('an account blocked by a weekly window frees up at its reset — and at the later of its blockers', () => {
+      const weeklyFull = view('weekly', usage({ session: 0, weekly: 100, weeklyResetsAt: days(2) }));
+      const both = view('both', usage({ session: 100, weekly: 100, weeklyResetsAt: days(1), sessionResetsAt: hours(2) }));
+      assert.deepEqual(pick([weeklyFull]).nextAvailable, { profile: 'weekly', at: days(2) });
+      assert.deepEqual(pick([weeklyFull, both]).nextAvailable, { profile: 'both', at: days(1) });
+      const marked = view('marked', usage({ session: 100, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: hours(1) }), { limitedUntil: hours(6) });
+      assert.deepEqual(pick([marked]).nextAvailable, { profile: 'marked', at: hours(6) }, 'the limited mark outlasts the session window');
+    });
+
+    it('never names an account that does not come back on its own, or whose blocker has no reset', () => {
+      const signedOut = view('out', undefined, { loggedIn: false });
+      const api = view('console', undefined, { billing: 'api', subscriptionType: null });
+      const credits = view('credits', undefined, { creditExhaustedAt: hours(-1) });
+      const switchedOff = view('off', usage({ session: 100, weekly: 0, weeklyResetsAt: days(1), sessionResetsAt: hours(1) }));
+      const noReset = view('noReset', usage({ session: 100, weekly: 0, weeklyResetsAt: days(1), sessionResetsAt: null }));
+      assert.deepEqual(pick([signedOut, api, credits, switchedOff, noReset], { excludedNames: new Set(['off']) }), { pick: null, reason: 'none', nextAvailable: null });
+    });
+
+    it('a session stopped by a limit whose figures show a blocker is named too; one without a blocker is not', () => {
+      const stopped = view('stopped', usage({ session: 100, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: hours(2) }));
+      const farther = view('farther', usage({ session: 100, weekly: 0, weeklyResetsAt: days(4), sessionResetsAt: hours(4) }));
+      assert.equal(pick([stopped, farther], { currentProfile: 'stopped', isStoppedByLimit: true }).nextAvailable?.profile, 'stopped');
+      const lagging = view('stopped', usage({ session: 40, weekly: 0, weeklyResetsAt: days(4) }));
+      assert.deepEqual(
+        pick([lagging, farther], { currentProfile: 'stopped', isStoppedByLimit: true }),
+        { pick: null, reason: 'none', nextAvailable: { profile: 'farther', at: hours(4) } },
+      );
+    });
+  });
+
+  describe('the report', () => {
+    it('marks the pick and carries the reason and nextAvailable; an API account is recommended only to its warm session', () => {
+      const soon = view('soon', usage({ session: 0, weekly: 0, weeklyResetsAt: days(1) }));
+      const late = view('late', usage({ session: 0, weekly: 0, weeklyResetsAt: days(5) }));
+      const report = buildClaudeProfilesReport([late, soon], 'sonnet', nowMs);
+      assert.equal(report.recommended, 'soon');
+      assert.deepEqual(report.profiles.map((entry) => [entry.name, entry.isRecommended]), [['late', false], ['soon', true]], 'the entries keep the input order');
+      assert.equal(report.pickReason, 'soonestWeeklyReset');
+      const warmReport = buildClaudeProfilesReport([late, soon], 'sonnet', nowMs, { currentProfile: 'late' });
+      assert.equal(warmReport.recommended, 'late');
+      assert.equal(warmReport.pickReason, 'warm');
+      const none = buildClaudeProfilesReport([view('full', usage({ session: 100, weekly: 0, weeklyResetsAt: days(1), sessionResetsAt: hours(2) }))], 'sonnet', nowMs);
+      assert.equal(none.recommended, null);
+      assert.equal(none.pickReason, 'none');
+      assert.deepEqual(none.nextAvailable, { profile: 'full', at: hours(2) });
+      const api = view('console', undefined, { billing: 'api', subscriptionType: null });
+      assert.equal(buildClaudeProfilesReport([soon, api], 'sonnet', nowMs).recommended, 'soon');
+      assert.equal(buildClaudeProfilesReport([soon, api], 'sonnet', nowMs, { currentProfile: 'console' }).recommended, 'console');
+    });
+
+    it('isEligible keeps its strict meaning: the figures as recorded, no ceiling, no roll-forward', () => {
+      const ninetyFive = view('hot', usage({ session: 95, weekly: 10, weeklyResetsAt: days(1) }));
+      const stale = view('stale', usage({ session: 0, weekly: 100, weeklyResetsAt: hours(-1) }));
+      const report = buildClaudeProfilesReport([ninetyFive, stale], 'sonnet', nowMs);
+      assert.deepEqual(report.profiles.map((entry) => entry.isEligible), [true, false]);
+      assert.equal(checkIsClaudeProfileLaunchable(ninetyFive, 'sonnet', nowMs), false, 'over the launch ceiling');
+      assert.equal(checkIsClaudeProfileLaunchable(stale, 'sonnet', nowMs), true, 'its week has rolled over since');
+    });
   });
 });
 

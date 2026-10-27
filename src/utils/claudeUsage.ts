@@ -1,6 +1,8 @@
 /**
  * @description Per-profile Claude USAGE — how much of each subscription window an account profile
- * (`utils/claudeProfiles.ts`) has used, and which profile a new process should run on.
+ * (`utils/claudeProfiles.ts`) has used, and which profile a process should run on: a NEW agent goes to the
+ * account whose weekly window resets soonest (spend first what burns soonest), a WARM session stays on the
+ * account it worked on ({@link getClaudeLaunchPick}).
  *
  * Two sources feed one snapshot per profile (`ClaudeProfileRecord.usage`):
  *   - the OAuth usage endpoint (`GET https://api.anthropic.com/api/oauth/usage`, the profile's own access
@@ -351,7 +353,8 @@ export interface ClaudeProfileReportEntry {
   subscriptionType: string | null;
   /**
    * `api`: billed per request to a Claude Console organization's API credits — no windows, so no headroom figure, and
-   * NEVER `isRecommended` (it would look inexhaustible and spend money). `null`: a subscription not recorded as such.
+   * NEVER picked for a NEW agent (it would look inexhaustible and spend money); only a warm session already on it stays.
+   * `null`: a subscription not recorded as such.
    */
   billing: ClaudeProfileBilling | null;
   /** `null` when never probed. */
@@ -362,39 +365,258 @@ export interface ClaudeProfileReportEntry {
   limitedUntil: string | null;
   /** When its prepaid API credits were found used up (`null`: not marked). */
   creditExhaustedAt: string | null;
-  /** Signed in, not limited, its API credits not used up, and not at 100 % on a window the model drains. */
+  /** Signed in, not limited, its API credits not used up, and not at 100 % on a window the model drains — by the figures AS RECORDED. */
   isEligible: boolean;
-  /** `100 − max(relevant percent)`; `null` when the usage is unknown. */
+  /** `100 − max(relevant percent)`; `null` when the usage is unknown. Informational: the pick ranks by reset, not by headroom. */
   headroomPercent: number | null;
+  /** The profile {@link getClaudeLaunchPick} chose (the figures read as of now). */
   isRecommended: boolean;
 }
 
 export interface ClaudeProfilesReport {
   model: string | null;
-  /** The windows the ranking looked at for `model`. */
+  /** The windows the pick looked at for `model`. */
   relevantBuckets: ClaudeUsageBucketKind[];
-  /** The SUBSCRIPTION profile a new process of `model` should run on; `null` when none is eligible. */
+  /** The profile a process of `model` should run on (see {@link getClaudeLaunchPick}); `null` when none is usable. */
   recommended: string | null;
+  /** Why `recommended` is what it is. */
+  pickReason: ClaudeLaunchPickReason;
+  /** With nothing usable: the account and instant that frees up first, so a resume can be scheduled for it. */
+  nextAvailable: ClaudeNextAvailable | null;
   profiles: ClaudeProfileReportEntry[];
 }
 
+// ── the launch pick ──
+
+/** A new agent never starts on an account whose five-hour window is already this full: it would hit the limit within minutes. */
+export const claudeLaunchSessionCeilingPercent = 90;
+
+/** Two weekly resets closer than this count as the same moment (the endpoint's instants carry sub-second jitter); the five-hour percent then decides. */
+export const claudeLaunchResetTieMs = 60_000;
+
+export const claudeWeeklyWindowMs = 7 * 24 * 3_600_000;
+export const claudeSessionWindowMs = 5 * 3_600_000;
+
+/** `warm`: the session stays on its account; `movedFromLimited`: it was stopped by a limit and goes elsewhere; `soonestWeeklyReset`: a new agent; `none`: nothing is usable. */
+export type ClaudeLaunchPickReason = 'warm' | 'movedFromLimited' | 'soonestWeeklyReset' | 'none';
+
+/** The account that frees up first and the ISO instant it does. */
+export interface ClaudeNextAvailable {
+  profile: string;
+  at: string;
+}
+
+export interface ClaudeLaunchPick {
+  pick: string | null;
+  reason: ClaudeLaunchPickReason;
+  nextAvailable: ClaudeNextAvailable | null;
+}
+
+/** What the pick needs besides the profiles, the model and the clock. */
+export interface ClaudeLaunchPickOptions {
+  /** The account a WARM session last ran on; absent for a new agent (an unknown name counts as absent). */
+  currentProfile?: string | null;
+  /** The session broke off on a usage limit of `currentProfile`: it is left out of this answer whatever the figures say. */
+  isStoppedByLimit?: boolean;
+  /** Accounts the operator switched off in the `/limits` list (every rung disabled): never picked for a new agent. */
+  excludedNames?: ReadonlySet<string>;
+}
+
 /**
- * @description Rank the profiles for a launch of `model`: a profile that is signed out, marked limited
- * (`limitedUntil` in the future), out of API credits or at 100 % on a relevant window is out; the rest are ordered by
- * headroom on the relevant windows (most first; unknown usage ranks after any known one; a tie goes to the lower
- * total of the relevant percentages). The first SUBSCRIPTION in that order is `recommended`: an account billed to API
- * credits has no windows — it would rank as unknown headroom forever — and a child launched on it spends money, so
- * it is listed (eligible or not) but never recommended. The entries keep the input order.
+ * The account itself can run: signed in, not marked limited, its API credits not used up, and none of the windows
+ * the model drains (`relevantBuckets`, read by the caller) at 100 %. The one hard-eligibility rule of the report's
+ * `isEligible` (figures as recorded) and of the launch pick (figures as of now).
  */
-export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageView[], model: string | null, nowMs: number): ClaudeProfilesReport {
+function checkIsClaudeProfileEligible(profile: ClaudeProfileUsageView, relevantBuckets: readonly ClaudeUsageBucket[], nowMs: number): boolean {
+  const isLimited = profile.limitedUntil !== null && Date.parse(profile.limitedUntil) > nowMs;
+  return profile.loggedIn !== false && !isLimited && profile.creditExhaustedAt === null && relevantBuckets.every((bucket) => bucket.percent < 100);
+}
+
+/** The reset instant in epoch ms; `NaN` when the bucket names none. */
+function getBucketResetMs(bucket: ClaudeUsageBucket): number {
+  return bucket.resetsAt === null ? Number.NaN : Date.parse(bucket.resetsAt);
+}
+
+function getRelevantClaudeUsageBuckets(usage: ClaudeUsageSnapshot | undefined, model: string | null): ClaudeUsageBucket[] {
+  return getRelevantClaudeUsageKinds(model)
+    .map((kind) => getClaudeUsageBucket(usage, kind))
+    .filter((bucket): bucket is ClaudeUsageBucket => bucket !== null);
+}
+
+/**
+ * A bucket as it stands at `nowMs`: a window whose reset instant has passed since the figure was read is empty again
+ * (0 %) and resets one window length per elapsed period later. A bucket without a usable reset stays as read.
+ */
+function readClaudeBucketAsOf(bucket: ClaudeUsageBucket, nowMs: number): ClaudeUsageBucket {
+  const resetMs = getBucketResetMs(bucket);
+  if (!Number.isFinite(resetMs) || resetMs > nowMs) return bucket;
+  const windowMs = bucket.kind === 'session' ? claudeSessionWindowMs : claudeWeeklyWindowMs;
+  const rolledMs = resetMs + (Math.floor((nowMs - resetMs) / windowMs) + 1) * windowMs;
+  return { ...bucket, percent: 0, resetsAt: new Date(rolledMs).toISOString() };
+}
+
+function getRelevantClaudeBucketsAsOf(profile: ClaudeProfileUsageView, model: string | null, nowMs: number): ClaudeUsageBucket[] {
+  return getRelevantClaudeUsageBuckets(profile.usage, model).map((bucket) => readClaudeBucketAsOf(bucket, nowMs));
+}
+
+/**
+ * @description Whether a NEW agent of `model` may start on the profile now: a subscription account that is eligible by the
+ * figures as of `nowMs` and whose five-hour window is below {@link claudeLaunchSessionCeilingPercent}. Switching it off
+ * in the `/limits` list is the caller's filter.
+ */
+export function checkIsClaudeProfileLaunchable(profile: ClaudeProfileUsageView, model: string | null, nowMs: number): boolean {
+  if (profile.billing === 'api') return false;
+  const buckets = getRelevantClaudeBucketsAsOf(profile, model, nowMs);
+  if (!checkIsClaudeProfileEligible(profile, buckets, nowMs)) return false;
+  const session = buckets.find((bucket) => bucket.kind === 'session');
+  return session === undefined || session.percent < claudeLaunchSessionCeilingPercent;
+}
+
+interface ClaudeLaunchRankKey<T extends ClaudeProfileUsageView> {
+  profile: T;
+  index: number;
+  /** The soonest reset among the weekly windows the model drains (the shared one; for Fable the earlier of it and Fable's own); `null` when none is known. */
+  weeklyResetMs: number | null;
+  /** `null` when the five-hour window is unknown. */
+  sessionPercent: number | null;
+  hasUsage: boolean;
+}
+
+/** 0: a known weekly reset; 1: a snapshot without one; 2: no snapshot at all. */
+function getRankTier(key: ClaudeLaunchRankKey<ClaudeProfileUsageView>): number {
+  if (key.weeklyResetMs !== null) return 0;
+  return key.hasUsage ? 1 : 2;
+}
+
+function compareRankKeysBySession(a: ClaudeLaunchRankKey<ClaudeProfileUsageView>, b: ClaudeLaunchRankKey<ClaudeProfileUsageView>): number {
+  const aSession = a.sessionPercent ?? Number.POSITIVE_INFINITY;
+  const bSession = b.sessionPercent ?? Number.POSITIVE_INFINITY;
+  if (aSession !== bSession) return aSession < bSession ? -1 : 1;
+  return a.index - b.index;
+}
+
+/**
+ * @description The profiles in the order a launch of `model` prefers them: the soonest weekly reset first (the figures as of
+ * `nowMs`: a passed reset rolled forward), an unknown reset after every known one, no snapshot last. Resets within
+ * {@link claudeLaunchResetTieMs} of the group's first count as one moment, ordered by the lower five-hour percent, then by
+ * input order. Pure ordering: the caller filters who may be picked at all. Shared by the report's pick and the bot's
+ * own topic switch (`claudeLimitSwitch.ts`) — ONE ranking.
+ */
+export function sortClaudeProfilesByLaunchRank<T extends ClaudeProfileUsageView>(profiles: readonly T[], model: string | null, nowMs: number): T[] {
+  const keys = profiles.map((profile, index): ClaudeLaunchRankKey<T> => {
+    const buckets = getRelevantClaudeBucketsAsOf(profile, model, nowMs);
+    const resets = buckets
+      .filter((bucket) => bucket.kind !== 'session')
+      .map(getBucketResetMs)
+      .filter((resetMs) => Number.isFinite(resetMs));
+    return {
+      profile,
+      index,
+      weeklyResetMs: resets.length === 0 ? null : Math.min(...resets),
+      sessionPercent: buckets.find((bucket) => bucket.kind === 'session')?.percent ?? null,
+      hasUsage: (profile.usage?.buckets.length ?? 0) > 0,
+    };
+  });
+  keys.sort((a, b) => getRankTier(a) - getRankTier(b) || (a.weeklyResetMs ?? 0) - (b.weeklyResetMs ?? 0) || a.index - b.index);
+  // A tie group is anchored at its first member, so the rule is a partition, not a comparator that could contradict itself.
+  const ordered: T[] = [];
+  let group: ClaudeLaunchRankKey<T>[] = [];
+  const flushGroup = (): void => {
+    ordered.push(...group.sort(compareRankKeysBySession).map((key) => key.profile));
+    group = [];
+  };
+  for (const key of keys) {
+    const anchor = group[0];
+    const isTied = anchor !== undefined
+      && getRankTier(anchor) === getRankTier(key)
+      && (key.weeklyResetMs === null || anchor.weeklyResetMs === null || key.weeklyResetMs - anchor.weeklyResetMs <= claudeLaunchResetTieMs);
+    if (anchor !== undefined && !isTied) flushGroup();
+    group.push(key);
+  }
+  flushGroup();
+  return ordered;
+}
+
+/**
+ * The instant the profile becomes usable for a new agent once every blocker clears: its limited mark, a weekly window the
+ * model drains at 100 %, a five-hour window at the launch ceiling (each at its reset, figures as of now). `nowMs` when
+ * nothing blocks it; `null` when a blocker names no reset (nobody can tell when it frees up).
+ */
+function getClaudeProfileFreeAtMs(profile: ClaudeProfileUsageView, model: string | null, nowMs: number): number | null {
+  let freeAtMs = nowMs;
+  const limitedUntilMs = profile.limitedUntil === null ? Number.NaN : Date.parse(profile.limitedUntil);
+  if (Number.isFinite(limitedUntilMs) && limitedUntilMs > nowMs) freeAtMs = limitedUntilMs;
+  for (const bucket of getRelevantClaudeBucketsAsOf(profile, model, nowMs)) {
+    const ceilingPercent = bucket.kind === 'session' ? claudeLaunchSessionCeilingPercent : 100;
+    if (bucket.percent < ceilingPercent) continue;
+    const resetMs = getBucketResetMs(bucket);
+    if (!Number.isFinite(resetMs)) return null;
+    freeAtMs = Math.max(freeAtMs, resetMs);
+  }
+  return freeAtMs;
+}
+
+/** The subscription account that frees up first, when nothing is usable now; `null` when no account names a time. */
+function getClaudeNextAvailable(profiles: readonly ClaudeProfileUsageView[], model: string | null, nowMs: number, excludedNames: ReadonlySet<string>): ClaudeNextAvailable | null {
+  let next: { profile: string; atMs: number } | null = null;
+  for (const profile of profiles) {
+    // These never come back at a known time: switched off, signed out, API-billed, out of credits.
+    if (excludedNames.has(profile.name) || profile.loggedIn === false || profile.billing === 'api' || profile.creditExhaustedAt !== null) continue;
+    const freeAtMs = getClaudeProfileFreeAtMs(profile, model, nowMs);
+    if (freeAtMs === null || freeAtMs <= nowMs) continue;
+    if (next === null || freeAtMs < next.atMs) next = { profile: profile.name, atMs: freeAtMs };
+  }
+  return next === null ? null : { profile: next.profile, at: new Date(next.atMs).toISOString() };
+}
+
+/**
+ * @description The account a process of `model` should run on.
+ *
+ * NEW agent (no `currentProfile`): of the USABLE accounts — subscription, signed in, not marked limited, not out of API
+ * credits, not switched off (`excludedNames`), every weekly window the model drains below 100 % and the five-hour window
+ * below {@link claudeLaunchSessionCeilingPercent} — the one whose weekly window resets soonest
+ * ({@link sortClaudeProfilesByLaunchRank}): spend first what burns first, and move to a farther reset only when the
+ * five-hour window is exhausted. Fable's own window at 100 % takes only Fable out.
+ *
+ * WARM session (`currentProfile` known): it stays on that account unless the account is signed out, marked limited, out
+ * of API credits or at 100 % on a window the model drains — the ceiling does not apply, and an API-billed account the
+ * session already works on is kept (the spend was approved). `isStoppedByLimit` takes `currentProfile` out of the answer
+ * whatever the figures say (they may lag the limit); the rest follows the new-agent rule.
+ *
+ * Nothing usable → `pick: null` and {@link ClaudeLaunchPick.nextAvailable}.
+ */
+export function getClaudeLaunchPick(input: ClaudeLaunchPickOptions & {
+  profiles: readonly ClaudeProfileUsageView[];
+  model: string | null;
+  nowMs: number;
+}): ClaudeLaunchPick {
+  const excludedNames = input.excludedNames ?? new Set<string>();
+  const current = input.currentProfile ? input.profiles.find((profile) => profile.name === input.currentProfile) : undefined;
+  if (current && input.isStoppedByLimit !== true
+    && checkIsClaudeProfileEligible(current, getRelevantClaudeBucketsAsOf(current, input.model, input.nowMs), input.nowMs)) {
+    return { pick: current.name, reason: 'warm', nextAvailable: null };
+  }
+  const movedFrom = current && input.isStoppedByLimit === true ? current.name : null;
+  const usable = input.profiles.filter((profile) => profile.name !== movedFrom
+    && !excludedNames.has(profile.name)
+    && checkIsClaudeProfileLaunchable(profile, input.model, input.nowMs));
+  const [first] = sortClaudeProfilesByLaunchRank(usable, input.model, input.nowMs);
+  if (first) return { pick: first.name, reason: movedFrom === null ? 'soonestWeeklyReset' : 'movedFromLimited', nextAvailable: null };
+  return { pick: null, reason: 'none', nextAvailable: getClaudeNextAvailable(input.profiles, input.model, input.nowMs, excludedNames) };
+}
+
+/**
+ * @description The report of every profile for a launch of `model`, with the pick of {@link getClaudeLaunchPick}
+ * (`options`: the warm account, the limit stop, the switched-off accounts). `isEligible` is the strict reading — signed in,
+ * not marked limited, its API credits not used up, not at 100 % on a relevant window as recorded — which the explicit
+ * fallback chain's availability reads; `recommended` is the pick, an account billed to API credits only when a warm
+ * session already runs on it. The entries keep the input order.
+ */
+export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageView[], model: string | null, nowMs: number, options: ClaudeLaunchPickOptions = {}): ClaudeProfilesReport {
   const relevantBuckets = getRelevantClaudeUsageKinds(model);
   const entries = profiles.map((profile): ClaudeProfileReportEntry => {
-    const relevant = relevantBuckets
-      .map((kind) => getClaudeUsageBucket(profile.usage, kind))
-      .filter((bucket): bucket is ClaudeUsageBucket => bucket !== null);
+    const relevant = getRelevantClaudeUsageBuckets(profile.usage, model);
     const maxPercent = relevant.length === 0 ? null : Math.max(...relevant.map((bucket) => bucket.percent));
-    const isLimited = profile.limitedUntil !== null && Date.parse(profile.limitedUntil) > nowMs;
-    const isEligible = profile.loggedIn !== false && !isLimited && profile.creditExhaustedAt === null && (maxPercent === null || maxPercent < 100);
     return {
       name: profile.name,
       configDir: profile.configDir,
@@ -408,27 +630,15 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
       isUsageStale: profile.usage?.isStale === true,
       limitedUntil: profile.limitedUntil,
       creditExhaustedAt: profile.creditExhaustedAt,
-      isEligible,
+      isEligible: checkIsClaudeProfileEligible(profile, relevant, nowMs),
       headroomPercent: maxPercent === null ? null : 100 - maxPercent,
       isRecommended: false,
     };
   });
-  const ranked = entries
-    .filter((entry) => entry.isEligible && entry.billing !== 'api')
-    .sort((a, b) => {
-      if (a.headroomPercent === null || b.headroomPercent === null) {
-        return (a.headroomPercent === null ? 1 : 0) - (b.headroomPercent === null ? 1 : 0);
-      }
-      if (a.headroomPercent !== b.headroomPercent) return b.headroomPercent - a.headroomPercent;
-      return sumRelevantPercent(a, relevantBuckets) - sumRelevantPercent(b, relevantBuckets);
-    });
-  const recommended = ranked[0] ?? null;
+  const launch = getClaudeLaunchPick({ ...options, profiles, model, nowMs });
+  const recommended = entries.find((entry) => entry.name === launch.pick);
   if (recommended) recommended.isRecommended = true;
-  return { model, relevantBuckets, recommended: recommended?.name ?? null, profiles: entries };
-}
-
-function sumRelevantPercent(entry: ClaudeProfileReportEntry, kinds: readonly ClaudeUsageBucketKind[]): number {
-  return entry.buckets.filter((bucket) => kinds.includes(bucket.kind)).reduce((sum, bucket) => sum + bucket.percent, 0);
+  return { model, relevantBuckets, recommended: launch.pick, pickReason: launch.reason, nextAvailable: launch.nextAvailable, profiles: entries };
 }
 
 /**
