@@ -15,6 +15,7 @@ import {
 import { keyToString, tryKeyFromString, type SessionKey } from './sessionKey';
 import { claudeTmuxAdapterName } from './adapters/adapterNames';
 import { resolveDefaultDataDir } from './legacyNames';
+import { stateFileName } from './stateFile';
 import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './utils/displayVerbosity';
 import { defaultTopicView, parseTopicView } from './utils/topicView';
 import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
@@ -958,7 +959,7 @@ export class StateStore {
 
   constructor(dataDir: string, options: StateStoreOptions = {}) {
     this.dataDir = dataDir;
-    this.statePath = path.join(dataDir, 'state.json');
+    this.statePath = path.join(dataDir, stateFileName);
     this.saveDebounceMs = options.saveDebounceMs ?? DEFAULT_SAVE_DEBOUNCE_MS;
   }
 

@@ -584,6 +584,9 @@ function getClaudeNextAvailable(
     // These never come back at a known time: switched off, signed out, API-billed, out of credits.
     if (excludedNames.has(profile.name) || profile.loggedIn === false || profile.billing === 'api' || profile.creditExhaustedAt !== null) continue;
     let freeAtMs = getClaudeProfileFreeAtMs(profile, model, nowMs);
+    // The limit stopped this account, yet its figures show no blocker, so nothing says WHICH limit it was (a weekly window
+    // the usage endpoint has not caught up with, or the five-hour one). The five-hour reset is a guess — the earliest it
+    // could be free. A wrong guess just hits the limit again on the resume and asks again: at most about one try per five hours.
     if (profile.name === stoppedName && freeAtMs !== null && freeAtMs <= nowMs) freeAtMs = getSessionResetMs(profile, nowMs);
     if (freeAtMs === null || freeAtMs <= nowMs) continue;
     if (next === null || freeAtMs < next.atMs) next = { profile: profile.name, atMs: freeAtMs };
