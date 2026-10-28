@@ -6440,7 +6440,7 @@ async function removeBindPicker(key: SessionKey, pickerMessageId: number): Promi
  * Every one of them is held first ({@link BindPickerClaims.retire}, outside the limited claim list), so a tap is refused
  * whatever becomes of its message; the hold is let go of only for the ones with nothing left to tap. ONE bulk call deletes them
  * (each single delete is a paced send, and there can be dozens). A message too old for Telegram to delete loses its buttons
- * instead, and so does every one of a bulk call Telegram refused — no delete per picker — but only the newest ten of them; the
+ * instead, and so does every one of a bulk call Telegram refused — no delete per picker — but only the newest `keyboardStripsPerSweepLimit` of them; the
  * older rest keeps its buttons, refused by the hold (`sweepOpenBindMessages`). The hold lives in memory: after a restart such a
  * picker works again. Never rejects: the callers that do not wait for it ({@link sendBindingWelcome}) have nothing to catch.
  */

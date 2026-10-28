@@ -12,7 +12,10 @@ function createEntries(first: number, count: number, sentAtMs: number): OpenBind
   return Array.from({ length: count }, (_, index) => ({ messageId: first + index, sentAtMs }));
 }
 
-const idsOf = (entries: readonly OpenBindMessage[]): number[] => entries.map((entry) => entry.messageId);
+const getMessageIds = (entries: readonly OpenBindMessage[]): number[] => entries.map((entry) => entry.messageId);
+
+/** Ids as numbers: a bare `.sort()` would order them as text. */
+const getSortedIds = (ids: Iterable<number>): number[] => [...ids].sort((first, second) => first - second);
 
 interface Harness {
   ports: BindSweepPorts;
@@ -54,27 +57,27 @@ test('every message is held before anything is awaited, and still held when the 
   const harness = createHarness();
   const entries = createEntries(100, 4, recentMs);
   const sweeping = sweepOpenBindMessages(entries, nowMs, harness.ports);
-  assert.deepEqual([...harness.held].sort(), idsOf(entries), 'held in the same synchronous step that took them');
+  assert.deepEqual(getSortedIds(harness.held), getMessageIds(entries), 'held in the same synchronous step that took them');
   await sweeping;
-  assert.deepEqual(harness.heldAtDelete, [idsOf(entries)]);
+  assert.deepEqual(harness.heldAtDelete, [getMessageIds(entries)]);
 });
 
 test('a bulk delete that goes through is ONE call, strips nothing, and lets go of everything it deleted', async () => {
   const harness = createHarness();
   const entries = createEntries(100, 30, recentMs);
   await sweepOpenBindMessages(entries, nowMs, harness.ports);
-  assert.deepEqual(harness.deleteCalls, [idsOf(entries)]);
+  assert.deepEqual(harness.deleteCalls, [getMessageIds(entries)]);
   assert.deepEqual(harness.strippedCalls, []);
   assert.equal(harness.held.size, 0, 'nothing left to tap, nothing held');
 });
 
-test('a refused bulk delete is not retried per picker: the newest ten lose their buttons and are let go of, the older rest stays held', async () => {
+test(`a refused bulk delete is not retried per picker: the newest ${keyboardStripsPerSweepLimit} lose their buttons and are let go of, the older rest stays held`, async () => {
   const harness = createHarness({ isBulkDeleteAccepted: false });
   const entries = createEntries(100, keyboardStripsPerSweepLimit + 3, recentMs);
   await sweepOpenBindMessages(entries, nowMs, harness.ports);
   assert.equal(harness.deleteCalls.length, 1, 'one bulk call, no delete per picker');
-  assert.deepEqual(harness.strippedCalls, idsOf(entries).slice(-keyboardStripsPerSweepLimit), 'the newest ten, oldest first');
-  assert.deepEqual([...harness.held].sort(), idsOf(entries).slice(0, 3), 'the three older pickers keep their buttons and their hold');
+  assert.deepEqual(harness.strippedCalls, getMessageIds(entries).slice(-keyboardStripsPerSweepLimit), `the newest ${keyboardStripsPerSweepLimit}, oldest first`);
+  assert.deepEqual(getSortedIds(harness.held), getMessageIds(entries).slice(0, 3), 'the pickers past the strip bound keep their buttons and their hold');
 });
 
 test('an edit that fails leaves its message held: it still has its buttons', async () => {
@@ -84,13 +87,13 @@ test('an edit that fails leaves its message held: it still has its buttons', asy
   assert.deepEqual([...harness.held], [101]);
 });
 
-test('messages too old to delete are never in a delete call: the newest ten lose their buttons, the older rest stays held', async () => {
+test(`messages too old to delete are never in a delete call: the newest ${keyboardStripsPerSweepLimit} lose their buttons, the older rest stays held`, async () => {
   const harness = createHarness();
   const entries = createEntries(100, keyboardStripsPerSweepLimit + 2, tooOldMs);
   await sweepOpenBindMessages(entries, nowMs, harness.ports);
   assert.deepEqual(harness.deleteCalls, [], 'Telegram would refuse them');
-  assert.deepEqual(harness.strippedCalls, idsOf(entries).slice(-keyboardStripsPerSweepLimit));
-  assert.deepEqual([...harness.held].sort(), idsOf(entries).slice(0, 2));
+  assert.deepEqual(harness.strippedCalls, getMessageIds(entries).slice(-keyboardStripsPerSweepLimit));
+  assert.deepEqual(getSortedIds(harness.held), getMessageIds(entries).slice(0, 2));
 });
 
 test('recent and old messages together: the recent are deleted and let go of, the old are stripped and let go of', async () => {
@@ -98,8 +101,8 @@ test('recent and old messages together: the recent are deleted and let go of, th
   const recent = createEntries(200, 2, recentMs);
   const harness = createHarness();
   await sweepOpenBindMessages([...old, ...recent], nowMs, harness.ports);
-  assert.deepEqual(harness.deleteCalls, [idsOf(recent)]);
-  assert.deepEqual(harness.strippedCalls, idsOf(old));
+  assert.deepEqual(harness.deleteCalls, [getMessageIds(recent)]);
+  assert.deepEqual(harness.strippedCalls, getMessageIds(old));
   assert.equal(harness.held.size, 0);
 });
 
@@ -109,7 +112,7 @@ test('nothing open: nothing is called', async () => {
   assert.deepEqual([harness.deleteCalls, harness.strippedCalls], [[], []]);
 });
 
-test('stripStaleKeyboards resolves the ids whose keyboard is gone: the newest ten that were edited successfully', async () => {
+test(`stripStaleKeyboards resolves the ids whose keyboard is gone: the newest ${keyboardStripsPerSweepLimit} that were edited successfully`, async () => {
   const stripped: number[] = [];
   const messageIds = Array.from({ length: keyboardStripsPerSweepLimit + 2 }, (_, index) => 500 + index);
   const failing = messageIds.at(-1);

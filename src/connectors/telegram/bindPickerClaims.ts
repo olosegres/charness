@@ -51,7 +51,7 @@ export class BindPickerClaims {
     this.retired.add(buildMessageSnapshotKey(key, messageId));
   }
 
-  /** @description Let go of a {@link retire}d message that is gone: nobody can tap it, and the hold would only grow. */
+  /** @description Let go of a {@link retire}d message that has nothing left to tap — deleted, or its buttons removed: the hold would only grow. */
   unretire(key: SessionKey, messageId: number): void {
     this.retired.delete(buildMessageSnapshotKey(key, messageId));
   }
