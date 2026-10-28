@@ -3,7 +3,7 @@
 Charness is a proxy between a chat (a Telegram topic, a Jira issue) and an agentic CLI. This page describes the backends it
 drives — **Claude Code** (three interchangeable backends) and **OpenCode** — how they behave when the bot restarts, and the
 tools the bot injects into every agent session. Alongside the agents there is one non-AI backend, the raw shell of
-[`/terminal`](commands.md#terminal). The commands are in [commands.md](commands.md); installing and configuring is in
+[`/terminal`](commands.md#terminal). The last section is about the two Telegram surfaces a topic can live on: a forum group or the bot's DM. The commands are in [commands.md](commands.md); installing and configuring is in
 [SETUP.md](../SETUP.md); the overview is the [README](../README.md).
 
 ## Claude Code backends (`/claude_mode`)
@@ -226,3 +226,17 @@ project's `.mcp.json`; inspect what's active in a thread with `/mcp`.)
 Third-party OpenCode MCP servers, including a separate `telegram-mcp`, belong to
 the OpenCode configuration of the Linux user that runs the bot. They are not
 injected by Charness; run `opencode mcp list` as that user to verify them.
+
+## Two surfaces: group topics, bot DM, or both
+
+The bot serves two Telegram surfaces:
+
+- **Forum supergroup** — every topic is a tab. The most familiar UX: a visible
+  topic list, per-topic names and icons, quick switching between agents. The
+  trade-off is Telegram's group throughput cap (about 20 messages/min per
+  group), so the bot paces and coalesces heavy output streams.
+- **The bot's own DM** (owner only) — the private
+  chat runs in topic mode too, so you get the same thread-per-agent tabs
+  there, and live output streams through Telegram's native draft "cursor":
+  the reply grows in place in one message instead of arriving as a flood of
+  separate messages.

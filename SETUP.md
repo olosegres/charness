@@ -687,7 +687,7 @@ talk to the bot there.
 | Variable | Default | Description |
 |---|---|---|
 | `ALLOWED_GROUP_ID` | (auto-pair) | Numeric forum supergroup id (`-100…`). Leave empty to auto-pair with the first forum group a group **admin/creator** contacts the bot from (id is saved to `state.json`; re-point with `/pair`). A **name** is not accepted. A numeric value disables auto-pairing |
-| `CHAT_MODE` | `both` | Which surface(s) this instance serves: `group`, `dm`, or `both` — see [Two surfaces](README.md#two-surfaces-group-topics-bot-dm-or-both) |
+| `CHAT_MODE` | `both` | Which surface(s) this instance serves: `group`, `dm`, or `both` — see [Two surfaces](docs/backends.md#two-surfaces-group-topics-bot-dm-or-both) |
 | `OWNER_USER_ID` | — | **Optional.** Numeric Telegram user id of the owner — leave it unset to run group-only (the DM surface stays inert; a group works fully without it). Set it only to enable the owner-DM surface; **required** solely for `CHAT_MODE=dm` |
 
 **Localized in 12 languages** — the bot UI (commands, buttons, notices) speaks

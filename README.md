@@ -13,7 +13,7 @@
 - **In Telegram** you control your agents through a bot or a group, so it becomes a terminal for OpenCode and Claude Code — every thread is like a terminal tab, plus scheduling and voice control.
 - **In Jira** it starts an agent when you assign a ticket to a special user: the agent reads the description, comments and attachments and does the work according to the ticket's status — like a real employee.
 
-<p align="center">It runs fine on your laptop. But it is called a <b>c</b>loud <b>harness</b> for a reason — put it on a VPS or VDS and your agents keep working while the laptop sleeps — background tasks, cron jobs, scheduled agents and recurring tasks included.</p>
+<p align="center">It runs fine on your laptop. But it is called a <b>c</b>loud <b>harness</b> for a reason — put it on a VPS or VDS and your agents keep working while the laptop sleeps. Give an agent a cron schedule and it takes on a recurring task by itself, in the background, while you do something else.</p>
 
 <p align="center">
   <img src="docs/images/hero-v2.png" alt="Charness — all your agents in Telegram; chat, code, ship; powerful slash commands" width="900" />
@@ -33,7 +33,7 @@ One topic is one AI pipeline: its own project folder, its own agent, its own sch
 - **Data analysis and reports** — drop a spreadsheet or a CSV into the topic; the agent analyses it and sends back charts and a report, and a cron job rebuilds the report every week.
 - **Translation and localization** — an agent keeps a project's locale files in sync: translates new strings and checks the existing ones.
 - **Inbox triage and support** — a scheduled agent sorts incoming messages or support requests (through the MCP servers you connect), drafts replies and posts what needs a human.
-- **News aggregation** — a morning digest in a topic: the agent collects the sources you list and posts one message per item.
+- **News aggregation** — a morning digest in a topic: the agent collects the sources you list and posts them as one digest message.
 - **Tracking new research and publications** — arXiv, blogs, releases of the tools you depend on: a scheduled agent checks them and posts a short summary of what is new.
 
 ## Quick start
@@ -106,7 +106,7 @@ Think **OpenClaw for vibe coding**, driven entirely from Telegram: no complex se
 |---|---|---|
 | Simple setup & management | Install the CLI, put your bot token in one `.env`, bind a topic to a folder, and run; everything after is managed from Telegram — no dashboards | [Quick start](#quick-start), [SETUP.md](SETUP.md), [`/doctor`](docs/commands.md#doctor) |
 | Multi-thread / topic | One topic per directory with your agent; two topics can share one folder for parallel work — run almost unlimited agents in parallel | [`/bind`](docs/commands.md#bind), [`/topic`](docs/commands.md#topic), [`/list`](docs/commands.md#list) |
-| Two chat surfaces | Forum-group topics and the owner's bot DM, both served at once by default, with tabs on either | [Two surfaces](#two-surfaces-group-topics-bot-dm-or-both) |
+| Two chat surfaces | Forum-group topics and the owner's bot DM, both served at once by default, with tabs on either | [Two surfaces](docs/backends.md#two-surfaces-group-topics-bot-dm-or-both) |
 | Raw terminal | A topic bound to a real `$SHELL` in the project folder | [`/terminal`](docs/commands.md#terminal) |
 | Notifications | When the agent asks a question, the bot pins that message so even a muted topic notifies you: the pin pierces mute, giving exactly one notification per question (unpinned once you answer) | — |
 | Scheduled & self-driving runs | `/schedule` arms cron / one-shot / N-times jobs per topic, and the agent can schedule *itself* via injected MCP tools: nightly reviews, recurring reports, a "finish this tomorrow at 9" hand-off, checks that wake the agent on failure. Each job fires as a fresh session with your prompt; restart-safe, with one catch-up for a run missed while the bot was down | [`/schedule`](docs/commands.md#schedule) |
@@ -121,24 +121,10 @@ Think **OpenClaw for vibe coding**, driven entirely from Telegram: no complex se
 | Observability | An always-on output trace and a console log, the source of truth for "a message never reached the topic" | [`/trace`](docs/commands.md#trace), [`/doctor`](docs/commands.md#doctor), [Troubleshooting](docs/troubleshooting.md) |
 | Languages | The bot speaks 12 languages, detected per chat and set with `/language` | [`/language`](docs/commands.md#language-lang) |
 
-### Two surfaces: group topics, bot DM, or both
-
-The bot serves two Telegram surfaces:
-
-- **Forum supergroup** — every topic is a tab. The most familiar UX: a visible
-  topic list, per-topic names and icons, quick switching between agents. The
-  trade-off is Telegram's group throughput cap (about 20 messages/min per
-  group), so the bot paces and coalesces heavy output streams.
-- **The bot's own DM** (owner only) — the private
-  chat runs in topic mode too, so you get the same thread-per-agent tabs
-  there, and live output streams through Telegram's native draft "cursor":
-  the reply grows in place in one message instead of arriving as a flood of
-  separate messages.
-
 ### Documentation
 
 - **[docs/commands.md](docs/commands.md)** — every command, one section each, with the features behind it: accounts, usage limits and fallback, scheduler, reminders, todo lists, timezone, skills, file intake.
-- **[docs/backends.md](docs/backends.md)** — Claude Code and OpenCode backends, restart behaviour and the tools the bot injects into every agent session.
+- **[docs/backends.md](docs/backends.md)** — Claude Code and OpenCode backends, restart behaviour, the tools the bot injects into every agent session, and the two Telegram surfaces (group topics, the bot's DM).
 - **[docs/troubleshooting.md](docs/troubleshooting.md)** — the bot doesn't see text, `/bind` can't find a folder, missing rights, two instances on one machine.
 - **[SETUP.md](SETUP.md)** — installing and configuring: Telegram, Jira, environment, updating; Docker as an alternative to npm.
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** — architecture and local development (build, test, hot-reload, Docker dev loop).
