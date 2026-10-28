@@ -10,6 +10,13 @@ export const openBindMessagesPerTopicLimit = 50;
 /** How long a bot's message can be deleted, per the Bot API's `deleteMessage` («less than 48 hours ago»). */
 export const telegramDeleteWindowMs = 48 * 60 * 60 * 1000;
 
+/**
+ * The most keyboards one sweep of a topic's open messages strips: each strip is a paced send of the bot's ONE global gate, so a
+ * topic with dozens of pickers must not queue dozens of them. The messages past the bound keep their buttons, and a tap on one
+ * is refused instead (`BindPickerClaims.retire`).
+ */
+export const keyboardStripsPerSweepLimit = 10;
+
 /** A remembered message and when the bot sent it. */
 export interface OpenBindMessage {
   messageId: number;

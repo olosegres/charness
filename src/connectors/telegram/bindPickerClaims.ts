@@ -16,13 +16,15 @@ export const bindPickerClaimLimit = 200;
  */
 export class BindPickerClaims {
   private readonly claimed = new Set<string>();
+  /** The messages {@link retire} holds until {@link unretire}; not subject to the limit. */
+  private readonly retired = new Set<string>();
 
   constructor(private readonly limit: number = bindPickerClaimLimit) {}
 
   /** @description Claim the picker message; `false` when a bind already holds it. */
   claim(key: SessionKey, messageId: number): boolean {
     const claimKey = buildMessageSnapshotKey(key, messageId);
-    if (this.claimed.has(claimKey)) return false;
+    if (this.claimed.has(claimKey) || this.retired.has(claimKey)) return false;
     this.claimed.add(claimKey);
     while (this.claimed.size > this.limit) {
       const oldest = this.claimed.values().next().value;
@@ -34,7 +36,24 @@ export class BindPickerClaims {
 
   /** @description Whether a bind (or a leave) holds the picker message: nothing else may act on it. */
   has(key: SessionKey, messageId: number): boolean {
-    return this.claimed.has(buildMessageSnapshotKey(key, messageId));
+    const claimKey = buildMessageSnapshotKey(key, messageId);
+    return this.claimed.has(claimKey) || this.retired.has(claimKey);
+  }
+
+  /**
+   * @description Hold the picker message outside the limit, until {@link unretire}: the sweep that closes a topic's open pickers
+   * takes dozens at once, which must neither push a tap's claim out of the limited list (a second tap would then bind again)
+   * nor be pushed out by newer claims (a picker that keeps its buttons — too old to delete, past the strip bound — has nothing
+   * else between a stale tap and a rebind). The hold lasts as long as the process: a restart forgets it, and a picker still
+   * carrying buttons then works again.
+   */
+  retire(key: SessionKey, messageId: number): void {
+    this.retired.add(buildMessageSnapshotKey(key, messageId));
+  }
+
+  /** @description Let go of a {@link retire}d message that is gone: nobody can tap it, and the hold would only grow. */
+  unretire(key: SessionKey, messageId: number): void {
+    this.retired.delete(buildMessageSnapshotKey(key, messageId));
   }
 
   /** @description Give a claim back: the bind it was for was refused, so the picker stays usable. */

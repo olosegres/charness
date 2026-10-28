@@ -169,7 +169,7 @@ below the 10 s floor of `jira.json`, `requestTurnPollMs` — the wake-up engine'
 `requestSweepIntervalMs` and `requestFirstPostRetryDelayMs` — the wake-up engine's minutes, `limitProbeDelayMs` — the two-minute probe of an unconfirmed usage limit, `stateSaveDebounceMs` — `state.json`'s
 500 ms save debounce, `openCodeServerUpBudgetMs` — the OpenCode server's 60 s of retries, `backgroundHoldMaxMs` — the 6 h the
 agent's own pending work holds a json-stream process, `todoReminderPollMs` and `todoReminderIntervalMs` — the todo
-reminder's 10 s poll and the interval `settings.json` sets, `scheduleMinFireIntervalMs` — the 5 min minimum between cron fires, `tscWatchCheckIntervalMs` and `tscWatchStaleGraceMs` — the
+reminder's 10 s poll and the interval `settings.json` sets, `scheduleMinFireIntervalMs` — the 5 min minimum between cron fires, `bindPickerClaimLimit` — how many `/bind` picker claims are kept (a count: 200), `tscWatchCheckIntervalMs` and `tscWatchStaleGraceMs` — the
 hot supervisor's 30 s check of its `tsc -w` and the minute a source may stay newer than its output; the supervisor reads these two, the bot the rest).
 It is the ONE test-only timing seam,
 never a setting: unset, every window is the production one; a value may only shorten its window (each key is capped at its

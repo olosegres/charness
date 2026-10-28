@@ -19,6 +19,7 @@ import { minFireIntervalMs } from '../scheduler/recurrence';
 import { openCodeServerRestartRetryBudgetMs } from '../adapters/openCodeAdapter';
 import { unconfirmedLimitProbeDelayMs } from '../apiErrorRetry';
 import { jiraPollIntervalMinSeconds } from '../connectors/jira/config';
+import { bindPickerClaimLimit } from '../connectors/telegram/bindPickerClaims';
 import { globalSendIntervalMs } from '../rateLimiter';
 import { unwatchedSweepMs, watchedTurnPollMs } from '../requests/wakeUpEngine';
 import { postRetryDelaysMs } from '../requests/wakeUpRules';
@@ -27,7 +28,7 @@ import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
 import { todoReminderDefaultMinutes } from '../todos/nag';
 import { todoReminderPollMs } from '../todos/reminderEngine';
 
-/** Every key with the production window it may only shorten. */
+/** Every key with the production window (a count, for `bindPickerClaimLimit`) it may only shorten. */
 const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['telegramSendIntervalMs', globalSendIntervalMs],
   ['jiraPollIntervalMs', jiraPollIntervalMinSeconds * 1000],
@@ -41,6 +42,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['todoReminderPollMs', todoReminderPollMs],
   ['todoReminderIntervalMs', todoReminderDefaultMinutes * 60 * 1000],
   ['scheduleMinFireIntervalMs', minFireIntervalMs],
+  ['bindPickerClaimLimit', bindPickerClaimLimit],
   ['tscWatchCheckIntervalMs', tscWatchCheckIntervalMs],
   ['tscWatchStaleGraceMs', tscWatchStaleGraceMs],
 ];

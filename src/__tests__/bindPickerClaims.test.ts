@@ -41,6 +41,37 @@ test('only the newest claims are kept: the oldest is dropped past the limit', ()
   assert.equal(claims.claim(topicKey, 1), true, 'the oldest was dropped');
 });
 
+test('a retired picker stays held when newer claims push the oldest ones out of the limit', () => {
+  const claims = new BindPickerClaims(2);
+  claims.retire(topicKey, 1);
+  for (const messageId of [2, 3, 4, 5]) claims.claim(topicKey, messageId);
+  assert.equal(claims.has(topicKey, 1), true, 'a plain claim 1 would be long gone');
+  assert.equal(claims.claim(topicKey, 1), false, 'a tap on it is refused');
+  assert.equal(claims.has(topicKey, 2), false, 'while a plain claim past the limit is dropped');
+});
+
+test('retired pickers do not count against the limit: a dozen of them leave the claims of the taps alone', () => {
+  const claims = new BindPickerClaims(2);
+  claims.claim(topicKey, 1);
+  claims.claim(topicKey, 2);
+  for (let messageId = 100; messageId < 112; messageId += 1) claims.retire(topicKey, messageId);
+  assert.equal(claims.has(topicKey, 1), true);
+  assert.equal(claims.has(topicKey, 2), true);
+});
+
+test('a retired picker holds until it is let go of, even through a release; only that message in that chat', async () => {
+  const claims = new BindPickerClaims();
+  claims.retire(topicKey, 500);
+  assert.equal(claims.has(topicKey, 500), true);
+  claims.release(topicKey, 500);
+  assert.equal(claims.has(topicKey, 500), true, 'a release is for a refused bind, which a retired picker never starts');
+  assert.equal(await claims.runClaimed(topicKey, 500, async () => true), 'busy');
+  assert.equal(claims.has(topicKey, 501), false);
+  assert.equal(claims.has(otherChatKey, 500), false);
+  claims.unretire(topicKey, 500);
+  assert.equal(claims.has(topicKey, 500), false, 'a message that is gone needs no hold');
+});
+
 test('a claim is visible to whoever else is about to act on the picker, until it is given back', () => {
   const claims = new BindPickerClaims();
   assert.equal(claims.has(topicKey, 500), false);

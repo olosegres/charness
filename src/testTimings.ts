@@ -3,6 +3,7 @@ import { openCodeServerRestartRetryBudgetMs } from './adapters/openCodeAdapter';
 import { unconfirmedLimitProbeDelayMs } from './apiErrorRetry';
 import { tscWatchCheckIntervalMs, tscWatchStaleGraceMs } from './cli/tscWatchGuard';
 import { jiraPollIntervalMinSeconds } from './connectors/jira/config';
+import { bindPickerClaimLimit } from './connectors/telegram/bindPickerClaims';
 import { globalSendIntervalMs } from './rateLimiter';
 import { unwatchedSweepMs, watchedTurnPollMs } from './requests/wakeUpEngine';
 import { postRetryDelaysMs } from './requests/wakeUpRules';
@@ -17,7 +18,7 @@ import { minFireIntervalMs } from './scheduler/recurrence';
  * production windows the process-level flows would otherwise wait out in real time (the Telegram send pacer's 2 s, the
  * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the two-minute probe of an
  * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold, the
- * todo reminder's 10 s poll and its interval). It is NOT a setting: no
+ * todo reminder's 10 s poll and its interval, and — a count, not a window — the 200 `/bind` picker claims). It is NOT a setting: no
  * operator sets it and it is documented only for developers (DEVELOPMENT.md); settings live in `settings.json`.
  *
  * Unset (every production instance) = every built-in window as it is. Set, it is validated strictly at boot: an unknown
@@ -67,6 +68,8 @@ const testTimingsSchema = z.strictObject({
   todoReminderPollMs: createShorterWindowSchema(todoReminderPollMs).optional(),
   /** The todo reminder's interval, in place of the `settings.json` one (production default: 60 min; off stays off). */
   todoReminderIntervalMs: createShorterWindowSchema(todoReminderDefaultMinutes * 60 * msPerSecond).optional(),
+  /** How many `/bind` picker claims the bot keeps before it drops the oldest — a COUNT, not a window (production: `bindPickerClaimLimit`, 200). */
+  bindPickerClaimLimit: z.number().int().positive().max(bindPickerClaimLimit).optional(),
   /** The shortest gap between two fires of a cron schedule (production: `minFireIntervalMs`, 5 min). */
   scheduleMinFireIntervalMs: createShorterWindowSchema(minFireIntervalMs).optional(),
   /** How often the hot supervisor compares its `tsc -w` with the sources (production: `tscWatchCheckIntervalMs`, 30 s). Read by `charness hot`, not by the bot. */

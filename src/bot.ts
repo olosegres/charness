@@ -136,7 +136,7 @@ import {
 import { recomputeSchedulesForTimezoneChange } from './scheduler/timezoneRecompute';
 import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir } from './validation';
 import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bindPageNoopCallback, buildBindKeyboard, checkIsBindPickerExtra } from './connectors/telegram/bindPicker';
-import { OpenBindMessages, splitByDeleteWindow } from './connectors/telegram/openBindMessages';
+import { keyboardStripsPerSweepLimit, OpenBindMessages, splitByDeleteWindow } from './connectors/telegram/openBindMessages';
 import { buildTopicLink, createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
 import { getCallbackMessageId } from './connectors/telegram/commands/callbackMessage';
 import { answerCallbackQuerySafely } from './connectors/telegram/commands/callbackToast';
@@ -2788,7 +2788,7 @@ const awaitingFolderName = new Set<string>();
  */
 const bindPickerMessageIds = new Map<string, number>();
 /** The `/bind` picker messages a bind or a leave holds (in flight or done), so a second tap on the same keyboard acts on nothing again. */
-const bindPickerClaims = new BindPickerClaims();
+const bindPickerClaims = new BindPickerClaims(ENV.testTimings.bindPickerClaimLimit);
 /**
  * The messages open in each topic that offer a bind or ask for a folder's name (every `/bind` picker, the «not bound» replies
  * that carry one, the «create new folder» prompt): any bind or leave of the topic deletes them all — see
@@ -2798,7 +2798,8 @@ const openBindMessages = new OpenBindMessages();
 /**
  * The welcome each topic last got (per topic, newest last): its ▶️ Claude / ▶️ OpenCode / 📋 Resume buttons act on the topic's
  * CURRENT folder whatever the message says, so the next bind or a leave strips the buttons of the ones before. In memory, like
- * {@link openBindMessages}: a welcome sent before a restart keeps its buttons.
+ * {@link openBindMessages}: a welcome sent before a restart keeps its buttons. The same per-topic, bounded, timestamped list of
+ * message ids as {@link openBindMessages}, reused: these messages are never deleted, only stripped.
  */
 const openWelcomeMessages = new OpenBindMessages();
 
@@ -6435,31 +6436,36 @@ async function removeBindPicker(key: SessionKey, pickerMessageId: number): Promi
  * bot's own auto-bind, a leave): their text is no longer true, and a tap on a stale one would rebind the topic. A message
  * the bot has no record of (sent before a restart) is not touched.
  *
- * ONE bulk call deletes them (each single delete is a paced send, and there can be dozens). A message too old for Telegram to
- * delete loses its buttons instead, and so does each one of a bulk call Telegram refused, tried one by one. Never rejects:
- * the callers that do not wait for it ({@link sendBindingWelcome}) have nothing to catch.
+ * Every one of them is held first ({@link BindPickerClaims.retire}, outside the limited claim list), so a tap is refused
+ * whatever becomes of its message; the hold is let go of only for the ones the delete removed. ONE bulk call deletes them (each
+ * single delete is a paced send, and there can be dozens). A message too old for Telegram to delete loses its buttons instead,
+ * and so does every one of a bulk call Telegram refused — no delete per picker — but only the newest
+ * {@link keyboardStripsPerSweepLimit} of them ({@link stripStaleKeyboards}); the older rest keeps its buttons, refused by the
+ * hold. The hold lives in memory: after a restart such a picker works again. Never rejects: the callers that do not wait for it
+ * ({@link sendBindingWelcome}) have nothing to catch.
  */
 async function closeOpenBindMessages(key: SessionKey): Promise<void> {
   try {
     const entries = openBindMessages.take(keyToString(key));
-    // Claimed before the first await: from here on a tap on any of them is refused («already used»), whether or not its message
-    // goes — a delete in flight, a bulk call Telegram refused and the strip bound below would otherwise leave live buttons.
-    for (const { messageId } of entries) bindPickerClaims.claim(key, messageId);
+    // Held before the first await: from here on a tap on any of them is refused («already used»), whether or not its message
+    // goes — a delete in flight, a bulk call Telegram refused and the strip bound below would otherwise leave live buttons. Not
+    // in the claim list, whose limit dozens of these would eat: they would push out the claim of the tap that started this sweep.
+    for (const { messageId } of entries) bindPickerClaims.retire(key, messageId);
     const { deletable, tooOld } = splitByDeleteWindow(entries, Date.now());
-    // A refused bulk call is not retried as a delete per picker (two paced sends each, from the one gate of the whole bot):
-    // the buttons go instead, a bounded number of them.
-    if (deletable.length > 0 && !await deleteThreadMessages(key, deletable)) await stripStaleKeyboards(key, deletable, 'bind');
+    if (deletable.length > 0) {
+      if (await deleteThreadMessages(key, deletable)) {
+        for (const messageId of deletable) bindPickerClaims.unretire(key, messageId);
+      } else {
+        // A refused bulk call is not retried as a delete per picker (two paced sends each, from the one gate of the whole bot):
+        // the buttons go instead, a bounded number of them.
+        await stripStaleKeyboards(key, deletable, 'bind');
+      }
+    }
     await stripStaleKeyboards(key, tooOld, 'bind');
   } catch (e) {
     console.warn(`[bind] closing the open pickers of ${keyToString(key)} failed:`, e);
   }
 }
-
-/**
- * The most keyboards one sweep strips: each is a paced send of the whole bot's one gate, and the claim ({@link closeOpenBindMessages})
- * already refuses a tap on the ones past the bound.
- */
-const keyboardStripsPerSweepLimit = 10;
 
 /**
  * @description Remove the keyboards of messages that can no longer be deleted or must stay as history, the newest

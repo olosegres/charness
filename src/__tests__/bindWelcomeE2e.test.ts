@@ -76,6 +76,7 @@ import {
 } from './e2e/isolatedCharness';
 import { getSessionLaunches, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { bindCreateFolderCallback, bindLeaveCurrentCallback } from '../connectors/telegram/bindPicker';
+import { keyboardStripsPerSweepLimit } from '../connectors/telegram/openBindMessages';
 import type { BindingData } from '../state';
 import { t } from '../i18n';
 import { enDict } from '../i18n/en';
@@ -105,8 +106,11 @@ const typedBeforeTapFolderName = 'bind-typed-before-tap';
 const tapThenNameFolderName = 'bind-tap-then-name';
 /** Folders the welcome steps bind to by a typed `/bind` (it finds them on disk; they need not be in a picker). */
 const welcomeStepFolders = { first: 'bind-welcome-first', second: 'bind-welcome-second', leaving: 'bind-welcome-leaving' } as const;
-/** How many stale keyboards one sweep strips at most (`keyboardStripsPerSweepLimit` in the bot); the pickers beyond it stay claimed. */
-const keyboardStripsPerSweepLimit = 10;
+/**
+ * How many `/bind` picker claims the instance keeps (production: 200), fewer than the pickers the sweep step opens: the sweep's
+ * claims alone push each other out, so a picker the sweep leaves with its buttons stays refused only if it is held for good.
+ */
+const bindPickerClaimLimitInFlow = 4;
 /** A folder other chats' bindings sit on, made on disk by the step that needs it (a typed `/bind` finds it without the picker). */
 const sharedAcrossChatsFolderName = 'bind-shared';
 /** The instance also keeps the bindings of other chats: a second group's topic and the operator's private chat. */
@@ -317,7 +321,7 @@ describe('/bind end to end: built charness, fake Bot API', () => {
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
-      ...getTelegramFlowTestTimingsEnv(),
+      ...getTelegramFlowTestTimingsEnv({ bindPickerClaimLimit: bindPickerClaimLimitInFlow }),
     });
   });
 
@@ -746,11 +750,13 @@ describe('/bind end to end: built charness, fake Bot API', () => {
     assert.deepEqual(listBoundMessages(tapFirstTopic, picker.message_id, tapThenNameFolderName), [], 'nothing announces a bind to the name');
   });
 
-  it('every picker the sweep takes is claimed at once: when a refused bulk delete leaves some with their buttons (the strip is bounded), a tap on them is refused — and the fallback costs no delete per picker', async () => {
+  it('every picker the sweep takes is claimed at once: when a refused bulk delete leaves some with their buttons (the strip is bounded), a tap on them is refused even past the limit of the claim list — and the fallback costs no delete per picker', async () => {
     const notes = Array.from({ length: keyboardStripsPerSweepLimit + 2 }, (_, index) => `plain note ${index + 1}`);
     const { threadId, topic: manyTopic, pickers } = await openTopicWithStalePickers('Sweep many', notes);
-    const oldest = pickers[0];
-    const oldestButton = manyTopic.getButtonData(oldest, `📁 ${folders.auto}`);
+    const pastTheBound = pickers.slice(0, pickers.length - keyboardStripsPerSweepLimit);
+    assert.ok(pastTheBound.length >= 2, 'the step has pickers past the strip bound');
+    assert.ok(pickers.length > bindPickerClaimLimitInFlow, 'and more pickers than the instance\'s claim list holds');
+    const pastTheBoundButtons = pastTheBound.map((picker) => manyTopic.getButtonData(picker, `📁 ${folders.auto}`));
     const singleDeletesBefore = fakeTelegram.listCalls('deleteMessage').length;
     fakeTelegram.isMessageDeletionRefused = true;
     try {
@@ -763,10 +769,13 @@ describe('/bind end to end: built charness, fake Bot API', () => {
       fakeTelegram.isMessageDeletionRefused = false;
     }
     assert.equal(fakeTelegram.listCalls('deleteMessage').length, singleDeletesBefore, 'no delete per picker: the fallback strips, it does not delete');
-    assert.ok(manyTopic.getKeyboardData(oldest).flat().length > 0, 'the oldest picker is past the bound: it keeps its buttons');
-    // …but a tap on it is refused: it was claimed with the rest.
-    assert.equal(await manyTopic.tapAndAwaitAnswer(oldest, oldestButton), t('cb.bind_picker_used'));
-    assert.equal(readBinding(threadId)?.subdir, welcomeStepFolders.first, 'the stale tap rebound nothing');
+    // …but a tap on one is refused: it was claimed with the rest — and held for good, since the instance's claim list (4 here) is
+    // smaller than the sweep, so the newer claims pushed these out of it.
+    for (const [index, picker] of pastTheBound.entries()) {
+      assert.ok(manyTopic.getKeyboardData(picker).flat().length > 0, 'a picker past the bound keeps its buttons');
+      assert.equal(await manyTopic.tapAndAwaitAnswer(picker, pastTheBoundButtons[index]), t('cb.bind_picker_used'));
+    }
+    assert.equal(readBinding(threadId)?.subdir, welcomeStepFolders.first, 'the stale taps rebound nothing');
   });
 
   it('a rebind strips the buttons of the topic\'s previous welcome: its ▶️ Claude / ▶️ OpenCode / 📋 Resume would act on the NEW folder', async () => {
