@@ -136,7 +136,8 @@ import {
 import { recomputeSchedulesForTimezoneChange } from './scheduler/timezoneRecompute';
 import { validateSubdir, resolveBoundWorkDir, BindError, findAutobindSubdir } from './validation';
 import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bindPageNoopCallback, buildBindKeyboard, checkIsBindPickerExtra } from './connectors/telegram/bindPicker';
-import { keyboardStripsPerSweepLimit, OpenBindMessages, splitByDeleteWindow } from './connectors/telegram/openBindMessages';
+import { OpenBindMessages } from './connectors/telegram/openBindMessages';
+import { stripStaleKeyboards, sweepOpenBindMessages } from './connectors/telegram/bindSweep';
 import { buildTopicLink, createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
 import { getCallbackMessageId } from './connectors/telegram/commands/callbackMessage';
 import { answerCallbackQuerySafely } from './connectors/telegram/commands/callbackToast';
@@ -6437,43 +6438,28 @@ async function removeBindPicker(key: SessionKey, pickerMessageId: number): Promi
  * the bot has no record of (sent before a restart) is not touched.
  *
  * Every one of them is held first ({@link BindPickerClaims.retire}, outside the limited claim list), so a tap is refused
- * whatever becomes of its message; the hold is let go of only for the ones the delete removed. ONE bulk call deletes them (each
- * single delete is a paced send, and there can be dozens). A message too old for Telegram to delete loses its buttons instead,
- * and so does every one of a bulk call Telegram refused — no delete per picker — but only the newest
- * {@link keyboardStripsPerSweepLimit} of them ({@link stripStaleKeyboards}); the older rest keeps its buttons, refused by the
- * hold. The hold lives in memory: after a restart such a picker works again. Never rejects: the callers that do not wait for it
- * ({@link sendBindingWelcome}) have nothing to catch.
+ * whatever becomes of its message; the hold is let go of only for the ones with nothing left to tap. ONE bulk call deletes them
+ * (each single delete is a paced send, and there can be dozens). A message too old for Telegram to delete loses its buttons
+ * instead, and so does every one of a bulk call Telegram refused — no delete per picker — but only the newest ten of them; the
+ * older rest keeps its buttons, refused by the hold (`sweepOpenBindMessages`). The hold lives in memory: after a restart such a
+ * picker works again. Never rejects: the callers that do not wait for it ({@link sendBindingWelcome}) have nothing to catch.
  */
 async function closeOpenBindMessages(key: SessionKey): Promise<void> {
   try {
-    const entries = openBindMessages.take(keyToString(key));
-    // Held before the first await: from here on a tap on any of them is refused («already used»), whether or not its message
-    // goes — a delete in flight, a bulk call Telegram refused and the strip bound below would otherwise leave live buttons. Not
-    // in the claim list, whose limit dozens of these would eat: they would push out the claim of the tap that started this sweep.
-    for (const { messageId } of entries) bindPickerClaims.retire(key, messageId);
-    const { deletable, tooOld } = splitByDeleteWindow(entries, Date.now());
-    if (deletable.length > 0) {
-      if (await deleteThreadMessages(key, deletable)) {
-        for (const messageId of deletable) bindPickerClaims.unretire(key, messageId);
-      } else {
-        // A refused bulk call is not retried as a delete per picker (two paced sends each, from the one gate of the whole bot):
-        // the buttons go instead, a bounded number of them.
-        await stripStaleKeyboards(key, deletable, 'bind');
-      }
-    }
-    await stripStaleKeyboards(key, tooOld, 'bind');
+    await sweepOpenBindMessages(openBindMessages.take(keyToString(key)), Date.now(), {
+      retire: (messageId) => bindPickerClaims.retire(key, messageId),
+      unretire: (messageId) => bindPickerClaims.unretire(key, messageId),
+      deleteMessages: (messageIds) => deleteThreadMessages(key, messageIds),
+      removeKeyboard: (messageId) => editThreadKeyboard(key, messageId, null, 'bind'),
+    });
   } catch (e) {
     console.warn(`[bind] closing the open pickers of ${keyToString(key)} failed:`, e);
   }
 }
 
-/**
- * @description Remove the keyboards of messages that can no longer be deleted or must stay as history, the newest
- * {@link keyboardStripsPerSweepLimit} of them (`messageIds` oldest first: the newest sit nearest the bottom of the topic).
- * Never rejects (an edit that fails is logged under `logTag`).
- */
-async function stripStaleKeyboards(key: SessionKey, messageIds: readonly number[], logTag: string): Promise<void> {
-  for (const messageId of messageIds.slice(-keyboardStripsPerSweepLimit)) await editThreadKeyboard(key, messageId, null, logTag);
+/** Remove the buttons of the topic's earlier welcomes (the newest few; see `stripStaleKeyboards`). Never rejects. */
+async function stripWelcomeKeyboards(key: SessionKey, messageIds: readonly number[]): Promise<void> {
+  await stripStaleKeyboards(messageIds, (messageId) => editThreadKeyboard(key, messageId, null, 'welcome'));
 }
 
 /**
@@ -7179,7 +7165,7 @@ async function sendBindingWelcome(key: SessionKey, subdir: string, notes: Bindin
   if (welcomeMessageId !== null) openWelcomeMessages.remember(keyToString(key), welcomeMessageId, Date.now());
   // Every bind ends in this welcome, so every bind sweeps here — after the welcome, and NOT waited for: what follows a bind
   // (an agent start, when the first message was a start phrase) must not hang on the deletions and edits, which are paced sends.
-  void stripStaleKeyboards(key, outdatedWelcomeIds, 'welcome');
+  void stripWelcomeKeyboards(key, outdatedWelcomeIds);
   void closeOpenBindMessages(key);
 }
 
@@ -10387,7 +10373,7 @@ bot.action(bindLeaveCurrentCallback, async (ctx) => {
     if (pickerMessageId !== null) await removeBindPicker(key, pickerMessageId);
     await closeOpenBindMessages(key);
     // The welcome's buttons have no folder to act on now.
-    await stripStaleKeyboards(key, openWelcomeMessages.take(keyToString(key)).map((entry) => entry.messageId), 'welcome');
+    await stripWelcomeKeyboards(key, openWelcomeMessages.take(keyToString(key)).map((entry) => entry.messageId));
     return true;
   });
   if (run === 'busy') await answerCallbackQuerySafely(ctx, t('cb.bind_picker_used'));
