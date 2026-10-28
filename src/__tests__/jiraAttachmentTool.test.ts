@@ -6,6 +6,10 @@
  * to disk, a stalled connection is aborted, a long name is cut on a character
  * boundary, a same-size file is reused, a planted symlink is replaced and never
  * followed, and the credentials never leave the site's origin (host, port, https).
+ *
+ * The stall bound's behaviour on a slow but steady download is not tested here against a real server: whether a server's timer
+ * beats the client's stall timer depends on how long a loaded host pauses the process, not on the code. It is tested on a clock
+ * the test moves by hand in `jiraAttachmentDownload.test.ts`.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -27,9 +31,13 @@ const email = 'ai-account@example.com';
 const apiToken = 'token-value-never-echoed';
 const expectedAuthorization = `Basic ${Buffer.from(`${email}:${apiToken}`).toString('base64')}`;
 const key = makeJiraKey('PROJ-1');
+/** The stall bound of the two tests whose point IS the stall: short, so the abort comes quickly. */
 const stallTimeoutMs = 250;
-/** The stall bound of a download that is slow only because the host is: a 40 MB stream must not be taken for a stuck connection. */
-const largeDownloadStallTimeoutMs = 10_000;
+/**
+ * The stall bound of every other download: a loaded host that pauses the process for a quarter second, or a 40 MB stream that
+ * takes its time, must not be taken for a stuck connection. Only a test of the stall itself runs with the short bound above.
+ */
+const patientStallTimeoutMs = 10_000;
 
 interface Served {
   attachments: Array<{ id: string; filename: string; mimeType: string; size: number; author?: { accountId: string; accountType?: string } }>;
@@ -97,7 +105,7 @@ describe('fetchIssueAttachment (C10)', () => {
     fs.rmSync(path.resolve(downloadDir, '..', '..'), { recursive: true, force: true });
   });
 
-  const fetchAttachment = (attachmentId: string, trust: JiraTrust | null = null, downloadStallTimeoutMs = stallTimeoutMs): ReturnType<typeof fetchIssueAttachment> => fetchIssueAttachment({
+  const fetchAttachment = (attachmentId: string, trust: JiraTrust | null = null, downloadStallTimeoutMs = patientStallTimeoutMs): ReturnType<typeof fetchIssueAttachment> => fetchIssueAttachment({
     client: createJiraClient({ baseUrl: siteUrl, email, apiToken, downloadStallTimeoutMs }),
     getDownloadDir: () => downloadDir,
     trust,
@@ -276,7 +284,7 @@ describe('fetchIssueAttachment (C10)', () => {
       };
       writeNext();
     };
-    const result = await fetchAttachment('5', null, largeDownloadStallTimeoutMs);
+    const result = await fetchAttachment('5');
     assert.ok(result.ok, JSON.stringify(result));
     assert.equal(fs.statSync(path.join(downloadDir, '5-big.mov')).size, chunk.length * chunkCount);
     assert.match(result.message, new RegExp(`${chunk.length * chunkCount} bytes`));
@@ -289,40 +297,19 @@ describe('fetchIssueAttachment (C10)', () => {
       response.write(Buffer.from('first-bytes'));
       // never ends
     };
-    const startedAt = Date.now();
-    const result = await fetchAttachment('6');
+    const result = await fetchAttachment('6', null, stallTimeoutMs);
     assert.equal(result.ok, false);
     assert.match(result.ok ? '' : result.error, /no data for/);
-    assert.ok(Date.now() - startedAt < stallTimeoutMs * 8, `${Date.now() - startedAt} ms`);
     assert.deepEqual(listDownloadDir(), [], 'neither the file nor its temporary name');
   });
 
   it('a server that never answers is aborted the same way; the default stall bound is two minutes', { timeout: 5_000 }, async () => {
     served.attachments = [{ id: '7', filename: 'silent.bin', mimeType: 'application/octet-stream', size: 5 }];
     served.content = () => {};
-    const result = await fetchAttachment('7');
+    const result = await fetchAttachment('7', null, stallTimeoutMs);
     assert.equal(result.ok, false);
     assert.match(result.ok ? '' : result.error, /no data for/);
     assert.equal(jiraDownloadStallTimeoutMs, 120_000);
-  });
-
-  it('an arrival that keeps delivering, however slowly, is not a stall', async () => {
-    served.attachments = [{ id: '8', filename: 'slow.bin', mimeType: 'application/octet-stream', size: 12 }];
-    served.content = (_id, _request, response) => {
-      response.writeHead(200, { 'Content-Length': 12 });
-      let sent = 0;
-      const timer = setInterval(() => {
-        response.write(Buffer.from('abcd'));
-        sent += 1;
-        if (sent === 3) {
-          clearInterval(timer);
-          response.end();
-        }
-      }, stallTimeoutMs / 2);
-    };
-    const result = await fetchAttachment('8');
-    assert.ok(result.ok, JSON.stringify(result));
-    assert.equal(fs.readFileSync(path.join(downloadDir, '8-slow.bin'), 'utf8'), 'abcdabcdabcd');
   });
 
   it('a name of 300 bytes is cut to 200 on a character boundary, its extension kept; separators and control characters are stripped', async () => {
@@ -420,7 +407,7 @@ describe('fetchIssueAttachment (C10)', () => {
     };
     const destinationPath = path.join(downloadDir, 'downgrade.bin');
     fs.mkdirSync(downloadDir, { recursive: true });
-    const result = await downloadJiraAttachment({ baseUrl: httpsSiteUrl, authorization: expectedAuthorization, fetchImpl, stallTimeoutMs }, '19', destinationPath);
+    const result = await downloadJiraAttachment({ baseUrl: httpsSiteUrl, authorization: expectedAuthorization, fetchImpl, stallTimeoutMs: patientStallTimeoutMs }, '19', destinationPath);
     assert.deepEqual(result, { ok: true, bytes: 'plain-bytes'.length });
     assert.deepEqual(requests, [
       { url: `${httpsSiteUrl}/rest/api/3/attachment/content/19?redirect=false`, authorization: expectedAuthorization },
