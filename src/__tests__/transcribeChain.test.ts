@@ -293,21 +293,31 @@ test('a later report of a longer queue extends the budget again: the voice ahead
   assertBudgetsMs(timeouts.asksMs, [200, 200, 800]);
 });
 
-test('Node\'s own timer honours the re-arm: after a report of audio queued ahead, a silent engine is cut no sooner than the extended budget', { timeout: noHangTestTimeoutMs }, async () => {
-  // Real timers, real socket. Only the LOWER bound is asserted: a timer never fires early, so a slow host can only make this
-  // truer, while a code that kept the first 200 ms would cut the engine long before the extended 600.
-  let reportedAtMs = 0;
+test('Node\'s own timer honours the re-arm: after a report of audio queued ahead, a silent engine is cut no sooner than the extended budget, counted from the re-arm', { timeout: noHangTestTimeoutMs }, async (context) => {
+  // What a recorded timeout cannot show is that Node itself re-arms a request's timeout when `setTimeout(ms)` is called again
+  // without a callback, and that the callback given first still fires. So the re-arm is Node's own, on a real timer. The FIRST
+  // arming is not: the client reads the engine's report some time after the server writes it, and a host that pauses for longer
+  // than the first budget (200 ms) runs the overdue timers BEFORE it reads the socket, so a real first deadline could cut the engine
+  // before it ever saw the report. Here the first call only registers the callback, as Node does, and arms nothing. The bound is
+  // counted from the client's own re-arm and is one-sided: a timer never fires early, so a slow host can only make it truer.
+  const originalSetTimeout = http.ClientRequest.prototype.setTimeout;
+  let rearmedAtMs = 0;
   let closedAtMs = 0;
   const closed = createSignal();
+  context.mock.method(http.ClientRequest.prototype, 'setTimeout', function (this: http.ClientRequest, timeoutMs: number, callback?: () => void) {
+    if (callback) return this.once('timeout', callback);
+    rearmedAtMs = performance.now();
+    return originalSetTimeout.call(this, timeoutMs);
+  });
   reset([(_req, res) => {
     res.on('close', () => { closedAtMs = performance.now(); closed.resolve(); });
-    reportedAtMs = performance.now();
     reportQueuedAudio(res, '0.4');
   }], [transcribed('rescued')]);
   const { result } = await runChain([createEngine('local', first, fastTimeout), createEngine('second', second)], { durationSeconds: shortVoiceSeconds });
   assert.equal(result.engine, 'second');
   await closed.promise;
-  assert.ok(closedAtMs - reportedAtMs >= extendedBudgetMs - timerEarlySlackMs, `cut ${closedAtMs - reportedAtMs} ms after the report, the extended budget is ${extendedBudgetMs} ms`);
+  assert.ok(rearmedAtMs > 0, 'the code re-armed the timeout when the report came');
+  assert.ok(closedAtMs - rearmedAtMs >= extendedBudgetMs - timerEarlySlackMs, `cut ${closedAtMs - rearmedAtMs} ms after the re-arm, the extended budget is ${extendedBudgetMs} ms`);
 });
 
 test('an absurdly long reported queue is capped at the longest timer Node can hold', { timeout: noHangTestTimeoutMs }, async () => {
