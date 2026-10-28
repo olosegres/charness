@@ -20,19 +20,26 @@ import { checkIsProcessIdentityCurrent, getProcessIdentity, startExternallyParen
 
 const subprocessTimeoutMs = 10_000;
 
-/** What a child process wrote to stdout and stderr, in the order it arrived, with waits on it that resolve on the data, not on a clock. */
+/**
+ * What a child process wrote, kept per stream: stdout and stderr are two pipes, and the order in which a reader sees data of
+ * different pipes is the OS's, not the order it was written in. Order is therefore only ever read within one stream. The waits
+ * resolve on the data, not on a clock.
+ */
 interface OutputWatch {
+  getStdoutText: () => string;
+  getStderrText: () => string;
+  /** Both streams, for a failure message. */
   getText: () => string;
-  /** Resolves once `text` occurs `occurrences` times in the output. */
+  /** Resolves once `text` occurs `occurrences` times in the output of either stream (counted per stream: a piece is never split by the other pipe). */
   waitFor: (text: string, occurrences?: number) => Promise<void>;
 }
 
-function countOccurrences(text: string, part: string): number {
+function getOccurrenceCount(text: string, part: string): number {
   return text.split(part).length - 1;
 }
 
 /** Fails with the output so far when `promise` does not settle in {@link subprocessTimeoutMs}: a hang guard, never a deadline the scenario depends on. */
-async function withinBound<Value>(promise: Promise<Value>, what: string, watch: OutputWatch): Promise<Value> {
+async function awaitWithinBound<Value>(promise: Promise<Value>, what: string, watch: OutputWatch): Promise<Value> {
   const bound = new AbortController();
   try {
     return await Promise.race([
@@ -45,18 +52,21 @@ async function withinBound<Value>(promise: Promise<Value>, what: string, watch: 
 }
 
 function createOutputWatch(child: ChildProcess): OutputWatch {
-  let text = '';
+  let stdoutText = '';
+  let stderrText = '';
   const waiters: Array<{ part: string; occurrences: number; resolve: () => void }> = [];
-  const append = (chunk: Buffer): void => {
-    text += chunk.toString();
-    for (const waiter of waiters) if (countOccurrences(text, waiter.part) >= waiter.occurrences) waiter.resolve();
+  const getCount = (part: string): number => getOccurrenceCount(stdoutText, part) + getOccurrenceCount(stderrText, part);
+  const notifyWaiters = (): void => {
+    for (const waiter of waiters) if (getCount(waiter.part) >= waiter.occurrences) waiter.resolve();
   };
-  child.stdout?.on('data', append);
-  child.stderr?.on('data', append);
+  child.stdout?.on('data', (chunk: Buffer) => { stdoutText += chunk.toString(); notifyWaiters(); });
+  child.stderr?.on('data', (chunk: Buffer) => { stderrText += chunk.toString(); notifyWaiters(); });
   const watch: OutputWatch = {
-    getText: () => text,
-    waitFor: (part, occurrences = 1) => withinBound(
-      countOccurrences(text, part) >= occurrences ? Promise.resolve() : new Promise<void>((resolve) => { waiters.push({ part, occurrences, resolve }); }),
+    getStdoutText: () => stdoutText,
+    getStderrText: () => stderrText,
+    getText: () => `[stdout]\n${stdoutText}\n[stderr]\n${stderrText}`,
+    waitFor: (part, occurrences = 1) => awaitWithinBound(
+      getCount(part) >= occurrences ? Promise.resolve() : new Promise<void>((resolve) => { waiters.push({ part, occurrences, resolve }); }),
       `${JSON.stringify(part)} (x${occurrences}) in the output`,
       watch,
     ),
@@ -141,7 +151,7 @@ test('hot supervisor waits for a clean compile, starts nodemon once, and propaga
     const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       supervisor?.once('exit', (code, signal) => resolve({ code, signal }));
     });
-    const connectedFakeTsc = await withinBound(fakeTscConnection, 'the fake tsc connecting to the test', supervisorOutput);
+    const connectedFakeTsc = await awaitWithinBound(fakeTscConnection, 'the fake tsc connecting to the test', supervisorOutput);
     fakeTsc = connectedFakeTsc;
     const release = (command: { stdout?: string; writeFile?: string }): void => { connectedFakeTsc.write(`${JSON.stringify(command)}\n`); };
     const failingMarkerStart = 'Found 1 error. Watching for file cha';
@@ -162,28 +172,30 @@ test('hot supervisor waits for a clean compile, starts nodemon once, and propaga
     await supervisorOutput.waitFor(cleanMarkerStart, 2);
     release({ stdout: markerEnd });
     await supervisorOutput.waitFor('FAKE_NODEMON_STARTED');
-    const result = await withinBound(exited, 'the supervisor exiting after its nodemon did', supervisorOutput);
+    const result = await awaitWithinBound(exited, 'the supervisor exiting after its nodemon did', supervisorOutput);
 
-    const output = supervisorOutput.getText();
-    const failedCompileIndex = output.indexOf('Found 1 error. Watching for file changes.');
-    const cleanCompileIndex = output.indexOf('Found 0 errors. Watching for file changes.');
-    const recoveredCompileIndex = output.indexOf(
+    // Order is read within stdout only (tsc's echo and the fake nodemon's line are written to the one pipe, in order); the
+    // supervisor's own notices are on stderr, and that each came at its moment is what the waits above proved.
+    const stdoutText = supervisorOutput.getStdoutText();
+    const stderrText = supervisorOutput.getStderrText();
+    const failedCompileIndex = stdoutText.indexOf('Found 1 error. Watching for file changes.');
+    const cleanCompileIndex = stdoutText.indexOf('Found 0 errors. Watching for file changes.');
+    const recoveredCompileIndex = stdoutText.indexOf(
       'Found 0 errors. Watching for file changes.',
       cleanCompileIndex + 1,
     );
-    const nodemonStartIndex = output.indexOf('FAKE_NODEMON_STARTED');
+    const nodemonStartIndex = stdoutText.indexOf('FAKE_NODEMON_STARTED');
 
     assert.equal(result.signal, null);
     assert.equal(result.code, 1, 'a clean unexpected nodemon exit must fail the wrapper');
     assert.ok(failedCompileIndex >= 0);
     assert.ok(cleanCompileIndex > failedCompileIndex);
     assert.ok(recoveredCompileIndex > cleanCompileIndex);
-    assert.ok(nodemonStartIndex > recoveredCompileIndex);
-    assert.ok(output.indexOf('compile has TypeScript errors') > failedCompileIndex);
-    assert.ok(output.indexOf('clean compile produced no dist worker entry') > cleanCompileIndex, 'the missing worker entry was noticed after the first clean compile…');
-    assert.ok(output.indexOf('clean compile produced no dist worker entry') < recoveredCompileIndex, '…and before the recovered one');
-    assert.match(output, new RegExp(`FAKE_NODEMON_STARTED WORK_ROOT=${launchRoot}`));
-    assert.equal(output.match(/FAKE_NODEMON_STARTED/g)?.length, 1);
+    assert.ok(nodemonStartIndex > recoveredCompileIndex, 'nodemon starts after the recovered compile, not at the first clean one');
+    assert.match(stderrText, /compile has TypeScript errors; nodemon is waiting for a clean build/);
+    assert.match(stderrText, /clean compile produced no dist worker entry/);
+    assert.match(stdoutText, new RegExp(`FAKE_NODEMON_STARTED WORK_ROOT=${launchRoot}`));
+    assert.equal(stdoutText.match(/FAKE_NODEMON_STARTED/g)?.length, 1);
   } finally {
     // A failed wait leaves the supervisor and its fake tsc running: stop them, so the test process can end.
     fakeTsc?.destroy();
