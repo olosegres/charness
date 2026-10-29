@@ -250,10 +250,16 @@ export interface PendingQuestionState {
  * @description A question the idle compaction re-asked (D1), as it is kept across a bot restart: the id of the message
  * that carries its `reask_<i>` buttons and the question they answer. Kept so those buttons still work after a restart
  * while the conversation sleeps, and so a restart that finds the conversation released can close the message.
+ *
+ * It is saved from the moment the idle compaction starts, when the re-ask is not posted yet: `isPosted: false`, and
+ * `messageId` is then the message the question waited in (its buttons are off, and it has no result yet). A restart that
+ * finds such a record closes that message as unanswered — nothing was asked again.
  */
 export interface ReAskedQuestionRecord {
   messageId: number;
   question: OpenCodeQuestion;
+  /** `false` while the re-ask is not posted yet; absent once it is. */
+  isPosted?: boolean;
 }
 
 /**

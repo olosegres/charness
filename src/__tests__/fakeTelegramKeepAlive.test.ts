@@ -3,6 +3,7 @@
  * (`keepAliveTimeout` plus its buffer), and a client that was starved of CPU for longer — the bot on a loaded host between
  * two requests — then writes its next request onto a pooled connection that is already closed: «socket hang up». A send is
  * not retried, so the notice it carried is lost; `limitRecoveryE2e` waited for such a notice in vain in a full e2e run.
+ * (Whether the bot should retry such a send is a separate question; this test is about the fake, which should not add the fault.)
  *
  * The client is a child process that stalls its event loop synchronously (the starvation, made exact) between two requests
  * and then reuses its connection at once. Against a plain Node server the same client fails — the test's stall is long
@@ -23,7 +24,16 @@ const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
-/** Longer than a default Node server keeps an idle connection (5 s + a 1 s buffer on Node 22). */
+/**
+ * What the control server keeps an idle connection for: set here, so the test does not depend on Node's default (5 s, plus a
+ * buffer of 1 s on Node 22). Not much shorter: the server tells clients its timeout, and Node's client stops pooling a
+ * connection whose advertised time is about a second or less.
+ */
+const controlServerKeepAliveMs = 3000;
+/**
+ * Longer than the control server keeps an idle connection, buffer included, and longer than Node's own default (5 s + 1 s) — so
+ * the fake, which sets none, is tried against what an unconfigured server would do too.
+ */
 const clientStallMs = 7000;
 const testTimeoutMs = 30 * 1000;
 
@@ -59,8 +69,9 @@ function runStallingClient(apiRoot: string): Promise<{ output: string; exitCode:
   });
 }
 
-test('a client stalled past a default Node server\'s keep-alive time loses its pooled connection (the control: the stall is long enough)', { timeout: testTimeoutMs }, async () => {
+test('a client stalled past a Node server\'s keep-alive time loses its pooled connection (the control: the stall is long enough)', { timeout: testTimeoutMs }, async () => {
   const plainServer = http.createServer((_request, response) => { response.end('{"ok":true,"result":true}'); });
+  plainServer.keepAliveTimeout = controlServerKeepAliveMs;
   await new Promise<void>((resolve) => plainServer.listen(0, '127.0.0.1', resolve));
   try {
     const { port } = plainServer.address() as AddressInfo;

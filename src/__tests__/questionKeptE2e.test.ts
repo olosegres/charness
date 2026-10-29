@@ -24,6 +24,7 @@
  *     closes it with the answer
  *   → the question cannot be put again at the bottom (both sends of the new copy are refused): the old copy is NOT marked
  *     «asked again below», keeps its buttons and still answers
+ *   → an option number typed while the question's own message is still being sent: the answer shows under it once it lands
  *   → the bot restarts with a saved re-asked copy next to a live question: the stale copy is closed, the question restored
  *   → the bot restarts while the question is open and finds the agent's session gone: the question the bot dropped at boot
  *     stays with the same note, its buttons gone and its pin released
@@ -36,8 +37,9 @@
  * not left to be tapped later, onto whatever the agent asks next — also one typed while the idle stop is under way), a
  * stop that comes while the re-asked message is still being sent, or a restart of the bot that finds the conversation
  * released (one that finds it asleep keeps the buttons working). Also: the old question says «asked again below» only once
- * the re-ask is there (and «not answered» if the re-ask could not be sent) while its buttons are taken off at once; a message
- * the person writes during the compaction stops the re-ask; picking another conversation (`/sessions`) or another backend
+ * the re-ask is there (and «not answered» if the re-ask could not be sent) while its buttons are taken off at once; a bot
+ * restart during the compaction ends the old question as «not answered»; a message the person writes during the compaction
+ * stops the re-ask, and an option NUMBER typed then — or later, to the re-asked copy — answers the question; picking another conversation (`/sessions`) or another backend
  * (`/terminal`) closes the re-asked copy of the one left; a button left on an older re-asked message
  * never answers a newer one; two quick taps send one answer; a tap on a re-ask still being sent counts; a long label is
  * shown once, under the question.
@@ -277,7 +279,7 @@ async function runStepThenRestore(step: () => Promise<void>, restore: () => Prom
 
 /** A new session after the previous one was stopped: the topic is bound, so `/claude` starts it. */
 async function startAgentSession(): Promise<void> {
-  await topic.sendAndAwaitReply('/claude', 'ready in');
+  await waitingTopic.sendAndAwaitReply('/claude', 'ready in');
 }
 
 /** A promise the test settles itself: the moment a held Bot API response is let go. */
@@ -520,6 +522,25 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     } finally {
       fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeOutputWhileAskedFileName), { force: true });
     }
+  });
+
+  it('an option number typed while the question\'s own message is still being sent: the answer shows under it once it lands', async () => {
+    const sendHold = createRelease();
+    // The Bot API holds the answer to the question's send: the message exists, the bot does not know its id yet.
+    fakeTelegram.holdNextResponse('sendMessage', sendHold.promise, (payload) => payload.message_thread_id === topicThreadId && JSON.stringify(payload.reply_markup ?? null).includes('qa_'));
+    await runStepThenRestore(async () => {
+      const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'KEPT-INFLIGHTANS [fake:ask] ask me something');
+      const question = await waitForQuestionAfter(topic, 'the question, its send held', sentMessageId, firstQuestion);
+      fakeTelegram.pushOperatorMessage(topicThreadId, '1');
+      sendHold.release();
+
+      await topic.waitForMessageText('the answer under the question', question, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
+      assertQuestionKeptWithNote(question, buildAnsweredNote(fakeAskQuestion.shortOptionLabel));
+      await waitForUnpinned(question);
+      await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getGivenAnswers().includes(fakeAskQuestion.shortOptionLabel));
+    }, async () => {
+      sendHold.release();
+    });
   });
 
   it('a restart with a saved re-asked copy next to a live question: the stale copy is closed, the question is restored and answers', async () => {
@@ -832,6 +853,7 @@ describe('A question the idle compaction re-asked stays too, when the conversati
     await getCharness().waitFor('both taps to be answered', agentStartTimeoutMs, () => fakeTelegram.callbackAnswers.length >= answersBefore + 2);
     assert.deepEqual([...fakeTelegram.callbackAnswers.slice(answersBefore, answersBefore + 2)].sort(), [enDict['cb.no_pending_question'], shortLabel].sort(), 'one tap is answered with the label, the other says it is spent');
     await waitingTopic.waitForMessageText('the answer under the re-asked question', reasked, (text) => text.endsWith(buildAnsweredNote(shortLabel)));
+    await getCharness().waitFor('the agent to read the label', agentStartTimeoutMs, () => countLabelPrompts(shortLabel) > labelPromptsBefore);
     assert.equal(countLabelPrompts(shortLabel), labelPromptsBefore + 1, 'the agent read the label once');
   });
 
@@ -969,5 +991,115 @@ describe('A question the idle compaction re-asked stays too, when the conversati
       await topic.sendAndAwaitReply('/quit', 'stopped');
       await startAgentSession();
     });
+  });
+
+  it('a restart of the bot during the idle compaction: the old question ends as «not answered» instead of staying with no result', async () => {
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    const noticeHold = createRelease();
+    // The compaction is done and its notice is the next thing to go out; the Bot API holds the answer to that send, so the
+    // bot is still "in" the compaction — the question cleared, its buttons off, the re-ask not yet posted — when it stops.
+    fakeTelegram.holdNextResponse('sendMessage', noticeHold.promise, (payload) => String(payload.text).includes(enDict['compactOnIdle.notice']));
+    await runStepThenRestore(async () => {
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-RESTART-WARM [fake:answer] one turn to compress');
+      await getCharness().waitFor('the warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('REASK-RESTART-WARM').length > 0);
+      const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-RESTART [fake:ask] ask me something');
+      await waitForQuestionAfter(topic, 'the question', sentMessageId, firstQuestion);
+      await waitingTopic.waitForMessage('the compaction notice, its send held', (message) => message.message_id > sentMessageId && message.text.includes(enDict['compactOnIdle.notice']));
+      const original = findNewestQuestionCopy();
+      assert.ok(original, 'the question that waited');
+      assert.equal(original.reply_markup, undefined, 'precondition: its buttons are already off');
+      assert.ok(!original.text.endsWith(`\n\n${unansweredNote}`) && !original.text.endsWith(askedAgainNote), 'precondition: and it has no result yet');
+
+      await getCharness().stop();
+      noticeHold.release();
+      charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+
+      await waitingTopic.waitForMessageText('the note under the old question', original, (text) => text.endsWith(`\n\n${unansweredNote}`));
+      assertQuestionKeptWithNote(original, unansweredNote);
+      await getCharness().waitFor('nothing to be left in the saved state', replyTimeoutMs, () => readPersistedState(getLayout()).reAskedQuestions?.[key] === undefined);
+      assert.deepEqual(
+        topic.listMessages().filter((message) => message.message_id > original.message_id && waitingTopic.getKeyboardData(message).flat().some((data) => data.startsWith('reask_'))),
+        [],
+        'and nothing was asked again',
+      );
+    }, async () => {
+      noticeHold.release();
+    });
+  });
+
+  it('a button of an older re-asked copy is not taken for the question whose re-ask is still being sent', async () => {
+    const shortLabel = fakeAskQuestion.shortOptionLabel;
+    const older = await putReAskedQuestionAndSleep('REASK-BOUND-OLD');
+    // Telegram refuses to touch the older message when it is closed (its text and its buttons alike): it keeps live buttons.
+    const isOlder = (payload: Record<string, unknown>): boolean => payload.message_id === older.message_id;
+    fakeTelegram.failNextCall('editMessageText', "Bad Request: message can't be edited", isOlder);
+    fakeTelegram.failNextCall('editMessageReplyMarkup', "Bad Request: message can't be edited", isOlder);
+    const sendHold = createRelease();
+    fakeTelegram.holdNextResponse('sendMessage', sendHold.promise, isReAskSend);
+    await runStepThenRestore(async () => {
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-BOUND-NEW-WARM [fake:answer] one turn to compress');
+      await getCharness().waitFor('the warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('REASK-BOUND-NEW-WARM').length > 0);
+      const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-BOUND-NEW [fake:ask] ask me something');
+      const newer = await waitingTopic.waitForMessage('the newer re-asked question, its send held', (message) =>
+        message.message_id > sentMessageId && waitingTopic.getKeyboardData(message).flat().some((data) => data.startsWith('reask_')));
+      assert.notEqual(readKeptMessage(older).reply_markup, undefined, 'precondition: the older message still has live buttons');
+      const labelPromptsBefore = countLabelPrompts(shortLabel);
+
+      // The bot has no id for the newer message yet: a tap on the OLDER message must not be taken for it.
+      assert.equal(await topic.tapAndAwaitAnswer(older, 'reask_0'), enDict['cb.no_pending_question'], 'the old button answers nothing');
+      assert.equal(countLabelPrompts(shortLabel), labelPromptsBefore, 'and sends nothing to the agent');
+
+      // The newer one is untouched, and a tap on IT still counts.
+      assert.equal(await topic.tapAndAwaitAnswer(newer, 'reask_0'), shortLabel);
+      await getCharness().waitFor('the label to reach the agent', agentStartTimeoutMs, () => countLabelPrompts(shortLabel) > labelPromptsBefore);
+      // The old buttons come off by a send of their own, which waits behind the held one: let that go.
+      sendHold.release();
+      await getCharness().waitFor('the old buttons to be taken off', replyTimeoutMs, () => readKeptMessage(older).reply_markup === undefined);
+      await waitingTopic.waitForMessageText('the answer under the newer question', newer, (text) => text.endsWith(buildAnsweredNote(shortLabel)));
+    }, async () => {
+      sendHold.release();
+    });
+  });
+
+  it('an option number typed during the idle compaction answers the question: the label goes to the agent, the old message shows the answer, nothing is asked again', async () => {
+    const longLabel = fakeAskQuestion.longOptionLabel;
+    const noticeHold = createRelease();
+    fakeTelegram.holdNextResponse('sendMessage', noticeHold.promise, (payload) => String(payload.text).includes(enDict['compactOnIdle.notice']));
+    await runStepThenRestore(async () => {
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-NUMBER-WARM [fake:answer] one turn to compress');
+      await getCharness().waitFor('the warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('REASK-NUMBER-WARM').length > 0);
+      const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-NUMBER [fake:ask] ask me something');
+      await waitForQuestionAfter(topic, 'the question', sentMessageId, firstQuestion);
+      await waitingTopic.waitForMessage('the compaction notice, its send held', (message) => message.message_id > sentMessageId && message.text.includes(enDict['compactOnIdle.notice']));
+      const original = findNewestQuestionCopy();
+      assert.ok(original, 'the question that waited');
+      const labelPromptsBefore = countLabelPrompts(longLabel);
+
+      // The buttons are off but the numbered options are still on screen: «2» is the long one.
+      fakeTelegram.pushOperatorMessage(topicThreadId, '2');
+      await getCharness().waitFor('the label to reach the agent', agentStartTimeoutMs, () => countLabelPrompts(longLabel) > labelPromptsBefore);
+      noticeHold.release();
+
+      await waitingTopic.waitForMessageText('the answer under the question', original, (text) => text.endsWith(buildAnsweredNote(longLabel)));
+      assertQuestionKeptWithNote(original, buildAnsweredNote(longLabel));
+      assert.deepEqual(
+        topic.listMessages().filter((message) => message.message_id > original.message_id && waitingTopic.getKeyboardData(message).flat().some((data) => data.startsWith('reask_'))),
+        [],
+        'the question is answered, so it is not asked again',
+      );
+    }, async () => {
+      noticeHold.release();
+    });
+  });
+
+  it('an option number typed under the re-asked copy answers it, like a tap', async () => {
+    const shortLabel = fakeAskQuestion.shortOptionLabel;
+    const reasked = await putReAskedQuestionAndSleep('REASK-DIGIT');
+    const labelPromptsBefore = countLabelPrompts(shortLabel);
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, '1');
+    await getCharness().waitFor('the label to reach the resumed agent', agentStartTimeoutMs, () => countLabelPrompts(shortLabel) > labelPromptsBefore);
+    await waitingTopic.waitForMessageText('the answer under the re-asked question', reasked, (text) => text.endsWith(buildAnsweredNote(shortLabel)));
+    assertQuestionKeptWithNote(reasked, buildAnsweredNote(shortLabel));
   });
 });

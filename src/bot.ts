@@ -69,6 +69,7 @@ import {
   migratePendingQuestionState,
   getQuestionReplyRoute,
   type QuestionClosing,
+  type QuestionEnd,
 } from './openCodeQuestionFlow';
 import { checkShouldRepostPendingQuestion } from './pendingQuestionRepost';
 import {
@@ -1899,11 +1900,11 @@ async function editQuestionMessageToClosed(key: SessionKey, messageId: number, q
 }
 
 /**
- * {@link editQuestionMessageToClosed} for a question that ended without an answer. The note speaks the topic's language
- * whatever called it — a boot or a session teardown runs in no request, so no locale is set by one.
+ * {@link editQuestionMessageToClosed} for a question that ended some way ({@link QuestionEnd}). The note speaks the topic's
+ * language whatever called it — a boot or a session teardown runs in no request, so no locale is set by one.
  */
-async function closeQuestionMessage(key: SessionKey, messageId: number, question: OpenCodeQuestion, closing: QuestionClosing): Promise<boolean> {
-  const note = withThreadLocale(key, () => t(questionClosingNoteKeys[closing]));
+async function closeQuestionMessage(key: SessionKey, messageId: number, question: OpenCodeQuestion, ending: QuestionEnd): Promise<boolean> {
+  const note = withThreadLocale(key, () => (typeof ending === 'string' ? t(questionClosingNoteKeys[ending]) : t('agent.question_answered_note', { answer: ending.answer })));
   return editQuestionMessageToClosed(key, messageId, question, note);
 }
 
@@ -5973,6 +5974,7 @@ const {
   threadsCompacting,
   peekReAskedQuestion,
   takeReAskedQuestion,
+  endReAskedQuestion,
   putBackReAskedQuestion,
   restoreReAskedQuestion,
   closeReAskedQuestion,
@@ -10670,11 +10672,15 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   const reAsked = peekReAskedQuestion(key);
   // The tap must be on the message of the question that waits now. A button left on an OLDER re-asked message (its close
   // failed, or it predates a restart) would answer the newer question with that question's own label: it answers nothing,
-  // and its buttons come off. A re-ask whose send has not returned has no message id yet — the tap is on that message.
-  const isTappedMessageCurrent = reAsked !== undefined && (reAsked.messageId === null || reAsked.messageId === tappedMessageId);
+  // and its buttons come off. A re-ask whose send has not returned has no message id yet — the tap is on that message if
+  // it is NEWER than the one the question waited in before (the re-ask is always posted after it); older ones are the stale ones.
+  const isTappedMessageCurrent = reAsked !== undefined && (reAsked.messageId !== null
+    ? reAsked.messageId === tappedMessageId
+    : tappedMessageId !== null && (reAsked.predecessorMessageId === null || tappedMessageId > reAsked.predecessorMessageId));
   if (!isTappedMessageCurrent) {
     await ctx.answerCbQuery(t('cb.no_pending_question'));
-    if (tappedMessageId !== null) await editThreadKeyboard(key, tappedMessageId, null, 'reask');
+    // Not awaited: the edit waits its turn in the send pacer, and the next update of the topic waits for this handler.
+    if (tappedMessageId !== null) void editThreadKeyboard(key, tappedMessageId, null, 'reask');
     return;
   }
   const label = reAsked.question.options[optIdx]?.label;
@@ -10708,6 +10714,32 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
     && await editQuestionMessageToClosed(key, reAskedMessageId, reAsked.question, t('agent.question_answered_note', { answer: label }));
   if (!isAnswerShown && isLabelCut) await replyToThread(key, label);
 });
+
+/**
+ * @description A bare option NUMBER typed while the question the idle compaction asks again waits — for its re-ask (the
+ * compaction runs: the buttons are off, the numbered options are still on screen) or for a tap — answers it, like a tap on
+ * that option: the label goes to the agent as a fresh prompt and the answer is written under the question. Without this the
+ * number would count as the person writing something else: the question would end «not answered» and the agent would get a
+ * bare «2». Resolves whether the text was such a number (and was handled).
+ */
+async function answerReAskedQuestionByNumber(key: SessionKey, text: string): Promise<boolean> {
+  const reAsked = peekReAskedQuestion(key);
+  if (!reAsked) return false;
+  const route = getQuestionReplyRoute(text, reAsked.question);
+  if (route.kind !== 'answer') return false;
+  const label = route.labels[0];
+  // Taken before anything is awaited, with the ending it will write: a re-ask still being sent ends the same way when it lands.
+  takeReAskedQuestion(key, { answer: label });
+  // A person wrote — the latch clears like for any message; the record is gone, so nothing is closed as «not answered».
+  notePersonActivity(key);
+  const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, getThreadAdapter(key), label, null));
+  if (outcome === 'noSession') {
+    await returnReAskedQuestionAfterTap(key, reAsked, reAsked.messageId ?? reAsked.predecessorMessageId);
+    return true;
+  }
+  await endReAskedQuestion(key, reAsked);
+  return true;
+}
 
 /**
  * @description A tap on a re-asked question whose label reached no session leaves the question open: its record goes back.
@@ -10851,6 +10883,8 @@ async function bufferPromptDuringStartup(
   intake: TopicRequestIntake,
   replyContext?: string,
 ): Promise<void> {
+  // The same for a bare option number typed in that window: it answers the question asked again.
+  if (await answerReAskedQuestionByNumber(key, text)) return;
   // A person wrote, in a window where the session is starting or being stopped: it counts like a message that reaches
   // `deliverActivePrompt` — the idle latch clears, and a question the idle compaction re-asked is closed (the idle fire
   // posts it just before the stop, so this window is where a message instead of a tap most often lands).
@@ -10886,6 +10920,8 @@ async function deliverActivePrompt(
   sentAtMs?: number,
   replyContext?: string,
 ): Promise<LatePromptOutcome | null> {
+  // A bare option number answers the question the idle compaction asked again (a tap's own label comes in with no intake).
+  if (intake !== null && await answerReAskedQuestionByNumber(key, text)) return null;
   // A genuine USER message (text or voice) — clear the compact-on-idle latch so
   // the next idle period can compact again (D2), whether it answers a pending
   // question or is a fresh prompt.
@@ -13136,7 +13172,8 @@ function restorePendingQuestions(): void {
  * question waits already, cannot be answered / must not be: its message is closed as unanswered, never left with buttons that
  * do nothing or that would answer the wrong question, and the saved record is dropped.
  * MUST run AFTER {@link reattachExistingSessions} so session activity is known. A platform this instance does not serve
- * is left alone, like {@link restorePendingQuestions}.
+ * is left alone, like {@link restorePendingQuestions}. A record saved BEFORE its re-ask was posted (`isPosted: false`: the bot
+ * stopped during the idle compaction) closes the message the question waited in, as unanswered.
  */
 function restoreReAskedQuestions(): void {
   for (const [keyStr, saved] of Object.entries(state.getReAskedQuestions())) {
@@ -13147,6 +13184,14 @@ function restoreReAskedQuestions(): void {
       continue;
     }
     if (!checkIsServedConversation(key, ENV.servedPlatforms)) continue;
+    if (saved.isPosted === false) {
+      // The bot stopped between the start of an idle compaction and its re-ask: nothing was asked again, and the message the
+      // question waited in (what is saved) has no result yet — it ends as unanswered, the one thing known of it.
+      state.clearReAskedQuestion(key).catch((e) => console.error('[reAskedQuestion] clear failed:', e));
+      closeQuestionMessage(key, saved.messageId, saved.question, 'unanswered')
+        .catch((e) => console.error('[reAskedQuestion] closing the interrupted question failed:', e));
+      continue;
+    }
     // A question waits already (restored a moment ago, or asked anew by the agent that reattached): the old copy's buttons
     // would deliver their label into IT. The copy is closed, never brought back.
     const isCopyUsable = !pendingQuestions.has(keyStr) && (getThreadAdapter(key).checkIsActive(key) || getResumableSessionId(key) !== null);

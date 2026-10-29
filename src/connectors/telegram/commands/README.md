@@ -124,28 +124,33 @@ the output path (`markThreadTurnProducedOutput`) and the session lifecycle (`rea
 `reAskedQuestions` (the re-ask button's question, which a tap closes with its answer). The factory must be built BEFORE the module-scope objects that name
 its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted like the function it replaced.
 **A question's message is never deleted.** The idle fire clears the pending question through the `clearPendingQuestion` port
-(`bot.ts`: clears the state, which unpins) and takes the old message's buttons off at once (`editThreadKeyboard`: the compaction can
-take minutes, and a restart in between would forget the message), then re-asks the question as a new message — unless a person wrote
-meanwhile (`getPersonActivityCount`, bumped by `noteThreadUserActivity`, is compared with its value at the start). Only after that
-does it edit the old message, through the `closeQuestionMessage` port, to the question as asked plus a note in place of its
-buttons — «asked again below», or «not answered» when there is no re-ask (its send failed, or the person wrote). Every other end (an
-answer, a message sent instead, `/esc`, the session gone, a re-post to the bottom — which edits the old copy only after the new one
-is posted —, a persisted question the boot drops) goes through the same `editQuestionMessageToClosed` edit.
-The re-asked copy is a `ReAskedQuestion` record (question, message id, `isTornDown`) kept from BEFORE its send, so a tap right after
-it finds it, and saved to `state.json` (`reAskedQuestions`, message id + question) once its message id is known. A tap takes the record
-(`takeReAskedQuestion`: out of memory AND of the saved state, before anything is awaited; `putBackReAskedQuestion` returns it if the
-label reaches no session) and closes the message with the answer — but only a tap on THE message of the record counts (a re-ask
-whose send has not returned has no id yet, and is the one tapped): a button left on an older re-asked message answers nothing and
-comes off. Updates of one topic run one at a time (`updateDispatcher`), so two taps never interleave; whatever else ends the copy goes
-through `closeReAskedQuestion`, which closes it as unanswered through the `closeQuestionMessage` port — a send still in flight is
-flagged `isTornDown` and closes the message it lands in. The callers: `clearThreadCompaction` (the conversation ended),
-`notePersonActivity` (a person wrote something else, also into a starting or stopping session — a tap has taken its record already),
-`handleAgentQuestion` (the agent asks a newer question, which the old buttons would answer wrongly) and the two ways of leaving a
-conversation for another (`switchThreadAdapter` to another backend, `resumeSessionByIndex` for a `/sessions` pick). A sleeping
-conversation has no process whose stop would say so, so every release of its saved ids goes through `releaseConversationIds` (`/quit`,
-`/quitall`, `releaseThreadSession` for `/new`, `unbindThread`), which also calls `clearThreadCompaction`. At boot
-`restoreReAskedQuestions` (`bot.ts`, after the sessions reattached) hands a saved record back to `restoreReAskedQuestion` when the
-conversation can still be resumed and no question waits beside it, else closes its message and drops it.
+(`bot.ts`: clears the state, which unpins), takes the old message's buttons off at once (`editThreadKeyboard`: the compaction can
+take minutes) and starts a `ReAskedQuestion` record for it (`startReAskedQuestion`). The record lives from there to the end of the
+re-ask, in three phases — COMPACTING (nothing posted), SENDING (the re-ask's message exists, its id is not known) and POSTED — and
+is SAVED to `state.json` (`reAskedQuestions`) all along: unposted it names the message the question waited in (`isPosted: false`),
+so a restart during the compaction closes that message as unanswered at boot (`restoreReAskedQuestions`); posted it names the
+re-ask's message, so a restart while the conversation sleeps keeps its buttons working. Only after the re-ask is posted does the
+fire edit the old message, through the `closeQuestionMessage` port, to the question as asked plus a note in place of its buttons —
+«asked again below», or «not answered» when there is no re-ask (its send failed). Every other end (an answer, a message sent
+instead, `/esc`, the session gone, a re-post to the bottom — which edits the old copy only after the new one is posted —, a
+persisted question the boot drops) goes through the same `editQuestionMessageToClosed` edit.
+Who reaches the record: a `reask_<i>` tap takes it (`takeReAskedQuestion`: out of memory AND of the saved state, before anything is
+awaited; `putBackReAskedQuestion` returns it if the label reaches no session) and writes the answer under the question — but only
+a tap on THE message of the record counts (a re-ask whose send has not returned has no id yet: a tap counts if its message is
+newer than the one the question waited in, `predecessorMessageId`): a button left on an older re-asked message answers nothing and
+comes off. A bare option NUMBER typed (`answerReAskedQuestionByNumber`, in `deliverActivePrompt` and the startup buffer) takes the
+record with its `ending` (`{ answer }`) and writes the answer on the re-ask's message — or, before it exists, on the predecessor;
+a re-ask still being sent ends the same way when it lands. Updates of one topic run one at a time (`updateDispatcher`), so two
+taps never interleave. Whatever else ends the record goes through `closeReAskedQuestion`, which sets the ending `unanswered`: the
+callers are `clearThreadCompaction` (the conversation ended), `notePersonActivity` (a person wrote something else, also into a
+starting or stopping session, and also while the compaction runs — the re-ask is then not posted — a tap or a number has taken its
+record already), `handleAgentQuestion` (the agent asks a newer question, which the old buttons would answer wrongly) and the two
+ways of leaving a conversation for another (`switchThreadAdapter` to another backend, `resumeSessionByIndex` for a `/sessions`
+pick). A sleeping conversation has no process whose stop would say so, so every release of its saved ids goes through
+`releaseConversationIds` (`/quit`, `/quitall`, `releaseThreadSession` for `/new`, `unbindThread`), which also calls
+`clearThreadCompaction`. At boot `restoreReAskedQuestions` (`bot.ts`, after the sessions reattached) hands a saved posted record
+back to `restoreReAskedQuestion` when the conversation can still be resumed and no question waits beside it, else closes its
+message and drops it.
 
 ## `autoContinueLimits.ts`
 

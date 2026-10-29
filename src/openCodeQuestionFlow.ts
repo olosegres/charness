@@ -75,6 +75,9 @@ export function buildQuestionBodyLinesPlain(question: OpenCodeQuestion): string[
  */
 export type QuestionClosing = 'unanswered' | 'askedAgain';
 
+/** How a question's message ends: a {@link QuestionClosing}, or with the answer that was given. */
+export type QuestionEnd = QuestionClosing | { answer: string };
+
 /**
  * @description The text a question's message is edited to when it ends: the same body it was posted with (header,
  * question, numbered options with their descriptions), a blank line, then `note`. `escape` is the one
