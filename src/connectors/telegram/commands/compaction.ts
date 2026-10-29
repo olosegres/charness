@@ -3,7 +3,7 @@ import { getThreadAdapter } from '../../../adapters/createAdapter';
 // Decides whether the D3 summary guidance rides the compaction instruction: OpenCode bakes it into its fork
 // compaction prompt (covering auto/overflow compaction too), the Claude backends need it every time.
 import { claudePerTurnAdapterName, openCodeAdapterName } from '../../../adapters/adapterNames';
-import type { AgentAdapter, PendingQuestionState, OpenCodeQuestion } from '../../../types';
+import type { AgentAdapter, PendingQuestionState, OpenCodeQuestion, ReAskedQuestionRecord } from '../../../types';
 import type { SessionKey } from '../../../sessionKey';
 import { keyToString } from '../../../sessionKey';
 import { checkIsTelegramKey } from '../sessionKeyCodec';
@@ -123,7 +123,6 @@ interface ThreadCompactionState {
   idleTimer: NodeJS.Timeout | null;
 }
 
-/** The two switches the `/compact_on_idle` picker shows: the idle compaction itself and the summary post. */
 /**
  * @description A question the idle compaction re-asked (D1): the question, the id of the message that carries its
  * `reask_<i>` buttons (`null` until the send resolves), and whether its conversation ended before that — the send then
@@ -135,6 +134,7 @@ export interface ReAskedQuestion {
   isTornDown: boolean;
 }
 
+/** The two switches the `/compact_on_idle` picker shows: the idle compaction itself and the summary post. */
 interface CompactOnIdlePickerState {
   isIdleEnabled: boolean;
   /** The `/compact_summary` setting — the same one, so the two pickers can never disagree. */
@@ -691,31 +691,77 @@ export function createCompaction(ports: CompactionPorts) {
    * @description Per-thread idle-compaction RE-ASKED question (D1), keyed by {@link SessionKey} string. A
    * `reask_<idx>` tap forwards the label of its option to the (now compacted) session as a FRESH prompt — the
    * original question request was rejected server-side, so it cannot be answered any more — and closes the re-asked
-   * message with that answer under the question. When the conversation ends instead ({@link closeReAskedQuestion}) the
-   * message is closed as unanswered, so its buttons never sit there dead. In-memory only: after a restart the buttons
-   * are simply inert ("no pending question"), which is safe.
+   * message with that answer under the question. When the conversation ends instead ({@link closeReAskedQuestion}), or a
+   * person writes something else, the message is closed as unanswered, so its buttons never sit there dead nor get tapped
+   * later onto whatever the agent asks next. The message id and the question are also kept in the saved state, so the
+   * buttons survive a bot restart while the conversation sleeps ({@link restoreReAskedQuestion}).
    */
   const reAskedQuestions = new Map<string, ReAskedQuestion>();
 
+  /** Keep the re-asked question in the saved state; a failed write is logged, the in-memory record is what a tap reads. */
+  function saveReAskedQuestion(key: SessionKey, reAsked: ReAskedQuestion): void {
+    if (reAsked.messageId === null) return;
+    getState().setReAskedQuestion(key, { messageId: reAsked.messageId, question: reAsked.question })
+      .catch((e) => console.error('[reAskedQuestion] persist failed:', e));
+  }
+
+  /** Drop the re-asked question from the saved state; a failed write is logged. */
+  function forgetSavedReAskedQuestion(key: SessionKey): void {
+    getState().clearReAskedQuestion(key).catch((e) => console.error('[reAskedQuestion] clear failed:', e));
+  }
+
+  /** The re-asked question a `reask_<idx>` tap works on, still kept. */
+  function peekReAskedQuestion(key: SessionKey): ReAskedQuestion | undefined {
+    return reAskedQuestions.get(keyToString(key));
+  }
+
   /**
-   * @description The conversation ended with its re-asked question unused (session closed or stopped, `/quit`, `/new`,
-   * leaving the folder): forget it and close its message as unanswered — the question stays, the buttons go. A re-ask
-   * whose send is still in flight has no message id yet: it is flagged, and the send closes the message when it lands.
-   * A question used by a tap is no longer in the map, so its answer is never overwritten.
+   * @description A tap takes the re-asked question out of memory and of the saved state: it is used now, so nothing closes
+   * its message as unanswered any more (the tap writes the answer there), and a restart does not bring it back.
    */
-  function closeReAskedQuestion(key: SessionKey): void {
+  function takeReAskedQuestion(key: SessionKey): ReAskedQuestion | undefined {
     const kStr = keyToString(key);
     const reAsked = reAskedQuestions.get(kStr);
-    if (!reAsked) return;
+    if (!reAsked) return undefined;
     reAskedQuestions.delete(kStr);
+    forgetSavedReAskedQuestion(key);
+    return reAsked;
+  }
+
+  /** A tap whose label reached no session leaves the question open: the record goes back, unless a newer one took its place. */
+  function putBackReAskedQuestion(key: SessionKey, reAsked: ReAskedQuestion): void {
+    if (reAskedQuestions.has(keyToString(key))) return;
+    reAskedQuestions.set(keyToString(key), reAsked);
+    saveReAskedQuestion(key, reAsked);
+  }
+
+  /** Boot: a saved re-asked question whose conversation can still be resumed gets its buttons back (memory only, it is saved already). */
+  function restoreReAskedQuestion(key: SessionKey, saved: ReAskedQuestionRecord): void {
+    reAskedQuestions.set(keyToString(key), { question: saved.question, messageId: saved.messageId, isTornDown: false });
+  }
+
+  /**
+   * @description The re-asked question will not be tapped any more — its conversation ended (session closed or stopped,
+   * `/quit`, `/quit-all`, `/new`, leaving the folder), a person wrote something else, or the agent asked a newer question:
+   * forget it and close its message as unanswered — the question stays, the buttons go. A re-ask whose send is still in
+   * flight has no message id yet: it is flagged, and the send closes the message when it lands. A question used by a tap is
+   * no longer here, so its answer is never overwritten.
+   */
+  function closeReAskedQuestion(key: SessionKey): void {
+    const reAsked = takeReAskedQuestion(key);
+    if (!reAsked) return;
     reAsked.isTornDown = true;
-    if (reAsked.messageId !== null) void closeQuestionMessage(key, reAsked.messageId, reAsked.question, 'unanswered');
+    if (reAsked.messageId !== null) {
+      closeQuestionMessage(key, reAsked.messageId, reAsked.question, 'unanswered')
+        .catch((e) => console.error('[reAskedQuestion] close failed:', e));
+    }
   }
 
   /**
    * @description Post the RE-ASKED question (D1) with its option buttons and record it BEFORE the send, so a
    * `reask_<idx>` tap that lands right after the send finds the question and can forward the chosen label as a fresh
-   * prompt. Its message id is recorded once the send resolves.
+   * prompt. Its message id is recorded once the send resolves (and the record saved, unless a tap or the end of the
+   * conversation took it meanwhile).
    */
   async function postReAskedQuestion(key: SessionKey, text: string, question: OpenCodeQuestion): Promise<void> {
     const reAsked: ReAskedQuestion = { question, messageId: null, isTornDown: false };
@@ -724,6 +770,7 @@ export function createCompaction(ports: CompactionPorts) {
     reAsked.messageId = await replyToThread(key, text, buildKeyboardExtra(keyboard));
     // The conversation ended while the send was in flight: the message that landed is closed now.
     if (reAsked.isTornDown && reAsked.messageId !== null) await closeQuestionMessage(key, reAsked.messageId, question, 'unanswered');
+    else if (reAskedQuestions.get(keyToString(key)) === reAsked) saveReAskedQuestion(key, reAsked);
   }
 
   /**
@@ -1043,7 +1090,11 @@ export function createCompaction(ports: CompactionPorts) {
     armDeferredCompaction,
     checkIsDeferredCompactionArmed,
     threadsCompacting,
-    reAskedQuestions,
+    peekReAskedQuestion,
+    takeReAskedQuestion,
+    putBackReAskedQuestion,
+    restoreReAskedQuestion,
+    closeReAskedQuestion,
     registerCompactionCommands,
     registerCompactionCallbacks,
   };

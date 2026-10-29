@@ -78,7 +78,10 @@ test('the cancel path never posts the standalone notice unconditionally', () => 
 });
 
 test('retirePendingQuestion says «closed» only when there was a bubble and a question to keep on it, and by what the edit did', () => {
-  const body = getFunctionBody('async function retirePendingQuestion');
-  assert.match(body, /if\s*\(\s*closedMessageId\s*===\s*null\s*\|\|\s*!closedQuestion\s*\)\s*return\s+false/, 'no bubble, no close');
-  assert.match(body, /return\s+runQuestionLifecycleOp\(key,\s*\(\)\s*=>\s*closeQuestionMessage\(key,\s*closedMessageId,\s*closedQuestion,\s*closing\)\)/, 'the close is the edit, and its outcome is what is reported');
+  const retireBody = getFunctionBody('async function retirePendingQuestion');
+  assert.match(retireBody, /return\s+closeCapturedQuestionMessage\(key,\s*pending\?\.messageId\s*\?\?\s*null,[^)]*closing\)/, 'the retire hands the captured bubble to the close');
+
+  const closeBody = getFunctionBody('async function closeCapturedQuestionMessage');
+  assert.match(closeBody, /if\s*\(\s*messageId\s*===\s*null\s*\|\|\s*!question\s*\)\s*return\s+false/, 'no bubble, no close');
+  assert.match(closeBody, /return\s+runQuestionLifecycleOp\(key,\s*\(\)\s*=>\s*closeQuestionMessage\(key,\s*messageId,\s*question,\s*closing\)\)/, 'the close is the edit, and its outcome is what is reported');
 });

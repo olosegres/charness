@@ -61,6 +61,7 @@ import { ClaudeCliAdapter, getClaudeReplyRoute, getClaudeTranscriptPath } from '
 import { listSavedOpenCodeModelLabels, type OpenCodePendingQuestion } from './adapters/openCodeAdapter';
 import { TerminalAdapter } from './adapters/terminalAdapter';
 import {
+  buildClosedQuestionPlainText,
   buildClosedQuestionText,
   buildQuestionBodyLines,
   buildQuestionBodyLinesPlain,
@@ -1876,10 +1877,22 @@ const questionClosingNoteKeys: Record<QuestionClosing, string> = {
 /**
  * @description End a question's message in the topic WITHOUT deleting it: the buttons are replaced by `note`, and the
  * header, the question and its options stay, so what the agent asked and how it ended can still be read. Resolves
- * whether the edit landed. Every way a question ends goes through this — a delete would take the record away.
+ * whether the text edit landed. Every way a question ends goes through this — a delete would take the record away.
+ *
+ * Telegram that cannot parse the Markdown render gets the plain one (no escape marks shown). An edit that fails for
+ * another reason (the text too long with the note on it, the message gone) leaves the old text, and the buttons would
+ * stay on it dead — so they are taken off by themselves.
  */
 async function editQuestionMessageToClosed(key: SessionKey, messageId: number, question: OpenCodeQuestion, note: string): Promise<boolean> {
-  return editThreadMessage(key, messageId, buildClosedQuestionText(question, note, escapeMarkdown), { parse_mode: 'Markdown' });
+  const isEdited = await editThreadMessage(
+    key,
+    messageId,
+    buildClosedQuestionText(question, note, escapeMarkdown),
+    { parse_mode: 'Markdown' },
+    buildClosedQuestionPlainText(question, note),
+  );
+  if (!isEdited) await editThreadKeyboard(key, messageId, null, 'questionClose');
+  return isEdited;
 }
 
 /**
@@ -3854,24 +3867,29 @@ async function replyToThread(
  * Returns `true` on success, `false` if the edit failed for any reason —
  * caller decides whether to fall back to a new `replyToThread`. We don't
  * track edits as new ids (the original was already tracked).
+ *
+ * `plainFallbackText`: the text for the retry without `parse_mode` when Telegram cannot parse the Markdown one — the
+ * same text when absent, which shows a Markdown render's escape marks as they are; a caller that has a real plain
+ * rendering passes it.
  */
 async function editThreadMessage(
   key: SessionKey,
   messageId: number,
   text: string,
   extra: SendExtra = {},
+  plainFallbackText: string = text,
 ): Promise<boolean> {
   if (!checkIsTelegramPrimitiveKey(key, 'editThreadMessage')) return false;
-  const editOnce = (editExtra: Record<string, unknown>) =>
+  const editOnce = (editText: string, editExtra: Record<string, unknown>) =>
     enqueueSend(key, () =>
       bot.telegram.editMessageText(
-        getTelegramChatId(key), messageId, undefined, text,
+        getTelegramChatId(key), messageId, undefined, editText,
         editExtra as Parameters<typeof bot.telegram.editMessageText>[4],
       ),
     );
 
   try {
-    await editOnce(extra as Record<string, unknown>);
+    await editOnce(text, extra as Record<string, unknown>);
     return true;
   } catch (e) {
     const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
@@ -3894,7 +3912,7 @@ async function editThreadMessage(
       const plainExtra = { ...(extra as Record<string, unknown>) };
       delete plainExtra.parse_mode;
       try {
-        await editOnce(plainExtra);
+        await editOnce(plainFallbackText, plainExtra);
         return true;
       } catch (e2) {
         const desc2 = checkIsApiError(e2) ? getErrorDescription(e2) : '';
@@ -5939,7 +5957,11 @@ const {
   armDeferredCompaction,
   checkIsDeferredCompactionArmed,
   threadsCompacting,
-  reAskedQuestions,
+  peekReAskedQuestion,
+  takeReAskedQuestion,
+  putBackReAskedQuestion,
+  restoreReAskedQuestion,
+  closeReAskedQuestion,
   registerCompactionCommands,
   registerCompactionCallbacks,
 } = createCompaction({
@@ -6575,7 +6597,7 @@ function armFolderCreation(key: SessionKey, pickerMessageId: number | null): voi
   cancelTopicInput(key);
   // A stale pending question would otherwise consume the message AFTER the
   // folder name as an answer to the old (pre-rebind) agent question. Its message stays, closed as unanswered.
-  void retirePendingQuestion(key);
+  retirePendingQuestionInBackground(key);
   awaitingFolderName.add(kStr);
   if (pickerMessageId !== null) bindPickerMessageIds.set(kStr, pickerMessageId);
 }
@@ -7957,11 +7979,15 @@ function getConversationAccountState(key: SessionKey): { isLimited: boolean; isA
 
 /**
  * @description A person wrote in the conversation (a message, voice, file, album; an issue's request): the
- * compact-on-idle latch clears (D2) and the todo reminder's silence after ignored reminders ends (D13).
+ * compact-on-idle latch clears (D2), the todo reminder's silence after ignored reminders ends (D13), and a question the
+ * idle compaction re-asked is closed as unanswered — they wrote something else instead of tapping it, like a live
+ * question a message cancels, and its buttons must not be tapped later onto whatever the agent asks next. A tap on the
+ * re-asked question takes its record before it gets here, so it is not closed by its own answer.
  */
 function notePersonActivity(key: SessionKey): void {
   noteThreadUserActivity(key);
   getTodoRegistry().notePersonActivity(key);
+  closeReAskedQuestion(key);
 }
 
 /**
@@ -8770,6 +8796,9 @@ command(['quit-all', 'quitall'], async (_ctx, key) => {
     stopped += result.stopped.length;
     // Same release-for-good semantics as `/quit`, per swept thread.
     await state.clearAgentSessionIds(bKey);
+    // A sleeping thread has no process whose stop would say so: a question the idle compaction re-asked for it can no
+    // longer be used, so its message is closed (it stays, without its buttons).
+    clearThreadCompaction(bKey);
   }
 
   if (active === 0) {
@@ -10629,7 +10658,7 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   const key = await authoriseContext(ctx);
   if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
   const optIdx = parseInt(ctx.match[1], 10);
-  const reAsked = reAskedQuestions.get(keyToString(key));
+  const reAsked = peekReAskedQuestion(key);
   const label = reAsked?.question.options[optIdx]?.label;
   if (!reAsked || !label) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
   // The idle fire posts the re-asked question just BEFORE it stops the process, and a stopping process still reads as
@@ -10641,7 +10670,7 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
     return;
   }
   const adapter = getThreadAdapter(key);
-  reAskedQuestions.delete(keyToString(key));
+  takeReAskedQuestion(key);
   // The label goes to the agent as a prompt and nothing else in the topic shows it whole (the buttons clip long
   // labels): a label too long for the toast is posted in full, as the record of the answer that was sent.
   await answerCallbackWithWholeText(ctx, label, (wholeLabel) => replyToThread(key, wholeLabel));
@@ -10651,7 +10680,7 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
   // The label reached no session (the topic was told why): the question is still open, so are its buttons.
   if (outcome === 'noSession') {
-    if (!reAskedQuestions.has(keyToString(key))) reAskedQuestions.set(keyToString(key), reAsked);
+    putBackReAskedQuestion(key, reAsked);
     return;
   }
   const reAskedMessageId = getCallbackMessageId(ctx);
@@ -10902,13 +10931,31 @@ async function deliverActivePrompt(
  */
 async function retirePendingQuestion(key: SessionKey, closing: QuestionClosing = 'unanswered'): Promise<boolean> {
   const pending = pendingQuestions.get(keyToString(key));
-  const closedMessageId = pending?.messageId ?? null;
-  const closedQuestion = pending?.data.questions[pending.currentIndex];
-
   clearPendingQuestion(key);
+  return closeCapturedQuestionMessage(key, pending?.messageId ?? null, pending?.data.questions[pending.currentIndex], closing);
+}
 
-  if (closedMessageId === null || !closedQuestion) return false;
-  return runQuestionLifecycleOp(key, () => closeQuestionMessage(key, closedMessageId, closedQuestion, closing));
+/**
+ * @description The edit half of {@link retirePendingQuestion}, for a question whose id and text were captured before its
+ * state was cleared (also: read from the saved state at boot, where no memory entry ever existed). `false` when there is no
+ * message to edit, else whether the edit landed.
+ */
+async function closeCapturedQuestionMessage(
+  key: SessionKey,
+  messageId: number | null,
+  question: OpenCodeQuestion | undefined,
+  closing: QuestionClosing,
+): Promise<boolean> {
+  if (messageId === null || !question) return false;
+  return runQuestionLifecycleOp(key, () => closeQuestionMessage(key, messageId, question, closing));
+}
+
+/**
+ * @description {@link retirePendingQuestion} for the teardown and boot paths that do not wait for the edit (it goes through
+ * the send pacer): a failure is logged, never an unhandled rejection.
+ */
+function retirePendingQuestionInBackground(key: SessionKey): void {
+  retirePendingQuestion(key).catch((e) => console.error('[pendingQuestion] retire failed:', e));
 }
 
 /**
@@ -12052,6 +12099,9 @@ function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuest
   if (persistedQuestion && persistedQuestion.data.requestId === questionData.requestId) {
     return;
   }
+  // The agent asks anew: a question the idle compaction re-asked earlier is superseded, and its buttons would now answer
+  // the wrong question — it is closed as unanswered.
+  closeReAskedQuestion(key);
   // A pending status frame is now stale — the question UI replaces it. Stop the
   // liveness loop first so it can't recreate a frame under the question prompt
   // (Claude-only; a no-op for OpenCode threads, which never arm it).
@@ -12233,7 +12283,7 @@ function handleAgentClosed(key: SessionKey): void {
   clearThinkingMessage(key);
   // A closed session has no running delegation — remove the sub-agent status.
   clearSubagentStatus(key);
-  void retirePendingQuestion(key);
+  retirePendingQuestionInBackground(key);
   // A closed session has nothing to resume — drop any armed retry silently.
   cancelApiRetry(key);
   clearAuthNotice(key); // session closed → retire any pinned logged-out notice
@@ -12342,7 +12392,7 @@ function handleAgentError(key: SessionKey, error: Error): void {
   deleteStatusMessage(key).catch(() => {});
   clearThinkingMessage(key);
   clearSubagentStatus(key);
-  void retirePendingQuestion(key);
+  retirePendingQuestionInBackground(key);
   replyToThread(key, `Error: ${error.message}`).catch(() => {});
 }
 
@@ -12401,7 +12451,7 @@ function clearGoneProcessFrames(key: SessionKey): void {
   deleteStatusMessage(key).catch(() => {});
   clearThinkingMessage(key);
   clearSubagentStatus(key);
-  void retirePendingQuestion(key);
+  retirePendingQuestionInBackground(key);
 }
 
 function handleAgentStopped(key: SessionKey): void {
@@ -13030,15 +13080,44 @@ function restorePendingQuestions(): void {
       restored += 1;
     } else {
       // The agent that asked it is gone, so nobody can answer it: it is closed like any question that ends unanswered —
-      // its message stays with the «not answered» note in place of the buttons and its pin is released. The entry goes
-      // back into the memory map first (and the retire clears it again at once): that is what lets the retire find the
-      // message and the pin, which only the restored entries had been given.
-      setPendingQuestion(key, migratePendingQuestionState(value));
-      void retirePendingQuestion(key);
+      // its message stays with the «not answered» note in place of the buttons and its pin is released. The pin map is
+      // lost with the restart, so it is seeded from the saved message id for the clear to unpin that message.
+      const orphaned = migratePendingQuestionState(value);
+      if (orphaned.messageId !== null) questionPinnedMessageId.set(keyStr, orphaned.messageId);
+      clearPendingQuestion(key);
+      closeCapturedQuestionMessage(key, orphaned.messageId, orphaned.data.questions[orphaned.currentIndex], 'unanswered')
+        .catch((e) => console.error('[pendingQuestion] closing the dropped question failed:', e));
       dropped += 1;
     }
   }
   console.log(`[reattach] pending questions: restored ${restored}, dropped ${dropped}`);
+}
+
+/**
+ * @description Bring back the questions the idle compaction re-asked, at boot. One whose conversation can still be
+ * resumed (a live adopted process, or a sleeping conversation whose id is kept) gets its buttons working again — a tap
+ * wakes it, as before the restart. One whose conversation is gone (released while the bot was down) cannot be answered:
+ * its message is closed as unanswered, never left with buttons that do nothing, and the saved record is dropped.
+ * MUST run AFTER {@link reattachExistingSessions} so session activity is known. A platform this instance does not serve
+ * is left alone, like {@link restorePendingQuestions}.
+ */
+function restoreReAskedQuestions(): void {
+  for (const [keyStr, saved] of Object.entries(state.getReAskedQuestions())) {
+    let key: SessionKey;
+    try {
+      key = keyFromString(keyStr);
+    } catch {
+      continue;
+    }
+    if (!checkIsServedConversation(key, ENV.servedPlatforms)) continue;
+    if (getThreadAdapter(key).checkIsActive(key) || getResumableSessionId(key) !== null) {
+      restoreReAskedQuestion(key, saved);
+      continue;
+    }
+    state.clearReAskedQuestion(key).catch((e) => console.error('[reAskedQuestion] clear failed:', e));
+    closeQuestionMessage(key, saved.messageId, saved.question, 'unanswered')
+      .catch((e) => console.error('[reAskedQuestion] closing the orphaned copy failed:', e));
+  }
 }
 
 /**
@@ -14385,6 +14464,9 @@ export async function startBot(): Promise<void> {
       // existing option buttons keep working. A question is restored only for a
       // thread whose session came back; otherwise it is unreachable, dropped.
       restorePendingQuestions();
+      // The questions the idle compaction re-asked: their buttons come back while the conversation can be resumed,
+      // else the message is closed.
+      restoreReAskedQuestions();
       // Re-arm persisted API-error retries (S6) so a pending kick survives the
       // restart. AFTER restorePendingQuestions so the kick lands in a live
       // session; a past fireAt fires one delayed catch-up.

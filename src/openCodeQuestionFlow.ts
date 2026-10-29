@@ -89,6 +89,14 @@ export function buildClosedQuestionText(
 }
 
 /**
+ * @description {@link buildClosedQuestionText} as plain text: no escaping, no bold marker — what the close is edited to
+ * when Telegram cannot parse the Markdown render of it, the way {@link buildQuestionBodyLinesPlain} is for a post.
+ */
+export function buildClosedQuestionPlainText(question: OpenCodeQuestion, note: string): string {
+  return [...buildQuestionBodyLinesPlain(question), '', note].join('\n');
+}
+
+/**
  * @description How to route a user's free-form reply that arrives WHILE an
  * OpenCode interactive question is pending. Mirrors `getClaudeReplyRoute`:
  *  - `answer` — the reply is a bare digit in range of the current question's

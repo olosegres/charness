@@ -12,6 +12,8 @@
  *   → another message sent instead of an answer: the question stays, a «not answered» note stands in place of the
  *     buttons, the pin is gone, and the message reaches the agent as a prompt
  *   → `/esc`: the same note
+ *   → a close whose edit Telegram refuses to apply to the text (too long): the buttons are taken off all the same
+ *   → a close whose Markdown Telegram cannot parse: the question is kept as plain text, without escape marks
  *   → `/quit` (the session is stopped with the question open): the same note
  *   → one call with TWO questions (`ask-two`): each question message keeps its own text and gets its own result — both
  *     answered by a tap; the first answered and the second left alone
@@ -24,9 +26,11 @@
  *
  * The second, on an instance whose idle window is seconds, so the idle compaction re-asks a question the agent was left
  * waiting on: the re-asked copy has `reask_<i>` buttons, and when the conversation ends without them being used the
- * copy stays with the same note instead of keeping buttons that are dead — whichever way it ends: `/quit` or `/new` of
- * the sleeping conversation, leaving the folder, a stop of the woken one, or a stop that comes while the re-asked
- * message is still being sent.
+ * copy stays with the same note instead of keeping buttons that are dead — whichever way it ends: `/quit`, `/quitall` or
+ * `/new` of the sleeping conversation, leaving the folder, a message of the person's instead of a tap (the copy is
+ * not left to be tapped later, onto whatever the agent asks next), a stop that comes while the re-asked message is
+ * still being sent, or a restart of the bot that finds the conversation released (one that finds it asleep keeps the
+ * buttons working).
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`. The idle compaction's re-ask itself is in `reaskedQuestionE2e.test.ts`; the OpenCode backend's cancel is in
@@ -40,7 +44,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
+import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
 import {
   fakeAskNoAnswerOutcome,
@@ -74,7 +78,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -233,6 +237,28 @@ async function waitForPinned(message: FakeTelegramMessage): Promise<void> {
   await getCharness().waitFor(`message ${message.message_id} to be pinned`, replyTimeoutMs, () => fakeTelegram.listPinnedMessageIds().includes(message.message_id));
 }
 
+/**
+ * Run a step, then `restore` the state the next step starts from — also when the step failed, and then the step's own error
+ * is the one reported (a failure of the restore after it is only logged, or it would hide what the step found).
+ */
+async function runStepThenRestore(step: () => Promise<void>, restore: () => Promise<void>): Promise<void> {
+  let stepError: unknown;
+  let hasStepFailed = false;
+  try {
+    await step();
+  } catch (error) {
+    hasStepFailed = true;
+    stepError = error;
+  }
+  try {
+    await restore();
+  } catch (restoreError) {
+    if (!hasStepFailed) throw restoreError;
+    console.error('the restore after a failed step failed too:', restoreError);
+  }
+  if (hasStepFailed) throw stepError;
+}
+
 /** A new session after the previous one was stopped: the topic is bound, so `/claude` starts it. */
 async function startAgentSession(): Promise<void> {
   await topic.sendAndAwaitReply('/claude', 'ready in');
@@ -310,6 +336,31 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     fakeTelegram.pushOperatorMessage(topicThreadId, '/esc');
     await topic.waitForMessageText('the note under the question', question, (text) => text.endsWith(`\n\n${unansweredNote}`));
     assertQuestionKeptWithNote(question, unansweredNote);
+    await waitForUnpinned(question);
+  });
+
+  it('a close whose edit Telegram refuses to apply to the text: the buttons are taken off all the same', async () => {
+    const question = await askQuestion(topic, 'KEPT-REFUSED');
+    await waitForPinned(question);
+    // «message is too long» is what an over-long question plus its note gets: not a parse error, so the text is not tried again.
+    fakeTelegram.failNextCall('editMessageText', 'Bad Request: message is too long', (payload) => String(payload.text).endsWith(unansweredNote));
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'REFUSED-1 [fake:answer] never mind the question');
+    await getCharness().waitFor('the buttons to be taken off', replyTimeoutMs, () => readKeptMessage(question).reply_markup === undefined);
+    const current = readKeptMessage(question);
+    assert.ok(current.text.includes(fakeAskQuestion.question) && !current.text.endsWith(unansweredNote), `the text is as it was: ${current.text.slice(-80)}`);
+    await waitForUnpinned(question);
+  });
+
+  it('a close whose Markdown Telegram cannot parse: the question is kept as plain text, without escape marks', async () => {
+    const question = await askQuestion(topic, 'KEPT-PLAIN');
+    await waitForPinned(question);
+    fakeTelegram.failNextCall('editMessageText', "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 12", (payload) => payload.parse_mode === 'Markdown' && String(payload.text).endsWith(unansweredNote));
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'PLAIN-1 [fake:answer] never mind the question');
+    await topic.waitForMessageText('the note under the question', question, (text) => text.endsWith(`\n\n${unansweredNote}`));
+    assertQuestionKeptWithNote(question, unansweredNote);
+    assert.ok(!readKeptMessage(question).text.includes('*'), `plain text: no bold mark is left: ${readKeptMessage(question).text}`);
     await waitForUnpinned(question);
   });
 
@@ -467,13 +518,11 @@ describe('A question the idle compaction re-asked stays too, when the conversati
 
   it('/quit of the sleeping conversation: the re-asked question stays with the «not answered» note instead of dead buttons', async () => {
     const reasked = await putReAskedQuestionAndSleep('REASK-QUIT');
-    try {
+    // The next step starts from a live session, whatever this one found.
+    await runStepThenRestore(async () => {
       await topic.sendAndAwaitReply('/quit', enDict['agent.sleeping_released']);
       await assertReAskedQuestionClosed(reasked);
-    } finally {
-      // The next step starts from a live session, whatever this one found.
-      await startAgentSession();
-    }
+    }, startAgentSession);
   });
 
   it('/new of the sleeping conversation: the same', async () => {
@@ -485,22 +534,22 @@ describe('A question the idle compaction re-asked stays too, when the conversati
 
   it('leaving the folder with the conversation asleep: the same', async () => {
     const reasked = await putReAskedQuestionAndSleep('REASK-LEAVE');
-    try {
+    // The next step starts from a bound topic with a live session, whatever this one found.
+    await runStepThenRestore(async () => {
       const picker = await topic.sendAndAwaitReply('/bind', enDict['bind.current'].replace('{subdir}', projectFolder));
       await topic.tapAndAwaitAnswer(picker, bindLeaveCurrentCallback);
       await assertReAskedQuestionClosed(reasked);
-    } finally {
-      // The next step starts from a bound topic with a live session, whatever this one found.
+    }, async () => {
       await topic.sendAndAwaitReply(`/bind ${projectFolder}`, `Bound to \`${projectFolder}\``);
       await startAgentSession();
-    }
+    });
   });
 
   it('/quit while the re-asked question is still being sent: the message that lands is closed the same', async () => {
     const sendHold = createRelease();
     // The Bot API holds the answer to the re-asked question's send: the message exists, the bot does not know its id yet.
     fakeTelegram.holdNextResponse('sendMessage', sendHold.promise, (payload) => JSON.stringify(payload.reply_markup ?? null).includes('reask_'));
-    try {
+    await runStepThenRestore(async () => {
       fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-INFLIGHT-WARM [fake:answer] one turn to compress');
       await getCharness().waitFor('the warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('REASK-INFLIGHT-WARM').length > 0);
       const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-INFLIGHT [fake:ask] ask me something');
@@ -516,21 +565,71 @@ describe('A question the idle compaction re-asked stays too, when the conversati
       assert.notEqual(readKeptMessage(reasked).reply_markup, undefined, 'precondition: the stop alone leaves the held message as it is');
       sendHold.release();
       await assertReAskedQuestionClosed(reasked);
-    } finally {
-      sendHold.release();
+    }, async () => {
       // The next step starts from a live session, whatever this one found.
+      sendHold.release();
       await startAgentSession();
-    }
+    });
   });
 
-  it('/quit of the conversation a message woke: the same', async () => {
-    const reasked = await putReAskedQuestionAndSleep('REASK-WOKEN');
-    // The question is still open for the person, and a message of theirs wakes the conversation up.
-    fakeTelegram.pushOperatorMessage(topicThreadId, 'WAKE-1 [fake:answer] a message instead of a tap');
-    await waitingTopic.waitForMessage('the woken agent to answer', (message) => message.message_id > reasked.message_id && message.text.includes('Working on WAKE-1.'));
-    assert.notEqual(readKeptMessage(reasked).reply_markup, undefined, 'a message of theirs leaves the re-asked question open');
+  it('/quitall with the conversation asleep: the same', async () => {
+    const reasked = await putReAskedQuestionAndSleep('REASK-ALL');
+    // The next step starts from a live session, whatever this one found.
+    await runStepThenRestore(async () => {
+      // The menu's spelling: a hyphen ends a command in Telegram, so `/quit-all` reaches the bot as `/quit`.
+      fakeTelegram.pushOperatorMessage(generalTopicThreadId, '/quitall');
+      await assertReAskedQuestionClosed(reasked);
+    }, startAgentSession);
+  });
 
-    fakeTelegram.pushOperatorMessage(topicThreadId, '/quit');
+  it('a restart of the bot while the re-asked question waits and the conversation sleeps: its buttons still work', async () => {
+    const reasked = await putReAskedQuestionAndSleep('REASK-BOOT');
+    const labelPromptsBefore = getAgentPrompts(fakeAskQuestion.shortOptionLabel).length;
+
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+    assert.notEqual(readKeptMessage(reasked).reply_markup, undefined, 'the restart leaves the question open');
+    assert.equal(await topic.tapAndAwaitAnswer(reasked, 'reask_0'), fakeAskQuestion.shortOptionLabel, 'the button still knows its question');
+    await getCharness().waitFor('the label to reach the resumed agent', agentStartTimeoutMs, () => getAgentPrompts(fakeAskQuestion.shortOptionLabel).length > labelPromptsBefore);
+    await waitingTopic.waitForMessageText('the answer under the re-asked question', reasked, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
+    assertQuestionKeptWithNote(reasked, buildAnsweredNote(fakeAskQuestion.shortOptionLabel));
+  });
+
+  it('a restart of the bot after the conversation was released while it was down: the re-asked question is closed at boot', async () => {
+    const reasked = await putReAskedQuestionAndSleep('REASK-GONE');
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+
+    await runStepThenRestore(async () => {
+      charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+        // What `/quit` does to a sleeping conversation, done while the bot is down: nothing is left to resume.
+        const agent = persisted.agents?.[key];
+        if (agent) delete agent.claudeSessionId;
+      });
+      await assertReAskedQuestionClosed(reasked);
+      assert.equal(readPersistedState(getLayout()).reAskedQuestions?.[key], undefined, 'the saved question is gone with it');
+    }, startAgentSession);
+  });
+
+  it('a message of the person\'s instead of a tap: the re-asked question stays with the same note, and the agent gets the message', async () => {
+    const reasked = await putReAskedQuestionAndSleep('REASK-INSTEAD');
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'INSTEAD-1 [fake:answer] a message instead of a tap');
     await assertReAskedQuestionClosed(reasked);
+    await waitingTopic.waitForMessage('the woken agent to answer', (message) => message.message_id > reasked.message_id && message.text.includes('Working on INSTEAD-1.'));
+  });
+
+  it('a button of a re-asked question that was left behind never lands on the question the agent asks next', async () => {
+    const reasked = await putReAskedQuestionAndSleep('REASK-STALE');
+    // The person writes again and the agent they woke asks a NEW question: the one that waits now is that one.
+    const newer = await askQuestion(waitingTopic, 'STALE-1');
+    assert.ok(newer.message_id > reasked.message_id, 'the newer question is a later message');
+    await waitForPinned(newer);
+    const answersBefore = getGivenAnswers().length;
+
+    await assertReAskedQuestionClosed(reasked);
+    // The old buttons did nothing: the newer question is as it was, still waiting, with its buttons and its pin.
+    assert.deepEqual(topic.getKeyboardData(readKeptMessage(newer)), [['qa_0_0'], ['qa_0_1']], 'the newer question keeps its buttons');
+    assert.ok(fakeTelegram.listPinnedMessageIds().includes(newer.message_id), 'and its pin');
+    assert.equal(getGivenAnswers().length, answersBefore, 'and the agent was told nothing about it');
+    await topic.tapAndAwaitAnswer(newer, 'qa_0_0');
+    await topic.waitForMessageText('the answer under the newer question', newer, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
   });
 });

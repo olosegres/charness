@@ -20,6 +20,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildClosedQuestionPlainText,
   buildClosedQuestionText,
   buildQuestionBodyLines,
   buildQuestionBodyLinesPlain,
@@ -363,4 +364,16 @@ test('the note goes through the same escaper as the body: a chosen label with ma
   const closedText = buildClosedQuestionText(question, '✅ Answer: get_user_id', escapeUnderscore);
   assert.ok(closedText.endsWith('✅ Answer: get\\_user\\_id'), closedText);
   assert.ok(!closedText.includes('get_user_id'), 'no unescaped underscore is left anywhere');
+});
+
+test('the plain closed text is the plain body and the raw note: no bold marker, no escaping', () => {
+  const question = makeQuestion({
+    header: 'Name',
+    question: 'Which id?',
+    options: [{ label: 'get_user_id', description: 'the *real* one' }],
+  });
+  const plainText = buildClosedQuestionPlainText(question, '✅ Answer: get_user_id');
+  assert.deepEqual(plainText.split('\n'), [...buildQuestionBodyLinesPlain(question), '', '✅ Answer: get_user_id']);
+  assert.ok(!plainText.includes('*Name*') && !plainText.includes('\\'), plainText);
+  assert.ok(plainText.includes('get_user_id') && plainText.includes('the *real* one'), 'the text itself is untouched');
 });

@@ -11,8 +11,11 @@ options, and under them stands «✅ Answer: …» for a tap or a typed number, 
 `/quit`, `/new` or a session that ended with the question open (also when «create new folder» of `/bind` drops it), or «↓ Asked again below»
 on the older copy of a question that was put again further down. A tap on the re-asked question after the idle compaction closes it with the
 answer too. A question the bot finds orphaned when it restarts (the agent that asked it is gone) stays with the «not answered» note as well,
-and so does the re-asked copy when its conversation ends before you tap it (`/quit`, `/new`, leaving the folder, a stopped or closed session), instead
-of keeping buttons that no longer do anything. The pin works as before: one notification when the question comes, removed when it ends (also for the
+and so does the re-asked copy when it is not tapped — its conversation ends (`/quit`, `/quitall`, `/new`, leaving the folder, a stopped or closed
+session, or a restart that finds the conversation released), you write something else instead, or the agent asks a newer question — instead of
+keeping buttons that no longer do anything or could be tapped later onto the wrong question. A restart that finds the conversation asleep keeps the
+re-asked buttons working. A close that Telegram cannot apply to the text (too long) still takes the buttons off, and one whose Markdown it cannot
+parse shows the question as plain text. The pin works as before: one notification when the question comes, removed when it ends (also for the
 orphaned question, whose pin a restart used to leave behind). The three notes are in all 12 languages (the old «Question cancelled» text is gone).
 
 **Typing or saying «claude» (or `клод`) to start the agent now opens the same backend `/claude` does — json-stream by default, or the one the topic picked — not the deprecated tmux one.**

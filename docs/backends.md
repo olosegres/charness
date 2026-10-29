@@ -122,7 +122,9 @@ On boot the bot:
      end-to-end, and a pending interactive question is restored from its
      on-disk sidecar (one whose process is gone cannot be answered: its message
      stays in the topic with a «not answered» note in place of the buttons, and
-     its pin is released). A topic whose process is gone (stopped at the idle
+     its pin is released; a question the idle compaction re-asked keeps its
+     buttons across the restart while the conversation can still be resumed).
+     A topic whose process is gone (stopped at the idle
      mark, or after its turn in per-turn mode) is NOT restarted at boot:
      it sleeps, and your next message resumes it. An adopted process
      started under an earlier bot build keeps that build's bot tools, so it

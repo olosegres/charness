@@ -8,6 +8,7 @@ import {
   type JsonStreamTailOffset,
   type LimitEpisodeMarker,
   type PendingQuestionState,
+  type ReAskedQuestionRecord,
   type ResolvedThreadDisplayPrefs,
   type SeenWatermark,
   type ThreadDisplayPrefs,
@@ -573,6 +574,13 @@ export interface StateV1 {
    * and is active; otherwise dropped (the question is unreachable).
    */
   pendingQuestions?: Record<string, PendingQuestionState>;
+  /**
+   * The question the idle compaction re-asked for each thread (message id + question), keyed by {@link SessionKey}
+   * string. Persisted so the re-asked buttons survive a bot restart while the conversation sleeps (the in-memory record
+   * is otherwise lost and they go dead), and so a restart that finds the conversation released can close the message
+   * instead of leaving them. Optional so older state files stay valid — a missing value is an empty set.
+   */
+  reAskedQuestions?: Record<string, ReAskedQuestionRecord>;
   /**
    * Armed auto-retries after a provider-side API error, keyed by
    * {@link SessionKey} string. Persisted so a pending retry survives a bot
@@ -2701,6 +2709,41 @@ export class StateStore {
       delete this.state.pendingQuestions[k];
       if (Object.keys(this.state.pendingQuestions).length === 0) {
         delete this.state.pendingQuestions;
+      }
+      this.scheduleSave();
+    });
+  }
+
+  // ── questions the idle compaction re-asked (restart survival) ──
+
+  /**
+   * @description Every persisted re-asked question across all threads, keyed by {@link SessionKey} string. Read at boot.
+   * Returns a shallow copy so callers can't mutate the live state object.
+   */
+  getReAskedQuestions(): Record<string, ReAskedQuestionRecord> {
+    return { ...(this.state.reAskedQuestions ?? {}) };
+  }
+
+  /** @description Persist (upsert) the question the idle compaction re-asked for `key`, mirroring the in-memory record. */
+  async setReAskedQuestion(key: SessionKey, value: ReAskedQuestionRecord): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      (this.state.reAskedQuestions ??= {})[k] = value;
+      this.scheduleSave();
+    });
+  }
+
+  /**
+   * @description Remove the re-asked question for `key` (it was used, closed or released). No-op (no save) when absent.
+   * The whole map is dropped once empty so an idle bot leaves a clean `state.json`.
+   */
+  async clearReAskedQuestion(key: SessionKey): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (!this.state.reAskedQuestions?.[k]) return;
+      delete this.state.reAskedQuestions[k];
+      if (Object.keys(this.state.reAskedQuestions).length === 0) {
+        delete this.state.reAskedQuestions;
       }
       this.scheduleSave();
     });

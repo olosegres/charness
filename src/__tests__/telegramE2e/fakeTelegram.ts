@@ -152,6 +152,7 @@ export class FakeTelegram {
   readonly createdTopics: Array<{ threadId: number; name: string }> = [];
   /** The responses {@link holdNextResponse} still has to hold, in the order they were asked for. */
   private readonly responseHolds: Array<{ method: string; release: Promise<unknown>; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
+  private readonly callFailures: Array<{ method: string; description: string; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
   /** The `file_path` of every file the bot downloaded from the file endpoint, in order. */
   readonly downloadedFilePaths: string[] = [];
   /** The files `getFile` knows, by file id. */
@@ -385,6 +386,13 @@ export class FakeTelegram {
       return;
     }
     this.calls.push({ method, payload });
+    const failureIndex = this.callFailures.findIndex((failure) => failure.method === method && failure.isMatch(payload));
+    if (failureIndex >= 0) {
+      const [failure] = this.callFailures.splice(failureIndex, 1);
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: false, error_code: 400, description: failure.description }));
+      return;
+    }
     const answer = await this.dispatch(method, payload, request.socket);
     const holdIndex = this.responseHolds.findIndex((hold) => hold.method === method && hold.isMatch(payload));
     if (holdIndex >= 0) {
@@ -402,6 +410,15 @@ export class FakeTelegram {
    */
   holdNextResponse(method: string, release: Promise<unknown>, isMatch: (payload: Record<string, unknown>) => boolean = () => true): void {
     this.responseHolds.push({ method, release, isMatch });
+  }
+
+  /**
+   * @description Refuse the NEXT `method` call whose payload `isMatch` with a 400 carrying `description` — the Bot API's
+   * wording for it (`Bad Request: message is too long`, `Bad Request: can't parse entities: …`) —, applying nothing: the call
+   * is recorded, the message stays as it was. One call per registration.
+   */
+  failNextCall(method: string, description: string, isMatch: (payload: Record<string, unknown>) => boolean = () => true): void {
+    this.callFailures.push({ method, description, isMatch });
   }
 
   private async dispatch(method: string, payload: Record<string, unknown>, socket: Socket): Promise<ApiOk | ApiError> {

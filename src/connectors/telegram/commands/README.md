@@ -128,10 +128,15 @@ its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted li
 here «asked again below»), then re-asks it as a new message; every other end (an answer, a message sent instead, `/esc`, the
 session gone, a re-post to the bottom, a persisted question the boot drops) goes through the same `editQuestionMessageToClosed` edit.
 The re-asked copy is a `ReAskedQuestion` record (question, message id, `isTornDown`) kept from BEFORE its send, so a tap right after
-it finds it: a tap removes the record and closes the message with the answer; the end of the conversation without a tap goes through
-`clearThreadCompaction` → `closeReAskedQuestion`, which closes it as unanswered through the `closeQuestionMessage` port — a send still
-in flight is flagged `isTornDown` and closes the message it lands in. A sleeping conversation has no process whose stop would say so,
-so its release paths (`/quit`, `releaseThreadSession` for `/new`, `unbindThread`) call `clearThreadCompaction` themselves.
+it finds it, and saved to `state.json` (`reAskedQuestions`, message id + question) once its message id is known. A tap takes the record
+(`takeReAskedQuestion`: out of memory AND of the saved state) and closes the message with the answer; whatever else ends the copy goes
+through `closeReAskedQuestion`, which closes it as unanswered through the `closeQuestionMessage` port — a send still in flight is
+flagged `isTornDown` and closes the message it lands in. The callers: `clearThreadCompaction` (the conversation ended), `notePersonActivity`
+(a person wrote something else — a tap has taken its record already) and `handleAgentQuestion` (the agent asks a newer question, which
+the old buttons would answer wrongly). A sleeping conversation has no process whose stop would say so, so its release paths (`/quit`,
+`/quitall`, `releaseThreadSession` for `/new`, `unbindThread`) call `clearThreadCompaction` themselves. At boot `restoreReAskedQuestions`
+(`bot.ts`, after the sessions reattached) hands a saved record back to `restoreReAskedQuestion` when the conversation can still be
+resumed, else closes its message and drops it.
 
 ## `autoContinueLimits.ts`
 
