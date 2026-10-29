@@ -146,6 +146,16 @@ export const fakeWatchJobName = 'watch worker W-1';
 export const fakeGoneWorkerPid = 4_194_305;
 export const fakeCancelWatchToken = '[fake:cancel-watch]';
 
+/**
+ * While this file exists, `ask` mode streams its content as one assistant text right after it puts the question, while the
+ * turn is still blocked on the answer — as a sub-agent or a parallel branch of the real CLI does. The text lands BELOW
+ * the question in the topic, which is what makes the bot bring the question back to the bottom.
+ */
+export const fakeClaudeOutputWhileAskedFileName = 'output-while-asked';
+
+/** The outcome `ask` mode logs for a question that was declined, not answered (the bot's `control_response` carries no answers). */
+export const fakeAskNoAnswerOutcome = 'no answer';
+
 /** The tool name `ask` mode logs its outcome under in `tool-calls.jsonl`; the outcome is the answer the user gave. */
 export const fakeAskToolName = 'AskUserQuestion';
 

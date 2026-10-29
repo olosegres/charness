@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+**A question the agent asks now stays in the topic however it ends: answered, it shows your answer in place of the buttons; left alone, a note says it was not answered.**
+Before, answering a question replaced its whole text with a short «✅ header: answer», and walking away from it — sending another message, `/esc` —
+replaced it with «❌ Question cancelled: header», so what the agent had asked (the question, the options) was gone from the topic; and the two
+places that put a question down again (it is re-posted to the bottom of the topic when the agent's output lands below it, and re-asked after
+the idle compaction) deleted the first message outright. Now the message is never deleted: it keeps the header, the question and the numbered
+options, and under them stands «✅ Answer: …» for a tap or a typed number, «❌ Not answered» for a message sent instead of answering, `/esc`,
+`/quit`, `/new` or a session that ended with the question open (also when «create new folder» of `/bind` drops it), or «↓ Asked again below»
+on the older copy of a question that was put again further down. A tap on the re-asked question after the idle compaction closes it with the
+answer too. The pin works as before: one notification when the question comes, removed when it ends. The three notes are in all 12 languages
+(the old «Question cancelled» text is gone).
+
 **Typing or saying «claude» (or `клод`) to start the agent now opens the same backend `/claude` does — json-stream by default, or the one the topic picked — not the deprecated tmux one.**
 Before, a start phrase — in a text message or a voice note — handed the bare name `claude` on, which is the tmux backend's own name, so the phrase quietly
 started the frozen tmux backend while `/claude` and the ▶️ Claude button opened the topic's backend. All three now open the same backend;

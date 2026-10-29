@@ -51,7 +51,7 @@ describe('compaction: the compaction flow over its ports', () => {
       startTypingLoader: () => {},
       forwardPromptToAgent: async () => {},
       pendingQuestions: new Map(),
-      clearPendingQuestion: () => {},
+      retirePendingQuestion: async () => false,
       idleWindowMs: 55 * 60 * 1000,
       checkIsLimitWaitArmed: () => false,
       suspendThreadSession: async () => {},
@@ -175,6 +175,6 @@ describe('compaction: the compaction flow over its ports', () => {
     compaction.markThreadTurnProducedOutput(harness.key);
     compaction.clearThreadCompaction(harness.key);
     assert.equal(compaction.threadsCompacting.has(keyToString(harness.key)), false);
-    assert.equal(compaction.reAskedQuestionOptions.has(keyToString(harness.key)), false);
+    assert.equal(compaction.reAskedQuestions.has(keyToString(harness.key)), false);
   });
 });

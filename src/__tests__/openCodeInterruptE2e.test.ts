@@ -12,8 +12,9 @@
  *   → the older `/esc` does the same
  *   → an interrupt before the turn produced anything: the aborted turn's idle is not taken for a session that ran
  *     nothing, so the prompt is not replayed on a recovered session
- *   → a turn blocked on a question: `/interrupt` cancels the question (its buttons are retired, the server's question
- *     is rejected) and aborts the turn — without waiting for Telegram's answer to the buttons' edit.
+ *   → a turn blocked on a question: `/interrupt` cancels the question (its buttons are replaced by a «not answered» note
+ *     under the question, which stays; the server's question is rejected) and aborts the turn — without waiting for
+ *     Telegram's answer to that edit.
  *
  * What the unit tests cover instead: the abort request and the wedged-turn watch (`openCodeInterrupt.test.ts`), the
  * menu entries (`modelPickerSurface.test.ts`).
@@ -70,7 +71,10 @@ const abortedErrorFragment = 'Aborted';
 const questionRequestId = 'que_interrupt_1';
 const questionHeader = 'Lexer';
 const questionText = 'Which lexer should I write?';
-const cancelledQuestionLabel = enDict['agent.question_cancelled_msg_label'].replace('{header}', questionHeader);
+const questionOptionLabels = ['hand-written', 'regex'];
+/** A cancelled question stays in the topic as asked, its buttons replaced by the «not answered» note. */
+const checkIsQuestionClosedUnanswered = (text: string): boolean =>
+  text.includes(questionHeader) && text.includes(questionText) && questionOptionLabels.every((label) => text.includes(label)) && text.endsWith(enDict['agent.question_unanswered_note']);
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -265,7 +269,7 @@ describe('/interrupt on an OpenCode topic end to end: built charness, fake Bot A
     await sendPrompt('STEER-5 pick a lexer');
     fakeOpenCode.emitSessionBusy(sessionId);
     fakeOpenCode.emitAssistantText(sessionId, 'msg_a5', 'I need a decision.');
-    fakeOpenCode.emitQuestionAsked(sessionId, questionRequestId, [{ question: questionText, header: questionHeader, options: [{ label: 'hand-written' }, { label: 'regex' }] }]);
+    fakeOpenCode.emitQuestionAsked(sessionId, questionRequestId, [{ question: questionText, header: questionHeader, options: questionOptionLabels.map((label) => ({ label })) }]);
     const bubble = await topic.waitForMessage('the question with its buttons', (message) => message.text.includes(questionText));
     assert.ok(topic.getKeyboardData(bubble).flat().some((data) => data.startsWith('qa_')), 'the options are buttons');
 
@@ -273,15 +277,16 @@ describe('/interrupt on an OpenCode topic end to end: built charness, fake Bot A
     // The Telegram answer to the question buttons' edit is held: the abort must not wait for it (that edit goes through the
     // send pacer, seconds late on a busy instance, while the agent keeps working).
     let releaseEdit = (): void => {};
-    fakeTelegram.holdNextResponse('editMessageText', new Promise<void>((resolve) => { releaseEdit = resolve; }), (payload) => payload.text === cancelledQuestionLabel);
+    fakeTelegram.holdNextResponse('editMessageText', new Promise<void>((resolve) => { releaseEdit = resolve; }), (payload) => checkIsQuestionClosedUnanswered(String(payload.text)));
     try {
       await interruptWith('/interrupt', sessionId);
       await getCharness().waitFor('the question rejected on the server while the buttons\' edit is still held', replyTimeoutMs, () => fakeOpenCode.listRequests('POST', `/question/${questionRequestId}/reject`).length > rejectsBefore);
     } finally {
       releaseEdit();
     }
-    await topic.waitForMessageText('the question retired', bubble, (text) => text === cancelledQuestionLabel);
+    await topic.waitForMessageText('the question closed as unanswered, its text kept', bubble, checkIsQuestionClosedUnanswered);
     assert.equal(fakeOpenCode.listRequests('POST', `/question/${questionRequestId}/reject`).length, rejectsBefore + 1, 'the question is rejected on the server');
     assert.deepEqual(topic.getKeyboardData(bubble).flat(), [], 'the stale buttons are gone');
+    assert.ok(topic.listMessages().some((message) => message.message_id === bubble.message_id), 'the question message is still in the topic, not deleted');
   });
 });

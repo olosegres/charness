@@ -292,8 +292,12 @@ describe('The todo reminder\'s held-back cases and the per-turn backend: built c
     // The scenario itself: the question waits for the operator longer than the reminder's interval.
     await new Promise((resolve) => setTimeout(resolve, reminderIntervalMs + longTurnWorkMs));
     const answeredAt = Date.now();
-    const [[firstOption]] = driver.getKeyboardData(question);
-    await driver.tapAndAwaitAnswer(question, firstOption);
+    // The turn's output landed below the question, so the bot put the question again at the bottom: the first message
+    // stays as the record (no buttons), and the live question is the newest message that still has them.
+    const liveQuestion = [...driver.listMessages()].reverse().find((message) => message.message_id >= question.message_id && driver.getKeyboardData(message).flat().some((data) => data.startsWith('qa_')));
+    assert.ok(liveQuestion, 'a question with its buttons is still on screen');
+    const [[firstOption]] = driver.getKeyboardData(liveQuestion);
+    await driver.tapAndAwaitAnswer(liveQuestion, firstOption);
     await getCharness().waitFor('the turn end after the answer', turnTimeoutMs, () => (readTopicTodoFile(topicQ.threadId).lastTurnEndAt ?? 0) > answeredAt);
     const workedMs = readTopicTodoFile(topicQ.threadId).nag?.workedMs ?? 0;
     assert.ok(workedMs < reminderIntervalMs, `the wait counted as work: ${workedMs} ms`);

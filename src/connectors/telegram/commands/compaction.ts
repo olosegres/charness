@@ -32,6 +32,7 @@ import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from '../questionKey
 import { splitMessage, MAX_MESSAGE_LEN } from '../messageSplit';
 import type { BotCore } from './botCore';
 import { getCallbackMessageId } from './callbackMessage';
+import type { QuestionClosing } from '../../../openCodeQuestionFlow';
 
 /** The literal slash command forwarded to backends whose own CLI parses it. */
 const compactCommandText = '/compact';
@@ -154,12 +155,16 @@ function buildCompactOnIdleKeyboard(picker: CompactOnIdlePickerState) {
 export interface CompactionPorts
   extends Pick<
     BotCore,
-    'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadKeyboard' | 'deleteThreadMessage' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral' | 'wakeSleepingSession'
+    'bot' | 'command' | 'getState' | 'replyToThread' | 'editThreadKeyboard' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral' | 'wakeSleepingSession'
   > {
   startTypingLoader: (key: SessionKey) => void;
   forwardPromptToAgent: (key: SessionKey, adapter: AgentAdapter, text: string) => Promise<void>;
   pendingQuestions: Map<string, PendingQuestionState>;
-  clearPendingQuestion: (key: SessionKey) => void;
+  /**
+   * Clear the topic's pending question (unpinning it) and close its message in place — the text stays, the buttons go,
+   * a note says how it ended; resolves whether the message was edited. The idle re-ask uses it with `askedAgain`.
+   */
+  retirePendingQuestion: (key: SessionKey, closing: QuestionClosing) => Promise<boolean>;
   /** The idle window in force (`AGENT_IDLE_MINUTES` or the 55-minute default; L-D9). */
   idleWindowMs: number;
   /** Whether a usage-limit wait is armed for the topic — no compaction turn then (L-D6). */
@@ -179,7 +184,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, bot, command, getState, replyToThread, editThreadKeyboard, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, retirePendingQuestion, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * Threads with a compaction IN FLIGHT (via {@link runThreadCompaction}). While a
@@ -517,7 +522,7 @@ export function createCompaction(ports: CompactionPorts) {
     const pollTimer = deferredCompactionPollTimers.get(kStr);
     if (pollTimer) clearTimeout(pollTimer);
     deferredCompactionPollTimers.delete(kStr);
-    reAskedQuestionOptions.delete(kStr);
+    reAskedQuestions.delete(kStr);
   }
 
   /**
@@ -638,18 +643,14 @@ export function createCompaction(ports: CompactionPorts) {
 
     // D1: a pending question at idle → reject it server-side to UNBLOCK the turn
     // (reusing each backend's abort-error swallow via rejectQuestion + SIGINT),
-    // remember it, drop the bot-side pending state + its now-stale buttons, then
-    // RE-ASK it after the compaction with real buttons that feed a fresh prompt.
+    // remember it, drop the bot-side pending state and its now-stale buttons (its message stays as the record,
+    // «asked again below»), then RE-ASK it after the compaction with real buttons that feed a fresh prompt.
     let savedQuestion: PendingQuestionState | null = null;
     if (hasPendingQuestion) {
       savedQuestion = pendingQuestions.get(kStr) ?? null;
-      const staleQuestionMessageId = savedQuestion?.messageId ?? null;
       adapter.rejectQuestion?.(key);
       adapter.sendSignal(key, 'SIGINT');
-      clearPendingQuestion(key);
-      if (staleQuestionMessageId !== null) {
-        await deleteThreadMessage(key, staleQuestionMessageId).catch(() => {});
-      }
+      await retirePendingQuestion(key, 'askedAgain');
     }
 
     const result = await runThreadCompaction(key, { withClosingSection: true });
@@ -672,25 +673,24 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
-   * @description Per-thread option labels of an idle-compaction RE-ASKED question
-   * (D1), keyed by {@link SessionKey} string. A `reask_<idx>` tap forwards the
-   * matching label to the (now compacted) session as a FRESH prompt — the original
-   * question request was rejected server-side, so it cannot be answered any more.
-   * In-memory only: after a restart the buttons are simply inert ("no pending
-   * question"), which is safe.
+   * @description Per-thread idle-compaction RE-ASKED question (D1), keyed by {@link SessionKey} string. A
+   * `reask_<idx>` tap forwards the label of its option to the (now compacted) session as a FRESH prompt — the
+   * original question request was rejected server-side, so it cannot be answered any more — and closes the re-asked
+   * message with that answer under the question. In-memory only: after a restart the buttons are simply inert ("no
+   * pending question"), which is safe.
    */
-  const reAskedQuestionOptions = new Map<string, string[]>();
+  const reAskedQuestions = new Map<string, OpenCodeQuestion>();
 
   /**
    * @description Build the RE-ASK inline keyboard for an idle-compaction pending
-   * question (D1) and record its option labels so a `reask_<idx>` tap can forward
-   * the chosen label as a fresh prompt.
+   * question (D1) and record the question so a `reask_<idx>` tap can forward the
+   * chosen label as a fresh prompt.
    */
   function buildReAskKeyboard(
     key: SessionKey,
     question: OpenCodeQuestion,
   ): InlineKeyboardMarkup | undefined {
-    reAskedQuestionOptions.set(keyToString(key), question.options.map((opt) => opt.label));
+    reAskedQuestions.set(keyToString(key), question);
     return buildQuestionOptionsKeyboard(question, (optionIndex) => `reask_${optionIndex}`);
   }
 
@@ -1012,7 +1012,7 @@ export function createCompaction(ports: CompactionPorts) {
     armDeferredCompaction,
     checkIsDeferredCompactionArmed,
     threadsCompacting,
-    reAskedQuestionOptions,
+    reAskedQuestions,
     registerCompactionCommands,
     registerCompactionCallbacks,
   };

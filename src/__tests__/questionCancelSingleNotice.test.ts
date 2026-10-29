@@ -5,7 +5,8 @@
  * Live report (json-stream Claude): typing a free-form message
  * while a question was pending surfaced THREE messages about the same thing:
  *   1. the question bubble relabelled to "❌ Question cancelled: <header>"
- *      (an in-place edit — `agent.question_cancelled_msg_label`),
+ *      (an in-place edit; today the same edit keeps the question text and ends it with
+ *      `agent.question_unanswered_note`),
  *   2. a SEPARATE "⚠️ Previous question cancelled — running your new request."
  *      line (`agent.question_cancelled_for_prompt`),
  *   3. a bogus "Claude error: API error" from the adapter (fixed separately in
@@ -13,8 +14,8 @@
  *
  * This guard locks the fix for (2): `cancelPendingQuestionAndForward` must post
  * the standalone notice ONLY when there was no question bubble to relabel
- * (`didLabelQuestionMessage`, what `retirePendingQuestion` — the relabel that `/esc`
- * shares — reports). When the bubble WAS relabelled, that relabel is the single
+ * (`didLabelQuestionMessage`, what `retirePendingQuestion` — the close that `/esc`
+ * shares — reports). When the bubble WAS closed with its note, that is the single
  * notice — a second standalone line is the reported noise.
  *
  * Structural (not behavioural): the function lives in the side-effecting
@@ -76,8 +77,8 @@ test('the cancel path never posts the standalone notice unconditionally', () => 
   );
 });
 
-test('retirePendingQuestion says «relabelled» only when there was a bubble and a question to name on it', () => {
+test('retirePendingQuestion says «closed» only when there was a bubble and a question to keep on it, and by what the edit did', () => {
   const body = getFunctionBody('async function retirePendingQuestion');
-  assert.match(body, /if\s*\(\s*cancelledMessageId\s*===\s*null\s*\|\|\s*!cancelledQuestion\s*\)\s*return\s+false/, 'no bubble, no relabel');
-  assert.match(body, /agent\.question_cancelled_msg_label[\s\S]*return\s+true/, 'the relabel is followed by `true`');
+  assert.match(body, /if\s*\(\s*closedMessageId\s*===\s*null\s*\|\|\s*!closedQuestion\s*\)\s*return\s+false/, 'no bubble, no close');
+  assert.match(body, /return\s+runQuestionLifecycleOp\(key,\s*\(\)\s*=>\s*closeQuestionMessage\(key,\s*closedMessageId,\s*closedQuestion,\s*closing\)\)/, 'the close is the edit, and its outcome is what is reported');
 });

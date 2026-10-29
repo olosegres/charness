@@ -23,7 +23,7 @@ functions where the handlers used to be registered. A module never imports `bot.
   or, built once per module from its `replyToThread` port, `createWholeTextAnswerer(replyToThread)` → `(ctx, key, text)`.
   Never `.slice(0, n)` a text into `answerCbQuery`, and no module keeps its own copy of the cut (`cb.model_error`,
   `cb.effort_error`, the display-mode errors, `/limits`, `/accounts`, `/stt` all use the helper). A text the thread already
-  carries in full (a pending question's answer: the question message is edited to "✅ …: <answer>") uses
+  carries in full (a pending question's answer: the question message is edited to the question as asked plus "✅ Answer: <answer>" in place of the buttons) uses
   `answerCallbackWithFittedText` — the toast only, cut when long, no second copy — but only while that edit succeeded
   (`applyQuestionAnswer` says so); a message that could not be edited, and a re-asked question's label (`reask_<i>`, nothing
   else shows it whole), use the whole-text variant. Telegram refuses a toast over 200 characters, so a bare
@@ -121,8 +121,12 @@ the reply language (`i18n.test.ts` pins that).
 `bot.ts` calls the returned hooks from the prompt path (`noteThreadActivity`, `noteThreadUserActivity`),
 the output path (`markThreadTurnProducedOutput`) and the session lifecycle (`rearmThreadIdleTimer`,
 `clearThreadCompaction`), and reads `threadsCompacting` (the typing loop, the request probe) and
-`reAskedQuestionOptions` (the re-ask button). The factory must be built BEFORE the module-scope objects that name
+`reAskedQuestions` (the re-ask button's question, which a tap closes with its answer). The factory must be built BEFORE the module-scope objects that name
 its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted like the function it replaced.
+**A question's message is never deleted.** The idle fire retires the pending question through the `retirePendingQuestion` port
+(`bot.ts`: clears the state — which unpins — and edits the message to the question as asked plus a note in place of its buttons,
+here «asked again below»), then re-asks it as a new message; every other end (an answer, a message sent instead, `/esc`, the
+session gone, a re-post to the bottom) goes through the same `editQuestionMessageToClosed` edit.
 
 ## `autoContinueLimits.ts`
 

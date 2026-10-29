@@ -63,6 +63,7 @@ import { TopicDriver } from './telegramE2e/topicDriver';
 import { restartCharnessWithState } from './e2e/fallbackFlowKit';
 import { createClaudeProfileLayout } from '../utils/claudeProfiles';
 import { getSttPaths } from '../stt/sttInstall';
+import { enDict } from '../i18n/en';
 import { appendInstallProgress, holdInstallLock, releaseInstallLock, writeInstalledMarker } from './fixtures/sttInstallFiles';
 import type { FallbackChainEntry } from '../utils/fallbackChain';
 import type { ScheduleRecord } from '../scheduler/types';
@@ -1000,7 +1001,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     return readJsonLines<FakeClaudeToolCall>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.toolCalls)).find((call) => call.issueKey === promptLabel && call.tool === fakeAskToolName)?.outcome;
   }
 
-  it('a pending question\'s buttons: the tap on a short option is answered with it whole; on one longer than a toast holds, with its start — the question message keeps the whole answer, nothing is posted beside it, and the agent gets the whole label', async () => {
+  it('a pending question\'s buttons: the tap on a short option is answered with it whole; on one longer than a toast holds, with its start — the question message keeps the question and carries the whole answer, nothing is posted beside it, and the agent gets the whole label', async () => {
     const shortAskPrompt = 'ASK-1';
     const longAskPrompt = 'ASK-2';
 
@@ -1014,11 +1015,16 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     const toast = await topic.tapAndAwaitAnswer(longQuestion, 'qa_0_1');
     assert.ok(toast.length <= 200 && toast.endsWith('…'), `the toast fits: ${toast.length} characters`);
     assert.ok(fakeAskQuestion.longOptionLabel.startsWith(toast.slice(0, -1)), 'it is the start of the label');
-    await topic.waitForMessageText('the question message edited to the whole answer', longQuestion, (text) => text === `✅ ${fakeAskQuestion.header}: ${fakeAskQuestion.longOptionLabel}`);
+    await topic.waitForMessageText('the question message edited to carry the whole answer', longQuestion, (text) => text.endsWith(`\n\n${enDict['agent.question_answered_note'].replace('{answer}', fakeAskQuestion.longOptionLabel)}`));
+    assert.ok(longQuestion.text.includes(fakeAskQuestion.question) && longQuestion.text.includes(fakeAskQuestion.shortOptionLabel), 'the question and its options stay above the answer');
+    assert.equal(longQuestion.reply_markup, undefined, 'the answer stands in place of the buttons');
     await getCharness().waitFor('the long answer to reach the agent', agentStartTimeoutMs, () => getAskOutcome(longAskPrompt) !== undefined);
     assert.equal(getAskOutcome(longAskPrompt), fakeAskQuestion.longOptionLabel, 'the agent got the whole label, not the toast');
-    // The answer is in the topic once: the edited question message. The tap posted nothing beside it.
-    assert.equal(topic.listMessages().filter((message) => message.text.includes(fakeAskQuestion.longOptionLabel)).length, 1, 'the whole label appears once');
+    // The answer is in the topic once: the edited question message. The tap posted nothing beside it (a question message
+    // lists every option, so the label alone is no sign of an answer).
+    const longAnswerNote = enDict['agent.question_answered_note'].replace('{answer}', fakeAskQuestion.longOptionLabel);
+    assert.equal(topic.listMessages().filter((message) => message.text.includes(longAnswerNote)).length, 1, 'the whole answer appears once');
+    assert.deepEqual(topic.listMessages().filter((message) => message.text.includes(fakeAskQuestion.longOptionLabel) && !message.text.includes(fakeAskQuestion.question)), [], 'nothing is posted beside the question message');
   });
 
   it('a question whose message can no longer be edited to show the answer (it was deleted): a label longer than a toast is posted in full instead', async () => {

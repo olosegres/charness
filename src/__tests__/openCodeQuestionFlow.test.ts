@@ -13,12 +13,14 @@
  *    the REAL collected answers and signals exactly one submit.
  *  - S2 restore-compat: an OLD persisted entry (no `answers`/`currentIndex`) is
  *    migrated to the new shape instead of crashing.
+ *  - A question that ends keeps its text: the closed text is the posted body plus a note.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildClosedQuestionText,
   buildQuestionBodyLines,
   buildQuestionBodyLinesPlain,
   recordAnswerAndAdvance,
@@ -337,4 +339,28 @@ test('S2 restore: an answers array of the WRONG length is rebuilt to the questio
   assert.deepEqual(migrated.answers, [null, null, null]);
   // Out-of-range currentIndex resets to 0.
   assert.equal(migrated.currentIndex, 0);
+});
+
+// ── a closed question keeps its text ────────────────────────────────────────
+
+test('the closed text is the question exactly as it was posted, a blank line, then the note', () => {
+  const question = makeQuestion({
+    header: 'Fruit',
+    question: 'Which fruit do you prefer?',
+    options: [{ label: 'Apple', description: 'Crisp.' }, { label: 'Pear' }],
+  });
+  const closedLines = buildClosedQuestionText(question, '✅ Answer: Pear', noEscape).split('\n');
+  assert.deepEqual(closedLines, [...buildQuestionBodyLines(question, noEscape), '', '✅ Answer: Pear']);
+  // The question, every option and its description are still there to read.
+  for (const expected of ['❓ *Fruit*', 'Which fruit do you prefer?', '1. Apple', '   Crisp.', '2. Pear']) {
+    assert.ok(closedLines.includes(expected), `${expected} survives the closing`);
+  }
+});
+
+test('the note goes through the same escaper as the body: a chosen label with markup cannot break the edit', () => {
+  const escapeUnderscore = (text: string): string => text.replace(/_/g, '\\_');
+  const question = makeQuestion({ header: 'Name', question: 'Which id?', options: [{ label: 'get_user_id' }] });
+  const closedText = buildClosedQuestionText(question, '✅ Answer: get_user_id', escapeUnderscore);
+  assert.ok(closedText.endsWith('✅ Answer: get\\_user\\_id'), closedText);
+  assert.ok(!closedText.includes('get_user_id'), 'no unescaped underscore is left anywhere');
 });

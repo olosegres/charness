@@ -40,7 +40,7 @@ import {
 import { ClaudeJsonStreamAdapter } from './adapters/claudeJsonStreamAdapter';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, claudeTmuxAdapterName, checkIsJsonStreamBackend, openCodeAdapterName } from './adapters/adapterNames';
 import { checkShouldPostReattachRecap, formatReattachRecap } from './resumeContext';
-import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, RecentTurn, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
+import type { AgentAdapter, AgentRuntimeInfo, AgentSession, DisplayVerbosityMode, OutputTransport, PendingQuestionState, AgentApiErrorClass, LimitEpisodeMarker, OpenCodeQuestion, RecentTurn, SeenWatermark, SubagentStatusEvent, ThinkingEvent, ToolResultEvent } from './types';
 import type { PlatformId, SessionKey } from './sessionKey';
 import { createOutputTransport } from './connectors/telegram/output/createOutputTransport';
 import { keyToString, keyFromString, tryKeyFromString } from './sessionKey';
@@ -61,11 +61,13 @@ import { ClaudeCliAdapter, getClaudeReplyRoute, getClaudeTranscriptPath } from '
 import { listSavedOpenCodeModelLabels, type OpenCodePendingQuestion } from './adapters/openCodeAdapter';
 import { TerminalAdapter } from './adapters/terminalAdapter';
 import {
+  buildClosedQuestionText,
   buildQuestionBodyLines,
   buildQuestionBodyLinesPlain,
   recordAnswerAndAdvance,
   migratePendingQuestionState,
   getQuestionReplyRoute,
+  type QuestionClosing,
 } from './openCodeQuestionFlow';
 import { checkShouldRepostPendingQuestion } from './pendingQuestionRepost';
 import {
@@ -1832,8 +1834,9 @@ function onThreadActivityWhileQuestionPending(key: SessionKey): void {
 
 /**
  * @description Re-post the current pending question as the newest thread message
- * (S3): delete the old question message, then send the current question again
- * via {@link postPendingQuestionAt} (which re-renders with S1 descriptions /
+ * (S3): close the old question message as «asked again below» (its text stays, its
+ * buttons go — a question message is never deleted), then send the current question
+ * again via {@link postPendingQuestionAt} (which re-renders with S1 descriptions /
  * S2 current index and re-owns `messageId`). No-op if the question was answered
  * meanwhile, or if it is already the last message (the loop guard re-checked at
  * fire time, since the debounce window may have closed the gap).
@@ -1853,11 +1856,35 @@ async function repostPendingQuestionToBottom(key: SessionKey): Promise<void> {
     // question's message (the live 2026-06-10 race).
     if (s.isPostInFlight) return;
     const oldMessageId = pending.messageId;
-    if (oldMessageId !== null) {
-      await deleteThreadMessage(key, oldMessageId);
+    const oldQuestion = pending.data.questions[pending.currentIndex];
+    if (oldMessageId !== null && oldQuestion) {
+      await closeQuestionMessage(key, oldMessageId, oldQuestion, 'askedAgain');
     }
     await postPendingQuestionAt(key);
   });
+}
+
+/**
+ * @description The note a question's message ends with, by how it ended (see {@link QuestionClosing}). An answer's
+ * note is built where the chosen label is known (`agent.question_answered_note`).
+ */
+const questionClosingNoteKeys: Record<QuestionClosing, string> = {
+  unanswered: 'agent.question_unanswered_note',
+  askedAgain: 'agent.question_asked_again_note',
+};
+
+/**
+ * @description End a question's message in the topic WITHOUT deleting it: the buttons are replaced by `note`, and the
+ * header, the question and its options stay, so what the agent asked and how it ended can still be read. Resolves
+ * whether the edit landed. Every way a question ends goes through this — a delete would take the record away.
+ */
+async function editQuestionMessageToClosed(key: SessionKey, messageId: number, question: OpenCodeQuestion, note: string): Promise<boolean> {
+  return editThreadMessage(key, messageId, buildClosedQuestionText(question, note, escapeMarkdown), { parse_mode: 'Markdown' });
+}
+
+/** {@link editQuestionMessageToClosed} for a question that ended without an answer. */
+async function closeQuestionMessage(key: SessionKey, messageId: number, question: OpenCodeQuestion, closing: QuestionClosing): Promise<boolean> {
+  return editQuestionMessageToClosed(key, messageId, question, t(questionClosingNoteKeys[closing]));
 }
 
 // ── auto-retry after a provider-side API error (plan S4/S5/S6) ──
@@ -5905,7 +5932,7 @@ const {
   armDeferredCompaction,
   checkIsDeferredCompactionArmed,
   threadsCompacting,
-  reAskedQuestionOptions,
+  reAskedQuestions,
   registerCompactionCommands,
   registerCompactionCallbacks,
 } = createCompaction({
@@ -5913,7 +5940,7 @@ const {
   startTypingLoader,
   forwardPromptToAgent: async (key, adapter, text) => { await forwardPromptToAgent(key, adapter, text); },
   pendingQuestions,
-  clearPendingQuestion,
+  retirePendingQuestion,
   idleWindowMs: getAgentIdleMs(process.env.AGENT_IDLE_MINUTES),
   checkIsLimitWaitArmed: (key) => getArmedApiRetry(key)?.kind === 'usageLimit',
   suspendThreadSession,
@@ -6539,8 +6566,8 @@ function armFolderCreation(key: SessionKey, pickerMessageId: number | null): voi
   // The `/topic` prompts are other readers of the next plain message.
   cancelTopicInput(key);
   // A stale pending question would otherwise consume the message AFTER the
-  // folder name as an answer to the old (pre-rebind) agent question.
-  clearPendingQuestion(key);
+  // folder name as an answer to the old (pre-rebind) agent question. Its message stays, closed as unanswered.
+  void retirePendingQuestion(key);
   awaitingFolderName.add(kStr);
   if (pickerMessageId !== null) bindPickerMessageIds.set(kStr, pickerMessageId);
 }
@@ -10583,14 +10610,15 @@ bot.action(new RegExp(`^${skipArmedRetryCallbackPrefix}(\\d+)$`), async (ctx) =>
 
 // D1: a tap on an idle-compaction RE-ASKED question button. The original request
 // was rejected server-side during the compaction, so the chosen option label is
-// delivered to the (now compacted) session as a FRESH prompt, not answered.
+// delivered to the (now compacted) session as a FRESH prompt, not answered. Once it is delivered the re-asked
+// message stays as the record: the question as asked, the chosen answer in place of the buttons.
 bot.action(/^reask_(\d+)$/, async (ctx) => {
   const key = await authoriseContext(ctx);
   if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
   const optIdx = parseInt(ctx.match[1], 10);
-  const labels = reAskedQuestionOptions.get(keyToString(key));
-  const label = labels?.[optIdx];
-  if (!label) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
+  const reAskedQuestion = reAskedQuestions.get(keyToString(key));
+  const label = reAskedQuestion?.options[optIdx]?.label;
+  if (!reAskedQuestion || !label) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
   // The idle fire posts the re-asked question just BEFORE it stops the process, and a stopping process still reads as
   // active: a tap inside that window (or inside a start) is buffered like a typed prompt and replayed once a session is up.
   const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
@@ -10600,7 +10628,7 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
     return;
   }
   const adapter = getThreadAdapter(key);
-  reAskedQuestionOptions.delete(keyToString(key));
+  reAskedQuestions.delete(keyToString(key));
   // The label goes to the agent as a prompt and nothing else in the topic shows it whole (the buttons clip long
   // labels): a label too long for the toast is posted in full, as the record of the answer that was sent.
   await answerCallbackWithWholeText(ctx, label, (wholeLabel) => replyToThread(key, wholeLabel));
@@ -10609,7 +10637,12 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   // window was never replayed.
   const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
   // The label reached no session (the topic was told why): the question is still open, so are its buttons.
-  if (outcome === 'noSession' && labels && !reAskedQuestionOptions.has(keyToString(key))) reAskedQuestionOptions.set(keyToString(key), labels);
+  if (outcome === 'noSession') {
+    if (!reAskedQuestions.has(keyToString(key))) reAskedQuestions.set(keyToString(key), reAskedQuestion);
+    return;
+  }
+  const reAskedMessageId = getCallbackMessageId(ctx);
+  if (reAskedMessageId !== null) await editQuestionMessageToClosed(key, reAskedMessageId, reAskedQuestion, t('agent.question_answered_note', { answer: label }));
 });
 
 registerReminderCallbacks();
@@ -10720,7 +10753,7 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
   const selectedLabel = question.options[optIdx].label;
   const isAnswerShown = await applyQuestionAnswer(key, [selectedLabel]);
   if (isAnswerShown) {
-    // The question message was just edited to "✅ <header>: <answer>", which carries the whole answer: the toast only
+    // The question message was just edited to carry the whole answer under the question: the toast only
     // confirms the tap, so a label too long for it is cut there and not posted a second time.
     await answerCallbackWithFittedText(ctx, selectedLabel);
   } else {
@@ -10763,8 +10796,8 @@ async function bufferPromptDuringStartup(
  *     user before forwarding so the prompt doesn't queue behind it forever.
  *  3. Forward the prompt (a bare `/clear` first purges thread context + files).
  *
- * Claude/terminal never reach step 1 (their routing returns earlier in the text
- * handler, and `pendingQuestions`/`answerQuestion` are OpenCode-only). For them
+ * Step 1 is the OpenCode AND the Claude stream-json backends (both raise the `question` event and implement
+ * `answerQuestion`). The tmux-scrape Claude and the terminal never reach it (no `pendingQuestions` entry): for them
  * `forwardPromptToAgent` interrupts the TUI selector itself.
  */
 async function deliverActivePrompt(
@@ -10845,27 +10878,24 @@ async function deliverActivePrompt(
 }
 
 /**
- * @description Retire the on-screen state of a pending OpenCode question the user walked away from: clear the bot's
- * pending-question state and neutralize the stale buttons message (edit it to a "cancelled" label so a late tap can't
- * re-answer an aborted question). Closing the question on the server is the caller's, before it aborts the turn.
- * Returns whether the buttons message itself was relabelled — it IS the cancellation notice then.
+ * @description Close the on-screen state of a pending question that ends without an answer: clear the bot's
+ * pending-question state (which unpins it) and edit the question's message so its buttons are gone and a note says how
+ * it ended (`closing`; by default that nobody answered it). The message is never deleted — the question and its options
+ * stay readable. Closing the question on the agent is the caller's, before it stops or aborts the turn.
+ * Returns whether the message itself was edited — it IS the notice then.
  *
  * The edit runs through `runQuestionLifecycleOp` (same serializer as the answer path) so it can't race a concurrent
- * re-post-to-bottom. The `messageId` + header are captured BEFORE clearing, since `clearPendingQuestion` drops the state.
+ * re-post-to-bottom. The `messageId` + question are captured BEFORE clearing, since `clearPendingQuestion` drops the state.
  */
-async function retirePendingQuestion(key: SessionKey): Promise<boolean> {
+async function retirePendingQuestion(key: SessionKey, closing: QuestionClosing = 'unanswered'): Promise<boolean> {
   const pending = pendingQuestions.get(keyToString(key));
-  const cancelledMessageId = pending?.messageId ?? null;
-  const cancelledQuestion = pending?.data.questions[pending.currentIndex];
+  const closedMessageId = pending?.messageId ?? null;
+  const closedQuestion = pending?.data.questions[pending.currentIndex];
 
   clearPendingQuestion(key);
 
-  if (cancelledMessageId === null || !cancelledQuestion) return false;
-  const header = cancelledQuestion.header || cancelledQuestion.question;
-  await runQuestionLifecycleOp(key, () =>
-    editThreadMessage(key, cancelledMessageId, t('agent.question_cancelled_msg_label', { header })),
-  );
-  return true;
+  if (closedMessageId === null || !closedQuestion) return false;
+  return runQuestionLifecycleOp(key, () => closeQuestionMessage(key, closedMessageId, closedQuestion, closing));
 }
 
 /**
@@ -10883,7 +10913,7 @@ async function cancelPendingQuestionAndForward(
   replyContext?: string,
   requestHeader?: string,
 ): Promise<LatePromptOutcome> {
-  // When the question bubble itself was relabelled to "❌ … cancelled", that IS the
+  // When the question bubble itself was closed with its «not answered» note, that IS the
   // cancellation notice — a second standalone "previous question cancelled" line is
   // pure noise (the reported triple message). The standalone notice is kept only
   // for the no-bubble case.
@@ -10929,11 +10959,13 @@ async function applyQuestionAnswerInner(key: SessionKey, answerForCurrent: strin
   const answeredQuestion = pending.data.questions[pending.currentIndex];
   const { nextState, action } = recordAnswerAndAdvance(pending, answerForCurrent);
 
-  // Mark the answered question's message as done (the chosen answer in place).
-  const isAnswerShown = pending.messageId !== null && answeredQuestion !== undefined && await editThreadMessage(
+  // Mark the answered question's message as done: the question stays as asked, the chosen answer takes the place of
+  // its buttons.
+  const isAnswerShown = pending.messageId !== null && answeredQuestion !== undefined && await editQuestionMessageToClosed(
     key,
     pending.messageId,
-    `✅ ${answeredQuestion.header || answeredQuestion.question}: ${answerForCurrent.join(', ')}`,
+    answeredQuestion,
+    t('agent.question_answered_note', { answer: answerForCurrent.join(', ') }),
   );
 
   if (action.kind === 'submit') {
@@ -12145,11 +12177,12 @@ async function postPendingQuestionAt(key: SessionKey): Promise<void> {
         // ordinary message, which is all a tracker comment can be anyway.
         if (getOutboundFor(key).capabilities.pinMessages) void pinThreadQuestion(key, messageId);
       } else {
-        // The question advanced / was answered while our send sat in the
+        // The question advanced / was answered / was closed while our send sat in the
         // queue (a fast digit reply can beat the post — seen live 2026-06-10:
         // a stale unanswered-looking "❓" landed and lingered). The message we
-        // just sent describes a question that no longer exists — remove it.
-        void deleteThreadMessage(key, messageId);
+        // just sent describes a question that no longer exists: it is closed as
+        // unanswered (its buttons would be dead), never deleted.
+        await closeQuestionMessage(key, messageId, question, 'unanswered');
       }
     }
   } catch (err) {
@@ -12187,7 +12220,7 @@ function handleAgentClosed(key: SessionKey): void {
   clearThinkingMessage(key);
   // A closed session has no running delegation — remove the sub-agent status.
   clearSubagentStatus(key);
-  clearPendingQuestion(key);
+  void retirePendingQuestion(key);
   // A closed session has nothing to resume — drop any armed retry silently.
   cancelApiRetry(key);
   clearAuthNotice(key); // session closed → retire any pinned logged-out notice
@@ -12296,7 +12329,7 @@ function handleAgentError(key: SessionKey, error: Error): void {
   deleteStatusMessage(key).catch(() => {});
   clearThinkingMessage(key);
   clearSubagentStatus(key);
-  clearPendingQuestion(key);
+  void retirePendingQuestion(key);
   replyToThread(key, `Error: ${error.message}`).catch(() => {});
 }
 
@@ -12346,8 +12379,8 @@ function handleAgentStarted(key: SessionKey): void {
  * the delete); the "thinking …" frame and the sub-agent status for the same reason;
  * and the pending question (F1): no stop path fires the adapter's `questionGone`
  * (Claude's pane is killed; OpenCode emits no resolve), so a pinned question would
- * leak forever — clearing it chains `unpinThreadQuestion`, matching
- * `handleAgentClosed` / `handleAgentError`.
+ * leak forever — retiring it chains `unpinThreadQuestion` and closes its message as unanswered (the question stays
+ * in the topic, its buttons would be dead), matching `handleAgentClosed` / `handleAgentError`.
  */
 function clearGoneProcessFrames(key: SessionKey): void {
   clearThreadQueues(key);
@@ -12355,7 +12388,7 @@ function clearGoneProcessFrames(key: SessionKey): void {
   deleteStatusMessage(key).catch(() => {});
   clearThinkingMessage(key);
   clearSubagentStatus(key);
-  clearPendingQuestion(key);
+  void retirePendingQuestion(key);
 }
 
 function handleAgentStopped(key: SessionKey): void {

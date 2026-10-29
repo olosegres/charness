@@ -66,6 +66,29 @@ export function buildQuestionBodyLinesPlain(question: OpenCodeQuestion): string[
 }
 
 /**
+ * @description How a question's message ends in the topic. A question message is never deleted: the buttons go, the
+ * text stays, and the note below it says what became of the question.
+ *  - `unanswered` — it was closed with no answer (a message sent instead, `/esc`, the session gone);
+ *  - `askedAgain` — the same question was put again further down (re-posted to the bottom, re-asked after the idle
+ *    compaction), so this copy is only the record.
+ * An answer is a note of its own (`agent.question_answered_note`), built where the chosen label is known.
+ */
+export type QuestionClosing = 'unanswered' | 'askedAgain';
+
+/**
+ * @description The text a question's message is edited to when it ends: the same body it was posted with (header,
+ * question, numbered options with their descriptions), a blank line, then `note`. `escape` is the one
+ * {@link buildQuestionBodyLines} takes; the note goes through it too, since it may carry the chosen label.
+ */
+export function buildClosedQuestionText(
+  question: OpenCodeQuestion,
+  note: string,
+  escape: (text: string) => string,
+): string {
+  return [...buildQuestionBodyLines(question, escape), '', escape(note)].join('\n');
+}
+
+/**
  * @description How to route a user's free-form reply that arrives WHILE an
  * OpenCode interactive question is pending. Mirrors `getClaudeReplyRoute`:
  *  - `answer` — the reply is a bare digit in range of the current question's

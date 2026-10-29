@@ -6,9 +6,10 @@
  *
  *   boot → the topic is bound → `/claude` → one answered turn (so the idle fire has something to compress)
  *   → a question is put and left unanswered; the idle fire rejects it, compacts, stops the process and re-asks the
- *     question with `reask_<i>` buttons
- *   → a tap on the SHORT option: the toast is the label whole, the label reaches the resumed agent as a prompt, and
- *     nothing is posted beside the toast
+ *     question with `reask_<i>` buttons — the first question message is NOT deleted: it stays as asked, «asked again
+ *     below» in place of its buttons
+ *   → a tap on the SHORT option: the toast is the label whole, the label reaches the resumed agent as a prompt, nothing
+ *     is posted beside the toast, and the re-asked message stays with the chosen answer in place of its buttons
  *   → the same with the LONG option (longer than a toast holds): the toast is its start, the label is posted in full
  *     as ONE message, and the whole label reaches the agent
  *   → a tap the moment the re-asked question appears, which may land while the process is still being stopped: the
@@ -133,13 +134,19 @@ function createRelease(): { promise: Promise<void>; release: () => void } {
 async function waitForReaskedQuestion(promptLabel: string, options: { isIdleStopAwaited: boolean } = { isIdleStopAwaited: true }): Promise<FakeTelegramMessage> {
   const idleStopsBefore = countIdleStops();
   const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:ask] ask me something`);
-  await topic.waitForMessage(`the question of ${promptLabel}`, (message) => message.message_id > sentMessageId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
+  const question = await topic.waitForMessage(`the question of ${promptLabel}`, (message) => message.message_id > sentMessageId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
   const reasked = await waitingTopic.waitForMessage(`the re-asked question of ${promptLabel}`, (message) =>
     message.message_id > sentMessageId && message.reply_markup !== undefined && waitingTopic.getKeyboardData(message).flat().some((data) => data.startsWith('reask_')),
   );
   assert.match(reasked.text, /You still have a pending question/);
   assert.match(reasked.text, new RegExp(fakeAskQuestion.question.replace('?', '\\?')));
   assert.deepEqual(topic.getKeyboardData(reasked), [['reask_0'], ['reask_1']], 'one button per option');
+  // The first question message is not deleted: the question as asked, «asked again below» in place of its buttons.
+  await waitingTopic.waitForMessageText(`the first question of ${promptLabel} marked as asked again`, question, (text) => text.endsWith(`\n\n${enDict['agent.question_asked_again_note']}`));
+  const keptQuestion = fakeTelegram.getMessage(question.message_id);
+  assert.ok(keptQuestion && !keptQuestion.isDeleted, 'the first question message is still in the topic');
+  assert.ok(keptQuestion.text.includes(fakeAskQuestion.question) && keptQuestion.text.includes(fakeAskQuestion.shortOptionLabel) && keptQuestion.text.includes(fakeAskQuestion.longOptionLabel), 'its question and options stay');
+  assert.equal(keptQuestion.reply_markup, undefined, 'its buttons are gone');
   if (!options.isIdleStopAwaited) return reasked;
   await getCharness().waitFor(`the idle stop that follows the re-ask of ${promptLabel}`, agentStartTimeoutMs, () => countIdleStops() > idleStopsBefore);
   return reasked;
@@ -201,6 +208,11 @@ describe('A pending question the idle compaction re-asks, end to end: built char
     const toast = await topic.tapAndAwaitAnswer(reasked, 'reask_0');
     assert.equal(toast, fakeAskQuestion.shortOptionLabel, 'a label that fits is the toast, whole');
     await getCharness().waitFor('the short label to reach the agent as a prompt', agentStartTimeoutMs, () => getAgentPrompts(fakeAskQuestion.shortOptionLabel).length > 0);
+    // The re-asked message stays as the record: the question as asked, the chosen answer in place of its buttons.
+    await topic.waitForMessageText('the answer under the re-asked question', reasked, (text) => text.endsWith(`\n\n${enDict['agent.question_answered_note'].replace('{answer}', fakeAskQuestion.shortOptionLabel)}`));
+    assert.ok(reasked.text.includes(fakeAskQuestion.question) && reasked.text.includes(fakeAskQuestion.longOptionLabel), 'the re-asked question stays with its options');
+    assert.equal(reasked.reply_markup, undefined, 'its buttons are gone');
+    assert.ok(!fakeTelegram.getMessage(reasked.message_id)?.isDeleted, 'it is not deleted');
     assert.equal(
       topic.listMessages().filter((message) => message.text === fakeAskQuestion.shortOptionLabel).length,
       0,
@@ -370,8 +382,10 @@ describe('A pending question the idle compaction re-asks, end to end: built char
       // The question is still open: once the agent can start, its button delivers the label.
       fs.rmSync(refuseLaunchPath, { force: true });
       const labelPromptsBeforeRetap = getAgentPrompts(fakeAskQuestion.shortOptionLabel).length;
+      assert.equal(tap.reasked.reply_markup !== undefined, true, 'the failed delivery left the question\'s buttons');
       assert.equal(await topic.tapAndAwaitAnswer(tap.reasked, 'reask_0'), fakeAskQuestion.shortOptionLabel, 'the button still knows its label');
       await getCharness().waitFor('the label to reach the started agent', agentStartTimeoutMs, () => getAgentPrompts(fakeAskQuestion.shortOptionLabel).length > labelPromptsBeforeRetap);
+      await topic.waitForMessageText('the answer under the question once the label was delivered', tap.reasked, (text) => text.endsWith(`\n\n${enDict['agent.question_answered_note'].replace('{answer}', fakeAskQuestion.shortOptionLabel)}`));
     } finally {
       fs.rmSync(refuseLaunchPath, { force: true });
     }

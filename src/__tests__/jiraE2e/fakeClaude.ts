@@ -13,12 +13,14 @@ import {
   fakeClaudeLogFileNames,
   fakeClaudeCodeVersion,
   fakeClaudeCodeVersionOverrideFileName,
+  fakeAskNoAnswerOutcome,
   fakeAskQuestion,
   fakeAskToolName,
   fakeClaudeCrashOnPromptFileName,
   fakeClaudeAlwaysUsageLimitFileName,
   fakeClaudeApiErrorDelayFileName,
   fakeClaudeApiErrorOnceFileName,
+  fakeClaudeOutputWhileAskedFileName,
   fakeClaudeLoginFileName,
   fakeClaudeLoginUrl,
   fakeClaudeUsageWindowsFileName,
@@ -133,7 +135,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    Honoured by a turn with or without a request, by the token in its text; in a turn without a request a
  *    `[bg-count:<n>]` token starts n such tasks, listed together — each write of the release file ends one;
  *  - `ask`         — puts `fakeAskQuestion` to the user the way the real CLI does (an `AskUserQuestion` control
- *    request on stdout, blocked on the bot's `control_response`), logs the answer it got to `tool-calls.jsonl`, then
+ *    request on stdout, blocked on the bot's `control_response`; while `fakeClaudeOutputWhileAskedFileName` exists it also
+ *    streams that file's content as text right after the question), logs the answer it got to `tool-calls.jsonl`, then
  *    answers `final` (in a turn without a request: ends the turn);
  *  - an `apiKeyHelper` in the launch's `--settings` (a file path or inline JSON; only the LAST `--settings` counts,
  *    as in the real CLI) is run through `/bin/sh` the way the CLI runs it: a plausible API key out of it makes the
@@ -794,7 +797,11 @@ async function askUserQuestion(): Promise<string> {
       },
     },
   });
-  return (await answered)[fakeAskQuestion.question] ?? 'no answer';
+  const outputWhileAskedPath = path.join(getStateDir(), fakeClaudeOutputWhileAskedFileName);
+  if (fs.existsSync(outputWhileAskedPath)) {
+    writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: fs.readFileSync(outputWhileAskedPath, 'utf8').trim() } } });
+  }
+  return (await answered)[fakeAskQuestion.question] ?? fakeAskNoAnswerOutcome;
 }
 
 /** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. `instruction` is what followed `/compact` (the bot's summary guidance), recorded for the flows. */

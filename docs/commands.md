@@ -349,7 +349,7 @@ tmux key passthrough.
 
 ### `/interrupt`, `/esc`, `/escape`
 
-Interrupt the running turn — Claude gets a raw Escape (which also dismisses a selector), OpenCode aborts the generation; the conversation stays and your next message steers the agent. A question the agent is waiting on is closed first (rejected on OpenCode, declined on the Claude stream-json backends) and its buttons are retired. A pending sign-in, account-name prompt or `/topic` wizard is cancelled first instead (the agent is not interrupted). Not supported in a `/terminal` topic.
+Interrupt the running turn — Claude gets a raw Escape (which also dismisses a selector), OpenCode aborts the generation; the conversation stays and your next message steers the agent. A question the agent is waiting on is closed first (rejected on OpenCode, declined on the Claude stream-json backends) and its message stays in the topic with a «not answered» note in place of the buttons (the same note a message you send instead of answering, `/quit`, `/new` or a stopped session leaves; a question is never deleted). A pending sign-in, account-name prompt or `/topic` wizard is cancelled first instead (the agent is not interrupted). Not supported in a `/terminal` topic.
 
 ### `/schedule`
 
@@ -511,7 +511,7 @@ Compact the agent's context — a real, confirmed compaction on OpenCode and on 
 
 ### `/compact_on_idle`
 
-Toggle auto-compaction after ~55 min idle (Enable/Disable picker; `AGENT_IDLE_MINUTES` sets the window). Per topic; run it in **General** to set the default for all topics. On by default. Each idle compaction posts one short notice; the picker's «Show summary» / «Hide summary» row (the `/compact_summary` switch) adds the agent's full summary after it. Fires at most once per active period (until you write again); if a question was pending it is re-asked with tappable buttons after the compaction. On the json-stream backends the idle mark also STOPS the agent process, compaction or not — the topic sleeps and your next message resumes it (`/status` says so).
+Toggle auto-compaction after ~55 min idle (Enable/Disable picker; `AGENT_IDLE_MINUTES` sets the window). Per topic; run it in **General** to set the default for all topics. On by default. Each idle compaction posts one short notice; the picker's «Show summary» / «Hide summary» row (the `/compact_summary` switch) adds the agent's full summary after it. Fires at most once per active period (until you write again); if a question was pending it is re-asked with tappable buttons after the compaction — the first message of the question stays, marked «asked again below», and a tap on the re-asked one leaves it with your answer in place of the buttons. On the json-stream backends the idle mark also STOPS the agent process, compaction or not — the topic sleeps and your next message resumes it (`/status` says so).
 
 ### `/compact_summary`
 
