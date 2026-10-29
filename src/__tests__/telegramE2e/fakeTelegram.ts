@@ -113,6 +113,8 @@ export interface FakeTelegramOptions {
 const longPollHoldMs = 2_000;
 /** The cap the Bot API enforces on `getUpdates` `limit`. */
 const maxUpdatesPerPoll = 100;
+/** The most characters a message text holds (the Bot API documents 1-4096): a longer one is refused, as it is for real. */
+const telegramTextMaxLength = 4096;
 /** The most ids one `deleteMessages` call takes (the Bot API documents 1-100). */
 const maxDeleteMessagesPerCall = 100;
 /** The icon colour every topic made in the fake group has (Telegram's first preset). */
@@ -448,6 +450,7 @@ export class FakeTelegram {
         return { ok: true, result: { file_id: fileId, file_unique_id: `unique-${fileId}`, file_size: file.bytes.length, file_path: file.filePath } };
       }
       case 'sendMessage': {
+        if (String(payload.text).length > telegramTextMaxLength) return { ok: false, error_code: 400, description: 'Bad Request: message is too long' };
         const message = this.storeMessage(Number(payload.message_thread_id ?? generalTopicThreadId), String(payload.text), this.options.botUser, {
           reply_markup: payload.reply_markup as FakeTelegramMessage['reply_markup'],
           isSilent: payload.disable_notification === true,
@@ -457,6 +460,7 @@ export class FakeTelegram {
       case 'editMessageText': {
         const message = this.getMessageOrError(payload);
         if ('ok' in message) return message;
+        if (String(payload.text).length > telegramTextMaxLength) return { ok: false, error_code: 400, description: 'Bad Request: message is too long' };
         message.text = String(payload.text);
         // The real Bot API drops the inline keyboard of a message edited without one: that is how a one-shot picker is consumed.
         if (payload.reply_markup === undefined) delete message.reply_markup;

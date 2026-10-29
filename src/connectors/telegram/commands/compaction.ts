@@ -170,11 +170,8 @@ export interface CompactionPorts
   startTypingLoader: (key: SessionKey) => void;
   forwardPromptToAgent: (key: SessionKey, adapter: AgentAdapter, text: string) => Promise<void>;
   pendingQuestions: Map<string, PendingQuestionState>;
-  /**
-   * Clear the topic's pending question (unpinning it) and close its message in place — the text stays, the buttons go,
-   * a note says how it ended; resolves whether the message was edited. The idle re-ask uses it with `askedAgain`.
-   */
-  retirePendingQuestion: (key: SessionKey, closing: QuestionClosing) => Promise<boolean>;
+  /** Clear the topic's pending question and unpin it; its message is left as it is (the idle re-ask closes it once the re-ask is posted). */
+  clearPendingQuestion: (key: SessionKey) => void;
   /**
    * Edit a question's message to the question as asked plus a note in place of its buttons (the text stays, the message
    * is never deleted); resolves whether it was edited. The re-asked copy uses it with `unanswered` when its conversation ends.
@@ -199,7 +196,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, retirePendingQuestion, closeQuestionMessage, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * Threads with a compaction IN FLIGHT (via {@link runThreadCompaction}). While a
@@ -658,14 +655,15 @@ export function createCompaction(ports: CompactionPorts) {
 
     // D1: a pending question at idle → reject it server-side to UNBLOCK the turn
     // (reusing each backend's abort-error swallow via rejectQuestion + SIGINT),
-    // remember it, drop the bot-side pending state and its now-stale buttons (its message stays as the record,
-    // «asked again below»), then RE-ASK it after the compaction with real buttons that feed a fresh prompt.
+    // remember it, drop the bot-side pending state (and its pin), then RE-ASK it after the compaction with real buttons
+    // that feed a fresh prompt. The old message stays as the record, but is edited only once the re-ask is there
+    // ({@link postIdleCompactionResult}): the compaction can take minutes, and «asked again below» would be untrue.
     let savedQuestion: PendingQuestionState | null = null;
     if (hasPendingQuestion) {
       savedQuestion = pendingQuestions.get(kStr) ?? null;
       adapter.rejectQuestion?.(key);
       adapter.sendSignal(key, 'SIGINT');
-      await retirePendingQuestion(key, 'askedAgain');
+      clearPendingQuestion(key);
     }
 
     const result = await runThreadCompaction(key, { withClosingSection: true });
@@ -728,11 +726,15 @@ export function createCompaction(ports: CompactionPorts) {
     return reAsked;
   }
 
-  /** A tap whose label reached no session leaves the question open: the record goes back, unless a newer one took its place. */
-  function putBackReAskedQuestion(key: SessionKey, reAsked: ReAskedQuestion): void {
-    if (reAskedQuestions.has(keyToString(key))) return;
+  /**
+   * A tap whose label reached no session leaves the question open: the record goes back, unless a newer one took its place.
+   * Resolves whether it went back — when not, the tapped message is no longer the question that waits.
+   */
+  function putBackReAskedQuestion(key: SessionKey, reAsked: ReAskedQuestion): boolean {
+    if (reAskedQuestions.has(keyToString(key))) return false;
     reAskedQuestions.set(keyToString(key), reAsked);
     saveReAskedQuestion(key, reAsked);
+    return true;
   }
 
   /** Boot: a saved re-asked question whose conversation can still be resumed gets its buttons back (memory only, it is saved already). */
@@ -761,16 +763,22 @@ export function createCompaction(ports: CompactionPorts) {
    * @description Post the RE-ASKED question (D1) with its option buttons and record it BEFORE the send, so a
    * `reask_<idx>` tap that lands right after the send finds the question and can forward the chosen label as a fresh
    * prompt. Its message id is recorded once the send resolves (and the record saved, unless a tap or the end of the
-   * conversation took it meanwhile).
+   * conversation took it meanwhile). Resolves that id — `null` when the send failed, and then there is no record either:
+   * nothing was posted that a tap could be on.
    */
-  async function postReAskedQuestion(key: SessionKey, text: string, question: OpenCodeQuestion): Promise<void> {
+  async function postReAskedQuestion(key: SessionKey, text: string, question: OpenCodeQuestion): Promise<number | null> {
     const reAsked: ReAskedQuestion = { question, messageId: null, isTornDown: false };
     reAskedQuestions.set(keyToString(key), reAsked);
     const keyboard = buildQuestionOptionsKeyboard(question, (optionIndex) => `reask_${optionIndex}`);
     reAsked.messageId = await replyToThread(key, text, buildKeyboardExtra(keyboard));
+    if (reAsked.messageId === null) {
+      if (reAskedQuestions.get(keyToString(key)) === reAsked) reAskedQuestions.delete(keyToString(key));
+      return null;
+    }
     // The conversation ended while the send was in flight: the message that landed is closed now.
-    if (reAsked.isTornDown && reAsked.messageId !== null) await closeQuestionMessage(key, reAsked.messageId, question, 'unanswered');
+    if (reAsked.isTornDown) await closeQuestionMessage(key, reAsked.messageId, question, 'unanswered');
     else if (reAskedQuestions.get(keyToString(key)) === reAsked) saveReAskedQuestion(key, reAsked);
+    return reAsked.messageId;
   }
 
   /**
@@ -807,7 +815,13 @@ export function createCompaction(ports: CompactionPorts) {
     if (plan.summary) await postCompactionSummary(key, plan.summary);
     // The question is recorded HERE (not while planning): the record is what a `reask_<idx>` tap resolves against,
     // which must not happen for a question that is never posted.
-    if (plan.question && question) await postReAskedQuestion(key, plan.question, question);
+    const reAskedMessageId = plan.question && question ? await postReAskedQuestion(key, plan.question, question) : null;
+    // The old question message stays as the record. It says «asked again below» only now that there IS a copy below — if
+    // the re-ask could not be sent, nobody answered it and nobody will be asked again.
+    const oldMessageId = savedQuestion?.messageId ?? null;
+    if (oldMessageId !== null && question) {
+      await closeQuestionMessage(key, oldMessageId, question, reAskedMessageId !== null ? 'askedAgain' : 'unanswered');
+    }
   }
 
   /**

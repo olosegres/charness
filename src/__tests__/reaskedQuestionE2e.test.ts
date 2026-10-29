@@ -10,8 +10,8 @@
  *     below» in place of its buttons
  *   → a tap on the SHORT option: the toast is the label whole, the label reaches the resumed agent as a prompt, nothing
  *     is posted beside the toast, and the re-asked message stays with the chosen answer in place of its buttons
- *   → the same with the LONG option (longer than a toast holds): the toast is its start, the label is posted in full
- *     as ONE message, and the whole label reaches the agent
+ *   → the same with the LONG option (longer than a toast holds): the toast is its start, the re-asked message carries the
+ *     whole label under the question (no second copy is posted), and the whole label reaches the agent
  *   → a tap the moment the re-asked question appears, which may land while the process is still being stopped: the
  *     label is held and still reaches the agent
  *   → a tap read INSIDE the idle stop (the process ignores its stop signals, so the stop lasts its kill wait) whose
@@ -220,7 +220,7 @@ describe('A pending question the idle compaction re-asks, end to end: built char
     );
   });
 
-  it('a re-asked question\'s LONG option: the toast is its start, the label is posted in full as ONE message, and the agent gets the whole label', async () => {
+  it('a re-asked question\'s LONG option: the toast is its start, the question carries the whole label (no second copy is posted), and the agent gets the whole label', async () => {
     assert.ok(fakeAskQuestion.longOptionLabel.length > 200, 'precondition: the long label is longer than a toast holds');
     fakeTelegram.pushOperatorMessage(topicThreadId, 'WARM-2 [fake:answer] one more turn to compress');
     await getCharness().waitFor('the second warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('WARM-2').length > 0);
@@ -229,13 +229,13 @@ describe('A pending question the idle compaction re-asks, end to end: built char
     const toast = await topic.tapAndAwaitAnswer(reasked, 'reask_1');
     assert.ok(toast.length <= 200 && toast.endsWith('…'), `the toast fits: ${toast.length} characters`);
     assert.ok(fakeAskQuestion.longOptionLabel.startsWith(toast.slice(0, -1)), 'it is the start of the label');
-    const posted = await topic.waitForMessage('the label posted in full', (message) => message.text === fakeAskQuestion.longOptionLabel);
-    assert.ok(posted.message_id > reasked.message_id);
+    // The closed question carries the whole label, so the toast's cut start needs no second copy of it in the topic.
+    await topic.waitForMessageText('the whole label under the re-asked question', reasked, (text) => text.endsWith(`\n\n${enDict['agent.question_answered_note'].replace('{answer}', fakeAskQuestion.longOptionLabel)}`));
     await getCharness().waitFor('the whole long label to reach the agent as a prompt', agentStartTimeoutMs, () => getAgentPrompts(fakeAskQuestion.longOptionLabel).length > 0);
     assert.equal(
       topic.listMessages().filter((message) => message.text === fakeAskQuestion.longOptionLabel).length,
-      1,
-      'the record of the answer is one message',
+      0,
+      'the label is not posted again beside the question that shows it',
     );
   });
 

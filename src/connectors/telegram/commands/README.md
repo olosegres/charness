@@ -123,13 +123,17 @@ the output path (`markThreadTurnProducedOutput`) and the session lifecycle (`rea
 `clearThreadCompaction`), and reads `threadsCompacting` (the typing loop, the request probe) and
 `reAskedQuestions` (the re-ask button's question, which a tap closes with its answer). The factory must be built BEFORE the module-scope objects that name
 its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted like the function it replaced.
-**A question's message is never deleted.** The idle fire retires the pending question through the `retirePendingQuestion` port
-(`bot.ts`: clears the state — which unpins — and edits the message to the question as asked plus a note in place of its buttons,
-here «asked again below»), then re-asks it as a new message; every other end (an answer, a message sent instead, `/esc`, the
+**A question's message is never deleted.** The idle fire clears the pending question through the `clearPendingQuestion` port
+(`bot.ts`: clears the state, which unpins) and re-asks it as a new message; only once that is posted does it edit the old message,
+through the `closeQuestionMessage` port, to the question as asked plus a note in place of its buttons — «asked again below», or
+«not answered» when the re-ask could not be sent (the compaction between the two can take minutes); every other end (an answer, a message sent instead, `/esc`, the
 session gone, a re-post to the bottom, a persisted question the boot drops) goes through the same `editQuestionMessageToClosed` edit.
 The re-asked copy is a `ReAskedQuestion` record (question, message id, `isTornDown`) kept from BEFORE its send, so a tap right after
 it finds it, and saved to `state.json` (`reAskedQuestions`, message id + question) once its message id is known. A tap takes the record
-(`takeReAskedQuestion`: out of memory AND of the saved state) and closes the message with the answer; whatever else ends the copy goes
+(`takeReAskedQuestion`: out of memory AND of the saved state, before anything is awaited; `putBackReAskedQuestion` returns it if the
+label reaches no session) and closes the message with the answer — but only a tap on THE message of the record counts (a re-ask
+whose send has not returned has no id yet, and is the one tapped): a button left on an older re-asked message answers nothing and
+comes off. Updates of one topic run one at a time (`updateDispatcher`), so two taps never interleave; whatever else ends the copy goes
 through `closeReAskedQuestion`, which closes it as unanswered through the `closeQuestionMessage` port — a send still in flight is
 flagged `isTornDown` and closes the message it lands in. The callers: `clearThreadCompaction` (the conversation ended), `notePersonActivity`
 (a person wrote something else — a tap has taken its record already) and `handleAgentQuestion` (the agent asks a newer question, which

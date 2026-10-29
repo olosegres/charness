@@ -13,6 +13,7 @@ import {
   fakeClaudeLogFileNames,
   fakeClaudeCodeVersion,
   fakeClaudeCodeVersionOverrideFileName,
+  fakeAskLongDescription,
   fakeAskNoAnswerOutcome,
   fakeAskQuestion,
   fakeAskSecondQuestion,
@@ -142,6 +143,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    answers `final` (in a turn without a request: ends the turn);
  *  - `ask-two`     — the same, with `fakeAskSecondQuestion` as a second question of the SAME call (the bot shows them one
  *    after the other); the outcome logged is the two answers joined by `fakeAskTwoOutcomeSeparator`;
+ *  - `ask-long`    — the same question, each option with a `fakeAskLongDescription`: it fits one Telegram message, but not
+ *    with an answer note under it;
  *  - an `apiKeyHelper` in the launch's `--settings` (a file path or inline JSON; only the LAST `--settings` counts,
  *    as in the real CLI) is run through `/bin/sh` the way the CLI runs it: a plausible API key out of it makes the
  *    session report `apiKeySource: "apiKeyHelper"` in its init frames (else `"none"`, the subscription login) and a
@@ -188,8 +191,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * `FAKE_CLAUDE_STATE_DIR` (per-request turn counts, the conversations held).
  */
 
-export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-two';
-const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-two'];
+export type FakeClaudeMode = 'answer' | 'silent-once' | 'silent' | 'hang-once' | 'hold-once' | 'slow-once' | 'progress' | 'finish-together' | 'answer-after-queued' | 'background' | 'background-notify' | 'compact' | 'overflow' | 'fetch-attachment' | 'run-tool' | 'reply-to' | 'usage-limit-once' | 'ask' | 'ask-two' | 'ask-long';
+const fakeModes: readonly FakeClaudeMode[] = ['answer', 'silent-once', 'silent', 'hang-once', 'hold-once', 'slow-once', 'progress', 'finish-together', 'answer-after-queued', 'background', 'background-notify', 'compact', 'overflow', 'fetch-attachment', 'run-tool', 'reply-to', 'usage-limit-once', 'ask', 'ask-two', 'ask-long'];
 /**
  * How long an `answer-after-queued` turn waits for the next message before it answers anyway: four polls of the 10 s
  * floor, or what the launcher sets (`fakeClaudeQueuedWaitMaxMsEnvName`) for the instance's own poll.
@@ -782,12 +785,17 @@ interface FakeAskedQuestion {
 /** The `can_use_tool` requests the fake is blocked on, by `request_id`: resolved with the answers the bot's `control_response` carries. */
 const controlResponseWaiters = new Map<string, (answers: Record<string, string>) => void>();
 
+/** What an ask-mode turn puts: the one question, it and a second one in the same call, or the one with very long option descriptions. */
+type FakeAskVariant = 'one' | 'two' | 'long';
+
+const fakeAskVariantByMode: Partial<Record<FakeClaudeMode, FakeAskVariant>> = { ask: 'one', 'ask-two': 'two', 'ask-long': 'long' };
+
 /**
  * The real CLI's `AskUserQuestion`: a `can_use_tool` control request on stdout, then the turn is blocked until the bot
- * writes the matching `control_response` on stdin. Resolves with what the user answered to the question — with
- * `isSecondQuestionAsked` the call carries a second question too, and it resolves with both answers, joined.
+ * writes the matching `control_response` on stdin. Resolves with what the user answered to the question — with the `two`
+ * variant the call carries a second question too, and it resolves with both answers, joined.
  */
-async function askUserQuestion(isSecondQuestionAsked = false): Promise<string> {
+async function askUserQuestion(variant: FakeAskVariant = 'one'): Promise<string> {
   const askRequestId = `req_ask_${randomUUID()}`;
   const answered = new Promise<Record<string, string>>((resolve) => controlResponseWaiters.set(askRequestId, resolve));
   const questions: FakeAskedQuestion[] = [{
@@ -795,11 +803,11 @@ async function askUserQuestion(isSecondQuestionAsked = false): Promise<string> {
     question: fakeAskQuestion.question,
     multiSelect: false,
     options: [
-      { label: fakeAskQuestion.shortOptionLabel, description: 'Quick.' },
-      { label: fakeAskQuestion.longOptionLabel, description: 'Thorough.' },
+      { label: fakeAskQuestion.shortOptionLabel, description: variant === 'long' ? fakeAskLongDescription : 'Quick.' },
+      { label: fakeAskQuestion.longOptionLabel, description: variant === 'long' ? fakeAskLongDescription : 'Thorough.' },
     ],
   }];
-  if (isSecondQuestionAsked) {
+  if (variant === 'two') {
     questions.push({
       header: fakeAskSecondQuestion.header,
       question: fakeAskSecondQuestion.question,
@@ -893,8 +901,9 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
       endTurnOnUsageLimit(sessionId, limitResetsRe.exec(content)?.[1] ?? 'in 1h');
       return;
     }
-    if (noRequestMode === 'ask' || noRequestMode === 'ask-two') {
-      appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: noRequestIssueKey, tool: fakeAskToolName, args: { question: fakeAskQuestion.question }, outcome: await askUserQuestion(noRequestMode === 'ask-two') });
+    const noRequestAskVariant = noRequestMode === undefined ? undefined : fakeAskVariantByMode[noRequestMode as FakeClaudeMode];
+    if (noRequestAskVariant) {
+      appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey: noRequestIssueKey, tool: fakeAskToolName, args: { question: fakeAskQuestion.question }, outcome: await askUserQuestion(noRequestAskVariant) });
     }
     endTurn(sessionId, 'Nothing to do.');
     if (noRequestMode === 'background-notify') {
@@ -985,8 +994,9 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
       logToolCall(attachmentToolName, { attachmentId }, await callBotTool(server, attachmentToolName, { attachmentId }));
     }
   }
-  if (state.mode === 'ask' || state.mode === 'ask-two') {
-    logToolCall(fakeAskToolName, { question: fakeAskQuestion.question }, await askUserQuestion(state.mode === 'ask-two'));
+  const askVariant = fakeAskVariantByMode[state.mode];
+  if (askVariant) {
+    logToolCall(fakeAskToolName, { question: fakeAskQuestion.question }, await askUserQuestion(askVariant));
   }
   if (state.mode === 'run-tool') {
     const ran = spawnSync(probeToolName, [], { encoding: 'utf8' });

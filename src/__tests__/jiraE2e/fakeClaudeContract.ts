@@ -164,6 +164,12 @@ export const fakeAskSecondQuestion = {
   secondOptionLabel: 'Back to front',
 } as const;
 
+/**
+ * The description each option of `ask-long` mode carries: ~1.8k characters, so the two options together nearly fill a
+ * Telegram message (4096) — the question fits when posted, but not with an answer note added under it.
+ */
+export const fakeAskLongDescription = 'every step spelled out in detail, '.repeat(52);
+
 /** What `ask-two` mode logs as its outcome: the two answers it got, in order, joined by this. */
 export const fakeAskTwoOutcomeSeparator = ' / ';
 

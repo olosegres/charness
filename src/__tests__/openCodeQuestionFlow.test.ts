@@ -377,3 +377,39 @@ test('the plain closed text is the plain body and the raw note: no bold marker, 
   assert.ok(!plainText.includes('*Name*') && !plainText.includes('\\'), plainText);
   assert.ok(plainText.includes('get_user_id') && plainText.includes('the *real* one'), 'the text itself is untouched');
 });
+
+// ── the plain closed text fits a message ────────────────────────────────────
+
+test('the plain closed text is left whole when it fits, and without a limit', () => {
+  const question = makeQuestion({ header: 'Way', question: 'Which way?', options: [{ label: 'Short', description: 'Quick.' }, { label: 'Long', description: 'Thorough.' }] });
+  const whole = buildClosedQuestionPlainText(question, '✅ Answer: Short');
+  assert.equal(buildClosedQuestionPlainText(question, '✅ Answer: Short', whole.length), whole, 'exactly at the limit');
+  assert.ok(whole.includes('Quick.') && whole.includes('Thorough.'));
+});
+
+test('a question too long for its note gives up the option descriptions first and keeps the labels and the note', () => {
+  const description = 'every step in detail, '.repeat(20);
+  const question = makeQuestion({ header: 'Way', question: 'Which way?', options: [{ label: 'Short', description }, { label: 'Long', description }] });
+  const note = '✅ Answer: Long';
+  const whole = buildClosedQuestionPlainText(question, note);
+  const closed = buildClosedQuestionPlainText(question, note, whole.length - 1);
+  assert.ok(closed.length <= whole.length - 1);
+  assert.ok(!closed.includes('every step'), 'the descriptions are what goes');
+  assert.deepEqual(closed.split('\n'), ['❓ Way', 'Which way?', '1. Short', '2. Long', '', note]);
+});
+
+test('a question still too long without its descriptions is cut at the end of the body, with an ellipsis, and the note stays whole', () => {
+  const question = makeQuestion({ header: 'Way', question: 'q'.repeat(300), options: [{ label: 'Short' }, { label: 'Long' }] });
+  const note = '❌ Not answered';
+  const closed = buildClosedQuestionPlainText(question, note, 120);
+  assert.ok(closed.length <= 120, `${closed.length}`);
+  assert.ok(closed.endsWith(`…\n\n${note}`), closed.slice(-40));
+  assert.ok(closed.startsWith('❓ Way\nqqq'), 'the start of the body is what stays');
+});
+
+test('the cut never splits a character in two', () => {
+  const question = makeQuestion({ header: 'Way', question: '🙂'.repeat(200), options: [{ label: 'A' }] });
+  const closed = buildClosedQuestionPlainText(question, 'note', 61);
+  assert.ok(closed.length <= 61);
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(closed) && !/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(closed), 'no lone surrogate');
+});

@@ -7,7 +7,9 @@
  *   - a person writing anything closes the re-asked copy (`notePersonActivity`);
  *   - a question the agent asks anew closes it too (`handleAgentQuestion`): the copy's buttons would answer the wrong question,
  *     and no person's message is needed for the agent to ask — a scheduled or resumed turn can;
- *   - the boot brings the saved copies back after the sessions reattached (`restoreReAskedQuestions`).
+ *   - the boot brings the saved copies back after the sessions reattached (`restoreReAskedQuestions`);
+ *   - a message typed while a session is starting or stopping counts as a person writing (`bufferPromptDuringStartup`);
+ *   - a tap that reached no session puts its question back, or — when a newer re-ask took its place — closes the tapped copy.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -44,4 +46,17 @@ test('the boot restores the saved copies after it restored the pending questions
   assert.notEqual(bootIndex, -1);
   assert.ok(botSource.indexOf('restoreReAskedQuestions();', bootIndex) > bootIndex, 'restoreReAskedQuestions() follows restorePendingQuestions()');
   assert.match(getFunctionBody('function restoreReAskedQuestions'), /getResumableSessionId\(key\) !== null/, 'a copy is kept only for a conversation that can be resumed');
+});
+
+test('a message buffered for a starting or stopping session counts as a person writing, before anything else is done with it', () => {
+  const body = getFunctionBody('async function bufferPromptDuringStartup');
+  const noteIndex = body.search(/notePersonActivity\(key\)/);
+  assert.notEqual(noteIndex, -1, 'the startup twin of deliverActivePrompt notes the person');
+  assert.ok(noteIndex < body.indexOf('openTopicRequest('), 'before the request is opened');
+});
+
+test('a tap that reached no session puts its question back, and closes the tapped copy when a newer re-ask is there', () => {
+  const body = getFunctionBody('async function returnReAskedQuestionAfterTap');
+  assert.match(body, /putBackReAskedQuestion\(key,\s*reAsked\)\s*\|\|\s*messageId\s*===\s*null/);
+  assert.match(body, /closeQuestionMessage\(key,\s*messageId,\s*reAsked\.question,\s*'unanswered'\)/);
 });

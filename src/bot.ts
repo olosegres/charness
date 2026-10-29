@@ -425,7 +425,7 @@ import { createDisplayModes, formatTopicView } from './connectors/telegram/comma
 import { createReminders, type ReminderWizardSession } from './connectors/telegram/commands/reminders';
 import { createModelProviders, type PendingProviderConnect } from './connectors/telegram/commands/modelProviders';
 import { answerCallbackWithFittedText, answerCallbackWithWholeText } from './connectors/telegram/commands/callbackToast';
-import { createCompaction } from './connectors/telegram/commands/compaction';
+import { createCompaction, type ReAskedQuestion } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createBotSkills } from './connectors/telegram/commands/botSkills';
 import { createTaskAgents } from './connectors/telegram/commands/taskAgents';
@@ -1879,18 +1879,18 @@ const questionClosingNoteKeys: Record<QuestionClosing, string> = {
  * header, the question and its options stay, so what the agent asked and how it ended can still be read. Resolves
  * whether the text edit landed. Every way a question ends goes through this — a delete would take the record away.
  *
- * Telegram that cannot parse the Markdown render gets the plain one (no escape marks shown). An edit that fails for
- * another reason (the text too long with the note on it, the message gone) leaves the old text, and the buttons would
- * stay on it dead — so they are taken off by themselves.
+ * Telegram that cannot parse the Markdown render gets the plain one (no escape marks shown), and a question too long for
+ * the note gets a shortened plain one. An edit that still fails (the message gone, say) leaves the old text, and the
+ * buttons would stay on it dead — so they are taken off by themselves.
  */
 async function editQuestionMessageToClosed(key: SessionKey, messageId: number, question: OpenCodeQuestion, note: string): Promise<boolean> {
-  const isEdited = await editThreadMessage(
-    key,
-    messageId,
-    buildClosedQuestionText(question, note, escapeMarkdown),
-    { parse_mode: 'Markdown' },
-    buildClosedQuestionPlainText(question, note),
-  );
+  const markdownText = buildClosedQuestionText(question, note, escapeMarkdown);
+  const plainText = buildClosedQuestionPlainText(question, note, MAX_MESSAGE_LEN);
+  // A question that filled a message when it was asked has no room for the note under it, and Telegram refuses the text:
+  // the note is the result, so the body gives way (descriptions first) and goes out as plain text, which cutting cannot break.
+  const isEdited = markdownText.length <= MAX_MESSAGE_LEN
+    ? await editThreadMessage(key, messageId, markdownText, { parse_mode: 'Markdown' }, plainText)
+    : await editThreadMessage(key, messageId, plainText);
   if (!isEdited) await editThreadKeyboard(key, messageId, null, 'questionClose');
   return isEdited;
 }
@@ -5969,7 +5969,7 @@ const {
   startTypingLoader,
   forwardPromptToAgent: async (key, adapter, text) => { await forwardPromptToAgent(key, adapter, text); },
   pendingQuestions,
-  retirePendingQuestion,
+  clearPendingQuestion,
   closeQuestionMessage,
   idleWindowMs: getAgentIdleMs(process.env.AGENT_IDLE_MINUTES),
   checkIsLimitWaitArmed: (key) => getArmedApiRetry(key)?.kind === 'usageLimit',
@@ -10658,34 +10658,58 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   const key = await authoriseContext(ctx);
   if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
   const optIdx = parseInt(ctx.match[1], 10);
+  const tappedMessageId = getCallbackMessageId(ctx);
   const reAsked = peekReAskedQuestion(key);
-  const label = reAsked?.question.options[optIdx]?.label;
-  if (!reAsked || !label) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
+  // The tap must be on the message of the question that waits now. A button left on an OLDER re-asked message (its close
+  // failed, or it predates a restart) would answer the newer question with that question's own label: it answers nothing,
+  // and its buttons come off. A re-ask whose send has not returned has no message id yet — the tap is on that message.
+  const isTappedMessageCurrent = reAsked !== undefined && (reAsked.messageId === null || reAsked.messageId === tappedMessageId);
+  if (!isTappedMessageCurrent) {
+    await ctx.answerCbQuery(t('cb.no_pending_question'));
+    if (tappedMessageId !== null) await editThreadKeyboard(key, tappedMessageId, null, 'reask');
+    return;
+  }
+  const label = reAsked.question.options[optIdx]?.label;
+  if (!label) { await ctx.answerCbQuery(t('cb.invalid_option')); return; }
+  // The question is taken before anything is awaited and put back if the label reaches no one: from here on it is this
+  // tap's, so no other path can use it or close it under the answer.
+  takeReAskedQuestion(key);
+  const reAskedMessageId = reAsked.messageId ?? tappedMessageId;
   // The idle fire posts the re-asked question just BEFORE it stops the process, and a stopping process still reads as
   // active: a tap inside that window (or inside a start) is buffered like a typed prompt and replayed once a session is up.
   const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
   // The answer to a re-asked question wakes a sleeping conversation (L-D4) — the question is its own.
   if (!isStarting && !getThreadAdapter(key).checkIsActive(key) && !(await resumeSleepingSessionForPrompt(key))) {
+    await returnReAskedQuestionAfterTap(key, reAsked, reAskedMessageId);
     await ctx.answerCbQuery(t('agent.no_session'));
     return;
   }
   const adapter = getThreadAdapter(key);
-  takeReAskedQuestion(key);
-  // The label goes to the agent as a prompt and nothing else in the topic shows it whole (the buttons clip long
-  // labels): a label too long for the toast is posted in full, as the record of the answer that was sent.
-  await answerCallbackWithWholeText(ctx, label, (wholeLabel) => replyToThread(key, wholeLabel));
+  // The closed question carries the whole label, so the toast may cut it; it is posted whole only if that close fails.
+  const isLabelCut = await answerCallbackWithFittedText(ctx, label);
   // An answer to the agent's own question is never a request (S7), even delivered as a prompt. Routed at delivery,
   // not on the `isStarting` read above: the stop may have ended during the toast, and a label buffered into its closed
   // window was never replayed.
   const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
   // The label reached no session (the topic was told why): the question is still open, so are its buttons.
   if (outcome === 'noSession') {
-    putBackReAskedQuestion(key, reAsked);
+    await returnReAskedQuestionAfterTap(key, reAsked, reAskedMessageId);
     return;
   }
-  const reAskedMessageId = getCallbackMessageId(ctx);
-  if (reAskedMessageId !== null) await editQuestionMessageToClosed(key, reAskedMessageId, reAsked.question, t('agent.question_answered_note', { answer: label }));
+  const isAnswerShown = reAskedMessageId !== null
+    && await editQuestionMessageToClosed(key, reAskedMessageId, reAsked.question, t('agent.question_answered_note', { answer: label }));
+  if (!isAnswerShown && isLabelCut) await replyToThread(key, label);
 });
+
+/**
+ * @description A tap on a re-asked question whose label reached no session leaves the question open: its record goes back.
+ * Not when a newer re-ask has taken its place meanwhile — the tapped message is not the question that waits any more,
+ * so it is closed as unanswered instead of keeping buttons that would answer the wrong question.
+ */
+async function returnReAskedQuestionAfterTap(key: SessionKey, reAsked: ReAskedQuestion, messageId: number | null): Promise<void> {
+  if (putBackReAskedQuestion(key, reAsked) || messageId === null) return;
+  await closeQuestionMessage(key, messageId, reAsked.question, 'unanswered');
+}
 
 registerReminderCallbacks();
 
@@ -10819,6 +10843,10 @@ async function bufferPromptDuringStartup(
   intake: TopicRequestIntake,
   replyContext?: string,
 ): Promise<void> {
+  // A person wrote, in a window where the session is starting or being stopped: it counts like a message that reaches
+  // `deliverActivePrompt` — the idle latch clears, and a question the idle compaction re-asked is closed (the idle fire
+  // posts it just before the stop, so this window is where a message instead of a tap most often lands).
+  notePersonActivity(key);
   const opening = await openTopicRequest(key, text, intake);
   const quotedText = getPromptWithThreadReplyQuote(key, text, replyContext);
   await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true);

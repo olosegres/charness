@@ -88,12 +88,38 @@ export function buildClosedQuestionText(
   return [...buildQuestionBodyLines(question, escape), '', escape(note)].join('\n');
 }
 
+/** What stands where a cut body ends. */
+const cutBodyEllipsis = '…';
+
 /**
  * @description {@link buildClosedQuestionText} as plain text: no escaping, no bold marker — what the close is edited to
  * when Telegram cannot parse the Markdown render of it, the way {@link buildQuestionBodyLinesPlain} is for a post.
+ *
+ * `maxLength` is the most characters the text may have (a Telegram message holds a few thousand): a question that
+ * filled a message when it was asked cannot take an answer note under it, and the note is the result the person looks
+ * for, so the BODY gives way — first the option descriptions (what a long question is mostly made of; the labels stay,
+ * they are what the answer names), then, if that is still too long, the end of the body, cut with an ellipsis. The note
+ * is never cut. No limit by default.
  */
-export function buildClosedQuestionPlainText(question: OpenCodeQuestion, note: string): string {
-  return [...buildQuestionBodyLinesPlain(question), '', note].join('\n');
+export function buildClosedQuestionPlainText(question: OpenCodeQuestion, note: string, maxLength: number = Number.POSITIVE_INFINITY): string {
+  const render = (shown: OpenCodeQuestion): string => [...buildQuestionBodyLinesPlain(shown), '', note].join('\n');
+  const full = render(question);
+  if (full.length <= maxLength) return full;
+
+  const withoutDescriptions: OpenCodeQuestion = { ...question, options: question.options.map((option) => ({ label: option.label })) };
+  const shortened = render(withoutDescriptions);
+  if (shortened.length <= maxLength) return shortened;
+
+  const noteBlock = `\n\n${note}`;
+  const bodyBudget = Math.max(maxLength - noteBlock.length - cutBodyEllipsis.length, 0);
+  const body = buildQuestionBodyLinesPlain(withoutDescriptions).join('\n');
+  // Whole characters up to the budget, which counts UTF-16 units as a message limit does: a code point is never split in two.
+  let cutBody = '';
+  for (const character of body) {
+    if (cutBody.length + character.length > bodyBudget) break;
+    cutBody += character;
+  }
+  return `${cutBody}${cutBodyEllipsis}${noteBlock}`;
 }
 
 /**

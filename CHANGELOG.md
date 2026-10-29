@@ -14,8 +14,12 @@ answer too. A question the bot finds orphaned when it restarts (the agent that a
 and so does the re-asked copy when it is not tapped — its conversation ends (`/quit`, `/quitall`, `/new`, leaving the folder, a stopped or closed
 session, or a restart that finds the conversation released), you write something else instead, or the agent asks a newer question — instead of
 keeping buttons that no longer do anything or could be tapped later onto the wrong question. A restart that finds the conversation asleep keeps the
-re-asked buttons working. A close that Telegram cannot apply to the text (too long) still takes the buttons off, and one whose Markdown it cannot
-parse shows the question as plain text. The pin works as before: one notification when the question comes, removed when it ends (also for the
+re-asked buttons working. The buttons of a re-asked question answer only the question that waits now: a button left on an older re-asked message
+answers nothing and comes off, and a message typed while the idle stop is under way closes the re-asked question like any other message. The
+old question says «↓ Asked again below» only once the re-ask is really there («❌ Not answered» if it could not be sent), and a long label tapped on a
+re-asked question is shown once, under the question, instead of also being posted again. A question so long that the note does not fit under it keeps
+its labels and the note and gives up its option descriptions; one whose close Telegram refuses still loses its buttons, and one whose Markdown it
+cannot parse shows the question as plain text. The pin works as before: one notification when the question comes, removed when it ends (also for the
 orphaned question, whose pin a restart used to leave behind). The three notes are in all 12 languages (the old «Question cancelled» text is gone).
 
 **Typing or saying «claude» (or `клод`) to start the agent now opens the same backend `/claude` does — json-stream by default, or the one the topic picked — not the deprecated tmux one.**

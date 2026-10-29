@@ -54,7 +54,7 @@ describe('compaction: the compaction flow over its ports', () => {
       startTypingLoader: () => {},
       forwardPromptToAgent: async () => {},
       pendingQuestions: new Map(),
-      retirePendingQuestion: async () => false,
+      clearPendingQuestion: () => {},
       closeQuestionMessage: async (_key, messageId, _question, closing) => {
         closedQuestionMessages.push({ messageId, closing });
         return true;
@@ -220,12 +220,12 @@ describe('compaction: the compaction flow over its ports', () => {
       await seedReAskedQuestion();
       const taken = compaction.takeReAskedQuestion(harness.key);
       assert.ok(taken);
-      compaction.putBackReAskedQuestion(harness.key, taken);
+      assert.equal(compaction.putBackReAskedQuestion(harness.key, taken), true, 'put back');
       assert.equal(compaction.peekReAskedQuestion(harness.key), taken);
       await waitUntil('the record to be saved again', () => harness.state.getReAskedQuestions()[keyToString(harness.key)]?.messageId === 4321);
 
       const newer = { question: reAskedQuestion, messageId: 9999, isTornDown: false };
-      compaction.putBackReAskedQuestion(harness.key, newer);
+      assert.equal(compaction.putBackReAskedQuestion(harness.key, newer), false, 'and told so when a record is already there: the tapped message is no longer the question that waits');
       assert.equal(compaction.peekReAskedQuestion(harness.key), taken, 'a record that is there is not replaced');
       compaction.closeReAskedQuestion(harness.key);
     });
