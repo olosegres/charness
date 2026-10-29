@@ -176,6 +176,12 @@ export class FakeTelegram {
     const server = http.createServer((request, response) => {
       void this.handle(request, response);
     });
+    // Node's server closes a connection that sat idle for ~6 s (`keepAliveTimeout` plus its buffer). The bot keeps its
+    // connections pooled and reuses them, so one that was starved of CPU past that (a loaded host: a boot, a stop and a
+    // restart in a row) writes its next request onto a connection the server has already closed: «socket hang up». A
+    // send is not retried (its outcome is unknown), so a notice is lost and the flow waits for it in vain. The fake
+    // never closes an idle connection by itself; `stop()` closes them all.
+    server.keepAliveTimeout = 0;
     this.server = server;
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address() as AddressInfo;
