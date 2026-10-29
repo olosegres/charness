@@ -23,7 +23,9 @@ import {
   fakeClaudeAlwaysUsageLimitFileName,
   fakeClaudeApiErrorDelayFileName,
   fakeClaudeApiErrorOnceFileName,
+  fakeClaudeNextOutputWhileAskedFileName,
   fakeClaudeOutputWhileAskedFileName,
+  fakeOutputWhileAskedPollMs,
   fakeClaudeLoginFileName,
   fakeClaudeLoginUrl,
   fakeClaudeUsageWindowsFileName,
@@ -139,7 +141,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    `[bg-count:<n>]` token starts n such tasks, listed together — each write of the release file ends one;
  *  - `ask`         — puts `fakeAskQuestion` to the user the way the real CLI does (an `AskUserQuestion` control
  *    request on stdout, blocked on the bot's `control_response`; while `fakeClaudeOutputWhileAskedFileName` exists it also
- *    streams that file's content as text right after the question), logs the answer it got to `tool-calls.jsonl`, then
+ *    streams that file's content as text right after the question, and each write of `fakeClaudeNextOutputWhileAskedFileName`
+ *    while the question waits streams one more text), logs the answer it got to `tool-calls.jsonl`, then
  *    answers `final` (in a turn without a request: ends the turn);
  *  - `ask-two`     — the same, with `fakeAskSecondQuestion` as a second question of the SAME call (the bot shows them one
  *    after the other); the outcome logged is the two answers joined by `fakeAskTwoOutcomeSeparator`;
@@ -832,7 +835,14 @@ async function askUserQuestion(variant: FakeAskVariant = 'one'): Promise<string>
   if (fs.existsSync(outputWhileAskedPath)) {
     writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: fs.readFileSync(outputWhileAskedPath, 'utf8').trim() } } });
   }
-  const answers = await answered;
+  const nextOutputPath = path.join(getStateDir(), fakeClaudeNextOutputWhileAskedFileName);
+  const nextOutputPoll = setInterval(() => {
+    if (!fs.existsSync(nextOutputPath)) return;
+    const text = fs.readFileSync(nextOutputPath, 'utf8').trim();
+    fs.rmSync(nextOutputPath, { force: true });
+    writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
+  }, fakeOutputWhileAskedPollMs);
+  const answers = await answered.finally(() => clearInterval(nextOutputPoll));
   return questions.map((question) => answers[question.question] ?? fakeAskNoAnswerOutcome).join(fakeAskTwoOutcomeSeparator);
 }
 

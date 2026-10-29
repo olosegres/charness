@@ -7,7 +7,8 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildMessageSnapshotKey, rememberBoundedSnapshot } from '../connectors/telegram/commands/callbackMessage';
+import type { Context } from 'telegraf';
+import { buildMessageSnapshotKey, getCallbackMessageText, rememberBoundedSnapshot } from '../connectors/telegram/commands/callbackMessage';
 import type { SessionKey } from '../sessionKey';
 
 const firstChat: SessionKey = { platform: 'telegram', space: '-1001111111111', thread: '111' };
@@ -43,5 +44,19 @@ describe('rememberBoundedSnapshot', () => {
     rememberBoundedSnapshot(snapshots, keyOf(1), 'one again', 2);
     rememberBoundedSnapshot(snapshots, keyOf(3), 'three', 2);
     assert.deepEqual([...snapshots.entries()], [[keyOf(1), 'one again'], [keyOf(3), 'three']]);
+  });
+});
+
+describe('getCallbackMessageText', () => {
+  /** A context whose tap sits on `message` (the part of Telegram's update the helper reads). */
+  const buildContext = (message: object | undefined): Context => ({ callbackQuery: message === undefined ? undefined : { message } }) as unknown as Context;
+
+  it('is the text of the message the button sits on', () => {
+    assert.equal(getCallbackMessageText(buildContext({ message_id: 5, text: '❓ Lexer\n1. hand-written' })), '❓ Lexer\n1. hand-written');
+  });
+
+  it('is null for a message without text (a photo) and for a tap that carries no message', () => {
+    assert.equal(getCallbackMessageText(buildContext({ message_id: 5, photo: [] })), null);
+    assert.equal(getCallbackMessageText(buildContext(undefined)), null);
   });
 });

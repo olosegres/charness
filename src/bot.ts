@@ -143,7 +143,7 @@ import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bin
 import { OpenBindMessages } from './connectors/telegram/openBindMessages';
 import { stripStaleKeyboards, sweepOpenBindMessages } from './connectors/telegram/bindSweep';
 import { buildTopicLink, createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
-import { getCallbackMessageId } from './connectors/telegram/commands/callbackMessage';
+import { getCallbackMessageId, getCallbackMessageText } from './connectors/telegram/commands/callbackMessage';
 import { answerCallbackQuerySafely } from './connectors/telegram/commands/callbackToast';
 import { formatSharedTopicList, type SharedTopic } from './connectors/telegram/bindingWelcome';
 import { BindPickerClaims } from './connectors/telegram/bindPickerClaims';
@@ -1745,6 +1745,14 @@ interface QuestionRepostState {
    * message (live race 2026-06-10 — answered-Q1 "✅" deleted, Q2 duplicated).
    */
   isPostInFlight: boolean;
+  /**
+   * The message the question was FIRST asked in — the record that stays in the topic with its text and the «asked again
+   * below» note however many times the question is re-posted. Every later copy of it is disposable: the next re-post deletes
+   * it, so a question that waits through a long stream of output leaves the original and the live copy, never a pile of
+   * copies. Bound to the question and index it was posted for; lost with the state (a restart): the message found then
+   * is taken for the record, which is never deleted.
+   */
+  record: { messageId: number; data: PendingQuestionState['data']; questionIndex: number } | null;
 }
 
 const questionRepostStates = new Map<string, QuestionRepostState>();
@@ -1784,7 +1792,7 @@ function getQuestionRepostState(key: SessionKey): QuestionRepostState {
   const kStr = keyToString(key);
   let s = questionRepostStates.get(kStr);
   if (!s) {
-    s = { wasLastSendTheQuestion: false, repostTimer: null, isPostInFlight: false };
+    s = { wasLastSendTheQuestion: false, repostTimer: null, isPostInFlight: false, record: null };
     questionRepostStates.set(kStr, s);
   }
   return s;
@@ -1838,9 +1846,10 @@ function onThreadActivityWhileQuestionPending(key: SessionKey): void {
  * @description Re-post the current pending question as the newest thread message
  * (S3): send the current question again via {@link postPendingQuestionAt} (which
  * re-renders with S1 descriptions / S2 current index and re-owns `messageId`), then
- * close the old question message as «asked again below» (its text stays, its
- * buttons go — a question message is never deleted). No-op if the question was answered
- * meanwhile, or if it is already the last message (the loop guard re-checked at
+ * end the old message. The ORIGINAL message of the question is its record: it is closed as «asked again
+ * below» (text stays, buttons go) and never deleted. A copy that an earlier re-post made is only a duplicate of that record
+ * and is deleted, so a question that waits through a long stream of output leaves two messages, not a pile. No-op if the
+ * question was answered meanwhile, or if it is already the last message (the loop guard re-checked at
  * fire time, since the debounce window may have closed the gap).
  */
 async function repostPendingQuestionToBottom(key: SessionKey): Promise<void> {
@@ -1858,13 +1867,22 @@ async function repostPendingQuestionToBottom(key: SessionKey): Promise<void> {
     // question's message (the live 2026-06-10 race).
     if (s.isPostInFlight) return;
     const oldMessageId = pending.messageId;
-    const oldQuestion = pending.data.questions[pending.currentIndex];
+    const questionIndex = pending.currentIndex;
+    const oldQuestion = pending.data.questions[questionIndex];
+    const knownRecord = s.record !== null && s.record.data === pending.data && s.record.questionIndex === questionIndex ? s.record : null;
     await postPendingQuestionAt(key);
-    // The old copy says «asked again below» only once there IS a copy below. A post that failed leaves the question where it
-    // was (its message id unchanged) and still answerable there: that message is not a record yet.
+    // The old message is touched only once there IS a copy below. A post that failed leaves the question where it was (its
+    // message id unchanged) and still answerable there.
     const newMessageId = pendingQuestions.get(kStr)?.messageId ?? null;
-    if (oldMessageId !== null && oldQuestion && newMessageId !== null && newMessageId !== oldMessageId) {
+    if (oldMessageId === null || !oldQuestion || newMessageId === null || newMessageId === oldMessageId) return;
+    const recordMessageId = knownRecord?.messageId ?? oldMessageId;
+    if (oldMessageId === recordMessageId) {
+      // The original: it stays as the record of the question, saying where the live copy is.
+      s.record = { messageId: oldMessageId, data: pending.data, questionIndex };
       await closeQuestionMessage(key, oldMessageId, oldQuestion, 'askedAgain');
+    } else {
+      // An earlier copy: the record already tells the question, so this one only duplicates it.
+      await deleteThreadMessage(key, oldMessageId);
     }
   });
 }
@@ -1906,6 +1924,19 @@ async function editQuestionMessageToClosed(key: SessionKey, messageId: number, q
 async function closeQuestionMessage(key: SessionKey, messageId: number, question: OpenCodeQuestion, ending: QuestionEnd): Promise<boolean> {
   const note = withThreadLocale(key, () => (typeof ending === 'string' ? t(questionClosingNoteKeys[ending]) : t('agent.question_answered_note', { answer: ending.answer })));
   return editQuestionMessageToClosed(key, messageId, question, note);
+}
+
+/**
+ * @description End a question message the bot holds no record of — a copy a restart left while its re-ask was being sent, an
+ * older copy whose close Telegram refused — when somebody taps its buttons: its own text stays (`messageText`, as the tap
+ * delivered it) and «not answered» takes the place of the buttons, so the question does not end with no result at all. Without
+ * the text, or when the note does not fit under it, only the buttons come off.
+ */
+async function closeOrphanQuestionMessage(key: SessionKey, messageId: number, messageText: string | null): Promise<void> {
+  const note = withThreadLocale(key, () => t(questionClosingNoteKeys.unanswered));
+  const closedText = messageText === null ? null : `${messageText}\n\n${note}`;
+  const isEdited = closedText !== null && closedText.length <= MAX_MESSAGE_LEN && await editThreadMessage(key, messageId, closedText);
+  if (!isEdited) await editThreadKeyboard(key, messageId, null, 'reask');
 }
 
 // ── auto-retry after a provider-side API error (plan S4/S5/S6) ──
@@ -5974,7 +6005,9 @@ const {
   threadsCompacting,
   peekReAskedQuestion,
   takeReAskedQuestion,
-  endReAskedQuestion,
+  takeReAskedQuestionForAnswer,
+  answerReAskedQuestion,
+  settleReAskedPredecessor,
   putBackReAskedQuestion,
   restoreReAskedQuestion,
   closeReAskedQuestion,
@@ -6777,6 +6810,11 @@ async function unbindThread(key: SessionKey): Promise<void> {
     // Order matters: drop the pin FIRST (while binding.pinnedStatusMessageId
     // is still readable), then stop the session, then wipe the binding.
     await clearPinnedStatus(key);
+
+    // A question still on screen ends here with its «not answered» note: the stop below is reported only after the process
+    // is gone (json-stream stops in the background), by which time the teardown has cleared the question's state and the
+    // report finds nothing to close — the buttons would stay, dead, with no note.
+    if (pendingQuestions.has(kStr)) await retirePendingQuestion(key);
 
     // Stop any running session before discarding the binding so we don't leave
     // an orphan tmux/SSE stream pointing at a directory we no longer track.
@@ -10680,7 +10718,9 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   if (!isTappedMessageCurrent) {
     await ctx.answerCbQuery(t('cb.no_pending_question'));
     // Not awaited: the edit waits its turn in the send pacer, and the next update of the topic waits for this handler.
-    if (tappedMessageId !== null) void editThreadKeyboard(key, tappedMessageId, null, 'reask');
+    if (tappedMessageId !== null) {
+      closeOrphanQuestionMessage(key, tappedMessageId, getCallbackMessageText(ctx)).catch((e) => console.error('[reask] closing the tapped orphan failed:', e));
+    }
     return;
   }
   const label = reAsked.question.options[optIdx]?.label;
@@ -10728,16 +10768,19 @@ async function answerReAskedQuestionByNumber(key: SessionKey, text: string): Pro
   const route = getQuestionReplyRoute(text, reAsked.question);
   if (route.kind !== 'answer') return false;
   const label = route.labels[0];
-  // Taken before anything is awaited, with the ending it will write: a re-ask still being sent ends the same way when it lands.
-  takeReAskedQuestion(key, { answer: label });
+  // Taken before anything is awaited, so no other path uses or closes it, but with no result written yet: the label may reach no
+  // session, and a re-ask that lands meanwhile is left as it is until that is known.
+  takeReAskedQuestionForAnswer(key);
   // A person wrote — the latch clears like for any message; the record is gone, so nothing is closed as «not answered».
   notePersonActivity(key);
   const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, getThreadAdapter(key), label, null));
   if (outcome === 'noSession') {
     await returnReAskedQuestionAfterTap(key, reAsked, reAsked.messageId ?? reAsked.predecessorMessageId);
+    // A re-ask that landed during the delivery is the question that waits now: the old message says so.
+    if (reAsked.messageId !== null) await settleReAskedPredecessor(key, reAsked);
     return true;
   }
-  await endReAskedQuestion(key, reAsked);
+  await answerReAskedQuestion(key, reAsked, label);
   return true;
 }
 

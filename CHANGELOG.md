@@ -4,7 +4,8 @@
 
 **A question the agent asks now stays in the topic however it ends: answered, it shows your answer in place of the buttons; left alone, a note says it was not answered.**
 Before, answering replaced the whole question with a short «✅ header: answer», walking away from it (another message, `/esc`) replaced it with «❌ Question cancelled», and re-posting or re-asking a question deleted the first message — so what the agent had asked was gone from the topic.
-Now the message is never deleted: it keeps the question and its options, with «✅ Answer: …», «❌ Not answered» or «↓ Asked again below» under them, also when the question is re-asked after the idle compaction, or its agent is gone.
+Now the message is never deleted: it keeps the question and its options, with «✅ Answer: …», «❌ Not answered» or «↓ Asked again below» under them, also when the question is re-asked after the idle compaction, when you leave the folder, or its agent is gone.
+A question that waits through a long stream of the agent's output is put at the bottom again each time: the first message stays as the record and the newest copy is the live one, the copies in between are removed.
 The pin works as before: one notification when the question comes, removed when it ends. The details are in `docs/commands.md`, «The agent's questions».
 
 **Typing or saying «claude» (or `клод`) to start the agent now opens the same backend `/claude` does — json-stream by default, or the one the topic picked — not the deprecated tmux one.**

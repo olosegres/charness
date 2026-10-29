@@ -154,6 +154,16 @@ export const fakeCancelWatchToken = '[fake:cancel-watch]';
 export const fakeClaudeOutputWhileAskedFileName = 'output-while-asked';
 
 /**
+ * While `ask` mode waits for the answer, a flow may write this file to make the agent stream one more text (the file's
+ * content, which the fake then deletes): a flow that needs several bursts of output under one question writes it once per
+ * burst, after it saw the bot answer the previous one — no timing between the bursts is guessed.
+ */
+export const fakeClaudeNextOutputWhileAskedFileName = 'next-output-while-asked';
+
+/** How often `ask` mode looks for {@link fakeClaudeNextOutputWhileAskedFileName} while the question is open. */
+export const fakeOutputWhileAskedPollMs = 100;
+
+/**
  * The second question of `ask-two` mode, put in the SAME `AskUserQuestion` call as {@link fakeAskQuestion}: the bot shows
  * them one after the other and replies to the agent once both are answered.
  */

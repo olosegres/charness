@@ -22,12 +22,15 @@
  *   → output landing below the question (a branch of the agent that keeps streaming): the question is posted again at the
  *     bottom and pinned, the first message stays as «asked again below» and is unpinned; an answer to the new one
  *     closes it with the answer
+ *   → output landing again and again: the first message stays as the record, the newest copy is the live one, and the
+ *     copies in between are deleted (two messages at most)
  *   → the question cannot be put again at the bottom (both sends of the new copy are refused): the old copy is NOT marked
  *     «asked again below», keeps its buttons and still answers
  *   → an option number typed while the question's own message is still being sent: the answer shows under it once it lands
  *   → the bot restarts with a saved re-asked copy next to a live question: the stale copy is closed, the question restored
  *   → the bot restarts while the question is open and finds the agent's session gone: the question the bot dropped at boot
  *     stays with the same note, its buttons gone and its pin released
+ *   → leaving the folder with the question open (the json-stream stop is reported late): the same note, the pin gone
  *   → «create new folder» of `/bind` (it drops a pending question): the same note
  *
  * The second, on an instance whose idle window is seconds, so the idle compaction re-asks a question the agent was left
@@ -41,12 +44,15 @@
  * restart during the compaction ends the old question as «not answered»; a message the person writes during the compaction
  * stops the re-ask, and an option NUMBER typed then — or later, to the re-asked copy — answers the question; picking another conversation (`/sessions`) or another backend
  * (`/terminal`) closes the re-asked copy of the one left; a button left on an older re-asked message
- * never answers a newer one; two quick taps send one answer; a tap on a re-ask still being sent counts; a long label is
- * shown once, under the question.
+ * never answers a newer one (and the message it sits on is closed with its own text and the same note); two quick taps send
+ * one answer; a tap on a re-ask still being sent counts; a number typed while the re-ask is being sent shows the answer
+ * once the agent got it; a number typed under a copy whose conversation cannot be started shows no answer and leaves the
+ * buttons; a long label is shown once, under the question.
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
  * in `after`. The idle compaction's re-ask itself is in `reaskedQuestionE2e.test.ts`; the OpenCode backend's cancel is in
- * `openCodeInterruptE2e.test.ts`.
+ * `openCodeInterruptE2e.test.ts`; its new question while a re-asked copy waits, and an error with a question open, in
+ * `openCodeQuestionE2e.test.ts`.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -68,7 +74,9 @@ import {
   fakeAskTwoOutcomeSeparator,
   fakeClaudeIgnoreStopSignalsFileName,
   fakeClaudeLogFileNames,
+  fakeClaudeNextOutputWhileAskedFileName,
   fakeClaudeOutputWhileAskedFileName,
+  fakeClaudeRefuseLaunchFileName,
   getFakeClaudeTranscriptPath,
   type FakeClaudePrompt,
   type FakeClaudeToolCall,
@@ -123,6 +131,8 @@ const droppedQuestionLogLine = '[reattach] pending questions: restored 0, droppe
 
 /** The text the fake streams under a pending question (`fakeClaudeOutputWhileAskedFileName`). */
 const outputWhileAskedText = 'A branch of the agent keeps working while the question waits.';
+/** A number typed under a sleeping conversation that cannot be started: the start fails inside the agent-start window. */
+const failedStartTimeoutMs = agentStartTimeoutMs;
 
 const unansweredNote = enDict['agent.question_unanswered_note'];
 const askedAgainNote = enDict['agent.question_asked_again_note'];
@@ -480,6 +490,41 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     }
   });
 
+  it('output landing again and again under the waiting question: the first message is the record, the live copy is the newest, the copies in between are deleted', async () => {
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeOutputWhileAskedFileName), `${outputWhileAskedText} 1`);
+    const nextOutputPath = path.join(getLayout().fakeStateDir, fakeClaudeNextOutputWhileAskedFileName);
+    try {
+      const repostTopic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, repostTimeoutMs);
+      const first = await askQuestion(repostTopic, 'KEPT-BURSTS');
+      const isCopyAfter = (afterMessageId: number) => (message: FakeTelegramMessage): boolean =>
+        message.message_id > afterMessageId && message.text.includes(fakeAskQuestion.question) && repostTopic.getKeyboardData(message).flat().some((data) => data.startsWith('qa_'));
+
+      // Burst one brings the first copy, and each burst the agent streams after the bot has put the question back brings one more.
+      const firstCopy = await repostTopic.waitForMessage('the question posted again after the first burst', isCopyAfter(first.message_id));
+      await repostTopic.waitForMessageText('the first message marked as asked again', first, (text) => text.endsWith(`\n\n${askedAgainNote}`));
+      fs.writeFileSync(nextOutputPath, `${outputWhileAskedText} 2`);
+      const secondCopy = await repostTopic.waitForMessage('the question posted again after the second burst', isCopyAfter(firstCopy.message_id));
+      fs.writeFileSync(nextOutputPath, `${outputWhileAskedText} 3`);
+      const thirdCopy = await repostTopic.waitForMessage('the question posted again after the third burst', isCopyAfter(secondCopy.message_id));
+
+      // The copies in between only duplicate the record, so they are deleted once the next one is there.
+      await getCharness().waitFor('the copies in between to be deleted', repostTimeoutMs, () => [firstCopy, secondCopy].every((copy) => fakeTelegram.getMessage(copy.message_id)?.isDeleted));
+      const questionMessages = fakeTelegram.listBotMessages(topicThreadId).filter((message) => message.message_id >= first.message_id && message.text.includes(fakeAskQuestion.question));
+      assert.deepEqual(questionMessages.map((message) => message.message_id), [first.message_id, thirdCopy.message_id], 'the topic holds the original and the live copy, nothing else');
+      assertQuestionKeptWithNote(first, askedAgainNote);
+      assert.deepEqual(topic.getKeyboardData(readKeptMessage(thirdCopy)), [['qa_0_0'], ['qa_0_1']], 'the live copy has the buttons');
+      await waitForPinned(thirdCopy);
+
+      await topic.tapAndAwaitAnswer(thirdCopy, 'qa_0_0');
+      await topic.waitForMessageText('the answer under the live copy', thirdCopy, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
+      assertQuestionKeptWithNote(first, askedAgainNote);
+      await waitForUnpinned(thirdCopy);
+    } finally {
+      fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeOutputWhileAskedFileName), { force: true });
+      fs.rmSync(nextOutputPath, { force: true });
+    }
+  });
+
   it('a question so long that its answer note does not fit under it: the option descriptions are left out and the answer still shows', async () => {
     const question = await askQuestion(topic, 'KEPT-LONG', 'ask-long');
     assert.ok(question.text.length > 3500 && question.text.length <= 4096, `precondition: the question fills a message: ${question.text.length} characters`);
@@ -586,6 +631,24 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     assertQuestionKeptWithNote(question, unansweredNote);
     await waitForUnpinned(question);
     assert.equal(readPersistedState(getLayout()).pendingQuestions?.[key], undefined, 'the dropped question is gone from the saved state');
+  });
+
+  it('leaving the folder with the question open: it stays with the same note, its buttons gone and its pin released', async () => {
+    const question = await askQuestion(topic, 'KEPT-LEAVE');
+    await waitForPinned(question);
+
+    // The json-stream process stops in the background after the unbind, so the bot's pending question is gone long before
+    // the stop is reported: the note has to come from the unbind itself. The next step starts from a bound topic with a session.
+    await runStepThenRestore(async () => {
+      const picker = await topic.sendAndAwaitReply('/bind', enDict['bind.current'].replace('{subdir}', projectFolder));
+      await topic.tapAndAwaitAnswer(picker, bindLeaveCurrentCallback);
+      await topic.waitForMessageText('the note under the question', question, (text) => text.endsWith(`\n\n${unansweredNote}`));
+      assertQuestionKeptWithNote(question, unansweredNote);
+      await waitForUnpinned(question);
+    }, async () => {
+      await topic.sendAndAwaitReply(`/bind ${projectFolder}`, `Bound to \`${projectFolder}\``);
+      await startAgentSession();
+    });
   });
 
   it('«create new folder» of /bind drops a pending question: it stays with the same note', async () => {
@@ -795,7 +858,11 @@ describe('A question the idle compaction re-asked stays too, when the conversati
     const labelPromptsBefore = countLabelPrompts(shortLabel);
 
     assert.equal(await topic.tapAndAwaitAnswer(older, 'reask_0'), enDict['cb.no_pending_question'], 'the old button answers nothing');
-    await getCharness().waitFor('the old buttons to be taken off', replyTimeoutMs, () => readKeptMessage(older).reply_markup === undefined);
+    // The tapped message is an orphan nothing in the bot knows: it ends where it stands, its own text kept and «not answered»
+    // in place of the buttons, so it is not left with no result at all.
+    await waitingTopic.waitForMessageText('the older message closed with its own text', older, (text) => text.endsWith(`\n\n${unansweredNote}`));
+    // A re-asked message names its options only on the buttons, so what stays is its header and question.
+    assertQuestionKeptWithNote(older, unansweredNote, { header: fakeAskQuestion.header, question: fakeAskQuestion.question, labels: [] });
     assert.equal(countLabelPrompts(shortLabel), labelPromptsBefore, 'and sends nothing to the agent');
     assert.equal(readKeptMessage(newer).text, newerText, 'the newer message is as it was');
     assert.deepEqual(waitingTopic.getKeyboardData(readKeptMessage(newer)), [['reask_0'], ['reask_1']], 'with its buttons');
@@ -1101,5 +1168,58 @@ describe('A question the idle compaction re-asked stays too, when the conversati
     await getCharness().waitFor('the label to reach the resumed agent', agentStartTimeoutMs, () => countLabelPrompts(shortLabel) > labelPromptsBefore);
     await waitingTopic.waitForMessageText('the answer under the re-asked question', reasked, (text) => text.endsWith(buildAnsweredNote(shortLabel)));
     assertQuestionKeptWithNote(reasked, buildAnsweredNote(shortLabel));
+  });
+
+  it('an option number typed while the re-ask is being sent: the label reaches the agent, then the old message and the copy that lands both show the answer', async () => {
+    const shortLabel = fakeAskQuestion.shortOptionLabel;
+    const sendHold = createRelease();
+    // The Bot API holds the answer to the re-asked question's send: the message exists, the bot does not know its id yet.
+    fakeTelegram.holdNextResponse('sendMessage', sendHold.promise, isReAskSend);
+    await runStepThenRestore(async () => {
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-NUMBER-FLIGHT-WARM [fake:answer] one turn to compress');
+      await getCharness().waitFor('the warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('REASK-NUMBER-FLIGHT-WARM').length > 0);
+      const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-NUMBER-FLIGHT [fake:ask] ask me something');
+      const reasked = await waitingTopic.waitForMessage('the re-asked question, its send held', (message) =>
+        message.message_id > sentMessageId && waitingTopic.getKeyboardData(message).flat().some((data) => data.startsWith('reask_')));
+      const original = findNewestQuestionCopy();
+      assert.ok(original, 'the question that waited');
+      const labelPromptsBefore = countLabelPrompts(shortLabel);
+
+      fakeTelegram.pushOperatorMessage(topicThreadId, '1');
+      await getCharness().waitFor('the label to reach the agent', agentStartTimeoutMs, () => countLabelPrompts(shortLabel) > labelPromptsBefore);
+      sendHold.release();
+
+      // Once the label is delivered, the copy that lands ends the same way as the message the question waited in.
+      await waitingTopic.waitForMessageText('the answer under the re-asked question', reasked, (text) => text.endsWith(buildAnsweredNote(shortLabel)));
+      await waitingTopic.waitForMessageText('the answer under the old message', original, (text) => text.endsWith(buildAnsweredNote(shortLabel)));
+      assertQuestionKeptWithNote(original, buildAnsweredNote(shortLabel));
+    }, async () => {
+      sendHold.release();
+    });
+  });
+
+  it('an option number typed under the re-asked copy when the conversation cannot be started: no answer is shown, the buttons stay and answer once the agent can start', async () => {
+    const shortLabel = fakeAskQuestion.shortOptionLabel;
+    const refuseLaunchPath = path.join(getLayout().fakeStateDir, fakeClaudeRefuseLaunchFileName);
+    const reasked = await putReAskedQuestionAndSleep('REASK-DIGIT-REFUSED');
+    const labelPromptsBefore = countLabelPrompts(shortLabel);
+    await runStepThenRestore(async () => {
+      fs.writeFileSync(refuseLaunchPath, '');
+      fakeTelegram.pushOperatorMessage(topicThreadId, '1');
+      await new TopicDriver(fakeTelegram, getCharness, topicThreadId, failedStartTimeoutMs).waitForMessage('the line that says why the start failed', (message) => message.message_id > reasked.message_id && /refused to start/.test(message.text));
+
+      // The label reached no agent, so nothing says it was answered: the copy is as it was, buttons and all.
+      assert.equal(countLabelPrompts(shortLabel), labelPromptsBefore, 'the label reached no agent');
+      const waiting = readKeptMessage(reasked);
+      assert.ok(!waiting.text.includes(buildAnsweredNote(shortLabel)), `no answer shown for a label nobody got: ${waiting.text.slice(-80)}`);
+      assert.deepEqual(waitingTopic.getKeyboardData(waiting), [['reask_0'], ['reask_1']], 'the buttons stay');
+
+      fs.rmSync(refuseLaunchPath, { force: true });
+      assert.equal(await topic.tapAndAwaitAnswer(reasked, 'reask_0'), shortLabel, 'the button still knows its label');
+      await getCharness().waitFor('the label to reach the started agent', agentStartTimeoutMs, () => countLabelPrompts(shortLabel) > labelPromptsBefore);
+      await waitingTopic.waitForMessageText('the answer under the question once the label was delivered', reasked, (text) => text.endsWith(buildAnsweredNote(shortLabel)));
+    }, async () => {
+      fs.rmSync(refuseLaunchPath, { force: true });
+    });
   });
 });

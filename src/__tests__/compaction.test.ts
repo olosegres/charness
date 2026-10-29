@@ -225,7 +225,7 @@ describe('compaction: the compaction flow over its ports', () => {
       assert.equal(compaction.peekReAskedQuestion(harness.key), taken);
       await waitUntil('the record to be saved again', () => harness.state.getReAskedQuestions()[keyToString(harness.key)]?.messageId === 4321);
 
-      const newer = { question: reAskedQuestion, messageId: 9999, predecessorMessageId: null, isPredecessorClosed: true, ending: null };
+      const newer = { question: reAskedQuestion, messageId: 9999, predecessorMessageId: null, isPredecessorClosed: true, ending: null, isAnswerPending: false };
       assert.equal(compaction.putBackReAskedQuestion(harness.key, newer), false, 'and told so when a record is already there: the tapped message is no longer the question that waits');
       assert.equal(compaction.peekReAskedQuestion(harness.key), taken, 'a record that is there is not replaced');
       compaction.closeReAskedQuestion(harness.key);
@@ -260,29 +260,47 @@ describe('compaction: the compaction flow over its ports', () => {
       assert.equal(closedQuestionMessages.length, 1, 'and nothing more the second time');
     });
 
-    it('a number that answers a record writes the answer on the message it waited in, and on a re-ask once it is known', async () => {
+    it('a number that answers a record writes nothing until its label is delivered, then the answer on the message it waited in and on a re-ask once it is known', async () => {
       closedQuestionMessages.length = 0;
       const started = compaction.startReAskedQuestion(harness.key, reAskedQuestion, 777);
-      const taken = compaction.takeReAskedQuestion(harness.key, { answer: 'Long' });
+      const taken = compaction.takeReAskedQuestionForAnswer(harness.key);
       assert.equal(taken, started);
-      assert.deepEqual(taken.ending, { answer: 'Long' }, 'the ending is set at the take: a re-ask that lands meanwhile ends the same way');
-      await compaction.endReAskedQuestion(harness.key, taken);
-      assert.deepEqual(closedQuestionMessages, [{ messageId: 777, closing: { answer: 'Long' } }]);
+      assert.equal(compaction.peekReAskedQuestion(harness.key), undefined, 'it is out of the map: no other path uses it');
+      assert.equal(taken.ending, null, 'and carries no result yet: the label may reach no session');
+      assert.equal(taken.isAnswerPending, true);
 
-      // The re-ask landed afterwards: its own message gets the answer too, the predecessor is not written twice.
+      // The idle compaction finishing meanwhile does not close the old message with a result of its own.
+      await compaction.settleReAskedPredecessor(harness.key, taken);
+      assert.deepEqual(closedQuestionMessages, []);
+
+      await compaction.answerReAskedQuestion(harness.key, taken, 'Long');
+      assert.deepEqual(closedQuestionMessages, [{ messageId: 777, closing: { answer: 'Long' } }]);
+      assert.equal(taken.isAnswerPending, false);
+
+      // The re-ask landed afterwards: its own message gets the answer too (the post does it by the ending), the predecessor is not written twice.
       taken.messageId = 888;
       await compaction.endReAskedQuestion(harness.key, taken);
       assert.deepEqual(closedQuestionMessages.slice(1), [{ messageId: 888, closing: { answer: 'Long' } }]);
     });
 
-    it('a record put back after a number reached no session is open again, without the ending', async () => {
+    it('a record put back after a number reached no session is open again, without the marker, and its old message is settled once a re-ask is there', async () => {
+      closedQuestionMessages.length = 0;
       const started = compaction.startReAskedQuestion(harness.key, reAskedQuestion, 777);
-      const taken = compaction.takeReAskedQuestion(harness.key, { answer: 'Long' });
+      const taken = compaction.takeReAskedQuestionForAnswer(harness.key);
       assert.ok(taken);
+      // The re-ask landed while the label was on its way: it is left as it is, with no result on it.
+      taken.messageId = 888;
       assert.equal(compaction.putBackReAskedQuestion(harness.key, taken), true);
       assert.equal(taken.ending, null);
+      assert.equal(taken.isAnswerPending, false);
       assert.equal(compaction.peekReAskedQuestion(harness.key), started);
-      await waitUntil('the unposted record to be saved again', () => harness.state.getReAskedQuestions()[keyToString(harness.key)]?.isPosted === false);
+      await waitUntil('the posted record to be saved again', () => harness.state.getReAskedQuestions()[keyToString(harness.key)]?.messageId === 888);
+      assert.deepEqual(closedQuestionMessages, [], 'nothing was written on the messages');
+
+      await compaction.settleReAskedPredecessor(harness.key, taken);
+      assert.deepEqual(closedQuestionMessages, [{ messageId: 777, closing: 'askedAgain' }], 'the old message points at the copy that waits');
+      await compaction.settleReAskedPredecessor(harness.key, taken);
+      assert.equal(closedQuestionMessages.length, 1, 'once');
       compaction.takeReAskedQuestion(harness.key);
     });
 

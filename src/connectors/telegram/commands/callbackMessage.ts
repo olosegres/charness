@@ -15,6 +15,15 @@ export function getCallbackMessageId(ctx: Context): number | null {
 }
 
 /**
+ * @description The text of the message a callback button sits on, as Telegram shows it (formatting marks resolved away), or
+ * `null` when the message carries none (a photo, a very old message). What a handler needs to rewrite a message it holds no record of.
+ */
+export function getCallbackMessageText(ctx: Context): string | null {
+  const message = ctx.callbackQuery?.message;
+  return message !== undefined && 'text' in message ? message.text : null;
+}
+
+/**
  * @description The map key of a per-MESSAGE snapshot (the list a keyboard's indexes resolve against, the rung a
  * question waits to add). A Telegram message id is unique only within ONE chat, so the chat (`key.space`) is part of
  * the key: with several groups, or the DM and group transports side by side, two chats' messages never meet.

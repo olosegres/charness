@@ -132,15 +132,23 @@ so a restart during the compaction closes that message as unanswered at boot (`r
 re-ask's message, so a restart while the conversation sleeps keeps its buttons working. Only after the re-ask is posted does the
 fire edit the old message, through the `closeQuestionMessage` port, to the question as asked plus a note in place of its buttons —
 «asked again below», or «not answered» when there is no re-ask (its send failed). Every other end (an answer, a message sent
-instead, `/esc`, the session gone, a re-post to the bottom — which edits the old copy only after the new one is posted —, a
-persisted question the boot drops) goes through the same `editQuestionMessageToClosed` edit.
+instead, `/esc`, the session gone, leaving the folder (`unbindThread`, before the stop: a json-stream stop is reported only
+after the process exits), a re-post to the bottom, a persisted question the boot drops) goes through the same
+`editQuestionMessageToClosed` edit. A re-post to the bottom edits the old message only after the new one is posted, and keeps
+the question's ORIGINAL message as its record («asked again below», never deleted); a copy an earlier re-post made is deleted when
+the next one lands, so a long stream of output under a waiting question leaves the original and the live copy, not a pile.
 Who reaches the record: a `reask_<i>` tap takes it (`takeReAskedQuestion`: out of memory AND of the saved state, before anything is
 awaited; `putBackReAskedQuestion` returns it if the label reaches no session) and writes the answer under the question — but only
 a tap on THE message of the record counts (a re-ask whose send has not returned has no id yet: a tap counts if its message is
-newer than the one the question waited in, `predecessorMessageId`): a button left on an older re-asked message answers nothing and
-comes off. A bare option NUMBER typed (`answerReAskedQuestionByNumber`, in `deliverActivePrompt` and the startup buffer) takes the
-record with its `ending` (`{ answer }`) and writes the answer on the re-ask's message — or, before it exists, on the predecessor;
-a re-ask still being sent ends the same way when it lands. Updates of one topic run one at a time (`updateDispatcher`), so two
+newer than the one the question waited in, `predecessorMessageId`): a button left on an older re-asked message answers nothing, and
+the message it sits on is closed with its own text and «not answered» (`closeOrphanQuestionMessage`) — also the copy a restart leaves
+when it lands after the boot has dropped the record (the one gap in «every end leaves a note»: such a copy keeps its buttons until
+somebody taps it). A bare option NUMBER typed (`answerReAskedQuestionByNumber`, in `deliverActivePrompt` and the startup buffer) takes the
+record (`takeReAskedQuestionForAnswer`) with `isAnswerPending` set and NO ending yet: the label may reach no session, and then the
+question is open again, so a result is written (`answerReAskedQuestion`: `{ answer }` on the re-ask's message — or, before it exists,
+on the predecessor) only once the delivery is known. Until then a re-ask that lands is left as it is, and the idle fire leaves the
+predecessor alone (`settleReAskedPredecessor` skips a pending answer); a label that reached no session puts the record back and settles
+the predecessor again. Updates of one topic run one at a time (`updateDispatcher`), so two
 taps never interleave. Whatever else ends the record goes through `closeReAskedQuestion`, which sets the ending `unanswered`: the
 callers are `clearThreadCompaction` (the conversation ended), `notePersonActivity` (a person wrote something else, also into a
 starting or stopping session, and also while the compaction runs — the re-ask is then not posted — a tap or a number has taken its

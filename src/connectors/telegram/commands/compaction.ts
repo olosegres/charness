@@ -131,7 +131,7 @@ interface ThreadCompactionState {
  *  - POSTED — the re-ask's message is known (`messageId`), its `reask_<i>` buttons live.
  * `predecessorMessageId` is the message the question waited in before: the re-ask is always newer than it, and until the
  * re-ask is posted the predecessor is where the question's result is written. `ending` is set when the record leaves the map
- * as closed or answered by a typed number — a re-ask that lands later ends the same way.
+ * as closed or answered — a re-ask that lands later ends the same way.
  */
 export interface ReAskedQuestion {
   question: OpenCodeQuestion;
@@ -140,6 +140,12 @@ export interface ReAskedQuestion {
   /** Whether the predecessor already has its result («asked again below», or the ending). */
   isPredecessorClosed: boolean;
   ending: QuestionEnd | null;
+  /**
+   * A typed number answered the question and its label is still on its way to the agent. The record is out of the map, but no
+   * result is written on its messages until the delivery is known (it may reach no session, and then the question is open
+   * again): a re-ask that lands meanwhile is left as it is, and the idle compaction leaves the predecessor alone.
+   */
+  isAnswerPending: boolean;
 }
 
 /** The two switches the `/compact_on_idle` picker shows: the idle compaction itself and the summary post. */
@@ -742,7 +748,7 @@ export function createCompaction(ports: CompactionPorts) {
    * message is the predecessor (`null` when it never got an id).
    */
   function startReAskedQuestion(key: SessionKey, question: OpenCodeQuestion, predecessorMessageId: number | null): ReAskedQuestion {
-    const reAsked: ReAskedQuestion = { question, messageId: null, predecessorMessageId, isPredecessorClosed: false, ending: null };
+    const reAsked: ReAskedQuestion = { question, messageId: null, predecessorMessageId, isPredecessorClosed: false, ending: null, isAnswerPending: false };
     reAskedQuestions.set(keyToString(key), reAsked);
     saveReAskedQuestion(key, reAsked);
     return reAsked;
@@ -755,8 +761,8 @@ export function createCompaction(ports: CompactionPorts) {
 
   /**
    * @description A tap takes the re-asked question out of memory and of the saved state: it is used now, so nothing closes
-   * its message as unanswered any more (the tap writes the answer there), and a restart does not bring it back. A number
-   * typed takes it with the `ending` it will write: a re-ask still being sent ends the same way when it lands.
+   * its message as unanswered any more (the tap writes the answer there), and a restart does not bring it back. An `ending`
+   * is what a re-ask still being sent writes on its message when it lands (the end of the conversation).
    */
   function takeReAskedQuestion(key: SessionKey, ending: QuestionEnd | null = null): ReAskedQuestion | undefined {
     const kStr = keyToString(key);
@@ -769,12 +775,34 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
+   * @description A number typed answers the question: the record is taken like a tap's, with no ending yet and
+   * {@link ReAskedQuestion.isAnswerPending} set. The label may still reach no session, and then the question is open again, so
+   * the answer is written by {@link answerReAskedQuestion} once the delivery is known.
+   */
+  function takeReAskedQuestionForAnswer(key: SessionKey): ReAskedQuestion | undefined {
+    const reAsked = takeReAskedQuestion(key);
+    if (reAsked) reAsked.isAnswerPending = true;
+    return reAsked;
+  }
+
+  /**
+   * @description The label of a taken question reached the agent: write `answer` as its result on its messages — the re-ask's
+   * own if it is known (one that lands later ends the same way), and the predecessor if it has no result yet.
+   */
+  async function answerReAskedQuestion(key: SessionKey, reAsked: ReAskedQuestion, answer: string): Promise<void> {
+    reAsked.isAnswerPending = false;
+    reAsked.ending = { answer };
+    await endReAskedQuestion(key, reAsked);
+  }
+
+  /**
    * A tap whose label reached no session leaves the question open: the record goes back, unless a newer one took its place.
    * Resolves whether it went back — when not, the tapped message is no longer the question that waits.
    */
   function putBackReAskedQuestion(key: SessionKey, reAsked: ReAskedQuestion): boolean {
     if (reAskedQuestions.has(keyToString(key))) return false;
     reAsked.ending = null;
+    reAsked.isAnswerPending = false;
     reAskedQuestions.set(keyToString(key), reAsked);
     saveReAskedQuestion(key, reAsked);
     return true;
@@ -782,7 +810,7 @@ export function createCompaction(ports: CompactionPorts) {
 
   /** Boot: a saved re-asked question whose conversation can still be resumed gets its buttons back (memory only, it is saved already). */
   function restoreReAskedQuestion(key: SessionKey, saved: ReAskedQuestionRecord): void {
-    reAskedQuestions.set(keyToString(key), { question: saved.question, messageId: saved.messageId, predecessorMessageId: null, isPredecessorClosed: true, ending: null });
+    reAskedQuestions.set(keyToString(key), { question: saved.question, messageId: saved.messageId, predecessorMessageId: null, isPredecessorClosed: true, ending: null, isAnswerPending: false });
   }
 
   /**
@@ -875,14 +903,20 @@ export function createCompaction(ports: CompactionPorts) {
     if (plan.notice) await replyToThread(key, plan.notice);
     if (plan.summary) await postCompactionSummary(key, plan.summary);
     if (!reAsked) return;
-    const reAskedMessageId = plan.question && peekReAskedQuestion(key) === reAsked ? await postReAskedQuestion(key, plan.question, reAsked) : null;
-    // The old question message stays as the record. It says «asked again below» only now that there IS a copy below — if
-    // the re-ask could not be sent, nobody answered it and nobody will be asked again. An ending written on it already
-    // (a person wrote, the conversation ended, a number answered it) stands.
-    if (reAsked.ending === null && reAsked.predecessorMessageId !== null && !reAsked.isPredecessorClosed) {
-      reAsked.isPredecessorClosed = true;
-      await closeQuestionMessage(key, reAsked.predecessorMessageId, reAsked.question, reAskedMessageId !== null ? 'askedAgain' : 'unanswered');
-    }
+    if (plan.question && peekReAskedQuestion(key) === reAsked) await postReAskedQuestion(key, plan.question, reAsked);
+    await settleReAskedPredecessor(key, reAsked);
+  }
+
+  /**
+   * @description The old question message stays as the record. It says "asked again below" only once there IS a copy below — if
+   * the re-ask could not be sent, nobody answered it and nobody will be asked again. An ending written on it already (a person
+   * wrote, the conversation ended) stands, and so does the result of a number whose delivery is under way: that answer
+   * writes it, or puts the question back and settles the predecessor again.
+   */
+  async function settleReAskedPredecessor(key: SessionKey, reAsked: ReAskedQuestion): Promise<void> {
+    if (reAsked.ending !== null || reAsked.isAnswerPending || reAsked.predecessorMessageId === null || reAsked.isPredecessorClosed) return;
+    reAsked.isPredecessorClosed = true;
+    await closeQuestionMessage(key, reAsked.predecessorMessageId, reAsked.question, reAsked.messageId !== null ? 'askedAgain' : 'unanswered');
   }
 
   /**
@@ -1168,6 +1202,9 @@ export function createCompaction(ports: CompactionPorts) {
     startReAskedQuestion,
     peekReAskedQuestion,
     takeReAskedQuestion,
+    takeReAskedQuestionForAnswer,
+    answerReAskedQuestion,
+    settleReAskedPredecessor,
     endReAskedQuestion,
     putBackReAskedQuestion,
     restoreReAskedQuestion,

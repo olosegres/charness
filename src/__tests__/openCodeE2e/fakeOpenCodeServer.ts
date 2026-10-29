@@ -91,6 +91,8 @@ export class FakeOpenCodeServer {
   private readonly runningTurns = new Set<string>();
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private sessionCounter = 0;
+  /** The requests a flow holds: each is let go (or refused) by the first request that matches it, once. */
+  private readonly requestHolds: Array<{ method: string; pathPattern: RegExp; outcome: Promise<number | null> }> = [];
 
   constructor(private readonly options: FakeOpenCodeOptions) {
     this.server = http.createServer((request, response) => {
@@ -115,6 +117,15 @@ export class FakeOpenCodeServer {
     this.eventStreams.clear();
     this.server.closeAllConnections();
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
+  }
+
+  /**
+   * @description Hold the response to the NEXT request with this method whose path matches `pathPattern`, until `outcome`
+   * settles: a status code answers the request with that error (it fails the way a refused or broken call does), `null`
+   * lets it through as the fake would have answered it at once. Once per call; the request is recorded on arrival.
+   */
+  holdNextRequest(method: string, pathPattern: RegExp, outcome: Promise<number | null>): void {
+    this.requestHolds.push({ method, pathPattern, outcome });
   }
 
   /** @description Requests with this method and path, in arrival order. */
@@ -230,6 +241,16 @@ export class FakeOpenCodeServer {
     const method = request.method ?? 'GET';
     const record: FakeOpenCodeRequest = { method, path: url.pathname, directory: url.searchParams.get('directory'), body: await readJsonBody(request) };
     this.requests.push(record);
+    const holdIndex = this.requestHolds.findIndex((hold) => hold.method === method && hold.pathPattern.test(record.path));
+    if (holdIndex !== -1) {
+      const [hold] = this.requestHolds.splice(holdIndex, 1);
+      const refusalStatus = await hold.outcome;
+      if (refusalStatus !== null) {
+        response.writeHead(refusalStatus, { 'content-type': jsonContentType });
+        response.end(JSON.stringify({ error: `the fake OpenCode refused ${method} ${record.path} (a flow held it and failed it)` }));
+        return;
+      }
+    }
     const reply = (body: unknown): void => {
       response.writeHead(okStatus, { 'content-type': jsonContentType });
       response.end(JSON.stringify(body));
