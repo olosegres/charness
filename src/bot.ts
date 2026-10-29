@@ -1882,9 +1882,13 @@ async function editQuestionMessageToClosed(key: SessionKey, messageId: number, q
   return editThreadMessage(key, messageId, buildClosedQuestionText(question, note, escapeMarkdown), { parse_mode: 'Markdown' });
 }
 
-/** {@link editQuestionMessageToClosed} for a question that ended without an answer. */
+/**
+ * {@link editQuestionMessageToClosed} for a question that ended without an answer. The note speaks the topic's language
+ * whatever called it — a boot or a session teardown runs in no request, so no locale is set by one.
+ */
 async function closeQuestionMessage(key: SessionKey, messageId: number, question: OpenCodeQuestion, closing: QuestionClosing): Promise<boolean> {
-  return editQuestionMessageToClosed(key, messageId, question, t(questionClosingNoteKeys[closing]));
+  const note = withThreadLocale(key, () => t(questionClosingNoteKeys[closing]));
+  return editQuestionMessageToClosed(key, messageId, question, note);
 }
 
 // ── auto-retry after a provider-side API error (plan S4/S5/S6) ──
@@ -4880,6 +4884,9 @@ async function releaseThreadSession(key: SessionKey): Promise<ReturnType<typeof 
   getThreadAdapter(key).rejectQuestion?.(key);
   const result = stopAllAdaptersFor(key);
   await state.clearAgentSessionIds(key);
+  // A sleeping conversation has no process whose stop would say so: a question the idle compaction re-asked for it can
+  // no longer be used, so its message is closed (it stays, without its buttons).
+  clearThreadCompaction(key);
   return result;
 }
 
@@ -5941,6 +5948,7 @@ const {
   forwardPromptToAgent: async (key, adapter, text) => { await forwardPromptToAgent(key, adapter, text); },
   pendingQuestions,
   retirePendingQuestion,
+  closeQuestionMessage,
   idleWindowMs: getAgentIdleMs(process.env.AGENT_IDLE_MINUTES),
   checkIsLimitWaitArmed: (key) => getArmedApiRetry(key)?.kind === 'usageLimit',
   suspendThreadSession,
@@ -6748,6 +6756,9 @@ async function unbindThread(key: SessionKey): Promise<void> {
     // Release persisted session ids too — otherwise re-binding this thread
     // later + a bot restart would resurrect the old session the user unbound.
     await state.clearAgentSessionIds(key);
+    // A sleeping conversation has no process whose stop would say so: a question the idle compaction re-asked for it can
+    // no longer be used, so its message is closed (it stays, without its buttons).
+    clearThreadCompaction(key);
     // Pause this thread's schedules BEFORE dropping the binding: a fire against
     // an unbound topic can't deliver, so the jobs park (paused + disarmed) and
     // the next /bind resumes them. `removeBinding` only touches bindings/agents/
@@ -8816,9 +8827,11 @@ command(['quit', 'q'], async (_ctx, key) => {
   stopAllAdaptersFor(key, otherAdapters);
 
   if (!primaryActive) {
-    // A sleeping conversation is released for good: the next message starts a fresh one.
+    // A sleeping conversation is released for good: the next message starts a fresh one. A question the idle compaction
+    // re-asked for it can no longer be used, so its message is closed (it stays, without its buttons).
     if (getResumableSessionId(key) !== null) {
       await state.clearAgentSessionIds(key);
+      clearThreadCompaction(key);
       await replyToThread(key, t('agent.sleeping_released'));
       return;
     }
@@ -10616,9 +10629,9 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   const key = await authoriseContext(ctx);
   if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
   const optIdx = parseInt(ctx.match[1], 10);
-  const reAskedQuestion = reAskedQuestions.get(keyToString(key));
-  const label = reAskedQuestion?.options[optIdx]?.label;
-  if (!reAskedQuestion || !label) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
+  const reAsked = reAskedQuestions.get(keyToString(key));
+  const label = reAsked?.question.options[optIdx]?.label;
+  if (!reAsked || !label) { await ctx.answerCbQuery(t('cb.no_pending_question')); return; }
   // The idle fire posts the re-asked question just BEFORE it stops the process, and a stopping process still reads as
   // active: a tap inside that window (or inside a start) is buffered like a typed prompt and replayed once a session is up.
   const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
@@ -10638,11 +10651,11 @@ bot.action(/^reask_(\d+)$/, async (ctx) => {
   const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
   // The label reached no session (the topic was told why): the question is still open, so are its buttons.
   if (outcome === 'noSession') {
-    if (!reAskedQuestions.has(keyToString(key))) reAskedQuestions.set(keyToString(key), reAskedQuestion);
+    if (!reAskedQuestions.has(keyToString(key))) reAskedQuestions.set(keyToString(key), reAsked);
     return;
   }
   const reAskedMessageId = getCallbackMessageId(ctx);
-  if (reAskedMessageId !== null) await editQuestionMessageToClosed(key, reAskedMessageId, reAskedQuestion, t('agent.question_answered_note', { answer: label }));
+  if (reAskedMessageId !== null) await editQuestionMessageToClosed(key, reAskedMessageId, reAsked.question, t('agent.question_answered_note', { answer: label }));
 });
 
 registerReminderCallbacks();
@@ -12985,7 +12998,8 @@ async function reattachExistingSessions(
  * A persisted question is restored ONLY when its thread's session reattached
  * and is currently active (`adapter.checkIsActive`). Otherwise the question is
  * unreachable — the agent that asked it is gone — so it is dropped from the
- * store, preventing a stale entry from lingering across boots. The persisted
+ * store, preventing a stale entry from lingering across boots; its message is
+ * kept, closed as unanswered, and its pin released. The persisted
  * `messageId` is preserved, so the OLD buttons resolve correctly; the question
  * is never re-posted.
  *
@@ -13015,7 +13029,12 @@ function restorePendingQuestions(): void {
       setPendingQuestion(key, migrated);
       restored += 1;
     } else {
-      clearPendingQuestion(key);
+      // The agent that asked it is gone, so nobody can answer it: it is closed like any question that ends unanswered —
+      // its message stays with the «not answered» note in place of the buttons and its pin is released. The entry goes
+      // back into the memory map first (and the retire clears it again at once): that is what lets the retire find the
+      // message and the pin, which only the restored entries had been given.
+      setPendingQuestion(key, migratePendingQuestionState(value));
+      void retirePendingQuestion(key);
       dropped += 1;
     }
   }

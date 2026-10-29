@@ -1,8 +1,9 @@
 /**
  * @description A question the agent asks stays in the topic however it ends, at PROCESS level: the BUILT charness started
  * the way an isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API of `telegramE2e/fakeTelegram.ts`,
- * with the fake `claude` (`jiraE2e/fakeClaude.ts`, mode `ask`) putting a real `AskUserQuestion` to the topic. One flow,
- * in order:
+ * with the fake `claude` (`jiraE2e/fakeClaude.ts`, mode `ask`) putting a real `AskUserQuestion` to the topic. Two flows.
+ *
+ * The first, on an instance with the default idle window, in order:
  *
  *   boot → the topic is bound → `/claude`
  *   → a tap on an option: the question message is NOT deleted, its text and options stay, the chosen answer stands in
@@ -12,13 +13,23 @@
  *     buttons, the pin is gone, and the message reaches the agent as a prompt
  *   → `/esc`: the same note
  *   → `/quit` (the session is stopped with the question open): the same note
+ *   → one call with TWO questions (`ask-two`): each question message keeps its own text and gets its own result — both
+ *     answered by a tap; the first answered and the second left alone
  *   → output landing below the question (a branch of the agent that keeps streaming): the question is posted again at the
  *     bottom and pinned, the first message stays as «asked again below» and is unpinned; an answer to the new one
  *     closes it with the answer
+ *   → the bot restarts while the question is open and finds the agent's session gone: the question the bot dropped at boot
+ *     stays with the same note, its buttons gone and its pin released
  *   → «create new folder» of `/bind` (it drops a pending question): the same note
  *
+ * The second, on an instance whose idle window is seconds, so the idle compaction re-asks a question the agent was left
+ * waiting on: the re-asked copy has `reask_<i>` buttons, and when the conversation ends without them being used the
+ * copy stays with the same note instead of keeping buttons that are dead — whichever way it ends: `/quit` or `/new` of
+ * the sleeping conversation, leaving the folder, a stop of the woken one, or a stop that comes while the re-asked
+ * message is still being sent.
+ *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is stopped
- * in `after`. The idle compaction's re-ask is in `reaskedQuestionE2e.test.ts`; the OpenCode backend's cancel is in
+ * in `after`. The idle compaction's re-ask itself is in `reaskedQuestionE2e.test.ts`; the OpenCode backend's cancel is in
  * `openCodeInterruptE2e.test.ts`.
  */
 
@@ -26,6 +37,7 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
@@ -33,14 +45,19 @@ import { TopicDriver } from './telegramE2e/topicDriver';
 import {
   fakeAskNoAnswerOutcome,
   fakeAskQuestion,
+  fakeAskSecondQuestion,
   fakeAskToolName,
+  fakeAskTwoOutcomeSeparator,
   fakeClaudeLogFileNames,
   fakeClaudeOutputWhileAskedFileName,
   type FakeClaudePrompt,
   type FakeClaudeToolCall,
 } from './jiraE2e/fakeClaudeContract';
 import { enDict } from '../i18n/en';
-import { bindCreateFolderCallback } from '../connectors/telegram/bindPicker';
+import { bindCreateFolderCallback, bindLeaveCurrentCallback } from '../connectors/telegram/bindPicker';
+import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { keyToString } from '../sessionKey';
+import { buildJsonStreamTmuxSessionName } from '../utils/jsonStreamHost';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -48,6 +65,7 @@ import {
   getFlowDeadlineMs,
   getFreeFixedPort,
   getFreePort,
+  getTmuxEnv,
   IsolatedCharness,
   listTmuxSessions,
   readJsonLines,
@@ -56,6 +74,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
+import { readPersistedState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -65,13 +84,20 @@ const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const projectFolder = 'proj';
-const launchLine = 'Launching Telegraf bot (long polling';
 
 const bootTimeoutMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
 /** A question put again at the bottom follows the output below it by a flush, a debounce and two paced sends. */
 const repostTimeoutMs = 45 * 1000;
+/** The idle window of the second flow's instance, in minutes (12 s): the fire that compacts and re-asks comes this long after the last activity. */
+const idleWindowMinutes = '0.2';
+/** The re-asked question follows the idle window by a compaction turn and a stop. */
+const reaskTimeoutMs = 90 * 1000;
+/** The line the bot logs once the idle fire has stopped the agent's process (the conversation then sleeps). */
+const idleStopLine = 'process stopped; the session sleeps';
+/** The line the bot logs at boot for the persisted questions it brought back and the ones it dropped. */
+const droppedQuestionLogLine = '[reattach] pending questions: restored 0, dropped 1';
 
 /** The text the fake streams under a pending question (`fakeClaudeOutputWhileAskedFileName`). */
 const outputWhileAskedText = 'A branch of the agent keeps working while the question waits.';
@@ -84,7 +110,7 @@ let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
 let fakeTelegram: FakeTelegram;
 let topic: TopicDriver;
-let repostTopic: TopicDriver;
+let waitingTopic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 
 function getLayout(): IsolatedInstanceLayout {
@@ -101,19 +127,67 @@ function removeInstanceSync(): void {
   removeIsolatedInstanceSync(layout, charness);
 }
 
+/** Lay out a fresh instance and its fake Bot API; `extraEnv` is what the flow adds to the instance's env file. */
+async function setUpInstance(layoutPrefix: string, waitTimeoutMs: number, extraEnv: Record<string, string>): Promise<void> {
+  if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
+  layout = createIsolatedInstanceLayout(layoutPrefix, [projectFolder], getFlowDeadlineMs());
+  defaultTmuxSessionsBefore = listTmuxSessions([]);
+
+  process.on('exit', removeInstanceSync);
+  process.once('SIGINT', exitOnSignal);
+  process.once('SIGTERM', exitOnSignal);
+
+  fakeTelegram = new FakeTelegram({ botUser, operator, group });
+  topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
+  waitingTopic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, waitTimeoutMs);
+  const apiRoot = await fakeTelegram.start();
+  writeInstanceEnvFile(layout, {
+    TELEGRAM_BOT_TOKEN: fakeBotToken,
+    TELEGRAM_API_ROOT: apiRoot,
+    ALLOWED_GROUP_ID: group.id.toString(),
+    CHAT_MODE: 'group',
+    DATA_DIR: layout.dataDir,
+    WORK_ROOT: layout.workRoot,
+    TMUX_TMPDIR: layout.tmuxTmpDir,
+    CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
+    // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
+    OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
+    SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+    ...getTelegramFlowTestTimingsEnv(),
+    ...extraEnv,
+  });
+}
+
+async function tearDownInstance(): Promise<void> {
+  await charness?.stop();
+  removeInstanceSync();
+  await fakeTelegram?.stop();
+  process.off('exit', removeInstanceSync);
+  process.off('SIGINT', exitOnSignal);
+  process.off('SIGTERM', exitOnSignal);
+  assert.deepEqual(listTmuxSessions([]), defaultTmuxSessionsBefore, 'the default tmux server was not touched');
+}
+
+/** Start charness on the instance, bind the topic to the project folder and start the fake agent in it. */
+async function bootBindAndStartAgent(): Promise<void> {
+  charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+  await topic.sendAndAwaitReply(`/bind ${projectFolder}`, `Bound to \`${projectFolder}\``);
+  await startAgentSession();
+}
+
 /** The user messages the fake agent read that carried `label`. */
 function getAgentPrompts(label: string): FakeClaudePrompt[] {
   return readJsonLines<FakeClaudePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts)).filter((prompt) => prompt.text.includes(label));
 }
 
-/** The answers the fake's `AskUserQuestion` got, in order. */
+/** The answers the fake's `AskUserQuestion` got, in order (the two answers of an `ask-two` call joined). */
 function getGivenAnswers(): string[] {
   return readJsonLines<FakeClaudeToolCall>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.toolCalls)).filter((call) => call.tool === fakeAskToolName).map((call) => call.outcome);
 }
 
-/** Put the question (`ask` mode): resolves its message once it carries the option buttons. */
-async function askQuestion(driver: TopicDriver, promptLabel: string): Promise<FakeTelegramMessage> {
-  const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:ask] ask me something`);
+/** Put the question (`ask` mode, or `mode`): resolves its message once it carries the option buttons. */
+async function askQuestion(driver: TopicDriver, promptLabel: string, mode: 'ask' | 'ask-two' = 'ask'): Promise<FakeTelegramMessage> {
+  const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:${mode}] ask me something`);
   return driver.waitForMessage(`the question of ${promptLabel}`, (message) =>
     message.message_id > sentMessageId
     && message.text.includes(fakeAskQuestion.question)
@@ -127,15 +201,28 @@ function readKeptMessage(message: FakeTelegramMessage): FakeTelegramMessage {
   return current;
 }
 
-/** The question stays as asked: header, question and EVERY option, then `note` — and no buttons. */
-function assertQuestionKeptWithNote(message: FakeTelegramMessage, note: string): void {
+/** The question stays as asked: header, question and EVERY option of `question`, then `note` — and no buttons. */
+function assertQuestionKeptWithNote(message: FakeTelegramMessage, note: string, question: { header: string; question: string; labels: readonly string[] } = firstQuestion): void {
   const current = readKeptMessage(message);
-  for (const part of [fakeAskQuestion.header, fakeAskQuestion.question, fakeAskQuestion.shortOptionLabel, fakeAskQuestion.longOptionLabel]) {
+  for (const part of [question.header, question.question, ...question.labels]) {
     assert.ok(current.text.includes(part), `the question's «${part.slice(0, 40)}…» stays: ${current.text}`);
   }
   assert.ok(current.text.endsWith(`\n\n${note}`), `the text ends with the note «${note.slice(0, 60)}»: ${current.text.slice(-120)}`);
   assert.equal(current.reply_markup, undefined, 'the buttons are gone');
 }
+
+/** What `ask` mode puts to the topic, as `assertQuestionKeptWithNote` reads it. */
+const firstQuestion = {
+  header: fakeAskQuestion.header,
+  question: fakeAskQuestion.question,
+  labels: [fakeAskQuestion.shortOptionLabel, fakeAskQuestion.longOptionLabel],
+} as const;
+/** The second question of `ask-two` mode. */
+const secondQuestion = {
+  header: fakeAskSecondQuestion.header,
+  question: fakeAskSecondQuestion.question,
+  labels: [fakeAskSecondQuestion.firstOptionLabel, fakeAskSecondQuestion.secondOptionLabel],
+} as const;
 
 async function waitForUnpinned(message: FakeTelegramMessage): Promise<void> {
   await getCharness().waitFor(`message ${message.message_id} to be unpinned`, replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(message.message_id));
@@ -151,52 +238,30 @@ async function startAgentSession(): Promise<void> {
   await topic.sendAndAwaitReply('/claude', 'ready in');
 }
 
+/** A promise the test settles itself: the moment a held Bot API response is let go. */
+function createRelease(): { promise: Promise<void>; release: () => void } {
+  let release: () => void = () => {};
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+}
+
+/** The topic message that carries the option buttons of the question that follows `afterMessageId`, waited for. */
+async function waitForQuestionAfter(driver: TopicDriver, description: string, afterMessageId: number, question: { question: string }): Promise<FakeTelegramMessage> {
+  return driver.waitForMessage(description, (message) =>
+    message.message_id > afterMessageId
+    && message.text.includes(question.question)
+    && driver.getKeyboardData(message).flat().some((data) => data.startsWith('qa_')));
+}
+
 describe('A question the agent asks stays in the topic however it ends, end to end: built charness, fake Bot API', () => {
   before(async () => {
-    if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
-    layout = createIsolatedInstanceLayout('charness-qkept-', [projectFolder], getFlowDeadlineMs());
-    defaultTmuxSessionsBefore = listTmuxSessions([]);
-
-    process.on('exit', removeInstanceSync);
-    process.once('SIGINT', exitOnSignal);
-    process.once('SIGTERM', exitOnSignal);
-
-    fakeTelegram = new FakeTelegram({ botUser, operator, group });
-    topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
-    repostTopic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, repostTimeoutMs);
-    const apiRoot = await fakeTelegram.start();
-    writeInstanceEnvFile(layout, {
-      TELEGRAM_BOT_TOKEN: fakeBotToken,
-      TELEGRAM_API_ROOT: apiRoot,
-      ALLOWED_GROUP_ID: group.id.toString(),
-      CHAT_MODE: 'group',
-      DATA_DIR: layout.dataDir,
-      WORK_ROOT: layout.workRoot,
-      TMUX_TMPDIR: layout.tmuxTmpDir,
-      CLAUDE_BIN: writeFakeClaudeLauncher(layout, null),
-      // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
-      OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
-      SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
-      ...getTelegramFlowTestTimingsEnv(),
-    });
+    await setUpInstance('charness-qkept-', replyTimeoutMs, {});
   });
 
-  after(async () => {
-    await charness?.stop();
-    removeInstanceSync();
-    await fakeTelegram?.stop();
-    process.off('exit', removeInstanceSync);
-    process.off('SIGINT', exitOnSignal);
-    process.off('SIGTERM', exitOnSignal);
-    assert.deepEqual(listTmuxSessions([]), defaultTmuxSessionsBefore, 'the default tmux server was not touched');
-  });
+  after(tearDownInstance);
 
   it('boots Telegram-only against the fake Bot API, binds the topic and starts the fake agent', async () => {
-    charness = new IsolatedCharness(getLayout());
-    const pollsBefore = fakeTelegram.listCalls('getUpdates').length;
-    await charness.start(bootTimeoutMs, (runOutput) => runOutput.includes(launchLine) && fakeTelegram.listCalls('getUpdates').length > pollsBefore);
-    await topic.sendAndAwaitReply(`/bind ${projectFolder}`, `Bound to \`${projectFolder}\``);
-    await startAgentSession();
+    await bootBindAndStartAgent();
   });
 
   it('a tap on an option: the question message stays with its options, the chosen answer stands in place of the buttons, the pin is gone, the agent gets the answer', async () => {
@@ -259,17 +324,57 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     await startAgentSession();
   });
 
+  it('one call with two questions, both answered: each question message keeps its own text and gets its own result', async () => {
+    const answersBefore = getGivenAnswers().length;
+    const first = await askQuestion(topic, 'KEPT-TWO-A', 'ask-two');
+    assert.ok(!first.text.includes(secondQuestion.question), 'only the first question is on screen at first');
+    await topic.tapAndAwaitAnswer(first, 'qa_0_0');
+    await topic.waitForMessageText('the first answer under the first question', first, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
+
+    // The second is a NEW message, shown once the first is answered; the first stays as it was.
+    const second = await waitForQuestionAfter(topic, 'the second question', first.message_id, secondQuestion);
+    assert.ok(!second.text.includes(fakeAskQuestion.question), 'the second message holds the second question alone');
+    assert.deepEqual(topic.getKeyboardData(second), [['qa_1_0'], ['qa_1_1']], 'one button per option of the second question');
+    assertQuestionKeptWithNote(first, buildAnsweredNote(fakeAskQuestion.shortOptionLabel));
+    await topic.tapAndAwaitAnswer(second, 'qa_1_1');
+    await topic.waitForMessageText('the second answer under the second question', second, (text) => text.endsWith(buildAnsweredNote(fakeAskSecondQuestion.secondOptionLabel)));
+
+    assertQuestionKeptWithNote(first, buildAnsweredNote(fakeAskQuestion.shortOptionLabel), firstQuestion);
+    assertQuestionKeptWithNote(second, buildAnsweredNote(fakeAskSecondQuestion.secondOptionLabel), secondQuestion);
+    await waitForUnpinned(first);
+    await waitForUnpinned(second);
+    await getCharness().waitFor('the agent to get both answers', agentStartTimeoutMs, () => getGivenAnswers().length > answersBefore);
+    assert.equal(getGivenAnswers().at(-1), [fakeAskQuestion.shortOptionLabel, fakeAskSecondQuestion.secondOptionLabel].join(fakeAskTwoOutcomeSeparator));
+  });
+
+  it('one call with two questions, the second left alone: the first keeps its answer, the second gets the «not answered» note', async () => {
+    const first = await askQuestion(topic, 'KEPT-TWO-B', 'ask-two');
+    await topic.tapAndAwaitAnswer(first, 'qa_0_1');
+    await topic.waitForMessageText('the long answer under the first question', first, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.longOptionLabel)));
+    const second = await waitForQuestionAfter(topic, 'the second question', first.message_id, secondQuestion);
+    await waitForPinned(second);
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'WALK-2 [fake:answer] leave the second question');
+    await topic.waitForMessageText('the note under the second question', second, (text) => text.endsWith(`\n\n${unansweredNote}`));
+    assertQuestionKeptWithNote(second, unansweredNote, secondQuestion);
+    assertQuestionKeptWithNote(first, buildAnsweredNote(fakeAskQuestion.longOptionLabel), firstQuestion);
+    await waitForUnpinned(second);
+    await getCharness().waitFor('the new message to reach the agent as a prompt', agentStartTimeoutMs, () => getAgentPrompts('WALK-2').length > 0);
+  });
+
   it('output landing below the question: it is posted again at the bottom and pinned, the first message stays as «asked again below», an answer closes the new one', async () => {
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeOutputWhileAskedFileName), outputWhileAskedText);
     try {
+      const repostTopic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, repostTimeoutMs);
       const first = await askQuestion(repostTopic, 'KEPT-REPOST');
       // The agent's output lands below the question, which brings it back to the bottom: a newer message with the buttons.
       const reposted = await repostTopic.waitForMessage('the question posted again at the bottom', (message) =>
         message.message_id > first.message_id
         && message.text.includes(fakeAskQuestion.question)
         && repostTopic.getKeyboardData(message).flat().some((data) => data.startsWith('qa_')));
-      const output = await repostTopic.waitForMessage('the output under the first question', (message) => message.text.includes(outputWhileAskedText));
-      assert.ok(first.message_id < output.message_id && output.message_id < reposted.message_id, 'the order: question, output, the question again');
+      // The text streamed while the question waits is what moved it; it may be a message of its own or carried by the one the
+      // turn's earlier text is in (a continuation is appended by an edit), so only its being in the topic is asserted.
+      await repostTopic.waitForMessage('the output the agent streamed while the question waited', (message) => message.text.includes(outputWhileAskedText));
 
       // The first message is not deleted: the question as asked, «asked again below» in place of the buttons, no pin.
       await repostTopic.waitForMessageText('the first question marked as asked again', first, (text) => text.endsWith(`\n\n${askedAgainNote}`));
@@ -287,6 +392,28 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     }
   });
 
+  it('a restart that finds the agent\'s session gone: the question the bot drops at boot stays with the «not answered» note, its buttons gone and its pin released', async () => {
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    const question = await askQuestion(topic, 'KEPT-BOOT');
+    await waitForPinned(question);
+    await getCharness().waitFor('the question to be saved', replyTimeoutMs, () => readPersistedState(getLayout()).pendingQuestions?.[key]?.messageId === question.message_id);
+
+    await getCharness().stop();
+    // Precondition: the bot being down closes nothing — the question is open on screen, with its buttons and its pin.
+    assert.notEqual(readKeptMessage(question).reply_markup, undefined, 'precondition: the buttons are there while the bot is down');
+    assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'precondition: the question is pinned while the bot is down');
+    // The agent's session is gone while the bot is down: nothing is left to answer the question.
+    const killed = spawnSync('tmux', ['kill-session', '-t', `=${buildJsonStreamTmuxSessionName(makeTelegramKey(group.id, topicThreadId))}`], { env: getTmuxEnv(getLayout().tmuxTmpDir) });
+    assert.equal(killed.status, 0, `the agent's tmux session was killed: ${killed.stderr.toString()}`);
+
+    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+    await getCharness().waitFor('the boot to drop the question', bootTimeoutMs, () => getCharness().output.includes(droppedQuestionLogLine));
+    await topic.waitForMessageText('the note under the dropped question', question, (text) => text.endsWith(`\n\n${unansweredNote}`));
+    assertQuestionKeptWithNote(question, unansweredNote);
+    await waitForUnpinned(question);
+    assert.equal(readPersistedState(getLayout()).pendingQuestions?.[key], undefined, 'the dropped question is gone from the saved state');
+  });
+
   it('«create new folder» of /bind drops a pending question: it stays with the same note', async () => {
     const question = await askQuestion(topic, 'KEPT-BIND');
     await waitForPinned(question);
@@ -296,5 +423,114 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     await topic.waitForMessageText('the note under the question', question, (text) => text.endsWith(`\n\n${unansweredNote}`));
     assertQuestionKeptWithNote(question, unansweredNote);
     await waitForUnpinned(question);
+  });
+});
+
+describe('A question the idle compaction re-asked stays too, when the conversation ends before it is used, end to end: built charness, fake Bot API', () => {
+  before(async () => {
+    await setUpInstance('charness-qkept-idle-', reaskTimeoutMs, { AGENT_IDLE_MINUTES: idleWindowMinutes });
+  });
+
+  after(tearDownInstance);
+
+  function countIdleStops(): number {
+    return getCharness().output.split(idleStopLine).length - 1;
+  }
+
+  /**
+   * One turn first, so the idle fire has something to compress; then the question, left unanswered until the idle fire
+   * rejects it, compacts, re-asks it and stops the process. Resolves the re-asked message (buttons `reask_<i>`) once the
+   * conversation sleeps.
+   */
+  async function putReAskedQuestionAndSleep(promptLabel: string): Promise<FakeTelegramMessage> {
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel}-WARM [fake:answer] one turn to compress`);
+    await getCharness().waitFor(`the warm-up turn of ${promptLabel} to reach the agent`, agentStartTimeoutMs, () => getAgentPrompts(`${promptLabel}-WARM`).length > 0);
+    const idleStopsBefore = countIdleStops();
+    const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:ask] ask me something`);
+    const reasked = await waitingTopic.waitForMessage(`the re-asked question of ${promptLabel}`, (message) =>
+      message.message_id > sentMessageId && waitingTopic.getKeyboardData(message).flat().some((data) => data.startsWith('reask_')));
+    await getCharness().waitFor(`the idle stop that follows the re-ask of ${promptLabel}`, agentStartTimeoutMs, () => countIdleStops() > idleStopsBefore);
+    assert.deepEqual(waitingTopic.getKeyboardData(reasked), [['reask_0'], ['reask_1']], 'precondition: one live button per option');
+    return reasked;
+  }
+
+  async function assertReAskedQuestionClosed(reasked: FakeTelegramMessage): Promise<void> {
+    await waitingTopic.waitForMessageText('the note under the re-asked question', reasked, (text) => text.endsWith(`\n\n${unansweredNote}`));
+    assertQuestionKeptWithNote(reasked, unansweredNote);
+    // The buttons are dead for good reason now: a tap says so, instead of looking alive.
+    assert.equal(await topic.tapAndAwaitAnswer(reasked, 'reask_0'), enDict['cb.no_pending_question']);
+  }
+
+  it('boots with a short idle window, binds the topic and starts the fake agent', async () => {
+    await bootBindAndStartAgent();
+  });
+
+  it('/quit of the sleeping conversation: the re-asked question stays with the «not answered» note instead of dead buttons', async () => {
+    const reasked = await putReAskedQuestionAndSleep('REASK-QUIT');
+    try {
+      await topic.sendAndAwaitReply('/quit', enDict['agent.sleeping_released']);
+      await assertReAskedQuestionClosed(reasked);
+    } finally {
+      // The next step starts from a live session, whatever this one found.
+      await startAgentSession();
+    }
+  });
+
+  it('/new of the sleeping conversation: the same', async () => {
+    const reasked = await putReAskedQuestionAndSleep('REASK-NEW');
+    const newCommandId = fakeTelegram.pushOperatorMessage(topicThreadId, '/new');
+    await assertReAskedQuestionClosed(reasked);
+    await waitingTopic.waitForMessage('the fresh session', (message) => message.message_id > newCommandId && message.text.includes('ready in'));
+  });
+
+  it('leaving the folder with the conversation asleep: the same', async () => {
+    const reasked = await putReAskedQuestionAndSleep('REASK-LEAVE');
+    try {
+      const picker = await topic.sendAndAwaitReply('/bind', enDict['bind.current'].replace('{subdir}', projectFolder));
+      await topic.tapAndAwaitAnswer(picker, bindLeaveCurrentCallback);
+      await assertReAskedQuestionClosed(reasked);
+    } finally {
+      // The next step starts from a bound topic with a live session, whatever this one found.
+      await topic.sendAndAwaitReply(`/bind ${projectFolder}`, `Bound to \`${projectFolder}\``);
+      await startAgentSession();
+    }
+  });
+
+  it('/quit while the re-asked question is still being sent: the message that lands is closed the same', async () => {
+    const sendHold = createRelease();
+    // The Bot API holds the answer to the re-asked question's send: the message exists, the bot does not know its id yet.
+    fakeTelegram.holdNextResponse('sendMessage', sendHold.promise, (payload) => JSON.stringify(payload.reply_markup ?? null).includes('reask_'));
+    try {
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-INFLIGHT-WARM [fake:answer] one turn to compress');
+      await getCharness().waitFor('the warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('REASK-INFLIGHT-WARM').length > 0);
+      const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-INFLIGHT [fake:ask] ask me something');
+      const reasked = await waitingTopic.waitForMessage('the re-asked question, its send held', (message) =>
+        message.message_id > sentMessageId && waitingTopic.getKeyboardData(message).flat().some((data) => data.startsWith('reask_')));
+
+      // The send being held, nothing else can be sent either (sends are paced in order): the stop is read off the saved state
+      // instead — it clears the conversation's compaction marks, which the idle fire left behind, the way any stop does.
+      const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+      assert.ok(readPersistedState(getLayout()).compactIdleTracking?.[key], 'precondition: the idle fire left its marks on the saved state');
+      fakeTelegram.pushOperatorMessage(topicThreadId, '/quit');
+      await getCharness().waitFor('the stop to clear the conversation\'s compaction marks', replyTimeoutMs, () => readPersistedState(getLayout()).compactIdleTracking?.[key] === undefined);
+      assert.notEqual(readKeptMessage(reasked).reply_markup, undefined, 'precondition: the stop alone leaves the held message as it is');
+      sendHold.release();
+      await assertReAskedQuestionClosed(reasked);
+    } finally {
+      sendHold.release();
+      // The next step starts from a live session, whatever this one found.
+      await startAgentSession();
+    }
+  });
+
+  it('/quit of the conversation a message woke: the same', async () => {
+    const reasked = await putReAskedQuestionAndSleep('REASK-WOKEN');
+    // The question is still open for the person, and a message of theirs wakes the conversation up.
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'WAKE-1 [fake:answer] a message instead of a tap');
+    await waitingTopic.waitForMessage('the woken agent to answer', (message) => message.message_id > reasked.message_id && message.text.includes('Working on WAKE-1.'));
+    assert.notEqual(readKeptMessage(reasked).reply_markup, undefined, 'a message of theirs leaves the re-asked question open');
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, '/quit');
+    await assertReAskedQuestionClosed(reasked);
   });
 });

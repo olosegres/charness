@@ -126,7 +126,12 @@ its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted li
 **A question's message is never deleted.** The idle fire retires the pending question through the `retirePendingQuestion` port
 (`bot.ts`: clears the state — which unpins — and edits the message to the question as asked plus a note in place of its buttons,
 here «asked again below»), then re-asks it as a new message; every other end (an answer, a message sent instead, `/esc`, the
-session gone, a re-post to the bottom) goes through the same `editQuestionMessageToClosed` edit.
+session gone, a re-post to the bottom, a persisted question the boot drops) goes through the same `editQuestionMessageToClosed` edit.
+The re-asked copy is a `ReAskedQuestion` record (question, message id, `isTornDown`) kept from BEFORE its send, so a tap right after
+it finds it: a tap removes the record and closes the message with the answer; the end of the conversation without a tap goes through
+`clearThreadCompaction` → `closeReAskedQuestion`, which closes it as unanswered through the `closeQuestionMessage` port — a send still
+in flight is flagged `isTornDown` and closes the message it lands in. A sleeping conversation has no process whose stop would say so,
+so its release paths (`/quit`, `releaseThreadSession` for `/new`, `unbindThread`) call `clearThreadCompaction` themselves.
 
 ## `autoContinueLimits.ts`
 

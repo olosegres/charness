@@ -1,5 +1,4 @@
 import { Markup, type Context } from 'telegraf';
-import type { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { getThreadAdapter } from '../../../adapters/createAdapter';
 // Decides whether the D3 summary guidance rides the compaction instruction: OpenCode bakes it into its fork
 // compaction prompt (covering auto/overflow compaction too), the Claude backends need it every time.
@@ -125,6 +124,17 @@ interface ThreadCompactionState {
 }
 
 /** The two switches the `/compact_on_idle` picker shows: the idle compaction itself and the summary post. */
+/**
+ * @description A question the idle compaction re-asked (D1): the question, the id of the message that carries its
+ * `reask_<i>` buttons (`null` until the send resolves), and whether its conversation ended before that — the send then
+ * closes the message it landed in.
+ */
+export interface ReAskedQuestion {
+  question: OpenCodeQuestion;
+  messageId: number | null;
+  isTornDown: boolean;
+}
+
 interface CompactOnIdlePickerState {
   isIdleEnabled: boolean;
   /** The `/compact_summary` setting — the same one, so the two pickers can never disagree. */
@@ -165,6 +175,11 @@ export interface CompactionPorts
    * a note says how it ended; resolves whether the message was edited. The idle re-ask uses it with `askedAgain`.
    */
   retirePendingQuestion: (key: SessionKey, closing: QuestionClosing) => Promise<boolean>;
+  /**
+   * Edit a question's message to the question as asked plus a note in place of its buttons (the text stays, the message
+   * is never deleted); resolves whether it was edited. The re-asked copy uses it with `unanswered` when its conversation ends.
+   */
+  closeQuestionMessage: (key: SessionKey, messageId: number, question: OpenCodeQuestion, closing: QuestionClosing) => Promise<boolean>;
   /** The idle window in force (`AGENT_IDLE_MINUTES` or the 55-minute default; L-D9). */
   idleWindowMs: number;
   /** Whether a usage-limit wait is armed for the topic — no compaction turn then (L-D6). */
@@ -184,7 +199,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, retirePendingQuestion, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, retirePendingQuestion, closeQuestionMessage, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * Threads with a compaction IN FLIGHT (via {@link runThreadCompaction}). While a
@@ -522,7 +537,7 @@ export function createCompaction(ports: CompactionPorts) {
     const pollTimer = deferredCompactionPollTimers.get(kStr);
     if (pollTimer) clearTimeout(pollTimer);
     deferredCompactionPollTimers.delete(kStr);
-    reAskedQuestions.delete(kStr);
+    closeReAskedQuestion(key);
   }
 
   /**
@@ -676,22 +691,39 @@ export function createCompaction(ports: CompactionPorts) {
    * @description Per-thread idle-compaction RE-ASKED question (D1), keyed by {@link SessionKey} string. A
    * `reask_<idx>` tap forwards the label of its option to the (now compacted) session as a FRESH prompt — the
    * original question request was rejected server-side, so it cannot be answered any more — and closes the re-asked
-   * message with that answer under the question. In-memory only: after a restart the buttons are simply inert ("no
-   * pending question"), which is safe.
+   * message with that answer under the question. When the conversation ends instead ({@link closeReAskedQuestion}) the
+   * message is closed as unanswered, so its buttons never sit there dead. In-memory only: after a restart the buttons
+   * are simply inert ("no pending question"), which is safe.
    */
-  const reAskedQuestions = new Map<string, OpenCodeQuestion>();
+  const reAskedQuestions = new Map<string, ReAskedQuestion>();
 
   /**
-   * @description Build the RE-ASK inline keyboard for an idle-compaction pending
-   * question (D1) and record the question so a `reask_<idx>` tap can forward the
-   * chosen label as a fresh prompt.
+   * @description The conversation ended with its re-asked question unused (session closed or stopped, `/quit`, `/new`,
+   * leaving the folder): forget it and close its message as unanswered — the question stays, the buttons go. A re-ask
+   * whose send is still in flight has no message id yet: it is flagged, and the send closes the message when it lands.
+   * A question used by a tap is no longer in the map, so its answer is never overwritten.
    */
-  function buildReAskKeyboard(
-    key: SessionKey,
-    question: OpenCodeQuestion,
-  ): InlineKeyboardMarkup | undefined {
-    reAskedQuestions.set(keyToString(key), question);
-    return buildQuestionOptionsKeyboard(question, (optionIndex) => `reask_${optionIndex}`);
+  function closeReAskedQuestion(key: SessionKey): void {
+    const kStr = keyToString(key);
+    const reAsked = reAskedQuestions.get(kStr);
+    if (!reAsked) return;
+    reAskedQuestions.delete(kStr);
+    reAsked.isTornDown = true;
+    if (reAsked.messageId !== null) void closeQuestionMessage(key, reAsked.messageId, reAsked.question, 'unanswered');
+  }
+
+  /**
+   * @description Post the RE-ASKED question (D1) with its option buttons and record it BEFORE the send, so a
+   * `reask_<idx>` tap that lands right after the send finds the question and can forward the chosen label as a fresh
+   * prompt. Its message id is recorded once the send resolves.
+   */
+  async function postReAskedQuestion(key: SessionKey, text: string, question: OpenCodeQuestion): Promise<void> {
+    const reAsked: ReAskedQuestion = { question, messageId: null, isTornDown: false };
+    reAskedQuestions.set(keyToString(key), reAsked);
+    const keyboard = buildQuestionOptionsKeyboard(question, (optionIndex) => `reask_${optionIndex}`);
+    reAsked.messageId = await replyToThread(key, text, buildKeyboardExtra(keyboard));
+    // The conversation ended while the send was in flight: the message that landed is closed now.
+    if (reAsked.isTornDown && reAsked.messageId !== null) await closeQuestionMessage(key, reAsked.messageId, question, 'unanswered');
   }
 
   /**
@@ -726,10 +758,9 @@ export function createCompaction(ports: CompactionPorts) {
     const plan = buildIdleCompactionNoticeParts({ ...parts, questionText });
     if (plan.notice) await replyToThread(key, plan.notice);
     if (plan.summary) await postCompactionSummary(key, plan.summary);
-    // The keyboard is built HERE (not while planning): it also records the option
-    // labels a `reask_<idx>` tap resolves against, which must not happen for a
-    // question that is never posted.
-    if (plan.question && question) await replyToThread(key, plan.question, buildKeyboardExtra(buildReAskKeyboard(key, question)));
+    // The question is recorded HERE (not while planning): the record is what a `reask_<idx>` tap resolves against,
+    // which must not happen for a question that is never posted.
+    if (plan.question && question) await postReAskedQuestion(key, plan.question, question);
   }
 
   /**

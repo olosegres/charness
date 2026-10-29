@@ -52,6 +52,7 @@ describe('compaction: the compaction flow over its ports', () => {
       forwardPromptToAgent: async () => {},
       pendingQuestions: new Map(),
       retirePendingQuestion: async () => false,
+      closeQuestionMessage: async () => false,
       idleWindowMs: 55 * 60 * 1000,
       checkIsLimitWaitArmed: () => false,
       suspendThreadSession: async () => {},

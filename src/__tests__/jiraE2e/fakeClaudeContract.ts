@@ -153,6 +153,20 @@ export const fakeCancelWatchToken = '[fake:cancel-watch]';
  */
 export const fakeClaudeOutputWhileAskedFileName = 'output-while-asked';
 
+/**
+ * The second question of `ask-two` mode, put in the SAME `AskUserQuestion` call as {@link fakeAskQuestion}: the bot shows
+ * them one after the other and replies to the agent once both are answered.
+ */
+export const fakeAskSecondQuestion = {
+  header: 'Order',
+  question: 'In which order do we go?',
+  firstOptionLabel: 'Front to back',
+  secondOptionLabel: 'Back to front',
+} as const;
+
+/** What `ask-two` mode logs as its outcome: the two answers it got, in order, joined by this. */
+export const fakeAskTwoOutcomeSeparator = ' / ';
+
 /** The outcome `ask` mode logs for a question that was declined, not answered (the bot's `control_response` carries no answers). */
 export const fakeAskNoAnswerOutcome = 'no answer';
 
