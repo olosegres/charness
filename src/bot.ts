@@ -1835,10 +1835,10 @@ function onThreadActivityWhileQuestionPending(key: SessionKey): void {
 
 /**
  * @description Re-post the current pending question as the newest thread message
- * (S3): close the old question message as «asked again below» (its text stays, its
- * buttons go — a question message is never deleted), then send the current question
- * again via {@link postPendingQuestionAt} (which re-renders with S1 descriptions /
- * S2 current index and re-owns `messageId`). No-op if the question was answered
+ * (S3): send the current question again via {@link postPendingQuestionAt} (which
+ * re-renders with S1 descriptions / S2 current index and re-owns `messageId`), then
+ * close the old question message as «asked again below» (its text stays, its
+ * buttons go — a question message is never deleted). No-op if the question was answered
  * meanwhile, or if it is already the last message (the loop guard re-checked at
  * fire time, since the debounce window may have closed the gap).
  */
@@ -1858,10 +1858,13 @@ async function repostPendingQuestionToBottom(key: SessionKey): Promise<void> {
     if (s.isPostInFlight) return;
     const oldMessageId = pending.messageId;
     const oldQuestion = pending.data.questions[pending.currentIndex];
-    if (oldMessageId !== null && oldQuestion) {
+    await postPendingQuestionAt(key);
+    // The old copy says «asked again below» only once there IS a copy below. A post that failed leaves the question where it
+    // was (its message id unchanged) and still answerable there: that message is not a record yet.
+    const newMessageId = pendingQuestions.get(kStr)?.messageId ?? null;
+    if (oldMessageId !== null && oldQuestion && newMessageId !== null && newMessageId !== oldMessageId) {
       await closeQuestionMessage(key, oldMessageId, oldQuestion, 'askedAgain');
     }
-    await postPendingQuestionAt(key);
   });
 }
 
@@ -4901,11 +4904,18 @@ async function releaseThreadSession(key: SessionKey): Promise<ReturnType<typeof 
   // Claude / no pending question.
   getThreadAdapter(key).rejectQuestion?.(key);
   const result = stopAllAdaptersFor(key);
-  await state.clearAgentSessionIds(key);
-  // A sleeping conversation has no process whose stop would say so: a question the idle compaction re-asked for it can
-  // no longer be used, so its message is closed (it stays, without its buttons).
-  clearThreadCompaction(key);
+  await releaseConversationIds(key);
   return result;
+}
+
+/**
+ * @description Release a conversation for good: its saved session ids go, so nothing resumes it, and the question the idle
+ * compaction re-asked for it is closed (its message stays, without its buttons). A conversation that is asleep has no process
+ * whose stop would say so, so the release itself has to — every release of a conversation that may be asleep goes through here.
+ */
+async function releaseConversationIds(key: SessionKey): Promise<void> {
+  await state.clearAgentSessionIds(key);
+  clearThreadCompaction(key);
 }
 
 /**
@@ -4930,7 +4940,11 @@ async function switchThreadAdapter(key: SessionKey, newName: string): Promise<Lo
   // Another agent or a shell takes the topic over: the open request belonged to
   // the old conversation, so it closes silently instead of a later wake-up
   // reminding (or, in a terminal, TYPING into) a session that never saw it.
-  if (prevName && !checkIsSameConversationSwitch(prevName, newName)) cancelConversationRequest(key);
+  if (prevName && !checkIsSameConversationSwitch(prevName, newName)) {
+    cancelConversationRequest(key);
+    // Nor does the conversation left behind get its re-asked question answered: its buttons would send the label into the new one.
+    closeReAskedQuestion(key);
+  }
   let switchCutOffWork: LostWork | null = null;
   if (prevName && prevName !== newName) {
     try {
@@ -6777,10 +6791,7 @@ async function unbindThread(key: SessionKey): Promise<void> {
     }
     // Release persisted session ids too — otherwise re-binding this thread
     // later + a bot restart would resurrect the old session the user unbound.
-    await state.clearAgentSessionIds(key);
-    // A sleeping conversation has no process whose stop would say so: a question the idle compaction re-asked for it can
-    // no longer be used, so its message is closed (it stays, without its buttons).
-    clearThreadCompaction(key);
+    await releaseConversationIds(key);
     // Pause this thread's schedules BEFORE dropping the binding: a fire against
     // an unbound topic can't deliver, so the jobs park (paused + disarmed) and
     // the next /bind resumes them. `removeBinding` only touches bindings/agents/
@@ -8742,8 +8753,10 @@ async function resumeSessionByIndex(
     // The ONLY resume path that posts the "last N messages" context block —
     // silent re-attach (bot restart) and crash recovery must stay quiet.
     await adapter.resumeSession(key, workDir, sessionId, { isWithRecentContext: true });
-    // Another session took over this topic; it does not know the open request.
+    // Another session took over this topic; it does not know the open request, and the question the idle compaction re-asked
+    // for the conversation it replaces would send its label into the picked one.
     cancelConversationRequest(key);
+    closeReAskedQuestion(key);
     // Persist the PICKED id — without this the next restart re-attaches to
     // whatever id the last fresh start wrote, silently dropping the user's
     // pick (live incident 2026-06-10).
@@ -8795,10 +8808,7 @@ command(['quit-all', 'quitall'], async (_ctx, key) => {
     active += result.attempted;
     stopped += result.stopped.length;
     // Same release-for-good semantics as `/quit`, per swept thread.
-    await state.clearAgentSessionIds(bKey);
-    // A sleeping thread has no process whose stop would say so: a question the idle compaction re-asked for it can no
-    // longer be used, so its message is closed (it stays, without its buttons).
-    clearThreadCompaction(bKey);
+    await releaseConversationIds(bKey);
   }
 
   if (active === 0) {
@@ -8856,11 +8866,9 @@ command(['quit', 'q'], async (_ctx, key) => {
   stopAllAdaptersFor(key, otherAdapters);
 
   if (!primaryActive) {
-    // A sleeping conversation is released for good: the next message starts a fresh one. A question the idle compaction
-    // re-asked for it can no longer be used, so its message is closed (it stays, without its buttons).
+    // A sleeping conversation is released for good: the next message starts a fresh one.
     if (getResumableSessionId(key) !== null) {
-      await state.clearAgentSessionIds(key);
-      clearThreadCompaction(key);
+      await releaseConversationIds(key);
       await replyToThread(key, t('agent.sleeping_released'));
       return;
     }
@@ -13124,8 +13132,9 @@ function restorePendingQuestions(): void {
 /**
  * @description Bring back the questions the idle compaction re-asked, at boot. One whose conversation can still be
  * resumed (a live adopted process, or a sleeping conversation whose id is kept) gets its buttons working again — a tap
- * wakes it, as before the restart. One whose conversation is gone (released while the bot was down) cannot be answered:
- * its message is closed as unanswered, never left with buttons that do nothing, and the saved record is dropped.
+ * wakes it, as before the restart. One whose conversation is gone (released while the bot was down), or beside which a newer
+ * question waits already, cannot be answered / must not be: its message is closed as unanswered, never left with buttons that
+ * do nothing or that would answer the wrong question, and the saved record is dropped.
  * MUST run AFTER {@link reattachExistingSessions} so session activity is known. A platform this instance does not serve
  * is left alone, like {@link restorePendingQuestions}.
  */
@@ -13138,7 +13147,10 @@ function restoreReAskedQuestions(): void {
       continue;
     }
     if (!checkIsServedConversation(key, ENV.servedPlatforms)) continue;
-    if (getThreadAdapter(key).checkIsActive(key) || getResumableSessionId(key) !== null) {
+    // A question waits already (restored a moment ago, or asked anew by the agent that reattached): the old copy's buttons
+    // would deliver their label into IT. The copy is closed, never brought back.
+    const isCopyUsable = !pendingQuestions.has(keyStr) && (getThreadAdapter(key).checkIsActive(key) || getResumableSessionId(key) !== null);
+    if (isCopyUsable) {
       restoreReAskedQuestion(key, saved);
       continue;
     }

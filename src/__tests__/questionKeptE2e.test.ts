@@ -15,12 +15,16 @@
  *   → a close whose edit Telegram refuses to apply to the text (too long): the buttons are taken off all the same
  *   → a close whose Markdown Telegram cannot parse: the question is kept as plain text, without escape marks
  *   → a question so long that its answer note does not fit under it: the option descriptions are left out, the answer shows
+ *   → the agent's process exits (the CLI dies) with the question open: the same note, the pin gone
  *   → `/quit` (the session is stopped with the question open): the same note
  *   → one call with TWO questions (`ask-two`): each question message keeps its own text and gets its own result — both
  *     answered by a tap; the first answered and the second left alone
  *   → output landing below the question (a branch of the agent that keeps streaming): the question is posted again at the
  *     bottom and pinned, the first message stays as «asked again below» and is unpinned; an answer to the new one
  *     closes it with the answer
+ *   → the question cannot be put again at the bottom (both sends of the new copy are refused): the old copy is NOT marked
+ *     «asked again below», keeps its buttons and still answers
+ *   → the bot restarts with a saved re-asked copy next to a live question: the stale copy is closed, the question restored
  *   → the bot restarts while the question is open and finds the agent's session gone: the question the bot dropped at boot
  *     stays with the same note, its buttons gone and its pin released
  *   → «create new folder» of `/bind` (it drops a pending question): the same note
@@ -32,7 +36,9 @@
  * not left to be tapped later, onto whatever the agent asks next — also one typed while the idle stop is under way), a
  * stop that comes while the re-asked message is still being sent, or a restart of the bot that finds the conversation
  * released (one that finds it asleep keeps the buttons working). Also: the old question says «asked again below» only once
- * the re-ask is there (and «not answered» if the re-ask could not be sent); a button left on an older re-asked message
+ * the re-ask is there (and «not answered» if the re-ask could not be sent) while its buttons are taken off at once; a message
+ * the person writes during the compaction stops the re-ask; picking another conversation (`/sessions`) or another backend
+ * (`/terminal`) closes the re-asked copy of the one left; a button left on an older re-asked message
  * never answers a newer one; two quick taps send one answer; a tap on a re-ask still being sent counts; a long label is
  * shown once, under the question.
  *
@@ -46,6 +52,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
@@ -60,6 +67,7 @@ import {
   fakeClaudeIgnoreStopSignalsFileName,
   fakeClaudeLogFileNames,
   fakeClaudeOutputWhileAskedFileName,
+  getFakeClaudeTranscriptPath,
   type FakeClaudePrompt,
   type FakeClaudeToolCall,
 } from './jiraE2e/fakeClaudeContract';
@@ -372,6 +380,25 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     await waitForUnpinned(question);
   });
 
+  it('the agent\'s process exits while a question is open: the question stays with the «not answered» note, its buttons gone and its pin released', async () => {
+    const question = await askQuestion(topic, 'KEPT-DIED');
+    await waitForPinned(question);
+    const agentPid = getAgentPrompts('KEPT-DIED')[0]?.pid;
+    assert.ok(agentPid !== undefined, 'the process that put the question');
+
+    // The CLI dies under the bot (the backend this flow runs: a json-stream process, which the bot reports as a session that
+    // ended unexpectedly), not a stop the person asked for. The next step starts from a live session.
+    await runStepThenRestore(async () => {
+      process.kill(agentPid, 'SIGKILL');
+      await topic.waitForMessageText('the note under the question', question, (text) => text.endsWith(`\n\n${unansweredNote}`));
+      assertQuestionKeptWithNote(question, unansweredNote);
+      await waitForUnpinned(question);
+    }, async () => {
+      // The conversation ended on its own and `/claude` picks it up silently: a fresh one gives the next step its session.
+      await topic.sendAndAwaitReply('/new', 'ready in');
+    });
+  });
+
   it('/quit with the question open: the session is stopped, the question stays with the same note', async () => {
     const question = await askQuestion(topic, 'KEPT-QUIT');
     await waitForPinned(question);
@@ -465,6 +492,57 @@ describe('A question the agent asks stays in the topic however it ends, end to e
     assertQuestionKeptWithNote(question, buildAnsweredNote(fakeAskQuestion.longOptionLabel));
     await waitForUnpinned(question);
     await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getGivenAnswers().includes(fakeAskQuestion.longOptionLabel));
+  });
+
+  it('the question cannot be put again at the bottom: the old copy is not marked «asked again below», keeps its buttons and still answers', async () => {
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeOutputWhileAskedFileName), outputWhileAskedText);
+    const isQuestionSend = (payload: Record<string, unknown>): boolean => payload.message_thread_id === topicThreadId && JSON.stringify(payload.reply_markup ?? null).includes('qa_');
+    const countQuestionSends = (): number => fakeTelegram.listCalls('sendMessage').filter((call) => isQuestionSend(call.payload)).length;
+    const sendsBefore = countQuestionSends();
+    try {
+      const question = await askQuestion(topic, 'KEPT-NOREPOST');
+      await waitForPinned(question);
+      // The agent's output below the question brings the re-post; both of its attempts (Markdown, then plain) are refused.
+      fakeTelegram.failNextCall('sendMessage', 'Bad Request: message is too long', isQuestionSend);
+      fakeTelegram.failNextCall('sendMessage', 'Bad Request: message is too long', isQuestionSend);
+      await getCharness().waitFor('both attempts at the new copy to be refused', repostTimeoutMs, () => countQuestionSends() - sendsBefore >= 3);
+
+      // Nothing is below: the old copy does not say so, and it is the question that waits.
+      const waiting = readKeptMessage(question);
+      assert.ok(!waiting.text.endsWith(askedAgainNote), `not «asked again below» with nothing below: ${waiting.text.slice(-60)}`);
+      assert.deepEqual(topic.getKeyboardData(waiting), [['qa_0_0'], ['qa_0_1']], 'it keeps its buttons');
+      assert.ok(fakeTelegram.listPinnedMessageIds().includes(question.message_id), 'and its pin');
+
+      await topic.tapAndAwaitAnswer(question, 'qa_0_0');
+      await topic.waitForMessageText('the answer under the old copy', question, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
+      assertQuestionKeptWithNote(question, buildAnsweredNote(fakeAskQuestion.shortOptionLabel));
+      await waitForUnpinned(question);
+    } finally {
+      fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeOutputWhileAskedFileName), { force: true });
+    }
+  });
+
+  it('a restart with a saved re-asked copy next to a live question: the stale copy is closed, the question is restored and answers', async () => {
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    // Any bot message will do as the stale copy's message: the boot only needs an id to close.
+    const staleCopy = await topic.sendAndAwaitReply('/timezone Not/AZone', 'Not/AZone');
+    const question = await askQuestion(topic, 'KEPT-STALECOPY');
+    await waitForPinned(question);
+    await getCharness().waitFor('the question to be saved', replyTimeoutMs, () => readPersistedState(getLayout()).pendingQuestions?.[key]?.messageId === question.message_id);
+
+    charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), (persisted) => {
+      persisted.reAskedQuestions = {
+        [key]: { messageId: staleCopy.message_id, question: { header: fakeAskQuestion.header, question: fakeAskQuestion.question, options: [{ label: fakeAskQuestion.shortOptionLabel }, { label: fakeAskQuestion.longOptionLabel }] } },
+      };
+    });
+    // The newer question is what waits: the old copy's buttons would deliver into it.
+    await topic.waitForMessageText('the stale copy closed', staleCopy, (text) => text.endsWith(`\n\n${unansweredNote}`));
+    assertQuestionKeptWithNote(staleCopy, unansweredNote);
+    await getCharness().waitFor('the saved copy to be dropped', replyTimeoutMs, () => readPersistedState(getLayout()).reAskedQuestions?.[key] === undefined);
+    assert.notEqual(readKeptMessage(question).reply_markup, undefined, 'the live question kept its buttons');
+    await topic.tapAndAwaitAnswer(question, 'qa_0_0');
+    await topic.waitForMessageText('the answer under the restored question', question, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
+    await getCharness().waitFor('the agent to get the answer', agentStartTimeoutMs, () => getAgentPrompts('KEPT-STALECOPY').length > 0 && getGivenAnswers().includes(fakeAskQuestion.shortOptionLabel));
   });
 
   it('a restart that finds the agent\'s session gone: the question the bot drops at boot stays with the «not answered» note, its buttons gone and its pin released', async () => {
@@ -781,9 +859,10 @@ describe('A question the idle compaction re-asked stays too, when the conversati
     });
   });
 
-  it('the old question says «asked again below» only once the re-ask is there', async () => {
+  it('the old question loses its buttons at once but says «asked again below» only once the re-ask is there', async () => {
     const sendHold = createRelease();
     fakeTelegram.holdNextResponse('sendMessage', sendHold.promise, isReAskSend);
+    const callsBeforeStep = fakeTelegram.calls.length;
     await runStepThenRestore(async () => {
       fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-ORDER-WARM [fake:answer] one turn to compress');
       await getCharness().waitFor('the warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('REASK-ORDER-WARM').length > 0);
@@ -797,6 +876,13 @@ describe('A question the idle compaction re-asked stays too, when the conversati
       const original = findNewestQuestionCopy();
       assert.ok(original && original.message_id < reasked.message_id, 'the question that waited is still in the topic');
       assert.ok(!original.text.endsWith(askedAgainNote), `not yet «asked again below»: ${original.text.slice(-60)}`);
+      // Its buttons are no longer good, though: the pending question is gone, and the compaction can take minutes (a restart in
+      // between would leave them dead for good). They came off at the start, BEFORE the compaction was announced.
+      assert.equal(original.reply_markup, undefined, 'the buttons are off while the re-ask is on its way');
+      const stepCalls = fakeTelegram.calls.slice(callsBeforeStep);
+      const keyboardOffIndex = stepCalls.findIndex((call) => call.method === 'editMessageReplyMarkup' && call.payload.message_id === original.message_id);
+      const noticeIndex = stepCalls.findIndex((call) => call.method === 'sendMessage' && String(call.payload.text).includes(enDict['compactOnIdle.notice']));
+      assert.ok(keyboardOffIndex >= 0 && noticeIndex > keyboardOffIndex, `the buttons came off (call ${keyboardOffIndex}) before the compaction was announced (call ${noticeIndex})`);
       sendHold.release();
       await waitingTopic.waitForMessageText('the old question marked as asked again', original, (text) => text.endsWith(`\n\n${askedAgainNote}`));
       assertQuestionKeptWithNote(original, askedAgainNote);
@@ -823,5 +909,65 @@ describe('A question the idle compaction re-asked stays too, when the conversati
       [],
       'no re-asked question reached the topic',
     );
+  });
+
+  it('a message of the person\'s during the idle compaction: no re-ask is posted after it, and the old question is closed as «not answered»', async () => {
+    const noticeHold = createRelease();
+    // The compaction is done and its notice is the next thing to go out; the Bot API holds the answer to that send, and the re-ask
+    // is the one after it.
+    fakeTelegram.holdNextResponse('sendMessage', noticeHold.promise, (payload) => String(payload.text).includes(enDict['compactOnIdle.notice']));
+    await runStepThenRestore(async () => {
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-DURING-WARM [fake:answer] one turn to compress');
+      await getCharness().waitFor('the warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('REASK-DURING-WARM').length > 0);
+      const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-DURING [fake:ask] ask me something');
+      await waitForQuestionAfter(topic, 'the question', sentMessageId, firstQuestion);
+      await waitingTopic.waitForMessage('the compaction notice, its send held', (message) => message.message_id > sentMessageId && message.text.includes(enDict['compactOnIdle.notice']));
+
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'DURING-1 [fake:answer] written while the compaction was being announced');
+      await getCharness().waitFor('the message to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('DURING-1').length > 0);
+      noticeHold.release();
+
+      // The person wrote instead of answering: the question that waited ends as «not answered», and nothing asks it again.
+      const original = await waitingTopic.waitForMessage('the newest copy of the question closed as unanswered', (message) =>
+        message.message_id > sentMessageId && message === findNewestQuestionCopy() && message.text.endsWith(`\n\n${unansweredNote}`));
+      assertQuestionKeptWithNote(original, unansweredNote);
+      assert.deepEqual(
+        topic.listMessages().filter((message) => message.message_id > original.message_id && waitingTopic.getKeyboardData(message).flat().some((data) => data.startsWith('reask_'))),
+        [],
+        'no re-asked question follows a message the person wrote instead',
+      );
+    }, async () => {
+      noticeHold.release();
+    });
+  });
+
+  it('picking another conversation from /sessions closes the re-asked question of the one that sleeps', async () => {
+    // Another conversation of this folder, as the CLI left it: the fake's own transcripts are not listed as resumable.
+    const otherSessionId = randomUUID();
+    const otherFirstPrompt = 'An older conversation about the lexer';
+    const workDir = path.join(getLayout().workRoot, projectFolder);
+    const transcriptPath = getFakeClaudeTranscriptPath({ homeDir: getLayout().instanceHome, workDir, sessionId: otherSessionId });
+    fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+    const entry = (type: 'user' | 'assistant', content: string | object[]): object => ({ type, cwd: workDir, sessionId: otherSessionId, timestamp: new Date().toISOString(), message: { role: type, content } });
+    fs.writeFileSync(transcriptPath, [entry('user', otherFirstPrompt), entry('assistant', [{ type: 'text', text: 'Noted.' }])].map((line) => `${JSON.stringify(line)}\n`).join(''));
+
+    const reasked = await putReAskedQuestionAndSleep('REASK-PICK');
+    const list = await topic.sendAndAwaitReply('/sessions', 'Sessions to resume');
+    const pickedIndex = topic.getKeyboardLabels(list).flat().findIndex((label) => label.startsWith(otherFirstPrompt));
+    assert.notEqual(pickedIndex, -1, `precondition: the other conversation is listed: ${topic.getKeyboardLabels(list).flat().join(' | ')}`);
+    await topic.tapAndAwaitAnswer(list, topic.getKeyboardData(list).flat()[pickedIndex]);
+    await assertReAskedQuestionClosed(reasked);
+  });
+
+  it('switching the topic to another backend closes the re-asked question of the conversation left behind', async () => {
+    const reasked = await putReAskedQuestionAndSleep('REASK-SWITCH');
+    await runStepThenRestore(async () => {
+      await topic.sendAndAwaitReply('/terminal', 'Terminal ready');
+      await assertReAskedQuestionClosed(reasked);
+    }, async () => {
+      // Back to the agent the next steps use: in a terminal every message is shell input, so the shell is closed first.
+      await topic.sendAndAwaitReply('/quit', 'stopped');
+      await startAgentSession();
+    });
   });
 });

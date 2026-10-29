@@ -500,7 +500,18 @@ export function createCompaction(ports: CompactionPorts) {
     if (getState().checkIsCompactIdleLatched(key)) {
       void getState().setCompactIdleLatched(key, false);
     }
+    personActivityCounts.set(keyToString(key), getPersonActivityCount(key) + 1);
     noteThreadActivity(key);
+  }
+
+  /**
+   * How many times a person wrote in the thread since the process started (a message, voice, file, album). A fire that
+   * wants to know whether someone wrote WHILE it worked compares the count at its start with the count when it posts.
+   */
+  const personActivityCounts = new Map<string, number>();
+
+  function getPersonActivityCount(key: SessionKey): number {
+    return personActivityCounts.get(keyToString(key)) ?? 0;
   }
 
   /**
@@ -659,12 +670,19 @@ export function createCompaction(ports: CompactionPorts) {
     // that feed a fresh prompt. The old message stays as the record, but is edited only once the re-ask is there
     // ({@link postIdleCompactionResult}): the compaction can take minutes, and «asked again below» would be untrue.
     let savedQuestion: PendingQuestionState | null = null;
+    const personActivityAtStart = getPersonActivityCount(key);
     if (hasPendingQuestion) {
       savedQuestion = pendingQuestions.get(kStr) ?? null;
       adapter.rejectQuestion?.(key);
       adapter.sendSignal(key, 'SIGINT');
       clearPendingQuestion(key);
+      // Its buttons are dead from here (the question is no longer pending) and the compaction can take minutes — and a restart
+      // in between would forget the message for good: they come off at once. The text waits for the re-ask's outcome.
+      if (savedQuestion?.messageId != null) void editThreadKeyboard(key, savedQuestion.messageId, null, 'idleReask');
     }
+    // Someone who writes while the compaction runs has moved on: asking the question again below their message would only
+    // put buttons under something they wrote instead of answering.
+    const isReAskStillWanted = (): boolean => getPersonActivityCount(key) === personActivityAtStart;
 
     const result = await runThreadCompaction(key, { withClosingSection: true });
     if (!result.ok) {
@@ -672,7 +690,7 @@ export function createCompaction(ports: CompactionPorts) {
       // The compaction failed but the question is already rejected — re-ask it so
       // the user isn't left without the pending decision (no notice: nothing was
       // compacted).
-      await postIdleCompactionResult(key, { noticeText: null, summary: null }, savedQuestion);
+      await postIdleCompactionResult(key, { noticeText: null, summary: null }, savedQuestion, isReAskStillWanted);
       return;
     }
     await postIdleCompactionResult(
@@ -682,6 +700,7 @@ export function createCompaction(ports: CompactionPorts) {
         summary: result.summary ?? null,
       },
       savedQuestion,
+      isReAskStillWanted,
     );
   }
 
@@ -799,6 +818,7 @@ export function createCompaction(ports: CompactionPorts) {
     key: SessionKey,
     parts: { noticeText: string | null; summary: string | null },
     savedQuestion: PendingQuestionState | null,
+    isReAskStillWanted: () => boolean,
   ): Promise<void> {
     const question = savedQuestion?.data.questions[savedQuestion.currentIndex];
     const questionText = question
@@ -815,9 +835,9 @@ export function createCompaction(ports: CompactionPorts) {
     if (plan.summary) await postCompactionSummary(key, plan.summary);
     // The question is recorded HERE (not while planning): the record is what a `reask_<idx>` tap resolves against,
     // which must not happen for a question that is never posted.
-    const reAskedMessageId = plan.question && question ? await postReAskedQuestion(key, plan.question, question) : null;
+    const reAskedMessageId = plan.question && question && isReAskStillWanted() ? await postReAskedQuestion(key, plan.question, question) : null;
     // The old question message stays as the record. It says «asked again below» only now that there IS a copy below — if
-    // the re-ask could not be sent, nobody answered it and nobody will be asked again.
+    // the re-ask could not be sent, or a person wrote instead, nobody answered it and nobody will be asked again.
     const oldMessageId = savedQuestion?.messageId ?? null;
     if (oldMessageId !== null && question) {
       await closeQuestionMessage(key, oldMessageId, question, reAskedMessageId !== null ? 'askedAgain' : 'unanswered');

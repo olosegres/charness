@@ -511,7 +511,7 @@ Compact the agent's context — a real, confirmed compaction on OpenCode and on 
 
 ### `/compact_on_idle`
 
-Toggle auto-compaction after ~55 min idle (Enable/Disable picker; `AGENT_IDLE_MINUTES` sets the window). Per topic; run it in **General** to set the default for all topics. On by default. Each idle compaction posts one short notice; the picker's «Show summary» / «Hide summary» row (the `/compact_summary` switch) adds the agent's full summary after it. Fires at most once per active period (until you write again); if a question was pending it is re-asked with tappable buttons after the compaction — the first message of the question stays, marked «asked again below» once the re-asked copy is posted (or «not answered» if it could not be sent), and a tap on the re-asked one leaves it with your answer in place of the buttons; if you do not tap it — the conversation ends (`/quit`, `/quitall`, `/new`, leaving the folder, a stopped or closed session), you write something else, or the agent asks a newer question — the re-asked message stays with a «not answered» note instead; a restart of the bot keeps its buttons working while the conversation sleeps. On the json-stream backends the idle mark also STOPS the agent process, compaction or not — the topic sleeps and your next message resumes it (`/status` says so).
+Toggle auto-compaction after ~55 min idle (Enable/Disable picker; `AGENT_IDLE_MINUTES` sets the window). Per topic; run it in **General** to set the default for all topics. On by default. Each idle compaction posts one short notice; the picker's «Show summary» / «Hide summary» row (the `/compact_summary` switch) adds the agent's full summary after it. Fires at most once per active period (until you write again); if a question was pending it is re-asked with tappable buttons after the compaction — the first message of the question stays — its buttons come off at once, and it is marked «asked again below» once the re-asked copy is posted (or «not answered» if it could not be sent, or you wrote while the compaction ran: then there is no re-ask) — and a tap on the re-asked one leaves it with your answer in place of the buttons; if you do not tap it — the conversation ends (`/quit`, `/quitall`, `/new`, leaving the folder, a stopped or closed session), you write something else, or the agent asks a newer question; picking another conversation or backend counts too — the re-asked message stays with a «not answered» note instead; a restart of the bot keeps its buttons working while the conversation sleeps. On the json-stream backends the idle mark also STOPS the agent process, compaction or not — the topic sleeps and your next message resumes it (`/status` says so).
 
 ### `/compact_summary`
 
@@ -799,6 +799,24 @@ says so in the topic — no need to re-record the voice note.
 
 `/terminal` is never started from a natural-language phrase — only the
 explicit command opens a shell.
+
+### The agent's questions
+
+When the agent asks a question (Claude Code's `AskUserQuestion`, OpenCode's question tool) the bot posts it with one button per option and
+pins it, so even a muted topic notifies you once. You answer by tapping an option or by typing its number. **The message is never deleted**:
+it keeps the header, the question and the numbered options (a long question gives up its option descriptions, and shows as plain text if
+Telegram cannot parse its formatting, so the result always fits), and under them stands how it ended in place of the buttons:
+
+- **«✅ Answer: …»** — you tapped or typed an option (several questions in one call are shown one after the other, each with its own result).
+- **«❌ Not answered»** — you wrote something else instead (the message goes to the agent as a prompt), sent `/esc`, `/quit`, `/quitall` or
+  `/new`, left the folder, picked another conversation or backend, «create new folder» of `/bind` dropped it, or the agent's process ended or
+  errored with the question open. The same note stands on a question the bot finds orphaned when it restarts (its agent is gone).
+- **«↓ Asked again below»** — the question was put again further down (the agent's output landed under it, or the idle compaction
+  re-asked it): this is the older copy, kept as a record, and it says so only once the new copy is really there.
+
+The pin is released whenever the question ends. After an idle compaction the re-asked copy has its own buttons; they close the same way, a
+button left on an older copy answers nothing, and a restart of the bot keeps them working while the conversation sleeps
+(see [`/compact_on_idle`](#compact_on_idle)).
 
 ### File intake
 

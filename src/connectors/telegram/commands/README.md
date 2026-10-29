@@ -23,11 +23,11 @@ functions where the handlers used to be registered. A module never imports `bot.
   or, built once per module from its `replyToThread` port, `createWholeTextAnswerer(replyToThread)` → `(ctx, key, text)`.
   Never `.slice(0, n)` a text into `answerCbQuery`, and no module keeps its own copy of the cut (`cb.model_error`,
   `cb.effort_error`, the display-mode errors, `/limits`, `/accounts`, `/stt` all use the helper). A text the thread already
-  carries in full (a pending question's answer: the question message is edited to the question as asked plus "✅ Answer: <answer>" in place of the buttons) uses
-  `answerCallbackWithFittedText` — the toast only, cut when long, no second copy — but only while that edit succeeded
-  (`applyQuestionAnswer` says so); a message that could not be edited, and a re-asked question's label (`reask_<i>`, nothing
-  else shows it whole), use the whole-text variant. Telegram refuses a toast over 200 characters, so a bare
-  `answerCbQuery(text)` of a user-visible label is a bug.
+  carries in full (a question's answer, a pending one's `qa_<i>_<j>` or a re-asked one's `reask_<i>`: the question message is edited to the
+  question as asked plus "✅ Answer: <answer>" in place of the buttons) uses `answerCallbackWithFittedText` — the toast only, cut
+  when long, no second copy — but only while that edit succeeded (`applyQuestionAnswer` says so; the `reask_` handler posts the label
+  whole itself, once, when its close failed); a message that could not be edited uses the whole-text variant. Telegram refuses a
+  toast over 200 characters, so a bare `answerCbQuery(text)` of a user-visible label is a bug.
 - **A late toast never changes what a handler does.** A handler that works first (a default-account change re-spawns every
   live topic, ~30 s; a model or effort pick re-spawns the session, and a re-spawn waits up to 5 s for the old process) answers
   after Telegram stopped waiting for the query, and the Bot API refuses it as «query is too old». RULE, for every tap handler
@@ -124,10 +124,13 @@ the output path (`markThreadTurnProducedOutput`) and the session lifecycle (`rea
 `reAskedQuestions` (the re-ask button's question, which a tap closes with its answer). The factory must be built BEFORE the module-scope objects that name
 its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted like the function it replaced.
 **A question's message is never deleted.** The idle fire clears the pending question through the `clearPendingQuestion` port
-(`bot.ts`: clears the state, which unpins) and re-asks it as a new message; only once that is posted does it edit the old message,
-through the `closeQuestionMessage` port, to the question as asked plus a note in place of its buttons — «asked again below», or
-«not answered» when the re-ask could not be sent (the compaction between the two can take minutes); every other end (an answer, a message sent instead, `/esc`, the
-session gone, a re-post to the bottom, a persisted question the boot drops) goes through the same `editQuestionMessageToClosed` edit.
+(`bot.ts`: clears the state, which unpins) and takes the old message's buttons off at once (`editThreadKeyboard`: the compaction can
+take minutes, and a restart in between would forget the message), then re-asks the question as a new message — unless a person wrote
+meanwhile (`getPersonActivityCount`, bumped by `noteThreadUserActivity`, is compared with its value at the start). Only after that
+does it edit the old message, through the `closeQuestionMessage` port, to the question as asked plus a note in place of its
+buttons — «asked again below», or «not answered» when there is no re-ask (its send failed, or the person wrote). Every other end (an
+answer, a message sent instead, `/esc`, the session gone, a re-post to the bottom — which edits the old copy only after the new one
+is posted —, a persisted question the boot drops) goes through the same `editQuestionMessageToClosed` edit.
 The re-asked copy is a `ReAskedQuestion` record (question, message id, `isTornDown`) kept from BEFORE its send, so a tap right after
 it finds it, and saved to `state.json` (`reAskedQuestions`, message id + question) once its message id is known. A tap takes the record
 (`takeReAskedQuestion`: out of memory AND of the saved state, before anything is awaited; `putBackReAskedQuestion` returns it if the
@@ -135,12 +138,14 @@ label reaches no session) and closes the message with the answer — but only a 
 whose send has not returned has no id yet, and is the one tapped): a button left on an older re-asked message answers nothing and
 comes off. Updates of one topic run one at a time (`updateDispatcher`), so two taps never interleave; whatever else ends the copy goes
 through `closeReAskedQuestion`, which closes it as unanswered through the `closeQuestionMessage` port — a send still in flight is
-flagged `isTornDown` and closes the message it lands in. The callers: `clearThreadCompaction` (the conversation ended), `notePersonActivity`
-(a person wrote something else — a tap has taken its record already) and `handleAgentQuestion` (the agent asks a newer question, which
-the old buttons would answer wrongly). A sleeping conversation has no process whose stop would say so, so its release paths (`/quit`,
-`/quitall`, `releaseThreadSession` for `/new`, `unbindThread`) call `clearThreadCompaction` themselves. At boot `restoreReAskedQuestions`
-(`bot.ts`, after the sessions reattached) hands a saved record back to `restoreReAskedQuestion` when the conversation can still be
-resumed, else closes its message and drops it.
+flagged `isTornDown` and closes the message it lands in. The callers: `clearThreadCompaction` (the conversation ended),
+`notePersonActivity` (a person wrote something else, also into a starting or stopping session — a tap has taken its record already),
+`handleAgentQuestion` (the agent asks a newer question, which the old buttons would answer wrongly) and the two ways of leaving a
+conversation for another (`switchThreadAdapter` to another backend, `resumeSessionByIndex` for a `/sessions` pick). A sleeping
+conversation has no process whose stop would say so, so every release of its saved ids goes through `releaseConversationIds` (`/quit`,
+`/quitall`, `releaseThreadSession` for `/new`, `unbindThread`), which also calls `clearThreadCompaction`. At boot
+`restoreReAskedQuestions` (`bot.ts`, after the sessions reattached) hands a saved record back to `restoreReAskedQuestion` when the
+conversation can still be resumed and no question waits beside it, else closes its message and drops it.
 
 ## `autoContinueLimits.ts`
 

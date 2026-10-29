@@ -9,7 +9,11 @@
  *     and no person's message is needed for the agent to ask — a scheduled or resumed turn can;
  *   - the boot brings the saved copies back after the sessions reattached (`restoreReAskedQuestions`);
  *   - a message typed while a session is starting or stopping counts as a person writing (`bufferPromptDuringStartup`);
- *   - a tap that reached no session puts its question back, or — when a newer re-ask took its place — closes the tapped copy.
+ *   - a tap that reached no session puts its question back, or — when a newer re-ask took its place — closes the tapped copy;
+ *   - a session that ends or errors closes the question that was open (`handleAgentClosed`, `handleAgentError`; the latter is
+ *     raised by the OpenCode adapter only, which the json-stream flows cannot drive);
+ *   - leaving a conversation for another (a `/sessions` pick, a switch of backend) closes the re-asked copy it leaves behind;
+ *   - every release of a conversation's ids goes through one helper that also closes the re-asked copy.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -59,4 +63,29 @@ test('a tap that reached no session puts its question back, and closes the tappe
   const body = getFunctionBody('async function returnReAskedQuestionAfterTap');
   assert.match(body, /putBackReAskedQuestion\(key,\s*reAsked\)\s*\|\|\s*messageId\s*===\s*null/);
   assert.match(body, /closeQuestionMessage\(key,\s*messageId,\s*reAsked\.question,\s*'unanswered'\)/);
+});
+
+test('a session that ends or errors closes the question that was open, not only clears it', () => {
+  for (const declaration of ['function handleAgentClosed', 'function handleAgentError']) {
+    assert.match(getFunctionBody(declaration), /retirePendingQuestionInBackground\(key\)/, `${declaration} closes the open question's message`);
+  }
+});
+
+test('leaving a conversation for another closes the re-asked copy it leaves behind', () => {
+  assert.match(getFunctionBody('async function switchThreadAdapter'), /cancelConversationRequest\(key\)[\s\S]{0,300}closeReAskedQuestion\(key\)/, 'a switch to another backend');
+  assert.match(getFunctionBody('async function resumeSessionByIndex'), /cancelConversationRequest\(key\)[\s\S]{0,200}closeReAskedQuestion\(key\)/, 'a pick from /sessions');
+});
+
+test('releasing a conversation\'s ids closes its re-asked copy, in one place', () => {
+  const helperBody = getFunctionBody('async function releaseConversationIds');
+  assert.match(helperBody, /state\.clearAgentSessionIds\(key\)/);
+  assert.match(helperBody, /clearThreadCompaction\(key\)/);
+  // The four releases of a conversation that may be asleep (no process, so no stop event to close the copy) use it.
+  assert.match(getFunctionBody('async function releaseThreadSession'), /releaseConversationIds\(key\)/, '/new');
+  assert.match(getFunctionBody('async function unbindThread'), /releaseConversationIds\(key\)/, 'leaving the folder');
+  assert.match(botSource, /releaseConversationIds\(bKey\)/, '/quitall');
+  assert.match(botSource, /await releaseConversationIds\(key\);\s*await replyToThread\(key, t\('agent\.sleeping_released'\)\)/, '/quit of a sleeping conversation');
+  // No site pairs the two steps by hand any more: a new one would repeat the comment, or forget the second step.
+  const outsideHelper = botSource.replace(helperBody, '');
+  assert.doesNotMatch(outsideHelper, /clearAgentSessionIds\([^)]*\);\s*(?:\/\/[^\n]*\s*)*clearThreadCompaction\(/);
 });
