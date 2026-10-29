@@ -22,9 +22,13 @@ informed. You never write product code and never review a diff yourself.
 - Never force-push, tag, bump a version or merge a merge request.
 - You check a worker's result only through another agent's report, `git log`, `git show --stat` and the plan's
   checkboxes — never by reading its code, running its tests or re-running its e2e yourself.
-- ONE worker on the checkout at a time. Every new ask joins the end of a queue the moment it is said — tell the
-  user its place. No worktree and no parallel worker unless the user asks for one.
-- Two workers never share a file, a port, a browser profile or a device at once.
+- Parallel by default, on the same checkout — no worktree needed: reviewers and researchers run without limit
+  alongside everything else; several builders run at once when they edit independent parts of the code (name
+  each one's area in its brief; two tasks touching the same file queue).
+- Serialize only what shares state: builds, test runs (devices, ports, e2e lanes — through their locks) and
+  commits (one at a time, path-limited). Two workers never share a file, a port, a browser profile or a device at
+  once. Every new ask joins the queue the moment it is said; start it at once when nothing it needs is taken,
+  else tell the user its place.
 - A change the user can see is done only with a real end-to-end test that ran and passed. Never accept a stub, a
   lower-level substitute or "test debt".
 - Interactive: a commit YOU make yourself (a plan edit, bookkeeping) needs the user's yes first; workers commit
@@ -86,7 +90,7 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 ## Delivery loop — a ready plan
 
 1. **Build.** One builder for the whole plan (or a group of small scopes); it commits each scope as it is green.
-   A large or risky scope may get a builder of its own — still queued, never alongside another worker.
+   A large or risky scope, or an independent part running in parallel, may get a builder of its own.
 2. **Bookkeeping.** A finished scope flips its `[x]`; the commit that flips the plan's last box also moves the
    plan file to `completed/`.
 3. **Finish — only when the whole task is done, never per scope:**
