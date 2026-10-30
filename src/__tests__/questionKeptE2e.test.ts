@@ -957,6 +957,13 @@ describe('A question the idle compaction re-asked stays too, when the conversati
     await waitingTopic.waitForMessageText('the answer under the re-asked question', reasked, (text) => text.endsWith(buildAnsweredNote(shortLabel)));
     await getCharness().waitFor('the agent to read the label', agentStartTimeoutMs, () => countLabelPrompts(shortLabel) > labelPromptsBefore);
     assert.equal(countLabelPrompts(shortLabel), labelPromptsBefore + 1, 'the agent read the label once');
+
+    // The second tap runs only after the first has written the answer, and whatever it edits waits its turn in the send pacer,
+    // behind the answer and ahead of anything the bot sends after it: a reply to a command typed now is sent after that edit, so
+    // when it is there nothing is queued any more. The answer must still be the last word on the message.
+    await waitingTopic.sendAndAwaitReply('/timezone Not/AZone', 'Not/AZone');
+    assertQuestionKeptWithNote(reasked, buildAnsweredNote(shortLabel), { ...firstQuestion, labels: [] });
+    assert.ok(!readKeptMessage(reasked).text.includes(unansweredNote), 'and the second tap did not write «not answered» over it');
   });
 
   it('a tap on the re-asked question while its message is still being sent counts, and the answer lands on that message', async () => {

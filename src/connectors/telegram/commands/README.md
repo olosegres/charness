@@ -130,8 +130,10 @@ re-ask, in three phases — COMPACTING (nothing posted), SENDING (the re-ask's m
 is SAVED to `state.json` (`reAskedQuestions`) all along: unposted it names the message the question waited in (`isPosted: false`),
 so a restart during the compaction asks the question again at boot (`reAskInterruptedQuestion`: the very post the idle fire makes,
 then the old message says «asked again below») when the conversation can still be resumed — nobody had the chance to answer — and
-closes that message as unanswered when it is gone (`restoreReAskedQuestions`); posted it names the re-ask's message, so a restart
-while the conversation sleeps keeps its buttons working. Only after the re-ask is posted does the
+closes that message as unanswered when it is gone (`restoreReAskedQuestions`); posted it names the re-ask's message and the old
+message with whether its note has LANDED (`predecessorMessageId`, `isPredecessorClosed`: saved before that edit is made, set after it
+lands), so a restart while the conversation sleeps keeps its buttons working and finishes an old message left without its note
+(«asked again below» when the copy is restored, «not answered» when it is closed: `closeSavedReAskedQuestion`). Only after the re-ask is posted does the
 fire edit the old message, through the `closeQuestionMessage` port, to the question as asked plus a note in place of its buttons —
 «asked again below», or «not answered» when there is no re-ask (its send failed). Every other end (an answer, a message sent
 instead, `/esc`, the session gone, leaving the folder (`unbindThread`, before the stop: a json-stream stop is reported only
@@ -148,12 +150,18 @@ a tap on THE message of the record counts (a re-ask whose send has not returned 
 newer than the one the question waited in, `predecessorMessageId`): a button left on an older re-asked message answers nothing, and
 the message it sits on is closed with its own text and «not answered» (`closeOrphanQuestionMessage`) — also the copy a restart leaves
 when it lands after the boot has dropped the record (the one gap in «every end leaves a note»: such a copy keeps its buttons until
-somebody taps it). A bare option NUMBER typed (`answerReAskedQuestionByNumber`, in `deliverActivePrompt` and the startup buffer) takes the
+somebody taps it). Only a message the bot knows NOTHING about is closed so: a message that already carries a result — an answer a
+first tap or a typed number is still delivering, a close that landed (`endedMessageIds`, per topic, bounded) — is left as it is,
+because a second tap from a stale view (the spinner the first one left) would otherwise write «not answered» over the answer; and
+while neither the copy nor the old message has an id there is nothing to tell the tapped message from an older copy by, so no tap is
+taken then and none is rewritten. A bare option NUMBER typed (`answerReAskedQuestionByNumber`, in `deliverActivePrompt` and the startup buffer) takes the
 record (`takeReAskedQuestionForAnswer`) with `isAnswerPending` set and NO ending yet: the label may reach no session, and then the
 question is open again, so a result is written (`answerReAskedQuestion`: `{ answer }` on the re-ask's message — or, before it exists,
 on the predecessor) only once the delivery is known. Until then a re-ask that lands is left as it is, and the idle fire leaves the
-predecessor alone (`settleReAskedPredecessor` skips a pending answer); a label that reached no session puts the record back and settles
-the predecessor again. Updates of one topic run one at a time (`updateDispatcher`), so two
+predecessor alone (`settleReAskedPredecessor` skips a pending answer); a label that reached no session puts the record back and
+finishes what the idle fire skipped (`finishReAskAfterNumberFoundNoSession`): the fire has not run — it asks the question itself;
+its send is in flight — it settles the old message when the copy lands; it ran and sent nothing (the record was taken) — the re-ask
+is posted now and the old message points at it, or ends «not answered» if that send fails. Updates of one topic run one at a time (`updateDispatcher`), so two
 taps never interleave. Whatever else ends the record goes through `closeReAskedQuestion`, which sets the ending `unanswered`: the
 callers are `clearThreadCompaction` (the conversation ended), `notePersonActivity` (a person wrote something else, also into a
 starting or stopping session, and also while the compaction runs — the re-ask is then not posted — a tap or a number has taken its

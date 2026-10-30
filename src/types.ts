@@ -269,6 +269,13 @@ export interface ReAskedQuestionRecord {
   question: OpenCodeQuestion;
   /** `false` while the re-ask is not posted yet; absent once it is. */
   isPosted?: boolean;
+  /**
+   * Of a posted re-ask: the message the question waited in, which the copy replaces, and whether its result («asked again
+   * below») has LANDED. The post is saved before that edit is made, so a restart between the two finds the old message
+   * without a note and finishes it.
+   */
+  predecessorMessageId?: number | null;
+  isPredecessorClosed?: boolean;
 }
 
 /**

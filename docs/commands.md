@@ -827,8 +827,9 @@ new copy is not posted. The new copy answers to a tap or a typed number, and end
 answer, or with «❌ Not answered» if you write something else, the conversation ends (`/quit`, `/quitall`, `/new`, leaving the folder, a
 stopped or closed session, a switch to another conversation or backend) or the agent asks a newer question. A button left on an older
 copy answers nothing and closes that copy with «❌ Not answered», and a restart of the bot keeps the new copy's buttons working while
-the conversation sleeps. A number typed while the new copy is being sent shows the answer only once the agent has really got it; if the
-conversation cannot be started, the question stays open with its buttons.
+the conversation sleeps. A number typed while the new copy is being sent (or while the compaction runs) shows the answer only once the agent has really got it; if the
+conversation cannot be started, the question stays open with its buttons — asked again at once if the compaction was over. A second tap on
+a copy that is already being answered changes nothing: the answer stays the last word on the message.
 
 ### File intake
 

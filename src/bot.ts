@@ -5997,6 +5997,7 @@ const {
   answerReAskedQuestionByNumber,
   reAskInterruptedQuestion,
   restoreReAskedQuestion,
+  closeSavedReAskedQuestion,
   closeReAskedQuestion,
   registerCompactionCommands,
   registerCompactionCallbacks,
@@ -10934,18 +10935,18 @@ async function deliverActivePrompt(
 
 /**
  * @description Close the on-screen state of a pending question that ends without an answer: clear the bot's
- * pending-question state (which unpins it) and edit the question's message so its buttons are gone and a note says how
- * it ended (`closing`; by default that nobody answered it). The message is never deleted — the question and its options
+ * pending-question state (which unpins it) and edit the question's message so its buttons are gone and a note says that
+ * nobody answered it. The message is never deleted — the question and its options
  * stay readable. Closing the question on the agent is the caller's, before it stops or aborts the turn.
  * Returns whether the message itself was edited — it IS the notice then.
  *
  * The edit runs through `runQuestionLifecycleOp` (same serializer as the answer path) so it can't race a concurrent
  * re-post-to-bottom. The `messageId` + question are captured BEFORE clearing, since `clearPendingQuestion` drops the state.
  */
-async function retirePendingQuestion(key: SessionKey, closing: QuestionClosing = 'unanswered'): Promise<boolean> {
+async function retirePendingQuestion(key: SessionKey): Promise<boolean> {
   const pending = pendingQuestions.get(keyToString(key));
   clearPendingQuestion(key);
-  return closeCapturedQuestionMessage(key, pending?.messageId ?? null, pending?.data.questions[pending.currentIndex], closing);
+  return closeCapturedQuestionMessage(key, pending?.messageId ?? null, pending?.data.questions[pending.currentIndex]);
 }
 
 /**
@@ -10957,10 +10958,9 @@ async function closeCapturedQuestionMessage(
   key: SessionKey,
   messageId: number | null,
   question: OpenCodeQuestion | undefined,
-  closing: QuestionClosing,
 ): Promise<boolean> {
   if (messageId === null || !question) return false;
-  return runQuestionLifecycleOp(key, () => closeQuestionMessage(key, messageId, question, closing));
+  return runQuestionLifecycleOp(key, () => closeQuestionMessage(key, messageId, question, 'unanswered'));
 }
 
 /**
@@ -13100,7 +13100,7 @@ function restorePendingQuestions(): void {
       const orphaned = migratePendingQuestionState(value);
       if (orphaned.messageId !== null) questionPinnedMessageId.set(keyStr, orphaned.messageId);
       clearPendingQuestion(key);
-      closeCapturedQuestionMessage(key, orphaned.messageId, orphaned.data.questions[orphaned.currentIndex], 'unanswered')
+      closeCapturedQuestionMessage(key, orphaned.messageId, orphaned.data.questions[orphaned.currentIndex])
         .catch((e) => console.error('[pendingQuestion] closing the dropped question failed:', e));
       dropped += 1;
     }
@@ -13144,9 +13144,7 @@ function restoreReAskedQuestions(): void {
       continue;
     }
     // The copy is closed, never brought back; an interrupted question's message ends as unanswered, the one thing known of it.
-    state.clearReAskedQuestion(key).catch((e) => console.error('[reAskedQuestion] clear failed:', e));
-    closeQuestionMessage(key, saved.messageId, saved.question, 'unanswered')
-      .catch((e) => console.error(`[reAskedQuestion] closing the ${saved.isPosted === false ? 'interrupted question' : 'orphaned copy'} failed:`, e));
+    closeSavedReAskedQuestion(key, saved);
   }
 }
 

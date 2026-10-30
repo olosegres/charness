@@ -29,10 +29,9 @@ import {
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from '../questionKeyboards';
 import { splitMessage, MAX_MESSAGE_LEN } from '../messageSplit';
 import type { BotCore } from './botCore';
-import { getCallbackMessageId } from './callbackMessage';
 import { getQuestionReplyRoute, type QuestionEnd } from '../../../openCodeQuestionFlow';
 import type { LatePromptOutcome } from '../../../utils/promptDelivery';
-import { getCallbackMessageText } from './callbackMessage';
+import { getCallbackMessageId, getCallbackMessageText } from './callbackMessage';
 import { answerCallbackWithFittedText } from './callbackToast';
 
 /** The literal slash command forwarded to backends whose own CLI parses it. */
@@ -123,9 +122,15 @@ export interface ReAskedQuestion {
   question: OpenCodeQuestion;
   messageId: number | null;
   predecessorMessageId: number | null;
-  /** Whether the predecessor already has its result («asked again below», or the ending). */
+  /** Whether the predecessor's result («asked again below», or the ending) is written or on its way — nothing else writes it. */
   isPredecessorClosed: boolean;
+  /** Whether the edit that gave the predecessor its result has LANDED: what the saved state says, so a restart finishes a lost edit. */
+  isPredecessorEditLanded: boolean;
   ending: QuestionEnd | null;
+  /** Where the re-ask's own send is: not begun, in flight (the message exists, its id is not known), or over (landed, or failed). */
+  sendPhase: 'notStarted' | 'inFlight' | 'finished';
+  /** Whether the idle fire has decided about the re-ask (posted it, or found the record taken and left it): its result has run. */
+  hasIdleResultRun: boolean;
   /**
    * A typed number answered the question and its label is still on its way to the agent. The record is out of the map, but no
    * result is written on its messages until the delivery is known (it may reach no session, and then the question is open
@@ -749,9 +754,50 @@ export function createCompaction(ports: CompactionPorts) {
    * waited in, flagged as such. `null` when there is no message to remember.
    */
   function buildSavedReAskedQuestion(reAsked: ReAskedQuestion): ReAskedQuestionRecord | null {
-    if (reAsked.messageId !== null) return { messageId: reAsked.messageId, question: reAsked.question };
+    if (reAsked.messageId !== null) {
+      // The old message goes with it, and whether its result has landed: a restart between the post and that edit finishes it.
+      return reAsked.predecessorMessageId === null
+        ? { messageId: reAsked.messageId, question: reAsked.question }
+        : { messageId: reAsked.messageId, question: reAsked.question, predecessorMessageId: reAsked.predecessorMessageId, isPredecessorClosed: reAsked.isPredecessorEditLanded };
+    }
     if (reAsked.predecessorMessageId !== null) return { messageId: reAsked.predecessorMessageId, question: reAsked.question, isPosted: false };
     return null;
+  }
+
+  /**
+   * The messages of a topic that already carry a result of a re-asked question — an answer a tap or a number took, or a close that
+   * landed — most recent last. A button can still be tapped on such a message from a stale view (a second tap on the spinner the first
+   * one left): it must not be taken for a message the bot knows nothing about, whose own text would be rewritten over the result.
+   */
+  const endedMessageIds = new Map<string, Set<number>>();
+  const endedMessageLimit = 100;
+
+  function rememberEndedMessage(key: SessionKey, messageId: number | null): void {
+    if (messageId === null) return;
+    const kStr = keyToString(key);
+    const messageIds = endedMessageIds.get(kStr) ?? new Set<number>();
+    messageIds.delete(messageId);
+    messageIds.add(messageId);
+    if (messageIds.size > endedMessageLimit) {
+      const oldest = messageIds.values().next().value;
+      if (oldest !== undefined) messageIds.delete(oldest);
+    }
+    endedMessageIds.set(kStr, messageIds);
+  }
+
+  function forgetEndedMessage(key: SessionKey, messageId: number | null): void {
+    if (messageId !== null) endedMessageIds.get(keyToString(key))?.delete(messageId);
+  }
+
+  function checkIsEndedMessage(key: SessionKey, messageId: number): boolean {
+    return endedMessageIds.get(keyToString(key))?.has(messageId) ?? false;
+  }
+
+  /** Give a message of the re-asked question its result through the bot's close; one that landed is remembered as ended. */
+  async function closeReAskedMessage(key: SessionKey, messageId: number, question: OpenCodeQuestion, ending: QuestionEnd): Promise<boolean> {
+    const isEdited = await closeQuestionMessage(key, messageId, question, ending);
+    if (isEdited) rememberEndedMessage(key, messageId);
+    return isEdited;
   }
 
   /** Keep the record in the saved state; a failed write is logged, the in-memory record is what a tap reads. */
@@ -771,10 +817,26 @@ export function createCompaction(ports: CompactionPorts) {
    * message is the predecessor (`null` when it never got an id).
    */
   function startReAskedQuestion(key: SessionKey, question: OpenCodeQuestion, predecessorMessageId: number | null): ReAskedQuestion {
-    const reAsked: ReAskedQuestion = { question, messageId: null, predecessorMessageId, isPredecessorClosed: false, ending: null, isAnswerPending: false };
+    const reAsked: ReAskedQuestion = {
+      question,
+      messageId: null,
+      predecessorMessageId,
+      isPredecessorClosed: false,
+      isPredecessorEditLanded: false,
+      ending: null,
+      isAnswerPending: false,
+      sendPhase: 'notStarted',
+      hasIdleResultRun: false,
+    };
     reAskedQuestions.set(keyToString(key), reAsked);
     saveReAskedQuestion(key, reAsked);
     return reAsked;
+  }
+
+  /** The record is over without a result to write (its send failed): out of memory and of the saved state. */
+  function dropReAskedQuestion(key: SessionKey): void {
+    reAskedQuestions.delete(keyToString(key));
+    forgetSavedReAskedQuestion(key);
   }
 
   /** The re-asked question a `reask_<idx>` tap or a typed number works on, still kept. */
@@ -804,8 +866,20 @@ export function createCompaction(ports: CompactionPorts) {
    */
   function takeReAskedQuestionForAnswer(key: SessionKey): ReAskedQuestion | undefined {
     const reAsked = takeReAskedQuestion(key);
-    if (reAsked) reAsked.isAnswerPending = true;
+    if (!reAsked) return undefined;
+    reAsked.isAnswerPending = true;
+    rememberAnsweredMessages(key, reAsked, reAsked.messageId);
     return reAsked;
+  }
+
+  /**
+   * A tap or a number took the question to answer it: the copy (`copyMessageId`, which a tap may know before the record does) and
+   * the old message are going to carry that answer, so a second tap on either — from a stale view, while the first is still being
+   * delivered — answers nothing and rewrites nothing.
+   */
+  function rememberAnsweredMessages(key: SessionKey, reAsked: ReAskedQuestion, copyMessageId: number | null): void {
+    rememberEndedMessage(key, copyMessageId);
+    rememberEndedMessage(key, reAsked.predecessorMessageId);
   }
 
   /**
@@ -831,9 +905,40 @@ export function createCompaction(ports: CompactionPorts) {
     return true;
   }
 
-  /** Boot: a saved re-asked question whose conversation can still be resumed gets its buttons back (memory only, it is saved already). */
+  /**
+   * Boot: a saved re-asked question whose conversation can still be resumed gets its buttons back (memory only, it is saved already).
+   * A restart between the post of the copy and the edit of the old message leaves the old message without a note: it gets it now.
+   */
   function restoreReAskedQuestion(key: SessionKey, saved: ReAskedQuestionRecord): void {
-    reAskedQuestions.set(keyToString(key), { question: saved.question, messageId: saved.messageId, predecessorMessageId: null, isPredecessorClosed: true, ending: null, isAnswerPending: false });
+    const isPredecessorSettled = saved.predecessorMessageId === undefined || saved.predecessorMessageId === null || saved.isPredecessorClosed !== false;
+    const reAsked: ReAskedQuestion = {
+      question: saved.question,
+      messageId: saved.messageId,
+      predecessorMessageId: saved.predecessorMessageId ?? null,
+      isPredecessorClosed: isPredecessorSettled,
+      isPredecessorEditLanded: isPredecessorSettled,
+      ending: null,
+      isAnswerPending: false,
+      sendPhase: 'finished',
+      hasIdleResultRun: true,
+    };
+    reAskedQuestions.set(keyToString(key), reAsked);
+    settleReAskedPredecessor(key, reAsked).catch((e) => console.error('[reAskedQuestion] settling the old message at boot failed:', e));
+  }
+
+  /**
+   * Boot: a saved re-asked question that cannot be brought back (its conversation is gone, or a question waits beside it) ends:
+   * its message — and the old message, if the restart left that without a note — is closed as unanswered, never left with buttons that
+   * do nothing or would answer the wrong question, and the saved record is dropped. An unposted record names the old message itself.
+   */
+  function closeSavedReAskedQuestion(key: SessionKey, saved: ReAskedQuestionRecord): void {
+    forgetSavedReAskedQuestion(key);
+    const messageIds = [saved.messageId];
+    if (saved.isPosted !== false && saved.predecessorMessageId != null && saved.isPredecessorClosed === false) messageIds.push(saved.predecessorMessageId);
+    for (const messageId of messageIds) {
+      closeReAskedMessage(key, messageId, saved.question, 'unanswered')
+        .catch((e) => console.error('[reAskedQuestion] closing the saved question failed:', e));
+    }
   }
 
   /**
@@ -844,10 +949,10 @@ export function createCompaction(ports: CompactionPorts) {
   async function endReAskedQuestion(key: SessionKey, reAsked: ReAskedQuestion): Promise<void> {
     const ending = reAsked.ending;
     if (ending === null) return;
-    if (reAsked.messageId !== null) await closeQuestionMessage(key, reAsked.messageId, reAsked.question, ending);
+    if (reAsked.messageId !== null) await closeReAskedMessage(key, reAsked.messageId, reAsked.question, ending);
     if (reAsked.predecessorMessageId !== null && !reAsked.isPredecessorClosed) {
       reAsked.isPredecessorClosed = true;
-      await closeQuestionMessage(key, reAsked.predecessorMessageId, reAsked.question, ending);
+      await closeReAskedMessage(key, reAsked.predecessorMessageId, reAsked.question, ending);
     }
   }
 
@@ -874,19 +979,20 @@ export function createCompaction(ports: CompactionPorts) {
    */
   async function postReAskedQuestion(key: SessionKey, text: string, reAsked: ReAskedQuestion): Promise<number | null> {
     const keyboard = buildQuestionOptionsKeyboard(reAsked.question, (optionIndex) => `reask_${optionIndex}`);
+    reAsked.sendPhase = 'inFlight';
     const sentMessageId = await replyToThread(key, text, buildKeyboardExtra(keyboard));
+    reAsked.sendPhase = 'finished';
     const isStillKept = reAskedQuestions.get(keyToString(key)) === reAsked;
     if (sentMessageId === null) {
-      if (isStillKept) {
-        reAskedQuestions.delete(keyToString(key));
-        forgetSavedReAskedQuestion(key);
-      }
+      if (isStillKept) dropReAskedQuestion(key);
       return null;
     }
     reAsked.messageId = sentMessageId;
     // The conversation ended (or a number answered) while the send was in flight: the message that landed ends the same way.
     if (reAsked.ending !== null) await endReAskedQuestion(key, reAsked);
     else if (isStillKept) saveReAskedQuestion(key, reAsked);
+    // Taken to be answered (a tap or a number): the copy that landed is going to carry the answer.
+    else rememberEndedMessage(key, sentMessageId);
     return sentMessageId;
   }
 
@@ -908,6 +1014,7 @@ export function createCompaction(ports: CompactionPorts) {
   async function reAskInterruptedQuestion(key: SessionKey, saved: ReAskedQuestionRecord): Promise<void> {
     await withThreadLocale(key, async () => {
       const reAsked = startReAskedQuestion(key, saved.question, saved.messageId);
+      reAsked.hasIdleResultRun = true;
       await postReAskedQuestion(key, buildReAskedQuestionText(saved.question), reAsked);
       await settleReAskedPredecessor(key, reAsked);
     });
@@ -943,6 +1050,8 @@ export function createCompaction(ports: CompactionPorts) {
     if (plan.notice) await replyToThread(key, plan.notice);
     if (plan.summary) await postCompactionSummary(key, plan.summary);
     if (!reAsked) return;
+    // From here the re-ask is decided: a record taken meanwhile (a number typed) is not posted, and whoever puts it back finishes it.
+    reAsked.hasIdleResultRun = true;
     if (plan.question && peekReAskedQuestion(key) === reAsked) await postReAskedQuestion(key, plan.question, reAsked);
     await settleReAskedPredecessor(key, reAsked);
   }
@@ -956,7 +1065,11 @@ export function createCompaction(ports: CompactionPorts) {
   async function settleReAskedPredecessor(key: SessionKey, reAsked: ReAskedQuestion): Promise<void> {
     if (reAsked.ending !== null || reAsked.isAnswerPending || reAsked.predecessorMessageId === null || reAsked.isPredecessorClosed) return;
     reAsked.isPredecessorClosed = true;
-    await closeQuestionMessage(key, reAsked.predecessorMessageId, reAsked.question, reAsked.messageId !== null ? 'askedAgain' : 'unanswered');
+    const isEdited = await closeReAskedMessage(key, reAsked.predecessorMessageId, reAsked.question, reAsked.messageId !== null ? 'askedAgain' : 'unanswered');
+    if (!isEdited) return;
+    // Saved only now, so a restart before the edit landed finds the old message unsettled and finishes it.
+    reAsked.isPredecessorEditLanded = true;
+    if (reAskedQuestions.get(keyToString(key)) === reAsked) saveReAskedQuestion(key, reAsked);
   }
 
   /**
@@ -970,19 +1083,27 @@ export function createCompaction(ports: CompactionPorts) {
     if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
     const tappedMessageId = getCallbackMessageId(ctx);
     const reAsked = peekReAskedQuestion(key);
+    // A re-ask whose send has not returned has no message id, and when the old message has none either there is nothing to tell
+    // the tapped message from an older copy by: no tap is taken until the id is known, and none is rewritten.
+    if (reAsked !== undefined && reAsked.messageId === null && reAsked.predecessorMessageId === null) {
+      await ctx.answerCbQuery(t('cb.no_pending_question'));
+      return;
+    }
     // The tap must be on the message of the question that waits now. A button left on an OLDER re-asked message (its close
     // failed, or it predates a restart) would answer the newer question with that question's own label: it answers nothing,
     // and its buttons come off. A re-ask whose send has not returned has no message id yet — the tap is on that message if
     // it is NEWER than the one the question waited in before (the re-ask is always posted after it); older ones are the stale ones.
     const isTappedMessageCurrent = reAsked !== undefined && (reAsked.messageId !== null
       ? reAsked.messageId === tappedMessageId
-      : tappedMessageId !== null && (reAsked.predecessorMessageId === null || tappedMessageId > reAsked.predecessorMessageId));
+      : tappedMessageId !== null && reAsked.predecessorMessageId !== null && tappedMessageId > reAsked.predecessorMessageId);
     if (!isTappedMessageCurrent) {
       await ctx.answerCbQuery(t('cb.no_pending_question'));
+      // A message that already carries a result (an answer a first tap is still delivering, a close that landed) is left as it is:
+      // a second tap from a stale view must not rewrite it. Only a message the bot knows nothing about is closed here.
+      if (tappedMessageId === null || checkIsEndedMessage(key, tappedMessageId)) return;
+      rememberEndedMessage(key, tappedMessageId);
       // Not awaited: the edit waits its turn in the send pacer, and the next update of the topic waits for this handler.
-      if (tappedMessageId !== null) {
-        closeOrphanQuestionMessage(key, tappedMessageId, getCallbackMessageText(ctx)).catch((e) => console.error('[reask] closing the tapped orphan failed:', e));
-      }
+      closeOrphanQuestionMessage(key, tappedMessageId, getCallbackMessageText(ctx)).catch((e) => console.error('[reask] closing the tapped orphan failed:', e));
       return;
     }
     const label = reAsked.question.options[optionIndex]?.label;
@@ -991,6 +1112,7 @@ export function createCompaction(ports: CompactionPorts) {
     // tap's, so no other path can use it or close it under the answer.
     takeReAskedQuestion(key);
     const reAskedMessageId = reAsked.messageId ?? tappedMessageId;
+    rememberAnsweredMessages(key, reAsked, reAskedMessageId);
     // The idle fire posts the re-asked question just BEFORE it stops the process, and a stopping process still reads as
     // active: a tap inside that window (or inside a start) is buffered like a typed prompt and replayed once a session is up.
     // The answer to a re-asked question wakes a sleeping conversation (L-D4) — the question is its own.
@@ -1010,7 +1132,7 @@ export function createCompaction(ports: CompactionPorts) {
       await returnReAskedQuestionAfterTap(key, reAsked, reAskedMessageId);
       return;
     }
-    const isAnswerShown = reAskedMessageId !== null && await closeQuestionMessage(key, reAskedMessageId, reAsked.question, { answer: label });
+    const isAnswerShown = reAskedMessageId !== null && await closeReAskedMessage(key, reAskedMessageId, reAsked.question, { answer: label });
     if (!isAnswerShown && isLabelCut) await replyToThread(key, label);
   }
 
@@ -1034,9 +1156,8 @@ export function createCompaction(ports: CompactionPorts) {
     notePersonActivity(key);
     const outcome = await deliverLabel(key, label);
     if (outcome === 'noSession') {
-      await returnReAskedQuestionAfterTap(key, reAsked, reAsked.messageId ?? reAsked.predecessorMessageId);
-      // A re-ask that landed during the delivery is the question that waits now: the old message says so.
-      if (reAsked.messageId !== null) await settleReAskedPredecessor(key, reAsked);
+      const isPutBack = await returnReAskedQuestionAfterTap(key, reAsked, reAsked.messageId ?? reAsked.predecessorMessageId);
+      if (isPutBack) await finishReAskAfterNumberFoundNoSession(key, reAsked);
       return true;
     }
     await answerReAskedQuestion(key, reAsked, label);
@@ -1044,13 +1165,37 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
+   * @description A typed number found no session and the question is open again. The idle fire decides about the re-ask once, and
+   * it skips a record a number has taken (an answer was on its way): so what the fire left undone is done here, once it has run.
+   *  - the fire has not run yet — it will post the re-ask itself, now that the record is back;
+   *  - its send is in flight — the fire settles the old message when the copy lands;
+   *  - the fire ran and sent nothing — the re-ask is posted now, and the old message points at it (or ends «not answered» if the
+   *    send fails);
+   *  - the copy is there already, the old message waiting for the answer's outcome — it says where the question went.
+   */
+  async function finishReAskAfterNumberFoundNoSession(key: SessionKey, reAsked: ReAskedQuestion): Promise<void> {
+    if (!reAsked.hasIdleResultRun || reAsked.sendPhase === 'inFlight') return;
+    if (reAsked.sendPhase === 'notStarted') {
+      await withThreadLocale(key, () => postReAskedQuestion(key, buildReAskedQuestionText(reAsked.question), reAsked));
+    }
+    await settleReAskedPredecessor(key, reAsked);
+    // A send that failed leaves nothing to answer: the question ended on the old message.
+    if (reAsked.messageId === null && peekReAskedQuestion(key) === reAsked) dropReAskedQuestion(key);
+  }
+
+  /**
    * @description A tap on a re-asked question whose label reached no session leaves the question open: its record goes back.
    * Not when a newer re-ask has taken its place meanwhile — the tapped message is not the question that waits any more,
-   * so it is closed as unanswered instead of keeping buttons that would answer the wrong question.
+   * so it is closed as unanswered instead of keeping buttons that would answer the wrong question. Resolves whether it went back.
    */
-  async function returnReAskedQuestionAfterTap(key: SessionKey, reAsked: ReAskedQuestion, messageId: number | null): Promise<void> {
-    if (putBackReAskedQuestion(key, reAsked) || messageId === null) return;
-    await closeQuestionMessage(key, messageId, reAsked.question, 'unanswered');
+  async function returnReAskedQuestionAfterTap(key: SessionKey, reAsked: ReAskedQuestion, messageId: number | null): Promise<boolean> {
+    if (putBackReAskedQuestion(key, reAsked)) {
+      // The answer did not happen: the message is an open question again, not one that carries a result.
+      forgetEndedMessage(key, messageId);
+      return true;
+    }
+    if (messageId !== null) await closeReAskedMessage(key, messageId, reAsked.question, 'unanswered');
+    return false;
   }
 
   /**
@@ -1338,6 +1483,7 @@ export function createCompaction(ports: CompactionPorts) {
     answerReAskedQuestionByNumber,
     reAskInterruptedQuestion,
     restoreReAskedQuestion,
+    closeSavedReAskedQuestion,
     closeReAskedQuestion,
     registerCompactionCommands,
     registerCompactionCallbacks,

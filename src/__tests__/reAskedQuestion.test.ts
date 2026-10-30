@@ -63,6 +63,9 @@ class StubAdapter extends EventEmitter implements AgentAdapter {
   readonly label = 'Stub';
   isActive = true;
   readonly signals: string[] = [];
+  /** When set, the compaction does not finish until the test lets it: the record stays in its COMPACTING phase. */
+  compactionGate: Deferred | null = null;
+  compactionStarted = createDeferred();
 
   async startSession(): Promise<void> {}
   async resumeSession(): Promise<void> {}
@@ -73,7 +76,11 @@ class StubAdapter extends EventEmitter implements AgentAdapter {
   sendSignal(_key: SessionKey, signal: string): void { this.signals.push(signal); }
   async getSessions(): Promise<AgentSession[]> { return []; }
   rejectQuestion(): void {}
-  async compactContext(): Promise<CompactionResult> { return { ok: true, preTokens: null, postTokens: null }; }
+  async compactContext(): Promise<CompactionResult> {
+    this.compactionStarted.resolve();
+    await this.compactionGate?.promise;
+    return { ok: true, preTokens: null, postTokens: null };
+  }
 }
 
 interface PendingDelivery {
@@ -95,6 +102,10 @@ let deliveries: PendingDelivery[] = [];
 let canWakeConversation = true;
 /** When set, the send of the re-ask is refused (the topic cannot be written to): the send resolves with no message id. */
 let isReAskSendRefused = false;
+/** Messages whose close the test holds (the call is recorded, its answer waits) — the edit that has not landed yet. */
+let heldCloses = new Map<number, Deferred>();
+/** Messages whose close Telegram refuses: the call is recorded, the edit does not land. */
+let refusedCloses = new Set<number>();
 let reAskSendStarted = createDeferred();
 let reAskSendGate = createDeferred();
 let idleFireFinished = createDeferred();
@@ -124,16 +135,21 @@ function sortByMessageId(closed: typeof closedQuestionMessages): typeof closedQu
  * output, the topic goes quiet for the (short) idle window. Resolves once the fire has begun to send the re-ask, which the
  * gate then holds — the record is in its SENDING phase.
  */
-async function startIdleFireUntilReAskIsBeingSent(): Promise<void> {
+async function startIdleFireUntilReAskIsBeingSent(options: { waitingMessageId: number | null } = { waitingMessageId }): Promise<void> {
+  startIdleFire(options.waitingMessageId);
+  await reAskSendStarted.promise;
+}
+
+/** The question is pending in `messageId` (`null`: its own post is still in flight), a turn produced output, the topic goes quiet. */
+function startIdleFire(messageId: number | null): void {
   pendingQuestions.set(keyString, {
     data: { requestId: 'que_1', questions: [question] },
-    messageId: waitingMessageId,
+    messageId,
     answers: [null],
     currentIndex: 0,
   });
   compaction.markThreadTurnProducedOutput(key);
   compaction.noteThreadActivity(key);
-  await reAskSendStarted.promise;
 }
 
 /** A restored (boot) record whose copy is the message `messageId`, saved the way the post leaves it. */
@@ -176,7 +192,8 @@ describe('the question the idle compaction asked again, through the compaction m
       clearPendingQuestion: (clearedKey) => { pendingQuestions.delete(keyToString(clearedKey)); },
       closeQuestionMessage: async (_key, messageId, _question, ending) => {
         closedQuestionMessages.push({ messageId, closing: ending });
-        return true;
+        await heldCloses.get(messageId)?.promise;
+        return !refusedCloses.has(messageId);
       },
       idleWindowMs,
       checkIsLimitWaitArmed: () => false,
@@ -204,6 +221,10 @@ describe('the question the idle compaction asked again, through the compaction m
     deliveries = [];
     canWakeConversation = true;
     isReAskSendRefused = false;
+    heldCloses = new Map();
+    refusedCloses = new Set();
+    adapter.compactionGate = null;
+    adapter.compactionStarted = createDeferred();
     adapter.isActive = true;
     pendingQuestions.clear();
     harness.replies.length = 0;
@@ -214,6 +235,8 @@ describe('the question the idle compaction asked again, through the compaction m
 
   afterEach(async () => {
     reAskSendGate.resolve();
+    adapter.compactionGate?.resolve();
+    for (const held of heldCloses.values()) held.resolve();
     for (const delivery of deliveries) delivery.settle('forwarded');
     compaction.clearThreadCompaction(key);
     await harness.state.clearReAskedQuestion(key);
@@ -297,7 +320,11 @@ describe('the question the idle compaction asked again, through the compaction m
 
       reAskSendGate.resolve();
       await idleFireFinished.promise;
-      assert.deepEqual(harness.state.getReAskedQuestions()[keyString], { messageId: getReAskedMessageId(), question });
+      assert.deepEqual(
+        harness.state.getReAskedQuestions()[keyString],
+        { messageId: getReAskedMessageId(), question, predecessorMessageId: waitingMessageId, isPredecessorClosed: true },
+        'and, once the old message has its note, says so',
+      );
       assert.deepEqual(closedQuestionMessages, [{ messageId: waitingMessageId, closing: 'askedAgain' }]);
     });
 
@@ -317,6 +344,219 @@ describe('the question the idle compaction asked again, through the compaction m
     });
   });
 
+  describe('a second tap, or a tap while a typed number is being delivered', () => {
+    it('a second tap on a message the first is still answering answers nothing and rewrites nothing, then or after', async () => {
+      adapter.isActive = false;
+      await seedRestoredReAskedQuestion(4321);
+      const firstTap = tapReAskedButton(4321, 0);
+      await waitForDelivery(1);
+      await tapReAskedButton(4321, 0);
+      assert.equal(getLastToast(), enDict['cb.no_pending_question'], 'the second tap says the question is spent');
+      assert.deepEqual(closedOrphanMessages, [], 'and does not rewrite the message the first is answering');
+
+      deliveries[0].settle('forwarded');
+      await firstTap;
+      await tapReAskedButton(4321, 0);
+      assert.deepEqual(closedOrphanMessages, [], 'nor does one that comes after the answer is written');
+      assert.deepEqual(closedQuestionMessages, [{ messageId: 4321, closing: { answer: 'Short' } }], 'the answer is the only result the message got');
+    });
+
+    it('a tap while a typed number\'s label is being delivered rewrites nothing, and the question is open again if that finds no session', async () => {
+      await seedRestoredReAskedQuestion(4322);
+      const handled = compaction.answerReAskedQuestionByNumber(key, '2');
+      await waitForDelivery(1);
+      await tapReAskedButton(4322, 0);
+      assert.equal(getLastToast(), enDict['cb.no_pending_question']);
+      assert.deepEqual(closedOrphanMessages, [], 'the message is not rewritten over an answer that may still come');
+
+      deliveries[0].settle('noSession');
+      assert.equal(await handled, true);
+      assert.deepEqual(closedQuestionMessages, [], 'nothing was written: the question is open again');
+      const tap = tapReAskedButton(4322, 1);
+      await waitForDelivery(2);
+      deliveries[1].settle('forwarded');
+      await tap;
+      assert.deepEqual(closedQuestionMessages, [{ messageId: 4322, closing: { answer: 'Long' } }], 'and its buttons still answer');
+    });
+
+    it('a copy whose answer found no session is an open question again: once a newer re-ask replaces it, a stale tap on it closes it', async () => {
+      await seedRestoredReAskedQuestion(4600);
+      const tap = tapReAskedButton(4600, 0);
+      await waitForDelivery(1);
+      deliveries[0].settle('noSession');
+      await tap;
+      assert.deepEqual(closedQuestionMessages, [], 'nothing was written: the question is open again');
+
+      compaction.restoreReAskedQuestion(key, { messageId: 4700, question });
+      await tapReAskedButton(4600, 0);
+      await waitUntil('the replaced copy to be closed', () => closedOrphanMessages.length === 1);
+      assert.deepEqual(closedOrphanMessages, [{ messageId: 4600, text: 'screen 4600' }], 'it is not a message that carries a result, so it does not keep live buttons');
+    });
+
+    it('a message the bot closed is not rewritten by a stale tap, but one whose close Telegram refused is closed with its own text, once', async () => {
+      await seedRestoredReAskedQuestion(4400);
+      compaction.closeReAskedQuestion(key);
+      await waitUntil('the close of the first message', () => closedQuestionMessages.length === 1);
+      await tapReAskedButton(4400, 0);
+      assert.deepEqual(closedOrphanMessages, [], 'its note is the result, whatever the stale view still shows');
+
+      refusedCloses.add(4500);
+      await seedRestoredReAskedQuestion(4500);
+      compaction.closeReAskedQuestion(key);
+      await waitUntil('the refused close', () => closedQuestionMessages.length === 2);
+      await tapReAskedButton(4500, 0);
+      await waitUntil('the stale message to be closed', () => closedOrphanMessages.length === 1);
+      assert.deepEqual(closedOrphanMessages, [{ messageId: 4500, text: 'screen 4500' }]);
+      await tapReAskedButton(4500, 0);
+      assert.equal(closedOrphanMessages.length, 1, 'a second tap on it does not append a second note');
+    });
+  });
+
+  describe('while neither the copy nor the old message has an id', () => {
+    it('no tap is taken: it answers nothing and rewrites nothing, and once the copy has its id it answers', async () => {
+      await startIdleFireUntilReAskIsBeingSent({ waitingMessageId: null });
+      await tapReAskedButton(800, 0);
+      assert.equal(getLastToast(), enDict['cb.no_pending_question']);
+      assert.deepEqual(closedOrphanMessages, [], 'the copy that is being sent may be the very message tapped');
+      assert.equal(deliveries.length, 0, 'and no label reaches the conversation');
+
+      reAskSendGate.resolve();
+      await idleFireFinished.promise;
+      const copyMessageId = getReAskedMessageId();
+      const tap = tapReAskedButton(copyMessageId, 0);
+      await waitForDelivery(1);
+      deliveries[0].settle('forwarded');
+      await tap;
+      assert.deepEqual(closedQuestionMessages, [{ messageId: copyMessageId, closing: { answer: 'Short' } }]);
+    });
+  });
+
+  describe('a typed number that finds no session', () => {
+    /** The compaction runs; a number typed now takes the record in its COMPACTING phase and its label is being delivered. */
+    async function typeNumberDuringCompaction(): Promise<{ handled: Promise<boolean> }> {
+      adapter.compactionGate = createDeferred();
+      startIdleFire(waitingMessageId);
+      await adapter.compactionStarted.promise;
+      const handled = compaction.answerReAskedQuestionByNumber(key, '2');
+      await waitForDelivery(1);
+      // In an object: an async function would otherwise wait for the very delivery the test settles later.
+      return { handled };
+    }
+
+    it('after the idle fire ran without posting the re-ask: it is posted now, and the old message points at it', async () => {
+      const { handled } = await typeNumberDuringCompaction();
+      reAskSendGate.resolve();
+      adapter.compactionGate?.resolve();
+      await idleFireFinished.promise;
+      assert.ok(!harness.replies.some((reply) => harness.getKeyboardData(reply).flat().some((data) => data.startsWith('reask_'))), 'the fire left the taken record alone: nothing asked again');
+      assert.deepEqual(closedQuestionMessages, [], 'and the old message has no result yet');
+
+      deliveries[0].settle('noSession');
+      assert.equal(await handled, true);
+      const copyMessageId = getReAskedMessageId();
+      assert.deepEqual(closedQuestionMessages, [{ messageId: waitingMessageId, closing: 'askedAgain' }], 'the question is asked again, and the old message says so');
+      assert.deepEqual(harness.state.getReAskedQuestions()[keyString]?.messageId, copyMessageId, 'the copy is the record');
+
+      const tap = tapReAskedButton(copyMessageId, 0);
+      await waitForDelivery(2);
+      deliveries[1].settle('forwarded');
+      await tap;
+      assert.deepEqual(closedQuestionMessages.at(-1), { messageId: copyMessageId, closing: { answer: 'Short' } }, 'and the copy answers');
+    });
+
+    it('before the idle fire ran: the record goes back and the fire asks the question itself', async () => {
+      const { handled } = await typeNumberDuringCompaction();
+      deliveries[0].settle('noSession');
+      assert.equal(await handled, true);
+      assert.equal(harness.replies.filter((reply) => harness.getKeyboardData(reply).flat().some((data) => data.startsWith('reask_'))).length, 0, 'nothing is posted before the compaction ends');
+
+      reAskSendGate.resolve();
+      adapter.compactionGate?.resolve();
+      await idleFireFinished.promise;
+      getReAskedMessageId();
+      assert.deepEqual(closedQuestionMessages, [{ messageId: waitingMessageId, closing: 'askedAgain' }]);
+    });
+
+    it('after the idle fire ran, when the re-ask cannot be sent: the old message ends as «not answered» and nothing is left to answer', async () => {
+      isReAskSendRefused = true;
+      const { handled } = await typeNumberDuringCompaction();
+      reAskSendGate.resolve();
+      adapter.compactionGate?.resolve();
+      await idleFireFinished.promise;
+
+      deliveries[0].settle('noSession');
+      assert.equal(await handled, true);
+      assert.deepEqual(closedQuestionMessages, [{ messageId: waitingMessageId, closing: 'unanswered' }]);
+      assert.equal(harness.state.getReAskedQuestions()[keyString], undefined, 'nothing is saved');
+      assert.equal(await compaction.answerReAskedQuestionByNumber(key, '1'), false, 'and no record is left for a number to answer');
+    });
+  });
+
+  describe('the old message of a re-ask, across a restart', () => {
+    it('the post is saved with the old message, and that is settled only once its edit has landed', async () => {
+      const oldMessageEdit = createDeferred();
+      heldCloses.set(waitingMessageId, oldMessageEdit);
+      await startIdleFireUntilReAskIsBeingSent();
+      reAskSendGate.resolve();
+      await waitUntil('the edit of the old message to be asked', () => closedQuestionMessages.length === 1);
+      const copyMessageId = getReAskedMessageId();
+      await waitUntil('the post to be saved', () => harness.state.getReAskedQuestions()[keyString]?.messageId === copyMessageId);
+      assert.deepEqual(
+        harness.state.getReAskedQuestions()[keyString],
+        { messageId: copyMessageId, question, predecessorMessageId: waitingMessageId, isPredecessorClosed: false },
+        'a restart now finds the old message without its note',
+      );
+
+      oldMessageEdit.resolve();
+      await waitUntil('the edit to be saved as landed', () => harness.state.getReAskedQuestions()[keyString]?.isPredecessorClosed === true);
+      await idleFireFinished.promise;
+    });
+
+    it('an edit that did not land leaves the old message unsettled in the saved state', async () => {
+      refusedCloses.add(waitingMessageId);
+      await startIdleFireUntilReAskIsBeingSent();
+      reAskSendGate.resolve();
+      await idleFireFinished.promise;
+      assert.equal(harness.state.getReAskedQuestions()[keyString]?.isPredecessorClosed, false);
+    });
+
+    it('a boot that restores the copy finishes an old message left without its note, and leaves a settled one alone', async () => {
+      const unsettled: ReAskedQuestionRecord = { messageId: 4321, question, predecessorMessageId: waitingMessageId, isPredecessorClosed: false };
+      await harness.state.setReAskedQuestion(key, unsettled);
+      compaction.restoreReAskedQuestion(key, unsettled);
+      await waitUntil('the old message to be settled', () => closedQuestionMessages.length === 1);
+      assert.deepEqual(closedQuestionMessages, [{ messageId: waitingMessageId, closing: 'askedAgain' }], 'it points at the copy that was restored');
+      await waitUntil('the saved record to say so', () => harness.state.getReAskedQuestions()[keyString]?.isPredecessorClosed === true);
+
+      compaction.closeReAskedQuestion(key);
+      closedQuestionMessages = [];
+      const settled: ReAskedQuestionRecord = { messageId: 4322, question, predecessorMessageId: waitingMessageId, isPredecessorClosed: true };
+      compaction.restoreReAskedQuestion(key, settled);
+      assert.deepEqual(closedQuestionMessages, [], 'a note that landed is not written twice');
+    });
+
+    it('a boot that cannot bring the copy back closes it and an unsettled old message as «not answered», and drops the record', async () => {
+      const unsettled: ReAskedQuestionRecord = { messageId: 4321, question, predecessorMessageId: waitingMessageId, isPredecessorClosed: false };
+      await harness.state.setReAskedQuestion(key, unsettled);
+      compaction.closeSavedReAskedQuestion(key, unsettled);
+      await waitUntil('both closes', () => closedQuestionMessages.length === 2);
+      assert.deepEqual(sortByMessageId(closedQuestionMessages), sortByMessageId([
+        { messageId: waitingMessageId, closing: 'unanswered' },
+        { messageId: 4321, closing: 'unanswered' },
+      ]));
+      await waitUntil('the saved record to be dropped', () => harness.state.getReAskedQuestions()[keyString] === undefined);
+
+      closedQuestionMessages = [];
+      compaction.closeSavedReAskedQuestion(key, { messageId: 4322, question, predecessorMessageId: waitingMessageId, isPredecessorClosed: true });
+      compaction.closeSavedReAskedQuestion(key, { messageId: waitingMessageId, question, isPosted: false });
+      await waitUntil('the two closes', () => closedQuestionMessages.length === 2);
+      assert.deepEqual(sortByMessageId(closedQuestionMessages), sortByMessageId([
+        { messageId: 4322, closing: 'unanswered' },
+        { messageId: waitingMessageId, closing: 'unanswered' },
+      ]), 'a settled old message is left alone; an unposted record names the old message itself');
+    });
+  });
+
   describe('the idle compaction a restart interrupted (the saved record names the message the question waited in)', () => {
     const interrupted: ReAskedQuestionRecord = { messageId: waitingMessageId, question, isPosted: false };
 
@@ -329,7 +569,7 @@ describe('the question the idle compaction asked again, through the compaction m
       assert.ok(sent?.text.includes(question.question), 'and the question');
       assert.deepEqual(harness.getKeyboardData(sent), [['reask_0'], ['reask_1']], 'one button per option');
       assert.deepEqual(closedQuestionMessages, [{ messageId: waitingMessageId, closing: 'askedAgain' }], 'the old message says where the question went');
-      assert.deepEqual(harness.state.getReAskedQuestions()[keyString], { messageId: copyMessageId, question }, 'and the saved record names the copy');
+      assert.deepEqual(harness.state.getReAskedQuestions()[keyString], { messageId: copyMessageId, question, predecessorMessageId: waitingMessageId, isPredecessorClosed: true }, 'and the saved record names the copy and the settled old message');
 
       const tap = tapReAskedButton(copyMessageId, 1);
       await waitForDelivery(1);
