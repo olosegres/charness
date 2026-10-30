@@ -22,7 +22,7 @@ import {
   botApiFreeSocketTimeoutMs,
   createBotApiHttpAgent,
   createBotApiHttpsAgent,
-  installReusedConnectionRetry,
+  wireBotApiClient,
   reusedConnectionRetryLogPrefix,
 } from '../connectors/telegram/botApiConnection';
 
@@ -34,6 +34,8 @@ const slowAnswerMs = 600;
 const shortFreeSocketTimeoutMs = 150;
 const freeSocketWaitMs = 3000;
 const responseResetDelayMs = 100;
+/** The start of a response's head, cut inside a header name: bytes of an answer that never becomes a response. */
+const partialResponseHead = 'HTTP/1.1 200 OK\r\ncontent-ty';
 
 /** What the loopback server does with a request, decided before it reads it. */
 type RequestFate =
@@ -45,6 +47,8 @@ type RequestFate =
   | 'hangUp'
   /** Apply it, send the status line and part of the body, then reset the connection. */
   | 'hangUpAfterHeaders'
+  /** Apply it, send PART of the response head (no complete status line and headers), then close: the answer began, though the client's response never did. */
+  | 'hangUpMidHead'
   /** Never answer. */
   | 'hold';
 
@@ -107,6 +111,10 @@ class LoopbackBotApi {
     const isJson = (request.headers['content-type'] ?? '').includes('application/json');
     const label = isJson ? getTextOfJsonBody(Buffer.concat(chunks)) : 'document';
     this.appliedLabels.push(label);
+    if (fate === 'hangUpMidHead') {
+      request.socket.end(partialResponseHead);
+      return;
+    }
     if (fate === 'answerSlowly') await new Promise<void>((resolve) => setTimeout(resolve, slowAnswerMs));
     const body = JSON.stringify({ ok: true, result: { message_id: this.appliedLabels.length, chat: { id: chatId }, text: label } });
     if (fate === 'hangUpAfterHeaders') {
@@ -121,12 +129,10 @@ class LoopbackBotApi {
   }
 }
 
-/** Telegraf's client on `agent`, wired the way `bot.ts` wires it: the agent set after construction, the retry installed. */
+/** Telegraf's client on `agent`, wired the way `bot.ts` wires `bot.telegram`. */
 function createClient(apiRoot: string, agent: http.Agent): Telegram {
   const telegram = new Telegram(testBotToken, { apiRoot });
-  // Telegraf drops its agent for an `http://` root.
-  telegram.options.agent = agent;
-  installReusedConnectionRetry(telegram, agent);
+  wireBotApiClient(telegram, agent);
   return telegram;
 }
 
@@ -246,6 +252,19 @@ describe('a failure that is not "a pooled connection dropped before any answer" 
     assert.deepEqual(api.appliedLabels, ['first', 'second'], 'the server applied the second once');
   });
 
+  it('a drop after PART of the response head arrived: the server had started to answer, so it did process the request', async () => {
+    const { api, apiRoot } = await startApi(({ attemptNumber }) => (attemptNumber === 2 ? 'hangUpMidHead' : 'answer'));
+    const telegram = createClient(apiRoot, createAgent());
+
+    await telegram.sendMessage(chatId, 'first');
+    // No 'response' event ever fires for it, and the error is the one of a connection closed before any answer: only the
+    // bytes the socket read since the reuse tell it from a pooled connection the server had closed.
+    await assert.rejects(telegram.sendMessage(chatId, 'second'), (error: NodeJS.ErrnoException) => error.code === 'ECONNRESET' && /socket hang up/.test(error.message));
+
+    assert.equal(api.attempts.length, 2, 'no second attempt');
+    assert.deepEqual(api.appliedLabels, ['first', 'second'], 'the server applied the second once');
+  });
+
   it('an aborted call', async () => {
     const { api, apiRoot } = await startApi(({ attemptNumber }) => (attemptNumber === 1 ? 'answer' : 'hold'));
     const telegram = createClient(apiRoot, createAgent());
@@ -258,6 +277,41 @@ describe('a failure that is not "a pooled connection dropped before any answer" 
 
     await assert.rejects(aborted, (error: Error) => error.name === 'AbortError');
     assert.equal(api.attempts.length, 2, 'no second attempt');
+  });
+});
+
+describe('the client Telegraf builds for one update (ctx.telegram)', () => {
+  /** What `Telegraf.handleUpdate` does for every update: a new client from the options of `bot.telegram`. */
+  function createUpdateClient(apiRoot: string, agent: http.Agent): { botClient: Telegram; updateClient: Telegram } {
+    const botClient = createClient(apiRoot, agent);
+    return { botClient, updateClient: new Telegram(testBotToken, botClient.options) };
+  }
+
+  it('(control) built from the options of the wired bot client it has neither the agent nor the retry: a dropped request is lost', async () => {
+    const { api, apiRoot } = await startApi(({ isReusedConnection }) => (isReusedConnection ? 'hangUp' : 'answer'));
+    const { updateClient } = createUpdateClient(apiRoot, createAgent());
+
+    assert.equal(updateClient.options.agent, undefined, 'an http:// root drops the agent of a new client');
+    await updateClient.sendMessage(chatId, 'first');
+    await assert.rejects(updateClient.sendMessage(chatId, 'second'), (error: NodeJS.ErrnoException) => error.code === 'ECONNRESET');
+
+    assert.deepEqual(api.appliedLabels, ['first']);
+  });
+
+  it('wired with wireBotApiClient it rides the bot\'s agent and a dropped request is sent again once', async () => {
+    const warnings = mock.method(console, 'warn', () => {});
+    const agent = createAgent();
+    const { api, apiRoot } = await startApi(({ isReusedConnection }) => (isReusedConnection ? 'hangUp' : 'answer'));
+    const { updateClient } = createUpdateClient(apiRoot, agent);
+    wireBotApiClient(updateClient, agent);
+
+    await updateClient.sendMessage(chatId, 'first');
+    await updateClient.sendMessage(chatId, 'second');
+
+    assert.equal(updateClient.options.agent, agent);
+    assert.deepEqual(api.appliedLabels, ['first', 'second']);
+    assert.deepEqual(api.attempts.map((attempt) => attempt.isReusedConnection), [false, true, false]);
+    assert.equal(warnings.mock.calls.length, 1);
   });
 });
 

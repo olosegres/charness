@@ -10,7 +10,7 @@
  */
 
 import { Telegram } from 'telegraf';
-import { createBotApiHttpAgent, installReusedConnectionRetry } from '../../connectors/telegram/botApiConnection';
+import { createBotApiHttpAgent, wireBotApiClient } from '../../connectors/telegram/botApiConnection';
 
 /** Not a Telegram token: the loopback Bot API accepts any `/bot<token>/` path. */
 const probeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
@@ -20,9 +20,9 @@ async function run(): Promise<number> {
   const [apiRoot, stallMs, retryMode] = process.argv.slice(2);
   const agent = createBotApiHttpAgent();
   const telegram = new Telegram(probeBotToken, { apiRoot });
-  // Telegraf drops its agent for an `http://` root; `bot.ts` sets it again the same way.
-  telegram.options.agent = agent;
-  if (retryMode === 'retry') installReusedConnectionRetry(telegram, agent);
+  if (retryMode === 'retry') wireBotApiClient(telegram, agent);
+  // Telegraf drops its agent for an `http://` root; the control gets it too, so only the retry differs.
+  else telegram.options.agent = agent;
   await telegram.sendMessage(probeChatId, 'first');
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(stallMs));
   try {

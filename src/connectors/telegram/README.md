@@ -50,20 +50,25 @@ cleanup.
 
 The bot pools keep-alive connections to the Bot API and a server closes an idle one after a while. A client that has not yet
 read that close (a process starved of CPU) writes its next request onto it: «socket hang up» / `ECONNRESET` / `EPIPE` for a
-request the server never saw.
+request the closed connection never delivered.
 
 - **The agent** (`createBotApiHttpsAgent`; `createBotApiHttpAgent` for the `http://` root of the process-level tests, where
   Telegraf drops its own agent) closes a pooled connection that idled `botApiFreeSocketTimeoutMs`, far below the server's
   limit. Node applies that socket timeout to FREE sockets only, so a 50 s long poll is not cut. A client stalled past the
   server's limit is not helped: its timers do not run either.
-- **The retry** (`installReusedConnectionRetry`, installed in `bot.ts` right after the trace wrap) sends a `callApi` again ONCE
-  on a fresh connection, only when its request rode a REUSED connection and failed before any response byte
-  (`ClientRequest.reusedSocket`, read through an `AsyncLocalStorage` probe because node-fetch drops the request from its
-  error) with a `checkIsConnectionResetError` error. Never after a timeout, an abort, a response that started, or on a fresh
-  connection; never for a payload with a stream (the file send path keeps its own `deliveryUnknown` rules). It runs below the
-  FIFO, the pacer and the 429 retry — no extra permit, the thread's order is kept — and above the trace, which shows both attempts.
+- **The retry** (`wireBotApiClient`) sends a `callApi` again ONCE on a fresh connection, only when its request rode a REUSED
+  connection (`ClientRequest.reusedSocket`, read through an `AsyncLocalStorage` probe because node-fetch drops the request
+  from its error), the socket read NOT A SINGLE BYTE since the reuse (`socket.bytesRead` — also true of a TLS socket's
+  application stream; the `response` event would miss half a head), and the error is a `checkIsConnectionResetError` one.
+  Never after a timeout, an abort, an answer that began, or on a fresh connection; never for a payload with a stream (the file
+  send path keeps its own `deliveryUnknown` rules). It is a heuristic: a server that took the request and dropped the
+  connection before any byte of its answer looks the same, and there the retry posts twice. It runs below the FIFO, the pacer
+  and the 429 retry — no extra permit, the thread's order is kept — and above the trace, which shows both attempts.
+- **Wire EVERY client.** Telegraf builds a NEW `Telegram` for every update (`ctx.telegram`, behind `ctx.reply`,
+  `ctx.answerCbQuery`, `ctx.editMessageText`) from `bot.telegram.options`, which already lack the agent of an `http://` root.
+  `bot.ts` wires `bot.telegram` once (after the trace wrap) and the FIRST `bot.use` wires `ctx.telegram` per update.
 - Proof: `botApiConnection.test.ts` (real sockets, every rule), `botApiConnectionStall.test.ts` (a stalled client against the
-  fake closing idle connections), `staleConnectionRetryE2e.test.ts` (the whole bot).
+  fake closing idle connections), `staleConnectionRetryE2e.test.ts` (the whole bot, a `bot.telegram` send and a `ctx.*` picker edit).
 
 ## Agent → user file sending
 

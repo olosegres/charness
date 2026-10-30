@@ -4,7 +4,7 @@
 
 **A message no longer gets lost when Telegram has closed the connection the bot was about to reuse — it is sent again, once, on a fresh connection.**
 Before, the bot kept its connections to Telegram open and reused them; when Telegram had closed an idle one a moment earlier (most often while the bot was starved of CPU), the next send failed with «socket hang up» and was dropped — a notice or a reply simply never appeared in the topic.
-Now such a send, which Telegram never received, is retried once on a new connection; it is never retried after a timeout, after Telegram started to answer, or on a connection that was new anyway, so nothing is posted twice. A file the agent sends is not retried this way either (it keeps its own delivery rules).
+Now a send that fails this way, before Telegram has started to answer, is retried once on a new connection — also a button tap's answer or the edit of a picker. It is not retried after a timeout, once Telegram has begun to answer, or on a connection that was new anyway, and a file the agent sends is not retried this way (it keeps its own delivery rules). If Telegram did take the message and the connection broke before a single byte of its answer, the retry cannot tell that from a closed connection and could post the message twice; that is rare.
 The bot also closes a connection that sat unused for 30 seconds itself, long before Telegram would, so an ordinary pause between two messages does not meet a closed one. When it retries, the bot log says «pooled connection was closed by the server».
 
 **Stopping every agent from General is typed `/quitall` — the «only available in the General topic» refusal now says so, in all 12 languages.**

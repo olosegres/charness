@@ -186,7 +186,7 @@ import {
   parseConnectors,
 } from './platform/connectorSet';
 import { installTelegramCallGuard } from './connectors/telegram/telegramCallGuard';
-import { createBotApiHttpAgent, createBotApiHttpsAgent, installReusedConnectionRetry } from './connectors/telegram/botApiConnection';
+import { createBotApiHttpAgent, createBotApiHttpsAgent, wireBotApiClient } from './connectors/telegram/botApiConnection';
 import { getPersistedConversations, getUnservedStateError } from './platform/unservedStateGuard';
 import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
 import { postToIdleSession, postToSession, type PostToSessionDeps } from './postToSession';
@@ -711,8 +711,6 @@ const telegramApiAgent = telegramApiRoot?.startsWith('http://') ? createBotApiHt
 const bot = new Telegraf(ENV.botToken, {
   telegram: { agent: telegramApiAgent, ...(telegramApiRoot ? { apiRoot: telegramApiRoot } : {}) },
 });
-// Telegraf has just dropped the agent of an `http://` root: put it back.
-bot.telegram.options.agent = telegramApiAgent;
 
 // Decouple the long-polling intake/ACK from per-handler latency: wrap
 // `bot.handleUpdate` so each update is enqueued into its thread's serial queue
@@ -738,9 +736,10 @@ const updateDrainTimeoutMs = 2000;
 installCallApiTrace(bot.telegram);
 process.on('exit', flushTraceBufferSyncOnExit);
 
-// A request that rode a pooled connection the server had closed is sent once more on a fresh one. Installed AFTER the
-// trace wrap so the trace records both real HTTP attempts, and below the send queue, pacer and 429 retry.
-installReusedConnectionRetry(bot.telegram, telegramApiAgent);
+// The bot's pooling (the agent Telegraf dropped for an `http://` root) and the retry of a request that met a pooled
+// connection the server had closed. AFTER the trace wrap, so the trace records both real HTTP attempts, and below the
+// send queue, pacer and 429 retry. Telegraf builds a NEW client per update: see the first `bot.use` below.
+wireBotApiClient(bot.telegram, telegramApiAgent);
 
 // Default every text message/edit to NO link preview: a bare URL in agent
 // output otherwise expanded into a large preview card, one per message, in the
@@ -867,7 +866,15 @@ async function checkIsForumAdmin(chatId: number, userId: number): Promise<boolea
   }
 }
 
-// Output-trace `recv` hook — must be the FIRST middleware so every update is
+// Telegraf builds a NEW `Telegram` client for every update (`ctx.telegram`, behind every `ctx.reply`, `ctx.answerCbQuery`
+// and `ctx.editMessageText`) from `bot.telegram.options`, so the wiring of `bot.telegram` does not reach it and an
+// `http://` root drops the agent again. Wire it before any handler can use it.
+bot.use((ctx, next) => {
+  wireBotApiClient(ctx.telegram, telegramApiAgent);
+  return next();
+});
+
+// Output-trace `recv` hook — must come before every middleware that can gate or drop an update, so every update is
 // recorded before any gating (access control, group routing) can drop it.
 // Security: while the thread awaits a `/connect` key paste (same
 // `pendingProviderConnects` state the text handler consumes later in this

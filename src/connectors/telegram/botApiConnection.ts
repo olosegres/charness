@@ -4,23 +4,28 @@
  *
  * The bot keeps its connections alive and reuses them. A server closes an idle one after a while; a client that learns
  * of it only when it writes its next request (a process starved of CPU, whose event loop has not yet read the close)
- * gets «socket hang up» / `ECONNRESET` / `EPIPE` for a request the server never saw. Two layers:
+ * gets «socket hang up» / `ECONNRESET` / `EPIPE` for a request the closed connection never delivered. Two layers:
  *
  *  1. The agent closes a connection that sat idle in the pool for {@link botApiFreeSocketTimeoutMs} itself, long before
  *     the server's own idle limit (api.telegram.org kept an idle HTTP/1.1 connection for more than 130 s when measured),
  *     so an ordinary pause between two sends never meets a connection the server closed. A client stalled past the
  *     server's limit cannot be helped that way: its timers do not run either, and the stale connection is still in the
  *     pool when the next request starts.
- *  2. {@link installReusedConnectionRetry} retries such a request ONCE, on a fresh connection. It does so only when the
- *     request rode a REUSED connection and failed before any response byte (`ClientRequest.reusedSocket` is the
- *     documented signal Node gives for exactly this), so the server did not process it and a retry cannot post twice.
- *     A timeout, an abort, a failure after the response started and a first-time connection are never retried.
+ *  2. {@link wireBotApiClient} makes a client send such a request again ONCE, on a fresh connection. It does so only when
+ *     the request rode a REUSED connection (`ClientRequest.reusedSocket`, the signal Node documents for exactly this) and
+ *     the connection failed with the socket having read not a single byte since the reuse: no answer began, not even a
+ *     partial one. A timeout, an abort, an answer that began and a first-time connection are never retried.
+ *
+ * This is a heuristic, not a guarantee. A server that took the request and dropped the connection before sending a byte of
+ * its answer looks the same to the client, and there the retry posts the message twice. That case is rare; the alternative
+ * is losing the message every time a pooled connection had been closed.
  */
 
 import * as http from 'http';
 import * as https from 'https';
 import { AsyncLocalStorage } from 'async_hooks';
-import { Readable } from 'stream';
+import { Socket } from 'net';
+import { Readable, type Duplex } from 'stream';
 import type { CallApiHost } from '../../outputTrace';
 import { checkIsConnectionResetError } from '../../sendErrorClassifier';
 
@@ -46,7 +51,7 @@ const maxPayloadDepth = 5;
 
 /** What one `callApi` learns from the agent about its own request. */
 interface ReuseProbe {
-  /** The request rode a reused (pooled) connection that failed before any response byte. */
+  /** The request rode a reused (pooled) connection that failed before the socket read a single byte of any answer. */
   isPooledConnectionLost: boolean;
 }
 
@@ -56,14 +61,18 @@ interface ReuseProbe {
  */
 const reuseProbeStorage = new AsyncLocalStorage<ReuseProbe>();
 
-/** Mark the running `callApi`'s probe when this reused request fails before its response starts. */
-function watchReusedRequest(request: http.ClientRequest): void {
+/**
+ * Mark the running `callApi`'s probe when this reused request fails with the socket having read nothing since the reuse. The
+ * socket's byte count, not the request's `response` event, is the test: that event fires only once a whole response head is
+ * parsed, so a connection that delivered half a head — an answer that began — would pass for a closed one. `bytesRead` is
+ * the bytes of the application stream on a TLS socket too (a `close_notify` alert is not counted).
+ */
+function watchReusedRequest(socket: Duplex, request: http.ClientRequest): void {
   const probe = reuseProbeStorage.getStore();
-  if (!probe) return;
-  let isResponseStarted = false;
-  request.once('response', () => { isResponseStarted = true; });
+  if (!probe || !(socket instanceof Socket)) return;
+  const bytesReadAtReuse = socket.bytesRead;
   request.once('error', () => {
-    if (!isResponseStarted) probe.isPooledConnectionLost = true;
+    if (socket.bytesRead === bytesReadAtReuse) probe.isPooledConnectionLost = true;
   });
 }
 
@@ -72,7 +81,7 @@ function trackReusedConnections<TAgent extends http.Agent>(agent: TAgent): TAgen
   const reuseSocket = agent.reuseSocket.bind(agent);
   agent.reuseSocket = (socket, request) => {
     reuseSocket(socket, request);
-    watchReusedRequest(request);
+    watchReusedRequest(socket, request);
   };
   return agent;
 }
@@ -116,13 +125,13 @@ function destroyFreeSockets(agent: http.Agent): void {
 }
 
 /**
- * @description Wrap `host.callApi` so a request that rode a reused connection and was dropped before any response byte is
- * sent again ONCE on a fresh connection (see the module description for why that cannot post twice). A second failure is
- * the caller's, as before. `agent` is the one `host` sends through. Sits BELOW the send queue, the global pacer and the 429
+ * Wrap `host.callApi` so a request that rode a reused connection and was dropped before any byte of an answer is sent again
+ * ONCE on a fresh connection (see the module description for what that does and does not guarantee). A second failure is the
+ * caller's, as before. `agent` is the one `host` sends through. Sits BELOW the send queue, the global pacer and the 429
  * retry — the retry takes no permit, the thread's order is kept — and above the output trace, which therefore shows both
  * attempts.
  */
-export function installReusedConnectionRetry(host: CallApiHost, agent: http.Agent): void {
+function installReusedConnectionRetry(host: CallApiHost, agent: http.Agent): void {
   const originalCallApi = host.callApi.bind(host);
   host.callApi = async (method, payload, options) => {
     const probe: ReuseProbe = { isPooledConnectionLost: false };
@@ -136,4 +145,21 @@ export function installReusedConnectionRetry(host: CallApiHost, agent: http.Agen
       return originalCallApi(method, payload, options);
     }
   };
+}
+
+/** A Telegraf `Telegram` client, as far as the wiring needs it. */
+export interface BotApiClient extends CallApiHost {
+  readonly options: { agent?: http.Agent };
+}
+
+/**
+ * @description Put the bot's pooling on a Telegraf client: its agent (Telegraf drops the agent of an `http://` root, and
+ * builds every client from options that already lack it) and the retry of a request that met a closed pooled connection.
+ * Telegraf builds a NEW client for every update (`ctx.telegram`, behind `ctx.reply` / `ctx.answerCbQuery` /
+ * `ctx.editMessageText`), so this runs once for `bot.telegram` and once per update for `ctx.telegram`. For `bot.telegram`
+ * call it AFTER the output trace wrap, so the trace records both attempts of a retried request.
+ */
+export function wireBotApiClient(telegram: BotApiClient, agent: http.Agent): void {
+  telegram.options.agent = agent;
+  installReusedConnectionRetry(telegram, agent);
 }

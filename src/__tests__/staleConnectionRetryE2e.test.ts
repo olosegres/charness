@@ -11,7 +11,9 @@
  *   → the fake hangs up on the NEXT send that rides a pooled connection, without processing it
  *     (`dropNextReusedConnectionRequest`: what the client sees of a connection closed a moment before its request landed)
  *   → the next command's reply still reaches the topic, ONCE, and the bot says it retried on a fresh connection
- *   → a command after it is answered as usual, so the bot did not stall on the failure and no second copy of the reply came.
+ *   → a command after it is answered as usual, so the bot did not stall on the failure and no second copy of the reply came
+ *   → the same for a reply made through the client Telegraf builds for ONE update (`ctx.*`: the `/language` picker's
+ *     confirmation edit): the fake hangs up on it, and the picker still loses its keyboard, once.
  *
  * Closing a connection under a client that is NOT starved is harmless — it sees the close at once and drops the connection
  * from its pool —, so the real idle close (`keepAliveTimeoutMs`) with a stalled client is `botApiConnectionStall.test.ts`'s.
@@ -55,6 +57,10 @@ const launchLine = 'Launching Telegraf bot (long polling';
 /** A read-only screen the bot answers with ONE message, whatever the topic holds. */
 const voiceScreenCommand = '/stt';
 const voiceScreenMark = '🎙 Voice recognition';
+/** The `/language` picker: a tap on its «Auto» row is answered, then the picker is edited into a confirmation by `ctx.editMessageText`. */
+const languagePickerCommand = '/language';
+const languagePickerMark = '🌐 Language:';
+const languageAutoButtonLabel = '✓ 🌐 Auto';
 
 const bootTimeoutMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
@@ -142,5 +148,24 @@ describe('A send on a pooled Bot API connection that was closed under the bot, e
     const replies = topic.listMessages().filter((message) => message.message_id > commandMessageId && message.message_id < barrierCommandId && message.text.includes(voiceScreenMark));
     assert.deepEqual(replies.map((message) => message.message_id), [reply.message_id], 'the reply is in the topic exactly once');
     assert.deepEqual(fakeTelegram.droppedRequests, ['sendMessage'], 'only the one request was hung up on');
+  });
+
+  it('a picker confirmation made through the per-update client (ctx.editMessageText) survives a dropped pooled connection, once', async () => {
+    const picker = await topic.sendAndAwaitReply(languagePickerCommand, languagePickerMark);
+    assert.ok(picker.reply_markup, 'the picker carries its keyboard');
+    const droppedBefore = fakeTelegram.droppedRequests.length;
+    fakeTelegram.dropNextReusedConnectionRequest('editMessageText');
+
+    // The tap is answered (`ctx.answerCbQuery`), which leaves a pooled connection; the edit then rides it and is hung up on.
+    await topic.tapAndAwaitAnswer(picker, topic.getButtonData(picker, languageAutoButtonLabel));
+    await getCharness().waitFor('the fake to hang up on the picker edit', replyTimeoutMs, () => fakeTelegram.droppedRequests.length === droppedBefore + 1);
+    assert.equal(fakeTelegram.droppedRequests[droppedBefore], 'editMessageText', 'the hung-up request was the edit, not something else');
+    await getCharness().waitFor('the picker to lose its keyboard', replyTimeoutMs, () => picker.reply_markup === undefined);
+
+    // A command answered afterwards proves no second edit of the picker is still on its way.
+    await topic.sendAndAwaitReply(voiceScreenCommand, voiceScreenMark);
+    const pickerEdits = fakeTelegram.listCalls('editMessageText').filter((call) => call.payload.message_id === picker.message_id);
+    assert.equal(pickerEdits.length, 1, 'the picker was edited exactly once');
+    assert.ok(getCharness().output.includes(`${reusedConnectionRetryLogPrefix} (editMessageText)`), 'the bot logged the retry of the edit');
   });
 });
