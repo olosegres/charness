@@ -561,7 +561,7 @@ export const frDict: Record<string, string> = {
   'connect.oauth_failed': '⚠️ La connexion OAuth pour `{provider}` ne s\'est pas terminée. Relance /connect.',
   'quit_all.none_active': 'Aucun agent en cours — rien à arrêter.',
   'quit_all.summary': '🚪 {stopped} sur {total} agents actifs arrêtés.',
-  'quit_all.general_only': '`/quit-all` n\'est disponible que dans le topic General.',
+  'quit_all.general_only': '`/quitall` n\'est disponible que dans le topic General.',
 
   'clearMessages.summary':
     '🗑 {deleted} sur {total} messages supprimés. ' +

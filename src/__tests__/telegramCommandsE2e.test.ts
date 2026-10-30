@@ -17,6 +17,7 @@
  *   → `/model`: the picker, a tap and a typed pick answered while no agent runs (`/effort` — its picker, a tap
  *     while no agent runs, the default and «as in General» — is `effortDefaultE2e.test.ts`)
  *   → `/connect` `/disconnect`: the refusals that need no OpenCode
+ *   → `/quitall`: refused outside General, naming itself as the menu spells it (no hyphen: Telegram cuts `/quit-all` to `/quit`)
  *   → `/limits_autoswitch` (+ the `/auto_continue_limits` alias) `/compact` `/compact_on_idle`: the picker and its tap,
  *     and the notices while no agent runs; a rung of a backend the list does not use yet (an account next to an
  *     OpenCode model) is asked about first — ✖️ Cancel keeps the list, ✅ Continue adds it (a stale Continue, a rung of
@@ -527,6 +528,16 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
   it('/connect refuses an invalid provider id; /disconnect says there is nothing to disconnect', async () => {
     await topic.sendAndAwaitReply('/connect bad!id', 'Invalid provider id `bad!id`');
     await topic.sendAndAwaitReply('/disconnect', 'No providers to disconnect.');
+  });
+
+  // ── /quitall ─────────────────────────────────────────────────────────
+
+  it('/quitall in a topic is refused with its own spelling, the one the menu lists; the hyphenated form is not offered', async () => {
+    const refusal = await topic.sendAndAwaitReply('/quitall', 'only available in the General topic');
+    assert.match(refusal.text, /^`\/quitall` /, 'the refusal names the command as it must be typed');
+    assert.doesNotMatch(refusal.text, /quit-all/);
+    assert.ok(listMenuCommandNames().includes('quitall'), 'the menu lists /quitall');
+    assert.ok(!listMenuCommandNames().includes('quit-all'), 'the menu never lists the hyphenated form');
   });
 
   // ── compaction and the limit-resume switch ───────────────────────────

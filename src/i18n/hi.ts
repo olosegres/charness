@@ -561,7 +561,7 @@ export const hiDict: Record<string, string> = {
   'connect.oauth_failed': '⚠️ `{provider}` के लिए OAuth साइन-इन पूरा नहीं हुआ। /connect फिर से चलाएँ।',
   'quit_all.none_active': 'कोई एजेंट नहीं चल रहा — रोकने के लिए कुछ नहीं।',
   'quit_all.summary': '🚪 {total} में से {stopped} सक्रिय एजेंट बंद किए।',
-  'quit_all.general_only': '`/quit-all` केवल General टॉपिक में उपलब्ध है।',
+  'quit_all.general_only': '`/quitall` केवल General टॉपिक में उपलब्ध है।',
 
   'clearMessages.summary':
     '🗑 {total} में से {deleted} संदेश हटाए। ' +

@@ -565,7 +565,7 @@ export const ruDict: Record<string, string> = {
   'connect.oauth_failed': '⚠️ Вход через OAuth для `{provider}` не завершён. Запустите /connect ещё раз.',
   'quit_all.none_active': 'Нет активных агентов — нечего останавливать.',
   'quit_all.summary': '🚪 Завершено {stopped} из {total} активных агентов.',
-  'quit_all.general_only': 'Команда `/quit-all` доступна только в General-топике.',
+  'quit_all.general_only': 'Команда `/quitall` доступна только в General-топике.',
 
   'clearMessages.summary':
     '🗑 Удалено {deleted} сообщений из {total}. ' +

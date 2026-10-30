@@ -1367,7 +1367,7 @@ export class StateStore {
    * @description Release both persisted session ids (and the json-stream tail
    * offset, which is meaningless without its session; plus the session-start
    * timestamp, which belongs to the session going away) for `key` while keeping
-   * `name` / `model`. Called on explicit user stop (`/quit`, `/quit-all`,
+   * `name` / `model`. Called on explicit user stop (`/quit`, `/quitall`,
    * `/new`, `/unbind`) so a later bot restart won't auto-reattach a session
    * the user deliberately ended. No-op when the thread has no agent record.
    */

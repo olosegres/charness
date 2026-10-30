@@ -561,7 +561,7 @@ export const jaDict: Record<string, string> = {
   'connect.oauth_failed': '⚠️ `{provider}` の OAuth サインインが完了しませんでした。/connect をもう一度実行してください。',
   'quit_all.none_active': '実行中のエージェントがいません — 停止するものはありません。',
   'quit_all.summary': '🚪 アクティブなエージェント {total} 件中 {stopped} 件を終了しました。',
-  'quit_all.general_only': '`/quit-all` は General トピックでのみ利用可能です。',
+  'quit_all.general_only': '`/quitall` は General トピックでのみ利用可能です。',
 
   'clearMessages.summary':
     '🗑 {total} 件中 {deleted} 件のメッセージを削除しました。 ' +

@@ -561,7 +561,7 @@ export const uzDict: Record<string, string> = {
   'connect.oauth_failed': '⚠️ `{provider}` uchun OAuth kirish yakunlanmadi. /connect ni qayta ishga tushiring.',
   'quit_all.none_active': 'Ishlayotgan agentlar yo‘q — to‘xtatishga hech narsa yo‘q.',
   'quit_all.summary': '🚪 {total} faol agentdan {stopped} to‘xtatildi.',
-  'quit_all.general_only': '`/quit-all` faqat General mavzusida mavjud.',
+  'quit_all.general_only': '`/quitall` faqat General mavzusida mavjud.',
 
   'clearMessages.summary':
     '🗑 {total} dan {deleted} xabar o‘chirildi. ' +

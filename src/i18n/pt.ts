@@ -561,7 +561,7 @@ export const ptDict: Record<string, string> = {
   'connect.oauth_failed': '⚠️ O início de sessão OAuth para `{provider}` não foi concluído. Executa /connect novamente.',
   'quit_all.none_active': 'Sem agentes em execução — nada a parar.',
   'quit_all.summary': '🚪 Parados {stopped} de {total} agentes ativos.',
-  'quit_all.general_only': '`/quit-all` só está disponível no tópico General.',
+  'quit_all.general_only': '`/quitall` só está disponível no tópico General.',
 
   'clearMessages.summary':
     '🗑 Apagadas {deleted} de {total} mensagens. ' +

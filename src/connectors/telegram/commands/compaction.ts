@@ -959,7 +959,7 @@ export function createCompaction(ports: CompactionPorts) {
 
   /**
    * @description The re-asked question will not be tapped any more — its conversation ended (session closed or stopped,
-   * `/quit`, `/quit-all`, `/new`, leaving the folder, another conversation picked), a person wrote something else, or the
+   * `/quit`, `/quitall`, `/new`, leaving the folder, another conversation picked), a person wrote something else, or the
    * agent asked a newer question: forget it and close its message as unanswered — the question stays, the buttons go. In
    * the compaction's own phase the message that closes is the one the question waited in. A re-ask whose send is still in
    * flight has no message id yet: its ending is set, and the send closes the message when it lands. A question used by a

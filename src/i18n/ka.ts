@@ -561,7 +561,7 @@ export const kaDict: Record<string, string> = {
   'connect.oauth_failed': '⚠️ `{provider}`-ის OAuth შესვლა არ დასრულდა. ხელახლა გაუშვით /connect.',
   'quit_all.none_active': 'აგენტები არ არის გაშვებული — გასაჩერებელი არაფერია.',
   'quit_all.summary': '🚪 გაჩერდა {stopped} / {total} აქტიური აგენტი.',
-  'quit_all.general_only': '`/quit-all` ხელმისაწვდომია მხოლოდ General თემაში.',
+  'quit_all.general_only': '`/quitall` ხელმისაწვდომია მხოლოდ General თემაში.',
 
   'clearMessages.summary':
     '🗑 წაიშალა {deleted} / {total} შეტყობინება. ' +

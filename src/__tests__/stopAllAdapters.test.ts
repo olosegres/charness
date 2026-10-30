@@ -1,6 +1,6 @@
 /**
  * @description Unit coverage for `stopAllAdaptersFor` — the sweep helper
- * that gates `/quit` and `/quit-all` from being silently
+ * that gates `/quit` and `/quitall` from being silently
  * no-ops when state and reality disagree.
  *
  * Why it matters: `/claude` then `/opencode` used to leave the claude
@@ -101,10 +101,10 @@ test('silently skips adapter names that fail to resolve', () => {
   assert.equal(claude.stopCalls, 1);
 });
 
-test('attempted counts throwing stops too (so /quit-all renders partial failure)', () => {
+test('attempted counts throwing stops too (so /quitall renders partial failure)', () => {
   // The first adapter throws; the helper must still try the second one.
   // attempted reflects how many adapters we *tried* to stop — used by
-  // /quit-all to print "stopped 1 of 2" when one throw was swallowed.
+  // /quitall to print "stopped 1 of 2" when one throw was swallowed.
   const throwingClaude: AdapterSweepTarget = {
     name: 'claude',
     label: 'Claude Code',

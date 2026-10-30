@@ -574,7 +574,7 @@ export const enDict: Record<string, string> = {
 
   'quit_all.none_active': 'No agents running — nothing to stop.',
   'quit_all.summary': '🚪 Quit {stopped} of {total} active agents.',
-  'quit_all.general_only': '`/quit-all` is only available in the General topic.',
+  'quit_all.general_only': '`/quitall` is only available in the General topic.',
 
   'clearMessages.summary':
     '🗑 Deleted {deleted} of {total} messages. ' +

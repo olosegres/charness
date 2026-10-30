@@ -1298,3 +1298,11 @@ test('the timezone.* strings substitute their placeholders in every locale', () 
     );
   }
 });
+
+test('the General-only refusal names /quitall in every locale: a hyphen ends a Telegram command, so /quit-all would run /quit', () => {
+  for (const locale of localeCodes) {
+    const text = getKeyInLang(locale, 'quit_all.general_only');
+    assert.ok(text?.includes('`/quitall`'), `quit_all.general_only in ${locale} must name /quitall literally`);
+    assert.ok(!text?.includes('/quit-all'), `quit_all.general_only in ${locale} must not name the hyphenated spelling`);
+  }
+});

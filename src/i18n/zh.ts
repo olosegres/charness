@@ -561,7 +561,7 @@ export const zhDict: Record<string, string> = {
   'connect.oauth_failed': '⚠️ `{provider}` 的 OAuth 登录未完成。请再次运行 /connect。',
   'quit_all.none_active': '没有运行中的代理 — 无需停止。',
   'quit_all.summary': '🚪 已停止 {stopped}/{total} 个活跃代理。',
-  'quit_all.general_only': '`/quit-all` 仅在 General 话题中可用。',
+  'quit_all.general_only': '`/quitall` 仅在 General 话题中可用。',
 
   'clearMessages.summary':
     '🗑 已删除 {deleted}/{total} 条消息。 ' +

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**Stopping every agent from General is typed `/quitall` — the «only available in the General topic» refusal now says so, in all 12 languages.**
+Before, that refusal (and the docs) told you to use `/quit-all`, but Telegram ends a command at the hyphen, so `/quit-all` reached the bot as plain `/quit` and stopped only the one topic's agent, not all of them.
+The refusal and the docs now name `/quitall`, the spelling the command menu lists; the command itself is unchanged.
+
 **A question the agent asks now stays in the topic however it ends: answered, it shows your answer in place of the buttons; left alone, a note says it was not answered.**
 Before, answering replaced the whole question with a short «✅ header: answer», walking away from it (another message, `/esc`) replaced it with «❌ Question cancelled», and re-posting or re-asking a question deleted the first message — so what the agent had asked was gone from the topic.
 Now the message is never deleted: it keeps the question and its options, with «✅ Answer: …», «❌ Not answered» or «↓ Asked again below» under them, also when the question is re-asked after the idle compaction, when you leave the folder, or its agent is gone.

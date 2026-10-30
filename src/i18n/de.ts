@@ -561,7 +561,7 @@ export const deDict: Record<string, string> = {
   'connect.oauth_failed': '⚠️ OAuth-Anmeldung für `{provider}` nicht abgeschlossen. Führe /connect erneut aus.',
   'quit_all.none_active': 'Keine Agenten laufen — nichts zu stoppen.',
   'quit_all.summary': '🚪 {stopped} von {total} aktiven Agenten beendet.',
-  'quit_all.general_only': '`/quit-all` ist nur im General-Topic verfügbar.',
+  'quit_all.general_only': '`/quitall` ist nur im General-Topic verfügbar.',
 
   'clearMessages.summary':
     '🗑 {deleted} von {total} Nachrichten gelöscht. ' +

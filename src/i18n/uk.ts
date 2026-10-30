@@ -567,7 +567,7 @@ export const ukDict: Record<string, string> = {
   'connect.oauth_failed': '⚠️ OAuth-вхід для `{provider}` не завершено. Запусти /connect ще раз.',
   'quit_all.none_active': 'Немає запущених агентів — нема чого зупиняти.',
   'quit_all.summary': '🚪 Завершено {stopped} з {total} активних агентів.',
-  'quit_all.general_only': 'Команда `/quit-all` доступна лише в топіку General.',
+  'quit_all.general_only': 'Команда `/quitall` доступна лише в топіку General.',
 
   'clearMessages.summary':
     '🗑 Видалено {deleted} з {total} повідомлень. ' +

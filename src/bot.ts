@@ -1072,7 +1072,7 @@ let schedulerEngine: SchedulerEngine | null = null;
  * The request wake-up engine (request/answer core S4), assigned once by
  * `startBot` after the request ledger loads. Module-level like
  * {@link schedulerEngine} because the cancel paths (`/esc`, `/c`, `/quit`,
- * `/quit-all`, `/new`, `/resume`, leaving the folder, switching the topic to
+ * `/quitall`, `/new`, `/resume`, leaving the folder, switching the topic to
  * another agent or a shell) are module-level command handlers.
  */
 let requestWakeUpEngine: RequestWakeUpEngine | null = null;
@@ -8810,7 +8810,7 @@ async function resumeSessionByIndex(
 command(['sessions', 'resume'], (_ctx, key) => handleSessionsList(key));
 
 /**
- * @description `/quit-all` — kill every active agent across every thread.
+ * @description `/quitall` — kill every active agent across every thread.
  *
  * General-only because it's a workspace-wide operation that's easy to
  * fire by mistake; restricting to General + needing an explicit command
@@ -8823,7 +8823,7 @@ command(['sessions', 'resume'], (_ctx, key) => handleSessionsList(key));
  * adapter that thread is configured for and stop only if it's active —
  * idempotent, so re-running is safe.
  */
-command(['quit-all', 'quitall'], async (_ctx, key) => {
+command('quitall', async (_ctx, key) => {
   if (!checkIsGeneral(key)) {
     await replyToThread(key, t('quit_all.general_only'));
     return;
@@ -9307,16 +9307,18 @@ command('clear_messages', async (ctx, key) => {
 
 // Slash tokens the text handler must NOT forward to the agent. Covers every
 // bot-owned command (incl. the raw-key controls c/y/n/enter/up/down/tab/esc)
-// PLUS the retired commands (agent/cancel/unbind/where/stop/stopall/stop-all):
-// their handlers were removed, but keeping the tokens here makes a stray
-// `/where` (or `/stop`) inert instead of typing a meaningless prompt into the
-// agent.
+// PLUS the retired commands (agent/cancel/unbind/where/stop/stopall/stop-all)
+// and the spelling `quit-all`: their handlers were removed (`quit-all` never
+// worked — Telegram ends a command at the hyphen, so a typed `/quit-all` is
+// routed as `/quit`), but keeping the tokens here makes a stray `/where` (or
+// `/stop`, or an entity-less `/quit-all`) inert instead of typing a meaningless
+// prompt into the agent.
 const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
-  'disconnect', 'stop', 'stopall', 'stop-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
+  'disconnect', 'stop', 'stopall', 'stop-all', 'quit-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
   'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'bot_skills', 'task_agents', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
-  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quit-all', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update',
+  'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update',
 ]);
 
 /**
@@ -12472,7 +12474,7 @@ function clearGoneProcessFrames(key: SessionKey): void {
 
 function handleAgentStopped(key: SessionKey): void {
   // Single convergence point for every `stopSession`-driven stop path —
-  // `/quit` (OpenCode/terminal), `/quit-all`, `/new`, `/unbind`, and adapter
+  // `/quit` (OpenCode/terminal), `/quitall`, `/new`, `/unbind`, and adapter
   // switch all emit `stopped`.
   clearGoneProcessFrames(key);
   // Session ended — a future session starts with empty context, so forget the
@@ -14706,7 +14708,7 @@ export async function startBot(): Promise<void> {
   });
 
   // 7. Shutdown — preserve active agents for restart/reattach. Use /quit
-  //    (or /quit-all) for an intentional agent stop; process signals only
+  //    (or /quitall) for an intentional agent stop; process signals only
   //    stop the bot itself. Ordering (bot.stop → state.flush →
   //    releaseLock → exit) is enforced by `gracefulShutdown` so the
   //    previous race against `lock.ts`'s synchronous `process.exit(0)`

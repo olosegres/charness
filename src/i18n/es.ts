@@ -561,7 +561,7 @@ export const esDict: Record<string, string> = {
   'connect.oauth_failed': '⚠️ El inicio de sesión OAuth para `{provider}` no se completó. Ejecuta /connect de nuevo.',
   'quit_all.none_active': 'No hay agentes en ejecución — nada que detener.',
   'quit_all.summary': '🚪 Detenidos {stopped} de {total} agentes activos.',
-  'quit_all.general_only': '`/quit-all` solo está disponible en el topic General.',
+  'quit_all.general_only': '`/quitall` solo está disponible en el topic General.',
 
   'clearMessages.summary':
     '🗑 Eliminados {deleted} de {total} mensajes. ' +
