@@ -46,6 +46,25 @@ cleanup.
 - The old post-cooldown redelivery was retired: at one send per 2 s a 429 is nearly impossible and the late
   re-send was the OUT-OF-ORDER cause. `withRateLimitRetry`'s single retry-after wait is the floor.
 
+## Bot API connections (`botApiConnection.ts`)
+
+The bot pools keep-alive connections to the Bot API and a server closes an idle one after a while. A client that has not yet
+read that close (a process starved of CPU) writes its next request onto it: «socket hang up» / `ECONNRESET` / `EPIPE` for a
+request the server never saw.
+
+- **The agent** (`createBotApiHttpsAgent`; `createBotApiHttpAgent` for the `http://` root of the process-level tests, where
+  Telegraf drops its own agent) closes a pooled connection that idled `botApiFreeSocketTimeoutMs`, far below the server's
+  limit. Node applies that socket timeout to FREE sockets only, so a 50 s long poll is not cut. A client stalled past the
+  server's limit is not helped: its timers do not run either.
+- **The retry** (`installReusedConnectionRetry`, installed in `bot.ts` right after the trace wrap) sends a `callApi` again ONCE
+  on a fresh connection, only when its request rode a REUSED connection and failed before any response byte
+  (`ClientRequest.reusedSocket`, read through an `AsyncLocalStorage` probe because node-fetch drops the request from its
+  error) with a `checkIsConnectionResetError` error. Never after a timeout, an abort, a response that started, or on a fresh
+  connection; never for a payload with a stream (the file send path keeps its own `deliveryUnknown` rules). It runs below the
+  FIFO, the pacer and the 429 retry — no extra permit, the thread's order is kept — and above the trace, which shows both attempts.
+- Proof: `botApiConnection.test.ts` (real sockets, every rule), `botApiConnectionStall.test.ts` (a stalled client against the
+  fake closing idle connections), `staleConnectionRetryE2e.test.ts` (the whole bot).
+
 ## Agent → user file sending
 
 User-visible behaviour (limits, albums, cancellation, `deliveryUnknown`) is in the public `docs/backends.md` (Bot-injected agent tools). What a

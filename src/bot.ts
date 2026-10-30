@@ -4,7 +4,6 @@ import type { Update, Message } from 'telegraf/typings/core/types/typegram';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import * as https from 'https';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -187,6 +186,7 @@ import {
   parseConnectors,
 } from './platform/connectorSet';
 import { installTelegramCallGuard } from './connectors/telegram/telegramCallGuard';
+import { createBotApiHttpAgent, createBotApiHttpsAgent, installReusedConnectionRetry } from './connectors/telegram/botApiConnection';
 import { getPersistedConversations, getUnservedStateError } from './platform/unservedStateGuard';
 import { buildJiraContextPreamble } from './connectors/jira/contextPreamble';
 import { postToIdleSession, postToSession, type PostToSessionDeps } from './postToSession';
@@ -699,20 +699,20 @@ function getOutputTransport(): OutputTransport {
   return outputTransport;
 }
 
-const telegramAgent = new https.Agent({
-  keepAlive: true,
-  keepAliveMsecs: 10000,
-  family: 4,
-});
+const telegramAgent = createBotApiHttpsAgent();
 // Without the telegram connector there is no token (an empty one), and the call
 // guard below refuses every Bot API call before it is sent (Jira plan J3, D9).
 // `TELEGRAM_API_ROOT` points the client at another Bot API host — the
 // process-level test's fake on loopback; unset is the real `api.telegram.org`.
-// Telegraf drops the https agent itself for an `http://` root.
 const telegramApiRoot = process.env.TELEGRAM_API_ROOT?.trim();
+// Telegraf drops the https agent itself for an `http://` root and node-fetch then rides the global agent, whose
+// pooling is not the bot's. That root gets the same pooling over `http`.
+const telegramApiAgent = telegramApiRoot?.startsWith('http://') ? createBotApiHttpAgent() : telegramAgent;
 const bot = new Telegraf(ENV.botToken, {
-  telegram: { agent: telegramAgent, ...(telegramApiRoot ? { apiRoot: telegramApiRoot } : {}) },
+  telegram: { agent: telegramApiAgent, ...(telegramApiRoot ? { apiRoot: telegramApiRoot } : {}) },
 });
+// Telegraf has just dropped the agent of an `http://` root: put it back.
+bot.telegram.options.agent = telegramApiAgent;
 
 // Decouple the long-polling intake/ACK from per-handler latency: wrap
 // `bot.handleUpdate` so each update is enqueued into its thread's serial queue
@@ -737,6 +737,10 @@ const updateDrainTimeoutMs = 2000;
 // window is not lost on shutdown.
 installCallApiTrace(bot.telegram);
 process.on('exit', flushTraceBufferSyncOnExit);
+
+// A request that rode a pooled connection the server had closed is sent once more on a fresh one. Installed AFTER the
+// trace wrap so the trace records both real HTTP attempts, and below the send queue, pacer and 429 retry.
+installReusedConnectionRetry(bot.telegram, telegramApiAgent);
 
 // Default every text message/edit to NO link preview: a bare URL in agent
 // output otherwise expanded into a large preview card, one per message, in the

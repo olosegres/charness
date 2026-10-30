@@ -1,9 +1,10 @@
 /**
- * @description The fake Bot API never closes an idle connection by itself. Node's own server does, after ~6 s
+ * @description The fake Bot API, by default, never closes an idle connection by itself. Node's own server does, after ~6 s
  * (`keepAliveTimeout` plus its buffer), and a client that was starved of CPU for longer — the bot on a loaded host between
- * two requests — then writes its next request onto a pooled connection that is already closed: «socket hang up». A send is
- * not retried, so the notice it carried is lost; `limitRecoveryE2e` waited for such a notice in vain in a full e2e run.
- * (Whether the bot should retry such a send is a separate question; this test is about the fake, which should not add the fault.)
+ * two requests — then writes its next request onto a pooled connection that is already closed: «socket hang up». The bot now
+ * sends that request again once (`botApiConnection.ts`); before it did, the notice it carried was lost and `limitRecoveryE2e`
+ * waited for it in vain in a full e2e run. The fake still closes none by itself unless a test asks, so that a flow about
+ * something else never meets one.
  *
  * The client is a child process that stalls its event loop synchronously (the starvation, made exact) between two requests
  * and then reuses its connection at once. Against a plain Node server the same client fails — the test's stall is long

@@ -66,3 +66,25 @@ export function classifySendError(err: unknown): SendErrorClass {
   if (/TOPIC_CLOSED|topic is closed/i.test(desc)) return 'topic-closed';
   return 'other';
 }
+
+/** Node's socket error codes for a connection the peer closed or reset under a request. */
+const connectionResetCodes = new Set(['ECONNRESET', 'EPIPE']);
+
+/** What Node (and node-fetch around it) says when the peer closes the connection before sending any response. */
+const socketHangUpPattern = /socket hang up/i;
+
+/**
+ * @description Whether `err` has the shape of a connection the other side closed or reset under the request —
+ * `ECONNRESET`, `EPIPE`, «socket hang up». Timeouts (`ETIMEDOUT`, node-fetch's «network timeout»), refused or unreachable
+ * hosts and a Telegram API error (an ANSWER, so the server did process the request) are not.
+ *
+ * It judges the error alone. Whether the server may have processed the request cannot be read from the error: a reset
+ * after the response started has this shape too. The caller that wants to retry must also know the connection was a
+ * reused one that failed before any response byte (`botApiConnection.ts`).
+ */
+export function checkIsConnectionResetError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null || checkIsApiError(err)) return false;
+  const code = 'code' in err ? err.code : undefined;
+  if (typeof code === 'string' && connectionResetCodes.has(code)) return true;
+  return err instanceof Error && socketHangUpPattern.test(err.message);
+}

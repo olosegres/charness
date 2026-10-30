@@ -107,6 +107,12 @@ export interface FakeTelegramOptions {
   /** Further group administrators (the bot serves every admin); the operator is always one. */
   admins?: TelegramUser[];
   group: { id: number; title: string };
+  /**
+   * How long (ms) the fake keeps an idle keep-alive connection before it closes it, as the real Bot API does after a while
+   * (Node adds about a second to this). 0, the default, never closes one by itself — a flow that is not about closing
+   * must not meet a connection closed under it (see {@link FakeTelegram.start}).
+   */
+  keepAliveTimeoutMs?: number;
 }
 
 /** How long a `getUpdates` long poll is held when nothing arrives (telegraf asks for 50 s; shorter keeps the stop quick). */
@@ -157,6 +163,12 @@ export class FakeTelegram {
   private readonly callFailures: Array<{ method: string; description: string; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
   /** The `file_path` of every file the bot downloaded from the file endpoint, in order. */
   readonly downloadedFilePaths: string[] = [];
+  /** The methods of the requests {@link dropNextReusedConnectionRequest} still has to hang up on, in the order asked for. */
+  private readonly pendingConnectionDrops: string[] = [];
+  /** The method of every request the fake hung up on instead of processing, in order: none of them is in {@link calls}. */
+  readonly droppedRequests: string[] = [];
+  /** The connections that have served a request: a later request on one of them rides a REUSED (pooled) connection. */
+  private readonly servedSockets = new WeakSet<Socket>();
   /** The files `getFile` knows, by file id. */
   private readonly files = new Map<string, { filePath: string; bytes: Buffer }>();
   private readonly messages = new Map<number, FakeTelegramMessage>();
@@ -179,12 +191,13 @@ export class FakeTelegram {
     const server = http.createServer((request, response) => {
       void this.handle(request, response);
     });
-    // Node's server closes a connection that sat idle for ~6 s (`keepAliveTimeout` plus its buffer). The bot keeps its
-    // connections pooled and reuses them, so one that was starved of CPU past that (a loaded host: a boot, a stop and a
-    // restart in a row) writes its next request onto a connection the server has already closed: «socket hang up». A
-    // send is not retried (its outcome is unknown), so a notice is lost and the flow waits for it in vain. The fake
-    // never closes an idle connection by itself; `stop()` closes them all.
-    server.keepAliveTimeout = 0;
+    // Node's server closes a connection that sat idle for ~6 s (`keepAliveTimeout` plus its buffer). A client that was
+    // starved of CPU past that between two requests (a loaded host: a boot, a stop and a restart in a row) writes its
+    // next request onto a pooled connection the server has already closed: «socket hang up». The fake closes none by
+    // itself unless a test asks (`keepAliveTimeoutMs`), so that a flow that is about something else never meets such a
+    // connection; `stop()` closes them all. The bot's retry of exactly this failure is proven with the option set
+    // (`botApiConnectionStall.test.ts`) and with `dropNextReusedConnectionRequest` (`staleConnectionRetryE2e.test.ts`).
+    server.keepAliveTimeout = this.options.keepAliveTimeoutMs ?? 0;
     this.server = server;
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address() as AddressInfo;
@@ -371,6 +384,8 @@ export class FakeTelegram {
   }
 
   private async handle(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+    const isReusedConnection = this.servedSockets.has(request.socket);
+    this.servedSockets.add(request.socket);
     if (this.serveFile(request, response)) return;
     const match = /^\/bot[^/]+\/([A-Za-z]+)$/.exec(request.url ?? '');
     if (!match) {
@@ -379,6 +394,13 @@ export class FakeTelegram {
       return;
     }
     const method = match[1];
+    const dropIndex = isReusedConnection ? this.pendingConnectionDrops.indexOf(method) : -1;
+    if (dropIndex >= 0) {
+      this.pendingConnectionDrops.splice(dropIndex, 1);
+      this.droppedRequests.push(method);
+      request.socket.destroy();
+      return;
+    }
     let payload: Record<string, unknown>;
     try {
       payload = await this.readJsonBody(request);
@@ -403,6 +425,16 @@ export class FakeTelegram {
     }
     response.writeHead(answer.ok ? 200 : answer.error_code, { 'content-type': 'application/json' });
     response.end(JSON.stringify(answer));
+  }
+
+  /**
+   * @description Hang up on the NEXT `method` request that arrives on a REUSED connection (one that already served a request),
+   * without processing it: the Bot API closed that connection a moment before the request landed on it. The client sees a
+   * connection dropped before any answer; nothing was applied, so the request is in {@link droppedRequests}, not in
+   * {@link calls}. A request on a fresh connection is processed and leaves the registration armed. One request per registration.
+   */
+  dropNextReusedConnectionRequest(method: string): void {
+    this.pendingConnectionDrops.push(method);
   }
 
   /**

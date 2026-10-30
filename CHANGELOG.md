@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**A message no longer gets lost when Telegram has closed the connection the bot was about to reuse — it is sent again, once, on a fresh connection.**
+Before, the bot kept its connections to Telegram open and reused them; when Telegram had closed an idle one a moment earlier (most often while the bot was starved of CPU), the next send failed with «socket hang up» and was dropped — a notice or a reply simply never appeared in the topic.
+Now such a send, which Telegram never received, is retried once on a new connection; it is never retried after a timeout, after Telegram started to answer, or on a connection that was new anyway, so nothing is posted twice. A file the agent sends is not retried this way either (it keeps its own delivery rules).
+The bot also closes a connection that sat unused for 30 seconds itself, long before Telegram would, so an ordinary pause between two messages does not meet a closed one. When it retries, the bot log says «pooled connection was closed by the server».
+
 **Stopping every agent from General is typed `/quitall` — the «only available in the General topic» refusal now says so, in all 12 languages.**
 Before, that refusal (and the docs) told you to use `/quit-all`, but Telegram ends a command at the hyphen, so `/quit-all` reached the bot as plain `/quit` and stopped only the one topic's agent, not all of them.
 The refusal and the docs now name `/quitall`, the spelling the command menu lists; the command itself is unchanged.

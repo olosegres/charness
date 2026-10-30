@@ -17,7 +17,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { classifySendError, getErrorCode, getErrorDescription, checkIsApiError } from '../sendErrorClassifier';
+import { classifySendError, getErrorCode, getErrorDescription, checkIsApiError, checkIsConnectionResetError } from '../sendErrorClassifier';
 
 // Helper: build an error in Telegraf's shape.
 function tgError(code: number, description: string): unknown {
@@ -116,4 +116,40 @@ test('R8: classifier accessors are stable for downstream logging', () => {
   const err = tgError(400, 'TOPIC_CLOSED');
   assert.equal(getErrorCode(err as never), 400);
   assert.equal(getErrorDescription(err as never), 'TOPIC_CLOSED');
+});
+
+// The shapes below are what node-fetch throws around a socket error (`FetchError`: its message, `type: 'system'`, and the
+// system error's `code` copied on); a real one is produced by `botApiConnection.test.ts` against a server that hangs up.
+function createFetchSystemError(message: string, code: string): Error {
+  return Object.assign(new Error(message), { type: 'system', errno: code, code });
+}
+
+test('a connection the other side reset before answering is a connection-reset error: ECONNRESET, EPIPE, «socket hang up»', () => {
+  assert.equal(checkIsConnectionResetError(createFetchSystemError('request to https://api.example.org/bot1/sendMessage failed, reason: socket hang up', 'ECONNRESET')), true);
+  assert.equal(checkIsConnectionResetError(createFetchSystemError('request to https://api.example.org/bot1/sendMessage failed, reason: read ECONNRESET', 'ECONNRESET')), true);
+  assert.equal(checkIsConnectionResetError(createFetchSystemError('request to https://api.example.org/bot1/sendMessage failed, reason: write EPIPE', 'EPIPE')), true);
+  assert.equal(checkIsConnectionResetError(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })), true);
+  // Node's own wording, without a code on the object.
+  assert.equal(checkIsConnectionResetError(new Error('socket hang up')), true);
+});
+
+test('a timeout, a refused or unreachable host and an abort are NOT connection-reset errors: the server may be working on the request', () => {
+  // node-fetch's own timer: no `code` at all, `type: 'request-timeout'`.
+  assert.equal(checkIsConnectionResetError(Object.assign(new Error('network timeout at: https://api.example.org/bot1/getUpdates'), { type: 'request-timeout' })), false);
+  assert.equal(checkIsConnectionResetError(createFetchSystemError('request to https://api.example.org failed, reason: connect ETIMEDOUT 1.2.3.4:443', 'ETIMEDOUT')), false);
+  assert.equal(checkIsConnectionResetError(createFetchSystemError('request to https://api.example.org failed, reason: connect ECONNREFUSED 1.2.3.4:443', 'ECONNREFUSED')), false);
+  assert.equal(checkIsConnectionResetError(createFetchSystemError('request to https://api.example.org failed, reason: getaddrinfo EAI_AGAIN api.example.org', 'EAI_AGAIN')), false);
+  assert.equal(checkIsConnectionResetError(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })), false);
+});
+
+test('an answer of the Bot API is never a connection-reset error, whatever its words: the server did process the request', () => {
+  assert.equal(checkIsConnectionResetError(tgError(429, 'Too Many Requests: retry after 5')), false);
+  assert.equal(checkIsConnectionResetError(tgError(502, 'socket hang up')), false);
+  assert.equal(checkIsConnectionResetError({ description: 'socket hang up' }), false);
+});
+
+test('values that are not errors are not connection-reset errors', () => {
+  for (const value of [null, undefined, 'socket hang up', 0, {}, { code: 'ECONNRESET_NOT' }]) {
+    assert.equal(checkIsConnectionResetError(value), false, JSON.stringify(value) ?? 'undefined');
+  }
 });
