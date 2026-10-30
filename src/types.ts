@@ -244,6 +244,15 @@ export interface PendingQuestionState {
   answers: (string[] | null)[];
   /** Index into `data.questions` of the question currently on screen. */
   currentIndex: number;
+  /**
+   * The message the question on screen (`currentIndex`) was FIRST asked in: the record that stays in the topic, with its text
+   * and «asked again below», however often the question is put at the bottom again — a copy an earlier re-post made is deleted
+   * when the next one lands, so a waiting question leaves the original and the live copy. Kept here, in the saved state, so a
+   * restart does not lose which message is the original. Empty until the question is posted, cleared when the question
+   * advances to the next one, and absent in a state that predates it (the message found then is taken for the original,
+   * which is never deleted).
+   */
+  originalMessageId?: number | null;
 }
 
 /**

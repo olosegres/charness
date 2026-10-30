@@ -4,7 +4,8 @@
  * recording topic sends). The default Claude backend has no running session here, so what is pinned is what
  * needs none:
  *
- *   • WIRING — the three commands and the six buttons the module registers, in order;
+ *   • WIRING — the three commands, the six switch buttons and the re-ask buttons the module registers, in order
+ *     (the re-asked question itself is `reAskedQuestion.test.ts`);
  *   • the compact-on-idle switch as the General topic uses it — the instance-wide default: the picker, the
  *     typed form, a button tap that persists, answers and re-renders the ✓;
  *   • the picker's summary row — the same `/compact_summary` setting, OFF until turned on;
@@ -16,9 +17,8 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { getThreadAdapter } from '../adapters/createAdapter';
 import { createCompaction } from '../connectors/telegram/commands/compaction';
-import type { OpenCodeQuestion, ReAskedQuestionRecord } from '../types';
-import type { QuestionEnd } from '../openCodeQuestionFlow';
 import { keyToString } from '../sessionKey';
 import { createCommandHarness, harnessThreadId, type CommandHarness } from './commandModuleHarness';
 
@@ -31,8 +31,6 @@ let compaction: ReturnType<typeof createCompaction>;
 let isGeneralTopic = false;
 /** How many button taps the fake Bot API had answered when each topic reply was posted. */
 const callbackAnswersAtReply: number[] = [];
-/** What the compaction module asked the bot to close, through its `closeQuestionMessage` port. */
-const closedQuestionMessages: Array<{ messageId: number; closing: QuestionEnd }> = [];
 
 async function waitUntil(description: string, check: () => boolean): Promise<void> {
   const deadline = Date.now() + waitTimeoutMs;
@@ -56,14 +54,17 @@ describe('compaction: the compaction flow over its ports', () => {
       forwardPromptToAgent: async () => {},
       pendingQuestions: new Map(),
       clearPendingQuestion: () => {},
-      closeQuestionMessage: async (_key, messageId, _question, ending) => {
-        closedQuestionMessages.push({ messageId, closing: ending });
-        return true;
-      },
+      closeQuestionMessage: async () => true,
       idleWindowMs: 55 * 60 * 1000,
       checkIsLimitWaitArmed: () => false,
       suspendThreadSession: async () => {},
       resumeSleepingSessionForCompaction: async () => false,
+      getThreadAdapter,
+      deliverLabel: async () => 'forwarded',
+      resumeSleepingSessionForPrompt: async () => false,
+      checkIsStarting: () => false,
+      closeOrphanQuestionMessage: async () => {},
+      notePersonActivity: () => {},
     });
     compaction.registerCompactionCommands();
     compaction.registerCompactionCallbacks();
@@ -73,9 +74,9 @@ describe('compaction: the compaction flow over its ports', () => {
     await harness.stop();
   });
 
-  it('registers /compact /compact_on_idle /compact_summary and the six switch buttons, in order', () => {
+  it('registers /compact /compact_on_idle /compact_summary, the six switch buttons and the re-ask buttons, in order', () => {
     assert.deepEqual(harness.registeredCommandNames, ['compact', 'compact_on_idle', 'compact_summary']);
-    assert.deepEqual(harness.registeredActionPatterns, ['coi_on', 'coi_off', 'coi_sum_on', 'coi_sum_off', 'csum_on', 'csum_off']);
+    assert.deepEqual(harness.registeredActionPatterns, ['coi_on', 'coi_off', 'coi_sum_on', 'coi_sum_off', 'csum_on', 'csum_off', String(/^reask_(\d+)$/)]);
   });
 
   it('a regular topic without a session is told the switch needs one', async () => {
@@ -183,138 +184,5 @@ describe('compaction: the compaction flow over its ports', () => {
     compaction.markThreadTurnProducedOutput(harness.key);
     compaction.clearThreadCompaction(harness.key);
     assert.equal(compaction.threadsCompacting.has(keyToString(harness.key)), false);
-    assert.equal(compaction.peekReAskedQuestion(harness.key), undefined);
-  });
-
-  describe('the question the idle compaction re-asked', () => {
-    const reAskedQuestion: OpenCodeQuestion = { question: 'Which way?', header: 'Way', options: [{ label: 'Short' }, { label: 'Long' }] };
-    const savedRecord: ReAskedQuestionRecord = { messageId: 4321, question: reAskedQuestion };
-
-    /** A re-asked question as the boot (or the post, once its send resolved) leaves it: in memory and in the saved state. */
-    async function seedReAskedQuestion(): Promise<void> {
-      await harness.state.setReAskedQuestion(harness.key, savedRecord);
-      compaction.restoreReAskedQuestion(harness.key, savedRecord);
-      closedQuestionMessages.length = 0;
-    }
-
-    it('a restored question is the one a tap works on', async () => {
-      await seedReAskedQuestion();
-      assert.deepEqual(compaction.peekReAskedQuestion(harness.key)?.question, reAskedQuestion);
-      assert.equal(compaction.peekReAskedQuestion(harness.key)?.messageId, 4321);
-      compaction.clearThreadCompaction(harness.key);
-      await waitUntil('the saved record to be dropped', () => harness.state.getReAskedQuestions()[keyToString(harness.key)] === undefined);
-    });
-
-    it('a tap takes it out of memory AND of the saved state, and closes nothing: its answer is written there', async () => {
-      await seedReAskedQuestion();
-      const taken = compaction.takeReAskedQuestion(harness.key);
-      assert.equal(taken?.messageId, 4321);
-      assert.equal(compaction.peekReAskedQuestion(harness.key), undefined);
-      await waitUntil('the saved record to be dropped', () => harness.state.getReAskedQuestions()[keyToString(harness.key)] === undefined);
-
-      // The end of the conversation after the tap finds nothing to close: the answer is never overwritten.
-      compaction.closeReAskedQuestion(harness.key);
-      assert.deepEqual(closedQuestionMessages, []);
-    });
-
-    it('a tap whose label reached no session puts it back, in memory and in the saved state, unless a newer one is there', async () => {
-      await seedReAskedQuestion();
-      const taken = compaction.takeReAskedQuestion(harness.key);
-      assert.ok(taken);
-      assert.equal(compaction.putBackReAskedQuestion(harness.key, taken), true, 'put back');
-      assert.equal(compaction.peekReAskedQuestion(harness.key), taken);
-      await waitUntil('the record to be saved again', () => harness.state.getReAskedQuestions()[keyToString(harness.key)]?.messageId === 4321);
-
-      const newer = { question: reAskedQuestion, messageId: 9999, predecessorMessageId: null, isPredecessorClosed: true, ending: null, isAnswerPending: false };
-      assert.equal(compaction.putBackReAskedQuestion(harness.key, newer), false, 'and told so when a record is already there: the tapped message is no longer the question that waits');
-      assert.equal(compaction.peekReAskedQuestion(harness.key), taken, 'a record that is there is not replaced');
-      compaction.closeReAskedQuestion(harness.key);
-    });
-
-    it('a record started by the idle compaction is saved at once, flagged as not posted, on the message the question waited in', async () => {
-      closedQuestionMessages.length = 0;
-      const started = compaction.startReAskedQuestion(harness.key, reAskedQuestion, 777);
-      assert.equal(started.messageId, null, 'no re-ask message yet');
-      assert.equal(compaction.peekReAskedQuestion(harness.key), started);
-      await waitUntil('the record to be saved', () => harness.state.getReAskedQuestions()[keyToString(harness.key)]?.isPosted === false);
-      assert.deepEqual(harness.state.getReAskedQuestions()[keyToString(harness.key)], { messageId: 777, question: reAskedQuestion, isPosted: false });
-      compaction.takeReAskedQuestion(harness.key);
-      await waitUntil('the saved record to be dropped', () => harness.state.getReAskedQuestions()[keyToString(harness.key)] === undefined);
-    });
-
-    it('a question that never had a message leaves nothing to save', async () => {
-      const started = compaction.startReAskedQuestion(harness.key, reAskedQuestion, null);
-      assert.equal(harness.state.getReAskedQuestions()[keyToString(harness.key)], undefined);
-      compaction.takeReAskedQuestion(harness.key);
-      assert.ok(started);
-    });
-
-    it('closing a record before its re-ask is posted ends the message the question waited in, once', async () => {
-      closedQuestionMessages.length = 0;
-      compaction.startReAskedQuestion(harness.key, reAskedQuestion, 777);
-      compaction.closeReAskedQuestion(harness.key);
-      await waitUntil('the close to be asked of the bot', () => closedQuestionMessages.length === 1);
-      assert.deepEqual(closedQuestionMessages, [{ messageId: 777, closing: 'unanswered' }]);
-      await waitUntil('the saved record to be dropped', () => harness.state.getReAskedQuestions()[keyToString(harness.key)] === undefined);
-      compaction.closeReAskedQuestion(harness.key);
-      assert.equal(closedQuestionMessages.length, 1, 'and nothing more the second time');
-    });
-
-    it('a number that answers a record writes nothing until its label is delivered, then the answer on the message it waited in and on a re-ask once it is known', async () => {
-      closedQuestionMessages.length = 0;
-      const started = compaction.startReAskedQuestion(harness.key, reAskedQuestion, 777);
-      const taken = compaction.takeReAskedQuestionForAnswer(harness.key);
-      assert.equal(taken, started);
-      assert.equal(compaction.peekReAskedQuestion(harness.key), undefined, 'it is out of the map: no other path uses it');
-      assert.equal(taken.ending, null, 'and carries no result yet: the label may reach no session');
-      assert.equal(taken.isAnswerPending, true);
-
-      // The idle compaction finishing meanwhile does not close the old message with a result of its own.
-      await compaction.settleReAskedPredecessor(harness.key, taken);
-      assert.deepEqual(closedQuestionMessages, []);
-
-      await compaction.answerReAskedQuestion(harness.key, taken, 'Long');
-      assert.deepEqual(closedQuestionMessages, [{ messageId: 777, closing: { answer: 'Long' } }]);
-      assert.equal(taken.isAnswerPending, false);
-
-      // The re-ask landed afterwards: its own message gets the answer too (the post does it by the ending), the predecessor is not written twice.
-      taken.messageId = 888;
-      await compaction.endReAskedQuestion(harness.key, taken);
-      assert.deepEqual(closedQuestionMessages.slice(1), [{ messageId: 888, closing: { answer: 'Long' } }]);
-    });
-
-    it('a record put back after a number reached no session is open again, without the marker, and its old message is settled once a re-ask is there', async () => {
-      closedQuestionMessages.length = 0;
-      const started = compaction.startReAskedQuestion(harness.key, reAskedQuestion, 777);
-      const taken = compaction.takeReAskedQuestionForAnswer(harness.key);
-      assert.ok(taken);
-      // The re-ask landed while the label was on its way: it is left as it is, with no result on it.
-      taken.messageId = 888;
-      assert.equal(compaction.putBackReAskedQuestion(harness.key, taken), true);
-      assert.equal(taken.ending, null);
-      assert.equal(taken.isAnswerPending, false);
-      assert.equal(compaction.peekReAskedQuestion(harness.key), started);
-      await waitUntil('the posted record to be saved again', () => harness.state.getReAskedQuestions()[keyToString(harness.key)]?.messageId === 888);
-      assert.deepEqual(closedQuestionMessages, [], 'nothing was written on the messages');
-
-      await compaction.settleReAskedPredecessor(harness.key, taken);
-      assert.deepEqual(closedQuestionMessages, [{ messageId: 777, closing: 'askedAgain' }], 'the old message points at the copy that waits');
-      await compaction.settleReAskedPredecessor(harness.key, taken);
-      assert.equal(closedQuestionMessages.length, 1, 'once');
-      compaction.takeReAskedQuestion(harness.key);
-    });
-
-    it('the end of the conversation closes its message once as unanswered and forgets the record', async () => {
-      await seedReAskedQuestion();
-      compaction.closeReAskedQuestion(harness.key);
-      await waitUntil('the close to be asked of the bot', () => closedQuestionMessages.length === 1);
-      assert.deepEqual(closedQuestionMessages, [{ messageId: 4321, closing: 'unanswered' }]);
-      assert.equal(compaction.peekReAskedQuestion(harness.key), undefined);
-      await waitUntil('the saved record to be dropped', () => harness.state.getReAskedQuestions()[keyToString(harness.key)] === undefined);
-
-      compaction.closeReAskedQuestion(harness.key);
-      compaction.clearThreadCompaction(harness.key);
-      assert.equal(closedQuestionMessages.length, 1, 'closing again closes nothing more');
-    });
   });
 });

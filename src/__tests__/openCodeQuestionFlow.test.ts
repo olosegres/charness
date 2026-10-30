@@ -325,6 +325,15 @@ test('S2 restore: a NEW-shape entry with valid fields is preserved verbatim', ()
   assert.equal(migrated.currentIndex, 1);
 });
 
+test('restore keeps which message the question was first asked in, and an entry saved before the mark has none', () => {
+  const questions = [makeQuestion({ header: 'Q1' })];
+  const marked = { ...makePending(questions, [null], 0), messageId: 12, originalMessageId: 10 };
+  assert.equal(migratePendingQuestionState(marked).originalMessageId, 10, 'the original survives the restore, so a restart cannot make a copy the record');
+
+  const unmarked = makePending(questions, [null], 0);
+  assert.equal(migratePendingQuestionState(unmarked).originalMessageId, undefined, 'an older state has none: the message found is taken for the original');
+});
+
 test('S2 restore: an answers array of the WRONG length is rebuilt to the question count', () => {
   const questions = [makeQuestion({ header: 'Q1' }), makeQuestion({ header: 'Q2' }), makeQuestion({ header: 'Q3' })];
   // A corrupt entry whose answers length no longer matches the questions.

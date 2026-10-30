@@ -809,8 +809,8 @@ Telegram cannot parse its formatting, so the result always fits), and under them
 
 - **«✅ Answer: …»** — you tapped or typed an option (several questions in one call are shown one after the other, each with its own result).
 - **«❌ Not answered»** — you wrote something else instead (the message goes to the agent as a prompt), sent `/esc`, `/quit`, `/quitall` or
-  `/new`, left the folder, picked another conversation or backend, «create new folder» of `/bind` dropped it, or the agent's process ended or
-  errored with the question open. The same note stands on a question the bot finds orphaned when it restarts (its agent is gone).
+  `/new`, left the folder, picked another conversation or backend, «create new folder» of `/bind` dropped it, or the agent's process ended, or the
+  bot's request to the agent failed, with the question open. The same note stands on a question the bot finds orphaned when it restarts (its agent is gone).
 - **«↓ Asked again below»** — the question was put again further down (the agent's output landed under it, or the idle compaction
   re-asked it): this is the older copy, kept as a record, and it says so only once the new copy is really there. When the agent keeps
   writing while the question waits, the question is put at the bottom again each time; the first message stays as the record and only the
@@ -821,7 +821,8 @@ The pin is released whenever the question ends.
 **After an idle compaction** (see [`/compact_on_idle`](#compact_on_idle)) a question that was pending is asked again with new buttons:
 the first copy loses its buttons at once and keeps its text as a record, with «↓ Asked again below» once the new copy is posted (or
 «❌ Not answered» if it could not be sent, or you wrote something else while the compaction ran — then nothing is asked again; a bot
-restart in that time leaves the same note). A number typed while the compaction runs answers the question as a tap would, and the
+restart in that time asks the question again when the conversation can still be resumed — nobody had the chance to answer — and leaves the
+«❌ Not answered» note only when the conversation is gone). A number typed while the compaction runs answers the question as a tap would, and the
 new copy is not posted. The new copy answers to a tap or a typed number, and ends like any question: with your
 answer, or with «❌ Not answered» if you write something else, the conversation ends (`/quit`, `/quitall`, `/new`, leaving the folder, a
 stopped or closed session, a switch to another conversation or backend) or the agent asks a newer question. A button left on an older

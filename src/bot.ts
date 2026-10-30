@@ -143,7 +143,7 @@ import { BIND_PAGE_SIZE, bindCreateFolderCallback, bindLeaveCurrentCallback, bin
 import { OpenBindMessages } from './connectors/telegram/openBindMessages';
 import { stripStaleKeyboards, sweepOpenBindMessages } from './connectors/telegram/bindSweep';
 import { buildTopicLink, createTopicCommand, type WorkFolderResult } from './connectors/telegram/commands/topicCommand';
-import { getCallbackMessageId, getCallbackMessageText } from './connectors/telegram/commands/callbackMessage';
+import { getCallbackMessageId } from './connectors/telegram/commands/callbackMessage';
 import { answerCallbackQuerySafely } from './connectors/telegram/commands/callbackToast';
 import { formatSharedTopicList, type SharedTopic } from './connectors/telegram/bindingWelcome';
 import { BindPickerClaims } from './connectors/telegram/bindPickerClaims';
@@ -426,7 +426,7 @@ import { createDisplayModes, formatTopicView } from './connectors/telegram/comma
 import { createReminders, type ReminderWizardSession } from './connectors/telegram/commands/reminders';
 import { createModelProviders, type PendingProviderConnect } from './connectors/telegram/commands/modelProviders';
 import { answerCallbackWithFittedText, answerCallbackWithWholeText } from './connectors/telegram/commands/callbackToast';
-import { createCompaction, type ReAskedQuestion } from './connectors/telegram/commands/compaction';
+import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createBotSkills } from './connectors/telegram/commands/botSkills';
 import { createTaskAgents } from './connectors/telegram/commands/taskAgents';
@@ -1745,14 +1745,6 @@ interface QuestionRepostState {
    * message (live race 2026-06-10 — answered-Q1 "✅" deleted, Q2 duplicated).
    */
   isPostInFlight: boolean;
-  /**
-   * The message the question was FIRST asked in — the record that stays in the topic with its text and the «asked again
-   * below» note however many times the question is re-posted. Every later copy of it is disposable: the next re-post deletes
-   * it, so a question that waits through a long stream of output leaves the original and the live copy, never a pile of
-   * copies. Bound to the question and index it was posted for; lost with the state (a restart): the message found then
-   * is taken for the record, which is never deleted.
-   */
-  record: { messageId: number; data: PendingQuestionState['data']; questionIndex: number } | null;
 }
 
 const questionRepostStates = new Map<string, QuestionRepostState>();
@@ -1792,7 +1784,7 @@ function getQuestionRepostState(key: SessionKey): QuestionRepostState {
   const kStr = keyToString(key);
   let s = questionRepostStates.get(kStr);
   if (!s) {
-    s = { wasLastSendTheQuestion: false, repostTimer: null, isPostInFlight: false, record: null };
+    s = { wasLastSendTheQuestion: false, repostTimer: null, isPostInFlight: false };
     questionRepostStates.set(kStr, s);
   }
   return s;
@@ -1867,18 +1859,17 @@ async function repostPendingQuestionToBottom(key: SessionKey): Promise<void> {
     // question's message (the live 2026-06-10 race).
     if (s.isPostInFlight) return;
     const oldMessageId = pending.messageId;
-    const questionIndex = pending.currentIndex;
-    const oldQuestion = pending.data.questions[questionIndex];
-    const knownRecord = s.record !== null && s.record.data === pending.data && s.record.questionIndex === questionIndex ? s.record : null;
+    const oldQuestion = pending.data.questions[pending.currentIndex];
+    // The first message of the question is its record. A state that predates the mark has none: the message found is the
+    // original then, which is never deleted.
+    if (oldMessageId !== null) pending.originalMessageId ??= oldMessageId;
     await postPendingQuestionAt(key);
     // The old message is touched only once there IS a copy below. A post that failed leaves the question where it was (its
     // message id unchanged) and still answerable there.
     const newMessageId = pendingQuestions.get(kStr)?.messageId ?? null;
     if (oldMessageId === null || !oldQuestion || newMessageId === null || newMessageId === oldMessageId) return;
-    const recordMessageId = knownRecord?.messageId ?? oldMessageId;
-    if (oldMessageId === recordMessageId) {
+    if (oldMessageId === pending.originalMessageId) {
       // The original: it stays as the record of the question, saying where the live copy is.
-      s.record = { messageId: oldMessageId, data: pending.data, questionIndex };
       await closeQuestionMessage(key, oldMessageId, oldQuestion, 'askedAgain');
     } else {
       // An earlier copy: the record already tells the question, so this one only duplicates it.
@@ -6003,12 +5994,8 @@ const {
   armDeferredCompaction,
   checkIsDeferredCompactionArmed,
   threadsCompacting,
-  peekReAskedQuestion,
-  takeReAskedQuestion,
-  takeReAskedQuestionForAnswer,
-  answerReAskedQuestion,
-  settleReAskedPredecessor,
-  putBackReAskedQuestion,
+  answerReAskedQuestionByNumber,
+  reAskInterruptedQuestion,
   restoreReAskedQuestion,
   closeReAskedQuestion,
   registerCompactionCommands,
@@ -6025,6 +6012,13 @@ const {
   suspendThreadSession,
   // L-D7: a sleeping per-turn session is woken for its idle compaction — a resume only, never a fresh start.
   resumeSleepingSessionForCompaction: async (key) => (await ensureAgentSession(key, { isResumeOnly: true })).ok && getThreadAdapter(key).checkIsActive(key),
+  getThreadAdapter,
+  // An answer to the agent's own question is never a request (S7), even delivered as a prompt.
+  deliverLabel: (key, label) => withThreadLocale(key, () => deliverActivePrompt(key, getThreadAdapter(key), label, null)),
+  resumeSleepingSessionForPrompt: (key) => resumeSleepingSessionForPrompt(key),
+  checkIsStarting: (key) => startupPromptBuffer.checkIsStarting(keyToString(key)),
+  closeOrphanQuestionMessage,
+  notePersonActivity,
 });
 
 /**
@@ -10698,102 +10692,6 @@ bot.action(new RegExp(`^${skipArmedRetryCallbackPrefix}(\\d+)$`), async (ctx) =>
   });
 });
 
-// D1: a tap on an idle-compaction RE-ASKED question button. The original request
-// was rejected server-side during the compaction, so the chosen option label is
-// delivered to the (now compacted) session as a FRESH prompt, not answered. Once it is delivered the re-asked
-// message stays as the record: the question as asked, the chosen answer in place of the buttons.
-bot.action(/^reask_(\d+)$/, async (ctx) => {
-  const key = await authoriseContext(ctx);
-  if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
-  const optIdx = parseInt(ctx.match[1], 10);
-  const tappedMessageId = getCallbackMessageId(ctx);
-  const reAsked = peekReAskedQuestion(key);
-  // The tap must be on the message of the question that waits now. A button left on an OLDER re-asked message (its close
-  // failed, or it predates a restart) would answer the newer question with that question's own label: it answers nothing,
-  // and its buttons come off. A re-ask whose send has not returned has no message id yet — the tap is on that message if
-  // it is NEWER than the one the question waited in before (the re-ask is always posted after it); older ones are the stale ones.
-  const isTappedMessageCurrent = reAsked !== undefined && (reAsked.messageId !== null
-    ? reAsked.messageId === tappedMessageId
-    : tappedMessageId !== null && (reAsked.predecessorMessageId === null || tappedMessageId > reAsked.predecessorMessageId));
-  if (!isTappedMessageCurrent) {
-    await ctx.answerCbQuery(t('cb.no_pending_question'));
-    // Not awaited: the edit waits its turn in the send pacer, and the next update of the topic waits for this handler.
-    if (tappedMessageId !== null) {
-      closeOrphanQuestionMessage(key, tappedMessageId, getCallbackMessageText(ctx)).catch((e) => console.error('[reask] closing the tapped orphan failed:', e));
-    }
-    return;
-  }
-  const label = reAsked.question.options[optIdx]?.label;
-  if (!label) { await ctx.answerCbQuery(t('cb.invalid_option')); return; }
-  // The question is taken before anything is awaited and put back if the label reaches no one: from here on it is this
-  // tap's, so no other path can use it or close it under the answer.
-  takeReAskedQuestion(key);
-  const reAskedMessageId = reAsked.messageId ?? tappedMessageId;
-  // The idle fire posts the re-asked question just BEFORE it stops the process, and a stopping process still reads as
-  // active: a tap inside that window (or inside a start) is buffered like a typed prompt and replayed once a session is up.
-  const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
-  // The answer to a re-asked question wakes a sleeping conversation (L-D4) — the question is its own.
-  if (!isStarting && !getThreadAdapter(key).checkIsActive(key) && !(await resumeSleepingSessionForPrompt(key))) {
-    await returnReAskedQuestionAfterTap(key, reAsked, reAskedMessageId);
-    await ctx.answerCbQuery(t('agent.no_session'));
-    return;
-  }
-  const adapter = getThreadAdapter(key);
-  // The closed question carries the whole label, so the toast may cut it; it is posted whole only if that close fails.
-  const isLabelCut = await answerCallbackWithFittedText(ctx, label);
-  // An answer to the agent's own question is never a request (S7), even delivered as a prompt. Routed at delivery,
-  // not on the `isStarting` read above: the stop may have ended during the toast, and a label buffered into its closed
-  // window was never replayed.
-  const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, adapter, label, null));
-  // The label reached no session (the topic was told why): the question is still open, so are its buttons.
-  if (outcome === 'noSession') {
-    await returnReAskedQuestionAfterTap(key, reAsked, reAskedMessageId);
-    return;
-  }
-  const isAnswerShown = reAskedMessageId !== null
-    && await editQuestionMessageToClosed(key, reAskedMessageId, reAsked.question, t('agent.question_answered_note', { answer: label }));
-  if (!isAnswerShown && isLabelCut) await replyToThread(key, label);
-});
-
-/**
- * @description A bare option NUMBER typed while the question the idle compaction asks again waits — for its re-ask (the
- * compaction runs: the buttons are off, the numbered options are still on screen) or for a tap — answers it, like a tap on
- * that option: the label goes to the agent as a fresh prompt and the answer is written under the question. Without this the
- * number would count as the person writing something else: the question would end «not answered» and the agent would get a
- * bare «2». Resolves whether the text was such a number (and was handled).
- */
-async function answerReAskedQuestionByNumber(key: SessionKey, text: string): Promise<boolean> {
-  const reAsked = peekReAskedQuestion(key);
-  if (!reAsked) return false;
-  const route = getQuestionReplyRoute(text, reAsked.question);
-  if (route.kind !== 'answer') return false;
-  const label = route.labels[0];
-  // Taken before anything is awaited, so no other path uses or closes it, but with no result written yet: the label may reach no
-  // session, and a re-ask that lands meanwhile is left as it is until that is known.
-  takeReAskedQuestionForAnswer(key);
-  // A person wrote — the latch clears like for any message; the record is gone, so nothing is closed as «not answered».
-  notePersonActivity(key);
-  const outcome = await withThreadLocale(key, () => deliverActivePrompt(key, getThreadAdapter(key), label, null));
-  if (outcome === 'noSession') {
-    await returnReAskedQuestionAfterTap(key, reAsked, reAsked.messageId ?? reAsked.predecessorMessageId);
-    // A re-ask that landed during the delivery is the question that waits now: the old message says so.
-    if (reAsked.messageId !== null) await settleReAskedPredecessor(key, reAsked);
-    return true;
-  }
-  await answerReAskedQuestion(key, reAsked, label);
-  return true;
-}
-
-/**
- * @description A tap on a re-asked question whose label reached no session leaves the question open: its record goes back.
- * Not when a newer re-ask has taken its place meanwhile — the tapped message is not the question that waits any more,
- * so it is closed as unanswered instead of keeping buttons that would answer the wrong question.
- */
-async function returnReAskedQuestionAfterTap(key: SessionKey, reAsked: ReAskedQuestion, messageId: number | null): Promise<void> {
-  if (putBackReAskedQuestion(key, reAsked) || messageId === null) return;
-  await closeQuestionMessage(key, messageId, reAsked.question, 'unanswered');
-}
-
 registerReminderCallbacks();
 
 bot.action(/^ccmode_(.+)$/, async (ctx) => {
@@ -11157,7 +11055,8 @@ async function applyQuestionAnswerInner(key: SessionKey, answerForCurrent: strin
 
   // More questions remain: persist the advanced state, then post the next one
   // (which re-owns `messageId`). DO NOT reply to the agent yet.
-  setPendingQuestion(key, nextState);
+  // The next question is a new message of its own: it has no original yet, the one of the question answered is not its record.
+  setPendingQuestion(key, { ...nextState, originalMessageId: null });
   await postPendingQuestionAt(key);
   return isAnswerShown;
 }
@@ -12346,6 +12245,7 @@ async function postPendingQuestionAt(key: SessionKey): Promise<void> {
       const existing = pendingQuestions.get(kStr);
       if (existing && existing.data === pending.data && existing.currentIndex === qIdx) {
         existing.messageId = messageId;
+        existing.originalMessageId ??= messageId;
         setPendingQuestion(key, existing);
         markQuestionMessageSent(key, messageId);
         // Pin the question so the muted topic fires a notification (S2). The
@@ -13216,7 +13116,9 @@ function restorePendingQuestions(): void {
  * do nothing or that would answer the wrong question, and the saved record is dropped.
  * MUST run AFTER {@link reattachExistingSessions} so session activity is known. A platform this instance does not serve
  * is left alone, like {@link restorePendingQuestions}. A record saved BEFORE its re-ask was posted (`isPosted: false`: the bot
- * stopped during the idle compaction) closes the message the question waited in, as unanswered.
+ * stopped during the idle compaction) names the message the question waited in: when the conversation can be resumed the
+ * question is asked again now (nobody has had the chance to answer it) and that message says so; otherwise it is closed as
+ * unanswered like any other.
  */
 function restoreReAskedQuestions(): void {
   for (const [keyStr, saved] of Object.entries(state.getReAskedQuestions())) {
@@ -13227,24 +13129,24 @@ function restoreReAskedQuestions(): void {
       continue;
     }
     if (!checkIsServedConversation(key, ENV.servedPlatforms)) continue;
-    if (saved.isPosted === false) {
-      // The bot stopped between the start of an idle compaction and its re-ask: nothing was asked again, and the message the
-      // question waited in (what is saved) has no result yet — it ends as unanswered, the one thing known of it.
-      state.clearReAskedQuestion(key).catch((e) => console.error('[reAskedQuestion] clear failed:', e));
-      closeQuestionMessage(key, saved.messageId, saved.question, 'unanswered')
-        .catch((e) => console.error('[reAskedQuestion] closing the interrupted question failed:', e));
+    // A question waits already (restored a moment ago, or asked anew by the agent that reattached): the copy's buttons would
+    // deliver their label into IT, and a question asked again now would sit beside it. Nor is there anything to deliver a label
+    // to once the conversation is gone.
+    const isConversationResumable = !pendingQuestions.has(keyStr) && (getThreadAdapter(key).checkIsActive(key) || getResumableSessionId(key) !== null);
+    if (isConversationResumable) {
+      if (saved.isPosted === false) {
+        // The bot stopped between the start of an idle compaction and its re-ask: the question was rejected on the agent's side
+        // and nobody has answered it — it is asked again now, and the message it waited in (what is saved) says so.
+        reAskInterruptedQuestion(key, saved).catch((e) => console.error('[reAskedQuestion] asking the interrupted question again failed:', e));
+      } else {
+        restoreReAskedQuestion(key, saved);
+      }
       continue;
     }
-    // A question waits already (restored a moment ago, or asked anew by the agent that reattached): the old copy's buttons
-    // would deliver their label into IT. The copy is closed, never brought back.
-    const isCopyUsable = !pendingQuestions.has(keyStr) && (getThreadAdapter(key).checkIsActive(key) || getResumableSessionId(key) !== null);
-    if (isCopyUsable) {
-      restoreReAskedQuestion(key, saved);
-      continue;
-    }
+    // The copy is closed, never brought back; an interrupted question's message ends as unanswered, the one thing known of it.
     state.clearReAskedQuestion(key).catch((e) => console.error('[reAskedQuestion] clear failed:', e));
     closeQuestionMessage(key, saved.messageId, saved.question, 'unanswered')
-      .catch((e) => console.error('[reAskedQuestion] closing the orphaned copy failed:', e));
+      .catch((e) => console.error(`[reAskedQuestion] closing the ${saved.isPosted === false ? 'interrupted question' : 'orphaned copy'} failed:`, e));
   }
 }
 

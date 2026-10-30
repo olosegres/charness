@@ -125,11 +125,13 @@ the output path (`markThreadTurnProducedOutput`) and the session lifecycle (`rea
 its hooks (`routedCommandTriggerDeps`): a destructured `const` is not hoisted like the function it replaced.
 **A question's message is never deleted.** The idle fire clears the pending question through the `clearPendingQuestion` port
 (`bot.ts`: clears the state, which unpins), takes the old message's buttons off at once (`editThreadKeyboard`: the compaction can
-take minutes) and starts a `ReAskedQuestion` record for it (`startReAskedQuestion`). The record lives from there to the end of the
+take minutes) and starts a `ReAskedQuestion` record for it (`startReAskedQuestion`, internal). The record lives from there to the end of the
 re-ask, in three phases — COMPACTING (nothing posted), SENDING (the re-ask's message exists, its id is not known) and POSTED — and
 is SAVED to `state.json` (`reAskedQuestions`) all along: unposted it names the message the question waited in (`isPosted: false`),
-so a restart during the compaction closes that message as unanswered at boot (`restoreReAskedQuestions`); posted it names the
-re-ask's message, so a restart while the conversation sleeps keeps its buttons working. Only after the re-ask is posted does the
+so a restart during the compaction asks the question again at boot (`reAskInterruptedQuestion`: the very post the idle fire makes,
+then the old message says «asked again below») when the conversation can still be resumed — nobody had the chance to answer — and
+closes that message as unanswered when it is gone (`restoreReAskedQuestions`); posted it names the re-ask's message, so a restart
+while the conversation sleeps keeps its buttons working. Only after the re-ask is posted does the
 fire edit the old message, through the `closeQuestionMessage` port, to the question as asked plus a note in place of its buttons —
 «asked again below», or «not answered» when there is no re-ask (its send failed). Every other end (an answer, a message sent
 instead, `/esc`, the session gone, leaving the folder (`unbindThread`, before the stop: a json-stream stop is reported only
@@ -137,8 +139,11 @@ after the process exits), a re-post to the bottom, a persisted question the boot
 `editQuestionMessageToClosed` edit. A re-post to the bottom edits the old message only after the new one is posted, and keeps
 the question's ORIGINAL message as its record («asked again below», never deleted); a copy an earlier re-post made is deleted when
 the next one lands, so a long stream of output under a waiting question leaves the original and the live copy, not a pile.
-Who reaches the record: a `reask_<i>` tap takes it (`takeReAskedQuestion`: out of memory AND of the saved state, before anything is
-awaited; `putBackReAskedQuestion` returns it if the label reaches no session) and writes the answer under the question — but only
+Who reaches the record — the `reask_<i>` handler (`handleReAskedQuestionTap`) and the typed number (`answerReAskedQuestionByNumber`)
+live in this module, over the `deliverLabel`, `resumeSleepingSessionForPrompt`, `checkIsStarting`, `closeOrphanQuestionMessage`
+and `notePersonActivity` ports, so a test drives the orderings with a held send and a label whose delivery it settles
+(`reAskedQuestion.test.ts`): a `reask_<i>` tap takes the record (`takeReAskedQuestion`: out of memory AND of the saved state, before
+anything is awaited; `putBackReAskedQuestion` returns it if the label reaches no session) and writes the answer under the question — but only
 a tap on THE message of the record counts (a re-ask whose send has not returned has no id yet: a tap counts if its message is
 newer than the one the question waited in, `predecessorMessageId`): a button left on an older re-asked message answers nothing, and
 the message it sits on is closed with its own text and «not answered» (`closeOrphanQuestionMessage`) — also the copy a restart leaves
@@ -156,9 +161,10 @@ record already), `handleAgentQuestion` (the agent asks a newer question, which t
 ways of leaving a conversation for another (`switchThreadAdapter` to another backend, `resumeSessionByIndex` for a `/sessions`
 pick). A sleeping conversation has no process whose stop would say so, so every release of its saved ids goes through
 `releaseConversationIds` (`/quit`, `/quitall`, `releaseThreadSession` for `/new`, `unbindThread`), which also calls
-`clearThreadCompaction`. At boot `restoreReAskedQuestions` (`bot.ts`, after the sessions reattached) hands a saved posted record
-back to `restoreReAskedQuestion` when the conversation can still be resumed and no question waits beside it, else closes its
-message and drops it.
+`clearThreadCompaction`. At boot `restoreReAskedQuestions` (`bot.ts`, after the sessions reattached) looks at each saved record
+once: when the conversation can still be resumed and no question waits beside it, a posted record goes back to
+`restoreReAskedQuestion` and an unposted one is asked again (`reAskInterruptedQuestion`); else its message is closed as unanswered
+and the record dropped.
 
 ## `autoContinueLimits.ts`
 

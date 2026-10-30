@@ -1,5 +1,4 @@
 import { Markup, type Context } from 'telegraf';
-import { getThreadAdapter } from '../../../adapters/createAdapter';
 // Decides whether the D3 summary guidance rides the compaction instruction: OpenCode bakes it into its fork
 // compaction prompt (covering auto/overflow compaction too), the Claude backends need it every time.
 import { claudePerTurnAdapterName, openCodeAdapterName } from '../../../adapters/adapterNames';
@@ -31,7 +30,10 @@ import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from '../questionKey
 import { splitMessage, MAX_MESSAGE_LEN } from '../messageSplit';
 import type { BotCore } from './botCore';
 import { getCallbackMessageId } from './callbackMessage';
-import type { QuestionEnd } from '../../../openCodeQuestionFlow';
+import { getQuestionReplyRoute, type QuestionEnd } from '../../../openCodeQuestionFlow';
+import type { LatePromptOutcome } from '../../../utils/promptDelivery';
+import { getCallbackMessageText } from './callbackMessage';
+import { answerCallbackWithFittedText } from './callbackToast';
 
 /** The literal slash command forwarded to backends whose own CLI parses it. */
 const compactCommandText = '/compact';
@@ -94,22 +96,6 @@ interface ThreadCompactionResult {
    */
   preTokens?: number | null;
   postTokens?: number | null;
-}
-
-/**
- * @description Resolve the `/compact` route for a thread's current backend — the
- * pure {@link getCompactCommandRoute} wrapped with the live adapter reading.
- * Every compaction entry point (the command, the seam, the F1 arm + drain, the
- * `/compact_on_idle` gate) asks the same question, so the three-line lookup lives
- * in ONE place rather than being spelled out at each of them.
- */
-function getThreadCompactRoute(key: SessionKey): CompactCommandRoute {
-  const adapter = getThreadAdapter(key);
-  return getCompactCommandRoute({
-    hasCompactContext: Boolean(adapter.compactContext),
-    adapterName: adapter.name,
-    terminalAdapterName,
-  });
 }
 
 /**
@@ -202,6 +188,25 @@ export interface CompactionPorts
   suspendThreadSession: (key: SessionKey) => Promise<void>;
   /** Wake a SLEEPING per-turn session for its idle compaction (L-D7): a resume only; `true` when it is live. */
   resumeSleepingSessionForCompaction: (key: SessionKey) => Promise<boolean>;
+  /** The adapter that runs the topic's conversation (the one a topic with no pick of its own answers to). */
+  getThreadAdapter: (key: SessionKey) => AgentAdapter;
+  /**
+   * Hand the label of an option a person chose on a re-asked question to the conversation as a fresh prompt, routed the way
+   * a typed message is (a live session gets it, a stopping one buffers it, a sleeping one is woken). Resolves where it went:
+   * `noSession` — nowhere, and the topic was told why.
+   */
+  deliverLabel: (key: SessionKey, label: string) => Promise<LatePromptOutcome | null>;
+  /** Wake the topic's SLEEPING conversation for a prompt of its own; `true` when it is live (a start that failed has told the topic why). */
+  resumeSleepingSessionForPrompt: (key: SessionKey) => Promise<boolean>;
+  /** Whether a session of the topic is starting (or stopping), so a prompt is buffered for the one to come. */
+  checkIsStarting: (key: SessionKey) => boolean;
+  /**
+   * End a question message the bot holds no record of, when its buttons are tapped: its own text (`messageText`) stays and
+   * «not answered» takes the place of the buttons.
+   */
+  closeOrphanQuestionMessage: (key: SessionKey, messageId: number, messageText: string | null) => Promise<void>;
+  /** A person wrote in the topic: the bot-wide effects of that (the idle latch, the todo registry) — and the re-asked question's own end. */
+  notePersonActivity: (key: SessionKey) => void;
 }
 
 /**
@@ -210,7 +215,23 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, getThreadAdapter, deliverLabel, resumeSleepingSessionForPrompt, checkIsStarting, closeOrphanQuestionMessage, notePersonActivity, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+
+  /**
+   * @description Resolve the `/compact` route for a thread's current backend — the
+   * pure {@link getCompactCommandRoute} wrapped with the live adapter reading.
+   * Every compaction entry point (the command, the seam, the F1 arm + drain, the
+   * `/compact_on_idle` gate) asks the same question, so the three-line lookup lives
+   * in ONE place rather than being spelled out at each of them.
+   */
+  function getThreadCompactRoute(key: SessionKey): CompactCommandRoute {
+    const adapter = getThreadAdapter(key);
+    return getCompactCommandRoute({
+      hasCompactContext: Boolean(adapter.compactContext),
+      adapterName: adapter.name,
+      terminalAdapterName,
+    });
+  }
 
   /**
    * Threads with a compaction IN FLIGHT (via {@link runThreadCompaction}). While a
@@ -680,8 +701,9 @@ export function createCompaction(ports: CompactionPorts) {
       clearPendingQuestion(key);
       const question = savedQuestion?.data.questions[savedQuestion.currentIndex];
       if (savedQuestion && question) {
-        // From here the question lives in a record of its own, SAVED (a restart during the compaction closes the old message
-        // as unanswered instead of forgetting it), and a person who writes, a conversation that ends or a number typed
+        // From here the question lives in a record of its own, SAVED (a restart during the compaction asks it again at boot,
+        // or ends the old message as unanswered when the conversation is gone, instead of forgetting it), and a person who
+        // writes, a conversation that ends or a number typed
         // reach it like they reach any re-asked question — so someone who writes meanwhile also stops the re-ask.
         reAsked = startReAskedQuestion(key, question, savedQuestion.messageId);
         // Its buttons are dead from here (the question is no longer pending) and the compaction can take minutes: they come
@@ -717,7 +739,8 @@ export function createCompaction(ports: CompactionPorts) {
    * instead ({@link closeReAskedQuestion}), or a person writes something else, the message is closed as unanswered, so its
    * buttons never sit there dead nor get tapped later onto whatever the agent asks next. The record is also kept in the saved
    * state, so a restart finds it: its buttons keep working while the conversation sleeps ({@link restoreReAskedQuestion}),
-   * and a restart during the compaction closes the old message as unanswered.
+   * and a restart during the compaction asks the question again ({@link reAskInterruptedQuestion}) while the conversation can
+   * still be resumed, or closes the old message as unanswered when it is gone.
    */
   const reAskedQuestions = new Map<string, ReAskedQuestion>();
 
@@ -867,6 +890,29 @@ export function createCompaction(ports: CompactionPorts) {
     return sentMessageId;
   }
 
+  /** The text of the re-asked question's message: the sentence that says it is asked again, then the question (its options are the buttons). */
+  function buildReAskedQuestionText(question: OpenCodeQuestion): string {
+    return [
+      t('compactOnIdle.pendingQuestionReask'),
+      question.header ? `${question.header}\n${question.question}` : question.question,
+    ].join('\n\n');
+  }
+
+  /**
+   * @description Boot: the bot stopped between the start of an idle compaction and the re-ask of its question, so `saved` names
+   * the message the question waited in (its buttons off, no result yet). The question was rejected on the agent's side, and
+   * nobody has had the chance to answer it — so, when the conversation can still be resumed, it is asked again NOW, by the very
+   * post the idle fire makes, and the old message says so. A re-ask that cannot be sent ends the old message as unanswered, as
+   * in the idle fire.
+   */
+  async function reAskInterruptedQuestion(key: SessionKey, saved: ReAskedQuestionRecord): Promise<void> {
+    await withThreadLocale(key, async () => {
+      const reAsked = startReAskedQuestion(key, saved.question, saved.messageId);
+      await postReAskedQuestion(key, buildReAskedQuestionText(saved.question), reAsked);
+      await settleReAskedPredecessor(key, reAsked);
+    });
+  }
+
   /**
    * @description Post the idle-compaction outcome (D1/D2) as SEPARATE messages in
    * the §1.4 order: the short notice → the full summary (when `/compact_summary` is
@@ -889,13 +935,7 @@ export function createCompaction(ports: CompactionPorts) {
     parts: { noticeText: string | null; summary: string | null },
     reAsked: ReAskedQuestion | null,
   ): Promise<void> {
-    const question = reAsked?.question;
-    const questionText = question
-      ? [
-          t('compactOnIdle.pendingQuestionReask'),
-          question.header ? `${question.header}\n${question.question}` : question.question,
-        ].join('\n\n')
-      : null;
+    const questionText = reAsked ? buildReAskedQuestionText(reAsked.question) : null;
 
     // A tracker issue has no topic to narrate into (R6): the compaction and the stop stay silent there.
     if (!checkIsTelegramKey(key)) return;
@@ -917,6 +957,100 @@ export function createCompaction(ports: CompactionPorts) {
     if (reAsked.ending !== null || reAsked.isAnswerPending || reAsked.predecessorMessageId === null || reAsked.isPredecessorClosed) return;
     reAsked.isPredecessorClosed = true;
     await closeQuestionMessage(key, reAsked.predecessorMessageId, reAsked.question, reAsked.messageId !== null ? 'askedAgain' : 'unanswered');
+  }
+
+  /**
+   * @description A tap on a button of the question the idle compaction asked again (D1). The original request was rejected
+   * on the agent's side during the compaction, so the chosen option's label is delivered to the (now compacted) conversation
+   * as a FRESH prompt, not answered. Once it is delivered the re-asked message stays as the record: the question as asked,
+   * the chosen answer in place of the buttons.
+   */
+  async function handleReAskedQuestionTap(ctx: Context, optionIndex: number): Promise<void> {
+    const key = await authoriseContext(ctx);
+    if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+    const tappedMessageId = getCallbackMessageId(ctx);
+    const reAsked = peekReAskedQuestion(key);
+    // The tap must be on the message of the question that waits now. A button left on an OLDER re-asked message (its close
+    // failed, or it predates a restart) would answer the newer question with that question's own label: it answers nothing,
+    // and its buttons come off. A re-ask whose send has not returned has no message id yet — the tap is on that message if
+    // it is NEWER than the one the question waited in before (the re-ask is always posted after it); older ones are the stale ones.
+    const isTappedMessageCurrent = reAsked !== undefined && (reAsked.messageId !== null
+      ? reAsked.messageId === tappedMessageId
+      : tappedMessageId !== null && (reAsked.predecessorMessageId === null || tappedMessageId > reAsked.predecessorMessageId));
+    if (!isTappedMessageCurrent) {
+      await ctx.answerCbQuery(t('cb.no_pending_question'));
+      // Not awaited: the edit waits its turn in the send pacer, and the next update of the topic waits for this handler.
+      if (tappedMessageId !== null) {
+        closeOrphanQuestionMessage(key, tappedMessageId, getCallbackMessageText(ctx)).catch((e) => console.error('[reask] closing the tapped orphan failed:', e));
+      }
+      return;
+    }
+    const label = reAsked.question.options[optionIndex]?.label;
+    if (!label) { await ctx.answerCbQuery(t('cb.invalid_option')); return; }
+    // The question is taken before anything is awaited and put back if the label reaches no one: from here on it is this
+    // tap's, so no other path can use it or close it under the answer.
+    takeReAskedQuestion(key);
+    const reAskedMessageId = reAsked.messageId ?? tappedMessageId;
+    // The idle fire posts the re-asked question just BEFORE it stops the process, and a stopping process still reads as
+    // active: a tap inside that window (or inside a start) is buffered like a typed prompt and replayed once a session is up.
+    // The answer to a re-asked question wakes a sleeping conversation (L-D4) — the question is its own.
+    if (!checkIsStarting(key) && !getThreadAdapter(key).checkIsActive(key) && !(await resumeSleepingSessionForPrompt(key))) {
+      await returnReAskedQuestionAfterTap(key, reAsked, reAskedMessageId);
+      await ctx.answerCbQuery(t('agent.no_session'));
+      return;
+    }
+    // The closed question carries the whole label, so the toast may cut it; it is posted whole only if that close fails.
+    const isLabelCut = await answerCallbackWithFittedText(ctx, label);
+    // An answer to the agent's own question is never a request (S7), even delivered as a prompt. Routed at delivery,
+    // not on the `checkIsStarting` read above: the stop may have ended during the toast, and a label buffered into its closed
+    // window was never replayed.
+    const outcome = await deliverLabel(key, label);
+    // The label reached no session (the topic was told why): the question is still open, so are its buttons.
+    if (outcome === 'noSession') {
+      await returnReAskedQuestionAfterTap(key, reAsked, reAskedMessageId);
+      return;
+    }
+    const isAnswerShown = reAskedMessageId !== null && await closeQuestionMessage(key, reAskedMessageId, reAsked.question, { answer: label });
+    if (!isAnswerShown && isLabelCut) await replyToThread(key, label);
+  }
+
+  /**
+   * @description A bare option NUMBER typed while the question the idle compaction asks again waits — for its re-ask (the
+   * compaction runs: the buttons are off, the numbered options are still on screen) or for a tap — answers it, like a tap on
+   * that option: the label goes to the agent as a fresh prompt and the answer is written under the question. Without this the
+   * number would count as the person writing something else: the question would end «not answered» and the agent would get a
+   * bare «2». Resolves whether the text was such a number (and was handled).
+   */
+  async function answerReAskedQuestionByNumber(key: SessionKey, text: string): Promise<boolean> {
+    const reAsked = peekReAskedQuestion(key);
+    if (!reAsked) return false;
+    const route = getQuestionReplyRoute(text, reAsked.question);
+    if (route.kind !== 'answer') return false;
+    const label = route.labels[0];
+    // Taken before anything is awaited, so no other path uses or closes it, but with no result written yet: the label may reach no
+    // session, and a re-ask that lands meanwhile is left as it is until that is known.
+    takeReAskedQuestionForAnswer(key);
+    // A person wrote — the latch clears like for any message; the record is gone, so nothing is closed as «not answered».
+    notePersonActivity(key);
+    const outcome = await deliverLabel(key, label);
+    if (outcome === 'noSession') {
+      await returnReAskedQuestionAfterTap(key, reAsked, reAsked.messageId ?? reAsked.predecessorMessageId);
+      // A re-ask that landed during the delivery is the question that waits now: the old message says so.
+      if (reAsked.messageId !== null) await settleReAskedPredecessor(key, reAsked);
+      return true;
+    }
+    await answerReAskedQuestion(key, reAsked, label);
+    return true;
+  }
+
+  /**
+   * @description A tap on a re-asked question whose label reached no session leaves the question open: its record goes back.
+   * Not when a newer re-ask has taken its place meanwhile — the tapped message is not the question that waits any more,
+   * so it is closed as unanswered instead of keeping buttons that would answer the wrong question.
+   */
+  async function returnReAskedQuestionAfterTap(key: SessionKey, reAsked: ReAskedQuestion, messageId: number | null): Promise<void> {
+    if (putBackReAskedQuestion(key, reAsked) || messageId === null) return;
+    await closeQuestionMessage(key, messageId, reAsked.question, 'unanswered');
   }
 
   /**
@@ -1187,6 +1321,8 @@ export function createCompaction(ports: CompactionPorts) {
     bot.action('csum_on', (ctx) => handleCompactSummaryCallback(ctx, true));
 
     bot.action('csum_off', (ctx) => handleCompactSummaryCallback(ctx, false));
+
+    bot.action(/^reask_(\d+)$/, (ctx) => handleReAskedQuestionTap(ctx, parseInt(ctx.match[1], 10)));
   }
 
   return {
@@ -1199,14 +1335,8 @@ export function createCompaction(ports: CompactionPorts) {
     armDeferredCompaction,
     checkIsDeferredCompactionArmed,
     threadsCompacting,
-    startReAskedQuestion,
-    peekReAskedQuestion,
-    takeReAskedQuestion,
-    takeReAskedQuestionForAnswer,
-    answerReAskedQuestion,
-    settleReAskedPredecessor,
-    endReAskedQuestion,
-    putBackReAskedQuestion,
+    answerReAskedQuestionByNumber,
+    reAskInterruptedQuestion,
     restoreReAskedQuestion,
     closeReAskedQuestion,
     registerCompactionCommands,

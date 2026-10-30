@@ -102,7 +102,7 @@ import {
   writeInstanceEnvFile,
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
-import { readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
+import { getStatePath, readPersistedState, restartCharnessWithState, startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -519,6 +519,41 @@ describe('A question the agent asks stays in the topic however it ends, end to e
       await topic.waitForMessageText('the answer under the live copy', thirdCopy, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
       assertQuestionKeptWithNote(first, askedAgainNote);
       await waitForUnpinned(thirdCopy);
+    } finally {
+      fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeOutputWhileAskedFileName), { force: true });
+      fs.rmSync(nextOutputPath, { force: true });
+    }
+  });
+
+  it('a restart between two re-posts: the first message is still the record, the copy from before the restart is deleted, and the topic holds the original and the live copy', async () => {
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeOutputWhileAskedFileName), `${outputWhileAskedText} 1`);
+    const nextOutputPath = path.join(getLayout().fakeStateDir, fakeClaudeNextOutputWhileAskedFileName);
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    try {
+      const repostTopic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, repostTimeoutMs);
+      const first = await askQuestion(repostTopic, 'KEPT-RESTART-REPOST');
+      const isCopyAfter = (afterMessageId: number) => (message: FakeTelegramMessage): boolean =>
+        message.message_id > afterMessageId && message.text.includes(fakeAskQuestion.question) && repostTopic.getKeyboardData(message).flat().some((data) => data.startsWith('qa_'));
+      const firstCopy = await repostTopic.waitForMessage('the question posted again after the first burst', isCopyAfter(first.message_id));
+      await repostTopic.waitForMessageText('the first message marked as asked again', first, (text) => text.endsWith(`\n\n${askedAgainNote}`));
+      await waitForPinned(firstCopy);
+      await getCharness().waitFor('the live copy to be saved', replyTimeoutMs, () => readPersistedState(getLayout()).pendingQuestions?.[key]?.messageId === firstCopy.message_id);
+
+      // The bot restarts: the question is restored as the copy that waits. Which message is the original has to survive the restart.
+      charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => {});
+      assert.notEqual(readKeptMessage(firstCopy).reply_markup, undefined, 'the live copy kept its buttons through the restart');
+      fs.writeFileSync(nextOutputPath, `${outputWhileAskedText} 2`);
+      const secondCopy = await repostTopic.waitForMessage('the question posted again after the restart', isCopyAfter(firstCopy.message_id));
+
+      // The copy from before the restart only duplicates the record, so it is deleted; the first message stays.
+      await getCharness().waitFor('the copy from before the restart to be deleted', repostTimeoutMs, () => fakeTelegram.getMessage(firstCopy.message_id)?.isDeleted === true);
+      const questionMessages = fakeTelegram.listBotMessages(topicThreadId).filter((message) => message.message_id >= first.message_id && message.text.includes(fakeAskQuestion.question));
+      assert.deepEqual(questionMessages.map((message) => message.message_id), [first.message_id, secondCopy.message_id], 'the topic holds the original and the live copy, nothing else');
+      assertQuestionKeptWithNote(first, askedAgainNote);
+
+      await topic.tapAndAwaitAnswer(secondCopy, 'qa_0_0');
+      await topic.waitForMessageText('the answer under the live copy', secondCopy, (text) => text.endsWith(buildAnsweredNote(fakeAskQuestion.shortOptionLabel)));
+      await waitForUnpinned(secondCopy);
     } finally {
       fs.rmSync(path.join(getLayout().fakeStateDir, fakeClaudeOutputWhileAskedFileName), { force: true });
       fs.rmSync(nextOutputPath, { force: true });
@@ -1060,26 +1095,69 @@ describe('A question the idle compaction re-asked stays too, when the conversati
     });
   });
 
-  it('a restart of the bot during the idle compaction: the old question ends as «not answered» instead of staying with no result', async () => {
+  /**
+   * The bot stops in the middle of an idle compaction: the compaction is done and its notice is the next thing to go out, the
+   * Bot API holds the answer to that send, so the bot is still "in" the compaction — the question cleared, its buttons off,
+   * the re-ask not yet posted — when it stops. `prepareBootState` runs while the bot is down; the bot is started again after it.
+   * Resolves the message the question waited in.
+   */
+  async function stopBotDuringIdleCompaction(promptLabel: string, noticeHold: { release: () => void; promise: Promise<void> }, prepareBootState: () => void): Promise<FakeTelegramMessage> {
+    fakeTelegram.holdNextResponse('sendMessage', noticeHold.promise, (payload) => String(payload.text).includes(enDict['compactOnIdle.notice']));
+    fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel}-WARM [fake:answer] one turn to compress`);
+    await getCharness().waitFor('the warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts(`${promptLabel}-WARM`).length > 0);
+    const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${promptLabel} [fake:ask] ask me something`);
+    await waitForQuestionAfter(topic, 'the question', sentMessageId, firstQuestion);
+    await waitingTopic.waitForMessage('the compaction notice, its send held', (message) => message.message_id > sentMessageId && message.text.includes(enDict['compactOnIdle.notice']));
+    const original = findNewestQuestionCopy();
+    assert.ok(original, 'the question that waited');
+    assert.equal(original.reply_markup, undefined, 'precondition: its buttons are already off');
+    assert.ok(!original.text.endsWith(`\n\n${unansweredNote}`) && !original.text.endsWith(askedAgainNote), 'precondition: and it has no result yet');
+
+    await getCharness().stop();
+    prepareBootState();
+    noticeHold.release();
+    charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+    return original;
+  }
+
+  it('a restart of the bot during the idle compaction, the conversation still resumable: the question is asked again at boot and the old message says so', async () => {
+    const shortLabel = fakeAskQuestion.shortOptionLabel;
     const key = keyToString(makeTelegramKey(group.id, topicThreadId));
     const noticeHold = createRelease();
-    // The compaction is done and its notice is the next thing to go out; the Bot API holds the answer to that send, so the
-    // bot is still "in" the compaction — the question cleared, its buttons off, the re-ask not yet posted — when it stops.
-    fakeTelegram.holdNextResponse('sendMessage', noticeHold.promise, (payload) => String(payload.text).includes(enDict['compactOnIdle.notice']));
     await runStepThenRestore(async () => {
-      fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-RESTART-WARM [fake:answer] one turn to compress');
-      await getCharness().waitFor('the warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('REASK-RESTART-WARM').length > 0);
-      const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, 'REASK-RESTART [fake:ask] ask me something');
-      await waitForQuestionAfter(topic, 'the question', sentMessageId, firstQuestion);
-      await waitingTopic.waitForMessage('the compaction notice, its send held', (message) => message.message_id > sentMessageId && message.text.includes(enDict['compactOnIdle.notice']));
-      const original = findNewestQuestionCopy();
-      assert.ok(original, 'the question that waited');
-      assert.equal(original.reply_markup, undefined, 'precondition: its buttons are already off');
-      assert.ok(!original.text.endsWith(`\n\n${unansweredNote}`) && !original.text.endsWith(askedAgainNote), 'precondition: and it has no result yet');
+      const original = await stopBotDuringIdleCompaction('REASK-RESTART', noticeHold, () => {});
 
-      await getCharness().stop();
+      // Nobody had the chance to answer: the question is put again, with buttons, and the old message points at it.
+      const reasked = await waitingTopic.waitForMessage('the question asked again at boot', (message) =>
+        message.message_id > original.message_id && waitingTopic.getKeyboardData(message).flat().some((data) => data.startsWith('reask_')));
+      await waitingTopic.waitForMessageText('the old question marked as asked again', original, (text) => text.endsWith(`\n\n${askedAgainNote}`));
+      assertQuestionKeptWithNote(original, askedAgainNote);
+      await getCharness().waitFor('the saved record to name the new copy', replyTimeoutMs, () => readPersistedState(getLayout()).reAskedQuestions?.[key]?.messageId === reasked.message_id);
+      assert.equal(readPersistedState(getLayout()).reAskedQuestions?.[key]?.isPosted, undefined, 'and to be a posted one');
+
+      // The copy works like any re-asked question: a tap delivers the label and writes the answer under it.
+      const labelPromptsBefore = countLabelPrompts(shortLabel);
+      assert.equal(await topic.tapAndAwaitAnswer(reasked, 'reask_0'), shortLabel);
+      await getCharness().waitFor('the label to reach the agent', agentStartTimeoutMs, () => countLabelPrompts(shortLabel) > labelPromptsBefore);
+      await waitingTopic.waitForMessageText('the answer under the question asked again', reasked, (text) => text.endsWith(buildAnsweredNote(shortLabel)));
+      assertQuestionKeptWithNote(original, askedAgainNote);
+    }, async () => {
       noticeHold.release();
-      charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
+    });
+  });
+
+  it('a restart of the bot during the idle compaction, the conversation gone while the bot was down: the old question ends as «not answered» and nothing is asked again', async () => {
+    const key = keyToString(makeTelegramKey(group.id, topicThreadId));
+    const noticeHold = createRelease();
+    await runStepThenRestore(async () => {
+      const original = await stopBotDuringIdleCompaction('REASK-RESTART-GONE', noticeHold, () => {
+        // What `/quit` does while the bot is down: the agent's process is gone and its conversation is released.
+        spawnSync('tmux', ['kill-session', '-t', `=${buildJsonStreamTmuxSessionName(makeTelegramKey(group.id, topicThreadId))}`], { env: getTmuxEnv(getLayout().tmuxTmpDir) });
+        const persisted = readPersistedState(getLayout());
+        const agent = persisted.agents?.[key];
+        if (agent) delete agent.claudeSessionId;
+        fs.writeFileSync(getStatePath(getLayout()), JSON.stringify(persisted));
+      });
 
       await waitingTopic.waitForMessageText('the note under the old question', original, (text) => text.endsWith(`\n\n${unansweredNote}`));
       assertQuestionKeptWithNote(original, unansweredNote);
@@ -1091,6 +1169,7 @@ describe('A question the idle compaction re-asked stays too, when the conversati
       );
     }, async () => {
       noticeHold.release();
+      await startAgentSession();
     });
   });
 
