@@ -8,6 +8,8 @@
 
 <h2 align="center">Harness for running Claude Code / OpenCode agents in the cloud or on your laptop, controlled from Telegram or Jira.</h2>
 
+**You talk. Your J.A.R.V.I.S. does the rest.** Send a voice note from the street — and an agent on your server opens the browser, calls your APIs, writes code, edits a video, drafts a post, generates an image, answers your email or messages someone for you, and sends you the result. It never sleeps: it keeps working while you do. Plug in a tool — and that becomes one more thing it can do.
+
 **Charness is a gateway between people and AI agents.** A Claude Code or OpenCode agent works in a project folder on a VPS / VDS or on your laptop, and you reach it from a Telegram topic or a Jira issue. On that gateway you set up AI pipelines for any work, not only code: a topic is one pipeline with its own folder, agent, schedule and checks.
 
 - **In Telegram** you control your agents through a bot or a group, so it becomes a terminal for OpenCode and Claude Code — every thread is like a terminal tab, plus scheduling and voice control.
@@ -28,6 +30,8 @@ One topic is one AI pipeline: its own project folder, its own agent, its own sch
 - **Blogging and content** — draft, edit and illustrate posts in one folder; a scheduled agent can prepare the next draft or the content plan every week.
 - **Research** — an agent reads the sources and papers in a notes folder and keeps a running write-up; ask follow-ups in the same topic.
 - **Video production** — scripts, cuts, subtitles and renders on a server with the tools installed; the agent sends the finished clips back into the topic.
+- **Images** — with an image tool or model connected (an MCP server or a CLI on the server), the agent generates pictures and sends them into the topic.
+- **Email and messengers** — with a mail or messenger tool connected (an MCP server), the agent answers an email or sends a message for you; ask it by voice, check the result in the topic.
 - **Monitoring and on-call** — a scheduled check runs a command (a service, a deploy, a disk, a URL), stays silent while it passes, and on the first failure pins an alert and wakes the agent with the output.
 - **Personal assistant and planning** — reminders and recurring tasks: a morning plan, a weekly review, a "finish this tomorrow at 9" hand-off, all by voice from your phone.
 - **Data analysis and reports** — drop a spreadsheet or a CSV into the topic; the agent analyses it and sends back charts and a report, and a cron job rebuilds the report every week.
