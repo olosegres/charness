@@ -262,7 +262,8 @@ export interface PendingQuestionState {
  *
  * It is saved from the moment the idle compaction starts, when the re-ask is not posted yet: `isPosted: false`, and
  * `messageId` is then the message the question waited in (its buttons are off, and it has no result yet). A restart that
- * finds such a record closes that message as unanswered — nothing was asked again.
+ * finds such a record asks the question again when the conversation can still be resumed (the old message then says «asked
+ * again below»), and closes that message as unanswered when it is gone.
  */
 export interface ReAskedQuestionRecord {
   messageId: number;

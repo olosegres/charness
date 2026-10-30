@@ -152,7 +152,9 @@ the message it sits on is closed with its own text and «not answered» (`closeO
 when it lands after the boot has dropped the record (the one gap in «every end leaves a note»: such a copy keeps its buttons until
 somebody taps it). Only a message the bot knows NOTHING about is closed so: a message that already carries a result — an answer a
 first tap or a typed number is still delivering, a close that landed (`endedMessageIds`, per topic, bounded) — is left as it is,
-because a second tap from a stale view (the spinner the first one left) would otherwise write «not answered» over the answer; and
+because a second tap from a stale view (the spinner the first one left) would otherwise write «not answered» over the answer (a
+close of an unknown message that did not land — `closeOrphanQuestionMessage` resolves `false`, or throws — takes its mark back,
+so the next tap tries again instead of leaving buttons that do nothing); and
 while neither the copy nor the old message has an id there is nothing to tell the tapped message from an older copy by, so no tap is
 taken then and none is rewritten. A bare option NUMBER typed (`answerReAskedQuestionByNumber`, in `deliverActivePrompt` and the startup buffer) takes the
 record (`takeReAskedQuestionForAnswer`) with `isAnswerPending` set and NO ending yet: the label may reach no session, and then the

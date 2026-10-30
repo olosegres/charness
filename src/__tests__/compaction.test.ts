@@ -63,7 +63,7 @@ describe('compaction: the compaction flow over its ports', () => {
       deliverLabel: async () => 'forwarded',
       resumeSleepingSessionForPrompt: async () => false,
       checkIsStarting: () => false,
-      closeOrphanQuestionMessage: async () => {},
+      closeOrphanQuestionMessage: async () => true,
       notePersonActivity: () => {},
     });
     compaction.registerCompactionCommands();

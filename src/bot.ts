@@ -1921,13 +1921,14 @@ async function closeQuestionMessage(key: SessionKey, messageId: number, question
  * @description End a question message the bot holds no record of — a copy a restart left while its re-ask was being sent, an
  * older copy whose close Telegram refused — when somebody taps its buttons: its own text stays (`messageText`, as the tap
  * delivered it) and «not answered» takes the place of the buttons, so the question does not end with no result at all. Without
- * the text, or when the note does not fit under it, only the buttons come off.
+ * the text, or when the note does not fit under it, only the buttons come off. Resolves whether the message was changed at all
+ * (the text edit or the removal of the buttons landed): when not, the buttons are still there and the next tap tries again.
  */
-async function closeOrphanQuestionMessage(key: SessionKey, messageId: number, messageText: string | null): Promise<void> {
+async function closeOrphanQuestionMessage(key: SessionKey, messageId: number, messageText: string | null): Promise<boolean> {
   const note = withThreadLocale(key, () => t(questionClosingNoteKeys.unanswered));
   const closedText = messageText === null ? null : `${messageText}\n\n${note}`;
   const isEdited = closedText !== null && closedText.length <= MAX_MESSAGE_LEN && await editThreadMessage(key, messageId, closedText);
-  if (!isEdited) await editThreadKeyboard(key, messageId, null, 'reask');
+  return isEdited || editThreadKeyboard(key, messageId, null, 'reask');
 }
 
 // ── auto-retry after a provider-side API error (plan S4/S5/S6) ──

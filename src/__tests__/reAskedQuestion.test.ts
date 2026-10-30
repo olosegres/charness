@@ -96,6 +96,9 @@ const pendingQuestions = new Map<string, PendingQuestionState>();
 let closedQuestionMessages: Array<{ messageId: number; closing: QuestionEnd }> = [];
 /** What the module asked the bot to close because its buttons were tapped on a message it holds no record of. */
 let closedOrphanMessages: Array<{ messageId: number; text: string | null }> = [];
+/** Messages whose orphan close does not land (both the text edit and the removal of the buttons fail), and ones whose close throws. */
+let refusedOrphanCloses = new Set<number>();
+let throwingOrphanCloses = new Set<number>();
 /** The labels handed to the conversation, each waiting for the test to say where it went. */
 let deliveries: PendingDelivery[] = [];
 /** Whether the conversation can be woken for a tap (a stopped one can, unless the test says it cannot). */
@@ -204,7 +207,11 @@ describe('the question the idle compaction asked again, through the compaction m
       deliverLabel: (_key, label) => new Promise((resolve) => { deliveries.push({ label, settle: resolve }); }),
       resumeSleepingSessionForPrompt: async () => canWakeConversation,
       checkIsStarting: () => false,
-      closeOrphanQuestionMessage: async (_key, messageId, text) => { closedOrphanMessages.push({ messageId, text }); },
+      closeOrphanQuestionMessage: async (_key, messageId, text) => {
+        closedOrphanMessages.push({ messageId, text });
+        if (throwingOrphanCloses.has(messageId)) throw new Error('the close could not be sent');
+        return !refusedOrphanCloses.has(messageId);
+      },
       notePersonActivity: (activeKey) => { compaction.noteThreadUserActivity(activeKey); },
     });
     compaction.registerCompactionCallbacks();
@@ -218,6 +225,8 @@ describe('the question the idle compaction asked again, through the compaction m
     resetGates();
     closedQuestionMessages = [];
     closedOrphanMessages = [];
+    refusedOrphanCloses = new Set();
+    throwingOrphanCloses = new Set();
     deliveries = [];
     canWakeConversation = true;
     isReAskSendRefused = false;
@@ -409,6 +418,40 @@ describe('the question the idle compaction asked again, through the compaction m
       assert.deepEqual(closedOrphanMessages, [{ messageId: 4500, text: 'screen 4500' }]);
       await tapReAskedButton(4500, 0);
       assert.equal(closedOrphanMessages.length, 1, 'a second tap on it does not append a second note');
+    });
+
+    it('a close that did not land (both edits failed, or it threw) is tried again by the next tap, and not any more once it landed', async () => {
+      /** Let what the tap left running in the background (the close, and what it does with the outcome) finish. */
+      const flushBackground = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve); });
+      refusedOrphanCloses.add(4800);
+      throwingOrphanCloses.add(4900);
+      await seedRestoredReAskedQuestion(4700);
+
+      // The text edit and the removal of the buttons both fail: the message keeps live buttons that do nothing, so it is not "ended".
+      await tapReAskedButton(4800, 0);
+      await waitUntil('the first attempt', () => closedOrphanMessages.length === 1);
+      await flushBackground();
+      await tapReAskedButton(4800, 0);
+      await waitUntil('the second attempt', () => closedOrphanMessages.length === 2);
+      assert.deepEqual(closedOrphanMessages.map((closed) => closed.messageId), [4800, 4800], 'the next tap tries the close again');
+      await flushBackground();
+
+      refusedOrphanCloses.delete(4800);
+      await tapReAskedButton(4800, 0);
+      await waitUntil('the attempt that lands', () => closedOrphanMessages.length === 3);
+      await flushBackground();
+      await tapReAskedButton(4800, 0);
+      await flushBackground();
+      assert.equal(closedOrphanMessages.length, 3, 'once it landed, a further tap leaves the message alone');
+
+      // A close that threw is no different.
+      await tapReAskedButton(4900, 0);
+      await waitUntil('the attempt that threw', () => closedOrphanMessages.length === 4);
+      await flushBackground();
+      throwingOrphanCloses.delete(4900);
+      await tapReAskedButton(4900, 0);
+      await waitUntil('the retry after the throw', () => closedOrphanMessages.length === 5);
+      assert.deepEqual(closedOrphanMessages.slice(3).map((closed) => closed.messageId), [4900, 4900]);
     });
   });
 

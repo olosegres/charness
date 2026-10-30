@@ -207,9 +207,10 @@ export interface CompactionPorts
   checkIsStarting: (key: SessionKey) => boolean;
   /**
    * End a question message the bot holds no record of, when its buttons are tapped: its own text (`messageText`) stays and
-   * «not answered» takes the place of the buttons.
+   * «not answered» takes the place of the buttons. Resolves whether the message was changed at all (the text edit or the
+   * removal of the buttons landed); when not, its buttons are still there and the next tap tries again.
    */
-  closeOrphanQuestionMessage: (key: SessionKey, messageId: number, messageText: string | null) => Promise<void>;
+  closeOrphanQuestionMessage: (key: SessionKey, messageId: number, messageText: string | null) => Promise<boolean>;
   /** A person wrote in the topic: the bot-wide effects of that (the idle latch, the todo registry) — and the re-asked question's own end. */
   notePersonActivity: (key: SessionKey) => void;
 }
@@ -1102,8 +1103,15 @@ export function createCompaction(ports: CompactionPorts) {
       // a second tap from a stale view must not rewrite it. Only a message the bot knows nothing about is closed here.
       if (tappedMessageId === null || checkIsEndedMessage(key, tappedMessageId)) return;
       rememberEndedMessage(key, tappedMessageId);
-      // Not awaited: the edit waits its turn in the send pacer, and the next update of the topic waits for this handler.
-      closeOrphanQuestionMessage(key, tappedMessageId, getCallbackMessageText(ctx)).catch((e) => console.error('[reask] closing the tapped orphan failed:', e));
+      // Not awaited: the edit waits its turn in the send pacer, and the next update of the topic waits for this handler. Marked
+      // first, so two quick taps do not both close it; a close that did not land leaves live buttons that do nothing, so the
+      // mark is taken back and the next tap tries again.
+      closeOrphanQuestionMessage(key, tappedMessageId, getCallbackMessageText(ctx))
+        .then((isClosed) => { if (!isClosed) forgetEndedMessage(key, tappedMessageId); })
+        .catch((e) => {
+          forgetEndedMessage(key, tappedMessageId);
+          console.error('[reask] closing the tapped orphan failed:', e);
+        });
       return;
     }
     const label = reAsked.question.options[optionIndex]?.label;
