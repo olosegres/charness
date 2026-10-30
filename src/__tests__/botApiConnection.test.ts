@@ -34,6 +34,8 @@ const slowAnswerMs = 600;
 const shortFreeSocketTimeoutMs = 150;
 const freeSocketWaitMs = 3000;
 const responseResetDelayMs = 100;
+/** Longer than the window in which a connection the server had closed fails (`staleConnectionFailureWindowMs`). */
+const heldRequestMs = 1300;
 /** The start of a response's head, cut inside a header name: bytes of an answer that never becomes a response. */
 const partialResponseHead = 'HTTP/1.1 200 OK\r\ncontent-ty';
 
@@ -50,7 +52,9 @@ type RequestFate =
   /** Apply it, send PART of the response head (no complete status line and headers), then close: the answer began, though the client's response never did. */
   | 'hangUpMidHead'
   /** Never answer. */
-  | 'hold';
+  | 'hold'
+  /** Apply it, hold the connection for {@link heldRequestMs}, then close it without a byte of an answer. */
+  | 'holdThenHangUp';
 
 interface ReceivedRequest {
   /** 1-based, over every request the server got, whatever its fate. */
@@ -113,6 +117,11 @@ class LoopbackBotApi {
     this.appliedLabels.push(label);
     if (fate === 'hangUpMidHead') {
       request.socket.end(partialResponseHead);
+      return;
+    }
+    if (fate === 'holdThenHangUp') {
+      await new Promise<void>((resolve) => setTimeout(resolve, heldRequestMs));
+      request.socket.destroy();
       return;
     }
     if (fate === 'answerSlowly') await new Promise<void>((resolve) => setTimeout(resolve, slowAnswerMs));
@@ -259,6 +268,19 @@ describe('a failure that is not "a pooled connection dropped before any answer" 
     await telegram.sendMessage(chatId, 'first');
     // No 'response' event ever fires for it, and the error is the one of a connection closed before any answer: only the
     // bytes the socket read since the reuse tell it from a pooled connection the server had closed.
+    await assert.rejects(telegram.sendMessage(chatId, 'second'), (error: NodeJS.ErrnoException) => error.code === 'ECONNRESET' && /socket hang up/.test(error.message));
+
+    assert.equal(api.attempts.length, 2, 'no second attempt');
+    assert.deepEqual(api.appliedLabels, ['first', 'second'], 'the server applied the second once');
+  });
+
+  it('a drop that comes only after the server held the request for long: it was working on it, not closed', async () => {
+    const { api, apiRoot } = await startApi(({ attemptNumber }) => (attemptNumber === 2 ? 'holdThenHangUp' : 'answer'));
+    const telegram = createClient(apiRoot, createAgent());
+
+    await telegram.sendMessage(chatId, 'first');
+    // The same error as a pooled connection the server had closed, on a reused connection, with nothing read: only the time
+    // it took tells them apart. A closed connection fails within one turn of the event loop of the write.
     await assert.rejects(telegram.sendMessage(chatId, 'second'), (error: NodeJS.ErrnoException) => error.code === 'ECONNRESET' && /socket hang up/.test(error.message));
 
     assert.equal(api.attempts.length, 2, 'no second attempt');

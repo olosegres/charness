@@ -715,7 +715,7 @@ const bot = new Telegraf(ENV.botToken, {
 // Decouple the long-polling intake/ACK from per-handler latency: wrap
 // `bot.handleUpdate` so each update is enqueued into its thread's serial queue
 // and the loop's `Promise.all` resolves at once (next `getUpdates` = ACK + new
-// batch fires now). The real middleware chain — the two `bot.use` middlewares,
+// batch fires now). The real middleware chain — every `bot.use` middleware,
 // every command/`on`/action, `bot.catch` — runs unchanged inside the captured
 // original, just off-loop and per-thread-serial. MUST be installed before
 // `bot.launch`. The graceful-shutdown path drains it (see `updateDrainTimeoutMs`).

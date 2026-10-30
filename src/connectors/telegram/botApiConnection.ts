@@ -13,11 +13,12 @@
  *     pool when the next request starts.
  *  2. {@link wireBotApiClient} makes a client send such a request again ONCE, on a fresh connection. It does so only when
  *     the request rode a REUSED connection (`ClientRequest.reusedSocket`, the signal Node documents for exactly this) and
- *     the connection failed with the socket having read not a single byte since the reuse: no answer began, not even a
- *     partial one. A timeout, an abort, an answer that began and a first-time connection are never retried.
+ *     the connection failed at once ({@link staleConnectionFailureWindowMs}) with the socket having read not a single byte
+ *     since the reuse: no answer began, not even a partial one, and the server did not sit on the request. A timeout, an
+ *     abort, an answer that began, a failure that came late and a first-time connection are never retried.
  *
- * This is a heuristic, not a guarantee. A server that took the request and dropped the connection before sending a byte of
- * its answer looks the same to the client, and there the retry posts the message twice. That case is rare; the alternative
+ * This is a heuristic, not a guarantee. A server that took the request and dropped the connection at once, before a byte of
+ * its answer, looks the same to the client, and there the retry posts the message twice. That case is rare; the alternative
  * is losing the message every time a pooled connection had been closed.
  */
 
@@ -25,6 +26,7 @@ import * as http from 'http';
 import * as https from 'https';
 import { AsyncLocalStorage } from 'async_hooks';
 import { Socket } from 'net';
+import { performance } from 'perf_hooks';
 import { Readable, type Duplex } from 'stream';
 import type { CallApiHost } from '../../outputTrace';
 import { checkIsConnectionResetError } from '../../sendErrorClassifier';
@@ -42,6 +44,14 @@ export const botApiFreeSocketTimeoutMs = 30_000;
 
 /** The initial delay of the TCP keep-alive probes on a pooled connection. */
 const tcpKeepAliveInitialDelayMs = 10_000;
+
+/**
+ * @description How soon after a pooled connection was handed to a request its failure still counts as "the server had
+ * closed it". A closed connection fails within one turn of the event loop of the write — milliseconds, a second on a host
+ * that is starved of CPU —, while a server that took the request, worked on it for long and then dropped the connection
+ * (a slow send under load, a media group, a middlebox) fails later: that request is not retried.
+ */
+export const staleConnectionFailureWindowMs = 1000;
 
 /** The log line of a retry: `<prefix> (<method>): …`. Never carries the bot token. */
 export const reusedConnectionRetryLogPrefix = '[telegram] pooled connection was closed by the server, retrying once on a fresh one';
@@ -62,17 +72,20 @@ interface ReuseProbe {
 const reuseProbeStorage = new AsyncLocalStorage<ReuseProbe>();
 
 /**
- * Mark the running `callApi`'s probe when this reused request fails with the socket having read nothing since the reuse. The
- * socket's byte count, not the request's `response` event, is the test: that event fires only once a whole response head is
- * parsed, so a connection that delivered half a head — an answer that began — would pass for a closed one. `bytesRead` is
- * the bytes of the application stream on a TLS socket too (a `close_notify` alert is not counted).
+ * Mark the running `callApi`'s probe when this reused request fails at once ({@link staleConnectionFailureWindowMs}) with the
+ * socket having read nothing since the reuse. The socket's byte count, not the request's `response` event, is the test for
+ * "nothing": that event fires only once a whole response head is parsed, so a connection that delivered half a head — an
+ * answer that began — would pass for a closed one. `bytesRead` is the bytes of the application stream on a TLS socket too (a
+ * `close_notify` alert is not counted).
  */
 function watchReusedRequest(socket: Duplex, request: http.ClientRequest): void {
   const probe = reuseProbeStorage.getStore();
   if (!probe || !(socket instanceof Socket)) return;
   const bytesReadAtReuse = socket.bytesRead;
+  const reusedAtMs = performance.now();
   request.once('error', () => {
-    if (socket.bytesRead === bytesReadAtReuse) probe.isPooledConnectionLost = true;
+    const isAtOnce = performance.now() - reusedAtMs <= staleConnectionFailureWindowMs;
+    if (isAtOnce && socket.bytesRead === bytesReadAtReuse) probe.isPooledConnectionLost = true;
   });
 }
 

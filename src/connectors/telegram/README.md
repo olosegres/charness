@@ -58,11 +58,13 @@ request the closed connection never delivered.
   server's limit is not helped: its timers do not run either.
 - **The retry** (`wireBotApiClient`) sends a `callApi` again ONCE on a fresh connection, only when its request rode a REUSED
   connection (`ClientRequest.reusedSocket`, read through an `AsyncLocalStorage` probe because node-fetch drops the request
-  from its error), the socket read NOT A SINGLE BYTE since the reuse (`socket.bytesRead` — also true of a TLS socket's
-  application stream; the `response` event would miss half a head), and the error is a `checkIsConnectionResetError` one.
+  from its error), the error came within `staleConnectionFailureWindowMs` of the reuse (a closed connection fails within a turn of the event loop;
+  a server that held the request for long and then reset it is not retried), the socket read NOT A SINGLE BYTE since the reuse
+  (`socket.bytesRead` — also true of a TLS socket's application stream; the `response` event would miss half a head), and the
+  error is a `checkIsConnectionResetError` one.
   Never after a timeout, an abort, an answer that began, or on a fresh connection; never for a payload with a stream (the file
   send path keeps its own `deliveryUnknown` rules). It is a heuristic: a server that took the request and dropped the
-  connection before any byte of its answer looks the same, and there the retry posts twice. It runs below the FIFO, the pacer
+  connection at once, before any byte of its answer, looks the same, and there the retry posts twice. It runs below the FIFO, the pacer
   and the 429 retry — no extra permit, the thread's order is kept — and above the trace, which shows both attempts.
 - **Wire EVERY client.** Telegraf builds a NEW `Telegram` for every update (`ctx.telegram`, behind `ctx.reply`,
   `ctx.answerCbQuery`, `ctx.editMessageText`) from `bot.telegram.options`, which already lack the agent of an `http://` root.
@@ -125,7 +127,7 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
 buttons and the voice path through a fake OpenAI-compatible engine `telegramE2e/fakeSpeechEngine.ts`, driven through
 `telegramE2e/topicDriver.ts`; `sttBootE2e.test.ts` for the voice settings at boot and the end of an interrupted install; `fallbackSwitchE2e.test.ts` and `fallbackSwitchOpenCodeE2e.test.ts` for the usage-limit switch and its notice — the latter against a fake OpenCode server and CLI, `openCodeE2e/fakeOpenCodeServer.ts`, that serves only what the bot calls and lists the rest as `unhandled`) runs the built bot against
 `telegramE2e/fakeTelegram.ts` on loopback with a placeholder token; unset, the client talks to `api.telegram.org`. Telegraf drops its https
-agent by itself for an `http://` root.
+agent by itself for an `http://` root; the bot then wires its own http agent onto every client (`wireBotApiClient`, see «Bot API connections»).
 
 ## Guards
 
