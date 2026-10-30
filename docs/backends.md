@@ -147,7 +147,7 @@ On boot the bot:
    is posted only when the agent kept working while the bot was down.
 5. Schedules `setMyCommands` so the Telegram client picks up the menu.
 
-Explicit `/quit`, `/quit-all`, and leaving a folder (the `/bind` «leave
+Explicit `/quit`, `/quitall`, and leaving a folder (the `/bind` «leave
 current dir» button) release the persisted session ids — those sessions
 are not auto-reattached on the next boot (they stay reachable via
 `/sessions`).
@@ -164,7 +164,7 @@ resumes with its next message.
 If you run the bot under `systemd`/`systemd-run`, set `KillMode=process`.
 The default `control-group` mode kills tmux and `opencode serve` children,
 which defeats restart/reattach. Process restarts intentionally leave agent
-sessions alive; use `/quit` or `/quit-all` when you want to terminate them.
+sessions alive; use `/quit` or `/quitall` when you want to terminate them.
 
 ## Bot-injected agent tools
 

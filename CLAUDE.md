@@ -71,7 +71,7 @@ per-backend controls are optional methods the bot checks before calling.
   process with a stale bot-MCP tool list is NOT stopped early: it follows the idle lifecycle — compaction at the idle
   mark, then the stop — and resumes with the current tools); OpenCode
   reconnects SSE and restores sessions by persisted id; a stale-version OpenCode server is replaced. Explicit
-  `/quit`, `/quit-all`, `/new` and leaving a folder RELEASE the persisted ids: no auto-reattach, still
+  `/quit`, `/quitall`, `/new` and leaving a folder RELEASE the persisted ids: no auto-reattach, still
   resumable via `/sessions`. tmux is REQUIRED for both Claude backends.
 - **Startup-safe input.** Prompts typed while a session boots are buffered in memory and replayed in order
   (`startupPromptBuffer.ts`; `deliverPromptOrBuffer` is the one buffer-or-forward unit).

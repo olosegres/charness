@@ -94,7 +94,7 @@ Numeric bounds are named constants in the files below; this README says only wha
   (`notePostFailed`); a message forwarded any other way drops a pending retry.
 - A failure in one conversation is logged and never stops the others or rejects a timer tick — an unhandled
   rejection ends the process.
-- Cancelling the conversation (`/esc`, `/c`, `/quit`, `/quit-all`, `/new`, a `/resume` pick, leaving the
+- Cancelling the conversation (`/esc`, `/c`, `/quit`, `/quitall`, `/new`, a `/resume` pick, leaving the
   folder, switching to another agent or a shell) closes EVERY open request of the conversation `cancelled`
   (`cancelConversation`); a limit-wait stop and the counters reset of a "continue" nudge apply to every one too.
 - **A topic prompt settles its request by where it went** (`topicRequestSettle.ts`, over the engine and the ledger as ports): a prompt

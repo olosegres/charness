@@ -57,7 +57,7 @@ them. How the agents run (the Claude Code backends, OpenCode, restarts, the bot'
   - [`/timezone`](#timezone)
   - [`/pair`](#pair)
 - **General-only**
-  - [`/quit-all`, `/quitall`](#quit-all-quitall)
+  - [`/quitall`](#quitall)
 - **Plain messages, voice and files**
   - [Natural language and voice](#natural-language-and-voice)
   - [File intake](#file-intake)
@@ -777,7 +777,7 @@ Bind this forum supergroup to the bot (re-point auto-pairing) — works from any
 
 ## General-only
 
-### `/quit-all`, `/quitall`
+### `/quitall`
 
 End every active agent in every bound topic (also releases their session ids).
 
