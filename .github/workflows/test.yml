@@ -24,9 +24,21 @@ jobs:
           node-version: 22
           cache: yarn
       - run: yarn install --immutable
-      # The flows drive real tmux sessions.
-      - name: Install tmux
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux
+      # The flows drive real tmux sessions; the remote-run flow a real loopback sshd and rsync (remoteRunE2e.test.ts).
+      - name: Install tmux, openssh-server and rsync
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux openssh-server rsync
+      # ...and Pueue, the runner's job queue: two static binaries, pinned by checksum (the remote-run flow never skips in CI).
+      - name: Install Pueue
+        run: |
+          set -euo pipefail
+          base=https://github.com/Nukesor/pueue/releases/download/v4.0.4
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -m 180 --connect-timeout 60 -o "$HOME/.local/bin/pueue" "$base/pueue-x86_64-unknown-linux-musl"
+          curl -fsSL -m 180 --connect-timeout 60 -o "$HOME/.local/bin/pueued" "$base/pueued-x86_64-unknown-linux-musl"
+          echo "c1b10d7e4e62211075ddd0e1dc3e8cbfc5a43d662cb3be7402a28504e23fcb51  $HOME/.local/bin/pueue" | sha256sum -c -
+          echo "5afeff6adbafb909e8d54e2caff158e6966c2adffa2c09e60fd631cc51b60390  $HOME/.local/bin/pueued" | sha256sum -c -
+          chmod +x "$HOME/.local/bin/pueue" "$HOME/.local/bin/pueued"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       # The STT sidecar's Python unit tests run through uv (sttSidecarPython.test.ts).
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2 (setup-uv publishes no v8+ major tags)
       - run: yarn typecheck

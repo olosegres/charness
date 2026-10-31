@@ -156,6 +156,12 @@ downloads them, so it needs the network once) or a **`python3` that has numpy, s
 `uv` cannot reach the package index, a local run skips that test and says why; CI (`CI=true`, uv installed by the
 workflow) fails instead.
 
+The `charness remote-run` flow (`remoteRunE2e.test.ts`) drives the built CLI against a throwaway loopback `sshd` (no root), `rsync` and a
+private **Pueue** in temp dirs. It wants `sshd` (`openssh-server`), `ssh`, `rsync`, `pueue` / `pueued` 4.x on `PATH` and `yarn build`;
+a local run without them is skipped with the reason, CI (`CI=true`) installs them (the workflow pins Pueue by checksum) and fails
+without. A flow that is killed or times out cannot leave daemons behind: `remoteRunE2e/remoteRunFlowSweep.ts` ends what names its
+layout, from the teardown, from a detached reaper and at the next start.
+
 Node applies `--test-timeout` to a whole test FILE (a `describe`'s own `timeout` cannot extend it), so a file that
 hangs or leaves a process alive fails by name when its limit passes, instead of hanging the run. A long-running
 flow file must be named `*E2e.test.ts` to get the flows' limit; `live/*Live.test.ts` is run directly (CLAUDE.md).
