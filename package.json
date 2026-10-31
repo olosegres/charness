@@ -31,6 +31,7 @@
   "files": [
     "dist/",
     "stt/gigaam_sidecar.py",
+    "remoteRun/runner.sh",
     "agent-plugin/",
     "CHANGELOG.md",
     "README.md",

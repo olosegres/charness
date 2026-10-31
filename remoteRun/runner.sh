@@ -1,0 +1,1009 @@
+#!/usr/bin/env bash
+# charness remote-run — the script that runs ON a runner (never on the main box).
+#
+# `charness remote-run` uploads this file to <workDir>/bin/runner-<sha8>.sh and calls it over ssh. Every subcommand takes
+# the runner's work dir first:   runner.sh <subcommand> <workDir> [arguments…]
+# Pueue is reached through PUEUE_BIN / PUEUE_CONFIG (both optional), set by the caller on every call.
+#
+# bash 3.2-compatible on purpose (the stock bash of macOS): no associative arrays, no `wait -n`, no `mapfile`, no
+# `timeout(1)`, no `read -t` (its timeout status differs between 3.2 and 4+), no GNU-only flags. Time limits are done by background watchdogs.
+#
+# Subcommands (the contract is in src/remoteRun/README.md):
+#   probe        key=value lines: OS, CPU, RAM, disk, jobs, capabilities
+#   prepare      layout for a job, Pueue daemon + groups, prune
+#   lease        add the job to Pueue, stream its log, kill it when the caller's heartbeat stops (foreground run)
+#   submit       add the job to Pueue and return (--bg)
+#   job          the Pueue task itself: lock → apply the staged tree → deps → command → result files
+#   follow       stream a job's log until it ends (logs -f)
+#   wait         block until the job ends
+#   result       key=value facts of a job (exit code, phase, markers)
+#   meta         the job's meta.json
+#   tail         the last N lines of a job's log
+#   kill         stop a job: SIGTERM, SIGKILL after 10 s
+#   exec         one-off command in the project's copy, leased like a foreground job
+#   workdir      the work dir as an absolute path
+#   pueue        run Pueue itself with the configured binary and config
+#   jobs         the meta.json of every job of a project (or of all), as a JSON array
+#   prune        remove old jobs, stale stage dirs and unused project copies
+#   sync-tree    the apply step alone (tests)
+
+LC_ALL=C
+export LC_ALL
+set -u
+
+# ─────────────────────────── constants ───────────────────────────
+
+kill_grace_sec=10
+pueue_start_wait_sec=8
+default_timeout_sec=10800
+job_keep_days=3
+copy_keep_days=30
+stage_keep_days=1
+drain_interval_sec=0.2
+probe_step_sec=8
+exit_file_wait_sec=5
+task_id_wait_sec=5
+heartbeat_poll_sec=1
+
+# ─────────────────────────── helpers ───────────────────────────
+
+die() {
+  printf 'remote-run-runner: %s\n' "$*" >&2
+  exit 125
+}
+
+# Own progress lines of a job, written into its log; the caller shows lines with this prefix on stderr.
+say() {
+  printf 'remote-run: %s\n' "$*"
+}
+
+pq() {
+  "${PUEUE_BIN:-pueue}" ${PUEUE_CONFIG:+-c "$PUEUE_CONFIG"} "$@"
+}
+
+pueued_bin() {
+  if [ -n "${PUEUE_BIN:-}" ] && [ -x "$(dirname "$PUEUE_BIN")/pueued" ]; then
+    printf '%s\n' "$(dirname "$PUEUE_BIN")/pueued"
+  else
+    printf 'pueued\n'
+  fi
+}
+
+# A name that is safe to use as one path component.
+check_name() {
+  case $1 in
+    '' | *[!A-Za-z0-9._-]* | .*) die "bad name: $1" ;;
+  esac
+}
+
+# A relative path inside a project: no leading slash, no ".." component.
+check_relative_path() {
+  case $1 in
+    /*) return 1 ;;
+  esac
+  case "/$1/" in
+    */../*) return 1 ;;
+  esac
+  return 0
+}
+
+# Sets work, slug, job and every directory derived from them. A slug of "-" means "the project this job id belongs to" (the commands
+# that take only a job id): found by looking for the job's folder.
+set_paths() {
+  work=$1
+  slug=${2:-}
+  job=${3:-}
+  if [ "$slug" = "-" ] && [ -n "$job" ]; then
+    slug=
+    local found
+    for found in "$work"/p/*/jobs/"$job"; do
+      [ -d "$found" ] && slug=$(basename "$(dirname "$(dirname "$found")")") && break
+    done
+    [ -n "$slug" ] || die "no such job: $job"
+  fi
+  check_name "$slug"
+  proj="$work/p/$slug"
+  tree="$proj/tree"
+  jobs_dir="$proj/jobs"
+  lock="$proj/lock"
+  if [ -n "$job" ]; then
+    case $job in *[!a-z0-9-]* | -*) die "bad job id: $job" ;; esac
+    jd="$jobs_dir/$job"
+    stage="$proj/stage/$job"
+  fi
+}
+
+set_phase() {
+  printf '%s\n' "$1" > "$jd/phase"
+}
+
+read_file() {
+  cat "$1" 2>/dev/null
+}
+
+# run_bounded <seconds> <command…>: the command's output goes to $bounded_out, the status is returned; never longer than the limit.
+bounded_out=${TMPDIR:-/tmp}/rr-bounded.$$
+run_bounded() {
+  local limit=$1
+  shift
+  "$@" > "$bounded_out" 2> /dev/null < /dev/null &
+  local command_pid=$!
+  ( sleep "$limit"; kill -9 "$command_pid" ) > /dev/null 2>&1 &
+  local watchdog_pid=$!
+  wait "$command_pid" 2> /dev/null
+  local status=$?
+  kill "$watchdog_pid" > /dev/null 2>&1
+  return $status
+}
+
+# ─────────────────────────── probe ───────────────────────────
+
+kb_to_mb() {
+  awk -v kb="$1" 'BEGIN { printf "%d", kb / 1024 }'
+}
+
+probe_linux() {
+  local os_name os_version
+  os_name=Linux
+  os_version=
+  if [ -r /etc/os-release ]; then
+    os_name=$(. /etc/os-release; printf '%s' "${NAME:-Linux}")
+    os_version=$(. /etc/os-release; printf '%s' "${VERSION_ID:-}")
+  fi
+  echo "os_name=$os_name"
+  echo "os_version=$os_version"
+  echo "cpu_model=$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -n 1)"
+  local threads cores
+  threads=$(grep -c '^processor' /proc/cpuinfo)
+  cores=$(awk -F: '/^physical id/ { p = $2 } /^core id/ { print p ":" $2 }' /proc/cpuinfo | sort -u | wc -l | tr -d ' ')
+  [ "$cores" -gt 0 ] 2> /dev/null || cores=$threads
+  echo "cpu_cores=$cores"
+  echo "cpu_threads=$threads"
+  echo "load=$(cut -d' ' -f1 /proc/loadavg)"
+  echo "ram_total_mb=$(kb_to_mb "$(sed -n 's/^MemTotal:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo)")"
+  echo "ram_free_mb=$(kb_to_mb "$(sed -n 's/^MemAvailable:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo)")"
+}
+
+probe_darwin() {
+  echo "os_name=$(sw_vers -productName 2> /dev/null || echo macOS)"
+  echo "os_version=$(sw_vers -productVersion 2> /dev/null)"
+  echo "cpu_model=$(sysctl -n machdep.cpu.brand_string 2> /dev/null)"
+  echo "cpu_cores=$(sysctl -n hw.physicalcpu 2> /dev/null)"
+  echo "cpu_threads=$(sysctl -n hw.logicalcpu 2> /dev/null)"
+  echo "load=$(sysctl -n vm.loadavg 2> /dev/null | tr -d '{}' | awk '{ print $1 }')"
+  local mem_bytes page_size free_pages
+  mem_bytes=$(sysctl -n hw.memsize 2> /dev/null)
+  page_size=$(sysctl -n hw.pagesize 2> /dev/null)
+  free_pages=$(vm_stat 2> /dev/null | awk '/^Pages (free|inactive|speculative):/ { gsub("\\.", "", $NF); sum += $NF } END { print sum + 0 }')
+  echo "ram_total_mb=$(awk -v b="$mem_bytes" 'BEGIN { printf "%d", b / 1048576 }')"
+  echo "ram_free_mb=$(awk -v p="$free_pages" -v s="${page_size:-4096}" 'BEGIN { printf "%d", p * s / 1048576 }')"
+}
+
+# capability lines: cap_<name>=yes|no and cap_<name>_detail=<words>
+probe_android() {
+  local acceleration=
+  case $(uname -s) in
+    Linux) [ -r /dev/kvm ] && [ -w /dev/kvm ] && acceleration=KVM ;;
+    Darwin) [ "$(sysctl -n kern.hv_support 2> /dev/null)" = 1 ] && acceleration=HVF ;;
+  esac
+  local emulator_path=
+  local sdk_root
+  for sdk_root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
+    [ -n "$sdk_root" ] && [ -x "$sdk_root/emulator/emulator" ] && emulator_path="$sdk_root/emulator/emulator" && break
+  done
+  [ -z "$emulator_path" ] && emulator_path=$(command -v emulator 2> /dev/null || true)
+  if [ -n "$acceleration" ] && [ -n "$emulator_path" ]; then
+    echo "cap_android=yes"
+    echo "cap_android_detail=$acceleration, emulator"
+  else
+    echo "cap_android=no"
+    if [ -z "$acceleration" ] && [ -z "$emulator_path" ]; then
+      echo "cap_android_detail=no hardware acceleration, no emulator binary"
+    elif [ -z "$acceleration" ]; then
+      echo "cap_android_detail=no hardware acceleration (KVM / HVF)"
+    else
+      echo "cap_android_detail=no emulator binary"
+    fi
+  fi
+}
+
+probe_ios() {
+  if [ "$(uname -s)" != Darwin ]; then
+    echo "cap_ios=no"
+    echo "cap_ios_detail=$(uname -s)"
+    return
+  fi
+  if run_bounded "$probe_step_sec" xcodebuild -version; then
+    local xcode_version simulators
+    xcode_version=$(head -n 1 "$bounded_out" | sed 's/^Xcode //')
+    simulators=0
+    if run_bounded "$probe_step_sec" xcrun simctl list devices available; then
+      simulators=$(grep -c '(Shutdown)\|(Booted)' "$bounded_out")
+    fi
+    echo "cap_ios=yes"
+    echo "cap_ios_detail=Xcode $xcode_version, $simulators simulators"
+  else
+    echo "cap_ios=no"
+    echo "cap_ios_detail=Xcode not found"
+  fi
+}
+
+probe_docker() {
+  if ! command -v docker > /dev/null 2>&1; then
+    echo "cap_docker=no"
+    echo "cap_docker_detail=docker not installed"
+  elif run_bounded "$probe_step_sec" docker info; then
+    echo "cap_docker=yes"
+    echo "cap_docker_detail="
+  else
+    echo "cap_docker=no"
+    echo "cap_docker_detail=daemon not reachable"
+  fi
+}
+
+probe_playwright() {
+  local browsers_dir=${PLAYWRIGHT_BROWSERS_PATH:-}
+  if [ -z "$browsers_dir" ]; then
+    case $(uname -s) in
+      Darwin) browsers_dir="$HOME/Library/Caches/ms-playwright" ;;
+      *) browsers_dir="$HOME/.cache/ms-playwright" ;;
+    esac
+  fi
+  local found=
+  local kind
+  for kind in chromium firefox webkit; do
+    if ls -d "$browsers_dir/$kind-"* > /dev/null 2>&1; then
+      found="${found:+$found, }$kind"
+    fi
+  done
+  if [ -n "$found" ]; then
+    echo "cap_playwright=yes"
+    echo "cap_playwright_detail=$found"
+  else
+    echo "cap_playwright=no"
+    echo "cap_playwright_detail=no browsers installed"
+  fi
+}
+
+# Jobs by their files: running = a live job process, queued = submitted and not started, finished = has an exit file.
+probe_jobs() {
+  local running=0 queued=0
+  local active_slugs=
+  local job_dir slug pid
+  for job_dir in "$work"/p/*/jobs/*/; do
+    [ -d "$job_dir" ] || continue
+    [ -f "$job_dir/exit" ] && continue
+    [ -f "$job_dir/task-id" ] || continue
+    slug=$(basename "$(dirname "$(dirname "$job_dir")")")
+    pid=$(read_file "$job_dir/pid")
+    if [ -n "$pid" ] && kill -0 "$pid" 2> /dev/null; then
+      running=$((running + 1))
+    elif [ -z "$pid" ]; then
+      queued=$((queued + 1))
+    else
+      continue
+    fi
+    case " $active_slugs " in
+      *" $slug "*) ;;
+      *) active_slugs="$active_slugs $slug" ;;
+    esac
+  done
+  local project_count=0
+  local counted
+  for counted in $active_slugs; do project_count=$((project_count + 1)); done
+  echo "jobs_running=$running"
+  echo "jobs_queued=$queued"
+  echo "jobs_projects=$project_count"
+}
+
+cmd_probe() {
+  work=$1
+  mkdir -p "$work" 2> /dev/null
+  echo "os=$(uname -s)"
+  echo "arch=$(uname -m)"
+  echo "kernel=$(uname -r)"
+  case $(uname -s) in
+    Linux) probe_linux ;;
+    Darwin) probe_darwin ;;
+  esac
+  echo "disk_free_mb=$(kb_to_mb "$(df -Pk "$work" 2> /dev/null | awk 'NR == 2 { print $4 }')")"
+  if pq --version > "$bounded_out" 2> /dev/null; then
+    echo "pueue=$(awk '{ print $NF }' "$bounded_out")"
+  else
+    echo "pueue=missing"
+  fi
+  probe_jobs
+  probe_android
+  probe_ios
+  probe_docker
+  probe_playwright
+  rm -f "$bounded_out"
+}
+
+# ─────────────────────────── pueue ───────────────────────────
+
+# Start the daemon once when it does not answer, with its output away from the ssh channel (it would keep the call open).
+ensure_pueued() {
+  if pq status > /dev/null 2>&1; then
+    return 0
+  fi
+  "$(pueued_bin)" ${PUEUE_CONFIG:+-c "$PUEUE_CONFIG"} -d > /dev/null 2>&1 < /dev/null
+  local started=$SECONDS
+  while [ $((SECONDS - started)) -lt "$pueue_start_wait_sec" ]; do
+    pq status > /dev/null 2>&1 && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+# groups = "name=parallel,name=parallel"
+apply_groups() {
+  printf '%s\n' "$1" | tr ',' '\n' | while IFS= read -r pair; do
+    name=${pair%%=*}
+    parallel=${pair#*=}
+    [ -n "$name" ] || continue
+    [ "$name" = default ] || pq group add "$name" > /dev/null 2>&1
+    pq parallel -g "$name" "$parallel" > /dev/null 2>&1
+  done
+}
+
+# ─────────────────────────── prepare / prune ───────────────────────────
+
+cmd_prepare() {
+  set_paths "$1" "$2" "$3"
+  local groups=${4:-}
+  # Ids are 30 random bits, made on the caller's side: a clash would make two jobs share one folder.
+  if [ -e "$jd/meta.json" ] || [ -e "$jd/task-id" ]; then
+    die "job id already in use: $job"
+  fi
+  mkdir -p "$work/bin" "$tree" "$proj/stage" "$jobs_dir" "$stage" "$jd" || die "cannot create the layout under $work"
+  : > "$jd/log"
+  touch "$proj/used"
+  if ! ensure_pueued; then
+    die "Pueue daemon is not reachable and could not be started (check PUEUE_BIN / the pueue settings of this runner)"
+  fi
+  apply_groups "$groups"
+  prune_work "$work" "$slug"
+  echo "work=$(cd "$work" && pwd -P)"
+}
+
+# Remove: jobs older than the keep time (and their Pueue tasks), leftover stage dirs, project copies unused for long.
+prune_work() {
+  local work_dir=$1
+  local keep_slug=${2:-}
+  [ -d "$work_dir/p" ] || return 0
+  find "$work_dir/p" -mindepth 3 -maxdepth 3 -path '*/jobs/*' -type d -mtime +"$job_keep_days" 2> /dev/null | while IFS= read -r old_job; do
+    # A job that never got a Pueue task (its submit failed half-way) has no exit file either.
+    [ -f "$old_job/exit" ] || [ ! -f "$old_job/task-id" ] || continue
+    task=$(read_file "$old_job/task-id")
+    [ -n "$task" ] && pq remove "$task" > /dev/null 2>&1
+    rm -rf "$old_job"
+  done
+  find "$work_dir/p" -mindepth 3 -maxdepth 3 -path '*/stage/*' -type d -mtime +"$stage_keep_days" 2> /dev/null | while IFS= read -r old_stage; do
+    rm -rf "$old_stage"
+  done
+  # Lease state of a watcher that was killed hard (a live one rewrites its beat every few seconds, so its folder is never this old).
+  find "$work_dir/tmp" -mindepth 1 -maxdepth 1 -mtime +"$stage_keep_days" 2> /dev/null | while IFS= read -r old_lease; do
+    rm -rf "$old_lease"
+  done
+  find "$work_dir/p" -mindepth 2 -maxdepth 2 -name used -type f -mtime +"$copy_keep_days" 2> /dev/null | while IFS= read -r used_file; do
+    old_copy=$(dirname "$used_file")
+    [ "$(basename "$old_copy")" = "$keep_slug" ] && continue
+    [ -d "$old_copy/lock" ] && continue
+    rm -rf "$old_copy"
+  done
+}
+
+cmd_prune() {
+  prune_work "$1" ""
+}
+
+# ─────────────────────────── adding the job to Pueue ───────────────────────────
+
+# Quote one word for a shell (single quotes).
+quote_word() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+add_job() {
+  local group=$1
+  local script_path
+  script_path=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+  local command_line
+  command_line="exec bash $(quote_word "$script_path") job $(quote_word "$work") $(quote_word "$slug") $(quote_word "$job")"
+  local task
+  task=$(pq add --print-task-id -g "$group" -l "rr-$job" -w "$proj" -- "$command_line") || return 1
+  printf '%s\n' "$task" > "$jd/task-id"
+}
+
+cmd_submit() {
+  set_paths "$1" "$2" "$3"
+  add_job "${4:-default}" || die "pueue add failed (does the group \"${4:-default}\" exist on this runner?)"
+  echo queued
+}
+
+# ─────────────────────────── killing ───────────────────────────
+
+# Signal the whole process group of the job (the script, its command and everything the command started). Pueue runs a task as
+# `sh -c <command>` in a process group of its own, and the command line of add_job starts with `exec`, so the job script IS that
+# group's leader: a group-wide signal has no wrapper to end first (which made Pueue call the task done while the job still ran).
+# The group is read from the LIVE job process at the moment of use and signalled only while the job leads its own group: a stale id,
+# or a Pueue that stopped isolating its tasks, can never make this hit another group (pueued's, the caller's).
+signal_job_group() {
+  local job_pid group_id
+  job_pid=$(read_file "$jd/pid")
+  [ -n "$job_pid" ] && kill -0 "$job_pid" 2> /dev/null || return 1
+  group_id=$(ps -o pgid= -p "$job_pid" 2> /dev/null | tr -d ' ')
+  [ -n "$group_id" ] && [ "$group_id" = "$job_pid" ] || return 1
+  kill "-$1" -- "-$group_id" 2> /dev/null
+}
+
+# Stop a job: a queued one is removed, a running one gets SIGTERM (its whole group) and, after the grace time, Pueue's own kill of the
+# whole task tree.
+kill_job() {
+  local task
+  task=$(read_file "$jd/task-id")
+  [ -n "$task" ] || return 1
+  [ -f "$jd/exit" ] && return 0
+  touch "$jd/killed"
+  if [ ! -f "$jd/pid" ] && pq remove "$task" > /dev/null 2>&1; then
+    finish_removed_job
+    return 0
+  fi
+  signal_job_group TERM || pq kill "$task" > /dev/null 2>&1
+  local started=$SECONDS
+  while [ $((SECONDS - started)) -lt "$kill_grace_sec" ]; do
+    check_job_ended && return 0
+    sleep 0.2
+  done
+  hard_kill_job "$task"
+  sleep 1
+  return 0
+}
+
+# SIGKILL of the whole group; Pueue's own kill follows only so that its task list agrees. Without a verifiable group, Pueue's kill
+# is all there is.
+hard_kill_job() {
+  signal_job_group KILL || pq kill "$1" > /dev/null 2>&1
+  pq kill "$1" > /dev/null 2>&1
+}
+
+# A job that never started: its result is the kill, written the way a finished job writes it.
+finish_removed_job() {
+  rm -rf "$stage"
+  printf '%s\n' done > "$jd/phase"
+  printf '137\n' > "$jd/exit.tmp" && mv "$jd/exit.tmp" "$jd/exit"
+}
+
+# Ended = it wrote its exit file, or its process is gone.
+check_job_ended() {
+  [ -f "$jd/exit" ] && return 0
+  local pid
+  pid=$(read_file "$jd/pid")
+  [ -n "$pid" ] && ! kill -0 "$pid" 2> /dev/null && return 0
+  return 1
+}
+
+cmd_kill() {
+  set_paths "$1" "$2" "$3"
+  kill_job || die "no such job: $job"
+  echo killed
+}
+
+# ─────────────────────────── log streaming ───────────────────────────
+
+# Print what the log gained since $log_offset, and move the offset.
+drain_log() {
+  local size
+  size=$(wc -c < "$jd/log" 2> /dev/null | tr -d ' ')
+  [ -n "$size" ] || return 0
+  if [ "$size" -gt "$log_offset" ]; then
+    tail -c +"$((log_offset + 1))" "$jd/log" | head -c "$((size - log_offset))"
+    log_offset=$size
+  fi
+}
+
+# Stream the log until the file $jd/drain-stop appears, then print the rest. Runs as a background job.
+stream_log() {
+  log_offset=${1:-0}
+  while [ ! -f "$jd/drain-stop" ]; do
+    drain_log
+    sleep "$drain_interval_sec"
+  done
+  drain_log
+}
+
+# Stream the log of the task until Pueue reports it done.
+follow_until_done() {
+  rm -f "$jd/drain-stop"
+  stream_log "$1" &
+  local streamer_pid=$!
+  local task
+  task=$(read_file "$jd/task-id")
+  [ -n "$task" ] && pq wait "$task" > /dev/null 2>&1
+  touch "$jd/drain-stop"
+  wait "$streamer_pid" 2> /dev/null
+}
+
+# Where `follow` starts in the log: the beginning, the end, or the last N lines.
+resolve_follow_offset() {
+  local size
+  size=$(wc -c < "$jd/log" 2> /dev/null | tr -d ' ')
+  size=${size:-0}
+  case ${1:-start} in
+    end) echo "$size" ;;
+    tail:*)
+      local tail_bytes
+      tail_bytes=$(tail -n "${1#tail:}" "$jd/log" 2> /dev/null | wc -c | tr -d ' ')
+      echo $((size - tail_bytes))
+      ;;
+    *) echo 0 ;;
+  esac
+}
+
+cmd_follow() {
+  set_paths "$1" "$2" "$3"
+  local from_offset
+  from_offset=$(resolve_follow_offset "${4:-start}")
+  follow_until_done "$from_offset"
+}
+
+# After Pueue says a task is done, its own last file may still be a moment away: wait for the exit file, or for the job process to
+# be gone (killed with SIGKILL, it never writes one), at most five seconds.
+wait_for_exit_file() {
+  local started=$SECONDS
+  while [ ! -f "$jd/exit" ] && [ $((SECONDS - started)) -lt "$exit_file_wait_sec" ]; do
+    check_job_ended && return 0
+    sleep 0.2
+  done
+}
+
+cmd_wait() {
+  set_paths "$1" "$2" "$3"
+  local task
+  task=$(read_file "$jd/task-id")
+  [ -n "$task" ] || die "no such job: $job"
+  pq wait "$task" > /dev/null 2>&1
+  wait_for_exit_file
+  echo done
+}
+
+# The facts of a job, one key=value per line (parsed by jobState.ts).
+print_job_facts() {
+  echo "slug=$slug"
+  echo "exit=$(read_file "$jd/exit")"
+  echo "phase=$(read_file "$jd/phase")"
+  echo "task=$(read_file "$jd/task-id")"
+  echo "started=$(read_file "$jd/started-at")"
+  echo "finished=$(read_file "$jd/finished-at")"
+  [ -f "$jd/timeout" ] && echo "timeout=1" || echo "timeout=0"
+  [ -f "$jd/killed" ] && echo "killed=1" || echo "killed=0"
+  [ -f "$jd/pid" ] && echo "has_pid=1" || echo "has_pid=0"
+  [ -d "$jd/artifacts" ] && echo "artifacts=1" || echo "artifacts=0"
+  echo "failed_step=$(read_file "$jd/failed-step")"
+}
+
+cmd_result() {
+  set_paths "$1" "$2" "$3"
+  [ -d "$jd" ] || die "no such job: $job"
+  print_job_facts
+}
+
+cmd_meta() {
+  set_paths "$1" "$2" "$3"
+  cat "$jd/meta.json" 2> /dev/null || die "no such job: $job"
+}
+
+# The last N lines of a job's log (all of it when N is "all").
+cmd_tail() {
+  set_paths "$1" "$2" "$3"
+  if [ "${4:-all}" = all ]; then cat "$jd/log" 2> /dev/null; else tail -n "$4" "$jd/log" 2> /dev/null; fi
+}
+
+# ─────────────────────────── the lease ───────────────────────────
+
+# The caller writes one byte every few seconds ("h"), and "d" when it has everything it needs. EOF without "d", or no byte for the
+# lease time, means the caller is gone: the job is killed. A stock sshd never notices a half-open connection, so this is the only
+# thing that stops an orphaned job. The stream is the caller's, on fd 3 (a background job gets /dev/null as stdin, so the callers keep
+# theirs there). A reader process does plain blocking reads and records each byte's arrival time; this loop compares the clock with
+# it once a second — no `read -t`, whose exit status for a timeout is not the same in bash 3.2 (macOS) and bash 4+, and which would
+# make a quiet second look like a closed connection.
+watch_lease() {
+  local lease_sec=$1
+  lease_state_dir=
+  lease_reader_pid=
+  # The traps first: a command that ends at once gets the watcher a SIGTERM before it has done anything, and whatever it created by
+  # then must go with it. The name is made here, not by a command substitution, so there is no instant with a dir nobody knows of.
+  trap 'end_lease_watch' EXIT
+  trap 'exit 143' TERM
+  lease_state_dir="$work/tmp/lease.$$.$RANDOM"
+  mkdir -p "$lease_state_dir" || return 1
+  write_lease_beat
+  (
+    byte=
+    while IFS= read -r -n 1 byte; do
+      write_lease_beat
+      [ "$byte" = d ] && : > "$lease_state_dir/done"
+    done
+    : > "$lease_state_dir/eof"
+  ) <&3 &
+  lease_reader_pid=$!
+  local verdict=0
+  local last_beat
+  while :; do
+    if [ -f "$lease_state_dir/eof" ]; then
+      [ -f "$lease_state_dir/done" ] || verdict=1
+      break
+    fi
+    last_beat=$(cat "$lease_state_dir/beat" 2> /dev/null)
+    case $last_beat in
+      '' | *[!0-9]*) ;;
+      *) [ $(($(date +%s) - last_beat)) -ge "$lease_sec" ] && { verdict=1; break; } ;;
+    esac
+    sleep "$heartbeat_poll_sec"
+  done
+  end_lease_watch
+  return "$verdict"
+}
+
+# The time of the latest heartbeat, replaced atomically: a plain `> beat` truncates the file first, and a watcher that read it in
+# that instant got an empty string, whose arithmetic is a syntax error that ended the watcher without a verdict.
+write_lease_beat() {
+  date +%s > "$lease_state_dir/beat.new" && mv -f "$lease_state_dir/beat.new" "$lease_state_dir/beat"
+}
+
+end_lease_watch() {
+  [ -n "${lease_reader_pid:-}" ] && kill "$lease_reader_pid" > /dev/null 2>&1
+  [ -n "${lease_state_dir:-}" ] && rm -rf "$lease_state_dir"
+}
+
+ms_to_sec() {
+  awk -v ms="$1" 'BEGIN { s = int((ms + 999) / 1000); if (s < 2) s = 2; print s }'
+}
+
+cmd_lease() {
+  set_paths "$1" "$2" "$3"
+  local group=$4
+  local lease_sec
+  lease_sec=$(ms_to_sec "$5")
+  # A background job gets /dev/null as stdin unless job control is on: keep the caller's stream on fd 3 for the watcher.
+  exec 3<&0
+  add_job "$group" || die "pueue add failed (does the group \"$group\" exist on this runner?)"
+  rm -f "$jd/drain-stop"
+  stream_log 0 &
+  local streamer_pid=$!
+  (
+    watch_lease "$lease_sec" || kill_job
+  ) &
+  local watcher_pid=$!
+  local task
+  task=$(read_file "$jd/task-id")
+  pq wait "$task" > /dev/null 2>&1
+  kill "$watcher_pid" > /dev/null 2>&1
+  wait_for_exit_file
+  touch "$jd/drain-stop"
+  wait "$streamer_pid" 2> /dev/null
+}
+
+# ─────────────────────────── the job (the Pueue task) ───────────────────────────
+
+lock_held=0
+
+acquire_lock() {
+  local noticed=0
+  local holder_pid holder_job
+  while ! mkdir "$lock" 2> /dev/null; do
+    [ "$killed" -eq 1 ] && return 1
+    holder_pid=$(read_file "$lock/pid")
+    holder_job=$(read_file "$lock/job")
+    if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2> /dev/null; then
+      rm -rf "$lock"
+      continue
+    fi
+    if [ -n "$holder_job" ] && [ -f "$jobs_dir/$holder_job/exit" ]; then
+      rm -rf "$lock"
+      continue
+    fi
+    if [ -z "$holder_pid" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2> /dev/null)" ]; then
+      rm -rf "$lock"
+      continue
+    fi
+    if [ "$noticed" -eq 0 ]; then
+      say "waiting for job ${holder_job:-another job} of this project"
+      noticed=1
+    fi
+    nap 1
+  done
+  printf '%s\n' "$$" > "$lock/pid"
+  printf '%s\n' "$job" > "$lock/job"
+  lock_held=1
+  return 0
+}
+
+release_lock() {
+  [ "$lock_held" -eq 1 ] && rm -rf "$lock"
+  lock_held=0
+}
+
+remove_tree_file() {
+  check_relative_path "$1" || return 0
+  rm -f "$tree/$1"
+  local dir
+  dir=$(dirname "$1")
+  while [ "$dir" != "." ] && rmdir "$tree/$dir" 2> /dev/null; do
+    dir=$(dirname "$dir")
+  done
+}
+
+# The apply step: delete what the previous submit had and this one has not, copy the staged files over, keep this submit's list.
+sync_tree() {
+  mkdir -p "$tree"
+  if [ -f "$proj/manifest" ]; then
+    sort "$proj/manifest" > "$jd/manifest.old.sorted"
+    sort "$jd/manifest" > "$jd/manifest.new.sorted"
+    comm -23 "$jd/manifest.old.sorted" "$jd/manifest.new.sorted" | while IFS= read -r removed_file; do
+      remove_tree_file "$removed_file"
+    done
+  fi
+  # --modify-window=-1: compare the mtimes to the nanosecond too — a same-length edit within one second of the previous version is
+  # otherwise "unchanged" (rsync's quick check) and the copy would keep the old file.
+  rsync -a --modify-window=-1 --exclude=/.git "$stage/" "$tree/" || return 1
+  if [ -d "$stage/.git" ]; then
+    mkdir -p "$tree/.git"
+    rsync -a --modify-window=-1 --delete "$stage/.git/" "$tree/.git/" || return 1
+  fi
+  cp "$jd/manifest" "$proj/manifest"
+  rm -rf "$stage"
+}
+
+cmd_sync_tree() {
+  set_paths "$1" "$2" "$3"
+  sync_tree || die "apply failed"
+}
+
+# bash -c <command> in <directory>, with the job's -e variables, output into the log; sets step_code. Runs as a child so a
+# SIGTERM to the job (the `killed` flag) does not abandon it half-way.
+run_step() {
+  local directory=$1
+  local command_text=$2
+  (
+    cd "$directory" || exit 126
+    if [ -s "$jd/env" ]; then
+      while IFS= read -r env_line; do export "$env_line"; done < "$jd/env"
+    fi
+    exec bash -c "$command_text"
+  ) < /dev/null &
+  local step_pid=$!
+  # The notices bash prints when it reaps a signalled child ("Terminated") are not the job's output.
+  { wait "$step_pid"; } 2> /dev/null
+  step_code=$?
+  while kill -0 "$step_pid" 2> /dev/null; do
+    { wait "$step_pid"; } 2> /dev/null
+    step_code=$?
+  done
+}
+
+# A sleep that a group-wide SIGTERM does not end (and bash does not report as "Terminated").
+nap() {
+  ( trap '' TERM; exec sleep "$1" )
+}
+
+# The timeout: from the job's start, covering the lock wait, the install and the command. SIGTERM to the job's group, SIGKILL after the
+# grace time (a process that ignores SIGTERM). It polls once a second for the cancel file instead of sleeping the whole limit: a
+# sleeper that a group-wide SIGTERM (a kill) ends would look like an expired limit, and a finished job needs no process to reap.
+start_watchdog() {
+  local limit=$1
+  local task
+  task=$(read_file "$jd/task-id")
+  (
+    trap '' TERM
+    local started=$SECONDS
+    while [ $((SECONDS - started)) -lt "$limit" ]; do
+      [ -f "$jd/watchdog-cancel" ] && exit 0
+      nap 1
+    done
+    [ -f "$jd/watchdog-cancel" ] && exit 0
+    touch "$jd/timeout"
+    signal_job_group TERM || pq kill "$task" > /dev/null 2>&1
+    local grace_started=$SECONDS
+    while [ $((SECONDS - grace_started)) -lt "$kill_grace_sec" ]; do
+      [ -f "$jd/watchdog-cancel" ] && exit 0
+      nap 1
+    done
+    hard_kill_job "$task"
+  ) > /dev/null 2>&1 &
+}
+
+stop_watchdog() {
+  touch "$jd/watchdog-cancel"
+}
+
+# Files the command created or changed that match pull.ere (one extended regular expression per line), kept per job.
+collect_artifacts() {
+  [ -s "$jd/pull.ere" ] || return 0
+  [ -f "$jd/start-marker" ] || return 0
+  local patterns=()
+  local pattern
+  while IFS= read -r pattern; do
+    [ -n "$pattern" ] && patterns+=("$pattern")
+  done < "$jd/pull.ere"
+  [ "${#patterns[@]}" -gt 0 ] || return 0
+  local candidate relative
+  while IFS= read -r -d '' candidate; do
+    relative=${candidate#./}
+    for pattern in "${patterns[@]}"; do
+      if [[ $relative =~ $pattern ]]; then
+        mkdir -p "$jd/artifacts/$(dirname "$relative")" && cp -p "$tree/$relative" "$jd/artifacts/$relative"
+        break
+      fi
+    done
+  done < <(cd "$tree" && find . -name .git -prune -o -type f -newer "$jd/start-marker" -print0 2> /dev/null)
+}
+
+finish_job() {
+  local code=$1
+  if [ -f "$jd/timeout" ]; then
+    code=124
+    say "timed out after ${timeout_sec}s"
+  elif [ "$killed" -eq 1 ]; then
+    code=137
+    say "job killed"
+  fi
+  stop_watchdog
+  set_phase collecting
+  collect_artifacts
+  release_lock
+  rm -rf "$stage"
+  set_phase done
+  date +%s > "$jd/finished-at"
+  printf '%s\n' "$code" > "$jd/exit.tmp" && mv "$jd/exit.tmp" "$jd/exit"
+  exit "$code"
+}
+
+cmd_job() {
+  set_paths "$1" "$2" "$3"
+  exec >> "$jd/log" 2>&1
+  printf '%s\n' "$$" > "$jd/pid"
+  date +%s > "$jd/started-at"
+  set_phase starting
+  killed=0
+  trap 'killed=1' TERM INT HUP
+  # Pueue starts the task before the adder has written its id down.
+  local id_wait_started=$SECONDS
+  while [ ! -s "$jd/task-id" ] && [ $((SECONDS - id_wait_started)) -lt "$task_id_wait_sec" ]; do
+    sleep 0.1
+  done
+  timeout_sec=$(read_file "$jd/timeout-sec")
+  [ -n "$timeout_sec" ] || timeout_sec=$default_timeout_sec
+  start_watchdog "$timeout_sec"
+
+  set_phase waiting-lock
+  acquire_lock || finish_job 137
+
+  set_phase syncing
+  sync_tree || { say "applying the files failed"; finish_job 125; }
+
+  local subfolder
+  subfolder=$(read_file "$jd/subfolder")
+  check_relative_path "$subfolder" || { say "bad subfolder"; finish_job 125; }
+  [ "$killed" -eq 1 ] && finish_job 137
+
+  local install_command install_key
+  install_command=$(read_file "$jd/install-command")
+  install_key=$(read_file "$jd/install-key")
+  if [ -n "$install_command" ] && [ "$(read_file "$proj/deps.hash")" != "$install_key" ]; then
+    set_phase deps
+    say "installing dependencies: $install_command"
+    run_step "$tree" "$install_command"
+    if [ "$step_code" -ne 0 ]; then
+      rm -f "$proj/deps.hash"
+      echo deps > "$jd/failed-step"
+      say "the dependencies step failed with exit code $step_code"
+      finish_job 125
+    fi
+    printf '%s\n' "$install_key" > "$proj/deps.hash"
+  fi
+  [ "$killed" -eq 1 ] && finish_job 137
+
+  touch "$jd/start-marker"
+  set_phase running
+  run_step "$tree/$subfolder" "$(read_file "$jd/cmd")"
+  finish_job "$step_code"
+}
+
+# ─────────────────────────── exec ───────────────────────────
+
+cmd_exec() {
+  set_paths "$1" "$2" ""
+  local subfolder=$3
+  local lease_sec
+  lease_sec=$(ms_to_sec "$4")
+  shift 4
+  check_relative_path "$subfolder" || die "bad subfolder"
+  [ -d "$tree/$subfolder" ] || die "the runner has no copy of this project yet (run a command first)"
+  exec 3<&0
+  # Own process group, so the lease can stop the command and everything it started.
+  set -m
+  ( cd "$tree/$subfolder" && exec bash -c "$*" ) < /dev/null &
+  local exec_pid=$!
+  set +m
+  (
+    if ! watch_lease "$lease_sec"; then
+      kill -TERM -- "-$exec_pid" 2> /dev/null
+      local grace_started=$SECONDS
+      while kill -0 "$exec_pid" 2> /dev/null && [ $((SECONDS - grace_started)) -lt "$kill_grace_sec" ]; do
+        sleep 0.2
+      done
+      kill -KILL -- "-$exec_pid" 2> /dev/null
+    fi
+  ) &
+  local watcher_pid=$!
+  wait "$exec_pid"
+  local exec_code=$?
+  kill "$watcher_pid" > /dev/null 2>&1
+  exit "$exec_code"
+}
+
+# ─────────────────────────── jobs / pueue passthrough ───────────────────────────
+
+# One JSON object per job: {"id", "facts": "k=v;k=v", "meta": <meta.json>} — everything `ls` and `status` show, in one call.
+cmd_jobs() {
+  local work_dir=$1
+  local only_slug=${2:-}
+  local first=1
+  local meta job_dir
+  printf '['
+  for meta in "$work_dir"/p/${only_slug:-*}/jobs/*/meta.json; do
+    [ -f "$meta" ] || continue
+    job_dir=$(dirname "$meta")
+    set_paths "$work_dir" "$(basename "$(dirname "$(dirname "$job_dir")")")" "$(basename "$job_dir")"
+    [ "$first" -eq 1 ] || printf ','
+    first=0
+    printf '{"id":"%s","facts":"%s","meta":' "$job" "$(print_job_facts | tr '\n' ';')"
+    cat "$meta"
+    printf '}'
+  done
+  printf ']\n'
+}
+
+# The work dir as an absolute path (a `~/…` the caller configured is expanded by the shell before it gets here).
+cmd_workdir() {
+  mkdir -p "$1" && (cd "$1" && pwd -P)
+}
+
+cmd_pueue() {
+  shift
+  pq "$@"
+}
+
+# ─────────────────────────── dispatch ───────────────────────────
+
+main() {
+  local subcommand=${1:-}
+  [ $# -gt 0 ] && shift
+  case $subcommand in
+    probe) cmd_probe "$@" ;;
+    prepare) cmd_prepare "$@" ;;
+    lease) cmd_lease "$@" ;;
+    submit) cmd_submit "$@" ;;
+    job) cmd_job "$@" ;;
+    follow) cmd_follow "$@" ;;
+    wait) cmd_wait "$@" ;;
+    result) cmd_result "$@" ;;
+    meta) cmd_meta "$@" ;;
+    tail) cmd_tail "$@" ;;
+    kill) cmd_kill "$@" ;;
+    exec) cmd_exec "$@" ;;
+    pueue) cmd_pueue "$@" ;;
+    workdir) cmd_workdir "$@" ;;
+    jobs) cmd_jobs "$@" ;;
+    prune) cmd_prune "$@" ;;
+    sync-tree) cmd_sync_tree "$@" ;;
+    *) die "unknown subcommand: $subcommand" ;;
+  esac
+}
+
+# Run as a script it dispatches; sourced (the unit tests call the functions one by one) it only defines them.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
