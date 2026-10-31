@@ -46,6 +46,8 @@ function printUsage(): void {
       `                              --best prints the CLAUDE_CONFIG_DIR to launch under\n` +
       `                              (empty = default), --model <name>, --json,\n` +
       `                              --current <name> [--stopped-by-limit] for a resumed session\n` +
+      `  charness remote-run       Run a command (tests, builds, e2e) on a runner machine reached by ssh:\n` +
+      `                              \`remote-run [--bg] <command…>\`, \`remote-run runners\` (see docs/remote-run.md)\n` +
       `  charness --help, -h       Show this help\n` +
       `  charness --version, -v    Print the version\n` +
       `\n` +
@@ -66,6 +68,7 @@ function printUsage(): void {
  * Branches on `argv[2]`:
  *   - missing          → start the Telegram bot
  *   - `hot`            → hot-reload dev mode
+ *   - `remote-run`     → run a command on a runner (`remoteRun/`)
  *   - `-h | --help | help` → usage
  *   - `-v | --version | version` → print the package version
  *   - anything else → usage + exit 2
@@ -106,6 +109,14 @@ async function main(): Promise<void> {
   if (sub === 'claude-profiles') {
     const { runClaudeProfilesCli } = await import('./cli/claudeProfiles');
     process.exitCode = await runClaudeProfilesCli(process.argv.slice(3));
+    return;
+  }
+
+  // Run a command on a runner (ssh + rsync + Pueue); it loads no env file and no instance state, and lazily, so the bot's own start
+  // path stays as it was.
+  if (sub === 'remote-run') {
+    const { runRemoteRunCli } = await import('./remoteRun/remoteRunCli');
+    process.exitCode = await runRemoteRunCli(process.argv.slice(3));
     return;
   }
 

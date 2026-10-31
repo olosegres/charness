@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**Agents can now send heavy commands — test suites, builds, emulator runs — to another machine with `charness remote-run`, and get the output, the exit code and the result files back as if the command had run here.**
+Before, everything an agent ran landed on the one machine the bot lives on, so a long test suite or an emulator run could take most of its CPU and memory for an hour while other agents waited on it.
+Now you list machines you reach by ssh in `~/.config/charness/runners.json` (set up by hand: an account of its own, `rsync`, Pueue — see `docs/remote-run.md`), and an agent runs `charness remote-run yarn test` (or `--bg` plus `wait` for a long run): the project is synced there (tracked and untracked files, never what `.gitignore` names, never secret-looking files unless `.remote-run` says so), the command runs in a copy, its output streams back, and an interrupt, a timeout or a lost connection stops the whole remote job.
+`charness remote-run runners` shows each machine's CPU, memory, disk, load and what it can do (Android, iOS, Docker, Playwright); `ls`, `status`, `logs`, `wait`, `kill`, `fetch` and `exec` manage the jobs. Two runs of one project queue on the runner, each against the files as they were when it was started.
+Agents (Telegram topics and Jira issues alike) are told about it only while at least one runner is listed; without one nothing changes.
+
 **A message no longer gets lost when Telegram has closed the connection the bot was about to reuse — it is sent again, once, on a fresh connection.**
 Before, the bot kept its connections to Telegram open and reused them; when Telegram had closed an idle one a moment earlier (most often while the bot was starved of CPU), the next send failed with «socket hang up» and was dropped — a notice or a reply simply never appeared in the topic.
 Now a send that fails this way — at once, before Telegram has started to answer — is retried once on a new connection, the answer to a button tap and the edit of a picker included. It is not retried after a timeout, once Telegram has begun to answer, when the connection broke only after a while, or on a connection that was new anyway, and a file the agent sends is not retried this way (it keeps its own delivery rules). If Telegram did take the message and the connection broke before a single byte of its answer, the retry cannot tell that from a closed connection and could post the message twice; that is rare.

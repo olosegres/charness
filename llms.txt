@@ -10,6 +10,7 @@ Charness (formerly TelegramCode) turns Telegram into a terminal for agentic codi
 - [README](https://github.com/olosegres/charness#readme): what Charness is, use cases, quick start, FAQ and the feature map.
 - [Commands](https://github.com/olosegres/charness/blob/main/docs/commands.md): every command, one section each.
 - [Agent backends](https://github.com/olosegres/charness/blob/main/docs/backends.md): Claude Code and OpenCode backends, restart behaviour, the tools the bot injects into agents.
+- [Running heavy commands on another machine](https://github.com/olosegres/charness/blob/main/docs/remote-run.md): `charness remote-run` sends a test suite, a build or an emulator run to a runner reached by ssh; output, exit code and result files come back.
 - [Troubleshooting](https://github.com/olosegres/charness/blob/main/docs/troubleshooting.md): known problems and their fixes.
 - [npm package](https://www.npmjs.com/package/charness): install with `npm install -g charness` (Node 22.12+).
 - [DEVELOPMENT.md](https://github.com/olosegres/charness/blob/main/DEVELOPMENT.md): architecture and local development.

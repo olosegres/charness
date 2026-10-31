@@ -102,6 +102,22 @@ test('removed `bot` worker entry is an unknown command', () => {
   assert.match(stderr, /Usage:/);
 });
 
+test('remote-run is dispatched, loads no env file (a project\'s .env cannot repoint it), and says where runners.json belongs', () => {
+  // The CLI is run from project folders by agents: the `.env` of a project, read with override like the bot's, would repoint HOME.
+  fs.writeFileSync(path.join(tmpRoot, '.env'), `HOME=${path.join(tmpRoot, 'poisoned-home')}\nENV_FILE=${path.join(tmpRoot, 'poisoned.env')}\n`);
+  const runners = runCli(['remote-run', 'runners']);
+  assert.equal(runners.status, 125);
+  assert.ok(runners.stderr.includes(`${path.join(tmpRoot, '.config', 'charness', 'runners.json')} does not exist`), runners.stderr);
+  assert.ok(!runners.stderr.includes('poisoned'), 'the project .env was not read');
+  const help = runCli(['remote-run', '--help']);
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /^Usage:\n {2}charness remote-run /);
+  const bad = runCli(['remote-run', '--frob', 'x']);
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /remote-run: unknown option: --frob/);
+  assert.match(runCli(['--help']).stderr, /charness remote-run {7}Run a command/);
+});
+
 const hourMs = 3_600_000;
 /** An ISO instant `hours` from now — whole seconds, so it survives the ISO round trip of the report unchanged. */
 const inHours = (hours: number): string => new Date(Math.floor((Date.now() + hours * hourMs) / 1000) * 1000).toISOString();

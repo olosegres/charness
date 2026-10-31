@@ -382,6 +382,17 @@ entry:
 
 (create the log directory once: `mkdir -p ~/.local/state/charness`).
 
+### Runners for heavy commands (`remote-run`)
+
+A test suite, a build or an emulator run can take most of the machine the bot lives on. List other machines you reach by ssh in
+`~/.config/charness/runners.json` (one file per OS user, shared by every instance of that user) and agents can send such commands
+there with `charness remote-run`: output, exit code and declared result files come back as if the command had run locally. Without a
+runner listed nothing changes for anyone, and agents are not told of the command. Setting a runner up by hand (an account of its own,
+`rsync`, Pueue), the file's fields, `.remote-run`, every command and the exit codes: [docs/remote-run.md](docs/remote-run.md).
+
+A **Jira** agent reaches `charness` through the bot's `PATH`; when that `PATH` lacks it, map it in `jira.json` `agentBinaries`
+([Jira setup](#jira-setup)).
+
 ## Telegram setup
 
 Four steps: create a bot, (optionally) set up a group, launch from your projects folder, bind a topic to an agent.
