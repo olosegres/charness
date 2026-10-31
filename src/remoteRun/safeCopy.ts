@@ -1,0 +1,82 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { createPathMatcher } from './pathPatterns';
+
+/**
+ * @description Bring a job's result files into the project, from a temp folder the runner's files were rsynced into. The runner is not
+ * trusted to write into the main box: only REGULAR files whose project-relative path a `pull:` pattern names are copied; a symlink,
+ * a special file, a path no pattern names, or a destination that would pass through a symlink or over a directory of the project is
+ * refused and only counted. Nothing outside the project root can be reached: paths come from walking the temp folder, and every
+ * destination directory is checked component by component.
+ */
+
+export interface SafeCopyResult {
+  copied: string[];
+  /** Files seen in the fetched folder that were not copied (symlinks, special files, paths no pattern names, unsafe destinations). */
+  refusedCount: number;
+}
+
+const copiedFileModeMask = 0o777;
+
+function listFetchedEntries(directory: string, relativeDirectory: string, found: Array<{ relativePath: string; kind: 'file' | 'other' }>): void {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const relativePath = relativeDirectory === '' ? entry.name : path.posix.join(relativeDirectory, entry.name);
+    if (entry.isDirectory()) listFetchedEntries(path.join(directory, entry.name), relativePath, found);
+    else found.push({ relativePath, kind: entry.isFile() ? 'file' : 'other' });
+  }
+}
+
+/** Create the directories of `relativeDirectory` under `rootReal`, refusing a symlink or a non-directory on the way. `false` = unsafe. */
+function ensureSafeDirectory(rootReal: string, relativeDirectory: string): boolean {
+  let current = rootReal;
+  for (const part of relativeDirectory.split('/').filter((segment) => segment !== '')) {
+    current = path.join(current, part);
+    let stat: fs.Stats | null;
+    try {
+      stat = fs.lstatSync(current);
+    } catch {
+      stat = null;
+    }
+    if (stat === null) fs.mkdirSync(current);
+    else if (!stat.isDirectory()) return false;
+  }
+  return true;
+}
+
+/** @description Copy the files of `fetchedRoot` that `patterns` name into `projectRoot`, as the module comment says. */
+export function copyFetchedFiles(params: { fetchedRoot: string; projectRoot: string; patterns: readonly string[] }): SafeCopyResult {
+  const isNamed = createPathMatcher(params.patterns);
+  const rootReal = fs.realpathSync(params.projectRoot);
+  const entries: Array<{ relativePath: string; kind: 'file' | 'other' }> = [];
+  listFetchedEntries(params.fetchedRoot, '', entries);
+  const result: SafeCopyResult = { copied: [], refusedCount: 0 };
+  for (const entry of entries) {
+    const isInside = !entry.relativePath.split('/').includes('..') && !path.isAbsolute(entry.relativePath);
+    if (entry.kind !== 'file' || !isInside || !isNamed(entry.relativePath)) {
+      result.refusedCount += 1;
+      continue;
+    }
+    const destination = path.join(rootReal, entry.relativePath);
+    if (!ensureSafeDirectory(rootReal, path.posix.dirname(entry.relativePath) === '.' ? '' : path.posix.dirname(entry.relativePath))) {
+      result.refusedCount += 1;
+      continue;
+    }
+    let existing: fs.Stats | null;
+    try {
+      existing = fs.lstatSync(destination);
+    } catch {
+      existing = null;
+    }
+    if (existing !== null && !existing.isFile()) {
+      result.refusedCount += 1;
+      continue;
+    }
+    const source = path.join(params.fetchedRoot, entry.relativePath);
+    const temporary = `${destination}.remote-run-${process.pid}.tmp`;
+    fs.copyFileSync(source, temporary);
+    fs.chmodSync(temporary, fs.statSync(source).mode & copiedFileModeMask);
+    fs.renameSync(temporary, destination);
+    result.copied.push(entry.relativePath);
+  }
+  return result;
+}
