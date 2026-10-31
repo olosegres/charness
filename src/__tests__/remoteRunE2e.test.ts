@@ -54,6 +54,7 @@ import {
   type CliRun,
   type FlowProject,
 } from './remoteRunE2e/remoteRunFlowKit';
+import { listLayoutProcesses } from './remoteRunE2e/remoteRunFlowSweep';
 import { closeSshMaster } from '../remoteRun/ssh';
 
 const missingTools = getMissingTools();
@@ -185,6 +186,27 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       const echoed = await run(['echo', 'picked']);
       assert.equal(echoed.exitCode, 0, echoed.stderr);
       assert.match(echoed.stdout, /picked/);
+      writeRunnersJson(layout, [createRunnerEntry(layout)]);
+    });
+
+    it('a runner that accepts the connection and never answers: `runners` ends within its 20 s limit, shows it offline WITH its last snapshot, and leaves no ssh of it running', async () => {
+      const cacheDir = path.join(layout.cacheDir, 'charness', 'remote-run');
+      // Its snapshot, from when it was healthy: the healthy runner's, taken here so the case needs no other.
+      writeRunnersJson(layout, [createRunnerEntry(layout)]);
+      assert.equal((await run(['runners'])).exitCode, 0);
+      // The second key's sshd entry forces `sleep 600` in place of any command: the connection is made and nothing ever comes back.
+      // No shared connection (ControlPath=none), or the entry would ride on the master of the healthy one and never reach sshd.
+      const frozen = createRunnerEntry(layout, { name: 'frozen', sshOptions: [...getSshOptions(layout, { keyPath: layout.hangKeyPath }), '-o', 'ControlMaster=no', '-o', 'ControlPath=none'] });
+      writeRunnersJson(layout, [frozen, createRunnerEntry(layout)]);
+      fs.copyFileSync(path.join(cacheDir, `${runnerName}.probe.json`), path.join(cacheDir, 'frozen.probe.json'));
+      const startedAt = Date.now();
+      const result = await run(['runners'], { timeoutMs: 120_000 });
+      const elapsedMs = Date.now() - startedAt;
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.match(result.stdout, /^frozen — offline \(no answer within 20 s\) · last seen \d{4}-\d\d-\d\d \d\d:\d\d UTC — as it was then: /m);
+      assert.match(result.stdout, new RegExp(`^${runnerName} — online`, 'm'), 'the healthy runner is not held back');
+      assert.ok(elapsedMs < 45_000, `the process lived ${elapsedMs} ms: its ssh call outlived the view (its own limit is 60 s)`);
+      assert.deepEqual(listLayoutProcesses(layout.root).filter((candidate) => candidate.args.includes('hang_key')).map((candidate) => candidate.pid), [], 'no ssh of the frozen runner is left');
       writeRunnersJson(layout, [createRunnerEntry(layout)]);
     });
 

@@ -125,6 +125,8 @@ export interface SshRunParams {
   input?: string;
   /** The deadline; the ssh process is killed when it passes. */
   timeoutMs: number;
+  /** Ends the call from outside (a caller's own, shared deadline): the ssh process is killed and the result says it was cut off. */
+  signal?: AbortSignal;
 }
 
 /** @description Run one command on the runner and collect its output, with a deadline. */
@@ -134,21 +136,28 @@ export function runSshCommand(params: SshRunParams): Promise<SshRunResult> {
     let stdout = '';
     let stderr = '';
     let isTimedOut = false;
-    const timer = setTimeout(() => {
+    const cutOff = (): void => {
       isTimedOut = true;
       child.kill('SIGKILL');
-    }, params.timeoutMs);
+    };
+    const timer = setTimeout(cutOff, params.timeoutMs);
+    if (params.signal?.aborted === true) cutOff();
+    else params.signal?.addEventListener('abort', cutOff, { once: true });
+    const settle = (): void => {
+      clearTimeout(timer);
+      params.signal?.removeEventListener('abort', cutOff);
+    };
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => { stdout += chunk; });
     child.stderr.on('data', (chunk: string) => { stderr += chunk; });
     child.stdin.on('error', () => { /* the command ended before it read its input */ });
     child.on('error', (error) => {
-      clearTimeout(timer);
+      settle();
       resolve({ exitCode: sshFailureExitCode, stdout, stderr: `${stderr}${error.message}\n`, isTimedOut });
     });
     child.on('close', (exitCode) => {
-      clearTimeout(timer);
+      settle();
       resolve({ exitCode, stdout, stderr, isTimedOut });
     });
     child.stdin.end(params.input ?? '');

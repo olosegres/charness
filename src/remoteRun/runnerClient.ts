@@ -47,14 +47,17 @@ export interface RunnerClient {
   readonly cacheDir: string;
   /** The `-e` command of rsync for this runner. */
   readonly rsyncSshCommand: string;
-  /** Upload the script when the runner does not have this version; throws a {@link RunnerUnreachableError} when the runner cannot be reached. */
-  ensureScript: () => Promise<void>;
+  /**
+   * Upload the script when the runner does not have this version; throws a {@link RunnerUnreachableError} when the runner cannot be
+   * reached. `signal` ends the ssh calls it makes from outside (a shared deadline).
+   */
+  ensureScript: (signal?: AbortSignal) => Promise<void>;
   /** The runner's work dir as an absolute path (a configured `~/…` is resolved on the runner once). */
   getAbsoluteWorkDir: () => Promise<string>;
   /** One subcommand of the script; never throws for a non-zero exit (the caller reads it). */
-  call: (subcommand: string, args: readonly string[], options?: { input?: string; timeoutMs?: number }) => Promise<SshRunResult>;
+  call: (subcommand: string, args: readonly string[], options?: { input?: string; timeoutMs?: number; signal?: AbortSignal }) => Promise<SshRunResult>;
   /** The same, but a non-zero exit or a timeout is a {@link RemoteRunError} carrying the runner's own message. */
-  callOrThrow: (subcommand: string, args: readonly string[], options?: { input?: string; timeoutMs?: number }) => Promise<string>;
+  callOrThrow: (subcommand: string, args: readonly string[], options?: { input?: string; timeoutMs?: number; signal?: AbortSignal }) => Promise<string>;
   /** The long-lived form: a spawned ssh whose streams the caller handles. */
   stream: (subcommand: string, args: readonly string[]) => ReturnType<typeof spawnSshStream>;
 }
@@ -78,6 +81,7 @@ export function createRunnerClient(runner: RunnerConfig, cacheDir: string, scrip
       remoteCommand: buildRunnerScriptCommand({ runner, scriptName: script.name, subcommand, args }),
       input: options.input,
       timeoutMs: options.timeoutMs ?? shortCallTimeoutMs,
+      signal: options.signal,
     });
 
   let absoluteWorkDir: string | null = runner.workDir.startsWith('/') ? runner.workDir : null;
@@ -95,11 +99,11 @@ export function createRunnerClient(runner: RunnerConfig, cacheDir: string, scrip
       }
       return absoluteWorkDir;
     },
-    async ensureScript() {
-      const exists = await runSshCommand({ runner, cacheDir, remoteCommand: buildScriptExistsCommand(runner, script.name), timeoutMs: scriptUploadTimeoutMs });
+    async ensureScript(signal) {
+      const exists = await runSshCommand({ runner, cacheDir, remoteCommand: buildScriptExistsCommand(runner, script.name), timeoutMs: scriptUploadTimeoutMs, signal });
       if (exists.exitCode === 0) return;
       if (exists.exitCode === sshFailureExitCode || exists.exitCode === null) throw new RunnerUnreachableError(runner.name, describeSshFailure(exists));
-      const upload = await runSshCommand({ runner, cacheDir, remoteCommand: buildScriptUploadCommand(runner, script.name), input: script.text, timeoutMs: scriptUploadTimeoutMs });
+      const upload = await runSshCommand({ runner, cacheDir, remoteCommand: buildScriptUploadCommand(runner, script.name), input: script.text, timeoutMs: scriptUploadTimeoutMs, signal });
       if (upload.exitCode !== 0) throw new RemoteRunError(`could not put the runner script on "${runner.name}" (${runner.workDir}/bin) — ${describeSshFailure(upload)}`);
     },
     call,

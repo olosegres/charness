@@ -52,6 +52,8 @@ export interface FlowLayout {
   sshPort: number;
   sshUser: string;
   clientKeyPath: string;
+  /** A second key whose sshd entry forces a command that never ends: a runner that accepts the connection and never answers. */
+  hangKeyPath: string;
   knownHostsPath: string;
   pueueBin: string;
   pueueConfigPath: string;
@@ -166,6 +168,7 @@ export async function createFlowLayout(): Promise<FlowLayout> {
     sshPort: 0,
     sshUser: os.userInfo().username,
     clientKeyPath: path.join(root, 'keys', 'client_key'),
+    hangKeyPath: path.join(root, 'keys', 'hang_key'),
     knownHostsPath: path.join(root, 'keys', 'known_hosts'),
     pueueBin,
     pueueConfigPath: path.join(root, 'pueue', 'pueue.yml'),
@@ -179,7 +182,12 @@ export async function createFlowLayout(): Promise<FlowLayout> {
   // The runner's work dir is made by remote-run itself: nothing is prepared on the runner by hand.
   execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', path.join(root, 'sshd', 'host_key')]);
   execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', layout.clientKeyPath]);
-  fs.copyFileSync(`${layout.clientKeyPath}.pub`, path.join(root, 'sshd', 'authorized_keys'));
+  execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', layout.hangKeyPath]);
+  fs.writeFileSync(path.join(root, 'sshd', 'authorized_keys'), [
+    fs.readFileSync(`${layout.clientKeyPath}.pub`, 'utf8').trim(),
+    `command="exec sleep 600" ${fs.readFileSync(`${layout.hangKeyPath}.pub`, 'utf8').trim()}`,
+    '',
+  ].join('\n'));
   writePueueConfig(layout);
   await startSshd(layout);
   const hostKey = fs.readFileSync(path.join(root, 'sshd', 'host_key.pub'), 'utf8').trim().split(' ').slice(0, 2).join(' ');
@@ -188,10 +196,10 @@ export async function createFlowLayout(): Promise<FlowLayout> {
 }
 
 /** The ssh options of an entry of runners.json: the operator's own, as the plan has it (`-F /dev/null`, a key, a port, known hosts checked strictly). */
-export function getSshOptions(layout: FlowLayout, options: { port?: number; knownHostsPath?: string } = {}): string[] {
+export function getSshOptions(layout: FlowLayout, options: { port?: number; knownHostsPath?: string; keyPath?: string } = {}): string[] {
   return [
     '-F', '/dev/null',
-    '-i', layout.clientKeyPath,
+    '-i', options.keyPath ?? layout.clientKeyPath,
     '-p', `${options.port ?? layout.sshPort}`,
     '-o', 'IdentitiesOnly=yes',
     '-o', `UserKnownHostsFile=${options.knownHostsPath ?? layout.knownHostsPath}`,

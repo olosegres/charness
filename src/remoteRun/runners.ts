@@ -22,6 +22,7 @@ import type { RunnerConfig, RunnersConfig } from './runnersConfig';
 /** The whole probing of all runners ends by then (a dead host costs its ssh connect timeout, once, in parallel with the others). */
 export const probeAllTimeoutMs = 20 * 1000;
 const probeFileSuffix = '.probe.json';
+const millisecondsPerSecond = 1000;
 
 interface StoredProbe {
   seenAtMs: number;
@@ -48,39 +49,50 @@ function writeLastProbe(cacheDir: string, runnerName: string, text: string, seen
   fs.writeFileSync(getStoredProbePath(cacheDir, runnerName), JSON.stringify(stored), { mode: 0o600 });
 }
 
-/** @description Probe one runner: its report is `online` with what it said, or `offline` with why and the last snapshot. */
-export async function probeRunner(client: RunnerClient, nowMs: number = Date.now()): Promise<RunnerReport> {
+/**
+ * @description Probe one runner: its report is `online` with what it said, or `offline` with why and the last snapshot taken when it
+ * was seen. `signal` is the deadline of the whole view (see {@link probeRunners}): when it fires the ssh calls in flight are killed and the
+ * runner is reported offline — with the snapshot, like any other way of not answering.
+ */
+export async function probeRunner(client: RunnerClient, nowMs: number = Date.now(), signal?: AbortSignal, deadlineMs: number = probeAllTimeoutMs): Promise<RunnerReport> {
   const runner = client.runner;
   const groupLimits = { ...(runner.groups ?? {}) };
   const offline = (reason: string): RunnerReport => {
     const last = readLastProbe(client.cacheDir, runner.name);
-    return { name: runner.name, status: 'offline', reason, lastSeenAtMs: last?.seenAtMs ?? null, lastProbe: last?.probe ?? null, groupLimits };
+    return {
+      name: runner.name,
+      status: 'offline',
+      reason: signal?.aborted === true ? `no answer within ${Math.round(deadlineMs / millisecondsPerSecond)} s` : reason,
+      lastSeenAtMs: last?.seenAtMs ?? null,
+      lastProbe: last?.probe ?? null,
+      groupLimits,
+    };
   };
   try {
-    await client.ensureScript();
+    await client.ensureScript(signal);
   } catch (error) {
     if (error instanceof RunnerUnreachableError) return offline(error.reason);
     return offline(error instanceof Error ? error.message : 'could not prepare the runner');
   }
-  const result = await client.call('probe', [], { timeoutMs: probeAllTimeoutMs });
+  const result = await client.call('probe', [], { timeoutMs: deadlineMs, signal });
   if (result.exitCode !== 0) return offline(describeSshFailure(result));
   writeLastProbe(client.cacheDir, runner.name, result.stdout, nowMs);
   return { name: runner.name, status: 'online', probe: parseProbeOutput(result.stdout), groupLimits };
 }
 
-/** @description Probe every client at once; one that does not answer inside the bound is reported offline, the others are not held back. */
-export async function probeRunners(clients: readonly RunnerClient[], nowMs: number = Date.now()): Promise<RunnerReport[]> {
-  return Promise.all(clients.map(async (client) => {
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<RunnerReport>((resolve) => {
-      timer = setTimeout(() => resolve({ name: client.runner.name, status: 'offline', reason: 'no answer in time', lastSeenAtMs: null, lastProbe: null, groupLimits: { ...(client.runner.groups ?? {}) } }), probeAllTimeoutMs);
-    });
-    try {
-      return await Promise.race([probeRunner(client, nowMs), timeout]);
-    } finally {
-      clearTimeout(timer);
-    }
-  }));
+/**
+ * @description Probe every client at once under ONE deadline (20 s): a runner that has not answered by then is reported offline with its
+ * last snapshot and its ssh calls are killed, so the view ends on time and nothing keeps the process alive afterwards. The others are not
+ * held back by it.
+ */
+export async function probeRunners(clients: readonly RunnerClient[], nowMs: number = Date.now(), deadlineMs: number = probeAllTimeoutMs): Promise<RunnerReport[]> {
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), deadlineMs);
+  try {
+    return await Promise.all(clients.map((client) => probeRunner(client, nowMs, deadline.signal, deadlineMs)));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export type RunnerPick = { ok: true; runnerName: string } | { ok: false; message: string; exitCode: number };
