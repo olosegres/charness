@@ -256,15 +256,16 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
 
   describe('more of the files and groups', () => {
 
-    it('`.git` stays home unless `--with-git`', async () => {
+    it('`.git` stays home unless `--with-git` — and a copy that got one for a run does not keep it for the next', async () => {
       const without = await run(["sh -c 'test ! -e .git && echo no-git-there'"]);
       assert.equal(without.exitCode, 0, without.stderr);
       assert.match(without.stdout, /no-git-there/);
       const withGit = await run(['--with-git', 'git log --oneline']);
       assert.equal(withGit.exitCode, 0, withGit.stderr);
       assert.match(withGit.stdout, /init/, 'the history came with it');
-      const gone = await run(["sh -c 'git log --oneline | head -1'"]);
-      assert.equal(gone.exitCode, 0, gone.stderr);
+      const gone = await run(["sh -c 'test ! -e .git && echo no-git-again'"]);
+      assert.equal(gone.exitCode, 0, `the next plain run found a stale .git:\n${gone.stdout}${gone.stderr}`);
+      assert.match(gone.stdout, /no-git-again/);
     });
 
     it('a Pueue group the runner has is accepted', async () => {
@@ -537,6 +538,24 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.equal(waited.exitCode, 124, waited.stderr);
       assert.match(waited.stderr, /the job timed out and was killed/);
       await expectNothingLeft(decoyPid, childPid, 20_000);
+      assert.match(await readNewestJobState(), /timed out/);
+    });
+
+    it('the limit counts from the moment a job is queued: a `--bg` job that waited it out behind a busy group is over when it starts, and never runs', async () => {
+      const holder = readJobId(await run(['--bg', '--group', 'emulator', createGatedCommand('gate-qlimit', { before: 'echo started > ../qlimit-holder-started', after: 'true' })]));
+      await waitUntil('the holder to hold the emulator group', 60_000, () => fs.existsSync(path.join(project.runnerDirectory, 'qlimit-holder-started')));
+      const limitSeconds = 6;
+      const waiting = readJobId(await run(['--bg', '--group', 'emulator', '--timeout', `${limitSeconds}s`, "sh -c 'touch ../qlimit-waiting-ran'"]));
+      // Counted from the moment the runner queued it (staging takes a variable time), not from when this test asked.
+      const queuedAtFile = path.join(project.runnerDirectory, 'jobs', waiting, 'queued-at');
+      await waitUntil('the limit to run out while the job is still queued', 60_000, () => fs.existsSync(queuedAtFile) && Date.now() / 1000 - Number(fs.readFileSync(queuedAtFile, 'utf8').trim()) > limitSeconds + 2);
+      assert.match((await run(['status', waiting])).stdout, /— queued/, 'it is still waiting for the group');
+      openGate(project, 'gate-qlimit');
+      assert.equal((await run(['wait', holder])).exitCode, 0);
+      const waited = await run(['wait', waiting]);
+      assert.equal(waited.exitCode, 124, waited.stderr);
+      assert.match(waited.stderr, /the job timed out and was killed/);
+      assert.equal(fs.existsSync(path.join(project.runnerDirectory, 'qlimit-waiting-ran')), false, 'its command never ran');
       assert.match(await readNewestJobState(), /timed out/);
     });
 

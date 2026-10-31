@@ -40,7 +40,7 @@ job_keep_days=3
 copy_keep_days=30
 stage_keep_days=1
 drain_interval_sec=0.2
-probe_step_sec=8
+probe_step_sec=4
 exit_file_wait_sec=5
 task_id_wait_sec=5
 heartbeat_poll_sec=1
@@ -121,21 +121,6 @@ read_file() {
   cat "$1" 2>/dev/null
 }
 
-# run_bounded <seconds> <command…>: the command's output goes to $bounded_out, the status is returned; never longer than the limit.
-bounded_out=${TMPDIR:-/tmp}/rr-bounded.$$
-run_bounded() {
-  local limit=$1
-  shift
-  "$@" > "$bounded_out" 2> /dev/null < /dev/null &
-  local command_pid=$!
-  ( sleep "$limit"; kill -9 "$command_pid" ) > /dev/null 2>&1 &
-  local watchdog_pid=$!
-  wait "$command_pid" 2> /dev/null
-  local status=$?
-  kill "$watchdog_pid" > /dev/null 2>&1
-  return $status
-}
-
 # ─────────────────────────── probe ───────────────────────────
 
 kb_to_mb() {
@@ -207,40 +192,6 @@ probe_android() {
   fi
 }
 
-probe_ios() {
-  if [ "$(uname -s)" != Darwin ]; then
-    echo "cap_ios=no"
-    echo "cap_ios_detail=$(uname -s)"
-    return
-  fi
-  if run_bounded "$probe_step_sec" xcodebuild -version; then
-    local xcode_version simulators
-    xcode_version=$(head -n 1 "$bounded_out" | sed 's/^Xcode //')
-    simulators=0
-    if run_bounded "$probe_step_sec" xcrun simctl list devices available; then
-      simulators=$(grep -c '(Shutdown)\|(Booted)' "$bounded_out")
-    fi
-    echo "cap_ios=yes"
-    echo "cap_ios_detail=Xcode $xcode_version, $simulators simulators"
-  else
-    echo "cap_ios=no"
-    echo "cap_ios_detail=Xcode not found"
-  fi
-}
-
-probe_docker() {
-  if ! command -v docker > /dev/null 2>&1; then
-    echo "cap_docker=no"
-    echo "cap_docker_detail=docker not installed"
-  elif run_bounded "$probe_step_sec" docker info; then
-    echo "cap_docker=yes"
-    echo "cap_docker_detail="
-  else
-    echo "cap_docker=no"
-    echo "cap_docker_detail=daemon not reachable"
-  fi
-}
-
 probe_playwright() {
   local browsers_dir=${PLAYWRIGHT_BROWSERS_PATH:-}
   if [ -z "$browsers_dir" ]; then
@@ -296,6 +247,90 @@ probe_jobs() {
   echo "jobs_projects=$project_count"
 }
 
+# The probe's slow questions — Pueue, the disk, Xcode and its simulators, Docker — are asked at once, each bounded by probe_step_sec, so
+# a hung one costs that much in all, not that much each: the caller gives the whole probe 20 s, and a Mac with a slow simctl, a stalled
+# mount and a sleeping Docker would otherwise read as offline. One step: output in $probe_dir/<name>.out, its status in <name>.status
+# (137: it was cut off; no file: it never finished).
+start_probe_step() {
+  local name=$1
+  local limit=$2
+  shift 2
+  (
+    "$@" > "$probe_dir/$name.out" 2> /dev/null < /dev/null &
+    local command_pid=$!
+    ( sleep "$limit"; kill -9 "$command_pid" ) > /dev/null 2>&1 &
+    local watchdog_pid=$!
+    wait "$command_pid" 2> /dev/null
+    echo "$?" > "$probe_dir/$name.status"
+    kill "$watchdog_pid" > /dev/null 2>&1
+  ) &
+}
+
+probe_step_status() {
+  read_file "$probe_dir/$1.status"
+}
+
+probe_step_output() {
+  read_file "$probe_dir/$1.out"
+}
+
+probe_slow() {
+  mkdir -p "$work/tmp"
+  probe_dir="$work/tmp/probe.$$.$RANDOM"
+  mkdir -p "$probe_dir" || return 1
+  local is_darwin=0
+  [ "$(uname -s)" = Darwin ] && is_darwin=1
+  local has_docker=0
+  command -v docker > /dev/null 2>&1 && has_docker=1
+  start_probe_step pueue "$probe_step_sec" "${PUEUE_BIN:-pueue}" ${PUEUE_CONFIG:+-c "$PUEUE_CONFIG"} --version
+  start_probe_step disk "$probe_step_sec" df -Pk "$work"
+  if [ "$is_darwin" -eq 1 ]; then
+    start_probe_step xcode "$probe_step_sec" xcodebuild -version
+    start_probe_step simctl "$probe_step_sec" xcrun simctl list devices available
+  fi
+  [ "$has_docker" -eq 1 ] && start_probe_step docker "$probe_step_sec" docker info
+  wait
+
+  echo "disk_free_mb=$(kb_to_mb "$(probe_step_output disk | awk 'NR == 2 { print $4 }')")"
+  if [ "$(probe_step_status pueue)" = 0 ]; then
+    echo "pueue=$(probe_step_output pueue | awk '{ print $NF }')"
+  else
+    echo "pueue=missing"
+  fi
+  if [ "$is_darwin" -eq 0 ]; then
+    echo "cap_ios=no"
+    echo "cap_ios_detail=$(uname -s)"
+  elif [ "$(probe_step_status xcode)" = 0 ]; then
+    local xcode_version
+    xcode_version=$(probe_step_output xcode | head -n 1 | sed 's/^Xcode //')
+    echo "cap_ios=yes"
+    if [ "$(probe_step_status simctl)" = 0 ]; then
+      echo "cap_ios_detail=Xcode $xcode_version, $(probe_step_output simctl | grep -c '(Shutdown)\|(Booted)') simulators"
+    else
+      # A slow simctl is no reason to say there is no Xcode, nor to invent a simulator count.
+      echo "cap_ios_detail=Xcode $xcode_version"
+    fi
+  else
+    echo "cap_ios=no"
+    if [ "$(probe_step_status xcode)" = 137 ] || [ -z "$(probe_step_status xcode)" ]; then
+      echo "cap_ios_detail=Xcode did not answer in time"
+    else
+      echo "cap_ios_detail=Xcode not found"
+    fi
+  fi
+  if [ "$has_docker" -eq 0 ]; then
+    echo "cap_docker=no"
+    echo "cap_docker_detail=docker not installed"
+  elif [ "$(probe_step_status docker)" = 0 ]; then
+    echo "cap_docker=yes"
+    echo "cap_docker_detail="
+  else
+    echo "cap_docker=no"
+    echo "cap_docker_detail=daemon not reachable"
+  fi
+  rm -rf "$probe_dir"
+}
+
 cmd_probe() {
   work=$1
   mkdir -p "$work" 2> /dev/null
@@ -306,18 +341,10 @@ cmd_probe() {
     Linux) probe_linux ;;
     Darwin) probe_darwin ;;
   esac
-  echo "disk_free_mb=$(kb_to_mb "$(df -Pk "$work" 2> /dev/null | awk 'NR == 2 { print $4 }')")"
-  if pq --version > "$bounded_out" 2> /dev/null; then
-    echo "pueue=$(awk '{ print $NF }' "$bounded_out")"
-  else
-    echo "pueue=missing"
-  fi
+  probe_slow
   probe_jobs
   probe_android
-  probe_ios
-  probe_docker
   probe_playwright
-  rm -f "$bounded_out"
 }
 
 # ─────────────────────────── pueue ───────────────────────────
@@ -380,6 +407,9 @@ prune_work() {
     rm -rf "$old_job"
   done
   find "$work_dir/p" -mindepth 3 -maxdepth 3 -path '*/stage/*' -type d -mtime +"$stage_keep_days" 2> /dev/null | while IFS= read -r old_stage; do
+    # A job that is queued in Pueue (a task, no exit yet) has not applied its stage: behind a busy group it can wait for days.
+    queued_job_dir="$(dirname "$(dirname "$old_stage")")/jobs/$(basename "$old_stage")"
+    [ -f "$queued_job_dir/task-id" ] && [ ! -f "$queued_job_dir/exit" ] && continue
     rm -rf "$old_stage"
   done
   # Lease state of a watcher that was killed hard (a live one rewrites its beat every few seconds, so its folder is never this old).
@@ -412,6 +442,9 @@ add_job() {
   local command_line
   command_line="exec bash $(quote_word "$script_path") job $(quote_word "$work") $(quote_word "$slug") $(quote_word "$job")"
   local task
+  # The job's time limit counts from here (a foreground run's own timer does too): a job that waited its whole limit in the queue is
+  # over when it starts (cmd_job), not given the limit again.
+  date +%s > "$jd/queued-at"
   task=$(pq add --print-task-id -g "$group" -l "rr-$job" -w "$proj" -- "$command_line") || return 1
   printf '%s\n' "$task" > "$jd/task-id"
 }
@@ -602,12 +635,13 @@ cmd_tail() {
 
 # ─────────────────────────── the lease ───────────────────────────
 
-# The caller writes one byte every few seconds ("h"), and "d" when it has everything it needs. EOF without "d", or no byte for the
-# lease time, means the caller is gone: the job is killed. A stock sshd never notices a half-open connection, so this is the only
-# thing that stops an orphaned job. The stream is the caller's, on fd 3 (a background job gets /dev/null as stdin, so the callers keep
-# theirs there). A reader process does plain blocking reads and records each byte's arrival time; this loop compares the clock with
-# it once a second — no `read -t`, whose exit status for a timeout is not the same in bash 3.2 (macOS) and bash 4+, and which would
-# make a quiet second look like a closed connection.
+# The caller writes one byte every few seconds. No byte for the lease time, or the end of its stream, means the caller is gone: the job
+# is killed. A caller that finishes normally has no use for the lease any more because the job it guarded is over (the lease script
+# stops its watcher when the job ends), and one that wants the job stopped says so with `kill` (an interrupted `exec` ends its stream on purpose, to have its command stopped).
+# A stock sshd never notices a half-open connection, so this is the only thing that stops an orphaned job. The stream is the caller's,
+# on fd 3 (a background job gets /dev/null as stdin, so the callers keep theirs there). A reader process does plain blocking reads and
+# records each byte's arrival time; this loop compares the clock with it once a second — no `read -t`, whose exit status for a timeout
+# is not the same in bash 3.2 (macOS) and bash 4+, and which would make a quiet second look like a closed connection.
 watch_lease() {
   local lease_sec=$1
   lease_state_dir=
@@ -623,7 +657,6 @@ watch_lease() {
     byte=
     while IFS= read -r -n 1 byte; do
       write_lease_beat
-      [ "$byte" = d ] && : > "$lease_state_dir/done"
     done
     : > "$lease_state_dir/eof"
   ) <&3 &
@@ -632,7 +665,7 @@ watch_lease() {
   local last_beat
   while :; do
     if [ -f "$lease_state_dir/eof" ]; then
-      [ -f "$lease_state_dir/done" ] || verdict=1
+      verdict=1
       break
     fi
     last_beat=$(cat "$lease_state_dir/beat" 2> /dev/null)
@@ -751,6 +784,9 @@ sync_tree() {
   if [ -d "$stage/.git" ]; then
     mkdir -p "$tree/.git"
     rsync -a --modify-window=-1 --delete "$stage/.git/" "$tree/.git/" || return 1
+  else
+    # `.git` only with --with-git: a copy that got one from an earlier run must not keep serving its stale history.
+    rm -rf "$tree/.git"
   fi
   cp "$jd/manifest" "$proj/manifest"
   rm -rf "$stage"
@@ -875,7 +911,19 @@ cmd_job() {
   done
   timeout_sec=$(read_file "$jd/timeout-sec")
   [ -n "$timeout_sec" ] || timeout_sec=$default_timeout_sec
-  start_watchdog "$timeout_sec"
+  local limit_sec=$timeout_sec
+  local queued_at
+  queued_at=$(read_file "$jd/queued-at")
+  case $queued_at in
+    '' | *[!0-9]*) ;;
+    *) limit_sec=$((timeout_sec - ($(date +%s) - queued_at))) ;;
+  esac
+  if [ "$limit_sec" -le 0 ]; then
+    touch "$jd/timeout"
+    say "its time limit ran out while it was queued"
+    finish_job 124
+  fi
+  start_watchdog "$limit_sec"
 
   set_phase waiting-lock
   acquire_lock || finish_job 137

@@ -219,6 +219,14 @@ describe('the apply step (sync-tree)', () => {
     assert.equal(fs.readFileSync(path.join(paths.tree, 'dir'), 'utf8'), 'now a file');
   });
 
+  it('a stage without .git removes the .git an earlier --with-git run left in the copy: .git only with --with-git', { skip: rsyncSkip }, () => {
+    const paths = getPaths();
+    prepareJob({ oldManifest: ['a.txt'], newManifest: ['a.txt'], treeFiles: { 'a.txt': 'a', '.git/HEAD': 'old head', '.git/refs/heads/main': 'x' }, stageFiles: { 'a.txt': 'a' } });
+    assert.equal(runScript(['sync-tree', workDir, slug, jobId]).status, 0);
+    assert.equal(fs.existsSync(path.join(paths.tree, '.git')), false, 'a plain run does not run against a stale history');
+    assert.equal(fs.readFileSync(path.join(paths.tree, 'a.txt'), 'utf8'), 'a');
+  });
+
   it('the first submit (no old manifest) just copies', { skip: rsyncSkip }, () => {
     const paths = getPaths();
     const manifestPath = path.join(paths.project, 'manifest');
@@ -365,7 +373,7 @@ describe('the lease (through `exec`, which uses the same watcher as a foreground
     assert.deepEqual(listLeaseState(), [], 'the lease state dir is removed');
   });
 
-  it('a caller whose stream ends without saying "done" is gone: the command and what it started are killed at once', async () => {
+  it('a caller whose stream ends is gone: the command and what it started are killed at once', async () => {
     const pidFile = path.join(workRoot, 'ended.pid');
     const run = startLeasedRun(`sh -c 'echo $$ > ${pidFile}; sleep 60 & wait'`);
     const stopBeating = startBeating(run, 300);
@@ -427,14 +435,159 @@ describe('the lease (through `exec`, which uses the same watcher as a foreground
     assert.deepEqual(listLeaseState(), []);
   });
 
-  it('"d" then the end of the stream is a goodbye, not a death: the command is left to finish', async () => {
-    const run = startLeasedRun('sleep 2; echo finished-after-goodbye');
-    run.write('h');
-    run.write('d');
-    run.endStream();
-    const result = await run.finished;
-    assert.equal(result.code, 0);
-    assert.match(result.stdout, /finished-after-goodbye/);
+});
+
+describe('prune keeps what a queued job still needs', () => {
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  function writeStage(id: string, jobFiles: string[]): string {
+    const stageDir = path.join(workDir, 'p', slug, 'stage', id);
+    writeFile(stageDir, 'a.txt');
+    const when = new Date(Date.now() - 2 * dayMs);
+    fs.utimesSync(stageDir, when, when);
+    for (const file of jobFiles) writeFile(path.join(workDir, 'p', slug, 'jobs', id), file, '1\n');
+    return stageDir;
+  }
+
+  it('an old stage folder of a job that waits in Pueue (a task, no exit yet) is never removed — behind a busy group it can wait for days — while the stage of a finished or never-submitted job goes', () => {
+    const queued = writeStage('box1-queued', ['task-id']);
+    const running = writeStage('box1-runnin', ['task-id', 'pid']);
+    const finished = writeStage('box1-finish', ['task-id', 'exit']);
+    const neverSubmitted = writeStage('box1-nevsub', ['meta.json']);
+    assert.equal(runScript(['prune', workDir]).status, 0);
+    assert.equal(fs.existsSync(queued), true, 'a queued job keeps its stage');
+    assert.equal(fs.existsSync(running), true);
+    assert.equal(fs.existsSync(finished), false);
+    assert.equal(fs.existsSync(neverSubmitted), false);
+  });
+});
+
+describe('the time limit counts from the moment the job was queued', () => {
+  const pollMs = 100;
+
+  /** A job folder as `prepare` + `submit` leave it, ready for `runner.sh job` to run directly (as Pueue would). */
+  function prepareJobToRun(options: { command: string; timeoutSec: number; queuedSecondsAgo: number }): { jobDir: string; ran: string } {
+    const paths = getPaths();
+    const ran = path.join(workRoot, 'command-ran');
+    fs.mkdirSync(paths.stage, { recursive: true });
+    writeFile(paths.stage, 'a.txt');
+    fs.mkdirSync(paths.jobDir, { recursive: true });
+    writeFile(paths.jobDir, 'manifest', 'a.txt\n');
+    writeFile(paths.jobDir, 'subfolder', '');
+    writeFile(paths.jobDir, 'cmd', options.command.replace('{ran}', ran));
+    writeFile(paths.jobDir, 'timeout-sec', `${options.timeoutSec}`);
+    writeFile(paths.jobDir, 'task-id', '1\n');
+    writeFile(paths.jobDir, 'queued-at', `${Math.floor(Date.now() / 1000) - options.queuedSecondsAgo}\n`);
+    return { jobDir: paths.jobDir, ran };
+  }
+
+  /** `runner.sh job` as Pueue starts it: a process group of its own. Resolves with the exit file's content and the time it took. */
+  async function runJobUntilItEnds(jobDir: string, giveUpMs: number): Promise<{ exit: string; elapsedMs: number }> {
+    const startedAt = Date.now();
+    const child = spawn('bash', [scriptPath, 'job', workDir, slug, jobId], { detached: true, stdio: 'ignore', env: { ...process.env, PUEUE_BIN: '/nonexistent/pueue' } });
+    try {
+      while (Date.now() - startedAt < giveUpMs) {
+        if (fs.existsSync(path.join(jobDir, 'exit'))) return { exit: fs.readFileSync(path.join(jobDir, 'exit'), 'utf8').trim(), elapsedMs: Date.now() - startedAt };
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+      }
+      return { exit: 'still running', elapsedMs: Date.now() - startedAt };
+    } finally {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          /* ended */
+        }
+      }
+    }
+  }
+
+  it('a job that waited its whole limit in the queue is over when it starts: 124 at once, its command never runs', async () => {
+    const { jobDir, ran } = prepareJobToRun({ command: 'touch {ran}', timeoutSec: 60, queuedSecondsAgo: 120 });
+    const result = await runJobUntilItEnds(jobDir, 30_000);
+    assert.equal(result.exit, '124');
+    assert.equal(fs.existsSync(ran), false, 'the command was not started');
+    assert.match(fs.readFileSync(path.join(jobDir, 'log'), 'utf8'), /remote-run: its time limit ran out while it was queued/);
+    assert.equal(fs.existsSync(path.join(jobDir, 'timeout')), true);
+  });
+
+  it('a job that waited part of its limit gets the rest, not the whole limit again', { skip: rsyncSkip }, async () => {
+    const { jobDir } = prepareJobToRun({ command: 'sleep 120', timeoutSec: 40, queuedSecondsAgo: 36 });
+    const result = await runJobUntilItEnds(jobDir, 25_000);
+    assert.equal(result.exit, '124', 'cut off after the rest of the limit (about 4 s), not after another 40 s');
+    assert.ok(result.elapsedMs < 25_000, `${result.elapsedMs} ms`);
+  });
+});
+
+describe('the probe fits its 20 s however many of its questions hang', () => {
+  const stepLimitSec = 4;
+  let fakeBin = '';
+
+  function writeFake(name: string, body: string): void {
+    const target = path.join(fakeBin, name);
+    fs.writeFileSync(target, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  }
+
+  /** `probe_slow` of a Mac whose tools are the fakes in `fakeBin`, run as a sourced function; returns its lines and how long it took. */
+  function probeSlowOfAMac(): { lines: Record<string, string>; elapsedSec: number } {
+    const result = spawnSync('bash', ['-c', `source ${scriptPath}; uname() { echo Darwin; }; work=${workDir}; start=$SECONDS; probe_slow; echo "elapsed=$((SECONDS - start))"`], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}`, PUEUE_BIN: path.join(fakeBin, 'pueue') },
+      timeout: 60_000,
+    });
+    const lines: Record<string, string> = {};
+    for (const line of result.stdout.split('\n')) {
+      const separator = line.indexOf('=');
+      if (separator > 0) lines[line.slice(0, separator)] = line.slice(separator + 1);
+    }
+    return { lines, elapsedSec: Number(lines.elapsed) };
+  }
+
+  beforeEach(() => {
+    fakeBin = path.join(workRoot, 'fake-bin');
+    fs.mkdirSync(fakeBin);
+  });
+
+  it('Xcode, the simulators, Docker and Pueue all hanging cost one step limit in all — not one each — and say so, instead of "not found"', () => {
+    for (const hanging of ['xcodebuild', 'xcrun', 'docker', 'pueue']) writeFake(hanging, 'exec sleep 120');
+    const { lines, elapsedSec } = probeSlowOfAMac();
+    assert.ok(elapsedSec <= stepLimitSec + 3, `${elapsedSec} s: the questions were asked one after the other (four of them would take ${4 * stepLimitSec} s)`);
+    assert.equal(lines.cap_ios, 'no');
+    assert.equal(lines.cap_ios_detail, 'Xcode did not answer in time');
+    assert.equal(lines.cap_docker, 'no');
+    assert.equal(lines.pueue, 'missing');
+    assert.ok(Number(lines.disk_free_mb) > 0, 'the answers that did come are reported');
+  });
+
+  it('a slow simctl does not turn a working Xcode into "no Xcode", nor invent a simulator count', () => {
+    writeFake('xcodebuild', 'echo "Xcode 16.2"; echo "Build version 16C5032a"');
+    writeFake('xcrun', 'exec sleep 120');
+    writeFake('pueue', 'echo "pueue 4.0.4"');
+    const { lines, elapsedSec } = probeSlowOfAMac();
+    assert.ok(elapsedSec <= stepLimitSec + 3, `${elapsedSec} s`);
+    assert.equal(lines.cap_ios, 'yes');
+    assert.equal(lines.cap_ios_detail, 'Xcode 16.2');
+    assert.equal(lines.pueue, '4.0.4');
+  });
+
+  it('everything answering: the Xcode version with the simulators it lists, Docker up, Pueue\'s version', () => {
+    writeFake('xcodebuild', 'echo "Xcode 16.2"');
+    writeFake('xcrun', 'printf "    iPhone 16 (AAAA) (Shutdown)\\n    iPhone 16 Pro (BBBB) (Booted)\\n"');
+    writeFake('docker', 'echo ok');
+    writeFake('pueue', 'echo "pueue 4.0.4"');
+    const { lines, elapsedSec } = probeSlowOfAMac();
+    assert.ok(elapsedSec <= 3, `${elapsedSec} s`);
+    assert.equal(lines.cap_ios, 'yes');
+    assert.equal(lines.cap_ios_detail, 'Xcode 16.2, 2 simulators');
+    assert.equal(lines.cap_docker, 'yes');
+  });
+
+  it('an Xcode that is not there is "not found" (not "did not answer"), and the probe leaves no scratch state behind', () => {
+    writeFake('xcodebuild', 'exit 127');
+    const { lines } = probeSlowOfAMac();
+    assert.equal(lines.cap_ios, 'no');
+    assert.equal(lines.cap_ios_detail, 'Xcode not found');
+    assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), [], 'the probe\'s scratch folder is removed');
   });
 });
 

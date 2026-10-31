@@ -112,7 +112,8 @@ and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn 
   `logs` its output (`-f` follows it), `kill` stops it, `fetch` brings its result files back again.
 - **`exec`**: a one-off command in the runner's copy as the last job left it, without syncing (`ls build/`, `adb logcat -d`). Not
   for editing. Killed like a foreground job.
-- **`runners`**: one short block per runner, all probed at once (at most 20 s):
+- **`runners`**: one short block per runner, all probed at once (at most 20 s; a runner that does not answer in time is shown offline
+  with its last snapshot):
 
   ```
   box1 — online · Ubuntu 24.04 (Linux 6.8, x86_64)
@@ -126,8 +127,9 @@ and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn 
   An offline runner shows its last snapshot. `--needs android|ios|docker|playwright` picks the first runner (in file order) that
   answers and has that capability; `--runner <name>` picks one. None fits → exit 125 with this view and why.
 
-`--timeout` (default 3 h, at most 7 days; `90m`, `3h`, `1h30m`, `600` seconds) applies to both modes: a job that runs past it is killed
-and the exit code is 124. `-e NAME=VALUE` passes one environment variable explicitly; **no** variable of the main machine reaches the
+`--timeout` (default 3 h, at most 7 days; `90m`, `3h`, `1h30m`, `600` seconds) applies to both modes and counts from the moment the job is
+queued on the runner: a job that runs past it is killed and the exit code is 124, and a `--bg` job that waited its whole limit behind a busy
+group is over the moment it starts (124) without running its command. `-e NAME=VALUE` passes one environment variable explicitly; **no** variable of the main machine reaches the
 runner otherwise.
 
 ### Exit codes
@@ -143,7 +145,7 @@ The project is the git working tree the command runs in (anything else is refuse
 
 - **Sent**: tracked and untracked files that `.gitignore` does not name, submodules included, deletions mirrored. Files the runner
   keeps for itself (`node_modules`, `build`, `Pods`, caches — everything ignored) are never touched. `.git` is not sent unless
-  `--with-git`.
+  `--with-git`, and a copy that got one for a run does not keep it for the next plain run.
 - **Never sent** unless `.remote-run` opts them in with `send:`: secret-looking files — `.env`, `.env.*` (except `.env.example`,
   `.env.sample`, `.env.template`), `*.pem`, `*.p12`, `*.key`, `.npmrc`. `remote-run` says which ones it held back. A file name with a
   newline is refused (named); drop it with `exclude:`.

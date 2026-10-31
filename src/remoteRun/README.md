@@ -49,12 +49,27 @@ check skips a same-length edit made within a second). The job (`runner.sh job`) 
 command (`bash -c`, `-e` variables, own timeout watchdog), copies the files that match `pull.ere` and are newer than the start marker into
 `jobs/<job>/artifacts/`, releases the lock. Two jobs of one project therefore queue and each runs the tree as it was when IT was submitted.
 
+**Time limit** (`--timeout`, default 3 h, both modes) counts from the moment the job is queued (`queued-at`, written when it is handed to Pueue):
+a foreground run's timer starts there, and the job script starts its watchdog with what is left — a job that waited its whole limit behind a busy
+group is over (124) the moment it starts, its command never runs.
+
+**`.git` only with `--with-git`.** The stage carries a `.git` only then; applying a stage that has none removes the `.git` an earlier
+`--with-git` run left in the copy.
+
+**Probe.** `runners` gives the whole probe 20 s. Its slow questions (Pueue, the disk, Xcode, the simulators, Docker) are asked at once, each
+bounded by 4 s, so a hung one costs 4 s in all; an Xcode that does not answer is «did not answer in time», not «not found», and a slow
+simctl keeps the Xcode version without inventing a simulator count.
+
+**Prune** (on every submit) removes jobs older than 3 days that ended (or never got a task), stage folders older than a day **unless their job is
+still queued** (a job can wait behind a busy group for days), lease/probe scratch state and project copies unused for 30 days.
+
 **Job state** is the job's own files first (`exit` is authoritative); Pueue's task list (label `rr-<id>`) only when there is no exit file
 (a job killed hard). `pueue wait` exits 0 for a failed task: Pueue's result is never used as a code.
 
 **Lease.** A foreground run (and `exec`) runs `runner.sh lease`/`exec` over ssh, which itself adds the job to Pueue and reads a heartbeat byte
 the CLI writes every `lease/9`. No byte for the lease (45 s; the test seam `CHARNESS_TEST_TIMINGS` `remoteRunLeaseMs` may only shorten it, at
-least 3 s), or the end of the stream without a `d` byte → the runner kills the job. A stock sshd (`ClientAliveInterval 0`) never notices a half-open
+least 3 s), or the end of the stream → the runner kills the job (a caller that finishes normally needs no lease: the job it guarded is over and
+the lease script stops its watcher; an interrupted `exec` ends its stream on purpose to have its command stopped). A stock sshd (`ClientAliveInterval 0`) never notices a half-open
 connection; this is what ends an orphaned job. SIGINT/SIGTERM/SIGHUP locally kill the job first (SIGTERM to its process group, SIGKILL after 10 s)
 and exit 130/143/129. The watcher reads the stream with plain blocking reads and compares clocks — never `read -t`, whose exit status for a
 timeout differs between bash 3.2 and 4+ — and replaces its beat file atomically (an empty read must not be an arithmetic error: it ends the
