@@ -109,6 +109,15 @@ export function buildScriptExistsCommand(runner: Pick<RunnerConfig, 'workDir'>, 
 /** The exit status ssh itself reports when it could not run the command. */
 export const sshFailureExitCode = 255;
 
+/**
+ * @description Did the ssh call end because the CONNECTION failed (ssh's own status 255, or a process that was killed), rather than
+ * because the command on the runner ended with a status of its own? The runner script's refusals exit 125 and a job's code is whatever its
+ * command returned, so only this one is worth opening the connection again for.
+ */
+export function checkIsConnectionLost(exitCode: number | null): boolean {
+  return exitCode === null || exitCode === sshFailureExitCode;
+}
+
 export interface SshRunResult {
   /** `null` when the process was killed (a timeout). */
   exitCode: number | null;

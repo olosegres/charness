@@ -656,6 +656,24 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
     });
 
 
+    it('`wait` on a job that does not exist — never submitted, or whose submit failed half-way — says so at once, not «lost the connection» after five retries', async () => {
+      const neverSubmitted = await run(['wait', 'box1-zzzzz2'], { timeoutMs: 60_000 });
+      assert.equal(neverSubmitted.exitCode, 125);
+      assert.match(neverSubmitted.stderr, /remote-run: runner "box1": no such job: box1-zzzzz2/);
+      assert.ok(!neverSubmitted.stderr.includes('lost the connection'), neverSubmitted.stderr);
+      // A job folder with a description and no Pueue task: what a submit that died after staging leaves behind.
+      const halfwayId = 'box1-yyyyy3';
+      const halfwayDir = path.join(project.runnerDirectory, 'jobs', halfwayId);
+      fs.mkdirSync(halfwayDir, { recursive: true });
+      fs.writeFileSync(path.join(halfwayDir, 'meta.json'), '{}');
+      const startedAt = Date.now();
+      const halfway = await run(['wait', halfwayId], { timeoutMs: 60_000 });
+      assert.equal(halfway.exitCode, 125);
+      assert.match(halfway.stderr, new RegExp(`remote-run: runner "box1": no such job: ${halfwayId}`));
+      assert.ok(Date.now() - startedAt < 30_000, 'no retries: five of them would take 12 s of pauses alone');
+      fs.rmSync(halfwayDir, { recursive: true, force: true });
+    });
+
     it('a bad .remote-run is refused with the line to fix', async () => {
       writeRemoteRunConfig('pull: out\ncolour: red\n');
       const result = await run(['echo', 'x']);

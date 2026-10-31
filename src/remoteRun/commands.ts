@@ -17,9 +17,10 @@ import { createJobOutputRouter, sayOwn, type CliIo } from './output';
 import { formatRunnerBlock, type RunnerCapability } from './probe';
 import { getProjectContext } from './project';
 import { RemoteRunError, RunnerUnreachableError } from './remoteRunError';
-import { createRunnerClient, type RunnerClient, type RunnerScript } from './runnerClient';
+import { createRunnerClient, describeRunnerRefusal, type RunnerClient, type RunnerScript } from './runnerClient';
 import { findRunnerOfJob, pickRunner, probeRunners } from './runners';
 import type { RunnersConfig } from './runnersConfig';
+import { checkIsConnectionLost } from './ssh';
 import { getJobOwner, stageJob } from './submit';
 
 /**
@@ -197,12 +198,24 @@ export async function runLogsCommand(command: Extract<RemoteRunCommand, { kind: 
 
 // ─────────────────────────── wait / fetch / kill ───────────────────────────
 
-/** Block until the runner says the job is done; a dropped connection is retried a few times (the job is Pueue's, it keeps running). */
-async function waitForJob(client: RunnerClient, jobId: string): Promise<InterruptSignal | null> {
+export interface WaitRetryPolicy {
+  attempts: number;
+  delayMs: number;
+}
+
+/**
+ * @description Block until the runner says the job is done. A connection that drops is opened again a few times (the job is Pueue's, it
+ * keeps running); a refusal of the runner itself — no such job (never submitted, pruned, a submit that failed half-way) — is final and
+ * says so at once instead of passing for a bad network. Resolves with the signal that interrupted the wait, if one did.
+ */
+export async function waitForJob(client: RunnerClient, jobId: string, retry: WaitRetryPolicy = { attempts: waitReconnectAttempts, delayMs: waitReconnectDelayMs }): Promise<InterruptSignal | null> {
   let interrupt: InterruptSignal | null = null;
-  for (let attempt = 1; attempt <= waitReconnectAttempts && interrupt === null; attempt += 1) {
+  for (let attempt = 1; attempt <= retry.attempts && interrupt === null; attempt += 1) {
     const child = client.stream('wait', ['-', jobId]);
     child.stdin.end();
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
     const removeHandler = addInterruptHandler((signal) => {
       interrupt ??= signal;
       child.kill('SIGTERM');
@@ -210,8 +223,9 @@ async function waitForJob(client: RunnerClient, jobId: string): Promise<Interrup
     const exitCode = await waitForChildEnd(child, () => interrupt !== null);
     removeHandler();
     if (exitCode === 0 || interrupt !== null) return interrupt;
-    if (attempt === waitReconnectAttempts) throw new RemoteRunError(`lost the connection to ${client.runner.name} while waiting for ${jobId}`);
-    await new Promise((resolve) => setTimeout(resolve, waitReconnectDelayMs));
+    if (!checkIsConnectionLost(exitCode)) throw new RemoteRunError(`runner "${client.runner.name}": ${describeRunnerRefusal(stderr, `wait ended with exit ${exitCode}`)}`);
+    if (attempt === retry.attempts) throw new RemoteRunError(`lost the connection to ${client.runner.name} while waiting for ${jobId}`);
+    await new Promise((resolve) => setTimeout(resolve, retry.delayMs));
   }
   return interrupt;
 }

@@ -9,7 +9,7 @@ import {
   buildScriptExistsCommand,
   buildScriptUploadCommand,
   runSshCommand,
-  sshFailureExitCode,
+  checkIsConnectionLost,
   spawnSshStream,
   type SshRunResult,
 } from './ssh';
@@ -72,6 +72,12 @@ export function describeSshFailure(result: SshRunResult): string {
   return text.length > 200 ? `${text.slice(0, 200)}…` : text;
 }
 
+/** @description The runner script's own refusal in a stderr text («remote-run-runner: no such job: x» → «no such job: x»): the last line, without the script's prefix. */
+export function describeRunnerRefusal(stderr: string, fallback: string): string {
+  const lastLine = stderr.split('\n').map((line) => line.trim()).filter((line) => line !== '').pop();
+  return lastLine === undefined ? fallback : lastLine.replace(/^remote-run-runner: /, '');
+}
+
 /** @description Create the client of `runner`. `script` and the spawn functions are injectable for the tests. */
 export function createRunnerClient(runner: RunnerConfig, cacheDir: string, script: RunnerScript = readRunnerScript()): RunnerClient {
   const call: RunnerClient['call'] = (subcommand, args, options = {}) =>
@@ -102,7 +108,7 @@ export function createRunnerClient(runner: RunnerConfig, cacheDir: string, scrip
     async ensureScript(signal) {
       const exists = await runSshCommand({ runner, cacheDir, remoteCommand: buildScriptExistsCommand(runner, script.name), timeoutMs: scriptUploadTimeoutMs, signal });
       if (exists.exitCode === 0) return;
-      if (exists.exitCode === sshFailureExitCode || exists.exitCode === null) throw new RunnerUnreachableError(runner.name, describeSshFailure(exists));
+      if (checkIsConnectionLost(exists.exitCode)) throw new RunnerUnreachableError(runner.name, describeSshFailure(exists));
       const upload = await runSshCommand({ runner, cacheDir, remoteCommand: buildScriptUploadCommand(runner, script.name), input: script.text, timeoutMs: scriptUploadTimeoutMs, signal });
       if (upload.exitCode !== 0) throw new RemoteRunError(`could not put the runner script on "${runner.name}" (${runner.workDir}/bin) — ${describeSshFailure(upload)}`);
     },
