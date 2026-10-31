@@ -1,0 +1,119 @@
+import * as os from 'os';
+import {
+  runExecCommand,
+  runFetchCommand,
+  runKillCommand,
+  runLogsCommand,
+  runLsCommand,
+  runRunCommand,
+  runRunnersCommand,
+  runStatusCommand,
+  runWaitCommand,
+  type CommandContext,
+} from './commands';
+import { parseRemoteRunArgs } from './cliArgs';
+import { remoteRunExitCodes } from './exitCodes';
+import { readRemoteRunLeaseMs } from './leaseTiming';
+import type { CliIo } from './output';
+import { RemoteRunError } from './remoteRunError';
+import { readRunnerScript } from './runnerClient';
+import { getRunnersConfigPath, loadRunnersConfig } from './runnersConfig';
+import { ensureRemoteRunCacheDir, getRemoteRunCacheDir } from './ssh';
+
+/**
+ * @description `charness remote-run …` — send a command to a runner (a machine reached by ordinary ssh, listed in
+ * `~/.config/charness/runners.json`) and get its output, exit code and declared result files back as if it had run here. The
+ * contracts are in `src/remoteRun/README.md`; the user-facing description is `docs/remote-run.md`.
+ *
+ * The CLI loads NO env file (it would read the PROJECT's `.env`: agents run it from project folders) and never touches `DATA_DIR` or
+ * the state store: it needs nothing from an instance.
+ */
+
+export const remoteRunUsage = `Usage:
+  charness remote-run [--runner <name>] [--needs android|ios|docker|playwright] [--group <g>] [--timeout <dur>]
+                      [--with-git] [-e NAME=VALUE]… [--bg] <command…>
+                              run <command> on a runner, in the same folder of a copy of this git project;
+                              output and exit code come back, interrupt or timeout kills the remote job.
+                              --bg prints a job id and returns (long runs).
+                              Options go BEFORE the command; a command that starts with a subcommand name goes after --
+  charness remote-run runners                 the runners: online, hardware, load, what each can do
+  charness remote-run ls [--all]              jobs of this project (all projects with --all)
+  charness remote-run status <id>             one job
+  charness remote-run logs <id> [-f] [--tail N]
+  charness remote-run wait <id>               block until the job ends, fetch its files, exit with its code
+  charness remote-run kill <id>
+  charness remote-run fetch <id>              bring a finished job's result files back (again)
+  charness remote-run exec [--runner <name>] <command…>
+                              one-off command in the runner's copy as the last job left it (no sync)
+Exit codes: the command's own; 125 remote-run failed, 124 timeout, 130/143/129 interrupted (SIGINT/SIGTERM/SIGHUP), 137 job killed, 2 bad usage.
+Setup: docs/remote-run.md
+`;
+
+/** @description The io of the real process. */
+export function createProcessIo(): CliIo {
+  return {
+    stdout: (text) => { process.stdout.write(text); },
+    stderr: (text) => { process.stderr.write(text); },
+    cwd: process.cwd(),
+    env: process.env,
+    homeDir: os.homedir(),
+  };
+}
+
+function createContext(io: CliIo): CommandContext {
+  const load = loadRunnersConfig(io.homeDir);
+  if (load.status === 'missing') {
+    throw new RemoteRunError(`no runners are set up: ${getRunnersConfigPath(io.homeDir)} does not exist (docs/remote-run.md explains how to add one)`);
+  }
+  if (load.status === 'invalid') throw new RemoteRunError(load.errors.join('\n'));
+  if (load.config.runners.length === 0) throw new RemoteRunError(`${getRunnersConfigPath(io.homeDir)} lists no runners`);
+  const cacheDir = getRemoteRunCacheDir(io.env, io.homeDir);
+  ensureRemoteRunCacheDir(cacheDir);
+  return {
+    io,
+    config: load.config,
+    cacheDir,
+    script: readRunnerScript(),
+    leaseMs: readRemoteRunLeaseMs(io.env),
+    now: Date.now,
+  };
+}
+
+/** @description Run the command line (the words after `remote-run`); resolves with the exit code. */
+export async function runRemoteRunCli(argv: readonly string[], io: CliIo = createProcessIo()): Promise<number> {
+  const parsed = parseRemoteRunArgs(argv);
+  if (!parsed.ok) {
+    io.stderr(`remote-run: ${parsed.error}\n\n${remoteRunUsage}`);
+    return remoteRunExitCodes.usage;
+  }
+  const { command } = parsed;
+  if (command.kind === 'help') {
+    if (argv.length === 0) {
+      io.stderr(remoteRunUsage);
+      return remoteRunExitCodes.usage;
+    }
+    io.stdout(remoteRunUsage);
+    return 0;
+  }
+  try {
+    const context = createContext(io);
+    switch (command.kind) {
+      case 'run': return await runRunCommand(command, context);
+      case 'runners': return await runRunnersCommand(context);
+      case 'ls': return await runLsCommand(command, context);
+      case 'status': return await runStatusCommand(command, context);
+      case 'logs': return await runLogsCommand(command, context);
+      case 'wait': return await runWaitCommand(command, context);
+      case 'fetch': return await runFetchCommand(command, context);
+      case 'kill': return await runKillCommand(command, context);
+      case 'exec': return await runExecCommand(command, context);
+    }
+  } catch (error) {
+    if (error instanceof RemoteRunError) {
+      io.stderr(`remote-run: ${error.message}\n`);
+      return error.exitCode;
+    }
+    io.stderr(`remote-run: unexpected error: ${error instanceof Error ? error.message : 'unknown'}\n`);
+    return remoteRunExitCodes.failed;
+  }
+}

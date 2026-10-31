@@ -27,6 +27,7 @@ import { DEFAULT_SAVE_DEBOUNCE_MS } from '../state';
 import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
 import { todoReminderDefaultMinutes } from '../todos/nag';
 import { todoReminderPollMs } from '../todos/reminderEngine';
+import { remoteRunLeaseMinMs, remoteRunLeaseMs } from '../remoteRun/leaseTiming';
 
 /** Every key with the production window (a count, for `bindPickerClaimLimit`) it may only shorten. */
 const productionWindowsMs: Array<[keyof TestTimings, number]> = [
@@ -42,6 +43,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['todoReminderPollMs', todoReminderPollMs],
   ['todoReminderIntervalMs', todoReminderDefaultMinutes * 60 * 1000],
   ['scheduleMinFireIntervalMs', minFireIntervalMs],
+  ['remoteRunLeaseMs', remoteRunLeaseMs],
   ['bindPickerClaimLimit', bindPickerClaimLimit],
   ['tscWatchCheckIntervalMs', tscWatchCheckIntervalMs],
   ['tscWatchStaleGraceMs', tscWatchStaleGraceMs],
@@ -51,6 +53,11 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
  * is proven by the hot update flow, which asserts the guard acted inside the production grace.
  */
 const supervisorTimingKeys = ['tscWatchCheckIntervalMs', 'tscWatchStaleGraceMs'];
+/**
+ * The keys the `charness remote-run` CLI reads, not the bot (`remoteRun/leaseTiming.ts` reads it tolerantly: the CLI cannot import this
+ * module's graph). That it reads it is proven by `remoteRunLease.test.ts` and the remote-run flow, whose lease expiry is its test window.
+ */
+const cliTimingKeys = ['remoteRunLeaseMs'];
 /** One past the longest delay Node's timers keep: a longer one fires after 1 ms. */
 const beyondTimerMaxMs = 2_147_483_648;
 
@@ -99,6 +106,15 @@ describe('a test timing may only shorten its window', () => {
   }
 });
 
+describe('the remote-run lease window has a floor as well as a ceiling', () => {
+  it(`remoteRunLeaseMs: ${remoteRunLeaseMinMs} ms is accepted, one ms less is refused naming the key — a shorter lease would kill a healthy job on one slow second`, () => {
+    assert.deepEqual(parseTestTimings(JSON.stringify({ remoteRunLeaseMs: remoteRunLeaseMinMs })), { ok: true, timings: { remoteRunLeaseMs: remoteRunLeaseMinMs } });
+    const parsed = parseTestTimings(JSON.stringify({ remoteRunLeaseMs: remoteRunLeaseMinMs - 1 }));
+    assert.equal(parsed.ok, false);
+    assert.ok(!parsed.ok && parsed.errors.every((error) => error.startsWith(`${testTimingsEnvName} remoteRunLeaseMs:`)), JSON.stringify(parsed));
+  });
+});
+
 describe('formatTestTimingsBootLine', () => {
   it('no overrides, no line', () => {
     assert.equal(formatTestTimingsBootLine({}), null);
@@ -116,6 +132,6 @@ describe('the composition root hands every key to its consumer', () => {
   it('bot.ts reads each key the seam accepts from the parsed timings — a key parsed but wired nowhere would shorten nothing', () => {
     const botSource = fs.readFileSync(path.join(__dirname, '..', 'bot.ts'), 'utf8');
     assert.ok(testTimingKeys.length >= productionWindowsMs.length, 'the walk is not vacuous');
-    assert.deepEqual(testTimingKeys.filter((key) => !supervisorTimingKeys.includes(key) && !botSource.includes(`ENV.testTimings.${key}`)), []);
+    assert.deepEqual(testTimingKeys.filter((key) => !supervisorTimingKeys.includes(key) && !cliTimingKeys.includes(key) && !botSource.includes(`ENV.testTimings.${key}`)), []);
   });
 });
