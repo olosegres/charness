@@ -213,7 +213,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
 
   it('a tracker conversation is pointed at the manager skill but gets no scheduling recipe — it has no scheduling tools', () => {
     for (const platform of ['jira', null] as const) {
-      const instructions = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: false, isTodoToolOffered: false }, true);
+      const instructions = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: false, isTodoToolOffered: false, isRemoteRunOffered: false }, true);
       assert.ok(instructions.includes('`charness-manager`'), `${platform ?? 'neutral'}`);
       assert.ok(!instructions.includes(workerWatchCheckCommand), `${platform ?? 'neutral'}`);
       assert.doesNotMatch(instructions, /schedule_create/);
