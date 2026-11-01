@@ -2,7 +2,7 @@
  * @description `remoteRun/remoteRunCli.ts` in-process, with its io injected: the usage and the exit codes of a bad command line (2, with
  * the reason and the usage), of `help` (0, stdout) and of no arguments at all (2, stderr); and what a missing, invalid or empty
  * `runners.json` says (125, naming the file and its fields, never a value). Nothing here reaches a runner: the commands that do are the
- * flow `remoteRunE2e.test.ts`.
+ * flows `remoteRunE2e.test.ts` and `remoteRunLifecycleE2e.test.ts`.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */

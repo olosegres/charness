@@ -1,6 +1,6 @@
 /**
  * @description `remoteRun/runner.sh` — the script that runs on a runner — as far as it can be tested without Pueue and ssh (the flow
- * `remoteRunE2e.test.ts` runs the rest): it parses and uses nothing newer than bash 3.2 (the stock bash of macOS); `probe` prints what
+ * `remoteRunE2e.test.ts` and `remoteRunLifecycleE2e.test.ts` run the rest): it parses and uses nothing newer than bash 3.2 (the stock bash of macOS); `probe` prints what
  * `probe.ts` parses; a bad project or job name is refused before anything is touched; the apply step mirrors deletions from the manifest
  * diff, leaves the runner's own ignored files alone, removes the folders it emptied, and never follows a hostile manifest entry out of
  * the copy; `jobs`, `meta`, `tail` and `result` read a job folder the way `ls` and `status` expect.

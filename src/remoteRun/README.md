@@ -116,7 +116,7 @@ whole subshell).
 
 Unit tests (`src/__tests__/remoteRun*.test.ts`) cover every planner, the CLI entry, the MCP bullet, the runner script (probe, apply step,
 prune, the lease through `exec`), ssh quoting against a real shell and file selection against real git repositories.
-The flow `remoteRunE2e.test.ts` drives the BUILT CLI against a throwaway loopback `sshd` (no root) and a private Pueue in temp dirs
+The flow (`remoteRunE2e.test.ts` and `remoteRunLifecycleE2e.test.ts`, side by side with a runner each, helpers in `remoteRunE2e/remoteRunFlowHarness.ts`: a single file was close to the 20 minutes a flow may take) drives the BUILT CLI against a throwaway loopback `sshd` (no root) and a private Pueue in temp dirs
 (`remoteRunE2e/remoteRunFlowKit.ts`), with decoy jobs that write their own and a child's pid so "nothing left" is asserted on real pids.
 A killed or timed-out flow cannot leak daemons: `remoteRunFlowSweep.ts` ends everything that names the layout or runs in it, from the
 test's teardown, from a detached reaper, and at the next start. It needs `sshd`, `ssh`, `rsync`, Pueue and `yarn build`; a local run without
