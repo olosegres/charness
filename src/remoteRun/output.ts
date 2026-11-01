@@ -48,3 +48,49 @@ export function createJobOutputRouter(io: Pick<CliIo, 'stdout' | 'stderr'>): Job
     },
   };
 }
+
+/** The line `runner.sh exec` ends its stderr with: RS (U+001E), the name, the command's exit code, a newline. */
+const exitMarkerPattern = /\u001eremote-run-exit:(\d+)\n/g;
+/** A marker that has begun but not arrived whole is held back at most this long (the marker is shorter than this). */
+const exitMarkerHoldBackLength = 40;
+
+export interface ExitMarkerFilter {
+  write: (chunk: string) => void;
+  /** Hand on what is still held back (a stream that ended). */
+  flush: () => void;
+  /** The code of the last marker seen, or `null` when none arrived. */
+  getExitCode: () => number | null;
+}
+
+/**
+ * @description Takes the exit marker `runner.sh exec` prints out of a stderr stream, however the stream is cut into chunks, and hands on
+ * everything else at once — a partial marker is held back only until the rest arrives or the stream ends.
+ */
+export function createExitMarkerFilter(forward: (text: string) => void): ExitMarkerFilter {
+  let pending = '';
+  let exitCode: number | null = null;
+  return {
+    write(chunk) {
+      let text = pending + chunk;
+      pending = '';
+      let handedOn = 0;
+      for (const match of text.matchAll(exitMarkerPattern)) {
+        if (match.index > handedOn) forward(text.slice(handedOn, match.index));
+        exitCode = Number(match[1]);
+        handedOn = match.index + match[0].length;
+      }
+      text = text.slice(handedOn);
+      const markerStart = text.lastIndexOf('\u001e');
+      if (markerStart >= 0 && text.length - markerStart < exitMarkerHoldBackLength && !text.slice(markerStart).includes('\n')) {
+        pending = text.slice(markerStart);
+        text = text.slice(0, markerStart);
+      }
+      if (text !== '') forward(text);
+    },
+    flush() {
+      if (pending !== '') forward(pending);
+      pending = '';
+    },
+    getExitCode: () => exitCode,
+  };
+}

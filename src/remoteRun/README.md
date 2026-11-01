@@ -80,7 +80,9 @@ it has no holder and is over a minute old; a stale lock is broken by ONE waiter,
 **Lease.** A foreground run (and `exec`) runs `runner.sh lease`/`exec` over ssh, which itself adds the job to Pueue and reads a heartbeat byte
 the CLI writes every `lease/9`. No byte for the lease (45 s; the test seam `CHARNESS_TEST_TIMINGS` `remoteRunLeaseMs` may only shorten it, at
 least 3 s), or the end of the stream → the runner kills the job (a caller that finishes normally needs no lease: the job it guarded is over and
-the lease script stops its watcher; an interrupted `exec` ends its stream on purpose to have its command stopped). A stock sshd (`ClientAliveInterval 0`) never notices a half-open
+the lease script stops its watcher; an interrupted `exec` ends its stream on purpose to have its command stopped). `exec` ends by printing a marker line with the
+command's code on stderr (`\036remote-run-exit:<code>`, cut out by `createExitMarkerFilter`): ssh's own 255 means a lost connection only
+when that marker never came, so a command that exits 255 keeps its code. A stock sshd (`ClientAliveInterval 0`) never notices a half-open
 connection; this is what ends an orphaned job. SIGINT/SIGTERM/SIGHUP locally kill the job first (SIGTERM to its process group, SIGKILL after 10 s)
 and exit 130/143/129. The watcher reads the stream with plain blocking reads and compares clocks — never `read -t`, whose exit status for a
 timeout differs between bash 3.2 and 4+ — and replaces its beat file atomically (an empty read must not be an arithmetic error: it ends the

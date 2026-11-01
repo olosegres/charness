@@ -669,6 +669,13 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
 
   describe('exec', () => {
     registerOpenJobCleanup();
+    // exec runs in the copy the last job left: make one, with a folder of the runner's own in it, instead of relying on earlier steps.
+    before(async () => {
+      writeProjectFile(project, 'src/a.txt', 'version A\n');
+      assert.equal((await run(['true'])).exitCode, 0);
+      fs.mkdirSync(path.join(project.runnerDirectory, 'tree', 'node_modules'), { recursive: true });
+    });
+
     it('runs in the runner\'s copy as the last job left it, and passes the command\'s code', async () => {
       const listed = await run(['exec', 'ls']);
       assert.equal(listed.exitCode, 0, listed.stderr);
@@ -679,6 +686,10 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       const failing = await run(['exec', "sh -c 'echo to-stderr >&2; exit 9'"]);
       assert.equal(failing.exitCode, 9);
       assert.match(failing.stderr, /to-stderr/, 'exec keeps stderr apart');
+      assert.ok(!failing.stderr.includes('\u001e'), 'and shows nothing of the exit marker');
+      const exits255 = await run(['exec', "sh -c 'echo before; exit 255'"]);
+      assert.equal(exits255.exitCode, 255, 'a command that really exits 255 keeps its code — it is not a lost connection');
+      assert.ok(!exits255.stderr.includes('connection'), exits255.stderr);
     });
 
     it('is killed like a foreground job: SIGINT ends it and the command with everything it started', async () => {

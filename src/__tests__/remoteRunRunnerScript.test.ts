@@ -309,7 +309,7 @@ describe('the lease (through `exec`, which uses the same watcher as a foreground
   interface LeasedRun {
     write: (text: string) => void;
     endStream: () => void;
-    finished: Promise<{ code: number | null; stdout: string; elapsedMs: number }>;
+    finished: Promise<{ code: number | null; stdout: string; stderr: string; elapsedMs: number }>;
   }
 
   /** `exec` of `command` in the copy of the project, with the stream of this test as the caller's. */
@@ -321,11 +321,14 @@ describe('the lease (through `exec`, which uses the same watcher as a foreground
       env: process.env,
     });
     let stdout = '';
+    let stderr = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (text: string) => { stdout += text; });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (text: string) => { stderr += text; });
     child.stdin.on('error', () => { /* the run ended before the write */ });
-    const finished = new Promise<{ code: number | null; stdout: string; elapsedMs: number }>((resolve) => {
-      child.on('close', (code) => resolve({ code, stdout, elapsedMs: Date.now() - startedAt }));
+    const finished = new Promise<{ code: number | null; stdout: string; stderr: string; elapsedMs: number }>((resolve) => {
+      child.on('close', (code) => resolve({ code, stdout, stderr, elapsedMs: Date.now() - startedAt }));
     });
     return { write: (text) => child.stdin.write(text), endStream: () => child.stdin.end(), finished };
   }
@@ -423,6 +426,17 @@ describe('the lease (through `exec`, which uses the same watcher as a foreground
     await finished;
     assert.match(stdout, /^verdict=1$/m, `the watcher reported the end of the stream (output: ${JSON.stringify(stdout)})`);
     assert.deepEqual(listLeaseState(), []);
+  });
+
+  it('`exec` ends its stderr with the command\'s own exit code, so a command that exits 255 can be told from ssh\'s own 255', async () => {
+    for (const code of [255, 0, 3]) {
+      const leased = startLeasedRun(`echo out; echo err >&2; exit ${code}`);
+      leased.write('h');
+      const result = await leased.finished;
+      assert.equal(result.code, code, `the command's ${code} is the script's exit status`);
+      assert.equal(result.stdout, 'out\n');
+      assert.equal(result.stderr, `err\n\u001eremote-run-exit:${code}\n`, 'the marker is the last thing on stderr');
+    }
   });
 
   it('commands that end at once leave no lease state: the watcher is told to stop before it has done anything', async () => {

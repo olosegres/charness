@@ -1047,6 +1047,10 @@ cmd_exec() {
   wait "$exec_pid"
   local exec_code=$?
   kill "$watcher_pid" > /dev/null 2>&1
+  # The command's own code, said out loud: ssh reports 255 for ITS failures, and a command that really exits 255 (ssh and adb do) would
+  # look like a lost connection. The marker (RS, the name, the code, a newline) is the last thing on stderr; the CLI takes it out of what it
+  # shows. A session that dies before it has none, which is how a lost connection is told from a command that exited 255.
+  printf '\036remote-run-exit:%s\n' "$exec_code" >&2
   exit "$exec_code"
 }
 

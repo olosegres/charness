@@ -3,9 +3,10 @@ import { addInterruptHandler, killCallTimeoutMs, waitForChildEnd } from './inter
 import { fetchJobFiles, type FetchTarget } from './jobFiles';
 import { readJobOutcome } from './jobQuery';
 import { getHeartbeatIntervalMs } from './leaseTiming';
-import { createJobOutputRouter, sayOwn, type CliIo } from './output';
+import { createExitMarkerFilter, createJobOutputRouter, sayOwn, type CliIo } from './output';
 import { RemoteRunError } from './remoteRunError';
 import type { RunnerClient } from './runnerClient';
+import { checkIsConnectionLost } from './ssh';
 import type { StagedJob } from './submit';
 import type { JobOutcome } from './jobState';
 
@@ -115,7 +116,8 @@ export async function runExec(params: { client: RunnerClient; slug: string; subf
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => io.stdout(chunk));
-  child.stderr.on('data', (chunk: string) => io.stderr(chunk));
+  const stderr = createExitMarkerFilter(io.stderr);
+  child.stderr.on('data', (chunk: string) => stderr.write(chunk));
   child.stdin.on('error', () => { /* the session ended */ });
   let interrupt: InterruptSignal | null = null;
   const closed = waitForChildEnd(child, () => interrupt !== null);
@@ -134,10 +136,15 @@ export async function runExec(params: { client: RunnerClient; slug: string; subf
   const exitCode = await closed;
   clearInterval(heartbeatTimer);
   removeSignalHandlers();
+  stderr.flush();
   if (interrupt !== null) return planInterrupt(interrupt).exitCode;
-  if (exitCode === null || exitCode === 255) {
+  // The command's own code, as the runner reported it: a command that exits 255 is not a lost connection. Without the report the session
+  // died before the command ended, or ssh itself failed.
+  const reportedCode = stderr.getExitCode();
+  if (reportedCode !== null) return reportedCode;
+  if (checkIsConnectionLost(exitCode)) {
     sayOwn(io, `the connection to ${client.runner.name} failed while the command ran`);
     return remoteRunExitCodes.failed;
   }
-  return exitCode;
+  return exitCode ?? remoteRunExitCodes.failed;
 }
