@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.7.0 — 2026-11-01
+
 **The answers of `send_messages_to_user` and `send_file_to_user` now say what was sent, per kind — «Delivered 3 messages: 1 text, 2 documents.», «Sent 3 files: 1 photo, 2 documents.» — so an agent can see when a file did not go out as the kind it meant.**
 Before, they only counted («Delivered 3 messages to the topic», «Sent 3 file(s) to the topic»), so a batch of images that arrived as plain text or as documents read as a full success.
 Now the answer names what landed — texts, photos, videos, animations, documents — taken from what Telegram was actually asked to render: a photo sent with `as_file`, one over the photo size limit, or one in an album that fell back to documents is counted as a document.
