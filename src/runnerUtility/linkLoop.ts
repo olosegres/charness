@@ -32,6 +32,14 @@ const stableLinkMs = 30 * 1000;
 export const removedRetryMs = 60 * 60 * 1000;
 /** How long after the first refusal of the key a second one confirms that the runner was removed. */
 export const removalConfirmMs = 15 * 1000;
+/**
+ * How long the hub must have been refusing the key, without ever saying «this runner is not paired», before the runner takes the refusal
+ * for a removal worth killing its jobs for. A refused key alone is also what a hub with a locked home folder, a changed file mode or an
+ * edited sshd setting looks like, and those last hours (a night, until someone unlocks the volume); killing a long run for them is the
+ * wrong mistake. A hub that removes an ONLINE runner stops its jobs itself over the link (`runners/runnerRemoval.ts`), and a hub that can
+ * answer says so (`identity`), so this only covers a machine that was off when it was removed.
+ */
+export const unconfirmedRemovalStopAfterMs = 12 * 60 * 60 * 1000;
 
 /** @description The wait before attempt number `failures + 1` (0 failures: the first retry); `random` is in [0, 1). */
 export function computeBackoffMs(failures: number, random: number): number {
@@ -51,6 +59,8 @@ export interface LinkLoopDeps {
   stopJobs?: () => Promise<void>;
   /** The wait between the two refusals that confirm a removal (default {@link removalConfirmMs}). */
   removalConfirmMs?: number;
+  /** How long a bare refusal of the key must last before it stops the jobs (default {@link unconfirmedRemovalStopAfterMs}). */
+  unconfirmedRemovalStopAfterMs?: number;
   random?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   connect?: typeof connectToHub;
@@ -92,6 +102,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
   const log = deps.log ?? (() => undefined);
   const versionPollMs = deps.versionPollMs ?? readRunnerVersionPollMs(process.env);
   const confirmMs = deps.removalConfirmMs ?? removalConfirmMs;
+  const stopAfterMs = deps.unconfirmedRemovalStopAfterMs ?? unconfirmedRemovalStopAfterMs;
   const endpoint: HubEndpoint = { host: deps.config.hub.host, port: deps.config.hub.port, user: deps.config.hub.user, hostKey: deps.config.hub.hostKey };
   let installedPackageId = deps.config.packageId;
   let state: LinkState = 'connecting';
@@ -245,8 +256,12 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
             continue;
           }
           writeStatus('removed', `removed by ${deps.config.hub.label}`);
-          log(`the hub no longer knows this runner: removed by ${deps.config.hub.label}; stopping its jobs, then asking again in an hour`);
-          await deps.stopJobs?.().catch((error) => log(`could not stop the jobs (${error instanceof Error ? error.message : 'unknown error'})`));
+          if (result.isConfirmed || now0 - firstRefusalAtMs >= stopAfterMs) {
+            log(`the hub no longer knows this runner: removed by ${deps.config.hub.label}; stopping its jobs, then asking again in an hour`);
+            await deps.stopJobs?.().catch((error) => log(`could not stop the jobs (${error instanceof Error ? error.message : 'unknown error'})`));
+          } else {
+            log(`the hub refuses this runner's key (removed by ${deps.config.hub.label}?); its jobs are left alone unless that lasts ${Math.round(stopAfterMs / 3_600_000)} hours without the hub saying more, asking again in an hour`);
+          }
           await sleep(removedRetryMs, signal);
           continue;
         }

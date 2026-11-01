@@ -54,7 +54,7 @@ A restart of the link (an update, a crash) never kills queued or running jobs �
 itself after a reboot, sleep or network change, and updates itself from the charness host when it is idle.
 
 **Remove.** `/runners` → **Remove** (or `charness runners remove <name>`): the key line and the registry entry are deleted, the link is
-cut, and the runner says «removed by …», stops the jobs it was running and retries at most hourly. `charness runners pause <name>` /
+cut, the jobs it was running are stopped (through the link, at once, when it is online; a machine that was off stops them itself once the hub has been refusing it for 12 hours), and the runner says «removed by …» and retries at most hourly. `charness runners pause <name>` /
 `resume <name>` keeps a machine attached but sends it no jobs.
 
 **What a job sees.** A command runs as the runner account with a clean environment — `HOME`, `USER`, `LANG`, `TMPDIR`, a `PATH` of

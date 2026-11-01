@@ -41,7 +41,7 @@ function createConfig(): RunnerConfig {
   };
 }
 
-function createLoopFixture(connect: () => Promise<never>, sleeps: number[], abort: AbortController, abortAfterSleeps: number, options: { stopJobs?: () => Promise<void> } = {}) {
+function createLoopFixture(connect: () => Promise<never>, sleeps: number[], abort: AbortController, abortAfterSleeps: number, options: { stopJobs?: () => Promise<void>; unconfirmedRemovalStopAfterMs?: number } = {}) {
   let clock = 1_000;
   const keys = { client: generateEd25519KeyPair('c'), server: generateEd25519KeyPair('s') };
   const config = createConfig();
@@ -55,6 +55,7 @@ function createLoopFixture(connect: () => Promise<never>, sleeps: number[], abor
     now: () => clock,
     connect,
     stopJobs: options.stopJobs,
+    unconfirmedRemovalStopAfterMs: options.unconfirmedRemovalStopAfterMs,
     sleep: async (ms) => {
       clock += ms;
       sleeps.push(ms);
@@ -96,7 +97,7 @@ describe('the link loop', () => {
     assert.equal(status?.pid, process.pid);
   });
 
-  it('a hub that refuses the key twice, a little apart, has removed this runner: the status says by whom, the jobs are stopped, and it is asked again in an hour', async () => {
+  it('a hub that refuses the key twice, a little apart, shows the runner as removed — but its jobs are NOT killed on that evidence alone (a locked home folder on the hub refuses the key the same way)', async () => {
     const sleeps: number[] = [];
     const abort = new AbortController();
     let stops = 0;
@@ -104,10 +105,37 @@ describe('the link loop', () => {
     await loop.run(abort.signal);
     assert.deepEqual(sleeps, [removalConfirmMs, removedRetryMs], 'one refusal waits to be sure; the second one is the removal; then the hourly wait — not the backoff');
     assert.equal(removedRetryMs, 60 * 60 * 1000);
-    assert.equal(stops, 1, 'the queue\'s jobs were stopped once');
+    assert.equal(stops, 0, 'the queue\'s jobs were left running');
     const status = readRunnerStatus(paths);
     assert.equal(status?.state, 'removed');
     assert.equal(status?.lastError, 'removed by @ExampleBot');
+  });
+
+  it('a refusal that lasts, hour after hour, without the hub ever saying more, finally stops the jobs — once the window is over', async () => {
+    const sleeps: number[] = [];
+    const abort = new AbortController();
+    const stoppedAfterSleeps: number[] = [];
+    const window = 2 * removedRetryMs;
+    const loop = createLoopFixture(async () => { throw new HubConnectionError('auth', 'refused'); }, sleeps, abort, 4, {
+      stopJobs: async () => { stoppedAfterSleeps.push(sleeps.length); },
+      unconfirmedRemovalStopAfterMs: window,
+    });
+    await loop.run(abort.signal);
+    assert.deepEqual(sleeps, [removalConfirmMs, removedRetryMs, removedRetryMs, removedRetryMs]);
+    assert.deepEqual(stoppedAfterSleeps, [3], 'not at the second or third attempt, whose refusals are younger than the window — at the fourth, which is older');
+  });
+
+  it('the window starts over after any other outcome: a refusal, a network failure and a long wait later do not add up', async () => {
+    const sleeps: number[] = [];
+    const abort = new AbortController();
+    const outcomes: Array<'auth' | 'network'> = ['auth', 'auth', 'network', 'auth', 'auth'];
+    let stops = 0;
+    const loop = createLoopFixture(async () => {
+      const outcome = outcomes.shift() ?? 'auth';
+      throw new HubConnectionError(outcome, outcome);
+    }, sleeps, abort, 5, { stopJobs: async () => { stops += 1; }, unconfirmedRemovalStopAfterMs: removedRetryMs + removalConfirmMs + 1 });
+    await loop.run(abort.signal);
+    assert.equal(stops, 0, 'two refusals, a network failure in between, two more: the clock restarted at the network failure');
   });
 
   it('ONE refusal of the key is not a removal: the jobs are left running and the runner says it is checking again', async () => {
@@ -122,7 +150,7 @@ describe('the link loop', () => {
     assert.match(readRunnerStatus(paths)?.lastError ?? '', /asking once more/);
   });
 
-  it('a refusal followed by a good connection is forgotten: a later refusal starts the confirmation again', async () => {
+  it('a refusal, a network failure and a refusal are not «twice in a row»: the failure in between forgets the first refusal', async () => {
     const abort = new AbortController();
     const sleeps: number[] = [];
     const outcomes: Array<'auth' | 'network'> = ['auth', 'network', 'auth'];
@@ -133,16 +161,6 @@ describe('the link loop', () => {
     }, sleeps, abort, 3, { stopJobs: async () => { stops += 1; } });
     await loop.run(abort.signal);
     assert.equal(stops, 0, 'refusal, a network failure, refusal: the two refusals are not "twice in a row"');
-  });
-
-  it('a runner that is down for a long while and learns on its first connection that it was removed stops the jobs', async () => {
-    const sleeps: number[] = [];
-    const abort = new AbortController();
-    let stops = 0;
-    // Restarted after the removal: the first refusal waits the confirmation, the second is the answer.
-    const loop = createLoopFixture(async () => { throw new HubConnectionError('auth', 'refused'); }, sleeps, abort, 2, { stopJobs: async () => { stops += 1; } });
-    await loop.run(abort.signal);
-    assert.equal(stops, 1);
   });
 
   it('a wrong host key is a failure to retry, not a removal', async () => {

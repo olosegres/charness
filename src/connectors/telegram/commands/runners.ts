@@ -21,12 +21,11 @@ import { findProposedHubAddress, formatHubAddress } from '../../../runners/hubAd
 import type { HubContext } from '../../../runners/hubPaths';
 import {
   createPairing,
-  removePairedRunner,
   setPairedRunnerPaused,
 } from '../../../runners/hubPairing';
 import { HubRegistryError, readPairedFile, readPendingFile } from '../../../runners/hubRegistry';
 import { pairingLifetimeMinutes } from '../../../runners/pairingTiming';
-import { cutRunnerLink } from '../../../runners/linkControl';
+import { removeRunnerAndEndItsWork } from '../../../runners/runnerRemoval';
 import type { RunnersOverview } from '../../../runners/runnersOverview';
 import {
   buildAddressStep,
@@ -351,8 +350,7 @@ export function createRunners(ports: RunnersPorts) {
         await answerCallbackQuerySafely(ctx);
         break;
       case 'removeYes': {
-        const removed = await removePairedRunner(hub, runner.id, now());
-        if (removed !== null) cutRunnerLink(hub.dir, removed.id);
+        await removeRunnerAndEndItsWork(hub, runner.id, now());
         await answerCallbackQuerySafely(ctx, t('runners.removedToast', { name: runner.name }));
         break;
       }

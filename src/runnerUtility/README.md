@@ -128,12 +128,19 @@ everything as it was, and `unpair --local` forgets the pairing here only.
 
 ## When the hub removes the runner
 
-Pueue outlives the link by design (a link restart must never kill a job), so a removal has to be told apart from an ordinary disconnection and
-end the work the hub's agents left running here. The runner takes a removal for certain when the hub's own answer says so — the gate refused
-`link` and `identity` answers that the runner is not paired — or when its key is refused twice, 15 s apart (one refusal could be a key file
-being rewritten, and killing jobs for that would be wrong). It then records `removed`, stops every job of the queue (`stopAllPueueJobs`: the
-running ones are killed, and the queued ones are removed so none starts in their place), and asks again once an hour. A machine that was
-offline during the removal does the same on its next connection.
+Pueue outlives the link by design (a link restart must never kill a job), so a removal has to end the work the hub's agents left running
+here — and a refused key alone is not proof of a removal: a hub whose home folder is locked (a volume not yet unlocked after a reboot), whose
+file modes changed or whose sshd setting was edited refuses the key the same way, for hours. So the jobs are stopped on evidence only
+(`stopAllPueueJobs`: the running ones are killed, the queued ones removed, and it waits until the queue is empty):
+
+- **The hub does it itself** when it removes a runner that is online: `runners/runnerRemoval.ts` runs `pueue reset --force` over the
+  link that is still open, then cuts it. This is the normal case (`/runners` → Remove, `charness runners remove`).
+- **The hub's own answer.** A key line that outlived the registry entry makes the gate refuse `link`; the runner then asks `identity`,
+  which the gate answers for a runner that is not paired (`{ok:false}`). That is certain: the runner records `removed` and stops its jobs at once.
+- **A refused key and nothing more** (the machine was off when it was removed, and the key line was deleted): after two refusals 15 s apart
+  (one could be a key file being rewritten) the status says `removed` and the runner asks again every hour, but its jobs are left alone
+  until the hub has been refusing for 12 hours (`unconfirmedRemovalStopAfterMs`) without ever answering, or any other outcome — a network
+  failure, a connection — starts the count again. A restart of the utility starts it again too.
 
 ## Tests
 

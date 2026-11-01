@@ -4,10 +4,11 @@ import { buildBootstrapLine } from './bootstrapLine';
 import { ensureGateWrapper } from './gateWrapper';
 import { checkHubAddress, parseHubAddress, scanHostKey, type HostKeyScanner } from './hubAddress';
 import { createHubContext, type HubContext } from './hubPaths';
-import { createPairing, findPairedRunner, removePairedRunner, setPairedRunnerPaused, sweepExpiredPairings } from './hubPairing';
+import { createPairing, findPairedRunner, setPairedRunnerPaused, sweepExpiredPairings } from './hubPairing';
 import { formatLifetime, readPairingLifetimeMs } from './pairingTiming';
 import { HubRegistryError, readPairedFile, readPendingFile } from './hubRegistry';
-import { cutRunnerLink, getRunnerLinkStatus } from './linkControl';
+import { getRunnerLinkStatus } from './linkControl';
+import { removeRunnerAndEndItsWork } from './runnerRemoval';
 import { formatListTimestamp, formatRunnerList } from './runnersList';
 
 /**
@@ -137,13 +138,12 @@ async function runListCommand(io: CliIo, deps: RunnersCliDeps): Promise<number> 
 }
 
 async function runRemoveCommand(name: string, io: CliIo, deps: RunnersCliDeps): Promise<number> {
-  const removed = await removePairedRunner(deps.ctx, name, deps.now());
+  const removed = await removeRunnerAndEndItsWork(deps.ctx, name, deps.now());
   if (removed === null) {
     io.stderr(`runners: no runner named "${name}"\n`);
     return failedExitCode;
   }
-  cutRunnerLink(deps.ctx.dir, removed.id);
-  io.stdout(`Runner "${removed.name}" removed: its key is deleted and its link cut.\n`);
+  io.stdout(`Runner "${removed.name}" removed: its key is deleted, its link cut, and the jobs it had running are stopped (an offline machine stops them itself once it finds out it was removed).\n`);
   return 0;
 }
 
