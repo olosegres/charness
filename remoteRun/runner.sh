@@ -480,13 +480,18 @@ signal_job_group() {
 }
 
 # Stop a job: a queued one is removed, a running one gets SIGTERM (its whole group) and, after the grace time, Pueue's own kill of the
-# whole task tree.
+# whole task tree. $1 says why: `timeout` when the caller's own time limit ran out (recorded like the job's own watchdog does it — 124,
+# "timed out" — whichever of the two gets there first), anything else is a kill (137).
 kill_job() {
   local task
   task=$(read_file "$jd/task-id")
   [ -n "$task" ] || return 1
   [ -f "$jd/exit" ] && return 0
-  touch "$jd/killed"
+  if [ "${1:-}" = timeout ]; then
+    touch "$jd/timeout"
+  else
+    touch "$jd/killed"
+  fi
   if [ ! -f "$jd/pid" ] && pq remove "$task" > /dev/null 2>&1; then
     finish_killed_job
     return 0
@@ -536,7 +541,7 @@ check_job_ended() {
 
 cmd_kill() {
   set_paths "$1" "$2" "$3"
-  kill_job || die "no such job: $job"
+  kill_job "${4:-}" || die "no such job: $job"
   echo killed
 }
 

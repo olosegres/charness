@@ -18,6 +18,9 @@ import type { JobOutcome } from './jobState';
  * shell's code for the signal; the local `--timeout` does the same and exits 124.
  */
 
+/** The reason `runner.sh kill` takes for a kill that is the caller's time limit running out. */
+const killReasonTimeout = 'timeout';
+
 /** After a kill or an interrupt the lease session ends by itself (the runner's grace time, and as long again); this long before the ssh process is cut. */
 const streamEndGraceMs = 2 * killGraceSeconds * 1000;
 
@@ -70,7 +73,8 @@ export async function followForeground(params: {
   const killJob = (): Promise<void> => {
     killing ??= (async () => {
       clearInterval(heartbeatTimer);
-      await client.call('kill', [staged.slug, staged.jobId], { timeoutMs: killCallTimeoutMs });
+      // A kill because the limit ran out is recorded as the limit (124), as the runner's own watchdog records it when it gets there first.
+      await client.call('kill', [staged.slug, staged.jobId, ...(isTimedOut ? [killReasonTimeout] : [])], { timeoutMs: killCallTimeoutMs });
       setTimeout(() => child.kill('SIGKILL'), streamEndGraceMs).unref();
     })();
     return killing;

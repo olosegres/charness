@@ -532,6 +532,29 @@ describe('a job that had to be SIGKILLed is an ended job', () => {
     assert.equal(fs.readFileSync(path.join(jobDir, 'exit'), 'utf8').trim(), '124');
   });
 
+  it('a kill that is the caller\'s time limit running out is recorded as the limit — 124, "timed out" — not as a kill (137), on a running job and on one still queued', () => {
+    const running = startStubbornJob();
+    assert.equal(runFunctions('kill_job timeout').status, 0);
+    assert.equal(fs.readFileSync(path.join(running.jobDir, 'exit'), 'utf8').trim(), '124');
+    assert.equal(fs.existsSync(path.join(running.jobDir, 'timeout')), true, 'the limit\'s marker is what `status` reads');
+    assert.equal(fs.existsSync(path.join(running.jobDir, 'killed')), false, 'and there is no kill marker beside it');
+    // A queued one: no process yet, Pueue removes the task (stubbed here), and the record is written at once.
+    const queuedDir = path.join(workDir, 'p', slug, 'jobs', 'box1-queued');
+    writeFile(queuedDir, 'task-id', '2\n');
+    const result = spawnSync('bash', ['-c', `source ${scriptPath}; set_paths ${workDir} ${slug} box1-queued; kill_grace_sec=1; pq() { return 0; }; kill_job timeout`], { encoding: 'utf8', timeout: 60_000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.readFileSync(path.join(queuedDir, 'exit'), 'utf8').trim(), '124');
+    assert.equal(fs.existsSync(path.join(queuedDir, 'killed')), false);
+  });
+
+  it('a plain kill still records 137 with the kill marker', () => {
+    const { jobDir } = startStubbornJob();
+    assert.equal(runFunctions('kill_job').status, 0);
+    assert.equal(fs.readFileSync(path.join(jobDir, 'exit'), 'utf8').trim(), '137');
+    assert.equal(fs.existsSync(path.join(jobDir, 'killed')), true);
+    assert.equal(fs.existsSync(path.join(jobDir, 'timeout')), false);
+  });
+
   it('an exit a job wrote itself is never overwritten by the kill record', () => {
     const { jobDir } = startStubbornJob();
     writeFile(jobDir, 'exit', '0\n');

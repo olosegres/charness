@@ -613,6 +613,18 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.match(await readNewestJobState(), /timed out/);
     });
 
+    it('a foreground run that waited behind a busy group until its limit ran out is recorded as TIMED OUT — the same word its exit code 124 says — not as killed', async () => {
+      const holder = readJobId(await run(['--bg', '--group', 'emulator', createGatedCommand('gate-fglimit', { before: 'echo started > ../fglimit-holder-started', after: 'true' })]));
+      await waitUntil('the holder to hold the emulator group', 60_000, () => fs.existsSync(path.join(project.runnerDirectory, 'fglimit-holder-started')));
+      // Nothing runs on the runner for this job yet, so only the CLI's own timer can end it — and it used to record a plain kill.
+      const queued = await run(['--group', 'emulator', '--timeout', '4s', 'true'], { timeoutMs: 90_000 });
+      assert.equal(queued.exitCode, 124, queued.stderr);
+      assert.match(queued.stderr, /timed out after 4s/);
+      assert.match(await readNewestJobState(), /timed out/, 'ls says timed out, as the exit code does');
+      openGate(project, 'gate-fglimit');
+      assert.equal((await run(['wait', holder])).exitCode, 0);
+    });
+
     it('a command that ignores SIGTERM is SIGKILLed after the grace time and still ends as an ENDED job: its exit is recorded — 137 for `kill`, 124 for the time limit — so prune can remove it', async () => {
       const killedId = readJobId(await run(['--bg', createDecoyCommand('decoy-stubborn-killed', { isIgnoringTerm: true })]));
       const killedPid = await waitForPidFile(project, 'decoy-stubborn-killed.pid');
