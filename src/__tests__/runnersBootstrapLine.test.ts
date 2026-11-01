@@ -154,7 +154,7 @@ describe('bootstrap line', () => {
     createBootstrapAnswer();
     const toolsBin = path.join(workDir, 'tools');
     fs.mkdirSync(toolsBin);
-    for (const tool of ['mktemp', 'rm', 'cat', 'tar', 'fold', 'mkdir', 'cp']) {
+    for (const tool of ['sh', 'mktemp', 'rm', 'cat', 'tar', 'fold', 'mkdir', 'cp']) {
       const resolved = spawnSync('sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
       if (resolved.startsWith('/')) fs.symlinkSync(resolved, path.join(toolsBin, tool));
     }

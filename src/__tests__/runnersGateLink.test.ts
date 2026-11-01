@@ -240,7 +240,8 @@ describe('the gate\'s link', () => {
 
     // A successor publishes its socket the way a gate does: bind under its own name, rename onto the path.
     const successorPath = `${paths.socket}.successor`;
-    const successor = net.createServer((connection) => { connection.end('successor'); });
+    // It accepts and says nothing: the probe hangs up at once, and a greeting written into that is a reset nobody listens for.
+    const successor = net.createServer((connection) => { connection.resume(); });
     await new Promise<void>((resolve) => { successor.listen(successorPath, resolve); });
     teardown.push(() => successor.close());
     fs.renameSync(successorPath, paths.socket);
