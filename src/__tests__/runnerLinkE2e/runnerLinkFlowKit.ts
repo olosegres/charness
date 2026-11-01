@@ -71,6 +71,17 @@ export interface SshdInstance {
   process: ChildProcess;
 }
 
+/**
+ * OpenSSH 9.8 and later refuse EVERY connection from an address after a few failed logins from it (`PerSourcePenalties`: «Connection closed by
+ * 127.0.0.1», a good key too), and the flows refuse logins on purpose — all from 127.0.0.1. Older sshd knows no such keyword and rejects the whole
+ * config for it, so sshd itself is asked whether it does.
+ */
+function checkIsPerSourcePenaltiesKnown(sshdDir: string, hostKeyPath: string): boolean {
+  const probeConfigPath = path.join(sshdDir, 'penalties_probe_config');
+  fs.writeFileSync(probeConfigPath, `HostKey ${hostKeyPath}\nPerSourcePenalties no\n`);
+  return spawnSync(sshdPath, ['-t', '-f', probeConfigPath], { stdio: 'ignore' }).status === 0;
+}
+
 /** A loopback sshd (own host key, key login only) that reads the keys of `authorizedKeysPath`. */
 async function startSshdInstance(root: string, name: string, authorizedKeysPath: string): Promise<SshdInstance> {
   const sshdDir = path.join(root, name);
@@ -79,6 +90,7 @@ async function startSshdInstance(root: string, name: string, authorizedKeysPath:
   fs.rmSync(hostKeyPath, { force: true });
   fs.rmSync(`${hostKeyPath}.pub`, { force: true });
   execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', hostKeyPath]);
+  const penaltyConfigLines = checkIsPerSourcePenaltiesKnown(sshdDir, hostKeyPath) ? ['PerSourcePenalties no'] : [];
   for (let attempt = 1; attempt <= sshdStartAttempts; attempt += 1) {
     const port = await getFreePort();
     const configPath = path.join(sshdDir, 'sshd_config');
@@ -94,6 +106,7 @@ async function startSshdInstance(root: string, name: string, authorizedKeysPath:
       'KbdInteractiveAuthentication no',
       'PubkeyAuthentication yes',
       'LogLevel ERROR',
+      ...penaltyConfigLines,
     ].join('\n'));
     const logFd = fs.openSync(path.join(sshdDir, 'sshd.log'), 'w');
     const child = spawn(sshdPath, ['-D', '-e', '-f', configPath], { stdio: ['ignore', logFd, logFd] });
@@ -169,8 +182,11 @@ export function installRunnerApp(layout: RunnerLinkLayout, home: string): void {
   const paths = getRunnerHomePaths(home);
   const previous = process.env[testNodeModulesEnvName];
   process.env[testNodeModulesEnvName] = path.join(repoRoot, 'node_modules');
+  const unpackedPackage = path.join(layout.root, 'runner-package-source');
+  fs.rmSync(unpackedPackage, { recursive: true, force: true });
+  fs.cpSync(layout.hubInstall, unpackedPackage, { recursive: true, filter: (source) => path.basename(source) !== 'node_modules' });
   try {
-    switchCurrentApp(paths, installAppFromDirectory(layout.hubInstall, paths));
+    switchCurrentApp(paths, installAppFromDirectory(unpackedPackage, paths));
   } finally {
     if (previous === undefined) delete process.env[testNodeModulesEnvName];
     else process.env[testNodeModulesEnvName] = previous;

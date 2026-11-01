@@ -60,10 +60,13 @@ describe('the runner\'s queue and its services (real Pueue)', { skip: skipReason
     return execFileSync(path.join(paths.binDir, 'pueue'), ['--config', paths.pueueConfig, ...args], { encoding: 'utf8' });
   }
 
-  /** A running background job that writes its own pid, as the agents' jobs do; returns the pidfile. */
+  /**
+   * A running background job that writes its own pid, as the agents' jobs do; returns the pidfile. The job is ONE string, the way the runner
+   * script submits it: Pueue joins separate arguments with plain spaces, so `sh -c 'echo $$ > f; …'` would redirect the outer command.
+   */
   async function startJob(name: string, command = 'sleep 120'): Promise<string> {
     const pidFile = path.join(home, `${name}.pid`);
-    pueue(['add', '--immediate', '--', 'sh', '-c', `echo $$ > ${pidFile}; ${command}`]);
+    pueue(['add', '--immediate', '--', `echo $$ > ${pidFile}; exec ${command}`]);
     await waitUntil(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '', `job ${name} to start`, 15_000);
     return pidFile;
   }
@@ -141,7 +144,7 @@ describe('the runner\'s queue and its services (real Pueue)', { skip: skipReason
     assert.equal(await ensurePueueDaemon(paths), true);
     const runningPid = await startJob('running');
     const queuedMarker = path.join(home, 'queued-ran');
-    pueue(['add', '--', 'sh', '-c', `echo ran > ${queuedMarker}`]);
+    pueue(['add', '--', `echo ran > ${queuedMarker}`]);
     assert.deepEqual(await inspectPueue(paths), { kind: 'busy', activeJobs: 1 });
 
     assert.equal(await stopAllPueueJobs(paths), true);

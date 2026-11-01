@@ -35,6 +35,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
+import { getRunnerLinkStatus } from '../runners/linkControl';
 import * as path from 'node:path';
 import { testNodeModulesEnvName } from '../runnerUtility/appInstall';
 import { readLastProbe } from '../remoteRun/runners';
@@ -417,6 +418,9 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
   it('the utility holds the link: /runners lists the machine online, and the live probe adds its hardware, jobs and capabilities', async () => {
     runner = startRunner(link);
     await waitUntil(() => readRunnerStatus()?.state === 'linked', 'the runner utility to report a linked state', linkTimeoutMs);
+    // The runner reports «linked» when the gate's marker arrives; the hub counts it online a moment later, when the gate's own ssh handshake to the
+    // runner is done and its socket is published — a list asked in between says «offline» and is not refreshed for 90 seconds.
+    await waitUntil(async () => (await getRunnerLinkStatus(getRegistryDir(), runnerId)).isOnline, 'the hub to see the link (its socket accepts)', linkTimeoutMs);
     const list = await general.sendAndAwaitReply('/runners', `${runnerName} — online`);
     assert.deepEqual(general.getKeyboardData(list), [['rnr_pair'], [`rnr_${readPaired().rev}_0_p`, `rnr_${readPaired().rev}_0_x`], ['rnr_refresh']]);
     await general.waitForMessageText('the live data on the list', list, (text) => text.includes('jobs: 0 running, 0 queued') && text.includes('can: ') && !text.includes('Checking the machines'));

@@ -26,6 +26,7 @@ import * as path from 'node:path';
 import { decodePairCode } from '../runners/pairCode';
 import { redeemReplySchema, type RedeemRequest } from '../runners/gateProtocol';
 import { readPairedFile, writePairedFile } from '../runners/hubRegistry';
+import { getRunnerLinkStatus } from '../runners/linkControl';
 import { connectToHub, HubConnectionError, requestGateJson } from '../runnerUtility/hubClient';
 import { readRunnerConfig, writePairingInProgress } from '../runnerUtility/runnerConfig';
 import { ensureRunnerKeys } from '../runnerUtility/runnerKeys';
@@ -104,6 +105,14 @@ describe('runner link (process level)', { skip: skipReason }, () => {
 
   function readHubPaired(): { rev: number; runners: Array<{ id: string; name: string }> } {
     return readJson(path.join(layout.hubDir, 'paired.json'));
+  }
+
+  /**
+   * The runner reports «linked» when the gate's marker arrives; the hub counts it online a moment later, when the gate's own ssh handshake to the
+   * runner is done and its socket is published. A command sent through the link in between finds no socket.
+   */
+  async function waitForHubToSeeLink(id: string): Promise<void> {
+    await waitUntil(async () => (await getRunnerLinkStatus(layout.hubDir, id)).isOnline, 'the hub to see the link (its socket accepts)', linkTimeoutMs);
   }
 
   async function waitForSsh(command: string): Promise<string> {
@@ -218,11 +227,14 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.notEqual(shellLogin.status, 0);
     assert.match(shellLogin.stderr, /refused: this key may only be used by charness-runner/);
 
-    // A word the gate DOES serve, so the only thing that can fail is the pty itself.
+    // A word the gate DOES serve (it answers without the pty), so the only thing that can fail the forced pty is the pty itself. What the client
+    // does after the refusal depends on its version — OpenSSH 10 ends the session (255, the command never runs), older ones run the command anyway
+    // — so the proof is the server's refusal, which every version prints.
+    const served = sshToHubWithRunnerKey(layout, [], 'version');
+    assert.equal(served.status, 0, served.stderr);
+    assert.match(served.stdout, /--charness-gate-1-- version package=/);
     const pty = sshToHubWithRunnerKey(layout, ['-tt'], 'version');
-    assert.equal(pty.status, 0, pty.stderr);
     assert.match(pty.stderr, /PTY allocation request failed/);
-    assert.match(pty.stdout, /--charness-gate-1-- version package=/);
 
     // `-N`: no command runs, the session stays up, so an exit with 255 is the server refusing the forward itself.
     const remoteTcp = sshToHubWithRunnerKey(layout, ['-N', '-R', '0:127.0.0.1:22', '-o', 'ExitOnForwardFailure=yes'], null);
@@ -302,6 +314,14 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal(readHubPaired().rev, 1, 'an update is not a new pairing');
   });
 
+  /**
+   * A job that writes the pid of the process that stays alive (the `exec`), as ONE string for `pueue add` — the way the runner script submits a
+   * job: Pueue joins separate arguments with plain spaces, so `sh -c 'echo $$ > f; …'` would redirect the outer command and leave the file empty.
+   */
+  function backgroundJobCommand(pidFile: string): string {
+    return `echo $$ > ${pidFile}; exec sleep 300`;
+  }
+
   function isProcessAlive(pid: number): boolean {
     try {
       process.kill(pid, 0);
@@ -315,7 +335,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     const name = readHubPaired().runners[0].name;
     // A background job, as `remote-run --bg` leaves one: it runs in the runner\'s Pueue, which outlives any link.
     const jobPidFile = path.join(layout.root, 'background-job.pid');
-    const started = sshThroughLink(layout, runnerId, `${path.join(runnerPaths.binDir, 'pueue')} --config ${runnerPaths.pueueConfig} add --immediate -- sh -c 'echo $$ > ${jobPidFile}; sleep 300'`);
+    const started = sshThroughLink(layout, runnerId, `${path.join(runnerPaths.binDir, 'pueue')} --config ${runnerPaths.pueueConfig} add --immediate -- '${backgroundJobCommand(jobPidFile)}'`);
     assert.equal(started.status, 0, started.stderr);
     await waitUntil(() => fs.existsSync(jobPidFile) && fs.readFileSync(jobPidFile, 'utf8').trim() !== '', 'the background job to start', linkTimeoutMs);
     const jobPid = Number(fs.readFileSync(jobPidFile, 'utf8'));
@@ -339,8 +359,9 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     const thirdId = readJson<RunnerConfig>(paths.config).runnerId;
     const third = startRunner(layout, home);
     await waitUntil(() => readStatusAt(paths)?.state === 'linked', 'the third machine to link', linkTimeoutMs);
+    await waitForHubToSeeLink(thirdId);
     const jobPidFile = path.join(layout.root, 'third-background-job.pid');
-    const started = sshThroughLink(layout, thirdId, `${path.join(paths.binDir, 'pueue')} --config ${paths.pueueConfig} add --immediate -- sh -c 'echo $$ > ${jobPidFile}; sleep 300'`);
+    const started = sshThroughLink(layout, thirdId, `${path.join(paths.binDir, 'pueue')} --config ${paths.pueueConfig} add --immediate -- '${backgroundJobCommand(jobPidFile)}'`);
     assert.equal(started.status, 0, started.stderr);
     await waitUntil(() => fs.existsSync(jobPidFile) && fs.readFileSync(jobPidFile, 'utf8').trim() !== '', 'the third machine\'s background job to start', linkTimeoutMs);
     const jobPid = Number(fs.readFileSync(jobPidFile, 'utf8'));
@@ -405,6 +426,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     const second = startRunner(layout, secondHome);
     await waitUntil(() => readStatusAt(paths)?.state === 'linked' && readStatusAt(paths)?.pid !== stalePid, 'the second machine to link again', linkTimeoutMs);
     const secondRunnerId = readJson<RunnerConfig>(paths.config).runnerId;
+    await waitForHubToSeeLink(secondRunnerId);
     const linkPid = readStatusAt(paths)?.pid ?? 0;
     assert.equal(sshThroughLink(layout, secondRunnerId, 'echo before').stdout.trim(), 'before');
 
