@@ -251,3 +251,18 @@ export function setPairedRunnerPaused(ctx: HubContext, nameOrId: string, isPause
     return { result: updated, paired: { rev: state.paired.rev + 1, runners: state.paired.runners.map((candidate) => (candidate.id === runner.id ? updated : candidate)) } };
   });
 }
+
+/**
+ * @description Record which message offers the open code `pairId` (opaque to the hub; the instance that sent it finds it again here after
+ * a restart, to edit it when the code is used or expires). The message can only be sent after the code exists — it carries the code — so
+ * this is a second step. `false` when the code is gone (used, expired and swept).
+ */
+export function setPairingMessageRef(ctx: HubContext, pairId: string, messageRef: string): Promise<boolean> {
+  return runTransaction(ctx, Date.now(), (state) => {
+    if (!state.pending.pending.some((pairing) => pairing.pairId === pairId)) return { result: false };
+    return {
+      result: true,
+      pending: { pending: state.pending.pending.map((pairing) => (pairing.pairId === pairId ? { ...pairing, messageRef } : pairing)) },
+    };
+  });
+}

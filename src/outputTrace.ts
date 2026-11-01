@@ -398,6 +398,29 @@ function getBooleanField(source: Record<string, unknown>, field: string): boolea
   return typeof value === 'boolean' ? value : undefined;
 }
 
+/** What the trace keeps of a message that holds a secret: nothing of the text, only its length. */
+const secretTextPreview = '[secret — text not recorded]';
+/** The texts of the secret messages being sent right now, each with how many sends of it are in flight. */
+const secretOutboundTexts = new Map<string, number>();
+
+/**
+ * @description Mark `text` as a secret while it is being sent (a pairing line is a credential): the `sendTry` / `sendOk` /
+ * `sendErr` records of the Bot API call that carries exactly this text keep its length and nothing else. The trace is the only
+ * place a sent text could be quoted, and it is written to disk. Returns the release to call once the send settled.
+ */
+export function markOutboundTextSecret(text: string): () => void {
+  secretOutboundTexts.set(text, (secretOutboundTexts.get(text) ?? 0) + 1);
+  return () => {
+    const remaining = (secretOutboundTexts.get(text) ?? 1) - 1;
+    if (remaining > 0) secretOutboundTexts.set(text, remaining);
+    else secretOutboundTexts.delete(text);
+  };
+}
+
+function createApiCallPreview(text: string): string {
+  return secretOutboundTexts.has(text) ? secretTextPreview : createTracePreview(text);
+}
+
 function extractApiCallFields(method: string, payload: object): Record<string, TraceFieldValue> {
   const p = payload as Record<string, unknown>;
   const text = getStringField(p, 'text');
@@ -412,7 +435,7 @@ function extractApiCallFields(method: string, payload: object): Record<string, T
     // notifies, repins are silent), so it must be visible in the trace.
     disableNotification: getBooleanField(p, 'disable_notification'),
     len: text?.length,
-    preview: text === undefined ? undefined : createTracePreview(text),
+    preview: text === undefined ? undefined : createApiCallPreview(text),
   };
 }
 

@@ -28,6 +28,8 @@ export interface RecordedSend {
   messageId: number | null;
   text: string;
   extra: object | undefined;
+  /** The send options the module passed (`unpaced`, `isSecret`); present only when it passed some. */
+  options?: object;
 }
 
 type CommandHandler = Parameters<RegisterCommand>[1];
@@ -83,9 +85,9 @@ export class CommandHarness {
         }
       },
       getState: () => this.state,
-      replyToThread: async (_key, text, extra) => {
+      replyToThread: async (_key, text, extra, options) => {
         const messageId = this.nextSentMessageId++;
-        this.replies.push({ messageId, text, extra });
+        this.replies.push({ messageId, text, extra, ...(options === undefined ? {} : { options }) });
         return messageId;
       },
       editThreadMessage: async (_key, messageId, text, extra) => {

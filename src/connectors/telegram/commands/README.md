@@ -214,6 +214,22 @@ only, `0` or `off` for no limit, up to the bound; anything else is refused with 
 the value and says it is changed in General; a typed number or an old picker's tap there is refused. Not gated on an adapter or a session. The text
 names no slash command (Telegram would auto-link it).
 
+## `runners.ts`
+
+`/runners` and the buttons `rnr_pair` / `rnr_refresh` / `rnr_aduse` / `rnr_adother` / `rnr_<rev>_<i>_<p|r|x|xy|xn>`: the machines paired as runners
+(`src/runners/` is the hub, `utils/runnersScreenPlan.ts` the pure text and button plan). General only; elsewhere a pointer to General. The list opens
+from `readOverview` (the registry, which links accept a connection, the last snapshots — no ssh) and is redrawn once `probeOverview` (the phase-1
+probe through the link of every ONLINE machine, one 20 s deadline) answers — unless the message is no longer that list at the registry revision it was
+drawn from (`shownScreens`: a question replaced it, or another revision). A runner button carries the registry revision AND the position: a mismatch is
+a toast and a fresh list, never an action on a neighbour; Remove is a question (`xy` / `xn`) on the same message. **Pairing**: no saved `runnerHost` →
+the address step (a proposal from `listAddressCandidates` that `findProposedHubAddress` proved to answer with this machine's own ssh key; the keyboard's
+«Use» resolves against a per-message snapshot) and, after «Enter another address», the next General message (`handleRunnersAddressText`, called by the
+text handler before the startup buffer; a slash command ends the wait) is the address, checked by `checkHubAddress`. The pairing message is HTML with the
+line in a `<pre>` (tap to copy) sent with the `isSecret` option of `replyToThread` (`markOutboundTextSecret` keeps the text out of the output trace —
+length only); its place is written into `pending.json` (`setPairingMessageRef`, `tg:<key>#<message id>`), and `startRunnersWatcher` (every 5 s, one
+look at boot) edits it to «paired» or «expired». A code used while the bot is down keeps its (spent) message: the registry no longer holds the note.
+`startRunnersWatcher` also refreshes the `gate` wrapper at boot, only for an instance that has runners or open codes.
+
 ## `backendSwitch.ts`
 
 The question before a MANUAL switch of a topic between the two agent backends (`bsw_ok` / `bsw_no`): «🔁 Switch this

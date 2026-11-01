@@ -86,7 +86,7 @@ export function checkHasCapability(probe: RunnerProbe, capability: RunnerCapabil
   return probe.capabilities[capability].isAvailable;
 }
 
-function formatGigabytes(megabytes: number | null): string {
+export function formatGigabytes(megabytes: number | null): string {
   if (megabytes === null) return '?';
   const gigabytes = megabytes / megabytesPerGigabyte;
   return `${gigabytes >= 10 ? Math.round(gigabytes) : Math.round(gigabytes * 10) / 10} GB`;

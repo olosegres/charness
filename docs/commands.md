@@ -58,6 +58,7 @@ them. How the agents run (the Claude Code backends, OpenCode, restarts, the bot'
   - [`/pair`](#pair)
 - **General-only**
   - [`/quitall`](#quitall)
+  - [`/runners`](#runners)
 - **Plain messages, voice and files**
   - [Natural language and voice](#natural-language-and-voice)
   - [File intake](#file-intake)
@@ -780,6 +781,17 @@ Bind this forum supergroup to the bot (re-point auto-pairing) — works from any
 ### `/quitall`
 
 End every active agent in every bound topic (also releases their session ids).
+
+### `/runners`
+
+The machines your agents can send tests and builds to (`charness remote-run`), paired from Telegram. **General only, admins only** — in a topic it points to General, and a button tapped from a topic is refused. One message, redrawn in place:
+
+- **The list.** Each machine with its name, online or «offline since …», paused, system and how it is kept running (run by hand, user service, always-on system service); when it is online also its hardware (CPU, load, RAM, disk), its jobs (running, queued, projects) and what it can do — Android, iOS, Docker, Playwright, with the reason for a «no». The list opens at once from what the bot already knows, then asks the online machines (up to 20 s) and redraws; a machine that does not answer keeps its last snapshot, marked «as it was then». Empty: «No runners yet.»
+- **＋ Pair a new runner** posts one message (a secret — the output trace records only its length): a line, valid 10 minutes, single use, to copy and run on the runner machine **as the account that will run jobs** — not your main account, it runs the agents' code. The line installs `charness-runner` there from this charness's own package and pairs the machine; the message then turns into «Runner “name” paired …» and the line is gone from it, or after 10 minutes into «Pairing code expired.» (also after a bot restart). The first time, the bot asks **which address runners dial**: it proposes a public address of this machine when it answers with this machine's own ssh key, or you send `host` / `host:port` — checked the same way, a mismatch names the key that answered and the bot asks again. The address is kept in [`settings.json`](../SETUP.md#instance-settings-settingsjson) (`runnerHost`).
+- **Pause / Resume** keeps a machine attached but sends it no jobs. **Remove** asks first («Its key is deleted and it stops connecting. Jobs running there are killed.»), then deletes its key line and registry entry and cuts its link; the machine says it was removed and retries at most hourly.
+- Buttons carry the registry's revision and the machine's position, so a keyboard left in the history only says «the list changed — here it is again» and draws the current list.
+
+The same actions without Telegram (an instance that serves only Jira): `charness runners [ls | pair --host <address> | remove <name> | pause <name> | resume <name>]`.
 
 ## Plain messages, voice and files
 

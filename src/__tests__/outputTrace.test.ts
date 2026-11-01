@@ -11,6 +11,7 @@ import {
   flushTraceBufferSyncOnExit,
   getTraceConfig,
   installCallApiTrace,
+  markOutboundTextSecret,
   pruneTraceBuckets,
   setTraceConfig,
   traceAgentEmit,
@@ -439,5 +440,74 @@ describe('installCallApiTrace — send-path filtering', () => {
     assert.equal(errEntry.kind, 'sendErr');
     assert.equal(errEntry.errorCode, 429);
     assert.equal(errEntry.retryAfterSec, 31);
+  });
+});
+
+describe('markOutboundTextSecret — a credential in a sent text never reaches the trace', () => {
+  const secretText = 'Pair a runner\n\nsh -c \'umask 077; echo cr1.SECRET-CODE-VALUE\'';
+
+  it('keeps the length and drops the text from sendTry and sendOk while the send is in flight, and from sendErr when it fails', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    let isFailing = false;
+    const host: CallApiHost = {
+      callApi: async () => {
+        if (isFailing) throw new Error('boom');
+        return { message_id: 7 };
+      },
+    };
+    installCallApiTrace(host);
+
+    const release = markOutboundTextSecret(secretText);
+    await host.callApi('sendMessage', { chat_id: -100123, message_thread_id: 7, text: secretText });
+    isFailing = true;
+    await assert.rejects(host.callApi('sendMessage', { chat_id: -100123, message_thread_id: 7, text: secretText }), /boom/);
+    release();
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    assert.ok(!fake.written.includes('SECRET-CODE-VALUE'), 'the code is nowhere in the trace');
+    assert.ok(!fake.written.includes('Pair a runner'), 'not even the start of the text');
+    const entries = parseLines(fake.written);
+    assert.deepEqual(entries.map((entry) => entry.kind), ['sendTry', 'sendOk', 'sendTry', 'sendErr']);
+    for (const entry of entries) {
+      assert.equal(entry.len, secretText.length, 'the length is still recorded');
+      assert.equal(entry.preview, '[secret — text not recorded]');
+    }
+  });
+
+  it('only the marked text is withheld, and the mark ends with its release (a second send of the same text is traced again)', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    const host: CallApiHost = { callApi: async () => ({ message_id: 8 }) };
+    installCallApiTrace(host);
+
+    const release = markOutboundTextSecret(secretText);
+    await host.callApi('sendMessage', { chat_id: -100123, message_thread_id: 7, text: 'an ordinary message' });
+    release();
+    await host.callApi('sendMessage', { chat_id: -100123, message_thread_id: 7, text: secretText });
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    const previews = parseLines(fake.written).filter((entry) => entry.kind === 'sendTry').map((entry) => entry.preview);
+    assert.equal(previews[0], 'an ordinary message');
+    assert.ok(typeof previews[1] === 'string' && previews[1].startsWith('Pair a runner'), 'after the release the text is an ordinary one again');
+  });
+
+  it('two sends of the same secret text overlap: it stays withheld until BOTH are released', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    const host: CallApiHost = { callApi: async () => ({ message_id: 9 }) };
+    installCallApiTrace(host);
+
+    const releaseFirst = markOutboundTextSecret(secretText);
+    const releaseSecond = markOutboundTextSecret(secretText);
+    releaseFirst();
+    await host.callApi('sendMessage', { chat_id: -100123, message_thread_id: 7, text: secretText });
+    releaseSecond();
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    assert.ok(!fake.written.includes('SECRET-CODE-VALUE'));
   });
 });
