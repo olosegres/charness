@@ -495,7 +495,7 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.match(group.stderr, /runner "box1" has no Pueue group "nope" \(its groups in runners\.json: default, emulator\)/);
       const unknownRunner = await run(['--runner', 'nope', 'echo', 'x']);
       assert.equal(unknownRunner.exitCode, 2);
-      assert.match(unknownRunner.stderr, /no runner named "nope" in runners\.json \(configured: box1\)/);
+      assert.match(unknownRunner.stderr, /no runner named "nope" \(configured: box1\)/);
       const badOption = await run(['--nope', 'echo', 'x']);
       assert.equal(badOption.exitCode, 2);
       assert.match(badOption.stderr, /unknown option: --nope/);
