@@ -29,8 +29,8 @@ import { createRandomId, generateEd25519KeyPair, getPublicKeyFingerprint } from 
  *      next operation, a plain `ls` included.
  *
  * Nothing in the middle can lose or double-spend a pairing: `redeem` records the runner with the id of the code that made it, so a
- * code is single use even when the pending entry outlives a crash, and a retry from the same machine is answered the same way
- * (idempotent). A runner that is removed from `paired.json` is refused by every gate request at once, whatever its key line still says.
+ * code is single use even when the pending entry outlives a crash (the entry is dropped by the next transaction, before anything else), and
+ * a retry from the same machine is answered the same way (idempotent). A runner that is removed from `paired.json` is refused by every gate request at once, whatever its key line still says.
  */
 
 const msPerMinute = 60 * 1000;
@@ -77,7 +77,14 @@ interface TransactionOutcome<TResult> {
 function runTransaction<TResult>(ctx: HubContext, nowMs: number, work: (state: RegistryState) => TransactionOutcome<TResult>): Promise<TResult> {
   return withHubLock(ctx.dir, () => {
     assertManagedBlockIntact(ctx.authorizedKeysPath);
-    const state: RegistryState = { paired: readPairedFile(ctx.dir), pending: readPendingFile(ctx.dir) };
+    const paired = readPairedFile(ctx.dir);
+    // A pending entry whose code was already used (a crash between the two writes of a redemption) is dropped BEFORE anything else is
+    // done, and persisted: the paired runner is the only proof that the code is spent, and a later removal of that runner must not leave
+    // the entry — and with it the code's temporary key — behind to be redeemed again.
+    const pending = readPendingFile(ctx.dir);
+    const openPending: PendingFile = { pending: pending.pending.filter((pairing) => !checkIsPairingUsed(paired, pairing.pairId)) };
+    if (openPending.pending.length !== pending.pending.length) writePendingFile(ctx.dir, openPending);
+    const state: RegistryState = { paired, pending: openPending };
     const outcome = work(state);
     if (outcome.paired !== undefined) writePairedFile(ctx.dir, outcome.paired);
     if (outcome.pending !== undefined) writePendingFile(ctx.dir, outcome.pending);
@@ -137,8 +144,7 @@ export function checkIsPairingOpen(ctx: HubContext, pairId: string, nowMs: numbe
  */
 export function sweepExpiredPairings(ctx: HubContext, nowMs: number): Promise<PendingPairing[]> {
   return runTransaction(ctx, nowMs, (state) => {
-    const withoutUsed = state.pending.pending.filter((pairing) => !checkIsPairingUsed(state.paired, pairing.pairId));
-    const { kept, expired } = removeExpired({ pending: withoutUsed }, nowMs);
+    const { kept, expired } = removeExpired(state.pending, nowMs);
     return { result: expired, ...(kept.pending.length === state.pending.pending.length ? {} : { pending: kept }) };
   });
 }
@@ -184,13 +190,8 @@ const unusableCodeReply: RedeemReply = { ok: false, reason: 'this pairing code i
 export function redeemPairing(ctx: HubContext, pairId: string, request: RedeemRequest, nowMs: number, packageId: string | null = null): Promise<RedeemReply> {
   return runTransaction(ctx, nowMs, (state): TransactionOutcome<RedeemReply> => {
     const used = state.paired.runners.find((runner) => runner.pairId === pairId);
-    const leftover = state.pending.pending.some((pairing) => pairing.pairId === pairId);
-    const pendingWithoutCode: PendingFile = { pending: state.pending.pending.filter((pairing) => pairing.pairId !== pairId) };
     if (used !== undefined) {
-      return {
-        result: used.publicKey === request.publicKey ? buildRedeemReply(used, readOrCreateHubKeyLocked(ctx.dir).publicKey, packageId) : unusableCodeReply,
-        ...(leftover ? { pending: pendingWithoutCode } : {}),
-      };
+      return { result: used.publicKey === request.publicKey ? buildRedeemReply(used, readOrCreateHubKeyLocked(ctx.dir).publicKey, packageId) : unusableCodeReply };
     }
     const pairing = state.pending.pending.find((candidate) => candidate.pairId === pairId);
     if (pairing === undefined) return { result: unusableCodeReply };
@@ -217,7 +218,7 @@ export function redeemPairing(ctx: HubContext, pairId: string, request: RedeemRe
     return {
       result: buildRedeemReply(runner, readOrCreateHubKeyLocked(ctx.dir).publicKey, packageId),
       paired: { rev: state.paired.rev + 1, runners: [...state.paired.runners, runner] },
-      pending: pendingWithoutCode,
+      pending: { pending: state.pending.pending.filter((candidate) => candidate.pairId !== pairId) },
     };
   });
 }

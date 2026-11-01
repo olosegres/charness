@@ -362,6 +362,23 @@ describe('interrupted operations mend themselves', () => {
     assert.equal(readPendingFile(fixture.ctx.dir).pending.length, 0, 'the leftover entry is dropped');
   });
 
+  it('removing a runner right after an interrupted redemption does not make its spent code redeemable again', async () => {
+    const pairing = await createTestPairing();
+    const survivingEntry = readPendingFile(fixture.ctx.dir).pending[0];
+    const first = await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture({ suggestedName: 'mac' }).request, startMs);
+    assert.ok(first.ok);
+    // The crash: paired.json was written, pending.json was not. The entry — and its temporary key's line — is still there.
+    writePendingFile(fixture.ctx.dir, { pending: [survivingEntry] });
+    assert.notEqual(await removePairedRunner(fixture.ctx, 'mac', startMs), null);
+
+    assert.deepEqual(readPendingFile(fixture.ctx.dir).pending, [], 'the spent code\'s entry is gone with the runner');
+    assert.deepEqual(readBlock(), [], 'and so is the temporary key\'s line');
+    assert.equal(checkIsPairingOpen(fixture.ctx, pairing.pairId, startMs), false);
+    const again = await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture().request, startMs);
+    assert.deepEqual(again, { ok: false, reason: 'this pairing code is unknown or already used' });
+    assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 0);
+  });
+
   it('the sweep drops the entry of a used code without handing it back as expired', async () => {
     const pairing = await createTestPairing();
     const survivingEntry = readPendingFile(fixture.ctx.dir).pending[0];
