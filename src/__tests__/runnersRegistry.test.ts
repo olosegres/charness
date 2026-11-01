@@ -13,18 +13,8 @@ import path from 'path';
 import { extractManagedBlock } from '../runners/authorizedKeys';
 import { decodePairCode } from '../runners/pairCode';
 import { createHubContext, getHandMadeRunnersPath, getHubFilePaths, getRunnerHostAlias } from '../runners/hubPaths';
-import {
-  checkIsPairingOpen,
-  createPairing,
-  describeRunnerIdentity,
-  pairingLifetimeMs,
-  pickFreeRunnerName,
-  redeemPairing,
-  removePairedRunner,
-  sanitizeRunnerName,
-  setPairedRunnerPaused,
-  sweepExpiredPairings,
-} from '../runners/hubPairing';
+import { checkIsPairingOpen, createPairing, describeRunnerIdentity, pickFreeRunnerName, redeemPairing, removePairedRunner, sanitizeRunnerName, setPairedRunnerPaused, sweepExpiredPairings } from '../runners/hubPairing';
+import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { AuthorizedKeysBlockError, authorizedKeysBlockStart } from '../runners/authorizedKeys';
 import { HubDerivedFilesError, HubRegistryError, readPairedFile, readPendingFile, writePendingFile } from '../runners/hubRegistry';
 import { generateEd25519KeyPair, getPublicKeyFingerprint } from '../runners/sshKeys';

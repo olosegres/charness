@@ -39,6 +39,7 @@ import {
   installRunnerApp,
   isCi,
   makePairingLine,
+  startImpostorSshd,
   readJson,
   runHubCli,
   runPairingLine,
@@ -163,39 +164,123 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal((await waitForSsh('echo relinked')).trim(), 'relinked');
   });
 
-  it('the runner\'s own key on the hub: no shell, no pty, no forwarding of any kind', async () => {
-    const shell = sshToHubWithRunnerKey(layout, [], 'id');
-    assert.notEqual(shell.status, 0);
-    assert.ok(!shell.stdout.includes('uid='));
-    const pty = sshToHubWithRunnerKey(layout, ['-tt'], 'true');
-    assert.notEqual(pty.status, 0);
-    const remote = sshToHubWithRunnerKey(layout, ['-R', '0:127.0.0.1:22', '-o', 'ExitOnForwardFailure=yes'], 'true');
-    assert.notEqual(remote.status, 0);
-    const stolenSocket = path.join(layout.root, 'stolen.sock');
-    const remoteSocket = sshToHubWithRunnerKey(layout, ['-R', `${stolenSocket}:127.0.0.1:22`, '-o', 'ExitOnForwardFailure=yes'], 'true');
-    assert.notEqual(remoteSocket.status, 0);
-    assert.equal(fs.existsSync(stolenSocket), false);
+  /** Connect to `localPort` (a forward the runner's key asked ssh for) and report whether anything came back. */
+  function probeForward(localPort: number): Promise<string> {
+    return new Promise((resolve) => {
+      const socket = net.connect(localPort, '127.0.0.1');
+      let received = '';
+      socket.on('data', (chunk) => { received += chunk.toString('utf8'); });
+      socket.on('close', () => resolve(received));
+      socket.on('error', () => resolve(received));
+      setTimeout(() => { socket.destroy(); resolve(received); }, 3000);
+    });
+  }
 
+  /** A listener the test owns: `listen` is a TCP port or a unix socket path; it counts every connection that reaches it. */
+  async function listenCounting(listenOn: number | string): Promise<{ count: () => number; close: () => void }> {
+    let connections = 0;
+    const server = net.createServer((socket) => {
+      connections += 1;
+      socket.end('reached');
+    });
+    await new Promise<void>((resolve) => { server.listen(listenOn, resolve); });
+    return { count: () => connections, close: () => { server.close(); } };
+  }
+
+  /** ssh -N -L with the runner's key: the connection stays up, so a refusal is the server's answer to the forward and not the end of the session. */
+  async function assertLocalForwardRefused(target: string, owner: { count: () => number }): Promise<void> {
     const localPort = await getFreePort();
     const forwarder = spawn('ssh', [
       '-F', '/dev/null', '-N', '-p', String(layout.sshPort), '-i', runnerPaths.clientKey, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
       '-o', 'StrictHostKeyChecking=no', '-o', `UserKnownHostsFile=${path.join(layout.root, 'known_hosts.scratch')}`,
-      '-L', `127.0.0.1:${localPort}:127.0.0.1:${layout.sshPort}`, `${os.userInfo().username}@127.0.0.1`,
+      '-L', `127.0.0.1:${localPort}:${target}`, `${os.userInfo().username}@127.0.0.1`,
     ], { stdio: 'ignore' });
     try {
       await waitUntil(() => spawnSync('bash', ['-c', `exec 3<>/dev/tcp/127.0.0.1/${localPort}`], { stdio: 'ignore' }).status === 0, 'the local forward to listen', 20_000);
-      const received = await new Promise<string>((resolve) => {
-        const socket = net.connect(localPort, '127.0.0.1');
-        let text = '';
-        socket.on('data', (chunk) => { text += chunk.toString('utf8'); });
-        socket.on('close', () => resolve(text));
-        socket.on('error', () => resolve(text));
-        setTimeout(() => { socket.destroy(); resolve(text); }, 4000);
-      });
-      assert.ok(!received.includes('SSH-2.0'), 'the forwarded connection reached nothing');
+      assert.equal(forwarder.exitCode, null, 'the session stays up: only the forward is refused');
+      const received = await probeForward(localPort);
+      assert.equal(received, '', 'nothing came back through the forward');
+      assert.equal(owner.count(), 0, `${target} was never reached`);
     } finally {
       forwarder.kill('SIGKILL');
     }
+  }
+
+  it('the runner\'s own key on the hub: no shell, no pty, no remote forward, no forward to a TCP port or to a unix socket the hub owns', async () => {
+    const wrongWord = sshToHubWithRunnerKey(layout, [], 'id');
+    assert.notEqual(wrongWord.status, 0);
+    assert.match(wrongWord.stderr, /refused: this key may only be used by charness-runner/);
+    assert.ok(!wrongWord.stdout.includes('uid='));
+    const shellLogin = sshToHubWithRunnerKey(layout, [], null);
+    assert.notEqual(shellLogin.status, 0);
+    assert.match(shellLogin.stderr, /refused: this key may only be used by charness-runner/);
+
+    // A word the gate DOES serve, so the only thing that can fail is the pty itself.
+    const pty = sshToHubWithRunnerKey(layout, ['-tt'], 'version');
+    assert.equal(pty.status, 0, pty.stderr);
+    assert.match(pty.stderr, /PTY allocation request failed/);
+    assert.match(pty.stdout, /--charness-gate-1-- version package=/);
+
+    // `-N`: no command runs, the session stays up, so an exit with 255 is the server refusing the forward itself.
+    const remoteTcp = sshToHubWithRunnerKey(layout, ['-N', '-R', '0:127.0.0.1:22', '-o', 'ExitOnForwardFailure=yes'], null);
+    assert.equal(remoteTcp.status, 255, remoteTcp.stderr);
+    assert.match(remoteTcp.stderr, /forward/i);
+    const stolenSocket = path.join(layout.root, 'stolen.sock');
+    const remoteSocket = sshToHubWithRunnerKey(layout, ['-N', '-R', `${stolenSocket}:127.0.0.1:22`, '-o', 'ExitOnForwardFailure=yes'], null);
+    assert.equal(remoteSocket.status, 255, remoteSocket.stderr);
+    assert.match(remoteSocket.stderr, /forward/i);
+    assert.equal(fs.existsSync(stolenSocket), false);
+
+    const tcpPort = await getFreePort();
+    const tcpOwner = await listenCounting(tcpPort);
+    const botLikeSocket = path.join(layout.root, 'bot-like.sock');
+    const socketOwner = await listenCounting(botLikeSocket);
+    try {
+      await assertLocalForwardRefused(`127.0.0.1:${tcpPort}`, tcpOwner);
+      await assertLocalForwardRefused(botLikeSocket, socketOwner);
+    } finally {
+      tcpOwner.close();
+      socketOwner.close();
+    }
+  });
+
+  it('refuses a pasted line once its code has expired, and registers nothing', async () => {
+    const pairedBefore = readHubPaired().runners.length;
+    const line = makePairingLine(layout, { CHARNESS_TEST_TIMINGS: JSON.stringify({ pairingLifetimeMs: 5000 }) });
+    await new Promise((resolve) => { setTimeout(resolve, 7000); });
+    const result = runPairingLine(layout, line);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Permission denied/, 'sshd itself refuses the expired key');
+    assert.equal(readHubPaired().runners.length, pairedBefore);
+    assert.doesNotMatch(runHubCli(layout, ['runners', 'ls']).stdout, /Pairing code open/, 'the expired code is swept');
+  });
+
+  it('refuses a pasted line that reaches a server with another host key, and spends nothing', async () => {
+    const impostor = await startImpostorSshd(layout);
+    const line = makePairingLine(layout);
+    const redirected = line.replace(`p="${layout.sshPort}"`, `p="${impostor.port}"`);
+    assert.notEqual(redirected, line, 'the line names the hub\'s port');
+    const result = runPairingLine(layout, redirected);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /host key verification failed|identification has changed/i);
+    assert.match(runHubCli(layout, ['runners', 'ls']).stdout, /Pairing code open/, 'the code was never presented to the hub');
+  });
+
+  it('a runner whose hub answers with another host key does not link, and says so', async () => {
+    assert.ok(runner !== null);
+    await stopRunner(layout, runner);
+    const impostor = await startImpostorSshd(layout);
+    const original = readJson<RunnerConfig>(runnerPaths.config);
+    fs.writeFileSync(runnerPaths.config, JSON.stringify({ ...original, hub: { ...original.hub, port: impostor.port } }));
+    fs.rmSync(runnerPaths.status, { force: true });
+    runner = startRunner(layout);
+    await waitUntil(() => readStatus()?.state === 'error', 'the runner to refuse the impostor', linkTimeoutMs);
+    assert.match(readStatus()?.lastError ?? '', /host key is not the one pinned/);
+    assert.notEqual(readStatus()?.state, 'linked');
+    await stopRunner(layout, runner);
+    fs.writeFileSync(runnerPaths.config, JSON.stringify(original));
+    runner = startRunner(layout);
+    await waitForLink();
   });
 
   it('a linked, idle runner learns of the hub\'s new package by itself — the link is not touched — updates, and relinks', async () => {

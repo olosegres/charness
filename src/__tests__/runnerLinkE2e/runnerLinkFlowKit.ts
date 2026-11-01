@@ -48,6 +48,7 @@ export interface RunnerLinkLayout {
   runnerHome: string;
   sshPort: number;
   sshdProcess: ChildProcess | null;
+  extraSshd: Set<ChildProcess>;
   groups: Set<ChildProcess>;
 }
 
@@ -63,19 +64,25 @@ function copyBuiltCharness(destination: string): void {
   fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(destination, 'node_modules'), 'dir');
 }
 
-async function startSshd(layout: RunnerLinkLayout): Promise<void> {
-  const sshdDir = path.join(layout.root, 'sshd');
+export interface SshdInstance {
+  port: number;
+  process: ChildProcess;
+}
+
+/** A loopback sshd (own host key, key login only) that reads the keys of `authorizedKeysPath`. */
+async function startSshdInstance(root: string, name: string, authorizedKeysPath: string): Promise<SshdInstance> {
+  const sshdDir = path.join(root, name);
   fs.mkdirSync(sshdDir, { recursive: true });
   execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', path.join(sshdDir, 'host_key')]);
   for (let attempt = 1; attempt <= sshdStartAttempts; attempt += 1) {
-    layout.sshPort = await getFreePort();
+    const port = await getFreePort();
     const configPath = path.join(sshdDir, 'sshd_config');
     fs.writeFileSync(configPath, [
-      `Port ${layout.sshPort}`,
+      `Port ${port}`,
       'ListenAddress 127.0.0.1',
       `HostKey ${path.join(sshdDir, 'host_key')}`,
       `PidFile ${path.join(sshdDir, 'sshd.pid')}`,
-      `AuthorizedKeysFile ${path.join(layout.hubHome, '.ssh', 'authorized_keys')}`,
+      `AuthorizedKeysFile ${authorizedKeysPath}`,
       'UsePAM no',
       'StrictModes no',
       'PasswordAuthentication no',
@@ -84,16 +91,25 @@ async function startSshd(layout: RunnerLinkLayout): Promise<void> {
       'LogLevel ERROR',
     ].join('\n'));
     const logFd = fs.openSync(path.join(sshdDir, 'sshd.log'), 'w');
-    layout.sshdProcess = spawn(sshdPath, ['-D', '-e', '-f', configPath], { stdio: ['ignore', logFd, logFd] });
+    const child = spawn(sshdPath, ['-D', '-e', '-f', configPath], { stdio: ['ignore', logFd, logFd] });
     fs.closeSync(logFd);
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
-      if (spawnSync('ssh-keyscan', ['-p', String(layout.sshPort), '-T', '2', '127.0.0.1'], { encoding: 'utf8' }).stdout.includes('ssh-ed25519')) return;
+      if (spawnSync('ssh-keyscan', ['-p', String(port), '-T', '2', '127.0.0.1'], { encoding: 'utf8' }).stdout.includes('ssh-ed25519')) return { port, process: child };
       await new Promise((resolve) => { setTimeout(resolve, 150); });
     }
-    layout.sshdProcess.kill('SIGKILL');
+    child.kill('SIGKILL');
   }
   throw new Error('sshd did not start');
+}
+
+/** @description A second sshd with a host key of its own, that knows no key at all: what a runner must refuse to trust. */
+export async function startImpostorSshd(layout: RunnerLinkLayout): Promise<SshdInstance> {
+  const emptyKeys = path.join(layout.root, 'impostor-authorized_keys');
+  fs.writeFileSync(emptyKeys, '');
+  const instance = await startSshdInstance(layout.root, 'impostor', emptyKeys);
+  layout.extraSshd.add(instance.process);
+  return instance;
 }
 
 /** @description Build the hub and an empty runner machine. */
@@ -109,11 +125,14 @@ export async function createRunnerLinkLayout(): Promise<RunnerLinkLayout> {
     runnerHome: path.join(root, 'machine'),
     sshPort: 0,
     sshdProcess: null,
+    extraSshd: new Set(),
     groups: new Set(),
   };
   for (const directory of [layout.hubHome, layout.runnerHome, path.join(root, 'tmp')]) fs.mkdirSync(directory, { recursive: true });
   copyBuiltCharness(layout.hubInstall);
-  await startSshd(layout);
+  const main = await startSshdInstance(root, 'sshd', path.join(layout.hubHome, '.ssh', 'authorized_keys'));
+  layout.sshPort = main.port;
+  layout.sshdProcess = main.process;
   placeMachineTools(layout.runnerHome);
   return layout;
 }
@@ -156,13 +175,13 @@ function createEnv(home: string, layout: RunnerLinkLayout, extra: NodeJS.Process
 }
 
 /** @description `charness <args>` of the hub's copy, with the hub's HOME. */
-export function runHubCli(layout: RunnerLinkLayout, args: string[]): SpawnSyncReturns<string> {
-  return spawnSync(process.execPath, [getHubCliPath(layout), ...args], { encoding: 'utf8', env: createEnv(layout.hubHome, layout), timeout: 60_000 });
+export function runHubCli(layout: RunnerLinkLayout, args: string[], extraEnv: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> {
+  return spawnSync(process.execPath, [getHubCliPath(layout), ...args], { encoding: 'utf8', env: createEnv(layout.hubHome, layout, extraEnv), timeout: 60_000 });
 }
 
 /** @description Make a pairing line on the hub; returns the `sh -c '…'` line. */
-export function makePairingLine(layout: RunnerLinkLayout): string {
-  const result = runHubCli(layout, ['runners', 'pair', '--host', `127.0.0.1:${layout.sshPort}`, '--label', '@ExampleBot']);
+export function makePairingLine(layout: RunnerLinkLayout, extraEnv: NodeJS.ProcessEnv = {}): string {
+  const result = runHubCli(layout, ['runners', 'pair', '--host', `127.0.0.1:${layout.sshPort}`, '--label', '@ExampleBot'], extraEnv);
   const line = result.stdout.split('\n').find((candidate) => candidate.startsWith("sh -c '"));
   if (result.status !== 0 || line === undefined) throw new Error(`runners pair failed: ${result.stderr}${result.stdout}`);
   return line;
@@ -247,5 +266,6 @@ export function readJson<TValue>(filePath: string): TValue {
 export async function destroyRunnerLinkLayout(layout: RunnerLinkLayout): Promise<void> {
   for (const child of [...layout.groups]) await stopRunner(layout, child);
   layout.sshdProcess?.kill('SIGKILL');
+  for (const extra of layout.extraSshd) extra.kill('SIGKILL');
   sweepFlowLayout(layout.root);
 }

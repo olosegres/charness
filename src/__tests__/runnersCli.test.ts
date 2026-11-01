@@ -11,7 +11,8 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import { extractManagedBlock } from '../runners/authorizedKeys';
 import { getHubFilePaths } from '../runners/hubPaths';
-import { pairingLifetimeMs, redeemPairing } from '../runners/hubPairing';
+import { redeemPairing } from '../runners/hubPairing';
+import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { readPairedFile, readPendingFile, type PairedRunner } from '../runners/hubRegistry';
 import { runRunnersCli, type RunnersCliDeps } from '../runners/runnersCli';
 import { formatRunnerList, formatRunnerListLine } from '../runners/runnersList';
@@ -41,10 +42,10 @@ function createDeps(overrides: Partial<RunnersCliDeps> = {}): RunnersCliDeps {
   };
 }
 
-async function runCli(argv: string[], deps: RunnersCliDeps = createDeps()): Promise<CliRun> {
+async function runCli(argv: string[], deps: RunnersCliDeps = createDeps(), env: NodeJS.ProcessEnv = {}): Promise<CliRun> {
   let stdout = '';
   let stderr = '';
-  const code = await runRunnersCli(argv, { stdout: (text) => { stdout += text; }, stderr: (text) => { stderr += text; }, cwd: fixture.root, env: {}, homeDir: fixture.root }, deps);
+  const code = await runRunnersCli(argv, { stdout: (text) => { stdout += text; }, stderr: (text) => { stderr += text; }, cwd: fixture.root, env, homeDir: fixture.root }, deps);
   return { code, stdout, stderr };
 }
 
@@ -85,6 +86,13 @@ describe('charness runners', () => {
     assert.ok(lines[0].includes('h="host.example"') && lines[0].includes('p="2222"'));
     assert.match(fs.readFileSync(getHubFilePaths(fixture.ctx.dir).gate, 'utf8'), /runner-gate "\$@"/);
     assert.equal(extractManagedBlock(fs.readFileSync(fixture.ctx.authorizedKeysPath, 'utf8')).length, 1);
+  });
+
+  it('pair honours the test seam that shortens a code (a flow cannot wait ten minutes)', async () => {
+    const run = await runCli(['pair', '--host', 'host.example'], createDeps(), { CHARNESS_TEST_TIMINGS: JSON.stringify({ pairingLifetimeMs: 5000 }) });
+    assert.equal(run.code, 0, run.stderr);
+    assert.match(run.stdout, /valid 5 seconds, single use/);
+    assert.equal(readPendingFile(fixture.ctx.dir).pending[0].expiresAtMs, startMs + 5000);
   });
 
   it('pair needs an address, and says so as a usage error', async () => {

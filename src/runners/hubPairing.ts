@@ -17,6 +17,7 @@ import {
   type PendingPairing,
 } from './hubRegistry';
 import { encodePairCode, type PairCodePayload } from './pairCode';
+import { pairingLifetimeMs } from './pairingTiming';
 import { createRandomId, generateEd25519KeyPair, getPublicKeyFingerprint } from './sshKeys';
 
 /**
@@ -33,10 +34,6 @@ import { createRandomId, generateEd25519KeyPair, getPublicKeyFingerprint } from 
  * a retry from the same machine is answered the same way (idempotent). A runner that is removed from `paired.json` is refused by every gate request at once, whatever its key line still says.
  */
 
-const msPerMinute = 60 * 1000;
-/** How long a pairing code works. */
-export const pairingLifetimeMinutes = 10;
-export const pairingLifetimeMs = pairingLifetimeMinutes * msPerMinute;
 const maxRunnerNameLength = 24;
 const fallbackRunnerName = 'runner';
 
@@ -50,6 +47,8 @@ export interface CreatePairingParams {
   /** What the offering instance wants to find again when the code is used or expires; the CLI sets none. */
   messageRef?: string | null;
   nowMs: number;
+  /** How long the code works (default: the production lifetime, 10 minutes). */
+  lifetimeMs?: number;
   /** The account the runner logs in as (default: the account this process runs as). */
   sshUser?: string;
 }
@@ -106,7 +105,7 @@ function checkIsPairingUsed(paired: PairedFile, pairId: string): boolean {
 export function createPairing(ctx: HubContext, params: CreatePairingParams): Promise<CreatedPairing> {
   return runTransaction(ctx, params.nowMs, (state) => {
     const pairId = createRandomId();
-    const expiresAtMs = params.nowMs + pairingLifetimeMs;
+    const expiresAtMs = params.nowMs + (params.lifetimeMs ?? pairingLifetimeMs);
     const temporaryKey = generateEd25519KeyPair(`charness-pairing-${pairId}`);
     const pairing: PendingPairing = {
       pairId,

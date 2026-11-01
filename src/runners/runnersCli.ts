@@ -4,7 +4,8 @@ import { buildBootstrapLine } from './bootstrapLine';
 import { ensureGateWrapper } from './gateWrapper';
 import { checkHubAddress, parseHubAddress, scanHostKey, type HostKeyScanner } from './hubAddress';
 import { createHubContext, type HubContext } from './hubPaths';
-import { createPairing, findPairedRunner, pairingLifetimeMinutes, removePairedRunner, setPairedRunnerPaused, sweepExpiredPairings } from './hubPairing';
+import { createPairing, findPairedRunner, removePairedRunner, setPairedRunnerPaused, sweepExpiredPairings } from './hubPairing';
+import { formatLifetime, readPairingLifetimeMs } from './pairingTiming';
 import { HubRegistryError, readPairedFile, readPendingFile } from './hubRegistry';
 import { cutRunnerLink, getRunnerLinkStatus } from './linkControl';
 import { formatListTimestamp, formatRunnerList } from './runnersList';
@@ -97,10 +98,11 @@ async function runPairCommand(args: readonly string[], io: CliIo, deps: RunnersC
     hostKey: check.hostKey,
     label: options.label ?? os.hostname(),
     nowMs: deps.now(),
+    lifetimeMs: readPairingLifetimeMs(io.env),
     sshUser: deps.sshUser,
   });
   io.stdout(
-    `Pair a runner — valid ${pairingLifetimeMinutes} minutes, single use.\n\n` +
+    `Pair a runner — valid ${formatLifetime(readPairingLifetimeMs(io.env))}, single use.\n\n` +
       `Run this on the runner machine, as the account that will run jobs\n` +
       `(not your main account — it runs the agents' code):\n\n` +
       `${buildBootstrapLine(pairing.payload)}\n\n` +

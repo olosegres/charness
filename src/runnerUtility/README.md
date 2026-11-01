@@ -75,4 +75,6 @@ boot check — scope 3. `remote-run` reaching a paired runner — scope 4.
 `src/__tests__/runnerUtility*.test.ts` (env, home/launcher/config/keys, tools, machine report and admin check, the servers driven
 the way the hub drives them, the link loop's backoff / removed state / update decision) and the process-level flow
 `runnerLinkE2e.test.ts` (kit: `runnerLinkE2e/runnerLinkFlowKit.ts`): the real pasted line, `charness-runner run`, plain ssh through
-`runner-proxy`, restart, gate killed, the runner key's refusals, a package change, remove.
+`runner-proxy`, restart, gate killed, the runner key's refusals (each against an endpoint the test owns, with the session kept up), an expired
+line, a line aimed at a server with another host key, a runner whose hub changes its host key, a package change found by polling, a lost
+redemption answer, remove.

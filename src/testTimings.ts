@@ -14,6 +14,7 @@ import { todoReminderPollMs } from './todos/reminderEngine';
 import { minFireIntervalMs } from './scheduler/recurrence';
 import { remoteRunLeaseMinMs, remoteRunLeaseMs } from './remoteRun/leaseTiming';
 import { runnerVersionPollMinMs, runnerVersionPollMs } from './runnerUtility/versionPollTiming';
+import { pairingLifetimeMinMs, pairingLifetimeMs } from './runners/pairingTiming';
 
 /**
  * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
@@ -77,6 +78,8 @@ const testTimingsSchema = z.strictObject({
   remoteRunLeaseMs: createShorterWindowSchema(remoteRunLeaseMs).min(remoteRunLeaseMinMs).optional(),
   /** How often a linked `charness-runner` asks the hub for its current package (production: `runnerVersionPollMs`, 5 min; at least `runnerVersionPollMinMs`). Read by the runner utility, not by the bot. */
   runnerVersionPollMs: createShorterWindowSchema(runnerVersionPollMs).min(runnerVersionPollMinMs).optional(),
+  /** How long a runner pairing code works (production: `pairingLifetimeMs`, 10 min; at least `pairingLifetimeMinMs`). Read by `charness runners pair`, not by the bot's boot. */
+  pairingLifetimeMs: createShorterWindowSchema(pairingLifetimeMs).min(pairingLifetimeMinMs).optional(),
   /** The shortest gap between two fires of a cron schedule (production: `minFireIntervalMs`, 5 min). */
   scheduleMinFireIntervalMs: createShorterWindowSchema(minFireIntervalMs).optional(),
   /** How often the hot supervisor compares its `tsc -w` with the sources (production: `tscWatchCheckIntervalMs`, 30 s). Read by `charness hot`, not by the bot. */
