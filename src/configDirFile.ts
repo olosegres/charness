@@ -146,20 +146,27 @@ export function createConfigFileLoader<TConfig>(options: ConfigFileLoaderOptions
 }
 
 /**
- * @description Write `value` as JSON to `filePath` with `fileMode`, creating missing directories, through a temp
- * file and a rename so a reader never sees half a file. The caller validates first: a caller that builds an
- * invalid file has a bug.
+ * @description Write `text` to `filePath` with `fileMode`, creating missing directories, through a temp file and a
+ * rename so a reader never sees half a file.
  */
-export function writeJsonFileAtomically(filePath: string, value: object, fileMode: number): void {
+export function writeTextFileAtomically(filePath: string, text: string, fileMode: number): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.${process.pid}.tmp`;
   try {
-    fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, { mode: fileMode });
+    fs.writeFileSync(tempPath, text, { mode: fileMode });
     fs.renameSync(tempPath, filePath);
   } catch (e) {
     fs.rmSync(tempPath, { force: true });
     throw e;
   }
+}
+
+/**
+ * @description Write `value` as JSON to `filePath` with `fileMode` (see {@link writeTextFileAtomically}). The caller
+ * validates first: a caller that builds an invalid file has a bug.
+ */
+export function writeJsonFileAtomically(filePath: string, value: object, fileMode: number): void {
+  writeTextFileAtomically(filePath, `${JSON.stringify(value, null, 2)}\n`, fileMode);
 }
 
 /** The nearest directory of `filePath`'s ancestors that exists (the save creates the rest), or the errno code that stops the walk. */

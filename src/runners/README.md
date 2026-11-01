@@ -1,0 +1,126 @@
+# `src/runners/` — the hub side of paired runners
+
+A **runner** is a machine that runs the agents' tests and builds (`charness remote-run`, phase 1). This folder is how a charness
+**hub** attaches one WITHOUT a VPN, an open port, root, or a second sshd: the runner dials OUT to the hub's stock sshd, and everything
+rides inside the forced command of the runner's key. The runner's side is `src/runnerUtility/`; the phase-1 core it reuses is
+`src/remoteRun/` (nothing there changes except where a paired runner is looked up).
+
+## Shape
+
+```
+runner machine                                   hub (stock sshd, the owning user's authorized_keys)
+──────────────                                   ─────────────────────────────────────────────────
+charness-runner ──ssh, outbound──► sshd ─forced command─► <dir>/gate ─► charness runner-gate  --dir D --keys K runner <id>
+  ssh2 Client: exec('link')                                  stdin/stdout = the channel
+  ssh2 SERVER over that channel ◄── ssh2 CLIENT (the gate) ─ checks the runner's pinned host key, logs in with hub_ed25519
+                                                              │ listens on  D/link/<id>.sock
+  stock `ssh` of remote-run ─ProxyCommand: charness runner-proxy <sock> ─► sock ─► client.forwardOut() ─► the runner's server
+```
+
+The roles turn around inside the channel: the runner is the ssh SERVER of an ssh session whose client is the gate. Each connection
+to `link/<id>.sock` becomes a `direct-tcpip` channel that the runner's server hands to a second ssh server instance — an ordinary ssh
+session for stock OpenSSH (ControlMaster, rsync, `exec`, all of phase 1 unchanged).
+
+## The safety line
+
+OpenSSH cannot restrict a key's forwarding of **unix sockets** (`permitopen` / `permitlisten` cover TCP only; the server code says
+«XXX fine grained permissions»), and a key that may forward can open ANY unix socket of the account — the bot's tmux sockets
+included. So a runner's key gets NO forwarding at all: `restrict` plus a forced command. The gate takes the request from
+`SSH_ORIGINAL_COMMAND` and matches it as a whole against the words the key's role allows; a shell login, a different word, or extra
+arguments are refused. The gate's ssh client refuses every channel and global request the runner side opens (nothing is registered
+for them in `ssh2`). The hub's own side never trusts the runner's data: public keys are matched against a strict pattern before they
+are written into `authorized_keys`, ids and hosts against strict patterns before they reach a command line, and messages sent to a
+runner name no hub path.
+
+## Files (`~/.config/charness/runners/`, 0700, one per OS user)
+
+| File | Holds |
+|------|-------|
+| `paired.json` | `rev` + the attached runners (`hubRegistry.ts`): id, name, public key + fingerprint, the runner's host key, work dir, reported OS / arch / version / service kind, `pairedAtMs`, `pairId`, hub-side `isPaused` |
+| `pending.json` | the pairing codes that are out: id, temporary PUBLIC key, expiry, address, label, the offering instance's opaque `messageRef` |
+| `hub_ed25519(.pub)` | the hub's client key, made at the first pairing (one for all runners) |
+| `known_hosts` | derived: `charness-runner-<id> <host key>` for the stock `ssh` calls through the links |
+| `gate` | the `sh` wrapper `exec '<node>' '<cli.js>' runner-gate "$@"`, rewritten at every start (`gateWrapper.ts`) |
+| `lock` | the registry lock (the updater's host lock): every change reads what others wrote first |
+| `link/<id>.sock`, `link/<id>.json` | the socket of the gate that holds the link, and its pid / since / heartbeat / ended |
+| `package/` | the packed hub package (`<id>.tgz`) and `current.json` (its source stamp) |
+
+Everything derived (`known_hosts`, the managed `authorized_keys` block) is rendered from the two registry files on every change
+(`syncDerivedHubFiles`), never edited on its own. A registry file that does not validate stops the caller with the field named —
+never read as empty, which would be rewritten empty.
+
+**`authorized_keys`.** charness owns ONE marked block (`authorizedKeysBlockStart` … `End`), replaced as a whole; every other line is
+kept byte for byte; a damaged block (a marker without its twin, two blocks) is NOT edited. The file is written 0600 through a temp
+file and a rename, into the target of a symlink. Lines:
+
+```
+restrict,expiry-time="YYYYMMDDHHMMSSZ",command="<dir>/gate --dir <dir> --keys <file> redeem <pairId>" ssh-ed25519 … charness-pairing:<pairId>
+restrict,command="<dir>/gate --dir <dir> --keys <file> runner <runnerId>" ssh-ed25519 … charness-runner:<runnerId>
+```
+
+The forced command names the folder and the keys file, so a gate never depends on `$HOME` / `DATA_DIR` (a flow test points a loopback
+sshd at a temp file and the gate never touches the real one). A path with a quote, a backslash or a line break is refused (sshd cannot
+escape a backslash in `command="…"`).
+
+## Pairing
+
+1. `createPairing` (under the lock): a temporary ed25519 key, its `pending.json` entry, its `authorized_keys` line (expires in 10 min),
+   and the **pair code** `cr1.<base64url JSON>` (`pairCode.ts`: host, port, account, the hub's ssh host key to pin, the temporary
+   PRIVATE key, the pair id). The code is a secret until used or expired: never logged; decode errors name fields, never values.
+2. `bootstrapLine.ts` renders the one `sh -c '…'` line for the operator: it writes the key and a `known_hosts` line to a private temp
+   folder, runs `ssh … bootstrap > package.tgz`, unpacks it and starts `runnerCli.js pair --bootstrap <folder> <code>`. The
+   unpacked package has no `node_modules`: the runner's `pair` step reaches its install step on Node built-ins only.
+3. The runner calls `redeem` with its own new public key and host key (`gateProtocol.ts`). `redeemPairing` (one critical section):
+   code must be in `pending.json` and not expired, the key not yet registered; it adds the runner (a unique name — `-2`, `-3`, … —
+   against paired AND hand-made runners), deletes the pending entry (**this is what makes the code single use**), rewrites
+   `known_hosts` and the block (the temporary line goes, the permanent one comes).
+4. `sweepExpiredPairings` drops expired codes and hands them back (the bot edits its messages to «expired»); sshd already refuses an
+   expired key by itself (`expiry-time`).
+
+The address check (`hubAddress.ts`) runs before a code is made: `ssh-keyscan` at the address must give the key `ssh-keyscan` gives on
+this machine's own loopback port — otherwise the runner would be told to pin a stranger's key.
+
+## The gate (`gate.ts`)
+
+| Key | Request | Answer |
+|-----|---------|--------|
+| temporary | `bootstrap` | the packed package, raw gzip, nothing else on stdout (only while the code is open) |
+| temporary | `redeem` | marker line, then `{ok, runnerId, name, hubPublicKey, label, host, port}` or `{ok:false, reason}` |
+| runner | `link` | marker line (`package=<id>`), then the ssh session of `gateLink.ts` |
+| runner | `package` | marker line, then the packed package |
+| runner | `unpair` | marker line, then `{ok}`; the hub removes the runner and cuts its link |
+
+A **marker line** (`--charness-gate-1-- <request> key=value…`) opens every answer but `bootstrap`; the reader discards what comes before
+it, so a chatty shell rc on the hub cannot corrupt the stream. (`bootstrap` is piped straight into `tar` by the pasted line: a hub whose
+non-interactive shell prints something cannot serve it.) The package id in the `link` marker lets an idle runner notice that the hub
+changed and update itself.
+
+**The link** (`gateLink.ts`). The gate is an `ssh2` client over its own stdio, verifies the runner's server host key against the pinned one
+(ed25519 only), logs in with the hub key, and listens on `link/<id>.sock`. **Newest link wins**: a starting gate deletes the old socket
+file and binds a new one; the replaced gate sees its socket's inode change at its next check (10 s) and leaves. The same check ends a gate
+whose runner left the registry. An ssh keepalive (15 s × 3) ends a gate whose peer is gone — a stock sshd with `ClientAliveInterval 0`
+never would. A runner is **online** when its socket accepts a connection (`linkControl.ts`); `link/<id>.json` says who holds it and
+when it was last seen. `remove` deletes the socket and stops the gate if the recorded pid still is that runner's gate (checked with `ps`).
+
+**`runner-proxy <socket>`** is the `ProxyCommand` of the ssh calls: it joins ssh's stdio to the socket; nothing listening → «the runner
+is not connected» on stderr and exit 255 (ssh's own «connection failed»).
+
+## The package (`hubPackage.ts`)
+
+The hub's own `package.json`, `remoteRun/runner.sh` and `dist/` (no tests, `.d.ts`, source maps) as a deterministic tar (`tarArchive.ts`:
+fixed times and order) in a gzip. Its **id** is the first 16 hex digits of the sha256 of the tar before compression. The cache in
+`package/` is reused while a stamp of the sources (path, size, mtime) is unchanged.
+
+## CLI
+
+`charness runners [ls | pair --host <host[:port]> [--label] [--wait] | remove <name> | pause <name> | resume <name>]` (`runnersCli.ts`)
+is the headless twin of `/runners`: it loads no env file and never touches `DATA_DIR`. `charness runner-gate` and `charness runner-proxy`
+are hidden (named by `authorized_keys` and `ProxyCommand`). `src/cli.ts` is a hot-supervisor file: a deploy that touches it needs a full
+service restart after `tsc -w` is green.
+
+## Tests
+
+`src/__tests__/runners*.test.ts`: the code codec, the block editor (foreign lines kept, damaged blocks refused), the line shapes, the
+registry (single-use `redeem` under concurrency, expiry sweep, names, removal), the gate's argument parsing and request routing and its
+answers over streams, the link against a stand-in ssh2 server (including the socket takeover), the proxy, the tar writer and package id,
+the bootstrap line against a real `sh`, the address check.

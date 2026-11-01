@@ -5,6 +5,8 @@
  * only moves it to the other stream.
  */
 
+import * as os from 'os';
+
 export const ownLinePrefix = 'remote-run: ';
 
 export interface CliIo {
@@ -13,6 +15,17 @@ export interface CliIo {
   cwd: string;
   env: NodeJS.ProcessEnv;
   homeDir: string;
+}
+
+/** @description The io of the real process. */
+export function createProcessIo(): CliIo {
+  return {
+    stdout: (text) => { process.stdout.write(text); },
+    stderr: (text) => { process.stderr.write(text); },
+    cwd: process.cwd(),
+    env: process.env,
+    homeDir: os.homedir(),
+  };
 }
 
 /** @description One of remote-run's own lines, to stderr. */

@@ -19,16 +19,20 @@ import { resolveGlobalConfigEnvPath } from '../legacyNames';
  */
 
 const configFileName = 'runners.json';
-const runnerNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** @description What a runner's name may be: lowercase letters and digits, single dashes between. */
+export const runnerNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const groupNamePattern = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 /** The group every runner has; its parallel limit may be set, it never needs `group add`. */
 export const defaultPueueGroup = 'default';
+
+/** @description A runner's work folder: an absolute path on the runner, or one the runner's shell expands from `~`. */
+export const runnerWorkDirSchema = z.string().min(1).refine((workDir) => workDir.startsWith('/') || workDir === '~' || workDir.startsWith('~/'), 'must be an absolute path on the runner or start with ~/');
 
 const runnerSchema = z.strictObject({
   name: z.string().regex(runnerNamePattern, 'must be lowercase letters, digits and single dashes'),
   ssh: z.string().min(1).refine((destination) => !destination.startsWith('-') && !/\s/.test(destination), 'must be an ssh destination (user@host or a host alias): no spaces, not an option'),
   sshOptions: z.array(z.string()).optional(),
-  workDir: z.string().min(1).refine((workDir) => workDir.startsWith('/') || workDir === '~' || workDir.startsWith('~/'), 'must be an absolute path on the runner or start with ~/'),
+  workDir: runnerWorkDirSchema,
   pueue: z.strictObject({ bin: z.string().min(1).optional(), config: z.string().min(1).optional() }).optional(),
   groups: z.record(z.string().regex(groupNamePattern, 'is not a valid group name'), z.number().int().positive()).optional(),
 });
@@ -57,9 +61,14 @@ const loader = createConfigFileLoader<RunnersConfig>({
   },
 });
 
-/** @description The file's current content (stamp-cached): missing = no runners, invalid = its errors and the last good config of this process, if any. */
+/** @description The content of the runners file at `filePath` (stamp-cached): missing = no runners, invalid = its errors and the last good config of this process, if any. */
+export function loadRunnersConfigAt(filePath: string): ConfigFileLoad<RunnersConfig> {
+  return loader.load(filePath);
+}
+
+/** @description The user's `runners.json` right now. */
 export function loadRunnersConfig(homeDir: string = os.homedir()): ConfigFileLoad<RunnersConfig> {
-  return loader.load(getRunnersConfigPath(homeDir));
+  return loadRunnersConfigAt(getRunnersConfigPath(homeDir));
 }
 
 /** @description Forget the cached loads (tests that swap files under one path). */

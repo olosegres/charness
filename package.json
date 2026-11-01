@@ -84,11 +84,13 @@
     "form-data": "^4.0.5",
     "marklassian": "^1.2.1",
     "node-pty": "^1.0.0",
+    "ssh2": "^1.17.0",
     "telegraf": "^4.16.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/ssh2": "^1",
     "nodemon": "^3.1.0",
     "playwright-core": "1.59.1",
     "tsx": "^4.21.0",

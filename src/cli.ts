@@ -10,6 +10,9 @@ import { runHot } from './cli/hot';
 
 applyDnsFix();
 
+/** How long a finished `runner-gate` waits for its stdout to drain before it ends the process. */
+const gateExitGraceMs = 5000;
+
 /**
  * @description Print the package version to stdout for `charness --version`.
  *
@@ -48,6 +51,7 @@ function printUsage(): void {
       `                              --current <name> [--stopped-by-limit] for a resumed session\n` +
       `  charness remote-run       Run a command (tests, builds, e2e) on a runner machine reached by ssh:\n` +
       `                              \`remote-run [--bg] <command…>\`, \`remote-run runners\` (see docs/remote-run.md)\n` +
+      `  charness runners          The machines paired as runners (\`ls\`, \`pair --host <address>\`, \`remove|pause|resume <name>\`)\n` +
       `  charness --help, -h       Show this help\n` +
       `  charness --version, -v    Print the version\n` +
       `\n` +
@@ -69,6 +73,9 @@ function printUsage(): void {
  *   - missing          → start the Telegram bot
  *   - `hot`            → hot-reload dev mode
  *   - `remote-run`     → run a command on a runner (`remoteRun/`)
+ *   - `runners`        → the paired runners: list, pair, remove, pause, resume (`runners/`)
+ *   - `runner-gate`    → what sshd starts for a runner's key (hidden; `runners/gate.ts`)
+ *   - `runner-proxy`   → the ProxyCommand of the ssh calls to a paired runner (hidden; `runners/runnerProxy.ts`)
  *   - `-h | --help | help` → usage
  *   - `-v | --version | version` → print the package version
  *   - anything else → usage + exit 2
@@ -117,6 +124,43 @@ async function main(): Promise<void> {
   if (sub === 'remote-run') {
     const { runRemoteRunCli } = await import('./remoteRun/remoteRunCli');
     process.exitCode = await runRemoteRunCli(process.argv.slice(3));
+    return;
+  }
+
+  // The paired runners (`/runners`' headless twin); lazy, and it loads no env file, like remote-run.
+  if (sub === 'runners') {
+    const { runRunnersCli } = await import('./runners/runnersCli');
+    const { createProcessIo } = await import('./remoteRun/output');
+    process.exitCode = await runRunnersCli(process.argv.slice(3), createProcessIo());
+    return;
+  }
+
+  // What sshd starts for a runner's key (hidden: only the forced command of an `authorized_keys` line names it). Its stdout is the
+  // runner's channel: nothing else may be printed on the way.
+  if (sub === 'runner-gate') {
+    const { runRunnerGate } = await import('./runners/gate');
+    const code = await runRunnerGate(process.argv.slice(3), process.env, {
+      stdin: process.stdin,
+      stdout: process.stdout,
+      log: (line) => { process.stderr.write(`charness-gate: ${line}\n`); },
+    });
+    process.exitCode = code;
+    // The link's stdin may still hold the loop open; give stdout a moment to drain, then leave.
+    setTimeout(() => process.exit(code), gateExitGraceMs).unref();
+    return;
+  }
+
+  // The ProxyCommand of the ssh calls to a paired runner (hidden): joins ssh's stdio to the gate's unix socket.
+  if (sub === 'runner-proxy') {
+    const { runRunnerProxy } = await import('./runners/runnerProxy');
+    const [socketPath] = process.argv.slice(3);
+    if (socketPath === undefined) {
+      process.stderr.write('Usage: charness runner-proxy <socket>\n');
+      process.exit(2);
+    }
+    const code = await runRunnerProxy(socketPath, { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
+    process.stdin.destroy();
+    process.exitCode = code;
     return;
   }
 

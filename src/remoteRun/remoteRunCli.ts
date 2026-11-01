@@ -1,4 +1,3 @@
-import * as os from 'os';
 import {
   runExecCommand,
   runFetchCommand,
@@ -14,7 +13,7 @@ import {
 import { parseRemoteRunArgs } from './cliArgs';
 import { remoteRunExitCodes } from './exitCodes';
 import { readRemoteRunLeaseMs } from './leaseTiming';
-import type { CliIo } from './output';
+import { createProcessIo, type CliIo } from './output';
 import { RemoteRunError } from './remoteRunError';
 import { readRunnerScript } from './runnerClient';
 import { getRunnersConfigPath, loadRunnersConfig } from './runnersConfig';
@@ -28,6 +27,8 @@ import { ensureRemoteRunCacheDir, getRemoteRunCacheDir } from './ssh';
  * The CLI loads NO env file (it would read the PROJECT's `.env`: agents run it from project folders) and never touches `DATA_DIR` or
  * the state store: it needs nothing from an instance.
  */
+
+export { createProcessIo };
 
 export const remoteRunUsage = `Usage:
   charness remote-run [--runner <name>] [--needs android|ios|docker|playwright] [--group <g>] [--timeout <dur>]
@@ -48,17 +49,6 @@ export const remoteRunUsage = `Usage:
 Exit codes: the command's own; 125 remote-run failed, 124 timeout, 130/143/129 interrupted (SIGINT/SIGTERM/SIGHUP), 137 job killed, 2 bad usage.
 Setup: docs/remote-run.md
 `;
-
-/** @description The io of the real process. */
-export function createProcessIo(): CliIo {
-  return {
-    stdout: (text) => { process.stdout.write(text); },
-    stderr: (text) => { process.stderr.write(text); },
-    cwd: process.cwd(),
-    env: process.env,
-    homeDir: os.homedir(),
-  };
-}
 
 function createContext(io: CliIo): CommandContext {
   const load = loadRunnersConfig(io.homeDir);

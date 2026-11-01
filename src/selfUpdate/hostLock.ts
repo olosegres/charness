@@ -4,7 +4,8 @@ import { hostLockStaleMs } from './constants';
 /**
  * A host-wide lock for an npm install that several instances may share: one of them installs, the others find the
  * new version on disk and restart onto it. The file holds the owner's pid and start time; it is taken over when that
- * pid is gone, or when it is older than {@link hostLockStaleMs} (an install that hung).
+ * pid is gone, or when it is older than {@link hostLockStaleMs} (an install that hung). The runner registry's lock
+ * (`runners/hubLock.ts`) is the same lock.
  */
 
 interface LockRecord {
@@ -43,6 +44,25 @@ export function createDefaultHostLockDeps(): HostLockDeps {
   };
 }
 
+/**
+ * Create the lock file EXCLUSIVELY with its content already in it: the record is written to a temp file and hard-linked to the lock
+ * path (`link` fails with EEXIST like `O_EXCL` does). Created empty and written afterwards, the file would be seen by a concurrent taker
+ * in between as unreadable — and an unreadable lock counts as stale. A file system without hard links falls back to the plain create.
+ */
+function createLockFileExclusively(lockPath: string, text: string): void {
+  const temporaryPath = `${lockPath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  fs.writeFileSync(temporaryPath, text);
+  try {
+    fs.linkSync(temporaryPath, lockPath);
+  } catch (error) {
+    const code = getErrorCode(error);
+    if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EOPNOTSUPP') throw error;
+    fs.writeFileSync(lockPath, text, { flag: 'wx' });
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
+  }
+}
+
 function readLockRecord(lockPath: string): LockRecord | null {
   try {
     const record: LockRecord = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
@@ -66,7 +86,7 @@ export function acquireHostLock(lockPath: string, deps: HostLockDeps = createDef
   const maxAttempts = 2;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      fs.writeFileSync(lockPath, JSON.stringify(record), { flag: 'wx' });
+      createLockFileExclusively(lockPath, JSON.stringify(record));
       return {
         release: () => {
           // Only the owner's own file: a lock taken over meanwhile is not ours to remove.

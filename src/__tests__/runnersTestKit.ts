@@ -1,0 +1,115 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import type { Socket } from 'net';
+import { Writable, type Duplex } from 'stream';
+import type { Server } from 'ssh2';
+import type { RedeemRequest } from '../runners/gateProtocol';
+import { createHubContext, type HubContext } from '../runners/hubPaths';
+import { generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
+import type { PairCodePayload } from '../runners/pairCode';
+
+/**
+ * Shared fixtures of the `runners*.test.ts` files: a throwaway hub (registry folder, `authorized_keys`, a package root to pack), fresh
+ * keys, and a stream that collects what a gate writes. Not a test itself.
+ */
+
+export interface HubFixture {
+  root: string;
+  ctx: HubContext;
+  cleanup: () => void;
+}
+
+/** A hub in a temp folder. The registry folder has a short name so the unix socket paths below it stay far under the OS limit. */
+export function createHubFixture(): HubFixture {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rnr-'));
+  const packageRoot = path.join(root, 'pkg');
+  fs.mkdirSync(path.join(packageRoot, 'dist', 'runners'), { recursive: true });
+  fs.mkdirSync(path.join(packageRoot, 'dist', '__tests__'), { recursive: true });
+  fs.mkdirSync(path.join(packageRoot, 'remoteRun'), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, 'package.json'), '{"name":"charness","version":"0.0.0-test"}\n');
+  fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'runner.sh'), '#!/usr/bin/env bash\necho runner\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(packageRoot, 'dist', 'cli.js'), 'console.log("cli");\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(packageRoot, 'dist', 'runners', 'example.js'), 'module.exports = 1;\n');
+  fs.writeFileSync(path.join(packageRoot, 'dist', 'runners', 'example.d.ts'), 'export {};\n');
+  fs.writeFileSync(path.join(packageRoot, 'dist', 'runners', 'example.js.map'), '{}\n');
+  fs.writeFileSync(path.join(packageRoot, 'dist', '__tests__', 'skipped.js'), 'module.exports = 2;\n');
+  const ctx = createHubContext({
+    dir: path.join(root, 'r'),
+    authorizedKeysPath: path.join(root, 'home', '.ssh', 'authorized_keys'),
+    nodePath: process.execPath,
+    cliPath: path.join(packageRoot, 'dist', 'cli.js'),
+    packageRoot,
+  });
+  return { root, ctx, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+export interface RedeemFixture {
+  /** What goes over the wire. */
+  request: RedeemRequest;
+  clientKey: SshKeyPair;
+  serverKey: SshKeyPair;
+}
+
+/** What a runner sends to `redeem`, with keys of its own. */
+export function createRedeemFixture(overrides: Partial<RedeemRequest> = {}): RedeemFixture {
+  const clientKey = generateEd25519KeyPair('runner-client');
+  const serverKey = generateEd25519KeyPair('runner-server');
+  return {
+    request: {
+      suggestedName: 'Mac Mini',
+      publicKey: clientKey.publicKey,
+      hostKey: serverKey.publicKey,
+      workDir: '/home/runner/.charness-runner/work',
+      os: 'macOS 15.1',
+      arch: 'arm64',
+      version: '3.7.0',
+      serviceKind: 'foreground',
+      ...overrides,
+    },
+    clientKey,
+    serverKey,
+  };
+}
+
+/** A pair-code payload with real keys. */
+export function createPairCodePayload(overrides: Partial<PairCodePayload> = {}): PairCodePayload {
+  const temporary = generateEd25519KeyPair('temporary');
+  const hubHost = generateEd25519KeyPair('hub-host');
+  return { host: 'host.example', port: 22, user: 'hubuser', hostKey: hubHost.publicKey, privateKey: temporary.privateKey, pairId: 'abcdef012345', ...overrides };
+}
+
+export interface Collector {
+  stream: Writable;
+  getBuffer: () => Buffer;
+  getText: () => string;
+}
+
+/** A writable that keeps every byte written to it. */
+export function createCollector(): Collector {
+  const chunks: Buffer[] = [];
+  const stream = new Writable({
+    write(chunk: Buffer | string, _encoding, callback) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      callback();
+    },
+  });
+  return { stream, getBuffer: () => Buffer.concat(chunks), getText: () => Buffer.concat(chunks).toString('utf8') };
+}
+
+/** Poll `check` until it holds; throws with `description` after `timeoutMs`. */
+export async function waitUntil(check: () => boolean | Promise<boolean>, description: string, timeoutMs: number = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for: ${description}`);
+    await new Promise((resolve) => { setTimeout(resolve, 20); });
+  }
+}
+
+/**
+ * ssh2's `Server.injectSocket` is typed for a `net.Socket` but takes any bidirectional stream «as though it were a TCP socket
+ * connection» — a channel of another ssh session included, which is how the runner serves ssh over a link. The one cast is here.
+ */
+export function injectStreamIntoSshServer(server: Server, stream: Duplex): void {
+  server.injectSocket(stream as Socket);
+}
