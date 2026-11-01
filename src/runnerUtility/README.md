@@ -110,12 +110,13 @@ it waits for the service's.
 Apple: the Simulator is not available to a LaunchDaemon or to a process started as another user. So the runner does not infer `ios` from
 «Xcode is installed»: every time the link starts (whoever runs it: a terminal, an agent, a daemon — the answer depends on that), and again whenever Xcode changes (looked at once an hour), it really tries — create a device,
 boot it, wait for `bootstatus`, delete it (bounded, 180 s; the device is deleted whatever happened). `pass` → the probe says `ios`;
-`fail` → «ios: no — needs the runner user's login session». A helper in that user's GUI session is a follow-up, only if the check fails
-where it matters. The previous record is DELETED when the link starts, and a paired Mac with Xcode and no record answers «ios: no — the iOS
-Simulator is being checked» until the new one is written (`runner.sh`), so an answer given by another account or kind of service is never
-offered meanwhile. The probe says «needs the runner user's login session» only for the Simulator's own boot refusal (a reason that begins with
-`iosBootFailureReasonPrefix`); any other failed check — no runtime installed, the device could not be created — shows its own reason. A record that cannot be
-written is logged by `run`, and the Mac then stays «being checked».
+`fail` → «ios: no — needs the runner user's login session» when the Simulator itself refused to boot (the reason begins with
+`iosBootFailureReasonPrefix`); any other failed check shows its own reason — `simctl <step> failed: <its error>` when a simctl command does
+not work at all (CoreSimulator cannot be reached), «no iOS simulator runtime and iPhone device type are installed» only for a list that
+worked and came back empty, «the Simulator device could not be created». A helper in that user's GUI session is a follow-up, only if the
+check fails where it matters. The previous record is DELETED when the link starts, and a paired Mac with Xcode and no record answers «ios: no
+— the iOS Simulator is being checked» until the new one is written (`runner.sh`), so an answer given by another account or kind of service is
+never offered meanwhile. A record that cannot be written is logged by `run`, and the Mac then stays «being checked».
 
 ## `pause`, `resume`, `unpair`
 

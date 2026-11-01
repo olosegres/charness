@@ -105,12 +105,28 @@ describe('the boot check', () => {
     assert.equal(unfinished.status, 'fail');
     assert.match(unfinished.reason ?? '', /did not finish booting/);
     calls = [];
-    const noDevice = await runIosBootCheck(createDeps({ runner: createRunner({ create: { ok: false, stdout: '' } }) }));
+    const noDevice = await runIosBootCheck(createDeps({ runner: createRunner({ create: { ok: true, stdout: '' } }) }));
     assert.equal(noDevice.status, 'fail');
+    assert.equal(noDevice.reason, 'the Simulator device could not be created');
     assert.ok(!calls.some((line) => line.includes('simctl boot')), 'nothing to boot');
     const noRuntime = await runIosBootCheck(createDeps({ runner: createRunner({ 'list runtimes': { stdout: JSON.stringify({ runtimes: [] }) } }) }));
     assert.equal(noRuntime.status, 'fail');
     assert.match(noRuntime.reason ?? '', /no iOS simulator runtime/);
+  });
+
+  it('a simctl that does not work at all says so with its own error — it is not «no runtime installed», which would send the operator to install one', async () => {
+    const noCoreSimulator = 'CoreSimulatorService connection became invalid\nUnable to locate device set';
+    const listFails = await runIosBootCheck(createDeps({ runner: createRunner({ 'list runtimes': { ok: false, exitCode: 1, stderr: noCoreSimulator } }) }));
+    assert.equal(listFails.status, 'fail');
+    assert.equal(listFails.reason, 'simctl list runtimes failed: Unable to locate device set');
+    const deviceTypesFail = await runIosBootCheck(createDeps({ runner: createRunner({ 'list devicetypes': { ok: false, exitCode: 1, stderr: '', isTimedOut: true } }) }));
+    assert.equal(deviceTypesFail.reason, 'simctl list devicetypes failed: no answer in time');
+    calls = [];
+    const createFails = await runIosBootCheck(createDeps({ runner: createRunner({ create: { ok: false, exitCode: 164, stderr: 'Invalid runtime: com.apple.CoreSimulator.SimRuntime.iOS-18-2' } }) }));
+    assert.equal(createFails.reason, 'simctl create failed: Invalid runtime: com.apple.CoreSimulator.SimRuntime.iOS-18-2');
+    assert.ok(!calls.some((line) => line.includes('simctl boot')), 'nothing to boot');
+    const emptyButWorking = await runIosBootCheck(createDeps({ runner: createRunner({ 'list devicetypes': { stdout: JSON.stringify({ devicetypes: [] }) } }) }));
+    assert.match(emptyButWorking.reason ?? '', /no iOS simulator runtime and iPhone device type are installed/, 'a list that worked and came back empty is the «not installed» case');
   });
 
   it('is skipped — and runs nothing — off macOS and without Xcode', async () => {

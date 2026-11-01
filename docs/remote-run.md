@@ -64,7 +64,9 @@ a token) goes into `~/.charness-runner/env`, one `KEY=VALUE` per line, read agai
 
 **iOS on a Mac LaunchDaemon.** Apple does not give the iOS Simulator to a daemon or to a process started as another user. The utility
 tries for real — it boots and deletes a Simulator when the service starts and when Xcode changes — and reports `ios` only if that
-worked; otherwise `runners` says «ios: no — needs the runner user's login session». Android emulators (`-no-window`), Jest, Playwright
+worked. If the Simulator refuses to boot, `runners` says «ios: no — needs the runner user's login session»; if the check fails for another reason (no
+runtime installed, `simctl` cannot be run) it shows that reason; and while the check of a fresh start is still running it says «the iOS Simulator is
+being checked». Android emulators (`-no-window`), Jest, Playwright
 and Docker work from the daemon.
 
 ## Advanced: a runner over plain ssh

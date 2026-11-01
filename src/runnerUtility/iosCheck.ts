@@ -107,6 +107,12 @@ export async function readXcodeVersion(deps: IosCheckDeps): Promise<string | nul
   return result.ok ? parseXcodeVersion(result.stdout) : null;
 }
 
+/** `simctl <step> failed: <last line of its stderr>` (or how it ended): the reason for a simctl command that did not work at all, which is not the same as «nothing installed». */
+function describeSimctlFailure(stepName: string, result: Awaited<ReturnType<CommandRunner>>): string {
+  const lastErrorLine = result.stderr.trim().split('\n').slice(-1)[0];
+  return `simctl ${stepName} failed: ${lastErrorLine !== '' ? lastErrorLine : result.isTimedOut ? 'no answer in time' : `exit ${result.exitCode ?? 'none'}`}`;
+}
+
 /** @description Run the boot check: create → boot → bootstatus → delete. Never throws; the device is deleted whatever happened. */
 export async function runIosBootCheck(deps: IosCheckDeps): Promise<IosCheckRecord> {
   const xcode = await readXcodeVersion(deps);
@@ -117,10 +123,14 @@ export async function runIosBootCheck(deps: IosCheckDeps): Promise<IosCheckRecor
   const step = (args: string[]): ReturnType<CommandRunner> => deps.runner('xcrun', ['simctl', ...args], { timeoutMs: Math.max(1000, Math.min(stepTimeoutMs, deadline - deps.now())) });
   const runtimes = await step(['list', 'runtimes', '-j']);
   const deviceTypes = await step(['list', 'devicetypes', '-j']);
-  const choice = runtimes.ok && deviceTypes.ok ? chooseSimulator(runtimes.stdout, deviceTypes.stdout) : null;
+  // A simctl that cannot be run (it cannot reach CoreSimulator, for one) is told as that — «no runtime installed» is only for a list that worked.
+  if (!runtimes.ok) return record('fail', describeSimctlFailure('list runtimes', runtimes));
+  if (!deviceTypes.ok) return record('fail', describeSimctlFailure('list devicetypes', deviceTypes));
+  const choice = chooseSimulator(runtimes.stdout, deviceTypes.stdout);
   if (choice === null) return record('fail', 'no iOS simulator runtime and iPhone device type are installed');
   const created = await step(['create', checkDeviceName, choice.deviceTypeId, choice.runtimeId]);
-  const udid = created.ok ? created.stdout.trim() : '';
+  if (!created.ok) return record('fail', describeSimctlFailure('create', created));
+  const udid = created.stdout.trim();
   if (udid === '') return record('fail', 'the Simulator device could not be created');
   try {
     const boot = await step(['boot', udid]);
