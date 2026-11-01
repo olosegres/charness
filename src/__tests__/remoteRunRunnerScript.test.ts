@@ -598,6 +598,109 @@ describe('a job that had to be SIGKILLed is an ended job', () => {
   });
 });
 
+describe('the number of a task Pueue has forgotten can belong to another job', () => {
+  const blockingSleepSeconds = '31.17';
+
+  /** Run runner.sh functions with a stub `pq` (the body of the stub is `stubBody`) and say how long it took. */
+  function runWithStub(stubBody: string, body: string): { status: number | null; stdout: string; seconds: number } {
+    const startedAt = Date.now();
+    // The trap ends what the body started in the background (the log streamer loops until a file that a red run never writes).
+    const result = spawnSync('bash', ['-c', `trap 'kill $(jobs -p) 2> /dev/null' EXIT TERM; source ${scriptPath}; pq() { ${stubBody}; }; ${body}`], { encoding: 'utf8', timeout: 25_000 });
+    return { status: result.status, stdout: result.stdout, seconds: (Date.now() - startedAt) / 1000 };
+  }
+
+  function writeEndedJob(id: string, files: Record<string, string> = {}): string {
+    const jobDir = path.join(workDir, 'p', slug, 'jobs', id);
+    for (const [name, content] of Object.entries({ 'task-id': '7\n', exit: '137\n', ...files })) writeFile(jobDir, name, content);
+    return jobDir;
+  }
+
+  /** The stub's blocking `sleep` is the only process with this exact command line. */
+  const countStubSleeps = (): number => {
+    const listing = spawnSync('ps', ['-u', `${os.userInfo().uid}`, '-o', 'args='], { encoding: 'utf8' }).stdout;
+    return listing.split('\n').filter((line) => line.trim() === `sleep ${blockingSleepSeconds}`).length;
+  };
+
+  it('`wait` of a job that already has its exit file returns at once, however long Pueue\'s wait on that number would take (it follows whoever holds the number now)', () => {
+    writeEndedJob(jobId);
+    const outcome = runWithStub(`sleep ${blockingSleepSeconds}`, `cmd_wait ${workDir} ${slug} ${jobId}`);
+    assert.equal(outcome.stdout.trim(), 'done');
+    assert.ok(outcome.seconds < 8, `it took ${outcome.seconds} s: it waited for Pueue`);
+    assert.equal(countStubSleeps(), 0, 'and no wait is left running');
+  });
+
+  it('a wait that is blocked on Pueue ends as soon as the exit file appears — and the Pueue wait it started is ended with it', () => {
+    const jobDir = writeEndedJob(jobId, { exit: '' });
+    fs.rmSync(path.join(jobDir, 'exit'));
+    const outcome = runWithStub(`sleep ${blockingSleepSeconds}`, `( sleep 1; echo 137 > ${jobDir}/exit ) & cmd_wait ${workDir} ${slug} ${jobId}`);
+    assert.equal(outcome.stdout.trim(), 'done');
+    assert.ok(outcome.seconds >= 0.8 && outcome.seconds < 8, `it took ${outcome.seconds} s`);
+    assert.equal(countStubSleeps(), 0, 'the Pueue wait it started is gone');
+  });
+
+  it('when Pueue\'s wait ends first (a job that runs and finishes) the wait ends with it, then waits for the exit file as before', () => {
+    const jobDir = writeEndedJob(jobId, { exit: '' });
+    fs.rmSync(path.join(jobDir, 'exit'));
+    const outcome = runWithStub('sleep 0.4', `( sleep 1; echo 0 > ${jobDir}/exit ) & cmd_wait ${workDir} ${slug} ${jobId}`);
+    assert.equal(outcome.stdout.trim(), 'done');
+    assert.ok(outcome.seconds >= 0.9 && outcome.seconds < 8, `it took ${outcome.seconds} s: the exit file is still waited for after Pueue is done`);
+  });
+
+  it('`logs -f` of a job that already has its exit file ends at once too', () => {
+    const jobDir = writeEndedJob(jobId, { log: 'line one\n' });
+    const outcome = runWithStub(`sleep ${blockingSleepSeconds}`, `cmd_follow ${workDir} ${slug} ${jobId} start`);
+    assert.equal(outcome.status, 0);
+    assert.equal(outcome.stdout, 'line one\n');
+    assert.ok(outcome.seconds < 8, `it took ${outcome.seconds} s`);
+    assert.equal(fs.existsSync(path.join(jobDir, 'drain-stop')), true);
+  });
+
+  it('a job killed while queued is marked as having lost its task, because Pueue may give the number to the next job', () => {
+    const queuedDir = path.join(workDir, 'p', slug, 'jobs', jobId);
+    writeFile(queuedDir, 'task-id', '7\n');
+    const outcome = runWithStub('return 0', `set_paths ${workDir} ${slug} ${jobId}; kill_grace_sec=1; kill_job`);
+    assert.equal(outcome.status, 0);
+    assert.equal(fs.existsSync(path.join(queuedDir, 'task-removed')), true);
+    assert.equal(fs.readFileSync(path.join(queuedDir, 'exit'), 'utf8').trim(), '137');
+  });
+
+  describe('prune removes a Pueue task only when it is the job\'s own', () => {
+    const dayMs = 24 * 60 * 60 * 1000;
+    /** Prune the old ended job `id`; `statusJson` is what the stub `pueue status` answers; returns the calls the stub saw and whether the folder is gone. */
+    function prune(id: string, files: Record<string, string>, statusJson: string): { calls: string[]; folderGone: boolean } {
+      const jobDir = writeEndedJob(id, files);
+      const old = new Date(Date.now() - 4 * dayMs);
+      fs.utimesSync(jobDir, old, old);
+      const callsFile = path.join(workRoot, `calls-${id}.log`);
+      const stub = `printf '%s\\n' "$*" >> ${callsFile}; if [ "$1" = status ]; then printf '%s' '${statusJson}'; fi; return 0`;
+      const outcome = runWithStub(stub, `prune_work ${workDir}`);
+      assert.equal(outcome.status, 0);
+      return { calls: fs.existsSync(callsFile) ? fs.readFileSync(callsFile, 'utf8').trim().split('\n') : [], folderGone: !fs.existsSync(jobDir) };
+    }
+
+    it('a task that carries the job\'s own label is removed, and the folder with it', () => {
+      const outcome = prune('box1-ownone', {}, '{"tasks":{"7":{"id":7,"label":"rr-box1-ownone","command":"x"}},"groups":{}}');
+      assert.deepEqual(outcome.calls, ['status --json label=rr-box1-ownone', 'remove 7']);
+      assert.equal(outcome.folderGone, true);
+    });
+
+    it('a number that Pueue no longer has, or that another job holds, is left alone — the old folder still goes', () => {
+      const none = prune('box1-gonenx', {}, '{"tasks":{},"groups":{}}');
+      assert.deepEqual(none.calls, ['status --json label=rr-box1-gonenx']);
+      assert.equal(none.folderGone, true);
+      const reused = prune('box1-reusdx', {}, '{"tasks":{"9":{"id":9,"label":"rr-box1-other1","command":"x"}},"groups":{}}');
+      assert.deepEqual(reused.calls, ['status --json label=rr-box1-reusdx'], 'task 7 was not removed: the only task answered is another number');
+      assert.equal(reused.folderGone, true);
+    });
+
+    it('a job whose task was removed when it was killed is not even asked about: its number is not its own any more', () => {
+      const outcome = prune('box1-killdq', { 'task-removed': '' }, '{"tasks":{"7":{"id":7,"label":"rr-box1-killdq","command":"x"}},"groups":{}}');
+      assert.deepEqual(outcome.calls, [], 'Pueue was not asked anything');
+      assert.equal(outcome.folderGone, true);
+    });
+  });
+});
+
 describe('the project lock', () => {
   const contenders = 5;
   const rounds = 40;

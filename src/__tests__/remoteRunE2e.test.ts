@@ -24,7 +24,7 @@
 
 import { after, afterEach, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -70,6 +70,7 @@ const ordinaryRunTimeoutMs = 120_000;
 const countingInstall = "install: sh -c 'n=$(cat ../deps-counter 2>/dev/null || echo 0); echo $((n+1)) > ../deps-counter'";
 const baseRemoteRunConfig = `pull: out test-results\n${countingInstall}\n`;
 const jobIdPattern = /^box1-[a-z2-7]{6}$/;
+const runnerScriptPath = path.resolve(__dirname, '..', '..', 'remoteRun', 'runner.sh');
 
 let layout: FlowLayout;
 let project: FlowProject;
@@ -655,6 +656,36 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.match(killed.stderr, new RegExp(`job ${finishedId} had already ended \\(exit 3\\) — nothing to kill`));
       assert.ok(!/ killed\s*$/.test(killed.stderr.trim()), killed.stderr);
       assert.match(await readNewestJobState(), /failed/, 'it is still the failed job it was');
+    });
+
+    it('a job killed while queued: Pueue gives its task number to the next job, and `wait` / `logs -f` of the killed job still end at once with its own 137 instead of following the other job', async () => {
+      const holder = readJobId(await run(['--bg', '--group', 'emulator', createGatedCommand('gate-reuse', { before: 'echo started > ../reuse-holder-started', after: 'true' })]));
+      await waitUntil('the holder to hold the emulator group', 60_000, () => fs.existsSync(path.join(project.runnerDirectory, 'reuse-holder-started')));
+      const killedId = readJobId(await run(['--bg', '--group', 'emulator', 'true']));
+      assert.match((await run(['status', killedId])).stdout, /— queued/, 'it waits behind the holder');
+      assert.equal((await run(['kill', killedId])).exitCode, 0);
+      const nextId = readJobId(await run(['--bg', '--group', 'emulator', 'true']));
+      const readTaskNumber = (id: string): string => fs.readFileSync(path.join(project.runnerDirectory, 'jobs', id, 'task-id'), 'utf8').trim();
+      assert.equal(readTaskNumber(nextId), readTaskNumber(killedId), 'the setup: Pueue gave the freed number to the next job');
+
+      // The next job is queued behind the closed gate for as long as this test wants: a wait that follows its number cannot return.
+      const waited = await run(['wait', killedId], { timeoutMs: 30_000 });
+      assert.equal(waited.exitCode, 137, `wait followed the other job instead of ending: ${waited.stderr}`);
+      const followed = await run(['logs', '-f', killedId], { timeoutMs: 30_000 });
+      assert.equal(followed.exitCode, 0, followed.stderr);
+      assert.match(await readNewestJobState(), /queued/, 'and the next job is still waiting behind the holder');
+
+      // Whose number is whose, as the runner script asks Pueue itself (the real status output, not a stand-in for it).
+      const ask = (taskNumber: string, jobName: string): number | null => spawnSync('bash', ['-c', `source ${runnerScriptPath}; check_task_belongs_to_job ${taskNumber} ${jobName}`], {
+        env: { ...process.env, PUEUE_BIN: layout.pueueBin, PUEUE_CONFIG: layout.pueueConfigPath },
+        timeout: 30_000,
+      }).status;
+      assert.equal(ask(readTaskNumber(nextId), nextId), 0, 'the number is the next job\'s');
+      assert.notEqual(ask(readTaskNumber(killedId), killedId), 0, 'and not the killed job\'s, whose record still holds it');
+
+      openGate(project, 'gate-reuse');
+      assert.equal((await run(['wait', holder])).exitCode, 0);
+      assert.equal((await run(['wait', nextId])).exitCode, 0, 'the next job runs as any other');
     });
 
     it('a command that ignores SIGTERM is SIGKILLed after the grace time and still ends as an ENDED job: its exit is recorded — 137 for `kill`, 124 for the time limit — so prune can remove it', async () => {

@@ -66,6 +66,12 @@ simctl keeps the Xcode version without inventing a simulator count.
 it records it first (`finish_killed_job`: exit 137, or 124 when the limit did it, `phase=done`, a finish time) — it is then an ended job like any
 other, and the next job of its project takes the lock over at once.
 
+**A job's Pueue task number is not its identity.** Pueue gives a number it has freed to the next task added, and `pueue wait` / `pueue remove`
+act on whoever holds a number (a number nobody holds: `wait` returns 0 at once). A job killed while queued loses its task that way, so
+`kill` marks it `task-removed` and writes its exit; every wait (`wait`, `logs -f`, the lease) is cut as soon as the job's exit file exists
+(`wait_for_task`), and prune removes a task only when it is not marked and Pueue says the task under that number carries the job's own
+label (`check_task_belongs_to_job`: `pueue status --json label=rr-<job>`).
+
 **Prune** (on every submit) removes jobs older than 3 days that ended (an exit file, no task, or — for one an earlier script SIGKILLed unrecorded —
 a process that is gone), stage folders older than a day **unless their job is
 still queued** (a job can wait behind a busy group for days), lease/probe scratch state and project copies unused for 30 days.

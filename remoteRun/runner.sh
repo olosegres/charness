@@ -404,6 +404,13 @@ check_job_dir_ended() {
   [ -n "$recorded_pid" ] && ! kill -0 "$recorded_pid" 2> /dev/null
 }
 
+# Is Pueue's task number $1 the task of job $2? Pueue hands a number it has freed (a task that was removed, or cleaned) to the next task
+# added, and `pueue wait` / `pueue remove` of a number act on whoever holds it — so a job's recorded number is only good while the task
+# under it carries the job's own label. The label filter is Pueue's (`status --json label=…`: an exact match), the answer the task's id.
+check_task_belongs_to_job() {
+  pq status --json "label=rr-$2" 2> /dev/null | grep -Eq "\"$1\": ?\{ ?\"id\": ?$1[,}]"
+}
+
 # Remove: jobs older than the keep time (and their Pueue tasks), leftover stage dirs, project copies unused for long.
 prune_work() {
   local work_dir=$1
@@ -412,7 +419,9 @@ prune_work() {
   find "$work_dir/p" -mindepth 3 -maxdepth 3 -path '*/jobs/*' -type d -mtime +"$job_keep_days" 2> /dev/null | while IFS= read -r old_job; do
     check_job_dir_ended "$old_job" || continue
     task=$(read_file "$old_job/task-id")
-    [ -n "$task" ] && pq remove "$task" > /dev/null 2>&1
+    if [ -n "$task" ] && [ ! -f "$old_job/task-removed" ] && check_task_belongs_to_job "$task" "$(basename "$old_job")"; then
+      pq remove "$task" > /dev/null 2>&1
+    fi
     rm -rf "$old_job"
   done
   find "$work_dir/p" -mindepth 3 -maxdepth 3 -path '*/stage/*' -type d -mtime +"$stage_keep_days" 2> /dev/null | while IFS= read -r old_stage; do
@@ -493,9 +502,13 @@ kill_job() {
     touch "$jd/killed"
   fi
   if [ ! -f "$jd/pid" ] && pq remove "$task" > /dev/null 2>&1; then
+    # Pueue gives a number it has freed to the next task it is asked to add: from here on `task-id` is a number that may belong to another
+    # job, so nothing may act on it any more (`prune_work` skips such a job's task; waiting is decided by the exit file below).
+    touch "$jd/task-removed"
     finish_killed_job
     return 0
   fi
+
   signal_job_group TERM || pq kill "$task" > /dev/null 2>&1
   local started=$SECONDS
   while [ $((SECONDS - started)) -lt "$kill_grace_sec" ]; do
@@ -574,6 +587,25 @@ stream_log() {
   drain_log
 }
 
+# Return when the job is over: Pueue says its task is done, or the job's exit file is there — whichever comes first, and at once if it
+# already is. The exit file is the job's own record. The number of a task that was removed (a queued job that was killed) can be given to
+# another job, and `pueue wait` on it would then follow THAT job for as long as it runs (hours, behind a busy group), or return at once
+# for a number nobody holds: so the wait is cut as soon as the exit file appears, and the number is never trusted alone.
+wait_for_task() {
+  [ -f "$jd/exit" ] && return 0
+  pq wait "$1" > /dev/null 2>&1 &
+  local waiter_pid=$!
+  while kill -0 "$waiter_pid" 2> /dev/null; do
+    if [ -f "$jd/exit" ]; then
+      kill "$waiter_pid" > /dev/null 2>&1
+      break
+    fi
+    sleep 0.2
+  done
+  { wait "$waiter_pid"; } 2> /dev/null
+  return 0
+}
+
 # Stream the log of the task until Pueue reports it done.
 follow_until_done() {
   rm -f "$jd/drain-stop"
@@ -581,7 +613,7 @@ follow_until_done() {
   local streamer_pid=$!
   local task
   task=$(read_file "$jd/task-id")
-  [ -n "$task" ] && pq wait "$task" > /dev/null 2>&1
+  [ -n "$task" ] && wait_for_task "$task"
   touch "$jd/drain-stop"
   wait "$streamer_pid" 2> /dev/null
 }
@@ -624,7 +656,7 @@ cmd_wait() {
   local task
   task=$(read_file "$jd/task-id")
   [ -n "$task" ] || die "no such job: $job"
-  pq wait "$task" > /dev/null 2>&1
+  wait_for_task "$task"
   wait_for_exit_file
   echo done
 }
@@ -739,7 +771,7 @@ cmd_lease() {
   local watcher_pid=$!
   local task
   task=$(read_file "$jd/task-id")
-  pq wait "$task" > /dev/null 2>&1
+  wait_for_task "$task"
   kill "$watcher_pid" > /dev/null 2>&1
   wait_for_exit_file
   touch "$jd/drain-stop"
