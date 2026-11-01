@@ -132,6 +132,16 @@ deleted on a packer's word: an archive is published whole by a rename, `current.
 archive is removed only after 10 minutes, and a gate opens the archive at once (`openHubPackage`) — a deleted file stays readable through
 the open handle.
 
+## The Telegram screen
+
+`/runners` (`connectors/telegram/commands/runners.ts`) is the hub's other front end. What it adds to this folder: `hubAddressCandidates.ts` (the routable
+addresses of this machine and the first one that answers with its own sshd — proposed at the first pairing; the chosen address is `runnerHost` in
+`settings.json`), `runnersOverview.ts` (the registry + link status + last snapshots without ssh, then a live probe of the online machines through the
+phase-1 client), the paired runner as a phase-1 `RunnerConfig` is built by `remoteRun/pairedRunners.ts` (`runner-proxy` as the `ProxyCommand`, the hub key, this folder's
+`known_hosts`; its Pueue paths follow the layout of `runnerUtility/runnerHome.ts`) — the screen's probe uses the same builder `remote-run` does. The registry holds credentials only: which Telegram message offers a code is each
+instance's own record (`connectors/telegram/runnerPairingMessages.ts`), so a second charness of the same OS user neither edits nor loses it (`pending.json`'s
+`messageRef` stays for a front end that wants it; the Telegram one does not use it).
+
 ## CLI
 
 `charness runners [ls | pair --host <host[:port]> [--label] [--wait] | remove <name> | pause <name> | resume <name>]` (`runnersCli.ts`)

@@ -240,6 +240,7 @@ import { checkIsMessageNotFoundError, checkIsStaleAnswerCallbackQueryError } fro
 import {
   flushTraceBufferSyncOnExit,
   installCallApiTrace,
+  markOutboundTextSecret,
   pruneTraceBuckets,
   setTraceConfig,
   traceAgentEmit,
@@ -304,7 +305,7 @@ import {
 } from './utils/claudeLivenessAction';
 import { formatIsoLocalOffset } from './utils/isoTimestamp';
 import { getThreadEffortView, setInstanceDefaultEffortReader, type ThreadEffortView } from './effortLevels';
-import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createTaskAgentsMaxConcurrentReader, createTodoSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath } from './instanceSettings';
+import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, createRunnerHostReader, createTaskAgentsMaxConcurrentReader, createTodoSettingsReader, createUpdateSettingsReader, getInstanceSettingsPath, saveInstanceSettingsChange } from './instanceSettings';
 import { readTaskAgentLimit, type TaskAgentLimitSources } from './trackers/taskAgentLimit';
 import { TaskAgentSlots } from './trackers/taskAgentSlots';
 import { checkIsBotSkillsEnabled, createBotSkillsReader, readBotSkillsInstanceValue, setBotSkillsReader, type BotSkillsSources } from './utils/botSkills';
@@ -431,6 +432,14 @@ import { createCompaction } from './connectors/telegram/commands/compaction';
 import { createAutoContinueLimits, appendAutoContinueLimitsHint } from './connectors/telegram/commands/autoContinueLimits';
 import { createBotSkills } from './connectors/telegram/commands/botSkills';
 import { createTaskAgents } from './connectors/telegram/commands/taskAgents';
+import { createRunners } from './connectors/telegram/commands/runners';
+import { ensureGateWrapper } from './runners/gateWrapper';
+import { scanHostKey } from './runners/hubAddress';
+import { listPublicAddressCandidates } from './runners/hubAddressCandidates';
+import { createHubContext } from './runners/hubPaths';
+import { sweepExpiredPairings } from './runners/hubPairing';
+import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOverview';
+import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
 import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
@@ -3836,6 +3845,11 @@ interface ReplyToThreadOptions {
    * output. Still 429-safe and traced; do NOT use it for ordinary agent output.
    */
   unpaced?: boolean;
+  /**
+   * The text is a credential (a pairing line): the output trace records its length and nothing else, see
+   * `markOutboundTextSecret`. Default `false`.
+   */
+  isSecret?: boolean;
 }
 
 async function replyToThread(
@@ -3863,6 +3877,7 @@ async function replyToThread(
     return messageId;
   };
 
+  const releaseSecret = options.isSecret ? markOutboundTextSecret(text) : null;
   try {
     return await trackSent(await sendOnce(buildSendExtra(key, extra)));
   } catch (e) {
@@ -3898,6 +3913,8 @@ async function replyToThread(
     // the user reported) — the rare 429 is just logged via handleSendError.
     await handleSendError(key, e);
     return null;
+  } finally {
+    releaseSecret?.();
   }
 }
 
@@ -7773,6 +7790,28 @@ const { registerTaskAgentsCommands, registerTaskAgentsCallbacks } = createTaskAg
 
 registerTaskAgentsCommands();
 
+// ── Paired runners (`/runners`): `connectors/telegram/commands/runners.ts`, the hub in `runners/` ──
+const runnersHub = createHubContext();
+const runnersCacheDir = getRemoteRunCacheDir();
+const { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressText, cancelRunnersAddressWait, startRunnersWatcher } = createRunners({
+  ...botCore,
+  hub: runnersHub,
+  // The pairing messages this instance sent: its own record (the hub registry is shared by every instance of the OS user).
+  pairingMessagesPath: path.join(resolveDataDir(), 'runner-pairing-messages.json'),
+  sweepExpiredCodes: async (nowMs) => { await sweepExpiredPairings(runnersHub, nowMs); },
+  readRunnerHost: createRunnerHostReader(() => getInstanceSettingsPath(), (line) => console.error(line)),
+  saveRunnerHost: (address) => saveInstanceSettingsChange(getInstanceSettingsPath(), { runnerHost: address }),
+  getBotLabel: () => (bot.botInfo?.username === undefined ? os.hostname() : `@${bot.botInfo.username}`),
+  readOverview: (nowMs) => readRunnersOverview(runnersHub, runnersCacheDir, nowMs),
+  probeOverview: (overview, nowMs) => probeRunnersOverview(runnersHub, overview, runnersCacheDir, nowMs),
+  listAddressCandidates: () => listPublicAddressCandidates(),
+  scanHostKey,
+  ensureGateWrapper: () => { ensureGateWrapper(runnersHub); },
+  now: Date.now,
+});
+
+registerRunnersCommands();
+
 // ── Claude account profiles (`/account`): `utils/claudeProfiles.ts`, `commands/claudeAccounts.ts` ──
 
 /**
@@ -9330,7 +9369,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'quit-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'bot_skills', 'task_agents', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'bot_skills', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update',
 ]);
 
@@ -9372,6 +9411,8 @@ bot.on(message('text'), async (ctx) => {
     cancelTopicInput(key);
     // ... and an armed `/stt` address or key step.
     await cancelSttInput(key);
+    // ... and the `/runners` address step.
+    cancelRunnersAddressWait(key);
     if (botCommands.has(cmd)) return;
     // `/login` on a json-stream Claude thread (idle or per-turn lifecycle) has no
     // TUI to host the OAuth flow → run it out-of-band (spawn `claude auth login`,
@@ -9485,6 +9526,9 @@ bot.on(message('text'), async (ctx) => {
       return;
     }
   }
+
+  // `/runners` → «Enter another address»: this General message is the address runners dial. A slash command wins over the wait.
+  if (await handleRunnersAddressText(key, text)) return;
 
   // Session is mid-startup → buffer the prompt and replay it once the agent is
   // ready, instead of dropping it into the "no agent running" guidance below.
@@ -10670,6 +10714,7 @@ registerCompactionCallbacks();
 registerAutoContinueLimitsCallbacks();
 registerBotSkillsCallbacks();
 registerTaskAgentsCallbacks();
+registerRunnersCallbacks();
 registerBackendSwitchCallbacks();
 registerClaudeAccountCallbacks();
 registerFallbackChainCallbacks();
@@ -12573,6 +12618,7 @@ export const COMMANDS_MENU = [
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
   { command: 'bot_skills', description: '🧰 The bot\'s own skills for agents (on/off)' },
   { command: 'task_agents', description: '🧵 How many tracker task agents work at once' },
+  { command: 'runners', description: '🖥 Runners — machines for the agents\' tests and builds' },
   { command: 'accounts', description: '👤 Claude accounts and OpenCode providers (switch, add, re-login, remove, connect, disconnect)' },
   { command: 'limits', description: '🚧 Usage limits — switch this topic' },
   { command: 'limits_autoswitch', description: '🔁 Automatic switching on a usage limit' },
@@ -14839,6 +14885,8 @@ export async function startBot(): Promise<void> {
     console.warn('[platform] native Windows notice failed:', e instanceof Error ? e.message : e);
   }
   await startUpdates();
+  // Pairing messages of `/runners` turn into «paired» / «expired» (and survive this restart through the registry's notes).
+  if (ENV.servedPlatforms.has('telegram')) startRunnersWatcher();
   // The local speech engine: clean up after an earlier run, re-attach to / start its install. Starts no process.
   void bootSttLocalEngine().catch((e) => console.warn('[STT] boot step failed:', e instanceof Error ? e.message : e));
 

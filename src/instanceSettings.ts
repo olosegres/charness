@@ -11,6 +11,8 @@ import {
 import { claudeEffortLevels, type ClaudeEffortLevel } from './effortLevels';
 import { botSkillsSettingValues, type BotSkillsSetting } from './utils/botSkillsSetting';
 import { taskAgentsMaxConcurrentUpperBound } from './trackers/taskAgentLimit';
+import { hubHostSchema, hubPortSchema } from './runners/hubIds';
+import type { HubAddress } from './runners/hubAddress';
 import { autoUpdateModes, defaultAutoUpdateMode, defaultWhatsNew, type AutoUpdateMode, type UpdateSettings } from './selfUpdate/updateModes';
 import { todoReminderDefaultMinutes, type TodoReminderSettings } from './todos/nag';
 
@@ -20,8 +22,9 @@ import { todoReminderDefaultMinutes, type TodoReminderSettings } from './todos/n
  * hand-edit it and the next read sees the edit (the load is cached by file stamp, no restart). More instance
  * settings will move here later; today it holds `defaultEffort`, `autoUpdate`, `whatsNew`, `botSkills` (whether the bot's
  * own skills reach the agents: the way an instance without General sets it), `taskAgents` (the cap on tracker task agents
- * running at once — the way an instance without General sets it) and `todo` (the shared todo lists: on / off and the
- * staleness reminder's interval — also the way an instance without General sets them).
+ * running at once — the way an instance without General sets it), `todo` (the shared todo lists: on / off and the
+ * staleness reminder's interval — also the way an instance without General sets them) and `runnerHost` (the address
+ * paired runners dial, chosen once in `/runners`).
  *
  * Validation is strict and all-or-nothing, like `stt.json`: a typo is an error that NAMES the field. Unlike
  * `stt.json`, an invalid file is NOT served from its last good copy — the built-in defaults apply and one error
@@ -48,6 +51,8 @@ export interface InstanceSettings {
   taskAgents: { maxConcurrent: number | null };
   /** The shared todo lists (`todos/`); a field that is `null` = its default (on, a reminder every hour). */
   todo: { isEnabled: boolean | null; reminderMinutes: number | null };
+  /** The address paired runners dial to reach this machine's sshd (`/runners` asks once); `null` = not chosen yet. */
+  runnerHost: HubAddress | null;
 }
 
 /** The longest reminder interval a hand-edited `settings.json` may name: a day. */
@@ -67,11 +72,12 @@ const rawSettingsSchema = z.strictObject({
     /** `0` = no staleness reminder. */
     reminderMinutes: z.number().int().min(0).max(todoReminderMaxMinutes).optional(),
   }).optional(),
+  runnerHost: z.strictObject({ host: hubHostSchema, port: hubPortSchema }).optional(),
 });
 
 /** @description The settings of an instance that has no `settings.json`: nothing set. */
 export function createEmptyInstanceSettings(): InstanceSettings {
-  return { defaultEffort: null, autoUpdate: null, whatsNew: null, botSkills: null, taskAgents: { maxConcurrent: null }, todo: { isEnabled: null, reminderMinutes: null } };
+  return { defaultEffort: null, autoUpdate: null, whatsNew: null, botSkills: null, taskAgents: { maxConcurrent: null }, todo: { isEnabled: null, reminderMinutes: null }, runnerHost: null };
 }
 
 /**
@@ -95,6 +101,7 @@ export function validateInstanceSettings(parsedJson: object): ConfigValidation<I
       botSkills: parsed.data.botSkills ?? null,
       taskAgents: { maxConcurrent: parsed.data.taskAgents?.maxConcurrent ?? null },
       todo: { isEnabled: parsed.data.todo?.isEnabled ?? null, reminderMinutes: parsed.data.todo?.reminderMinutes ?? null },
+      runnerHost: parsed.data.runnerHost ?? null,
     },
   };
 }
@@ -139,6 +146,7 @@ export function saveInstanceSettings(filePath: string, settings: InstanceSetting
           ...(settings.todo.reminderMinutes === null ? {} : { reminderMinutes: settings.todo.reminderMinutes }),
         },
       }),
+    ...(settings.runnerHost === null ? {} : { runnerHost: { host: settings.runnerHost.host, port: settings.runnerHost.port } }),
   };
   const validation = validateInstanceSettings(body);
   if (!validation.ok) throw new Error(`refusing to write an invalid ${instanceSettingsFileName}: ${validation.errors.join('; ')}`);
@@ -251,4 +259,13 @@ export function createTodoSettingsReader(getFilePath: () => string, logError: (l
     isEnabled: settings.todo.isEnabled ?? true,
     reminderMinutes: settings.todo.reminderMinutes ?? todoReminderDefaultMinutes,
   }));
+}
+
+/**
+ * @description The reader of the address paired runners dial (`/runners`): `runnerHost`, re-read when the file changes — a hand
+ * edit applies to the next pairing. `null` = not chosen yet. An invalid file reads as `null`, and `logError` gets ONE line per
+ * distinct broken state (not one per read).
+ */
+export function createRunnerHostReader(getFilePath: () => string, logError: (line: string) => void): () => HubAddress | null {
+  return createSettingsPartReader(getFilePath, logError, (settings) => settings.runnerHost);
 }

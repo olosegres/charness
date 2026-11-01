@@ -542,6 +542,7 @@ test('General\'s help is sent as legacy Markdown: every underscore in it is esca
     assert.ok(!help.replace(/`[^`]*`/g, '').replace(/\\_/g, '').includes('_'), `help.general in ${locale} has an unescaped underscore`);
     assert.ok(help.includes('/task\\_agents — '), `help.general in ${locale} does not name /task_agents`);
     assert.ok(help.includes('/bot\\_skills — '), `help.general in ${locale} does not name /bot_skills`);
+    assert.ok(help.includes('/runners — '), `help.general in ${locale} does not name /runners`);
   }
 });
 
@@ -1304,5 +1305,47 @@ test('the General-only refusal names /quitall in every locale: a hyphen ends a T
     const text = getKeyInLang(locale, 'quit_all.general_only');
     assert.ok(text?.includes('`/quitall`'), `quit_all.general_only in ${locale} must name /quitall literally`);
     assert.ok(!text?.includes('/quit-all'), `quit_all.general_only in ${locale} must not name the hyphenated spelling`);
+  }
+});
+
+test('the /runners keys exist in every locale and keep their placeholders', () => {
+  const placeholdersByKey: Record<string, string[]> = {
+    'runners.title': [],
+    'runners.pairButton': [],
+    'runners.pauseButton': ['{name}'],
+    'runners.resumeButton': ['{name}'],
+    'runners.removeButton': ['{name}'],
+    'runners.statusOffline': ['{time}'],
+    'runners.hardwareLine': ['{cpu}', '{ramTotal}', '{ramFree}', '{disk}'],
+    'runners.hardwareOldLine': ['{cpu}', '{ramTotal}', '{disk}'],
+    'runners.cpuCores': ['{model}', '{cores}'],
+    'runners.cpuThreads': ['{model}', '{threads}'],
+    'runners.cpuLoad': ['{load}'],
+    'runners.jobsLine': ['{running}', '{queued}', '{projects}'],
+    'runners.capabilitiesLine': ['{list}'],
+    'runners.capabilityNo': ['{name}'],
+    'runners.capabilityNoWhy': ['{name}', '{detail}'],
+    'runners.pendingCodeLine': ['{time}'],
+    'runners.pendingCodesLine': ['{count}', '{time}'],
+    'runners.pageLine': ['{page}', '{pages}'],
+    'runners.pagePreviousButton': [],
+    'runners.pageNextButton': [],
+    'runners.removeConfirmText': ['{name}'],
+    'runners.addressFound': ['{address}'],
+    'runners.addressUseButton': ['{address}'],
+    'runners.addressRejected': ['{reason}', '/runners'],
+    'runners.addressNote': ['{note}'],
+    'runners.generalOnlyText': ['/runners'],
+    'runners.pairingIntro': ['{minutes}'],
+    'runners.pairedText': ['{name}', '{time}'],
+    'runners.pairFailedText': ['{reason}'],
+    'runners.registryErrorText': ['{reason}'],
+  };
+  for (const [code, placeholders] of Object.entries(placeholdersByKey)) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+    for (const locale of localeCodes) {
+      const template = getKeyInLang(locale, code) ?? '';
+      for (const placeholder of placeholders) assert.ok(template.includes(placeholder), `${code} in ${locale} lost ${placeholder}`);
+    }
   }
 });

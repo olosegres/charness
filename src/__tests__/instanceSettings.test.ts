@@ -13,6 +13,7 @@ import {
   createBotSkillsSettingsReader,
   createEmptyInstanceSettings,
   createInstanceDefaultEffortReader,
+  createRunnerHostReader,
   createTaskAgentsMaxConcurrentReader,
   createUpdateSettingsReader,
   getInstanceSettingsPath,
@@ -297,4 +298,35 @@ test('the task-agents reader: null with no file or field, the file\'s value (0 i
   read();
   assert.equal(errors.length, 1);
   assert.match(errors[0], /taskAgents\.maxConcurrent/);
+});
+
+test('runnerHost: the address paired runners dial — absent is null, a host and port round-trip through the file, a bad one is a named error', () => {
+  assert.equal(createEmptyInstanceSettings().runnerHost, null);
+  assert.deepEqual(validateInstanceSettings({}), { ok: true, config: createSettings({}) });
+  assert.deepEqual(
+    validateInstanceSettings({ runnerHost: { host: 'host.example', port: 2222 } }),
+    { ok: true, config: createSettings({ runnerHost: { host: 'host.example', port: 2222 } }) },
+  );
+
+  saveInstanceSettings(settingsPath, createSettings({ runnerHost: { host: '203.0.113.5', port: 22 } }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { runnerHost: { host: '203.0.113.5', port: 22 } });
+  resetInstanceSettingsCache();
+  assert.deepEqual(createRunnerHostReader(() => settingsPath, () => {})(), { host: '203.0.113.5', port: 22 });
+
+  for (const wrong of [{ host: 'bad host', port: 22 }, { host: 'host.example', port: 0 }, { host: 'host.example', port: 70000 }, { host: 'host.example' }, '203.0.113.5:22']) {
+    const bad = validateInstanceSettings({ runnerHost: wrong });
+    assert.equal(bad.ok, false, JSON.stringify(wrong));
+    if (!bad.ok) assert.ok(bad.errors.every((error) => error.startsWith('settings.json runnerHost')), bad.errors.join('; '));
+  }
+});
+
+test('runnerHost: an invalid file reads as not chosen, and a change keeps the other settings', () => {
+  const logged: string[] = [];
+  writeRaw('{ "runnerHost": { "host": "x y", "port": 22 } }\n');
+  assert.equal(createRunnerHostReader(() => settingsPath, (line) => logged.push(line))(), null);
+  assert.equal(logged.length, 1);
+
+  saveInstanceSettings(settingsPath, createSettings({ autoUpdate: 'off', runnerHost: { host: 'host.example', port: 22 } }));
+  assert.deepEqual(loadInstanceSettingsForUpdate(settingsPath).runnerHost, { host: 'host.example', port: 22 });
+  assert.equal(loadInstanceSettingsForUpdate(settingsPath).autoUpdate, 'off');
 });

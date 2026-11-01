@@ -26,8 +26,11 @@ export interface BotCore {
    * getter each time a handler RUNS; a copy taken at registration would be `undefined`.
    */
   getState: () => StateStore;
-  /** Send into the topic (paced, tracked for `/clear_messages`); the sent message id, or `null` when the send failed. */
-  replyToThread: (key: SessionKey, text: string, extra?: object, options?: { unpaced?: boolean }) => Promise<number | null>;
+  /**
+   * Send into the topic (paced, tracked for `/clear_messages`); the sent message id, or `null` when the send failed.
+   * `isSecret`: the text is a credential, the output trace records its length and nothing else.
+   */
+  replyToThread: (key: SessionKey, text: string, extra?: object, options?: { unpaced?: boolean; isSecret?: boolean }) => Promise<number | null>;
   /** Edit a message of the topic in place; `false` when the edit failed. */
   editThreadMessage: (key: SessionKey, messageId: number, text: string, extra?: object) => Promise<boolean>;
   /**
