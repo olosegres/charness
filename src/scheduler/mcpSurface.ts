@@ -132,16 +132,16 @@ const managerSkillInstruction =
 
 /** The instruction bullets that hold on every platform (the two platform-neutral tools). */
 const compactConversationInstruction =
-  '• The user EXPLICITLY asks to compact/shrink/summarize this conversation\'s context → compact_conversation. Only on an explicit request, never on your own judgement.';
+  '• The user EXPLICITLY asks to compact/shrink/summarize this conversation\'s context → compact_conversation. Never on your own judgement.';
 const answerRequestInstruction =
-  '• A message carries a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. You may call it several times; only question/final close the request. ' +
+  '• A message carries a "[Request <id> · from: …]" header → answer it through answer_request with that id: kind "final" with the full result at the end of your turn, "question" when you need the requester before you can go on (their reply arrives as a new request), "progress" for an interim note. Only question/final close the request. ' +
   answerStyleInstruction;
 /** The shared todo registry's bullet (D7) — Telegram topics and Jira issues publish alike. */
 const todoInstruction =
-  '• BEFORE you start any task (fixes you found yourself included: a failing test, a leak) → todo_update adds it as inWork, naming the area concretely (files, tests). Check the returned board for overlap with other agents. Take the queue top-down; mark items done / dropped at once. A ticket you create in a tracker gets an item with its key in `ref`.';
+  '• BEFORE you start any task (fixes you found yourself included: a failing test, a leak) → todo_update adds it as inWork, naming the area (files, tests). Check the returned board for overlap with other agents. Take the queue top-down; mark items done / dropped at once. A ticket you create in a tracker gets an item with its key in `ref`.';
 /** The `charness remote-run` bullet — present only while a runner is paired or listed in `runners.json`, for Telegram topics and tracker issues alike. The CLI's own `--help` has the job commands. */
 const remoteRunInstruction =
-  '• Heavy work (a test suite, a build, an e2e run) → send it to a runner, not this machine: `charness remote-run runners` shows what each can do (android, ios, docker, playwright); `charness remote-run [--needs <capability>] <command>` runs it in a copy of this project and returns its output and exit code (edit files only here). Longer than your tool timeout: `charness remote-run --bg <command>`, then `charness remote-run wait <id>` in the background; `charness remote-run --help` lists the rest.';
+  '• Heavy work (test suite, build, e2e run) → send it to a runner, not this machine: `charness remote-run runners` lists them and what each can do; `charness remote-run [--needs android|ios|docker|playwright] <command>` runs it in a copy of this project and returns its output and exit code (edit files only here). Longer than your tool timeout: `charness remote-run --bg <command>`, then `charness remote-run wait <id>` in the background; `charness remote-run --help` lists the rest.';
 
 /**
  * Claude Code cuts a server's connect-time `instructions` that are longer than this: whatever comes last is lost, silently. The Telegram
@@ -159,7 +159,7 @@ function buildRemoteRunInstruction(runnerLines: readonly string[], shownCount: n
   const hiddenCount = runnerLines.length - shownCount;
   return [
     remoteRunInstruction,
-    '  Runners as last seen (`runners` has the live state):',
+    '  Runners, as last seen:',
     ...runnerLines.slice(0, shownCount).map((line) => `  – ${line}`),
     ...(hiddenCount > 0 ? [`  – … and ${hiddenCount} more`] : []),
   ].join('\n');
@@ -184,7 +184,7 @@ function buildTelegramOrchestrationInstruction(isBotSkillsEnabled: boolean): str
     : `${orchestrationInstructionHead} schedule_create to watch EACH worker — ${workerWatchRecipeText}`;
 }
 const claudeProfilesInstruction =
-  '• Before you start or resume a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch, and start the child under the account it names (`CLAUDE_CONFIG_DIR=<its configDir>`): without it the child inherits YOUR account and drains the same limits. The tool description has the rest (resuming, `recommended: null`).';
+  '• Before you start or resume a child `claude` process (worker, reviewer, planner) → claude_profiles with the model you will launch, and start the child under the account it names (`CLAUDE_CONFIG_DIR=<configDir>`): without it the child inherits YOUR account and drains the same limits. The tool description has the rest (resuming, `recommended: null`).';
 
 /** What the `claude_profiles` tool asks the bot: the model, and for a resumed session the account it last ran on. */
 export interface ClaudeProfilesQuery {
@@ -220,17 +220,17 @@ function buildTelegramInstructions(isTodoToolOffered: boolean, remoteRunInstruct
   return `This MCP lets the agent act on its own Telegram topic.
 
 When to use it:
-• The user asks to run/finish a plan or task LATER ("in 2h", "tomorrow 9am", "every weekday") → schedule_create. Put the work in \`prompt\`; the future run is a fresh session with no memory of this chat. Not CronCreate / ScheduleWakeup for anything that must happen: they live only in your process, which the bot stops after a long idle stretch, and die with it.
-• You produced a file/chart/screenshot/video to deliver → send_file_to_user. Videos MUST be H.264 .mp4 sent as video (never as_file/document, never .webm/.mov — those render as GIFs or don't play); transcode first if needed (the tool description has the ffmpeg recipe).
-• You want to deliver SEVERAL discrete messages (each its own Telegram message, e.g. a per-item news digest) → send_messages_to_user; an item may attach ONE file (the text becomes its caption).
+• The user asks to run/finish a plan or task LATER ("in 2h", "tomorrow 9am", "every weekday") → schedule_create. Put the work in \`prompt\`; the future run is a fresh session with no memory of this chat. Not CronCreate / ScheduleWakeup for anything that must happen: they die with your process, which the bot stops after a long idle stretch.
+• You produced a file/chart/screenshot/video to deliver → send_file_to_user. Videos MUST be H.264 .mp4 sent as video (never as_file/document or .webm/.mov — those render as GIFs or don't play); transcode first if needed (recipe in the tool description).
+• You want to deliver SEVERAL discrete messages (each its own message, e.g. a per-item news digest) → send_messages_to_user; an item may attach ONE file (the text becomes its caption).
 ${compactConversationInstruction}
 ${isTodoToolOffered ? `${todoInstruction}\n` : ''}• You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
-• You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron): the bot runs it in this folder, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart, silently.
+• You need a watchdog — keep an eye on a service, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron): the bot runs it in this folder, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive restarts and crashes. NEVER build your own watcher (background loop, nohup, sleep loop, tmux pane, shell crontab): it dies with your session or a restart, silently.
 ${buildTelegramOrchestrationInstruction(isBotSkillsEnabled)}
 ${answerRequestInstruction} The requester may not see your plain text: anything they must read goes through answer_request — yet your plain text is relayed into the topic too, so end the turn WITHOUT a recap of what you answered (it would show twice).
 ${claudeProfilesInstruction}${remoteRunInstructionText === null ? '' : `\n${remoteRunInstructionText}`}
 
-Each tool's own description has the exact argument recipe.`;
+Tool descriptions hold the argument recipes.`;
 }
 
 /** What a Jira session's instructions add: the tool that reaches the issue's original files (C10). */

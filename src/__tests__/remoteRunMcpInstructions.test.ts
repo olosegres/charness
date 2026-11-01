@@ -43,7 +43,7 @@ const runnerLines = ['mac — macOS 15.1, android, playwright', 'box1 (paused) �
 const offeredWithout: OptionalBotTools = { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] };
 const offeredWith: OptionalBotTools = { ...offeredWithout, remoteRunRunnerLines: runnerLines };
 /** The lines the runner list adds under the bullet: its heading and one per runner. */
-const runnersHeading = '  Runners as last seen (`runners` has the live state):';
+const runnersHeading = '  Runners, as last seen:';
 /** Words only the bullet has. */
 const bulletMarkers = ['charness remote-run runners', 'charness remote-run --bg', 'charness remote-run wait <id>'];
 const telegramTopic = makeTelegramKey(-1001111111111, 51);
@@ -117,8 +117,8 @@ describe('the instructions built for a platform', () => {
 
   it('the bullet tells what remote-run is for, to look at `runners` first, and to run `wait` in the background for long jobs', () => {
     const bullet = buildMcpServerInstructions('telegram', offeredWith, true).split('\n').find((line) => line.includes('charness remote-run runners')) ?? '';
-    assert.match(bullet, /test suite, a build, an e2e run/);
-    assert.match(bullet, /`charness remote-run runners` shows what each can do/);
+    assert.match(bullet, /test suite, build, e2e run/);
+    assert.match(bullet, /`charness remote-run runners` lists them and what each can do/);
     assert.match(bullet, /edit files only here/);
     assert.match(bullet, /Longer than your tool timeout: `charness remote-run --bg <command>`.*`charness remote-run wait <id>` in the background/);
   });
@@ -146,6 +146,18 @@ describe('the instructions built for a platform', () => {
         else assert.equal(left, null, `no runner shown, so no count of the rest — ${label}`);
       }
     }
+  });
+
+  it('four typical runners — a paused one and the longest capability list included — are shown whole on a Telegram topic with the todo tool and the bot\'s skills on (the longest text), with room to spare', () => {
+    const typicalLines = [
+      'mac — macOS 15.1, android, playwright',
+      'box1 (paused) — Ubuntu 24.04, android, docker, playwright',
+      'ci2 — Ubuntu 24.04, android, docker',
+      'studio — macOS 15.1, android, ios, playwright',
+    ];
+    const text = buildMcpServerInstructions('telegram', { ...offeredWithout, remoteRunRunnerLines: typicalLines }, true);
+    assert.deepEqual(text.split('\n').filter((line) => line.startsWith('  – ')), typicalLines.map((line) => `  – ${line}`), 'none of them is reduced to a count');
+    assert.ok(text.length <= claudeCodeInstructionsMaxLength - 60, `a margin of at least 60 characters: ${text.length} of ${claudeCodeInstructionsMaxLength}`);
   });
 
   it('a short list is shown whole on a Telegram topic with the bot\'s skills on — the default, and the longest text', () => {
