@@ -11,8 +11,19 @@ export type StrictToolInput<Shape extends z.ZodRawShape = z.ZodRawShape> = z.Zod
 /** A key must hold, or be held by, an allowed key at least this long to count as a near match ("id" sits in "width"). */
 const minHeldKeyLength = 3;
 
+/** An allowed key that merely holds the unknown one counts only when it is at most this much longer (`message` → `messages`, not `file` → `as_file`). */
+const maxHeldLengthGap = 1;
+
 /** A typo of up to this share of the key's length counts as a near match. */
 const typoLengthDivisor = 3;
+
+/** The keys that carry a file's path; every attachment name below stands for whichever of them an input has. */
+const attachmentPathKeys: readonly string[] = ['path', 'paths'];
+
+/** What an agent calls a file's path when it is not `path` — the commonest wrong key, and no edit distance reaches it. */
+const attachmentKeyAliases: ReadonlySet<string> = new Set([
+  'file', 'files', 'filename', 'filenames', 'image', 'images', 'attachment', 'attachments',
+]);
 
 /** Case and separators carry no meaning to a human mis-typing a key (`asFile`, `as_file`, `AS-FILE`). */
 function normalizeKey(key: string): string {
@@ -55,7 +66,8 @@ function getKeyDistance(unknownKey: string, allowedKey: string): number | null {
   if (unknown.length === 0 || allowed.length === 0) return null;
   if (unknown === allowed) return 0;
   const shorterLength = Math.min(unknown.length, allowed.length);
-  if (shorterLength >= minHeldKeyLength && (unknown.includes(allowed) || allowed.includes(unknown))) {
+  const isHeld = unknown.includes(allowed) || (allowed.includes(unknown) && allowed.length - unknown.length <= maxHeldLengthGap);
+  if (shorterLength >= minHeldKeyLength && isHeld) {
     // Of several held keys the longest is the most specific (`filePaths` → `paths`, not `path`).
     return 1000 - shorterLength;
   }
@@ -64,10 +76,15 @@ function getKeyDistance(unknownKey: string, allowedKey: string): number | null {
 }
 
 /**
- * @description The allowed key an unknown one was most likely meant to be — a case/separator difference, a key that holds
- * the other (`filePath` → `path`, `message` → `messages`), or a typo — or `undefined` when none is near.
+ * @description The allowed key an unknown one was most likely meant to be — a usual name for an attachment (`file` →
+ * `path`), a case/separator difference, a key that holds the other (`filePath` → `path`) or is one character longer
+ * (`message` → `messages`), or a typo — or `undefined` when none is near.
  */
 export function findClosestKey(unknownKey: string, allowedKeys: readonly string[]): string | undefined {
+  if (attachmentKeyAliases.has(normalizeKey(unknownKey))) {
+    const attachmentKey = allowedKeys.find((allowedKey) => attachmentPathKeys.includes(normalizeKey(allowedKey)));
+    if (attachmentKey !== undefined) return attachmentKey;
+  }
   let closestKey: string | undefined;
   let closestDistance = Infinity;
   for (const allowedKey of allowedKeys) {

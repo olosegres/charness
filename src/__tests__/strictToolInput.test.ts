@@ -53,6 +53,32 @@ describe('findClosestKey', () => {
   it('does not take a short allowed key for a hit just because the unknown key holds its letters', () => {
     assert.equal(findClosestKey('width', ['id', 'title']), undefined);
   });
+
+  it('does not take a much longer allowed key for a hit just because it holds the unknown one: `file` is not the as_file flag', () => {
+    assert.equal(findClosestKey('file', ['as_file']), undefined);
+    assert.equal(findClosestKey('file', ['text', 'as_file']), undefined);
+    assert.equal(findClosestKey('thread', ['threadKey']), undefined);
+    assert.equal(findClosestKey('case', ['uppercase']), undefined);
+  });
+
+  it('still takes an allowed key that is one character longer than the unknown one', () => {
+    assert.equal(findClosestKey('message', ['messages']), 'messages');
+    assert.equal(findClosestKey('path', ['paths']), 'paths');
+    assert.equal(findClosestKey('Path', ['paths']), 'paths');
+  });
+
+  it('points the usual names for an attachment at the key that takes it, never at the as_file flag', () => {
+    const attachmentNames = ['file', 'files', 'filename', 'filenames', 'image', 'images', 'attachment', 'attachments', 'File_Name'];
+    for (const attachmentName of attachmentNames) {
+      assert.equal(findClosestKey(attachmentName, ['text', 'path', 'as_file']), 'path', attachmentName);
+      assert.equal(findClosestKey(attachmentName, ['paths', 'caption', 'as_file', 'threadKey']), 'paths', attachmentName);
+    }
+  });
+
+  it('suggests an alias target only where the input has one', () => {
+    assert.equal(findClosestKey('file', ['id', 'title', 'status', 'note', 'ref', 'position']), undefined);
+    assert.equal(findClosestKey('image', ['attachmentId']), undefined);
+  });
 });
 
 describe('buildUnknownKeysMessage', () => {
@@ -60,6 +86,13 @@ describe('buildUnknownKeysMessage', () => {
     assert.equal(
       buildUnknownKeysMessage(['filePath'], ['text', 'path', 'as_file']),
       'unknown key `filePath` — did you mean `path`? Allowed: text, path, as_file.',
+    );
+  });
+
+  it('hints at `path` for `file` on an item, as the commonest wrong name for an attachment', () => {
+    assert.equal(
+      buildUnknownKeysMessage(['file'], ['text', 'path', 'as_file']),
+      'unknown key `file` — did you mean `path`? Allowed: text, path, as_file.',
     );
   });
 

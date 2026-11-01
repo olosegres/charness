@@ -261,6 +261,20 @@ describe('send_messages_to_user', () => {
     assert.deepEqual(fixture.fileGatewayCalls, []);
   });
 
+  it('an item with `file` is pointed at `path`, never at the as_file flag', async () => {
+    writeBoundFile('a.png');
+    const client = await connectTelegram();
+    const result = await client.callTool({
+      name: 'send_messages_to_user',
+      arguments: { messages: [{ text: 'chart one', file: 'a.png' }] },
+    });
+    const text = getText(result);
+    assert.equal(result.isError, true, text);
+    const [issue] = getValidationIssues(text);
+    assert.equal(issue.message, 'unknown key `file` — did you mean `path`? Allowed: text, path, as_file.');
+    assert.deepEqual(fixture.toolBodyCalls, []);
+  });
+
   it('the same refusal when the bridge hands the array over as a JSON string', async () => {
     const client = await connectTelegram();
     const result = await client.callTool({
@@ -364,6 +378,18 @@ describe('send_file_to_user', () => {
     assert.ok(text.includes('unknown key `path` — did you mean `paths`? Allowed: paths, caption, as_file, threadKey'), text);
     assert.deepEqual(fixture.toolBodyCalls, []);
     assert.deepEqual(fixture.fileGatewayCalls, []);
+  });
+});
+
+describe('send_file_to_user, wrong names for the files', () => {
+  it('`file` instead of `paths` is pointed at `paths`', async () => {
+    writeBoundFile('a.png');
+    const client = await connectTelegram();
+    const result = await client.callTool({ name: 'send_file_to_user', arguments: { file: 'a.png' } });
+    const text = getText(result);
+    assert.equal(result.isError, true, text);
+    assert.ok(text.includes('unknown key `file` — did you mean `paths`? Allowed: paths, caption, as_file, threadKey'), text);
+    assert.deepEqual(fixture.toolBodyCalls, []);
   });
 });
 
