@@ -10,8 +10,8 @@ import * as path from 'path';
  * `bot.js` reads its settings at module scope and exits the process without them. Hidden: it is not in `--help`.
  */
 
-/** Entry points: importing one starts something (the CLI, the bot, the install job). */
-const entryModules: ReadonlySet<string> = new Set(['cli.js', 'index.js', 'bot.js', 'cli/botEntry.js', 'stt/sttInstallEntry.js']);
+/** Entry points: importing one starts something (the CLI, the bot, the install job, the runner utility's command line). */
+const entryModules: ReadonlySet<string> = new Set(['cli.js', 'index.js', 'bot.js', 'cli/botEntry.js', 'stt/sttInstallEntry.js', 'runnerUtility/runnerCli.js']);
 const testsFolderName = '__tests__';
 const botModule = 'bot.js';
 const syntaxCheckTimeoutMs = 30 * 1000;
