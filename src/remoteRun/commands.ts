@@ -18,7 +18,7 @@ import { formatRunnerBlock, type RunnerCapability } from './probe';
 import { getProjectContext } from './project';
 import { RemoteRunError, RunnerUnreachableError } from './remoteRunError';
 import { createRunnerClient, describeRunnerRefusal, type RunnerClient, type RunnerScript } from './runnerClient';
-import { chooseExecRunnerName, findRunnerOfJob, pickRunner, probeRunners } from './runners';
+import { chooseExecRunnerName, findRunnerOfJob, pickRunner, probeAllTimeoutMs, probeRunners } from './runners';
 import type { RunnersConfig } from './runnersConfig';
 import { defaultRunnerWaitSeconds } from './runnerWaitTiming';
 import { chooseRunnerWithWait, planRunnerWait } from './runnerWait';
@@ -38,6 +38,8 @@ export interface CommandContext {
   script: RunnerScript;
   leaseMs: number;
   now: () => number;
+  /** The runners right now — read again at every attempt of the wait for a runner, so a pause or a removal made meanwhile counts. */
+  loadRunners: () => RunnersConfig;
   /** How often the wait for an offline paired runner looks again (`runnerWaitTiming.ts`). */
   runnerPollMs: number;
   /** Resolves after `ms`, or earlier with the signal that interrupted it; a test replaces it. */
@@ -51,25 +53,29 @@ const waitReconnectAttempts = 5;
 const waitReconnectDelayMs = 3000;
 const jobsListTimeoutMs = 30 * 1000;
 
-function createClient(context: CommandContext, runnerName: string): RunnerClient {
-  const runner = context.config.runners.find((candidate) => candidate.name === runnerName);
-  if (runner === undefined) throw new RemoteRunError(`no runner named "${runnerName}" (configured: ${context.config.runners.map((candidate) => candidate.name).join(', ')})`, remoteRunExitCodes.usage);
+function createClient(context: CommandContext, config: RunnersConfig, runnerName: string): RunnerClient {
+  const runner = config.runners.find((candidate) => candidate.name === runnerName);
+  if (runner === undefined) throw new RemoteRunError(`no runner named "${runnerName}" (configured: ${config.runners.map((candidate) => candidate.name).join(', ')})`, remoteRunExitCodes.usage);
   return createRunnerClient(runner, context.cacheDir, context.script);
 }
 
 /**
  * Probe the runners a command may use and pick one (the named one, or the first that answers, is not paused and has `needs`). With
  * `needs`, an offline paired runner that could do the job is waited for up to `waitSeconds` (see `runnerWait.ts`).
+ *
+ * The catalog is read again on EVERY attempt and the clients are built from it: a runner paused, removed or paired again from the hub while
+ * this command waits counts as it is NOW, not as it was when the command started (a wait may last 15 minutes).
  */
-async function chooseClient(context: CommandContext, wanted: { runner: string | null; needs: RunnerCapability | null; waitSeconds: number }): Promise<RunnerClient> {
-  const clients = wanted.runner === null
-    ? context.config.runners.map((runner) => createClient(context, runner.name))
-    : [createClient(context, wanted.runner)];
+export async function chooseClient(context: CommandContext, wanted: { runner: string | null; needs: RunnerCapability | null; waitSeconds: number }): Promise<RunnerClient> {
   return chooseRunnerWithWait<RunnerClient>({
-    attempt: async () => {
-      const reports = await probeRunners(clients, context.now());
-      const pick = pickRunner(context.config, reports, wanted);
-      if (!pick.ok) return { ok: false, failure: pick, wait: planRunnerWait(context.config, reports, wanted) };
+    attempt: async (budgetMs) => {
+      const config = context.loadRunners();
+      const clients = wanted.runner === null
+        ? config.runners.map((runner) => createClient(context, config, runner.name))
+        : [createClient(context, config, wanted.runner)];
+      const reports = await probeRunners(clients, context.now(), budgetMs === null ? probeAllTimeoutMs : Math.min(probeAllTimeoutMs, budgetMs));
+      const pick = pickRunner(config, reports, wanted);
+      if (!pick.ok) return { ok: false, failure: pick, wait: planRunnerWait(config, reports, wanted) };
       const client = clients.find((candidate) => candidate.runner.name === pick.runnerName);
       if (client === undefined) throw new RemoteRunError('the picked runner is not among the candidates');
       return { ok: true, choice: client };

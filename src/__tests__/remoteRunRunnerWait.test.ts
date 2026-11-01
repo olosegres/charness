@@ -13,7 +13,7 @@ import { parseProbeOutput, type RunnerReport } from '../remoteRun/probe';
 import { RemoteRunError } from '../remoteRun/remoteRunError';
 import { pickRunner } from '../remoteRun/runners';
 import type { RunnersConfig } from '../remoteRun/runnersConfig';
-import { chooseRunnerWithWait, formatWaitDuration, planRunnerWait, type RunnerAttempt } from '../remoteRun/runnerWait';
+import { chooseRunnerWithWait, formatWaitDuration, minWaitAttemptMs, planRunnerWait, type RunnerAttempt } from '../remoteRun/runnerWait';
 import { defaultRunnerWaitSeconds, readRunnerWaitPollMs, runnerWaitPollMinMs, runnerWaitPollMs } from '../remoteRun/runnerWaitTiming';
 
 const pairedLink = { runnerId: 'a1b2c3d4e5f6', hubDir: '/h', isPausedByHub: false };
@@ -90,25 +90,32 @@ describe('formatWaitDuration', () => {
   });
 });
 
+/** What an attempt does: answers, or (a function) first spends time or changes the world — as a slow probe would — and then answers. */
+type FakeAnswer = RunnerAttempt<string> | ((world: FakeWorld) => RunnerAttempt<string>);
+
 interface FakeWorld {
   nowMs: number;
   said: string[];
   sleeps: number[];
   attempts: number;
+  /** The time each attempt was told it had: `null` for the first, then what was left of the wait. */
+  budgets: Array<number | null>;
   /** The attempt's answer by number (from 1); the last one repeats. */
-  answers: Array<RunnerAttempt<string>>;
+  answers: FakeAnswer[];
   interruptAtSleep: { sleepNumber: number; signal: 'SIGINT' | 'SIGTERM' | 'SIGHUP' } | null;
 }
 
-function createWorld(answers: Array<RunnerAttempt<string>>): FakeWorld {
-  return { nowMs: 1_000_000, said: [], sleeps: [], attempts: 0, answers, interruptAtSleep: null };
+function createWorld(answers: FakeAnswer[]): FakeWorld {
+  return { nowMs: 1_000_000, said: [], sleeps: [], attempts: 0, budgets: [], answers, interruptAtSleep: null };
 }
 
 function runLoop(world: FakeWorld, options: { waitSeconds: number; needs?: 'android' | null; pollMs?: number }): Promise<string> {
   return chooseRunnerWithWait<string>({
-    attempt: async () => {
+    attempt: async (budgetMs) => {
       world.attempts += 1;
-      return world.answers[Math.min(world.attempts, world.answers.length) - 1];
+      world.budgets.push(budgetMs);
+      const answer = world.answers[Math.min(world.attempts, world.answers.length) - 1];
+      return typeof answer === 'function' ? answer(world) : answer;
     },
     needs: options.needs === undefined ? 'android' : options.needs,
     waitSeconds: options.waitSeconds,
@@ -165,6 +172,45 @@ describe('the wait loop', () => {
       return true;
     });
     assert.deepEqual(world.sleeps, [10_000, 10_000, 5_000], 'the last sleep is cut to what is left of the wait');
+  });
+
+  it('every attempt of the wait is told what is left of it, so its probe can end in time — the first one, before any waiting, is not', async () => {
+    const world = createWorld([waitingFailure]);
+    await assert.rejects(runLoop(world, { waitSeconds: 25 }), RemoteRunError);
+    assert.deepEqual(world.budgets, [null, 15_000, 5_000]);
+  });
+
+  it('with less than a second left no attempt is started — the wait is over, a probe could not answer in that time', async () => {
+    assert.equal(minWaitAttemptMs, 1000);
+    const world = createWorld([waitingFailure]);
+    await assert.rejects(runLoop(world, { waitSeconds: 10, pollMs: 9_500 }), (error: Error) => error instanceof RemoteRunError && /waited \d+ s for a runner with "android" to come back — none did$/.test(error.message));
+    assert.equal(world.attempts, 1, 'the half second that was left bought no second attempt');
+    assert.deepEqual(world.sleeps, [9_500]);
+  });
+
+  it('a runner that answers only AFTER the deadline is refused — the job is not started late, however good the answer', async () => {
+    const answersAfterDeadline = (world: FakeWorld): RunnerAttempt<string> => {
+      world.nowMs += 30_000;
+      return chosen;
+    };
+    const world = createWorld([waitingFailure, answersAfterDeadline]);
+    await assert.rejects(runLoop(world, { waitSeconds: 20 }), (error: Error) => {
+      assert.ok(error instanceof RemoteRunError);
+      assert.equal(error.exitCode, 125);
+      assert.ok(error.message.startsWith('no online runner can do "android"\nmac — offline\n'), error.message);
+      assert.match(error.message, /waited 40 s for a runner with "android" to come back — one answered only after the wait had ended, so the job was not started$/);
+      return true;
+    });
+    assert.equal(world.attempts, 2);
+  });
+
+  it('a runner that answers in time, with the whole budget used, is still taken', async () => {
+    const answersJustInTime = (world: FakeWorld): RunnerAttempt<string> => {
+      world.nowMs += 10_000;
+      return chosen;
+    };
+    const world = createWorld([waitingFailure, answersJustInTime]);
+    assert.equal(await runLoop(world, { waitSeconds: 20 }), 'mac');
   });
 
   it('--runner-wait 0: 125 at once — nothing announced, nothing slept, no "waited" line', async () => {

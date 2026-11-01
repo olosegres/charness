@@ -12,7 +12,12 @@
  *   exec → the command runs in the runner's copy as the last job left it
  *   paused → from the hub, and on the runner itself: never picked, said so; resumed: used again
  *   --needs → a runner offline: `--runner-wait 0` and a capability nobody has fail at once (125); the wait gives up on time; an
- *             interrupt ends it with 130; the runner coming back lets the waiting job run
+ *             interrupt ends it with 130; a runner paused from the hub meanwhile is given up on and runs nothing when it comes back;
+ *             the runner coming back lets the waiting job run
+ *
+ * The hub's home folder has a SPACE in its name (the CLI runs with `HOME` set to a symlink called «hub home»): every path of the ssh line —
+ * the proxy socket, the known-hosts file, the key — must survive ssh's own option parsing and rsync's `-e` splitter, or the pinned host key
+ * is not found and the first call is refused.
  *
  * The Playwright capability is real: the runner's `env` file points `PLAYWRIGHT_BROWSERS_PATH` at a folder that holds a `chromium-*`
  * entry, so the probe reports it on any machine. Needs sshd, ssh, ssh-keyscan, rsync, Pueue, git, tar and the built CLI (`yarn build`):
@@ -80,8 +85,11 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
     assert.deepEqual(missingTools, [], 'CI installs everything this flow needs');
     layout = await createRunnerLinkLayout();
     runnerPaths = getRunnerHomePaths(layout.runnerHome);
+    // The same folder under a name with a space: what the CLI sees as its HOME (`runHubCli` keeps the plain one).
+    const spacedHubHome = path.join(layout.root, 'hub home');
+    fs.symlinkSync(layout.hubHome, spacedHubHome, 'dir');
     cliLayout = {
-      home: layout.hubHome,
+      home: spacedHubHome,
       cacheDir: path.join(layout.root, 'cache'),
       cliChildren: new Set(),
       projectsDir: path.join(layout.root, 'projects'),
@@ -266,7 +274,9 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
     });
 
     it('the wait gives up when --runner-wait ends, with the reason and how long it waited', async () => {
+      const startedAtMs = Date.now();
       const result = await run(['--needs', 'playwright', '--runner-wait', '3s', 'echo x']);
+      assert.ok(Date.now() - startedAtMs < 20_000, 'it stopped waiting at its deadline, not a probe later');
       assert.equal(result.exitCode, 125);
       assert.match(result.stderr, new RegExp(`waiting for a runner with playwright \\(${runnerName} offline since `));
       assert.match(result.stderr, /waited \d+ s for a runner with "playwright" to come back — none did/);
@@ -279,6 +289,23 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
       assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 130, cli.stderr());
       assert.match(cli.stderr(), /interrupted while waiting for a runner/);
       assert.equal(cli.stdout(), '');
+    });
+
+    it('a runner paused from the hub while the command waits is given up on — and runs nothing when it comes back', async () => {
+      const markerName = 'paused-wait.marker';
+      const cli = start(['--needs', 'playwright', '--runner-wait', '5m', `touch ../${markerName}`]);
+      await waitUntil(() => cli.stderr().includes('waiting for a runner with playwright'), 'the wait to begin', ordinaryRunTimeoutMs);
+      assert.equal(runHubCli(layout, ['runners', 'pause', runnerName]).status, 0);
+      try {
+        assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 125, cli.stderr());
+        assert.match(cli.stderr(), /waited \d+ s for a runner with "playwright" to come back — none did/);
+        await startTheRunner();
+        await new Promise((resolve) => { setTimeout(resolve, 4 * pollMs); });
+        assert.equal(fs.existsSync(path.join(project.runnerDirectory, markerName)), false, 'the command was not run on the paused runner');
+      } finally {
+        assert.equal(runHubCli(layout, ['runners', 'resume', runnerName]).status, 0);
+      }
+      await stopTheRunner();
     });
 
     it('the runner coming back lets the waiting job run — the wait is announced once', async () => {

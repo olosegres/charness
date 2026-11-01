@@ -30,6 +30,16 @@ function escapeSshTokens(value: string): string {
   return value.replace(/%/g, '%%');
 }
 
+/**
+ * A path as the VALUE of an `-o` option. ssh reads `-o` like a line of its config file, and `UserKnownHostsFile` there is a LIST of files
+ * separated by whitespace: `/home/my user/…/known_hosts` would be the files `/home/my` and `user/…/known_hosts`, the pin would not be found
+ * and strict checking would refuse the runner. Double quotes keep one path one word (ssh_config(5): «arguments may optionally be enclosed in
+ * double quotes»); `-i` takes its path as a plain argument and needs none.
+ */
+function quoteSshOptionPath(value: string): string {
+  return /\s/.test(value) ? `"${value}"` : value;
+}
+
 /** @description `value` as an ssh path, or a {@link PairedRunnerSetupError} naming what it is the path of. */
 function getUsableSshPath(value: string, what: string): string {
   if (unquotablePattern.test(value)) throw new PairedRunnerSetupError(`the path of ${what} holds a quote, a backslash, a $ or a line break, which ssh cannot be given safely`);
@@ -64,7 +74,7 @@ export function buildPairedSshOptions(input: PairedSshOptionsInput): string[] {
     '-F', '/dev/null',
     '-o', `ProxyCommand=${escapeSshTokens(proxyCommand)}`,
     '-o', `HostKeyAlias=${getRunnerHostAlias(input.runnerId)}`,
-    '-o', `UserKnownHostsFile=${escapeSshTokens(getUsableSshPath(files.knownHosts, 'the hub known_hosts'))}`,
+    '-o', `UserKnownHostsFile=${quoteSshOptionPath(escapeSshTokens(getUsableSshPath(files.knownHosts, 'the hub known_hosts')))}`,
     '-o', 'GlobalKnownHostsFile=/dev/null',
     '-o', 'StrictHostKeyChecking=yes',
     '-i', escapeSshTokens(getUsableSshPath(files.hubKey, 'the hub key')),

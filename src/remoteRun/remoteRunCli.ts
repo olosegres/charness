@@ -16,7 +16,7 @@ import { readRemoteRunLeaseMs } from './leaseTiming';
 import { createProcessIo, type CliIo } from './output';
 import { RemoteRunError } from './remoteRunError';
 import { readRunnerScript } from './runnerClient';
-import { getRunnersConfigPath } from './runnersConfig';
+import { getRunnersConfigPath, type RunnersConfig } from './runnersConfig';
 import { loadRunnersCatalog } from './runnersCatalog';
 import { readRunnerWaitPollMs } from './runnerWaitTiming';
 import { sleepUntilInterrupted } from './runnerWait';
@@ -55,6 +55,13 @@ Exit codes: the command's own; 125 remote-run failed, 124 timeout, 130/143/129 i
 Setup: docs/remote-run.md
 `;
 
+/** The runners as they are right now; a broken file or registry stops the caller with its errors, no runner at all is an empty list. */
+function readCurrentRunners(homeDir: string): RunnersConfig {
+  const load = loadRunnersCatalog(homeDir);
+  if (load.status === 'invalid') throw new RemoteRunError(load.errors.join('\n'));
+  return load.config;
+}
+
 function createContext(io: CliIo): CommandContext {
   const load = loadRunnersCatalog(io.homeDir);
   if (load.status === 'missing') {
@@ -71,6 +78,7 @@ function createContext(io: CliIo): CommandContext {
     script: readRunnerScript(),
     leaseMs: readRemoteRunLeaseMs(io.env),
     now: Date.now,
+    loadRunners: () => readCurrentRunners(io.homeDir),
     runnerPollMs: readRunnerWaitPollMs(io.env),
     sleep: sleepUntilInterrupted,
   };

@@ -41,7 +41,7 @@ A registry entry becomes the same `RunnerConfig` a `runners.json` entry is (`pai
 upload, rsync, Pueue, the lease — is phase 1 unchanged. Only the ssh options differ: destination `charness-runner-<id>`, no host and port but
 `ProxyCommand=<node> <cli.js> runner-proxy <hub dir>/link/<id>.sock`, the host key pinned under `HostKeyAlias` from the hub's own `known_hosts`
 (`StrictHostKeyChecking=yes`, never learned), the hub's key only (`IdentitiesOnly`, `IdentityAgent=none`), `-F /dev/null`. Every path on that line is
-`%`-escaped for ssh and refused when it holds a quote, a backslash, `$`, a backtick or a line break (rsync's `-e` splitter and ssh must read the same
+`%`-escaped for ssh (`UserKnownHostsFile` is a whitespace-separated LIST in ssh's option parser, so its path is double-quoted inside the option when it has a space) and refused when it holds a quote, a backslash, `$`, a backtick or a line break (rsync's `-e` splitter and ssh must read the same
 words: single quotes around a word, double quotes inside it, never a quote inside a single-quoted word — rsync cannot nest them). Pueue's binary and
 config are found from the reported work dir with the layout `runnerUtility/runnerHome.ts` writes down (`work/`, `bin/`, `pueue/` side by side).
 
@@ -53,7 +53,9 @@ config are found from the reported work dir with the layout `runnerUtility/runne
   (`runnerWait.ts`): it says so once, looks again every 10 s (`runnerWaitTiming.ts`; the test seam `CHARNESS_TEST_TIMINGS` `remoteRunRunnerPollMs`
   may only shorten it) and gives up after `--runner-wait` (default 15 min, `0` = fail at once) with the pick's own message and 125. A runner nobody
   can say can do the job (no runner has the capability, one never seen, a hand-made one, a named one) is not waited for: 125 at once, as in phase 1.
-  An interrupt while waiting ends it with 130 / 143 / 129 and starts no job.
+  An interrupt while waiting ends it with 130 / 143 / 129 and starts no job. The deadline is hard: the catalog is read AGAIN at every look (a runner
+  paused or removed from the hub meanwhile is given up on, whatever it does next), every look is told what is left of the wait and its probe is cut
+  there, none starts with under a second left, and a runner that answers after the deadline is refused — the job is never started late.
 - **What a paired runner says in `probe`** (`runner.sh`, read from its state folder — the parent of the work dir, recognised by `config.json` and
   `keys/`; a hand-made runner has none of it): `paused=` (the file `paused` exists), `service=` (the file `service`: `user-service` | `system-service`;
   none = `foreground`), `runner_version=` (`current/package.json`), and from `ios-check.json` (`"isBootable": true|false`, `"detail"`) `ios_boot=` /

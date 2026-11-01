@@ -96,6 +96,15 @@ describe('the ssh options of a paired runner', () => {
     assert.ok(!proxy?.includes("'"));
   });
 
+  it('a hub folder with a space keeps one path one word everywhere: the known-hosts file is double-quoted INSIDE its option (ssh reads UserKnownHostsFile as a whitespace-separated list), the proxy socket inside the ProxyCommand, the key as a plain argument', () => {
+    const spacedDir = '/home/my user/.config/charness/runners';
+    const options = buildPairedSshOptions({ ...input, hubDir: spacedDir });
+    assert.ok(options.includes(`UserKnownHostsFile="${spacedDir}/known_hosts"`), options.join('\n'));
+    assert.ok(options.includes(`ProxyCommand=/usr/bin/node /opt/charness/dist/cli.js runner-proxy "${spacedDir}/link/${runnerId}.sock"`));
+    assert.equal(options[options.indexOf('-i') + 1], `${spacedDir}/hub_ed25519`, '-i takes its path as an argument: no quotes of its own');
+    assert.ok(options.every((option) => !option.includes("'")), 'no single quote anywhere: rsync cannot nest them');
+  });
+
   it('a % in a path is written %% (ssh expands %-tokens in a ProxyCommand, a known-hosts path and an identity file)', () => {
     const options = buildPairedSshOptions({ ...input, hubDir: '/home/us%er/.config/charness/runners' });
     assert.ok(options.includes('UserKnownHostsFile=/home/us%%er/.config/charness/runners/known_hosts'));
@@ -111,14 +120,15 @@ describe('the ssh options of a paired runner', () => {
   });
 
   it('survive the real shells: ssh\'s own argument list keeps ProxyCommand one word, and the `-e` string of rsync splits back into the same words', () => {
-    const config = buildPairedRunnerConfig(createPairedRunner(), { hubDir: '/home/user/.config/charness/runners', nodePath: '/usr/bin/node', cliPath: '/opt/my charness/dist/cli.js' });
+    const config = buildPairedRunnerConfig(createPairedRunner(), { hubDir: '/home/my user/.config/charness/runners', nodePath: '/usr/bin/node', cliPath: '/opt/my charness/dist/cli.js' });
     const rsyncCommand = buildRsyncSshCommand(config, '/tmp/cache');
     // rsync's manual (`-e`): «single- and/or double-quotes preserve spaces in an argument (but not backslashes)», and a doubled single quote
     // is a single quote — so a word is wrapped in single quotes and holds none inside; a POSIX shell reads this input the same way.
     const printed = spawnSync('sh', ['-c', `for word in ${rsyncCommand}; do printf '%s\\n' "$word"; done`], { encoding: 'utf8' }).stdout.split('\n');
     const expected = ['ssh', ...buildSshArgs(config, '/tmp/cache')];
     assert.deepEqual(printed.slice(0, expected.length), expected);
-    assert.ok(printed.includes('ProxyCommand=/usr/bin/node "/opt/my charness/dist/cli.js" runner-proxy /home/user/.config/charness/runners/link/a1b2c3d4e5f6.sock'));
+    assert.ok(printed.includes('ProxyCommand=/usr/bin/node "/opt/my charness/dist/cli.js" runner-proxy "/home/my user/.config/charness/runners/link/a1b2c3d4e5f6.sock"'));
+    assert.ok(printed.includes('UserKnownHostsFile="/home/my user/.config/charness/runners/known_hosts"'));
   });
 });
 
