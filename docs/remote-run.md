@@ -14,7 +14,7 @@ In this phase a runner is a machine **you set up by hand** and list in a file. P
   code (tests are code): give it an unprivileged account with no secrets in its home, and nothing of the main machine's environment
   is sent to it.
 - `bash`, `rsync` (3.1.3 or newer: older ones compare file times in whole seconds, so an edit made within a second of the previous
-  version of the same length can be missed; on macOS `brew install rsync`) and **[Pueue](https://github.com/Nukesor/pueue) 4**
+  version of the same length can be missed; on macOS see «Put the tools on the runner's PATH» below) and **[Pueue](https://github.com/Nukesor/pueue) 4**
   (the job queue). Pueue is a single static binary:
 
   ```bash
@@ -27,6 +27,31 @@ In this phase a runner is a machine **you set up by hand** and list in a file. P
   Pick the asset for your platform from the release page (`aarch64-apple-darwin` for an Apple-silicon Mac, and so on).
 - Whatever the project's commands need: Node and a package manager, an Android SDK, Docker, Playwright's browsers. `charness remote-run
   runners` shows what each runner has (below).
+
+### Put the tools on the runner's PATH
+
+The dependencies step and the command run in the environment of the **non-interactive ssh command** that queued them (Pueue gives a task
+the environment of the client that added it, not of its daemon). Such a command does not read `~/.profile`, `~/.zprofile` or the
+interactive part of `~/.bashrc`, so its `PATH` is sshd's default, and a Node from nvm, Volta or Homebrew is usually not on it: the first
+run then ends with `yarn: command not found` as a failed dependencies step (125). Check what a job will see:
+
+```bash
+ssh runner@runner.example 'command -v node yarn rsync pueue'
+```
+
+- **bash** (the usual login shell of a Linux runner): on Debian and Ubuntu the bash that sshd starts reads `~/.bashrc` (`man bash`,
+  «Invoked by remote shell daemon»; other builds of bash do not read it for ssh at all), but the stock file returns at its top for a
+  non-interactive shell (`case $- in *i*) ;; *) return;; esac`), so a `PATH` line an installer appended at the bottom (nvm does) is
+  never reached. Put the `export PATH=…` (or nvm's lines) **above** that guard.
+- **zsh** (the macOS default): `~/.zshenv` is read by every zsh, ssh commands included (`export PATH=/opt/homebrew/bin:$PATH` there).
+- **Any shell**: an absolute path in `install:` (`install: /home/runner/.nvm/versions/node/v22.11.0/bin/yarn install`) covers the
+  dependencies step; `-e PATH=…` on the call covers the step and the command (keep the system directories in it:
+  `charness remote-run -e PATH=/home/runner/.nvm/versions/node/v22.11.0/bin:/usr/bin:/bin yarn test`).
+
+`rsync` is found the same way: the main machine starts it on the runner over ssh, and the runner looks it up on that `PATH`. On macOS
+Homebrew's rsync (`brew install rsync`) is not on it, so the system's is used — a 2.6.9-compatible rsync (openrsync since macOS 15),
+older than the 3.1.3 needed. Put `/opt/homebrew/bin` (Apple silicon; `/usr/local/bin` on Intel) on the `PATH` as above before relying on a
+Mac runner.
 
 `remote-run` starts Pueue's daemon by itself when it does not answer. To run it as a service with limits, so a runaway test cannot
 take the machine, use a systemd user unit (and `loginctl enable-linger <account>` so it survives logout):
