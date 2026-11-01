@@ -17,41 +17,17 @@ import path from 'path';
 import { buildPairedRunnerConfig, buildPairedSshOptions, getPairedRunnerPueue, loadPairedRunners, PairedRunnerSetupError, resetPairedRunnersCache } from '../remoteRun/pairedRunners';
 import type { RunnerClient } from '../remoteRun/runnerClient';
 import { probeRunner } from '../remoteRun/runners';
-import { checkIsRemoteRunOffered, loadRunnersCatalog } from '../remoteRun/runnersCatalog';
+import { getRunnerSummaryLines } from '../remoteRun/runnerSummary';
+import { loadRunnersCatalog } from '../remoteRun/runnersCatalog';
 import { getRunnersConfigPath, resetRunnersConfigCache } from '../remoteRun/runnersConfig';
 import { buildRsyncSshCommand, buildSshArgs } from '../remoteRun/ssh';
 import { createHubContext, getHubFilePaths, getRunnerLinkPaths } from '../runners/hubPaths';
 import { writeLinkState } from '../runners/linkControl';
 import { writePairedFile, type PairedRunner } from '../runners/hubRegistry';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
-import { generateEd25519KeyPair } from '../runners/sshKeys';
-
-const runnerId = 'a1b2c3d4e5f6';
-const reportedWorkDir = '/Users/runner/.charness-runner/work';
+import { createPairedRunnerFixture as createPairedRunner, pairedRunnerId as runnerId, pairedRunnerWorkDir as reportedWorkDir } from './remoteRunPairedKit';
 
 let homeDir = '';
-
-function createPairedRunner(overrides: Partial<PairedRunner> = {}): PairedRunner {
-  return {
-    id: runnerId,
-    name: 'mac',
-    publicKey: generateEd25519KeyPair('client').publicKey,
-    keyFingerprint: 'SHA256:x',
-    hostKey: generateEd25519KeyPair('server').publicKey,
-    workDir: reportedWorkDir,
-    os: 'macOS 15.1',
-    arch: 'arm64',
-    version: '3.8.0',
-    serviceKind: 'system-service',
-    pairedAtMs: 1,
-    pairId: '0123456789ab',
-    label: '@ExampleBot',
-    host: 'host.example',
-    port: 22,
-    isPaused: false,
-    ...overrides,
-  };
-}
 
 function writePaired(runners: PairedRunner[]): void {
   writePairedFile(createHubContext({ homeDir }).dir, { rev: 1, runners });
@@ -153,7 +129,7 @@ describe('a registry entry as a RunnerConfig', () => {
     assert.equal(config.name, 'mac');
     assert.equal(config.ssh, `charness-runner-${runnerId}`);
     assert.equal(config.workDir, reportedWorkDir);
-    assert.deepEqual(config.paired, { runnerId, hubDir: hub.hubDir, isPausedByHub: true });
+    assert.deepEqual(config.paired, { runnerId, hubDir: hub.hubDir, isPausedByHub: true, os: 'macOS 15.1' });
     assert.equal(config.pueue?.config, getRunnerHomePaths('/Users/runner').pueueConfig);
   });
 });
@@ -193,15 +169,15 @@ describe('the catalog of every runner', () => {
     const load = loadRunnersCatalog(homeDir);
     assert.equal(load.status, 'ok');
     assert.deepEqual(load.config?.runners.map((runner) => [runner.name, runner.paired === undefined ? 'hand-made' : 'paired']), [['box1', 'hand-made'], ['mac', 'paired']]);
-    assert.equal(checkIsRemoteRunOffered(homeDir), true);
+    assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, true);
   });
 
   it('nothing at all is missing and offers nothing; only paired runners (no runners.json) work', () => {
     assert.equal(loadRunnersCatalog(homeDir).status, 'missing');
-    assert.equal(checkIsRemoteRunOffered(homeDir), false);
+    assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, false);
     writePaired([createPairedRunner()]);
     assert.equal(loadRunnersCatalog(homeDir).status, 'ok');
-    assert.equal(checkIsRemoteRunOffered(homeDir), true);
+    assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, true);
   });
 
   it('a name in both sources is an error that names it; the hand-made entry stays, the paired duplicate is left out', () => {
@@ -219,7 +195,7 @@ describe('the catalog of every runner', () => {
     const load = loadRunnersCatalog(homeDir);
     assert.equal(load.status, 'invalid');
     assert.ok(load.status === 'invalid' && load.errors.some((error) => error.startsWith('runners.json')));
-    assert.equal(checkIsRemoteRunOffered(homeDir), true);
+    assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, true);
   });
 
   it('a runner whose paths cannot be put on an ssh line is reported by name and left out of the list', () => {
@@ -247,7 +223,7 @@ describe('probing a paired runner', () => {
       throw new Error('not used by the probe');
     };
     return {
-      runner: { name: 'mac', ssh: `charness-runner-${runnerId}`, workDir: reportedWorkDir, paired: { runnerId, hubDir, isPausedByHub } },
+      runner: { name: 'mac', ssh: `charness-runner-${runnerId}`, workDir: reportedWorkDir, paired: { runnerId, hubDir, isPausedByHub, os: 'Ubuntu 24.04' } },
       cacheDir,
       rsyncSshCommand: 'ssh',
       ensureScript: async () => { scriptChecks += 1; },

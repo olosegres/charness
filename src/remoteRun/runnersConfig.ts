@@ -52,6 +52,8 @@ export interface PairedRunnerLink {
   hubDir: string;
   /** Paused from the hub (`charness runners pause`, `/runners`): the runner stays attached but is never picked for a job. */
   isPausedByHub: boolean;
+  /** The OS the runner reported at pairing (`macOS 15.1`) — text from the runner machine, to be cleaned before it is shown to an agent. */
+  os: string;
 }
 
 /** @name RunnerConfig @description One runner: an entry of the file, or a paired runner built from the hub's registry. */

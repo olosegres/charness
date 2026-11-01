@@ -231,8 +231,11 @@ as a Gradle daemon or the adb server do) survives by design — it is the runner
 
 While `runners.json` lists at least one runner or one is paired, the bot MCP's instructions (Telegram topics and tracker conversations alike) carry
 one bullet: what remote-run is for, `runners` first, and `--bg` plus `wait` in the background for anything longer than the tool
-timeout. Nobody without a runner sees any change. A running agent reads the instructions at connect, so it sees the bullet after its
-next session start or idle cycle.
+timeout — with one line under it per runner: its name, its OS and what it could do when it was last probed (`mac — macOS 15.1, android,
+playwright`; `(paused)` after the name of a runner that is held back; a runner nobody has probed yet shows only its name and, if paired,
+the OS it reported). The lines are a snapshot taken at connect — `charness remote-run runners` has the live state. Nobody without a runner
+sees any change. A running agent reads the instructions at connect, so it sees the bullet and the list after its next session start or
+idle cycle.
 
 A **Jira** agent runs with a minimal environment: it reaches `charness` through the bot's `PATH`. If the bot's `PATH` lacks it (or
 the instance's env file sets `PATH`), map it in `jira.json` `agentBinaries` (see [Jira setup](../SETUP.md#jira-setup)) — for example

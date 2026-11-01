@@ -139,9 +139,27 @@ const answerRequestInstruction =
 /** The shared todo registry's bullet (D7) — Telegram topics and Jira issues publish alike. */
 const todoInstruction =
   '• BEFORE you start any task (fixes you found yourself included: a failing test, a leak) → todo_update adds it as inWork, naming the area concretely (files, tests). Check the returned board for overlap with other agents. Take the queue top-down; mark items done / dropped at once. A ticket you create in a tracker gets an item with its key in `ref`.';
-/** The `charness remote-run` bullet — present only while `runners.json` lists a runner, for Telegram topics and tracker issues alike. */
+/** The `charness remote-run` bullet — present only while a runner is paired or listed in `runners.json`, for Telegram topics and tracker issues alike. */
 const remoteRunInstruction =
   '• Heavy work (a test suite, a build, an e2e run) can run on a runner machine instead of this one → `charness remote-run runners` shows which runners are online with their CPU, RAM, disk, load and what each can do (android, ios, docker, playwright); then `charness remote-run [--needs <capability>] <command>` runs the command in a copy of this git project there and gives you its output, exit code and declared result files as if it ran here (edit files only here; an interrupt or tool timeout kills the remote job). Longer than your tool timeout: `charness remote-run --bg <command>` prints a job id, then run `charness remote-run wait <id>` in the background (it blocks until the job ends and exits with its code); `ls`, `status <id>`, `logs <id> -f`, `kill <id>` manage jobs.';
+/** More runners than this are summed up ("… and 3 more"): the bullet is a hint, `runners` is the list. */
+const maxRunnerLinesInInstructions = 12;
+
+/**
+ * The remote-run bullet with one line per runner under it (`mac — macOS 15.1, android, playwright`: the name, the OS, what it could do when
+ * last probed), or `null` with no runner. The lines are a snapshot taken at connect; `charness remote-run runners` has the live state.
+ */
+function buildRemoteRunInstruction(runnerLines: readonly string[]): string | null {
+  if (runnerLines.length === 0) return null;
+  const shown = runnerLines.slice(0, maxRunnerLinesInInstructions);
+  const hiddenCount = runnerLines.length - shown.length;
+  return [
+    remoteRunInstruction,
+    '  Runners as last seen (`runners` has the live state):',
+    ...shown.map((line) => `  – ${line}`),
+    ...(hiddenCount > 0 ? [`  – … and ${hiddenCount} more`] : []),
+  ].join('\n');
+}
 const orchestrationInstructionHead = '• You orchestrate detached workers (a `claude -p` / `opencode run` builder, reviewer, researcher) →';
 /** What the worker-watch recipe says once a tool is named: shared by both wordings of the Telegram bullet. */
 const workerWatchRecipeText =
@@ -181,8 +199,8 @@ export interface ClaudeProfilesQuery {
 export interface OptionalBotTools {
   isJiraAttachmentToolOffered: boolean;
   isTodoToolOffered: boolean;
-  /** At least one runner is listed in `runners.json`: the instructions name `charness remote-run`. */
-  isRemoteRunOffered: boolean;
+  /** One line per runner that is paired or listed in `runners.json` (`remoteRun/runnerSummary.ts`); none = the instructions do not mention `charness remote-run`. */
+  remoteRunRunnerLines: readonly string[];
 }
 
 /** @description Which optional tools `deps` offers. */
@@ -190,11 +208,11 @@ function getOptionalBotTools(deps: SchedulerMcpDeps): OptionalBotTools {
   return {
     isJiraAttachmentToolOffered: deps.fetchJiraAttachment !== undefined,
     isTodoToolOffered: deps.todos !== undefined,
-    isRemoteRunOffered: deps.isRemoteRunOffered?.() ?? false,
+    remoteRunRunnerLines: deps.getRemoteRunRunnerLines?.() ?? [],
   };
 }
 
-function buildTelegramInstructions(isTodoToolOffered: boolean, isRemoteRunOffered: boolean, isBotSkillsEnabled: boolean): string {
+function buildTelegramInstructions(isTodoToolOffered: boolean, remoteRunInstructionText: string | null, isBotSkillsEnabled: boolean): string {
   return `This MCP lets the agent act on its own Telegram topic.
 
 When to use it:
@@ -206,7 +224,7 @@ ${isTodoToolOffered ? `${todoInstruction}\n` : ''}• You need to review or remo
 • You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron). The bot runs the command in this folder on schedule, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive bot restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart and then fails silently.
 ${buildTelegramOrchestrationInstruction(isBotSkillsEnabled)}
 ${answerRequestInstruction} The requester may not see your plain text, so anything they must read goes through answer_request. Your plain text is relayed into the topic too, so after answer_request end the turn WITHOUT a plain-text recap of what you answered — it would show up twice.
-${claudeProfilesInstruction}${isRemoteRunOffered ? `\n${remoteRunInstruction}` : ''}
+${claudeProfilesInstruction}${remoteRunInstructionText === null ? '' : `\n${remoteRunInstructionText}`}
 
 Each tool's own description has the exact argument recipe (one-shot vs cron vs N-times, checks).`;
 }
@@ -245,8 +263,9 @@ Each tool's own description has the exact argument recipe.`;
  * (`isBotSkillsEnabled`, `/bot_skills`) the orchestration bullet no longer tells it to load `charness-manager`.
  */
 export function buildMcpServerInstructions(platform: PlatformId | null, offered: OptionalBotTools, isBotSkillsEnabled: boolean): string {
-  if (platform === 'telegram') return buildTelegramInstructions(offered.isTodoToolOffered, offered.isRemoteRunOffered, isBotSkillsEnabled);
-  const remoteRunInstructions = offered.isRemoteRunOffered ? [remoteRunInstruction] : [];
+  const remoteRunInstructionText = buildRemoteRunInstruction(offered.remoteRunRunnerLines);
+  if (platform === 'telegram') return buildTelegramInstructions(offered.isTodoToolOffered, remoteRunInstructionText, isBotSkillsEnabled);
+  const remoteRunInstructions = remoteRunInstructionText === null ? [] : [remoteRunInstructionText];
   if (platform !== 'jira') return buildTrackerInstructions(remoteRunInstructions, isBotSkillsEnabled);
   return buildTrackerInstructions([
     ...(offered.isJiraAttachmentToolOffered ? [jiraAttachmentInstruction] : []),
@@ -445,10 +464,11 @@ export interface SchedulerMcpDeps {
    */
   listClaudeProfiles?: (query: ClaudeProfilesQuery) => Promise<ClaudeProfilesReport>;
   /**
-   * Is any runner for `charness remote-run` configured (`runners.json`, `remoteRun/runnersConfig.ts`)? Asked at every connect, so
-   * adding the first runner shows in the next session's instructions; absent or false = the instructions do not mention it.
+   * One line per runner `charness remote-run` can use — paired or in `runners.json` (`remoteRun/runnerSummary.ts`): name, OS, what it could do
+   * when last probed. Asked at every connect, so a runner added, removed or paused shows in the next session's instructions; absent or empty =
+   * the instructions do not mention remote-run.
    */
-  isRemoteRunOffered?: () => boolean;
+  getRemoteRunRunnerLines?: () => readonly string[];
   /**
    * Where the surface leaves one diagnostic line when it REFUSES a tool call for an unknown input key. The SDK checks
    * the input before any of the bot's code runs, so without this a client that adds a key of its own to every call

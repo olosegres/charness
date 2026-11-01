@@ -31,7 +31,7 @@ let onSleep: (sleepNumber: number) => void = () => undefined;
 
 function createPairedRunner(overrides: { isPausedByHub?: boolean; name?: string } = {}): RunnerConfig {
   // No link directory exists under `root/hub`: the link accepts nothing, the runner is offline, and no ssh is ever started.
-  return { name: overrides.name ?? 'mac', ssh: `charness-runner-${runnerId}`, workDir: '/w', paired: { runnerId, hubDir: path.join(root, 'hub'), isPausedByHub: overrides.isPausedByHub ?? false } };
+  return { name: overrides.name ?? 'mac', ssh: `charness-runner-${runnerId}`, workDir: '/w', paired: { runnerId, hubDir: path.join(root, 'hub'), isPausedByHub: overrides.isPausedByHub ?? false, os: 'Ubuntu 24.04' } };
 }
 
 function createContext(): CommandContext {
@@ -106,7 +106,7 @@ describe('the wait for a paired runner reads the catalog again at every attempt'
 
   it('a runner paired again under the same name (a new link) is a new client at the next look, not the one the command started with', async () => {
     const paired = createPairedRunner();
-    const pairedAgain = { ...paired, paired: { runnerId: 'ffffffffffff', hubDir: path.join(root, 'other-hub'), isPausedByHub: true } };
+    const pairedAgain = { ...paired, paired: { runnerId: 'ffffffffffff', hubDir: path.join(root, 'other-hub'), isPausedByHub: true, os: 'Ubuntu 24.04' } };
     catalogs = [{ runners: [paired] }, { runners: [pairedAgain] }];
     await assert.rejects(chooseClient(createContext(), { runner: null, needs: 'playwright', waitSeconds: 900 }), (error: Error) => error instanceof RemoteRunError && /paused from the hub/.test(error.message));
   });

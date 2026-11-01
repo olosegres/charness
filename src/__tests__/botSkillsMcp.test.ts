@@ -38,7 +38,7 @@ const claudeSharedFolderTopic = makeTelegramKey(-1001111111111, 44);
 const jiraConversation = makeJiraKey('PROJ-12');
 const sharedFolder = '/home/user/projects/shared';
 const lonelyFolder = '/home/user/projects/lonely';
-const offered: OptionalBotTools = { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, isRemoteRunOffered: false };
+const offered: OptionalBotTools = { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] };
 /** The sentence the hint is made of; the bullet is gone with it on a tracker. */
 const managerSkillHint = '`charness-manager`';
 const orchestrationBullet = 'You orchestrate detached workers';

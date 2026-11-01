@@ -10,7 +10,7 @@ import { loadRunnersConfig, type RunnerConfig, type RunnersConfig } from './runn
  * only come from a hand edit made afterwards. This is the only place that knows both sources; it is kept apart from `runnersConfig.ts`
  * because the hub registry's schemas import that file.
  *
- * Both loads are stamp-cached, so the bot MCP can ask «is any runner offered?» on every connect for the cost of two `stat` calls.
+ * Both loads are stamp-cached, so the bot MCP can read the runners (`runnerSummary.ts`) on every connect for the cost of two `stat` calls.
  */
 
 /** @description The runners of the user whose home is `homeDir`. `missing` = neither a `runners.json` nor a paired runner; `invalid` carries every problem and, when there is one, the last good (or best-effort) list. */
@@ -30,9 +30,4 @@ export function loadRunnersCatalog(homeDir: string = os.homedir()): ConfigFileLo
   const config: RunnersConfig = { runners: [...handMadeRunners, ...pairedRunners.filter((runner) => !clashingNames.has(runner.name))] };
   if (errors.length > 0) return { status: 'invalid', config: config.runners.length > 0 ? config : null, errors };
   return { status: handMade.status === 'missing' && paired.status === 'missing' ? 'missing' : 'ok', config };
-}
-
-/** @description Does any runner exist right now? The bot MCP's instructions mention remote-run only while one does (a broken file does not hide the runners that last loaded). */
-export function checkIsRemoteRunOffered(homeDir: string = os.homedir()): boolean {
-  return (loadRunnersCatalog(homeDir).config?.runners.length ?? 0) > 0;
 }

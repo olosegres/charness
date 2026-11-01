@@ -27,7 +27,7 @@ agents run it from project folders) and never touches `DATA_DIR` or the state st
   says (a Jira agent has neither `ENV_FILE` nor `DATA_DIR`): the hand-made runners. The paired ones come from the hub's registry
   `~/.config/charness/runners/paired.json` (`pairedRunners.ts`). `runnersCatalog.ts` is the only place that knows both: hand-made first, then
   paired, a name in both is an error naming it. The bot MCP offers the instruction bullet while the catalog lists a runner
-  (`checkIsRemoteRunOffered`, both files stamp-cached).
+  (`runnerSummary.ts` reads the catalog on every connect, both files stamp-cached).
 - **Local cache** — `${XDG_CACHE_HOME:-~/.cache}/charness/remote-run/` (0700): ssh control sockets (`ssh/`), the last probe of each runner
   (`<runner>.probe.json`), and `jobs/<id>.json` — the main box's own record of which local project a job came from.
 - **Runner** — `<workDir>/`: `bin/runner-<sha8>.sh`; `tmp/lease.*` (a lease watcher's state, removed when it ends, `prune` sweeps what a killed one left);

@@ -16,7 +16,7 @@ import type { RunnersConfig } from '../remoteRun/runnersConfig';
 import { chooseRunnerWithWait, formatWaitDuration, minWaitAttemptMs, planRunnerWait, type RunnerAttempt } from '../remoteRun/runnerWait';
 import { defaultRunnerWaitSeconds, readRunnerWaitPollMs, runnerWaitPollMinMs, runnerWaitPollMs } from '../remoteRun/runnerWaitTiming';
 
-const pairedLink = { runnerId: 'a1b2c3d4e5f6', hubDir: '/h', isPausedByHub: false };
+const pairedLink = { runnerId: 'a1b2c3d4e5f6', hubDir: '/h', isPausedByHub: false, os: 'Ubuntu 24.04' };
 const config: RunnersConfig = {
   runners: [
     { name: 'plain', ssh: 'u@plain.example', workDir: '/w' },
