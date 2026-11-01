@@ -5,8 +5,12 @@
  * button data out, so the first render and every re-render can never drift apart, and the callback data is checked for Telegram's
  * 64-byte cap in one place.
  *
- * Buttons carry the registry revision AND the runner's position (`rnr_<rev>_<i>_<action>`): a keyboard left in the history acts
- * on the list it was drawn from or is refused, never on a neighbour that moved up.
+ * Buttons carry the registry revision AND the runner's position in the WHOLE list (`rnr_<rev>_<i>_<action>`): a keyboard left in the
+ * history acts on the list it was drawn from or is refused, never on a neighbour that moved up — whichever page it stands on.
+ *
+ * The text is BOUNDED: Telegram refuses a message over 4096 characters, and what a machine reports about itself (CPU model, capability
+ * details) has no length of its own, so every reported string is clipped and the machines are split over pages of at most
+ * {@link maxScreenTextChars}. A page holds at least one machine; a list that fits is one page with no navigation.
  */
 
 import type { Translate } from '../i18n';
@@ -15,12 +19,21 @@ import type { PairedRunner, RunnerServiceKind } from '../runners/hubRegistry';
 
 /** Telegram refuses callback data over 64 BYTES. */
 export const maxCallbackDataBytes = 64;
+/** The most characters a screen's text may have: Telegram's limit is 4096, the rest is the margin for the title, notes and the page line. */
+export const maxScreenTextChars = 3600;
+/** The longest a string a machine reported about itself (CPU model, a capability's detail, its OS name) is shown. */
+export const maxReportedTextChars = 80;
+/** What the page line («Page 2 of 3») and the separators around it may take of the budget. */
+const pageLineReserveChars = 60;
+const sectionSeparator = '\n\n';
 
 export const runnersCallbackPrefix = 'rnr_';
 export const runnersPairCallback = 'rnr_pair';
 export const runnersRefreshCallback = 'rnr_refresh';
 export const runnersAddressUseCallback = 'rnr_aduse';
 export const runnersAddressOtherCallback = 'rnr_adother';
+/** Matches `rnr_pg_<page>` (0-based): a view change that acts on nothing, so it carries no revision. */
+export const runnersPageCallbackRe = /^rnr_pg_(\d+)$/;
 
 /** What a button next to a runner does. `remove` asks; `removeYes` / `removeNo` answer the question. */
 export type RunnerAction = 'pause' | 'resume' | 'remove' | 'removeYes' | 'removeNo';
@@ -34,7 +47,12 @@ export type RunnersCallback =
   | { kind: 'refresh' }
   | { kind: 'addressUse' }
   | { kind: 'addressOther' }
+  | { kind: 'page'; page: number }
   | { kind: 'runner'; revision: number; index: number; action: RunnerAction };
+
+export function buildRunnersPageCallback(page: number): string {
+  return `${runnersCallbackPrefix}pg_${page}`;
+}
 
 export function buildRunnerActionCallback(revision: number, index: number, action: RunnerAction): string {
   return `${runnersCallbackPrefix}${revision}_${index}_${actionCodes[action]}`;
@@ -46,6 +64,8 @@ export function parseRunnersCallback(data: string): RunnersCallback | null {
   if (data === runnersRefreshCallback) return { kind: 'refresh' };
   if (data === runnersAddressUseCallback) return { kind: 'addressUse' };
   if (data === runnersAddressOtherCallback) return { kind: 'addressOther' };
+  const pageMatch = runnersPageCallbackRe.exec(data);
+  if (pageMatch !== null) return { kind: 'page', page: Number(pageMatch[1]) };
   const match = runnerActionCallbackRe.exec(data);
   if (match === null) return null;
   const action = (Object.keys(actionCodes) as RunnerAction[]).find((candidate) => actionCodes[candidate] === match[3]);
@@ -61,6 +81,13 @@ export interface ScreenButton {
 export interface RunnersScreen {
   text: string;
   rows: ScreenButton[][];
+}
+
+/** @name RunnersListScreen @description The list as one page: which of how many it is. */
+export interface RunnersListScreen extends RunnersScreen {
+  /** 0-based, clamped into the list that exists. */
+  page: number;
+  pageCount: number;
 }
 
 /** @name RunnerScreenEntry @description One paired machine and everything known of it right now. */
@@ -93,15 +120,20 @@ const serviceKindKeys: Record<RunnerServiceKind, string> = {
   unknown: 'runners.serviceUnknown',
 };
 
+/** @description `text` as a string a machine reported: no longer than {@link maxReportedTextChars}, cut with an ellipsis. */
+export function clipReportedText(text: string): string {
+  return text.length <= maxReportedTextChars ? text : `${text.slice(0, maxReportedTextChars - 1)}…`;
+}
+
 function describeSystem(entry: RunnerScreenEntry): string {
   const { probe, runner } = entry;
-  if (probe === null || probe.osName === '') return `${runner.os} (${runner.arch})`;
+  if (probe === null || probe.osName === '') return clipReportedText(`${runner.os} (${runner.arch})`);
   const name = [probe.osName, probe.osVersion].filter((part) => part !== '').join(' ');
-  return probe.arch === '' ? name : `${name} (${probe.arch})`;
+  return clipReportedText(probe.arch === '' ? name : `${name} (${probe.arch})`);
 }
 
 function describeCpu(probe: RunnerProbe, t: Translate, isLive: boolean): string {
-  const model = probe.cpuModel === '' ? 'CPU' : probe.cpuModel;
+  const model = probe.cpuModel === '' ? 'CPU' : clipReportedText(probe.cpuModel);
   const shape =
     probe.cpuCores !== null
       ? t('runners.cpuCores', { model, cores: probe.cpuCores })
@@ -117,8 +149,9 @@ function describeCapabilities(probe: RunnerProbe, t: Translate): string {
   const unavailable: string[] = [];
   for (const name of runnerCapabilities) {
     const report = probe.capabilities[name];
-    if (report.isAvailable) available.push(report.detail === '' ? name : `${name} (${report.detail})`);
-    else unavailable.push(report.detail === '' ? t('runners.capabilityNo', { name }) : t('runners.capabilityNoWhy', { name, detail: report.detail }));
+    const detail = clipReportedText(report.detail);
+    if (report.isAvailable) available.push(detail === '' ? name : `${name} (${detail})`);
+    else unavailable.push(detail === '' ? t('runners.capabilityNo', { name }) : t('runners.capabilityNoWhy', { name, detail }));
   }
   return t('runners.capabilitiesLine', { list: [...available, ...unavailable].join(' · ') });
 }
@@ -145,17 +178,59 @@ function buildEntryBlock(entry: RunnerScreenEntry, t: Translate, formatTime: For
   return lines.join('\n');
 }
 
-/** @description The list screen: the machines, a button to pair another, a Pause/Resume and a Remove per machine, Refresh. */
-export function buildRunnersScreen(model: RunnersScreenModel, t: Translate, formatTime: FormatTime): RunnersScreen {
+/**
+ * @description Split the entry blocks over pages: each page takes blocks while the text stays within `budget` characters (blocks joined by
+ * a blank line), and at least one block, so a block over the budget alone still has a page. Returns each page's first block and the
+ * block after its last.
+ */
+export function paginateBlocks(blocks: readonly string[], budget: number): Array<{ start: number; end: number }> {
+  const pages: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  let used = 0;
+  blocks.forEach((block, index) => {
+    const cost = block.length + (index === start ? 0 : sectionSeparator.length);
+    if (index > start && used + cost > budget) {
+      pages.push({ start, end: index });
+      start = index;
+      used = 0;
+    }
+    used += index === start ? block.length : cost;
+  });
+  if (blocks.length > 0) pages.push({ start, end: blocks.length });
+  return pages;
+}
+
+function buildOpenPairingsSection(expiries: readonly number[], t: Translate, formatTime: FormatTime): string[] {
+  if (expiries.length === 0) return [];
+  const lastExpiry = Math.max(...expiries);
+  return [expiries.length === 1 ? t('runners.pendingCodeLine', { time: formatTime(lastExpiry) }) : t('runners.pendingCodesLine', { count: expiries.length, time: formatTime(lastExpiry) })];
+}
+
+/**
+ * @description The list screen, page `page` (0-based; a page past the end is the last): the machines on it, a button to pair another, a
+ * Pause/Resume and a Remove per machine on the page, the page buttons when there is more than one page, Refresh.
+ */
+export function buildRunnersScreen(model: RunnersScreenModel, t: Translate, formatTime: FormatTime, page = 0): RunnersListScreen {
+  const title = t('runners.title');
+  const openPairings = buildOpenPairingsSection(model.openPairingExpiries, t, formatTime);
+  const checking = model.isChecking ? [t('runners.checkingNote')] : [];
+  const blocks = model.entries.map((entry) => buildEntryBlock(entry, t, formatTime));
+  const chromeChars = [title, ...openPairings, ...checking].join(sectionSeparator).length + sectionSeparator.length + pageLineReserveChars;
+  const pages = paginateBlocks(blocks, maxScreenTextChars - chromeChars);
+  const pageCount = Math.max(pages.length, 1);
+  const shownPage = Math.min(Math.max(page, 0), pageCount - 1);
+  const { start, end } = pages[shownPage] ?? { start: 0, end: 0 };
   const sections = [
-    t('runners.title'),
-    ...(model.entries.length === 0 ? [t('runners.emptyText')] : model.entries.map((entry) => buildEntryBlock(entry, t, formatTime))),
-    ...(model.openPairingExpiries.length === 0 ? [] : [model.openPairingExpiries.map((expiresAtMs) => t('runners.pendingCodeLine', { time: formatTime(expiresAtMs) })).join('\n')]),
-    ...(model.isChecking ? [t('runners.checkingNote')] : []),
+    title,
+    ...(pageCount > 1 ? [t('runners.pageLine', { page: shownPage + 1, pages: pageCount })] : []),
+    ...(model.entries.length === 0 ? [t('runners.emptyText')] : blocks.slice(start, end)),
+    ...openPairings,
+    ...checking,
   ];
   const rows: ScreenButton[][] = [[{ text: t('runners.pairButton'), data: runnersPairCallback }]];
-  model.entries.forEach((entry, index) => {
+  model.entries.slice(start, end).forEach((entry, offset) => {
     const { name, isPaused } = entry.runner;
+    const index = start + offset;
     rows.push([
       isPaused
         ? { text: t('runners.resumeButton', { name }), data: buildRunnerActionCallback(model.revision, index, 'resume') }
@@ -163,8 +238,14 @@ export function buildRunnersScreen(model: RunnersScreenModel, t: Translate, form
       { text: t('runners.removeButton', { name }), data: buildRunnerActionCallback(model.revision, index, 'remove') },
     ]);
   });
+  if (pageCount > 1) {
+    rows.push([
+      ...(shownPage > 0 ? [{ text: t('runners.pagePreviousButton'), data: buildRunnersPageCallback(shownPage - 1) }] : []),
+      ...(shownPage < pageCount - 1 ? [{ text: t('runners.pageNextButton'), data: buildRunnersPageCallback(shownPage + 1) }] : []),
+    ]);
+  }
   rows.push([{ text: t('runners.refreshButton'), data: runnersRefreshCallback }]);
-  return { text: sections.join('\n\n'), rows };
+  return { text: sections.join(sectionSeparator), rows, page: shownPage, pageCount };
 }
 
 /** @description The question a Remove button turns the screen into. */

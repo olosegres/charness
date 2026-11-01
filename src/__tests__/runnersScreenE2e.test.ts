@@ -14,11 +14,13 @@
  *   → the utility holds the link: /runners lists the machine online, and the live probe adds its hardware, jobs and capabilities
  *   → Pause marks it (a toast, the list says paused, Resume instead of Pause), Resume undoes it; a keyboard of an older revision only
  *     says the list changed and removes nothing
- *   → Remove asks first; Cancel keeps it; Remove for sure takes it out of the registry and of authorized_keys, empties the list, the
- *     machine's key is refused by sshd and the utility reports it was removed
- *   → a second pairing needs no address (it was kept); across a restart of the bot the message is found again from the registry's note
- *     and turns into «Pairing code expired.» when its code runs out, and the expired code is gone from authorized_keys; the first line,
- *     already used, and the expired one are refused on the runner machine
+ *   → Remove asks first; Cancel keeps it; with a background job running on the machine, Remove for sure takes it out of the registry
+ *     and of authorized_keys, empties the list, the machine's key is refused by sshd, the utility reports it was removed and the job is
+ *     killed (the cleanup is the runner utility's: this step is red until it exists)
+ *   → a second pairing needs no address (it was kept); across a restart of the bot the message is found again from the instance's own
+ *     record and turns into «Pairing code expired.» when its code runs out, and the expired code is gone from authorized_keys; the first
+ *     line, already used, and the expired one are refused on the runner machine
+ *   → a third code is used on a second machine while the bot is STOPPED: the restarted bot turns its message into «paired»
  *   → the pairing code is nowhere in the output trace, the console log or the bot's output: the trace keeps the message's length only
  *
  * Needs sshd, ssh, ssh-keyscan, rsync, Pueue, tar and the built CLI (`yarn build`): a local run without them is SKIPPED with the reason,
@@ -28,7 +30,7 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { testNodeModulesEnvName } from '../runnerUtility/appInstall';
@@ -100,6 +102,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
 
   let firstPairingLine = '';
   let secondPairingLine = '';
+  let thirdPairingLine = '';
   let runnerId = '';
   let runnerName = '';
 
@@ -168,12 +171,12 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     return match[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
   }
 
-  /** The pasted line run on the runner machine, WITHOUT blocking this process (the fake Bot API lives in it). */
-  function runPairingLineAsync(line: string): Promise<{ status: number | null; output: string }> {
+  /** The pasted line run on a runner machine (default: the main one), WITHOUT blocking this process (the fake Bot API lives in it). */
+  function runPairingLineAsync(line: string, machineHome: string = link.runnerHome): Promise<{ status: number | null; output: string }> {
     return new Promise((resolve) => {
       const child = spawn('sh', ['-c', line], {
         env: {
-          HOME: link.runnerHome,
+          HOME: machineHome,
           PATH: `${path.dirname(process.execPath)}:${process.env.PATH ?? ''}`,
           TMPDIR: path.join(link.root, 'tmp'),
           LANG: 'C.UTF-8',
@@ -190,6 +193,33 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
         resolve({ status, output });
       });
     });
+  }
+
+  /** The pairing messages this instance has sent and not yet settled (`DATA_DIR/runner-pairing-messages.json`). */
+  function readPairingStore(): Array<{ pairId: string; key: string; messageId: number }> {
+    const filePath = path.join(getLayout().dataDir, 'runner-pairing-messages.json');
+    return fs.existsSync(filePath) ? readJson<{ messages: Array<{ pairId: string; key: string; messageId: number }> }>(filePath).messages : [];
+  }
+
+  /** A second runner machine: an empty HOME with Pueue where the utility looks for its own (nothing is downloaded), like the kit's first one. */
+  function createSecondMachine(): string {
+    const machineHome = path.join(link.root, 'machine2');
+    const binDir = getRunnerHomePaths(machineHome).binDir;
+    fs.mkdirSync(binDir, { recursive: true });
+    for (const tool of ['pueue', 'pueued']) fs.symlinkSync(execFileSync('which', [tool], { encoding: 'utf8' }).trim(), path.join(binDir, tool));
+    return machineHome;
+  }
+
+  /** `pueue <args>` against the main runner machine's private Pueue (the one `charness-runner run` keeps). */
+  function runRunnerPueue(args: string[]): string {
+    const paths = getRunnerHomePaths(link.runnerHome);
+    const result = spawnSync(path.join(paths.binDir, 'pueue'), ['--config', paths.pueueConfig, ...args], { encoding: 'utf8', timeout: 30_000 });
+    return `${result.stdout}${result.stderr}`;
+  }
+
+  /** Does the machine's Pueue have a task in the Running state? (The group's own «running» is lower case.) */
+  function checkIsRunnerJobRunning(): boolean {
+    return /\bRunning\b/.test(runRunnerPueue(['status']));
   }
 
   /** The bot's output-trace records (every hourly bucket and its rollover), as text. */
@@ -320,8 +350,9 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.match(firstPairingLine, /^sh -c '.*cr1\.[A-Za-z0-9_-]+.*'$/s);
     const sendCall = fakeTelegram.listCalls('sendMessage').find((call) => typeof call.payload.text === 'string' && call.payload.text.startsWith('Pair a runner'));
     assert.equal(sendCall?.payload.parse_mode, 'HTML');
-    const [pending] = readJson<{ pending: Array<{ messageRef: string | null; label: string; host: string; port: number }> }>(path.join(getRegistryDir(), 'pending.json')).pending;
-    assert.equal(pending.messageRef, `tg:${group.id}:${generalTopicThreadId}#${pairingMessage.message_id}`);
+    const [pending] = readJson<{ pending: Array<{ pairId: string; messageRef: string | null; label: string; host: string; port: number }> }>(path.join(getRegistryDir(), 'pending.json')).pending;
+    assert.equal(pending.messageRef, null, 'the shared registry carries credentials only');
+    assert.deepEqual(readPairingStore().map((message) => [message.pairId, message.key, message.messageId]), [[pending.pairId, `${group.id}:${generalTopicThreadId}`, pairingMessage.message_id]], 'the instance keeps its own record of the message');
     assert.deepEqual([pending.label, pending.host, pending.port], ['@fake_charness_bot', '127.0.0.1', link.sshPort]);
     assert.match(readAuthorizedKeys(), /charness-pairing:/);
   });
@@ -333,6 +364,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.equal(result.status, 0, result.output);
     await general.waitForMessageText('the pairing message to read paired', pairingMessage, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u.test(text));
     assert.ok(!pairingMessage.text.includes('cr1.') && !pairingMessage.text.includes('sh -c'), 'the line is gone from the message');
+    await waitUntil(() => readPairingStore().length === 0, 'the settled message to leave the instance\'s record', 10_000);
     const { runners } = readPaired();
     assert.equal(runners.length, 1);
     [{ id: runnerId, name: runnerName }] = runners;
@@ -378,6 +410,10 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     await general.waitForMessageText('the list back', list, (text) => text.startsWith('Runners — machines'));
     assert.equal(readPaired().runners.length, 1, 'Cancel removed nothing');
 
+    // A background job is running on the machine: removing it must stop the job too (Pueue itself survives a lost link).
+    runRunnerPueue(['add', '--', 'sleep', '600']);
+    await waitUntil(checkIsRunnerJobRunning, 'a job to run on the machine', 30_000);
+
     await general.tapAndAwaitAnswer(list, `rnr_${revision}_0_x`);
     await general.waitForMessageText('the question again', list, (text) => text.startsWith(`Remove ${runnerName}?`));
     assert.equal(await general.tapAndAwaitAnswer(list, `rnr_${revision}_0_xy`), `✅ ${runnerName} removed`);
@@ -390,9 +426,11 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /Permission denied/, 'sshd no longer knows its key');
     await waitUntil(() => readRunnerStatus()?.state === 'removed', 'the runner to learn it was removed', linkTimeoutMs);
+    // The promise the confirmation makes («Jobs running there are killed»). The runner kills them when it learns it was removed.
+    await waitUntil(() => !checkIsRunnerJobRunning(), 'the removed machine to kill its running job', linkTimeoutMs);
   });
 
-  it('a second pairing needs no address; after a restart of the bot the message is found again from the registry and turns to «expired»; the expired code and the used one are refused', async () => {
+  it('a second pairing needs no address; after a restart of the bot the message is found again from its own record and turns to «expired»; the expired code and the used one are refused', async () => {
     const list = await general.sendAndAwaitReply('/runners', 'No runners yet.');
     await general.tapAndAwaitAnswer(list, 'rnr_pair');
     const second = await general.waitForMessage('the second pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
@@ -414,9 +452,27 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.equal(readPaired().runners.length, 0, 'neither paired a machine');
   });
 
+  it('a code used while the bot is stopped: the restarted bot turns its message into «paired»', async () => {
+    const list = await general.sendAndAwaitReply('/runners', 'No runners yet.');
+    await general.tapAndAwaitAnswer(list, 'rnr_pair');
+    const third = await general.waitForMessage('the third pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
+    thirdPairingLine = readPairingLine(third);
+
+    await getCharness().stop();
+    const result = await runPairingLineAsync(thirdPairingLine, createSecondMachine());
+    assert.equal(result.status, 0, result.output);
+    assert.ok(third.text.startsWith('Pair a runner'), 'nobody edited the message while the bot was down');
+    assert.equal(readPaired().runners.length, 1, 'the second machine is paired');
+
+    await startCharness();
+    await general.waitForMessageText('the pairing message to read paired', third, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u.test(text));
+    assert.ok(!third.text.includes('cr1.'), 'the line is gone');
+    await waitUntil(() => readPairingStore().length === 0, 'the settled message to leave the instance\'s record', 10_000);
+  });
+
   it('the pairing code is nowhere in the output trace, the console log or the bot\'s own output — the trace keeps only the length of the message', async () => {
     await getCharness().stop();
-    const codes = [firstPairingLine, secondPairingLine].map((line) => /cr1\.[A-Za-z0-9_-]+/.exec(line)?.[0] ?? '');
+    const codes = [firstPairingLine, secondPairingLine, thirdPairingLine].map((line) => /cr1\.[A-Za-z0-9_-]+/.exec(line)?.[0] ?? '');
     assert.ok(codes.every((code) => code.length > 100), 'the codes were read from the lines');
     const trace = readOutputTrace();
     assert.ok(trace.length > 0, 'the trace is on and has recorded the run');

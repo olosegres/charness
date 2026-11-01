@@ -133,8 +133,9 @@ the open handle.
 addresses of this machine and the first one that answers with its own sshd — proposed at the first pairing; the chosen address is `runnerHost` in
 `settings.json`), `runnersOverview.ts` (the registry + link status + last snapshots without ssh, then a live probe of the online machines through the
 phase-1 client), `pairedRunnerConfig.ts` (a paired runner as a phase-1 `RunnerConfig`: `runner-proxy` as the `ProxyCommand`, the hub key, this folder's
-`known_hosts`; its Pueue paths are derived from the work dir it reported) and `setPairingMessageRef` in `hubPairing.ts` (the message that offers a code,
-written after the message exists, so the bot can edit it when the code is used or expires).
+`known_hosts`; its Pueue paths are derived from the work dir it reported). The registry holds credentials only: which Telegram message offers a code is each
+instance's own record (`connectors/telegram/runnerPairingMessages.ts`), so a second charness of the same OS user neither edits nor loses it (`pending.json`'s
+`messageRef` stays for a front end that wants it; the Telegram one does not use it).
 
 ## CLI
 

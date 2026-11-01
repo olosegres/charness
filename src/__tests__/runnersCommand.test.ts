@@ -5,12 +5,14 @@
  *
  *   • WIRING — the command, its buttons and their order; General only (a topic is sent to General, a tap from a topic is refused);
  *   • the list: empty, with machines, the live check that redraws the list when the machines answer — and does not redraw a message
- *     that has become a question or a different revision;
+ *     that has become a question (even while the question's own edit is still queued) or was drawn again since; a long list is split over
+ *     pages that each fit a Telegram message (checked against the fake Bot API's own limit), runner buttons keeping their place;
  *   • the first pairing: the address step (a proposal, none found), the typed address (refused with the reason and asked again, taken
  *     and saved), a slash command ends the wait; the pairing message is HTML in a `<pre>`, SECRET for the trace, and registered with its
  *     message note in the registry;
- *   • the pairing message turns into «paired» when its code is used and into «expired» when it runs out — also after a restart, from the
- *     registry's note;
+ *   • the pairing message turns into «paired» when its code is used and into «expired» when it runs out — also after a restart and for a
+ *     code used while the bot was down (the instance's own record of its messages), a failed edit is tried again, and another instance
+ *     sharing the registry neither edits nor takes away the way back to a message;
  *   • Pause / Resume / Remove: revisioned buttons, a stale keyboard only redraws, Remove asks first and Cancel puts the list back.
  *
  * Test case: N/A — Charness has no Jira tracker.
@@ -20,22 +22,24 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { createRunners, buildPairingMessageRef, parsePairingMessageRef, runnersWatchIntervalMs } from '../connectors/telegram/commands/runners';
-import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { createRunners, runnersWatchIntervalMs } from '../connectors/telegram/commands/runners';
+import { readPairingMessages } from '../connectors/telegram/runnerPairingMessages';
+import { keyToString } from '../sessionKey';
 import { parseProbeOutput } from '../remoteRun/probe';
 import { ensureGateWrapper } from '../runners/gateWrapper';
 import type { HostKeyScanner, HubAddress } from '../runners/hubAddress';
-import { createPairing, redeemPairing } from '../runners/hubPairing';
+import { createPairing, redeemPairing, sweepExpiredPairings } from '../runners/hubPairing';
 import { readPairedFile, readPendingFile } from '../runners/hubRegistry';
 import { readRunnersOverview, type RunnersOverview } from '../runners/runnersOverview';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
-import { createCommandHarness, type CommandHarness, type RecordedSend } from './commandModuleHarness';
+import { maxScreenTextChars } from '../utils/runnersScreenPlan';
+import { createCommandHarness, harnessGroup, harnessThreadId, type CommandHarness, type RecordedSend } from './commandModuleHarness';
 import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 
 const ownKey = generateEd25519KeyPair('own').publicKey;
 const strangerKey = generateEd25519KeyPair('stranger').publicKey;
 const minute = 60 * 1000;
-const liveProbeText = [
+const defaultProbeText = [
   'os=Linux', 'os_name=Ubuntu', 'os_version=24.04', 'arch=x86_64', 'cpu_model=AMD Ryzen 7 9700X', 'cpu_cores=8', 'cpu_threads=16', 'load=0.4',
   'ram_total_mb=65536', 'ram_free_mb=40960', 'disk_free_mb=512000', 'pueue=4.0.4', 'jobs_running=2', 'jobs_queued=1', 'jobs_projects=2',
   'cap_android=yes', 'cap_android_detail=KVM, emulator', 'cap_ios=no', 'cap_ios_detail=Linux', 'cap_docker=yes', 'cap_docker_detail=', 'cap_playwright=no', 'cap_playwright_detail=',
@@ -44,6 +48,13 @@ const liveProbeText = [
 let harness: CommandHarness;
 let hubFixture: HubFixture;
 let cacheDir: string;
+let pairingMessagesPath: string;
+/** What the canned live probe says every online machine is like. */
+let liveProbeText = defaultProbeText;
+/** When set, every send and edit of the module also goes through the fake Bot API, which refuses a text over Telegram's limit. */
+let isLengthChecked = false;
+/** Decides an edit before it reaches the harness: a promise of "go ahead" (true) or "this edit fails" (false); null leaves it alone. */
+let editHook: ((messageId: number, text: string) => Promise<boolean> | null) | null = null;
 let clockMs = Date.now();
 let savedAddress: HubAddress | null = null;
 let candidates: string[] = [];
@@ -51,8 +62,8 @@ let candidates: string[] = [];
 let scanAnswers: Record<string, string | null> = {};
 let onlineRunnerNames = new Set<string>();
 const probeCalls: RunnersOverview[] = [];
-/** When set, the live probe waits for it. */
-let probeGate: Promise<void> | null = null;
+/** The gates the next live probes wait for, one per probe, in the order they start (none left: a probe answers at once). */
+const probeGates: Array<Promise<void>> = [];
 let feature: ReturnType<typeof createRunners>;
 
 const scanHostKey: HostKeyScanner = async (host, port) => scanAnswers[`${host}:${port}`] ?? null;
@@ -60,7 +71,18 @@ const scanHostKey: HostKeyScanner = async (host, port) => scanAnswers[`${host}:$
 function buildPorts(): Parameters<typeof createRunners>[0] {
   return {
     ...harness.core,
+    replyToThread: async (key, text, extra, options) => {
+      if (isLengthChecked) await harness.core.bot.telegram.sendMessage(harnessGroup.id, text, { message_thread_id: harnessThreadId });
+      return harness.core.replyToThread(key, text, extra, options);
+    },
+    editThreadMessage: async (key, messageId, text, extra) => {
+      const decision = editHook?.(messageId, text) ?? null;
+      if (decision !== null && !(await decision)) return false;
+      if (isLengthChecked) await harness.core.bot.telegram.sendMessage(harnessGroup.id, text, { message_thread_id: harnessThreadId });
+      return harness.core.editThreadMessage(key, messageId, text, extra);
+    },
     hub: hubFixture.ctx,
+    pairingMessagesPath,
     readRunnerHost: () => savedAddress,
     saveRunnerHost: (address) => {
       savedAddress = address;
@@ -74,7 +96,8 @@ function buildPorts(): Parameters<typeof createRunners>[0] {
     },
     probeOverview: async (overview) => {
       probeCalls.push(overview);
-      if (probeGate !== null) await probeGate;
+      const gate = probeGates.shift();
+      if (gate !== undefined) await gate;
       return { ...overview, entries: overview.entries.map((entry) => (entry.isOnline ? { ...entry, probe: parseProbeOutput(liveProbeText) } : entry)) };
     },
     listAddressCandidates: () => candidates,
@@ -120,15 +143,19 @@ describe('/runners over its ports', () => {
     harness = await createCommandHarness();
     hubFixture = createHubFixture();
     cacheDir = path.join(hubFixture.root, 'cache');
+    pairingMessagesPath = path.join(hubFixture.root, 'pairing-messages.json');
     fs.mkdirSync(cacheDir, { recursive: true });
     harness.isGeneral = true;
+    liveProbeText = defaultProbeText;
+    isLengthChecked = false;
+    editHook = null;
     clockMs = Date.now();
     savedAddress = null;
     candidates = [];
     scanAnswers = {};
     onlineRunnerNames = new Set();
     probeCalls.length = 0;
-    probeGate = null;
+    probeGates.length = 0;
     feature = createRunners(buildPorts());
     feature.registerRunnersCommands();
     feature.registerRunnersCallbacks();
@@ -139,9 +166,9 @@ describe('/runners over its ports', () => {
     hubFixture.cleanup();
   });
 
-  it('registers /runners and its buttons: the four plain ones, then the per-runner pattern', () => {
+  it('registers /runners and its buttons: the four plain ones, then the page and the per-runner patterns', () => {
     assert.deepEqual(harness.registeredCommandNames, ['runners']);
-    assert.deepEqual(harness.registeredActionPatterns, ['rnr_pair', 'rnr_refresh', 'rnr_aduse', 'rnr_adother', String(/^rnr_(\d+)_(\d+)_(p|r|x|xy|xn)$/)]);
+    assert.deepEqual(harness.registeredActionPatterns, ['rnr_pair', 'rnr_refresh', 'rnr_aduse', 'rnr_adother', String(/^rnr_pg_(\d+)$/), String(/^rnr_(\d+)_(\d+)_(p|r|x|xy|xn)$/)]);
   });
 
   describe('the list', () => {
@@ -185,7 +212,7 @@ describe('/runners over its ports', () => {
       await pairMachine('mac');
       onlineRunnerNames = new Set(['mac']);
       let openProbe: () => void = () => {};
-      probeGate = new Promise<void>((resolve) => { openProbe = resolve; });
+      probeGates.push(new Promise<void>((resolve) => { openProbe = resolve; }));
       await harness.runCommand('runners');
       const screen = harness.replies.at(-1);
       assert.ok(screen?.messageId !== null && screen?.messageId !== undefined);
@@ -195,6 +222,44 @@ describe('/runners over its ports', () => {
       openProbe();
       await new Promise((resolve) => { setTimeout(resolve, 50); });
       assert.equal(harness.edits.length, editsBeforeAnswer, 'the question stands');
+    });
+
+    it('the live data cannot draw the list over the Remove question while the question\'s own edit is still queued', async () => {
+      await pairMachine('mac');
+      onlineRunnerNames = new Set(['mac']);
+      let openProbe: () => void = () => {};
+      probeGates.push(new Promise<void>((resolve) => { openProbe = resolve; }));
+      let openQuestionEdit: () => void = () => {};
+      const questionEditGate = new Promise<void>((resolve) => { openQuestionEdit = resolve; });
+      await harness.runCommand('runners');
+      const screen = harness.replies.at(-1);
+      // The paced send queue holds the question's edit; meanwhile the probe — started from the list — finishes.
+      editHook = (_messageId, text) => (text.startsWith('Remove ') ? questionEditGate.then(() => true) : null);
+      const tap = harness.tapButton(screen?.messageId ?? 0, `rnr_${readPairedFile(hubFixture.ctx.dir).rev}_0_x`);
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+      openProbe();
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+      assert.equal(harness.edits.length, 0, 'the probe drew nothing while the question\'s edit was pending');
+      openQuestionEdit();
+      await tap;
+      assert.deepEqual(harness.edits.map((edit) => edit.text.slice(0, 12)), ['Remove mac? ']);
+    });
+
+    it('a live check that started before the list was drawn again does not draw its older data over the newer list', async () => {
+      await pairMachine('mac');
+      onlineRunnerNames = new Set(['mac']);
+      let openOldProbe: () => void = () => {};
+      probeGates.push(new Promise<void>((resolve) => { openOldProbe = resolve; }));
+      await harness.runCommand('runners');
+      const screen = harness.replies.at(-1);
+      // Pause redraws the same message (a second probe, which answers at once) while the first probe is still out.
+      await harness.tapButton(screen?.messageId ?? 0, `rnr_${readPairedFile(hubFixture.ctx.dir).rev}_0_p`);
+      await waitUntilAsync('the second probe to draw', () => harness.edits.some((edit) => edit.text.includes('mac — online · paused') && !edit.text.includes('Checking')));
+      const editsBeforeOldProbe = harness.edits.length;
+      openOldProbe();
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+      assert.equal(harness.edits.length, editsBeforeOldProbe, 'the older check drew nothing');
+      assert.ok(harness.edits.at(-1)?.text.includes('mac — online · paused'), harness.edits.at(-1)?.text);
     });
 
     it('Refresh draws the list again on the same message', async () => {
@@ -278,7 +343,7 @@ describe('/runners over its ports', () => {
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0);
     });
 
-    it('with an address saved there is no step: the pairing message at once — HTML in a <pre>, a SECRET for the trace, within one message, and its note in the registry', async () => {
+    it('with an address saved there is no step: the pairing message at once — HTML in a <pre>, a SECRET for the trace, within one message, and recorded as this instance\'s own', async () => {
       savedAddress = { host: 'host.example', port: 22 };
       scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
       await harness.runCommand('runners');
@@ -293,7 +358,8 @@ describe('/runners over its ports', () => {
       assert.ok(pairing.text.includes('cr1.'), 'the line carries the code');
       assert.ok(!pairing.text.slice(pairing.text.indexOf('<pre>') + 5, pairing.text.indexOf('</pre>')).match(/[<>]/), 'the line is HTML-escaped inside the <pre>');
       const [pending] = readPendingFile(hubFixture.ctx.dir).pending;
-      assert.equal(pending.messageRef, buildPairingMessageRef(harness.key, pairing.messageId ?? 0));
+      assert.equal(pending.messageRef, null, 'the shared registry carries credentials only: no note of this instance\'s message');
+      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages, [{ pairId: pending.pairId, key: keyToString(harness.key), messageId: pairing.messageId, offeredAtMs: clockMs }]);
       assert.equal(pending.label, '@ExampleBot');
       assert.ok(fs.existsSync(path.join(hubFixture.ctx.dir, 'gate')), 'the gate wrapper the key line runs is in place');
     });
@@ -348,13 +414,18 @@ describe('/runners over its ports', () => {
       scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
       await harness.tapButton(900, 'rnr_pair');
       const pairing = harness.replies.at(-1);
-      const [pending] = readPendingFile(hubFixture.ctx.dir).pending;
+      const [pending] = readPendingFile(hubFixture.ctx.dir).pending.slice(-1);
       assert.ok(pairing?.messageId !== null && pairing?.messageId !== undefined);
       return { messageId: pairing.messageId, pairId: pending.pairId };
     }
 
-    it('used: the message becomes «Runner “<name>” paired <time>.» — one plain edit, no keyboard', async () => {
+    function readRecordedPairIds(): string[] {
+      return readPairingMessages(pairingMessagesPath).messages.map((message) => message.pairId);
+    }
+
+    it('used: the message becomes «Runner “<name>” paired <time>.» — one plain edit, no keyboard — and leaves the record', async () => {
       const { messageId, pairId } = await offerPairing();
+      assert.deepEqual(readRecordedPairIds(), [pairId]);
       await redeemPairing(hubFixture.ctx, pairId, createRedeemFixture({ suggestedName: 'Mac Mini' }).request, clockMs);
       await feature.watchPairingsOnce();
       const edit = harness.edits.at(-1);
@@ -362,12 +433,13 @@ describe('/runners over its ports', () => {
       assert.match(edit?.text ?? '', /^Runner “mac-mini” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u);
       assert.equal(edit?.extra, undefined, 'plain text: no parse mode, no keyboard');
       assert.ok(!edit?.text.includes('cr1.'), 'the line is gone');
+      assert.deepEqual(readRecordedPairIds(), []);
       const editsAfterFirst = harness.edits.length;
       await feature.watchPairingsOnce();
       assert.equal(harness.edits.length, editsAfterFirst, 'edited once');
     });
 
-    it('expired: the message becomes «Pairing code expired.», the expired code is swept from the registry', async () => {
+    it('expired: the message becomes «Pairing code expired.», the expired code is swept from the registry, the record is cleared', async () => {
       const { messageId } = await offerPairing();
       await feature.watchPairingsOnce();
       assert.equal(harness.edits.length, 0, 'still open: nothing to say');
@@ -376,9 +448,10 @@ describe('/runners over its ports', () => {
       assert.equal(harness.edits.at(-1)?.messageId, messageId);
       assert.equal(harness.edits.at(-1)?.text, 'Pairing code expired.');
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0);
+      assert.deepEqual(readRecordedPairIds(), []);
     });
 
-    it('after a restart (a new module over the same registry) the message is found again from its note and still turns to «expired» / «paired»', async () => {
+    it('after a restart (a new module over the same record) the message still turns to «expired» / «paired»', async () => {
       const first = await offerPairing();
       clockMs += 11 * minute;
       await createRunners(buildPorts()).watchPairingsOnce();
@@ -388,18 +461,114 @@ describe('/runners over its ports', () => {
       const second = await offerPairing();
       const restarted = createRunners(buildPorts());
       await restarted.watchPairingsOnce();
-      assert.equal(harness.edits.length, 0, 'adopted from the note, still open: nothing to say');
+      assert.equal(harness.edits.length, 0, 'still open: nothing to say');
       await redeemPairing(hubFixture.ctx, second.pairId, createRedeemFixture({ suggestedName: 'box1' }).request, clockMs);
       await restarted.watchPairingsOnce();
       assert.ok(readMessageText(second.messageId).startsWith('Runner “box1” paired'), readMessageText(second.messageId));
     });
 
-    it('a code used while the bot was down keeps its (spent) message: the registry no longer holds its note', async () => {
+    it('a code used while the bot was down: the restarted bot turns its message into «paired» — the credential\'s entry is gone from the registry, the instance\'s own record is not', async () => {
       const { messageId, pairId } = await offerPairing();
       await redeemPairing(hubFixture.ctx, pairId, createRedeemFixture({ suggestedName: 'box1' }).request, clockMs);
+      assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0, 'the registry no longer holds the code');
       await createRunners(buildPorts()).watchPairingsOnce();
-      assert.equal(readMessageText(messageId).startsWith('Pair a runner'), true);
+      assert.ok(readMessageText(messageId).startsWith('Runner “box1” paired'), readMessageText(messageId));
+      assert.deepEqual(readRecordedPairIds(), []);
+    });
+
+    it('a code that expired and was swept while the bot was down still gets its «expired» edit', async () => {
+      const { messageId } = await offerPairing();
+      clockMs += 11 * minute;
+      await sweepExpiredPairings(hubFixture.ctx, clockMs);
+      assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0);
+      await createRunners(buildPorts()).watchPairingsOnce();
+      assert.equal(readMessageText(messageId), 'Pairing code expired.');
+    });
+
+    it('a failed edit is kept and tried again later (5 s, then 10 s…), not given up on; a restart tries at once', async () => {
+      const { messageId } = await offerPairing();
+      clockMs += 11 * minute;
+      let attempts = 0;
+      let failuresLeft = 2;
+      editHook = () => {
+        attempts += 1;
+        if (failuresLeft > 0) {
+          failuresLeft -= 1;
+          return Promise.resolve(false);
+        }
+        return null;
+      };
+      await feature.watchPairingsOnce();
+      assert.equal(attempts, 1);
       assert.equal(harness.edits.length, 0);
+      assert.equal(readRecordedPairIds().length, 1, 'the failed edit leaves the record');
+      await feature.watchPairingsOnce();
+      assert.equal(attempts, 1, 'not again before the delay');
+      clockMs += 5 * 1000;
+      await feature.watchPairingsOnce();
+      assert.equal(attempts, 2, 'the second failure');
+      clockMs += 5 * 1000;
+      await feature.watchPairingsOnce();
+      assert.equal(attempts, 2, 'the delay doubled to 10 s');
+      clockMs += 5 * 1000;
+      await feature.watchPairingsOnce();
+      assert.equal(attempts, 3);
+      assert.equal(readMessageText(messageId), 'Pairing code expired.');
+      assert.deepEqual(readRecordedPairIds(), []);
+
+      // A restart forgets the delay: it tries at once.
+      const second = await offerPairing();
+      clockMs += 11 * minute;
+      failuresLeft = 1;
+      await feature.watchPairingsOnce();
+      assert.equal(readRecordedPairIds().length, 1);
+      await createRunners(buildPorts()).watchPairingsOnce();
+      assert.equal(readMessageText(second.messageId), 'Pairing code expired.');
+      assert.deepEqual(readRecordedPairIds(), []);
+    });
+
+    it('a message that could not be edited for a day is given up on', async () => {
+      await offerPairing();
+      clockMs += 25 * 60 * minute;
+      editHook = () => Promise.resolve(false);
+      await feature.watchPairingsOnce();
+      assert.deepEqual(readRecordedPairIds(), [], 'dropped, not retried for ever');
+      assert.equal(harness.edits.length, 0);
+    });
+
+    it('another instance sharing the registry neither edits this one\'s message nor takes the way back to it by sweeping the credential', async () => {
+      const { messageId, pairId } = await offerPairing();
+      const otherEdits: Array<{ messageId: number; text: string }> = [];
+      const otherPairingMessagesPath = path.join(hubFixture.root, 'other-instance-pairing-messages.json');
+      const otherInstance = createRunners({
+        ...buildPorts(),
+        pairingMessagesPath: otherPairingMessagesPath,
+        editThreadMessage: async (_key, otherMessageId, text) => {
+          otherEdits.push({ messageId: otherMessageId, text });
+          return true;
+        },
+      });
+      // While the code is open, and after it is used: nothing for the other instance to do.
+      await otherInstance.watchPairingsOnce();
+      assert.deepEqual(otherEdits, []);
+      // It sweeps the expired credential (shared hygiene) before the owner looks…
+      clockMs += 11 * minute;
+      await otherInstance.watchPairingsOnce();
+      assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0, 'the credential was swept by the other instance');
+      assert.deepEqual(otherEdits, [], 'but it edits no message of ours');
+      assert.deepEqual(readPairingMessages(otherPairingMessagesPath).messages, []);
+      // …and the owner still reaches its message.
+      assert.deepEqual(readRecordedPairIds(), [pairId]);
+      await feature.watchPairingsOnce();
+      assert.equal(readMessageText(messageId), 'Pairing code expired.');
+    });
+
+    it('a record that is not valid reads as empty (said once per look), and the next pairing replaces it', async () => {
+      fs.writeFileSync(pairingMessagesPath, '{ not json');
+      await feature.watchPairingsOnce();
+      assert.equal(harness.edits.length, 0);
+      const { pairId } = await offerPairing();
+      assert.deepEqual(readRecordedPairIds(), [pairId]);
     });
 
     it('the watcher starts with a look at once, refreshes the gate wrapper only when something is registered, and stops', async () => {
@@ -494,13 +663,112 @@ describe('/runners over its ports', () => {
     });
   });
 
-  describe('the registry note of a pairing message', () => {
-    it('builds and reads back `tg:<key>#<message id>`; a note this module did not write is not one', () => {
-      const key = makeTelegramKey(-1001111111111, 1);
-      const note = buildPairingMessageRef(key, 42);
-      assert.equal(note, 'tg:-1001111111111:1#42');
-      assert.deepEqual(parsePairingMessageRef(note), { key, messageId: 42 });
-      for (const other of [null, '', 'jira:PROJ-1#3', 'tg:abc#1', 'tg:-100:1', 'tg:-100:1#x']) assert.equal(parsePairingMessageRef(other), null, String(other));
+  describe('a long list', () => {
+    const machineCount = 12;
+    const machineNames = Array.from({ length: machineCount }, (_value, index) => `box-${index}`);
+
+    /**
+     * Twelve online machines whose reports are bulky (a CPU model and a capability detail of 300 characters each): the list is a single
+     * short page until the live data arrives, then several. Every send and edit also goes through the fake Bot API's length limit.
+     * Resolves the list's message id once page 1 is drawn with the live data.
+     */
+    async function openLongList(): Promise<number> {
+      isLengthChecked = true;
+      liveProbeText = `${defaultProbeText}\ncap_android_detail=${'a'.repeat(300)}\ncpu_model=${'M'.repeat(300)}`;
+      for (const name of machineNames) await pairMachine(name);
+      onlineRunnerNames = new Set(machineNames);
+      await harness.runCommand('runners');
+      const messageId = harness.replies.at(-1)?.messageId ?? 0;
+      await waitUntilAsync('page 1 to be drawn with the live data', () => readMessageText(messageId).includes('Page 1 of ') && !readMessageText(messageId).includes('Checking the machines'));
+      return messageId;
+    }
+
+    function readLastEditOf(messageId: number): RecordedSend | undefined {
+      return harness.edits.filter((edit) => edit.messageId === messageId).at(-1);
+    }
+
+    /** The first runner row of a render: its Pause/Resume button's data and the machine it names. */
+    function readFirstRunnerRow(sent: RecordedSend | undefined): { data: string; removeData: string; name: string } {
+      const labels = harness.getKeyboardLabels(sent)[1];
+      const data = harness.getKeyboardData(sent)[1];
+      return { data: data[0], removeData: data[1], name: labels[0].replace(/: (Pause|Resume)$/, '') };
+    }
+
+    it('is split over pages that each fit a Telegram message — the fake Bot API refuses a longer one — and what a machine reported about itself is clipped', async () => {
+      const messageId = await openLongList();
+      const text = readMessageText(messageId);
+      assert.ok(text.length <= maxScreenTextChars, `${text.length} characters`);
+      assert.ok(text.includes('box-0 —') && !text.includes('box-11 —'), 'the first page holds the first machines only');
+      assert.ok(text.includes(`${'a'.repeat(79)}…`) && !text.includes('a'.repeat(81)), 'a reported detail is clipped');
+      assert.ok(text.includes(`${'M'.repeat(79)}…`) && !text.includes('M'.repeat(81)), 'so is the CPU model');
+      const labels = harness.getKeyboardLabels(readLastEditOf(messageId)).flat();
+      assert.ok(labels.includes('Next ›') && !labels.includes('‹ Previous'), labels.join(' | '));
+    });
+
+    it('Next moves through the pages on the same message, every machine is on exactly one page in order, Previous goes back, and a page past the end is the last', async () => {
+      const messageId = await openLongList();
+      const seen: string[] = [];
+      let pageNumber = 1;
+      for (;;) {
+        await waitUntilAsync(`page ${pageNumber} to be drawn with the live data`, () => readMessageText(messageId).includes(`Page ${pageNumber} of `) && !readMessageText(messageId).includes('Checking the machines'));
+        const text = readMessageText(messageId);
+        assert.ok(text.length <= maxScreenTextChars, `page ${pageNumber}: ${text.length} characters`);
+        seen.push(...[...text.matchAll(/^(box-\d+) — /gm)].map((match) => match[1]));
+        const lastEdit = readLastEditOf(messageId);
+        const nextIndex = harness.getKeyboardLabels(lastEdit).flat().indexOf('Next ›');
+        if (nextIndex < 0) break;
+        await harness.tapButton(messageId, harness.getKeyboardData(lastEdit).flat()[nextIndex]);
+        pageNumber += 1;
+      }
+      assert.deepEqual(seen, machineNames, 'every machine once, in order');
+      assert.ok(pageNumber >= 2);
+      assert.ok(harness.getKeyboardLabels(readLastEditOf(messageId)).flat().includes('‹ Previous'), 'the last page can go back');
+
+      await harness.tapButton(messageId, 'rnr_pg_99');
+      assert.ok(readMessageText(messageId).includes(`Page ${pageNumber} of ${pageNumber}`), 'past the end is the last page');
+      await harness.tapButton(messageId, 'rnr_pg_0');
+      assert.ok(readMessageText(messageId).includes(`Page 1 of ${pageNumber}`));
+    });
+
+    it('a machine on a later page is acted on by its place in the WHOLE list and the revision, and the list stays on its page', async () => {
+      const messageId = await openLongList();
+      await harness.tapButton(messageId, 'rnr_pg_1');
+      const secondPage = readLastEditOf(messageId);
+      assert.ok(secondPage?.text.includes('Page 2 of '), secondPage?.text.slice(0, 120));
+      const { data, name } = readFirstRunnerRow(secondPage);
+      const [, revision, index, action] = /^rnr_(\d+)_(\d+)_(\w+)$/.exec(data) ?? [];
+      assert.equal(action, 'p');
+      assert.equal(readPairedFile(hubFixture.ctx.dir).runners[Number(index)].name, name, 'the button names the machine at that place in the whole list');
+      assert.ok(Number(index) > 0, 'not the first machine of the list');
+      assert.equal(Number(revision), readPairedFile(hubFixture.ctx.dir).rev);
+
+      await harness.tapButton(messageId, data);
+      assert.deepEqual(readPairedFile(hubFixture.ctx.dir).runners.filter((runner) => runner.isPaused).map((runner) => runner.name), [name], 'only that machine');
+      assert.ok(readLastEditOf(messageId)?.text.includes('Page 2 of '), 'the list stays on its page');
+
+      // The keyboard of the revision before the pause is stale for a machine on any page.
+      await harness.tapButton(messageId, data);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'The list changed — here it is again.');
+    });
+
+    it('Remove asks about the right machine on a later page, and Cancel brings back the page it was on', async () => {
+      const messageId = await openLongList();
+      await harness.tapButton(messageId, 'rnr_pg_1');
+      const { removeData, name } = readFirstRunnerRow(readLastEditOf(messageId));
+      await harness.tapButton(messageId, removeData);
+      assert.ok(readLastEditOf(messageId)?.text.startsWith(`Remove ${name}?`), readLastEditOf(messageId)?.text);
+      const cancelData = harness.getKeyboardData(readLastEditOf(messageId))[0][1];
+      await harness.tapButton(messageId, cancelData);
+      assert.ok(readLastEditOf(messageId)?.text.includes('Page 2 of '), 'back on the page it was on');
+      assert.equal(readPairedFile(hubFixture.ctx.dir).runners.length, machineCount, 'nothing was removed');
+    });
+
+    it('many open pairing codes are one line, not one line each', async () => {
+      for (let count = 0; count < 8; count += 1) await createPairing(hubFixture.ctx, { host: 'host.example', port: 22, hostKey: ownKey, label: '@ExampleBot', nowMs: clockMs });
+      await harness.runCommand('runners');
+      const text = harness.replies.at(-1)?.text ?? '';
+      assert.ok(text.includes('8 pairing codes are open, the last until '), text);
+      assert.equal(text.split('\n').filter((line) => line.includes('pairing code')).length, 1);
     });
   });
 });

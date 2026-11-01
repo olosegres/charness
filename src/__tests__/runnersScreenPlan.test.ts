@@ -13,6 +13,7 @@ import { t } from '../i18n';
 import { parseProbeOutput, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner } from '../runners/hubRegistry';
 import {
+  buildRunnersPageCallback,
   buildAddressStep,
   buildExpiredText,
   buildPairedText,
@@ -20,7 +21,11 @@ import {
   buildRemoveConfirmation,
   buildRunnerActionCallback,
   buildRunnersScreen,
+  clipReportedText,
   maxCallbackDataBytes,
+  maxReportedTextChars,
+  maxScreenTextChars,
+  paginateBlocks,
   parseRunnersCallback,
   runnersAddressOtherCallback,
   runnersAddressUseCallback,
@@ -115,9 +120,12 @@ describe('runnersScreenPlan: the list', () => {
     assert.deepEqual(screen.rows.map((row) => row.map((button) => button.data)), [[runnersPairCallback], [runnersRefreshCallback]]);
   });
 
-  it('open pairing codes and a running check are said under the list', () => {
-    const screen = buildRunnersScreen({ revision, entries: [], openPairingExpiries: [10, 20], isChecking: true }, t, formatTime);
-    assert.ok(screen.text.endsWith('A pairing code is open until T10.\nA pairing code is open until T20.\n\n⏳ Checking the machines…'), screen.text);
+  it('an open pairing code and a running check are said under the list; several codes are ONE line with their count and the last expiry', () => {
+    const one = buildRunnersScreen({ revision, entries: [], openPairingExpiries: [10], isChecking: true }, t, formatTime);
+    assert.ok(one.text.endsWith('A pairing code is open until T10.\n\n⏳ Checking the machines…'), one.text);
+    const several = buildRunnersScreen({ revision, entries: [], openPairingExpiries: [10, 30, 20, 5, 7, 9, 11, 13], isChecking: false }, t, formatTime);
+    assert.ok(several.text.endsWith('8 pairing codes are open, the last until T30.'), several.text);
+    assert.equal(several.text.split('\n').filter((line) => line.includes('pairing code')).length, 1);
   });
 
   it('every machine gets Pause (Resume when paused) and Remove, carrying the revision and its position', () => {
@@ -140,6 +148,7 @@ describe('runnersScreenPlan: callback data', () => {
     for (const action of actions) {
       assert.deepEqual(parseRunnersCallback(buildRunnerActionCallback(revision, 3, action)), { kind: 'runner', revision, index: 3, action });
     }
+    for (const page of [0, 1, 17]) assert.deepEqual(parseRunnersCallback(buildRunnersPageCallback(page)), { kind: 'page', page });
     assert.deepEqual(parseRunnersCallback(runnersPairCallback), { kind: 'pair' });
     assert.deepEqual(parseRunnersCallback(runnersRefreshCallback), { kind: 'refresh' });
     assert.deepEqual(parseRunnersCallback(runnersAddressUseCallback), { kind: 'addressUse' });
@@ -151,10 +160,11 @@ describe('runnersScreenPlan: callback data', () => {
     for (const action of actions) {
       assert.ok(Buffer.byteLength(buildRunnerActionCallback(hugeRevision, 99, action)) <= maxCallbackDataBytes, action);
     }
+    assert.ok(Buffer.byteLength(buildRunnersPageCallback(Number.MAX_SAFE_INTEGER)) <= maxCallbackDataBytes);
   });
 
   it('refuses data that is not one of its own', () => {
-    for (const data of ['rnr_', 'rnr_x', 'rnr_7_0', 'rnr_7_0_z', 'rnr_7_-1_p', 'rnr_a_0_p', 'rnr_7_0_p_extra', 'fbk_add', 'tka_5', '']) {
+    for (const data of ['rnr_', 'rnr_x', 'rnr_7_0', 'rnr_7_0_z', 'rnr_7_-1_p', 'rnr_a_0_p', 'rnr_7_0_p_extra', 'rnr_pg_', 'rnr_pg_x', 'rnr_pg_-1', 'rnr_pg_1_2', 'fbk_add', 'tka_5', '']) {
       assert.equal(parseRunnersCallback(data), null, data);
     }
   });
@@ -208,5 +218,93 @@ describe('runnersScreenPlan: the other screens and texts', () => {
   it('what the pairing message becomes: paired (with the name and the time) or expired', () => {
     assert.equal(buildPairedText('mac', 42, t, formatTime), 'Runner “mac” paired T42.');
     assert.equal(buildExpiredText(t), 'Pairing code expired.');
+  });
+});
+
+describe('runnersScreenPlan: a bounded, paged list', () => {
+  /** A machine whose report is as bulky as a machine can make it: every string a machine reports is 500 characters long. */
+  function createBulkyEntry(index: number, overrides: Partial<RunnerScreenEntry> = {}): RunnerScreenEntry {
+    const long = 'x'.repeat(500);
+    const probe = parseProbeOutput(`${probeText}\ncpu_model=${long}\ncap_android_detail=${long}\ncap_ios_detail=${long}\ncap_docker=yes\ncap_docker_detail=${long}\ncap_playwright_detail=${long}\nos_name=${long}`);
+    return createEntry({ runner: createRunner({ id: index.toString(16).padStart(12, '0'), name: `box-${index}` }), probe, ...overrides });
+  }
+
+  it('clips what a machine reported to a fixed length, with an ellipsis, and leaves a short text alone', () => {
+    assert.equal(clipReportedText('short'), 'short');
+    assert.equal(clipReportedText('y'.repeat(maxReportedTextChars)), 'y'.repeat(maxReportedTextChars));
+    const clipped = clipReportedText('y'.repeat(maxReportedTextChars + 1));
+    assert.equal(clipped.length, maxReportedTextChars);
+    assert.ok(clipped.endsWith('…'));
+  });
+
+  it('paginateBlocks fills a page while the text fits, always gives a block a page of its own at least, and covers every block once', () => {
+    const blocks = ['a'.repeat(100), 'b'.repeat(100), 'c'.repeat(100), 'd'.repeat(100)];
+    assert.deepEqual(paginateBlocks(blocks, 1000), [{ start: 0, end: 4 }]);
+    // Two blocks and their blank-line separator are 202 characters.
+    assert.deepEqual(paginateBlocks(blocks, 202), [{ start: 0, end: 2 }, { start: 2, end: 4 }]);
+    assert.deepEqual(paginateBlocks(blocks, 201), [{ start: 0, end: 1 }, { start: 1, end: 2 }, { start: 2, end: 3 }, { start: 3, end: 4 }]);
+    assert.deepEqual(paginateBlocks(blocks, 5), [{ start: 0, end: 1 }, { start: 1, end: 2 }, { start: 2, end: 3 }, { start: 3, end: 4 }], 'a block over the budget still has a page');
+    assert.deepEqual(paginateBlocks([], 100), []);
+  });
+
+  it('a list that fits is one page with no navigation and no page line', () => {
+    const screen = buildRunnersScreen({ revision, entries: [createEntry(), createEntry({ runner: createRunner({ id: 'ba9876543210', name: 'box1' }) })], openPairingExpiries: [], isChecking: false }, t, formatTime);
+    assert.equal(screen.pageCount, 1);
+    assert.equal(screen.page, 0);
+    assert.ok(!screen.text.includes('Page '), screen.text);
+    assert.ok(!screen.rows.flat().some((button) => button.data.startsWith('rnr_pg_')));
+  });
+
+  it('thirty machines with the bulkiest reports fit pages that each stay within the screen budget AND Telegram\'s 4096, and every machine is on exactly one page, in order', () => {
+    const entries = Array.from({ length: 30 }, (_value, index) => createBulkyEntry(index));
+    const model = { revision, entries, openPairingExpiries: [1, 2, 3, 4, 5, 6, 7, 8], isChecking: true };
+    const first = buildRunnersScreen(model, t, formatTime);
+    assert.ok(first.pageCount > 4, `${first.pageCount} pages`);
+    const seen: string[] = [];
+    for (let page = 0; page < first.pageCount; page += 1) {
+      const screen = buildRunnersScreen(model, t, formatTime, page);
+      assert.equal(screen.page, page);
+      assert.ok(screen.text.length <= maxScreenTextChars, `page ${page + 1}: ${screen.text.length} characters`);
+      assert.ok(screen.text.length <= 4096);
+      assert.ok(screen.text.includes(`Page ${page + 1} of ${first.pageCount}`));
+      seen.push(...[...screen.text.matchAll(/^(box-\d+) — /gm)].map((match) => match[1]));
+      for (const button of screen.rows.flat()) assert.ok(Buffer.byteLength(button.data) <= maxCallbackDataBytes, button.data);
+      assert.ok(screen.rows.length <= 100, 'within the keyboard limit');
+    }
+    assert.deepEqual(seen, entries.map((entry) => entry.runner.name));
+  });
+
+  it('a machine\'s buttons keep its place in the WHOLE list and the revision, whichever page it is on', () => {
+    const entries = Array.from({ length: 30 }, (_value, index) => createBulkyEntry(index));
+    const model = { revision: 42, entries, openPairingExpiries: [], isChecking: false };
+    const pageCount = buildRunnersScreen(model, t, formatTime).pageCount;
+    const buttonData: string[] = [];
+    for (let page = 0; page < pageCount; page += 1) {
+      const screen = buildRunnersScreen(model, t, formatTime, page);
+      buttonData.push(...screen.rows.flat().map((button) => button.data).filter((data) => data.endsWith('_p')));
+    }
+    assert.deepEqual(buttonData, entries.map((_entry, index) => `rnr_42_${index}_p`));
+  });
+
+  it('Previous and Next appear only where there is a page to go to, and a page past either end is clamped', () => {
+    const entries = Array.from({ length: 30 }, (_value, index) => createBulkyEntry(index));
+    const model = { revision, entries, openPairingExpiries: [], isChecking: false };
+    const { pageCount } = buildRunnersScreen(model, t, formatTime);
+    const labelsOf = (page: number): string[] => buildRunnersScreen(model, t, formatTime, page).rows.flat().map((button) => button.text);
+    assert.ok(labelsOf(0).includes('Next ›') && !labelsOf(0).includes('‹ Previous'));
+    assert.ok(labelsOf(1).includes('Next ›') && labelsOf(1).includes('‹ Previous'));
+    assert.ok(!labelsOf(pageCount - 1).includes('Next ›') && labelsOf(pageCount - 1).includes('‹ Previous'));
+    assert.equal(buildRunnersScreen(model, t, formatTime, pageCount + 7).page, pageCount - 1);
+    assert.equal(buildRunnersScreen(model, t, formatTime, -3).page, 0);
+    const middle = buildRunnersScreen(model, t, formatTime, 1);
+    assert.deepEqual(middle.rows.flat().filter((button) => button.data.startsWith('rnr_pg_')).map((button) => button.data), [buildRunnersPageCallback(0), buildRunnersPageCallback(2)]);
+  });
+
+  it('a single machine with the bulkiest report is bounded by itself, and an empty list is one page', () => {
+    const screen = buildRunnersScreen({ revision, entries: [createBulkyEntry(0)], openPairingExpiries: [], isChecking: true }, t, formatTime);
+    assert.equal(screen.pageCount, 1);
+    assert.ok(screen.text.length < 1500, `${screen.text.length} characters`);
+    const empty = buildRunnersScreen({ revision, entries: [], openPairingExpiries: [], isChecking: false }, t, formatTime, 5);
+    assert.deepEqual([empty.page, empty.pageCount], [0, 1]);
   });
 });

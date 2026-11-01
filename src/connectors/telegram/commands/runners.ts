@@ -4,8 +4,14 @@
  * another one — a one-time line to paste on the new machine, valid 10 minutes, shown as a message that turns into «paired» or «expired».
  * The hub itself is `src/runners/`; this file is only the screen, its buttons and the two background jobs (editing the pairing message,
  * refreshing a list with live data). See `src/runners/README.md` for the safety line and `utils/runnersScreenPlan.ts` for the texts.
+ *
+ * Two rules keep the screen true under concurrency. (1) A render is claimed BEFORE its Telegram edit is awaited: every message has a
+ * generation, and a background job (the live probe) draws only if the message still carries the generation it started from — so a
+ * question that replaced the list while its edit was still queued is never drawn over. (2) The messages that offer a pairing code are
+ * this instance's own record (`runnerPairingMessages.ts`), kept until the edit that settles them was accepted.
  */
 import { Markup, type Context } from 'telegraf';
+import { getCaughtErrnoCode } from '../../../configDirFile';
 import { getActiveLang, t } from '../../../i18n';
 import { escapeHtmlText } from '../renderAgentHtml';
 import { keyFromString, keyToString, type SessionKey } from '../../../sessionKey';
@@ -18,7 +24,6 @@ import {
   pairingLifetimeMinutes,
   removePairedRunner,
   setPairedRunnerPaused,
-  setPairingMessageRef,
   sweepExpiredPairings,
 } from '../../../runners/hubPairing';
 import { HubRegistryError, readPairedFile, readPendingFile } from '../../../runners/hubRegistry';
@@ -35,12 +40,14 @@ import {
   runnerActionCallbackRe,
   runnersAddressOtherCallback,
   runnersAddressUseCallback,
+  runnersPageCallbackRe,
   runnersPairCallback,
   runnersRefreshCallback,
   type FormatTime,
   type RunnersCallback,
   type RunnersScreen,
 } from '../../../utils/runnersScreenPlan';
+import { addPairingMessage, readPairingMessages, removePairingMessages } from '../runnerPairingMessages';
 import type { BotCore } from './botCore';
 import { answerCallbackQuerySafely } from './callbackToast';
 import { buildMessageSnapshotKey, getCallbackMessageId, rememberBoundedSnapshot } from './callbackMessage';
@@ -51,8 +58,11 @@ const messageSnapshotLimit = 50;
 const addressWaitMs = 10 * 60 * 1000;
 /** How often the pairing messages are checked for «used» or «expired» (the registry is two small files). */
 export const runnersWatchIntervalMs = 5 * 1000;
-/** The registry's note of which message offers a code: `tg:<telegram key>#<message id>`. */
-const messageRefPattern = /^tg:(-?\d+:\d+)#(\d+)$/;
+/** A pairing message whose edit still fails a day after it was sent is given up on (the code lived 10 minutes; the message may be gone). */
+const pairingMessageMaxAgeMs = 24 * 60 * 60 * 1000;
+/** After a failed edit of a pairing message the next try waits this long, doubling each time up to the cap. */
+const settleRetryFirstDelayMs = 5 * 1000;
+const settleRetryMaxDelayMs = 5 * 60 * 1000;
 const logTag = 'runners';
 
 /** What the module needs from the bot: the shared core, the hub and the few readings only the composition root has. */
@@ -65,6 +75,8 @@ export interface RunnersPorts extends Pick<BotCore, 'bot' | 'command' | 'replyTo
   saveRunnerHost: (address: HubAddress) => string | null;
   /** Whose charness it is, as the runner shows it (`@ExampleBot`). */
   getBotLabel: () => string;
+  /** The file this instance keeps its unsettled pairing messages in (`DATA_DIR/runner-pairing-messages.json`). */
+  pairingMessagesPath: string;
   /** The registry, the links and the last snapshots — no ssh. */
   readOverview: (nowMs: number) => Promise<RunnersOverview>;
   /** The same with the machines that are online asked what they are like right now. */
@@ -84,17 +96,6 @@ function describeCaughtError(caught: unknown): string {
   return caught instanceof Error ? `${caught.name}: ${caught.message}` : 'unknown error';
 }
 
-/** @description The registry's note of the message that offers a code. */
-export function buildPairingMessageRef(key: SessionKey, messageId: number): string {
-  return `tg:${keyToString(key)}#${messageId}`;
-}
-
-/** @description The message a registry note points to; `null` for a note this module did not write. */
-export function parsePairingMessageRef(messageRef: string | null): { key: SessionKey; messageId: number } | null {
-  const match = messageRef === null ? null : messageRefPattern.exec(messageRef);
-  return match === null ? null : { key: keyFromString(match[1]), messageId: Number(match[2]) };
-}
-
 /** `1 Nov 14:02` in the bot's timezone (`process.env.TZ`) and the topic's language: the parts in one fixed order, so it reads the same in every locale. */
 export const formatRunnersTime: FormatTime = (epochMs) => {
   const parts = new Intl.DateTimeFormat(getActiveLang(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(epochMs);
@@ -106,10 +107,14 @@ function buildKeyboard(screen: RunnersScreen): ReturnType<typeof Markup.inlineKe
   return Markup.inlineKeyboard(screen.rows.map((row) => row.map((button) => Markup.button.callback(button.text, button.data))));
 }
 
-/** @description What the screen was last drawn as on a message: the list (with the revision it came from) or a question that replaced it. */
+/**
+ * @description What a message was last CLAIMED for: the list (the page it shows) or a question that replaced it. `generation` is
+ * unique per claim: a background job that started from one claim draws only while the message still carries it.
+ */
 interface ShownScreen {
   kind: 'list' | 'question';
-  revision: number;
+  generation: number;
+  page: number;
 }
 
 /**
@@ -126,40 +131,62 @@ export function createRunners(ports: RunnersPorts) {
   const addressProposals = new Map<string, HubAddress | null>();
   /** General keys whose next message is an address → when the wait began. */
   const addressWaits = new Map<string, number>();
-  /** Pairing messages being watched, by code. */
-  const watchedPairings = new Map<string, { key: SessionKey; messageId: number }>();
+  /** Pairing messages whose edit failed: when the next try may be, and the delay after it (in memory — a restart tries at once). */
+  const settleRetries = new Map<string, { nextAttemptAtMs: number; delayMs: number }>();
   let isWatchTickRunning = false;
+  let lastGeneration = 0;
+  let lastStoreProblem: string | null = null;
 
-  function rememberScreen(key: SessionKey, messageId: number, shown: ShownScreen): void {
+  /** Claim `messageId` for a render: whatever started from an earlier claim no longer draws on it. Returns the claim. */
+  function claimMessage(key: SessionKey, messageId: number, kind: ShownScreen['kind'], page: number): ShownScreen {
+    lastGeneration += 1;
+    const shown: ShownScreen = { kind, generation: lastGeneration, page };
     rememberBoundedSnapshot(shownScreens, buildMessageSnapshotKey(key, messageId), shown, messageSnapshotLimit);
+    return shown;
   }
 
-  /** The list on `messageId` is still the list it was drawn as, from the registry revision it was drawn from. */
-  function checkIsListShown(key: SessionKey, messageId: number, revision: number): boolean {
-    const shown = shownScreens.get(buildMessageSnapshotKey(key, messageId));
-    return shown !== undefined && shown.kind === 'list' && shown.revision === revision;
+  /** The claim `messageId` carries now; `undefined` for a message this module never drew (or forgot). */
+  function readClaim(key: SessionKey, messageId: number): ShownScreen | undefined {
+    return shownScreens.get(buildMessageSnapshotKey(key, messageId));
+  }
+
+  /** The page of the list `messageId` shows — or showed, when a question has replaced it (the question keeps the page it came from); 0 for a message never drawn. */
+  function readShownPage(key: SessionKey, messageId: number): number {
+    return readClaim(key, messageId)?.page ?? 0;
   }
 
   async function reportRegistryError(key: SessionKey, caught: unknown): Promise<void> {
     await replyToThread(key, t('runners.registryErrorText', { reason: describeCaughtError(caught) }));
   }
 
-  /** Draw `overview` on `messageId` and, when machines are online, ask them in the background and draw again. */
-  async function drawList(key: SessionKey, overview: RunnersOverview, draw: (screen: RunnersScreen) => Promise<number | null>): Promise<void> {
+  /**
+   * Draw page `page` of `overview` — as a new message, or over `messageId` — and, when machines are online, ask them in the background and
+   * draw again. A message that is edited is claimed BEFORE the edit is awaited, so a probe that started from an earlier claim cannot draw
+   * over it; a new message is claimed once it exists (nothing can have started from it).
+   */
+  async function drawList(key: SessionKey, overview: RunnersOverview, page: number, target: { messageId: number | null }): Promise<void> {
     const isChecking = overview.entries.some((entry) => entry.isOnline);
-    const screen = buildRunnersScreen({ ...overview, isChecking }, t, formatRunnersTime);
-    const messageId = await draw(screen);
-    if (messageId === null) return;
-    rememberScreen(key, messageId, { kind: 'list', revision: overview.revision });
-    if (!isChecking) return;
-    void probeAndRedraw(key, messageId, overview).catch((error) => console.warn(`[${logTag}] live check failed: ${describeCaughtError(error)}`));
+    const screen = buildRunnersScreen({ ...overview, isChecking }, t, formatRunnersTime, page);
+    let messageId: number | null;
+    let claim: ShownScreen | null = null;
+    if (target.messageId === null) {
+      messageId = await replyToThread(key, screen.text, buildKeyboard(screen));
+      if (messageId !== null) claim = claimMessage(key, messageId, 'list', screen.page);
+    } else {
+      claim = claimMessage(key, target.messageId, 'list', screen.page);
+      messageId = (await editThreadMessage(key, target.messageId, screen.text, buildKeyboard(screen))) ? target.messageId : null;
+    }
+    if (messageId === null || claim === null || !isChecking) return;
+    const startedFrom = claim;
+    void probeAndRedraw(key, messageId, overview, startedFrom).catch((error) => console.warn(`[${logTag}] live check failed: ${describeCaughtError(error)}`));
   }
 
-  async function probeAndRedraw(key: SessionKey, messageId: number, overview: RunnersOverview): Promise<void> {
+  async function probeAndRedraw(key: SessionKey, messageId: number, overview: RunnersOverview, startedFrom: ShownScreen): Promise<void> {
     const probed = await ports.probeOverview(overview, now());
-    if (!checkIsListShown(key, messageId, overview.revision)) return;
+    // No await between this check and the edit being queued: a claim made later queues its own edit behind this one.
+    if (readClaim(key, messageId)?.generation !== startedFrom.generation) return;
     await withThreadLocale(key, async () => {
-      const screen = buildRunnersScreen({ ...probed, isChecking: false }, t, formatRunnersTime);
+      const screen = buildRunnersScreen({ ...probed, isChecking: false }, t, formatRunnersTime, startedFrom.page);
       await editThreadMessage(key, messageId, screen.text, buildKeyboard(screen));
     });
   }
@@ -173,12 +200,12 @@ export function createRunners(ports: RunnersPorts) {
         await reportRegistryError(key, error);
         return;
       }
-      await drawList(key, overview, (screen) => replyToThread(key, screen.text, buildKeyboard(screen)));
+      await drawList(key, overview, 0, { messageId: null });
     });
   }
 
-  /** Draw the list over the message a button sits on. */
-  async function redrawList(key: SessionKey, messageId: number): Promise<void> {
+  /** Draw the list over the message a button sits on — page `page`, else the page it already shows. */
+  async function redrawList(key: SessionKey, messageId: number, page: number = readShownPage(key, messageId)): Promise<void> {
     let overview: RunnersOverview;
     try {
       overview = await ports.readOverview(now());
@@ -186,7 +213,7 @@ export function createRunners(ports: RunnersPorts) {
       await reportRegistryError(key, error);
       return;
     }
-    await drawList(key, overview, async (screen) => ((await editThreadMessage(key, messageId, screen.text, buildKeyboard(screen))) ? messageId : null));
+    await drawList(key, overview, page, { messageId });
   }
 
   async function showAddressStep(key: SessionKey): Promise<void> {
@@ -226,8 +253,12 @@ export function createRunners(ports: RunnersPorts) {
         await replyToThread(key, t('runners.pairFailedText', { reason: 'the message could not be sent' }));
         return;
       }
-      await setPairingMessageRef(hub, pairing.pairId, buildPairingMessageRef(key, messageId));
-      watchedPairings.set(pairing.pairId, { key, messageId });
+      try {
+        addPairingMessage(ports.pairingMessagesPath, { pairId: pairing.pairId, key: keyToString(key), messageId, offeredAtMs: now() });
+      } catch (error) {
+        // The line is out and works; only its turning into «paired» / «expired» is lost.
+        console.warn(`[${logTag}] the pairing message could not be recorded (${getCaughtErrnoCode(error)}); it will not turn into «paired» or «expired»`);
+      }
     } catch (error) {
       await replyToThread(key, t('runners.pairFailedText', { reason: describeCaughtError(error) }));
     }
@@ -309,7 +340,10 @@ export function createRunners(ports: RunnersPorts) {
         await answerCallbackQuerySafely(ctx);
         if (messageId === null) return;
         const question = buildRemoveConfirmation(runner.name, paired.rev, callback.index, t);
-        if (await editThreadMessage(key, messageId, question.text, buildKeyboard(question))) rememberScreen(key, messageId, { kind: 'question', revision: paired.rev });
+        // Claimed first: a live check that finishes while this edit is still queued must not draw the list over the question.
+        const listClaim = readClaim(key, messageId);
+        claimMessage(key, messageId, 'question', listClaim?.page ?? 0);
+        await editThreadMessage(key, messageId, question.text, buildKeyboard(question));
         return;
       }
       case 'removeNo':
@@ -365,40 +399,58 @@ export function createRunners(ports: RunnersPorts) {
           armAddressWait(key);
           await replyToThread(key, t('runners.addressAsk'));
           return;
+        case 'page':
+          await answerCallbackQuerySafely(ctx);
+          if (messageId === null) await showScreen(key);
+          else await redrawList(key, messageId, callback.page);
+          return;
         case 'runner':
           await handleRunnerAction(ctx, key, messageId, callback);
       }
     });
   }
 
-  /** Edit one watched pairing message to what became of its code. */
-  async function settlePairingMessage(pairId: string, text: string): Promise<void> {
-    const watched = watchedPairings.get(pairId);
-    if (watched === undefined) return;
-    watchedPairings.delete(pairId);
-    if (!(await editThreadMessage(watched.key, watched.messageId, text))) console.warn(`[${logTag}] the pairing message could not be edited`);
-  }
-
   /**
-   * @description One look at the registry: a code that became a runner turns its message into «paired», one that is no longer open (expired)
-   * into «expired». Messages are adopted from `pending.json`'s notes, so a restart loses none; a code used while the bot was down keeps
-   * its (spent) message.
+   * @description One look at this instance's unsettled pairing messages (`runnerPairingMessages.ts`): a code that became a runner turns its
+   * message into «paired», one that is no longer open (expired, swept) into «expired». An entry is dropped only after Telegram accepted
+   * the edit — a failed one is tried again later (5 s, doubling to 5 min) and survives a restart; one a day old is given up on. Expired
+   * credentials are swept from the shared registry here too, but the messages never depend on what the sweep left (they are this
+   * instance's own record, and another instance may have swept or even spent the code while this one was down).
    */
   async function watchPairingsOnce(): Promise<void> {
     const nowMs = now();
     const pending = readPendingFile(hub.dir).pending;
     const runners = readPairedFile(hub.dir).runners;
-    for (const pairing of pending) {
-      const target = parsePairingMessageRef(pairing.messageRef);
-      if (target !== null && !watchedPairings.has(pairing.pairId)) watchedPairings.set(pairing.pairId, target);
-    }
     if (pending.some((pairing) => pairing.expiresAtMs <= nowMs)) await sweepExpiredPairings(hub, nowMs);
-    for (const [pairId, target] of [...watchedPairings]) {
-      const runner = runners.find((candidate) => candidate.pairId === pairId);
-      const isOpen = pending.some((pairing) => pairing.pairId === pairId && pairing.expiresAtMs > nowMs);
-      if (runner !== undefined) await withThreadLocale(target.key, () => settlePairingMessage(pairId, buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime)));
-      else if (!isOpen) await withThreadLocale(target.key, () => settlePairingMessage(pairId, buildExpiredText(t)));
+    const { messages, problem } = readPairingMessages(ports.pairingMessagesPath);
+    // A broken record fails every look: say it once, not every five seconds.
+    if (problem !== null && problem !== lastStoreProblem) console.warn(`[${logTag}] ${problem}; the pairing messages it held are not followed`);
+    lastStoreProblem = problem;
+    const settledPairIds = new Set<string>();
+    for (const message of messages) {
+      if (nowMs - message.offeredAtMs > pairingMessageMaxAgeMs) {
+        console.warn(`[${logTag}] a pairing message could not be edited for a day; giving up on it`);
+        settledPairIds.add(message.pairId);
+        settleRetries.delete(message.pairId);
+        continue;
+      }
+      if ((settleRetries.get(message.pairId)?.nextAttemptAtMs ?? 0) > nowMs) continue;
+      const runner = runners.find((candidate) => candidate.pairId === message.pairId);
+      const isOpen = pending.some((pairing) => pairing.pairId === message.pairId && pairing.expiresAtMs > nowMs);
+      if (runner === undefined && isOpen) continue;
+      const key = keyFromString(message.key);
+      const isEdited = await withThreadLocale(key, () =>
+        editThreadMessage(key, message.messageId, runner === undefined ? buildExpiredText(t) : buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime)),
+      );
+      if (isEdited) {
+        settledPairIds.add(message.pairId);
+        settleRetries.delete(message.pairId);
+      } else {
+        const delayMs = Math.min((settleRetries.get(message.pairId)?.delayMs ?? settleRetryFirstDelayMs / 2) * 2, settleRetryMaxDelayMs);
+        settleRetries.set(message.pairId, { nextAttemptAtMs: nowMs + delayMs, delayMs });
+      }
     }
+    if (settledPairIds.size > 0) removePairingMessages(ports.pairingMessagesPath, settledPairIds);
   }
 
   /**
@@ -455,10 +507,12 @@ export function createRunners(ports: RunnersPorts) {
         return callback === null ? Promise.resolve() : handleCallback(ctx, callback);
       });
     }
-    bot.action(runnerActionCallbackRe, (ctx) => {
-      const callback = parseRunnersCallback(ctx.match[0]);
-      return callback === null ? Promise.resolve() : handleCallback(ctx, callback);
-    });
+    for (const pattern of [runnersPageCallbackRe, runnerActionCallbackRe]) {
+      bot.action(pattern, (ctx) => {
+        const callback = parseRunnersCallback(ctx.match[0]);
+        return callback === null ? Promise.resolve() : handleCallback(ctx, callback);
+      });
+    }
   }
 
   return { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressText, cancelRunnersAddressWait, startRunnersWatcher, watchPairingsOnce };

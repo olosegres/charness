@@ -7795,6 +7795,8 @@ const runnersCacheDir = getRemoteRunCacheDir();
 const { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressText, cancelRunnersAddressWait, startRunnersWatcher } = createRunners({
   ...botCore,
   hub: runnersHub,
+  // The pairing messages this instance sent: its own record (the hub registry is shared by every instance of the OS user).
+  pairingMessagesPath: path.join(resolveDataDir(), 'runner-pairing-messages.json'),
   readRunnerHost: createRunnerHostReader(() => getInstanceSettingsPath(), (line) => console.error(line)),
   saveRunnerHost: (address) => saveInstanceSettingsChange(getInstanceSettingsPath(), { runnerHost: address }),
   getBotLabel: () => (bot.botInfo?.username === undefined ? os.hostname() : `@${bot.botInfo.username}`),

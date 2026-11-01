@@ -216,19 +216,31 @@ names no slash command (Telegram would auto-link it).
 
 ## `runners.ts`
 
-`/runners` and the buttons `rnr_pair` / `rnr_refresh` / `rnr_aduse` / `rnr_adother` / `rnr_<rev>_<i>_<p|r|x|xy|xn>`: the machines paired as runners
-(`src/runners/` is the hub, `utils/runnersScreenPlan.ts` the pure text and button plan). General only; elsewhere a pointer to General. The list opens
-from `readOverview` (the registry, which links accept a connection, the last snapshots — no ssh) and is redrawn once `probeOverview` (the phase-1
-probe through the link of every ONLINE machine, one 20 s deadline) answers — unless the message is no longer that list at the registry revision it was
-drawn from (`shownScreens`: a question replaced it, or another revision). A runner button carries the registry revision AND the position: a mismatch is
-a toast and a fresh list, never an action on a neighbour; Remove is a question (`xy` / `xn`) on the same message. **Pairing**: no saved `runnerHost` →
-the address step (a proposal from `listAddressCandidates` that `findProposedHubAddress` proved to answer with this machine's own ssh key; the keyboard's
-«Use» resolves against a per-message snapshot) and, after «Enter another address», the next General message (`handleRunnersAddressText`, called by the
-text handler before the startup buffer; a slash command ends the wait) is the address, checked by `checkHubAddress`. The pairing message is HTML with the
-line in a `<pre>` (tap to copy) sent with the `isSecret` option of `replyToThread` (`markOutboundTextSecret` keeps the text out of the output trace —
-length only); its place is written into `pending.json` (`setPairingMessageRef`, `tg:<key>#<message id>`), and `startRunnersWatcher` (every 5 s, one
-look at boot) edits it to «paired» or «expired». A code used while the bot is down keeps its (spent) message: the registry no longer holds the note.
-`startRunnersWatcher` also refreshes the `gate` wrapper at boot, only for an instance that has runners or open codes.
+`/runners` and the buttons `rnr_pair` / `rnr_refresh` / `rnr_aduse` / `rnr_adother` / `rnr_pg_<page>` / `rnr_<rev>_<i>_<p|r|x|xy|xn>`: the machines paired as
+runners (`src/runners/` is the hub, `utils/runnersScreenPlan.ts` the pure text and button plan). General only; elsewhere a pointer to General.
+
+- **The list** opens from `readOverview` (the registry, which links accept a connection, the last snapshots — no ssh) and is redrawn once `probeOverview`
+  (the phase-1 probe through the link of every ONLINE machine, one 20 s deadline) answers. Its text is BOUNDED: what a machine reports about itself is
+  clipped (`clipReportedText`), the machines are split over pages of at most `maxScreenTextChars` (`paginateBlocks`; ‹ Previous / Next › and a «Page 2 of 3» line
+  only when there is more than one page), open pairing codes are one line. A runner button carries the registry revision AND the machine's place in the WHOLE
+  list (not on its page): a mismatch is a toast and a fresh list, never an action on a neighbour; Remove is a question (`xy` / `xn`) on the same message,
+  and Cancel returns to the page it came from.
+- **Concurrent edits.** A message is CLAIMED for a render (`claimMessage`: a generation and the page) BEFORE its Telegram edit is awaited, and the live probe
+  draws only if the message still carries the generation it started from — so neither a question whose edit is still queued, nor a list drawn again since, is
+  drawn over by a probe that finishes late. The paced send queue is FIFO and there is no await between the probe's check and its edit being queued, so a
+  claim made later queues behind it.
+- **Pairing.** No saved `runnerHost` → the address step (a proposal from `listAddressCandidates` that `findProposedHubAddress` proved to answer with this
+  machine's own ssh key; the keyboard's «Use» resolves against a per-message snapshot) and, after «Enter another address», the next General message
+  (`handleRunnersAddressText`, called by the text handler before the startup buffer; `cancelRunnersAddressWait` ends the wait for any slash command) is the
+  address, checked by `checkHubAddress`. The pairing message is HTML with the line in a `<pre>` (tap to copy) sent with the `isSecret` option of
+  `replyToThread` (`markOutboundTextSecret` keeps the text out of the output trace — length only).
+- **Settling the pairing message.** The place of every message that offers a code is this INSTANCE's own record (`runnerPairingMessages.ts`,
+  `DATA_DIR/runner-pairing-messages.json`) — not the shared hub registry, which is every charness's of the OS user and holds credentials only. `startRunnersWatcher`
+  (every 5 s, one look at boot) edits a message to «paired» (a runner carries its code's id) or «expired» (the code is neither open nor a runner) and
+  drops its entry ONLY after Telegram accepted the edit: a failed edit is tried again (5 s, doubling to 5 min; a restart tries at once), one a day old is given
+  up on. So a code used or swept while the bot was down, or by another instance, still reaches its message; another instance never edits it. The watcher also sweeps
+  expired credentials from the registry (shared hygiene, independent of the messages) and refreshes the `gate` wrapper at boot, only for an instance that has runners
+  or open codes.
 
 ## `backendSwitch.ts`
 
