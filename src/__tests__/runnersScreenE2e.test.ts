@@ -21,6 +21,9 @@
  *     record and turns into «Pairing code expired.» when its code runs out, and the expired code is gone from authorized_keys; the first
  *     line, already used, and the expired one are refused on the runner machine
  *   → a third code is used on a second machine while the bot is STOPPED: the restarted bot turns its message into «paired»
+ *   → thirty seeded machines (a registry written by hand, a snapshot each) make a list of several pages: Next / Previous edit the SAME
+ *     message, every page fits Telegram's limit (the fake Bot API refuses a longer text, as the real one does), and a button on a later
+ *     page pauses and removes the machine it names — by its place in the whole list and the revision — and nothing else
  *   → the pairing code is nowhere in the output trace, the console log or the bot's output: the trace keeps the message's length only
  *
  * Needs sshd, ssh, ssh-keyscan, rsync, Pueue, tar and the built CLI (`yarn build`): a local run without them is SKIPPED with the reason,
@@ -34,7 +37,11 @@ import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_pr
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { testNodeModulesEnvName } from '../runnerUtility/appInstall';
+import { readLastProbe } from '../remoteRun/runners';
+import { getRemoteRunCacheDir } from '../remoteRun/ssh';
 import type { RunnerStatus } from '../runnerUtility/runnerConfig';
+import { generateEd25519KeyPair } from '../runners/sshKeys';
+import { maxScreenTextChars } from '../utils/runnersScreenPlan';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import {
   builtCliPath,
@@ -220,6 +227,40 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
   /** Does the machine's Pueue have a task in the Running state? (The group's own «running» is lower case.) */
   function checkIsRunnerJobRunning(): boolean {
     return /\bRunning\b/.test(runRunnerPueue(['status']));
+  }
+
+  /**
+   * Machines that exist only as registry entries and last-probe snapshots: written by hand the way the hub and the real probe write them
+   * (`paired.json` under a new revision; `<cache>/<name>.probe.json` as `{ seenAtMs, text }` — read back through the real reader), so a
+   * list long enough for several pages needs no thirty machines. None is online. Returns their names.
+   */
+  function seedMachines(count: number): string[] {
+    const cacheDir = getRemoteRunCacheDir({}, getLayout().instanceHome);
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const snapshotText = ['os=Linux', 'os_name=Ubuntu', 'os_version=24.04', 'arch=x86_64', `cpu_model=${'M'.repeat(300)}`, 'cpu_cores=8', 'ram_total_mb=65536', 'ram_free_mb=40960', 'disk_free_mb=512000', 'pueue=4.0.4'].join('\n');
+    const names = Array.from({ length: count }, (_value, index) => `seed-${index.toString().padStart(2, '0')}`);
+    const current = readJson<{ rev: number; runners: object[] }>(path.join(getRegistryDir(), 'paired.json'));
+    const seeded = names.map((name, index) => {
+      const publicKey = generateEd25519KeyPair(name).publicKey;
+      const id = (index + 1).toString(16).padStart(12, '0');
+      return {
+        id, name, publicKey, keyFingerprint: `SHA256:seed${index}`, hostKey: publicKey, workDir: '/home/runner/.charness-runner/work', os: 'Linux', arch: 'x86_64', version: '3.8.0',
+        serviceKind: 'user-service', pairedAtMs: 1_000 + index, pairId: (index + 1000).toString(16).padStart(12, '0'), label: '@fake_charness_bot', host: '127.0.0.1', port: link.sshPort, isPaused: false,
+      };
+    });
+    const pairedPath = path.join(getRegistryDir(), 'paired.json');
+    fs.writeFileSync(`${pairedPath}.by-hand`, `${JSON.stringify({ rev: current.rev + 1, runners: [...current.runners, ...seeded] }, null, 2)}\n`);
+    fs.renameSync(`${pairedPath}.by-hand`, pairedPath);
+    for (const name of names) {
+      fs.writeFileSync(path.join(cacheDir, `${name}.probe.json`), JSON.stringify({ seenAtMs: Date.now() - 60_000, text: snapshotText }), { mode: 0o600 });
+    }
+    assert.ok(readLastProbe(cacheDir, names[0]) !== null, 'the snapshots are in the format the real probe writes');
+    return names;
+  }
+
+  /** The names of the machines a list message shows, in order (the heading line of each block starts with the name). */
+  function readListedNames(text: string): string[] {
+    return [...text.matchAll(/^([a-z0-9-]+) — /gm)].map((match) => match[1]);
   }
 
   /** The bot's output-trace records (every hourly bucket and its rollover), as text. */
@@ -468,6 +509,65 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     await general.waitForMessageText('the pairing message to read paired', third, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u.test(text));
     assert.ok(!third.text.includes('cr1.'), 'the line is gone');
     await waitUntil(() => readPairingStore().length === 0, 'the settled message to leave the instance\'s record', 10_000);
+  });
+
+  it('a long list is split over pages through the built bot: Next / Previous edit the same message within Telegram\'s limit, and a later page\'s buttons act on the machine they name', async () => {
+    seedMachines(30);
+    const registryNames = readPaired().runners.map((runner) => runner.name);
+    assert.equal(registryNames.length, 31, 'the second machine and the thirty seeded ones');
+    const list = await general.sendAndAwaitReply('/runners', 'Page 1 of ');
+    const pageCount = Number(/Page 1 of (\d+)/.exec(list.text)?.[1]);
+    assert.ok(pageCount >= 2, `${pageCount} pages`);
+
+    // Next through every page: one message, each page within the bound, every machine once, in the registry's order.
+    const seen: string[] = [];
+    for (let page = 1; page <= pageCount; page += 1) {
+      await general.waitForMessageText(`page ${page} of the list`, list, (text) => text.includes(`Page ${page} of ${pageCount}`) && !text.includes('Checking the machines'));
+      assert.ok(list.text.length <= maxScreenTextChars, `page ${page}: ${list.text.length} characters`);
+      seen.push(...readListedNames(list.text));
+      const labels = general.getKeyboardLabels(list).flat();
+      assert.equal(labels.includes('‹ Previous'), page > 1, `Previous on page ${page}`);
+      assert.equal(labels.includes('Next ›'), page < pageCount, `Next on page ${page}`);
+      if (page < pageCount) assert.equal(await general.tapAndAwaitAnswer(list, general.getButtonData(list, 'Next ›')), '');
+    }
+    assert.deepEqual(seen, registryNames);
+    assert.ok(fakeTelegram.listCalls('editMessageText').every((call) => String(call.payload.text).length <= 4096), 'no edit was refused as too long');
+
+    // Previous goes back on the same message.
+    assert.equal(await general.tapAndAwaitAnswer(list, general.getButtonData(list, '‹ Previous')), '');
+    await general.waitForMessageText('the page before', list, (text) => text.includes(`Page ${pageCount - 1} of ${pageCount}`));
+    assert.equal(await general.tapAndAwaitAnswer(list, 'rnr_pg_1'), '');
+    await general.waitForMessageText('page 2', list, (text) => text.includes(`Page 2 of ${pageCount}`) && !text.includes('Checking the machines'));
+
+    // A button on page 2 names a machine by its place in the WHOLE list and the revision; only that machine is acted on.
+    const [pauseData, removeData] = general.getKeyboardData(list)[1];
+    const target = readListedNames(list.text)[0];
+    const [, , targetIndex] = /^rnr_(\d+)_(\d+)_p$/.exec(pauseData) ?? [];
+    assert.equal(registryNames[Number(targetIndex)], target, 'the button\'s place is the machine\'s place in the whole list');
+    assert.ok(Number(targetIndex) > 0);
+    assert.equal(await general.tapAndAwaitAnswer(list, pauseData), `⏸ ${target} paused`);
+    assert.deepEqual(readPaired().runners.filter((runner) => runner.isPaused).map((runner) => runner.name), [target], 'only the named machine');
+    await general.waitForMessageText('page 2 after the pause', list, (text) => text.includes(`Page 2 of ${pageCount}`) && text.includes(`${target} — offline`) && text.includes(' · paused'));
+
+    // The keyboard from before the pause is stale for every machine on the list; it only says so and draws page 2 again.
+    assert.equal(await general.tapAndAwaitAnswer(list, removeData), staleListToast);
+    assert.equal(readPaired().runners.length, 31, 'the stale tap removed nothing');
+    await general.waitForMessageText('page 2 settled', list, (text) => text.includes(`Page 2 of ${pageCount}`) && !text.includes('Checking the machines'));
+
+    // Remove asks about that machine; Cancel brings page 2 back; Remove for sure takes exactly it out.
+    const revision = readPaired().rev;
+    const freshRemoveData = general.getKeyboardData(list)[1][1];
+    assert.equal(freshRemoveData, `rnr_${revision}_${targetIndex}_x`);
+    await general.tapAndAwaitAnswer(list, freshRemoveData);
+    await general.waitForMessageText('the question', list, (text) => text.startsWith(`Remove ${target}?`));
+    await general.tapAndAwaitAnswer(list, `rnr_${revision}_${targetIndex}_xn`);
+    await general.waitForMessageText('page 2 back', list, (text) => text.includes(`Page 2 of ${pageCount}`) && text.includes(`${target} — `));
+    assert.equal(readPaired().runners.length, 31, 'Cancel removed nothing');
+    await general.tapAndAwaitAnswer(list, freshRemoveData);
+    await general.waitForMessageText('the question again', list, (text) => text.startsWith(`Remove ${target}?`));
+    assert.equal(await general.tapAndAwaitAnswer(list, `rnr_${revision}_${targetIndex}_xy`), `✅ ${target} removed`);
+    assert.deepEqual(readPaired().runners.map((runner) => runner.name), registryNames.filter((name) => name !== target), 'exactly that machine is gone');
+    await general.waitForMessageText('the list on page 2 again', list, (text) => text.includes('Page 2 of ') && !text.includes(`${target} — `));
   });
 
   it('the pairing code is nowhere in the output trace, the console log or the bot\'s own output — the trace keeps only the length of the message', async () => {

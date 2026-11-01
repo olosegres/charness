@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { addPairingMessage, readPairingMessages, removePairingMessages, writePairingMessages, type PairingMessage } from '../connectors/telegram/runnerPairingMessages';
+import { addPairingMessage, markPairingMessageFailed, readPairingMessages, removePairingMessages, writePairingMessages, type PairingMessage } from '../connectors/telegram/runnerPairingMessages';
 
 let tempDir = '';
 let filePath = '';
@@ -61,6 +61,18 @@ describe('runnerPairingMessages', () => {
     }
     addPairingMessage(filePath, createMessage());
     assert.deepEqual(readPairingMessages(filePath), { messages: [createMessage()], problem: null });
+  });
+
+  it('the first failed edit of a message is written down and stays the first; other messages are not touched; an unknown code changes nothing', () => {
+    addPairingMessage(filePath, createMessage());
+    addPairingMessage(filePath, createMessage({ pairId: 'ba9876543210' }));
+    markPairingMessageFailed(filePath, '0123456789ab', 5_000);
+    markPairingMessageFailed(filePath, '0123456789ab', 9_000);
+    markPairingMessageFailed(filePath, 'ffffffffffff', 9_000);
+    assert.equal(readPairingMessages(filePath).messages.length, 2);
+    const byCode = new Map(readPairingMessages(filePath).messages.map((message) => [message.pairId, message.firstFailedAtMs]));
+    assert.equal(byCode.get('0123456789ab'), 5_000);
+    assert.equal(byCode.get('ba9876543210'), undefined);
   });
 
   it('keeps the newest fifty entries only', () => {

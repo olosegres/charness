@@ -24,7 +24,6 @@ import {
   pairingLifetimeMinutes,
   removePairedRunner,
   setPairedRunnerPaused,
-  sweepExpiredPairings,
 } from '../../../runners/hubPairing';
 import { HubRegistryError, readPairedFile, readPendingFile } from '../../../runners/hubRegistry';
 import { cutRunnerLink } from '../../../runners/linkControl';
@@ -47,7 +46,7 @@ import {
   type RunnersCallback,
   type RunnersScreen,
 } from '../../../utils/runnersScreenPlan';
-import { addPairingMessage, readPairingMessages, removePairingMessages } from '../runnerPairingMessages';
+import { addPairingMessage, markPairingMessageFailed, readPairingMessages, removePairingMessages } from '../runnerPairingMessages';
 import type { BotCore } from './botCore';
 import { answerCallbackQuerySafely } from './callbackToast';
 import { buildMessageSnapshotKey, getCallbackMessageId, rememberBoundedSnapshot } from './callbackMessage';
@@ -58,8 +57,8 @@ const messageSnapshotLimit = 50;
 const addressWaitMs = 10 * 60 * 1000;
 /** How often the pairing messages are checked for «used» or «expired» (the registry is two small files). */
 export const runnersWatchIntervalMs = 5 * 1000;
-/** A pairing message whose edit still fails a day after it was sent is given up on (the code lived 10 minutes; the message may be gone). */
-const pairingMessageMaxAgeMs = 24 * 60 * 60 * 1000;
+/** A pairing message whose edits have been failing for a day is given up on (the code lived 10 minutes; the message may be gone). */
+const pairingMessageGiveUpAfterFailingMs = 24 * 60 * 60 * 1000;
 /** After a failed edit of a pairing message the next try waits this long, doubling each time up to the cap. */
 const settleRetryFirstDelayMs = 5 * 1000;
 const settleRetryMaxDelayMs = 5 * 60 * 1000;
@@ -77,6 +76,8 @@ export interface RunnersPorts extends Pick<BotCore, 'bot' | 'command' | 'replyTo
   getBotLabel: () => string;
   /** The file this instance keeps its unsettled pairing messages in (`DATA_DIR/runner-pairing-messages.json`). */
   pairingMessagesPath: string;
+  /** Drop the expired pairing codes (and their key lines) from the shared hub registry. */
+  sweepExpiredCodes: (nowMs: number) => Promise<void>;
   /** The registry, the links and the last snapshots — no ssh. */
   readOverview: (nowMs: number) => Promise<RunnersOverview>;
   /** The same with the machines that are online asked what they are like right now. */
@@ -413,27 +414,27 @@ export function createRunners(ports: RunnersPorts) {
   /**
    * @description One look at this instance's unsettled pairing messages (`runnerPairingMessages.ts`): a code that became a runner turns its
    * message into «paired», one that is no longer open (expired, swept) into «expired». An entry is dropped only after Telegram accepted
-   * the edit — a failed one is tried again later (5 s, doubling to 5 min) and survives a restart; one a day old is given up on. Expired
-   * credentials are swept from the shared registry here too, but the messages never depend on what the sweep left (they are this
-   * instance's own record, and another instance may have swept or even spent the code while this one was down).
+   * the edit — a failed one is tried again later (5 s, doubling to 5 min) and survives a restart; one whose edits have been failing for a
+   * day is given up on (counted from the first failed attempt: a message older than that is still tried once). Expired credentials are
+   * swept from the shared registry here too, but the messages never depend on what the sweep left (they are this instance's own record,
+   * and another instance may have swept or even spent the code while this one was down).
+   *
+   * ORDER matters: the record is read FIRST, the registry right after, with no await between. A message is recorded after its code was
+   * created, so a registry read after the record holds the code of every message in it — a message is never judged against a registry
+   * older than itself (reading them the other way round, an offer that finishes while the sweep waits for the hub lock would be taken for
+   * an expired code and its live line edited away).
    */
   async function watchPairingsOnce(): Promise<void> {
     const nowMs = now();
+    const { messages, problem } = readPairingMessages(ports.pairingMessagesPath);
     const pending = readPendingFile(hub.dir).pending;
     const runners = readPairedFile(hub.dir).runners;
-    if (pending.some((pairing) => pairing.expiresAtMs <= nowMs)) await sweepExpiredPairings(hub, nowMs);
-    const { messages, problem } = readPairingMessages(ports.pairingMessagesPath);
     // A broken record fails every look: say it once, not every five seconds.
     if (problem !== null && problem !== lastStoreProblem) console.warn(`[${logTag}] ${problem}; the pairing messages it held are not followed`);
     lastStoreProblem = problem;
+    if (pending.some((pairing) => pairing.expiresAtMs <= nowMs)) await ports.sweepExpiredCodes(nowMs);
     const settledPairIds = new Set<string>();
     for (const message of messages) {
-      if (nowMs - message.offeredAtMs > pairingMessageMaxAgeMs) {
-        console.warn(`[${logTag}] a pairing message could not be edited for a day; giving up on it`);
-        settledPairIds.add(message.pairId);
-        settleRetries.delete(message.pairId);
-        continue;
-      }
       if ((settleRetries.get(message.pairId)?.nextAttemptAtMs ?? 0) > nowMs) continue;
       const runner = runners.find((candidate) => candidate.pairId === message.pairId);
       const isOpen = pending.some((pairing) => pairing.pairId === message.pairId && pairing.expiresAtMs > nowMs);
@@ -445,10 +446,17 @@ export function createRunners(ports: RunnersPorts) {
       if (isEdited) {
         settledPairIds.add(message.pairId);
         settleRetries.delete(message.pairId);
-      } else {
-        const delayMs = Math.min((settleRetries.get(message.pairId)?.delayMs ?? settleRetryFirstDelayMs / 2) * 2, settleRetryMaxDelayMs);
-        settleRetries.set(message.pairId, { nextAttemptAtMs: nowMs + delayMs, delayMs });
+        continue;
       }
+      if (nowMs - (message.firstFailedAtMs ?? nowMs) > pairingMessageGiveUpAfterFailingMs) {
+        console.warn(`[${logTag}] a pairing message could not be edited for a day; giving up on it`);
+        settledPairIds.add(message.pairId);
+        settleRetries.delete(message.pairId);
+        continue;
+      }
+      markPairingMessageFailed(ports.pairingMessagesPath, message.pairId, nowMs);
+      const delayMs = Math.min((settleRetries.get(message.pairId)?.delayMs ?? settleRetryFirstDelayMs / 2) * 2, settleRetryMaxDelayMs);
+      settleRetries.set(message.pairId, { nextAttemptAtMs: nowMs + delayMs, delayMs });
     }
     if (settledPairIds.size > 0) removePairingMessages(ports.pairingMessagesPath, settledPairIds);
   }

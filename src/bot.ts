@@ -437,6 +437,7 @@ import { ensureGateWrapper } from './runners/gateWrapper';
 import { scanHostKey } from './runners/hubAddress';
 import { listPublicAddressCandidates } from './runners/hubAddressCandidates';
 import { createHubContext } from './runners/hubPaths';
+import { sweepExpiredPairings } from './runners/hubPairing';
 import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOverview';
 import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
@@ -7797,6 +7798,7 @@ const { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressT
   hub: runnersHub,
   // The pairing messages this instance sent: its own record (the hub registry is shared by every instance of the OS user).
   pairingMessagesPath: path.join(resolveDataDir(), 'runner-pairing-messages.json'),
+  sweepExpiredCodes: async (nowMs) => { await sweepExpiredPairings(runnersHub, nowMs); },
   readRunnerHost: createRunnerHostReader(() => getInstanceSettingsPath(), (line) => console.error(line)),
   saveRunnerHost: (address) => saveInstanceSettingsChange(getInstanceSettingsPath(), { runnerHost: address }),
   getBotLabel: () => (bot.botInfo?.username === undefined ? os.hostname() : `@${bot.botInfo.username}`),

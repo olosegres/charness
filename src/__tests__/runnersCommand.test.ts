@@ -24,6 +24,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createRunners, runnersWatchIntervalMs } from '../connectors/telegram/commands/runners';
 import { readPairingMessages } from '../connectors/telegram/runnerPairingMessages';
+import { readLastProbe } from '../remoteRun/runners';
 import { keyToString } from '../sessionKey';
 import { parseProbeOutput } from '../remoteRun/probe';
 import { ensureGateWrapper } from '../runners/gateWrapper';
@@ -53,6 +54,8 @@ let pairingMessagesPath: string;
 let liveProbeText = defaultProbeText;
 /** When set, every send and edit of the module also goes through the fake Bot API, which refuses a text over Telegram's limit. */
 let isLengthChecked = false;
+/** When set, the sweep of expired codes waits for it before it touches the registry (a sweep queued behind the hub lock). */
+let sweepGate: Promise<void> | null = null;
 /** Decides an edit before it reaches the harness: a promise of "go ahead" (true) or "this edit fails" (false); null leaves it alone. */
 let editHook: ((messageId: number, text: string) => Promise<boolean> | null) | null = null;
 let clockMs = Date.now();
@@ -83,6 +86,10 @@ function buildPorts(): Parameters<typeof createRunners>[0] {
     },
     hub: hubFixture.ctx,
     pairingMessagesPath,
+    sweepExpiredCodes: async (nowMs) => {
+      if (sweepGate !== null) await sweepGate;
+      await sweepExpiredPairings(hubFixture.ctx, nowMs);
+    },
     readRunnerHost: () => savedAddress,
     saveRunnerHost: (address) => {
       savedAddress = address;
@@ -94,10 +101,12 @@ function buildPorts(): Parameters<typeof createRunners>[0] {
       const overview = await readRunnersOverview(hubFixture.ctx, cacheDir, nowMs);
       return { ...overview, entries: overview.entries.map((entry) => ({ ...entry, isOnline: onlineRunnerNames.has(entry.runner.name) })) };
     },
-    probeOverview: async (overview) => {
+    probeOverview: async (overview, nowMs) => {
       probeCalls.push(overview);
       const gate = probeGates.shift();
       if (gate !== undefined) await gate;
+      // Like the real probe, leave each answering machine's snapshot behind: the next `readOverview` reads it.
+      for (const entry of overview.entries) if (entry.isOnline) writeProbeSnapshot(entry.runner.name, liveProbeText, nowMs);
       return { ...overview, entries: overview.entries.map((entry) => (entry.isOnline ? { ...entry, probe: parseProbeOutput(liveProbeText) } : entry)) };
     },
     listAddressCandidates: () => candidates,
@@ -106,6 +115,15 @@ function buildPorts(): Parameters<typeof createRunners>[0] {
     now: () => clockMs,
     watchIntervalMs: 60 * minute,
   };
+}
+
+/**
+ * What the real probe leaves behind (`remoteRun/runners.ts` writes `<cache>/<name>.probe.json` as `{ seenAtMs, text }`): every later
+ * `readOverview` reads the machine's last snapshot from it. The read-back keeps this copy of the format honest.
+ */
+function writeProbeSnapshot(name: string, text: string, seenAtMs: number): void {
+  fs.writeFileSync(path.join(cacheDir, `${name}.probe.json`), JSON.stringify({ seenAtMs, text }), { mode: 0o600 });
+  assert.equal(readLastProbe(cacheDir, name)?.seenAtMs, seenAtMs, 'the snapshot is in the format the real probe writes');
 }
 
 /** Pair a machine through the real registry: a code, then its use. Returns the code's id. */
@@ -149,6 +167,7 @@ describe('/runners over its ports', () => {
     liveProbeText = defaultProbeText;
     isLengthChecked = false;
     editHook = null;
+    sweepGate = null;
     clockMs = Date.now();
     savedAddress = null;
     candidates = [];
@@ -527,13 +546,69 @@ describe('/runners over its ports', () => {
       assert.deepEqual(readRecordedPairIds(), []);
     });
 
-    it('a message that could not be edited for a day is given up on', async () => {
-      await offerPairing();
+    it('a bot restarted more than a day after the code was issued still tries the edit — and when Telegram accepts it, the old message is settled', async () => {
+      const { messageId } = await offerPairing();
       clockMs += 25 * 60 * minute;
+      await createRunners(buildPorts()).watchPairingsOnce();
+      assert.equal(readMessageText(messageId), 'Pairing code expired.');
+      assert.deepEqual(readRecordedPairIds(), []);
+
+      // Also a machine that paired during the long stop.
+      const second = await offerPairing();
+      await redeemPairing(hubFixture.ctx, second.pairId, createRedeemFixture({ suggestedName: 'box1' }).request, clockMs);
+      clockMs += 25 * 60 * minute;
+      await createRunners(buildPorts()).watchPairingsOnce();
+      assert.ok(readMessageText(second.messageId).startsWith('Runner “box1” paired'), readMessageText(second.messageId));
+      assert.deepEqual(readRecordedPairIds(), []);
+    });
+
+    it('a message is given up on only after its edits have been FAILING for a day — counted from the first failed attempt, not from the message\'s age', async () => {
+      await offerPairing();
+      clockMs += 11 * minute;
       editHook = () => Promise.resolve(false);
       await feature.watchPairingsOnce();
-      assert.deepEqual(readRecordedPairIds(), [], 'dropped, not retried for ever');
+      const [recorded] = readPairingMessages(pairingMessagesPath).messages;
+      assert.equal(recorded.firstFailedAtMs, clockMs, 'the first failure is written down');
+      clockMs += 12 * 60 * minute;
+      await feature.watchPairingsOnce();
+      assert.equal(readRecordedPairIds().length, 1, 'half a day of failing: still kept');
+      assert.equal(readPairingMessages(pairingMessagesPath).messages[0].firstFailedAtMs, recorded.firstFailedAtMs, 'the first failure stays the first');
+      clockMs += 13 * 60 * minute;
+      await feature.watchPairingsOnce();
+      assert.deepEqual(readRecordedPairIds(), [], 'a day of failing: given up on, not retried for ever');
       assert.equal(harness.edits.length, 0);
+    });
+
+    it('a message whose edits failed for a day and then are accepted is settled, not dropped', async () => {
+      const { messageId } = await offerPairing();
+      clockMs += 11 * minute;
+      editHook = () => Promise.resolve(false);
+      await feature.watchPairingsOnce();
+      clockMs += 30 * 60 * minute;
+      editHook = null;
+      await createRunners(buildPorts()).watchPairingsOnce();
+      assert.equal(readMessageText(messageId), 'Pairing code expired.');
+      assert.deepEqual(readRecordedPairIds(), []);
+    });
+
+    it('an offer that finishes while the expiry sweep waits for the hub lock is judged against a registry that already holds its code — its live line stays', async () => {
+      const first = await offerPairing();
+      clockMs += 11 * minute;
+      // The sweep is queued (behind the hub lock); the watcher has already looked.
+      let releaseSweep: () => void = () => {};
+      sweepGate = new Promise<void>((resolve) => { releaseSweep = resolve; });
+      const look = feature.watchPairingsOnce();
+      await new Promise((resolve) => { setTimeout(resolve, 20); });
+      // An offer finishes meanwhile: its code is created, its message sent and recorded.
+      sweepGate = null;
+      const second = await offerPairing();
+      assert.deepEqual(readRecordedPairIds().sort(), [first.pairId, second.pairId].sort());
+      releaseSweep();
+      await look;
+      assert.equal(readMessageText(first.messageId), 'Pairing code expired.', 'the expired code\'s message is settled');
+      assert.ok(readMessageText(second.messageId).startsWith('Pair a runner'), 'the new, live message is untouched');
+      assert.deepEqual(readRecordedPairIds(), [second.pairId], 'and it is still followed');
+      assert.ok(readPendingFile(hubFixture.ctx.dir).pending.some((pairing) => pairing.pairId === second.pairId), 'its code is still open');
     });
 
     it('another instance sharing the registry neither edits this one\'s message nor takes the way back to it by sweeping the credential', async () => {

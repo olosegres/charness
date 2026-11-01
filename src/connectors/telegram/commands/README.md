@@ -237,8 +237,11 @@ runners (`src/runners/` is the hub, `utils/runnersScreenPlan.ts` the pure text a
 - **Settling the pairing message.** The place of every message that offers a code is this INSTANCE's own record (`runnerPairingMessages.ts`,
   `DATA_DIR/runner-pairing-messages.json`) — not the shared hub registry, which is every charness's of the OS user and holds credentials only. `startRunnersWatcher`
   (every 5 s, one look at boot) edits a message to «paired» (a runner carries its code's id) or «expired» (the code is neither open nor a runner) and
-  drops its entry ONLY after Telegram accepted the edit: a failed edit is tried again (5 s, doubling to 5 min; a restart tries at once), one a day old is given
-  up on. So a code used or swept while the bot was down, or by another instance, still reaches its message; another instance never edits it. The watcher also sweeps
+  drops its entry ONLY after Telegram accepted the edit: a failed edit is tried again (5 s, doubling to 5 min; a restart tries at once), and one whose edits have
+  been FAILING for a day (counted from the first failed attempt, which the entry records — a bot restarted after a long stop still tries a message of any age) is
+  given up on. A look reads the record FIRST and the registry right after, with no await between (a message is recorded after its code exists, so the registry
+  it is judged against always holds its code; the expiry sweep, which can wait for the hub lock, runs after both reads). So a code used or swept while the bot
+  was down, or by another instance, still reaches its message; another instance never edits it. The watcher also sweeps
   expired credentials from the registry (shared hygiene, independent of the messages) and refreshes the `gate` wrapper at boot, only for an instance that has runners
   or open codes.
 

@@ -8,7 +8,8 @@ import { hubIdSchema } from '../../runners/hubIds';
  * (`DATA_DIR/runner-pairing-messages.json`). It is the instance's own: the hub registry is shared by every charness of the OS user and
  * holds the credentials only, so a message of this bot is never adopted by another bot, and a credential swept or spent (while this bot
  * was down, or by another instance) does not take the way back to its message with it. An entry stays until the message was edited to
- * what became of its code (paired / expired) and Telegram accepted the edit, or until it is a day old.
+ * what became of its code (paired / expired) and Telegram accepted the edit — or until edits of it have been FAILING for a day: the
+ * clock of that cutoff starts at the first failed attempt, not at the message's age, so a bot restarted after a long stop still tries.
  */
 
 /** `<chat id>:<topic id>` — the Telegram spelling of a conversation key. */
@@ -22,6 +23,8 @@ const pairingMessageSchema = z.strictObject({
   key: z.string().regex(telegramKeyPattern),
   messageId: z.number().int().positive(),
   offeredAtMs: z.number().int().nonnegative(),
+  /** When an edit of this message first failed; absent while none has. */
+  firstFailedAtMs: z.number().int().nonnegative().optional(),
 });
 
 const pairingMessagesFileSchema = z.strictObject({ messages: z.array(pairingMessageSchema) });
@@ -66,4 +69,11 @@ export function addPairingMessage(filePath: string, message: PairingMessage): vo
 export function removePairingMessages(filePath: string, pairIds: ReadonlySet<string>): void {
   const { messages } = readPairingMessages(filePath);
   writePairingMessages(filePath, messages.filter((candidate) => !pairIds.has(candidate.pairId)));
+}
+
+/** @description Note that an edit of the message for `pairId` failed at `nowMs`: the first failure is kept, later ones change nothing. */
+export function markPairingMessageFailed(filePath: string, pairId: string, nowMs: number): void {
+  const { messages } = readPairingMessages(filePath);
+  if (!messages.some((candidate) => candidate.pairId === pairId && candidate.firstFailedAtMs === undefined)) return;
+  writePairingMessages(filePath, messages.map((candidate) => (candidate.pairId === pairId && candidate.firstFailedAtMs === undefined ? { ...candidate, firstFailedAtMs: nowMs } : candidate)));
 }
