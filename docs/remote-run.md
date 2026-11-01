@@ -306,11 +306,9 @@ idle cycle.
 A **Jira** agent runs with a minimal environment: it reaches `charness` through the bot's `PATH`. If the bot's `PATH` lacks it (or
 the instance's env file sets `PATH`), map it in `jira.json` `agentBinaries` (see [Jira setup](../SETUP.md#jira-setup)) — for example
 `"charness": "/home/user/.nvm/versions/node/v22/bin/charness"`. Its environment also lacks `SSH_AUTH_SOCK` (see
-[above](#reach-it-without-a-prompt-once)) and `XDG_CACHE_HOME`: the local cache (ssh control sockets, and the main machine's own note of
-which project each job came from) then follows `HOME` — `~/.cache/charness/remote-run/` — so when the other agents run with
-`XDG_CACHE_HOME` set, a job one of them submitted is not one a Jira agent can fetch the files of («this machine did not submit the job
-as this user»); its output and exit code still come with `wait`. Jobs belong to the agent that submitted them. The runner lines above look for a runner's last probe in
-both caches and take the newest, so a probe a Jira agent took still shows up in the instructions of the others.
+[above](#reach-it-without-a-prompt-once)). `XDG_CACHE_HOME` is passed on (a path, no secret; not when the instance's env file sets it), so a
+Jira agent uses the same local cache as the bot and the other agents — ssh control sockets, the last probe of each runner, and the record
+of which project each job came from — and the runner lines above see the probes it took.
 
 ## Troubleshooting
 

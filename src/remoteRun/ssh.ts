@@ -28,14 +28,6 @@ export function getRemoteRunCacheDir(env: NodeJS.ProcessEnv = process.env, homeD
   return path.join(cacheHome, 'charness', 'remote-run');
 }
 
-/**
- * @description Every place a snapshot of a runner may have been written to by a `remote-run` of this user: the cache `env` names, and the one
- * under `homeDir` when `XDG_CACHE_HOME` moved it (a tracker agent runs without `XDG_CACHE_HOME`, so its snapshots land in `~/.cache`).
- */
-export function getRemoteRunCacheDirCandidates(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): string[] {
-  return [...new Set([getRemoteRunCacheDir(env, homeDir), getRemoteRunCacheDir({}, homeDir)])];
-}
-
 /** @description Create the cache dir (mode 0700) and its ssh folder. */
 export function ensureRemoteRunCacheDir(cacheDir: string): void {
   fs.mkdirSync(path.join(cacheDir, 'ssh'), { recursive: true, mode: cacheDirectoryMode });

@@ -23,6 +23,10 @@ import * as path from 'path';
  * `IS_SANDBOX` lets Claude Code run `--dangerously-skip-permissions` as root,
  * which the whole bot in a rootless Docker container is (the image sets it);
  * without it every agent there refuses to start. It holds no secret.
+ * `XDG_CACHE_HOME` is a path: with it the agent and the bot (and the other agents) use ONE local cache —
+ * `charness remote-run` keeps its ssh control sockets, the last probe of each runner and its record of
+ * which project a job came from there; without it a tracker agent's cache followed `HOME` while the bot's
+ * did not, and what one wrote the other could not read.
  */
 export const agentEnvironmentNames = [
   'HOME',
@@ -37,6 +41,7 @@ export const agentEnvironmentNames = [
   'TMPDIR',
   'TZ',
   'IS_SANDBOX',
+  'XDG_CACHE_HOME',
 ] as const;
 
 /** Names the instance's `ENV_FILE` set — recorded by the env loader on every load (the hot worker loads it again). */
