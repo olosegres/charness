@@ -350,10 +350,12 @@ export function createRunners(ports: RunnersPorts) {
         await answerCallbackQuerySafely(ctx);
         break;
       case 'removeYes': {
-        // Answered first: stopping the jobs on the machine can take 20 s and more, and a tap left unanswered for long is «too old».
-        await answerCallbackQuerySafely(ctx, t('runners.removedToast', { name: runner.name }));
+        // The tap is answered at once, without text: stopping the jobs on the machine can take 20 s and more, and a tap left unanswered for
+        // long is «too old». What happened — including whether the jobs were stopped — is told in a message of its own once it is known.
+        await answerCallbackQuerySafely(ctx);
         try {
-          await removeRunnerAndEndItsWork(hub, runner.id, now());
+          const removal = await removeRunnerAndEndItsWork(hub, runner.id, now());
+          if (removal !== null) await replyToThread(key, t(removal.jobs === 'stopped' ? 'runners.removedJobsStoppedText' : 'runners.removedJobsNotStoppedText', { name: removal.runner.name }));
         } catch (error) {
           await reportRegistryError(key, error);
           return;

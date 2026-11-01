@@ -726,8 +726,26 @@ describe('/runners over its ports', () => {
       await harness.tapButton(screen?.messageId ?? 0, `rnr_${revision}_0_xy`);
       assert.deepEqual(readPairedFile(hubFixture.ctx.dir).runners.map((runner) => runner.name), ['box1']);
       assert.equal(fs.readFileSync(authorizedKeys, 'utf8').match(/charness-runner:/g)?.length, 1);
-      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '✅ mac removed');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '', 'the tap is answered at once with no toast: what happened is told in a message once it is known');
+      // The machine is offline here (no link), so its jobs could not be stopped from the hub: the message says so instead of promising it.
+      assert.equal(harness.replies.at(-1)?.text, '✅ mac removed. Its key is deleted, but the jobs it was running could not be stopped from here (the machine is offline or did not answer): it stops them itself once it finds out it was removed.');
       assert.ok(!harness.edits.at(-1)?.text.includes('mac —') && harness.edits.at(-1)?.text.includes('box1 —'), harness.edits.at(-1)?.text);
+    });
+
+    it('a removal that fails (a damaged authorized_keys block) is reported in General after the empty answer — never «removed» — and the machine stays listed', async () => {
+      await pairMachine('mac');
+      await harness.runCommand('runners');
+      const screen = harness.replies.at(-1);
+      const revision = readPairedFile(hubFixture.ctx.dir).rev;
+      fs.writeFileSync(hubFixture.ctx.authorizedKeysPath, '# charness runners: managed block, do not edit between the markers\n');
+      const repliesBefore = harness.replies.length;
+      await harness.tapButton(screen?.messageId ?? 0, `rnr_${revision}_0_xy`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '');
+      const newReplies = harness.replies.slice(repliesBefore).map((reply) => reply.text);
+      assert.equal(newReplies.length, 1, newReplies.join('\n'));
+      assert.match(newReplies[0], /damaged/);
+      assert.ok(!newReplies[0].includes('removed'));
+      assert.equal(readPairedFile(hubFixture.ctx.dir).runners.length, 1, 'nothing was removed');
     });
 
     it('a registry file that does not validate is said, not shown as an empty list', async () => {

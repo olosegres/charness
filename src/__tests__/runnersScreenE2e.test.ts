@@ -457,7 +457,9 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
 
     await general.tapAndAwaitAnswer(list, `rnr_${revision}_0_x`);
     await general.waitForMessageText('the question again', list, (text) => text.startsWith(`Remove ${runnerName}?`));
-    assert.equal(await general.tapAndAwaitAnswer(list, `rnr_${revision}_0_xy`), `✅ ${runnerName} removed`);
+    assert.equal(await general.tapAndAwaitAnswer(list, `rnr_${revision}_0_xy`), '', 'the tap is answered at once, without a toast');
+    // The machine is online: the hub ended its jobs over the link, and says so in a message of its own.
+    await general.waitForMessage('the outcome of the removal', (message) => message.text === `✅ ${runnerName} removed. Its key is deleted and the jobs it was running are stopped.`);
     await general.waitForMessageText('the empty list', list, (text) => text.includes('No runners yet.'));
     assert.equal(readPaired().runners.length, 0);
     assert.doesNotMatch(readAuthorizedKeys(), /charness-runner:/);
@@ -565,7 +567,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.equal(readPaired().runners.length, 31, 'Cancel removed nothing');
     await general.tapAndAwaitAnswer(list, freshRemoveData);
     await general.waitForMessageText('the question again', list, (text) => text.startsWith(`Remove ${target}?`));
-    assert.equal(await general.tapAndAwaitAnswer(list, `rnr_${revision}_${targetIndex}_xy`), `✅ ${target} removed`);
+    assert.equal(await general.tapAndAwaitAnswer(list, `rnr_${revision}_${targetIndex}_xy`), '');
     assert.deepEqual(readPaired().runners.map((runner) => runner.name), registryNames.filter((name) => name !== target), 'exactly that machine is gone');
     await general.waitForMessageText('the list on page 2 again', list, (text) => text.includes('Page 2 of ') && !text.includes(`${target} — `));
   });
