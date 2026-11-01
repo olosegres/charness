@@ -190,7 +190,10 @@ keys, instead of being dropped unseen. It exposes:
 - `send_file_to_user` — lets the agent push files from the bound folder into the
   topic. A single MP4 uses Bot API `sendVideo`; eligible all-video and mixed
   photo/video albums use `sendMediaGroup`, with each MP4 represented by an
-  `InputMediaVideo` entry. `as_file:true` explicitly forces documents. A file is
+  `InputMediaVideo` entry. `as_file:true` explicitly forces documents. The success answer says
+  what was actually sent, per kind — `Sent 3 files: 1 photo, 2 documents.` — so a photo that went
+  out as a document (`as_file`, over Telegram's photo size limit, or an album that fell back to
+  documents) is visible to the agent. A file is
   opened so that a path swapped after validation cannot reach outside the bound
   folder: on Linux component by component beneath a pinned folder descriptor
   (`/proc/self/fd`); on Windows and macOS by its canonical path, held to the
@@ -226,9 +229,8 @@ keys, instead of being dropped unseen. It exposes:
   returns an error, a partial one stays successful but reports how many landed,
   and an ambiguous attachment delivery surfaces as the same non-retryable
   `deliveryUnknown` outcome as `send_file_to_user`. The success answer says what was
-  actually sent, per kind — `Delivered 3 messages: 1 text, 2 documents.` — so an
-  attachment that went out as something else (an over-size photo or `as_file` is a
-  document) is visible to the agent. Capped at 50 items per call.
+  actually sent, per kind — `Delivered 3 messages: 1 text, 2 documents.` — in the same
+  wording as `send_file_to_user`. Capped at 50 items per call.
 
 This server is bot-owned plumbing; if its port fails to bind, the bot still
 boots — only these agent-facing tools go inert. (Your own MCP servers still work

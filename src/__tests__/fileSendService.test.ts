@@ -30,6 +30,7 @@ import {
   type SendFilesToThreadDeps,
 } from '../utils/fileSendService';
 import {
+  telegramPhotoMaxBytes,
   telegramSendMaxBytes,
   type FileSendKind,
   type TelegramSingleFileSendMethod,
@@ -242,7 +243,7 @@ for (const gatewayCase of singleGatewayCases) {
         caption: 'caption',
       });
 
-      assert.deepEqual(result, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: [gatewayCase.expectedSentKind] });
+      assert.deepEqual(result, { ok: true, summary: `Sent 1 file: 1 ${gatewayCase.expectedSentKind}.`, sentKinds: [gatewayCase.expectedSentKind] });
       assert.equal(recorder.gatewayCalls.length, 1);
       assert.deepEqual(recorder.gatewayCalls[0], {
         method: gatewayCase.expectedMethod,
@@ -277,7 +278,7 @@ sharedTest('createSendFilesToThread routes a photo/video album, records every id
       caption: 'album caption',
     });
 
-    assert.deepEqual(result, { ok: true, summary: 'Sent 2 file(s) to the topic.', sentKinds: ['photo', 'video'] });
+    assert.deepEqual(result, { ok: true, summary: 'Sent 2 files: 1 photo, 1 video.', sentKinds: ['photo', 'video'] });
     assert.deepEqual(recorder.gatewayCalls, [
       {
         method: 'sendMediaGroup',
@@ -357,6 +358,34 @@ test('createSendFilesToThread converts a resolver throw into a typed failure', a
   }
 });
 
+sharedTest('createSendFilesToThread answers with what it SENT: as_file, an over-limit photo and a document-fallback album are documents', async () => {
+  const fixture = createTempFileSendFixture();
+  const recorder = createServiceRecorder();
+  try {
+    fs.writeFileSync(path.join(fixture.workDir, 'chart.png'), 'photo-bytes');
+    fs.writeFileSync(path.join(fixture.workDir, 'other.png'), 'photo-bytes');
+    fs.writeFileSync(path.join(fixture.workDir, 'loop.gif'), 'animation-bytes');
+    const huge = path.join(fixture.workDir, 'huge.png');
+    fs.writeFileSync(huge, '');
+    fs.truncateSync(huge, telegramPhotoMaxBytes + 1);
+    const sendFilesToThread = createService(fixture.workDir, recorder);
+
+    const forcedDocument = await sendFilesToThread('thread-key', { paths: ['chart.png'], asFile: true });
+    const overLimitPhoto = await sendFilesToThread('thread-key', { paths: ['huge.png'] });
+    const fallbackAlbum = await sendFilesToThread('thread-key', { paths: ['chart.png', 'loop.gif'] });
+    const forcedAlbum = await sendFilesToThread('thread-key', { paths: ['chart.png', 'other.png'], asFile: true });
+    const photoAlbum = await sendFilesToThread('thread-key', { paths: ['chart.png', 'other.png'] });
+
+    assert.deepEqual(forcedDocument, { ok: true, summary: 'Sent 1 file: 1 document.', sentKinds: ['document'] });
+    assert.deepEqual(overLimitPhoto, { ok: true, summary: 'Sent 1 file: 1 document.', sentKinds: ['document'] });
+    assert.deepEqual(fallbackAlbum, { ok: true, summary: 'Sent 2 files: 2 documents.', sentKinds: ['document', 'document'] });
+    assert.deepEqual(forcedAlbum, { ok: true, summary: 'Sent 2 files: 2 documents.', sentKinds: ['document', 'document'] });
+    assert.deepEqual(photoAlbum, { ok: true, summary: 'Sent 2 files: 2 photos.', sentKinds: ['photo', 'photo'] });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 sharedTest('createSendFilesToThread converts a gateway rejection into a typed failure and closes its descriptor', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
@@ -410,7 +439,7 @@ sharedTest('createSendFilesToThread waits for message-id recording before report
     assert.equal(didSettle, false, 'the service must await message-id persistence');
 
     releaseMessageIdRecording();
-    assert.deepEqual(await sendPromise, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: ['video'] });
+    assert.deepEqual(await sendPromise, { ok: true, summary: 'Sent 1 file: 1 video.', sentKinds: ['video'] });
     assert.deepEqual(recorder.messageIdCalls, [
       { target: 'telegram-target', messageIds: [singleGatewayMessageIds.sendVideo] },
     ]);
@@ -464,8 +493,8 @@ sharedTest('createSendFilesToThread keeps the target delivery executor occupied 
     );
 
     releaseFirstRecording();
-    assert.deepEqual(await firstSend, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: ['video'] });
-    assert.deepEqual(await secondSend, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: ['video'] });
+    assert.deepEqual(await firstSend, { ok: true, summary: 'Sent 1 file: 1 video.', sentKinds: ['video'] });
+    assert.deepEqual(await secondSend, { ok: true, summary: 'Sent 1 file: 1 video.', sentKinds: ['video'] });
     assert.equal(recorder.gatewayCalls.length, 2);
     assert.equal(recorder.messageIdCalls.length, 2);
   } finally {
@@ -536,7 +565,7 @@ sharedTest('createSendFilesToThread keeps delivery successful when message-id re
     ]);
     assert.equal(result.ok, true);
     if (result.ok) {
-      assert.match(result.summary, /^Sent 1 file\(s\) to the topic\./);
+      assert.match(result.summary, /^Sent 1 file: 1 video\./);
       assert.match(result.summary, /delivery succeeded.*message IDs could not be recorded.*state write failed/i);
     }
     assertFileDescriptorClosed(recorder.capturedFileDescriptors[0]);
@@ -572,7 +601,7 @@ linuxTest('createSendFilesToThread keeps delivery successful when root-descripto
     ]);
     assert.equal(result.ok, true);
     if (result.ok) {
-      assert.match(result.summary, /^Sent 1 file\(s\) to the topic\./);
+      assert.match(result.summary, /^Sent 1 file: 1 video\./);
       assert.match(result.summary, /delivery succeeded.*descriptor cleanup failed.*forced root close failure/i);
     }
     assertFileDescriptorClosed(recorder.capturedFileDescriptors[0]);
@@ -913,7 +942,7 @@ sharedTest('createSendFilesToThread sanitizes unsafe multipart filename characte
 
     const result = await sendFilesToThread('thread-key', { paths: ['safe-alias.txt'] });
 
-    assert.deepEqual(result, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: ['document'] });
+    assert.deepEqual(result, { ok: true, summary: 'Sent 1 file: 1 document.', sentKinds: ['document'] });
     assert.equal(recorder.gatewayCalls.length, 1);
     assert.equal(recorder.gatewayCalls[0].source?.filename, 'unsafe_____name.txt');
     assert.equal(recorder.gatewayCalls[0].source?.contents, 'safe-contents');

@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-**The answer of `send_messages_to_user` now says what was sent, per kind — «Delivered 3 messages: 1 text, 2 documents.» — so an agent can see when an attachment did not go out as one.**
-Before, it only counted the messages («Delivered 3 messages to the topic»), so a batch of images that arrived as plain text or as documents read as a full success.
-Now the answer names what landed — texts, photos, videos, animations, documents — taken from what Telegram was actually asked to render: a photo sent with `as_file`, or one over the photo size limit, is counted as a document.
+**The answers of `send_messages_to_user` and `send_file_to_user` now say what was sent, per kind — «Delivered 3 messages: 1 text, 2 documents.», «Sent 3 files: 1 photo, 2 documents.» — so an agent can see when a file did not go out as the kind it meant.**
+Before, they only counted («Delivered 3 messages to the topic», «Sent 3 file(s) to the topic»), so a batch of images that arrived as plain text or as documents read as a full success.
+Now the answer names what landed — texts, photos, videos, animations, documents — taken from what Telegram was actually asked to render: a photo sent with `as_file`, one over the photo size limit, or one in an album that fell back to documents is counted as a document.
 
 **An agent that misnames a field when it calls one of the bot's tools now gets an error that says which field and what to write — attachments no longer vanish unseen.**
 Before, a key the tool does not know was dropped silently: an agent that sent three images to `send_messages_to_user` as `{text, filePath}` (the field is `path`) had them posted as three text-only messages, and the tool still answered «Delivered 3 messages».

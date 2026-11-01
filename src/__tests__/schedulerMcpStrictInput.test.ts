@@ -381,6 +381,26 @@ describe('send_file_to_user', () => {
   });
 });
 
+describe('send_file_to_user, the summary', () => {
+  it('says what was sent, per kind: two photos, and the same two forced to documents', async () => {
+    writeBoundFile('a.png');
+    writeBoundFile('b.png');
+    const client = await connectTelegram();
+    const photos = await client.callTool({ name: 'send_file_to_user', arguments: { paths: ['a.png', 'b.png'] } });
+    assert.notEqual(photos.isError, true, getText(photos));
+    assert.equal(getText(photos), 'Sent 2 files: 2 photos.');
+    const documents = await client.callTool({ name: 'send_file_to_user', arguments: { paths: ['a.png', 'b.png'], as_file: true } });
+    assert.equal(getText(documents), 'Sent 2 files: 2 documents.');
+  });
+
+  it('says a lone file that is not a photo was a document', async () => {
+    writeBoundFile('notes.txt');
+    const client = await connectTelegram();
+    const result = await client.callTool({ name: 'send_file_to_user', arguments: { paths: ['notes.txt'] } });
+    assert.equal(getText(result), 'Sent 1 file: 1 document.');
+  });
+});
+
 describe('send_file_to_user, wrong names for the files', () => {
   it('`file` instead of `paths` is pointed at `paths`', async () => {
     writeBoundFile('a.png');

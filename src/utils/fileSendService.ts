@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getAbortError } from '../utils';
 import { AbortableFifo } from './abortableFifo';
+import { formatSentKinds } from './sentKindsSummary';
 import {
   buildTelegramFileSendRequest,
   classifyFileSendKind,
@@ -526,7 +527,7 @@ export function createSendFilesToThread<TTarget>(
               throw new Error(`Unsupported file send method: ${unsupportedMethod}`);
             }
           }
-          const summary = `Sent ${items.length} file(s) to the topic.`;
+          const summary = `Sent ${items.length} ${items.length === 1 ? 'file' : 'files'}: ${formatSentKinds(sentKinds)}.`;
           try {
             await deps.recordMessageIds(deliveryTarget, gatewayResult.messageIds);
           } catch (error) {
