@@ -295,30 +295,29 @@ interface LaunchdEntry {
   file: string;
 }
 
-async function stopLaunchdJobs(labels: readonly string[], domain: string, deps: ServiceDeps): Promise<string | null> {
-  for (const label of labels) {
-    await deps.runner('launchctl', ['bootout', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
-    // `print` succeeds only for a job launchd still has loaded.
-    const loaded = await deps.runner('launchctl', ['print', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
-    if (loaded.ok) return `${label} is still loaded in ${domain}`;
-  }
-  return null;
-}
-
 const unloadPollMs = 300;
 const unloadPollAttempts = 10;
 
 /**
- * @description Boot a job out and wait (bounded: 3 s) until launchd no longer has it loaded. A `bootstrap` right after a `bootout` often
- * fails with error 5 while launchd is still tearing the old job down; `print` succeeds only for a job that is still loaded.
+ * @description Boot a job out and wait (bounded: 3 s) until launchd no longer has it loaded; `false` when it still is. A `bootstrap` right
+ * after a `bootout` often fails with error 5 while launchd is still tearing the old job down, and a check right after it can find the job
+ * «still loaded»: `print` succeeds only for a job that is still loaded.
  */
-async function bootOutAndWaitUntilGone(label: string, domain: string, deps: ServiceDeps): Promise<void> {
+async function bootOutAndWaitUntilGone(label: string, domain: string, deps: ServiceDeps): Promise<boolean> {
   await deps.runner('launchctl', ['bootout', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
   for (let attempt = 0; attempt < unloadPollAttempts; attempt += 1) {
     const loaded = await deps.runner('launchctl', ['print', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
-    if (!loaded.ok) return;
+    if (!loaded.ok) return true;
     await new Promise((resolve) => { setTimeout(resolve, unloadPollMs); });
   }
+  return false;
+}
+
+async function stopLaunchdJobs(labels: readonly string[], domain: string, deps: ServiceDeps): Promise<string | null> {
+  for (const label of labels) {
+    if (!(await bootOutAndWaitUntilGone(label, domain, deps))) return `${label} is still loaded in ${domain}`;
+  }
+  return null;
 }
 
 /** @description Load the jobs in order; stops at the first that fails. `touchedFiles` are the definitions it had rewritten (and booted out the old job of) by then, the failing one included. */

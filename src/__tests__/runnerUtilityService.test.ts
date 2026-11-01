@@ -149,6 +149,39 @@ function recordingRunner(answers: Record<string, Partial<CommandResult>> = {}): 
   };
 }
 
+/**
+ * A launchd that tears a job down slowly: after `bootout` the job still shows in `print` for `teardownPrints` more looks, and a
+ * `bootstrap` of a job that is still being torn down fails (error 5) — what a reload right after an unload meets. The bootstrap calls
+ * numbered in `failingBootstraps` (1-based) fail whatever the state; everything else answers like the default runner.
+ */
+function createLaunchdRunner(options: { failingBootstraps?: number[]; teardownPrints?: number } = {}): CommandRunner {
+  const { failingBootstraps = [], teardownPrints = 0 } = options;
+  const base = recordingRunner();
+  const printsLeft = new Map<string, number>();
+  let bootstrapCount = 0;
+  const getLabel = (target: string): string => target.split('/').pop() ?? '';
+  const refuse = (file: string, args: readonly string[], stderr: string, isOk: boolean): CommandResult => {
+    calls.push({ file, args });
+    return { ok: isOk, exitCode: isOk ? 0 : 1, stdout: '', stderr, isTimedOut: false };
+  };
+  return async (file, args, runOptions) => {
+    if (file === 'launchctl' && args[0] === 'bootout') printsLeft.set(getLabel(args[1] ?? ''), teardownPrints);
+    if (file === 'launchctl' && args[0] === 'print') {
+      const left = printsLeft.get(getLabel(args[1] ?? '')) ?? 0;
+      if (left > 0) {
+        printsLeft.set(getLabel(args[1] ?? ''), left - 1);
+        return refuse(file, args, '', true);
+      }
+    }
+    if (file === 'launchctl' && args[0] === 'bootstrap') {
+      bootstrapCount += 1;
+      const isTearingDown = (printsLeft.get(path.basename(args[2] ?? '', '.plist')) ?? 0) > 0;
+      if (failingBootstraps.includes(bootstrapCount) || isTearingDown) return refuse(file, args, 'Bootstrap failed: 5\n', false);
+    }
+    return base(file, args, runOptions);
+  };
+}
+
 function createDeps(overrides: Partial<ServiceDeps> = {}): ServiceDeps {
   return {
     runner: recordingRunner(),
@@ -441,39 +474,6 @@ describe('installing and removing the services', () => {
   describe('a RE-install that fails', () => {
     const agentDir = (): string => path.join(home, 'Library', 'LaunchAgents');
 
-    /**
-     * A launchd that tears a job down slowly: after `bootout` the job still shows in `print` for `teardownPrints` more looks, and a
-     * `bootstrap` of a job that is still being torn down fails (error 5) — what a reload right after an unload meets. The bootstrap calls
-     * numbered in `failingBootstraps` (1-based) fail whatever the state; everything else answers like the default runner.
-     */
-    function createLaunchdRunner(options: { failingBootstraps?: number[]; teardownPrints?: number } = {}): CommandRunner {
-      const { failingBootstraps = [], teardownPrints = 0 } = options;
-      const base = recordingRunner();
-      const printsLeft = new Map<string, number>();
-      let bootstrapCount = 0;
-      const getLabel = (target: string): string => target.split('/').pop() ?? '';
-      const refuse = (file: string, args: readonly string[], stderr: string, isOk: boolean): CommandResult => {
-        calls.push({ file, args });
-        return { ok: isOk, exitCode: isOk ? 0 : 1, stdout: '', stderr, isTimedOut: false };
-      };
-      return async (file, args, runOptions) => {
-        if (file === 'launchctl' && args[0] === 'bootout') printsLeft.set(getLabel(args[1] ?? ''), teardownPrints);
-        if (file === 'launchctl' && args[0] === 'print') {
-          const left = printsLeft.get(getLabel(args[1] ?? '')) ?? 0;
-          if (left > 0) {
-            printsLeft.set(getLabel(args[1] ?? ''), left - 1);
-            return refuse(file, args, '', true);
-          }
-        }
-        if (file === 'launchctl' && args[0] === 'bootstrap') {
-          bootstrapCount += 1;
-          const isTearingDown = (printsLeft.get(path.basename(args[2] ?? '', '.plist')) ?? 0) > 0;
-          if (failingBootstraps.includes(bootstrapCount) || isTearingDown) return refuse(file, args, 'Bootstrap failed: 5\n', false);
-        }
-        return base(file, args, runOptions);
-      };
-    }
-
     /** A working launchd service whose two definitions are then replaced by text that tells them apart; returns their file names. */
     async function installWorkingAgents(): Promise<string[]> {
       const installed = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
@@ -546,7 +546,7 @@ describe('installing and removing the services', () => {
     it('Mac: when the queue job loaded its new definition and the link job then failed, both old jobs are unloaded, waited for and loaded again — a reload right after an unload meets a job still being torn down', async () => {
       pair();
       const plists = await installWorkingAgents();
-      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: createLaunchdRunner({ failingBootstraps: [2], teardownPrints: 1 }) }));
+      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: createLaunchdRunner({ failingBootstraps: [2], teardownPrints: 2 }) }));
       assert.equal(mac.ok, false);
       assert.match(mac.lines.join('\n'), /loaded again as it was/, mac.lines.join('\n'));
       for (const plist of plists) assert.equal(fs.readFileSync(path.join(agentDir(), plist), 'utf8'), `<!-- the working ${plist} -->\n`);
@@ -556,7 +556,8 @@ describe('installing and removing the services', () => {
         const lastBootout = lines.lastIndexOf(`launchctl bootout gui/501/${label}`);
         const lastBootstrap = lines.map((line, index) => (line.startsWith('launchctl bootstrap gui/501') && line.endsWith(`${label}.plist`) ? index : -1)).filter((index) => index > -1).at(-1) ?? -1;
         assert.ok(lastBootout > -1 && lastBootstrap > lastBootout, `${label}: unloaded, then loaded again`);
-        assert.ok(lines.slice(lastBootout, lastBootstrap).some((line) => line === `launchctl print gui/501/${label}`), `${label}: the unload was waited for before the reload`);
+        const printsBetween = lines.slice(lastBootout, lastBootstrap).filter((line) => line === `launchctl print gui/501/${label}`).length;
+        assert.ok(printsBetween >= 2, `${label}: the unload was waited for — it was looked at again while launchd was still tearing the job down (${printsBetween} looks)`);
       }
     });
 
@@ -629,6 +630,15 @@ describe('installing and removing the services', () => {
       const gone = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunner({ 'launchctl bootout': { ok: false, stderr: 'Could not find service\n' } }) }));
       assert.equal(gone.ok, true);
       assert.deepEqual(fs.readdirSync(agentDir), []);
+    });
+
+    it('macOS: a job launchd is still tearing down is waited for — not reported «still loaded» at the first look — so the services are removed', async () => {
+      pair();
+      await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
+      const removed = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: createLaunchdRunner({ teardownPrints: 2 }) }));
+      assert.equal(removed.ok, true, removed.lines.join('\n'));
+      assert.deepEqual(fs.readdirSync(path.join(home, 'Library', 'LaunchAgents')), []);
+      assert.equal(readServiceKind(runnerPaths), null);
     });
   });
 
