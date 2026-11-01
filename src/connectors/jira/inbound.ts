@@ -83,6 +83,8 @@ export function getJiraMentionWindowMs(pollIntervalMs: number): number {
 export interface JiraProjectTrigger {
   folder: string;
   triggerStatusIds: ReadonlySet<string>;
+  /** The trigger statuses as `jira.json` names them: a mention's note tells the agent which statuses hand work over. */
+  triggerStatusNames: readonly string[];
   /** The project's `extraFields` the site knows, named (an unknown id was dropped at boot). */
   extraFields: readonly JiraExtraField[];
 }
@@ -497,6 +499,8 @@ export class JiraInbound {
       trigger,
       requester,
       assignee: context.issue.fields.assignee ?? null,
+      isAssignedToYou: context.issue.fields.assignee?.accountId === deps.aiAccountId,
+      triggerStatusNames: project.triggerStatusNames,
       isTextFiltered: trust !== null,
     };
     // Rendered and written BEFORE the request opens: the ledger builds the prompt inside its own synchronous update.

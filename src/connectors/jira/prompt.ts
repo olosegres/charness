@@ -54,11 +54,20 @@ export function getJiraOriginDescription(issueKey: string, trigger: JiraIssueTri
 function getMentionNote(input: JiraRequestPromptBase, commentId: string): string {
   const assigneeName = input.assignee ? getAccountName(input.assignee) : 'nobody';
   const statusName = getSingleLineText(input.statusName ?? '') || 'unknown';
+  const workStatuses = (input.triggerStatusNames ?? []).map((name) => `"${getSingleLineText(name)}"`).join(', ');
+  const workStatusText = workStatuses ? ` (in this project: ${workStatuses})` : '';
+  // Assigned to the AI account in a status it does not work in: "assign it to me" would be wrong — the status is what is missing.
+  const notHandedText = input.isAssignedToYou
+    ? `The issue is assigned to you, but its status (${statusName}) is not one you work in${workStatusText}, so it is not handed to you. `
+    : `The issue is not handed to you (assignee: ${assigneeName}, status: ${statusName}). `;
+  const handOverText = input.isAssignedToYou
+    ? `answer that the issue has to be moved to a status you work in${workStatusText} for that — it is already assigned to you. `
+    : `answer that the issue has to be assigned to you in a status you work in${workStatusText} for that. `;
   return `You were mentioned in comment ${getSingleLineText(commentId)} by ${getAccountName(input.trigger.author)}. ` +
-    `The issue is not handed to you (assignee: ${assigneeName}, status: ${statusName}). ` +
+    notHandedText +
     'Answer only: you may read the issue and the code and run read-only checks, but change nothing — ' +
     'no code changes, no commits or pushes, no edits in Jira. ' +
-    'If the comment asks you to do work, answer that the issue has to be assigned to you for that. ' +
+    `If the comment asks you to do work, ${handOverText}` +
     'Your answer becomes a comment on the issue; it does not reassign the issue.';
 }
 
@@ -74,6 +83,10 @@ export interface JiraRequestPromptBase {
   requester: JiraAccount | null;
   /** The issue's assignee when the request is a mention (the issue is not handed over; the note names who has it). */
   assignee?: JiraAccount | null;
+  /** A mention request: the issue is assigned to the AI account (its status is what keeps it from being handed over). */
+  isAssignedToYou?: boolean;
+  /** A mention request: the statuses the issue's project hands work over in (`jira.json` `triggerStatuses`), as configured. */
+  triggerStatusNames?: readonly string[];
   /** The same requester's earlier requests of the issue this one replaced (R34); the header names them. */
   supersededRequestIds?: readonly string[];
   /** A trusted group filters the issue's text (`jira.json` `trustedGroup`): the note then says what a `[withheld: …]` marker is. */
