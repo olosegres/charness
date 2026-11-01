@@ -710,6 +710,120 @@ describe('the project lock', () => {
   });
 });
 
+describe('collecting the result files (collect_artifacts)', () => {
+  const findLogName = 'find-calls.log';
+  let binDir = '';
+
+  /** Run `collect_artifacts` for the job, with a `find` in front of the real one that writes down what it was asked to walk. */
+  function collect(): { status: number | null; stderr: string; walked: string } {
+    const result = spawnSync('bash', ['-c', `source ${scriptPath}; set_paths ${workDir} ${slug} ${jobId}; collect_artifacts`], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      timeout: 60_000,
+    });
+    const logPath = path.join(binDir, findLogName);
+    return { status: result.status, stderr: result.stderr, walked: fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '' };
+  }
+
+  function listArtifacts(): string[] {
+    const root = path.join(getPaths().jobDir, 'artifacts');
+    const found: string[] = [];
+    const visit = (directory: string): void => {
+      if (!fs.existsSync(directory)) return;
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const entryPath = path.join(directory, entry.name);
+        if (entry.isDirectory()) visit(entryPath);
+        else found.push(path.relative(root, entryPath));
+      }
+    };
+    visit(root);
+    return found.sort();
+  }
+
+  beforeEach(() => {
+    binDir = path.join(workRoot, 'bin');
+    fs.mkdirSync(binDir);
+    const realFind = spawnSync('which', ['find'], { encoding: 'utf8' }).stdout.trim();
+    fs.writeFileSync(path.join(binDir, 'find'), `#!/bin/bash\nprintf '%s\\n' "$*" >> ${path.join(binDir, findLogName)}\nexec ${realFind} "$@"\n`, { mode: 0o755 });
+    const paths = getPaths();
+    fs.mkdirSync(paths.jobDir, { recursive: true });
+    fs.mkdirSync(paths.tree, { recursive: true });
+    fs.writeFileSync(path.join(paths.jobDir, 'start-marker'), '');
+    const past = new Date(Date.now() - 60_000);
+    fs.utimesSync(path.join(paths.jobDir, 'start-marker'), past, past);
+    writeFile(paths.tree, 'test-results/snap.txt', 'snapshot');
+    writeFile(paths.tree, 'e2e/artifacts/shot.png', 'png');
+    writeFile(paths.tree, 'node_modules/pkg/deep/in.txt', 'not wanted');
+    writeFile(paths.tree, 'build/out/app.apk', 'apk');
+  });
+
+  it('walks only the fixed folders of the patterns — never the rest of the copy (node_modules, build folders) — and brings back what matches', () => {
+    const paths = getPaths();
+    writeFile(paths.jobDir, 'pull.ere', '^test-results(/.*)?$\n^e2e/artifacts(/.*)?$\n');
+    writeFile(paths.jobDir, 'pull.roots', 'test-results\ne2e/artifacts\n');
+    const outcome = collect();
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.deepEqual(listArtifacts(), ['e2e/artifacts/shot.png', 'test-results/snap.txt']);
+    assert.equal(outcome.walked.trim().split('\n').length, 1, 'one walk');
+    assert.match(outcome.walked, /^test-results e2e\/artifacts -name \.git -prune/);
+    assert.ok(!/(^| )\.( |$)/.test(outcome.walked), 'and never the whole copy');
+  });
+
+  it('what the roots leave out is not looked at, whatever the patterns would say', () => {
+    const paths = getPaths();
+    writeFile(paths.jobDir, 'pull.ere', '^(test-results|build)(/.*)?$\n');
+    writeFile(paths.jobDir, 'pull.roots', 'test-results\n');
+    assert.equal(collect().status, 0);
+    assert.deepEqual(listArtifacts(), ['test-results/snap.txt'], 'build/ matches a pattern but is outside the walked roots');
+  });
+
+  it('a pattern that starts with a wildcard (root `.`) walks the whole copy; so does a job from an older main box that sent no roots', () => {
+    const paths = getPaths();
+    writeFile(paths.jobDir, 'pull.ere', '^(.*/)?app\\.apk$\n');
+    writeFile(paths.jobDir, 'pull.roots', '.\n');
+    assert.equal(collect().status, 0);
+    assert.deepEqual(listArtifacts(), ['build/out/app.apk']);
+    fs.rmSync(path.join(paths.jobDir, 'artifacts'), { recursive: true, force: true });
+    fs.rmSync(path.join(paths.jobDir, 'pull.roots'));
+    fs.rmSync(path.join(binDir, findLogName), { force: true });
+    assert.equal(collect().status, 0);
+    assert.deepEqual(listArtifacts(), ['build/out/app.apk']);
+    assert.match(collect().walked, /^\. -name \.git -prune/m);
+  });
+
+  it('a root that does not exist, or is a symlink out of the copy, or is reached through one, is skipped — a link is never followed', () => {
+    const paths = getPaths();
+    const outside = path.join(workRoot, 'outside');
+    writeFile(outside, 'artifacts/secret.txt', 'outside the copy');
+    fs.symlinkSync(outside, path.join(paths.tree, 'linked'));
+    fs.symlinkSync(path.join(outside, 'artifacts'), path.join(paths.tree, 'direct'));
+    writeFile(paths.jobDir, 'pull.ere', '^(linked|direct|missing|test-results)(/.*)?$\n');
+    writeFile(paths.jobDir, 'pull.roots', 'linked/artifacts\ndirect\nmissing\ntest-results\n');
+    const outcome = collect();
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.deepEqual(listArtifacts(), ['test-results/snap.txt']);
+    assert.ok(!outcome.walked.includes('linked') && !outcome.walked.includes('direct') && !outcome.walked.includes('missing'), outcome.walked);
+  });
+
+  it('a root that is a single file is collected too, and a root with ".." is refused', () => {
+    const paths = getPaths();
+    writeFile(paths.jobDir, 'pull.ere', '^test-results/snap\\.txt(/.*)?$\n');
+    writeFile(paths.jobDir, 'pull.roots', 'test-results/snap.txt\n../outside\n');
+    assert.equal(collect().status, 0);
+    assert.deepEqual(listArtifacts(), ['test-results/snap.txt']);
+  });
+
+  it('with no root left to walk nothing is walked at all', () => {
+    const paths = getPaths();
+    writeFile(paths.jobDir, 'pull.ere', '^missing(/.*)?$\n');
+    writeFile(paths.jobDir, 'pull.roots', 'missing\n');
+    const outcome = collect();
+    assert.equal(outcome.status, 0);
+    assert.equal(outcome.walked, '');
+    assert.deepEqual(listArtifacts(), []);
+  });
+});
+
 describe('the time limit counts from the moment the job was queued', () => {
   const pollMs = 100;
 

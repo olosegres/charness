@@ -30,7 +30,7 @@ agents run it from project folders) and never touches `DATA_DIR` or the state st
   (`<runner>.probe.json`), and `jobs/<id>.json` — the main box's own record of which local project a job came from.
 - **Runner** — `<workDir>/`: `bin/runner-<sha8>.sh`; `tmp/lease.*` (a lease watcher's state, removed when it ends, `prune` sweeps what a killed one left);
   `p/<slug>/{tree,stage/<job>,jobs/<job>,manifest,deps.hash,used,lock}`.
-  `slug` = `<basename>-<sha256(hostname:uid:root)[0..10]>`. A job folder holds `meta.json`, `cmd`, `env`, `pull.ere`, `manifest`,
+  `slug` = `<basename>-<sha256(hostname:uid:root)[0..10]>`. A job folder holds `meta.json`, `cmd`, `env`, `pull.ere`, `pull.roots`, `manifest`,
   `install-command`/`install-key`, `log`, `phase`, `pid`, `task-id`, `exit`, markers (`timeout`, `killed`, `failed-step`), `artifacts/`.
 
 ## Contracts
@@ -47,7 +47,9 @@ rewriting a file in place would change a queued job's stage; `--modify-window=-1
 check skips a same-length edit made within a second). The job (`runner.sh job`) takes the project lock, deletes
 `old manifest − new manifest` from `tree/`, applies the stage, runs the dependencies step when its key differs from `deps.hash`, runs the
 command (`bash -c`, `-e` variables, own timeout watchdog), copies the files that match `pull.ere` and are newer than the start marker into
-`jobs/<job>/artifacts/`, releases the lock. Two jobs of one project therefore queue and each runs the tree as it was when IT was submitted.
+`jobs/<job>/artifacts/` (walking only the folders of `pull.roots` — the fixed prefixes of the `pull:` patterns, `getPathPatternSearchRoots` —
+never `node_modules` or a build folder; `.` when a pattern starts with a wildcard; no `pull.roots` from an older main box = the whole copy; a
+root with a symlink on its way is skipped), releases the lock. Two jobs of one project therefore queue and each runs the tree as it was when IT was submitted.
 
 **Time limit** (`--timeout`, default 3 h, both modes) counts from the moment the job is queued (`queued-at`, written when it is handed to Pueue):
 a foreground run's timer starts there, and the job script starts its watchdog with what is left — a job that waited its whole limit behind a busy

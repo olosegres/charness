@@ -7,7 +7,7 @@ import { computeDepsKey, hashContent, planDepsStep } from './depsPlan';
 import { createJobId } from './jobId';
 import type { JobMeta } from './jobMeta';
 import { writeLocalJobRecord } from './jobRecords';
-import { compilePathPatterns } from './pathPatterns';
+import { compilePathPatterns, getPathPatternSearchRoots } from './pathPatterns';
 import { planProjectSend, type ProjectContext } from './project';
 import { RemoteRunError } from './remoteRunError';
 import { runRsync } from './rsync';
@@ -108,6 +108,7 @@ export async function stageJob(params: {
     'timeout-sec': `${timeoutSeconds}`,
     env: options.env.map((entry) => `${entry.name}=${entry.value}\n`).join(''),
     'pull.ere': compilePathPatterns(project.config.pull).map((expression) => `${expression}\n`).join(''),
+    'pull.roots': getPathPatternSearchRoots(project.config.pull).map((root) => `${root}\n`).join(''),
     'meta.json': `${JSON.stringify(meta)}\n`,
     ...(deps === null || depsKey === null ? {} : { 'install-command': deps.command, 'install-key': depsKey }),
   });

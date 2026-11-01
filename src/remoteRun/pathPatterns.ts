@@ -68,6 +68,34 @@ export function compilePathPatterns(patterns: readonly string[]): string[] {
   return patterns.map(compilePathPattern);
 }
 
+/** The root every path of the project lies under. */
+export const projectSearchRoot = '.';
+
+/**
+ * @description The folder a walk must start from to find every path `pattern` names: its leading segments that hold no `*`, `?` or `**`
+ * (`e2e/artifacts` → itself, `test-results/**` + `/*.xml` → `test-results`, `**` + `/*.png` → `.`). A fully literal pattern is its own root: a file or
+ * a folder, either is found from there.
+ */
+export function getPathPatternSearchRoot(pattern: string): string {
+  const fixedSegments: string[] = [];
+  for (const segment of splitPatternSegments(pattern)) {
+    if (segment.includes('*') || segment.includes('?')) break;
+    fixedSegments.push(segment);
+  }
+  return fixedSegments.length === 0 ? projectSearchRoot : fixedSegments.join('/');
+}
+
+/**
+ * @description The folders to walk to find what any of `patterns` names, without the ones another root already covers; just `.` as soon
+ * as one pattern starts with a wildcard (that one needs the whole tree). The runner walks these instead of the whole copy, which holds
+ * `node_modules` and every build folder.
+ */
+export function getPathPatternSearchRoots(patterns: readonly string[]): string[] {
+  const roots = [...new Set(patterns.map(getPathPatternSearchRoot))];
+  if (roots.includes(projectSearchRoot)) return [projectSearchRoot];
+  return roots.filter((root) => !roots.some((other) => other !== root && root.startsWith(`${other}/`)));
+}
+
 /** @description A predicate over project-relative paths: does any of `patterns` name it? No pattern names nothing. */
 export function createPathMatcher(patterns: readonly string[]): (relativePath: string) => boolean {
   const expressions = compilePathPatterns(patterns).map((source) => new RegExp(source));

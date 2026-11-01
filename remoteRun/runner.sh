@@ -923,10 +923,39 @@ stop_watchdog() {
   touch "$jd/watchdog-cancel"
 }
 
-# Files the command created or changed that match pull.ere (one extended regular expression per line), kept per job.
+# True when "$tree/$1" has no symlink in it, so a walk that starts there stays inside the copy (the walk of the whole copy never followed a
+# link either).
+check_has_no_symlink() {
+  local parent physical
+  [ ! -L "$tree/$1" ] || return 1
+  parent=$(dirname "$1")
+  [ "$parent" = . ] && return 0
+  physical=$(cd "$tree/$parent" 2> /dev/null && pwd -P) || return 1
+  [ "$physical" = "$(cd "$tree" && pwd -P)/$parent" ]
+}
+
+# Files the command created or changed that match pull.ere (one extended regular expression per line), kept per job. Only the folders in
+# pull.roots are walked (the fixed prefixes of the patterns, `e2e/artifacts`): the copy also holds node_modules and every build folder,
+# which a Gradle or Metro build fills with hundreds of thousands of files. `.` there (a pattern that starts with a wildcard) or no
+# pull.roots at all (an older main box) walks the whole copy.
 collect_artifacts() {
   [ -s "$jd/pull.ere" ] || return 0
   [ -f "$jd/start-marker" ] || return 0
+  local roots=()
+  local root
+  if [ -s "$jd/pull.roots" ]; then
+    while IFS= read -r root; do
+      [ -n "$root" ] || continue
+      if [ "$root" = . ]; then
+        roots=(.)
+        break
+      fi
+      check_relative_path "$root" && [ -e "$tree/$root" ] && check_has_no_symlink "$root" && roots+=("$root")
+    done < "$jd/pull.roots"
+    [ "${#roots[@]}" -gt 0 ] || return 0
+  else
+    roots=(.)
+  fi
   local patterns=()
   local pattern
   while IFS= read -r pattern; do
@@ -942,7 +971,7 @@ collect_artifacts() {
         break
       fi
     done
-  done < <(cd "$tree" && find . -name .git -prune -o -type f -newer "$jd/start-marker" -print0 2> /dev/null)
+  done < <(cd "$tree" && find "${roots[@]}" -name .git -prune -o -type f -newer "$jd/start-marker" -print0 2> /dev/null)
 }
 
 finish_job() {

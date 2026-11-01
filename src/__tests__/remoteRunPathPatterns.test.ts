@@ -9,7 +9,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'child_process';
-import { compilePathPattern, compilePathPatterns, createPathMatcher, getPathPatternProblem } from '../remoteRun/pathPatterns';
+import { compilePathPattern, compilePathPatterns, createPathMatcher, getPathPatternProblem, getPathPatternSearchRoot, getPathPatternSearchRoots } from '../remoteRun/pathPatterns';
 
 /** [pattern, path, is it named]: the semantics, one line each. */
 const samples: Array<[string, string, boolean]> = [
@@ -101,5 +101,38 @@ describe('the expressions mean the same to RegExp, grep -E and bash =~', () => {
 
   it('compilePathPatterns keeps the order the runner script reads them in', () => {
     assert.deepEqual(compilePathPatterns(['b', 'a']), [compilePathPattern('b'), compilePathPattern('a')]);
+  });
+});
+
+describe('the folders a walk for a pattern must start from', () => {
+  it('a pattern\'s root is its leading segments without a wildcard; a pattern that starts with one needs the whole tree', () => {
+    const roots: Array<[string, string]> = [
+      ['e2e/artifacts', 'e2e/artifacts'],
+      ['test-results', 'test-results'],
+      ['./test-results/', 'test-results'],
+      ['test-results/snap.txt', 'test-results/snap.txt'],
+      ['test-results/**/*.xml', 'test-results'],
+      ['build/*/outputs', 'build'],
+      ['a/b?/c', 'a'],
+      ['**/__snapshots__', '.'],
+      ['*.log', '.'],
+      ['**', '.'],
+    ];
+    for (const [pattern, root] of roots) assert.equal(getPathPatternSearchRoot(pattern), root, pattern);
+  });
+
+  it('a walk of the root finds every path the pattern names: each sample the pattern names lies under its root', () => {
+    for (const [pattern, samplePath, isNamed] of samples) {
+      if (!isNamed) continue;
+      const root = getPathPatternSearchRoot(pattern);
+      assert.ok(root === '.' || samplePath === root || samplePath.startsWith(`${root}/`), `${samplePath} is named by ${pattern} but is not under ${root}`);
+    }
+  });
+
+  it('the roots of several patterns: duplicates and roots inside another root are dropped, and one wildcard-first pattern makes it the whole tree', () => {
+    assert.deepEqual(getPathPatternSearchRoots(['e2e/artifacts', 'test-results', 'e2e/artifacts/shots', 'test-results/**/*.xml']), ['e2e/artifacts', 'test-results']);
+    assert.deepEqual(getPathPatternSearchRoots(['e2e/artifacts', '**/*.snap']), ['.']);
+    assert.deepEqual(getPathPatternSearchRoots([]), []);
+    assert.deepEqual(getPathPatternSearchRoots(['e2e', 'e2e-old']), ['e2e', 'e2e-old'], 'a root that only starts with the same letters is not inside the other');
   });
 });
