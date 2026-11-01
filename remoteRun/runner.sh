@@ -592,13 +592,21 @@ stream_log() {
 # already is. The exit file is the job's own record. The number of a task that was removed (a queued job that was killed) can be given to
 # another job, and `pueue wait` on it would then follow THAT job for as long as it runs (hours, behind a busy group), or return at once
 # for a number nobody holds: so the wait is cut as soon as the exit file appears, and the number is never trusted alone.
+#
+# The Pueue wait runs in a process group of its own (`set -m`, as `exec` does) and the cut signals the GROUP. `pq` is a function, so the
+# background job is a subshell and `pueue wait` its child — unless the bash happens to run it in place of the subshell (5.3 can; 5.2, the
+# bash of Ubuntu 24.04, does not). A kill of the subshell alone left `pueue wait` running for as long as the task, however many times
+# the exit file won the race.
 wait_for_task() {
   [ -f "$jd/exit" ] && return 0
+  set -m
   pq wait "$1" > /dev/null 2>&1 &
   local waiter_pid=$!
+  set +m
   while kill -0 "$waiter_pid" 2> /dev/null; do
     if [ -f "$jd/exit" ]; then
-      kill "$waiter_pid" > /dev/null 2>&1
+      # The group, or the process alone when it did not get a group of its own: a group id that is not a live group is harmless.
+      kill -- "-$waiter_pid" > /dev/null 2>&1 || kill "$waiter_pid" > /dev/null 2>&1
       break
     fi
     sleep 0.2

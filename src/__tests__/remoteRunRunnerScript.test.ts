@@ -592,6 +592,13 @@ describe('a job that had to be SIGKILLed is an ended job', () => {
 
 describe('the number of a task Pueue has forgotten can belong to another job', () => {
   const blockingSleepSeconds = '31.17';
+  /**
+   * What the stub `pq wait` does: block in a CHILD process that is not the last thing the function runs. The real `pueue wait` is
+   * a child of the subshell the script starts for `pq`; whether bash runs a last command in place of that subshell (it can in
+   * 5.3, it does not in 5.2, the bash of Ubuntu 24.04 and so of the CI runner) is not something the script may depend on. The
+   * trailing `:` keeps the child a child on every bash, so the test is the same on all of them.
+   */
+  const blockingPueueWaitStub = `sleep ${blockingSleepSeconds}; :`;
 
   /** Run runner.sh functions with a stub `pq` (the body of the stub is `stubBody`) and say how long it took. */
   function runWithStub(stubBody: string, body: string): { status: number | null; stdout: string; seconds: number } {
@@ -615,7 +622,7 @@ describe('the number of a task Pueue has forgotten can belong to another job', (
 
   it('`wait` of a job that already has its exit file returns at once, however long Pueue\'s wait on that number would take (it follows whoever holds the number now)', () => {
     writeEndedJob(jobId);
-    const outcome = runWithStub(`sleep ${blockingSleepSeconds}`, `cmd_wait ${workDir} ${slug} ${jobId}`);
+    const outcome = runWithStub(blockingPueueWaitStub, `cmd_wait ${workDir} ${slug} ${jobId}`);
     assert.equal(outcome.stdout.trim(), 'done');
     assert.ok(outcome.seconds < 8, `it took ${outcome.seconds} s: it waited for Pueue`);
     assert.equal(countStubSleeps(), 0, 'and no wait is left running');
@@ -624,7 +631,7 @@ describe('the number of a task Pueue has forgotten can belong to another job', (
   it('a wait that is blocked on Pueue ends as soon as the exit file appears — and the Pueue wait it started is ended with it', () => {
     const jobDir = writeEndedJob(jobId, { exit: '' });
     fs.rmSync(path.join(jobDir, 'exit'));
-    const outcome = runWithStub(`sleep ${blockingSleepSeconds}`, `( sleep 1; echo 137 > ${jobDir}/exit ) & cmd_wait ${workDir} ${slug} ${jobId}`);
+    const outcome = runWithStub(blockingPueueWaitStub, `( sleep 1; echo 137 > ${jobDir}/exit ) & cmd_wait ${workDir} ${slug} ${jobId}`);
     assert.equal(outcome.stdout.trim(), 'done');
     assert.ok(outcome.seconds >= 0.8 && outcome.seconds < 8, `it took ${outcome.seconds} s`);
     assert.equal(countStubSleeps(), 0, 'the Pueue wait it started is gone');
@@ -640,11 +647,21 @@ describe('the number of a task Pueue has forgotten can belong to another job', (
 
   it('`logs -f` of a job that already has its exit file ends at once too', () => {
     const jobDir = writeEndedJob(jobId, { log: 'line one\n' });
-    const outcome = runWithStub(`sleep ${blockingSleepSeconds}`, `cmd_follow ${workDir} ${slug} ${jobId} start`);
+    const outcome = runWithStub(blockingPueueWaitStub, `cmd_follow ${workDir} ${slug} ${jobId} start`);
     assert.equal(outcome.status, 0);
     assert.equal(outcome.stdout, 'line one\n');
     assert.ok(outcome.seconds < 8, `it took ${outcome.seconds} s`);
     assert.equal(fs.existsSync(path.join(jobDir, 'drain-stop')), true);
+  });
+
+  it('`logs -f` that is blocked on Pueue ends as soon as the exit file appears, with the log to the end — and the Pueue wait it started is ended with it', () => {
+    const jobDir = writeEndedJob(jobId, { exit: '', log: 'line one\n' });
+    fs.rmSync(path.join(jobDir, 'exit'));
+    const outcome = runWithStub(blockingPueueWaitStub, `( sleep 1; echo 'line two' >> ${jobDir}/log; echo 0 > ${jobDir}/exit ) & cmd_follow ${workDir} ${slug} ${jobId} start`);
+    assert.equal(outcome.status, 0);
+    assert.equal(outcome.stdout, 'line one\nline two\n');
+    assert.ok(outcome.seconds >= 0.8 && outcome.seconds < 8, `it took ${outcome.seconds} s`);
+    assert.equal(countStubSleeps(), 0, 'the Pueue wait it started is gone');
   });
 
   it('a job killed while queued is marked as having lost its task, because Pueue may give the number to the next job', () => {
