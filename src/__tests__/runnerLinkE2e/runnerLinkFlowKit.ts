@@ -49,6 +49,8 @@ export interface RunnerLinkLayout {
   sshPort: number;
   sshdProcess: ChildProcess | null;
   extraSshd: Set<ChildProcess>;
+  /** The impostor server, once started (see {@link startImpostorSshd}). */
+  impostor: SshdInstance | null;
   groups: Set<ChildProcess>;
 }
 
@@ -73,7 +75,10 @@ export interface SshdInstance {
 async function startSshdInstance(root: string, name: string, authorizedKeysPath: string): Promise<SshdInstance> {
   const sshdDir = path.join(root, name);
   fs.mkdirSync(sshdDir, { recursive: true });
-  execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', path.join(sshdDir, 'host_key')]);
+  const hostKeyPath = path.join(sshdDir, 'host_key');
+  fs.rmSync(hostKeyPath, { force: true });
+  fs.rmSync(`${hostKeyPath}.pub`, { force: true });
+  execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', hostKeyPath]);
   for (let attempt = 1; attempt <= sshdStartAttempts; attempt += 1) {
     const port = await getFreePort();
     const configPath = path.join(sshdDir, 'sshd_config');
@@ -103,12 +108,18 @@ async function startSshdInstance(root: string, name: string, authorizedKeysPath:
   throw new Error('sshd did not start');
 }
 
-/** @description A second sshd with a host key of its own, that knows no key at all: what a runner must refuse to trust. */
+/**
+ * @description A second sshd with a host key of its own, that knows no key at all: what a runner must refuse to trust. ONE per layout —
+ * every case that needs an impostor gets the same server (a second `ssh-keygen` into the same folder would stop to ask about overwriting
+ * the host key), and it lives until the layout is destroyed.
+ */
 export async function startImpostorSshd(layout: RunnerLinkLayout): Promise<SshdInstance> {
+  if (layout.impostor !== null) return layout.impostor;
   const emptyKeys = path.join(layout.root, 'impostor-authorized_keys');
   fs.writeFileSync(emptyKeys, '');
   const instance = await startSshdInstance(layout.root, 'impostor', emptyKeys);
   layout.extraSshd.add(instance.process);
+  layout.impostor = instance;
   return instance;
 }
 
@@ -126,6 +137,7 @@ export async function createRunnerLinkLayout(): Promise<RunnerLinkLayout> {
     sshPort: 0,
     sshdProcess: null,
     extraSshd: new Set(),
+    impostor: null,
     groups: new Set(),
   };
   for (const directory of [layout.hubHome, layout.runnerHome, path.join(root, 'tmp')]) fs.mkdirSync(directory, { recursive: true });
