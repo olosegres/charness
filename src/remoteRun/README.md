@@ -74,7 +74,9 @@ still queued** (a job can wait behind a busy group for days), lease/probe scratc
 `mkdir`: the uutils coreutils that current Ubuntu installs as `/usr/bin/mkdir` let simultaneous `mkdir` of one path all succeed (265 of 1200 races with five
 contenders on the dev box), which gave two jobs of a project the lock together. A lock is stale when its process is gone, its job has an exit record, or
 it has no holder and is over a minute old; a stale lock is broken by ONE waiter, which checks and removes it inside a short-lived mutex of the same kind
-(`lock.breaking`), and a job gives back only a lock that is still its own.
+(`lock.breaking`; it holds its breaker's pid, and is cleared only when that process is gone — never by its age, so a slow breaker keeps it —
+by renaming it away first and judging what was claimed once more, so a fresh mutex of a live breaker is never removed by mistake), and a job
+gives back only a lock that is still its own.
 
 **Job state** is the job's own files first (`exit` is authoritative); Pueue's task list (label `rr-<id>`) only when there is no exit file
 (a job killed hard). `pueue wait` exits 0 for a failed task: Pueue's result is never used as a code.

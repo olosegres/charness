@@ -787,13 +787,38 @@ check_lock_is_stale() {
 # another waiter is at it.
 break_stale_lock() {
   if ! create_lock_file "$lock.breaking"; then
-    # A mutex left for over a minute belongs to a breaker that died.
-    [ -n "$(find "$lock.breaking" -maxdepth 0 -mmin +1 2> /dev/null)" ] && rm -f "$lock.breaking"
+    check_breaker_mutex_is_stale "$lock.breaking" && remove_dead_breaker_mutex
     return 1
   fi
   check_lock_is_stale && rm -f "$lock"
   rm -f "$lock.breaking"
   return 0
+}
+
+# Is the breaker mutex file $1 held by nobody any more? Its breaker's process is gone — the same test as for the lock itself, so a breaker
+# that is merely slow (a busy disk) keeps its mutex however long it takes. One with no breaker written yet is judged by age (its creator
+# died between creating it and writing it).
+check_breaker_mutex_is_stale() {
+  local holder_pid holder_job
+  read_lock_holder "$1"
+  if [ -n "$holder_pid" ]; then
+    kill -0 "$holder_pid" 2> /dev/null && return 1
+    return 0
+  fi
+  [ -n "$(find "$1" -maxdepth 0 -mmin +1 2> /dev/null)" ]
+}
+
+# Clear the mutex of a breaker that died. Several waiters can find it dead at once, and a plain `rm` of the path could remove the fresh
+# mutex a live breaker made in between (two breakers at once = the race the mutex is there to stop). So the dead mutex is first CLAIMED by
+# renaming it away — only one of those waiters wins the rename — and what was claimed is judged once more: a mutex that is alive after all
+# is put back (`ln` never overwrites one that has appeared since).
+remove_dead_breaker_mutex() {
+  local claimed="$lock.breaking.$$"
+  mv "$lock.breaking" "$claimed" 2> /dev/null || return 0
+  if ! check_breaker_mutex_is_stale "$claimed"; then
+    ln "$claimed" "$lock.breaking" 2> /dev/null
+  fi
+  rm -f "$claimed"
 }
 
 acquire_lock() {
