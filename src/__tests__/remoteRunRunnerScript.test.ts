@@ -582,8 +582,10 @@ describe('the project lock', () => {
     const project = path.join(workDir, 'p', slug);
     fs.mkdirSync(project, { recursive: true });
     const deadPid = spawnSync('true').pid;
+    // The trap ends the waiters with the driver: when the lock is broken they spin for ever, and a driver that timed out must not leave them behind.
     const driver = `
       work=${workDir}; killed=0
+      trap 'kill $(jobs -p) 2> /dev/null' EXIT TERM
       set_paths ${workDir} ${slug} box1-race00
       for round in $(seq 1 ${rounds}); do
         rm -f "$lock" "$lock.breaking" "$proj/critical"
