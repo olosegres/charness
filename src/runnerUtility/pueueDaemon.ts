@@ -13,6 +13,7 @@ import type { RunnerHomePaths } from './runnerHome';
 const probeTimeoutMs = 5000;
 const daemonStartTimeoutMs = 15 * 1000;
 const configMode = 0o600;
+const pueueWaitPollMs = 500;
 
 export function renderPueueConfig(paths: RunnerHomePaths): string {
   const runtimeDir = path.join(paths.pueueDir, 'run');
@@ -53,4 +54,15 @@ export async function ensurePueueDaemon(paths: RunnerHomePaths, runner: CommandR
   if (await checkIsPueueRunning(paths, runner)) return true;
   const started = await runner(path.join(paths.binDir, 'pueued'), ['--daemonize', '--config', paths.pueueConfig], { timeoutMs: daemonStartTimeoutMs });
   return started.ok && await checkIsPueueRunning(paths, runner);
+}
+
+/** @description When a service manages Pueue the link must not start a second daemon: wait (up to `timeoutMs`) for the service's to answer. */
+export async function waitForPueueDaemon(paths: RunnerHomePaths, timeoutMs: number, runner: CommandRunner = runCommand): Promise<boolean> {
+  ensurePueueConfig(paths);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await checkIsPueueRunning(paths, runner)) return true;
+    await new Promise((resolve) => { setTimeout(resolve, pueueWaitPollMs); });
+  }
+  return false;
 }

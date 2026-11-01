@@ -65,10 +65,50 @@ the queue), `logs/`, `build/`.
 - **The account.** An admin account (macOS `admin` group; Linux root, `sudo`, `wheel`, `admin`) gets a warning: the agents' code runs with
   its rights.
 
+## Services (`service install|uninstall`)
+
+Two services per runner — the LINK (`charness-runner run` through the launcher) and PUEUED (the queue, a service of its own: a link restart
+or an update never touches a queued or running job). Names carry a hash of the state folder (`serviceUnits.ts`), so a stand-in or a second
+account never clashes with this one.
+
+| | Linux | macOS | macOS, always on |
+|---|---|---|---|
+| command | `service install` | `service install` | `sudo …/charness-runner service install --system --user <account>`, once, by an admin |
+| what | two systemd USER units | two LaunchAgents | two LaunchDaemons with `UserName=<account>` |
+| runs | at boot and without a login, once lingering is on | while the account is logged in (switched away included) | always, also logged out and across fast user switching; as that account, with no extra rights |
+| admin | none; `loginctl enable-linger` is tried by the account itself, and where polkit wants an admin the one `sudo loginctl enable-linger <account>` line is printed (the units are installed anyway) | none | once |
+
+`KillMode=process` (systemd) and `AbandonProcessGroup` (launchd) keep a stop of the link from killing what it started: the commands it
+served see their pipes close and finish by themselves (phase 1's lease watcher kills its job on the closed stream). For that to be
+enough the launcher passes TERM / INT / HUP on to the app. Pueue runs at `nice`, never `taskpolicy -b` (on Apple Silicon that pins jobs
+to the efficiency cores). One kind at a time: installing one while the other's files exist is refused with the command that removes it.
+`run` does not start its own Pueue daemon when a service manages it — it waits for the service's.
+
+## State the probe reads (`runner.sh probe`, scope 4)
+
+`~/.charness-runner/paused` (an empty file; `pause` / `resume`), `~/.charness-runner/service` (one word, `user-service` or
+`system-service`, while a service is installed), `~/.charness-runner/ios-check.json` (one line:
+`{"status":"pass|fail|skipped","checkedAtMs":…,"xcode":"16.2 (16C5032a)","reason":…}`).
+
+## The iOS Simulator (`iosCheck.ts`)
+
+Apple: the Simulator is not available to a LaunchDaemon or to a process started as another user. So the runner does not infer `ios` from
+«Xcode is installed»: when the link starts, and again whenever Xcode changes (looked at once an hour), it really tries — create a device,
+boot it, wait for `bootstatus`, delete it (bounded, 180 s; the device is deleted whatever happened). `pass` → the probe says `ios`;
+`fail` → «ios: no — needs the runner user's login session». A helper in that user's GUI session is a follow-up, only if the check fails
+where it matters.
+
+## `pause`, `resume`, `unpair`
+
+`pause` writes the flag, `resume` removes it (the hub has a pause of its own, set from `/runners`). `unpair` tells the hub (`unpair` request:
+it removes the key line and cuts the link), stops the user service, and forgets the pairing here — `config.json`, the keys, the status, the
+pause, the iOS result; the installed program, the tools, the work folder and the queue stay. A hub that cannot be reached leaves everything as
+it was; `unpair --local` forgets the pairing here only. A system service is not removed from the account (it needs an admin): the command
+is printed.
+
 ## Not here yet
 
-`service install|uninstall` (systemd user unit + linger, LaunchAgent, `--system` LaunchDaemon), `pause|resume`, `unpair`, the iOS Simulator
-boot check — scope 3. `remote-run` reaching a paired runner — scope 4.
+`remote-run` reaching a paired runner, the `runner.sh` probe fields — scope 4.
 
 ## Tests
 

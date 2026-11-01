@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { formatListTimestamp } from '../runners/runnersList';
-import { redeemReplySchema, type RedeemReply, type RedeemRequest } from '../runners/gateProtocol';
+import { redeemReplySchema, unpairReplySchema, type RedeemReply, type RedeemRequest } from '../runners/gateProtocol';
 import { decodePairCode } from '../runners/pairCode';
 import { checkIsAdminAccount, formatAdminWarning, readAccountFacts } from './adminCheck';
 import { ensureLauncher } from './launcher';
@@ -11,7 +11,10 @@ import { connectToHub, HubConnectionError, requestGateJson, type HubEndpoint } f
 import { recoverPairing } from './pairingRecovery';
 import { createLinkLoop } from './linkLoop';
 import { collectMachineReport, createMachineProbe, formatMachineReport, type MachineReport } from './machineReport';
-import { ensurePueueDaemon } from './pueueDaemon';
+import { ensurePueueDaemon, waitForPueueDaemon } from './pueueDaemon';
+import { createIosCheckDeps, readIosCheck, refreshIosCheck } from './iosCheck';
+import { checkIsRunnerPaused, setRunnerPaused } from './runnerFlags';
+import { createServiceDeps, installService, readServiceKind, uninstallService, parseServiceCommand, type ServiceDeps } from './serviceManager';
 import { readPairingInProgress, readRunnerConfig, readRunnerStatus, removePairingInProgress, writePairingInProgress, writeRunnerConfig, type RunnerConfig } from './runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from './runnerHome';
 import { ensureRunnerKeys, readRunnerKeys, type RunnerKeys } from './runnerKeys';
@@ -31,6 +34,10 @@ export interface CommandIo {
 
 const envFileTemplate = '# KEY=VALUE lines, added to the environment of every job that runs on this machine (read again for each job).\n';
 const shutdownGraceMs = 3000;
+/** How long `run` waits for the service-managed Pueue to answer. */
+const pueueServiceWaitMs = 20 * 1000;
+/** How often the link looks at Xcode: a new version is checked again (`iosCheck.ts`). */
+const iosRecheckIntervalMs = 60 * 60 * 1000;
 const packageJsonRelativePath = path.join('..', '..', 'package.json');
 
 function readOwnVersion(): string {
@@ -67,12 +74,20 @@ async function installTools(paths: RunnerHomePaths, deps: ToolDeps, io: CommandI
   for (const outcome of [pueue, rsync]) if (!outcome.ok) io.stderr(`charness-runner: ${outcome.reason}\n`);
 }
 
-export function formatKeepRunningHelp(paths: RunnerHomePaths): string {
-  return [
+/** @description The «Keep it running» part of the pairing text: the terminal, a service without admin, and — on a Mac — the always-on daemon. */
+export function formatKeepRunningHelp(paths: RunnerHomePaths, platform: NodeJS.Platform = process.platform, accountName: string = os.userInfo().username): string {
+  const lines = [
     'Keep it running:',
-    `  ${paths.launcher} run      here, in this terminal (Ctrl-C stops)`,
-    '',
-  ].join('\n');
+    `  ${paths.launcher} run`,
+    '      here, in this terminal (Ctrl-C stops)',
+    `  ${paths.launcher} service install`,
+    platform === 'darwin' ? '      in the background while this user is logged in' : '      in the background, also after a logout or a reboot (a systemd user service that lingers)',
+  ];
+  if (platform === 'darwin') {
+    lines.push(`  sudo ${paths.launcher} service install --system --user ${accountName}`, '      always, also logged out — once, from an admin account');
+  }
+  lines.push('');
+  return lines.join('\n');
 }
 
 export function formatRemovedMessage(label: string): string {
@@ -208,7 +223,13 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   ensureLauncher(paths, process.execPath);
   const toolDeps = createToolDeps();
   if (!(await findPueue(paths, toolDeps))) await ensurePueue(paths, toolDeps);
-  if (!(await ensurePueueDaemon(paths))) io.stderr('charness-runner: Pueue is not running; jobs cannot be queued until it is (the link goes up anyway).\n');
+  // A service that manages Pueue owns the daemon: starting a second one here would only fight it for the socket.
+  const isPueueRunning = readServiceKind(paths) === null ? await ensurePueueDaemon(paths) : await waitForPueueDaemon(paths, pueueServiceWaitMs);
+  if (!isPueueRunning) io.stderr('charness-runner: Pueue is not running; jobs cannot be queued until it is (the link goes up anyway).\n');
+  const iosDeps = createIosCheckDeps();
+  void refreshIosCheck(paths, iosDeps).catch(() => undefined);
+  const iosTimer = setInterval(() => { void refreshIosCheck(paths, iosDeps).catch(() => undefined); }, iosRecheckIntervalMs);
+  iosTimer.unref();
   const loopRef: { current: ReturnType<typeof createLinkLoop> | null } = { current: null };
   const servers = createRunnerServers({
     serverPrivateKey: keys.server.privateKey,
@@ -256,6 +277,10 @@ export function runStatus(io: CommandIo, homeDir: string = os.homedir()): number
     lines.push(`  link: ${status.state} since ${formatListTimestamp(status.sinceMs)}${status.lastError === null ? '' : ` (last error: ${status.lastError})`}`);
     lines.push(`  jobs running over the link: ${status.activeJobs}`);
   }
+  const serviceKind = readServiceKind(paths);
+  lines.push(`  service: ${serviceKind === null ? 'none (run it by hand, or `service install`)' : serviceKind === 'system-service' ? 'system service (always on)' : 'user service'}${checkIsRunnerPaused(paths) ? ' · PAUSED (no jobs are sent here; `resume` ends it)' : ''}`);
+  const ios = readIosCheck(paths);
+  if (ios !== null && ios.status !== 'skipped') lines.push(`  ios: ${ios.status === 'pass' ? `the Simulator boots (Xcode ${ios.xcode ?? 'unknown'})` : `no — needs the runner user's login session (${ios.reason ?? 'the boot check failed'})`}`);
   lines.push(`  package: ${config.packageId ?? 'unknown'} · paired ${formatListTimestamp(config.pairedAtMs)}`);
   io.stdout(`${lines.join('\n')}\n`);
   return 0;
@@ -268,4 +293,75 @@ export async function runCheck(io: CommandIo, homeDir: string = os.homedir()): P
   const toolDeps = createToolDeps();
   await installTools(paths, toolDeps, io);
   return (await findRsync(paths, toolDeps)) !== null && (await findPueue(paths, toolDeps)) !== null ? 0 : 1;
+}
+
+/** @description `charness-runner pause` / `resume`: take this machine out of rotation, or back in. */
+export function runPause(isPaused: boolean, io: CommandIo, homeDir: string = os.homedir()): number {
+  const paths = getRunnerHomePaths(homeDir);
+  if (readRunnerConfig(paths) === null) {
+    io.stderr('charness-runner: this account is not paired.\n');
+    return 1;
+  }
+  setRunnerPaused(paths, isPaused);
+  io.stdout(isPaused ? 'Paused: the link stays up, but no job is sent to this machine until `charness-runner resume`.\n' : 'Resumed: this machine takes jobs again.\n');
+  return 0;
+}
+
+/** @description `charness-runner service install|uninstall [--system --user <account>]`. */
+export async function runService(args: readonly string[], io: CommandIo, deps: ServiceDeps = createServiceDeps()): Promise<number> {
+  const parsed = parseServiceCommand(args);
+  if (!parsed.ok) {
+    io.stderr(`charness-runner: ${parsed.error}\n`);
+    return 2;
+  }
+  const result = parsed.action === 'install' ? await installService(parsed.request, deps) : await uninstallService(parsed.request, deps);
+  io.stdout(result.lines.length === 0 ? '' : `${result.lines.join('\n')}\n`);
+  return result.ok ? 0 : 1;
+}
+
+export interface UnpairOptions {
+  /** Do not tell the hub (it is gone, or this machine cannot reach it). */
+  isLocalOnly: boolean;
+}
+
+/**
+ * @description `charness-runner unpair`: tell the hub (which removes its key line and cuts the link), stop the user service, and forget the
+ * pairing here — `config.json`, the keys, the status, the pause and the iOS result. The installed program, the tools, the work folder and
+ * the queue stay (a pairing again reuses them).
+ */
+export async function runUnpair(options: UnpairOptions, io: CommandIo, homeDir: string = os.homedir(), serviceDeps: ServiceDeps = createServiceDeps()): Promise<number> {
+  const paths = getRunnerHomePaths(homeDir);
+  const config = readRunnerConfig(paths);
+  const keys = readRunnerKeys(paths);
+  if (config === null || keys === null) {
+    io.stderr('charness-runner: this account is not paired.\n');
+    return 1;
+  }
+  if (!options.isLocalOnly) {
+    try {
+      const client = await connectToHub({ host: config.hub.host, port: config.hub.port, user: config.hub.user, hostKey: config.hub.hostKey }, keys.client.privateKey);
+      try {
+        await requestGateJson(client, 'unpair', null, unpairReplySchema);
+      } finally {
+        client.end();
+      }
+    } catch (error) {
+      // A hub that no longer accepts the key has already forgotten this machine: nothing is left to tell it.
+      if (!(error instanceof HubConnectionError && error.failure === 'auth')) {
+        io.stderr(`charness-runner: the hub could not be told (${error instanceof Error ? error.message : 'unknown error'}). Try again, or use \`unpair --local\` to forget the pairing here only.\n`);
+        return 1;
+      }
+    }
+  }
+  const serviceKind = readServiceKind(paths);
+  if (serviceKind === 'user-service') {
+    const removed = await uninstallService({ isSystem: false, userName: null }, serviceDeps);
+    if (!removed.ok) io.stderr(`charness-runner: ${removed.lines.join(' ')}\n`);
+  } else if (serviceKind === 'system-service') {
+    io.stderr(`charness-runner: a system service is installed; remove it as an admin: sudo ${paths.launcher} service uninstall --system --user ${os.userInfo().username}\n`);
+  }
+  for (const file of [paths.config, paths.status, paths.pairing, paths.pausedFlag, paths.iosCheck]) fs.rmSync(file, { force: true });
+  fs.rmSync(paths.keysDir, { recursive: true, force: true });
+  io.stdout(`Unpaired from charness ${config.hub.label}${options.isLocalOnly ? ' (here only — the hub was not told)' : ''}. This machine no longer serves it.\n`);
+  return 0;
 }

@@ -8,6 +8,8 @@
  *   charness-runner pair <code>            attach this account with a pairing code (the line from /runners does it for you)
  *   charness-runner run                    hold the link to the hub; Ctrl-C stops (a service does the same, see the pairing text)
  *   charness-runner check                  look at this machine and install what a runner needs (Pueue, rsync)
+ *   charness-runner service install        keep it running without a terminal (see `serviceManager.ts`)
+ *   charness-runner pause | resume | unpair
  *
  * This file is the FIRST thing a pairing runs, from a package that has no `node_modules` yet (`pair --bootstrap <folder> <code>`,
  * started by the pasted line): it imports Node built-ins only, installs the package's dependencies into a new app folder, and starts
@@ -27,6 +29,12 @@ const usage = `Usage:
   charness-runner pair <code>        attach this account with a pairing code
   charness-runner run                hold the link to the hub (Ctrl-C stops)
   charness-runner check              look at this machine; install Pueue and rsync when they are missing
+  charness-runner service install    keep it running in the background (systemd user service on Linux, LaunchAgent on macOS)
+  sudo charness-runner service install --system --user <account>
+                                     macOS: always on, also logged out (LaunchDaemon running as <account>), once, by an admin
+  charness-runner service uninstall  remove the services (with --system --user <account> for the daemons)
+  charness-runner pause | resume     take this machine out of rotation, or back in
+  charness-runner unpair [--local]   tell the hub and forget the pairing (--local: forget it here only)
 `;
 
 /** The folder of the copy that is running: this file is `<app>/dist/runnerUtility/runnerCli.js`. */
@@ -111,6 +119,23 @@ async function main(): Promise<number> {
     case 'check': {
       const { runCheck } = await import('./runnerCommands');
       return runCheck(io);
+    }
+    case 'service': {
+      const { runService } = await import('./runnerCommands');
+      return runService(args, io);
+    }
+    case 'pause':
+    case 'resume': {
+      const { runPause } = await import('./runnerCommands');
+      return runPause(command === 'pause', io);
+    }
+    case 'unpair': {
+      if (args.length > 1 || (args.length === 1 && args[0] !== '--local')) {
+        process.stderr.write(usage);
+        return usageExitCode;
+      }
+      const { runUnpair } = await import('./runnerCommands');
+      return runUnpair({ isLocalOnly: args[0] === '--local' }, io);
     }
     case 'help':
     case '--help':

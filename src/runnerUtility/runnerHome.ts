@@ -23,6 +23,12 @@ export interface RunnerHomePaths {
   status: string;
   /** A pairing that was started and not finished (see `pairingRecovery.ts`). */
   pairing: string;
+  /** An empty file: the operator paused this runner ("is this machine busy"). Read by `runner.sh probe` as `paused=`. */
+  pausedFlag: string;
+  /** One word, `user-service` or `system-service`, while a service is installed. Read by `runner.sh probe` as `service=`. */
+  serviceMarker: string;
+  /** The iOS Simulator boot check's last result (`iosCheck.ts`). Read by `runner.sh probe` as `ios_boot=`. */
+  iosCheck: string;
   keysDir: string;
   clientKey: string;
   serverKey: string;
@@ -45,6 +51,9 @@ export function getRunnerHomePaths(homeDir: string = os.homedir()): RunnerHomePa
     config: path.join(root, 'config.json'),
     status: path.join(root, 'status.json'),
     pairing: path.join(root, 'pairing.json'),
+    pausedFlag: path.join(root, 'paused'),
+    serviceMarker: path.join(root, 'service'),
+    iosCheck: path.join(root, 'ios-check.json'),
     keysDir: path.join(root, 'keys'),
     clientKey: path.join(root, 'keys', 'client_ed25519'),
     serverKey: path.join(root, 'keys', 'server_host_ed25519'),

@@ -11,13 +11,14 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { createAppId, installAppFromDirectory, installDependencies, removeOldApps, restartExitCode, switchCurrentApp, testNodeModulesEnvName } from '../runnerUtility/appInstall';
 import { ensureLauncher, renderLauncher } from '../runnerUtility/launcher';
 import { readRunnerConfig, readRunnerStatus, RunnerConfigError, writeRunnerConfig, writeRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getAppDirPath, getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { ensureRunnerKeys, readRunnerKeys } from '../runnerUtility/runnerKeys';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
+import { waitUntil } from './runnersTestKit';
 
 let home = '';
 let paths: RunnerHomePaths;
@@ -143,6 +144,27 @@ describe('launcher', () => {
     const result = spawnSync(launcher, ['run'], { encoding: 'utf8' });
     assert.equal(result.status, 3, 'a code other than 75 ends the loop and is passed on');
     assert.equal(fs.readFileSync(counter, 'utf8'), '3', 'two restarts, then the last run');
+  });
+
+  it('passes TERM on to the app and ends with it — the launcher is the process a service manager signals', async () => {
+    const appDir = path.join(paths.currentApp, 'dist', 'runnerUtility');
+    fs.mkdirSync(appDir, { recursive: true });
+    const gotTerm = path.join(home, 'got-term');
+    const appPid = path.join(home, 'app-pid');
+    fs.writeFileSync(path.join(appDir, 'runnerCli.js'), [
+      `const fs = require('fs');`,
+      `fs.writeFileSync(${JSON.stringify(appPid)}, String(process.pid));`,
+      `process.on('SIGTERM', () => { fs.writeFileSync(${JSON.stringify(gotTerm)}, '1'); process.exit(0); });`,
+      `setInterval(() => undefined, 1000);`,
+    ].join('\n'));
+    const launcher = ensureLauncher(paths, process.execPath);
+    const child = spawn(launcher, ['run'], { stdio: 'ignore' });
+    const exited = new Promise<number | null>((resolve) => { child.once('exit', (code) => resolve(code)); });
+    await waitUntil(() => fs.existsSync(appPid), 'the app to start');
+    child.kill('SIGTERM');
+    assert.equal(await exited, 0, 'the launcher ends with the app\'s exit code');
+    assert.equal(fs.existsSync(gotTerm), true, 'the app received the TERM');
+    assert.throws(() => process.kill(Number(fs.readFileSync(appPid, 'utf8')), 0), 'the app is gone: nothing is left running unsupervised');
   });
 
   it('is rewritten only when its text changes', () => {
