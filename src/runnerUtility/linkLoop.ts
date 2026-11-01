@@ -171,6 +171,13 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
       const outcome = await tryUpdate(hubPackageId, signal);
       return outcome?.ok === true ? { kind: 'restart' } : { kind: 'failed', reason: outcome === null ? 'stopped' : `update failed: ${outcome.reason}` };
     }
+    // A stop that came during the connect or the handshake fired before anything listened for it, and the listener added below would never
+    // hear it: the link would stay up and `run` would never return. Nothing between this check and that listener waits, so none slips by.
+    if (signal.aborted) {
+      answer.channel.destroy();
+      client.end();
+      return { kind: 'closed', lastedMs: 0 };
+    }
     deps.servers.acceptLinkStream(answer.channel);
     answer.channel.resume();
     writeStatus('linked', null);

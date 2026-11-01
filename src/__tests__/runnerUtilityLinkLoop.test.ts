@@ -239,6 +239,8 @@ interface HubStandIn {
   versionRequests: { count: number };
   /** When set, `link` is refused (no marker, as a gate does for a runner it does not know) and `identity` answers with this. */
   refuseLinkWith: { reply: string | null };
+  /** While `until` is set the hub takes a `link` request and answers it only when that promise settles — a runner caught between «asked» and «linked». */
+  holdLinkAnswer: { until: Promise<void> | null; requestCount: number };
   close: () => void;
 }
 
@@ -250,6 +252,7 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
   const connections = { opened: 0, closed: 0 };
   const versionRequests = { count: 0 };
   const refuseLinkWith: { reply: string | null } = { reply: null };
+  const holdLinkAnswer: { until: Promise<void> | null; requestCount: number } = { until: null, requestCount: 0 };
   const server = new Server({ hostKeys: [hostKey.privateKey] }, (connection) => {
     connections.opened += 1;
     connection.on('error', () => undefined);
@@ -271,9 +274,14 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
             channel.exit(1);
             channel.end();
           } else if (info.command === 'link') {
+            holdLinkAnswer.requestCount += 1;
             const channel = accept();
-            channel.write(formatGateAnswerHead('link', { package: currentPackageId.value }));
-            linkChannels.push(channel);
+            const answerLink = (): void => {
+              channel.write(formatGateAnswerHead('link', { package: currentPackageId.value }));
+              linkChannels.push(channel);
+            };
+            if (holdLinkAnswer.until === null) answerLink();
+            else void holdLinkAnswer.until.then(answerLink);
           } else if (info.command === 'version') {
             versionRequests.count += 1;
             const channel = accept();
@@ -290,7 +298,7 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
   await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('the stand-in has no port');
-  return { port: address.port, hostKey, currentPackageId, linkChannels, connections, versionRequests, refuseLinkWith, close: () => { server.close(); } };
+  return { port: address.port, hostKey, currentPackageId, linkChannels, connections, versionRequests, refuseLinkWith, holdLinkAnswer, close: () => { server.close(); } };
 }
 
 const installedPackageId = '0123456789abcdef';
@@ -359,6 +367,18 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
     startLoop({ servers: createFakeServers({ busy: 0 }), stopJobs: async () => { stops += 1; } });
     await waitUntil(() => readRunnerStatus(paths)?.state === 'error', 'the failure to be recorded', 15_000);
     assert.equal(stops, 0);
+  });
+
+  it('a stop that comes while the hub has not yet answered the link request still ends the run and closes the connection — it is not lost to the handshake', async () => {
+    let answerLink: () => void = () => undefined;
+    hub.holdLinkAnswer.until = new Promise<void>((resolve) => { answerLink = resolve; });
+    const { finished, abort } = startLoop({ servers: createFakeServers({ busy: 0 }) });
+    await waitUntil(() => hub.holdLinkAnswer.requestCount === 1, 'the link request to reach the hub', 15_000);
+    abort.abort();
+    answerLink();
+    const outcome = await Promise.race([finished, new Promise<string>((resolve) => { setTimeout(() => resolve('still running'), 5000); })]);
+    assert.equal(outcome, 0, 'the run ended with the stop');
+    await waitUntil(() => hub.connections.closed === 1, 'the runner to close its connection to the hub', 5_000);
   });
 
   it('a busy runner that becomes idle installs the update once, and does not reconnect while it installs', async () => {
