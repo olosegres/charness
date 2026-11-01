@@ -334,6 +334,28 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.equal(result.exitCode, 0, result.stderr);
       assert.match(result.stdout, /marker=\[\] passed=\[yes\]/);
     });
+
+    it('`-e PATH=…` puts a tool the runner\'s own PATH lacks within reach of the command AND of the dependencies step (the way docs/remote-run.md gives)', async () => {
+      const toolDirectory = path.join(layout.root, 'runner-tools');
+      fs.mkdirSync(toolDirectory, { recursive: true });
+      fs.writeFileSync(path.join(toolDirectory, 'rr-tool'), '#!/bin/sh\necho "tool ran: $1"\n', { mode: 0o755 });
+      const toolPath = `PATH=${toolDirectory}:/usr/bin:/bin`;
+      const missing = await run(['rr-tool', 'plain']);
+      assert.equal(missing.exitCode, 127, 'without it the tool is not found, as on a runner whose PATH lacks nvm');
+      writeRemoteRunConfig("pull: out test-results\ninstall: sh -c 'rr-tool install >> ../tool-install.log'\n");
+      try {
+        writeProjectFile(project, 'yarn.lock', '# lock for the tool path\n');
+        const failedStep = await run(['true']);
+        assert.equal(failedStep.exitCode, 125, 'the dependencies step cannot find it either: «dependencies step failed»');
+        const withPath = await run(['-e', toolPath, 'rr-tool', 'command']);
+        assert.equal(withPath.exitCode, 0, withPath.stderr);
+        assert.match(withPath.stdout, /tool ran: command/);
+        assert.match(fs.readFileSync(path.join(project.runnerDirectory, 'tool-install.log'), 'utf8'), /tool ran: install/, 'the dependencies step found it too');
+      } finally {
+        writeRemoteRunConfig(baseRemoteRunConfig);
+        writeProjectFile(project, 'yarn.lock', '# lock v3\n');
+      }
+    });
   });
 
   describe('a job in the background', () => {
