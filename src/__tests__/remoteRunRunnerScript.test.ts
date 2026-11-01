@@ -1137,9 +1137,10 @@ describe('a Mac (the platform is faked, with fake Xcode and caffeinate)', () => 
   it('iOS: a PAIRED runner with no record yet is still being checked — no, not yes: the answer of an earlier start must not be offered meanwhile', () => {
     writeFile(workRoot, 'config.json', '{}');
     fs.mkdirSync(path.join(workRoot, 'keys'));
-    const lines = readLines(runAsAMac('read_runner_state; probe_slow').stdout);
+    const lines = readLines(runAsAMac('read_runner_state; probe_runner_state; probe_slow').stdout);
     assert.equal(lines.cap_ios, 'no');
     assert.equal(lines.cap_ios_detail, 'the iOS Simulator is being checked');
+    assert.equal(lines.paused, 'no', 'the runner state IS read, so this probe reaches probe_runner_state\'s output');
     assert.equal(lines.ios_boot, undefined, 'and no answer is reported as the check\'s');
   });
 
