@@ -129,11 +129,24 @@ describe('runSshCommand with an outside deadline', () => {
   const hasSsh = spawnSync('ssh', ['-V'], { stdio: 'ignore' }).status === 0;
   const isCi = process.env.CI === 'true' || process.env.CI === '1';
   const sshSkip = !hasSsh && !isCi ? 'ssh is not installed here (CI has it)' : false;
-  /** An ssh whose connection never completes: its "proxy" just sleeps. */
-  const hungRunner = { ssh: 'u@hung.example', sshOptions: ['-F', '/dev/null', '-o', 'ProxyCommand=sleep 120'] };
+  let stopFile = '';
+  /** An ssh whose connection never completes: its "proxy" waits for the stop file the test creates when it is done — a plain `sleep` would outlive a killed ssh. */
+  const createHungRunner = (): { ssh: string; sshOptions: string[] } => ({
+    ssh: 'u@hung.example',
+    sshOptions: ['-F', '/dev/null', '-o', `ProxyCommand=sh -c 'until [ -e ${stopFile} ]; do sleep 0.2; done'`],
+  });
+  /** Let the proxy end, and check that nothing of it is left. */
+  async function releaseProxyAndExpectNothingLeft(): Promise<void> {
+    fs.writeFileSync(stopFile, '');
+    const deadline = Date.now() + 5000;
+    const isProxyRunning = (): boolean => (spawnSync('pgrep', ['-f', stopFile], { encoding: 'utf8' }).stdout ?? '').trim() !== '';
+    while (isProxyRunning() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(isProxyRunning(), false, 'no proxy process of the killed ssh is left');
+  }
 
   beforeEach(() => {
     cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-abort-'));
+    stopFile = path.join(cacheDir, 'stop-proxy');
   });
   afterEach(() => {
     fs.rmSync(cacheDir, { recursive: true, force: true });
@@ -143,9 +156,10 @@ describe('runSshCommand with an outside deadline', () => {
     const controller = new AbortController();
     const timeoutsBefore = process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
     const startedAt = Date.now();
-    const pending = runSshCommand({ runner: hungRunner, cacheDir, remoteCommand: 'true', timeoutMs: 120_000, signal: controller.signal });
+    const pending = runSshCommand({ runner: createHungRunner(), cacheDir, remoteCommand: 'true', timeoutMs: 120_000, signal: controller.signal });
     setTimeout(() => controller.abort(), 500);
     const result = await withinBound(pending);
+    await releaseProxyAndExpectNothingLeft();
     assert.equal(result.isTimedOut, true);
     assert.equal(result.exitCode, null, 'killed, not exited');
     assert.ok(Date.now() - startedAt < 10_000, `${Date.now() - startedAt} ms`);
@@ -153,7 +167,8 @@ describe('runSshCommand with an outside deadline', () => {
   });
 
   it('a signal that has already fired kills the process before it can do anything', { skip: sshSkip }, async () => {
-    const result = await withinBound(runSshCommand({ runner: hungRunner, cacheDir, remoteCommand: 'true', timeoutMs: 120_000, signal: AbortSignal.abort() }));
+    const result = await withinBound(runSshCommand({ runner: createHungRunner(), cacheDir, remoteCommand: 'true', timeoutMs: 120_000, signal: AbortSignal.abort() }));
     assert.equal(result.isTimedOut, true);
+    await releaseProxyAndExpectNothingLeft();
   });
 });
