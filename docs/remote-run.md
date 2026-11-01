@@ -1,14 +1,79 @@
 # Running heavy commands on another machine — `charness remote-run`
 
 An agent edits files on the machine the bot lives on. A test suite, a build or an emulator run can take most of that
-machine's CPU and memory for an hour. `charness remote-run` sends such a command to a **runner** — another machine you reach
-by ordinary ssh — runs it in a copy of the project there, and brings back its output, its exit code and the result files you
-declare, as if the command had run locally. Every agent of the OS user that runs charness can call it: Telegram topics
-(Claude and OpenCode), Jira agents, and you in a shell.
+machine's CPU and memory for an hour. `charness remote-run` sends such a command to a **runner** — another machine — runs it in a
+copy of the project there, and brings back its output, its exit code and the result files you declare, as if the command had run
+locally. Every agent of the OS user that runs charness can call it: Telegram topics (Claude and OpenCode), Jira agents, and you in a
+shell.
 
-In this phase a runner is a machine **you set up by hand** and list in a file. Pairing machines from Telegram is not part of it.
+A runner is attached in one of two ways:
 
-## What you need on the runner
+- **Paired** (the normal way): you copy one line from Telegram (`/runners`) or from `charness runners pair` and run it on the runner
+  machine. No ssh keys, no account setup on the charness host, no Pueue or `PATH` work, no open port.
+- **Plain ssh** (under [Advanced](#advanced-a-runner-over-plain-ssh)): a machine you reach by ordinary ssh, set up by hand and listed
+  in `~/.config/charness/runners.json`. Both kinds can be used together; `remote-run` treats them alike.
+
+## Pair a runner
+
+**What it takes.**
+
+- **The charness host** runs its ordinary ssh server (`sshd`, key login on) and has an address the runner can reach — a public
+  address, or one the runner can dial. Nothing else changes there: no root, no extra account, no VPN, no `sshd_config` edit. Pairing
+  adds one marked block of key lines to the charness user's `~/.ssh/authorized_keys` and touches no other line. Each key is
+  restricted to a single forced command — **no shell, no port or unix-socket forwarding** — so a runner can do nothing on the charness
+  host but dial in, fetch charness's own package, hold its link and unpair itself.
+- **The runner machine** (Linux or macOS) needs outbound internet to that sshd, Node 22.12 or newer, `ssh` and `tar`. The utility
+  installs Pueue itself (pinned release, checksum-verified) and uses an `rsync` 3.1 or newer if it finds one — on a Mac without one
+  (macOS 15.4 and later ship Apple's `openrsync`, which is not enough) it builds the pinned rsync with the Xcode command line tools, or
+  names the one install command. Use **an account of its own** that you do not mind running the agents' code: a standard user, not an
+  admin (the utility warns about an admin account).
+
+**Pairing.**
+
+1. In Telegram, in General, send `/runners` and tap **＋ Pair a new runner** ([`/runners`](commands.md#runners)). The first time the
+   bot asks which address runners dial and proposes the public address it finds, after checking that the address answers with this
+   machine's own ssh key. Without Telegram (a Jira-only instance): `charness runners pair --host host.example[:port]`.
+2. The bot posts **one line**, valid 10 minutes and good once. Run it on the runner machine as the account that will run jobs. It fetches
+   charness's own package from the charness host over ssh (so the versions never differ), checks the machine, pairs and prints how to
+   keep it running. The pairing message turns into «Runner “name” paired …» — or «Pairing code expired.» after 10 minutes.
+3. The runner appears in `/runners` (and in `charness remote-run runners`) with its OS, CPU, memory, disk, load, jobs and what it can
+   do. Anyone you give the line to can attach a machine until it is used or expires — treat it like a password.
+
+**Keep it running.** The pairing is permanent; the link has to be up for jobs to arrive.
+
+| Command on the runner | What it does |
+|---|---|
+| `~/.charness-runner/bin/charness-runner run` | holds the link in this terminal (Ctrl-C stops) |
+| `charness-runner service install` | keeps it running in the background, no admin: a systemd user service on Linux (with `loginctl enable-linger`; where polkit asks for an admin, the one `sudo` line is printed), a LaunchAgent on macOS (while that account is logged in) |
+| `sudo …/charness-runner service install --system --user <account>` | macOS, always on — also logged out and across fast user switching — once, from an admin account: a LaunchDaemon that runs **as `<account>`**, with no extra rights |
+| `charness-runner status` | whose charness it serves, the link state, how it is kept running, paused or not, running jobs |
+| `charness-runner pause` / `resume` | takes this machine out of rotation, or back in (the hub has its own pause, set in `/runners`) |
+| `charness-runner unpair` | tells the charness host to forget it, and stops the link and the queue's jobs here |
+
+A restart of the link (an update, a crash) never kills queued or running jobs — Pueue is a service of its own. The link reconnects by
+itself after a reboot, sleep or network change, and updates itself from the charness host when it is idle.
+
+**Remove.** `/runners` → **Remove** (or `charness runners remove <name>`): the key line and the registry entry are deleted, the link is
+cut, and the runner says «removed by …», stops the jobs it was running and retries at most hourly. `charness runners pause <name>` /
+`resume <name>` keeps a machine attached but sends it no jobs.
+
+**What a job sees.** A command runs as the runner account with a clean environment — `HOME`, `USER`, `LANG`, `TMPDIR`, a `PATH` of
+`~/.charness-runner/bin`, the folder of the `node` that runs the utility, Homebrew and the system folders, the Android SDK where the
+usual installers put it — and nothing of the charness host's environment. Anything else (`PATH` additions for a Node from nvm, `JAVA_HOME`,
+a token) goes into `~/.charness-runner/env`, one `KEY=VALUE` per line, read again for every job.
+
+**iOS on a Mac LaunchDaemon.** Apple does not give the iOS Simulator to a daemon or to a process started as another user. The utility
+tries for real — it boots and deletes a Simulator when the service starts and when Xcode changes — and reports `ios` only if that
+worked; otherwise `runners` says «ios: no — needs the runner user's login session». Android emulators (`-no-window`), Jest, Playwright
+and Docker work from the daemon.
+
+## Advanced: a runner over plain ssh
+
+Pairing replaces everything below for a machine that can dial your charness host. Use plain ssh when it cannot (the charness host has
+no sshd or no reachable address — a Docker image, a laptop), or when you already have a machine set up this way. You set it up
+yourself and list it in a file.
+
+### What you need on the runner
 
 - A Linux or macOS machine you can `ssh` to with a key, and **an account of its own** for charness. The runner runs your project's
   code (tests are code): give it an unprivileged account with no secrets in its home, and nothing of the main machine's environment
@@ -28,7 +93,7 @@ In this phase a runner is a machine **you set up by hand** and list in a file. P
 - Whatever the project's commands need: Node and a package manager, an Android SDK, Docker, Playwright's browsers. `charness remote-run
   runners` shows what each runner has (below).
 
-### Put the tools on the runner's PATH
+#### Put the tools on the runner's PATH
 
 The dependencies step and the command run in the environment of the **non-interactive ssh command** that queued them (Pueue gives a task
 the environment of the client that added it, not of its daemon). Such a command does not read `~/.profile`, `~/.zprofile` or the
@@ -72,7 +137,7 @@ MemoryMax=24G
 WantedBy=default.target
 ```
 
-### Reach it without a prompt, once
+#### Reach it without a prompt, once
 
 `remote-run` never asks anything: ssh runs with `BatchMode=yes`, so a password prompt or an unknown host key is an error. Make
 `ssh runner@runner.example true` work from the main machine's user by hand — key login, and the host key accepted once. It
@@ -83,7 +148,7 @@ environment that has no `SSH_AUTH_SOCK`, so a key that is only held by an agent 
 («permission denied») for a Jira one. Use a key file with no passphrase — `"sshOptions": ["-i", "/home/user/.ssh/runner_key"]` in
 `runners.json`, or an `IdentityFile` for the host in your ssh config — and make it a key that opens only the runner's account.
 
-## `~/.config/charness/runners.json`
+### `~/.config/charness/runners.json`
 
 One file per OS user, shared by every charness instance of that user (a Telegram one and an isolated Jira one alike):
 
@@ -159,7 +224,7 @@ and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn 
   An offline runner shows its last snapshot. `--needs android|ios|docker|playwright` picks the first runner (in file order) that
   answers and has that capability; `--runner <name>` picks one. None fits → exit 125 with this view and why.
 
-- **Paired runners** (attached with `charness runners pair` / `/runners`, no `runners.json` entry) are listed after the hand-made ones. A paused
+- **Paired runners** ([attached](#pair-a-runner) with `/runners` or `charness runners pair`, no `runners.json` entry) are listed after the hand-made ones. A paused
   runner is never picked (`charness runners pause <name>` / `resume <name>`, or `charness-runner pause` on the machine itself). With `--needs`, an
   offline paired runner that had the capability when it was last seen is **waited for**: the command says `waiting for a runner with android (mac
   offline since …)` once, looks again every 10 s and gives up after `--runner-wait` (`15m` by default, `0` = fail at once) with exit 125. A
@@ -243,13 +308,17 @@ the instance's env file sets `PATH`), map it in `jira.json` `agentBinaries` (see
 [above](#reach-it-without-a-prompt-once)) and `XDG_CACHE_HOME`: the local cache (ssh control sockets, and the main machine's own note of
 which project each job came from) then follows `HOME` — `~/.cache/charness/remote-run/` — so when the other agents run with
 `XDG_CACHE_HOME` set, a job one of them submitted is not one a Jira agent can fetch the files of («this machine did not submit the job
-as this user»); its output and exit code still come with `wait`. Jobs belong to the agent that submitted them.
+as this user»); its output and exit code still come with `wait`. Jobs belong to the agent that submitted them. The runner lines above look for a runner's last probe in
+both caches and take the newest, so a probe a Jira agent took still shows up in the instructions of the others.
 
 ## Troubleshooting
 
 - `runners` says **offline (ssh: …)**: run the ssh command by hand. «the host key is not trusted yet — connect once by hand» means
   exactly that; «the key was rejected» is the account's `authorized_keys`.
-- **Pueue: MISSING** on a runner: install it as above or set `pueue.bin`.
+- A paired runner says **offline (the runner is not connected)**: on that machine, `charness-runner status` shows the link state and the last
+  error. Nothing holds the link until you run `charness-runner run` or `service install`; after a reboot a terminal `run` is gone, a service
+  is not. «removed by …» means the charness host removed it (`/runners`): pair again with a new line.
+- **Pueue: MISSING** on a hand-made runner: install it as above or set `pueue.bin` (a paired runner installs its own).
 - A job «lost the connection» message: the runner stops the job by itself when its heartbeat lease (45 s) runs out; `ls` shows it.
-- Where the files live: the runner's `workDir`; the main machine keeps ssh control sockets and the last probe of each runner in
-  `~/.cache/charness/remote-run/`.
+- Where the files live: the runner's `workDir` (`~/.charness-runner/work/` on a paired one); the main machine keeps ssh control sockets and
+  the last probe of each runner in `~/.cache/charness/remote-run/`; the pairing registry is `~/.config/charness/runners/`.

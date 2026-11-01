@@ -384,11 +384,21 @@ entry:
 
 ### Runners for heavy commands (`remote-run`)
 
-A test suite, a build or an emulator run can take most of the machine the bot lives on. List other machines you reach by ssh in
-`~/.config/charness/runners.json` (one file per OS user, shared by every instance of that user) and agents can send such commands
-there with `charness remote-run`: output, exit code and declared result files come back as if the command had run locally. Without a
-runner listed nothing changes for anyone, and agents are not told of the command. Setting a runner up by hand (an account of its own,
-`rsync`, Pueue), the file's fields, `.remote-run`, every command and the exit codes: [docs/remote-run.md](docs/remote-run.md).
+A test suite, a build or an emulator run can take most of the machine the bot lives on. Attach another machine as a **runner** and
+agents can send such commands there with `charness remote-run`: output, exit code and declared result files come back as if the command
+had run locally. Without a runner nothing changes for anyone, and agents are not told of the command.
+
+**Pair it (the normal way).** Needs this machine's ordinary `sshd` (key login on) with an address the runner can reach — nothing else is
+opened or changed, no root, no VPN — and on the runner machine Node 22.12+, `ssh` and `tar`. In General send `/runners` → **＋ Pair a new
+runner**; the first time the bot asks which address runners dial (the `runnerHost` row of the [instance settings](#instance-settings-settingsjson)) and
+proposes the public address it finds. It posts one line (valid 10 minutes, single use): run it on the runner machine as the account that
+will run the jobs, then `charness-runner service install` there to keep it running. An instance without Telegram uses
+`charness runners pair --host host.example`. The steps, the services (a Mac that stays on while logged out), removing and the safety
+model: [docs/remote-run.md](docs/remote-run.md#pair-a-runner).
+
+**Or by hand over plain ssh** — for a machine that cannot dial this one: list it in `~/.config/charness/runners.json` (one file per OS
+user, shared by every instance of that user) after giving it an account of its own, `rsync` and Pueue; see
+[docs/remote-run.md](docs/remote-run.md#advanced-a-runner-over-plain-ssh) for that, `.remote-run`, every command and the exit codes.
 
 A **Jira** agent reaches `charness` through the bot's `PATH`; when that `PATH` lacks it, map it in `jira.json` `agentBinaries`
 ([Jira setup](#jira-setup)).

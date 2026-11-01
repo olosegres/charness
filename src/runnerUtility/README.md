@@ -99,7 +99,7 @@ anything: a service-manager failure, or a unit still running, is reported as not
 can be run again; units that are already absent count as removed. `run` does not start its own Pueue daemon when a service manages it —
 it waits for the service's.
 
-## State the probe reads (`runner.sh probe`, scope 4)
+## State the probe reads (`runner.sh probe`)
 
 `~/.charness-runner/paused` (an empty file; `pause` / `resume`), `~/.charness-runner/service` (one word, `user-service` or
 `system-service`, while a service is installed), `~/.charness-runner/ios-check.json` (one line:
@@ -135,10 +135,6 @@ being rewritten, and killing jobs for that would be wrong). It then records `rem
 running ones are killed, and the queued ones are removed so none starts in their place), and asks again once an hour. A machine that was
 offline during the removal does the same on its next connection.
 
-## Not here yet
-
-`remote-run` reaching a paired runner, the `runner.sh` probe fields — scope 4.
-
 ## Tests
 
 `src/__tests__/runnerUtility*.test.ts` (env, home/launcher/config/keys, tools, machine report and admin check, the servers driven
@@ -147,3 +143,5 @@ the way the hub drives them, the link loop's backoff / removed state / update de
 `runner-proxy`, restart, gate killed, the runner key's refusals (each against an endpoint the test owns, with the session kept up), an expired
 line, a line aimed at a server with another host key, a runner whose hub changes its host key, a package change found by polling, a lost
 redemption answer, remove.
+`remote-run` through a paired runner is `remoteRunPairedE2e.test.ts` (kit `remoteRunE2e/remoteRunFlowKit.ts`), and `/runners` from Telegram end to
+end is `runnersScreenE2e.test.ts`.

@@ -49,9 +49,12 @@ function printUsage(): void {
       `                              --best prints the CLAUDE_CONFIG_DIR to launch under\n` +
       `                              (empty = default), --model <name>, --json,\n` +
       `                              --current <name> [--stopped-by-limit] for a resumed session\n` +
-      `  charness remote-run       Run a command (tests, builds, e2e) on a runner machine reached by ssh:\n` +
+      `  charness remote-run       Run a command (tests, builds, e2e) on a runner machine (paired, or reached by ssh):\n` +
       `                              \`remote-run [--bg] <command…>\`, \`remote-run runners\` (see docs/remote-run.md)\n` +
-      `  charness runners          The machines paired as runners (\`ls\`, \`pair --host <address>\`, \`remove|pause|resume <name>\`)\n` +
+      `  charness runners          Pair and manage runner machines, like /runners in Telegram:\n` +
+      `                              \`ls\`, \`pair --host <address>\`, \`remove|pause|resume <name>\`\n` +
+      `  charness-runner           The program a paired machine runs (\`run\`, \`service install\`, \`status\`);\n` +
+      `                              the line that installs it comes from /runners\n` +
       `  charness --help, -h       Show this help\n` +
       `  charness --version, -v    Print the version\n` +
       `\n` +

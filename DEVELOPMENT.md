@@ -162,6 +162,10 @@ a local run without them is skipped with the reason, CI (`CI=true`) installs the
 without. A flow that is killed or times out cannot leave daemons behind: `remoteRunE2e/remoteRunFlowSweep.ts` ends what names its
 layout, from the teardown, from a detached reaper and at the next start.
 
+The paired-runner flows (`runnerLinkE2e.test.ts`, `remoteRunPairedE2e.test.ts`, `runnersScreenE2e.test.ts`) use the same loopback `sshd` as «the charness
+host» (its `AuthorizedKeysFile` pointed at a temp `.ssh`) and `charness-runner` in a temp `HOME`, so they never touch the real `~/.ssh`;
+`runnerServiceTakeoverE2e.test.ts` needs only real Pueue (the service manager is a recording stand-in). Same tools, same local skip and CI failure.
+
 Node applies `--test-timeout` to a whole test FILE (a `describe`'s own `timeout` cannot extend it), so a file that
 hangs or leaves a process alive fails by name when its limit passes, instead of hanging the run. A long-running
 flow file must be named `*E2e.test.ts` to get the flows' limit; `live/*Live.test.ts` is run directly (CLAUDE.md).
