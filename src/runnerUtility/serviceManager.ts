@@ -156,6 +156,23 @@ function writeDefinition(filePath: string, text: string): void {
   fs.chmodSync(filePath, unitFileMode);
 }
 
+interface PreviousDefinition {
+  file: string;
+  /** The text the file had before this install rewrote it; `null` = there was no such file. */
+  content: string | null;
+}
+
+/** @description The files of a service that already exists, as they are now: a failed re-install puts them back instead of tearing the working service down. */
+function readPreviousDefinitions(files: readonly string[]): PreviousDefinition[] {
+  return files.map((file) => ({ file, content: fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null }));
+}
+
+function restorePreviousDefinitions(previous: readonly PreviousDefinition[]): void {
+  for (const { file, content } of previous) {
+    if (content !== null) writeDefinition(file, content);
+  }
+}
+
 function writeMarker(paths: RunnerHomePaths, kind: ServiceKind, owner: TargetAccount | null, chown: ServiceDeps['chown']): void {
   fs.mkdirSync(paths.root, { recursive: true, mode: 0o700 });
   fs.writeFileSync(paths.serviceMarker, `${kind}\n`, { mode: markerMode });
@@ -224,11 +241,18 @@ async function installSystemd(paths: RunnerHomePaths, deps: ServiceDeps): Promis
   const files = getSystemdFiles(paths.homeDir, names);
   const { refusal, hadService } = await prepareManagedStart(paths, deps, 'user-service', null);
   if (refusal !== null) return refusal;
+  const previous = hadService ? readPreviousDefinitions([files.link, files.pueued]) : [];
   const rollBack = async (...reason: string[]): Promise<ServiceResult> => {
+    if (hadService) {
+      // A re-install that fails must not take the working service down with it: its definitions come back, its units are not touched.
+      restorePreviousDefinitions(previous);
+      await deps.runner('systemctl', ['--user', 'daemon-reload'], { timeoutMs: commandTimeoutMs });
+      return fail(...reason, 'The service installed before was left as it was.');
+    }
     await stopSystemdUnits(names, deps);
     for (const file of [files.link, files.pueued]) fs.rmSync(file, { force: true });
     await deps.runner('systemctl', ['--user', 'daemon-reload'], { timeoutMs: commandTimeoutMs });
-    if (!hadService) fs.rmSync(paths.serviceMarker, { force: true });
+    fs.rmSync(paths.serviceMarker, { force: true });
     return fail(...reason, 'Nothing was left installed.');
   };
   writeDefinition(files.pueued, renderSystemdPueuedUnit(paths));
@@ -304,11 +328,24 @@ async function installLaunchd(request: ServiceRequest, deps: ServiceDeps, paths:
   const accountName = owner?.name ?? deps.accountName;
   const jobs = planLaunchdJobs(paths, names, accountName, path.dirname(deps.nodePath), request.isSystem ? accountName : null);
   const domain = request.isSystem ? 'system' : `gui/${deps.uid}`;
+  const previous = hadService ? readPreviousDefinitions([files.pueued, files.link]) : [];
   const loaded = await loadLaunchdJobs([{ job: jobs.pueued, file: files.pueued }, { job: jobs.link, file: files.link }], domain, deps, owner, request.isSystem);
   if (!loaded.ok) {
+    if (hadService) {
+      // A re-install that fails must not leave the working service unloaded: its definitions come back and launchd loads them again.
+      restorePreviousDefinitions(previous);
+      for (const { file, content } of previous) {
+        if (content === null) continue;
+        if (request.isSystem) deps.chown(file, rootUid, wheelGid);
+        const label = file === files.link ? names.launchdLink : names.launchdPueued;
+        await deps.runner('launchctl', ['bootout', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
+        await deps.runner('launchctl', ['bootstrap', domain, file], { timeoutMs: commandTimeoutMs });
+      }
+      return fail(...loaded.lines, 'The service installed before was loaded again as it was.');
+    }
     await stopLaunchdJobs([names.launchdLink, names.launchdPueued], domain, deps);
     for (const file of [files.link, files.pueued]) fs.rmSync(file, { force: true });
-    if (!hadService) fs.rmSync(paths.serviceMarker, { force: true });
+    fs.rmSync(paths.serviceMarker, { force: true });
     return fail(...loaded.lines, 'Nothing was left installed.');
   }
   return {
