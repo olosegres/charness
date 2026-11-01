@@ -1134,6 +1134,15 @@ describe('a Mac (the platform is faked, with fake Xcode and caffeinate)', () => 
     assert.equal(lines.cap_ios_detail, "needs the runner user's login session");
   });
 
+  it('iOS: a PAIRED runner with no record yet is still being checked — no, not yes: the answer of an earlier start must not be offered meanwhile', () => {
+    writeFile(workRoot, 'config.json', '{}');
+    fs.mkdirSync(path.join(workRoot, 'keys'));
+    const lines = readLines(runAsAMac('read_runner_state; probe_slow').stdout);
+    assert.equal(lines.cap_ios, 'no');
+    assert.equal(lines.cap_ios_detail, 'the iOS Simulator is being checked');
+    assert.equal(lines.ios_boot, undefined, 'and no answer is reported as the check\'s');
+  });
+
   it('iOS: a check that failed for another reason shows THAT reason — a login session would be the wrong cure for a missing runtime', () => {
     writeFile(workRoot, 'config.json', '{}');
     fs.mkdirSync(path.join(workRoot, 'keys'));
