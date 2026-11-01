@@ -73,7 +73,7 @@ export function checkIsRemoteRunOffered(homeDir: string = os.homedir()): boolean
   return (load.config?.runners.length ?? 0) > 0;
 }
 
-/** @description The parallel limits of a runner's groups as the `name=n,name=n` string the runner script applies; the default group is always listed first. */
+/** @description The parallel limits of a runner's groups as the `name=n,name=n` string the runner script applies, in the order of the file (the runner applies each pair on its own, so the order carries no meaning). */
 export function formatGroupLimits(groups: RunnerConfig['groups']): string {
   return Object.entries(groups ?? {}).map(([groupName, parallel]) => `${groupName}=${parallel}`).join(',');
 }
