@@ -596,11 +596,12 @@ stream_log() {
 # The Pueue wait runs in a process group of its own (`set -m`, as `exec` does) and the cut signals the GROUP. `pq` is a function, so the
 # background job is a subshell and `pueue wait` its child — unless the bash happens to run it in place of the subshell (5.3 can; 5.2, the
 # bash of Ubuntu 24.04, does not). A kill of the subshell alone left `pueue wait` running for as long as the task, however many times
-# the exit file won the race.
+# the exit file won the race. Under job control bash no longer gives a background job /dev/null as stdin, so it is given here: in a
+# lease the caller's stdin is the heartbeat stream, which only the lease watcher (fd 3) may read.
 wait_for_task() {
   [ -f "$jd/exit" ] && return 0
   set -m
-  pq wait "$1" > /dev/null 2>&1 &
+  pq wait "$1" < /dev/null > /dev/null 2>&1 &
   local waiter_pid=$!
   set +m
   while kill -0 "$waiter_pid" 2> /dev/null; do

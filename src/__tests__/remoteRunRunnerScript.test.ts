@@ -600,11 +600,11 @@ describe('the number of a task Pueue has forgotten can belong to another job', (
    */
   const blockingPueueWaitStub = `sleep ${blockingSleepSeconds}; :`;
 
-  /** Run runner.sh functions with a stub `pq` (the body of the stub is `stubBody`) and say how long it took. */
-  function runWithStub(stubBody: string, body: string): { status: number | null; stdout: string; seconds: number } {
+  /** Run runner.sh functions with a stub `pq` (the body of the stub is `stubBody`) and say how long it took; `input` is what the caller's stdin carries. */
+  function runWithStub(stubBody: string, body: string, input?: string): { status: number | null; stdout: string; seconds: number } {
     const startedAt = Date.now();
     // The trap ends what the body started in the background (the log streamer loops until a file that a red run never writes).
-    const result = spawnSync('bash', ['-c', `trap 'kill $(jobs -p) 2> /dev/null' EXIT TERM; source ${scriptPath}; pq() { ${stubBody}; }; ${body}`], { encoding: 'utf8', timeout: 25_000 });
+    const result = spawnSync('bash', ['-c', `trap 'kill $(jobs -p) 2> /dev/null' EXIT TERM; source ${scriptPath}; pq() { ${stubBody}; }; ${body}`], { encoding: 'utf8', timeout: 25_000, input });
     return { status: result.status, stdout: result.stdout, seconds: (Date.now() - startedAt) / 1000 };
   }
 
@@ -635,6 +635,17 @@ describe('the number of a task Pueue has forgotten can belong to another job', (
     assert.equal(outcome.stdout.trim(), 'done');
     assert.ok(outcome.seconds >= 0.8 && outcome.seconds < 8, `it took ${outcome.seconds} s`);
     assert.equal(countStubSleeps(), 0, 'the Pueue wait it started is gone');
+  });
+
+  it('the Pueue wait it starts never reads the caller\'s stdin — in a lease that is the heartbeat stream, which only the watcher may read', () => {
+    const jobDir = writeEndedJob(jobId, { exit: '' });
+    fs.rmSync(path.join(jobDir, 'exit'));
+    const stdinSeenByPueueWait = path.join(workDir, 'stdin-seen-by-pueue-wait');
+    // A job under job control (`set -m`) is NOT given /dev/null as stdin by bash; the stub drains whatever its stdin is.
+    const outcome = runWithStub(`cat > ${stdinSeenByPueueWait}; ${blockingPueueWaitStub}`, `( sleep 1; echo 0 > ${jobDir}/exit ) & cmd_wait ${workDir} ${slug} ${jobId}`, 'a-heartbeat-byte');
+    assert.equal(outcome.stdout.trim(), 'done');
+    assert.equal(fs.readFileSync(stdinSeenByPueueWait, 'utf8'), '', 'the Pueue wait was handed /dev/null, not the caller\'s stream');
+    assert.equal(countStubSleeps(), 0, 'and the Pueue wait it started is gone');
   });
 
   it('when Pueue\'s wait ends first (a job that runs and finishes) the wait ends with it, then waits for the exit file as before', () => {
