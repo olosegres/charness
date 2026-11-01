@@ -138,12 +138,17 @@ async function runListCommand(io: CliIo, deps: RunnersCliDeps): Promise<number> 
 }
 
 async function runRemoveCommand(name: string, io: CliIo, deps: RunnersCliDeps): Promise<number> {
-  const removed = await removeRunnerAndEndItsWork(deps.ctx, name, deps.now());
-  if (removed === null) {
+  const removal = await removeRunnerAndEndItsWork(deps.ctx, name, deps.now());
+  if (removal === null) {
     io.stderr(`runners: no runner named "${name}"\n`);
     return failedExitCode;
   }
-  io.stdout(`Runner "${removed.name}" removed: its key is deleted, its link cut, and the jobs it had running are stopped (an offline machine stops them itself once it finds out it was removed).\n`);
+  const jobsNote = {
+    stopped: 'the jobs it had running are stopped',
+    failed: 'the jobs it had running could not be stopped from here (it stops them itself once it finds out it was removed)',
+    offline: 'it is offline: it stops the jobs it had running itself once it finds out it was removed',
+  }[removal.jobs];
+  io.stdout(`Runner "${removal.runner.name}" removed: its key is deleted and its link cut; ${jobsNote}.\n`);
   return 0;
 }
 

@@ -133,8 +133,10 @@ here — and a refused key alone is not proof of a removal: a hub whose home fol
 file modes changed or whose sshd setting was edited refuses the key the same way, for hours. So the jobs are stopped on evidence only
 (`stopAllPueueJobs`: the running ones are killed, the queued ones removed, and it waits until the queue is empty):
 
-- **The hub does it itself** when it removes a runner that is online: `runners/runnerRemoval.ts` runs `pueue reset --force` over the
-  link that is still open, then cuts it. This is the normal case (`/runners` → Remove, `charness runners remove`).
+- **The hub does it itself** when it removes a runner that is online: `runners/runnerRemoval.ts` pauses the runner and runs
+  `pueue reset --force` over the link WHILE IT IS STILL PAIRED (the gate ends a link as soon as its runner has left the registry, which
+  would cut the reset off), then removes it and cuts the link. This is the normal case (`/runners` → Remove, `charness runners remove`);
+  a stop that fails is logged and said so (the CLI's last line, never «stopped» when it was not), and the removal goes through anyway.
 - **The hub's own answer.** A key line that outlived the registry entry makes the gate refuse `link`; the runner then asks `identity`,
   which the gate answers for a runner that is not paired (`{ok:false}`). That is certain: the runner records `removed` and stops its jobs at once.
 - **A refused key and nothing more** (the machine was off when it was removed, and the key line was deleted): after two refusals 15 s apart

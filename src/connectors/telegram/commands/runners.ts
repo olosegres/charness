@@ -350,8 +350,14 @@ export function createRunners(ports: RunnersPorts) {
         await answerCallbackQuerySafely(ctx);
         break;
       case 'removeYes': {
-        await removeRunnerAndEndItsWork(hub, runner.id, now());
+        // Answered first: stopping the jobs on the machine can take 20 s and more, and a tap left unanswered for long is «too old».
         await answerCallbackQuerySafely(ctx, t('runners.removedToast', { name: runner.name }));
+        try {
+          await removeRunnerAndEndItsWork(hub, runner.id, now());
+        } catch (error) {
+          await reportRegistryError(key, error);
+          return;
+        }
         break;
       }
       case 'pause':
