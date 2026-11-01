@@ -44,7 +44,7 @@ a name with a newline is refused. `.git` only with `--with-git`.
 
 **Submit = stage, the job applies.** The main box stages the tree into `stage/<job>/` (`rsync --copy-dest=<tree>`, never `--link-dest`: a job
 rewriting a file in place would change a queued job's stage; `--modify-window=-1`: compare nanoseconds, rsync's whole-second quick
-check skips a same-length edit made within a second). The job (`runner.sh job`) takes the project lock (`mkdir lock`), deletes
+check skips a same-length edit made within a second). The job (`runner.sh job`) takes the project lock, deletes
 `old manifest − new manifest` from `tree/`, applies the stage, runs the dependencies step when its key differs from `deps.hash`, runs the
 command (`bash -c`, `-e` variables, own timeout watchdog), copies the files that match `pull.ere` and are newer than the start marker into
 `jobs/<job>/artifacts/`, releases the lock. Two jobs of one project therefore queue and each runs the tree as it was when IT was submitted.
@@ -67,6 +67,12 @@ other, and the next job of its project takes the lock over at once.
 **Prune** (on every submit) removes jobs older than 3 days that ended (an exit file, no task, or — for one an earlier script SIGKILLed unrecorded —
 a process that is gone), stage folders older than a day **unless their job is
 still queued** (a job can wait behind a busy group for days), lease/probe scratch state and project copies unused for 30 days.
+
+**The project lock** is a file created with the shell's own exclusive create (`set -C`, `open(O_EXCL)`) holding the holder's pid and job — never
+`mkdir`: the uutils coreutils that current Ubuntu installs as `/usr/bin/mkdir` let simultaneous `mkdir` of one path all succeed (265 of 1200 races with five
+contenders on the dev box), which gave two jobs of a project the lock together. A lock is stale when its process is gone, its job has an exit record, or
+it has no holder and is over a minute old; a stale lock is broken by ONE waiter, which checks and removes it inside a short-lived mutex of the same kind
+(`lock.breaking`), and a job gives back only a lock that is still its own.
 
 **Job state** is the job's own files first (`exit` is authoritative); Pueue's task list (label `rr-<id>`) only when there is no exit file
 (a job killed hard). `pueue wait` exits 0 for a failed task: Pueue's result is never used as a code.

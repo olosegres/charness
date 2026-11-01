@@ -624,6 +624,28 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.equal(fs.readFileSync(path.join(project.runnerDirectory, 'jobs', limitedId, 'exit'), 'utf8').trim(), '124', 'the limit\'s kill is on record');
     });
 
+    it('the lock of a job that had to be SIGKILLed passes to the jobs queued behind it ONE at a time — two of them never run on the project together', async () => {
+      const holder = readJobId(await run(['--bg', createDecoyCommand('decoy-lockholder', { isIgnoringTerm: true })]));
+      const holderPid = await waitForPidFile(project, 'decoy-lockholder.pid');
+      const holderChild = await waitForPidFile(project, 'decoy-lockholder.child');
+      const section = "sh -c 'echo start >> ../lock-sections; sleep 2; echo end >> ../lock-sections'";
+      const first = readJobId(await run(['--bg', section]));
+      const second = readJobId(await run(['--bg', section]));
+      for (const waiting of [first, second]) {
+        await waitUntil(`${waiting} to wait for the lock`, 60_000, () => {
+          const log = path.join(project.runnerDirectory, 'jobs', waiting, 'log');
+          return fs.existsSync(log) && fs.readFileSync(log, 'utf8').includes(`waiting for job ${holder}`);
+        });
+      }
+      // The holder ignores SIGTERM: after the grace time it is SIGKILLed and cannot give the lock back — both waiters see a dead holder.
+      assert.equal((await run(['kill', holder])).exitCode, 0);
+      await expectNothingLeft(holderPid, holderChild, 30_000);
+      assert.equal((await run(['wait', first])).exitCode, 0);
+      assert.equal((await run(['wait', second])).exitCode, 0);
+      const sections = fs.readFileSync(path.join(project.runnerDirectory, 'lock-sections'), 'utf8').split('\n').filter((line) => line !== '');
+      assert.deepEqual(sections, ['start', 'end', 'start', 'end'], 'each ran alone, one after the other');
+    });
+
     it('`kill <id>` of a background job leaves nothing; `wait` then gives 137', async () => {
       const jobId = readJobId(await run(['--bg', createDecoyCommand('decoy-killed')]));
       const decoyPid = await waitForPidFile(project, 'decoy-killed.pid');

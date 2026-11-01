@@ -427,7 +427,7 @@ prune_work() {
   find "$work_dir/p" -mindepth 2 -maxdepth 2 -name used -type f -mtime +"$copy_keep_days" 2> /dev/null | while IFS= read -r used_file; do
     old_copy=$(dirname "$used_file")
     [ "$(basename "$old_copy")" = "$keep_slug" ] && continue
-    [ -d "$old_copy/lock" ] && continue
+    [ -e "$old_copy/lock" ] && continue
     rm -rf "$old_copy"
   done
 }
@@ -739,39 +739,80 @@ cmd_lease() {
 
 lock_held=0
 
+# The project lock is a FILE made with the shell's own exclusive create (`set -C`, noclobber: open(O_EXCL)) — never with `mkdir`. The uutils
+# coreutils that current Ubuntu ships as /usr/bin/mkdir let several simultaneous `mkdir` of one path ALL succeed (measured here: 265 races
+# of 1200 with five contenders), which gave two jobs of one project the lock together. The file holds the holder's pid and job, two lines,
+# written by the very redirection that creates it. Succeeds only for the one that created the file.
+create_lock_file() {
+  ( set -C; printf '%s\n%s\n' "$$" "$job" > "$1" ) 2> /dev/null
+}
+
+# Read the lock file $1 into holder_pid and holder_job (empty when it is missing or has no holder written yet).
+read_lock_holder() {
+  holder_pid=
+  holder_job=
+  { IFS= read -r holder_pid; IFS= read -r holder_job; } 2> /dev/null < "$1"
+  return 0
+}
+
+# Is the lock held by nobody any more? Its holder's process is gone, or its job has an exit record, or no holder was ever written and it
+# is over a minute old (its creator died between creating the file and writing it).
+check_lock_is_stale() {
+  local holder_pid holder_job
+  read_lock_holder "$lock"
+  if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2> /dev/null; then
+    return 0
+  fi
+  if [ -n "$holder_job" ] && [ -f "$jobs_dir/$holder_job/exit" ]; then
+    return 0
+  fi
+  [ -z "$holder_pid" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2> /dev/null)" ]
+}
+
+# Break a stale lock — by ONE waiter, and only while it is still stale. Several waiters can see the same dead holder at once; if each simply
+# removed the lock, a slow one could remove the lock a faster one had already re-created, and two jobs of a project would run on one tree.
+# So the check and the removal both happen inside a short-lived mutex ($lock.breaking, made the same exclusive way): in there nothing can
+# change the lock but the breaker (a live holder is not stale, and a new lock cannot be created while the old one stands). Returns 1 when
+# another waiter is at it.
+break_stale_lock() {
+  if ! create_lock_file "$lock.breaking"; then
+    # A mutex left for over a minute belongs to a breaker that died.
+    [ -n "$(find "$lock.breaking" -maxdepth 0 -mmin +1 2> /dev/null)" ] && rm -f "$lock.breaking"
+    return 1
+  fi
+  check_lock_is_stale && rm -f "$lock"
+  rm -f "$lock.breaking"
+  return 0
+}
+
 acquire_lock() {
   local noticed=0
   local holder_pid holder_job
-  while ! mkdir "$lock" 2> /dev/null; do
+  while ! create_lock_file "$lock"; do
     [ "$killed" -eq 1 ] && return 1
-    holder_pid=$(read_file "$lock/pid")
-    holder_job=$(read_file "$lock/job")
-    if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2> /dev/null; then
-      rm -rf "$lock"
-      continue
-    fi
-    if [ -n "$holder_job" ] && [ -f "$jobs_dir/$holder_job/exit" ]; then
-      rm -rf "$lock"
-      continue
-    fi
-    if [ -z "$holder_pid" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2> /dev/null)" ]; then
-      rm -rf "$lock"
+    if check_lock_is_stale && break_stale_lock; then
       continue
     fi
     if [ "$noticed" -eq 0 ]; then
+      read_lock_holder "$lock"
       say "waiting for job ${holder_job:-another job} of this project"
       noticed=1
     fi
     nap 1
   done
-  printf '%s\n' "$$" > "$lock/pid"
-  printf '%s\n' "$job" > "$lock/job"
   lock_held=1
   return 0
 }
 
+# Give the lock back — only if it is still ours (a lock that was broken as stale and taken by another job is not ours to remove).
 release_lock() {
-  [ "$lock_held" -eq 1 ] && rm -rf "$lock"
+  if [ "$lock_held" -eq 1 ]; then
+    local holder_pid holder_job
+    read_lock_holder "$lock"
+    if [ "$holder_pid" = "$$" ] && [ "$holder_job" = "$job" ]; then
+      rm -f "$lock"
+    fi
+  fi
   lock_held=0
 }
 
