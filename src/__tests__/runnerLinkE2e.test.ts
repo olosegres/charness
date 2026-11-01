@@ -61,6 +61,8 @@ describe('runner link (process level)', { skip: skipReason }, () => {
   let runnerPaths: ReturnType<typeof getRunnerHomePaths>;
   let runnerId = '';
   let runner: ChildProcess | null = null;
+  /** The second machine (made by the lost-answer case) and where its state is. */
+  let secondHome = '';
 
   before(async () => {
     assert.deepEqual(missingTools, [], 'CI installs everything this flow needs');
@@ -299,18 +301,38 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal(readHubPaired().rev, 1, 'an update is not a new pairing');
   });
 
-  it('after the hub removes the machine its link is cut and it says so', async () => {
+  function isProcessAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it('after the hub removes the machine its link is cut, it says so, and the background job the hub\'s agents left running there is stopped', async () => {
     const name = readHubPaired().runners[0].name;
+    // A background job, as `remote-run --bg` leaves one: it runs in the runner\'s Pueue, which outlives any link.
+    const jobPidFile = path.join(layout.root, 'background-job.pid');
+    const started = sshThroughLink(layout, runnerId, `${path.join(runnerPaths.binDir, 'pueue')} --config ${runnerPaths.pueueConfig} add --immediate -- sh -c 'echo $$ > ${jobPidFile}; sleep 300'`);
+    assert.equal(started.status, 0, started.stderr);
+    await waitUntil(() => fs.existsSync(jobPidFile) && fs.readFileSync(jobPidFile, 'utf8').trim() !== '', 'the background job to start', linkTimeoutMs);
+    const jobPid = Number(fs.readFileSync(jobPidFile, 'utf8'));
+    assert.equal(isProcessAlive(jobPid), true);
+
     const removal = runHubCli(layout, ['runners', 'remove', name]);
     assert.equal(removal.status, 0, removal.stderr);
     assert.notEqual(sshThroughLink(layout, runnerId, 'echo nope').status, 0);
     await waitUntil(() => readStatus()?.state === 'removed', 'the runner to learn it was removed', linkTimeoutMs);
+    await waitUntil(() => !isProcessAlive(jobPid), 'the removed runner to stop the background job it was running', linkTimeoutMs);
     const status = spawnSync(process.execPath, [path.join(runnerPaths.currentApp, 'dist', 'runnerUtility', 'runnerCli.js'), 'status'], { encoding: 'utf8', env: { HOME: layout.runnerHome, PATH: process.env.PATH } });
     assert.match(status.stdout, /This runner was removed by @ExampleBot\. Pair again with a new line from \/runners\./);
     assert.equal(readHubPaired().runners.length, 0);
   });
+
   it('a pairing whose answer was lost is recovered with the machine\'s own key — the temporary key is spent, the code is gone', async () => {
     const home = createExtraMachine(layout, 'machine-two');
+    secondHome = home;
     const paths = getRunnerHomePaths(home);
     installRunnerApp(layout, home);
     const line = makePairingLine(layout);
@@ -347,6 +369,34 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal(readRunnerConfig(paths)?.runnerId, lost.ok ? lost.runnerId : '');
     assert.equal(fs.existsSync(paths.pairing), false, 'the half-done pairing is finished');
     assert.equal(readHubPaired().runners.length, 1);
+    await stopRunner(layout, second);
+  });
+  it('`unpair --local` on a linked runner stops its link for good: the former hub cannot run another command, and the link does not come back', async () => {
+    assert.notEqual(secondHome, '', 'the lost-answer case made the second machine');
+    const paths = getRunnerHomePaths(secondHome);
+    const stalePid = readStatusAt(paths)?.pid ?? null;
+    const second = startRunner(layout, secondHome);
+    await waitUntil(() => readStatusAt(paths)?.state === 'linked' && readStatusAt(paths)?.pid !== stalePid, 'the second machine to link again', linkTimeoutMs);
+    const secondRunnerId = readJson<RunnerConfig>(paths.config).runnerId;
+    const linkPid = readStatusAt(paths)?.pid ?? 0;
+    assert.equal(sshThroughLink(layout, secondRunnerId, 'echo before').stdout.trim(), 'before');
+
+    const unpair = spawnSync(process.execPath, [path.join(paths.currentApp, 'dist', 'runnerUtility', 'runnerCli.js'), 'unpair', '--local'], {
+      encoding: 'utf8',
+      env: { HOME: secondHome, PATH: process.env.PATH, CHARNESS_TEST_TIMINGS: '' },
+      timeout: 60_000,
+    });
+    assert.equal(unpair.status, 0, unpair.stderr);
+    assert.match(unpair.stdout, /Unpaired from charness @ExampleBot \(here only/);
+    assert.equal(isProcessAlive(linkPid), false, 'the runner process is gone — checked, not assumed');
+    assert.equal(fs.existsSync(paths.config), false);
+    assert.equal(fs.existsSync(paths.keysDir), false);
+
+    // The hub still lists the machine (it was not told) — and cannot reach it, now or later.
+    assert.notEqual(sshThroughLink(layout, secondRunnerId, 'echo after').status, 0);
+    await new Promise((resolve) => { setTimeout(resolve, 8000); });
+    assert.notEqual(sshThroughLink(layout, secondRunnerId, 'echo later').status, 0, 'no link came back: nothing on the machine retains the pairing');
+    assert.match(runHubCli(layout, ['runners', 'ls']).stdout, /machine-two — offline/);
     await stopRunner(layout, second);
   });
 });

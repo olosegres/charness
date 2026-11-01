@@ -17,7 +17,7 @@ import { gzipSync } from 'zlib';
 import { decideUpdate, updateRetryDelayMs } from '../runnerUtility/appUpdate';
 import { checkArchiveHasId, checkIsPackageId, getPackageIdOfArchive } from '../runnerUtility/packageId';
 import { HubConnectionError } from '../runnerUtility/hubClient';
-import { computeBackoffMs, createLinkLoop, removedRetryMs } from '../runnerUtility/linkLoop';
+import { computeBackoffMs, createLinkLoop, removalConfirmMs, removedRetryMs } from '../runnerUtility/linkLoop';
 import { readRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { createHubAuthenticator, createRunnerServers, type RunnerServers } from '../runnerUtility/runnerServers';
@@ -41,7 +41,8 @@ function createConfig(): RunnerConfig {
   };
 }
 
-function createLoopFixture(connect: () => Promise<never>, sleeps: number[], abort: AbortController, abortAfterSleeps: number) {
+function createLoopFixture(connect: () => Promise<never>, sleeps: number[], abort: AbortController, abortAfterSleeps: number, options: { stopJobs?: () => Promise<void> } = {}) {
+  let clock = 1_000;
   const keys = { client: generateEd25519KeyPair('c'), server: generateEd25519KeyPair('s') };
   const config = createConfig();
   const servers = createRunnerServers({ serverPrivateKey: keys.server.privateKey, hubPublicKey: config.hub.publicKey, readEnv: () => ({}), cwd: home });
@@ -51,9 +52,11 @@ function createLoopFixture(connect: () => Promise<never>, sleeps: number[], abor
     keys,
     servers,
     random: () => noRandom,
-    now: () => 1_000,
+    now: () => clock,
     connect,
+    stopJobs: options.stopJobs,
     sleep: async (ms) => {
+      clock += ms;
       sleeps.push(ms);
       if (sleeps.length >= abortAfterSleeps) abort.abort();
     },
@@ -93,16 +96,53 @@ describe('the link loop', () => {
     assert.equal(status?.pid, process.pid);
   });
 
-  it('a hub that refuses the key is «removed»: the status says by whom, and it is asked again in an hour — not with the backoff', async () => {
+  it('a hub that refuses the key twice, a little apart, has removed this runner: the status says by whom, the jobs are stopped, and it is asked again in an hour', async () => {
     const sleeps: number[] = [];
     const abort = new AbortController();
-    const loop = createLoopFixture(async () => { throw new HubConnectionError('auth', 'the hub refused the runner\'s key'); }, sleeps, abort, 2);
+    let stops = 0;
+    const loop = createLoopFixture(async () => { throw new HubConnectionError('auth', 'the hub refused the runner\'s key'); }, sleeps, abort, 2, { stopJobs: async () => { stops += 1; } });
     await loop.run(abort.signal);
-    assert.deepEqual(sleeps, [removedRetryMs, removedRetryMs]);
+    assert.deepEqual(sleeps, [removalConfirmMs, removedRetryMs], 'one refusal waits to be sure; the second one is the removal; then the hourly wait — not the backoff');
     assert.equal(removedRetryMs, 60 * 60 * 1000);
+    assert.equal(stops, 1, 'the queue\'s jobs were stopped once');
     const status = readRunnerStatus(paths);
     assert.equal(status?.state, 'removed');
     assert.equal(status?.lastError, 'removed by @ExampleBot');
+  });
+
+  it('ONE refusal of the key is not a removal: the jobs are left running and the runner says it is checking again', async () => {
+    const sleeps: number[] = [];
+    const abort = new AbortController();
+    let stops = 0;
+    const loop = createLoopFixture(async () => { throw new HubConnectionError('auth', 'refused'); }, sleeps, abort, 1, { stopJobs: async () => { stops += 1; } });
+    await loop.run(abort.signal);
+    assert.deepEqual(sleeps, [removalConfirmMs]);
+    assert.equal(stops, 0);
+    assert.equal(readRunnerStatus(paths)?.state, 'error');
+    assert.match(readRunnerStatus(paths)?.lastError ?? '', /asking once more/);
+  });
+
+  it('a refusal followed by a good connection is forgotten: a later refusal starts the confirmation again', async () => {
+    const abort = new AbortController();
+    const sleeps: number[] = [];
+    const outcomes: Array<'auth' | 'network'> = ['auth', 'network', 'auth'];
+    let stops = 0;
+    const loop = createLoopFixture(async () => {
+      const outcome = outcomes.shift() ?? 'auth';
+      throw new HubConnectionError(outcome, outcome);
+    }, sleeps, abort, 3, { stopJobs: async () => { stops += 1; } });
+    await loop.run(abort.signal);
+    assert.equal(stops, 0, 'refusal, a network failure, refusal: the two refusals are not "twice in a row"');
+  });
+
+  it('a runner that is down for a long while and learns on its first connection that it was removed stops the jobs', async () => {
+    const sleeps: number[] = [];
+    const abort = new AbortController();
+    let stops = 0;
+    // Restarted after the removal: the first refusal waits the confirmation, the second is the answer.
+    const loop = createLoopFixture(async () => { throw new HubConnectionError('auth', 'refused'); }, sleeps, abort, 2, { stopJobs: async () => { stops += 1; } });
+    await loop.run(abort.signal);
+    assert.equal(stops, 1);
   });
 
   it('a wrong host key is a failure to retry, not a removal', async () => {
@@ -179,6 +219,8 @@ interface HubStandIn {
   linkChannels: ServerChannel[];
   connections: { opened: number; closed: number };
   versionRequests: { count: number };
+  /** When set, `link` is refused (no marker, as a gate does for a runner it does not know) and `identity` answers with this. */
+  refuseLinkWith: { reply: string | null };
   close: () => void;
 }
 
@@ -189,6 +231,7 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
   const linkChannels: ServerChannel[] = [];
   const connections = { opened: 0, closed: 0 };
   const versionRequests = { count: 0 };
+  const refuseLinkWith: { reply: string | null } = { reply: null };
   const server = new Server({ hostKeys: [hostKey.privateKey] }, (connection) => {
     connections.opened += 1;
     connection.on('error', () => undefined);
@@ -198,7 +241,18 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
       connection.on('session', (acceptSession) => {
         const session = acceptSession();
         session.on('exec', (accept, reject, info) => {
-          if (info.command === 'link') {
+          if (info.command === 'link' && refuseLinkWith.reply !== null) {
+            const channel = accept();
+            channel.stderr.write('charness-gate: refused: this runner is not paired here\n');
+            channel.exit(2);
+            channel.end();
+          } else if (info.command === 'identity' && refuseLinkWith.reply !== null) {
+            const channel = accept();
+            channel.write(formatGateAnswerHead('identity'));
+            channel.write(`${refuseLinkWith.reply}\n`);
+            channel.exit(1);
+            channel.end();
+          } else if (info.command === 'link') {
             const channel = accept();
             channel.write(formatGateAnswerHead('link', { package: currentPackageId.value }));
             linkChannels.push(channel);
@@ -218,7 +272,7 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
   await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('the stand-in has no port');
-  return { port: address.port, hostKey, currentPackageId, linkChannels, connections, versionRequests, close: () => { server.close(); } };
+  return { port: address.port, hostKey, currentPackageId, linkChannels, connections, versionRequests, refuseLinkWith, close: () => { server.close(); } };
 }
 
 const installedPackageId = '0123456789abcdef';
@@ -234,7 +288,7 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
     return { acceptLinkStream: () => undefined, getActiveExecCount: () => state.busy };
   }
 
-  function startLoop(options: { servers: RunnerServers; update?: Parameters<typeof createLinkLoop>[0]['update']; versionPollMs?: number; now?: () => number }) {
+  function startLoop(options: { servers: RunnerServers; update?: Parameters<typeof createLinkLoop>[0]['update']; versionPollMs?: number; now?: () => number; stopJobs?: () => Promise<void> }) {
     const config = createConfig();
     const abort = new AbortController();
     aborts.push(abort);
@@ -244,6 +298,7 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
       keys: { client: clientKey, server: generateEd25519KeyPair('s') },
       servers: options.servers,
       update: options.update,
+      stopJobs: options.stopJobs,
       versionPollMs: options.versionPollMs ?? 60_000,
       now: options.now,
       sleep: () => new Promise((resolve) => { setTimeout(resolve, 20); }),
@@ -269,6 +324,23 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
     await waitUntil(() => hub.linkChannels.length === 2, 'a second link after the channel closed', 15_000);
     assert.equal(hub.connections.opened, 2, 'the runner left the old connection and made a new one');
     await waitUntil(() => hub.connections.closed >= 1, 'the old connection to be closed by the runner');
+  });
+
+  it('a gate that refuses the link because the registry no longer holds this runner is a removal at once — confirmed by the hub\'s own answer — and the jobs are stopped', async () => {
+    hub.refuseLinkWith.reply = JSON.stringify({ ok: false, reason: 'this runner is not paired here' });
+    let stops = 0;
+    startLoop({ servers: createFakeServers({ busy: 0 }), stopJobs: async () => { stops += 1; } });
+    await waitUntil(() => stops >= 1, 'the jobs to be stopped', 15_000);
+    assert.equal(readRunnerStatus(paths)?.state, 'removed');
+    assert.equal(hub.linkChannels.length, 0, 'no link was ever up');
+  });
+
+  it('a refused link that the hub does not call a removal is just a failure to retry', async () => {
+    hub.refuseLinkWith.reply = JSON.stringify({ ok: true, runnerId: 'abcdef012345', name: 'mac', hubPublicKey: generateEd25519KeyPair('k').publicKey, label: '@ExampleBot', host: 'host.example', port: 22, packageId: null });
+    let stops = 0;
+    startLoop({ servers: createFakeServers({ busy: 0 }), stopJobs: async () => { stops += 1; } });
+    await waitUntil(() => readRunnerStatus(paths)?.state === 'error', 'the failure to be recorded', 15_000);
+    assert.equal(stops, 0);
   });
 
   it('a busy runner that becomes idle installs the update once, and does not reconnect while it installs', async () => {

@@ -1,7 +1,8 @@
 import type { Client } from 'ssh2';
 import { restartExitCode } from './appInstall';
 import { decideUpdate, updateFromHub, type UpdateOutcome } from './appUpdate';
-import { callGate, connectToHub, HubConnectionError, type HubEndpoint } from './hubClient';
+import { redeemReplySchema } from '../runners/gateProtocol';
+import { callGate, connectToHub, HubConnectionError, requestGateJson, type HubEndpoint } from './hubClient';
 import { readRunnerVersionPollMs } from './versionPollTiming';
 import { writeRunnerStatus, type LinkState, type RunnerConfig } from './runnerConfig';
 import type { RunnerHomePaths } from './runnerHome';
@@ -14,7 +15,10 @@ import type { RunnerServers } from './runnerServers';
  * changes because nothing here is state but `config.json` and the keys.
  *
  *   backoff   1 s, doubling, up to 5 min, ±20 % jitter; a link that held for 30 s starts the series again
- *   removed   the hub refused the key (a removed runner): say so in the status and ask once an hour — never a flood that trips fail2ban
+ *   removed   the hub no longer knows this runner: its key is refused (twice, a short time apart — one refusal could be a key file being
+ *             rewritten), or the gate answers that the runner is not paired. Say so in the status, STOP THE QUEUE'S JOBS (Pueue outlives
+ *             the link by design, so a removal must be told apart from an ordinary disconnection and end the work the hub's agents
+ *             left running here), and ask again once an hour — never a flood that trips fail2ban
  *   update    the `link` answer names the hub's package id, and a linked runner asks again every few minutes (`version`, over the
  *             connection it holds); an idle runner whose id differs updates and asks the launcher for a restart
  *   closing   the attempt ends when the `link` CHANNEL ends or the connection does — the hub's gate dying, or the link being cut, closes
@@ -26,6 +30,8 @@ const maxBackoffMs = 5 * 60 * 1000;
 const jitterRatio = 0.2;
 const stableLinkMs = 30 * 1000;
 export const removedRetryMs = 60 * 60 * 1000;
+/** How long after the first refusal of the key a second one confirms that the runner was removed. */
+export const removalConfirmMs = 15 * 1000;
 
 /** @description The wait before attempt number `failures + 1` (0 failures: the first retry); `random` is in [0, 1). */
 export function computeBackoffMs(failures: number, random: number): number {
@@ -41,6 +47,10 @@ export interface LinkLoopDeps {
   now?: () => number;
   /** How often a linked runner asks the hub for its package (default: {@link readRunnerVersionPollMs}). */
   versionPollMs?: number;
+  /** Stops the jobs of the queue; called when the runner learns it was removed. */
+  stopJobs?: () => Promise<void>;
+  /** The wait between the two refusals that confirm a removal (default {@link removalConfirmMs}). */
+  removalConfirmMs?: number;
   random?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   connect?: typeof connectToHub;
@@ -71,7 +81,7 @@ function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-type AttemptResult = { kind: 'closed'; lastedMs: number } | { kind: 'removed' } | { kind: 'failed'; reason: string } | { kind: 'restart' };
+type AttemptResult = { kind: 'closed'; lastedMs: number } | { kind: 'removed'; isConfirmed: boolean } | { kind: 'failed'; reason: string } | { kind: 'restart' };
 
 export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
   const now = deps.now ?? Date.now;
@@ -81,6 +91,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
   const update = deps.update ?? updateFromHub;
   const log = deps.log ?? (() => undefined);
   const versionPollMs = deps.versionPollMs ?? readRunnerVersionPollMs(process.env);
+  const confirmMs = deps.removalConfirmMs ?? removalConfirmMs;
   const endpoint: HubEndpoint = { host: deps.config.hub.host, port: deps.config.hub.port, user: deps.config.hub.user, hostKey: deps.config.hub.hostKey };
   let installedPackageId = deps.config.packageId;
   let state: LinkState = 'connecting';
@@ -117,7 +128,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
     try {
       client = await connect(endpoint, deps.keys.client.privateKey);
     } catch (error) {
-      if (error instanceof HubConnectionError && error.failure === 'auth') return { kind: 'removed' };
+      if (error instanceof HubConnectionError && error.failure === 'auth') return { kind: 'removed', isConfirmed: false };
       return { kind: 'failed', reason: error instanceof Error ? error.message : 'could not connect' };
     }
     let answer: Awaited<ReturnType<typeof callGate>>;
@@ -128,7 +139,10 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
       return { kind: 'failed', reason: error instanceof Error ? error.message : 'the link request failed' };
     }
     if (answer === null) {
+      // The gate refused (no marker). If the hub says it does not know this runner, that is a removal whose key line outlived the registry entry.
+      const identity = await requestGateJson(client, 'identity', null, redeemReplySchema).catch(() => null);
       client.end();
+      if (identity !== null && !identity.ok) return { kind: 'removed', isConfirmed: true };
       return { kind: 'failed', reason: 'the hub did not start the link' };
     }
     let hubPackageId = answer.marker.fields.package;
@@ -218,15 +232,25 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
     },
     run: async (signal) => {
       let failures = 0;
+      let firstRefusalAtMs: number | null = null;
       while (!signal.aborted) {
         const result = await runOnce(signal);
         if (result.kind === 'restart') return restartExitCode;
         if (result.kind === 'removed') {
+          const now0 = now();
+          firstRefusalAtMs ??= now0;
+          if (!result.isConfirmed && now0 - firstRefusalAtMs < confirmMs) {
+            writeStatus('error', 'the hub refused the key; asking once more before taking this for a removal');
+            await sleep(confirmMs, signal);
+            continue;
+          }
           writeStatus('removed', `removed by ${deps.config.hub.label}`);
-          log(`the hub refused this runner's key: removed by ${deps.config.hub.label}; asking again in an hour`);
+          log(`the hub no longer knows this runner: removed by ${deps.config.hub.label}; stopping its jobs, then asking again in an hour`);
+          await deps.stopJobs?.().catch((error) => log(`could not stop the jobs (${error instanceof Error ? error.message : 'unknown error'})`));
           await sleep(removedRetryMs, signal);
           continue;
         }
+        firstRefusalAtMs = null;
         if (result.kind === 'failed') {
           writeStatus('error', result.reason);
           log(`link failed: ${result.reason}`);

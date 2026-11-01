@@ -11,8 +11,10 @@ import { connectToHub, HubConnectionError, requestGateJson, type HubEndpoint } f
 import { recoverPairing } from './pairingRecovery';
 import { createLinkLoop } from './linkLoop';
 import { collectMachineReport, createMachineProbe, formatMachineReport, type MachineReport } from './machineReport';
-import { ensurePueueDaemon, waitForPueueDaemon } from './pueueDaemon';
+import { ensurePueueDaemon, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
 import { createIosCheckDeps, readIosCheck, refreshIosCheck } from './iosCheck';
+import { createProcessControl, stopLocalLink, type ProcessControl } from './localLinkStop';
+import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { checkIsRunnerPaused, setRunnerPaused } from './runnerFlags';
 import { createServiceDeps, installService, readServiceKind, uninstallService, parseServiceCommand, type ServiceDeps } from './serviceManager';
 import { readPairingInProgress, readRunnerConfig, readRunnerStatus, removePairingInProgress, writePairingInProgress, writeRunnerConfig, type RunnerConfig } from './runnerConfig';
@@ -238,7 +240,14 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     cwd: paths.workDir,
     onActiveCountChange: () => loopRef.current?.notifyActiveCountChange(),
   });
-  loopRef.current = createLinkLoop({ paths, config, keys, servers, log: (line) => io.stderr(`charness-runner: ${line}\n`) });
+  loopRef.current = createLinkLoop({
+    paths,
+    config,
+    keys,
+    servers,
+    log: (line) => io.stderr(`charness-runner: ${line}\n`),
+    stopJobs: async () => { await stopAllPueueJobs(paths); },
+  });
   const controller = new AbortController();
   const stop = (): void => {
     controller.abort();
@@ -324,17 +333,39 @@ export interface UnpairOptions {
   isLocalOnly: boolean;
 }
 
+export interface UnpairDeps {
+  service: ServiceDeps;
+  process: ProcessControl;
+  queueRunner: CommandRunner;
+}
+
+export function createUnpairDeps(): UnpairDeps {
+  return { service: createServiceDeps(), process: createProcessControl(), queueRunner: runCommand };
+}
+
 /**
- * @description `charness-runner unpair`: tell the hub (which removes its key line and cuts the link), stop the user service, and forget the
- * pairing here — `config.json`, the keys, the status, the pause and the iOS result. The installed program, the tools, the work folder and
- * the queue stay (a pairing again reuses them).
+ * @description `charness-runner unpair`: forget the pairing — and make that true. In this order:
+ *   1. a system service (installed by an admin) is NOT touched from the account: unpair stops there and prints the admin command, because a
+ *      pairing cannot be forgotten under a running daemon that holds it;
+ *   2. the hub is told (it removes the key line and cuts the link) unless `--local`;
+ *   3. the link on this machine is STOPPED and checked to be gone — the user service removed (verified), a foreground `run` ended — since a
+ *      running link keeps the keys in memory and goes on serving the hub's commands whatever the files say;
+ *   4. the queue's jobs are stopped (this machine no longer serves that hub's agents);
+ *   5. only then `config.json`, the keys, the status, the pause and the iOS result are deleted. The installed program, the tools, the work
+ *      folder and the queue (now empty) stay.
+ * A step that fails stops the command with exit 1 and says what is left.
  */
-export async function runUnpair(options: UnpairOptions, io: CommandIo, homeDir: string = os.homedir(), serviceDeps: ServiceDeps = createServiceDeps()): Promise<number> {
+export async function runUnpair(options: UnpairOptions, io: CommandIo, homeDir: string = os.homedir(), deps: UnpairDeps = createUnpairDeps()): Promise<number> {
   const paths = getRunnerHomePaths(homeDir);
   const config = readRunnerConfig(paths);
   const keys = readRunnerKeys(paths);
   if (config === null || keys === null) {
     io.stderr('charness-runner: this account is not paired.\n');
+    return 1;
+  }
+  const serviceKind = readServiceKind(paths);
+  if (serviceKind === 'system-service') {
+    io.stderr(`charness-runner: this runner runs as a system service, which only an admin can remove. Remove it first, then unpair: sudo ${paths.launcher} service uninstall --system --user ${os.userInfo().username}. Nothing was changed.\n`);
     return 1;
   }
   if (!options.isLocalOnly) {
@@ -348,20 +379,26 @@ export async function runUnpair(options: UnpairOptions, io: CommandIo, homeDir: 
     } catch (error) {
       // A hub that no longer accepts the key has already forgotten this machine: nothing is left to tell it.
       if (!(error instanceof HubConnectionError && error.failure === 'auth')) {
-        io.stderr(`charness-runner: the hub could not be told (${error instanceof Error ? error.message : 'unknown error'}). Try again, or use \`unpair --local\` to forget the pairing here only.\n`);
+        io.stderr(`charness-runner: the hub could not be told (${error instanceof Error ? error.message : 'unknown error'}). Nothing was changed. Try again, or use \`unpair --local\` to forget the pairing here only.\n`);
         return 1;
       }
     }
   }
-  const serviceKind = readServiceKind(paths);
   if (serviceKind === 'user-service') {
-    const removed = await uninstallService({ isSystem: false, userName: null }, serviceDeps);
-    if (!removed.ok) io.stderr(`charness-runner: ${removed.lines.join(' ')}\n`);
-  } else if (serviceKind === 'system-service') {
-    io.stderr(`charness-runner: a system service is installed; remove it as an admin: sudo ${paths.launcher} service uninstall --system --user ${os.userInfo().username}\n`);
+    const removed = await uninstallService({ isSystem: false, userName: null }, deps.service);
+    if (!removed.ok) {
+      io.stderr(`charness-runner: the service on this machine could not be stopped, so the pairing is kept here: ${removed.lines.join(' ')}\n`);
+      return 1;
+    }
   }
+  const stillRunning = await stopLocalLink(paths, deps.process);
+  if (stillRunning !== null) {
+    io.stderr(`charness-runner: the runner on this machine could not be stopped (${stillRunning}), so the pairing is kept here. Stop it by hand and run unpair again.\n`);
+    return 1;
+  }
+  if (!(await stopAllPueueJobs(paths, deps.queueRunner))) io.stderr('charness-runner: some jobs of the queue may still be running; check `pueue status` with the runner\'s configuration.\n');
   for (const file of [paths.config, paths.status, paths.pairing, paths.pausedFlag, paths.iosCheck]) fs.rmSync(file, { force: true });
   fs.rmSync(paths.keysDir, { recursive: true, force: true });
-  io.stdout(`Unpaired from charness ${config.hub.label}${options.isLocalOnly ? ' (here only — the hub was not told)' : ''}. This machine no longer serves it.\n`);
+  io.stdout(`Unpaired from charness ${config.hub.label}${options.isLocalOnly ? ' (here only — the hub was not told)' : ''}. The link on this machine is stopped, and so are its jobs.\n`);
   return 0;
 }

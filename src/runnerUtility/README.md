@@ -115,11 +115,25 @@ where it matters.
 
 ## `pause`, `resume`, `unpair`
 
-`pause` writes the flag, `resume` removes it (the hub has a pause of its own, set from `/runners`). `unpair` tells the hub (`unpair` request:
-it removes the key line and cuts the link), stops the user service, and forgets the pairing here — `config.json`, the keys, the status, the
-pause, the iOS result; the installed program, the tools, the work folder and the queue stay. A hub that cannot be reached leaves everything as
-it was; `unpair --local` forgets the pairing here only. A system service is not removed from the account (it needs an admin): the command
-is printed.
+`pause` writes the flag, `resume` removes it (the hub has a pause of its own, set from `/runners`). **`unpair` makes «unpaired» true.** In
+order: (1) a system service (installed by an admin) is not touched from the account — unpair stops there with the admin command and changes
+nothing, because a pairing cannot be forgotten under a running daemon that holds it; (2) the hub is told (`unpair` request: it removes the key
+line and cuts the link), unless `--local`; (3) the link on this machine is STOPPED and checked to be gone — the user service removed
+(verified, see above), a foreground `run` sent TERM and then KILL until its pid is really gone (`localLinkStop.ts`; a pid that now belongs
+to another program is recognised by its command line and left alone) — because a running link keeps the keys in memory and goes on serving
+the hub's commands and reconnecting whatever the files say; (4) the queue's jobs are stopped (`pueue reset --force`); (5) only then
+`config.json`, the keys, the status, the pause and the iOS result are deleted. The installed program, the tools, the work folder and the
+queue (now empty) stay. A step that fails stops the command with exit 1 and says what is left; a hub that cannot be reached leaves
+everything as it was, and `unpair --local` forgets the pairing here only.
+
+## When the hub removes the runner
+
+Pueue outlives the link by design (a link restart must never kill a job), so a removal has to be told apart from an ordinary disconnection and
+end the work the hub's agents left running here. The runner takes a removal for certain when the hub's own answer says so — the gate refused
+`link` and `identity` answers that the runner is not paired — or when its key is refused twice, 15 s apart (one refusal could be a key file
+being rewritten, and killing jobs for that would be wrong). It then records `removed`, stops every job of the queue (`stopAllPueueJobs`: the
+running ones are killed, and the queued ones are removed so none starts in their place), and asks again once an hour. A machine that was
+offline during the removal does the same on its next connection.
 
 ## Not here yet
 

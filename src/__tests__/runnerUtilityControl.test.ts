@@ -17,7 +17,8 @@ import type { CommandRunner } from '../selfUpdate/commandRunner';
 import { formatGateAnswerHead } from '../runners/gateProtocol';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { writeIosCheck } from '../runnerUtility/iosCheck';
-import { formatKeepRunningHelp, runPause, runService, runStatus, runUnpair, type CommandIo } from '../runnerUtility/runnerCommands';
+import { formatKeepRunningHelp, runPause, runService, runStatus, runUnpair, type CommandIo, type UnpairDeps } from '../runnerUtility/runnerCommands';
+import type { ProcessControl } from '../runnerUtility/localLinkStop';
 import { readRunnerConfig, writeRunnerConfig, writeRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { checkIsRunnerPaused } from '../runnerUtility/runnerFlags';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
@@ -84,6 +85,16 @@ function createServiceDeps(commands: string[]): ServiceDeps {
     return { ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false };
   };
   return { runner, platform: 'linux', uid: 1000, checkIsProcessAlive: () => false, accountName: 'runner', homeDir: home, nodePath: process.execPath, launchDaemonsDir: path.join(home, 'LaunchDaemons'), chown: () => undefined, resolveAccount: async () => null };
+}
+
+/** The unpair command's collaborators: the service manager and the queue record their commands; no process is running. */
+function createUnpairDeps(commands: string[], overrides: Partial<UnpairDeps> = {}): UnpairDeps {
+  const idleProcess: ProcessControl = { checkIsAlive: () => false, readCommand: () => null, signal: () => undefined, terminateGraceMs: 50, killGraceMs: 50 };
+  const queueRunner: CommandRunner = async (file, args) => {
+    commands.push(`${file} ${args.join(' ')}`);
+    return { ok: false, exitCode: 1, stdout: '', stderr: '', isTimedOut: false };
+  };
+  return { service: createServiceDeps(commands), process: idleProcess, queueRunner, ...overrides };
 }
 
 beforeEach(() => {
@@ -174,9 +185,9 @@ describe('unpair', () => {
     writeRunnerStatus(paths, { pid: process.pid, state: 'linked', sinceMs: 1, updatedAtMs: 1, lastError: null, activeJobs: 0, packageId: null });
     const commands: string[] = [];
 
-    assert.equal(await runUnpair({ isLocalOnly: false }, io, home, createServiceDeps(commands)), 0, errors);
+    assert.equal(await runUnpair({ isLocalOnly: false }, io, home, createUnpairDeps(commands)), 0, errors);
     assert.equal(hub.unpairRequests.count, 1, 'the hub was told');
-    assert.match(output, /Unpaired from charness @ExampleBot\. This machine no longer serves it\./);
+    assert.match(output, /Unpaired from charness @ExampleBot\. The link on this machine is stopped, and so are its jobs\./);
     assert.ok(commands.some((line) => line.startsWith('systemctl --user disable --now')), 'the user service is stopped');
     assert.equal(readRunnerConfig(paths), null);
     assert.equal(readRunnerKeys(paths), null);
@@ -189,13 +200,13 @@ describe('unpair', () => {
     hubs.splice(0).forEach((hub) => hub.close());
     ensureRunnerKeys(paths);
     pair(closed.port, closed.hostKey);
-    const refused = await runUnpair({ isLocalOnly: false }, io, home, createServiceDeps([]));
+    const refused = await runUnpair({ isLocalOnly: false }, io, home, createUnpairDeps([]));
     assert.equal(refused, 1);
     assert.match(errors, /the hub could not be told.*unpair --local/);
     assert.notEqual(readRunnerConfig(paths), null, 'nothing was forgotten');
 
     output = '';
-    assert.equal(await runUnpair({ isLocalOnly: true }, io, home, createServiceDeps([])), 0);
+    assert.equal(await runUnpair({ isLocalOnly: true }, io, home, createUnpairDeps([])), 0);
     assert.match(output, /here only — the hub was not told/);
     assert.equal(readRunnerConfig(paths), null);
   });
@@ -204,23 +215,100 @@ describe('unpair', () => {
     const hub = await startHub(generateEd25519KeyPair('someone else').publicKey);
     ensureRunnerKeys(paths);
     pair(hub.port, hub.hostKey);
-    assert.equal(await runUnpair({ isLocalOnly: false }, io, home, createServiceDeps([])), 0, errors);
+    assert.equal(await runUnpair({ isLocalOnly: false }, io, home, createUnpairDeps([])), 0, errors);
     assert.equal(hub.unpairRequests.count, 0);
     assert.equal(readRunnerConfig(paths), null);
   });
 
-  it('a system service is not touched from the account: the admin command to remove it is printed', async () => {
-    ensureRunnerKeys(paths);
-    pair(22);
+  it('a system service is not touched from the account: unpair stops with the admin command and changes nothing — not even the hub is told', async () => {
+    const keys = ensureRunnerKeys(paths);
+    const hub = await startHub(keys.client.publicKey);
+    pair(hub.port, hub.hostKey);
     fs.writeFileSync(paths.serviceMarker, 'system-service\n');
     const commands: string[] = [];
-    assert.equal(await runUnpair({ isLocalOnly: true }, io, home, createServiceDeps(commands)), 0);
-    assert.match(errors, /sudo .*service uninstall --system --user/);
+    assert.equal(await runUnpair({ isLocalOnly: false }, io, home, createUnpairDeps(commands)), 1);
+    assert.match(errors, /sudo .*service uninstall --system --user .*Nothing was changed/);
     assert.deepEqual(commands, []);
+    assert.equal(hub.unpairRequests.count, 0);
+    assert.notEqual(readRunnerConfig(paths), null);
+  });
+
+  it('a user service that cannot be stopped keeps the pairing, and does not say it is gone', async () => {
+    ensureRunnerKeys(paths);
+    pair(22);
+    fs.writeFileSync(paths.serviceMarker, 'user-service\n');
+    const commands: string[] = [];
+    const service = createServiceDeps(commands);
+    const stuck: UnpairDeps = createUnpairDeps(commands, { service: { ...service, runner: async (file, args) => {
+      commands.push(`${file} ${args.join(' ')}`);
+      return { ok: false, exitCode: 1, stdout: args.includes('show') ? 'active\n' : '', stderr: '', isTimedOut: false };
+    } } });
+    assert.equal(await runUnpair({ isLocalOnly: true }, io, home, stuck), 1);
+    assert.match(errors, /service on this machine could not be stopped, so the pairing is kept here/);
+    assert.doesNotMatch(output, /Unpaired/);
+    assert.notEqual(readRunnerConfig(paths), null);
+    assert.notEqual(readRunnerKeys(paths), null);
+  });
+
+  it('a foreground runner that is still linked is stopped — and checked to be gone — before the pairing is forgotten; the queue\'s jobs are stopped too', async () => {
+    ensureRunnerKeys(paths);
+    pair(22);
+    const alive = new Set([4242]);
+    const signals: string[] = [];
+    const commands: string[] = [];
+    writeRunnerStatus(paths, { pid: 4242, state: 'linked', sinceMs: 1, updatedAtMs: 1, lastError: null, activeJobs: 0, packageId: null });
+    const control: ProcessControl = {
+      checkIsAlive: (pid) => alive.has(pid),
+      readCommand: () => `/usr/bin/node ${paths.currentApp}/dist/runnerUtility/runnerCli.js run`,
+      signal: (pid, signal) => { signals.push(signal); if (signal === 'SIGTERM') alive.delete(pid); },
+      terminateGraceMs: 500,
+      killGraceMs: 500,
+    };
+    assert.equal(await runUnpair({ isLocalOnly: true }, io, home, createUnpairDeps(commands, { process: control })), 0, errors);
+    assert.deepEqual(signals, ['SIGTERM']);
+    assert.equal(alive.has(4242), false);
+    assert.ok(commands.some((line) => line.endsWith('reset --force')), 'the queue was emptied: its running jobs are killed');
+    assert.equal(readRunnerConfig(paths), null);
+  });
+
+  it('a runner that ignores TERM is killed; one that cannot be stopped at all keeps the pairing in place', async () => {
+    ensureRunnerKeys(paths);
+    pair(22);
+    writeRunnerStatus(paths, { pid: 4243, state: 'linked', sinceMs: 1, updatedAtMs: 1, lastError: null, activeJobs: 0, packageId: null });
+    const alive = new Set([4243]);
+    const signals: string[] = [];
+    const stubborn: ProcessControl = {
+      checkIsAlive: (pid) => alive.has(pid),
+      readCommand: () => `node ${paths.currentApp}/dist/runnerUtility/runnerCli.js run`,
+      signal: (pid, signal) => { signals.push(signal); if (signal === 'SIGKILL') alive.delete(pid); },
+      terminateGraceMs: 200,
+      killGraceMs: 200,
+    };
+    assert.equal(await runUnpair({ isLocalOnly: true }, io, home, createUnpairDeps([], { process: stubborn })), 0, errors);
+    assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+
+    ensureRunnerKeys(paths);
+    pair(22);
+    writeRunnerStatus(paths, { pid: 4244, state: 'linked', sinceMs: 1, updatedAtMs: 1, lastError: null, activeJobs: 0, packageId: null });
+    const unkillable: ProcessControl = { ...stubborn, checkIsAlive: (pid) => pid === 4244, signal: () => undefined };
+    errors = '';
+    assert.equal(await runUnpair({ isLocalOnly: true }, io, home, createUnpairDeps([], { process: unkillable })), 1);
+    assert.match(errors, /could not be stopped \(the link process \(pid 4244\) did not end\), so the pairing is kept here/);
+    assert.notEqual(readRunnerConfig(paths), null, 'the pairing is still there: the runner still holds it');
+  });
+
+  it('a pid in status.json that now belongs to another program is left alone', async () => {
+    ensureRunnerKeys(paths);
+    pair(22);
+    writeRunnerStatus(paths, { pid: 4245, state: 'linked', sinceMs: 1, updatedAtMs: 1, lastError: null, activeJobs: 0, packageId: null });
+    const signals: string[] = [];
+    const reused: ProcessControl = { checkIsAlive: () => true, readCommand: () => '/usr/bin/vim notes.txt', signal: (_pid, signal) => { signals.push(signal); }, terminateGraceMs: 50, killGraceMs: 50 };
+    assert.equal(await runUnpair({ isLocalOnly: true }, io, home, createUnpairDeps([], { process: reused })), 0);
+    assert.deepEqual(signals, []);
   });
 
   it('an account that is not paired is told so', async () => {
-    assert.equal(await runUnpair({ isLocalOnly: false }, io, home, createServiceDeps([])), 1);
+    assert.equal(await runUnpair({ isLocalOnly: false }, io, home, createUnpairDeps([])), 1);
     assert.match(errors, /not paired/);
   });
 });
