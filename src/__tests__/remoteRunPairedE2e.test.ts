@@ -276,7 +276,12 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
     it('the wait gives up when --runner-wait ends, with the reason and how long it waited', async () => {
       const startedAtMs = Date.now();
       const result = await run(['--needs', 'playwright', '--runner-wait', '3s', 'echo x']);
-      assert.ok(Date.now() - startedAtMs < 20_000, 'it stopped waiting at its deadline, not a probe later');
+      // A smoke check of the whole command, not of the deadline arithmetic (an offline paired runner is found offline at once, so even a
+      // loop that ignored the deadline would end soon): the wait really happened — the last look is a second before the end — and ended.
+      // Where the deadline is kept (sleeps cut, probes cut at what is left, an answer after the end refused) is `remoteRunRunnerWait.test.ts`.
+      const elapsedMs = Date.now() - startedAtMs;
+      assert.ok(elapsedMs >= 2_000, `it waited for the runner (${elapsedMs} ms)`);
+      assert.ok(elapsedMs < 20_000, `and stopped (${elapsedMs} ms)`);
       assert.equal(result.exitCode, 125);
       assert.match(result.stderr, new RegExp(`waiting for a runner with playwright \\(${runnerName} offline since `));
       assert.match(result.stderr, /waited \d+ s for a runner with "playwright" to come back — none did/);

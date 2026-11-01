@@ -104,11 +104,24 @@ describe('the wait for a paired runner reads the catalog again at every attempt'
     assert.deepEqual(sleeps, [10_000]);
   });
 
-  it('a runner paired again under the same name (a new link) is a new client at the next look, not the one the command started with', async () => {
+  it('a runner paired again under the same name (a new link) is a new client at the next look: its own link\'s last-seen time is what the failure shows, not the old one\'s', async () => {
     const paired = createPairedRunner();
-    const pairedAgain = { ...paired, paired: { runnerId: 'ffffffffffff', hubDir: path.join(root, 'other-hub'), isPausedByHub: true, os: 'Ubuntu 24.04' } };
+    const newRunnerId = 'ffffffffffff';
+    const newHubDir = path.join(root, 'other-hub');
+    const pairedAgain = { ...paired, paired: { runnerId: newRunnerId, hubDir: newHubDir, isPausedByHub: false, os: 'Ubuntu 24.04' } };
+    // The new link left a heartbeat of its own (the gate has gone: offline); the old one has none, so a client that stayed on the old
+    // link could only show the time of the last probe snapshot (14:02).
+    const linkDir = path.join(newHubDir, 'link');
+    fs.mkdirSync(linkDir, { recursive: true });
+    fs.writeFileSync(path.join(linkDir, `${newRunnerId}.json`), JSON.stringify({ pid: 4242, sinceMs: Date.UTC(2026, 10, 1, 16, 0), lastBeatMs: Date.UTC(2026, 10, 1, 16, 30), endedAtMs: Date.UTC(2026, 10, 1, 16, 31) }));
     catalogs = [{ runners: [paired] }, { runners: [pairedAgain] }];
-    await assert.rejects(chooseClient(createContext(), { runner: null, needs: 'playwright', waitSeconds: 900 }), (error: Error) => error instanceof RemoteRunError && /paused from the hub/.test(error.message));
+    await assert.rejects(chooseClient(createContext(), { runner: null, needs: 'playwright', waitSeconds: 15 }), (error: Error) => {
+      assert.ok(error instanceof RemoteRunError);
+      assert.match(error.message, /mac — offline \(the runner is not connected\) · last seen 2026-11-01 16:31 UTC/, 'the new link\'s own end time');
+      assert.doesNotMatch(error.message, /last seen 2026-11-01 14:02 UTC/);
+      assert.doesNotMatch(error.message, /paused from the hub/);
+      return true;
+    });
   });
 
   it('--runner-wait 0 reads the catalog once and fails at once, as without a wait', async () => {
