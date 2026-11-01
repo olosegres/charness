@@ -44,6 +44,13 @@ export const agentEnvironmentNames = [
   'XDG_CACHE_HOME',
 ] as const;
 
+/**
+ * Allowlisted names that reach the agent even when the instance's `ENV_FILE` set them: a PATH or TZ from that file is the instance's own
+ * business, but `XDG_CACHE_HOME` is a path the BOT then follows too — and the agent must follow the bot, or the two keep separate
+ * `charness remote-run` caches (probes, ssh connections, job records) and cannot read each other's. It holds no secret.
+ */
+const namesPassedEvenFromEnvFile: ReadonlySet<string> = new Set(['XDG_CACHE_HOME']);
+
 /** Names the instance's `ENV_FILE` set — recorded by the env loader on every load (the hot worker loads it again). */
 const envFileVariableNames = new Set<string>();
 
@@ -60,13 +67,13 @@ export function resetEnvFileVariableNamesForTests(): void {
 /**
  * @description The allowlisted variables `env` holds, minus any the `ENV_FILE`
  * set — an instance file that sets `PATH` leaves the agent on the shell's default
- * search path rather than handing it a value from the file.
+ * search path rather than handing it a value from the file (`XDG_CACHE_HOME` excepted, see above).
  */
 export function getAgentEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const environment: Record<string, string> = {};
   for (const name of agentEnvironmentNames) {
     const value = env[name];
-    if (value !== undefined && !envFileVariableNames.has(name)) environment[name] = value;
+    if (value !== undefined && (!envFileVariableNames.has(name) || namesPassedEvenFromEnvFile.has(name))) environment[name] = value;
   }
   return environment;
 }

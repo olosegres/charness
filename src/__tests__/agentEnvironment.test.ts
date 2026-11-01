@@ -58,10 +58,10 @@ describe('getAgentEnvironment', () => {
     assert.deepEqual(getAgentEnvironment({ HOME: '/home/user' }), { HOME: '/home/user' }, 'and adds nothing when the bot has none');
   });
 
-  it('passes XDG_CACHE_HOME on, so a tracker agent and the bot share one remote-run cache — unless the instance file set it', () => {
+  it('passes XDG_CACHE_HOME on — also when the instance file set it, because the bot follows that value too and the agent must share its remote-run cache; any other name the file set stays out', () => {
     assert.deepEqual(getAgentEnvironment({ HOME: '/home/user', XDG_CACHE_HOME: '/data/cache' }), { HOME: '/home/user', XDG_CACHE_HOME: '/data/cache' });
-    addEnvFileVariableNames(['XDG_CACHE_HOME']);
-    assert.deepEqual(getAgentEnvironment({ HOME: '/home/user', XDG_CACHE_HOME: '/data/cache' }), { HOME: '/home/user' });
+    addEnvFileVariableNames(['XDG_CACHE_HOME', 'TZ']);
+    assert.deepEqual(getAgentEnvironment({ HOME: '/home/user', XDG_CACHE_HOME: '/data/cache', TZ: 'Europe/Berlin' }), { HOME: '/home/user', XDG_CACHE_HOME: '/data/cache' });
   });
 
   it('starts clean: a name an earlier case recorded is not remembered', () => {

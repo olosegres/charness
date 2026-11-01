@@ -157,7 +157,7 @@ another platform's state.
   runs only in the whole-bot Docker container (root `SETUP.md`, "Run with Docker"), where the agent still reads the
   `ENV_FILE` and `DATA_DIR` but nothing of the host beyond the container's mounts. The image runs everything as
   root, so the allowlist carries `IS_SANDBOX` (Claude Code refuses `--dangerously-skip-permissions` as root
-  without it). `XDG_CACHE_HOME` (a path) is on it too, so the agent and the bot share one `charness remote-run` cache. A deployment that
+  without it). `XDG_CACHE_HOME` (a path) is on it too — even when the `ENV_FILE` set it, as the bot then follows that value — so the agent and the bot share one `charness remote-run` cache. A deployment that
   needs `CLAUDE_CONFIG_DIR`, a proxy or `NODE_EXTRA_CA_CERTS` must add the name to that allowlist — a missing
   one fails SILENTLY.
 - **Project memory loads from the working folder and every parent**, like any Claude Code session — `jira.json`
