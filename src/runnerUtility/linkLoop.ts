@@ -149,6 +149,15 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
       client.end();
       return { kind: 'failed', reason: error instanceof Error ? error.message : 'the link request failed' };
     }
+    // A stop that came during the connect or the handshake fired before anything listened for it, and the listener added further down would
+    // never hear it: the link would stay up and `run` would never return. So the stop is looked at HERE, right after the awaited answer and
+    // before anything else is started on it — a refusal's follow-up request, an update (a download and a blocking install), the link itself.
+    // The branches that wait further (the follow-up request, the update) end the attempt, and on the way to the listener nothing waits.
+    if (signal.aborted) {
+      answer?.channel.destroy();
+      client.end();
+      return { kind: 'closed', lastedMs: 0 };
+    }
     if (answer === null) {
       // The gate refused (no marker). If the hub says it does not know this runner, that is a removal whose key line outlived the registry entry.
       const identity = await requestGateJson(client, 'identity', null, redeemReplySchema).catch(() => null);
@@ -170,13 +179,6 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
       client.end();
       const outcome = await tryUpdate(hubPackageId, signal);
       return outcome?.ok === true ? { kind: 'restart' } : { kind: 'failed', reason: outcome === null ? 'stopped' : `update failed: ${outcome.reason}` };
-    }
-    // A stop that came during the connect or the handshake fired before anything listened for it, and the listener added below would never
-    // hear it: the link would stay up and `run` would never return. Nothing between this check and that listener waits, so none slips by.
-    if (signal.aborted) {
-      answer.channel.destroy();
-      client.end();
-      return { kind: 'closed', lastedMs: 0 };
     }
     deps.servers.acceptLinkStream(answer.channel);
     answer.channel.resume();

@@ -239,7 +239,7 @@ interface HubStandIn {
   versionRequests: { count: number };
   /** When set, `link` is refused (no marker, as a gate does for a runner it does not know) and `identity` answers with this. */
   refuseLinkWith: { reply: string | null };
-  /** While `until` is set the hub takes a `link` request and answers it only when that promise settles — a runner caught between «asked» and «linked». */
+  /** While `until` is set the hub takes a `link` request and answers it (the link, or the refusal) only when that promise settles — a runner caught between «asked» and «linked». */
   holdLinkAnswer: { until: Promise<void> | null; requestCount: number };
   close: () => void;
 }
@@ -263,10 +263,15 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
         const session = acceptSession();
         session.on('exec', (accept, reject, info) => {
           if (info.command === 'link' && refuseLinkWith.reply !== null) {
+            holdLinkAnswer.requestCount += 1;
             const channel = accept();
-            channel.stderr.write('charness-gate: refused: this runner is not paired here\n');
-            channel.exit(2);
-            channel.end();
+            const refuseLink = (): void => {
+              channel.stderr.write('charness-gate: refused: this runner is not paired here\n');
+              channel.exit(2);
+              channel.end();
+            };
+            if (holdLinkAnswer.until === null) refuseLink();
+            else void holdLinkAnswer.until.then(refuseLink);
           } else if (info.command === 'identity' && refuseLinkWith.reply !== null) {
             const channel = accept();
             channel.write(formatGateAnswerHead('identity'));
@@ -369,16 +374,40 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
     assert.equal(stops, 0);
   });
 
-  it('a stop that comes while the hub has not yet answered the link request still ends the run and closes the connection — it is not lost to the handshake', async () => {
+  for (const hubPackage of [
+    { description: 'the package the runner has', packageId: installedPackageId },
+    { description: 'a newer package — and no update is started for a runner that is leaving', packageId: newerPackageId },
+  ]) {
+    it(`a stop that comes while the hub has not yet answered the link request still ends the run and closes the connection — it is not lost to the handshake (the answer names ${hubPackage.description})`, async () => {
+      hub.currentPackageId.value = hubPackage.packageId;
+      let answerLink: () => void = () => undefined;
+      hub.holdLinkAnswer.until = new Promise<void>((resolve) => { answerLink = resolve; });
+      let updateCalls = 0;
+      const { finished, abort } = startLoop({ servers: createFakeServers({ busy: 0 }), update: async () => { updateCalls += 1; return { ok: true, packageId: newerPackageId }; } });
+      await waitUntil(() => hub.holdLinkAnswer.requestCount === 1, 'the link request to reach the hub', 15_000);
+      abort.abort();
+      answerLink();
+      const outcome = await Promise.race([finished, new Promise<string>((resolve) => { setTimeout(() => resolve('still running'), 5000); })]);
+      assert.equal(outcome, 0, 'the run ended with the stop');
+      await waitUntil(() => hub.connections.closed === 1, 'the runner to close its connection to the hub', 5_000);
+      assert.equal(updateCalls, 0, 'nothing was downloaded or installed after the stop');
+    });
+  }
+
+  it('a stop that comes while the hub has not yet answered a link request it will refuse ends the run without asking who the runner is — a stop is not a removal, and no job is killed for it', async () => {
+    hub.refuseLinkWith.reply = JSON.stringify({ ok: false, reason: 'this runner is not paired here' });
     let answerLink: () => void = () => undefined;
     hub.holdLinkAnswer.until = new Promise<void>((resolve) => { answerLink = resolve; });
-    const { finished, abort } = startLoop({ servers: createFakeServers({ busy: 0 }) });
+    let stops = 0;
+    const { finished, abort } = startLoop({ servers: createFakeServers({ busy: 0 }), stopJobs: async () => { stops += 1; } });
     await waitUntil(() => hub.holdLinkAnswer.requestCount === 1, 'the link request to reach the hub', 15_000);
     abort.abort();
     answerLink();
     const outcome = await Promise.race([finished, new Promise<string>((resolve) => { setTimeout(() => resolve('still running'), 5000); })]);
     assert.equal(outcome, 0, 'the run ended with the stop');
     await waitUntil(() => hub.connections.closed === 1, 'the runner to close its connection to the hub', 5_000);
+    assert.equal(stops, 0, 'the jobs were left alone');
+    assert.notEqual(readRunnerStatus(paths)?.state, 'removed');
   });
 
   it('a busy runner that becomes idle installs the update once, and does not reconnect while it installs', async () => {
