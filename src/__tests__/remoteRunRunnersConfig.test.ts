@@ -11,7 +11,8 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { checkIsRemoteRunOffered, formatGroupLimits, getRunnersConfigPath, loadRunnersConfig, resetRunnersConfigCache } from '../remoteRun/runnersConfig';
+import { getRunnerSummaryLines } from '../remoteRun/runnerSummary';
+import { formatGroupLimits, getRunnersConfigPath, loadRunnersConfig, resetRunnersConfigCache } from '../remoteRun/runnersConfig';
 
 const validRunner = { name: 'box1', ssh: 'runner@runner.example', workDir: '/home/runner/charness-runner' };
 
@@ -47,7 +48,7 @@ describe('runners.json', () => {
     const load = loadRunnersConfig(homeDir);
     assert.equal(load.status, 'missing');
     assert.deepEqual(load.config?.runners, []);
-    assert.equal(checkIsRemoteRunOffered(homeDir), false);
+    assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, false);
   });
 
   it('a valid file is read with every optional part, and offers remote-run', () => {
@@ -55,21 +56,21 @@ describe('runners.json', () => {
     const load = loadRunnersConfig(homeDir);
     assert.equal(load.status, 'ok');
     assert.deepEqual(load.config?.runners[0].groups, { default: 2, emulator: 1 });
-    assert.equal(checkIsRemoteRunOffered(homeDir), true);
+    assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, true);
     assert.equal(formatGroupLimits(load.config?.runners[0].groups), 'default=2,emulator=1');
     assert.equal(formatGroupLimits(undefined), '');
   });
 
   it('an empty list offers nothing', () => {
     writeRunnersFile({ runners: [] });
-    assert.equal(checkIsRemoteRunOffered(homeDir), false);
+    assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, false);
   });
 
   it('a change of the file is picked up by the next call (stamp-cached, not frozen)', () => {
     writeRunnersFile({ runners: [] });
-    assert.equal(checkIsRemoteRunOffered(homeDir), false);
+    assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, false);
     writeRunnersFile({ runners: [validRunner, { ...validRunner, name: 'box2' }] });
-    assert.equal(checkIsRemoteRunOffered(homeDir), true);
+    assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, true);
   });
 
   it('errors name the field and never echo a value', () => {
@@ -100,9 +101,9 @@ describe('runners.json', () => {
 
   it('an invalid edit after a good one keeps the last good runners offered (the file is the operator\'s, a typo must not blind the agents)', () => {
     writeRunnersFile({ runners: [validRunner] });
-    assert.equal(checkIsRemoteRunOffered(homeDir), true);
+    assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, true);
     writeRunnersFile('{oops');
     assert.equal(loadRunnersConfig(homeDir).status, 'invalid');
-    assert.equal(checkIsRemoteRunOffered(homeDir), true);
+    assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, true);
   });
 });

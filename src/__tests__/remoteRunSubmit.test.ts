@@ -49,7 +49,7 @@ function createRecordingClient(): { client: RunnerClient; calls: string[] } {
   return { client, calls };
 }
 
-const withGitOptions: RemoteRunOptions = { runner: null, needs: null, group: null, timeoutSeconds: null, isWithGit: true, env: [], isBackground: false };
+const withGitOptions: RemoteRunOptions = { runner: null, needs: null, runnerWaitSeconds: null, group: null, timeoutSeconds: null, isWithGit: true, env: [], isBackground: false };
 
 async function stage(projectRoot: string, options: RemoteRunOptions): Promise<{ error: Error | null; calls: string[]; cacheEntries: string[] }> {
   const { client, calls } = createRecordingClient();

@@ -53,7 +53,7 @@ const pairedRunnerSchema = z.strictObject({
   isPaused: z.boolean(),
 });
 
-const pairedFileSchema = z.strictObject({
+export const pairedFileSchema = z.strictObject({
   /** Counts every change: a keyboard built from one revision never acts on a later list. */
   rev: z.number().int().nonnegative(),
   runners: z.array(pairedRunnerSchema),

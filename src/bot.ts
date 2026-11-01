@@ -473,7 +473,7 @@ import type { ClaudeRateLimitEvent, ClaudeTurnCostReport } from './adapters/clau
 import { addClaudeApiSpend, computeClaudeTurnCostUsd, formatUsd, getClaudeTurnCostOutcome } from './utils/claudeApiSpend';
 import { formatClaudeApiSpendWords } from './utils/claudeProfileUsageLines';
 import { resolveClaudeBinary } from './utils/resolveBinary';
-import { checkIsRemoteRunOffered } from './remoteRun/runnersConfig';
+import { getRunnerSummaryLines } from './remoteRun/runnerSummary';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ENV parsing & fatal validation
@@ -13854,7 +13854,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     sendMessagesToThread,
     compactConversation: (threadKeyStr) => armDeferredCompaction(keyFromString(threadKeyStr)),
     listClaudeProfiles: listClaudeProfilesForAgent,
-    isRemoteRunOffered: () => checkIsRemoteRunOffered(),
+    getRemoteRunRunnerLines: () => getRunnerSummaryLines(),
     // A refused tool call leaves one line in the bounded diagnostic log (agent-diag.log): the SDK refuses before the bot sees it.
     logDiagnostic: appendDiagLog,
     ...(jiraConnector

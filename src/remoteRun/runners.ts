@@ -1,7 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { getRunnerLinkStatus } from '../runners/linkControl';
 import {
   checkHasCapability,
+  checkIsRunnerPaused,
   formatRunnerBlock,
   parseProbeOutput,
   type RunnerCapability,
@@ -10,13 +12,13 @@ import {
 } from './probe';
 import { RemoteRunError, RunnerUnreachableError } from './remoteRunError';
 import { remoteRunExitCodes } from './exitCodes';
-import { describeSshFailure, type RunnerClient } from './runnerClient';
+import { describeSshFailure, notConnectedReason, type RunnerClient } from './runnerClient';
 import type { RunnerConfig, RunnersConfig } from './runnersConfig';
 
 /**
  * @description Which runners exist right now: probe them (in parallel, bounded), remember each one's last answer so an offline runner
- * still shows what it was, and pick the one a command should use — the named one, or the first in `runners.json` that answers and, with
- * `--needs`, has the capability.
+ * still shows what it was, and pick the one a command should use — the named one, or the first in the catalog (`runners.json` entries,
+ * then the paired runners) that answers, is not paused and, with `--needs`, has the capability.
  */
 
 /** The whole probing of all runners ends by then (a dead host costs its ssh connect timeout, once, in parallel with the others). */
@@ -57,17 +59,25 @@ function writeLastProbe(cacheDir: string, runnerName: string, text: string, seen
 export async function probeRunner(client: RunnerClient, nowMs: number = Date.now(), signal?: AbortSignal, deadlineMs: number = probeAllTimeoutMs): Promise<RunnerReport> {
   const runner = client.runner;
   const groupLimits = { ...(runner.groups ?? {}) };
-  const offline = (reason: string): RunnerReport => {
+  const isPausedByHub = runner.paired?.isPausedByHub ?? false;
+  const offline = (reason: string, linkLastSeenMs: number | null = null): RunnerReport => {
     const last = readLastProbe(client.cacheDir, runner.name);
     return {
       name: runner.name,
       status: 'offline',
       reason: signal?.aborted === true ? `no answer within ${Math.round(deadlineMs / millisecondsPerSecond)} s` : reason,
-      lastSeenAtMs: last?.seenAtMs ?? null,
+      // The link's own heartbeat is the better «last seen» of a paired runner: the last probe may be hours older than its last connection.
+      lastSeenAtMs: linkLastSeenMs ?? last?.seenAtMs ?? null,
       lastProbe: last?.probe ?? null,
       groupLimits,
+      isPausedByHub,
     };
   };
+  if (runner.paired !== undefined) {
+    // A paired runner is online when its link accepts a connection; asking is cheaper than an ssh call that fails through the proxy.
+    const link = await getRunnerLinkStatus(runner.paired.hubDir, runner.paired.runnerId);
+    if (!link.isOnline) return offline(notConnectedReason, link.lastSeenMs);
+  }
   try {
     await client.ensureScript(signal);
   } catch (error) {
@@ -77,7 +87,7 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
   const result = await client.call('probe', [], { timeoutMs: deadlineMs, signal });
   if (result.exitCode !== 0) return offline(describeSshFailure(result));
   writeLastProbe(client.cacheDir, runner.name, result.stdout, nowMs);
-  return { name: runner.name, status: 'online', probe: parseProbeOutput(result.stdout), groupLimits };
+  return { name: runner.name, status: 'online', probe: parseProbeOutput(result.stdout), groupLimits, isPausedByHub };
 }
 
 /**
@@ -103,22 +113,40 @@ export function formatRunnersView(reports: readonly RunnerReport[]): string {
 }
 
 function checkIsUsable(report: RunnerReport): report is Extract<RunnerReport, { status: 'online' }> {
-  return report.status === 'online' && report.probe.pueueVersion !== null;
+  return report.status === 'online' && report.probe.pueueVersion !== null && !checkIsRunnerPaused(report);
+}
+
+/** Who paused a runner and the way back, for the message of a pick that refused it. */
+function describePause(report: RunnerReport): string {
+  const probe = report.status === 'online' ? report.probe : report.lastProbe;
+  return [
+    ...(report.isPausedByHub ? [`from the hub — \`charness runners resume ${report.name}\``] : []),
+    ...(probe?.isPaused === true ? ['on the runner — `charness-runner resume` there'] : []),
+  ].join(' and ');
+}
+
+/** « (paused, so not used: mac)» for the online runners a pick skipped only because they are paused (only those that could have done the job), else nothing. */
+function describeSkippedPaused(reports: readonly RunnerReport[], needs: RunnerCapability | null): string {
+  const names = reports
+    .filter((report): report is Extract<RunnerReport, { status: 'online' }> => report.status === 'online' && report.probe.pueueVersion !== null && checkIsRunnerPaused(report) && (needs === null || checkHasCapability(report.probe, needs)))
+    .map((report) => report.name);
+  return names.length === 0 ? '' : ` (paused, so not used: ${names.join(', ')})`;
 }
 
 /**
- * @description The runner a command should use. `wanted.runner` names one (it must exist, answer and have Pueue); otherwise the first
- * runner in `config` order that answers, has Pueue and — with `wanted.needs` — the capability. None: the reason and the `runners`
- * view, exit 125.
+ * @description The runner a command should use. `wanted.runner` names one (it must exist, answer, have Pueue and not be paused);
+ * otherwise the first runner in `config` order that answers, has Pueue, is not paused and — with `wanted.needs` — the capability. None:
+ * the reason and the `runners` view, exit 125.
  */
 export function pickRunner(config: RunnersConfig, reports: readonly RunnerReport[], wanted: { runner: string | null; needs: RunnerCapability | null }): RunnerPick {
   if (wanted.runner !== null) {
     const report = reports.find((candidate) => candidate.name === wanted.runner);
     if (report === undefined) {
-      return { ok: false, exitCode: remoteRunExitCodes.usage, message: `no runner named "${wanted.runner}" in runners.json (configured: ${config.runners.map((runner) => runner.name).join(', ')})` };
+      return { ok: false, exitCode: remoteRunExitCodes.usage, message: `no runner named "${wanted.runner}" (configured: ${config.runners.map((runner) => runner.name).join(', ')})` };
     }
     if (report.status === 'offline') return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" is offline (${report.reason})\n${formatRunnersView([report])}` };
-    if (!checkIsUsable(report)) return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" has no Pueue (install it there, see docs/remote-run.md)\n${formatRunnersView([report])}` };
+    if (report.probe.pueueVersion === null) return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" has no Pueue (install it there, see docs/remote-run.md)\n${formatRunnersView([report])}` };
+    if (checkIsRunnerPaused(report)) return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" is paused ${describePause(report)}\n${formatRunnersView([report])}` };
     if (wanted.needs !== null && !checkHasCapability(report.probe, wanted.needs)) {
       return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" cannot do "${wanted.needs}"\n${formatRunnersView([report])}` };
     }
@@ -130,7 +158,7 @@ export function pickRunner(config: RunnersConfig, reports: readonly RunnerReport
     if (wanted.needs === null || checkHasCapability(report.probe, wanted.needs)) return { ok: true, runnerName: runner.name };
   }
   const reason = wanted.needs === null ? 'no runner is online' : `no online runner can do "${wanted.needs}"`;
-  return { ok: false, exitCode: remoteRunExitCodes.failed, message: `${reason}\n${formatRunnersView(reports)}` };
+  return { ok: false, exitCode: remoteRunExitCodes.failed, message: `${reason}${describeSkippedPaused(reports, wanted.needs)}\n${formatRunnersView(reports)}` };
 }
 
 /**
@@ -141,12 +169,12 @@ export function pickRunner(config: RunnersConfig, reports: readonly RunnerReport
 export function chooseExecRunnerName(config: RunnersConfig, named: string | null, lastRunnerName: string | null): { runnerName: string | null; note: string | null } {
   if (named !== null || lastRunnerName === null) return { runnerName: named, note: null };
   if (config.runners.some((runner) => runner.name === lastRunnerName)) return { runnerName: lastRunnerName, note: null };
-  return { runnerName: null, note: `the runner of this project's last job, "${lastRunnerName}", is not in runners.json any more — using the first online runner` };
+  return { runnerName: null, note: `the runner of this project's last job, "${lastRunnerName}", is not a configured runner any more (not in runners.json, not paired) — using the first online runner` };
 }
 
 /** @description The runner of a job id, from the config: an id of a runner that is no longer listed is an error. */
 export function findRunnerOfJob(config: RunnersConfig, runnerName: string): RunnerConfig {
   const runner = config.runners.find((candidate) => candidate.name === runnerName);
-  if (runner === undefined) throw new RemoteRunError(`the job belongs to runner "${runnerName}", which is not in runners.json any more`);
+  if (runner === undefined) throw new RemoteRunError(`the job belongs to runner "${runnerName}", which is not a configured runner any more (not in runners.json, not paired)`);
   return runner;
 }

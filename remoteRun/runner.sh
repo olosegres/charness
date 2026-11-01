@@ -5,11 +5,18 @@
 # the runner's work dir first:   runner.sh <subcommand> <workDir> [arguments…]
 # Pueue is reached through PUEUE_BIN / PUEUE_CONFIG (both optional), set by the caller on every call.
 #
+# A PAIRED runner (`charness-runner`, src/runnerUtility) keeps its work dir as <state>/work in its own state folder; `probe` reads three
+# files there and reports them — nothing else in this script knows about pairing. A hand-made runner has none of them:
+#   <state>/paused          exists → paused=yes (written by `charness-runner pause`; the main box never sends a job to a paused runner)
+#   <state>/service         one word: user-service | system-service (no file = run by hand: service=foreground)
+#   <state>/ios-check.json  the service's iOS Simulator boot check: "isBootable": true|false and "detail": "…"
+# <state> counts only when it holds config.json and keys/ (a work dir that merely is called «work» is not one).
+#
 # bash 3.2-compatible on purpose (the stock bash of macOS): no associative arrays, no `wait -n`, no `mapfile`, no
 # `timeout(1)`, no `read -t` (its timeout status differs between 3.2 and 4+), no GNU-only flags. Time limits are done by background watchdogs.
 #
 # Subcommands (the contract is in src/remoteRun/README.md):
-#   probe        key=value lines: OS, CPU, RAM, disk, jobs, capabilities
+#   probe        key=value lines: OS, CPU, RAM, disk, jobs, capabilities (paused / service / iOS boot check of a paired runner)
 #   prepare      layout for a job, Pueue daemon + groups, prune
 #   lease        add the job to Pueue, stream its log, kill it when the caller's heartbeat stops (foreground run)
 #   submit       add the job to Pueue and return (--bg)
@@ -121,6 +128,14 @@ set_phase() {
 
 read_file() {
   cat "$1" 2>/dev/null
+}
+
+# A Mac that idle-sleeps in the middle of a job drops the link and stalls the build: while the process $1 runs, `caffeinate -i -w` holds
+# the idle-sleep assertion and ends by itself with it. A sibling, not a wrapper: the command keeps its own signals and exit status.
+# Nothing on other systems, or where caffeinate is missing.
+keep_awake_while() {
+  [ "$(uname -s)" = Darwin ] && command -v caffeinate > /dev/null 2>&1 || return 0
+  caffeinate -i -w "$1" > /dev/null 2>&1 < /dev/null &
 }
 
 # ─────────────────────────── probe ───────────────────────────
@@ -305,12 +320,18 @@ probe_slow() {
   elif [ "$(probe_step_status xcode)" = 0 ]; then
     local xcode_version
     xcode_version=$(probe_step_output xcode | head -n 1 | sed 's/^Xcode //')
-    echo "cap_ios=yes"
-    if [ "$(probe_step_status simctl)" = 0 ]; then
-      echo "cap_ios_detail=Xcode $xcode_version, $(probe_step_output simctl | grep -c '(Shutdown)\|(Booted)') simulators"
+    if [ "${ios_boot_status:-}" = failed ]; then
+      # Xcode is there, but the runner's own service could not boot a Simulator (Apple: none is available outside a login session).
+      echo "cap_ios=no"
+      echo "cap_ios_detail=needs the runner user's login session"
     else
-      # A slow simctl is no reason to say there is no Xcode, nor to invent a simulator count.
-      echo "cap_ios_detail=Xcode $xcode_version"
+      echo "cap_ios=yes"
+      if [ "$(probe_step_status simctl)" = 0 ]; then
+        echo "cap_ios_detail=Xcode $xcode_version, $(probe_step_output simctl | grep -c '(Shutdown)\|(Booted)') simulators"
+      else
+        # A slow simctl is no reason to say there is no Xcode, nor to invent a simulator count.
+        echo "cap_ios_detail=Xcode $xcode_version"
+      fi
     fi
   else
     echo "cap_ios=no"
@@ -333,9 +354,49 @@ probe_slow() {
   rm -rf "$probe_dir"
 }
 
+# The state folder of the charness-runner this work dir belongs to (sets runner_state; empty for a hand-made runner), and what it says
+# about the machine: sets ios_boot_status (ok | failed | unchecked, empty off a Mac or without a check) and ios_boot_detail.
+read_runner_state() {
+  runner_state=
+  ios_boot_status=
+  ios_boot_detail=
+  local candidate
+  candidate=$(dirname "$work")
+  [ "$(basename "$work")" = work ] && [ -f "$candidate/config.json" ] && [ -d "$candidate/keys" ] || return 0
+  runner_state=$candidate
+  local check="$runner_state/ios-check.json"
+  [ -f "$check" ] || return 0
+  if grep -q '"isBootable"[[:space:]]*:[[:space:]]*true' "$check"; then
+    ios_boot_status=ok
+  elif grep -q '"isBootable"[[:space:]]*:[[:space:]]*false' "$check"; then
+    ios_boot_status=failed
+  else
+    ios_boot_status=unchecked
+  fi
+  ios_boot_detail=$(sed -n 's/.*"detail"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$check" | head -n 1)
+}
+
+# paused= / service= / runner_version= / ios_boot= of a paired runner (nothing for a hand-made one).
+probe_runner_state() {
+  [ -n "$runner_state" ] || return 0
+  if [ -f "$runner_state/paused" ]; then echo "paused=yes"; else echo "paused=no"; fi
+  local service
+  service=$(head -n 1 "$runner_state/service" 2> /dev/null)
+  case $service in
+    user-service | system-service) echo "service=$service" ;;
+    '') echo "service=foreground" ;;
+    *) echo "service=unknown" ;;
+  esac
+  echo "runner_version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$runner_state/current/package.json" 2> /dev/null | head -n 1)"
+  [ -n "$ios_boot_status" ] && echo "ios_boot=$ios_boot_status"
+  [ -n "$ios_boot_detail" ] && echo "ios_boot_detail=$ios_boot_detail"
+  return 0
+}
+
 cmd_probe() {
   work=$1
   mkdir -p "$work" 2> /dev/null
+  read_runner_state
   echo "os=$(uname -s)"
   echo "arch=$(uname -m)"
   echo "kernel=$(uname -r)"
@@ -347,6 +408,7 @@ cmd_probe() {
   probe_jobs
   probe_android
   probe_playwright
+  probe_runner_state
 }
 
 # ─────────────────────────── pueue ───────────────────────────
@@ -962,6 +1024,7 @@ run_step() {
     exec bash -c "$command_text"
   ) < /dev/null &
   local step_pid=$!
+  keep_awake_while "$step_pid"
   # The notices bash prints when it reaps a signalled child ("Terminated") are not the job's output.
   { wait "$step_pid"; } 2> /dev/null
   step_code=$?
@@ -1155,6 +1218,7 @@ cmd_exec() {
   set -m
   ( cd "$tree/$subfolder" && exec bash -c "$*" ) < /dev/null &
   local exec_pid=$!
+  keep_awake_while "$exec_pid"
   set +m
   (
     if ! watch_lease "$lease_sec"; then

@@ -6,7 +6,7 @@ import type { PairedRunner, PendingPairing, RunnerServiceKind } from './hubRegis
  * is kept running, version) and a line for each pairing code still open. Pure: the status is read by the caller.
  */
 
-const serviceKindLabels: Record<RunnerServiceKind, string> = {
+export const serviceKindLabels: Record<RunnerServiceKind, string> = {
   foreground: 'run by hand',
   'user-service': 'user service',
   'system-service': 'system service',

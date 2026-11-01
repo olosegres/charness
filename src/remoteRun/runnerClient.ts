@@ -62,6 +62,9 @@ export interface RunnerClient {
   stream: (subcommand: string, args: readonly string[]) => ReturnType<typeof spawnSshStream>;
 }
 
+/** Why a paired runner whose link is down is offline — the words `charness runner-proxy` (`runners/runnerProxy.ts`) puts on stderr when nothing listens on the link's socket. */
+export const notConnectedReason = 'the runner is not connected';
+
 /**
  * @description The first useful line of a failed ssh's stderr, for a message (never the whole text: it may quote the destination). A
  * rejected key from a process with no ssh-agent (`SSH_AUTH_SOCK` unset — a tracker agent such as Jira's starts with a minimal environment
@@ -69,6 +72,7 @@ export interface RunnerClient {
  */
 export function describeSshFailure(result: SshRunResult, env: NodeJS.ProcessEnv = process.env): string {
   if (result.isTimedOut) return 'ssh: the command ran past its deadline';
+  if (result.stderr.includes(notConnectedReason)) return notConnectedReason;
   const lines = result.stderr.split('\n').map((line) => line.trim()).filter((line) => line !== '');
   const text = lines.length === 0 ? `ssh exited with ${result.exitCode ?? 'a signal'}` : lines[lines.length - 1];
   if (/host key verification failed/i.test(result.stderr)) return `ssh: the host key is not trusted yet — connect once by hand (ssh to this runner) so it is known`;

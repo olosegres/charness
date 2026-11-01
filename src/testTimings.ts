@@ -15,13 +15,14 @@ import { minFireIntervalMs } from './scheduler/recurrence';
 import { remoteRunLeaseMinMs, remoteRunLeaseMs } from './remoteRun/leaseTiming';
 import { runnerVersionPollMinMs, runnerVersionPollMs } from './runnerUtility/versionPollTiming';
 import { pairingLifetimeMinMs, pairingLifetimeMs } from './runners/pairingTiming';
+import { runnerWaitPollMinMs, runnerWaitPollMs } from './remoteRun/runnerWaitTiming';
 
 /**
  * @description The ONE test-only timing seam: `CHARNESS_TEST_TIMINGS`, a JSON object of named overrides for the
  * production windows the process-level flows would otherwise wait out in real time (the Telegram send pacer's 2 s, the
  * Jira poll's 10 s floor, the wake-up engine's 10 s turn poll and its sweep's minute, the first re-post retry's minute, the two-minute probe of an
  * unconfirmed usage limit, `state.json`'s save debounce, the OpenCode server's 60 s of retries, the 6 h pending-work hold, the
- * todo reminder's 10 s poll and its interval, the 45 s heartbeat lease of a foreground `charness remote-run`, and — a count, not a window —
+ * todo reminder's 10 s poll and its interval, the 45 s heartbeat lease of a foreground `charness remote-run` and its 10 s poll while it waits for a paired runner, and — a count, not a window —
  * the 200 `/bind` picker claims). It is NOT a setting: no
  * operator sets it and it is documented only for developers (DEVELOPMENT.md); settings live in `settings.json`.
  *
@@ -80,6 +81,8 @@ const testTimingsSchema = z.strictObject({
   runnerVersionPollMs: createShorterWindowSchema(runnerVersionPollMs).min(runnerVersionPollMinMs).optional(),
   /** How long a runner pairing code works (production: `pairingLifetimeMs`, 10 min; at least `pairingLifetimeMinMs`). Read by `charness runners pair`, not by the bot's boot. */
   pairingLifetimeMs: createShorterWindowSchema(pairingLifetimeMs).min(pairingLifetimeMinMs).optional(),
+  /** How often `charness remote-run --needs <capability>` looks again while it waits for an offline paired runner (production: `runnerWaitPollMs`, 10 s; at least `runnerWaitPollMinMs`). Read by the remote-run CLI, not by the bot. */
+  remoteRunRunnerPollMs: createShorterWindowSchema(runnerWaitPollMs).min(runnerWaitPollMinMs).optional(),
   /** The shortest gap between two fires of a cron schedule (production: `minFireIntervalMs`, 5 min). */
   scheduleMinFireIntervalMs: createShorterWindowSchema(minFireIntervalMs).optional(),
   /** How often the hot supervisor compares its `tsc -w` with the sources (production: `tscWatchCheckIntervalMs`, 30 s). Read by `charness hot`, not by the bot. */

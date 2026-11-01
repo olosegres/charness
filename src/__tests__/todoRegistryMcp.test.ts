@@ -140,7 +140,7 @@ describe('todo_update / todo_read over the bot MCP server', () => {
 
   it('every platform\'s instructions stay inside Claude Code\'s 4,096 characters with everything offered', () => {
     for (const platform of ['telegram', 'jira', null] as const) {
-      const length = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, isRemoteRunOffered: false }, true).length;
+      const length = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] }, true).length;
       assert.ok(length < claudeCodeInstructionsMaxLength, `${platform}: ${length}`);
     }
   });
