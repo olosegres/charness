@@ -87,7 +87,6 @@ function createServiceDeps(commands: string[]): ServiceDeps {
   return { runner, platform: 'linux', uid: 1000, checkIsRunnerLink: () => false, accountName: 'runner', homeDir: home, nodePath: process.execPath, launchDaemonsDir: path.join(home, 'LaunchDaemons'), chown: () => undefined, resolveAccount: async () => null };
 }
 
-/** The unpair command's collaborators: the service manager and the queue record their commands; no process is running. */
 /** A Pueue with one running task that `reset --force` ends: `status --json` shows it until the reset, an empty queue after. */
 function createBusyQueueRunner(commands: string[]): CommandRunner {
   let isReset = false;
@@ -103,6 +102,7 @@ function createBusyQueueRunner(commands: string[]): CommandRunner {
   };
 }
 
+/** The unpair command's collaborators: the service manager and the queue record their commands; no process is running. */
 function createUnpairDeps(commands: string[], overrides: Partial<UnpairDeps> = {}): UnpairDeps {
   const idleProcess: ProcessControl = { checkIsAlive: () => false, readCommand: () => null, signal: () => undefined, terminateGraceMs: 50, killGraceMs: 50 };
   const queueRunner: CommandRunner = async (file, args) => {

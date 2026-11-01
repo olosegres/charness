@@ -52,7 +52,6 @@ export interface ServiceDeps {
   platform: NodeJS.Platform;
   /** The uid of this process (a `--system` install must be root). */
   uid: number;
-  /** Does a process with this pid exist? (`kill(pid, 0)`; a test names its own.) */
   /** Is `pid` the runner's link (alive and running `runnerCli.js run`)? A stale or reused pid in `status.json` is not. */
   checkIsRunnerLink: (pid: number) => boolean;
   /** The account that runs this process, and its home. */
