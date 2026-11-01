@@ -321,9 +321,15 @@ probe_slow() {
     local xcode_version
     xcode_version=$(probe_step_output xcode | head -n 1 | sed 's/^Xcode //')
     if [ "${ios_boot_status:-}" = failed ]; then
-      # Xcode is there, but the runner's own service could not boot a Simulator (Apple: none is available outside a login session).
+      # Xcode is there, but the runner's own check failed. The Simulator refusing to boot is Apple's rule (none is available outside a login
+      # session); any other reason (no runtime installed, the device could not be created) is shown as it is — the login session would be a
+      # wrong cure. «the Simulator did not» is `iosBootFailureReasonPrefix` in runnerUtility/iosCheck.ts.
       echo "cap_ios=no"
-      echo "cap_ios_detail=needs the runner user's login session"
+      case "$ios_boot_detail" in
+        "the Simulator did not"*) echo "cap_ios_detail=needs the runner user's login session" ;;
+        ?*) echo "cap_ios_detail=the iOS Simulator check failed: $ios_boot_detail" ;;
+        *) echo "cap_ios_detail=the iOS Simulator check failed" ;;
+      esac
     elif [ -n "$runner_state" ] && [ -z "$ios_boot_status" ]; then
       # A paired runner writes its record every time its link starts: none yet means the check of THIS start is still running, and an
       # answer from an earlier start (another account, another kind of service) must not be offered meanwhile.

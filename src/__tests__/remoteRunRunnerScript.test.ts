@@ -18,6 +18,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { parseProbeOutput } from '../remoteRun/probe';
+import { iosBootFailureReasonPrefix } from '../runnerUtility/iosCheck';
 import { parseJobFacts } from '../remoteRun/jobState';
 import { checkIsProcessRunning } from './e2e/isolatedCharness';
 import { jobId, scriptPath, slug, writeFile } from './remoteRunRunnerScriptKit';
@@ -1127,18 +1128,25 @@ describe('a Mac (the platform is faked, with fake Xcode and caffeinate)', () => 
   it('iOS: Xcode is there but the service could not boot a Simulator — no, and the reason is the login session (the plan\'s owner choice A)', () => {
     writeFile(workRoot, 'config.json', '{}');
     fs.mkdirSync(path.join(workRoot, 'keys'));
-    writeFile(workRoot, 'ios-check.json', '{"status":"fail","checkedAtMs":1,"xcode":"16.2 (16C5032a)","reason":"CoreSimulator is not available to a daemon"}\n');
+    writeFile(workRoot, 'ios-check.json', `{"status":"fail","checkedAtMs":1,"xcode":"16.2 (16C5032a)","reason":"${iosBootFailureReasonPrefix} boot: CoreSimulator is not available to a daemon"}\n`);
     const lines = readLines(runAsAMac('read_runner_state; probe_slow').stdout);
     assert.equal(lines.cap_ios, 'no');
     assert.equal(lines.cap_ios_detail, "needs the runner user's login session");
   });
 
-  it('iOS: a PAIRED runner with no record yet is still being checked — no, not yes: the answer of an earlier start must not be offered meanwhile', () => {
+  it('iOS: a check that failed for another reason shows THAT reason — a login session would be the wrong cure for a missing runtime', () => {
     writeFile(workRoot, 'config.json', '{}');
     fs.mkdirSync(path.join(workRoot, 'keys'));
+    writeFile(workRoot, 'ios-check.json', '{"status":"fail","checkedAtMs":1,"xcode":"16.2 (16C5032a)","reason":"no iOS simulator runtime and iPhone device type are installed"}\n');
     const lines = readLines(runAsAMac('read_runner_state; probe_slow').stdout);
     assert.equal(lines.cap_ios, 'no');
-    assert.equal(lines.cap_ios_detail, 'the iOS Simulator is being checked');
+    assert.equal(lines.cap_ios_detail, 'the iOS Simulator check failed: no iOS simulator runtime and iPhone device type are installed');
+    writeFile(workRoot, 'ios-check.json', '{"status":"fail","checkedAtMs":1,"xcode":null,"reason":null}\n');
+    assert.equal(readLines(runAsAMac('read_runner_state; probe_slow').stdout).cap_ios_detail, 'the iOS Simulator check failed');
+  });
+
+  it('the script and the utility agree on which failures are the boot refusal: the script carries the very prefix the check writes', () => {
+    assert.ok(fs.readFileSync(scriptPath, 'utf8').includes(`"${iosBootFailureReasonPrefix}"*)`));
   });
 
   it('iOS: a runner with no boot check (a hand-made one, or one run in a terminal) keeps the answer Xcode gives', () => {

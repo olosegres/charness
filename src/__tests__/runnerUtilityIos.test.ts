@@ -178,17 +178,6 @@ describe('when the check runs again', () => {
       assert.deepEqual(readIosCheck(paths), record);
     });
 
-    it('a start-up check that cannot run at all leaves a «fail» record that says so — not «being checked» until the next start — and the hourly look tries again', async () => {
-      writeIosCheck(paths, { status: 'pass', checkedAtMs: 1, xcode: '16.2 (16C5032a)', reason: null });
-      const broken: CommandRunner = async () => { throw new Error('spawn xcodebuild EACCES'); };
-      const failed = await refreshIosCheck(paths, createDeps({ runner: broken }), { isStartup: true });
-      assert.equal(failed?.status, 'fail');
-      assert.match(failed?.reason ?? '', /could not run \(spawn xcodebuild EACCES\)/);
-      assert.deepEqual(readIosCheck(paths), failed, 'written, so the old «pass» is gone and the probe has an answer');
-      const retried = await refreshIosCheck(paths, createDeps(), { isStartup: false });
-      assert.equal(retried?.status, 'pass', 'its xcode is null, so the next hourly look checks again and replaces it');
-    });
-
     it('a persisted result does not survive a change of who runs the link: the same Xcode, a different boot outcome', async () => {
       // A result from an interactive login ...
       writeIosCheck(paths, { status: 'pass', checkedAtMs: 1, xcode: '16.2 (16C5032a)', reason: null });

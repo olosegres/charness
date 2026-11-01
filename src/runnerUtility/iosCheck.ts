@@ -21,6 +21,13 @@ const stepTimeoutMs = 60 * 1000;
 export const iosCheckBudgetMs = 180 * 1000;
 const checkDeviceName = 'charness-runner-boot-check';
 
+/**
+ * How the reason of a `fail` record that is the Simulator's own boot refusal begins. `runner.sh` tells the operator «needs the runner
+ * user's login session» for those — Apple gives no Simulator to a daemon — and shows the reason itself for every other failure (no
+ * runtime installed, the device could not be created); a test pins that the script carries this very text.
+ */
+export const iosBootFailureReasonPrefix = 'the Simulator did not';
+
 const iosCheckSchema = z.strictObject({
   status: z.enum(['pass', 'fail', 'skipped']),
   checkedAtMs: z.number().int().nonnegative(),
@@ -117,9 +124,9 @@ export async function runIosBootCheck(deps: IosCheckDeps): Promise<IosCheckRecor
   if (udid === '') return record('fail', 'the Simulator device could not be created');
   try {
     const boot = await step(['boot', udid]);
-    if (!boot.ok) return record('fail', `the Simulator did not boot: ${boot.stderr.trim().split('\n').slice(-1)[0]}`);
+    if (!boot.ok) return record('fail', `${iosBootFailureReasonPrefix} boot: ${boot.stderr.trim().split('\n').slice(-1)[0]}`);
     const status = await step(['bootstatus', udid, '-b']);
-    return status.ok ? record('pass', null) : record('fail', `the Simulator did not finish booting: ${status.stderr.trim().split('\n').slice(-1)[0]}`);
+    return status.ok ? record('pass', null) : record('fail', `${iosBootFailureReasonPrefix} finish booting: ${status.stderr.trim().split('\n').slice(-1)[0]}`);
   } finally {
     await step(['shutdown', udid]);
     await step(['delete', udid]);
@@ -158,25 +165,16 @@ export interface IosRefreshOptions {
 
 /**
  * @description At the link's start (always) and then once an hour (when Xcode is not what the last result saw): run the boot check and record it.
- * At the start the old record is deleted first, and if the new check then cannot run at all (an error, not a failed boot) a `fail` record
- * saying so is written instead — a paired Mac with no record answers «being checked», and that must not last until the next start. Its
- * `xcode` is null, so the hourly look tries again.
+ * At the start the old record is deleted first: a paired Mac with no record answers «being checked», so an answer given by another account or
+ * kind of service is never offered while the new check runs. (`runIosBootCheck` never throws — a failed boot is a `fail` record; what can
+ * throw here is writing the record, and the callers log that.)
  */
 export async function refreshIosCheck(paths: RunnerHomePaths, deps: IosCheckDeps, options: IosRefreshOptions): Promise<IosCheckRecord | null> {
   if (deps.platform !== 'darwin') return null;
-  // The old answer was given by whoever ran the link before: from this moment it proves nothing, and the probe must not offer it while the
-  // new check (up to 3 minutes) runs. Without a record a paired runner says «being checked» (`runner.sh`).
   if (options.isStartup) fs.rmSync(paths.iosCheck, { force: true });
-  try {
-    const current = await readXcodeVersion(deps);
-    if (!options.isStartup && !checkShouldRunIosCheck(readIosCheck(paths), current)) return null;
-    const record = await runIosBootCheck(deps);
-    writeIosCheck(paths, record);
-    return record;
-  } catch (error) {
-    if (!options.isStartup) throw error;
-    const failed: IosCheckRecord = { status: 'fail', checkedAtMs: deps.now(), xcode: null, reason: `the boot check could not run (${error instanceof Error ? error.message : 'unknown error'})` };
-    writeIosCheck(paths, failed);
-    return failed;
-  }
+  const current = await readXcodeVersion(deps);
+  if (!options.isStartup && !checkShouldRunIosCheck(readIosCheck(paths), current)) return null;
+  const record = await runIosBootCheck(deps);
+  writeIosCheck(paths, record);
+  return record;
 }

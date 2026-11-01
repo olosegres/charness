@@ -229,8 +229,10 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   const isPueueRunning = readServiceKind(paths) === null ? await ensurePueueDaemon(paths) : await waitForPueueDaemon(paths, pueueServiceWaitMs);
   if (!isPueueRunning) io.stderr('charness-runner: Pueue is not running; jobs cannot be queued until it is (the link goes up anyway).\n');
   const iosDeps = createIosCheckDeps();
-  void refreshIosCheck(paths, iosDeps, { isStartup: true }).catch(() => undefined);
-  const iosTimer = setInterval(() => { void refreshIosCheck(paths, iosDeps, { isStartup: false }).catch(() => undefined); }, iosRecheckIntervalMs);
+  // The record cannot be written (the state folder, a full disk): the Mac then says «being checked» — and why is in the log, not nowhere.
+  const logIosCheckError = (error: unknown): void => { io.stderr(`charness-runner: the iOS Simulator check could not be recorded (${error instanceof Error ? error.message : 'unknown error'})\n`); };
+  void refreshIosCheck(paths, iosDeps, { isStartup: true }).catch(logIosCheckError);
+  const iosTimer = setInterval(() => { void refreshIosCheck(paths, iosDeps, { isStartup: false }).catch(logIosCheckError); }, iosRecheckIntervalMs);
   iosTimer.unref();
   const loopRef: { current: ReturnType<typeof createLinkLoop> | null } = { current: null };
   const servers = createRunnerServers({
