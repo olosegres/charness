@@ -3,7 +3,7 @@ import { runnerCapabilities, type RunnerCapability, type RunnerProbe } from './p
 import { readLastProbe } from './runners';
 import { loadRunnersCatalog } from './runnersCatalog';
 import type { RunnerConfig } from './runnersConfig';
-import { getRemoteRunCacheDir } from './ssh';
+import { getRemoteRunCacheDirCandidates } from './ssh';
 
 /**
  * @description The one line per runner that the bot MCP's instructions give an agent — `mac — macOS 15.1, android, playwright`: the name, the
@@ -50,12 +50,23 @@ export function formatRunnerSummaryLine(summary: RunnerSummary): string {
   return `${summary.name}${summary.isPaused ? ' (paused)' : ''}${details.length === 0 ? '' : ` — ${details.join(', ')}`}`;
 }
 
+/** The newest snapshot of `runnerName` among the cache folders: the same runner may have been probed by agents whose `XDG_CACHE_HOME` differs. */
+function readFreshestProbe(cacheDirs: readonly string[], runnerName: string): RunnerProbe | null {
+  let freshest: ReturnType<typeof readLastProbe> = null;
+  for (const cacheDir of cacheDirs) {
+    const snapshot = readLastProbe(cacheDir, runnerName);
+    if (snapshot !== null && (freshest === null || snapshot.seenAtMs > freshest.seenAtMs)) freshest = snapshot;
+  }
+  return freshest?.probe ?? null;
+}
+
 /**
  * @description The lines for the instructions of a session that connects now: one per runner of the catalog (hand-made first, then paired; a
- * catalog with an error still gives the runners that last loaded). Empty = no runner, and remote-run is not mentioned.
+ * catalog with an error still gives the runners that last loaded). Empty = no runner, and remote-run is not mentioned. The snapshots are
+ * looked for in the bot's own cache and in `~/.cache` ({@link getRemoteRunCacheDirCandidates}), the newest wins.
  */
 export function getRunnerSummaryLines(homeDir: string = os.homedir(), env: NodeJS.ProcessEnv = process.env): string[] {
   const runners = loadRunnersCatalog(homeDir).config?.runners ?? [];
-  const cacheDir = getRemoteRunCacheDir(env, homeDir);
-  return runners.map((runner) => formatRunnerSummaryLine(summarizeRunner(runner, readLastProbe(cacheDir, runner.name)?.probe ?? null)));
+  const cacheDirs = getRemoteRunCacheDirCandidates(env, homeDir);
+  return runners.map((runner) => formatRunnerSummaryLine(summarizeRunner(runner, readFreshestProbe(cacheDirs, runner.name))));
 }

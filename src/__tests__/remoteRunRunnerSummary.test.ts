@@ -20,6 +20,7 @@ import { writePairedFile } from '../runners/hubRegistry';
 import { createPairedRunnerFixture } from './remoteRunPairedKit';
 
 const ubuntuProbe = 'os=Linux\nos_name=Ubuntu\nos_version=24.04\npueue=4.0.4\ncap_android=yes\ncap_ios=no\ncap_docker=yes\ncap_playwright=yes\n';
+const macProbe = 'os=Darwin\nos_name=macOS\nos_version=15.1\npueue=4.0.4\ncap_android=yes\ncap_ios=no\ncap_docker=no\ncap_playwright=no\n';
 const handMade: RunnerConfig = { name: 'box1', ssh: 'runner@runner.example', workDir: '/w' };
 const pairedLink: PairedRunnerLink = { runnerId: 'a1b2c3d4e5f6', hubDir: '/h', isPausedByHub: false, os: 'macOS 15.1' };
 const paired: RunnerConfig = { name: 'mac', ssh: 'charness-runner-a1b2c3d4e5f6', workDir: '/w', paired: pairedLink };
@@ -79,10 +80,10 @@ describe('getRunnerSummaryLines (the real files)', () => {
     fs.writeFileSync(filePath, typeof content === 'string' ? content : JSON.stringify(content));
   }
 
-  function storeProbe(runnerName: string, text: string): void {
-    const dir = path.join(cacheHome, 'charness', 'remote-run');
+  function storeProbe(runnerName: string, text: string, cacheRoot: string = cacheHome, seenAtMs = 1): void {
+    const dir = path.join(cacheRoot, 'charness', 'remote-run');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${runnerName}.probe.json`), JSON.stringify({ seenAtMs: 1, text }));
+    fs.writeFileSync(path.join(dir, `${runnerName}.probe.json`), JSON.stringify({ seenAtMs, text }));
   }
 
   function readLines(): string[] {
@@ -112,11 +113,25 @@ describe('getRunnerSummaryLines (the real files)', () => {
 
   it('the cache is the CLI\'s: XDG_CACHE_HOME when set, else ~/.cache of the home folder', () => {
     writeRunnersJson({ runners: [handMade] });
-    const defaultCache = path.join(homeDir, '.cache', 'charness', 'remote-run');
-    fs.mkdirSync(defaultCache, { recursive: true });
-    fs.writeFileSync(path.join(defaultCache, 'box1.probe.json'), JSON.stringify({ seenAtMs: 1, text: ubuntuProbe }));
+    storeProbe('box1', ubuntuProbe, path.join(homeDir, '.cache'), 1000);
     assert.deepEqual(getRunnerSummaryLines(homeDir, {}), ['box1 — Ubuntu 24.04, android, docker, playwright']);
-    assert.deepEqual(readLines(), ['box1'], 'with XDG_CACHE_HOME set the other cache is not looked into');
+    storeProbe('box1', macProbe, cacheHome, 2000);
+    assert.deepEqual(getRunnerSummaryLines(homeDir, { XDG_CACHE_HOME: cacheHome }), ['box1 — macOS 15.1, android'], 'the cache XDG_CACHE_HOME names is read');
+  });
+
+  it('an agent without XDG_CACHE_HOME (a tracker one) probes into ~/.cache: the bot, whose XDG_CACHE_HOME is set, still finds that snapshot', () => {
+    writeRunnersJson({ runners: [handMade] });
+    storeProbe('box1', ubuntuProbe, path.join(homeDir, '.cache'));
+    assert.deepEqual(readLines(), ['box1 — Ubuntu 24.04, android, docker, playwright']);
+  });
+
+  it('when both caches hold a snapshot of the runner the newer one wins, whichever cache it is in', () => {
+    writeRunnersJson({ runners: [handMade] });
+    storeProbe('box1', macProbe, cacheHome, 1000);
+    storeProbe('box1', ubuntuProbe, path.join(homeDir, '.cache'), 2000);
+    assert.deepEqual(readLines(), ['box1 — Ubuntu 24.04, android, docker, playwright']);
+    storeProbe('box1', macProbe, cacheHome, 3000);
+    assert.deepEqual(readLines(), ['box1 — macOS 15.1, android']);
   });
 
   it('a damaged runners.json costs nothing it already gave: the runners that loaded last are still listed; the first time it gives nothing', () => {

@@ -30,6 +30,9 @@ agents run it from project folders) and never touches `DATA_DIR` or the state st
   (`runnerSummary.ts` reads the catalog on every connect, both files stamp-cached).
 - **Local cache** — `${XDG_CACHE_HOME:-~/.cache}/charness/remote-run/` (0700): ssh control sockets (`ssh/`), the last probe of each runner
   (`<runner>.probe.json`), and `jobs/<id>.json` — the main box's own record of which local project a job came from.
+  A tracker (Jira) agent runs without `XDG_CACHE_HOME`, so its probes land in `~/.cache/…` while the bot's are under its own `XDG_CACHE_HOME`:
+  the runner lines of the agents' bullet (`runnerSummary.ts`) look for a runner's snapshot in both (`getRemoteRunCacheDirCandidates`) and take the
+  newest. Everything else (a job's record, `exec`'s last runner) stays in the one cache of the process that submitted it.
 - **Runner** — `<workDir>/`: `bin/runner-<sha8>.sh`; `tmp/lease.*` (a lease watcher's state, removed when it ends, `prune` sweeps what a killed one left);
   `p/<slug>/{tree,stage/<job>,jobs/<job>,manifest,deps.hash,used,lock}`.
   `slug` = `<basename>-<sha256(hostname:uid:root)[0..10]>`. A job folder holds `meta.json`, `cmd`, `env`, `pull.ere`, `pull.roots`, `manifest`,
