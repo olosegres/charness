@@ -91,7 +91,7 @@ describe('bootstrap line', () => {
       env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp') },
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, new RegExp(`^RUNNER_CLI pair --bootstrap \\S+/pkg ${encodePairCode(payload).replace(/\./g, '\\.')}$`, 'm'));
+    assert.match(result.stdout, new RegExp(`^RUNNER_CLI pair --bootstrap \\S+/pkg --archive \\S+/package\\.tgz --package-id 0123456789abcdef ${encodePairCode(payload).replace(/\./g, '\\.')}$`, 'm'));
 
     const sshArgs = fs.readFileSync(path.join(workDir, 'ssh.args'), 'utf8');
     for (const expected of ['-T', '-F /dev/null', 'BatchMode=yes', 'IdentitiesOnly=yes', 'IdentityAgent=none', 'StrictHostKeyChecking=yes', 'GlobalKnownHostsFile=/dev/null', 'HostKeyAlias=charness-hub', '-p 2222', 'hubuser@hub.example bootstrap']) {
@@ -112,6 +112,7 @@ describe('bootstrap line', () => {
     const result = runLine(payload);
     assert.equal(result.status, 0, String(result.stderr));
     assert.match(String(result.stdout), /^RUNNER_CLI pair --bootstrap /m);
+    assert.match(String(result.stdout), /--package-id 0123456789abcdef /, 'the id the hub announced travels on');
   });
 
   it('stops with a clear line when the answer has no marker (an expired line, a refusal), and cleans up', () => {

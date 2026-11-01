@@ -2,18 +2,19 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { formatListTimestamp } from '../runners/runnersList';
-import { redeemReplySchema, type RedeemRequest } from '../runners/gateProtocol';
+import { redeemReplySchema, type RedeemReply, type RedeemRequest } from '../runners/gateProtocol';
 import { decodePairCode } from '../runners/pairCode';
 import { checkIsAdminAccount, formatAdminWarning, readAccountFacts } from './adminCheck';
 import { ensureLauncher } from './launcher';
 import { removeOldApps, switchCurrentApp } from './appInstall';
-import { connectToHub, HubConnectionError, requestGateJson } from './hubClient';
+import { connectToHub, HubConnectionError, requestGateJson, type HubEndpoint } from './hubClient';
+import { recoverPairing } from './pairingRecovery';
 import { createLinkLoop } from './linkLoop';
 import { collectMachineReport, createMachineProbe, formatMachineReport, type MachineReport } from './machineReport';
 import { ensurePueueDaemon } from './pueueDaemon';
-import { readRunnerConfig, readRunnerStatus, writeRunnerConfig, type RunnerConfig } from './runnerConfig';
+import { readPairingInProgress, readRunnerConfig, readRunnerStatus, removePairingInProgress, writePairingInProgress, writeRunnerConfig, type RunnerConfig } from './runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from './runnerHome';
-import { ensureRunnerKeys, readRunnerKeys } from './runnerKeys';
+import { ensureRunnerKeys, readRunnerKeys, type RunnerKeys } from './runnerKeys';
 import { readExecEnv } from './execEnv';
 import { createRunnerServers } from './runnerServers';
 import { createToolDeps, ensurePueue, ensureRsync, findPueue, findRsync, type ToolDeps, type ToolInstallOutcome } from './toolInstall';
@@ -78,8 +79,42 @@ export function formatRemovedMessage(label: string): string {
   return `This runner was removed by ${label}. Pair again with a new line from /runners.`;
 }
 
-/** @description `charness-runner pair <code>` (run from the INSTALLED copy): redeem the code, record who the runner serves, install its tools. Returns the exit code. */
-export async function runPair(code: string, appDir: string, io: CommandIo, homeDir: string = os.homedir()): Promise<number> {
+export interface PairingOutcomeInputs {
+  endpoint: HubEndpoint;
+  keys: RunnerKeys;
+  reply: Extract<RedeemReply, { ok: true }>;
+  /** The id of the archive this copy was installed from — NOT the hub's current package, which is only what is available now. */
+  packageId: string | null;
+  appDir: string;
+}
+
+/** @description Record a pairing the hub has committed: folders, `current`, launcher, `config.json`; then the tools. Removes `pairing.json`. */
+async function finishPairing(paths: RunnerHomePaths, inputs: PairingOutcomeInputs, io: CommandIo, isRecovered: boolean): Promise<void> {
+  const { endpoint, reply } = inputs;
+  const config: RunnerConfig = {
+    runnerId: reply.runnerId,
+    name: reply.name,
+    hub: { host: endpoint.host, port: endpoint.port, user: endpoint.user, hostKey: endpoint.hostKey, publicKey: reply.hubPublicKey, label: reply.label },
+    packageId: inputs.packageId,
+    pairedAtMs: Date.now(),
+  };
+  for (const directory of [paths.workDir, paths.logsDir]) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (!fs.existsSync(paths.envFile)) fs.writeFileSync(paths.envFile, envFileTemplate, { mode: 0o600 });
+  switchCurrentApp(paths, inputs.appDir);
+  ensureLauncher(paths, process.execPath);
+  writeRunnerConfig(paths, config);
+  removePairingInProgress(paths);
+  removeOldApps(paths);
+  await installTools(paths, createToolDeps(), io);
+  io.stdout(`\n${isRecovered ? 'Recovered a pairing whose answer was lost: paired' : 'Paired'} with charness ${reply.label} (${endpoint.host}:${endpoint.port}) as runner “${reply.name}”.\n`);
+  io.stdout(`Its agents will run their projects' code on this machine as user «${os.userInfo().username}».\n\n${formatKeepRunningHelp(paths)}`);
+}
+
+/**
+ * @description `charness-runner pair <code>` (run from the INSTALLED copy): redeem the code, record who the runner serves, install its
+ * tools. A pairing that an earlier run left half done is recovered FIRST (with the runner's own key), whatever the new code is. Returns the exit code.
+ */
+export async function runPair(code: string, appDir: string, packageId: string | null, io: CommandIo, homeDir: string = os.homedir()): Promise<number> {
   const paths = getRunnerHomePaths(homeDir);
   const existing = readRunnerConfig(paths);
   if (existing !== null) {
@@ -93,6 +128,20 @@ export async function runPair(code: string, appDir: string, io: CommandIo, homeD
   }
   const payload = decoded.payload;
   const keys = ensureRunnerKeys(paths);
+  const interrupted = readPairingInProgress(paths);
+  if (interrupted !== null) {
+    const recovery = await recoverPairing({ host: interrupted.host, port: interrupted.port, user: interrupted.user, hostKey: interrupted.hostKey }, keys);
+    if (recovery.kind === 'recovered') {
+      await finishPairing(paths, { endpoint: interrupted, keys, reply: recovery.reply, packageId: interrupted.packageId, appDir }, io, true);
+      return 0;
+    }
+    if (recovery.kind === 'unreachable') {
+      io.stderr(`charness-runner: an earlier pairing was interrupted and the hub cannot be asked about it now (${recovery.message}); try again in a moment.\n`);
+      return 1;
+    }
+    removePairingInProgress(paths);
+  }
+  const endpoint: HubEndpoint = { host: payload.host, port: payload.port, user: payload.user, hostKey: payload.hostKey };
   const report = await printMachineCheck(paths, io);
   const request: RedeemRequest = {
     suggestedName: os.hostname(),
@@ -104,46 +153,54 @@ export async function runPair(code: string, appDir: string, io: CommandIo, homeD
     version: readOwnVersion(),
     serviceKind: 'foreground',
   };
-  let reply;
+  writePairingInProgress(paths, { pairId: payload.pairId, ...endpoint, startedAtMs: Date.now(), packageId });
+  let reply: RedeemReply | null = null;
+  let failure = 'pairing failed';
   try {
-    const client = await connectToHub({ host: payload.host, port: payload.port, user: payload.user, hostKey: payload.hostKey }, payload.privateKey);
+    const client = await connectToHub(endpoint, payload.privateKey);
     try {
       reply = await requestGateJson(client, 'redeem', JSON.stringify(request), redeemReplySchema);
     } finally {
       client.end();
     }
   } catch (error) {
-    io.stderr(`charness-runner: ${error instanceof HubConnectionError && error.failure === 'auth' ? 'the hub refused this pairing line — it has expired or has been used already; make a new one' : error instanceof Error ? error.message : 'pairing failed'}\n`);
-    return 1;
+    failure = error instanceof HubConnectionError && error.failure === 'auth' ? 'the hub refused this pairing line — it has expired or has been used already; make a new one' : error instanceof Error ? error.message : failure;
   }
-  if (!reply.ok) {
+  if (reply !== null && !reply.ok) {
+    removePairingInProgress(paths);
     io.stderr(`charness-runner: the hub refused the pairing: ${reply.reason}\n`);
     return 1;
   }
-  const config: RunnerConfig = {
-    runnerId: reply.runnerId,
-    name: reply.name,
-    hub: { host: payload.host, port: payload.port, user: payload.user, hostKey: payload.hostKey, publicKey: reply.hubPublicKey, label: reply.label },
-    packageId: reply.packageId,
-    pairedAtMs: Date.now(),
-  };
-  for (const directory of [paths.workDir, paths.logsDir]) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (!fs.existsSync(paths.envFile)) fs.writeFileSync(paths.envFile, envFileTemplate, { mode: 0o600 });
-  switchCurrentApp(paths, appDir);
-  ensureLauncher(paths, process.execPath);
-  writeRunnerConfig(paths, config);
-  removeOldApps(paths);
-  await installTools(paths, createToolDeps(), io);
-  io.stdout(`\nPaired with charness ${reply.label} (${payload.host}:${payload.port}) as runner “${reply.name}”.\n`);
-  io.stdout(`Its agents will run their projects' code on this machine as user «${os.userInfo().username}».\n\n${formatKeepRunningHelp(paths)}`);
+  if (reply === null) {
+    // No answer: the hub may have committed all the same (its answer lost on the way). The runner's own key can ask.
+    const recovery = await recoverPairing(endpoint, keys);
+    if (recovery.kind === 'recovered') {
+      await finishPairing(paths, { endpoint, keys, reply: recovery.reply, packageId, appDir }, io, true);
+      return 0;
+    }
+    if (recovery.kind === 'not-registered') removePairingInProgress(paths);
+    io.stderr(`charness-runner: ${failure}${recovery.kind === 'unreachable' ? ' (run `charness-runner pair` again later to finish if the hub did register this machine)' : ''}\n`);
+    return 1;
+  }
+  await finishPairing(paths, { endpoint, keys, reply, packageId, appDir }, io, false);
   return 0;
 }
 
 /** @description `charness-runner run`: ensure the tools and Pueue, then hold the link until stopped. Returns the exit code (75 = restart onto an update). */
-export async function runLink(io: CommandIo, homeDir: string = os.homedir()): Promise<number> {
+export async function runLink(io: CommandIo, appDir: string, homeDir: string = os.homedir()): Promise<number> {
   const paths = getRunnerHomePaths(homeDir);
-  const config = readRunnerConfig(paths);
+  let config = readRunnerConfig(paths);
   const keys = readRunnerKeys(paths);
+  const interrupted = config === null && keys !== null ? readPairingInProgress(paths) : null;
+  if (interrupted !== null && keys !== null) {
+    const recovery = await recoverPairing({ host: interrupted.host, port: interrupted.port, user: interrupted.user, hostKey: interrupted.hostKey }, keys);
+    if (recovery.kind === 'recovered') {
+      await finishPairing(paths, { endpoint: interrupted, keys, reply: recovery.reply, packageId: interrupted.packageId, appDir }, io, true);
+      config = readRunnerConfig(paths);
+    } else if (recovery.kind === 'not-registered') {
+      removePairingInProgress(paths);
+    }
+  }
   if (config === null || keys === null) {
     io.stderr('charness-runner: this account is not paired. Run the line from /runners on this machine first.\n');
     return 1;

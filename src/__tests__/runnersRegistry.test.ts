@@ -16,6 +16,7 @@ import { createHubContext, getHandMadeRunnersPath, getHubFilePaths, getRunnerHos
 import {
   checkIsPairingOpen,
   createPairing,
+  describeRunnerIdentity,
   pairingLifetimeMs,
   pickFreeRunnerName,
   redeemPairing,
@@ -317,6 +318,24 @@ describe('a registry file that does not validate', () => {
     fs.mkdirSync(fixture.ctx.dir, { recursive: true });
     fs.writeFileSync(getHubFilePaths(fixture.ctx.dir).pending, '{not json');
     assert.throws(() => readPendingFile(fixture.ctx.dir), /pending\.json is not valid JSON/);
+  });
+});
+
+describe('what a runner is told again', () => {
+  beforeEach(() => {
+    fixture = createHubFixture();
+  });
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  it('describeRunnerIdentity gives the very answer redeem gave, for a paired runner only', async () => {
+    const pairing = await createTestPairing();
+    const reply = await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture().request, startMs, '0123456789abcdef');
+    assert.ok(reply.ok);
+    if (!reply.ok) return;
+    assert.deepEqual(describeRunnerIdentity(fixture.ctx, reply.runnerId, '0123456789abcdef'), reply);
+    assert.deepEqual(describeRunnerIdentity(fixture.ctx, 'ffffffffffff', null), { ok: false, reason: 'this runner is not paired here' });
   });
 });
 

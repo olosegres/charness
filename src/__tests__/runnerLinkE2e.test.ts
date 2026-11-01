@@ -23,13 +23,20 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { decodePairCode } from '../runners/pairCode';
+import { redeemReplySchema, type RedeemRequest } from '../runners/gateProtocol';
+import { connectToHub, HubConnectionError, requestGateJson } from '../runnerUtility/hubClient';
+import { readRunnerConfig, writePairingInProgress } from '../runnerUtility/runnerConfig';
+import { ensureRunnerKeys } from '../runnerUtility/runnerKeys';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import type { RunnerConfig, RunnerStatus } from '../runnerUtility/runnerConfig';
 import { getFreePort } from './e2e/isolatedCharness';
 import {
+  createExtraMachine,
   createRunnerLinkLayout,
   destroyRunnerLinkLayout,
   getMissingTools,
+  installRunnerApp,
   isCi,
   makePairingLine,
   readJson,
@@ -63,12 +70,16 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     await destroyRunnerLinkLayout(layout);
   });
 
-  function readStatus(): RunnerStatus | null {
+  function readStatusAt(paths: ReturnType<typeof getRunnerHomePaths>): RunnerStatus | null {
     try {
-      return readJson<RunnerStatus>(runnerPaths.status);
+      return readJson<RunnerStatus>(paths.status);
     } catch {
       return null;
     }
+  }
+
+  function readStatus(): RunnerStatus | null {
+    return readStatusAt(runnerPaths);
   }
 
   async function waitForLink(excludedPid: number | null = null): Promise<RunnerStatus> {
@@ -212,5 +223,45 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     const status = spawnSync(process.execPath, [path.join(runnerPaths.currentApp, 'dist', 'runnerUtility', 'runnerCli.js'), 'status'], { encoding: 'utf8', env: { HOME: layout.runnerHome, PATH: process.env.PATH } });
     assert.match(status.stdout, /This runner was removed by @ExampleBot\. Pair again with a new line from \/runners\./);
     assert.equal(readHubPaired().runners.length, 0);
+  });
+  it('a pairing whose answer was lost is recovered with the machine\'s own key — the temporary key is spent, the code is gone', async () => {
+    const home = createExtraMachine(layout, 'machine-two');
+    const paths = getRunnerHomePaths(home);
+    installRunnerApp(layout, home);
+    const line = makePairingLine(layout);
+    const code = /cr1\.[A-Za-z0-9_-]+/.exec(line)?.[0] ?? '';
+    const decoded = decodePairCode(code);
+    assert.ok(decoded.ok);
+    if (!decoded.ok) return;
+    const payload = decoded.payload;
+    const endpoint = { host: payload.host, port: payload.port, user: payload.user, hostKey: payload.hostKey };
+
+    // What a runner does up to the redemption: keys, a note that a pairing is under way, the redemption itself — and then the answer is lost.
+    const keys = ensureRunnerKeys(paths);
+    writePairingInProgress(paths, { pairId: payload.pairId, ...endpoint, startedAtMs: Date.now(), packageId: null });
+    const request: RedeemRequest = {
+      suggestedName: 'machine-two',
+      publicKey: keys.client.publicKey,
+      hostKey: keys.server.publicKey,
+      workDir: paths.workDir,
+      os: 'Linux',
+      arch: 'x86_64',
+      version: 'flow',
+      serviceKind: 'foreground',
+    };
+    const client = await connectToHub(endpoint, payload.privateKey);
+    const lost = await requestGateJson(client, 'redeem', JSON.stringify(request), redeemReplySchema);
+    client.end();
+    assert.ok(lost.ok, 'the hub committed the pairing');
+    assert.equal(readRunnerConfig(paths), null, 'the machine never got the answer');
+    await assert.rejects(connectToHub(endpoint, payload.privateKey), (error: Error) => error instanceof HubConnectionError && error.failure === 'auth');
+
+    // The way back is the machine's own key: `run` finds the half-done pairing and asks the hub who it is.
+    const second = startRunner(layout, home);
+    await waitUntil(() => readStatusAt(paths)?.state === 'linked', 'the recovered machine to link', linkTimeoutMs);
+    assert.equal(readRunnerConfig(paths)?.runnerId, lost.ok ? lost.runnerId : '');
+    assert.equal(fs.existsSync(paths.pairing), false, 'the half-done pairing is finished');
+    assert.equal(readHubPaired().runners.length, 1);
+    await stopRunner(layout, second);
   });
 });

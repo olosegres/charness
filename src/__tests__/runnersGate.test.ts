@@ -83,7 +83,7 @@ describe('gate routing', () => {
   it('a pairing\'s key may bootstrap and redeem — nothing else', () => {
     assert.equal(routeGateRequest('temporary', 'bootstrap'), 'bootstrap');
     assert.equal(routeGateRequest('temporary', 'redeem'), 'redeem');
-    for (const command of ['link', 'package', 'version', 'unpair', 'bootstrap now', 'redeem; id', ' redeem', '', 'sh', '$(id)', undefined]) {
+    for (const command of ['link', 'package', 'version', 'identity', 'unpair', 'bootstrap now', 'redeem; id', ' redeem', '', 'sh', '$(id)', undefined]) {
       assert.equal(routeGateRequest('temporary', command), null, String(command));
     }
   });
@@ -92,6 +92,7 @@ describe('gate routing', () => {
     assert.equal(routeGateRequest('runner', 'link'), 'link');
     assert.equal(routeGateRequest('runner', 'package'), 'package');
     assert.equal(routeGateRequest('runner', 'version'), 'version');
+    assert.equal(routeGateRequest('runner', 'identity'), 'identity');
     assert.equal(routeGateRequest('runner', 'unpair'), 'unpair');
     for (const command of ['bootstrap', 'redeem', 'link extra', 'scp -t /tmp', 'cat /etc/passwd', 'sftp', '', undefined]) {
       assert.equal(routeGateRequest('runner', command), null, String(command));
@@ -199,6 +200,33 @@ describe('gate requests', () => {
     assert.equal(marker?.fields.package, splitMarker((await runGate(gateArgs('runner', runnerId), 'package')).stdout).marker?.fields.id, 'the same id the package request announces');
   });
 
+  it('identity tells a paired runner what redeem told it — the way back when that answer was lost — and tells it nothing once it is removed', async () => {
+    const pairId = await createOpenPairing();
+    const redeemed = await redeemPairing(fixture.ctx, pairId, createRedeemFixture().request, startMs);
+    assert.ok(redeemed.ok);
+    if (!redeemed.ok) return;
+    const run = await runGate(gateArgs('runner', redeemed.runnerId), 'identity');
+    assert.equal(run.code, 0);
+    const { request, body } = splitMarker(run.stdout);
+    assert.equal(request, 'identity');
+    const reply = redeemReplySchema.parse(JSON.parse(body.toString('utf8')));
+    assert.ok(reply.ok);
+    if (reply.ok) {
+      assert.deepEqual({ runnerId: reply.runnerId, name: reply.name, hubPublicKey: reply.hubPublicKey, label: reply.label, host: reply.host, port: reply.port }, {
+        runnerId: redeemed.runnerId,
+        name: redeemed.name,
+        hubPublicKey: redeemed.hubPublicKey,
+        label: redeemed.label,
+        host: redeemed.host,
+        port: redeemed.port,
+      });
+    }
+    await removePairedRunner(fixture.ctx, redeemed.runnerId, startMs);
+    const afterRemoval = await runGate(gateArgs('runner', redeemed.runnerId), 'identity');
+    assert.equal(afterRemoval.code, 2);
+    assert.equal(afterRemoval.stdout.length, 0);
+  });
+
   it('unpair removes the runner and says so; a second unpair says no', async () => {
     const runnerId = await pairRunner();
     const first = await runGate(gateArgs('runner', runnerId), 'unpair');
@@ -211,7 +239,7 @@ describe('gate requests', () => {
   it('a runner that left the registry is refused by `package` and `link` whatever its key line still allows', async () => {
     const runnerId = await pairRunner();
     await removePairedRunner(fixture.ctx, runnerId, startMs);
-    for (const command of ['package', 'link', 'version']) {
+    for (const command of ['package', 'link', 'version', 'identity']) {
       const run = await runGate(gateArgs('runner', runnerId), command);
       assert.equal(run.code, 2, command);
       assert.equal(run.stdout.length, 0, command);

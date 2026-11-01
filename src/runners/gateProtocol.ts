@@ -15,6 +15,9 @@ import { runnerServiceKinds } from './hubRegistry';
  *                                    `package`    marker line, then the packed package (raw gzip)
  *                                    `version`    marker line with the hub's current `package=<id>`, nothing else — asked every few minutes over
  *                                                 the connection that is already open, so a linked runner learns of an update
+ *                                    `identity`   marker line, then a {@link RedeemReply} — what `redeem` answered for this key's runner. The
+ *                                                 way back for a runner whose redeem answer was lost: the hub committed the pairing and
+ *                                                 removed the temporary key, so only the permanent key can still ask
  *                                    `unpair`     marker line, then {@link UnpairReply}
  *
  * Every answer starts with a MARKER line (after a line break, see {@link formatGateAnswerHead}): a shell that prints something before the
@@ -24,12 +27,12 @@ import { runnerServiceKinds } from './hubRegistry';
 
 /** The text every marker line starts with; the `1` is the protocol version. */
 export const gateMarker = '--charness-gate-1--';
-export const gateRequests = ['bootstrap', 'redeem', 'link', 'package', 'version', 'unpair'] as const;
+export const gateRequests = ['bootstrap', 'redeem', 'link', 'package', 'version', 'identity', 'unpair'] as const;
 /** @name GateRequest @description One of the words a runner may send. */
 export type GateRequest = (typeof gateRequests)[number];
 
 export const temporaryKeyRequests: readonly GateRequest[] = ['bootstrap', 'redeem'];
-export const runnerKeyRequests: readonly GateRequest[] = ['link', 'package', 'version', 'unpair'];
+export const runnerKeyRequests: readonly GateRequest[] = ['link', 'package', 'version', 'identity', 'unpair'];
 
 /** What a `link` / `version` answer names as the package when the hub cannot pack one. */
 export const noPackageMarker = 'none';

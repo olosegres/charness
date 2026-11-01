@@ -15,7 +15,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { builtCliPath, getFreePort } from '../e2e/isolatedCharness';
 import { flowLayoutPrefix, reapDeadFlowLayouts, sweepFlowLayout, writeFlowLayoutOwner } from '../remoteRunE2e/remoteRunFlowSweep';
-import { testNodeModulesEnvName } from '../../runnerUtility/appInstall';
+import { installAppFromDirectory, switchCurrentApp, testNodeModulesEnvName } from '../../runnerUtility/appInstall';
+import { ensureLauncher } from '../../runnerUtility/launcher';
 import { getRunnerHomePaths } from '../../runnerUtility/runnerHome';
 
 export { waitUntil } from '../runnersTestKit';
@@ -113,11 +114,37 @@ export async function createRunnerLinkLayout(): Promise<RunnerLinkLayout> {
   for (const directory of [layout.hubHome, layout.runnerHome, path.join(root, 'tmp')]) fs.mkdirSync(directory, { recursive: true });
   copyBuiltCharness(layout.hubInstall);
   await startSshd(layout);
-  // Pueue and rsync are the machine's own, placed where the utility looks for its own: the flow never downloads or builds anything.
-  const runnerBin = getRunnerHomePaths(layout.runnerHome).binDir;
-  fs.mkdirSync(runnerBin, { recursive: true });
-  for (const tool of ['pueue', 'pueued']) fs.symlinkSync(execFileSync('which', [tool], { encoding: 'utf8' }).trim(), path.join(runnerBin, tool));
+  placeMachineTools(layout.runnerHome);
   return layout;
+}
+
+/** Pueue is the machine's own, placed where the utility looks for its own: the flow never downloads or builds anything (rsync is found on PATH). */
+function placeMachineTools(home: string): void {
+  const binDir = getRunnerHomePaths(home).binDir;
+  fs.mkdirSync(binDir, { recursive: true });
+  for (const tool of ['pueue', 'pueued']) fs.symlinkSync(execFileSync('which', [tool], { encoding: 'utf8' }).trim(), path.join(binDir, tool));
+}
+
+/** @description A second, empty machine (a home of its own) next to the first. */
+export function createExtraMachine(layout: RunnerLinkLayout, name: string): string {
+  const home = path.join(layout.root, name);
+  fs.mkdirSync(home, { recursive: true });
+  placeMachineTools(home);
+  return home;
+}
+
+/** @description What the pasted line does on a machine up to the redemption: install the charness package, point `current` at it, write the launcher. */
+export function installRunnerApp(layout: RunnerLinkLayout, home: string): void {
+  const paths = getRunnerHomePaths(home);
+  const previous = process.env[testNodeModulesEnvName];
+  process.env[testNodeModulesEnvName] = path.join(repoRoot, 'node_modules');
+  try {
+    switchCurrentApp(paths, installAppFromDirectory(layout.hubInstall, paths));
+  } finally {
+    if (previous === undefined) delete process.env[testNodeModulesEnvName];
+    else process.env[testNodeModulesEnvName] = previous;
+  }
+  ensureLauncher(paths, process.execPath);
 }
 
 export function getHubCliPath(layout: RunnerLinkLayout): string {
@@ -151,12 +178,12 @@ export function runPairingLine(layout: RunnerLinkLayout, line: string): SpawnSyn
 }
 
 /** @description Start `charness-runner run` through the launcher, in a process group of its own, with `FLOW_SECRET` in ITS environment (a job must never see it). */
-export function startRunner(layout: RunnerLinkLayout): ChildProcess {
-  const paths = getRunnerHomePaths(layout.runnerHome);
+export function startRunner(layout: RunnerLinkLayout, home: string = layout.runnerHome): ChildProcess {
+  const paths = getRunnerHomePaths(home);
   const child = spawn(paths.launcher, ['run'], {
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: createEnv(layout.runnerHome, layout, {
+    env: createEnv(home, layout, {
       FLOW_SECRET: 'leak',
       [testNodeModulesEnvName]: path.join(repoRoot, 'node_modules'),
       // The linked runner asks the hub for its package every 2 s instead of every 5 minutes (the seam may only shorten the window).

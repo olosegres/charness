@@ -1,9 +1,8 @@
-import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { gunzipSync } from 'zlib';
 import { noPackageMarker } from '../runners/gateProtocol';
 import { callGate, connectToHub, type HubEndpoint } from './hubClient';
+import { getPackageIdOfArchive } from './packageId';
 import { installAppFromArchive, removeOldApps, switchCurrentApp } from './appInstall';
 import { writeRunnerConfig, type RunnerConfig } from './runnerConfig';
 import type { RunnerHomePaths } from './runnerHome';
@@ -14,12 +13,6 @@ import type { RunnerHomePaths } from './runnerHome';
  * the id the hub announced, installs it next to the running copy, points `current` at it and records the id. The caller then exits with
  * the restart code and the launcher starts the new copy. Nothing is changed in the running copy.
  */
-
-const packageIdLength = 16;
-/** The id of a package is the sha256 of its tar before compression, cut to 16 hex digits (`hubPackage.ts`). */
-export function getPackageIdOfArchive(archive: Buffer): string {
-  return createHash('sha256').update(gunzipSync(archive)).digest('hex').slice(0, packageIdLength);
-}
 
 export type UpdateOutcome = { ok: true; packageId: string } | { ok: false; reason: string };
 

@@ -42,6 +42,14 @@ the queue), `logs/`, `build/`.
   exit status or signal goes back. A running command counts as busy until the process really ends.
 - **The attempt ends with the `link` CHANNEL.** The hub's gate dying, or the link being cut, closes that channel while the connection
   to sshd stays up and answers keepalives; the loop watches the channel as well as the connection.
+- **A lost answer is recoverable.** The hub commits a redemption before the runner has the answer, and the temporary key is spent. So the
+  runner writes `pairing.json` (the hub's address and the code's id — no key) BEFORE it redeems; after any failure of the redemption, and at
+  the start of `pair` and `run` when it finds that file without a `config.json`, it asks the gate for its `identity` with its own
+  permanent key: the hub's answer is the reply `redeem` gave (`pairingRecovery.ts`). A key the hub does not know means nothing was
+  committed and the file is dropped; a hub that cannot be reached leaves it for the next try.
+- **The recorded package is the one downloaded.** The pasted line passes `--archive` and `--package-id` (the id the hub announced in the
+  marker line of `bootstrap`); the first step hashes the archive against it (`packageId.ts`, builtins only) and `config.json` records THAT
+  id. The id in the redemption reply is only what is available now — if it differs, the first `link` triggers the update.
 - **Reconnect.** Backoff 1 s doubling to 5 min, ±20 % jitter, reset by a link that held 30 s. The hub refusing the key (a removed runner) is
   the `removed` state: `status` says «This runner was removed by <hub>. Pair again with a new line from /runners.» and it asks once an hour.
 - **Updates.** The `link` marker names the hub's package id, and a LINKED runner asks again every 5 minutes (`version`, a short exec on

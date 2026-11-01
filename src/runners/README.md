@@ -83,6 +83,9 @@ escape a backslash in `command="…"`).
    code must be in `pending.json` and not expired, the key not yet registered; it adds the runner (a unique name — `-2`, `-3`, … —
    against paired AND hand-made runners), deletes the pending entry (**this is what makes the code single use**), rewrites
    `known_hosts` and the block (the temporary line goes, the permanent one comes).
+   The hub commits a redemption (the runner registered, the temporary key deleted) BEFORE the runner has the answer. A runner that loses
+   it recovers with its PERMANENT key: it writes `pairing.json` before redeeming, and asks `identity` whenever it finds that file without a
+   `config.json` (see `src/runnerUtility/README.md`).
 4. `sweepExpiredPairings` drops expired codes and hands them back (the bot edits its messages to «expired»); sshd already refuses an
    expired key by itself (`expiry-time`).
 
@@ -98,6 +101,7 @@ this machine's own loopback port — otherwise the runner would be told to pin a
 | runner | `link` | marker line (`package=<id>`), then the ssh session of `gateLink.ts` |
 | runner | `package` | marker line, then the packed package |
 | runner | `version` | marker line with the hub's current `package=<id>`, nothing else — a linked runner asks every few minutes over its open connection |
+| runner | `identity` | marker line, then what `redeem` answered for this key's runner — the way back for a runner whose answer was lost (see below) |
 | runner | `unpair` | marker line, then `{ok}`; the hub removes the runner and cuts its link |
 
 A **marker line** (`--charness-gate-1-- <request> key=value…`) opens every answer, after a line break that ends any unfinished line a shell

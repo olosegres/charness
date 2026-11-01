@@ -21,6 +21,8 @@ export interface RunnerHomePaths {
   root: string;
   config: string;
   status: string;
+  /** A pairing that was started and not finished (see `pairingRecovery.ts`). */
+  pairing: string;
   keysDir: string;
   clientKey: string;
   serverKey: string;
@@ -42,6 +44,7 @@ export function getRunnerHomePaths(homeDir: string = os.homedir()): RunnerHomePa
     root,
     config: path.join(root, 'config.json'),
     status: path.join(root, 'status.json'),
+    pairing: path.join(root, 'pairing.json'),
     keysDir: path.join(root, 'keys'),
     clientKey: path.join(root, 'keys', 'client_ed25519'),
     serverKey: path.join(root, 'keys', 'server_host_ed25519'),

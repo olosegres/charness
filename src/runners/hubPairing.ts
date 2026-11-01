@@ -4,7 +4,7 @@ import { assertManagedBlockIntact } from './authorizedKeys';
 import type { RedeemReply, RedeemRequest } from './gateProtocol';
 import { getHandMadeRunnersPath, type HubContext } from './hubPaths';
 import { withHubLock } from './hubLock';
-import { readOrCreateHubKeyLocked } from './hubKey';
+import { readHubKey, readOrCreateHubKeyLocked } from './hubKey';
 import {
   readPairedFile,
   readPendingFile,
@@ -177,6 +177,14 @@ function getTakenRunnerNames(ctx: HubContext, paired: readonly PairedRunner[]): 
 
 function buildRedeemReply(runner: PairedRunner, hubPublicKey: string, packageId: string | null): RedeemReply {
   return { ok: true, runnerId: runner.id, name: runner.name, hubPublicKey, label: runner.label, host: runner.host, port: runner.port, packageId };
+}
+
+/** @description What `redeem` answered (or would answer) for the paired runner `runnerId` — for the runner that lost the answer. `ok: false` when it is not in the registry. */
+export function describeRunnerIdentity(ctx: HubContext, runnerId: string, packageId: string | null): RedeemReply {
+  const runner = readPairedFile(ctx.dir).runners.find((candidate) => candidate.id === runnerId);
+  const hubKey = readHubKey(ctx.dir);
+  if (runner === undefined || hubKey === null) return { ok: false, reason: 'this runner is not paired here' };
+  return buildRedeemReply(runner, hubKey.publicKey, packageId);
 }
 
 const unusableCodeReply: RedeemReply = { ok: false, reason: 'this pairing code is unknown or already used' };

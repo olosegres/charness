@@ -19,7 +19,7 @@ import { hubIdPattern } from './hubIds';
 import { createHubContext, type HubContext } from './hubPaths';
 import { HubRegistryError } from './hubRegistry';
 import { getHubPackage, openHubPackage } from './hubPackage';
-import { checkIsPairingOpen, checkIsRunnerPaired, redeemPairing, removePairedRunner } from './hubPairing';
+import { checkIsPairingOpen, checkIsRunnerPaired, describeRunnerIdentity, redeemPairing, removePairedRunner } from './hubPairing';
 import { cutRunnerLink } from './linkControl';
 
 /**
@@ -135,6 +135,13 @@ function describeFailure(error: unknown): string {
   return `internal error (${getCaughtErrnoCode(error)})`;
 }
 
+async function handleIdentity(ctx: HubContext, runnerId: string, io: GateIo): Promise<number> {
+  const reply = describeRunnerIdentity(ctx, runnerId, getPackageIdOrNull(ctx, io.log));
+  io.stdout.write(formatGateAnswerHead('identity'));
+  io.stdout.write(`${JSON.stringify(reply)}\n`);
+  return reply.ok ? 0 : failedExitCode;
+}
+
 async function handleVersion(ctx: HubContext, io: GateIo): Promise<number> {
   io.stdout.write(formatGateAnswerHead('version', { package: getPackageIdOrNull(ctx, io.log) ?? noPackageMarker }));
   return 0;
@@ -188,6 +195,8 @@ export async function runRunnerGate(argv: readonly string[], env: NodeJS.Process
         return await writePackage(ctx, io, 'package');
       case 'version':
         return await handleVersion(ctx, io);
+      case 'identity':
+        return await handleIdentity(ctx, invocation.runnerId, io);
       case 'unpair':
         return await handleUnpair(ctx, invocation.runnerId, io, now);
       default:

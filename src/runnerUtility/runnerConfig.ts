@@ -54,6 +54,20 @@ const runnerStatusSchema = z.strictObject({
 /** @name RunnerStatus @description `status.json`. */
 export type RunnerStatus = z.infer<typeof runnerStatusSchema>;
 
+const pairingInProgressSchema = z.strictObject({
+  pairId: hubIdSchema,
+  host: hubHostSchema,
+  port: hubPortSchema,
+  user: hubSshUserSchema,
+  hostKey: hubHostKeySchema,
+  startedAtMs: z.number().int().nonnegative(),
+  /** The id of the archive this runner installed from (told by the pasted line), kept for the config. */
+  packageId: z.string().max(maxTextLength).nullable(),
+});
+
+/** @name PairingInProgress @description `pairing.json`: the hub's address and the code's id — NOT the temporary key — written before a code is redeemed. */
+export type PairingInProgress = z.infer<typeof pairingInProgressSchema>;
+
 export class RunnerConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -100,4 +114,17 @@ export function readRunnerStatus(paths: RunnerHomePaths): RunnerStatus | null {
 
 export function writeRunnerStatus(paths: RunnerHomePaths, status: RunnerStatus): void {
   writeJsonFileAtomically(paths.status, runnerStatusSchema.parse(status), fileMode);
+}
+
+/** @description `pairing.json`, or `null` when no pairing is half done. */
+export function readPairingInProgress(paths: RunnerHomePaths): PairingInProgress | null {
+  return readJsonFile(paths.pairing, 'pairing.json', pairingInProgressSchema);
+}
+
+export function writePairingInProgress(paths: RunnerHomePaths, pairing: PairingInProgress): void {
+  writeJsonFileAtomically(paths.pairing, pairingInProgressSchema.parse(pairing), fileMode);
+}
+
+export function removePairingInProgress(paths: RunnerHomePaths): void {
+  fs.rmSync(paths.pairing, { force: true });
 }

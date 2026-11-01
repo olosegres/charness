@@ -119,8 +119,8 @@ export async function readChannelText(channel: ClientChannel): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/** @description A gate request whose answer is one JSON line (`redeem`, `unpair`), parsed with `schema`. */
-export async function requestGateJson<TReply>(client: Client, request: 'redeem' | 'unpair', body: string | null, schema: z.ZodType<TReply>): Promise<TReply> {
+/** @description A gate request whose answer is one JSON line (`redeem`, `identity`, `unpair`), parsed with `schema`. */
+export async function requestGateJson<TReply>(client: Client, request: 'redeem' | 'unpair' | 'identity', body: string | null, schema: z.ZodType<TReply>): Promise<TReply> {
   const answer = await callGate(client, request, body ?? '');
   if (answer === null) throw new HubConnectionError('network', 'the hub did not answer the request');
   const text = await readChannelText(answer.channel);

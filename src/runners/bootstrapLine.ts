@@ -5,10 +5,10 @@ import { encodePairCode, type PairCodePayload } from './pairCode';
  * @description The one line the operator runs on the runner machine. It is plain `sh` (a runner has nothing of charness yet): it
  * writes the pairing's temporary key and the hub's host key into a private temp folder (removed on exit), downloads the hub's own
  * charness package through the gate's `bootstrap` request, unpacks it, and hands over to the runner utility's `pair` step with the
- * pairing code. What the hub's shell printed before the gate ran (a banner, a motd) is skipped: the answer opens with the marker line,
+ * pairing code and the id of the archive it downloaded (the hub announces it in the marker line; the first step checks the archive against it). What the hub's shell printed before the gate ran (a banner, a motd) is skipped: the answer opens with the marker line,
  * which `grep -b` finds among the first {@link maxGateNoiseBytes} bytes, and the archive is cut out from the byte after it.
  *
- * Contract with the runner utility: `runnerCli.js pair --bootstrap <unpacked folder> <code>` is started with a package that has NO
+ * Contract with the runner utility: `runnerCli.js pair --bootstrap <unpacked folder> --archive <file> --package-id <id> <code>` is started with a package that has NO
  * `node_modules` yet, so it reaches its install step (`npm install --omit=dev --ignore-scripts` into its own app folder) using
  * Node's built-ins only.
  *
@@ -61,7 +61,7 @@ export function buildBootstrapLine(payload: PairCodePayload): string {
     'tail -c +$((o + ${#t} + 2)) "$d/answer" > "$d/package.tgz"',
     'mkdir "$d/pkg"',
     'tar -xzf "$d/package.tgz" -C "$d/pkg"',
-    `node "$d/pkg/dist/runnerUtility/runnerCli.js" pair --bootstrap "$d/pkg" ${code}`,
+    `node "$d/pkg/dist/runnerUtility/runnerCli.js" pair --bootstrap "$d/pkg" --archive "$d/package.tgz" --package-id "\${t##*id=}" ${code}`,
   ].join('; ');
   if (script.includes("'")) throw new Error('the bootstrap script must not hold a single quote');
   return `sh -c '${script}'`;

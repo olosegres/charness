@@ -18,6 +18,7 @@ import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { installAppFromDirectory, restartExitCode } from './appInstall';
+import { checkArchiveHasId, checkIsPackageId } from './packageId';
 import { getRunnerHomePaths } from './runnerHome';
 
 const usageExitCode = 2;
@@ -33,7 +34,36 @@ function getOwnAppDir(): string {
   return path.resolve(__dirname, '..', '..');
 }
 
-function runBootstrap(bootstrapDir: string, code: string): number {
+interface BootstrapArgs {
+  bootstrapDir: string;
+  archivePath: string;
+  packageId: string;
+  code: string;
+}
+
+/** `--bootstrap <folder> --archive <file> --package-id <id> <code>` — what the pasted line passes. */
+function parseBootstrapArgs(args: readonly string[]): BootstrapArgs | null {
+  const [bootstrapFlag, bootstrapDir, archiveFlag, archivePath, idFlag, packageId, code, ...rest] = args;
+  if (bootstrapFlag !== '--bootstrap' || archiveFlag !== '--archive' || idFlag !== '--package-id' || rest.length > 0) return null;
+  return bootstrapDir === undefined || archivePath === undefined || packageId === undefined || code === undefined ? null : { bootstrapDir, archivePath, packageId, code };
+}
+
+/** `<code> [--package-id <id>]` — `pair` from an installed copy. */
+function parsePairArgs(args: readonly string[]): { code: string; packageId: string | null } | null {
+  const [code, flag, packageId, ...rest] = args;
+  if (code === undefined || rest.length > 0) return null;
+  if (flag === undefined) return { code, packageId: null };
+  return flag === '--package-id' && packageId !== undefined && checkIsPackageId(packageId) ? { code, packageId } : null;
+}
+
+function runBootstrap(args: BootstrapArgs): number {
+  const { bootstrapDir, archivePath, packageId, code } = args;
+  // The archive is checked against the id the hub announced with it, and THAT id — not whatever the hub offers a moment later — is
+  // what the runner records as installed.
+  if (!checkArchiveHasId(archivePath, packageId)) {
+    process.stderr.write('charness-runner: the package that was downloaded is not the one the hub announced; run the line again\n');
+    return 1;
+  }
   const paths = getRunnerHomePaths();
   let appDir: string;
   try {
@@ -43,7 +73,7 @@ function runBootstrap(bootstrapDir: string, code: string): number {
     return 1;
   }
   const installedCli = path.join(appDir, 'dist', 'runnerUtility', 'runnerCli.js');
-  const result = spawnSync(process.execPath, [installedCli, 'pair', code], { stdio: 'inherit' });
+  const result = spawnSync(process.execPath, [installedCli, 'pair', code, '--package-id', packageId], { stdio: 'inherit' });
   const isCurrent = fs.existsSync(paths.currentApp) && fs.realpathSync(paths.currentApp) === fs.realpathSync(appDir);
   if (!isCurrent) fs.rmSync(appDir, { recursive: true, force: true });
   return result.status ?? 1;
@@ -52,26 +82,27 @@ function runBootstrap(bootstrapDir: string, code: string): number {
 async function main(): Promise<number> {
   const [command = 'status', ...args] = process.argv.slice(2);
   if (command === 'pair' && args[0] === '--bootstrap') {
-    const [, bootstrapDir, code] = args;
-    if (bootstrapDir === undefined || code === undefined) {
+    const bootstrapArgs = parseBootstrapArgs(args);
+    if (bootstrapArgs === null) {
       process.stderr.write(usage);
       return usageExitCode;
     }
-    return runBootstrap(bootstrapDir, code);
+    return runBootstrap(bootstrapArgs);
   }
   const io = { stdout: (text: string): void => { process.stdout.write(text); }, stderr: (text: string): void => { process.stderr.write(text); } };
   switch (command) {
     case 'pair': {
-      if (args.length !== 1) {
+      const pairArgs = parsePairArgs(args);
+      if (pairArgs === null) {
         process.stderr.write(usage);
         return usageExitCode;
       }
       const { runPair } = await import('./runnerCommands');
-      return runPair(args[0], getOwnAppDir(), io);
+      return runPair(pairArgs.code, getOwnAppDir(), pairArgs.packageId, io);
     }
     case 'run': {
       const { runLink } = await import('./runnerCommands');
-      return runLink(io);
+      return runLink(io, getOwnAppDir());
     }
     case 'status': {
       const { runStatus } = await import('./runnerCommands');

@@ -14,7 +14,8 @@ import os from 'os';
 import path from 'path';
 import { Server, type ServerChannel } from 'ssh2';
 import { gzipSync } from 'zlib';
-import { decideUpdate, getPackageIdOfArchive, updateRetryDelayMs } from '../runnerUtility/appUpdate';
+import { decideUpdate, updateRetryDelayMs } from '../runnerUtility/appUpdate';
+import { checkArchiveHasId, checkIsPackageId, getPackageIdOfArchive } from '../runnerUtility/packageId';
 import { HubConnectionError } from '../runnerUtility/hubClient';
 import { computeBackoffMs, createLinkLoop, removedRetryMs } from '../runnerUtility/linkLoop';
 import { readRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
@@ -149,6 +150,21 @@ describe('update decision', () => {
 });
 
 describe('package id', () => {
+  it('checks a downloaded archive against the announced id; anything else is a mismatch', () => {
+    const tar = createTarArchive([{ path: 'package.json', content: Buffer.from('{}'), mode: 0o644 }]);
+    const archivePath = path.join(home, 'package.tgz');
+    fs.writeFileSync(archivePath, gzipSync(tar));
+    const id = createHash('sha256').update(tar).digest('hex').slice(0, 16);
+    assert.equal(checkArchiveHasId(archivePath, id), true);
+    assert.equal(checkArchiveHasId(archivePath, 'f'.repeat(16)), false);
+    assert.equal(checkArchiveHasId(archivePath, 'not-an-id'), false);
+    assert.equal(checkArchiveHasId(path.join(home, 'missing.tgz'), id), false);
+    fs.writeFileSync(archivePath, 'not gzip at all');
+    assert.equal(checkArchiveHasId(archivePath, id), false);
+    assert.equal(checkIsPackageId(id), true);
+    assert.equal(checkIsPackageId('0123456789ABCDEF'), false);
+  });
+
   it('is the first 16 hex digits of the sha256 of the tar before compression — what the hub computes', () => {
     const tar = createTarArchive([{ path: 'package.json', content: Buffer.from('{}'), mode: 0o644 }]);
     assert.equal(getPackageIdOfArchive(gzipSync(tar)), createHash('sha256').update(tar).digest('hex').slice(0, 16));
