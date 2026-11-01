@@ -904,7 +904,7 @@ describe('the probe fits its 20 s however many of its questions hang', () => {
 
   /** `probe_slow` of a Mac whose tools are the fakes in `fakeBin`, run as a sourced function; returns its lines and how long it took. */
   function probeSlowOfAMac(): { lines: Record<string, string>; elapsedSec: number } {
-    const result = spawnSync('bash', ['-c', `source ${scriptPath}; uname() { echo Darwin; }; work=${workDir}; start=$SECONDS; probe_slow; echo "elapsed=$((SECONDS - start))"`], {
+    const result = spawnSync('bash', ['-c', `source ${scriptPath}; uname() { echo Darwin; }; work=${workDir}; read_runner_state; start=$SECONDS; probe_slow; echo "elapsed=$((SECONDS - start))"`], {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}`, PUEUE_BIN: path.join(fakeBin, 'pueue') },
       timeout: 60_000,

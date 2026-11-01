@@ -118,7 +118,10 @@ describe('where a paired runner keeps Pueue', () => {
   it('a work dir that does not follow that layout gives no Pueue paths (the script finds Pueue on the PATH, as for a hand-made runner)', () => {
     assert.equal(getPairedRunnerPueue('/srv/runner-work'), undefined);
     assert.equal(getPairedRunnerPueue('/Users/runner/.charness-runner/other'), undefined);
-    assert.equal(getPairedRunnerPueue('~/.charness-runner/work'), undefined);
+  });
+
+  it('a work dir under ~ follows the layout too: its Pueue is under ~ as well (the runner\'s own shell expands it, `quoteRemotePath` leaves the leading ~/ alone) — falling back to the PATH would reach another queue than the service\'s', () => {
+    assert.deepEqual(getPairedRunnerPueue('~/.charness-runner/work'), { bin: '~/.charness-runner/bin/pueue', config: '~/.charness-runner/pueue/pueue.yml' });
   });
 });
 
