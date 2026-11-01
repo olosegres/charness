@@ -4,6 +4,7 @@ import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { createHubContext, getHubFilePaths, getRunnerHostAlias, getRunnerLinkPaths } from '../runners/hubPaths';
 import { pairedFileSchema, type PairedFile, type PairedRunner } from '../runners/hubRegistry';
 import type { PairedRunnerLink, RunnerConfig } from './runnersConfig';
+import { checkIsPlainShellWord, checkIsSshPathQuotable, escapeSshTokens, quoteSshOptionPath } from './ssh';
 
 /**
  * @description Paired runners as `remote-run` sees them: the same `RunnerConfig` an entry of `runners.json` gives, built from the hub's
@@ -13,10 +14,6 @@ import type { PairedRunnerLink, RunnerConfig } from './runnersConfig';
  * hub's key. Nothing here talks to the network or to the runner; whether the link is up is `linkControl.ts`'s question.
  */
 
-/** The ssh options below name files and a command line: a character that cannot be quoted for ssh AND rsync's `-e` parser is refused. */
-const unquotablePattern = /["'\\$`\r\n]/;
-const plainWordPattern = /^[A-Za-z0-9_@%+=:,./-]+$/;
-
 /** @description A path this machine's registry or program lives in cannot be put on an ssh command line; the runner stays out of the catalog, with the reason. */
 export class PairedRunnerSetupError extends Error {
   constructor(message: string) {
@@ -25,24 +22,9 @@ export class PairedRunnerSetupError extends Error {
   }
 }
 
-/** ssh expands `%`-tokens in a ProxyCommand, an identity file and a known-hosts path: a literal `%` is written `%%`. */
-function escapeSshTokens(value: string): string {
-  return value.replace(/%/g, '%%');
-}
-
-/**
- * A path as the VALUE of an `-o` option. ssh reads `-o` like a line of its config file, and `UserKnownHostsFile` there is a LIST of files
- * separated by whitespace: `/home/my user/…/known_hosts` would be the files `/home/my` and `user/…/known_hosts`, the pin would not be found
- * and strict checking would refuse the runner. Double quotes keep one path one word (ssh_config(5): «arguments may optionally be enclosed in
- * double quotes»); `-i` takes its path as a plain argument and needs none.
- */
-function quoteSshOptionPath(value: string): string {
-  return /\s/.test(value) ? `"${value}"` : value;
-}
-
 /** @description `value` as an ssh path, or a {@link PairedRunnerSetupError} naming what it is the path of. */
 function getUsableSshPath(value: string, what: string): string {
-  if (unquotablePattern.test(value)) throw new PairedRunnerSetupError(`the path of ${what} holds a quote, a backslash, a $ or a line break, which ssh cannot be given safely`);
+  if (!checkIsSshPathQuotable(value)) throw new PairedRunnerSetupError(`the path of ${what} holds a quote, a backslash, a $ or a line break, which ssh cannot be given safely`);
   return value;
 }
 
@@ -52,7 +34,7 @@ function getUsableSshPath(value: string, what: string): string {
  * nest them.
  */
 function quoteProxyWord(word: string, what: string): string {
-  return plainWordPattern.test(getUsableSshPath(word, what)) ? word : `"${word}"`;
+  return checkIsPlainShellWord(getUsableSshPath(word, what)) ? word : `"${word}"`;
 }
 
 export interface PairedSshOptionsInput {

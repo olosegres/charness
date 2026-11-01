@@ -53,6 +53,49 @@ describe('buildSshArgs', () => {
     assert.ok(!args.includes('ControlPath'));
   });
 
+  it('a cache path with whitespace is double-quoted, so ssh reads the ControlPath as one word (unquoted it is «extra arguments at end of line»)', () => {
+    const spacedCache = '/home/my user/.cache/charness/remote-run';
+    const args = buildSshArgs({}, spacedCache);
+    assert.ok(args.includes(`ControlPath="${spacedCache}/ssh/%C"`));
+    assert.ok(args.includes('ControlMaster=auto'));
+  });
+
+  it('a literal % in the cache path is written %% — ssh expands %-tokens in a ControlPath', () => {
+    const args = buildSshArgs({}, '/home/100%/.cache/charness/remote-run');
+    assert.ok(args.includes('ControlPath=/home/100%%/.cache/charness/remote-run/ssh/%C'));
+  });
+
+  it('a cache path that cannot be quoted for ssh and rsync turns the multiplexing off instead of failing', () => {
+    for (const unsafe of ["/home/it's", '/home/a"b', '/home/a\\b', '/home/a$b', '/home/a`b', '/home/a\nb']) {
+      const args = buildSshArgs({}, `${unsafe}/.cache`);
+      assert.ok(args.includes('ControlMaster=no'), unsafe);
+      assert.ok(!args.join(' ').includes('ControlPath'), unsafe);
+    }
+  });
+
+  describe('read by the real ssh and the real shell', { skip: spawnSync('ssh', ['-V']).error === undefined ? false : 'ssh is not installed' }, () => {
+    /** The `controlpath` line of `ssh -G`: where ssh would really put the socket (`%C` expanded to its hash). */
+    function readControlPath(cache: string): string {
+      const printed = spawnSync('ssh', ['-G', '-F', '/dev/null', ...buildSshArgs({}, cache), 'host.example'], { encoding: 'utf8' });
+      assert.equal(printed.status, 0, printed.stderr);
+      const line = printed.stdout.split('\n').find((candidate) => candidate.startsWith('controlpath '));
+      assert.ok(line, printed.stdout);
+      return line.slice('controlpath '.length);
+    }
+
+    it('a cache path with whitespace or a % gives one socket path in that very folder', () => {
+      assert.match(readControlPath('/home/my user/.cache/charness/remote-run'), /^\/home\/my user\/\.cache\/charness\/remote-run\/ssh\/[0-9a-f]{40}$/);
+      assert.match(readControlPath('/home/100%/.cache/charness/remote-run'), /^\/home\/100%\/\.cache\/charness\/remote-run\/ssh\/[0-9a-f]{40}$/);
+    });
+
+    it('the `-e` string of rsync splits back into the same words, the quoted ControlPath among them', () => {
+      const spacedCache = '/home/my user/.cache/charness/remote-run';
+      const rsyncCommand = buildRsyncSshCommand({ sshOptions: ['-p', '2222'] }, spacedCache);
+      const printed = spawnSync('sh', ['-c', `for word in ${rsyncCommand}; do printf '%s\\n' "$word"; done`], { encoding: 'utf8' }).stdout.split('\n');
+      assert.deepEqual(printed.slice(0, -1), ['ssh', ...buildSshArgs({ sshOptions: ['-p', '2222'] }, spacedCache)]);
+    });
+  });
+
   it('the rsync -e command is ssh with the same options', () => {
     assert.equal(buildRsyncSshCommand({ sshOptions: ['-p', '2222'] }, cacheDir), `ssh -p 2222 -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ControlMaster=auto -o ControlPath=${cacheDir}/ssh/%C -o ControlPersist=60`);
   });

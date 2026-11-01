@@ -35,27 +35,59 @@ export function ensureRemoteRunCacheDir(cacheDir: string): void {
   fs.chmodSync(path.join(cacheDir, 'ssh'), cacheDirectoryMode);
 }
 
-/** @description The ssh options of every call to `runner` (without the destination): the operator's own first — ssh keeps the first value of an option — then ours. */
+/** A path that holds one of these cannot reach ssh's option parser AND rsync's `-e` parser as the same single word. */
+const unquotablePathPattern = /["'\\$`\r\n]/;
+
+/** @description Can `value` be put into an ssh option or a command line that ssh and rsync's `-e` both read back as one word? (Whitespace can; a quote, a backslash, a `$`, a backtick or a line break cannot.) */
+export function checkIsSshPathQuotable(value: string): boolean {
+  return !unquotablePathPattern.test(value);
+}
+
+/** @description ssh expands `%`-tokens in a ProxyCommand, an identity file, a known-hosts path and a ControlPath: a literal `%` is written `%%`. */
+export function escapeSshTokens(value: string): string {
+  return value.replace(/%/g, '%%');
+}
+
+/**
+ * @description A path as the VALUE of an `-o` option. ssh reads `-o` like a line of its config file: `UserKnownHostsFile` there is a LIST of
+ * files separated by whitespace and `ControlPath` takes one word followed by nothing, so `/home/my user/…` would be two words and ssh would
+ * fail or look in the wrong place. Double quotes keep one path one word (ssh_config(5): «arguments may optionally be enclosed in double
+ * quotes»); `-i` takes its path as a plain argument and needs none.
+ */
+export function quoteSshOptionPath(value: string): string {
+  return /\s/.test(value) ? `"${value}"` : value;
+}
+
+/**
+ * @description The ssh options of every call to `runner` (without the destination): the operator's own first — ssh keeps the first value of an
+ * option — then ours. The shared connection is an optimisation: a cache path that is too long for a unix socket, or holds a character that
+ * cannot be quoted, turns it off instead of failing the call.
+ */
 export function buildSshArgs(runner: Pick<RunnerConfig, 'sshOptions'>, cacheDir: string): string[] {
   const controlDirectory = path.join(cacheDir, 'ssh');
-  const isControlPathShortEnough = controlDirectory.length + 1 + controlPathHashLength <= unixSocketPathLimit;
+  const isControlPathUsable = controlDirectory.length + 1 + controlPathHashLength <= unixSocketPathLimit && checkIsSshPathQuotable(controlDirectory);
   return [
     ...(runner.sshOptions ?? []),
     '-o', 'BatchMode=yes',
     '-o', `ConnectTimeout=${connectTimeoutSeconds}`,
     '-o', `ServerAliveInterval=${serverAliveIntervalSeconds}`,
     '-o', `ServerAliveCountMax=${serverAliveCountMax}`,
-    ...(isControlPathShortEnough
-      ? ['-o', 'ControlMaster=auto', '-o', `ControlPath=${path.join(controlDirectory, '%C')}`, '-o', `ControlPersist=${controlPersistSeconds}`]
+    ...(isControlPathUsable
+      ? ['-o', 'ControlMaster=auto', '-o', `ControlPath=${quoteSshOptionPath(path.join(escapeSshTokens(controlDirectory), '%C'))}`, '-o', `ControlPersist=${controlPersistSeconds}`]
       : ['-o', 'ControlMaster=no']),
   ];
 }
 
 const safeWordPattern = /^[A-Za-z0-9_@%+=:,./-]+$/;
 
+/** @description Is `word` one that needs no quoting for a POSIX shell (and for ssh's and rsync's own parsers)? */
+export function checkIsPlainShellWord(word: string): boolean {
+  return safeWordPattern.test(word);
+}
+
 /** @description One word quoted for a POSIX shell (`shellSingleQuote`; an already plain word stays as it is, so the commands read well in a log). */
 export function quoteShellWord(word: string): string {
-  return word !== '' && safeWordPattern.test(word) ? word : shellSingleQuote(word);
+  return word !== '' && checkIsPlainShellWord(word) ? word : shellSingleQuote(word);
 }
 
 /** @description The words of an argument list as one string rsync's `-e` and a shell both read back as the same words. */

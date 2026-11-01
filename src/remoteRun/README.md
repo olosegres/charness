@@ -41,7 +41,7 @@ A registry entry becomes the same `RunnerConfig` a `runners.json` entry is (`pai
 upload, rsync, Pueue, the lease — is phase 1 unchanged. Only the ssh options differ: destination `charness-runner-<id>`, no host and port but
 `ProxyCommand=<node> <cli.js> runner-proxy <hub dir>/link/<id>.sock`, the host key pinned under `HostKeyAlias` from the hub's own `known_hosts`
 (`StrictHostKeyChecking=yes`, never learned), the hub's key only (`IdentitiesOnly`, `IdentityAgent=none`), `-F /dev/null`. Every path on that line is
-`%`-escaped for ssh (`UserKnownHostsFile` is a whitespace-separated LIST in ssh's option parser, so its path is double-quoted inside the option when it has a space) and refused when it holds a quote, a backslash, `$`, a backtick or a line break (rsync's `-e` splitter and ssh must read the same
+`%`-escaped for ssh (`UserKnownHostsFile` is a whitespace-separated LIST in ssh's option parser and `ControlPath` takes one word, so such a path is double-quoted inside the option when it has a space — `ssh.ts` does it for the `ControlPath` of every call too, and drops the shared connection for a cache path it cannot quote) and refused when it holds a quote, a backslash, `$`, a backtick or a line break (rsync's `-e` splitter and ssh must read the same
 words: single quotes around a word, double quotes inside it, never a quote inside a single-quoted word — rsync cannot nest them). Pueue's binary and
 config are found from the reported work dir with the layout `runnerUtility/runnerHome.ts` writes down (`work/`, `bin/`, `pueue/` side by side).
 
