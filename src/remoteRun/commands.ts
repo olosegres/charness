@@ -261,8 +261,14 @@ export async function runKillCommand(command: Extract<RemoteRunCommand, { kind: 
   const client = await openJobClient(context, command.jobId);
   const result = await client.call('kill', ['-', command.jobId], { timeoutMs: killCallTimeoutMs });
   if (result.exitCode !== 0) throw new RemoteRunError(`killing ${command.jobId} failed — ${result.stderr.trim().split('\n').pop() || `exit ${result.exitCode}`}`);
-  sayOwn(context.io, `job ${command.jobId} killed`);
+  sayOwn(context.io, describeKillResult(command.jobId, result.stdout));
   return 0;
+}
+
+/** @description What `kill` tells the user: the runner answers `killed`, or `already-ended <code>` for a job that had finished (nothing was killed then). */
+export function describeKillResult(jobId: string, runnerAnswer: string): string {
+  const ended = /^already-ended (\d+)$/m.exec(runnerAnswer);
+  return ended === null ? `job ${jobId} killed` : `job ${jobId} had already ended (exit ${ended[1]}) — nothing to kill`;
 }
 
 // ─────────────────────────── exec ───────────────────────────

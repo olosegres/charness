@@ -539,8 +539,14 @@ check_job_ended() {
   return 1
 }
 
+# Prints `killed`, or `already-ended <code>` for a job that had finished before the kill came (nothing is killed then, and the caller
+# must not be told it was).
 cmd_kill() {
   set_paths "$1" "$2" "$3"
+  if [ -n "$(read_file "$jd/task-id")" ] && [ -f "$jd/exit" ]; then
+    echo "already-ended $(read_file "$jd/exit")"
+    return 0
+  fi
   kill_job "${4:-}" || die "no such job: $job"
   echo killed
 }

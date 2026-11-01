@@ -83,7 +83,7 @@ least 3 s), or the end of the stream → the runner kills the job (a caller that
 the lease script stops its watcher; an interrupted `exec` ends its stream on purpose to have its command stopped). `exec` ends by printing a marker line with the
 command's code on stderr (`\036remote-run-exit:<code>`, cut out by `createExitMarkerFilter`): ssh's own 255 means a lost connection only
 when that marker never came, so a command that exits 255 keeps its code. A stock sshd (`ClientAliveInterval 0`) never notices a half-open
-connection; this is what ends an orphaned job. SIGINT/SIGTERM/SIGHUP locally kill the job first (SIGTERM to its process group, SIGKILL after 10 s; the local `--timeout` is the same kill with the reason `timeout`, so a run that the CLI's own timer ended is recorded as timed out (124), like one the runner's watchdog ended first, never as killed)
+connection; this is what ends an orphaned job. SIGINT/SIGTERM/SIGHUP locally kill the job first (SIGTERM to its process group, SIGKILL after 10 s; the local `--timeout` is the same kill with the reason `timeout`, so a run that the CLI's own timer ended is recorded as timed out (124), like one the runner's watchdog ended first, never as killed; `runner.sh kill` answers `already-ended <code>` for a job that had finished, and the CLI says so instead of «killed»)
 and exit 130/143/129. The watcher reads the stream with plain blocking reads and compares clocks — never `read -t`, whose exit status for a
 timeout differs between bash 3.2 and 4+ — and replaces its beat file atomically (an empty read must not be an arithmetic error: it ends the
 whole subshell).

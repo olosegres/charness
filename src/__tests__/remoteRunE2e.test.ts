@@ -625,6 +625,16 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.equal((await run(['wait', holder])).exitCode, 0);
     });
 
+    it('`kill` of a job that has already finished says it had already ended, with its exit code — and does not mark it killed', async () => {
+      const finishedId = readJobId(await run(['--bg', "sh -c 'exit 3'"]));
+      assert.equal((await run(['wait', finishedId])).exitCode, 3);
+      const killed = await run(['kill', finishedId]);
+      assert.equal(killed.exitCode, 0, killed.stderr);
+      assert.match(killed.stderr, new RegExp(`job ${finishedId} had already ended \\(exit 3\\) — nothing to kill`));
+      assert.ok(!/ killed\s*$/.test(killed.stderr.trim()), killed.stderr);
+      assert.match(await readNewestJobState(), /failed/, 'it is still the failed job it was');
+    });
+
     it('a command that ignores SIGTERM is SIGKILLed after the grace time and still ends as an ENDED job: its exit is recorded — 137 for `kill`, 124 for the time limit — so prune can remove it', async () => {
       const killedId = readJobId(await run(['--bg', createDecoyCommand('decoy-stubborn-killed', { isIgnoringTerm: true })]));
       const killedPid = await waitForPidFile(project, 'decoy-stubborn-killed.pid');

@@ -10,6 +10,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'child_process';
+import { describeKillResult } from '../remoteRun/commands';
 import { describeEnd, runExec } from '../remoteRun/foreground';
 import { createExitMarkerFilter } from '../remoteRun/output';
 import type { CliIo } from '../remoteRun/output';
@@ -145,5 +146,16 @@ describe('describeEnd', () => {
     const exitCode = describeEnd({ state: 'done', code: 4, reason: 'exit' }, 'box1-aaaaa1', { stderr: (text) => { lines += text; } }, 'remote-run-runner: stale warning\n');
     assert.equal(exitCode, 4);
     assert.equal(lines, '');
+  });
+});
+
+describe('describeKillResult', () => {
+  it('a kill that happened says killed', () => {
+    assert.equal(describeKillResult('box1-aaaaa2', 'killed\n'), 'job box1-aaaaa2 killed');
+  });
+
+  it('a job that had finished first is not reported as killed: it says it had already ended, with its code', () => {
+    assert.equal(describeKillResult('box1-aaaaa2', 'already-ended 4\n'), 'job box1-aaaaa2 had already ended (exit 4) — nothing to kill');
+    assert.equal(describeKillResult('box1-aaaaa2', 'already-ended 0\n'), 'job box1-aaaaa2 had already ended (exit 0) — nothing to kill');
   });
 });

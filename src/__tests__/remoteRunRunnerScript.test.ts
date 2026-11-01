@@ -555,6 +555,20 @@ describe('a job that had to be SIGKILLed is an ended job', () => {
     assert.equal(fs.existsSync(path.join(jobDir, 'timeout')), false);
   });
 
+  it('`kill` of a job that had already finished says so with its code and kills nothing; of a job that never existed it refuses', () => {
+    const paths = getPaths();
+    writeFile(paths.jobDir, 'task-id', '7\n');
+    writeFile(paths.jobDir, 'exit', '4\n');
+    const finished = runScript(['kill', workDir, slug, jobId]);
+    assert.equal(finished.status, 0, finished.stderr);
+    assert.equal(finished.stdout.trim(), 'already-ended 4');
+    assert.equal(fs.existsSync(path.join(paths.jobDir, 'killed')), false, 'no kill marker was put on a job that was over');
+    assert.equal(fs.readFileSync(path.join(paths.jobDir, 'exit'), 'utf8').trim(), '4');
+    const missing = runScript(['kill', workDir, slug, 'box1-neverx']);
+    assert.notEqual(missing.status, 0);
+    assert.match(missing.stderr, /no such job: box1-neverx/);
+  });
+
   it('an exit a job wrote itself is never overwritten by the kill record', () => {
     const { jobDir } = startStubbornJob();
     writeFile(jobDir, 'exit', '0\n');
