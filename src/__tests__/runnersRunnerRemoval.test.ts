@@ -24,14 +24,19 @@ let sshCalls: SshRunParams[];
 /** What the registry and the link looked like at the moment each ssh call ran. */
 let stateAtCall: Array<{ runnersInRegistry: number; isPaused: boolean; socketExists: boolean }>;
 let logged: string[];
+let onlineChecks: number;
 
 function getSocketPath(): string {
   return getRunnerLinkPaths(hub.ctx.dir, pairedRunnerId).socket;
 }
 
-function createDeps(options: { isOnline: boolean; exitCode?: number | null; sshError?: Error }): RunnerRemovalDeps {
+function createDeps(options: { isOnline: boolean; exitCode?: number | null; sshError?: Error; statusError?: Error }): RunnerRemovalDeps {
   return {
-    isLinkOnline: async () => options.isOnline,
+    isLinkOnline: async () => {
+      onlineChecks += 1;
+      if (options.statusError !== undefined) throw options.statusError;
+      return options.isOnline;
+    },
     runSsh: async (params) => {
       sshCalls.push(params);
       const registry = readPairedFile(hub.ctx.dir);
@@ -55,6 +60,7 @@ beforeEach(() => {
   sshCalls = [];
   stateAtCall = [];
   logged = [];
+  onlineChecks = 0;
 });
 afterEach(() => {
   hub.cleanup();
@@ -66,6 +72,8 @@ describe('removing a runner that is online', () => {
     const removal = await removeRunnerAndEndItsWork(hub.ctx, 'mac', 1000, createDeps({ isOnline: true }));
     assert.equal(removal?.runner.id, pairedRunnerId);
     assert.equal(removal?.jobs, 'stopped');
+    assert.equal(removal?.runner.isPaused, true, 'it was paused before the reset (the removed record shows it)');
+    assert.equal(onlineChecks, 1, 'whether the link is up is asked once');
     assert.equal(sshCalls.length, 1);
     const pueue = getPairedRunnerPueue(pairedRunnerWorkDir);
     assert.equal(sshCalls[0].remoteCommand, `${pueue?.bin} --config ${pueue?.config} reset --force`);
@@ -109,8 +117,19 @@ describe('removing a runner that is offline, or unknown', () => {
     const removal = await removeRunnerAndEndItsWork(hub.ctx, 'mac', 1000, createDeps({ isOnline: false }));
     assert.equal(removal?.runner.id, pairedRunnerId);
     assert.equal(removal?.jobs, 'offline');
+    assert.equal(removal?.runner.isPaused, false, 'not paused first: nothing to protect on a machine nobody can reach');
     assert.deepEqual(sshCalls, []);
     assert.equal(readPairedFile(hub.ctx.dir).runners.length, 0);
+  });
+
+  it('a link state that cannot be read is NOT «offline»: it is logged and told as «failed», nothing is called, and the removal still goes through', async () => {
+    pairRunner();
+    const removal = await removeRunnerAndEndItsWork(hub.ctx, 'mac', 1000, createDeps({ isOnline: true, statusError: new Error('EACCES: link folder') }));
+    assert.equal(removal?.jobs, 'failed');
+    assert.ok(logged.some((line) => line.includes('could not tell whether "mac" is online') && line.includes('EACCES')), logged.join('\n'));
+    assert.deepEqual(sshCalls, []);
+    assert.equal(readPairedFile(hub.ctx.dir).runners.length, 0);
+    assert.equal(fs.existsSync(getSocketPath()), false);
   });
 
   it('a name nobody is paired under removes nothing and calls nothing', async () => {

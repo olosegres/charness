@@ -38,10 +38,19 @@ function createRemovalDeps(): RunnerRemovalDeps {
   };
 }
 
-/** @description Stop every job of an online runner's queue through its link. Never throws: a failure is logged and told as `failed` — the runner then falls back to what it can tell by itself. */
-export async function stopRunnerJobsOverLink(ctx: HubContext, runner: PairedRunner, deps: RunnerRemovalDeps = createRemovalDeps()): Promise<RunnerJobsStop> {
+/** Is the runner's link up? `null` when that could not be read (logged): a runner nobody can tell about is not «offline». */
+async function checkIsLinkOnline(ctx: HubContext, runner: PairedRunner, deps: RunnerRemovalDeps): Promise<boolean | null> {
   try {
-    if (!(await deps.isLinkOnline(ctx, runner.id))) return 'offline';
+    return await deps.isLinkOnline(ctx, runner.id);
+  } catch (error) {
+    deps.log(`runners: could not tell whether "${runner.name}" is online (${error instanceof Error ? error.message : 'unknown error'}); its jobs are not stopped from here`);
+    return null;
+  }
+}
+
+/** Reset the queue of a runner whose link is up. Never throws: a failure is logged and told as `failed`. */
+async function resetQueueOverLink(ctx: HubContext, runner: PairedRunner, deps: RunnerRemovalDeps): Promise<'stopped' | 'failed'> {
+  try {
     const config = buildPairedRunnerConfig(runner, { hubDir: ctx.dir, nodePath: ctx.nodePath, cliPath: ctx.cliPath });
     if (config.pueue?.bin === undefined || config.pueue.config === undefined) {
       deps.log(`runners: cannot stop the jobs of "${runner.name}" from here: its work folder does not follow the runner utility's layout`);
@@ -60,6 +69,13 @@ export async function stopRunnerJobsOverLink(ctx: HubContext, runner: PairedRunn
   }
 }
 
+/** @description Stop every job of an online runner's queue through its link. Never throws: a failure is logged and told as `failed` — the runner then falls back to what it can tell by itself. */
+export async function stopRunnerJobsOverLink(ctx: HubContext, runner: PairedRunner, deps: RunnerRemovalDeps = createRemovalDeps()): Promise<RunnerJobsStop> {
+  const isOnline = await checkIsLinkOnline(ctx, runner, deps);
+  if (isOnline === null) return 'failed';
+  return isOnline ? resetQueueOverLink(ctx, runner, deps) : 'offline';
+}
+
 /**
  * @description Remove `nameOrId`: while it is still paired, pause it and stop its jobs through the link (when it is online); then drop it
  * from the registry (its key line goes with it) and cut the link. `null` when no such runner is paired. A registry that cannot be
@@ -69,11 +85,12 @@ export async function removeRunnerAndEndItsWork(ctx: HubContext, nameOrId: strin
   const resolvedDeps = deps ?? createRemovalDeps();
   const found = findPairedRunner(readPairedFile(ctx.dir).runners, nameOrId);
   if (found === undefined) return null;
-  let jobs: RunnerJobsStop = 'offline';
-  if (await resolvedDeps.isLinkOnline(ctx, found.id).catch(() => false)) {
+  const isOnline = await checkIsLinkOnline(ctx, found, resolvedDeps);
+  let jobs: RunnerJobsStop = isOnline === null ? 'failed' : 'offline';
+  if (isOnline === true) {
     // No agent is sent to it from now on; the reset below takes seconds.
     await setPairedRunnerPaused(ctx, found.id, true).catch((error) => { resolvedDeps.log(`runners: could not pause "${found.name}" before stopping its jobs (${error instanceof Error ? error.message : 'unknown error'})`); });
-    jobs = await stopRunnerJobsOverLink(ctx, found, resolvedDeps);
+    jobs = await resetQueueOverLink(ctx, found, resolvedDeps);
   }
   const removed = await removePairedRunner(ctx, found.id, nowMs);
   cutRunnerLink(ctx.dir, found.id);
