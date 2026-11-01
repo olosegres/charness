@@ -14,9 +14,10 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 import type { Readable } from 'stream';
-import { Client, type ClientChannel } from 'ssh2';
-import { createRunnerServers, type RunnerServers } from '../runnerUtility/runnerServers';
-import { generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
+import { EventEmitter } from 'events';
+import { Client, utils, type ClientChannel, type NoneAuthContext, type PublicKeyAuthContext } from 'ssh2';
+import { createHubAuthenticator, createRunnerServers, type RunnerServers } from '../runnerUtility/runnerServers';
+import { generateEd25519KeyPair, parsePublicKey, type SshKeyPair } from '../runners/sshKeys';
 import { waitUntil } from './runnersTestKit';
 
 const hubKey = generateEd25519KeyPair('hub');
@@ -186,5 +187,76 @@ describe('the runner\'s built-in servers', () => {
     const [first, second] = await Promise.all([connectSession(link), connectSession(link)]);
     const results = await Promise.all([exec(first, 'echo one'), exec(second, 'echo two')]);
     assert.deepEqual(results.map((result) => result.stdout.trim()), ['one', 'two']);
+  });
+});
+
+describe('the hub authenticator', () => {
+  const hubBlob = parsePublicKey(hubKey.publicKey)?.blob ?? Buffer.alloc(0);
+  const signedData = Buffer.from('the data the client signs');
+
+  function sign(key: SshKeyPair): Buffer {
+    const parsed = utils.parseKey(key.privateKey);
+    if (parsed instanceof Error) throw parsed;
+    const signature = parsed.sign(signedData);
+    if (signature instanceof Error) throw signature;
+    return signature;
+  }
+
+  function judge(request: { algo?: string; data?: Buffer; signature?: Buffer; blob?: Buffer; hashAlgo?: string }): 'accepted' | 'rejected' | 'unanswered' {
+    let outcome: 'accepted' | 'rejected' | 'unanswered' = 'unanswered';
+    const auth: PublicKeyAuthContext = Object.assign(new EventEmitter(), {
+      username: 'hub',
+      service: 'ssh-connection',
+      method: 'publickey' as const,
+      key: { algo: request.algo ?? 'ssh-ed25519', data: request.data ?? hubBlob },
+      signature: request.signature,
+      blob: request.blob,
+      hashAlgo: request.hashAlgo,
+      accept: () => { outcome = 'accepted'; },
+      reject: () => { outcome = 'rejected'; },
+    });
+    createHubAuthenticator(hubKey.publicKey)(auth);
+    return outcome;
+  }
+
+  function judgeNoneMethod(): 'accepted' | 'rejected' | 'unanswered' {
+    let outcome: 'accepted' | 'rejected' | 'unanswered' = 'unanswered';
+    const auth: NoneAuthContext = Object.assign(new EventEmitter(), {
+      username: 'hub',
+      service: 'ssh-connection',
+      method: 'none' as const,
+      accept: () => { outcome = 'accepted'; },
+      reject: () => { outcome = 'rejected'; },
+    });
+    createHubAuthenticator(hubKey.publicKey)(auth);
+    return outcome;
+  }
+
+  it('accepts the hub\'s key with a valid signature, and the unsigned «would this key do?» query', () => {
+    assert.equal(judge({ signature: sign(hubKey), blob: signedData }), 'accepted');
+    assert.equal(judge({}), 'accepted');
+  });
+
+  it('refuses a signature made by another key under the hub\'s public key', () => {
+    assert.equal(judge({ signature: sign(strangerKey), blob: signedData }), 'rejected');
+  });
+
+  it('refuses a signature that does not match the data, or that is garbage', () => {
+    assert.equal(judge({ signature: sign(hubKey), blob: Buffer.from('other data') }), 'rejected');
+    assert.equal(judge({ signature: Buffer.from('not a signature'), blob: signedData }), 'rejected');
+  });
+
+  it('refuses the hub\'s public key offered under another algorithm — verify answers an Error there, which is not a pass', () => {
+    for (const algo of ['rsa-sha2-256', 'rsa-sha2-512', 'ssh-rsa', 'ecdsa-sha2-nistp256']) {
+      assert.equal(judge({ algo, signature: Buffer.from('garbage'), blob: signedData, hashAlgo: 'sha256' }), 'rejected', algo);
+      assert.equal(judge({ algo }), 'rejected', `${algo}, unsigned`);
+    }
+    assert.equal(judge({ signature: Buffer.from('garbage'), blob: signedData, hashAlgo: 'sha256' }), 'rejected', 'the right algorithm with an unusable hash algorithm and a bad signature');
+  });
+
+  it('refuses another key, and every method but a public key', () => {
+    const other = parsePublicKey(strangerKey.publicKey)?.blob ?? Buffer.alloc(0);
+    assert.equal(judge({ data: other, signature: sign(strangerKey), blob: signedData }), 'rejected');
+    assert.equal(judgeNoneMethod(), 'rejected');
   });
 });

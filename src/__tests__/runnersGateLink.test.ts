@@ -14,7 +14,8 @@ import fs from 'fs';
 import net from 'net';
 import path from 'path';
 import { PassThrough } from 'stream';
-import { Client, Server, utils, type AuthContext } from 'ssh2';
+import { Client, Server } from 'ssh2';
+import { createHubAuthenticator } from '../runnerUtility/runnerServers';
 import { runGateLink, type GateLinkTimings } from '../runners/gateLink';
 import { readUntilGateMarker, type GateMarker } from '../runners/gateProtocol';
 import { getRunnerLinkPaths } from '../runners/hubPaths';
@@ -22,7 +23,7 @@ import { createPairing, redeemPairing, removePairedRunner } from '../runners/hub
 import { readHubKey } from '../runners/hubKey';
 import { checkIsGateProcessOf, cutRunnerLink, getRunnerLinkStatus, probeSocket, readLinkState } from '../runners/linkControl';
 import { runRunnerProxy } from '../runners/runnerProxy';
-import { parsePublicKey, generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
+import { generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
 import { createCollector, createHubFixture, createRedeemFixture, injectStreamIntoSshServer, waitUntil, type HubFixture } from './runnersTestKit';
 
 const startMs = Date.UTC(2026, 10, 1, 12, 0, 0);
@@ -56,24 +57,9 @@ interface StandInRunner {
 
 /** The runner utility's side of the link, as far as the gate can tell: marker, ssh server, a second ssh server per channel. */
 async function startStandInRunner(runner: PairedRunnerFixture, options: { shouldTryOpenBack?: boolean } = {}): Promise<StandInRunner> {
-  const hubBlob = parsePublicKey(runner.hubPublicKey)?.blob;
-  const hubKey = utils.parseKey(runner.hubPublicKey);
-  if (hubBlob === undefined || hubKey instanceof Error) throw new Error('the hub key does not parse');
   const markers: GateMarker[] = [];
   const openBackResults: Array<Error | undefined> = [];
-  const authenticate = (auth: AuthContext): void => {
-    if (auth.method !== 'publickey' || auth.key.algo !== 'ssh-ed25519' || !auth.key.data.equals(hubBlob)) {
-      auth.reject();
-      return;
-    }
-    // The first, signature-less request asks "would this key do?"; the signed one proves the client holds it.
-    if (auth.signature === undefined) {
-      auth.accept();
-      return;
-    }
-    if (auth.blob !== undefined && hubKey.verify(auth.blob, auth.signature, auth.hashAlgo)) auth.accept();
-    else auth.reject();
-  };
+  const authenticate = createHubAuthenticator(runner.hubPublicKey);
   const sessionServer = new Server({ hostKeys: [runner.serverKey.privateKey] }, (connection) => {
     connection.on('error', () => undefined);
     connection.on('authentication', authenticate);

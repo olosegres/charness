@@ -36,13 +36,18 @@ export interface RunnerServers {
   getActiveExecCount: () => number;
 }
 
-/** @description The check shared by both servers: the hub's key only, and the signature must verify (the first, unsigned query only asks «would this key do?»). */
+/**
+ * @description The check shared by both servers: the hub's key only — the blob AND the algorithm name it was offered under must be the
+ * pinned key's (a request that carries the right public key under another algorithm, say RSA-SHA2, makes `verify` return an Error) —
+ * and the signature must verify. `verify` answers `boolean | Error`: only `true` is a pass. The first, unsigned query only asks «would
+ * this key do?».
+ */
 export function createHubAuthenticator(hubPublicKey: string): (auth: AuthContext) => void {
-  const hubBlob = parsePublicKey(hubPublicKey)?.blob;
+  const hub = parsePublicKey(hubPublicKey);
   const hubKey = utils.parseKey(hubPublicKey);
-  if (hubBlob === undefined || hubKey instanceof Error) throw new Error('the hub key does not read as an ssh public key');
+  if (hub === null || hubKey instanceof Error) throw new Error('the hub key does not read as an ssh public key');
   return (auth) => {
-    if (auth.method !== 'publickey' || !auth.key.data.equals(hubBlob)) {
+    if (auth.method !== 'publickey' || auth.key.algo !== hub.type || !auth.key.data.equals(hub.blob)) {
       auth.reject();
       return;
     }
@@ -50,7 +55,7 @@ export function createHubAuthenticator(hubPublicKey: string): (auth: AuthContext
       auth.accept();
       return;
     }
-    if (auth.blob !== undefined && hubKey.verify(auth.blob, auth.signature, auth.hashAlgo)) auth.accept();
+    if (auth.blob !== undefined && hubKey.verify(auth.blob, auth.signature, auth.hashAlgo) === true) auth.accept();
     else auth.reject();
   };
 }
