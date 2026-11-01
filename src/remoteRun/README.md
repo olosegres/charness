@@ -60,7 +60,12 @@ group is over (124) the moment it starts, its command never runs.
 bounded by 4 s, so a hung one costs 4 s in all; an Xcode that does not answer is «did not answer in time», not «not found», and a slow
 simctl keeps the Xcode version without inventing a simulator count.
 
-**Prune** (on every submit) removes jobs older than 3 days that ended (or never got a task), stage folders older than a day **unless their job is
+**A job that had to be SIGKILLed** (it ignored SIGTERM through `kill`, a lost lease or the time limit) cannot write its own result, so whoever kills
+it records it first (`finish_killed_job`: exit 137, or 124 when the limit did it, `phase=done`, a finish time) — it is then an ended job like any
+other, and the next job of its project takes the lock over at once.
+
+**Prune** (on every submit) removes jobs older than 3 days that ended (an exit file, no task, or — for one an earlier script SIGKILLed unrecorded —
+a process that is gone), stage folders older than a day **unless their job is
 still queued** (a job can wait behind a busy group for days), lease/probe scratch state and project copies unused for 30 days.
 
 **Job state** is the job's own files first (`exit` is authoritative); Pueue's task list (label `rr-<id>`) only when there is no exit file

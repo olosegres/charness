@@ -394,22 +394,30 @@ cmd_prepare() {
   echo "work=$(cd "$work" && pwd -P)"
 }
 
+# Has the job in folder $1 ended? It wrote its exit file; or it never got a Pueue task (its submit failed half-way); or its process is
+# gone (a runner script of an earlier version SIGKILLed it without recording that). One that waits in the queue, or runs, has not.
+check_job_dir_ended() {
+  [ -f "$1/exit" ] && return 0
+  [ -f "$1/task-id" ] || return 0
+  local recorded_pid
+  recorded_pid=$(read_file "$1/pid")
+  [ -n "$recorded_pid" ] && ! kill -0 "$recorded_pid" 2> /dev/null
+}
+
 # Remove: jobs older than the keep time (and their Pueue tasks), leftover stage dirs, project copies unused for long.
 prune_work() {
   local work_dir=$1
   local keep_slug=${2:-}
   [ -d "$work_dir/p" ] || return 0
   find "$work_dir/p" -mindepth 3 -maxdepth 3 -path '*/jobs/*' -type d -mtime +"$job_keep_days" 2> /dev/null | while IFS= read -r old_job; do
-    # A job that never got a Pueue task (its submit failed half-way) has no exit file either.
-    [ -f "$old_job/exit" ] || [ ! -f "$old_job/task-id" ] || continue
+    check_job_dir_ended "$old_job" || continue
     task=$(read_file "$old_job/task-id")
     [ -n "$task" ] && pq remove "$task" > /dev/null 2>&1
     rm -rf "$old_job"
   done
   find "$work_dir/p" -mindepth 3 -maxdepth 3 -path '*/stage/*' -type d -mtime +"$stage_keep_days" 2> /dev/null | while IFS= read -r old_stage; do
     # A job that is queued in Pueue (a task, no exit yet) has not applied its stage: behind a busy group it can wait for days.
-    queued_job_dir="$(dirname "$(dirname "$old_stage")")/jobs/$(basename "$old_stage")"
-    [ -f "$queued_job_dir/task-id" ] && [ ! -f "$queued_job_dir/exit" ] && continue
+    check_job_dir_ended "$(dirname "$(dirname "$old_stage")")/jobs/$(basename "$old_stage")" || continue
     rm -rf "$old_stage"
   done
   # Lease state of a watcher that was killed hard (a live one rewrites its beat every few seconds, so its folder is never this old).
@@ -480,7 +488,7 @@ kill_job() {
   [ -f "$jd/exit" ] && return 0
   touch "$jd/killed"
   if [ ! -f "$jd/pid" ] && pq remove "$task" > /dev/null 2>&1; then
-    finish_removed_job
+    finish_killed_job
     return 0
   fi
   signal_job_group TERM || pq kill "$task" > /dev/null 2>&1
@@ -495,17 +503,26 @@ kill_job() {
 }
 
 # SIGKILL of the whole group; Pueue's own kill follows only so that its task list agrees. Without a verifiable group, Pueue's kill
-# is all there is.
+# is all there is. A job that is SIGKILLed cannot write its own result, so the result is recorded FIRST: when the caller is the job's own
+# watchdog the group-wide SIGKILL takes the watchdog down with the job.
 hard_kill_job() {
+  finish_killed_job
   signal_job_group KILL || pq kill "$1" > /dev/null 2>&1
   pq kill "$1" > /dev/null 2>&1
+  return 0
 }
 
-# A job that never started: its result is the kill, written the way a finished job writes it.
-finish_removed_job() {
+# A job that was killed (never started and removed from the queue, or SIGKILLed after it ignored SIGTERM): its result is written the way a
+# finished job writes it — 124 when its time limit did it, 137 otherwise — so it is an ENDED job: `wait` and `ls` read a code, the next job
+# of the project takes over its lock at once, and prune removes it after 3 days like any other.
+finish_killed_job() {
+  [ -f "$jd/exit" ] && return 0
+  local code=137
+  [ -f "$jd/timeout" ] && code=124
   rm -rf "$stage"
   printf '%s\n' done > "$jd/phase"
-  printf '137\n' > "$jd/exit.tmp" && mv "$jd/exit.tmp" "$jd/exit"
+  date +%s > "$jd/finished-at"
+  printf '%s\n' "$code" > "$jd/exit.tmp" && mv "$jd/exit.tmp" "$jd/exit"
 }
 
 # Ended = it wrote its exit file, or its process is gone.

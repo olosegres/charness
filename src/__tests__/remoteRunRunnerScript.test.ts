@@ -13,7 +13,7 @@
 
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -255,7 +255,8 @@ describe('prune', () => {
 
   function writeJobFolder(id: string, files: string[], ageDays: number): string {
     const jobDir = path.join(workDir, 'p', slug, 'jobs', id);
-    for (const file of files) writeFile(jobDir, file, '1\n');
+    // A pid file names a process of the runner's own user: this test process stands for a job that runs.
+    for (const file of files) writeFile(jobDir, file, file === 'pid' ? `${process.pid}\n` : '1\n');
     makeOld(jobDir, ageDays);
     return jobDir;
   }
@@ -445,7 +446,7 @@ describe('prune keeps what a queued job still needs', () => {
     writeFile(stageDir, 'a.txt');
     const when = new Date(Date.now() - 2 * dayMs);
     fs.utimesSync(stageDir, when, when);
-    for (const file of jobFiles) writeFile(path.join(workDir, 'p', slug, 'jobs', id), file, '1\n');
+    for (const file of jobFiles) writeFile(path.join(workDir, 'p', slug, 'jobs', id), file, file === 'pid' ? `${process.pid}\n` : '1\n');
     return stageDir;
   }
 
@@ -459,6 +460,90 @@ describe('prune keeps what a queued job still needs', () => {
     assert.equal(fs.existsSync(running), true);
     assert.equal(fs.existsSync(finished), false);
     assert.equal(fs.existsSync(neverSubmitted), false);
+  });
+});
+
+describe('a job that had to be SIGKILLed is an ended job', () => {
+  const dayMs = 24 * 60 * 60 * 1000;
+  let decoy: ChildProcess | null = null;
+
+  afterEach(() => {
+    if (decoy?.pid !== undefined) {
+      try {
+        process.kill(-decoy.pid, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+    decoy = null;
+  });
+
+  /** A job that is running on a command that ignores SIGTERM: a process group of its own whose leader's pid is the job's. */
+  function startStubbornJob(): { jobDir: string; pid: number } {
+    const paths = getPaths();
+    fs.mkdirSync(paths.jobDir, { recursive: true });
+    decoy = spawn('sh', ['-c', 'trap "" TERM; sleep 100'], { detached: true, stdio: 'ignore' });
+    const pid = decoy.pid ?? 0;
+    writeFile(paths.jobDir, 'task-id', '1\n');
+    writeFile(paths.jobDir, 'pid', `${pid}\n`);
+    writeFile(paths.stage, 'a.txt');
+    return { jobDir: paths.jobDir, pid };
+  }
+
+  /** Run runner.sh functions (it is sourceable) for the job, the way the lease script or the watchdog does. */
+  function runFunctions(body: string): { status: number | null; stdout: string } {
+    const result = spawnSync('bash', ['-c', `source ${scriptPath}; set_paths ${workDir} ${slug} ${jobId}; kill_grace_sec=1; ${body}`], {
+      encoding: 'utf8',
+      env: { ...process.env, PUEUE_BIN: '/nonexistent/pueue' },
+      timeout: 60_000,
+    });
+    return { status: result.status, stdout: result.stdout };
+  }
+
+  it('`kill` of a command that ignores SIGTERM: after the grace time it is SIGKILLed AND recorded — exit 137, phase done, a finish time, its stage gone', async () => {
+    const { jobDir, pid } = startStubbornJob();
+    assert.equal(runFunctions('kill_job').status, 0);
+    assert.equal(fs.readFileSync(path.join(jobDir, 'exit'), 'utf8').trim(), '137');
+    assert.equal(fs.readFileSync(path.join(jobDir, 'phase'), 'utf8').trim(), 'done');
+    assert.match(fs.readFileSync(path.join(jobDir, 'finished-at'), 'utf8').trim(), /^\d+$/);
+    assert.equal(fs.existsSync(getPaths().stage), false);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(checkIsProcessRunning(pid), false, 'and it is really gone');
+  });
+
+  it('the time limit\'s SIGKILL records 124, not 137', () => {
+    const { jobDir } = startStubbornJob();
+    writeFile(jobDir, 'timeout', '');
+    assert.equal(runFunctions('hard_kill_job 1').status, 0);
+    assert.equal(fs.readFileSync(path.join(jobDir, 'exit'), 'utf8').trim(), '124');
+  });
+
+  it('an exit a job wrote itself is never overwritten by the kill record', () => {
+    const { jobDir } = startStubbornJob();
+    writeFile(jobDir, 'exit', '0\n');
+    assert.equal(runFunctions('hard_kill_job 1').status, 0);
+    assert.equal(fs.readFileSync(path.join(jobDir, 'exit'), 'utf8').trim(), '0');
+  });
+
+  it('prune also removes a job an EARLIER runner script SIGKILLed without recording it — a task, a process that is gone, no exit — after 3 days; one whose process runs, or that is queued, stays', () => {
+    const deadPid = spawnSync('true').pid;
+    const makeOld = (target: string): void => {
+      const when = new Date(Date.now() - 4 * dayMs);
+      fs.utimesSync(target, when, when);
+    };
+    const writeOldJob = (id: string, files: Record<string, string>): string => {
+      const jobDir = path.join(workDir, 'p', slug, 'jobs', id);
+      for (const [name, content] of Object.entries(files)) writeFile(jobDir, name, content);
+      makeOld(jobDir);
+      return jobDir;
+    };
+    const killedEarlier = writeOldJob('box1-killed', { 'task-id': '4\n', pid: `${deadPid}\n` });
+    const running = writeOldJob('box1-runnin', { 'task-id': '5\n', pid: `${process.pid}\n` });
+    const queued = writeOldJob('box1-queued', { 'task-id': '6\n' });
+    assert.equal(runScript(['prune', workDir]).status, 0);
+    assert.equal(fs.existsSync(killedEarlier), false, 'the SIGKILLed job is pruned');
+    assert.equal(fs.existsSync(running), true);
+    assert.equal(fs.existsSync(queued), true);
   });
 });
 

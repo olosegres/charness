@@ -606,6 +606,24 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.match(await readNewestJobState(), /timed out/);
     });
 
+    it('a command that ignores SIGTERM is SIGKILLed after the grace time and still ends as an ENDED job: its exit is recorded — 137 for `kill`, 124 for the time limit — so prune can remove it', async () => {
+      const killedId = readJobId(await run(['--bg', createDecoyCommand('decoy-stubborn-killed', { isIgnoringTerm: true })]));
+      const killedPid = await waitForPidFile(project, 'decoy-stubborn-killed.pid');
+      const killedChild = await waitForPidFile(project, 'decoy-stubborn-killed.child');
+      assert.equal((await run(['kill', killedId])).exitCode, 0);
+      await expectNothingLeft(killedPid, killedChild, 30_000);
+      assert.equal(fs.readFileSync(path.join(project.runnerDirectory, 'jobs', killedId, 'exit'), 'utf8').trim(), '137', 'the kill is on record');
+      assert.equal((await run(['wait', killedId])).exitCode, 137);
+
+      const limitedId = readJobId(await run(['--bg', '--timeout', '3s', createDecoyCommand('decoy-stubborn-limited', { isIgnoringTerm: true })]));
+      const limitedPid = await waitForPidFile(project, 'decoy-stubborn-limited.pid');
+      const limitedChild = await waitForPidFile(project, 'decoy-stubborn-limited.child');
+      const waited = await run(['wait', limitedId]);
+      assert.equal(waited.exitCode, 124, waited.stderr);
+      await expectNothingLeft(limitedPid, limitedChild, 30_000);
+      assert.equal(fs.readFileSync(path.join(project.runnerDirectory, 'jobs', limitedId, 'exit'), 'utf8').trim(), '124', 'the limit\'s kill is on record');
+    });
+
     it('`kill <id>` of a background job leaves nothing; `wait` then gives 137', async () => {
       const jobId = readJobId(await run(['--bg', createDecoyCommand('decoy-killed')]));
       const decoyPid = await waitForPidFile(project, 'decoy-killed.pid');
