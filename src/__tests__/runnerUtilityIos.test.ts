@@ -165,6 +165,19 @@ describe('when the check runs again', () => {
       assert.equal(await refreshIosCheck(paths, createDeps({ platform: 'linux' }), { isStartup: true }), null);
     });
 
+    it('while the start-up check runs the old answer is gone, so the probe cannot offer it — and a failed start-up check leaves the new answer', async () => {
+      writeIosCheck(paths, { status: 'pass', checkedAtMs: 1, xcode: '16.2 (16C5032a)', reason: null });
+      const seenDuringCheck: Array<IosCheckRecord | null> = [];
+      const inner = createRunner();
+      const observing: CommandRunner = async (file, args, options) => {
+        if (args.includes('boot')) seenDuringCheck.push(readIosCheck(paths));
+        return inner(file, args, options);
+      };
+      const record = await refreshIosCheck(paths, createDeps({ runner: observing }), { isStartup: true });
+      assert.deepEqual(seenDuringCheck, [null], 'the boot ran with no record on disk: the earlier «pass» was not offered');
+      assert.deepEqual(readIosCheck(paths), record);
+    });
+
     it('a persisted result does not survive a change of who runs the link: the same Xcode, a different boot outcome', async () => {
       // A result from an interactive login ...
       writeIosCheck(paths, { status: 'pass', checkedAtMs: 1, xcode: '16.2 (16C5032a)', reason: null });

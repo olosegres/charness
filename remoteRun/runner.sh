@@ -9,7 +9,7 @@
 # files there and reports them — nothing else in this script knows about pairing. A hand-made runner has none of them:
 #   <state>/paused          exists → paused=yes (written by `charness-runner pause`; the main box never sends a job to a paused runner)
 #   <state>/service         one word: user-service | system-service (no file = run by hand: service=foreground)
-#   <state>/ios-check.json  the service's iOS Simulator boot check: "isBootable": true|false and "detail": "…"
+#   <state>/ios-check.json  the runner's iOS Simulator boot check (one JSON line): "status": "pass"|"fail"|"skipped" and "reason": "…"|null
 # <state> counts only when it holds config.json and keys/ (a work dir that merely is called «work» is not one).
 #
 # bash 3.2-compatible on purpose (the stock bash of macOS): no associative arrays, no `wait -n`, no `mapfile`, no
@@ -324,6 +324,11 @@ probe_slow() {
       # Xcode is there, but the runner's own service could not boot a Simulator (Apple: none is available outside a login session).
       echo "cap_ios=no"
       echo "cap_ios_detail=needs the runner user's login session"
+    elif [ -n "$runner_state" ] && [ -z "$ios_boot_status" ]; then
+      # A paired runner writes its record every time its link starts: none yet means the check of THIS start is still running, and an
+      # answer from an earlier start (another account, another kind of service) must not be offered meanwhile.
+      echo "cap_ios=no"
+      echo "cap_ios_detail=the iOS Simulator is being checked"
     else
       echo "cap_ios=yes"
       if [ "$(probe_step_status simctl)" = 0 ]; then
@@ -366,14 +371,14 @@ read_runner_state() {
   runner_state=$candidate
   local check="$runner_state/ios-check.json"
   [ -f "$check" ] || return 0
-  if grep -q '"isBootable"[[:space:]]*:[[:space:]]*true' "$check"; then
+  if grep -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$check"; then
     ios_boot_status=ok
-  elif grep -q '"isBootable"[[:space:]]*:[[:space:]]*false' "$check"; then
+  elif grep -q '"status"[[:space:]]*:[[:space:]]*"fail"' "$check"; then
     ios_boot_status=failed
   else
     ios_boot_status=unchecked
   fi
-  ios_boot_detail=$(sed -n 's/.*"detail"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$check" | head -n 1)
+  ios_boot_detail=$(sed -n 's/.*"reason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$check" | head -n 1)
 }
 
 # paused= / service= / runner_version= / ios_boot= of a paired runner (nothing for a hand-made one).

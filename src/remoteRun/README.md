@@ -61,7 +61,7 @@ config are found from the reported work dir with the layout `runnerUtility/runne
   there, none starts with under a second left, and a runner that answers after the deadline is refused — the job is never started late.
 - **What a paired runner says in `probe`** (`runner.sh`, read from its state folder — the parent of the work dir, recognised by `config.json` and
   `keys/`; a hand-made runner has none of it): `paused=` (the file `paused` exists), `service=` (the file `service`: `user-service` | `system-service`;
-  none = `foreground`), `runner_version=` (`current/package.json`), and from `ios-check.json` (`"isBootable": true|false`, `"detail"`) `ios_boot=` /
+  none = `foreground`), `runner_version=` (`current/package.json`), and from `ios-check.json` (`"status": "pass"|"fail"|"skipped"`, `"reason"` — the line `runnerUtility/iosCheck.ts` writes; a paired Mac with Xcode and no record yet answers `ios: no — the iOS Simulator is being checked`) `ios_boot=` /
   `ios_boot_detail=`. A failed boot check turns `cap_ios` into `no — needs the runner user's login session`: Apple does not give a Simulator to a
   LaunchDaemon. The files are written by `charness-runner` (`pause`, `service install`, the iOS check of the service).
 - **A Mac does not sleep under a job**: the job's command (and `exec`) runs with a sibling `caffeinate -i -w <pid>` (it ends with the process; the

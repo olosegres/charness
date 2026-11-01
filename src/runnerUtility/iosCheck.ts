@@ -159,6 +159,9 @@ export interface IosRefreshOptions {
 /** @description At the link's start (always) and then once an hour (when Xcode is not what the last result saw): run the boot check and record it. */
 export async function refreshIosCheck(paths: RunnerHomePaths, deps: IosCheckDeps, options: IosRefreshOptions): Promise<IosCheckRecord | null> {
   if (deps.platform !== 'darwin') return null;
+  // The old answer was given by whoever ran the link before: from this moment it proves nothing, and the probe must not offer it while the
+  // new check (up to 3 minutes) runs. Without a record a paired runner says «being checked» (`runner.sh`).
+  if (options.isStartup) fs.rmSync(paths.iosCheck, { force: true });
   const current = await readXcodeVersion(deps);
   if (!options.isStartup && !checkShouldRunIosCheck(readIosCheck(paths), current)) return null;
   const record = await runIosBootCheck(deps);

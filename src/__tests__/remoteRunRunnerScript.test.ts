@@ -1066,10 +1066,13 @@ describe('what the probe says of a paired runner (its state folder is the parent
 
   it('the iOS boot check file: bootable, not bootable (with its detail), or unreadable', () => {
     makeStateFolder();
-    writeFile(workRoot, 'ios-check.json', '{"checkedAtMs":1,"isBootable":true,"detail":"booted in 31 s"}');
-    assert.deepEqual(probe().parsed.iosBoot, { status: 'ok', detail: 'booted in 31 s' });
-    writeFile(workRoot, 'ios-check.json', '{\n  "isBootable": false,\n  "detail": "no login session"\n}\n');
-    assert.deepEqual(probe().parsed.iosBoot, { status: 'failed', detail: 'no login session' });
+    // The exact line `writeIosCheck` writes (iosCheck.ts), so the two sides of the file cannot drift apart again.
+    writeFile(workRoot, 'ios-check.json', '{"status":"pass","checkedAtMs":1,"xcode":"16.2 (16C5032a)","reason":null}\n');
+    assert.deepEqual(probe().parsed.iosBoot, { status: 'ok', detail: '' });
+    writeFile(workRoot, 'ios-check.json', '{"status":"fail","checkedAtMs":1,"xcode":"16.2 (16C5032a)","reason":"the Simulator did not boot: no login session"}\n');
+    assert.deepEqual(probe().parsed.iosBoot, { status: 'failed', detail: 'the Simulator did not boot: no login session' });
+    writeFile(workRoot, 'ios-check.json', '{"status":"skipped","checkedAtMs":1,"xcode":null,"reason":null}\n');
+    assert.deepEqual(probe().parsed.iosBoot, { status: 'unchecked', detail: '' });
     writeFile(workRoot, 'ios-check.json', 'garbage');
     assert.deepEqual(probe().parsed.iosBoot, { status: 'unchecked', detail: '' });
   });
@@ -1115,7 +1118,7 @@ describe('a Mac (the platform is faked, with fake Xcode and caffeinate)', () => 
   it('iOS: Xcode is there and the runner\'s service booted a Simulator — yes, with the Xcode version and the simulators', () => {
     writeFile(workRoot, 'config.json', '{}');
     fs.mkdirSync(path.join(workRoot, 'keys'));
-    writeFile(workRoot, 'ios-check.json', '{"isBootable":true,"detail":"ok"}');
+    writeFile(workRoot, 'ios-check.json', '{"status":"pass","checkedAtMs":1,"xcode":"16.2 (16C5032a)","reason":null}\n');
     const lines = readLines(runAsAMac('read_runner_state; probe_slow').stdout);
     assert.equal(lines.cap_ios, 'yes');
     assert.equal(lines.cap_ios_detail, 'Xcode 16.2, 1 simulators');
@@ -1124,10 +1127,18 @@ describe('a Mac (the platform is faked, with fake Xcode and caffeinate)', () => 
   it('iOS: Xcode is there but the service could not boot a Simulator — no, and the reason is the login session (the plan\'s owner choice A)', () => {
     writeFile(workRoot, 'config.json', '{}');
     fs.mkdirSync(path.join(workRoot, 'keys'));
-    writeFile(workRoot, 'ios-check.json', '{"isBootable":false,"detail":"CoreSimulator is not available to a daemon"}');
+    writeFile(workRoot, 'ios-check.json', '{"status":"fail","checkedAtMs":1,"xcode":"16.2 (16C5032a)","reason":"CoreSimulator is not available to a daemon"}\n');
     const lines = readLines(runAsAMac('read_runner_state; probe_slow').stdout);
     assert.equal(lines.cap_ios, 'no');
     assert.equal(lines.cap_ios_detail, "needs the runner user's login session");
+  });
+
+  it('iOS: a PAIRED runner with no record yet is still being checked — no, not yes: the answer of an earlier start must not be offered meanwhile', () => {
+    writeFile(workRoot, 'config.json', '{}');
+    fs.mkdirSync(path.join(workRoot, 'keys'));
+    const lines = readLines(runAsAMac('read_runner_state; probe_slow').stdout);
+    assert.equal(lines.cap_ios, 'no');
+    assert.equal(lines.cap_ios_detail, 'the iOS Simulator is being checked');
   });
 
   it('iOS: a runner with no boot check (a hand-made one, or one run in a terminal) keeps the answer Xcode gives', () => {
