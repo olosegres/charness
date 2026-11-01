@@ -441,19 +441,36 @@ describe('installing and removing the services', () => {
   describe('a RE-install that fails', () => {
     const agentDir = (): string => path.join(home, 'Library', 'LaunchAgents');
 
-    /** Fails the first `failures` `launchctl bootstrap` calls and answers the rest like the default runner. */
-    function recordingRunnerFailingBootstrap(failures: number): CommandRunner {
-      let seen = 0;
+    /**
+     * A launchd that tears a job down slowly: after `bootout` the job still shows in `print` for `teardownPrints` more looks, and a
+     * `bootstrap` of a job that is still being torn down fails (error 5) — what a reload right after an unload meets. The bootstrap calls
+     * numbered in `failingBootstraps` (1-based) fail whatever the state; everything else answers like the default runner.
+     */
+    function createLaunchdRunner(options: { failingBootstraps?: number[]; teardownPrints?: number } = {}): CommandRunner {
+      const { failingBootstraps = [], teardownPrints = 0 } = options;
       const base = recordingRunner();
-      return async (file, args, options) => {
-        if (file === 'launchctl' && args[0] === 'bootstrap') {
-          seen += 1;
-          if (seen <= failures) {
-            calls.push({ file, args });
-            return { ok: false, exitCode: 1, stdout: '', stderr: 'Bootstrap failed: 5\n', isTimedOut: false };
+      const printsLeft = new Map<string, number>();
+      let bootstrapCount = 0;
+      const getLabel = (target: string): string => target.split('/').pop() ?? '';
+      const refuse = (file: string, args: readonly string[], stderr: string, isOk: boolean): CommandResult => {
+        calls.push({ file, args });
+        return { ok: isOk, exitCode: isOk ? 0 : 1, stdout: '', stderr, isTimedOut: false };
+      };
+      return async (file, args, runOptions) => {
+        if (file === 'launchctl' && args[0] === 'bootout') printsLeft.set(getLabel(args[1] ?? ''), teardownPrints);
+        if (file === 'launchctl' && args[0] === 'print') {
+          const left = printsLeft.get(getLabel(args[1] ?? '')) ?? 0;
+          if (left > 0) {
+            printsLeft.set(getLabel(args[1] ?? ''), left - 1);
+            return refuse(file, args, '', true);
           }
         }
-        return base(file, args, options);
+        if (file === 'launchctl' && args[0] === 'bootstrap') {
+          bootstrapCount += 1;
+          const isTearingDown = (printsLeft.get(path.basename(args[2] ?? '', '.plist')) ?? 0) > 0;
+          if (failingBootstraps.includes(bootstrapCount) || isTearingDown) return refuse(file, args, 'Bootstrap failed: 5\n', false);
+        }
+        return base(file, args, runOptions);
       };
     }
 
@@ -504,7 +521,7 @@ describe('installing and removing the services', () => {
     it('Mac: only the jobs the failed pass reached are loaded again — the one it never touched keeps running — and the definitions come back', async () => {
       pair();
       const plists = await installWorkingAgents();
-      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunnerFailingBootstrap(1) }));
+      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: createLaunchdRunner({ failingBootstraps: [1] }) }));
       assert.equal(mac.ok, false);
       assert.match(mac.lines.join('\n'), /loaded again as it was/);
       for (const plist of plists) assert.equal(fs.readFileSync(path.join(agentDir(), plist), 'utf8'), `<!-- the working ${plist} -->\n`);
@@ -519,17 +536,46 @@ describe('installing and removing the services', () => {
     it('Mac: when the old job cannot be loaded again either, it says so — never «loaded again as it was»', async () => {
       pair();
       await installWorkingAgents();
-      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunnerFailingBootstrap(2) }));
+      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: createLaunchdRunner({ failingBootstraps: [1, 2] }) }));
       assert.equal(mac.ok, false);
       assert.match(mac.lines.join('\n'), /could NOT be loaded again .*run `charness-runner service install` again/);
       assert.doesNotMatch(mac.lines.join('\n'), /loaded again as it was/);
       assert.equal(readServiceKind(runnerPaths), 'user-service', 'the record stays: the install can simply be run again');
     });
 
+    it('Mac: when the queue job loaded its new definition and the link job then failed, both old jobs are unloaded, waited for and loaded again — a reload right after an unload meets a job still being torn down', async () => {
+      pair();
+      const plists = await installWorkingAgents();
+      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: createLaunchdRunner({ failingBootstraps: [2], teardownPrints: 1 }) }));
+      assert.equal(mac.ok, false);
+      assert.match(mac.lines.join('\n'), /loaded again as it was/, mac.lines.join('\n'));
+      for (const plist of plists) assert.equal(fs.readFileSync(path.join(agentDir(), plist), 'utf8'), `<!-- the working ${plist} -->\n`);
+      const names = getServiceNames(runnerPaths.root);
+      for (const label of [names.launchdPueued, names.launchdLink]) {
+        const lines = commandLines();
+        const lastBootout = lines.lastIndexOf(`launchctl bootout gui/501/${label}`);
+        const lastBootstrap = lines.map((line, index) => (line.startsWith('launchctl bootstrap gui/501') && line.endsWith(`${label}.plist`) ? index : -1)).filter((index) => index > -1).at(-1) ?? -1;
+        assert.ok(lastBootout > -1 && lastBootstrap > lastBootout, `${label}: unloaded, then loaded again`);
+        assert.ok(lines.slice(lastBootout, lastBootstrap).some((line) => line === `launchctl print gui/501/${label}`), `${label}: the unload was waited for before the reload`);
+      }
+    });
+
+    it('Mac, always-on (--system): a job that will not load again is named with the command that mends a SYSTEM service — the plain install would be refused', async () => {
+      pair();
+      const first = await installService({ isSystem: true, userName: 'runner' }, createDeps({ platform: 'darwin', uid: 0, accountName: 'root' }));
+      assert.equal(first.ok, true, first.lines.join('\n'));
+      const second = await installService({ isSystem: true, userName: 'runner' }, createDeps({ platform: 'darwin', uid: 0, accountName: 'root', runner: createLaunchdRunner({ failingBootstraps: [1, 2] }) }));
+      assert.equal(second.ok, false);
+      const text = second.lines.join('\n');
+      assert.match(text, /could NOT be loaded again/);
+      assert.match(text, /sudo .* service install --system --user runner/, text);
+      assert.doesNotMatch(text, /run `charness-runner service install` again/);
+    });
+
     it('Mac: a definition this install made new (it had no earlier file) is removed again', async () => {
       pair();
       fs.writeFileSync(runnerPaths.serviceMarker, 'user-service\n');
-      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunnerFailingBootstrap(1) }));
+      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: createLaunchdRunner({ failingBootstraps: [1] }) }));
       assert.equal(mac.ok, false);
       assert.deepEqual(fs.existsSync(agentDir()) ? fs.readdirSync(agentDir()) : [], [], 'no plist is left that was not there before');
     });

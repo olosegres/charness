@@ -305,6 +305,22 @@ async function stopLaunchdJobs(labels: readonly string[], domain: string, deps: 
   return null;
 }
 
+const unloadPollMs = 300;
+const unloadPollAttempts = 10;
+
+/**
+ * @description Boot a job out and wait (bounded: 3 s) until launchd no longer has it loaded. A `bootstrap` right after a `bootout` often
+ * fails with error 5 while launchd is still tearing the old job down; `print` succeeds only for a job that is still loaded.
+ */
+async function bootOutAndWaitUntilGone(label: string, domain: string, deps: ServiceDeps): Promise<void> {
+  await deps.runner('launchctl', ['bootout', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
+  for (let attempt = 0; attempt < unloadPollAttempts; attempt += 1) {
+    const loaded = await deps.runner('launchctl', ['print', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
+    if (!loaded.ok) return;
+    await new Promise((resolve) => { setTimeout(resolve, unloadPollMs); });
+  }
+}
+
 /** @description Load the jobs in order; stops at the first that fails. `touchedFiles` are the definitions it had rewritten (and booted out the old job of) by then, the failing one included. */
 async function loadLaunchdJobs(entries: readonly LaunchdEntry[], domain: string, deps: ServiceDeps, owner: TargetAccount | null, isSystem: boolean): Promise<ServiceResult & { touchedFiles: string[] }> {
   const touchedFiles: string[] = [];
@@ -314,7 +330,7 @@ async function loadLaunchdJobs(entries: readonly LaunchdEntry[], domain: string,
     touchedFiles.push(file);
     writeDefinition(file, renderLaunchdPlist(job));
     if (isSystem) deps.chown(file, rootUid, wheelGid);
-    await deps.runner('launchctl', ['bootout', `${domain}/${job.label}`], { timeoutMs: commandTimeoutMs });
+    await bootOutAndWaitUntilGone(job.label, domain, deps);
     const boot = await deps.runner('launchctl', ['bootstrap', domain, file], { timeoutMs: commandTimeoutMs });
     if (!boot.ok) return { ...fail(`launchctl bootstrap ${domain} failed for ${job.label}: ${boot.stderr.trim().split('\n').slice(-1)[0]}`), touchedFiles };
   }
@@ -345,7 +361,7 @@ async function installLaunchd(request: ServiceRequest, deps: ServiceDeps, paths:
       const notLoaded: string[] = [];
       for (const { file, content } of touched) {
         const label = file === files.link ? names.launchdLink : names.launchdPueued;
-        await deps.runner('launchctl', ['bootout', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
+        await bootOutAndWaitUntilGone(label, domain, deps);
         if (content === null) continue;
         if (request.isSystem) deps.chown(file, rootUid, wheelGid);
         const reboot = await deps.runner('launchctl', ['bootstrap', domain, file], { timeoutMs: commandTimeoutMs });
@@ -353,7 +369,7 @@ async function installLaunchd(request: ServiceRequest, deps: ServiceDeps, paths:
       }
       return fail(...loaded.lines, notLoaded.length === 0
         ? 'The service installed before was loaded again as it was.'
-        : `The service installed before could NOT be loaded again (${notLoaded.join(', ')}): run \`charness-runner service install\` again.`);
+        : `The service installed before could NOT be loaded again (${notLoaded.join(', ')}): run \`${request.isSystem ? `sudo ${paths.launcher} service install --system --user ${accountName}` : 'charness-runner service install'}\` again.`);
     }
     await stopLaunchdJobs([names.launchdLink, names.launchdPueued], domain, deps);
     for (const file of [files.link, files.pueued]) fs.rmSync(file, { force: true });
