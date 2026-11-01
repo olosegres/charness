@@ -33,7 +33,6 @@ export interface HubFilePaths {
   hubPublicKey: string;
   knownHosts: string;
   gate: string;
-  lock: string;
   linkDir: string;
   packageDir: string;
 }
@@ -74,7 +73,6 @@ export function getHubFilePaths(dir: string): HubFilePaths {
     hubPublicKey: path.join(dir, 'hub_ed25519.pub'),
     knownHosts: path.join(dir, 'known_hosts'),
     gate: path.join(dir, 'gate'),
-    lock: path.join(dir, 'lock'),
     linkDir: path.join(dir, 'link'),
     packageDir: path.join(dir, 'package'),
   };

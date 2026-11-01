@@ -41,7 +41,7 @@ runner name no hub path.
 | `hub_ed25519(.pub)` | the hub's client key, made at the first pairing (one for all runners) |
 | `known_hosts` | derived: `charness-runner-<id> <host key>` for the stock `ssh` calls through the links |
 | `gate` | the `sh` wrapper `exec '<node>' '<cli.js>' runner-gate "$@"`, rewritten at every start (`gateWrapper.ts`) |
-| `lock` | the registry lock (the updater's host lock): every change reads what others wrote first |
+| `lock.<n>` | the registry lock (`hubLock.ts`): the holder is whoever made the highest number; no file is ever deleted on someone else's word, so two contenders that found one dead holder cannot both take over |
 | `link/<id>.sock`, `link/<id>.json` | the socket of the gate that holds the link, and its pid / since / heartbeat / ended |
 | `package/` | the packed hub package (`<id>.tgz`) and `current.json` (its source stamp) |
 
