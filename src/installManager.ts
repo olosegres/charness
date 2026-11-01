@@ -822,7 +822,7 @@ export async function getOpenCodeServerHealth(): Promise<OpenCodeServerHealth> {
 
 /** Cache so a boot-time reattach burst doesn't spawn `opencode --version` per call. */
 let installedOpenCodeVersionCache: { value: string | null; at: number } | null = null;
-const installedVersionCacheTtlMs = 10_000;
+export const installedVersionCacheTtlMs = 10_000;
 
 /**
  * @description Version of the opencode binary currently on disk

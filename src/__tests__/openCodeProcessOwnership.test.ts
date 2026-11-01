@@ -6,7 +6,7 @@
  * Test case: N/A - Charness has no Jira tracker.
  */
 
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -17,6 +17,7 @@ import {
   checkIsProcessIdentityCurrent,
   ensureOpenCodeServer,
   type ExternalProcessIdentity,
+  installedVersionCacheTtlMs,
   onOpenCodeServerExit,
   openCodeExternalHostEnvName,
   openCodeExternalHostEnvValue,
@@ -29,7 +30,12 @@ import {
 
 const persistentChildScript = 'setInterval(() => {}, 1000)';
 const processExitPollMs = 25;
-const processExitTimeoutMs = 2_000;
+/**
+ * How long a wait for a process event (a server answering, a pid in a log, a file, an exit) may take before the test calls it a
+ * hang. Every such wait returns the moment its state is reached, so the bound is only a hang guard: far above any honest run, on
+ * a host that is starved of CPU too (starting a Node fixture takes seconds there) — never a claim about how fast something is.
+ */
+const eventWaitHangGuardMs = 30_000;
 const fixtureOwnerPollMs = 100;
 const testExternalHostTimeoutMs = 2_000;
 const stallingExternalHostScript = `
@@ -236,14 +242,14 @@ function checkIsTestProcessAlive(pid: number): boolean {
 }
 
 async function waitForTestProcessExit(pid: number): Promise<void> {
-  const deadline = Date.now() + processExitTimeoutMs;
+  const deadline = Date.now() + eventWaitHangGuardMs;
   while (Date.now() < deadline && checkIsTestProcessAlive(pid)) {
     await new Promise<void>((resolve) => setTimeout(resolve, processExitPollMs));
   }
 }
 
 async function waitForTestServerHealth(url: string): Promise<void> {
-  const deadline = Date.now() + processExitTimeoutMs;
+  const deadline = Date.now() + eventWaitHangGuardMs;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`${url}/global/health`);
@@ -261,7 +267,7 @@ async function waitForTestServerHealth(url: string): Promise<void> {
  * moment before the pid is in it, so waiting for the file alone can read an empty log.
  */
 async function waitForSpawnedPid(spawnLogPath: string): Promise<number> {
-  const deadline = Date.now() + processExitTimeoutMs;
+  const deadline = Date.now() + eventWaitHangGuardMs;
   while (Date.now() < deadline && getSpawnedPids(spawnLogPath).length === 0) {
     await new Promise<void>((resolve) => setTimeout(resolve, processExitPollMs));
   }
@@ -271,7 +277,7 @@ async function waitForSpawnedPid(spawnLogPath: string): Promise<number> {
 }
 
 async function waitForTestFile(filePath: string): Promise<void> {
-  const deadline = Date.now() + processExitTimeoutMs;
+  const deadline = Date.now() + eventWaitHangGuardMs;
   while (Date.now() < deadline && !fs.existsSync(filePath)) {
     await new Promise<void>((resolve) => setTimeout(resolve, processExitPollMs));
   }
@@ -670,6 +676,7 @@ test(
     process.env[openCodeOwnershipFileEnvName] = ownershipFilePath;
 
     try {
+      const ensureStartedAt = Date.now();
       await Promise.all([
         ensureOpenCodeServer(),
         ensureOpenCodeServer(),
@@ -704,10 +711,24 @@ test(
         'bot-created generations must signal their whole process group',
       );
       assert.equal(checkIsTestProcessAlive(allDescendantPids[1]), true);
+      const serverEnvLines = fs.readFileSync(serverEnvFilePath, 'utf8').trim().split('\n').sort();
+      const versionProbeLines = serverEnvLines.filter((line) => line.startsWith('version:'));
       assert.deepEqual(
-        fs.readFileSync(serverEnvFilePath, 'utf8').trim().split('\n').sort(),
-        ['serve:|||', 'serve:|||', 'version:|||'],
-        'process-host controls must not leak into OpenCode probes, servers, or descendants',
+        serverEnvLines.filter((line) => line.startsWith('serve:')),
+        ['serve:|||', 'serve:|||'],
+        'process-host controls must not leak into OpenCode servers or descendants',
+      );
+      assert.ok(versionProbeLines.length > 0, 'the installed version was probed, so the probe below was checked');
+      assert.ok(
+        versionProbeLines.every((line) => line === 'version:|||'),
+        'process-host controls must not leak into OpenCode probes',
+      );
+      // The probe is cached for installedVersionCacheTtlMs, so a burst of ensure calls asks once. Measured in cache windows,
+      // not assumed: a host that is starved of CPU takes longer than one window to run this test and then asks again.
+      const elapsedMs = Date.now() - ensureStartedAt;
+      assert.ok(
+        versionProbeLines.length <= Math.floor(elapsedMs / installedVersionCacheTtlMs) + 1,
+        `${versionProbeLines.length} version probes in ${elapsedMs} ms: more than one per ${installedVersionCacheTtlMs} ms cache window`,
       );
       assert.equal(
         getProcessAncestorPids(allPids[1]).includes(process.pid),
@@ -769,14 +790,25 @@ test(
       assert.equal(getSpawnedPids(spawnLogPath).length, 1);
       fs.writeFileSync(terminationTargetPath, initialProcess.pid.toString());
 
+      // The signals production sends to the server, with the moment each one is SENT (production runs in this process): the fake
+      // can only say when it handled SIGTERM, which a starved host delays, and it is never told of the SIGKILL.
+      const realKill = process.kill.bind(process);
+      const signalsSent: Array<{ signal: string | number | undefined; sentAt: number }> = [];
+      mock.method(process, 'kill', (pid: number, signal?: string | number) => {
+        if (Math.abs(pid) === initialProcess.pid) signalsSent.push({ signal, sentAt: Date.now() });
+        return realKill(pid, signal);
+      });
       const recovery = ensureOpenCodeServer();
       await waitForTestFile(sigtermFilePath);
-      const sigtermAt = Number.parseInt(fs.readFileSync(sigtermFilePath, 'utf8'), 10);
       process.kill(initialProcess.pid, 0);
       await recovery;
+      mock.restoreAll();
+      const sigtermSentAt = signalsSent.find((sent) => sent.signal === 'SIGTERM')?.sentAt;
+      const sigkillSentAt = signalsSent.find((sent) => sent.signal === 'SIGKILL')?.sentAt;
+      assert.ok(sigtermSentAt !== undefined && sigkillSentAt !== undefined, `SIGTERM and then SIGKILL were sent: ${JSON.stringify(signalsSent)}`);
       assert.ok(
-        Date.now() - sigtermAt >= 3_000,
-        'SIGKILL escalation must remain delayed after SIGTERM',
+        sigkillSentAt - sigtermSentAt >= 3_000,
+        `SIGKILL escalation must remain delayed after SIGTERM (${sigkillSentAt - sigtermSentAt} ms)`,
       );
 
       const spawnedPids = getSpawnedPids(spawnLogPath);
@@ -786,6 +818,7 @@ test(
       await waitForTestProcessExit(initialProcess.pid);
       assert.equal(checkIsTestProcessAlive(initialProcess.pid), false);
     } finally {
+      mock.restoreAll();
       stopOpenCodeServer();
       for (const pid of getSpawnedPids(spawnLogPath)) stopTestProcess(pid);
       restoreTestEnvironment(savedEnv);
@@ -1094,7 +1127,7 @@ test(
       // one event-loop turn on an idle box, by far more under load. A started
       // server's exit must be reported: wait for that report, bounded. A start
       // that failed must report nothing: give a late report its turn to show.
-      const exitReportDeadline = Date.now() + processExitTimeoutMs;
+      const exitReportDeadline = Date.now() + eventWaitHangGuardMs;
       while (didStartupResolve && unexpectedExitCalls === 0 && Date.now() < exitReportDeadline) {
         await new Promise<void>((resolve) => setTimeout(resolve, processExitPollMs));
       }
