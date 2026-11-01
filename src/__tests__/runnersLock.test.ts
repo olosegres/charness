@@ -13,7 +13,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { holderStaleAfterMs, withHubLock } from '../runners/hubLock';
+import { getProcessStartKey, withHubLock } from '../runners/hubLock';
 import { waitUntil } from './runnersTestKit';
 
 const workerPath = path.join(__dirname, 'runnersLockWorker.ts');
@@ -90,6 +90,45 @@ describe('registry lock between processes', () => {
   });
 });
 
+describe('a holder that is alive keeps the lock', () => {
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'lk-'));
+    registryDir = path.join(root, 'r');
+    sharedDir = path.join(root, 's');
+    fs.mkdirSync(sharedDir);
+  });
+  afterEach(() => {
+    for (const child of children.splice(0)) child.kill('SIGKILL');
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('a holder suspended inside its critical section is not overtaken: the contender waits, and the two sections never overlap', async () => {
+    const holder = startWorker(['hold-stopped', registryDir, sharedDir]);
+    await waitUntil(() => fs.existsSync(path.join(sharedDir, 'holding')), 'the holder to be inside its section', workerTimeoutMs);
+    await new Promise((resolve) => { setTimeout(resolve, 300); });
+    const contender = startWorker(['contend', registryDir, sharedDir, '0', '1']);
+    await waitUntil(() => fs.existsSync(path.join(sharedDir, 'ready.0')), 'the contender to be ready', workerTimeoutMs);
+    fs.writeFileSync(path.join(sharedDir, 'go'), '');
+
+    let contenderExited = false;
+    void contender.exited.then(() => { contenderExited = true; });
+    await new Promise((resolve) => { setTimeout(resolve, 2000); });
+    assert.equal(contenderExited, false, 'the contender is still waiting for the stopped holder');
+    assert.equal(fs.existsSync(path.join(sharedDir, 'counter')), false, 'nobody has entered a section yet');
+    assert.equal(readViolations(), '');
+
+    const holderPid = holder.child.pid;
+    if (holderPid === undefined) throw new Error('the holder has no pid');
+    process.kill(holderPid, 'SIGCONT');
+    const [holderExit, contenderExit] = await Promise.all([holder.exited, contender.exited]);
+    assert.equal(holderExit.code, 0, holderExit.stderr);
+    assert.equal(contenderExit.code, 0, contenderExit.stderr);
+    assert.ok(fs.existsSync(path.join(sharedDir, 'resumed')));
+    assert.equal(readViolations(), '', 'the resumed holder finished its section before the contender entered');
+    assert.equal(Number(fs.readFileSync(path.join(sharedDir, 'counter'), 'utf8')), 2, 'neither update was lost');
+  });
+});
+
 describe('registry lock inside one process', () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'lk-'));
@@ -121,16 +160,10 @@ describe('registry lock inside one process', () => {
     for (let index = 0; index < order.length; index += 2) assert.equal(order[index].replace('-in', ''), order[index + 1].replace('-out', ''));
   });
 
-  it('takes over a lock whose record is older than the stale limit even though its pid is alive (a hung holder)', async () => {
+  it('does not take over a lock that a live process holds, however long it has held it', async () => {
     fs.mkdirSync(registryDir, { recursive: true });
-    fs.writeFileSync(path.join(registryDir, 'lock.7'), JSON.stringify({ pid: process.pid, token: 'old', startedAtMs: Date.now() - holderStaleAfterMs - 1000, releasedAtMs: null }));
-    assert.equal(await withHubLock(registryDir, () => 'taken'), 'taken');
-    assert.deepEqual(fs.readdirSync(registryDir), ['lock.8']);
-  });
-
-  it('does not take over a lock that a live process holds', async () => {
-    fs.mkdirSync(registryDir, { recursive: true });
-    fs.writeFileSync(path.join(registryDir, 'lock.3'), JSON.stringify({ pid: process.pid, token: 'live', startedAtMs: Date.now(), releasedAtMs: null }));
+    const aDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    fs.writeFileSync(path.join(registryDir, 'lock.3'), JSON.stringify({ pid: process.pid, token: 'live', startedAtMs: aDayAgo, startKey: getProcessStartKey(process.pid), releasedAtMs: null }));
     let ran = false;
     const waiting = withHubLock(registryDir, () => { ran = true; });
     await new Promise((resolve) => { setTimeout(resolve, 300); });
@@ -138,6 +171,12 @@ describe('registry lock inside one process', () => {
     fs.rmSync(path.join(registryDir, 'lock.3'));
     await waiting;
     assert.equal(ran, true);
+  });
+
+  it('a pid that now belongs to another process (it started at another time) is not the holder: the lock is taken over', async () => {
+    fs.mkdirSync(registryDir, { recursive: true });
+    fs.writeFileSync(path.join(registryDir, 'lock.2'), JSON.stringify({ pid: process.pid, token: 'reused', startedAtMs: Date.now(), startKey: 'a start time that is not this process\'s', releasedAtMs: null }));
+    assert.equal(await withHubLock(registryDir, () => 'taken'), 'taken');
   });
 
   it('a lock file that does not read counts as a dead holder', async () => {
@@ -148,8 +187,8 @@ describe('registry lock inside one process', () => {
 
   it('the highest number decides, and a taker removes the lower files', async () => {
     fs.mkdirSync(registryDir, { recursive: true });
-    fs.writeFileSync(path.join(registryDir, 'lock.2'), JSON.stringify({ pid: process.pid, token: 'ghost', startedAtMs: 0, releasedAtMs: 1 }));
-    fs.writeFileSync(path.join(registryDir, 'lock.5'), JSON.stringify({ pid: process.pid, token: 'top', startedAtMs: 0, releasedAtMs: 1 }));
+    fs.writeFileSync(path.join(registryDir, 'lock.2'), JSON.stringify({ pid: process.pid, token: 'ghost', startedAtMs: 0, startKey: null, releasedAtMs: 1 }));
+    fs.writeFileSync(path.join(registryDir, 'lock.5'), JSON.stringify({ pid: process.pid, token: 'top', startedAtMs: 0, startKey: null, releasedAtMs: 1 }));
     await withHubLock(registryDir, () => undefined);
     assert.deepEqual(fs.readdirSync(registryDir), ['lock.6']);
   });

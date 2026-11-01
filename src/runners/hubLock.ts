@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process';
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -14,8 +15,11 @@ import { z } from 'zod';
  *   - to take the lock, create `lock.<top + 1>` exclusively (a hard link of a finished temp file, so it never shows half written;
  *     `link` fails with EEXIST like `O_EXCL`) — of any number of contenders exactly one creates a given number, which is the whole
  *     arbitration, also when they all found the same dead holder;
- *   - the top file is free when its holder released it (the record says so), is dead (its pid is gone) or has held for over
- *     {@link holderStaleAfterMs}; otherwise the contender waits;
+ *   - the top file is free when its holder released it (the record says so) or is dead (its pid is gone, or belongs to a process that
+ *     started at another time — pid reuse); otherwise the contender waits. A holder that is ALIVE is never overtaken, however long it
+ *     has held: a process that is suspended inside its critical section (a stopped job, a laptop asleep) resumes where it was, and
+ *     overtaking it would let both write the registry. A holder that hangs for good blocks the registry loudly (the waiting caller
+ *     fails after 15 s naming the lock) instead of silently risking two writers;
  *   - after creating its file the contender lists the folder again: if a higher number exists, its judgement was out of date (it saw
  *     an old listing) — it removes its own file and starts over;
  *   - a released lock stays as a marker (the next number is made after it, so numbers never repeat while a stale observer could still
@@ -27,8 +31,8 @@ const lockFilePrefix = 'lock.';
 const lockTempPrefix = 'lock-temp.';
 const lockPollMs = 25;
 const lockWaitLimitMs = 15 * 1000;
-/** A holder that has held this long is taken to be hung (a critical section is a few file writes). */
-export const holderStaleAfterMs = 30 * 1000;
+/** A temp file of a process that died between writing it and linking it is swept after this long. */
+const abandonedTempAgeMs = 60 * 1000;
 const registryDirMode = 0o700;
 const tokenBytes = 8;
 
@@ -37,6 +41,8 @@ const lockRecordSchema = z.strictObject({
   /** Tells this holder's file from another's with the same number. */
   token: z.string(),
   startedAtMs: z.number(),
+  /** Identifies the holder's process beyond its pid (its start time), so a reused pid is not taken for the holder; `null` where it cannot be read. */
+  startKey: z.string().nullable(),
   /** Set when the holder gives the lock back; the file then stays as the marker of the number. */
   releasedAtMs: z.number().nullable(),
 });
@@ -78,19 +84,33 @@ function readRecord(filePath: string): LockRecord | null {
   }
 }
 
-function checkIsProcessAlive(pid: number): boolean {
+/** @description What tells one process from another that has the same pid: the start time (`/proc` on Linux, `ps` elsewhere), or `null`. */
+export function getProcessStartKey(pid: number): string | null {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM: the process exists but is another account's.
-    return error instanceof Error && 'code' in error && error.code === 'EPERM';
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // Field 22 counts from the state field that follows the command name's closing parenthesis.
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null;
+  } catch {
+    const listing = spawnSync('ps', ['-p', pid.toString(), '-o', 'lstart='], { encoding: 'utf8', timeout: 5000 });
+    return listing.status === 0 && listing.stdout.trim() !== '' ? listing.stdout.trim() : null;
   }
 }
 
+function checkIsProcessAlive(record: LockRecord): boolean {
+  try {
+    process.kill(record.pid, 0);
+  } catch (error) {
+    // EPERM: the process exists but is another account's.
+    if (!(error instanceof Error && 'code' in error && error.code === 'EPERM')) return false;
+  }
+  if (record.startKey === null) return true;
+  const currentKey = getProcessStartKey(record.pid);
+  return currentKey === null || currentKey === record.startKey;
+}
+
 /** A record that does not read counts as a dead holder: a file nobody finished writing is never left by a live one (it is linked whole). */
-function checkIsHeld(record: LockRecord | null, nowMs: number): boolean {
-  return record !== null && record.releasedAtMs === null && checkIsProcessAlive(record.pid) && nowMs - record.startedAtMs <= holderStaleAfterMs;
+function checkIsHeld(record: LockRecord | null): boolean {
+  return record !== null && record.releasedAtMs === null && checkIsProcessAlive(record);
 }
 
 function writeTempRecord(dir: string, record: LockRecord): string {
@@ -133,7 +153,7 @@ function removeAbandonedTempFiles(dir: string, nowMs: number): void {
     if (!name.startsWith(lockTempPrefix)) continue;
     const filePath = path.join(dir, name);
     try {
-      if (nowMs - fs.statSync(filePath).mtimeMs > holderStaleAfterMs) fs.rmSync(filePath, { force: true });
+      if (nowMs - fs.statSync(filePath).mtimeMs > abandonedTempAgeMs) fs.rmSync(filePath, { force: true });
     } catch {
       // Gone already: another contender swept it.
     }
@@ -144,9 +164,9 @@ function removeAbandonedTempFiles(dir: string, nowMs: number): void {
 function tryAcquire(dir: string, nowMs: number): HeldLock | null {
   const generations = listGenerations(dir);
   const top = generations.at(-1) ?? 0;
-  if (top > 0 && checkIsHeld(readRecord(getLockFilePath(dir, top)), nowMs)) return null;
+  if (top > 0 && checkIsHeld(readRecord(getLockFilePath(dir, top)))) return null;
   const generation = top + 1;
-  const record: LockRecord = { pid: process.pid, token: randomBytes(tokenBytes).toString('hex'), startedAtMs: nowMs, releasedAtMs: null };
+  const record: LockRecord = { pid: process.pid, token: randomBytes(tokenBytes).toString('hex'), startedAtMs: nowMs, startKey: getProcessStartKey(process.pid), releasedAtMs: null };
   if (!createGenerationFile(dir, generation, record)) return null;
   const after = listGenerations(dir);
   if (after.some((other) => other > generation)) {

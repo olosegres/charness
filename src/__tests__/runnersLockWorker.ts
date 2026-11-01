@@ -4,6 +4,7 @@
  *
  *   node --import tsx runnersLockWorker.ts contend <registryDir> <sharedDir> <workerIndex> <iterations>
  *   node --import tsx runnersLockWorker.ts die-holding <registryDir> <sharedDir>
+ *   node --import tsx runnersLockWorker.ts hold-stopped <registryDir> <sharedDir>
  *
  * `contend` signals `ready.<index>` in <sharedDir>, waits for the file `go`, then enters the section <iterations> times. A section
  * takes the marker `inside` (exclusively; an existing one is a violation, appended to `violations.log`), adds one to `counter`
@@ -41,6 +42,20 @@ async function main(): Promise<void> {
     await withHubLock(registryDir, () => {
       fs.writeFileSync(path.join(sharedDir, 'holding'), '');
       process.kill(process.pid, 'SIGKILL');
+    });
+    return;
+  }
+  if (mode === 'hold-stopped') {
+    // Takes the lock, enters the section, and suspends ITSELF inside it (a stopped job, a sleeping laptop); finishes the section when continued.
+    await withHubLock(registryDir, () => {
+      const insidePath = path.join(sharedDir, 'inside');
+      fs.writeFileSync(insidePath, process.pid.toString(), { flag: 'wx' });
+      fs.writeFileSync(path.join(sharedDir, 'holding'), '');
+      process.kill(process.pid, 'SIGSTOP');
+      fs.writeFileSync(path.join(sharedDir, 'resumed'), '');
+      const counterPath = path.join(sharedDir, 'counter');
+      fs.writeFileSync(counterPath, (Number(fs.existsSync(counterPath) ? fs.readFileSync(counterPath, 'utf8') : 0) + 1).toString());
+      fs.rmSync(insidePath, { force: true });
     });
     return;
   }
