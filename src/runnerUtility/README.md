@@ -111,7 +111,10 @@ Apple: the Simulator is not available to a LaunchDaemon or to a process started 
 «Xcode is installed»: every time the link starts (whoever runs it: a terminal, an agent, a daemon — the answer depends on that), and again whenever Xcode changes (looked at once an hour), it really tries — create a device,
 boot it, wait for `bootstatus`, delete it (bounded, 180 s; the device is deleted whatever happened). `pass` → the probe says `ios`;
 `fail` → «ios: no — needs the runner user's login session». A helper in that user's GUI session is a follow-up, only if the check fails
-where it matters.
+where it matters. The previous record is DELETED when the link starts, and a paired Mac with Xcode and no record answers «ios: no — the iOS
+Simulator is being checked» until the new one is written (`runner.sh`), so an answer given by another account or kind of service is never
+offered meanwhile; a check that cannot run at all (an error, not a failed boot) writes a `fail` record saying so, with `xcode: null` so that
+the hourly look tries again.
 
 ## `pause`, `resume`, `unpair`
 

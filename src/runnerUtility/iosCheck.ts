@@ -156,15 +156,27 @@ export interface IosRefreshOptions {
   isStartup: boolean;
 }
 
-/** @description At the link's start (always) and then once an hour (when Xcode is not what the last result saw): run the boot check and record it. */
+/**
+ * @description At the link's start (always) and then once an hour (when Xcode is not what the last result saw): run the boot check and record it.
+ * At the start the old record is deleted first, and if the new check then cannot run at all (an error, not a failed boot) a `fail` record
+ * saying so is written instead — a paired Mac with no record answers «being checked», and that must not last until the next start. Its
+ * `xcode` is null, so the hourly look tries again.
+ */
 export async function refreshIosCheck(paths: RunnerHomePaths, deps: IosCheckDeps, options: IosRefreshOptions): Promise<IosCheckRecord | null> {
   if (deps.platform !== 'darwin') return null;
   // The old answer was given by whoever ran the link before: from this moment it proves nothing, and the probe must not offer it while the
   // new check (up to 3 minutes) runs. Without a record a paired runner says «being checked» (`runner.sh`).
   if (options.isStartup) fs.rmSync(paths.iosCheck, { force: true });
-  const current = await readXcodeVersion(deps);
-  if (!options.isStartup && !checkShouldRunIosCheck(readIosCheck(paths), current)) return null;
-  const record = await runIosBootCheck(deps);
-  writeIosCheck(paths, record);
-  return record;
+  try {
+    const current = await readXcodeVersion(deps);
+    if (!options.isStartup && !checkShouldRunIosCheck(readIosCheck(paths), current)) return null;
+    const record = await runIosBootCheck(deps);
+    writeIosCheck(paths, record);
+    return record;
+  } catch (error) {
+    if (!options.isStartup) throw error;
+    const failed: IosCheckRecord = { status: 'fail', checkedAtMs: deps.now(), xcode: null, reason: `the boot check could not run (${error instanceof Error ? error.message : 'unknown error'})` };
+    writeIosCheck(paths, failed);
+    return failed;
+  }
 }
