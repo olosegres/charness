@@ -8,12 +8,12 @@
 
 <h2 align="center">Harness for running Claude Code / OpenCode agents in the cloud or on your laptop, controlled from Telegram or Jira.</h2>
 
-**You talk. Your J.A.R.V.I.S. does the rest.** Send a voice note from the street — and an agent on your server opens the browser, calls your APIs, writes code, edits a video, drafts a post, generates an image, answers your email or messages someone for you, and sends you the result. It never sleeps: it keeps working while you do. Plug in a tool — and that becomes one more thing it can do.
-
-**Charness is a gateway between people and AI agents.** A Claude Code or OpenCode agent works in a project folder on a VPS / VDS or on your laptop, and you reach it from a Telegram topic or a Jira issue. On that gateway you set up AI pipelines for any work, not only code: a topic is one pipeline with its own folder, agent, schedule and checks.
+**Charness is a gateway that controls all your Claude Code and OpenCode sessions.** It runs them for you and brings their controls to the entry point you prefer — Telegram and Jira are supported now.
 
 - **In Telegram** you control your agents through a bot or a group, so it becomes a terminal for OpenCode and Claude Code — every thread is like a terminal tab, plus scheduling and voice control.
 - **In Jira** it starts an agent when you assign a ticket to a special user: the agent reads the description, comments and attachments and does the work according to the ticket's status — like a real employee.
+
+*In Telegram it may literally become your J.A.R.V.I.S. 😄 You talk — Charness does the rest. Send a voice note from the street — and an agent on your server opens the browser, calls your APIs, writes code, edits a video, drafts a post, generates an image, answers your email or messages someone for you, and sends you the result. It never sleeps: it keeps working while you do. Plug in a tool — and that becomes one more thing it can do.*
 
 <p align="center">It runs fine on your laptop. But it is called a <b>c</b>loud <b>harness</b> for a reason — put it on a VPS or VDS and your agents keep working while the laptop sleeps. Give an agent a cron schedule and it takes on a recurring task by itself, in the background, while you do something else.</p>
 
