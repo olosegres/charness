@@ -139,6 +139,8 @@ export const redeemReplySchema = z.discriminatedUnion('ok', [
     label: z.string(),
     host: z.string(),
     port: z.number().int(),
+    /** The hub's current package (what the runner just downloaded, or something newer); `null` when it cannot be packed. */
+    packageId: z.string().nullable(),
   }),
   z.strictObject({ ok: z.literal(false), reason: z.string() }),
 ]);

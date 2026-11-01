@@ -24,7 +24,8 @@ import {
   setPairedRunnerPaused,
   sweepExpiredPairings,
 } from '../runners/hubPairing';
-import { HubRegistryError, readPairedFile, readPendingFile } from '../runners/hubRegistry';
+import { AuthorizedKeysBlockError, authorizedKeysBlockStart } from '../runners/authorizedKeys';
+import { HubDerivedFilesError, HubRegistryError, readPairedFile, readPendingFile, writePendingFile } from '../runners/hubRegistry';
 import { generateEd25519KeyPair, getPublicKeyFingerprint } from '../runners/sshKeys';
 import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 
@@ -316,5 +317,125 @@ describe('a registry file that does not validate', () => {
     fs.mkdirSync(fixture.ctx.dir, { recursive: true });
     fs.writeFileSync(getHubFilePaths(fixture.ctx.dir).pending, '{not json');
     assert.throws(() => readPendingFile(fixture.ctx.dir), /pending\.json is not valid JSON/);
+  });
+});
+
+describe('interrupted operations mend themselves', () => {
+  beforeEach(() => {
+    fixture = createHubFixture();
+  });
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  /** A directory where the atomic write of `authorized_keys` wants its temp file: the write fails, whoever runs it. */
+  function blockAuthorizedKeysWrite(): () => void {
+    const blocker = `${fs.realpathSync(fixture.ctx.authorizedKeysPath)}.${process.pid}.tmp`;
+    fs.mkdirSync(blocker);
+    return () => fs.rmSync(blocker, { recursive: true });
+  }
+
+  it('a code whose pending entry outlived a crash is still single use: another key is refused, the same machine is answered again', async () => {
+    const pairing = await createTestPairing();
+    const survivingEntry = readPendingFile(fixture.ctx.dir).pending[0];
+    const first = createRedeemFixture();
+    const reply = await redeemPairing(fixture.ctx, pairing.pairId, first.request, startMs);
+    assert.ok(reply.ok);
+    // The crash: paired.json was written, pending.json was not.
+    writePendingFile(fixture.ctx.dir, { pending: [survivingEntry] });
+    assert.equal(checkIsPairingOpen(fixture.ctx, pairing.pairId, startMs), false, 'a used code is not open');
+
+    const stranger = await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture().request, startMs);
+    assert.deepEqual(stranger, { ok: false, reason: 'this pairing code is unknown or already used' });
+    assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 1);
+
+    const again = await redeemPairing(fixture.ctx, pairing.pairId, first.request, startMs, '0123456789abcdef');
+    assert.ok(again.ok);
+    if (reply.ok && again.ok) {
+      assert.equal(again.runnerId, reply.runnerId);
+      assert.equal(again.name, reply.name);
+      assert.equal(again.packageId, '0123456789abcdef');
+      assert.deepEqual({ label: again.label, host: again.host, port: again.port }, { label: '@ExampleBot', host: 'host.example', port: 2222 });
+    }
+    assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 1);
+    assert.equal(readPairedFile(fixture.ctx.dir).rev, 1);
+    assert.equal(readPendingFile(fixture.ctx.dir).pending.length, 0, 'the leftover entry is dropped');
+  });
+
+  it('the sweep drops the entry of a used code without handing it back as expired', async () => {
+    const pairing = await createTestPairing();
+    const survivingEntry = readPendingFile(fixture.ctx.dir).pending[0];
+    await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture().request, startMs);
+    writePendingFile(fixture.ctx.dir, { pending: [survivingEntry] });
+    assert.deepEqual(await sweepExpiredPairings(fixture.ctx, startMs + pairingLifetimeMs + 1), []);
+    assert.equal(readPendingFile(fixture.ctx.dir).pending.length, 0);
+  });
+
+  it('a failure to write authorized_keys after the registry was written leaves a committed runner; asking again installs its key', async () => {
+    const pairing = await createTestPairing();
+    const { request } = createRedeemFixture();
+    const unblock = blockAuthorizedKeysWrite();
+    await assert.rejects(redeemPairing(fixture.ctx, pairing.pairId, request, startMs), HubDerivedFilesError);
+    assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 1, 'the registry is the commit');
+    assert.equal(readPendingFile(fixture.ctx.dir).pending.length, 0);
+    assert.ok(!readBlock().some((line) => line.includes('charness-runner:')), 'the key is not installed yet');
+
+    unblock();
+    const retry = await redeemPairing(fixture.ctx, pairing.pairId, request, startMs);
+    assert.ok(retry.ok);
+    const block = readBlock();
+    assert.equal(block.length, 1);
+    assert.ok(block[0].includes(` ${request.publicKey} charness-runner:`));
+    assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 1);
+  });
+
+  it('a failure to write known_hosts is reported the same way and mended the same way', async () => {
+    const pairing = await createTestPairing();
+    const { request } = createRedeemFixture();
+    const blocker = `${getHubFilePaths(fixture.ctx.dir).knownHosts}.${process.pid}.tmp`;
+    fs.mkdirSync(blocker);
+    await assert.rejects(redeemPairing(fixture.ctx, pairing.pairId, request, startMs), (error: Error) => error instanceof HubDerivedFilesError && /known_hosts/.test(error.message));
+    fs.rmSync(blocker, { recursive: true });
+    assert.ok((await redeemPairing(fixture.ctx, pairing.pairId, request, startMs)).ok);
+    assert.ok(fs.readFileSync(getHubFilePaths(fixture.ctx.dir).knownHosts, 'utf8').includes(request.hostKey));
+  });
+
+  it('a removal whose key rewrite failed is repaired by the next command, which finds nothing left to remove', async () => {
+    const pairing = await createTestPairing();
+    const reply = await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture({ suggestedName: 'mac' }).request, startMs);
+    assert.ok(reply.ok);
+    const unblock = blockAuthorizedKeysWrite();
+    await assert.rejects(removePairedRunner(fixture.ctx, 'mac', startMs), HubDerivedFilesError);
+    assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 0);
+    assert.equal(readBlock().length, 1, 'the key line is still there');
+
+    unblock();
+    assert.equal(await removePairedRunner(fixture.ctx, 'mac', startMs), null);
+    assert.deepEqual(readBlock(), []);
+  });
+
+  it('any other operation repairs the files too — a sweep, a pause', async () => {
+    const pairing = await createTestPairing();
+    await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture({ suggestedName: 'mac' }).request, startMs);
+    const unblock = blockAuthorizedKeysWrite();
+    await assert.rejects(removePairedRunner(fixture.ctx, 'mac', startMs), HubDerivedFilesError);
+    unblock();
+    await sweepExpiredPairings(fixture.ctx, startMs);
+    assert.deepEqual(readBlock(), []);
+  });
+
+  it('a damaged authorized_keys block stops the operation before anything is written', async () => {
+    fs.mkdirSync(path.dirname(fixture.ctx.authorizedKeysPath), { recursive: true });
+    fs.writeFileSync(fixture.ctx.authorizedKeysPath, `${authorizedKeysBlockStart}\nno end marker\n`);
+    await assert.rejects(createTestPairing(), AuthorizedKeysBlockError);
+    assert.equal(fs.existsSync(getHubFilePaths(fixture.ctx.dir).pending), false);
+
+    fs.writeFileSync(fixture.ctx.authorizedKeysPath, '');
+    const pairing = await createTestPairing();
+    fs.writeFileSync(fixture.ctx.authorizedKeysPath, `${authorizedKeysBlockStart}\nno end marker\n`);
+    await assert.rejects(redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture().request, startMs), AuthorizedKeysBlockError);
+    assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 0, 'the code was not spent');
+    assert.equal(readPendingFile(fixture.ctx.dir).pending.length, 1);
+    await assert.rejects(removePairedRunner(fixture.ctx, 'anyone', startMs), AuthorizedKeysBlockError);
   });
 });

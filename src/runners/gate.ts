@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { pipeline } from 'stream/promises';
 import type { Readable, Writable } from 'stream';
+import { AuthorizedKeysBlockError } from './authorizedKeys';
 import { getCaughtErrnoCode } from '../configDirFile';
 import { runGateLink, type GateLinkTimings } from './gateLink';
 import {
@@ -18,7 +19,7 @@ import { hubIdPattern } from './hubIds';
 import { createHubContext, type HubContext } from './hubPaths';
 import { HubRegistryError } from './hubRegistry';
 import { getHubPackage } from './hubPackage';
-import { checkIsPairingOpen, redeemPairing, removePairedRunner } from './hubPairing';
+import { checkIsPairingOpen, checkIsRunnerPaired, redeemPairing, removePairedRunner } from './hubPairing';
 import { cutRunnerLink } from './linkControl';
 
 /**
@@ -101,7 +102,7 @@ async function handleRedeem(ctx: HubContext, pairId: string, io: GateIo, now: ()
   } else {
     const request = redeemRequestSchema.safeParse(parsed);
     reply = request.success
-      ? await redeemPairing(ctx, pairId, request.data, now())
+      ? await redeemPairing(ctx, pairId, request.data, now(), getPackageIdOrNull(ctx, io.log))
       : { ok: false, reason: `the request is invalid: ${request.error.issues.map((issue) => `${issue.path.join('.') || '(root)'} ${issue.message}`).join('; ')}` };
   }
   io.stdout.write(formatGateMarkerLine('redeem'));
@@ -129,7 +130,7 @@ async function handleUnpair(ctx: HubContext, runnerId: string, io: GateIo, now: 
 
 /** What the runner is told about a failure on the hub: our own registry messages, else only an error code — never a hub path. */
 function describeFailure(error: unknown): string {
-  if (error instanceof HubRegistryError) return error.message;
+  if (error instanceof HubRegistryError || error instanceof AuthorizedKeysBlockError) return error.message;
   return `internal error (${getCaughtErrnoCode(error)})`;
 }
 
@@ -167,6 +168,12 @@ export async function runRunnerGate(argv: readonly string[], env: NodeJS.Process
         return await writePackage(ctx, io, false);
       }
       return await handleRedeem(ctx, invocation.pairId, io, now);
+    }
+    // The key line is only the way in: a runner that left the registry is refused whatever its line (or an ssh connection it already
+    // has open, which keeps the key's options) still allows.
+    if (request !== 'unpair' && !checkIsRunnerPaired(ctx, invocation.runnerId)) {
+      io.log('refused: this runner is not paired here');
+      return refusedExitCode;
     }
     switch (request) {
       case 'link':

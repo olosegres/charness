@@ -15,7 +15,7 @@ import { parseGateArgs, routeGateRequest, runRunnerGate, type GateInvocation } f
 import { ensureGateWrapper, renderGateWrapper } from '../runners/gateWrapper';
 import { gateMarker, maxGateRequestBytes, parseGateMarkerLine, redeemReplySchema } from '../runners/gateProtocol';
 import { getHubFilePaths } from '../runners/hubPaths';
-import { createPairing, redeemPairing } from '../runners/hubPairing';
+import { createPairing, redeemPairing, removePairedRunner } from '../runners/hubPairing';
 import { readPairedFile } from '../runners/hubRegistry';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { createCollector, createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
@@ -151,6 +151,7 @@ describe('gate requests', () => {
     assert.equal(marker, 'redeem');
     const reply = redeemReplySchema.parse(JSON.parse(body.toString('utf8')));
     assert.equal(reply.ok, true);
+    assert.match(reply.ok ? (reply.packageId ?? '') : '', /^[0-9a-f]{16}$/, 'the reply tells the hub\'s current package');
     assert.deepEqual(readPairedFile(fixture.ctx.dir).runners.map((runner) => runner.publicKey), [request.publicKey]);
   });
 
@@ -190,6 +191,27 @@ describe('gate requests', () => {
     assert.deepEqual(JSON.parse(splitMarker(first.stdout).body.toString('utf8')), { ok: true });
     assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 0);
     assert.deepEqual(JSON.parse(splitMarker((await runGate(gateArgs('runner', runnerId), 'unpair')).stdout).body.toString('utf8')), { ok: false });
+  });
+
+  it('a runner that left the registry is refused by `package` and `link` whatever its key line still allows', async () => {
+    const runnerId = await pairRunner();
+    await removePairedRunner(fixture.ctx, runnerId, startMs);
+    for (const command of ['package', 'link']) {
+      const run = await runGate(gateArgs('runner', runnerId), command);
+      assert.equal(run.code, 2, command);
+      assert.equal(run.stdout.length, 0, command);
+      assert.ok(run.log.some((line) => line.includes('not paired')), command);
+    }
+  });
+
+  it('a damaged authorized_keys block fails a redeem with a message that names no path, and spends nothing', async () => {
+    const pairId = await createOpenPairing();
+    fs.writeFileSync(fixture.ctx.authorizedKeysPath, '# charness runners: managed block, do not edit between the markers\n');
+    const run = await runGate(gateArgs('redeem', pairId), 'redeem', JSON.stringify(createRedeemFixture().request));
+    assert.equal(run.code, 1);
+    assert.ok(run.log.some((line) => line.includes('damaged charness block')));
+    assert.ok(run.log.every((line) => !line.includes(fixture.root)));
+    assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 0);
   });
 
   it('a failure tells the runner no hub path', async () => {

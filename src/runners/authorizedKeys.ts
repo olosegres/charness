@@ -117,6 +117,11 @@ function readTextIfPresent(filePath: string): string {
   }
 }
 
+/** @description Throws {@link AuthorizedKeysBlockError} when the file holds a damaged block — asked BEFORE a change is committed, so a block that cannot be edited never leaves a half-done change behind. */
+export function assertManagedBlockIntact(authorizedKeysPath: string): void {
+  extractManagedBlock(readTextIfPresent(authorizedKeysPath));
+}
+
 /**
  * @description Make the managed block of `authorizedKeysPath` hold exactly `blockLines`. The folder is created 0700 when missing
  * (sshd's StrictModes refuses a writable one), the file is written 0600 through a temp file and a rename — into the file a symlink

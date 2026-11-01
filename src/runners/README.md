@@ -45,9 +45,18 @@ runner name no hub path.
 | `link/<id>.sock`, `link/<id>.json` | the socket of the gate that holds the link, and its pid / since / heartbeat / ended |
 | `package/` | the packed hub package (`<id>.tgz`) and `current.json` (its source stamp) |
 
-Everything derived (`known_hosts`, the managed `authorized_keys` block) is rendered from the two registry files on every change
-(`syncDerivedHubFiles`), never edited on its own. A registry file that does not validate stops the caller with the field named —
-never read as empty, which would be rewritten empty.
+Everything derived (`known_hosts`, the managed `authorized_keys` block) is rendered from the two registry files (`syncDerivedHubFiles`),
+never edited on its own. A registry file that does not validate stops the caller with the field named — never read as empty, which would
+be rewritten empty.
+
+**Every change is a transaction under the registry lock** (`hubPairing.ts`, `runTransaction`): (1) the `authorized_keys` block is checked
+first — a damaged one stops the operation before anything is written; (2) the AUTHORITATIVE files are written, `paired.json` then
+`pending.json`; (3) the derived files are rewritten from the registry — and this step runs at the end of EVERY operation, a plain
+`ls` or sweep included, so a step that failed, or a crash between two writes, is mended by whatever runs next (a failed derived write is
+reported as `HubDerivedFilesError`). A code is single use because the runner is recorded with the id of the code that made it, even if the
+pending entry outlives a crash; the SAME machine asking again for a used code is answered again (idempotent). A runner that left
+`paired.json` is refused by every gate request (`package`, `link`) at once, whatever its key line — or an ssh connection it already has
+open, which keeps the key's options — still allows.
 
 **`authorized_keys`.** charness owns ONE marked block (`authorizedKeysBlockStart` … `End`), replaced as a whole; every other line is
 kept byte for byte; a damaged block (a marker without its twin, two blocks) is NOT edited. The file is written 0600 through a temp

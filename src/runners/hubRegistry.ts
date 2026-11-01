@@ -2,10 +2,11 @@ import * as fs from 'fs';
 import { z } from 'zod';
 import { writeJsonFileAtomically, writeTextFileAtomically } from '../configDirFile';
 import { runnerNamePattern, runnerWorkDirSchema } from '../remoteRun/runnersConfig';
-import { writeManagedBlock, buildRunnerKeyLine, buildTempKeyLine } from './authorizedKeys';
+import { buildRunnerKeyLine, buildTempKeyLine, writeManagedBlock } from './authorizedKeys';
 import { hubHostSchema, hubIdSchema, hubPortSchema } from './hubIds';
 import { getHubFilePaths, getRunnerHostAlias, type HubContext } from './hubPaths';
 import { ensureHubDir } from './hubLock';
+import { getCaughtErrnoCode } from '../configDirFile';
 import { checkIsEd25519PublicKey } from './sshKeys';
 
 /**
@@ -42,8 +43,12 @@ const pairedRunnerSchema = z.strictObject({
   version: z.string().max(maxTextLength),
   serviceKind: z.enum(runnerServiceKinds),
   pairedAtMs: z.number().int().nonnegative(),
-  /** The pairing that made it: how the instance that offered the code finds out that it was used. */
+  /** The pairing that made it: how the instance that offered the code finds out that it was used, and what makes a retry of `redeem` idempotent. */
   pairId: hubIdSchema,
+  /** What the runner was told about this hub (kept so a retried `redeem` is answered the same way after the pending entry is gone). */
+  label: z.string().min(1).max(maxTextLength),
+  host: hubHostSchema,
+  port: hubPortSchema,
   /** Set from the hub: the runner stays attached, but no job is sent to it. */
   isPaused: z.boolean(),
 });
@@ -83,6 +88,14 @@ export class HubRegistryError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'HubRegistryError';
+  }
+}
+
+/** @description The registry files were written but a file derived from them could not be; the next locked operation repairs it. */
+export class HubDerivedFilesError extends HubRegistryError {
+  constructor(fileName: string, errnoCode: string) {
+    super(`the registry was updated but ${fileName} could not be written (${errnoCode}); the next runners command repairs it`);
+    this.name = 'HubDerivedFilesError';
   }
 }
 
@@ -142,11 +155,31 @@ export function renderManagedBlockLines(ctx: HubContext, pending: readonly Pendi
   ];
 }
 
+function readTextIfPresent(filePath: string): string | null {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 /**
- * @description Bring the derived files in line with the two registry files: `known_hosts` and the `authorized_keys` block. The registry
- * lock must be held. The block goes LAST, so a key is never allowed before the files its gate reads are in place.
+ * @description Bring the derived files in line with the two registry files: `known_hosts` and the `authorized_keys` block, each written
+ * only when it differs. The registry lock must be held. The block goes LAST, so a key is never allowed before the files its gate reads
+ * are in place. The registry files are authoritative and are written BEFORE this runs; a failure here is reported as
+ * {@link HubDerivedFilesError} and mends itself, because every locked operation ends with this same call.
  */
 export function syncDerivedHubFiles(ctx: HubContext, pending: PendingFile, paired: PairedFile, nowMs: number): void {
-  writeTextFileAtomically(getHubFilePaths(ctx.dir).knownHosts, renderKnownHosts(paired.runners), knownHostsMode);
-  writeManagedBlock(ctx.authorizedKeysPath, renderManagedBlockLines(ctx, pending.pending, paired.runners, nowMs));
+  const knownHostsPath = getHubFilePaths(ctx.dir).knownHosts;
+  const knownHosts = renderKnownHosts(paired.runners);
+  try {
+    if (readTextIfPresent(knownHostsPath) !== knownHosts) writeTextFileAtomically(knownHostsPath, knownHosts, knownHostsMode);
+  } catch (error) {
+    throw new HubDerivedFilesError('known_hosts', getCaughtErrnoCode(error));
+  }
+  try {
+    writeManagedBlock(ctx.authorizedKeysPath, renderManagedBlockLines(ctx, pending.pending, paired.runners, nowMs));
+  } catch (error) {
+    throw new HubDerivedFilesError('authorized_keys', getCaughtErrnoCode(error));
+  }
 }

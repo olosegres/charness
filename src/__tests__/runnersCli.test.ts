@@ -202,6 +202,9 @@ describe('runner list text', () => {
     serviceKind: 'system-service',
     pairedAtMs: startMs,
     pairId: '0123456789ab',
+    label: '@ExampleBot',
+    host: 'host.example',
+    port: 22,
     isPaused: true,
   };
 
