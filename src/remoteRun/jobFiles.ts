@@ -47,7 +47,7 @@ export async function fetchJobFiles(params: { client: RunnerClient; facts: JobFa
     if (!fetched.isOk) throw new RemoteRunError(`fetching the result files from "${client.runner.name}" failed — ${fetched.errorTail}`);
     const copied = copyFetchedFiles({ fetchedRoot, projectRoot: target.root, patterns: target.patterns });
     if (copied.copied.length > 0 || copied.refusedCount > 0) {
-      sayOwn(params.io, `${copied.copied.length} result file${copied.copied.length === 1 ? '' : 's'} came back${copied.refusedCount > 0 ? `, ${copied.refusedCount} refused (not a regular file named by "pull:")` : ''}`);
+      sayOwn(params.io, `${copied.copied.length} result file${copied.copied.length === 1 ? '' : 's'} came back${copied.refusedCount > 0 ? `, ${copied.refusedCount} refused (not a regular file a "pull:" pattern names, or inside a .git, or the project's .remote-run)` : ''}`);
     }
   } finally {
     fs.rmSync(fetchedRoot, { recursive: true, force: true });

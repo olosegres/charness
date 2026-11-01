@@ -2,7 +2,8 @@ import { z } from 'zod';
 
 /**
  * @description What `meta.json` of a job holds: written by the main box at submit, kept on the runner next to the job, read back by `ls`
- * and `status` and — for the project root — by a later `wait` / `fetch` (which only trust the root when it matches the job's slug).
+ * and `status` — for DISPLAY only. The runner holds the file, so it can say anything in it: where a job's result files go is never read
+ * from here but from the main box's own record (`jobRecords.ts`).
  */
 
 const jobMetaSchema = z.looseObject({

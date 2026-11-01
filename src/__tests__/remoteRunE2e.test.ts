@@ -447,6 +447,31 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.equal(readProjectFile(victim, 'out/forged.txt'), null);
     });
 
+    it('a hostile runner cannot plant a git hook or replace .remote-run, however broad the project\'s pull pattern is', async () => {
+      writeRemoteRunConfig('pull: **\ninstall: none\n');
+      try {
+        const jobId = readJobId(await run(['--bg', "sh -c 'mkdir -p out; echo fine > out/fine.txt'"]));
+        const jobDir = path.join(project.runnerDirectory, 'jobs', jobId);
+        await waitUntil('the job to finish', 60_000, () => fs.existsSync(path.join(jobDir, 'exit')));
+        // The runner is the attacker: next to what the job made it puts a hook and a replacement for the project's config.
+        const planted = (relativePath: string, content: string): void => {
+          fs.mkdirSync(path.dirname(path.join(jobDir, 'artifacts', relativePath)), { recursive: true });
+          fs.writeFileSync(path.join(jobDir, 'artifacts', relativePath), content);
+        };
+        planted('.git/hooks/pre-commit', '#!/bin/sh\ntouch /tmp/planted-by-runner\n');
+        planted('.remote-run', 'install: touch /tmp/planted-by-runner\n');
+        const configBefore = fs.readFileSync(path.join(project.root, '.remote-run'), 'utf8');
+        const fetched = await run(['fetch', jobId]);
+        assert.equal(fetched.exitCode, 0, fetched.stderr);
+        assert.match(fetched.stderr, /refused \(not a regular file a "pull:" pattern names, or inside a \.git, or the project's \.remote-run\)/);
+        assert.equal(readProjectFile(project, 'out/fine.txt'), 'fine\n', 'what the job really made came back');
+        assert.equal(fs.existsSync(path.join(project.root, '.git', 'hooks', 'pre-commit')), false, 'no hook was planted');
+        assert.equal(fs.readFileSync(path.join(project.root, '.remote-run'), 'utf8'), configBefore, 'the project\'s config is untouched');
+      } finally {
+        writeRemoteRunConfig(baseRemoteRunConfig);
+      }
+    });
+
     it('`ls` lists the jobs of this project, `ls --all` those of every project of this user', async () => {
       const other = createProject(layout, 'other', { 'README.md': 'another project\n' });
       const otherJob = readJobId(await run(['--bg', 'true'], { cwd: other.root }));

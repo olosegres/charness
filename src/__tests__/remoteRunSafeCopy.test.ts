@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { copyFetchedFiles } from '../remoteRun/safeCopy';
+import { copyFetchedFiles, getProtectedPathReason } from '../remoteRun/safeCopy';
 
 let workRoot = '';
 let fetchedRoot = '';
@@ -99,6 +99,36 @@ describe('copyFetchedFiles', () => {
     assert.equal(result.copied.length, 0);
     assert.equal(result.refusedCount, 1);
     assert.ok(fs.statSync(path.join(projectRoot, 'test-results/report')).isDirectory());
+  });
+
+  it('a broad pattern (**) brings every regular file EXCEPT anything inside a .git and the project\'s own .remote-run — a hostile runner cannot plant a hook or a config', () => {
+    fs.mkdirSync(path.join(projectRoot, '.git', 'hooks'), { recursive: true });
+    for (const safe of ['ok.txt', 'sub/ok.txt', 'sub/.remote-run', '.gitignore', '.github/workflows/ci.yml', 'gitlog.txt']) writeFile(fetchedRoot, safe, 'fine');
+    for (const hostile of ['.git/hooks/pre-commit', '.git/config', 'sub/.git', 'nested/.git/hooks/post-merge', '.Git/hooks/pre-push', '.GIT/config', '.remote-run', '.REMOTE-RUN']) writeFile(fetchedRoot, hostile, 'planted');
+    writeFile(projectRoot, '.remote-run', 'pull: **\n');
+    const result = copyFetchedFiles({ fetchedRoot, projectRoot, patterns: ['**'] });
+    assert.deepEqual(result.copied.sort(), ['.github/workflows/ci.yml', '.gitignore', 'gitlog.txt', 'ok.txt', 'sub/.remote-run', 'sub/ok.txt']);
+    assert.equal(result.refusedCount, 8);
+    assert.deepEqual(fs.readdirSync(path.join(projectRoot, '.git', 'hooks')), [], 'no hook was planted');
+    assert.equal(fs.existsSync(path.join(projectRoot, '.git', 'config')), false);
+    assert.equal(fs.readFileSync(path.join(projectRoot, '.remote-run'), 'utf8'), 'pull: **\n', 'the project\'s own config is untouched');
+    for (const caseVariant of ['.Git', '.GIT']) assert.equal(fs.existsSync(path.join(projectRoot, caseVariant)), false, caseVariant);
+  });
+
+  it('a pattern that names .git or .remote-run outright does not bring them either', () => {
+    writeFile(fetchedRoot, '.git/hooks/pre-commit', 'planted');
+    writeFile(fetchedRoot, '.remote-run', 'planted');
+    const result = copyFetchedFiles({ fetchedRoot, projectRoot, patterns: ['.git', '.remote-run'] });
+    assert.deepEqual(result, { copied: [], refusedCount: 2 });
+  });
+
+  it('getProtectedPathReason: a .git anywhere in the path, only the ROOT .remote-run, case-insensitively', () => {
+    assert.equal(getProtectedPathReason('.git/hooks/pre-commit'), 'inside a .git');
+    assert.equal(getProtectedPathReason('a/b/.git'), 'inside a .git');
+    assert.equal(getProtectedPathReason('x/.GIT/config'), 'inside a .git');
+    assert.equal(getProtectedPathReason('.remote-run'), "the project's .remote-run");
+    assert.equal(getProtectedPathReason('.Remote-Run'), "the project's .remote-run");
+    for (const fine of ['sub/.remote-run', '.gitignore', '.gitattributes', '.github/x', 'my.git/x', 'out/report.txt']) assert.equal(getProtectedPathReason(fine), null, fine);
   });
 
   it('leaves no temp file behind', () => {

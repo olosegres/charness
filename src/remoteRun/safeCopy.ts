@@ -1,10 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createPathMatcher } from './pathPatterns';
+import { projectConfigName } from './projectConfig';
 
 /**
  * @description Bring a job's result files into the project, from a temp folder the runner's files were rsynced into. The runner is not
- * trusted to write into the main box: only REGULAR files whose project-relative path a `pull:` pattern names are copied; a symlink,
+ * trusted to write into the main box: only REGULAR files whose project-relative path a `pull:` pattern names are copied — never one that
+ * {@link getProtectedPathReason} protects; a symlink,
  * a special file, a path no pattern names, or a destination that would pass through a symlink or over a directory of the project is
  * refused and only counted. Nothing outside the project root can be reached: paths come from walking the temp folder, and every
  * destination directory is checked component by component.
@@ -43,6 +45,20 @@ function ensureSafeDirectory(rootReal: string, relativeDirectory: string): boole
   return true;
 }
 
+const gitDirectoryName = '.git';
+
+/**
+ * @description Why a path may never be copied in, whatever a `pull:` pattern says — or `null`. A broad pattern (`**`) is a trust in the
+ * runner for what it names, but two kinds of file turn that into code running on the MAIN box: anything under a `.git` (a hook, or
+ * `core.hooksPath` / `fsmonitor` in its `config`, run at the next git command) and the project's own `.remote-run` (it decides what is sent,
+ * installed and pulled next time). Compared case-insensitively: on a case-insensitive disk `.Git/hooks` IS `.git/hooks`.
+ */
+export function getProtectedPathReason(relativePath: string): string | null {
+  if (relativePath.split('/').some((part) => part.toLowerCase() === gitDirectoryName)) return 'inside a .git';
+  if (relativePath.toLowerCase() === projectConfigName) return "the project's .remote-run";
+  return null;
+}
+
 /** @description Copy the files of `fetchedRoot` that `patterns` name into `projectRoot`, as the module comment says. */
 export function copyFetchedFiles(params: { fetchedRoot: string; projectRoot: string; patterns: readonly string[] }): SafeCopyResult {
   const isNamed = createPathMatcher(params.patterns);
@@ -52,7 +68,7 @@ export function copyFetchedFiles(params: { fetchedRoot: string; projectRoot: str
   const result: SafeCopyResult = { copied: [], refusedCount: 0 };
   for (const entry of entries) {
     const isInside = !entry.relativePath.split('/').includes('..') && !path.isAbsolute(entry.relativePath);
-    if (entry.kind !== 'file' || !isInside || !isNamed(entry.relativePath)) {
+    if (entry.kind !== 'file' || !isInside || !isNamed(entry.relativePath) || getProtectedPathReason(entry.relativePath) !== null) {
       result.refusedCount += 1;
       continue;
     }
