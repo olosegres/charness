@@ -13,6 +13,12 @@ A machine attaches itself with the new `charness-runner` program that the pasted
 Before, a health check that got no answer within 2 seconds counted as «no server». On a slow or loaded host that made the bot start another OpenCode server on a port that was already served — it died of «address already in use» and the start was reported as failed — and a server the bot had started itself was stopped and replaced for being slow to answer.
 Now a silent check is asked again (three tries of 2 seconds) before it counts, and the bot never starts a server onto a port that is not proven free (only a refused connection proves it). A slow server is used as it is; a server the bot started that stays silent on all three tries is replaced as before, after about 6 seconds instead of 2; a port held by a silent process the bot did not start gets a clear error («port … is in use … will not start another server on the port») instead of a failed start — also for a port whose holder does not even answer a connection. `/status` still waits for one try only.
 
+### Removed
+
+**The `/clear_session` alias of `/new` is gone — `/new` is the one command that restarts a topic's session.**
+Before, `/clear_session` did exactly what `/new` does and had a row of its own in the command menu, which made the menu longer and the two names look like two commands.
+Now only `/new` exists (the menu row and the `(alias …)` text are gone); typing `/clear_session` is no longer a bot command.
+
 ## 3.7.0 — 2026-11-01
 
 **The answers of `send_messages_to_user` and `send_file_to_user` now say what was sent, per kind — «Delivered 3 messages: 1 text, 2 documents.», «Sent 3 files: 1 photo, 2 documents.» — so an agent can see when a file did not go out as the kind it meant.**

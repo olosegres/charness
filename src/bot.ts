@@ -4917,7 +4917,7 @@ function stopAllAdaptersFor(key: SessionKey, adapterNames?: string[]) {
 }
 
 /**
- * @description Explicit-stop teardown used by `/new`/`/clear_session`:
+ * @description Explicit-stop teardown used by `/new`:
  * sweep every adapter active for the thread, then RELEASE the persisted session
  * ids (even when nothing was running) so a later bot restart won't auto-reattach
  * and any half-dead state from a crash/SSE-giveup is cleared. The session stays
@@ -6955,7 +6955,7 @@ command('list', async (_ctx, key) => {
 });
 
 /**
- * @description `/new` (alias `/clear_session`) — stop the thread's current agent
+ * @description `/new` — stop the thread's current agent
  * session and immediately start a fresh one in the SAME topic with the SAME
  * adapter. The old session is RELEASED (not deleted): its transcript stays on
  * disk so it's still resumable via `/sessions`, but a bot restart won't
@@ -6965,7 +6965,7 @@ command('list', async (_ctx, key) => {
  * Guards mirror `handleStartCommand`: General has no binding/agent, so it just
  * hints; an unbound topic gets the standard bind-required reply.
  */
-command(['new', 'clear_session'], async (_ctx, key) => {
+command('new', async (_ctx, key) => {
   if (checkIsGeneral(key)) {
     await replyToThread(key, t('new.general_hint'));
     return;
@@ -9329,7 +9329,7 @@ command('clear_messages', async (ctx, key) => {
 const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'quit-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
-  'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'clear_session', 'whoami', 'version', 'help', 'language', 'lang',
+  'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'whoami', 'version', 'help', 'language', 'lang',
   'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'bot_skills', 'task_agents', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update',
 ]);
@@ -12556,8 +12556,7 @@ export const COMMANDS_MENU = [
   { command: 'opencode', description: '▶️ Start OpenCode' },
   { command: 'terminal', description: '🖥 Open a raw shell in the bound folder' },
   { command: 'claude_mode', description: '🔀 Claude backend: json-stream ⇄ per-turn ⇄ tmux (deprecated)' },
-  { command: 'new', description: '🆕 Restart session (alias /clear_session)' },
-  { command: 'clear_session', description: '🆕 Restart session (alias /new)' },
+  { command: 'new', description: '🆕 Restart session' },
   { command: 'model', description: '🧠 Switch model' },
   { command: 'effort', description: '⚙️ Reasoning effort' },
   { command: 'verbosity', description: '🔊 Output verbosity (thinking+tools+sub-agents)' },

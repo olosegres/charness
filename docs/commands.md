@@ -20,7 +20,7 @@ them. How the agents run (the Claude Code backends, OpenCode, restarts, the bot'
   - [`/sessions`](#sessions)
   - [`/rename_session`](#rename_session)
   - [`/quit`, `/q`](#quit-q)
-  - [`/new`, `/clear_session`](#new-clear_session)
+  - [`/new`](#new)
   - [`/status`](#status)
   - [`/output`](#output)
   - [`/c`, `/y`, `/n`](#c-y-n)
@@ -327,7 +327,7 @@ Rename the current live session (OpenCode; Claude transcripts have no title).
 
 End the session — Claude: graceful double Ctrl+C; OpenCode/terminal: `stopSession`. Releases the persisted session id, so a bot restart won't auto-reattach it (resume later via `/sessions`). A topic whose agent process is gone but whose session is kept (it "sleeps": the next message, file, voice note, `/compact`, `/model` or `/effort` resumes it by itself) is released the same way.
 
-### `/new`, `/clear_session`
+### `/new`
 
 End the current session and start a fresh one (same adapter).
 
