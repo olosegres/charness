@@ -718,6 +718,22 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.match(result.stderr, /remote-run: .* is not inside a git working tree/);
     });
 
+    it('a job the runner refuses at once says why — its own last line — and not only «state unknown»', async () => {
+      // The runner's Pueue, wrapped: everything goes through to the real one except `add`, which fails the way a full or broken queue would.
+      const failingPueue = path.join(layout.root, 'failing-pueue.sh');
+      fs.writeFileSync(failingPueue, `#!/usr/bin/env bash\nfor word in "$@"; do\n  if [ "$word" = add ]; then echo 'pueue: simulated failure' >&2; exit 1; fi\ndone\nexec ${layout.pueueBin} "$@"\n`, { mode: 0o755 });
+      writeRunnersJson(layout, [createRunnerEntry(layout, { pueue: { bin: failingPueue, config: layout.pueueConfigPath } })]);
+      try {
+        const result = await run(['echo', 'x']);
+        assert.equal(result.exitCode, 125);
+        assert.match(result.stderr, /remote-run: the runner said: pueue add failed \(does the group "default" exist on this runner\?\)/);
+        assert.match(result.stderr, /remote-run: the state of job \S+ is unknown \(unknown\)/);
+      } finally {
+        writeRunnersJson(layout, [createRunnerEntry(layout)]);
+        fs.rmSync(failingPueue, { force: true });
+      }
+    });
+
     it('a capability no runner has fails with the runners view that says why', async () => {
       const result = await run(['--needs', 'ios', 'echo', 'x']);
       assert.equal(result.exitCode, 125);

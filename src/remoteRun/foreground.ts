@@ -5,7 +5,7 @@ import { readJobOutcome } from './jobQuery';
 import { getHeartbeatIntervalMs } from './leaseTiming';
 import { createExitMarkerFilter, createJobOutputRouter, sayOwn, type CliIo } from './output';
 import { RemoteRunError } from './remoteRunError';
-import type { RunnerClient } from './runnerClient';
+import { describeRunnerRefusal, type RunnerClient } from './runnerClient';
 import { checkIsConnectionLost } from './ssh';
 import type { StagedJob } from './submit';
 import type { JobOutcome } from './jobState';
@@ -21,9 +21,15 @@ import type { JobOutcome } from './jobState';
 /** After a kill or an interrupt the lease session ends by itself (the runner's grace time, and as long again); this long before the ssh process is cut. */
 const streamEndGraceMs = 2 * killGraceSeconds * 1000;
 
-/** @description Say why a job ended the way it did (when it is not simply its command's own code) and return remote-run's exit code for it. */
-export function describeEnd(outcome: JobOutcome, jobId: string, io: Pick<CliIo, 'stderr'>): number {
+/**
+ * @description Say why a job ended the way it did (when it is not simply its command's own code) and return remote-run's exit code for it.
+ * `runnerStderr` is what the runner script wrote on the session that ran the job: a job it refused at once (`pueue add` failed) has no
+ * state to show, and that last line is the only thing that says why.
+ */
+export function describeEnd(outcome: JobOutcome, jobId: string, io: Pick<CliIo, 'stderr'>, runnerStderr = ''): number {
   if (outcome.state !== 'done') {
+    const runnerSaid = describeRunnerRefusal(runnerStderr, '');
+    if (runnerSaid !== '') sayOwn(io, `the runner said: ${runnerSaid}`);
     sayOwn(io, `the state of job ${jobId} is unknown (${outcome.state}) — see \`charness remote-run status ${jobId}\``);
     return remoteRunExitCodes.failed;
   }
@@ -106,7 +112,7 @@ export async function followForeground(params: {
     sayOwn(io, `timed out after ${staged.timeoutSeconds}s — job ${staged.jobId} was killed`);
     return remoteRunExitCodes.timedOut;
   }
-  return describeEnd(result.outcome, staged.jobId, io);
+  return describeEnd(result.outcome, staged.jobId, io, sshStderr);
 }
 
 /** @description Run a one-off command in the runner's copy under the same lease; resolves with the command's exit code. */

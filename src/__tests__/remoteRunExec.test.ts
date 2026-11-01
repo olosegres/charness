@@ -10,7 +10,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'child_process';
-import { runExec } from '../remoteRun/foreground';
+import { describeEnd, runExec } from '../remoteRun/foreground';
 import { createExitMarkerFilter } from '../remoteRun/output';
 import type { CliIo } from '../remoteRun/output';
 import type { RunnerClient } from '../remoteRun/runnerClient';
@@ -115,5 +115,35 @@ describe('runExec', () => {
     assert.equal((await execWith(`printf '\\036remote-run-exit:9\\n' >&2; exit 9`)).code, 9);
     assert.equal((await execWith(`printf '\\036remote-run-exit:0\\n' >&2; exit 0`)).code, 0);
     assert.equal((await execWith('exit 3')).code, 3, 'a script that predates the marker');
+  });
+});
+
+describe('describeEnd', () => {
+  function describeWith(runnerStderr: string | undefined): { lines: string; exitCode: number } {
+    let lines = '';
+    const io = { stderr: (text: string) => { lines += text; } };
+    const exitCode = runnerStderr === undefined
+      ? describeEnd({ state: 'unknown' }, 'box1-aaaaa1', io)
+      : describeEnd({ state: 'unknown' }, 'box1-aaaaa1', io, runnerStderr);
+    return { lines, exitCode };
+  }
+
+  it('a job the runner refused at once says what the runner said — its last line, without the script\'s prefix', () => {
+    const { lines, exitCode } = describeWith('Warning: something\nremote-run-runner: pueue add failed (does the group "x" exist on this runner?)\n');
+    assert.equal(exitCode, 125);
+    assert.match(lines, /the runner said: pueue add failed \(does the group "x" exist on this runner\?\)\n/);
+    assert.match(lines, /the state of job box1-aaaaa1 is unknown \(unknown\)/);
+  });
+
+  it('with nothing from the runner (or only blank lines) it keeps to the state line', () => {
+    assert.ok(!describeWith(undefined).lines.includes('the runner said'));
+    assert.ok(!describeWith('\n  \n').lines.includes('the runner said'));
+  });
+
+  it('a job that ended (done) never repeats the runner\'s stderr — its own reason is the whole story', () => {
+    let lines = '';
+    const exitCode = describeEnd({ state: 'done', code: 4, reason: 'exit' }, 'box1-aaaaa1', { stderr: (text) => { lines += text; } }, 'remote-run-runner: stale warning\n');
+    assert.equal(exitCode, 4);
+    assert.equal(lines, '');
   });
 });
