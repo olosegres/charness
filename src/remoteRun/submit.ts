@@ -96,7 +96,7 @@ export async function stageJob(params: {
 
   const { metaDirectory } = params;
   // The main box's own note of where this job came from: `wait` / `fetch` bring the files back there and nowhere else.
-  writeLocalJobRecord(client.cacheDir, jobId, { projectRoot: project.root, slug: project.slug, submittedAtMs: meta.submittedAtMs });
+  writeLocalJobRecord(client.cacheDir, jobId, { projectRoot: project.root, slug: project.slug, submittedAtMs: meta.submittedAtMs, timeoutSeconds });
   writeJobFiles(metaDirectory, {
     manifest: formatManifest(plan.files),
     cmd: params.command,

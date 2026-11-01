@@ -13,7 +13,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { resolveFetchTarget } from '../remoteRun/jobFiles';
-import { readLocalJobRecord, writeLocalJobRecord } from '../remoteRun/jobRecords';
+import { getRecordExpiryMs, readLocalJobRecord, writeLocalJobRecord } from '../remoteRun/jobRecords';
 import { RemoteRunError } from '../remoteRun/remoteRunError';
 
 const jobId = 'box1-abc234';
@@ -36,8 +36,9 @@ describe('local job records', () => {
   });
 
   it('what was written is read back; the file and its folder are private to the user', () => {
-    writeLocalJobRecord(cacheDir, jobId, { projectRoot, slug: 'project-0123456789', submittedAtMs: 5 });
-    assert.deepEqual(readLocalJobRecord(cacheDir, jobId), { projectRoot, slug: 'project-0123456789', submittedAtMs: 5 });
+    const submittedAtMs = Date.now();
+    writeLocalJobRecord(cacheDir, jobId, { projectRoot, slug: 'project-0123456789', submittedAtMs, timeoutSeconds: 600 });
+    assert.deepEqual(readLocalJobRecord(cacheDir, jobId), { projectRoot, slug: 'project-0123456789', submittedAtMs, timeoutSeconds: 600 });
     assert.equal(fs.statSync(path.join(cacheDir, 'jobs', `${jobId}.json`)).mode & 0o777, 0o600);
     assert.equal(fs.statSync(path.join(cacheDir, 'jobs')).mode & 0o777, 0o700);
   });
@@ -59,14 +60,41 @@ describe('local job records', () => {
     assert.equal(fs.existsSync(path.join(cacheDir, 'escape.json')), false);
   });
 
-  it('records older than the runner keeps its jobs are dropped on the next write, younger ones stay', () => {
+  it('a record lives until its job\'s deadline plus the days the runner keeps a finished job — NOT by the age of its file: a job that runs for days still finds it', () => {
     const nowMs = Date.UTC(2026, 10, 1);
-    writeLocalJobRecord(cacheDir, jobId, { projectRoot, slug: 's', submittedAtMs: 1 }, nowMs);
-    const old = new Date(nowMs - 4 * dayMs);
-    fs.utimesSync(path.join(cacheDir, 'jobs', `${jobId}.json`), old, old);
-    writeLocalJobRecord(cacheDir, otherJobId, { projectRoot, slug: 's', submittedAtMs: 2 }, nowMs);
-    assert.equal(readLocalJobRecord(cacheDir, jobId), null);
+    const writeAged = (id: string, submittedDaysAgo: number, timeoutDays: number | undefined): void => {
+      writeLocalJobRecord(cacheDir, id, { projectRoot, slug: 's', submittedAtMs: nowMs - submittedDaysAgo * dayMs, ...(timeoutDays === undefined ? {} : { timeoutSeconds: timeoutDays * 24 * 3600 }) }, nowMs - submittedDaysAgo * dayMs);
+      // The file itself is as old as the job: what the age-based rule used to look at.
+      const when = new Date(nowMs - submittedDaysAgo * dayMs);
+      fs.utimesSync(path.join(cacheDir, 'jobs', `${id}.json`), when, when);
+    };
+    writeAged('box1-longrn', 6, 5);
+    writeAged('box1-shortk', 2, 0.04);
+    writeAged('box1-shortg', 4, 0.04);
+    writeAged('box1-legacy', 9, undefined);
+    writeAged('box1-legac2', 11, undefined);
+    writeAged('box1-longgn', 9, 5);
+    writeLocalJobRecord(cacheDir, otherJobId, { projectRoot, slug: 's', submittedAtMs: nowMs, timeoutSeconds: 3600 }, nowMs);
+    assert.notEqual(readLocalJobRecord(cacheDir, 'box1-longrn'), null, 'a 5-day job submitted 6 days ago is still within 5 + 3 days');
+    assert.notEqual(readLocalJobRecord(cacheDir, 'box1-shortk'), null, 'a short job from 2 days ago is within its 3 days');
+    assert.equal(readLocalJobRecord(cacheDir, 'box1-shortg'), null, 'a 1-hour job from 4 days ago has outlived the runner\'s retention');
+    assert.notEqual(readLocalJobRecord(cacheDir, 'box1-legacy'), null, 'a record with no timeout stands for the longest one (7 + 3 days): 9 days is within it');
+    assert.equal(readLocalJobRecord(cacheDir, 'box1-legac2'), null, 'and 11 days is not');
+    assert.equal(readLocalJobRecord(cacheDir, 'box1-longgn'), null, 'a 5-day job from 9 days ago is past 5 + 3');
     assert.notEqual(readLocalJobRecord(cacheDir, otherJobId), null);
+  });
+
+  it('the expiry is the job\'s deadline plus the retention, and a file that is not a record is dropped by its own age after the longest possible life', () => {
+    assert.equal(getRecordExpiryMs({ projectRoot, slug: 's', submittedAtMs: 1000, timeoutSeconds: 60 }), 1000 + 60_000 + 3 * dayMs);
+    assert.equal(getRecordExpiryMs({ projectRoot, slug: 's', submittedAtMs: 1000 }), 1000 + 7 * dayMs + 3 * dayMs);
+    const nowMs = Date.UTC(2026, 10, 1);
+    fs.mkdirSync(path.join(cacheDir, 'jobs'), { recursive: true });
+    const garbage = path.join(cacheDir, 'jobs', 'box1-garbge.json');
+    fs.writeFileSync(garbage, '{not json');
+    const old = new Date(nowMs - 11 * dayMs);
+    fs.utimesSync(garbage, old, old);
+    writeLocalJobRecord(cacheDir, jobId, { projectRoot, slug: 's', submittedAtMs: nowMs }, nowMs);
+    assert.equal(fs.existsSync(garbage), false);
   });
 });
 
