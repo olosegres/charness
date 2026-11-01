@@ -197,8 +197,23 @@ export async function buildRsync(paths: RunnerHomePaths, deps: ToolDeps): Promis
   return found === null ? { ok: false, reason: 'the rsync that was built does not run' } : { ok: true, tool: found, wasInstalled: true };
 }
 
-/** @description rsync: the usable one that is there, else a built one. */
+/**
+ * @description Make `<root>/bin/<name>` the tool at `targetPath`. Jobs get `~/.charness-runner/bin` FIRST on their PATH, so what is linked
+ * there is what every job (and phase 1's runner script) runs — discovery that only looked at the caller's PATH would report a tool that
+ * the jobs never see.
+ */
+export function linkToolIntoBin(paths: RunnerHomePaths, name: string, targetPath: string): void {
+  const linkPath = path.join(paths.binDir, name);
+  if (linkPath === targetPath) return;
+  fs.mkdirSync(paths.binDir, { recursive: true, mode: 0o700 });
+  fs.rmSync(linkPath, { force: true });
+  fs.symlinkSync(targetPath, linkPath);
+}
+
+/** @description rsync: the usable one that is there — linked into the runner's bin folder so jobs run exactly that one — else a built one. */
 export async function ensureRsync(paths: RunnerHomePaths, deps: ToolDeps): Promise<ToolInstallOutcome> {
   const found = await findRsync(paths, deps);
-  return found !== null ? { ok: true, tool: found, wasInstalled: false } : buildRsync(paths, deps);
+  if (found === null) return buildRsync(paths, deps);
+  linkToolIntoBin(paths, 'rsync', found.path);
+  return { ok: true, tool: found, wasInstalled: false };
 }

@@ -17,6 +17,7 @@ import {
   buildRsync,
   checkIsRsyncUsable,
   describeRsyncRemedy,
+  ensureRsync,
   downloadVerified,
   ensurePueue,
   findRsync,
@@ -156,6 +157,29 @@ describe('rsync', () => {
   it('finds none when the only rsync is openrsync', async () => {
     const runner: CommandRunner = async () => ({ ok: true, exitCode: 0, stdout: openText, stderr: '', isTimedOut: false });
     assert.equal(await findRsync(paths, createDeps({ runner, checkExists: (candidate) => candidate === '/usr/bin/rsync' })), null);
+  });
+
+  it('links the rsync it chose into the runner\'s bin folder, so jobs — which put that folder first on their PATH — run that one, not an earlier unusable one', async () => {
+    const present = new Set(['/usr/bin/rsync', '/custom/tools/rsync']);
+    const runner: CommandRunner = async (file) => ({ ok: true, exitCode: 0, stdout: file === '/usr/bin/rsync' ? openText : gnuText, stderr: '', isTimedOut: false });
+    const deps = createDeps({ runner, checkExists: (candidate) => present.has(candidate), environment: { PATH: '/usr/bin:/custom/tools' } });
+    const outcome = await ensureRsync(paths, deps);
+    assert.ok(outcome.ok && !outcome.wasInstalled && outcome.tool.path === '/custom/tools/rsync');
+    assert.equal(fs.readlinkSync(path.join(paths.binDir, 'rsync')), '/custom/tools/rsync');
+  });
+
+  it('replaces a link that points at an rsync which is gone, and leaves a tool already in the bin folder alone', async () => {
+    fs.mkdirSync(paths.binDir, { recursive: true });
+    fs.symlinkSync('/old/removed/rsync', path.join(paths.binDir, 'rsync'));
+    const present = new Set(['/new/rsync']);
+    const runner: CommandRunner = async () => ({ ok: true, exitCode: 0, stdout: gnuText, stderr: '', isTimedOut: false });
+    await ensureRsync(paths, createDeps({ runner, checkExists: (candidate) => present.has(candidate), environment: { PATH: '/new' } }));
+    assert.equal(fs.readlinkSync(path.join(paths.binDir, 'rsync')), '/new/rsync');
+
+    const own = path.join(paths.binDir, 'rsync');
+    const ownPresent = new Set([own]);
+    await ensureRsync(paths, createDeps({ runner, checkExists: (candidate) => ownPresent.has(candidate), environment: { PATH: '' } }));
+    assert.equal(fs.readlinkSync(own), '/new/rsync', 'the bin folder\'s own rsync is the chosen one: nothing is relinked onto itself');
   });
 
   it('plans the build: unpack, configure without optional libraries, make, install into the runner\'s own folder', () => {
