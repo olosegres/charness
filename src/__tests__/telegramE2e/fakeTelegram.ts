@@ -169,6 +169,8 @@ export class FakeTelegram {
   readonly droppedRequests: string[] = [];
   /** The connections that have served a request: a later request on one of them rides a REUSED (pooled) connection. */
   private readonly servedSockets = new WeakSet<Socket>();
+  /** How many connections the fake has accepted: a client that found its pooled connection gone has opened another. */
+  private acceptedConnections = 0;
   /** The files `getFile` knows, by file id. */
   private readonly files = new Map<string, { filePath: string; bytes: Buffer }>();
   private readonly messages = new Map<number, FakeTelegramMessage>();
@@ -186,6 +188,11 @@ export class FakeTelegram {
     this.chat = { id: options.group.id, type: 'supergroup', title: options.group.title, is_forum: true };
   }
 
+  /** @description How many connections the fake has accepted so far. */
+  get acceptedConnectionCount(): number {
+    return this.acceptedConnections;
+  }
+
   /** @description Listen on a free loopback port; resolves the API root to put in `TELEGRAM_API_ROOT`. */
   async start(): Promise<string> {
     const server = http.createServer((request, response) => {
@@ -198,6 +205,9 @@ export class FakeTelegram {
     // connection; `stop()` closes them all. The bot's retry of exactly this failure is proven with the option set
     // (`botApiConnectionStall.test.ts`) and with `dropNextReusedConnectionRequest` (`staleConnectionRetryE2e.test.ts`).
     server.keepAliveTimeout = this.options.keepAliveTimeoutMs ?? 0;
+    server.on('connection', () => {
+      this.acceptedConnections += 1;
+    });
     this.server = server;
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address() as AddressInfo;

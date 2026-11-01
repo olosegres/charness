@@ -10,8 +10,12 @@
  *     the server's own idle limit (api.telegram.org kept an idle HTTP/1.1 connection for more than 130 s when measured),
  *     so an ordinary pause between two sends never meets a connection the server closed. A client stalled past the
  *     server's limit cannot be helped that way: its timers do not run either, and the stale connection is still in the
- *     pool when the next request starts.
- *  2. {@link wireBotApiClient} makes a client send such a request again ONCE, on a fresh connection. It does so only when
+ *     pool when the next request starts. What it meets then depends on the Node: since 22.23.4 the http agent looks for
+ *     what the server already sent on an idle socket before it reuses it («http: ensure agent data guard works without I/O»,
+ *     CVE-2026-105481) and opens a fresh connection; an older Node (`engines` allows 22.12) writes onto the closed one.
+ *  2. {@link wireBotApiClient} makes a client send such a request again ONCE, on a fresh connection — the case of those older
+ *     agents, and on every Node the one of a server that closes the connection as the request is on its way, which no
+ *     client sees coming. It does so only when
  *     the request rode a REUSED connection (`ClientRequest.reusedSocket`, the signal Node documents for exactly this) and
  *     the connection failed at once ({@link staleConnectionFailureWindowMs}) with the socket having read not a single byte
  *     since the reuse: no answer began, not even a partial one, and the server did not sit on the request. A timeout, an

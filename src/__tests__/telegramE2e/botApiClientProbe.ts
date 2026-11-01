@@ -1,7 +1,7 @@
 /**
  * @description The client side of the Bot API connection tests, run as a CHILD process (`node --import tsx <this file>
  * <apiRoot> <stallMs> <retry|noRetry>`): Telegraf's own client on the production agent, with the production retry
- * installed or not. It sends `first`, stalls its event loop synchronously for `stallMs` — a client starved of CPU between
+ * installed or not. It sends `first`, stalls its event loop synchronously for `stallMs` (0: not at all) — a client starved of CPU between
  * two requests, made exact: neither its timers nor its socket events run —, then sends `second` on the connection `first`
  * left pooled, and prints `second=ok` or `second=failed <code> <message>`. Exit code 0 when `second` went through.
  *

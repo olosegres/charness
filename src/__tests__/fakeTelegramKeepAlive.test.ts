@@ -7,8 +7,12 @@
  * something else never meets one.
  *
  * The client is a child process that stalls its event loop synchronously (the starvation, made exact) between two requests
- * and then reuses its connection at once. Against a plain Node server the same client fails — the test's stall is long
- * enough on this Node; against the fake it does not.
+ * and then reuses its connection at once. Against a plain Node server the same client LOSES its pooled connection — the
+ * test's stall is long enough on this Node; against the fake it does not. How the loss shows is up to the client's Node:
+ * the older http agent writes onto the closed connection («socket hang up»), the agent of Node 22.23.4 and later looks for
+ * what the server already sent on an idle socket before it reuses it («http: ensure agent data guard works without I/O»,
+ * CVE-2026-105481), finds the close and opens a fresh connection (`reused=false`). Both are a lost connection; keeping it
+ * is `reused=true`, which only the fake does.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -73,12 +77,21 @@ function runStallingClient(apiRoot: string): Promise<{ output: string; exitCode:
 test('a client stalled past a Node server\'s keep-alive time loses its pooled connection (the control: the stall is long enough)', { timeout: testTimeoutMs }, async () => {
   const plainServer = http.createServer((_request, response) => { response.end('{"ok":true,"result":true}'); });
   plainServer.keepAliveTimeout = controlServerKeepAliveMs;
+  let acceptedConnections = 0;
+  plainServer.on('connection', () => { acceptedConnections += 1; });
   await new Promise<void>((resolve) => plainServer.listen(0, '127.0.0.1', resolve));
   try {
     const { port } = plainServer.address() as AddressInfo;
     const outcome = await runStallingClient(`http://127.0.0.1:${port}/bot${fakeBotToken}`);
-    assert.equal(outcome.exitCode, 1, outcome.output);
-    assert.match(outcome.output, /failed=socket hang up/);
+    if (outcome.exitCode === 1) {
+      // The client wrote its second request onto the connection the server had closed.
+      assert.match(outcome.output, /failed=socket hang up/);
+      assert.equal(acceptedConnections, 1, 'the one connection the server closed');
+    } else {
+      // Its agent found the close before it reused the connection and opened another: not `reused=true`, two connections.
+      assert.equal(outcome.output, 'reused=false', `${outcome.output}`);
+      assert.equal(acceptedConnections, 2, 'the server closed the idle connection, so the second request needed a new one');
+    }
   } finally {
     plainServer.closeAllConnections();
     await new Promise<void>((resolve) => plainServer.close(() => resolve()));

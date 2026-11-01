@@ -55,7 +55,11 @@ request the closed connection never delivered.
 - **The agent** (`createBotApiHttpsAgent`; `createBotApiHttpAgent` for the `http://` root of the process-level tests, where
   Telegraf drops its own agent) closes a pooled connection that idled `botApiFreeSocketTimeoutMs`, far below the server's
   limit. Node applies that socket timeout to FREE sockets only, so a 50 s long poll is not cut. A client stalled past the
-  server's limit is not helped: its timers do not run either.
+  server's limit is not helped by it: its timers do not run either. What it meets then depends on the Node: since 22.23.4 the
+  http agent itself looks for what the server already sent on an idle socket before it reuses it («http: ensure agent data guard
+  works without I/O», CVE-2026-105481), finds the close and opens a fresh connection; an older one (`engines` allows 22.12) writes
+  onto the closed connection. On every Node a server can still close a pooled connection as the request is on its way, which no
+  client sees coming — the retry below covers that, and the older agents' case.
 - **The retry** (`wireBotApiClient`) sends a `callApi` again ONCE on a fresh connection, only when its request rode a REUSED
   connection (`ClientRequest.reusedSocket`, read through an `AsyncLocalStorage` probe because node-fetch drops the request
   from its error), the error came within `staleConnectionFailureWindowMs` of the reuse (a closed connection fails within a turn of the event loop;
@@ -69,8 +73,9 @@ request the closed connection never delivered.
 - **Wire EVERY client.** Telegraf builds a NEW `Telegram` for every update (`ctx.telegram`, behind `ctx.reply`,
   `ctx.answerCbQuery`, `ctx.editMessageText`) from `bot.telegram.options`, which already lack the agent of an `http://` root.
   `bot.ts` wires `bot.telegram` once (after the trace wrap) and the FIRST `bot.use` wires `ctx.telegram` per update.
-- Proof: `botApiConnection.test.ts` (real sockets, every rule), `botApiConnectionStall.test.ts` (a stalled client against the
-  fake closing idle connections), `staleConnectionRetryE2e.test.ts` (the whole bot, a `bot.telegram` send and a `ctx.*` picker edit).
+- Proof: `botApiConnection.test.ts` (real sockets, every rule), `botApiConnectionStall.test.ts` (the fake hanging up on a
+  pooled connection under the client — every Node —, and a stalled client against the fake closing idle connections, held to
+  what this Node's agent does with it), `staleConnectionRetryE2e.test.ts` (the whole bot, a `bot.telegram` send and a `ctx.*` picker edit).
 
 ## Agent → user file sending
 
