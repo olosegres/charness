@@ -167,9 +167,11 @@ function readPreviousDefinitions(files: readonly string[]): PreviousDefinition[]
   return files.map((file) => ({ file, content: fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null }));
 }
 
+/** @description Put `previous` back: a file that existed gets its text again, one this install made new (it had no earlier version) is removed. */
 function restorePreviousDefinitions(previous: readonly PreviousDefinition[]): void {
   for (const { file, content } of previous) {
-    if (content !== null) writeDefinition(file, content);
+    if (content === null) fs.rmSync(file, { force: true });
+    else writeDefinition(file, content);
   }
 }
 
@@ -246,8 +248,10 @@ async function installSystemd(paths: RunnerHomePaths, deps: ServiceDeps): Promis
     if (hadService) {
       // A re-install that fails must not take the working service down with it: its definitions come back, its units are not touched.
       restorePreviousDefinitions(previous);
-      await deps.runner('systemctl', ['--user', 'daemon-reload'], { timeoutMs: commandTimeoutMs });
-      return fail(...reason, 'The service installed before was left as it was.');
+      const reloaded = await deps.runner('systemctl', ['--user', 'daemon-reload'], { timeoutMs: commandTimeoutMs });
+      return fail(...reason, reloaded.ok
+        ? 'The service installed before was left as it was.'
+        : 'Its definitions are back as they were, but systemd could not be asked to read them again: run `systemctl --user daemon-reload`.');
     }
     await stopSystemdUnits(names, deps);
     for (const file of [files.link, files.pueued]) fs.rmSync(file, { force: true });
@@ -302,17 +306,20 @@ async function stopLaunchdJobs(labels: readonly string[], domain: string, deps: 
   return null;
 }
 
-async function loadLaunchdJobs(entries: readonly LaunchdEntry[], domain: string, deps: ServiceDeps, owner: TargetAccount | null, isSystem: boolean): Promise<ServiceResult> {
+/** @description Load the jobs in order; stops at the first that fails. `touchedFiles` are the definitions it had rewritten (and booted out the old job of) by then, the failing one included. */
+async function loadLaunchdJobs(entries: readonly LaunchdEntry[], domain: string, deps: ServiceDeps, owner: TargetAccount | null, isSystem: boolean): Promise<ServiceResult & { touchedFiles: string[] }> {
+  const touchedFiles: string[] = [];
   for (const { job, file } of entries) {
     fs.mkdirSync(path.dirname(job.logPath), { recursive: true, mode: logsDirMode });
     if (owner !== null) deps.chown(path.dirname(job.logPath), owner.uid, owner.gid);
+    touchedFiles.push(file);
     writeDefinition(file, renderLaunchdPlist(job));
     if (isSystem) deps.chown(file, rootUid, wheelGid);
     await deps.runner('launchctl', ['bootout', `${domain}/${job.label}`], { timeoutMs: commandTimeoutMs });
     const boot = await deps.runner('launchctl', ['bootstrap', domain, file], { timeoutMs: commandTimeoutMs });
-    if (!boot.ok) return fail(`launchctl bootstrap ${domain} failed for ${job.label}: ${boot.stderr.trim().split('\n').slice(-1)[0]}`);
+    if (!boot.ok) return { ...fail(`launchctl bootstrap ${domain} failed for ${job.label}: ${boot.stderr.trim().split('\n').slice(-1)[0]}`), touchedFiles };
   }
-  return { ok: true, lines: [] };
+  return { ok: true, lines: [], touchedFiles };
 }
 
 async function installLaunchd(request: ServiceRequest, deps: ServiceDeps, paths: RunnerHomePaths, owner: TargetAccount | null): Promise<ServiceResult> {
@@ -332,16 +339,22 @@ async function installLaunchd(request: ServiceRequest, deps: ServiceDeps, paths:
   const loaded = await loadLaunchdJobs([{ job: jobs.pueued, file: files.pueued }, { job: jobs.link, file: files.link }], domain, deps, owner, request.isSystem);
   if (!loaded.ok) {
     if (hadService) {
-      // A re-install that fails must not leave the working service unloaded: its definitions come back and launchd loads them again.
-      restorePreviousDefinitions(previous);
-      for (const { file, content } of previous) {
-        if (content === null) continue;
-        if (request.isSystem) deps.chown(file, rootUid, wheelGid);
+      // A re-install that fails must not leave the working service unloaded: the definitions this pass rewrote come back, and launchd
+      // loads those jobs again. A job the pass never reached keeps running untouched. Each load is checked and the answer is honest.
+      const touched = previous.filter((entry) => loaded.touchedFiles.includes(entry.file));
+      restorePreviousDefinitions(touched);
+      const notLoaded: string[] = [];
+      for (const { file, content } of touched) {
         const label = file === files.link ? names.launchdLink : names.launchdPueued;
         await deps.runner('launchctl', ['bootout', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
-        await deps.runner('launchctl', ['bootstrap', domain, file], { timeoutMs: commandTimeoutMs });
+        if (content === null) continue;
+        if (request.isSystem) deps.chown(file, rootUid, wheelGid);
+        const reboot = await deps.runner('launchctl', ['bootstrap', domain, file], { timeoutMs: commandTimeoutMs });
+        if (!reboot.ok) notLoaded.push(label);
       }
-      return fail(...loaded.lines, 'The service installed before was loaded again as it was.');
+      return fail(...loaded.lines, notLoaded.length === 0
+        ? 'The service installed before was loaded again as it was.'
+        : `The service installed before could NOT be loaded again (${notLoaded.join(', ')}): run \`charness-runner service install\` again.`);
     }
     await stopLaunchdJobs([names.launchdLink, names.launchdPueued], domain, deps);
     for (const file of [files.link, files.pueued]) fs.rmSync(file, { force: true });

@@ -438,39 +438,101 @@ describe('installing and removing the services', () => {
     assert.equal(readServiceKind(runnerPaths), null);
   });
 
-  it('a RE-install that fails puts the working service\'s definitions back and touches no unit — it is not torn down, and its record stays', async () => {
-    pair();
-    fs.writeFileSync(runnerPaths.serviceMarker, 'user-service\n');
-    const serviceNames = getServiceNames(runnerPaths.root);
-    const unitDir = path.join(home, '.config', 'systemd', 'user');
-    fs.mkdirSync(unitDir, { recursive: true });
-    fs.writeFileSync(path.join(unitDir, serviceNames.systemdLink), '# the working link unit\n');
-    fs.writeFileSync(path.join(unitDir, serviceNames.systemdPueued), '# the working queue unit\n');
-    const result = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'enable --now': { ok: false, stderr: 'Failed to enable unit: boom\n' } }) }));
-    assert.equal(result.ok, false);
-    assert.match(result.lines.join('\n'), /left as it was/);
-    assert.doesNotMatch(result.lines.join('\n'), /Nothing was left installed/);
-    assert.equal(fs.readFileSync(path.join(unitDir, serviceNames.systemdLink), 'utf8'), '# the working link unit\n');
-    assert.equal(fs.readFileSync(path.join(unitDir, serviceNames.systemdPueued), 'utf8'), '# the working queue unit\n');
-    assert.ok(!commandLines().some((line) => line.includes('disable --now')), 'the working units were not stopped');
-    assert.equal(readServiceKind(runnerPaths), 'user-service', 'the record of the working service stays');
+  describe('a RE-install that fails', () => {
+    const agentDir = (): string => path.join(home, 'Library', 'LaunchAgents');
 
-    calls = [];
-    const agentDir = path.join(home, 'Library', 'LaunchAgents');
-    const installed = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
-    assert.equal(installed.ok, true, installed.lines.join('\n'));
-    const plists = fs.readdirSync(agentDir);
-    assert.equal(plists.length, 2);
-    for (const plist of plists) fs.writeFileSync(path.join(agentDir, plist), `<!-- the working ${plist} -->\n`);
-    calls = [];
-    const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunner({ 'launchctl bootstrap': { ok: false, stderr: 'Bootstrap failed: 5\n' } }) }));
-    assert.equal(mac.ok, false);
-    assert.match(mac.lines.join('\n'), /loaded again as it was/);
-    for (const plist of plists) {
-      assert.equal(fs.readFileSync(path.join(agentDir, plist), 'utf8'), `<!-- the working ${plist} -->\n`);
-      assert.ok(commandLines().some((line) => line.startsWith('launchctl bootstrap gui/501') && line.endsWith(plist)), `${plist} was bootstrapped again (the failed pass never reached the second job)`);
+    /** Fails the first `failures` `launchctl bootstrap` calls and answers the rest like the default runner. */
+    function recordingRunnerFailingBootstrap(failures: number): CommandRunner {
+      let seen = 0;
+      const base = recordingRunner();
+      return async (file, args, options) => {
+        if (file === 'launchctl' && args[0] === 'bootstrap') {
+          seen += 1;
+          if (seen <= failures) {
+            calls.push({ file, args });
+            return { ok: false, exitCode: 1, stdout: '', stderr: 'Bootstrap failed: 5\n', isTimedOut: false };
+          }
+        }
+        return base(file, args, options);
+      };
     }
-    assert.equal(readServiceKind(runnerPaths), 'user-service');
+
+    /** A working launchd service whose two definitions are then replaced by text that tells them apart; returns their file names. */
+    async function installWorkingAgents(): Promise<string[]> {
+      const installed = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
+      assert.equal(installed.ok, true, installed.lines.join('\n'));
+      const plists = fs.readdirSync(agentDir());
+      assert.equal(plists.length, 2);
+      for (const plist of plists) fs.writeFileSync(path.join(agentDir(), plist), `<!-- the working ${plist} -->\n`);
+      calls = [];
+      return plists;
+    }
+
+    it('Linux: puts the working definitions back and touches no unit — it is not torn down, and its record stays', async () => {
+      pair();
+      fs.writeFileSync(runnerPaths.serviceMarker, 'user-service\n');
+      const serviceNames = getServiceNames(runnerPaths.root);
+      const unitDir = path.join(home, '.config', 'systemd', 'user');
+      fs.mkdirSync(unitDir, { recursive: true });
+      fs.writeFileSync(path.join(unitDir, serviceNames.systemdLink), '# the working link unit\n');
+      fs.writeFileSync(path.join(unitDir, serviceNames.systemdPueued), '# the working queue unit\n');
+      const result = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'enable --now': { ok: false, stderr: 'Failed to enable unit: boom\n' } }) }));
+      assert.equal(result.ok, false);
+      assert.match(result.lines.join('\n'), /left as it was/);
+      assert.doesNotMatch(result.lines.join('\n'), /Nothing was left installed/);
+      assert.equal(fs.readFileSync(path.join(unitDir, serviceNames.systemdLink), 'utf8'), '# the working link unit\n');
+      assert.equal(fs.readFileSync(path.join(unitDir, serviceNames.systemdPueued), 'utf8'), '# the working queue unit\n');
+      assert.ok(!commandLines().some((line) => line.includes('disable --now')), 'the working units were not stopped');
+      assert.equal(readServiceKind(runnerPaths), 'user-service', 'the record of the working service stays');
+    });
+
+    it('Linux: a file this install made new (the record said a service existed, the file did not) goes away again, and a reload that fails is said', async () => {
+      pair();
+      fs.writeFileSync(runnerPaths.serviceMarker, 'user-service\n');
+      const serviceNames = getServiceNames(runnerPaths.root);
+      const unitDir = path.join(home, '.config', 'systemd', 'user');
+      const result = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'enable --now': { ok: false, stderr: 'boom\n' } }) }));
+      assert.equal(result.ok, false);
+      assert.equal(fs.existsSync(path.join(unitDir, serviceNames.systemdLink)), false, 'no definition is left that was not there before');
+      assert.equal(fs.existsSync(path.join(unitDir, serviceNames.systemdPueued)), false);
+
+      const unreadable = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'enable --now': { ok: false, stderr: 'boom\n' }, 'daemon-reload': { ok: false, stderr: 'no user session\n' } }) }));
+      assert.match(unreadable.lines.join('\n'), /could not be asked to read them again: run `systemctl --user daemon-reload`/);
+      assert.doesNotMatch(unreadable.lines.join('\n'), /left as it was/);
+    });
+
+    it('Mac: only the jobs the failed pass reached are loaded again — the one it never touched keeps running — and the definitions come back', async () => {
+      pair();
+      const plists = await installWorkingAgents();
+      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunnerFailingBootstrap(1) }));
+      assert.equal(mac.ok, false);
+      assert.match(mac.lines.join('\n'), /loaded again as it was/);
+      for (const plist of plists) assert.equal(fs.readFileSync(path.join(agentDir(), plist), 'utf8'), `<!-- the working ${plist} -->\n`);
+      const names = getServiceNames(runnerPaths.root);
+      const bootstraps = commandLines().filter((line) => line.startsWith('launchctl bootstrap gui/501'));
+      assert.equal(bootstraps.filter((line) => line.endsWith(`${names.launchdPueued}.plist`)).length, 2, 'the queue job: the new definition that failed, then the old one again');
+      // The queue's label starts with the link's, so the link is recognised by its exact label and by its own file.
+      assert.ok(!commandLines().some((line) => line === `launchctl bootout gui/501/${names.launchdLink}` || line.endsWith(`${names.launchdLink}.plist`)), 'the link job, which the failed pass never reached, was not booted out or bootstrapped');
+      assert.equal(readServiceKind(runnerPaths), 'user-service');
+    });
+
+    it('Mac: when the old job cannot be loaded again either, it says so — never «loaded again as it was»', async () => {
+      pair();
+      await installWorkingAgents();
+      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunnerFailingBootstrap(2) }));
+      assert.equal(mac.ok, false);
+      assert.match(mac.lines.join('\n'), /could NOT be loaded again .*run `charness-runner service install` again/);
+      assert.doesNotMatch(mac.lines.join('\n'), /loaded again as it was/);
+      assert.equal(readServiceKind(runnerPaths), 'user-service', 'the record stays: the install can simply be run again');
+    });
+
+    it('Mac: a definition this install made new (it had no earlier file) is removed again', async () => {
+      pair();
+      fs.writeFileSync(runnerPaths.serviceMarker, 'user-service\n');
+      const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunnerFailingBootstrap(1) }));
+      assert.equal(mac.ok, false);
+      assert.deepEqual(fs.existsSync(agentDir()) ? fs.readdirSync(agentDir()) : [], [], 'no plist is left that was not there before');
+    });
   });
 
   it('the account gets the queue\'s folders and the record when an admin installs the daemons (root created them)', async () => {
