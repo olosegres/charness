@@ -209,6 +209,10 @@ export function runGateLink(params: GateLinkParams): Promise<number> {
 
     params.output.write(formatGateAnswerHead('link', { package: params.packageId ?? noPackageMarker }));
     duplex.on('error', () => finish('the connection to the runner failed'));
+    // The channel from the runner ended cleanly (EOF: the ssh session that carried it is gone). A duplex whose readable side ended stays half
+    // open, so the ssh client never sees a close — only a failed write or the keepalive's silence would tell, and until then the hub shows a
+    // runner that has left as online.
+    params.input.once('end', () => finish('the channel from the runner ended'));
     client.on('error', (error) => finish(`ssh: ${error.message}`));
     client.on('close', () => finish('the runner disconnected'));
     client.on('ready', bindSocket);

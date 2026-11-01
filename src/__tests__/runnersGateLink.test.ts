@@ -196,6 +196,24 @@ describe('the gate\'s link', () => {
     await settleWithin(gate.done, 'the gate to end with its transport');
   });
 
+  it('a clean end of the channel from the runner — EOF on the gate\'s stdin, as when the ssh session that carried it is gone — ends the gate at once, with no failed write or keepalive to tell it', async () => {
+    const runner = await pairRunner();
+    const standIn = await startStandInRunner(runner);
+    const transport = await standIn.connect();
+    // The gate's stdin and stdout are the two pipes of an ssh session, not one socket: the runner going away shows as EOF on the input alone.
+    const input = new PassThrough();
+    const output = new PassThrough();
+    transport.pipe(input, { end: false });
+    output.pipe(transport, { end: false });
+    const done = runGateLink({ ctx: fixture.ctx, runnerId: runner.runnerId, input, output, packageId: '0123456789abcdef', log: () => undefined, timings: fastTimings });
+    const paths = getRunnerLinkPaths(fixture.ctx.dir, runner.runnerId);
+    await waitUntil(() => probeSocket(paths.socket), 'the link to accept connections');
+    input.end();
+    assert.equal(await settleWithin(done, 'the gate to end on the EOF of its input'), 0);
+    assert.equal(await probeSocket(paths.socket), false, 'the runner reads offline');
+    transport.destroy();
+  });
+
   it('when the runner goes away the socket no longer accepts, the status says when, and the runner reads offline', async () => {
     const runner = await pairRunner();
     const standIn = await startStandInRunner(runner);
