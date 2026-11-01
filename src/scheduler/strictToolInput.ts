@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { z } from 'zod';
 
 /**
@@ -111,14 +112,62 @@ export function buildUnknownKeysMessage(unknownKeys: readonly string[], allowedK
   return `${sentences.join(' ')} Allowed: ${allowedKeys.length > 0 ? allowedKeys.join(', ') : 'none'}.`;
 }
 
+/** The most unknown keys one diagnostic line names, and the longest a named key may be: an agent chose them, so the line stays bounded. */
+const refusalLogMaxKeys = 10;
+const refusalLogMaxKeyLength = 64;
+
 /**
- * @description Close an object: a key outside `shape` is an error carrying {@link buildUnknownKeysMessage}. Used for a
- * tool's whole input and for every object nested in it (an array item).
+ * @name RefusalLogging
+ * @description Where a refused call is reported, and whose call it was. The SDK checks a tool's input BEFORE any code
+ * of the bot's runs, so the bot would never learn that a call was refused — a client that added a key of its own to
+ * every call would fail every call with no trace on the operator's side.
+ */
+export interface RefusalLogging {
+  toolName: string;
+  /** Appends one diagnostic line; must not throw (a logger that does is ignored). */
+  log: (line: string) => void;
+}
+
+/**
+ * The context of the request being handled. The strict objects are module-level and shared by every request, so the
+ * tool name and the logger travel with the request itself rather than with a schema.
+ */
+const refusalLogging = new AsyncLocalStorage<RefusalLogging>();
+
+/** @description Run the handling of ONE tool call so that a refusal of its input is reported through `context`. */
+export function runWithRefusalLogging<Result>(context: RefusalLogging, handleCall: () => Result): Result {
+  return refusalLogging.run(context, handleCall);
+}
+
+/** One diagnostic line for the unknown keys of the call being handled; nothing outside {@link runWithRefusalLogging}. */
+function logRefusedKeys(unknownKeys: readonly string[]): void {
+  const context = refusalLogging.getStore();
+  if (context === undefined) return;
+  const shownKeys = unknownKeys
+    .slice(0, refusalLogMaxKeys)
+    .map((unknownKey) => (unknownKey.length > refusalLogMaxKeyLength ? `${unknownKey.slice(0, refusalLogMaxKeyLength)}…` : unknownKey));
+  const hiddenCount = unknownKeys.length - shownKeys.length;
+  const hiddenNote = hiddenCount > 0 ? ` (+${hiddenCount} more)` : '';
+  try {
+    context.log(`[scheduler-mcp] ${context.toolName} refused a call: unknown key(s) ${JSON.stringify(shownKeys)}${hiddenNote}`);
+  } catch {
+    // Reporting is best-effort: a failing logger must not turn the clear refusal below into another failure.
+  }
+}
+
+/**
+ * @description Close an object: a key outside `shape` is an error carrying {@link buildUnknownKeysMessage}, and a line
+ * for the operator when it happens inside {@link runWithRefusalLogging}. Used for a tool's whole input and for every
+ * object nested in it (an array item).
  */
 export function createStrictToolInput<Shape extends z.ZodRawShape>(shape: Shape): StrictToolInput<Shape> {
   const allowedKeys = Object.keys(shape);
   return z.strictObject(shape, {
-    error: (issue) => (issue.code === 'unrecognized_keys' ? buildUnknownKeysMessage(issue.keys, allowedKeys) : undefined),
+    error: (issue) => {
+      if (issue.code !== 'unrecognized_keys') return undefined;
+      logRefusedKeys(issue.keys);
+      return buildUnknownKeysMessage(issue.keys, allowedKeys);
+    },
   });
 }
 

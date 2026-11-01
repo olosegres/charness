@@ -15,6 +15,7 @@ import {
   createStrictToolInput,
   findClosestKey,
   getUnknownKeysMessageOfUnion,
+  runWithRefusalLogging,
 } from '../scheduler/strictToolInput';
 
 describe('findClosestKey', () => {
@@ -159,5 +160,57 @@ describe('createStrictToolInput', () => {
     const result = batch.safeParse({ messages: [true] });
     assert.equal(result.success, false);
     assert.equal(result.error?.issues[0].message, 'Invalid input');
+  });
+});
+
+describe('the diagnostic line for a refused call', () => {
+  const input = createStrictToolInput({ name: z.string(), count: z.number().optional() });
+
+  /** The lines logged while `input` parses `value` inside a refusal-logging context for `toolName`. */
+  function collectRefusalLines(value: object, toolName = 'some_tool'): string[] {
+    const lines: string[] = [];
+    runWithRefusalLogging({ toolName, log: (line) => lines.push(line) }, () => input.safeParse(value));
+    return lines;
+  }
+
+  it('names the tool and the unknown keys, once', () => {
+    assert.deepEqual(collectRefusalLines({ name: 'a', coutn: 2, extra: 1 }), [
+      '[scheduler-mcp] some_tool refused a call: unknown key(s) ["coutn","extra"]',
+    ]);
+  });
+
+  it('logs once for an unknown key inside a nested object, naming the tool whose call it was', () => {
+    const batch = createStrictToolInput({
+      messages: z.array(z.union([z.string(), createStrictToolInput({ path: z.string().optional() })], { error: getUnknownKeysMessageOfUnion })),
+    });
+    const lines: string[] = [];
+    runWithRefusalLogging({ toolName: 'send_things', log: (line) => lines.push(line) }, () => batch.safeParse({ messages: ['ok', { filePath: 'a.png' }] }));
+    assert.deepEqual(lines, ['[scheduler-mcp] send_things refused a call: unknown key(s) ["filePath"]']);
+  });
+
+  it('logs nothing for a call that is refused for another reason, or accepted', () => {
+    assert.deepEqual(collectRefusalLines({ name: 5 }), []);
+    assert.deepEqual(collectRefusalLines({}), []);
+    assert.deepEqual(collectRefusalLines({ name: 'a', count: 1 }), []);
+  });
+
+  it('logs nothing outside a refusal-logging context', () => {
+    assert.equal(input.safeParse({ name: 'a', coutn: 2 }).success, false);
+  });
+
+  it('keeps the line to one bounded line whatever the agent put in the keys', () => {
+    const [line] = collectRefusalLines({ name: 'a', ['bad\nkey' + 'x'.repeat(500)]: 1 });
+    assert.ok(!line.includes('\n'), line);
+    assert.ok(line.length < 200, `${line.length} chars`);
+    const manyKeys = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`key${index}`, index]));
+    const [manyLine] = collectRefusalLines({ name: 'a', ...manyKeys });
+    assert.ok(manyLine.length < 300, `${manyLine.length} chars`);
+    assert.match(manyLine, /\(\+30 more\)$/);
+  });
+
+  it('a logger that throws does not turn the refusal into another failure', () => {
+    const result = runWithRefusalLogging({ toolName: 'some_tool', log: () => { throw new Error('disk full'); } }, () => input.safeParse({ name: 'a', coutn: 2 }));
+    assert.equal(result.success, false);
+    assert.equal(result.error?.issues[0].message, 'unknown key `coutn` — did you mean `count`? Allowed: name, count.');
   });
 });

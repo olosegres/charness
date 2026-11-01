@@ -57,6 +57,8 @@ interface Fixture {
   toolBodyCalls: string[];
   sentTextChunks: string[];
   fileGatewayCalls: Array<RecordedFileSendGatewayCall<string>>;
+  /** What the server logged through its injected diagnostic logger. */
+  diagnosticLines: string[];
   boundDir: string;
 }
 
@@ -75,6 +77,7 @@ async function startFixture(): Promise<Fixture> {
   const toolBodyCalls: string[] = [];
   const sentTextChunks: string[] = [];
   const fileGatewayCalls: Array<RecordedFileSendGatewayCall<string>> = [];
+  const diagnosticLines: string[] = [];
   const sendFilesToThread = createSendFilesToThread<string>({
     resolveTargetAndWorkDir: (threadKey) => ({ ok: true, target: threadKey, workDir: boundDir }),
     gateway: createFileSendTestRecorderGateway(fileGatewayCalls, recorderMessageIds),
@@ -138,11 +141,12 @@ async function startFixture(): Promise<Fixture> {
     },
     whenSessionsRestored: async () => {},
     getSecret: async () => secret,
+    logDiagnostic: (line) => diagnosticLines.push(line),
     port: 0,
   };
   const handle = createSchedulerMcpServer(deps);
   await handle.start();
-  return { handle, toolBodyCalls, sentTextChunks, fileGatewayCalls, boundDir };
+  return { handle, toolBodyCalls, sentTextChunks, fileGatewayCalls, diagnosticLines, boundDir };
 }
 
 async function connect(scope: SchedulerScope): Promise<Client> {
@@ -238,6 +242,19 @@ describe('every bot tool refuses an unknown key', () => {
       }
       assert.deepEqual(fixture.toolBodyCalls, [], 'no tool body may run on a refused call');
     });
+
+    it(`${label} session: each refusal leaves ONE diagnostic line naming the tool it was and the key, so a client that fails every call is seen`, async () => {
+      const client = await connectSession();
+      const { tools } = await client.listTools();
+      for (const tool of tools) {
+        fixture.diagnosticLines.length = 0;
+        await client.callTool({ name: tool.name, arguments: { [unknownKeyProbe]: true } });
+        assert.deepEqual(
+          fixture.diagnosticLines,
+          [`[scheduler-mcp] ${tool.name} refused a call: unknown key(s) ["${unknownKeyProbe}"]`],
+        );
+      }
+    });
   }
 });
 
@@ -259,6 +276,7 @@ describe('send_messages_to_user', () => {
     assert.deepEqual(fixture.toolBodyCalls, []);
     assert.deepEqual(fixture.sentTextChunks, []);
     assert.deepEqual(fixture.fileGatewayCalls, []);
+    assert.deepEqual(fixture.diagnosticLines, ['[scheduler-mcp] send_messages_to_user refused a call: unknown key(s) ["filePath"]']);
   });
 
   it('an item with `file` is pointed at `path`, never at the as_file flag', async () => {
@@ -323,6 +341,7 @@ describe('send_messages_to_user', () => {
       assert.ok(text.includes('text or path'), text);
       assert.deepEqual(fixture.toolBodyCalls, []);
       assert.deepEqual(fixture.sentTextChunks, []);
+      assert.deepEqual(fixture.diagnosticLines, [], 'a refusal that is not an unknown key is not logged as one');
     });
   }
 
@@ -336,6 +355,7 @@ describe('send_messages_to_user', () => {
     assert.notEqual(result.isError, true, getText(result));
     assert.deepEqual(fixture.sentTextChunks, ['hello']);
     assert.equal(fixture.fileGatewayCalls.length, 1);
+    assert.deepEqual(fixture.diagnosticLines, [], 'an accepted call leaves no line');
   });
 
   it('the summary says what was sent: three photos', async () => {

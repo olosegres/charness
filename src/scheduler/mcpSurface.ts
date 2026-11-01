@@ -4,6 +4,7 @@ import type { Socket } from 'node:net';
 import { McpServer, type ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
+  CallToolRequestSchema,
   CancelledNotificationSchema,
   JSONRPCRequestSchema,
   type CallToolResult,
@@ -28,7 +29,7 @@ import { defaultCheckTimeoutSec, maxCheckCommandLength, maxCheckTimeoutSec } fro
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import { workerWatchCheckCommand, workerWatchCheckCron, workerWatchPinArgument } from './workerWatch';
 import { describeSchedule, validateScheduleSpec } from './recurrence';
-import { createStrictToolInput, getUnknownKeysMessageOfUnion, type StrictToolInput } from './strictToolInput';
+import { createStrictToolInput, getUnknownKeysMessageOfUnion, runWithRefusalLogging, type StrictToolInput } from './strictToolInput';
 import { createScheduleForThread } from './store';
 import type { ScheduleRecord, ScheduleSpec } from './types';
 import { formatDeprecation, warnLegacyNameOnce } from '../legacyNames';
@@ -448,6 +449,12 @@ export interface SchedulerMcpDeps {
    * adding the first runner shows in the next session's instructions; absent or false = the instructions do not mention it.
    */
   isRemoteRunOffered?: () => boolean;
+  /**
+   * Where the surface leaves one diagnostic line when it REFUSES a tool call for an unknown input key. The SDK checks
+   * the input before any of the bot's code runs, so without this a client that adds a key of its own to every call
+   * would fail every call with no trace on the operator's side. Must not throw; absent = nothing is logged.
+   */
+  logDiagnostic?: (line: string) => void;
   /**
    * `todo_update` / `todo_read`: the conversation's published todo list (`todos/registry.ts`). Offered to Telegram
    * and Jira sessions; absent = the tools are not offered.
@@ -1870,7 +1877,12 @@ export function createSchedulerMcpServer(deps: SchedulerMcpDeps): SchedulerMcpHa
       void server.close();
     });
     await server.connect(transport);
-    await transport.handleRequest(req, res, parsedBody);
+    // The SDK refuses a call's input before any tool code runs, so the refusal is reported from inside the handling.
+    const toolCall = CallToolRequestSchema.safeParse(parsedBody);
+    const handleRequest = (): Promise<void> => transport.handleRequest(req, res, parsedBody);
+    await (toolCall.success && deps.logDiagnostic
+      ? runWithRefusalLogging({ toolName: toolCall.data.params.name, log: deps.logDiagnostic }, handleRequest)
+      : handleRequest());
   }
 
   function start(): Promise<void> {

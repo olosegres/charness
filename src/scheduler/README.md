@@ -57,7 +57,11 @@ constants in the code; this README keeps what the code cannot say.
   (`filePath` for `path`) vanished before the handler ran and the call still answered "delivered". An unknown key is now
   a tool error naming it, hinting at the nearest allowed key and listing the allowed ones; an object nested in an array
   item is built with `createStrictToolInput` too, and a union around it takes `getUnknownKeysMessageOfUnion` as its
-  `error` so zod's bare "Invalid input" carries that message. The digest hashes only the shape's keys, so closing the
+  `error` so zod's bare "Invalid input" carries that message. The SDK refuses a call's input before any
+  code of the bot's runs, so a refusal for an unknown key is reported from inside the request: the request handler runs a
+  `tools/call` under `runWithRefusalLogging` (an `AsyncLocalStorage` carrying the tool name and `deps.logDiagnostic`),
+  and the strict object's error callback leaves ONE bounded line (`[scheduler-mcp] <tool> refused a call: unknown
+  key(s) [...]`) in `agent-diag.log`. A client that fails every call because of a key of its own is then visible. The digest hashes only the shape's keys, so closing the
   objects did not move it. `schedulerMcpStrictInput.test.ts` walks every tool a session gets over the real server.
 - Bearer tokens are HMAC-signed and scoped `thread:` (Claude, one conversation) or `dir:` (OpenCode, every
   thread bound to the folder). `getSchedulerScopePlatform` reads the scope's platform: only a Telegram session

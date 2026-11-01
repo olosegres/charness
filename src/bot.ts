@@ -107,6 +107,7 @@ import {
   getNativeWindowsGeneralNotice,
 } from './utils/nativeWindows';
 import { getStateStore, KeyLock, resolveDataDir, type StateStore } from './state';
+import { appendDiagLog } from './diagLog';
 import { releaseLock } from './instanceLock';
 import { gracefulShutdown } from './shutdown';
 import {
@@ -13855,6 +13856,8 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     compactConversation: (threadKeyStr) => armDeferredCompaction(keyFromString(threadKeyStr)),
     listClaudeProfiles: listClaudeProfilesForAgent,
     isRemoteRunOffered: () => checkIsRemoteRunOffered(),
+    // A refused tool call leaves one line in the bounded diagnostic log (agent-diag.log): the SDK refuses before the bot sees it.
+    logDiagnostic: appendDiagLog,
     ...(jiraConnector
       ? { fetchJiraAttachment: (threadKeyStr: string, attachmentId: string) => jiraConnector.fetchAttachment(keyFromString(threadKeyStr), attachmentId) }
       : {}),
