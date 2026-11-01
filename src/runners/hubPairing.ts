@@ -6,6 +6,7 @@ import { getHandMadeRunnersPath, type HubContext } from './hubPaths';
 import { withHubLock } from './hubLock';
 import { readHubKey, readOrCreateHubKeyLocked } from './hubKey';
 import {
+  HubRegistryError,
   readPairedFile,
   readPendingFile,
   syncDerivedHubFiles,
@@ -178,11 +179,17 @@ function buildRedeemReply(runner: PairedRunner, hubPublicKey: string, packageId:
   return { ok: true, runnerId: runner.id, name: runner.name, hubPublicKey, label: runner.label, host: runner.host, port: runner.port, packageId };
 }
 
-/** @description What `redeem` answered (or would answer) for the paired runner `runnerId` — for the runner that lost the answer. `ok: false` when it is not in the registry. */
+/**
+ * @description What `redeem` answered (or would answer) for the paired runner `runnerId` — for the runner that lost the answer.
+ * `ok: false` ONLY when the runner is not in the registry: that answer makes the runner stop its jobs, so a fault of the hub (a hub key
+ * that cannot be read, a file mode that changed) must not look like it — it throws, the gate fails without an answer, and the runner
+ * just tries again.
+ */
 export function describeRunnerIdentity(ctx: HubContext, runnerId: string, packageId: string | null): RedeemReply {
   const runner = readPairedFile(ctx.dir).runners.find((candidate) => candidate.id === runnerId);
+  if (runner === undefined) return { ok: false, reason: 'this runner is not paired here' };
   const hubKey = readHubKey(ctx.dir);
-  if (runner === undefined || hubKey === null) return { ok: false, reason: 'this runner is not paired here' };
+  if (hubKey === null) throw new HubRegistryError('the hub key cannot be read');
   return buildRedeemReply(runner, hubKey.publicKey, packageId);
 }
 

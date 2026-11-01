@@ -229,6 +229,16 @@ describe('gate requests', () => {
     assert.deepEqual(removedReply, { ok: false, reason: 'this runner is not paired here' }, 'the answer the runner reads as «removed» — and nothing else');
   });
 
+  it('identity tells «not paired» only for a runner that IS gone from the registry — a hub whose key cannot be read fails with no answer, so the runner tries again instead of stopping its jobs', async () => {
+    const runnerId = await pairRunner();
+    fs.rmSync(getHubFilePaths(fixture.ctx.dir).hubKey, { force: true });
+    const run = await runGate(gateArgs('runner', runnerId), 'identity');
+    assert.equal(run.code, 1, 'a failure');
+    assert.equal(run.stdout.length, 0, 'and no JSON the runner could read as «removed»');
+    assert.ok(run.log.some((line) => line.includes('hub key cannot be read')), run.log.join('\n'));
+    assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 1, 'the runner is still registered');
+  });
+
   it('unpair removes the runner and says so; a second unpair says no', async () => {
     const runnerId = await pairRunner();
     const first = await runGate(gateArgs('runner', runnerId), 'unpair');
