@@ -81,9 +81,10 @@ still queued** (a job can wait behind a busy group for days), lease/probe scratc
 contenders on the dev box), which gave two jobs of a project the lock together. A lock is stale when its process is gone, its job has an exit record, or
 it has no holder and is over a minute old; a stale lock is broken by ONE waiter, the one that wins the *right* to break the lock of that very dead holder: a file
 `lock.breaking.<pid>.<job>.<n>` made with the same exclusive create (the others yield). Once the winner has seen the lock still carries that
-holder, nothing else can remove or replace it (the holder is gone for good and its job id is unique), and a lock another job took meanwhile is
-left alone. A winner that died leaves its file held by a gone process, and the next waiter takes generation `n+1` — never by the age of the
-file, so a slow breaker keeps its right; a job that takes the lock clears the files (they name holders that are gone). A job gives back only a
+holder and is still stale, nothing else can remove or replace it (a named holder is gone for good and its job id is unique; a lock with no
+holder written is stale only when over a minute old, which a lock that is about to be written never is), and a lock another job took meanwhile
+is left alone. A winner that is gone — its process dead, or its job ended while its pid went to another process — leaves its file, and the next
+waiter takes generation `n+1`; never by the age of the file, so a slow breaker keeps its right; a job that takes the lock clears the files (they name holders that are gone). A job gives back only a
 lock that is still its own. The pause between a waiting job's attempts is `lock_poll_sec` (a second; the tests shorten it).
 
 **Job state** is the job's own files first (`exit` is authoritative); Pueue's task list (label `rr-<id>`) only when there is no exit file

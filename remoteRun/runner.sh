@@ -840,20 +840,27 @@ break_lock_of_holder() {
     check_breaker_is_alive "$right" && return 1
     generation=$((generation + 1))
   done
+  # The lock must carry that holder AND still be stale. For a named holder the second test adds nothing (it is dead for good). For a lock
+  # with no holder written it is what matters: every fresh lock is empty for a moment between its creation and the write of its pid, so
+  # "no holder" names no one in particular — only the over-a-minute test tells a creator that died from one that is about to write.
   local holder_pid holder_job
   read_lock_holder "$lock"
-  if [ "$holder_pid" = "$1" ] && [ "$holder_job" = "$2" ]; then
+  if [ "$holder_pid" = "$1" ] && [ "$holder_job" = "$2" ] && check_lock_is_stale; then
     rm -f "$lock"
   fi
   return 0
 }
 
 # Is the breaker that made the right file $1 still at it? Its process is alive — the test the lock itself uses, so a breaker that is merely
-# slow (a busy disk) keeps its right however long it takes. A file with no process written yet is a breaker between creating it and writing
-# it: it counts until it is over a minute old.
+# slow (a busy disk) keeps its right however long it takes — and its job has no exit record (the lock's second test: a breaker that died
+# and whose pid went to some long-lived process would otherwise hold its right for ever, and the project's queue would never drain). A file
+# with no process written yet is a breaker between creating it and writing it: it counts until it is over a minute old.
 check_breaker_is_alive() {
   local holder_pid holder_job
   read_lock_holder "$1"
+  if [ -n "$holder_job" ] && [ -f "$jobs_dir/$holder_job/exit" ]; then
+    return 1
+  fi
   if [ -n "$holder_pid" ]; then
     kill -0 "$holder_pid" 2> /dev/null
     return
