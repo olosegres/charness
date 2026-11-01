@@ -47,20 +47,33 @@ function ensureSafeDirectory(rootReal: string, relativeDirectory: string): boole
 
 const gitDirectoryName = '.git';
 
+/** Is `relativePath` the folder `directory` or inside it? `''` is the project root: everything. Case-insensitive, like the disks that make `.Git` the same as `.git`. */
+function checkIsInsideDirectory(relativePath: string, directory: string): boolean {
+  if (directory === '') return true;
+  const lowerPath = relativePath.toLowerCase();
+  const lowerDirectory = directory.toLowerCase();
+  return lowerPath === lowerDirectory || lowerPath.startsWith(`${lowerDirectory}/`);
+}
+
 /**
  * @description Why a path may never be copied in, whatever a `pull:` pattern says — or `null`. A broad pattern (`**`) is a trust in the
- * runner for what it names, but two kinds of file turn that into code running on the MAIN box: anything under a `.git` (a hook, or
- * `core.hooksPath` / `fsmonitor` in its `config`, run at the next git command) and the project's own `.remote-run` (it decides what is sent,
- * installed and pulled next time). Compared case-insensitively: on a case-insensitive disk `.Git/hooks` IS `.git/hooks`.
+ * runner for what it names, but some files turn that into code running on the MAIN box: anything under a `.git` (a hook, or
+ * `core.hooksPath` / `fsmonitor` in its `config`, run at the next git command), the project's own `.remote-run` (it decides what is sent,
+ * installed and pulled next time), and anything in a folder git takes hooks from (`hookDirectories`: `getHookDirectories` in `project.ts` —
+ * husky's `.husky`, a `core.hooksPath` inside the project). Compared case-insensitively: on a case-insensitive disk `.Git/hooks` IS
+ * `.git/hooks`. Other tools that run commands at commit (lint-staged and lefthook configs, `package.json` scripts) are not recognised:
+ * that is what keeping `pull:` narrow is for.
  */
-export function getProtectedPathReason(relativePath: string): string | null {
+export function getProtectedPathReason(relativePath: string, hookDirectories: readonly string[] = []): string | null {
   if (relativePath.split('/').some((part) => part.toLowerCase() === gitDirectoryName)) return 'inside a .git';
   if (relativePath.toLowerCase() === projectConfigName) return "the project's .remote-run";
+  const hookDirectory = hookDirectories.find((directory) => checkIsInsideDirectory(relativePath, directory));
+  if (hookDirectory !== undefined) return hookDirectory === '' ? 'in a project whose git hooks folder is the project root' : `inside the git hooks folder ${hookDirectory}`;
   return null;
 }
 
 /** @description Copy the files of `fetchedRoot` that `patterns` name into `projectRoot`, as the module comment says. */
-export function copyFetchedFiles(params: { fetchedRoot: string; projectRoot: string; patterns: readonly string[] }): SafeCopyResult {
+export function copyFetchedFiles(params: { fetchedRoot: string; projectRoot: string; patterns: readonly string[]; hookDirectories?: readonly string[] }): SafeCopyResult {
   const isNamed = createPathMatcher(params.patterns);
   const rootReal = fs.realpathSync(params.projectRoot);
   const entries: Array<{ relativePath: string; kind: 'file' | 'other' }> = [];
@@ -68,7 +81,7 @@ export function copyFetchedFiles(params: { fetchedRoot: string; projectRoot: str
   const result: SafeCopyResult = { copied: [], refusedCount: 0 };
   for (const entry of entries) {
     const isInside = !entry.relativePath.split('/').includes('..') && !path.isAbsolute(entry.relativePath);
-    if (entry.kind !== 'file' || !isInside || !isNamed(entry.relativePath) || getProtectedPathReason(entry.relativePath) !== null) {
+    if (entry.kind !== 'file' || !isInside || !isNamed(entry.relativePath) || getProtectedPathReason(entry.relativePath, params.hookDirectories) !== null) {
       result.refusedCount += 1;
       continue;
     }

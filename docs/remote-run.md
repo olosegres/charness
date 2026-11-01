@@ -162,8 +162,11 @@ The project is the git working tree the command runs in (anything else is refuse
   updated snapshots show in `git diff`. A foreground run fetches at its end (also on failure); `--bg` jobs by `wait` / `fetch`. The
   files come back into the project the job was submitted from — remembered on the main machine — and nowhere else, and only regular
   files that a `pull:` pattern names; a symlink or a path outside the project is refused. Whatever the patterns say, nothing inside a
-  `.git` and not the project's own `.remote-run` is ever copied in (a hook or a config planted there would run code on the main
-  machine) — and a pattern is trust in the runner for what it names, so keep patterns narrow (`test-results`, not `**`).
+  `.git`, nothing inside a folder git takes hooks from (the one `core.hooksPath` names when it is inside the project — husky's
+  `.husky/_` brings its parent `.husky` with it — and the conventional `.husky` and `.githooks`), and not the project's own
+  `.remote-run` is ever copied in: a hook or a config planted there would run code on the main machine at the next commit. That is
+  all remote-run can recognise. A pattern is trust in the runner for what it names, and other things also run at commit or install time
+  (a `lint-staged` or `lefthook` config, `package.json` scripts), so keep patterns narrow (`test-results`, not `**`).
 
 ### `.remote-run`
 

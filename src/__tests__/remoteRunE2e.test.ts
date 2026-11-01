@@ -24,6 +24,7 @@
 
 import { after, afterEach, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -458,14 +459,20 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
           fs.mkdirSync(path.dirname(path.join(jobDir, 'artifacts', relativePath)), { recursive: true });
           fs.writeFileSync(path.join(jobDir, 'artifacts', relativePath), content);
         };
+        // The project keeps its hooks in a folder of its own (core.hooksPath), and has husky's conventional folder too.
+        execFileSync('git', ['-C', project.root, 'config', 'core.hooksPath', 'ci/git-hooks']);
         planted('.git/hooks/pre-commit', '#!/bin/sh\ntouch /tmp/planted-by-runner\n');
+        planted('ci/git-hooks/pre-commit', '#!/bin/sh\ntouch /tmp/planted-by-runner\n');
+        planted('.husky/pre-push', '#!/bin/sh\ntouch /tmp/planted-by-runner\n');
         planted('.remote-run', 'install: touch /tmp/planted-by-runner\n');
         const configBefore = fs.readFileSync(path.join(project.root, '.remote-run'), 'utf8');
         const fetched = await run(['fetch', jobId]);
         assert.equal(fetched.exitCode, 0, fetched.stderr);
-        assert.match(fetched.stderr, /refused \(not a regular file a "pull:" pattern names, or inside a \.git, or the project's \.remote-run\)/);
+        assert.match(fetched.stderr, /4 refused \(not a regular file a "pull:" pattern names, or inside a \.git, the project's \.remote-run or a git hooks folder\)/);
         assert.equal(readProjectFile(project, 'out/fine.txt'), 'fine\n', 'what the job really made came back');
         assert.equal(fs.existsSync(path.join(project.root, '.git', 'hooks', 'pre-commit')), false, 'no hook was planted');
+        assert.equal(fs.existsSync(path.join(project.root, 'ci', 'git-hooks')), false, 'nor in the folder core.hooksPath names');
+        assert.equal(fs.existsSync(path.join(project.root, '.husky')), false, 'nor in husky\'s');
         assert.equal(fs.readFileSync(path.join(project.root, '.remote-run'), 'utf8'), configBefore, 'the project\'s config is untouched');
       } finally {
         writeRemoteRunConfig(baseRemoteRunConfig);

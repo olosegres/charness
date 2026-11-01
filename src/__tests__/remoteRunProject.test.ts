@@ -13,7 +13,7 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { getProjectContext, planProjectSend, readProjectConfig } from '../remoteRun/project';
+import { getHookDirectories, getProjectContext, planProjectSend, readProjectConfig } from '../remoteRun/project';
 import { RemoteRunError } from '../remoteRun/remoteRunError';
 
 let workRoot = '';
@@ -133,6 +133,64 @@ describe('planProjectSend', () => {
     fs.symlinkSync('real.ts', path.join(repository, 'alias.ts'));
     const plan = planProjectSend(getProjectContext(repository));
     assert.ok(plan.files.includes('alias.ts'));
+  });
+});
+
+describe('getHookDirectories', () => {
+  beforeEach(() => {
+    workRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-run-hooks-')));
+  });
+  afterEach(() => {
+    fs.rmSync(workRoot, { recursive: true, force: true });
+  });
+
+  const conventional = ['.husky', '.githooks'];
+  const read = (repository: string): string[] => getHookDirectories(repository).sort();
+
+  it('with no core.hooksPath: git\'s own .git/hooks (the .git rule covers it too) and the conventional hook folders', () => {
+    const repository = createRepository('plain');
+    assert.deepEqual(read(repository), ['.git/hooks', '.githooks', '.husky']);
+  });
+
+  it('a core.hooksPath inside the project is protected; husky 9\'s `.husky/_` brings its parent, where the hooks a developer writes are', () => {
+    const repository = createRepository('hooks');
+    git(repository, 'config', 'core.hooksPath', 'ci/git-hooks');
+    assert.deepEqual(read(repository), [...conventional, 'ci/git-hooks'].sort());
+    git(repository, 'config', 'core.hooksPath', '.husky/_');
+    assert.deepEqual(read(repository), ['.githooks', '.husky', '.husky/_']);
+    git(repository, 'config', 'core.hooksPath', 'tools/hooks/_');
+    assert.deepEqual(read(repository), [...conventional, 'tools/hooks', 'tools/hooks/_'].sort());
+  });
+
+  it('an absolute path inside the project counts, one outside it (or above it) is not the project\'s to protect', () => {
+    const repository = createRepository('absolute');
+    git(repository, 'config', 'core.hooksPath', path.join(repository, 'inside', 'hooks'));
+    assert.ok(read(repository).includes('inside/hooks'));
+    git(repository, 'config', 'core.hooksPath', path.join(workRoot, 'elsewhere'));
+    assert.deepEqual(read(repository), ['.githooks', '.husky']);
+    git(repository, 'config', 'core.hooksPath', '../shared-hooks');
+    assert.deepEqual(read(repository), ['.githooks', '.husky']);
+  });
+
+  it('a hooks folder that is the project root takes everything: the empty path', () => {
+    const repository = createRepository('rootpath');
+    git(repository, 'config', 'core.hooksPath', '.');
+    assert.ok(read(repository).includes(''));
+  });
+
+  it('a linked worktree (its .git is a file; its hooks are in the main checkout) has the conventional folders only', () => {
+    const repository = createRepository('main');
+    writeFile(repository, 'a.txt');
+    git(repository, 'add', '-A');
+    git(repository, 'commit', '-q', '-m', 'init');
+    git(repository, 'worktree', 'add', '-q', path.join(workRoot, 'linked'), '-b', 'linked');
+    assert.deepEqual(read(path.join(workRoot, 'linked')), ['.githooks', '.husky']);
+  });
+
+  it('a folder that is not a git repository still gets the conventional ones', () => {
+    const plain = path.join(workRoot, 'not-a-repo');
+    fs.mkdirSync(plain);
+    assert.deepEqual(read(plain), ['.githooks', '.husky']);
   });
 });
 

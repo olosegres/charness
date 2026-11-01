@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { JobFacts } from './jobState';
 import { sayOwn, type CliIo } from './output';
-import { readProjectConfig } from './project';
+import { getHookDirectories, readProjectConfig } from './project';
 import { RemoteRunError } from './remoteRunError';
 import { runRsync } from './rsync';
 import type { RunnerClient } from './runnerClient';
@@ -23,13 +23,20 @@ export interface FetchTarget {
   /** The project's folder name on the runner, from the local record. */
   slug: string;
   patterns: string[];
+  /** Folders of the project git takes hooks from (`getHookDirectories`): nothing a runner returns lands in them. */
+  hookDirectories: string[];
+}
+
+/** @description The target for the project at `root`: its hook folders are read now, from the project's own git configuration. */
+export function createFetchTarget(root: string, slug: string, patterns: string[]): FetchTarget {
+  return { root, slug, patterns, hookDirectories: getHookDirectories(root) };
 }
 
 /** @description The local project a job's files go back to, from the local record; an error says why there is none. */
 export function resolveFetchTarget(record: LocalJobRecord | null): FetchTarget {
   if (record === null) throw new RemoteRunError('this machine did not submit the job as this user (or its record is gone) — its files are not fetched');
   if (!fs.existsSync(record.projectRoot) || !fs.statSync(record.projectRoot).isDirectory()) throw new RemoteRunError(`the job's project folder is gone from this machine: ${record.projectRoot}`);
-  return { root: record.projectRoot, slug: record.slug, patterns: readProjectConfig(record.projectRoot).pull };
+  return createFetchTarget(record.projectRoot, record.slug, readProjectConfig(record.projectRoot).pull);
 }
 
 /** @description Fetch `jobId`'s result files into `target`; says how many came back. A job with none, or a project that names none, is not an error. */
@@ -45,9 +52,9 @@ export async function fetchJobFiles(params: { client: RunnerClient; facts: JobFa
       destinationDirectory: fetchedRoot,
     }));
     if (!fetched.isOk) throw new RemoteRunError(`fetching the result files from "${client.runner.name}" failed — ${fetched.errorTail}`);
-    const copied = copyFetchedFiles({ fetchedRoot, projectRoot: target.root, patterns: target.patterns });
+    const copied = copyFetchedFiles({ fetchedRoot, projectRoot: target.root, patterns: target.patterns, hookDirectories: target.hookDirectories });
     if (copied.copied.length > 0 || copied.refusedCount > 0) {
-      sayOwn(params.io, `${copied.copied.length} result file${copied.copied.length === 1 ? '' : 's'} came back${copied.refusedCount > 0 ? `, ${copied.refusedCount} refused (not a regular file a "pull:" pattern names, or inside a .git, or the project's .remote-run)` : ''}`);
+      sayOwn(params.io, `${copied.copied.length} result file${copied.copied.length === 1 ? '' : 's'} came back${copied.refusedCount > 0 ? `, ${copied.refusedCount} refused (not a regular file a "pull:" pattern names, or inside a .git, the project's .remote-run or a git hooks folder)` : ''}`);
     }
   } finally {
     fs.rmSync(fetchedRoot, { recursive: true, force: true });

@@ -110,7 +110,9 @@ describe('resolveFetchTarget', () => {
 
   it('the recorded project, its runner folder name, and the patterns of ITS local .remote-run', () => {
     fs.writeFileSync(path.join(projectRoot, '.remote-run'), 'pull: out test-results\n');
-    assert.deepEqual(resolveFetchTarget({ projectRoot, slug: 'project-0123456789', submittedAtMs: 1 }), { root: projectRoot, slug: 'project-0123456789', patterns: ['out', 'test-results'] });
+    const target = resolveFetchTarget({ projectRoot, slug: 'project-0123456789', submittedAtMs: 1 });
+    assert.deepEqual({ root: target.root, slug: target.slug, patterns: target.patterns }, { root: projectRoot, slug: 'project-0123456789', patterns: ['out', 'test-results'] });
+    assert.ok(target.hookDirectories.includes('.husky'), 'the folders git takes hooks from are part of the target');
   });
 
   it('a project without a .remote-run names no pull pattern: nothing will be copied', () => {

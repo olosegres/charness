@@ -6,7 +6,7 @@ import type { RemoteRunCommand } from './cliArgs';
 import { planInterrupt, remoteRunExitCodes, type InterruptSignal } from './exitCodes';
 import { addInterruptHandler, killCallTimeoutMs, waitForChildEnd } from './interrupts';
 import { describeEnd, followForeground, runExec } from './foreground';
-import { fetchJobFiles, resolveFetchTarget } from './jobFiles';
+import { createFetchTarget, fetchJobFiles, resolveFetchTarget } from './jobFiles';
 import { formatJobList, formatJobStatus, type JobEntry } from './jobFormat';
 import { getJobLabel, parseJobId } from './jobId';
 import { parseJobMeta } from './jobMeta';
@@ -98,7 +98,7 @@ export async function runRunCommand(command: Extract<RemoteRunCommand, { kind: '
     sayOwn(io, `job ${staged.jobId} runs on ${client.runner.name} — \`charness remote-run wait ${staged.jobId}\` blocks until it ends and brings its files back`);
     return 0;
   }
-  return followForeground({ client, staged, target: { root: project.root, slug: project.slug, patterns: project.config.pull }, io, leaseMs: context.leaseMs });
+  return followForeground({ client, staged, target: createFetchTarget(project.root, project.slug, project.config.pull), io, leaseMs: context.leaseMs });
 }
 
 // ─────────────────────────── runners ───────────────────────────

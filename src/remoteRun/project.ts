@@ -109,3 +109,33 @@ export function planProjectSend(project: ProjectContext): SendPlan {
   const ignoredFiles = project.config.send.length === 0 ? [] : listIgnoredFiles(project.root).filter((file) => checkIsSendable(project.root, file));
   return planSendList({ files, ignoredFiles, exclude: project.config.exclude, send: project.config.send });
 }
+
+/** The folders hook managers conventionally keep git hooks in (husky's, and the common `.githooks`): protected whether or not git points at them yet. */
+const conventionalHookDirectories: readonly string[] = ['.husky', '.githooks'];
+/** The folder husky 9 points `core.hooksPath` at; the hooks a developer writes are in its parent. */
+const huskyShimDirectoryName = '_';
+
+/**
+ * @description The folders of the project (relative, `/`-separated) in which a file runs on this machine at the next git command, so a
+ * result file from a runner must never land there: where git looks for hooks (`git rev-parse --git-path hooks`, which already folds in
+ * `core.hooksPath`) when that is inside the project — and, for husky's `_` shim folder, its parent, where the real hooks are — plus the
+ * conventional hook folders, which become live the moment a hook manager's install step points git at them. A hooks folder that is the
+ * project root itself is `''`: nothing may come back. Ones outside the project (the default `.git/hooks` is covered by the `.git` rule; a
+ * worktree's lives in the main checkout) are not the project's to protect.
+ */
+export function getHookDirectories(projectRoot: string): string[] {
+  const directories = new Set<string>(conventionalHookDirectories);
+  const result = spawnSync('git', ['-C', projectRoot, 'rev-parse', '--git-path', 'hooks'], { encoding: 'utf8', timeout: gitDeadlineMs });
+  if (result.error === undefined && result.status === 0 && result.stdout.trim() !== '') {
+    const relative = path.relative(fs.realpathSync(projectRoot), path.resolve(projectRoot, result.stdout.trim()));
+    if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
+      const hooksDirectory = relative.split(path.sep).join('/');
+      directories.add(hooksDirectory);
+      if (path.posix.basename(hooksDirectory) === huskyShimDirectoryName) {
+        const parent = path.posix.dirname(hooksDirectory);
+        directories.add(parent === '.' ? '' : parent);
+      }
+    }
+  }
+  return [...directories];
+}

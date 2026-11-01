@@ -115,6 +115,29 @@ describe('copyFetchedFiles', () => {
     for (const caseVariant of ['.Git', '.GIT']) assert.equal(fs.existsSync(path.join(projectRoot, caseVariant)), false, caseVariant);
   });
 
+  it('a broad pattern never fills a folder git takes hooks from: husky\'s .husky and its _ shim folder, and one core.hooksPath names — hooks that run on the main box at the next commit', () => {
+    for (const hook of ['.husky/pre-commit', '.husky/_/h', 'ci/git-hooks/pre-push', 'ci/git-hooks/sub/commit-msg', '.HUSKY/pre-commit']) writeFile(fetchedRoot, hook, 'planted');
+    for (const fine of ['src/ok.txt', '.husky-notes/readme.md', 'ci/git-hooks-docs/readme.md', 'ci/report.txt']) writeFile(fetchedRoot, fine, 'fine');
+    const result = copyFetchedFiles({ fetchedRoot, projectRoot, patterns: ['**'], hookDirectories: ['.husky', 'ci/git-hooks'] });
+    assert.deepEqual(result.copied.sort(), ['.husky-notes/readme.md', 'ci/git-hooks-docs/readme.md', 'ci/report.txt', 'src/ok.txt'], 'a folder that only starts with the same letters is not a hooks folder');
+    assert.equal(result.refusedCount, 5);
+    assert.equal(fs.existsSync(path.join(projectRoot, '.husky')), false);
+    assert.equal(fs.existsSync(path.join(projectRoot, 'ci', 'git-hooks')), false);
+  });
+
+  it('a project whose git hooks folder is the project root itself takes nothing back, and says why', () => {
+    writeFile(fetchedRoot, 'anything.txt', 'x');
+    assert.deepEqual(copyFetchedFiles({ fetchedRoot, projectRoot, patterns: ['**'], hookDirectories: [''] }), { copied: [], refusedCount: 1 });
+    assert.equal(getProtectedPathReason('anything.txt', ['']), 'in a project whose git hooks folder is the project root');
+  });
+
+  it('getProtectedPathReason names the hooks folder', () => {
+    assert.equal(getProtectedPathReason('.husky/pre-commit', ['.husky']), 'inside the git hooks folder .husky');
+    assert.equal(getProtectedPathReason('.husky', ['.husky']), 'inside the git hooks folder .husky');
+    assert.equal(getProtectedPathReason('src/a.ts', ['.husky']), null);
+    assert.equal(getProtectedPathReason('.husky/pre-commit'), null, 'no hooks folders given: only .git and .remote-run are protected');
+  });
+
   it('a pattern that names .git or .remote-run outright does not bring them either', () => {
     writeFile(fetchedRoot, '.git/hooks/pre-commit', 'planted');
     writeFile(fetchedRoot, '.remote-run', 'planted');
