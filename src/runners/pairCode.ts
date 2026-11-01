@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { hubHostSchema, hubIdSchema, hubPortSchema, hubSshUserSchema } from './hubIds';
+import { hubHostKeySchema, hubHostSchema, hubIdSchema, hubPortSchema, hubSshUserSchema } from './hubIds';
 
 /**
  * @description The pairing code: everything a runner needs to reach the hub ONCE — the address, the hub's ssh host key to pin, the
@@ -11,13 +11,12 @@ import { hubHostSchema, hubIdSchema, hubPortSchema, hubSshUserSchema } from './h
 export const pairCodePrefix = 'cr1.';
 const maxCodeLength = 4096;
 const privateKeyPattern = /^-----BEGIN OPENSSH PRIVATE KEY-----\n[A-Za-z0-9+/=\n]+\n-----END OPENSSH PRIVATE KEY-----\n?$/;
-const hostKeyPattern = /^(ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,2}$/;
 
 const pairCodePayloadSchema = z.strictObject({
   host: hubHostSchema,
   port: hubPortSchema,
   user: hubSshUserSchema,
-  hostKey: z.string().regex(hostKeyPattern, 'must be an ssh public key'),
+  hostKey: hubHostKeySchema,
   privateKey: z.string().max(2048).regex(privateKeyPattern, 'must be an OpenSSH private key'),
   pairId: hubIdSchema,
 });

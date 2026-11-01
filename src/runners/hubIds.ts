@@ -20,3 +20,7 @@ export const hubIdSchema = z.string().regex(hubIdPattern, 'must be a 12-digit he
 export const hubHostSchema = z.string().refine((host) => hostNamePattern.test(host) || ipv6Pattern.test(host), 'must be a host name or an IP address');
 export const hubPortSchema = z.number().int().min(1).max(maxPort);
 export const hubSshUserSchema = z.string().regex(sshUserPattern, 'must be a plain account name');
+
+const hostKeyPattern = /^(ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,2}$/;
+/** The hub's ssh host key as `<type> <base64>` — what a runner pins. */
+export const hubHostKeySchema = z.string().regex(hostKeyPattern, 'must be an ssh public key');

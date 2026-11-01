@@ -55,13 +55,14 @@
   "bin": {
     "charness": "dist/cli.js",
     "telegramCode": "dist/cli.js",
-    "telegramcode": "dist/cli.js"
+    "telegramcode": "dist/cli.js",
+    "charness-runner": "dist/runnerUtility/runnerCli.js"
   },
   "engines": {
     "node": ">=22.12"
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/cli.js dist/index.js",
+    "build": "tsc && chmod +x dist/cli.js dist/index.js dist/runnerUtility/runnerCli.js",
     "build:watch": "tsc -w",
     "start": "node dist/cli.js",
     "dev": "tsx watch src/cli.ts",

@@ -1,9 +1,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { Socket } from 'net';
-import { Writable, type Duplex } from 'stream';
-import type { Server } from 'ssh2';
+import { Writable } from 'stream';
+import { injectStreamIntoSshServer } from '../runnerUtility/injectStream';
 import type { RedeemRequest } from '../runners/gateProtocol';
 import { createHubContext, type HubContext } from '../runners/hubPaths';
 import { generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
@@ -106,10 +105,4 @@ export async function waitUntil(check: () => boolean | Promise<boolean>, descrip
   }
 }
 
-/**
- * ssh2's `Server.injectSocket` is typed for a `net.Socket` but takes any bidirectional stream «as though it were a TCP socket
- * connection» — a channel of another ssh session included, which is how the runner serves ssh over a link. The one cast is here.
- */
-export function injectStreamIntoSshServer(server: Server, stream: Duplex): void {
-  server.injectSocket(stream as Socket);
-}
+export { injectStreamIntoSshServer };
