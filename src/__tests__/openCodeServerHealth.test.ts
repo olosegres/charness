@@ -26,6 +26,12 @@ import { getOpenCodeServerHealth, openCodeHealthAttemptTimeoutMs, openCodeHealth
 import { startFullBacklogListener } from './fullBacklogListener';
 
 const testAttemptTimeoutMs = 100;
+/**
+ * For the cases where the server answers at once (or refuses at once) and the time limit is NOT what is tested: the first `fetch` of a test
+ * process is cold, and on a loaded machine it can take longer than `testAttemptTimeoutMs` — the probe then asks again, as designed, and a
+ * test that counts requests fails on the retry instead of on anything wrong.
+ */
+const promptServerAttemptTimeoutMs = 10_000;
 /** Late enough for a test attempt to give up, soon enough that the next one meets an answer. */
 const lateAnswerDelayMs = 250;
 
@@ -70,14 +76,14 @@ afterEach(async () => {
 describe('getOpenCodeServerHealth', () => {
   it('a server that answers 200 is healthy, with its version, after one request', async () => {
     await startServer((_number, response) => answerHealthy(response));
-    const health = await getOpenCodeServerHealth({ attemptTimeoutMs: testAttemptTimeoutMs });
+    const health = await getOpenCodeServerHealth({ attemptTimeoutMs: promptServerAttemptTimeoutMs });
     assert.deepEqual(health, { healthy: true, version: '1.2.3', outcome: 'healthy' });
     assert.equal(healthRequestCount, 1);
   });
 
   it('a server that answers but is not OK is unhealthy, and is not asked again: the answer would be the same', async () => {
     await startServer((_number, response) => response.writeHead(503).end());
-    const health = await getOpenCodeServerHealth({ attemptTimeoutMs: testAttemptTimeoutMs });
+    const health = await getOpenCodeServerHealth({ attemptTimeoutMs: promptServerAttemptTimeoutMs });
     assert.deepEqual(health, { healthy: false, version: null, outcome: 'unhealthy' });
     assert.equal(healthRequestCount, 1);
   });
@@ -86,7 +92,7 @@ describe('getOpenCodeServerHealth', () => {
     await startServer((_number, response) => answerHealthy(response));
     await new Promise<void>((resolve) => server!.close(() => resolve()));
     server = null;
-    const health = await getOpenCodeServerHealth({ attemptTimeoutMs: testAttemptTimeoutMs });
+    const health = await getOpenCodeServerHealth({ attemptTimeoutMs: promptServerAttemptTimeoutMs });
     assert.deepEqual(health, { healthy: false, version: null, outcome: 'unreachable' });
   });
 
