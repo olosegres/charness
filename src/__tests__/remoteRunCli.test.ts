@@ -78,7 +78,7 @@ describe('runRemoteRunCli', () => {
   it('without a runners.json: exit 125, naming where the file belongs', async () => {
     const { io, err } = createTestIo();
     assert.equal(await runRemoteRunCli(['runners'], io), 125);
-    assert.equal(err.join(''), `remote-run: no runners are set up: ${getRunnersConfigPath(homeDir)} does not exist (docs/remote-run.md explains how to add one)\n`);
+    assert.equal(err.join(''), `remote-run: no runners are set up: ${getRunnersConfigPath(homeDir)} does not exist and none is paired (docs/remote-run.md explains how to add one; \`charness runners pair\` pairs one)\n`);
   });
 
   it('an empty list: exit 125 saying so', async () => {

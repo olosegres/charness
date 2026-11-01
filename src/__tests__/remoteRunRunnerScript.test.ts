@@ -1009,3 +1009,172 @@ describe('reading a job folder', () => {
     assert.ok(fs.statSync(path.join(workDir, 'fresh')).isDirectory());
   });
 });
+
+describe('what the probe says of a paired runner (its state folder is the parent of the work dir)', () => {
+  /** Make `workRoot` look like the state folder of a charness-runner: `config.json` and `keys/` beside `work/`. */
+  function makeStateFolder(): void {
+    writeFile(workRoot, 'config.json', '{}');
+    fs.mkdirSync(path.join(workRoot, 'keys'));
+  }
+
+  function probe(): { text: string; parsed: ReturnType<typeof parseProbeOutput> } {
+    const result = runScript(['probe', workDir]);
+    assert.equal(result.status, 0, result.stderr);
+    return { text: result.stdout, parsed: parseProbeOutput(result.stdout) };
+  }
+
+  it('a hand-made runner (no state folder around its work dir) prints none of it', () => {
+    const { text } = probe();
+    assert.ok(!/^(paused|service|runner_version|ios_boot)/m.test(text), text);
+  });
+
+  it('a work dir that is merely called work, beside a config.json but no keys/, is not a runner state folder', () => {
+    writeFile(workRoot, 'config.json', '{}');
+    assert.ok(!/^paused=/m.test(probe().text));
+    fs.rmSync(path.join(workRoot, 'config.json'));
+    fs.mkdirSync(path.join(workRoot, 'keys'));
+    assert.ok(!/^paused=/m.test(probe().text));
+  });
+
+  it('a runner nobody paused and nobody installed as a service is running by hand', () => {
+    makeStateFolder();
+    const { parsed } = probe();
+    assert.deepEqual([parsed.isPaused, parsed.serviceKind, parsed.iosBoot, parsed.runnerVersion], [false, 'foreground', null, null]);
+  });
+
+  it('the paused flag is a file: present = paused', () => {
+    makeStateFolder();
+    writeFile(workRoot, 'paused', '');
+    assert.equal(probe().parsed.isPaused, true);
+    fs.rmSync(path.join(workRoot, 'paused'));
+    assert.equal(probe().parsed.isPaused, false);
+  });
+
+  it('the service file names how it is kept running: user or system service; a word nobody knows is "unknown", not "run by hand"', () => {
+    makeStateFolder();
+    for (const [word, expected] of [['user-service', 'user-service'], ['system-service\n', 'system-service'], ['launchd-magic', 'unknown']] as const) {
+      writeFile(workRoot, 'service', word);
+      assert.equal(probe().text.match(/^service=(.*)$/m)?.[1], expected, word);
+    }
+  });
+
+  it('the charness version is the one in the installed package (`current/package.json`)', () => {
+    makeStateFolder();
+    writeFile(path.join(workRoot, 'current'), 'package.json', '{\n  "name": "charness",\n  "version": "3.8.0",\n  "scripts": {}\n}\n');
+    assert.equal(probe().parsed.runnerVersion, '3.8.0');
+  });
+
+  it('the iOS boot check file: bootable, not bootable (with its detail), or unreadable', () => {
+    makeStateFolder();
+    writeFile(workRoot, 'ios-check.json', '{"checkedAtMs":1,"isBootable":true,"detail":"booted in 31 s"}');
+    assert.deepEqual(probe().parsed.iosBoot, { status: 'ok', detail: 'booted in 31 s' });
+    writeFile(workRoot, 'ios-check.json', '{\n  "isBootable": false,\n  "detail": "no login session"\n}\n');
+    assert.deepEqual(probe().parsed.iosBoot, { status: 'failed', detail: 'no login session' });
+    writeFile(workRoot, 'ios-check.json', 'garbage');
+    assert.deepEqual(probe().parsed.iosBoot, { status: 'unchecked', detail: '' });
+  });
+});
+
+describe('a Mac (the platform is faked, with fake Xcode and caffeinate)', () => {
+  let fakeBin = '';
+  let caffeinateLog = '';
+
+  function writeFake(name: string, body: string): void {
+    fs.writeFileSync(path.join(fakeBin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  }
+
+  /** Bash sourcing the script with `uname` saying Darwin, running `commands`; the fakes are first on the PATH. */
+  function runAsAMac(commands: string): { stdout: string; stderr: string } {
+    const result = spawnSync('bash', ['-c', `source ${scriptPath}; uname() { echo Darwin; }; work=${workDir}; ${commands}`], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}`, PUEUE_BIN: path.join(fakeBin, 'pueue'), CAFFEINATE_LOG: caffeinateLog },
+      timeout: 60_000,
+    });
+    return { stdout: result.stdout, stderr: result.stderr };
+  }
+
+  function readLines(text: string): Record<string, string> {
+    const lines: Record<string, string> = {};
+    for (const line of text.split('\n')) {
+      const separator = line.indexOf('=');
+      if (separator > 0) lines[line.slice(0, separator)] = line.slice(separator + 1);
+    }
+    return lines;
+  }
+
+  beforeEach(() => {
+    fakeBin = path.join(workRoot, 'fake-bin');
+    fs.mkdirSync(fakeBin);
+    caffeinateLog = path.join(workRoot, 'caffeinate.log');
+    writeFake('caffeinate', 'echo "$@" >> "$CAFFEINATE_LOG"');
+    writeFake('xcodebuild', 'echo "Xcode 16.2"');
+    writeFake('xcrun', 'printf "    iPhone 16 (AAAA) (Shutdown)\\n"');
+    writeFake('pueue', 'echo "pueue 4.0.4"');
+  });
+
+  it('iOS: Xcode is there and the runner\'s service booted a Simulator — yes, with the Xcode version and the simulators', () => {
+    writeFile(workRoot, 'config.json', '{}');
+    fs.mkdirSync(path.join(workRoot, 'keys'));
+    writeFile(workRoot, 'ios-check.json', '{"isBootable":true,"detail":"ok"}');
+    const lines = readLines(runAsAMac('read_runner_state; probe_slow').stdout);
+    assert.equal(lines.cap_ios, 'yes');
+    assert.equal(lines.cap_ios_detail, 'Xcode 16.2, 1 simulators');
+  });
+
+  it('iOS: Xcode is there but the service could not boot a Simulator — no, and the reason is the login session (the plan\'s owner choice A)', () => {
+    writeFile(workRoot, 'config.json', '{}');
+    fs.mkdirSync(path.join(workRoot, 'keys'));
+    writeFile(workRoot, 'ios-check.json', '{"isBootable":false,"detail":"CoreSimulator is not available to a daemon"}');
+    const lines = readLines(runAsAMac('read_runner_state; probe_slow').stdout);
+    assert.equal(lines.cap_ios, 'no');
+    assert.equal(lines.cap_ios_detail, "needs the runner user's login session");
+  });
+
+  it('iOS: a runner with no boot check (a hand-made one, or one run in a terminal) keeps the answer Xcode gives', () => {
+    const lines = readLines(runAsAMac('read_runner_state; probe_slow').stdout);
+    assert.equal(lines.cap_ios, 'yes');
+  });
+
+  /** What the fake caffeinate was asked, once it has written it (it is started in the background and may outlive the script by a moment). */
+  async function readCaffeinateLog(): Promise<string> {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if (fs.existsSync(caffeinateLog) && fs.readFileSync(caffeinateLog, 'utf8').endsWith('\n')) return fs.readFileSync(caffeinateLog, 'utf8');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('the fake caffeinate was never called');
+  }
+
+  it('a job\'s command runs with caffeinate holding the Mac awake for its process — and keeps its own exit code', async () => {
+    fs.mkdirSync(path.join(workRoot, 'jd'));
+    const { stdout } = runAsAMac(`jd=${workRoot}/jd; run_step ${workRoot} 'exit 3'; wait; echo "code=$step_code"`);
+    assert.equal(readLines(stdout).code, '3');
+    assert.match(await readCaffeinateLog(), /^-i -w \d+\n$/);
+  });
+
+  it('`exec` holds the Mac awake the same way', async () => {
+    fs.mkdirSync(path.join(workDir, 'p', slug, 'tree'), { recursive: true });
+    writeFake('uname', 'echo Darwin');
+    spawnSync('bash', [scriptPath, 'exec', workDir, slug, '', '3000', 'true'], {
+      encoding: 'utf8',
+      input: '',
+      env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}`, CAFFEINATE_LOG: caffeinateLog },
+      timeout: 60_000,
+    });
+    assert.match(await readCaffeinateLog(), /^-i -w \d+\n$/);
+  });
+
+  // On a real Mac the system's own caffeinate would be found (and hold the test shell): the case is for the machines CI and the dev box are.
+  it('nothing on a system that is not a Mac, and nothing breaks where caffeinate is missing', { skip: process.platform === 'darwin' ? 'this Mac has a real caffeinate' : false }, () => {
+    const notAMac = spawnSync('bash', ['-c', `source ${scriptPath}; fake_pid=$$; keep_awake_while "$fake_pid"; wait; echo done`], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}`, CAFFEINATE_LOG: caffeinateLog },
+      timeout: 60_000,
+    });
+    assert.equal(notAMac.stdout.trim(), 'done');
+    assert.equal(fs.existsSync(caffeinateLog), false, 'caffeinate was not started off a Mac');
+    fs.rmSync(path.join(fakeBin, 'caffeinate'));
+    const missing = runAsAMac('keep_awake_while $$; wait; echo done');
+    assert.equal(missing.stdout.trim().endsWith('done'), true, missing.stderr);
+  });
+});

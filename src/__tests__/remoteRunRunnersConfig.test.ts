@@ -11,7 +11,8 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { checkIsRemoteRunOffered, formatGroupLimits, getRunnersConfigPath, loadRunnersConfig, resetRunnersConfigCache } from '../remoteRun/runnersConfig';
+import { checkIsRemoteRunOffered } from '../remoteRun/runnersCatalog';
+import { formatGroupLimits, getRunnersConfigPath, loadRunnersConfig, resetRunnersConfigCache } from '../remoteRun/runnersConfig';
 
 const validRunner = { name: 'box1', ssh: 'runner@runner.example', workDir: '/home/runner/charness-runner' };
 

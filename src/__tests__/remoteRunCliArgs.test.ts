@@ -31,11 +31,26 @@ describe('running a command', () => {
   });
 
   it('every option, before the command', () => {
-    const command = parseOk(['--runner', 'box1', '--needs=android', '--group', 'emulator', '--timeout', '1h30m', '--with-git', '-e', 'A=1', '-e', 'B=x=y', '--bg', 'yarn', 'e2e']);
+    const command = parseOk(['--runner', 'box1', '--needs=android', '--runner-wait', '20m', '--group', 'emulator', '--timeout', '1h30m', '--with-git', '-e', 'A=1', '-e', 'B=x=y', '--bg', 'yarn', 'e2e']);
     assert.equal(command.kind, 'run');
     if (command.kind !== 'run') return;
-    assert.deepEqual(command.options, { runner: 'box1', needs: 'android', group: 'emulator', timeoutSeconds: 5400, isWithGit: true, env: [{ name: 'A', value: '1' }, { name: 'B', value: 'x=y' }], isBackground: true });
+    assert.deepEqual(command.options, { runner: 'box1', needs: 'android', runnerWaitSeconds: 1200, group: 'emulator', timeoutSeconds: 5400, isWithGit: true, env: [{ name: 'A', value: '1' }, { name: 'B', value: 'x=y' }], isBackground: true });
     assert.equal(command.command, 'yarn e2e');
+  });
+
+  it('--runner-wait: a duration, `0` (never wait), `--runner-wait=…`; left to the default when absent; its name does not shadow --runner', () => {
+    const waitOf = (words: string[]): number | null | undefined => {
+      const command = parseOk(words);
+      return command.kind === 'run' ? command.options.runnerWaitSeconds : undefined;
+    };
+    assert.equal(waitOf(['--runner-wait', '90s', 'x']), 90);
+    assert.equal(waitOf(['--runner-wait=1h', 'x']), 3600);
+    assert.equal(waitOf(['--runner-wait', '600', 'x']), 600);
+    assert.equal(waitOf(['--runner-wait', '0', 'x']), 0);
+    assert.equal(waitOf(['--runner-wait', '0m', 'x']), 0);
+    assert.equal(waitOf(['x']), null);
+    const both = parseOk(['--runner', 'box1', '--runner-wait', '5m', 'x']);
+    assert.ok(both.kind === 'run' && both.options.runner === 'box1' && both.options.runnerWaitSeconds === 300);
   });
 
   it('defaults: no options set, the timeout left to the default', () => {
@@ -68,6 +83,9 @@ describe('running a command', () => {
     assert.match(parseError(['--bg']), /no command/);
     assert.match(parseError(['--runner']), /--runner needs a value/);
     assert.match(parseError(['--needs', 'gpu', 'x']), /--needs must be one of: android, ios, docker, playwright/);
+    assert.match(parseError(['--runner-wait', 'soon', 'x']), /--runner-wait needs a duration/);
+    assert.match(parseError(['--runner-wait']), /--runner-wait needs a value/);
+    assert.match(parseError(['--runner-wait', '200h', 'x']), /--runner-wait is at most 7 days/);
     assert.match(parseError(['--timeout', 'soon', 'x']), /--timeout needs a duration/);
     assert.match(parseError(['--timeout', '169h', 'x']), /at most 7 days/);
     assert.match(parseError(['--runner', '--bg', 'x']), /--runner needs a runner name/);

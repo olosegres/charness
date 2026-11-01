@@ -16,12 +16,15 @@ import { readRemoteRunLeaseMs } from './leaseTiming';
 import { createProcessIo, type CliIo } from './output';
 import { RemoteRunError } from './remoteRunError';
 import { readRunnerScript } from './runnerClient';
-import { getRunnersConfigPath, loadRunnersConfig } from './runnersConfig';
+import { getRunnersConfigPath } from './runnersConfig';
+import { loadRunnersCatalog } from './runnersCatalog';
+import { readRunnerWaitPollMs } from './runnerWaitTiming';
+import { sleepUntilInterrupted } from './runnerWait';
 import { ensureRemoteRunCacheDir, getRemoteRunCacheDir } from './ssh';
 
 /**
- * @description `charness remote-run …` — send a command to a runner (a machine reached by ordinary ssh, listed in
- * `~/.config/charness/runners.json`) and get its output, exit code and declared result files back as if it had run here. The
+ * @description `charness remote-run …` — send a command to a runner (a machine PAIRED with this charness — `charness runners pair`, the
+ * pasted line — or reached by ordinary ssh and listed in `~/.config/charness/runners.json`) and get its output, exit code and declared result files back as if it had run here. The
  * contracts are in `src/remoteRun/README.md`; the user-facing description is `docs/remote-run.md`.
  *
  * The CLI loads NO env file (it would read the PROJECT's `.env`: agents run it from project folders) and never touches `DATA_DIR` or
@@ -31,11 +34,13 @@ import { ensureRemoteRunCacheDir, getRemoteRunCacheDir } from './ssh';
 export { createProcessIo };
 
 export const remoteRunUsage = `Usage:
-  charness remote-run [--runner <name>] [--needs android|ios|docker|playwright] [--group <g>] [--timeout <dur>]
-                      [--with-git] [-e NAME=VALUE]… [--bg] <command…>
+  charness remote-run [--runner <name>] [--needs android|ios|docker|playwright] [--runner-wait <dur>] [--group <g>]
+                      [--timeout <dur>] [--with-git] [-e NAME=VALUE]… [--bg] <command…>
                               run <command> on a runner, in the same folder of a copy of this git project;
                               output and exit code come back, interrupt or timeout kills the remote job.
                               --bg prints a job id and returns (long runs).
+                              --needs with a paired runner that has it but is offline waits for it up to --runner-wait
+                              (default 15m, 0 = fail at once).
                               Options go BEFORE the command; a command that starts with a subcommand name goes after --
   charness remote-run runners                 the runners: online, hardware, load, what each can do
   charness remote-run ls [--all]              jobs of this project (all projects with --all)
@@ -51,12 +56,12 @@ Setup: docs/remote-run.md
 `;
 
 function createContext(io: CliIo): CommandContext {
-  const load = loadRunnersConfig(io.homeDir);
+  const load = loadRunnersCatalog(io.homeDir);
   if (load.status === 'missing') {
-    throw new RemoteRunError(`no runners are set up: ${getRunnersConfigPath(io.homeDir)} does not exist (docs/remote-run.md explains how to add one)`);
+    throw new RemoteRunError(`no runners are set up: ${getRunnersConfigPath(io.homeDir)} does not exist and none is paired (docs/remote-run.md explains how to add one; \`charness runners pair\` pairs one)`);
   }
   if (load.status === 'invalid') throw new RemoteRunError(load.errors.join('\n'));
-  if (load.config.runners.length === 0) throw new RemoteRunError(`${getRunnersConfigPath(io.homeDir)} lists no runners`);
+  if (load.config.runners.length === 0) throw new RemoteRunError(`${getRunnersConfigPath(io.homeDir)} lists no runners and none is paired`);
   const cacheDir = getRemoteRunCacheDir(io.env, io.homeDir);
   ensureRemoteRunCacheDir(cacheDir);
   return {
@@ -66,6 +71,8 @@ function createContext(io: CliIo): CommandContext {
     script: readRunnerScript(),
     leaseMs: readRemoteRunLeaseMs(io.env),
     now: Date.now,
+    runnerPollMs: readRunnerWaitPollMs(io.env),
+    sleep: sleepUntilInterrupted,
   };
 }
 

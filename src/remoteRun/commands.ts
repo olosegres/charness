@@ -20,6 +20,8 @@ import { RemoteRunError, RunnerUnreachableError } from './remoteRunError';
 import { createRunnerClient, describeRunnerRefusal, type RunnerClient, type RunnerScript } from './runnerClient';
 import { chooseExecRunnerName, findRunnerOfJob, pickRunner, probeRunners } from './runners';
 import type { RunnersConfig } from './runnersConfig';
+import { defaultRunnerWaitSeconds } from './runnerWaitTiming';
+import { chooseRunnerWithWait, planRunnerWait } from './runnerWait';
 import { checkIsConnectionLost } from './ssh';
 import { getJobOwner, stageJob } from './submit';
 
@@ -36,6 +38,10 @@ export interface CommandContext {
   script: RunnerScript;
   leaseMs: number;
   now: () => number;
+  /** How often the wait for an offline paired runner looks again (`runnerWaitTiming.ts`). */
+  runnerPollMs: number;
+  /** Resolves after `ms`, or earlier with the signal that interrupted it; a test replaces it. */
+  sleep: (ms: number) => Promise<InterruptSignal | null>;
 }
 
 /** The last lines of a finished job's log that `wait` prints. */
@@ -47,21 +53,34 @@ const jobsListTimeoutMs = 30 * 1000;
 
 function createClient(context: CommandContext, runnerName: string): RunnerClient {
   const runner = context.config.runners.find((candidate) => candidate.name === runnerName);
-  if (runner === undefined) throw new RemoteRunError(`no runner named "${runnerName}" in runners.json (configured: ${context.config.runners.map((candidate) => candidate.name).join(', ')})`, remoteRunExitCodes.usage);
+  if (runner === undefined) throw new RemoteRunError(`no runner named "${runnerName}" (configured: ${context.config.runners.map((candidate) => candidate.name).join(', ')})`, remoteRunExitCodes.usage);
   return createRunnerClient(runner, context.cacheDir, context.script);
 }
 
-/** Probe the runners a command may use and pick one (the named one, or the first that answers and has `needs`). */
-async function chooseClient(context: CommandContext, wanted: { runner: string | null; needs: RunnerCapability | null }): Promise<RunnerClient> {
+/**
+ * Probe the runners a command may use and pick one (the named one, or the first that answers, is not paused and has `needs`). With
+ * `needs`, an offline paired runner that could do the job is waited for up to `waitSeconds` (see `runnerWait.ts`).
+ */
+async function chooseClient(context: CommandContext, wanted: { runner: string | null; needs: RunnerCapability | null; waitSeconds: number }): Promise<RunnerClient> {
   const clients = wanted.runner === null
     ? context.config.runners.map((runner) => createClient(context, runner.name))
     : [createClient(context, wanted.runner)];
-  const reports = await probeRunners(clients, context.now());
-  const pick = pickRunner(context.config, reports, wanted);
-  if (!pick.ok) throw new RemoteRunError(pick.message, pick.exitCode);
-  const client = clients.find((candidate) => candidate.runner.name === pick.runnerName);
-  if (client === undefined) throw new RemoteRunError('the picked runner is not among the candidates');
-  return client;
+  return chooseRunnerWithWait<RunnerClient>({
+    attempt: async () => {
+      const reports = await probeRunners(clients, context.now());
+      const pick = pickRunner(context.config, reports, wanted);
+      if (!pick.ok) return { ok: false, failure: pick, wait: planRunnerWait(context.config, reports, wanted) };
+      const client = clients.find((candidate) => candidate.runner.name === pick.runnerName);
+      if (client === undefined) throw new RemoteRunError('the picked runner is not among the candidates');
+      return { ok: true, choice: client };
+    },
+    needs: wanted.needs,
+    waitSeconds: wanted.waitSeconds,
+    pollMs: context.runnerPollMs,
+    now: context.now,
+    sleep: context.sleep,
+    say: (line) => sayOwn(context.io, line),
+  });
 }
 
 /** The client of the runner a job id belongs to, with its script in place. */
@@ -78,7 +97,7 @@ async function openJobClient(context: CommandContext, jobId: string): Promise<Ru
 export async function runRunCommand(command: Extract<RemoteRunCommand, { kind: 'run' }>, context: CommandContext): Promise<number> {
   const { io } = context;
   const project = getProjectContext(io.cwd);
-  const client = await chooseClient(context, { runner: command.options.runner, needs: command.options.needs });
+  const client = await chooseClient(context, { runner: command.options.runner, needs: command.options.needs, waitSeconds: command.options.runnerWaitSeconds ?? defaultRunnerWaitSeconds });
   const metaDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-run-'));
   // Before the job exists an interrupt only has the temp files to clean up.
   const removeStagingGuard = addInterruptHandler((signal) => {
@@ -277,6 +296,6 @@ export async function runExecCommand(command: Extract<RemoteRunCommand, { kind: 
   const project = getProjectContext(context.io.cwd);
   const chosen = chooseExecRunnerName(context.config, command.runner, command.runner === null ? readLastRunnerNameOfProject(context.cacheDir, project.root) : null);
   if (chosen.note !== null) sayOwn(context.io, chosen.note);
-  const client = await chooseClient(context, { runner: chosen.runnerName, needs: null });
+  const client = await chooseClient(context, { runner: chosen.runnerName, needs: null, waitSeconds: 0 });
   return runExec({ client, slug: project.slug, subfolder: project.subfolder, command: command.command, io: context.io, leaseMs: context.leaseMs });
 }

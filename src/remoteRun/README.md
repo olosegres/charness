@@ -1,7 +1,7 @@
 # `src/remoteRun/` — `charness remote-run`
 
-Run a command on another machine (a **runner**, reached by ordinary ssh) and get its output, exit code and declared result files
-back as if it had run here. User-facing description and setup: [`docs/remote-run.md`](../../docs/remote-run.md). Here: the contracts.
+Run a command on another machine (a **runner**: one PAIRED with this charness — `src/runners/` — or reached by ordinary ssh) and get its
+output, exit code and declared result files back as if it had run here. User-facing description and setup: [`docs/remote-run.md`](../../docs/remote-run.md). Here: the contracts.
 
 "Runner" is the machine. "Worker" already means a detached agent process and the hot-mode child in charness — never use it for this.
 
@@ -24,14 +24,43 @@ agents run it from project folders) and never touches `DATA_DIR` or the state st
 ## Files
 
 - **Config** — `~/.config/charness/runners.json` (`runnersConfig.ts`), one per OS user, beside the global env file whatever `ENV_FILE`
-  says (a Jira agent has neither `ENV_FILE` nor `DATA_DIR`). The bot MCP offers the instruction bullet while it lists a runner
-  (`checkIsRemoteRunOffered`, stamp-cached).
+  says (a Jira agent has neither `ENV_FILE` nor `DATA_DIR`): the hand-made runners. The paired ones come from the hub's registry
+  `~/.config/charness/runners/paired.json` (`pairedRunners.ts`). `runnersCatalog.ts` is the only place that knows both: hand-made first, then
+  paired, a name in both is an error naming it. The bot MCP offers the instruction bullet while the catalog lists a runner
+  (`checkIsRemoteRunOffered`, both files stamp-cached).
 - **Local cache** — `${XDG_CACHE_HOME:-~/.cache}/charness/remote-run/` (0700): ssh control sockets (`ssh/`), the last probe of each runner
   (`<runner>.probe.json`), and `jobs/<id>.json` — the main box's own record of which local project a job came from.
 - **Runner** — `<workDir>/`: `bin/runner-<sha8>.sh`; `tmp/lease.*` (a lease watcher's state, removed when it ends, `prune` sweeps what a killed one left);
   `p/<slug>/{tree,stage/<job>,jobs/<job>,manifest,deps.hash,used,lock}`.
   `slug` = `<basename>-<sha256(hostname:uid:root)[0..10]>`. A job folder holds `meta.json`, `cmd`, `env`, `pull.ere`, `pull.roots`, `manifest`,
   `install-command`/`install-key`, `log`, `phase`, `pid`, `task-id`, `exit`, markers (`timeout`, `killed`, `failed-step`), `artifacts/`.
+
+## Paired runners
+
+A registry entry becomes the same `RunnerConfig` a `runners.json` entry is (`pairedRunners.ts`), so everything above the ssh layer — script
+upload, rsync, Pueue, the lease — is phase 1 unchanged. Only the ssh options differ: destination `charness-runner-<id>`, no host and port but
+`ProxyCommand=<node> <cli.js> runner-proxy <hub dir>/link/<id>.sock`, the host key pinned under `HostKeyAlias` from the hub's own `known_hosts`
+(`StrictHostKeyChecking=yes`, never learned), the hub's key only (`IdentitiesOnly`, `IdentityAgent=none`), `-F /dev/null`. Every path on that line is
+`%`-escaped for ssh and refused when it holds a quote, a backslash, `$`, a backtick or a line break (rsync's `-e` splitter and ssh must read the same
+words: single quotes around a word, double quotes inside it, never a quote inside a single-quoted word — rsync cannot nest them). Pueue's binary and
+config are found from the reported work dir with the layout `runnerUtility/runnerHome.ts` writes down (`work/`, `bin/`, `pueue/` side by side).
+
+- **Online** = the link's unix socket accepts a connection (`runners/linkControl.ts`), asked before any ssh call; offline says «the runner is not
+  connected» and its last seen is the link's own heartbeat (the last probe's time only when there is none).
+- **Paused runners are never picked**: from the hub (`paired.json` `isPaused`) or on the runner itself (the probe's `paused=yes`). A named runner that is
+  paused is refused with who paused it and how to resume; the skipped ones are named in the «no runner is online» message.
+- **`--needs <cap>` waits** for a paired runner that is offline and, when last seen, had the capability and Pueue and was not paused
+  (`runnerWait.ts`): it says so once, looks again every 10 s (`runnerWaitTiming.ts`; the test seam `CHARNESS_TEST_TIMINGS` `remoteRunRunnerPollMs`
+  may only shorten it) and gives up after `--runner-wait` (default 15 min, `0` = fail at once) with the pick's own message and 125. A runner nobody
+  can say can do the job (no runner has the capability, one never seen, a hand-made one, a named one) is not waited for: 125 at once, as in phase 1.
+  An interrupt while waiting ends it with 130 / 143 / 129 and starts no job.
+- **What a paired runner says in `probe`** (`runner.sh`, read from its state folder — the parent of the work dir, recognised by `config.json` and
+  `keys/`; a hand-made runner has none of it): `paused=` (the file `paused` exists), `service=` (the file `service`: `user-service` | `system-service`;
+  none = `foreground`), `runner_version=` (`current/package.json`), and from `ios-check.json` (`"isBootable": true|false`, `"detail"`) `ios_boot=` /
+  `ios_boot_detail=`. A failed boot check turns `cap_ios` into `no — needs the runner user's login session`: Apple does not give a Simulator to a
+  LaunchDaemon. The files are written by `charness-runner` (`pause`, `service install`, the iOS check of the service).
+- **A Mac does not sleep under a job**: the job's command (and `exec`) runs with a sibling `caffeinate -i -w <pid>` (it ends with the process; the
+  command keeps its signals and exit status). Nothing off a Mac or without `caffeinate`.
 
 ## Contracts
 
@@ -115,10 +144,11 @@ whole subshell).
 
 ## Tests
 
-Unit tests (`src/__tests__/remoteRun*.test.ts`) cover every planner, the CLI entry, the MCP bullet, the runner script (probe, apply step,
+Unit tests (`src/__tests__/remoteRun*.test.ts`) cover every planner (the paired runners' ssh options and catalog in `remoteRunPairedRunners.test.ts`, the wait in `remoteRunRunnerWait.test.ts`), the CLI entry, the MCP bullet, the runner script (probe, apply step,
 prune, the lease through `exec`), ssh quoting against a real shell and file selection against real git repositories.
 The flow (`remoteRunE2e.test.ts` and `remoteRunLifecycleE2e.test.ts`, side by side with a runner each, helpers in `remoteRunE2e/remoteRunFlowHarness.ts`: a single file was close to the 20 minutes a flow may take) drives the BUILT CLI against a throwaway loopback `sshd` (no root) and a private Pueue in temp dirs
 (`remoteRunE2e/remoteRunFlowKit.ts`), with decoy jobs that write their own and a child's pid so "nothing left" is asserted on real pids.
+`remoteRunPairedE2e.test.ts` runs the same CLI through a PAIRED runner (the runner-link flow's hub and runner machine, `runnerLinkE2e/runnerLinkFlowKit.ts`): pass / fail codes, live output, `--bg` + `wait`, interrupt, `exec`, paused, `--needs` with the runner offline.
 A killed or timed-out flow cannot leak daemons: `remoteRunFlowSweep.ts` ends everything that names the layout or runs in it, from the
 test's teardown, from a detached reaper, and at the next start. It needs `sshd`, `ssh`, `rsync`, Pueue and `yarn build`; a local run without
 them is skipped with the reason, CI (`CI=true`) installs them and fails without.

@@ -41,10 +41,25 @@ const runnersConfigSchema = z.strictObject({
   runners: z.array(runnerSchema),
 }).refine((config) => new Set(config.runners.map((runner) => runner.name)).size === config.runners.length, { path: ['runners'], message: 'runner names must be unique' });
 
-/** @name RunnerConfig @description One runner as the file describes it. */
-export type RunnerConfig = z.infer<typeof runnerSchema>;
-/** @name RunnersConfig @description The whole file. */
-export type RunnersConfig = z.infer<typeof runnersConfigSchema>;
+/**
+ * @name PairedRunnerLink
+ * @description What only a PAIRED runner has (`pairedRunners.ts` fills it; the file never can): where the hub keeps its link on this
+ * machine and whether the hub paused it. A runner without it is a hand-made one, reached by plain ssh.
+ */
+export interface PairedRunnerLink {
+  runnerId: string;
+  /** The registry folder (`~/.config/charness/runners`): `link/<id>.sock` / `link/<id>.json` say whether the runner is connected. */
+  hubDir: string;
+  /** Paused from the hub (`charness runners pause`, `/runners`): the runner stays attached but is never picked for a job. */
+  isPausedByHub: boolean;
+}
+
+/** @name RunnerConfig @description One runner: an entry of the file, or a paired runner built from the hub's registry. */
+export type RunnerConfig = z.infer<typeof runnerSchema> & { paired?: PairedRunnerLink };
+/** @name RunnersConfig @description Every runner `remote-run` may use (see `runnersCatalog.ts`); the file alone holds only the hand-made ones. */
+export interface RunnersConfig {
+  runners: RunnerConfig[];
+}
 
 /** @description Where the file lives: beside the user's global charness env file, whatever `ENV_FILE` says (it is per OS user, not per instance). */
 export function getRunnersConfigPath(homeDir: string = os.homedir()): string {
@@ -74,12 +89,6 @@ export function loadRunnersConfig(homeDir: string = os.homedir()): ConfigFileLoa
 /** @description Forget the cached loads (tests that swap files under one path). */
 export function resetRunnersConfigCache(): void {
   loader.resetCache();
-}
-
-/** @description Does any runner exist right now? The bot MCP's instructions mention remote-run only while one does. */
-export function checkIsRemoteRunOffered(homeDir: string = os.homedir()): boolean {
-  const load = loadRunnersConfig(homeDir);
-  return (load.config?.runners.length ?? 0) > 0;
 }
 
 /** @description The parallel limits of a runner's groups as the `name=n,name=n` string the runner script applies, in the order of the file (the runner applies each pair on its own, so the order carries no meaning). */

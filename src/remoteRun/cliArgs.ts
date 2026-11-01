@@ -12,6 +12,8 @@ export interface RemoteRunOptions {
   runner: string | null;
   /** `--needs`: the first runner that has this capability. */
   needs: RunnerCapability | null;
+  /** `--runner-wait` in seconds: how long to wait for an offline paired runner that has `--needs`; `0` = fail at once; `null` = the default. */
+  runnerWaitSeconds: number | null;
   /** `--group`: the Pueue group the job joins. */
   group: string | null;
   /** `--timeout` in seconds; `null` = the default. */
@@ -56,7 +58,7 @@ export function parseDuration(text: string): number | null {
 }
 
 function createDefaultOptions(): RemoteRunOptions {
-  return { runner: null, needs: null, group: null, timeoutSeconds: null, isWithGit: false, env: [], isBackground: false };
+  return { runner: null, needs: null, runnerWaitSeconds: null, group: null, timeoutSeconds: null, isWithGit: false, env: [], isBackground: false };
 }
 
 /** The value of `--name value` / `--name=value` at `index`, and how many words it took; `null` when this word is not that option. */
@@ -128,6 +130,12 @@ function applyRunOption(options: RemoteRunOptions, name: string, value: string):
     const capability = runnerCapabilities.find((candidate) => candidate === value);
     if (capability === undefined) return `--needs must be one of: ${runnerCapabilities.join(', ')}`;
     options.needs = capability;
+  } else if (name === '--runner-wait') {
+    // `0` is meaningful here («never wait»), unlike a timeout, so it is read before `parseDuration` (which refuses zero).
+    const seconds = /^0+[hms]?$/.test(value) ? 0 : parseDuration(value);
+    if (seconds === null) return '--runner-wait needs a duration such as 15m, 90s or 1h (seconds if no unit), or 0 to fail at once';
+    if (seconds > maxTimeoutSeconds) return '--runner-wait is at most 7 days';
+    options.runnerWaitSeconds = seconds;
   } else if (name === '--group') {
     if (!groupNamePattern.test(value)) return '--group needs a Pueue group name (letters, digits, - and _)';
     options.group = value;
@@ -147,7 +155,7 @@ function applyRunOption(options: RemoteRunOptions, name: string, value: string):
   return null;
 }
 
-const runValueOptions: readonly string[] = ['--runner', '--needs', '--group', '--timeout'];
+const runValueOptions: readonly string[] = ['--runner', '--needs', '--runner-wait', '--group', '--timeout'];
 
 function parseRunArguments(words: readonly string[]): RemoteRunArgsParse {
   const options = createDefaultOptions();

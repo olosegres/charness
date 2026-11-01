@@ -28,7 +28,8 @@ import {
 } from '../scheduler/mcpSurface';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
-import { checkIsRemoteRunOffered, getRunnersConfigPath, resetRunnersConfigCache } from '../remoteRun/runnersConfig';
+import { checkIsRemoteRunOffered } from '../remoteRun/runnersCatalog';
+import { getRunnersConfigPath, resetRunnersConfigCache } from '../remoteRun/runnersConfig';
 
 const secret = 'f'.repeat(64);
 const offeredWithout: OptionalBotTools = { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, isRemoteRunOffered: false };

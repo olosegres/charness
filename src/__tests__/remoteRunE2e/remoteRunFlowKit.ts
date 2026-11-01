@@ -65,6 +65,11 @@ export interface FlowLayout {
   runners: RunnersConfig['runners'];
 }
 
+/** What the CLI helpers need of a layout, so a flow that builds its runner another way (the paired one) can use them. */
+export type CliFlowLayout = Pick<FlowLayout, 'home' | 'cacheDir' | 'cliChildren' | 'projectsDir'>;
+/** What `createProject` needs of a layout. */
+export type ProjectFlowLayout = Pick<FlowLayout, 'projectsDir' | 'workDir'>;
+
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -239,7 +244,7 @@ function git(directory: string, ...args: string[]): void {
 }
 
 /** @description A git project with `files` committed (name → content); `.gitignore` is added by the caller when wanted. */
-export function createProject(layout: FlowLayout, name: string, files: Readonly<Record<string, string>>): FlowProject {
+export function createProject(layout: ProjectFlowLayout, name: string, files: Readonly<Record<string, string>>): FlowProject {
   fs.mkdirSync(path.join(layout.projectsDir, name), { recursive: true });
   const root = fs.realpathSync(path.join(layout.projectsDir, name));
   git(root, 'init', '-q', '-b', 'main');
@@ -280,7 +285,7 @@ export interface CliRun {
 }
 
 /** @description Start the BUILT CLI as `charness remote-run <args>` in `cwd`, with an environment of its own (the layout's HOME and cache, nothing else of this process's). */
-export function startCli(layout: FlowLayout, args: readonly string[], options: { cwd: string; env?: NodeJS.ProcessEnv } = { cwd: layout.projectsDir }): CliRun {
+export function startCli(layout: CliFlowLayout, args: readonly string[], options: { cwd: string; env?: NodeJS.ProcessEnv } = { cwd: layout.projectsDir }): CliRun {
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
     HOME: layout.home,
@@ -319,7 +324,7 @@ export interface CliResult {
 }
 
 /** @description Run the CLI to its end, killed (and the test failed) when it runs past `timeoutMs`. */
-export async function runCli(layout: FlowLayout, args: readonly string[], options: { cwd: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }): Promise<CliResult> {
+export async function runCli(layout: CliFlowLayout, args: readonly string[], options: { cwd: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }): Promise<CliResult> {
   const run = startCli(layout, args, options);
   const timeoutMs = options.timeoutMs ?? 120_000;
   const timer = setTimeout(() => run.child.kill('SIGKILL'), timeoutMs);

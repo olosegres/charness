@@ -28,6 +28,7 @@ import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
 import { todoReminderDefaultMinutes } from '../todos/nag';
 import { todoReminderPollMs } from '../todos/reminderEngine';
 import { remoteRunLeaseMinMs, remoteRunLeaseMs } from '../remoteRun/leaseTiming';
+import { runnerWaitPollMinMs, runnerWaitPollMs } from '../remoteRun/runnerWaitTiming';
 
 /** Every key with the production window (a count, for `bindPickerClaimLimit`) it may only shorten. */
 const productionWindowsMs: Array<[keyof TestTimings, number]> = [
@@ -44,6 +45,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['todoReminderIntervalMs', todoReminderDefaultMinutes * 60 * 1000],
   ['scheduleMinFireIntervalMs', minFireIntervalMs],
   ['remoteRunLeaseMs', remoteRunLeaseMs],
+  ['remoteRunRunnerPollMs', runnerWaitPollMs],
   ['bindPickerClaimLimit', bindPickerClaimLimit],
   ['tscWatchCheckIntervalMs', tscWatchCheckIntervalMs],
   ['tscWatchStaleGraceMs', tscWatchStaleGraceMs],
@@ -54,10 +56,11 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
  */
 const supervisorTimingKeys = ['tscWatchCheckIntervalMs', 'tscWatchStaleGraceMs'];
 /**
- * The keys the `charness remote-run` CLI reads, not the bot (`remoteRun/leaseTiming.ts` reads it tolerantly: the CLI cannot import this
- * module's graph). That it reads it is proven by `remoteRunLease.test.ts` and the remote-run flow, whose lease expiry is its test window.
+ * The keys the `charness remote-run` CLI reads, not the bot (`remoteRun/leaseTiming.ts` and `runnerWaitTiming.ts` read them tolerantly: the CLI
+ * cannot import this module's graph). That they read them is proven by `remoteRunLease.test.ts` and `remoteRunRunnerWait.test.ts`, and by the
+ * flows, whose lease expiry and wait poll are their test windows.
  */
-const cliTimingKeys = ['remoteRunLeaseMs'];
+const cliTimingKeys = ['remoteRunLeaseMs', 'remoteRunRunnerPollMs'];
 /** One past the longest delay Node's timers keep: a longer one fires after 1 ms. */
 const beyondTimerMaxMs = 2_147_483_648;
 
@@ -112,6 +115,15 @@ describe('the remote-run lease window has a floor as well as a ceiling', () => {
     const parsed = parseTestTimings(JSON.stringify({ remoteRunLeaseMs: remoteRunLeaseMinMs - 1 }));
     assert.equal(parsed.ok, false);
     assert.ok(!parsed.ok && parsed.errors.every((error) => error.startsWith(`${testTimingsEnvName} remoteRunLeaseMs:`)), JSON.stringify(parsed));
+  });
+});
+
+describe('the remote-run runner wait poll has a floor as well as a ceiling', () => {
+  it(`remoteRunRunnerPollMs: ${runnerWaitPollMinMs} ms is accepted, one ms less is refused naming the key — a tighter poll would probe every runner in a loop`, () => {
+    assert.deepEqual(parseTestTimings(JSON.stringify({ remoteRunRunnerPollMs: runnerWaitPollMinMs })), { ok: true, timings: { remoteRunRunnerPollMs: runnerWaitPollMinMs } });
+    const parsed = parseTestTimings(JSON.stringify({ remoteRunRunnerPollMs: runnerWaitPollMinMs - 1 }));
+    assert.equal(parsed.ok, false);
+    assert.ok(!parsed.ok && parsed.errors.every((error) => error.startsWith(`${testTimingsEnvName} remoteRunRunnerPollMs:`)), JSON.stringify(parsed));
   });
 });
 

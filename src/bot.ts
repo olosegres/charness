@@ -473,7 +473,7 @@ import type { ClaudeRateLimitEvent, ClaudeTurnCostReport } from './adapters/clau
 import { addClaudeApiSpend, computeClaudeTurnCostUsd, formatUsd, getClaudeTurnCostOutcome } from './utils/claudeApiSpend';
 import { formatClaudeApiSpendWords } from './utils/claudeProfileUsageLines';
 import { resolveClaudeBinary } from './utils/resolveBinary';
-import { checkIsRemoteRunOffered } from './remoteRun/runnersConfig';
+import { checkIsRemoteRunOffered } from './remoteRun/runnersCatalog';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ENV parsing & fatal validation
