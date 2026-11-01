@@ -156,7 +156,12 @@ export function startRunner(layout: RunnerLinkLayout): ChildProcess {
   const child = spawn(paths.launcher, ['run'], {
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: createEnv(layout.runnerHome, layout, { FLOW_SECRET: 'leak', [testNodeModulesEnvName]: path.join(repoRoot, 'node_modules') }),
+    env: createEnv(layout.runnerHome, layout, {
+      FLOW_SECRET: 'leak',
+      [testNodeModulesEnvName]: path.join(repoRoot, 'node_modules'),
+      // The linked runner asks the hub for its package every 2 s instead of every 5 minutes (the seam may only shorten the window).
+      CHARNESS_TEST_TIMINGS: JSON.stringify({ runnerVersionPollMs: 2000 }),
+    }),
   });
   layout.groups.add(child);
   return child;

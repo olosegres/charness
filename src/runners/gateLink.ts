@@ -5,7 +5,7 @@ import * as path from 'path';
 import { Duplex, Writable, type Readable } from 'stream';
 import { Client } from 'ssh2';
 import { getCaughtErrnoCode } from '../configDirFile';
-import { formatGateAnswerHead, linkUserName } from './gateProtocol';
+import { formatGateAnswerHead, linkUserName, noPackageMarker } from './gateProtocol';
 import { getRunnerLinkPaths, type HubContext } from './hubPaths';
 import { readHubKey } from './hubKey';
 import { readPairedFile } from './hubRegistry';
@@ -64,8 +64,6 @@ export interface GateLinkParams {
   timings?: Partial<GateLinkTimings>;
   now?: () => number;
 }
-
-const noPackageId = 'none';
 
 /**
  * A writable that hands everything to `target` and never ends it: the gate's stdout is `process.stdout`, which is not to be closed
@@ -209,7 +207,7 @@ export function runGateLink(params: GateLinkParams): Promise<number> {
       });
     };
 
-    params.output.write(formatGateAnswerHead('link', { package: params.packageId ?? noPackageId }));
+    params.output.write(formatGateAnswerHead('link', { package: params.packageId ?? noPackageMarker }));
     duplex.on('error', () => finish('the connection to the runner failed'));
     client.on('error', (error) => finish(`ssh: ${error.message}`));
     client.on('close', () => finish('the runner disconnected'));

@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { gunzipSync } from 'zlib';
+import { noPackageMarker } from '../runners/gateProtocol';
 import { callGate, connectToHub, type HubEndpoint } from './hubClient';
 import { installAppFromArchive, removeOldApps, switchCurrentApp } from './appInstall';
 import { writeRunnerConfig, type RunnerConfig } from './runnerConfig';
@@ -71,7 +72,6 @@ export interface UpdateDecisionInputs {
 }
 
 export const updateRetryDelayMs = 10 * 60 * 1000;
-const noPackageMarker = 'none';
 
 export type UpdateDecision = 'none' | 'wait-until-idle' | 'update-now';
 

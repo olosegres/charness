@@ -13,6 +13,8 @@ import { runnerServiceKinds } from './hubRegistry';
  *                                    `redeem`     stdin: a {@link RedeemRequest} as JSON; stdout: marker line, then a {@link RedeemReply}
  *   permanent key (a paired runner): `link`       marker line, then an ssh session in which the GATE is the client (see gateLink.ts)
  *                                    `package`    marker line, then the packed package (raw gzip)
+ *                                    `version`    marker line with the hub's current `package=<id>`, nothing else — asked every few minutes over
+ *                                                 the connection that is already open, so a linked runner learns of an update
  *                                    `unpair`     marker line, then {@link UnpairReply}
  *
  * Every answer starts with a MARKER line (after a line break, see {@link formatGateAnswerHead}): a shell that prints something before the
@@ -22,13 +24,15 @@ import { runnerServiceKinds } from './hubRegistry';
 
 /** The text every marker line starts with; the `1` is the protocol version. */
 export const gateMarker = '--charness-gate-1--';
-export const gateRequests = ['bootstrap', 'redeem', 'link', 'package', 'unpair'] as const;
+export const gateRequests = ['bootstrap', 'redeem', 'link', 'package', 'version', 'unpair'] as const;
 /** @name GateRequest @description One of the words a runner may send. */
 export type GateRequest = (typeof gateRequests)[number];
 
 export const temporaryKeyRequests: readonly GateRequest[] = ['bootstrap', 'redeem'];
-export const runnerKeyRequests: readonly GateRequest[] = ['link', 'package', 'unpair'];
+export const runnerKeyRequests: readonly GateRequest[] = ['link', 'package', 'version', 'unpair'];
 
+/** What a `link` / `version` answer names as the package when the hub cannot pack one. */
+export const noPackageMarker = 'none';
 /** The username the gate's ssh client logs in with inside the link (the runner's server ignores it). */
 export const linkUserName = 'charness';
 /** The most bytes of a request body the gate reads from stdin. */

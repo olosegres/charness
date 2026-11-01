@@ -28,6 +28,7 @@ import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
 import { todoReminderDefaultMinutes } from '../todos/nag';
 import { todoReminderPollMs } from '../todos/reminderEngine';
 import { remoteRunLeaseMinMs, remoteRunLeaseMs } from '../remoteRun/leaseTiming';
+import { runnerVersionPollMs } from '../runnerUtility/versionPollTiming';
 
 /** Every key with the production window (a count, for `bindPickerClaimLimit`) it may only shorten. */
 const productionWindowsMs: Array<[keyof TestTimings, number]> = [
@@ -44,6 +45,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['todoReminderIntervalMs', todoReminderDefaultMinutes * 60 * 1000],
   ['scheduleMinFireIntervalMs', minFireIntervalMs],
   ['remoteRunLeaseMs', remoteRunLeaseMs],
+  ['runnerVersionPollMs', runnerVersionPollMs],
   ['bindPickerClaimLimit', bindPickerClaimLimit],
   ['tscWatchCheckIntervalMs', tscWatchCheckIntervalMs],
   ['tscWatchStaleGraceMs', tscWatchStaleGraceMs],
@@ -57,7 +59,7 @@ const supervisorTimingKeys = ['tscWatchCheckIntervalMs', 'tscWatchStaleGraceMs']
  * The keys the `charness remote-run` CLI reads, not the bot (`remoteRun/leaseTiming.ts` reads it tolerantly: the CLI cannot import this
  * module's graph). That it reads it is proven by `remoteRunLease.test.ts` and the remote-run flow, whose lease expiry is its test window.
  */
-const cliTimingKeys = ['remoteRunLeaseMs'];
+const cliTimingKeys = ['remoteRunLeaseMs', 'runnerVersionPollMs'];
 /** One past the longest delay Node's timers keep: a longer one fires after 1 ms. */
 const beyondTimerMaxMs = 2_147_483_648;
 

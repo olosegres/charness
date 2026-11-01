@@ -97,6 +97,7 @@ this machine's own loopback port — otherwise the runner would be told to pin a
 | temporary | `redeem` | marker line, then `{ok, runnerId, name, hubPublicKey, label, host, port}` or `{ok:false, reason}` |
 | runner | `link` | marker line (`package=<id>`), then the ssh session of `gateLink.ts` |
 | runner | `package` | marker line, then the packed package |
+| runner | `version` | marker line with the hub's current `package=<id>`, nothing else — a linked runner asks every few minutes over its open connection |
 | runner | `unpair` | marker line, then `{ok}`; the hub removes the runner and cuts its link |
 
 A **marker line** (`--charness-gate-1-- <request> key=value…`) opens every answer, after a line break that ends any unfinished line a shell

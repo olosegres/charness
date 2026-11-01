@@ -7,6 +7,7 @@ import { runGateLink, type GateLinkTimings } from './gateLink';
 import {
   formatGateAnswerHead,
   maxGateRequestBytes,
+  noPackageMarker,
   redeemRequestSchema,
   runnerKeyRequests,
   temporaryKeyRequests,
@@ -134,6 +135,11 @@ function describeFailure(error: unknown): string {
   return `internal error (${getCaughtErrnoCode(error)})`;
 }
 
+async function handleVersion(ctx: HubContext, io: GateIo): Promise<number> {
+  io.stdout.write(formatGateAnswerHead('version', { package: getPackageIdOrNull(ctx, io.log) ?? noPackageMarker }));
+  return 0;
+}
+
 function getPackageIdOrNull(ctx: HubContext, log: (line: string) => void): string | null {
   try {
     return getHubPackage(ctx).id;
@@ -180,6 +186,8 @@ export async function runRunnerGate(argv: readonly string[], env: NodeJS.Process
         return await runGateLink({ ctx, runnerId: invocation.runnerId, input: io.stdin, output: io.stdout, packageId: getPackageIdOrNull(ctx, io.log), log: io.log, timings: options.linkTimings, now });
       case 'package':
         return await writePackage(ctx, io, 'package');
+      case 'version':
+        return await handleVersion(ctx, io);
       case 'unpair':
         return await handleUnpair(ctx, invocation.runnerId, io, now);
       default:

@@ -40,12 +40,16 @@ the queue), `logs/`, `build/`.
   `~/.charness-runner/bin` + the `node` folder + Homebrew + system, the Android SDK where installers put it, then the `env` file); the
   client's EOF is the command's EOF (phase 1's lease relies on it); a CLOSED channel closes the pipes and does not kill the command; the
   exit status or signal goes back. A running command counts as busy until the process really ends.
+- **The attempt ends with the `link` CHANNEL.** The hub's gate dying, or the link being cut, closes that channel while the connection
+  to sshd stays up and answers keepalives; the loop watches the channel as well as the connection.
 - **Reconnect.** Backoff 1 s doubling to 5 min, ±20 % jitter, reset by a link that held 30 s. The hub refusing the key (a removed runner) is
   the `removed` state: `status` says «This runner was removed by <hub>. Pair again with a new line from /runners.» and it asks once an hour.
-- **Updates.** The `link` marker names the hub's package id; a runner whose id differs, **idle** (no command over the link), fetches the
-  package (`package` request on its own connection), checks the archive hashes to the announced id, installs it next to the running copy,
-  points `current` at it and exits with 75 — the launcher starts the new copy. A busy runner waits until its last command ends; a failed
-  update is not tried again for 10 minutes. Pueue jobs are not commands over the link: a queue never blocks an update.
+- **Updates.** The `link` marker names the hub's package id, and a LINKED runner asks again every 5 minutes (`version`, a short exec on
+  the connection it already holds; the test seam `CHARNESS_TEST_TIMINGS` `runnerVersionPollMs` may shorten it); a runner whose id
+  differs, **idle** (no command over the link), fetches the package (`package` request on its own connection), checks the archive hashes to the announced id, installs it next to the running copy,
+  points `current` at it and exits with 75 — the launcher starts the new copy. A busy runner waits until its last command ends; while the
+  update installs the link is closed on purpose and that closing does not start another attempt; a failed update is tried again by the
+  next poll after a 10-minute cooldown. Pueue jobs are not commands over the link: a queue never blocks an update.
 - **Tools.** Pueue 4.0.4 from the pinned release binaries, each checked against its sha256 before it is kept (`toolInstall.ts`;
   hashes taken from the v4.0.4 assets). rsync ≥ 3.1 is found (PATH, Homebrew, `/usr/local`, `/usr/bin`; Apple's `openrsync` does not count:
   no `--copy-dest`, no `--modify-window=-1`); otherwise rsync 3.4.1 is built from its pinned source with `cc`/`make`, or the one command to

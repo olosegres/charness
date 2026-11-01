@@ -2,6 +2,7 @@ import type { Client } from 'ssh2';
 import { restartExitCode } from './appInstall';
 import { decideUpdate, updateFromHub, type UpdateOutcome } from './appUpdate';
 import { callGate, connectToHub, HubConnectionError, type HubEndpoint } from './hubClient';
+import { readRunnerVersionPollMs } from './versionPollTiming';
 import { writeRunnerStatus, type LinkState, type RunnerConfig } from './runnerConfig';
 import type { RunnerHomePaths } from './runnerHome';
 import type { RunnerKeys } from './runnerKeys';
@@ -14,7 +15,10 @@ import type { RunnerServers } from './runnerServers';
  *
  *   backoff   1 s, doubling, up to 5 min, ±20 % jitter; a link that held for 30 s starts the series again
  *   removed   the hub refused the key (a removed runner): say so in the status and ask once an hour — never a flood that trips fail2ban
- *   update    the `link` answer names the hub's package id; an idle runner whose id differs updates and asks the launcher for a restart
+ *   update    the `link` answer names the hub's package id, and a linked runner asks again every few minutes (`version`, over the
+ *             connection it holds); an idle runner whose id differs updates and asks the launcher for a restart
+ *   closing   the attempt ends when the `link` CHANNEL ends or the connection does — the hub's gate dying, or the link being cut, closes
+ *             the channel while the connection to sshd stays up and keeps answering keepalives, so the connection alone proves nothing
  */
 
 const initialBackoffMs = 1000;
@@ -34,8 +38,9 @@ export interface LinkLoopDeps {
   config: RunnerConfig;
   keys: RunnerKeys;
   servers: RunnerServers;
-  /** Set by the caller; the loop reads it to know when idle commands finish (see {@link LinkLoopHandle.notifyActiveCountChange}). */
   now?: () => number;
+  /** How often a linked runner asks the hub for its package (default: {@link readRunnerVersionPollMs}). */
+  versionPollMs?: number;
   random?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   connect?: typeof connectToHub;
@@ -75,6 +80,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
   const connect = deps.connect ?? connectToHub;
   const update = deps.update ?? updateFromHub;
   const log = deps.log ?? (() => undefined);
+  const versionPollMs = deps.versionPollMs ?? readRunnerVersionPollMs(process.env);
   const endpoint: HubEndpoint = { host: deps.config.hub.host, port: deps.config.hub.port, user: deps.config.hub.user, hostKey: deps.config.hub.hostKey };
   let installedPackageId = deps.config.packageId;
   let state: LinkState = 'connecting';
@@ -125,7 +131,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
       client.end();
       return { kind: 'failed', reason: 'the hub did not start the link' };
     }
-    const hubPackageId = answer.marker.fields.package;
+    let hubPackageId = answer.marker.fields.package;
     const decide = (): ReturnType<typeof decideUpdate> => decideUpdate({
       hubPackageId,
       installedPackageId,
@@ -146,29 +152,63 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
     const linkedAtMs = now();
     return new Promise<AttemptResult>((resolve) => {
       let isDone = false;
+      // While an update is being installed the link is deliberately closed: its closing is not the attempt ending, and the attempt
+      // ends only with the update's outcome — otherwise the loop would reconnect and run the next attempt beside the install.
+      let isUpdating = false;
+      let pollTimer: NodeJS.Timeout | null = null;
+      const closedResult = (): AttemptResult => ({ kind: 'closed', lastedMs: now() - linkedAtMs });
       const finish = (result: AttemptResult): void => {
         if (isDone) return;
         isDone = true;
+        if (pollTimer !== null) clearInterval(pollTimer);
         onIdleUpdate = null;
         signal.removeEventListener('abort', onAbort);
         client.end();
         resolve(result);
       };
-      const onAbort = (): void => finish({ kind: 'closed', lastedMs: now() - linkedAtMs });
+      const onAbort = (): void => finish(closedResult());
+      const onLost = (): void => {
+        if (!isUpdating) finish(closedResult());
+      };
+      const startUpdate = (targetId: string): void => {
+        isUpdating = true;
+        pendingUpdateId = null;
+        onIdleUpdate = null;
+        if (pollTimer !== null) clearInterval(pollTimer);
+        client.end();
+        void tryUpdate(targetId, signal).then((outcome) => finish(outcome?.ok === true ? { kind: 'restart' } : closedResult()));
+      };
+      const considerUpdate = (): void => {
+        const decision = decide();
+        if (decision === 'update-now' && hubPackageId !== undefined) {
+          startUpdate(hubPackageId);
+        } else if (decision === 'wait-until-idle' && hubPackageId !== undefined) {
+          pendingUpdateId = hubPackageId;
+          onIdleUpdate = (): void => {
+            if (pendingUpdateId !== null && decide() === 'update-now') startUpdate(pendingUpdateId);
+          };
+        }
+      };
+      const askHubForPackage = async (): Promise<void> => {
+        if (isUpdating || isDone) return;
+        try {
+          const versionAnswer = await callGate(client, 'version', null);
+          if (versionAnswer === null) return;
+          versionAnswer.channel.resume();
+          if (isUpdating || isDone) return;
+          hubPackageId = versionAnswer.marker.fields.package;
+          considerUpdate();
+        } catch (error) {
+          log(`could not ask the hub for its package (${error instanceof Error ? error.message : 'unknown'})`);
+        }
+      };
       signal.addEventListener('abort', onAbort, { once: true });
-      client.once('close', () => finish({ kind: 'closed', lastedMs: now() - linkedAtMs }));
-      client.once('error', () => finish({ kind: 'closed', lastedMs: now() - linkedAtMs }));
-      if (decide() === 'wait-until-idle' && hubPackageId !== undefined) {
-        pendingUpdateId = hubPackageId;
-        onIdleUpdate = (): void => {
-          if (decide() !== 'update-now' || pendingUpdateId === null) return;
-          const targetId = pendingUpdateId;
-          pendingUpdateId = null;
-          onIdleUpdate = null;
-          client.end();
-          void tryUpdate(targetId, signal).then((outcome) => finish(outcome?.ok === true ? { kind: 'restart' } : { kind: 'closed', lastedMs: now() - linkedAtMs }));
-        };
-      }
+      client.once('close', onLost);
+      client.once('error', onLost);
+      answer.channel.once('close', onLost);
+      answer.channel.once('error', onLost);
+      considerUpdate();
+      if (!isUpdating) pollTimer = setInterval(() => { void askHubForPackage(); }, versionPollMs);
     });
   };
 

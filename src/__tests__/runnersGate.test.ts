@@ -83,14 +83,15 @@ describe('gate routing', () => {
   it('a pairing\'s key may bootstrap and redeem — nothing else', () => {
     assert.equal(routeGateRequest('temporary', 'bootstrap'), 'bootstrap');
     assert.equal(routeGateRequest('temporary', 'redeem'), 'redeem');
-    for (const command of ['link', 'package', 'unpair', 'bootstrap now', 'redeem; id', ' redeem', '', 'sh', '$(id)', undefined]) {
+    for (const command of ['link', 'package', 'version', 'unpair', 'bootstrap now', 'redeem; id', ' redeem', '', 'sh', '$(id)', undefined]) {
       assert.equal(routeGateRequest('temporary', command), null, String(command));
     }
   });
 
-  it('a runner\'s key may link, fetch the package and unpair — nothing else', () => {
+  it('a runner\'s key may link, fetch the package, ask the version and unpair — nothing else', () => {
     assert.equal(routeGateRequest('runner', 'link'), 'link');
     assert.equal(routeGateRequest('runner', 'package'), 'package');
+    assert.equal(routeGateRequest('runner', 'version'), 'version');
     assert.equal(routeGateRequest('runner', 'unpair'), 'unpair');
     for (const command of ['bootstrap', 'redeem', 'link extra', 'scp -t /tmp', 'cat /etc/passwd', 'sftp', '', undefined]) {
       assert.equal(routeGateRequest('runner', command), null, String(command));
@@ -187,6 +188,17 @@ describe('gate requests', () => {
     assert.ok(gunzipSync(body).toString('latin1').includes('package.json'));
   });
 
+  it('version answers with the marker and the hub\'s current package id, and nothing else', async () => {
+    const runnerId = await pairRunner();
+    const run = await runGate(gateArgs('runner', runnerId), 'version');
+    assert.equal(run.code, 0);
+    const { marker, body } = splitMarker(run.stdout);
+    assert.equal(marker?.request, 'version');
+    assert.match(marker?.fields.package ?? '', /^[0-9a-f]{16}$/);
+    assert.equal(body.length, 0);
+    assert.equal(marker?.fields.package, splitMarker((await runGate(gateArgs('runner', runnerId), 'package')).stdout).marker?.fields.id, 'the same id the package request announces');
+  });
+
   it('unpair removes the runner and says so; a second unpair says no', async () => {
     const runnerId = await pairRunner();
     const first = await runGate(gateArgs('runner', runnerId), 'unpair');
@@ -199,7 +211,7 @@ describe('gate requests', () => {
   it('a runner that left the registry is refused by `package` and `link` whatever its key line still allows', async () => {
     const runnerId = await pairRunner();
     await removePairedRunner(fixture.ctx, runnerId, startMs);
-    for (const command of ['package', 'link']) {
+    for (const command of ['package', 'link', 'version']) {
       const run = await runGate(gateArgs('runner', runnerId), command);
       assert.equal(run.code, 2, command);
       assert.equal(run.stdout.length, 0, command);

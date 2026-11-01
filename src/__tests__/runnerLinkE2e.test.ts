@@ -187,18 +187,19 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     }
   });
 
-  it('an idle runner updates itself when the hub\'s package changes, and relinks', async () => {
+  it('a linked, idle runner learns of the hub\'s new package by itself — the link is not touched — updates, and relinks', async () => {
     const before = readJson<RunnerConfig>(runnerPaths.config);
     const appBefore = fs.realpathSync(runnerPaths.currentApp);
     const statusBefore = await waitForLink();
+    const gateBefore = readGatePid();
     fs.appendFileSync(path.join(layout.hubInstall, 'dist', 'runners', 'pairCode.js'), '\n// changed by the flow\n');
-    process.kill(readGatePid(), 'SIGKILL');
     await waitUntil(() => {
       const config = readJson<RunnerConfig>(runnerPaths.config);
       return config.packageId !== before.packageId && fs.realpathSync(runnerPaths.currentApp) !== appBefore;
     }, 'the runner to install the new package', updateTimeoutMs);
     await waitForLink(statusBefore.pid);
     assert.equal((await waitForSsh('echo updated')).trim(), 'updated');
+    assert.notEqual(readGatePid(), gateBefore, 'the update restarted the link — nothing killed the old gate to make it happen');
     assert.equal(readHubPaired().rev, 1, 'an update is not a new pairing');
   });
 
