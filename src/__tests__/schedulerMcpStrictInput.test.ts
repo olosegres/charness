@@ -3,7 +3,7 @@
  * them). An agent that writes `filePath` instead of `path` used to have the key dropped silently — the images never
  * arrived and the tool still said "Delivered 3 messages". Now an unknown key, at the top of a call or inside a nested
  * item, is a tool error that names the key, hints at the nearest allowed one and lists the allowed ones; no tool body
- * runs. Also covered: an empty item is refused.
+ * runs. Also covered: an empty item is refused, and the success summary says what was actually sent, per kind.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -322,6 +322,35 @@ describe('send_messages_to_user', () => {
     assert.notEqual(result.isError, true, getText(result));
     assert.deepEqual(fixture.sentTextChunks, ['hello']);
     assert.equal(fixture.fileGatewayCalls.length, 1);
+  });
+
+  it('the summary says what was sent: three photos', async () => {
+    for (const name of ['a.png', 'b.jpg', 'c.webp']) writeBoundFile(name);
+    const client = await connectTelegram();
+    const result = await client.callTool({
+      name: 'send_messages_to_user',
+      arguments: { messages: [{ path: 'a.png' }, { path: 'b.jpg', text: 'caption' }, { path: 'c.webp' }] },
+    });
+    assert.notEqual(result.isError, true, getText(result));
+    assert.equal(getText(result), 'Delivered 3 messages: 3 photos.');
+  });
+
+  it('the summary counts each kind: a text, a document by extension, a photo forced to a document', async () => {
+    writeBoundFile('notes.txt');
+    writeBoundFile('a.png');
+    const client = await connectTelegram();
+    const result = await client.callTool({
+      name: 'send_messages_to_user',
+      arguments: { messages: ['hello', { path: 'notes.txt' }, { path: 'a.png', as_file: true }] },
+    });
+    assert.notEqual(result.isError, true, getText(result));
+    assert.equal(getText(result), 'Delivered 3 messages: 1 text, 2 documents.');
+  });
+
+  it('the summary keeps a plain text-only batch honest too', async () => {
+    const client = await connectTelegram();
+    const result = await client.callTool({ name: 'send_messages_to_user', arguments: { messages: ['one', 'two'] } });
+    assert.equal(getText(result), 'Delivered 2 messages: 2 texts.');
   });
 });
 

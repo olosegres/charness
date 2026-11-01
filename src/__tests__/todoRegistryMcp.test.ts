@@ -58,7 +58,7 @@ function buildDeps(store: StateStore, answerSinks: AnswerSinks): SchedulerMcpDep
     disarmJob: () => {},
     getThreadsForDirectory: (directory) => (directory === sharedFolder ? [keyToString(topicKey), keyToString(sharedFolderTopicKey)] : []),
     getThreadAdapterName: () => 'claude',
-    sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
+    sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
     sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
     compactConversation: () => ({ ok: true, message: 'unused' }),
     unpinMessages: async () => {},

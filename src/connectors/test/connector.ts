@@ -14,6 +14,7 @@
 
 import type { SessionKey } from '../../sessionKey';
 import { keyToString } from '../../sessionKey';
+import { classifyFileSendKind } from '../../utils/fileSendPlan';
 import { getDegradedContent, checkNeedsOwnMessage } from '../../platform/capabilityFallback';
 import type {
   ConnectorInbound,
@@ -139,7 +140,11 @@ export function createTestConnector(
         return { ok: false, error: 'this surface cannot receive file attachments' };
       }
       files.push(request);
-      return { ok: true, summary: `Sent ${request.paths.length} file(s) to ${keyToString(key)}.` };
+      return {
+        ok: true,
+        summary: `Sent ${request.paths.length} file(s) to ${keyToString(key)}.`,
+        sentKinds: request.paths.map(classifyFileSendKind),
+      };
     },
 
     setActivity(key: SessionKey, state: ActivityState): void {

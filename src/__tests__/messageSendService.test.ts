@@ -24,6 +24,7 @@ import type {
   SendFilesToThreadOptions,
   SendFilesToThreadResult,
 } from '../utils/fileSendService';
+import { classifyFileSendKind } from '../utils/fileSendPlan';
 import { getAbortError } from '../utils';
 
 interface FileCall {
@@ -49,7 +50,9 @@ function createService(
   const defaultSendFiles: SendFilesToThread = async (threadKey, options) => {
     recorder.fileCalls.push({ threadKey, options });
     recorder.events.push(`file:${options.paths.join(',')}`);
-    return { ok: true, summary: `Sent ${options.paths.length} file(s) to the topic.` };
+    // What the real pipeline reports: the extension's kind, except `asFile` sends a document.
+    const sentKinds = options.paths.map((filePath) => (options.asFile ? 'document' : classifyFileSendKind(filePath)));
+    return { ok: true, summary: `Sent ${options.paths.length} file(s) to the topic.`, sentKinds };
   };
   const service = createSendMessagesToThread<string>({
     resolveTarget: (threadKey) => ({ ok: true, target: threadKey }),
@@ -74,7 +77,7 @@ test('sends each input string as its own message, in order', async () => {
   assert.deepEqual(recorder.sent, ['first', 'second', 'third']);
   assert.deepEqual(recorder.targets, ['-100:1', '-100:1', '-100:1']);
   assert.equal(result.ok, true);
-  assert.equal(result.ok && result.summary, 'Delivered 3 messages to the topic.');
+  assert.equal(result.ok && result.summary, 'Delivered 3 messages: 3 texts.');
   assert.equal(result.ok && result.undeliveredCount, 0);
 });
 
@@ -92,20 +95,20 @@ test('splits a single over-long input into multiple messages', async () => {
   const result = await service('-100:1', { messages: [long] });
   assert.equal(recorder.sent.length, 3);
   assert.equal(recorder.sent.join(''), long);
-  assert.equal(result.ok && result.summary, 'Delivered 3 messages to the topic.');
+  assert.equal(result.ok && result.summary, 'Delivered 3 messages: 3 texts.');
 });
 
 test('skips a blank (whitespace-only) input without posting an empty bubble', async () => {
   const { service, recorder } = createService();
   const result = await service('-100:1', { messages: ['real', '   ', 'also real'] });
   assert.deepEqual(recorder.sent, ['real', 'also real']);
-  assert.equal(result.ok && result.summary, 'Delivered 2 messages to the topic.');
+  assert.equal(result.ok && result.summary, 'Delivered 2 messages: 2 texts.');
 });
 
 test('singular summary for a single delivered message', async () => {
   const { service } = createService();
   const result = await service('-100:1', { messages: ['solo'] });
-  assert.equal(result.ok && result.summary, 'Delivered 1 message to the topic.');
+  assert.equal(result.ok && result.summary, 'Delivered 1 message: 1 text.');
   assert.deepEqual(result.ok && result.sentMessageIds, [1], 'the sent id comes back for the caller to pin or edit');
 });
 
@@ -127,7 +130,7 @@ test('partial send failure stays ok but reports the landed/attempted split', asy
   });
   const result = await service('-100:1', { messages: ['a', 'b'] });
   assert.equal(result.ok, true);
-  assert.equal(result.ok && result.summary, 'Delivered 1 of 2 messages to the topic (1 failed to send).');
+  assert.equal(result.ok && result.summary, 'Delivered 1 of 2 messages (1 failed to send): 1 text.');
   assert.equal(result.ok && result.undeliveredCount, 1);
   assert.deepEqual(result.ok && result.sentMessageIds, [1], 'only the message that landed is listed');
 });
@@ -165,7 +168,7 @@ test('cancellation between messages stops further delivery', async () => {
     },
     sendFiles: async (threadKey, options) => {
       recorder.fileCalls.push({ threadKey, options });
-      return { ok: true, summary: 'sent' };
+      return { ok: true, summary: 'sent', sentKinds: ['document'] };
     },
     splitMessage,
     maxMessageLength: 10,
@@ -195,7 +198,7 @@ test('an attachment item routes to the file-send pipeline with caption/asFile/au
   assert.equal(recorder.fileCalls[0].options.caption, 'my caption');
   assert.equal(recorder.fileCalls[0].options.asFile, true);
   assert.equal(recorder.fileCalls[0].options.authorizedWorkDir, '/work/dir');
-  assert.equal(result.ok && result.summary, 'Delivered 1 message to the topic.');
+  assert.equal(result.ok && result.summary, 'Delivered 1 message: 1 document.');
 });
 
 test('an attachment item without text or workdir sends no caption and no authorizedWorkDir', async () => {
@@ -205,7 +208,7 @@ test('an attachment item without text or workdir sends no caption and no authori
   assert.equal(recorder.fileCalls[0].options.caption, undefined);
   assert.equal(recorder.fileCalls[0].options.asFile, undefined);
   assert.equal(recorder.fileCalls[0].options.authorizedWorkDir, undefined);
-  assert.equal(result.ok && result.summary, 'Delivered 1 message to the topic.');
+  assert.equal(result.ok && result.summary, 'Delivered 1 message: 1 photo.');
 });
 
 test('an object item with only text is a plain text message', async () => {
@@ -213,7 +216,7 @@ test('an object item with only text is a plain text message', async () => {
   const result = await service('-100:1', { messages: [{ text: 'just text' }] });
   assert.deepEqual(recorder.sent, ['just text']);
   assert.equal(recorder.fileCalls.length, 0);
-  assert.equal(result.ok && result.summary, 'Delivered 1 message to the topic.');
+  assert.equal(result.ok && result.summary, 'Delivered 1 message: 1 text.');
 });
 
 test('a mixed batch waits for an attachment before sending later text', async () => {
@@ -234,11 +237,41 @@ test('a mixed batch waits for an attachment before sending later text', async ()
 
   await fileStarted;
   assert.deepEqual(recorder.events, ['text:intro', 'file:a.png']);
-  releaseFile({ ok: true, summary: 'sent' });
+  releaseFile({ ok: true, summary: 'sent', sentKinds: ['photo'] });
 
   const result = await resultPromise;
   assert.deepEqual(recorder.events, ['text:intro', 'file:a.png', 'text:outro']);
-  assert.equal(result.ok && result.summary, 'Delivered 3 messages to the topic.');
+  assert.equal(result.ok && result.summary, 'Delivered 3 messages: 2 texts, 1 photo.');
+});
+
+// ─── the summary says what was sent, per kind ────────────────────────
+
+test('the summary counts every kind sent, in a fixed order, singular and plural', async () => {
+  const { service } = createService();
+  const result = await service('-100:1', {
+    messages: [{ path: 'a.png' }, 'hello', { path: 'clip.mp4' }, { path: 'b.png' }, { path: 'loop.gif' }, { path: 'notes.txt' }, { path: 'c.pdf' }],
+  });
+  assert.equal(result.ok && result.summary, 'Delivered 7 messages: 1 text, 2 photos, 1 video, 1 animation, 2 documents.');
+});
+
+test('the summary reports what the pipeline sent, not the kind the extension suggests', async () => {
+  // An over-cap photo is sent as a document: the pipeline says so, and so does the summary.
+  const { service } = createService({
+    sendFiles: async () => ({ ok: true, summary: 'sent', sentKinds: ['document'] }),
+  });
+  const result = await service('-100:1', { messages: [{ path: 'huge.png' }] });
+  assert.equal(result.ok && result.summary, 'Delivered 1 message: 1 document.');
+});
+
+test('a failed attachment is left out of the per-kind counts', async () => {
+  const { service } = createService({
+    sendFiles: async () => ({ ok: false, error: 'cannot read a.png: ENOENT' }),
+  });
+  const result = await service('-100:1', { messages: ['ok text', { path: 'a.png' }, { path: 'b.png' }] });
+  assert.equal(
+    result.ok && result.summary,
+    'Delivered 1 of 3 messages (2 failed to send): 1 text. Attachment errors: cannot read a.png: ENOENT; cannot read a.png: ENOENT.',
+  );
 });
 
 test('an all-empty object is rejected before anything is sent', async () => {
@@ -266,8 +299,10 @@ test('a failed attachment stays a partial success and names the attachment error
   const { service } = createService({ sendFiles: failingSendFiles });
   const result = await service('-100:1', { messages: ['ok text', { path: 'a.png' }] });
   assert.equal(result.ok, true);
-  assert.match(result.ok ? result.summary : '', /Delivered 1 of 2 messages/);
-  assert.match(result.ok ? result.summary : '', /Attachment errors: cannot read a\.png: ENOENT/);
+  assert.equal(
+    result.ok && result.summary,
+    'Delivered 1 of 2 messages (1 failed to send): 1 text. Attachment errors: cannot read a.png: ENOENT.',
+  );
   assert.equal(result.ok && result.undeliveredCount, 1, 'the failed attachment counts as undelivered');
 });
 

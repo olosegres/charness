@@ -91,7 +91,7 @@ function makeOutbound(
     },
     sendFiles: async (threadKeyString, request) => {
       recorder.files.push({ threadKeyString, request });
-      return { ok: true, summary: 'sent 1 file' } satisfies SendFilesToThreadResult;
+      return { ok: true, summary: 'sent 1 file', sentKinds: ['document'] } satisfies SendFilesToThreadResult;
     },
     encodeKey: keyToString,
     ...overrides,
@@ -245,7 +245,7 @@ test('deliverFile serializes the key for the string-keyed file service', async (
 
   const result = await outbound.deliverFile(key, request);
 
-  assert.deepEqual(result, { ok: true, summary: 'sent 1 file' });
+  assert.deepEqual(result, { ok: true, summary: 'sent 1 file', sentKinds: ['document'] });
   assert.deepEqual(recorder.files, [
     { threadKeyString: '-1001234567890:42', request },
   ]);

@@ -82,7 +82,7 @@ beforeEach(async () => {
       directory === sharedFolder ? [keyToString(topicKey), keyToString(sharedFolderTopicKey)] : [],
     getThreadAdapterName: () => 'claude',
     unpinMessages: async () => {},
-    sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
+    sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
     sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
     compactConversation: (threadKey) => {
       compactCalls.push(threadKey);

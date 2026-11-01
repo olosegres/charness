@@ -417,3 +417,13 @@ export function planFileSend(items: FileSendItem[], asFile: boolean): FileSendPl
     items,
   };
 }
+
+/**
+ * @description What Telegram is actually asked to render for a validated plan, one kind per file, in order. It differs
+ * from the extension's kind wherever the plan overrode it (`asFile`, an over-cap photo, an album that fell back to
+ * documents), so it is what a caller reports back to the agent as "sent".
+ */
+export function getSentFileKinds(plan: NonErrorFileSendPlan): FileSendKind[] {
+  if (plan.kind === 'send') return [plan.mode];
+  return plan.items.map((item) => (plan.mode === 'albumPhotoVideo' ? item.kind : 'document'));
+}

@@ -1,5 +1,6 @@
 import { checkIsAbortError } from '../utils';
 import type { SendFilesToThread, SendFilesToThreadResult } from './fileSendService';
+import type { FileSendKind } from './fileSendPlan';
 
 /**
  * @description Deliver a batch of DISCRETE messages into a topic. Unlike the
@@ -158,6 +159,26 @@ function formatMessageCount(count: number): string {
   return `${count} message${count === 1 ? '' : 's'}`;
 }
 
+/** What one delivered message was: a text, or the kind of attachment Telegram was asked to render. */
+type DeliveredKind = 'text' | FileSendKind;
+
+/** The order the summary names the kinds in, so the same batch always reads the same. */
+const deliveredKindOrder: readonly DeliveredKind[] = ['text', 'photo', 'video', 'animation', 'document'];
+
+/**
+ * @description "1 text, 2 photos" — what actually landed, per kind. The agent reads it to notice an attachment that did
+ * not go out as one (a batch of images that arrived as text, or as documents), which a bare message count hides.
+ */
+function formatDeliveredKinds(counts: ReadonlyMap<DeliveredKind, number>): string {
+  return deliveredKindOrder
+    .filter((kind) => (counts.get(kind) ?? 0) > 0)
+    .map((kind) => {
+      const count = counts.get(kind) ?? 0;
+      return `${count} ${kind}${count === 1 ? '' : 's'}`;
+    })
+    .join(', ');
+}
+
 /**
  * @description The graceful-cancellation result. Naming what ALREADY landed is
  * load-bearing: without it the agent's natural next move is to re-send the whole
@@ -183,9 +204,11 @@ function buildCancelledResult(landed: number): SendMessagesToThreadResult {
  * swallowed: if every send failed the result is an ERROR (with any attachment
  * errors named), so the agent knows nothing reached the topic instead of reading
  * a false "Delivered 0" success; a partial failure stays `ok` but says how many
- * landed. An attachment whose delivery outcome is unknown terminates the batch
- * with a `deliveryUnknown` result so the agent does not blindly retry (mirrors
- * `send_file_to_user`).
+ * landed. The summary names what landed per kind (`1 text, 2 photos`), the
+ * attachment kinds taken from what the file pipeline reports it SENT, never from
+ * the extension. An attachment whose delivery outcome is unknown terminates the
+ * batch with a `deliveryUnknown` result so the agent does not blindly retry
+ * (mirrors `send_file_to_user`).
  */
 export function createSendMessagesToThread<TTarget>(
   deps: SendMessagesToThreadDeps<TTarget>,
@@ -204,6 +227,10 @@ export function createSendMessagesToThread<TTarget>(
 
     let attempted = 0;
     let landed = 0;
+    const deliveredKindCounts = new Map<DeliveredKind, number>();
+    const countDelivered = (kind: DeliveredKind): void => {
+      deliveredKindCounts.set(kind, (deliveredKindCounts.get(kind) ?? 0) + 1);
+    };
     const sentMessageIds: number[] = [];
     const attachmentErrors: string[] = [];
     for (const item of normalized) {
@@ -235,6 +262,7 @@ export function createSendMessagesToThread<TTarget>(
         }
         if (fileResult.ok) {
           landed += 1;
+          fileResult.sentKinds.forEach(countDelivered);
         } else if ('kind' in fileResult && fileResult.kind === 'deliveryUnknown') {
           return {
             ok: false,
@@ -255,6 +283,7 @@ export function createSendMessagesToThread<TTarget>(
         const messageId = await deps.sendChunk(target, chunk, signal);
         if (messageId === null) continue;
         landed += 1;
+        countDelivered('text');
         sentMessageIds.push(messageId);
       }
     }
@@ -270,10 +299,11 @@ export function createSendMessagesToThread<TTarget>(
           attachmentErrorSuffix,
       };
     }
+    const deliveredKinds = landed > 0 ? `: ${formatDeliveredKinds(deliveredKindCounts)}` : '';
     const summary =
       (landed === attempted
-        ? `Delivered ${formatMessageCount(landed)} to the topic.`
-        : `Delivered ${landed} of ${attempted} messages to the topic (${attempted - landed} failed to send).`) +
+        ? `Delivered ${formatMessageCount(landed)}${deliveredKinds}.`
+        : `Delivered ${landed} of ${attempted} messages (${attempted - landed} failed to send)${deliveredKinds}.`) +
       attachmentErrorSuffix;
     return { ok: true, summary, undeliveredCount: attempted - landed, sentMessageIds };
   };

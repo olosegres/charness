@@ -19,12 +19,14 @@ import {
   getFileSendCountError,
   getTelegramUploadFilename,
   getTelegramFileOversizeError,
+  getSentFileKinds,
   planFileSend,
   resolveSendFileWithinDir,
   telegramSendMaxBytes,
   type FileDescriptorSnapshot,
   type FileIdentity,
   type FileSendItem,
+  type FileSendKind,
   type FileSendMediaGroup,
 } from './fileSendPlan';
 
@@ -37,8 +39,13 @@ export interface SendFilesToThreadOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * @name SendFilesToThreadResult
+ * @description `sentKinds` is what Telegram was actually asked to render, one entry per file in order — not the kind the
+ * extension suggests (`as_file`, an over-cap photo or an album that fell back to documents all send documents).
+ */
 export type SendFilesToThreadResult =
-  | { ok: true; summary: string }
+  | { ok: true; summary: string; sentKinds: FileSendKind[] }
   | { ok: false; error: string }
   | { ok: false; kind: 'deliveryUnknown'; error: string };
 
@@ -453,6 +460,7 @@ export function createSendFilesToThread<TTarget>(
         const plan = planFileSend(items, options.asFile ?? false);
         if (plan.kind === 'error') return { ok: false, error: plan.error };
 
+        const sentKinds = getSentFileKinds(plan);
         const request = buildTelegramFileSendRequest(plan, options.caption);
         const executeDelivery = deps.executeDelivery ?? ((_target, delivery) => delivery());
         return executeDelivery(target, async () => {
@@ -529,9 +537,10 @@ export function createSendFilesToThread<TTarget>(
                 summary,
                 `${messageIdRecordingWarning}: ${errorMessage}`,
               ),
+              sentKinds,
             };
           }
-          return { ok: true, summary };
+          return { ok: true, summary, sentKinds };
         }, options.signal);
       })();
     } catch (error) {
@@ -569,6 +578,7 @@ export function createSendFilesToThread<TTarget>(
             operationResult.summary,
             `${descriptorCleanupWarning}: ${closeError}`,
           ),
+          sentKinds: operationResult.sentKinds,
         }
         : { ...operationResult, error: `${operationResult.error}; ${closeError}` };
     }

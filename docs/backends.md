@@ -225,7 +225,10 @@ keys, instead of being dropped unseen. It exposes:
   front (an empty object is rejected and nothing is sent); a total send failure
   returns an error, a partial one stays successful but reports how many landed,
   and an ambiguous attachment delivery surfaces as the same non-retryable
-  `deliveryUnknown` outcome as `send_file_to_user`. Capped at 50 items per call.
+  `deliveryUnknown` outcome as `send_file_to_user`. The success answer says what was
+  actually sent, per kind — `Delivered 3 messages: 1 text, 2 documents.` — so an
+  attachment that went out as something else (an over-size photo or `as_file` is a
+  document) is visible to the agent. Capped at 50 items per call.
 
 This server is bot-owned plumbing; if its port fails to bind, the bot still
 boots — only these agent-facing tools go inert. (Your own MCP servers still work

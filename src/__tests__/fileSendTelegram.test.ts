@@ -522,7 +522,7 @@ linuxTest('real service records a Telegram acceptance that resolves after reques
     resolveSender({ message_id: acceptedMessageId });
     const result = await send;
 
-    assert.deepEqual(result, { ok: true, summary: 'Sent 1 file(s) to the topic.' });
+    assert.deepEqual(result, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: ['video'] });
     assert.deepEqual(recordedMessageIds, [acceptedMessageId]);
     for (const attemptDescriptor of attemptDescriptors) {
       assert.throws(
@@ -616,7 +616,7 @@ linuxTest('real service records a Telegram media-group acceptance that resolves 
     resolveSender(acceptedMessageIds.map((messageId) => ({ message_id: messageId })));
     const result = await send;
 
-    assert.deepEqual(result, { ok: true, summary: 'Sent 2 file(s) to the topic.' });
+    assert.deepEqual(result, { ok: true, summary: 'Sent 2 file(s) to the topic.', sentKinds: ['photo', 'video'] });
     assert.deepEqual(recordedMessageIds, acceptedMessageIds);
     for (const fileDescriptor of attemptDescriptors) {
       assert.throws(
@@ -863,7 +863,7 @@ linuxTest('message IDs returned at the response deadline boundary are durably re
     await Promise.resolve();
     deadline.fire();
 
-    assert.deepEqual(await send, { ok: true, summary: 'Sent 1 file(s) to the topic.' });
+    assert.deepEqual(await send, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: ['video'] });
     assert.deepEqual(recordedMessageIds, [73313]);
     assert.equal(deadline.getActiveCount(), 0);
   } finally {
@@ -1070,7 +1070,7 @@ for (const openStrategy of fileSendOpenStrategies) strategyTests[openStrategy](`
 
     const result = await sendFilesToThread('thread-key', { paths: ['clip.mp4'] });
 
-    assert.deepEqual(result, { ok: true, summary: 'Sent 1 file(s) to the topic.' });
+    assert.deepEqual(result, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: ['video'] });
     assert.equal(sendAttempt, 2);
     assert.equal(new Set(attemptStreams).size, 2, 'the retry must receive a fresh stream');
     assertStreamsTerminal(attemptStreams);
@@ -1139,7 +1139,7 @@ for (const openStrategy of fileSendOpenStrategies) strategyTests[openStrategy](`
       paths: ['chart.png', 'clip.mp4'],
     });
 
-    assert.deepEqual(result, { ok: true, summary: 'Sent 2 file(s) to the topic.' });
+    assert.deepEqual(result, { ok: true, summary: 'Sent 2 file(s) to the topic.', sentKinds: ['photo', 'video'] });
     assert.equal(sendAttempt, 2);
     assert.equal(
       new Set(attemptStreams.flat()).size,

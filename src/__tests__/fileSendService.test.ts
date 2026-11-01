@@ -31,6 +31,7 @@ import {
 } from '../utils/fileSendService';
 import {
   telegramSendMaxBytes,
+  type FileSendKind,
   type TelegramSingleFileSendMethod,
 } from '../utils/fileSendPlan';
 import {
@@ -69,6 +70,7 @@ interface SingleGatewayCase {
   fileName: string;
   contents: string;
   expectedMethod: TelegramSingleFileSendMethod;
+  expectedSentKind: FileSendKind;
   expectedMessageId: number;
 }
 
@@ -201,24 +203,28 @@ const singleGatewayCases: SingleGatewayCase[] = [
     fileName: 'chart.png',
     contents: 'photo-bytes',
     expectedMethod: 'sendPhoto',
+    expectedSentKind: 'photo',
     expectedMessageId: singleGatewayMessageIds.sendPhoto,
   },
   {
     fileName: 'loop.gif',
     contents: 'animation-bytes',
     expectedMethod: 'sendAnimation',
+    expectedSentKind: 'animation',
     expectedMessageId: singleGatewayMessageIds.sendAnimation,
   },
   {
     fileName: 'clip.mp4',
     contents: 'video-bytes',
     expectedMethod: 'sendVideo',
+    expectedSentKind: 'video',
     expectedMessageId: singleGatewayMessageIds.sendVideo,
   },
   {
     fileName: 'report.pdf',
     contents: 'document-bytes',
     expectedMethod: 'sendDocument',
+    expectedSentKind: 'document',
     expectedMessageId: singleGatewayMessageIds.sendDocument,
   },
 ];
@@ -236,7 +242,7 @@ for (const gatewayCase of singleGatewayCases) {
         caption: 'caption',
       });
 
-      assert.deepEqual(result, { ok: true, summary: 'Sent 1 file(s) to the topic.' });
+      assert.deepEqual(result, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: [gatewayCase.expectedSentKind] });
       assert.equal(recorder.gatewayCalls.length, 1);
       assert.deepEqual(recorder.gatewayCalls[0], {
         method: gatewayCase.expectedMethod,
@@ -271,7 +277,7 @@ sharedTest('createSendFilesToThread routes a photo/video album, records every id
       caption: 'album caption',
     });
 
-    assert.deepEqual(result, { ok: true, summary: 'Sent 2 file(s) to the topic.' });
+    assert.deepEqual(result, { ok: true, summary: 'Sent 2 file(s) to the topic.', sentKinds: ['photo', 'video'] });
     assert.deepEqual(recorder.gatewayCalls, [
       {
         method: 'sendMediaGroup',
@@ -404,7 +410,7 @@ sharedTest('createSendFilesToThread waits for message-id recording before report
     assert.equal(didSettle, false, 'the service must await message-id persistence');
 
     releaseMessageIdRecording();
-    assert.deepEqual(await sendPromise, { ok: true, summary: 'Sent 1 file(s) to the topic.' });
+    assert.deepEqual(await sendPromise, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: ['video'] });
     assert.deepEqual(recorder.messageIdCalls, [
       { target: 'telegram-target', messageIds: [singleGatewayMessageIds.sendVideo] },
     ]);
@@ -458,8 +464,8 @@ sharedTest('createSendFilesToThread keeps the target delivery executor occupied 
     );
 
     releaseFirstRecording();
-    assert.deepEqual(await firstSend, { ok: true, summary: 'Sent 1 file(s) to the topic.' });
-    assert.deepEqual(await secondSend, { ok: true, summary: 'Sent 1 file(s) to the topic.' });
+    assert.deepEqual(await firstSend, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: ['video'] });
+    assert.deepEqual(await secondSend, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: ['video'] });
     assert.equal(recorder.gatewayCalls.length, 2);
     assert.equal(recorder.messageIdCalls.length, 2);
   } finally {
@@ -907,7 +913,7 @@ sharedTest('createSendFilesToThread sanitizes unsafe multipart filename characte
 
     const result = await sendFilesToThread('thread-key', { paths: ['safe-alias.txt'] });
 
-    assert.deepEqual(result, { ok: true, summary: 'Sent 1 file(s) to the topic.' });
+    assert.deepEqual(result, { ok: true, summary: 'Sent 1 file(s) to the topic.', sentKinds: ['document'] });
     assert.equal(recorder.gatewayCalls.length, 1);
     assert.equal(recorder.gatewayCalls[0].source?.filename, 'unsafe_____name.txt');
     assert.equal(recorder.gatewayCalls[0].source?.contents, 'safe-contents');

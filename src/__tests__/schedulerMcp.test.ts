@@ -165,7 +165,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
       getThreadsForDirectory: () => [],
       getThreadAdapterName: () => 'claude',
       unpinMessages: async () => {},
-      sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
+      sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
       sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
       compactConversation: () => ({ ok: true, message: 'unused' }),
       answerRequest: async () => ({ ok: false, error: 'unused' }),
@@ -314,7 +314,7 @@ describe('createSchedulerMcpServer port binding', () => {
       getThreadsForDirectory: () => [],
       getThreadAdapterName: () => 'claude',
       unpinMessages: async () => {},
-      sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
+      sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
       sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
       compactConversation: () => ({ ok: true, message: 'unused' }),
       answerRequest: async () => ({ ok: false, error: 'unused' }),
@@ -1661,7 +1661,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
   it('suppresses an inactive late cancellation but cancels the active reused request', async () => {
     const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
     const clientId = 'reused-request-client';
-    fixture.fileSendHandler.current = async () => ({ ok: true, summary: 'first completed' });
+    fixture.fileSendHandler.current = async () => ({ ok: true, summary: 'first completed', sentKinds: ['document'] });
     const firstClient = await buildClient(fixture.handle.port, token, clientId);
     try {
       const firstResult = await firstClient.callTool({
@@ -1826,7 +1826,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
 
       wasReusedRequestAbortedOnEntry = signal.aborted;
       assert.equal(signal.aborted, false, 'the late cancellation must not pre-cancel the reused request');
-      return { ok: true, summary: 'reused request entered un-aborted' };
+      return { ok: true, summary: 'reused request entered un-aborted', sentKinds: ['document'] };
     };
 
     const abnormalCall = startRawFileSendCall(
@@ -1893,7 +1893,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         signal.addEventListener('abort', handleAbort, { once: true });
         if (signal.aborted) handleAbort();
         if (callIndex === 1) {
-          releaseSecond = () => resolve({ ok: true, summary: 'second delivered' });
+          releaseSecond = () => resolve({ ok: true, summary: 'second delivered', sentKinds: ['document'] });
         }
       });
     };

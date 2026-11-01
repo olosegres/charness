@@ -56,7 +56,7 @@ function buildDeps(): SchedulerMcpDeps {
     getThreadsForDirectory: () => [],
     getThreadAdapterName: () => undefined,
     unpinMessages: async () => {},
-    sendFilesToThread: async () => ({ ok: true, summary: 'unused' }),
+    sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
     sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
     compactConversation: () => ({ ok: true, message: 'unused' }),
     answerRequest: async () => ({ ok: false, error: 'unused' }),

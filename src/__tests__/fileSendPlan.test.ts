@@ -20,6 +20,7 @@ import {
   resolveSendFileWithinDir,
   classifyFileSendKind,
   planFileSend,
+  getSentFileKinds,
   buildTelegramFileSendRequest,
   trimCaption,
   telegramPhotoMaxBytes,
@@ -295,6 +296,41 @@ test('planFileSend: 11 items → error', () => {
   const plan = planFileSend(items, false);
   assert.equal(plan.kind, 'error');
   if (plan.kind === 'error') assert.match(plan.error, /too many/);
+});
+
+// ─── getSentFileKinds: what was actually sent, overrides applied ─────
+
+/** The kinds a call's plan sends — the plan must not be an error. */
+function getPlannedKinds(items: FileSendItem[], asFile: boolean): string[] {
+  const plan = planFileSend(items, asFile);
+  if (plan.kind === 'error') assert.fail(plan.error);
+  return getSentFileKinds(plan);
+}
+
+test('getSentFileKinds: a single file is sent as its own kind', () => {
+  assert.deepEqual(getPlannedKinds([item('/w/a.png', 'photo')], false), ['photo']);
+  assert.deepEqual(getPlannedKinds([item('/w/a.gif', 'animation')], false), ['animation']);
+  assert.deepEqual(getPlannedKinds([item('/w/a.mp4', 'video')], false), ['video']);
+  assert.deepEqual(getPlannedKinds([item('/w/a.pdf', 'document')], false), ['document']);
+});
+
+test('getSentFileKinds: as_file and an over-cap photo are sent as documents, whatever the extension says', () => {
+  assert.deepEqual(getPlannedKinds([item('/w/a.png', 'photo')], true), ['document']);
+  assert.deepEqual(getPlannedKinds([item('/w/a.mp4', 'video')], true), ['document']);
+  assert.deepEqual(getPlannedKinds([item('/w/big.png', 'photo', telegramPhotoMaxBytes + 1)], false), ['document']);
+});
+
+test('getSentFileKinds: a native photo/video album keeps each file its own kind', () => {
+  assert.deepEqual(getPlannedKinds([item('/w/a.png', 'photo'), item('/w/b.mp4', 'video'), item('/w/c.jpg', 'photo')], false), ['photo', 'video', 'photo']);
+});
+
+test('getSentFileKinds: an album that falls back to documents sends every file as one', () => {
+  assert.deepEqual(getPlannedKinds([item('/w/a.png', 'photo'), item('/w/b.gif', 'animation')], false), ['document', 'document']);
+  assert.deepEqual(getPlannedKinds([item('/w/a.png', 'photo'), item('/w/b.png', 'photo')], true), ['document', 'document']);
+  assert.deepEqual(
+    getPlannedKinds([item('/w/a.png', 'photo'), item('/w/b.png', 'photo', telegramPhotoMaxBytes + 1)], false),
+    ['document', 'document'],
+  );
 });
 
 // ─── buildTelegramFileSendRequest ─────────────────────────────────────
