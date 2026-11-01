@@ -21,6 +21,7 @@ import { keyToString } from '../sessionKey';
 import {
   buildMcpServerInstructions,
   buildSchedulerMcpToken,
+  claudeCodeInstructionsMaxLength,
   createSchedulerMcpServer,
   getBotMcpToolDigest,
   type OptionalBotTools,
@@ -117,7 +118,7 @@ describe('the instructions built for a platform', () => {
   it('the bullet tells what remote-run is for, to look at `runners` first, and to run `wait` in the background for long jobs', () => {
     const bullet = buildMcpServerInstructions('telegram', offeredWith, true).split('\n').find((line) => line.includes('charness remote-run runners')) ?? '';
     assert.match(bullet, /test suite, a build, an e2e run/);
-    assert.match(bullet, /`charness remote-run runners` shows which runners are online/);
+    assert.match(bullet, /`charness remote-run runners` shows what each can do/);
     assert.match(bullet, /edit files only here/);
     assert.match(bullet, /Longer than your tool timeout: `charness remote-run --bg <command>`.*`charness remote-run wait <id>` in the background/);
   });
@@ -130,12 +131,26 @@ describe('the instructions built for a platform', () => {
     }
   });
 
-  it('a long list is cut at twelve runners and says how many are left — the bullet is a hint, `runners` is the list', () => {
-    const manyLines = Array.from({ length: 15 }, (_, index) => `box${index} — Ubuntu 24.04`);
-    const lines = buildMcpServerInstructions('telegram', { ...offeredWithout, remoteRunRunnerLines: manyLines }, true).split('\n').filter((line) => line.startsWith('  – '));
-    assert.equal(lines.length, 13);
-    assert.equal(lines[11], '  – box11 — Ubuntu 24.04');
-    assert.equal(lines[12], '  – … and 3 more');
+  it('a long list is fitted to the room under Claude Code\'s 4,096 characters and says how many runners are left — on every platform, with the longest lines a runner can have', () => {
+    const worstLine = `${'x'.repeat(40)} (paused) — ${'y'.repeat(40)}, android, ios, docker, playwright`;
+    const manyLines = Array.from({ length: 40 }, () => worstLine);
+    for (const platform of ['telegram', 'jira', null] as const) {
+      for (const isBotSkillsEnabled of [true, false]) {
+        const text = buildMcpServerInstructions(platform, { ...offeredWithout, remoteRunRunnerLines: manyLines }, isBotSkillsEnabled);
+        const label = `${platform ?? 'neutral'}, skills ${isBotSkillsEnabled ? 'on' : 'off'}: ${text.length}`;
+        assert.ok(text.length <= claudeCodeInstructionsMaxLength, label);
+        assert.ok(text.includes('charness remote-run runners') && text.includes('charness remote-run wait <id>'), `the bullet is whole — ${label}`);
+        const shown = text.split('\n').filter((line) => line.startsWith('  – ') && !line.includes('… and '));
+        const left = /… and (\d+) more/.exec(text);
+        if (shown.length > 0) assert.equal(shown.length + Number(left?.[1] ?? 0), manyLines.length, `every runner is shown or counted — ${label}`);
+        else assert.equal(left, null, `no runner shown, so no count of the rest — ${label}`);
+      }
+    }
+  });
+
+  it('a short list is shown whole on a Telegram topic with the bot\'s skills on — the default, and the longest text', () => {
+    const lines = buildMcpServerInstructions('telegram', offeredWith, true).split('\n').filter((line) => line.startsWith('  – '));
+    assert.deepEqual(lines, runnerLines.map((line) => `  – ${line}`));
   });
 
   it('nothing else moves: with the bullet and its runner lines taken out, the text is the one without runners', () => {

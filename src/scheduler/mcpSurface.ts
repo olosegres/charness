@@ -139,24 +139,28 @@ const answerRequestInstruction =
 /** The shared todo registry's bullet (D7) — Telegram topics and Jira issues publish alike. */
 const todoInstruction =
   '• BEFORE you start any task (fixes you found yourself included: a failing test, a leak) → todo_update adds it as inWork, naming the area concretely (files, tests). Check the returned board for overlap with other agents. Take the queue top-down; mark items done / dropped at once. A ticket you create in a tracker gets an item with its key in `ref`.';
-/** The `charness remote-run` bullet — present only while a runner is paired or listed in `runners.json`, for Telegram topics and tracker issues alike. */
+/** The `charness remote-run` bullet — present only while a runner is paired or listed in `runners.json`, for Telegram topics and tracker issues alike. The CLI's own `--help` has the job commands. */
 const remoteRunInstruction =
-  '• Heavy work (a test suite, a build, an e2e run) can run on a runner machine instead of this one → `charness remote-run runners` shows which runners are online with their CPU, RAM, disk, load and what each can do (android, ios, docker, playwright); then `charness remote-run [--needs <capability>] <command>` runs the command in a copy of this git project there and gives you its output, exit code and declared result files as if it ran here (edit files only here; an interrupt or tool timeout kills the remote job). Longer than your tool timeout: `charness remote-run --bg <command>` prints a job id, then run `charness remote-run wait <id>` in the background (it blocks until the job ends and exits with its code); `ls`, `status <id>`, `logs <id> -f`, `kill <id>` manage jobs.';
-/** More runners than this are summed up ("… and 3 more"): the bullet is a hint, `runners` is the list. */
-const maxRunnerLinesInInstructions = 12;
+  '• Heavy work (a test suite, a build, an e2e run) → send it to a runner, not this machine: `charness remote-run runners` shows what each can do (android, ios, docker, playwright); `charness remote-run [--needs <capability>] <command>` runs it in a copy of this project and returns its output and exit code (edit files only here). Longer than your tool timeout: `charness remote-run --bg <command>`, then `charness remote-run wait <id>` in the background; `charness remote-run --help` lists the rest.';
+
+/**
+ * Claude Code cuts a server's connect-time `instructions` that are longer than this: whatever comes last is lost, silently. The Telegram
+ * text is within a few hundred characters of it before the remote-run bullet, so the runner lines are fitted to the room that is left.
+ */
+export const claudeCodeInstructionsMaxLength = 4096;
 
 /**
  * The remote-run bullet with one line per runner under it (`mac — macOS 15.1, android, playwright`: the name, the OS, what it could do when
- * last probed), or `null` with no runner. The lines are a snapshot taken at connect; `charness remote-run runners` has the live state.
+ * last probed): the first `shownCount` runners, and «… and N more» for the rest. The lines are a snapshot taken at connect; `charness
+ * remote-run runners` has the live state. `shownCount` 0 gives the bullet alone.
  */
-function buildRemoteRunInstruction(runnerLines: readonly string[]): string | null {
-  if (runnerLines.length === 0) return null;
-  const shown = runnerLines.slice(0, maxRunnerLinesInInstructions);
-  const hiddenCount = runnerLines.length - shown.length;
+function buildRemoteRunInstruction(runnerLines: readonly string[], shownCount: number): string {
+  if (shownCount === 0) return remoteRunInstruction;
+  const hiddenCount = runnerLines.length - shownCount;
   return [
     remoteRunInstruction,
     '  Runners as last seen (`runners` has the live state):',
-    ...shown.map((line) => `  – ${line}`),
+    ...runnerLines.slice(0, shownCount).map((line) => `  – ${line}`),
     ...(hiddenCount > 0 ? [`  – … and ${hiddenCount} more`] : []),
   ].join('\n');
 }
@@ -180,7 +184,7 @@ function buildTelegramOrchestrationInstruction(isBotSkillsEnabled: boolean): str
     : `${orchestrationInstructionHead} schedule_create to watch EACH worker — ${workerWatchRecipeText}`;
 }
 const claudeProfilesInstruction =
-  '• Before you start or resume a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch: it lists the signed-in Claude accounts with their usage windows and names the one to run on (`recommended`: the account whose weekly limit resets soonest is spent first). A new child: no `currentProfile`; a resumed one: the profile it last ran on, plus `isStoppedByLimit: true` when it broke off on a usage limit. Launch the child with `CLAUDE_CONFIG_DIR=<its configDir>` in its environment (nothing when configDir is null); without it the child inherits YOUR account and drains the same limits. `recommended: null` → nothing is usable now: schedule one resume at `nextAvailable.at` (null too: tell the user, retry once in about 30 minutes).';
+  '• Before you start or resume a child `claude` process (a detached worker, reviewer, planner) → claude_profiles with the model you will launch, and start the child under the account it names (`CLAUDE_CONFIG_DIR=<its configDir>`): without it the child inherits YOUR account and drains the same limits. The tool description has the rest (resuming, `recommended: null`).';
 
 /** What the `claude_profiles` tool asks the bot: the model, and for a resumed session the account it last ran on. */
 export interface ClaudeProfilesQuery {
@@ -218,15 +222,15 @@ function buildTelegramInstructions(isTodoToolOffered: boolean, remoteRunInstruct
 When to use it:
 • The user asks to run/finish a plan or task LATER ("in 2h", "tomorrow 9am", "every weekday") → schedule_create. Put the work in \`prompt\`; the future run is a fresh session with no memory of this chat. Not CronCreate / ScheduleWakeup for anything that must happen: they live only in your process, which the bot stops after a long idle stretch, and die with it.
 • You produced a file/chart/screenshot/video to deliver → send_file_to_user. Videos MUST be H.264 .mp4 sent as video (never as_file/document, never .webm/.mov — those render as GIFs or don't play); transcode first if needed (the tool description has the ffmpeg recipe).
-• You want to deliver SEVERAL discrete messages (each as its own Telegram message, e.g. a per-item news digest) → send_messages_to_user. Each item can optionally attach ONE file/photo/video (text becomes its caption).
+• You want to deliver SEVERAL discrete messages (each its own Telegram message, e.g. a per-item news digest) → send_messages_to_user; an item may attach ONE file (the text becomes its caption).
 ${compactConversationInstruction}
 ${isTodoToolOffered ? `${todoInstruction}\n` : ''}• You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
-• You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron). The bot runs the command in this folder on schedule, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive bot restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart and then fails silently.
+• You need a watchdog — keep an eye on a service, process, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron): the bot runs it in this folder, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive restarts and crashes. NEVER build your own watcher (a background loop, nohup, a sleep loop, a tmux pane, a shell crontab): it dies with your session or a restart, silently.
 ${buildTelegramOrchestrationInstruction(isBotSkillsEnabled)}
-${answerRequestInstruction} The requester may not see your plain text, so anything they must read goes through answer_request. Your plain text is relayed into the topic too, so after answer_request end the turn WITHOUT a plain-text recap of what you answered — it would show up twice.
+${answerRequestInstruction} The requester may not see your plain text: anything they must read goes through answer_request — yet your plain text is relayed into the topic too, so end the turn WITHOUT a recap of what you answered (it would show twice).
 ${claudeProfilesInstruction}${remoteRunInstructionText === null ? '' : `\n${remoteRunInstructionText}`}
 
-Each tool's own description has the exact argument recipe (one-shot vs cron vs N-times, checks).`;
+Each tool's own description has the exact argument recipe.`;
 }
 
 /** What a Jira session's instructions add: the tool that reaches the issue's original files (C10). */
@@ -263,15 +267,24 @@ Each tool's own description has the exact argument recipe.`;
  * (`isBotSkillsEnabled`, `/bot_skills`) the orchestration bullet no longer tells it to load `charness-manager`.
  */
 export function buildMcpServerInstructions(platform: PlatformId | null, offered: OptionalBotTools, isBotSkillsEnabled: boolean): string {
-  const remoteRunInstructionText = buildRemoteRunInstruction(offered.remoteRunRunnerLines);
-  if (platform === 'telegram') return buildTelegramInstructions(offered.isTodoToolOffered, remoteRunInstructionText, isBotSkillsEnabled);
-  const remoteRunInstructions = remoteRunInstructionText === null ? [] : [remoteRunInstructionText];
-  if (platform !== 'jira') return buildTrackerInstructions(remoteRunInstructions, isBotSkillsEnabled);
-  return buildTrackerInstructions([
-    ...(offered.isJiraAttachmentToolOffered ? [jiraAttachmentInstruction] : []),
-    ...(offered.isTodoToolOffered ? [todoInstruction] : []),
-    ...remoteRunInstructions,
-  ], isBotSkillsEnabled);
+  const render = (remoteRunInstructionText: string | null): string => {
+    if (platform === 'telegram') return buildTelegramInstructions(offered.isTodoToolOffered, remoteRunInstructionText, isBotSkillsEnabled);
+    const remoteRunInstructions = remoteRunInstructionText === null ? [] : [remoteRunInstructionText];
+    if (platform !== 'jira') return buildTrackerInstructions(remoteRunInstructions, isBotSkillsEnabled);
+    return buildTrackerInstructions([
+      ...(offered.isJiraAttachmentToolOffered ? [jiraAttachmentInstruction] : []),
+      ...(offered.isTodoToolOffered ? [todoInstruction] : []),
+      ...remoteRunInstructions,
+    ], isBotSkillsEnabled);
+  };
+  const runnerCount = offered.remoteRunRunnerLines.length;
+  if (runnerCount === 0) return render(null);
+  // As many runners as the room under Claude Code's cap leaves; the bullet itself always stays (its `runners` command is the full list).
+  for (let shownCount = runnerCount; shownCount > 0; shownCount -= 1) {
+    const text = render(buildRemoteRunInstruction(offered.remoteRunRunnerLines, shownCount));
+    if (text.length <= claudeCodeInstructionsMaxLength) return text;
+  }
+  return render(buildRemoteRunInstruction(offered.remoteRunRunnerLines, 0));
 }
 
 /** Max characters of a free-text job name / prompt accepted by a tool (defensive bound). */

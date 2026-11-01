@@ -24,6 +24,7 @@ import type { AnswerSinks } from '../platform/answerSink';
 import { RotatingJsonlFile } from '../utils/rotatingJsonlFile';
 import {
   buildMcpServerInstructions,
+  claudeCodeInstructionsMaxLength,
   buildSchedulerMcpToken,
   createSchedulerMcpServer,
   type SchedulerMcpDeps,
@@ -41,7 +42,6 @@ const sharedFolderTopicKey = makeTelegramKey(-1001111111111, 43);
 const jiraKey = makeJiraKey('PROJ-12');
 const sharedFolder = '/home/user/projects/shared';
 /** Claude Code cuts a server's instructions longer than this. */
-const claudeCodeInstructionsMaxLength = 4096;
 
 let fakeHome: string;
 let handle: SchedulerMcpHandle;
@@ -138,10 +138,15 @@ describe('todo_update / todo_read over the bot MCP server', () => {
     assert.doesNotMatch(client.getInstructions() ?? '', /todo_update/);
   });
 
-  it('every platform\'s instructions stay inside Claude Code\'s 4,096 characters with everything offered', () => {
+  it('every platform\'s instructions stay inside Claude Code\'s 4,096 characters with everything offered — the remote-run bullet and a list of the longest runner lines included', () => {
+    const worstRunnerLines = Array.from({ length: 40 }, () => `${'x'.repeat(40)} (paused) — ${'y'.repeat(40)}, android, ios, docker, playwright`);
     for (const platform of ['telegram', 'jira', null] as const) {
-      const length = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] }, true).length;
-      assert.ok(length < claudeCodeInstructionsMaxLength, `${platform}: ${length}`);
+      for (const isBotSkillsEnabled of [true, false]) {
+        for (const remoteRunRunnerLines of [[], worstRunnerLines]) {
+          const length = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines }, isBotSkillsEnabled).length;
+          assert.ok(length <= claudeCodeInstructionsMaxLength, `${platform}, skills ${isBotSkillsEnabled ? 'on' : 'off'}, ${remoteRunRunnerLines.length} runners: ${length}`);
+        }
+      }
     }
   });
 

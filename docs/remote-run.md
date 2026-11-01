@@ -298,7 +298,8 @@ While `runners.json` lists at least one runner or one is paired, the bot MCP's i
 one bullet: what remote-run is for, `runners` first, and `--bg` plus `wait` in the background for anything longer than the tool
 timeout — with one line under it per runner: its name, its OS and what it could do when it was last probed (`mac — macOS 15.1, android,
 playwright`; `(paused)` after the name of a runner that is held back; a runner nobody has probed yet shows only its name and, if paired,
-the OS it reported). The lines are a snapshot taken at connect — `charness remote-run runners` has the live state. Nobody without a runner
+the OS it reported). Claude Code cuts a server's instructions at 4,096 characters, so the list gets the room that is left after the rest of the
+text — every runner when it fits, else the first ones and «… and N more» (the bullet itself always stays; `runners` is the full list). The lines are a snapshot taken at connect — `charness remote-run runners` has the live state. Nobody without a runner
 sees any change. A running agent reads the instructions at connect, so it sees the bullet and the list after its next session start or
 idle cycle.
 
