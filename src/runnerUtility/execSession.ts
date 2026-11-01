@@ -50,13 +50,17 @@ export function serveExec(channel: ServerChannel, command: string, options: Exec
     child.stdout.destroy();
     child.stderr.destroy();
   });
-  child.once('error', (error) => {
-    channel.stderr.write(`charness-runner: cannot start the command (${error.message})\n`);
-    sendExitStatus(channel, commandNotFoundStatus, null);
-    options.tracker.ended();
-  });
-  child.once('close', (exitCode, signal) => {
+  // A failed start emits `error` and then `close`: the command is finished exactly once, or the busy count would go negative.
+  let isFinished = false;
+  const finish = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
+    if (isFinished) return;
+    isFinished = true;
     sendExitStatus(channel, exitCode, signal);
     options.tracker.ended();
+  };
+  child.once('error', (error) => {
+    channel.stderr.write(`charness-runner: cannot start the command (${error.message})\n`);
+    finish(commandNotFoundStatus, null);
   });
+  child.once('close', (exitCode, signal) => finish(exitCode, signal));
 }

@@ -29,6 +29,8 @@ let servers: RunnerServers;
 let listener: net.Server;
 let socketPath = '';
 let activeCounts: number[] = [];
+/** What the next command's environment is: a test that wants a command to fail to start points PATH at nothing. */
+let jobPath = process.env.PATH ?? '';
 const clients: Client[] = [];
 
 function connectClient(options: { sock: Readable; key: SshKeyPair }): Promise<Client> {
@@ -89,10 +91,11 @@ describe('the runner\'s built-in servers', () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'srv-'));
     socketPath = path.join(root, 'link.sock');
     activeCounts = [];
+    jobPath = process.env.PATH ?? '';
     servers = createRunnerServers({
       serverPrivateKey: serverKey.privateKey,
       hubPublicKey: hubKey.publicKey,
-      readEnv: () => ({ PATH: process.env.PATH ?? '', HOME: root, ONLY_THIS: '1' }),
+      readEnv: () => ({ PATH: jobPath, HOME: root, ONLY_THIS: '1' }),
       cwd: root,
       onActiveCountChange: (count) => activeCounts.push(count),
     });
@@ -156,6 +159,34 @@ describe('the runner\'s built-in servers', () => {
     await waitUntil(() => fs.existsSync(markerPath), 'the command to finish although its channel was closed', 10_000);
     await waitUntil(() => servers.getActiveExecCount() === 0, 'the command to stop counting');
     assert.deepEqual(activeCounts, [1, 0]);
+  });
+
+  it('a command that cannot start is finished once: the busy count never goes negative, and the next command still counts', async () => {
+    const session = await connectSession(await connectLink());
+    jobPath = path.join(root, 'no-such-folder');
+    const failed = await exec(session, 'true');
+    assert.equal(failed.code, 127);
+    assert.match(failed.stderr, /cannot start the command/);
+    await waitUntil(() => activeCounts.length >= 2, 'the failed command to be counted in and out');
+    assert.deepEqual(activeCounts, [1, 0]);
+    assert.equal(servers.getActiveExecCount(), 0);
+
+    jobPath = process.env.PATH ?? '';
+    const markerPath = path.join(root, 'second-finished');
+    await new Promise<void>((resolve, reject) => {
+      session.exec(`sleep 0.4; echo done > ${markerPath}`, (error, stream) => {
+        if (error !== undefined) {
+          reject(error);
+          return;
+        }
+        stream.close();
+        resolve();
+      });
+    });
+    await waitUntil(() => servers.getActiveExecCount() === 1, 'the next command to count as running — not as idle');
+    await waitUntil(() => fs.existsSync(markerPath), 'the next command to finish', 10_000);
+    await waitUntil(() => servers.getActiveExecCount() === 0, 'the next command to stop counting');
+    assert.deepEqual(activeCounts, [1, 0, 1, 0]);
   });
 
   it('serves nothing but exec: no pty, no shell, no subsystem', async () => {
