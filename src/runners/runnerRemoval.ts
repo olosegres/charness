@@ -69,13 +69,6 @@ async function resetQueueOverLink(ctx: HubContext, runner: PairedRunner, deps: R
   }
 }
 
-/** @description Stop every job of an online runner's queue through its link. Never throws: a failure is logged and told as `failed` — the runner then falls back to what it can tell by itself. */
-export async function stopRunnerJobsOverLink(ctx: HubContext, runner: PairedRunner, deps: RunnerRemovalDeps = createRemovalDeps()): Promise<RunnerJobsStop> {
-  const isOnline = await checkIsLinkOnline(ctx, runner, deps);
-  if (isOnline === null) return 'failed';
-  return isOnline ? resetQueueOverLink(ctx, runner, deps) : 'offline';
-}
-
 /**
  * @description Remove `nameOrId`: while it is still paired, pause it and stop its jobs through the link (when it is online); then drop it
  * from the registry (its key line goes with it) and cut the link. `null` when no such runner is paired. A registry that cannot be

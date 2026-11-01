@@ -33,6 +33,7 @@ import {
   buildPairedText,
   buildPairingMessageParts,
   buildRemoveConfirmation,
+  buildRemovalOutcomeText,
   buildRunnersScreen,
   parseRunnersCallback,
   runnerActionCallbackRe,
@@ -355,7 +356,7 @@ export function createRunners(ports: RunnersPorts) {
         await answerCallbackQuerySafely(ctx);
         try {
           const removal = await removeRunnerAndEndItsWork(hub, runner.id, now());
-          if (removal !== null) await replyToThread(key, t(removal.jobs === 'stopped' ? 'runners.removedJobsStoppedText' : 'runners.removedJobsNotStoppedText', { name: removal.runner.name }));
+          if (removal !== null) await replyToThread(key, buildRemovalOutcomeText(removal.runner.name, removal.jobs, t));
         } catch (error) {
           await reportRegistryError(key, error);
           return;

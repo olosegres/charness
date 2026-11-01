@@ -18,6 +18,7 @@ import {
   buildExpiredText,
   buildPairedText,
   buildPairingMessageParts,
+  buildRemovalOutcomeText,
   buildRemoveConfirmation,
   buildRunnerActionCallback,
   buildRunnersScreen,
@@ -306,5 +307,17 @@ describe('runnersScreenPlan: a bounded, paged list', () => {
     assert.ok(screen.text.length < 1500, `${screen.text.length} characters`);
     const empty = buildRunnersScreen({ revision, entries: [], openPairingExpiries: [], isChecking: false }, t, formatTime, 5);
     assert.deepEqual([empty.page, empty.pageCount], [0, 1]);
+  });
+});
+
+describe('what a removal came to', () => {
+  it('has a text of its own for each outcome — stopped, offline, could not be stopped — and each names the machine', () => {
+    const texts = (['stopped', 'offline', 'failed'] as const).map((jobs) => buildRemovalOutcomeText('mac', jobs, t));
+    assert.equal(new Set(texts).size, 3, texts.join('\n'));
+    assert.ok(texts.every((text) => text.startsWith('✅ mac removed.')));
+    assert.match(texts[0], /jobs it was running are stopped/);
+    assert.match(texts[1], /machine is offline/);
+    assert.doesNotMatch(texts[2], /offline/, '«could not be stopped» does not claim the machine is offline: it may well be online');
+    assert.match(texts[2], /could not be stopped from here/);
   });
 });

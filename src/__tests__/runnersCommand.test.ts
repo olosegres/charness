@@ -728,7 +728,7 @@ describe('/runners over its ports', () => {
       assert.equal(fs.readFileSync(authorizedKeys, 'utf8').match(/charness-runner:/g)?.length, 1);
       assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '', 'the tap is answered at once with no toast: what happened is told in a message once it is known');
       // The machine is offline here (no link), so its jobs could not be stopped from the hub: the message says so instead of promising it.
-      assert.equal(harness.replies.at(-1)?.text, '✅ mac removed. Its key is deleted, but the jobs it was running could not be stopped from here (the machine is offline or did not answer): it stops them itself once it finds out it was removed.');
+      assert.equal(harness.replies.at(-1)?.text, '✅ mac removed. Its key is deleted. The machine is offline, so its jobs were not stopped from here: it stops them itself once it finds out it was removed.');
       assert.ok(!harness.edits.at(-1)?.text.includes('mac —') && harness.edits.at(-1)?.text.includes('box1 —'), harness.edits.at(-1)?.text);
     });
 

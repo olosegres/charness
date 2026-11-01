@@ -15,7 +15,7 @@ import { getPairedRunnerPueue } from '../remoteRun/pairedRunners';
 import type { SshRunParams } from '../remoteRun/ssh';
 import { getRunnerLinkPaths } from '../runners/hubPaths';
 import { readPairedFile, writePairedFile } from '../runners/hubRegistry';
-import { removeRunnerAndEndItsWork, stopRunnerJobsOverLink, type RunnerRemovalDeps } from '../runners/runnerRemoval';
+import { removeRunnerAndEndItsWork, type RunnerRemovalDeps } from '../runners/runnerRemoval';
 import { createPairedRunnerFixture, pairedRunnerId, pairedRunnerWorkDir } from './remoteRunPairedKit';
 import { createHubFixture, type HubFixture } from './runnersTestKit';
 
@@ -137,13 +137,5 @@ describe('removing a runner that is offline, or unknown', () => {
     assert.equal(await removeRunnerAndEndItsWork(hub.ctx, 'nobody', 1000, createDeps({ isOnline: true })), null);
     assert.deepEqual(sshCalls, []);
     assert.equal(readPairedFile(hub.ctx.dir).runners.length, 1);
-  });
-
-  it('stopRunnerJobsOverLink tells what became of the jobs', async () => {
-    pairRunner();
-    const runner = createPairedRunnerFixture({});
-    assert.equal(await stopRunnerJobsOverLink(hub.ctx, runner, createDeps({ isOnline: true })), 'stopped');
-    assert.equal(await stopRunnerJobsOverLink(hub.ctx, runner, createDeps({ isOnline: true, exitCode: 1 })), 'failed');
-    assert.equal(await stopRunnerJobsOverLink(hub.ctx, runner, createDeps({ isOnline: false })), 'offline');
   });
 });
