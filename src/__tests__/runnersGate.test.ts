@@ -13,7 +13,7 @@ import { Readable } from 'stream';
 import { gunzipSync } from 'zlib';
 import { parseGateArgs, routeGateRequest, runRunnerGate, type GateInvocation } from '../runners/gate';
 import { ensureGateWrapper, renderGateWrapper } from '../runners/gateWrapper';
-import { gateMarker, maxGateRequestBytes, parseGateMarkerLine, redeemReplySchema } from '../runners/gateProtocol';
+import { gateMarker, maxGateRequestBytes, parseGateMarkerLine, redeemReplySchema, type GateMarker } from '../runners/gateProtocol';
 import { getHubFilePaths } from '../runners/hubPaths';
 import { createPairing, redeemPairing, removePairedRunner } from '../runners/hubPairing';
 import { readPairedFile } from '../runners/hubRegistry';
@@ -48,10 +48,12 @@ function gateArgs(role: 'redeem' | 'runner', id: string): string[] {
   return ['--dir', fixture.ctx.dir, '--keys', fixture.ctx.authorizedKeysPath, role, id];
 }
 
-/** The text after the first line and the first line parsed as a marker. */
-function splitMarker(stdout: Buffer): { request: string | undefined; body: Buffer } {
-  const newline = stdout.indexOf(0x0a);
-  return { request: parseGateMarkerLine(stdout.subarray(0, newline).toString('utf8'))?.request, body: stdout.subarray(newline + 1) };
+/** The marker line of an answer (it follows a line break, and may follow shell noise) and the bytes after it. */
+function splitMarker(stdout: Buffer): { marker: GateMarker | null; request: string | undefined; body: Buffer } {
+  const start = stdout.indexOf(gateMarker);
+  const newline = stdout.indexOf(0x0a, start);
+  const marker = start === -1 ? null : parseGateMarkerLine(stdout.subarray(start, newline).toString('utf8'));
+  return { marker, request: marker?.request, body: stdout.subarray(newline + 1) };
 }
 
 describe('gate arguments', () => {
@@ -128,14 +130,16 @@ describe('gate requests', () => {
     assert.equal(badArgs.code, 2);
   });
 
-  it('bootstrap sends the package as raw gzip — no marker — only while the code is open', async () => {
+  it('bootstrap sends the marker line, then the package as gzip, only while the code is open', async () => {
     const pairId = await createOpenPairing();
     const run = await runGate(gateArgs('redeem', pairId), 'bootstrap');
     assert.equal(run.code, 0);
-    const tar = gunzipSync(run.stdout).toString('latin1');
+    assert.ok(run.stdout.toString('latin1').startsWith(`\n${gateMarker} bootstrap id=`), 'a line break first, so the marker opens a line of its own');
+    const { request, body } = splitMarker(run.stdout);
+    assert.equal(request, 'bootstrap');
+    const tar = gunzipSync(body).toString('latin1');
     for (const name of ['package.json', 'remoteRun/runner.sh', 'dist/cli.js', 'dist/runners/example.js']) assert.ok(tar.includes(name), name);
     assert.ok(!tar.includes('__tests__'));
-    assert.ok(!run.stdout.toString('latin1').startsWith(gateMarker));
 
     const unknown = await runGate(gateArgs('redeem', knownId), 'bootstrap');
     assert.equal(unknown.code, 2);
@@ -177,11 +181,10 @@ describe('gate requests', () => {
     const runnerId = await pairRunner();
     const run = await runGate(gateArgs('runner', runnerId), 'package');
     assert.equal(run.code, 0);
-    const newline = run.stdout.indexOf(0x0a);
-    const marker = parseGateMarkerLine(run.stdout.subarray(0, newline).toString('utf8'));
+    const { marker, body } = splitMarker(run.stdout);
     assert.equal(marker?.request, 'package');
     assert.match(marker?.fields.id ?? '', /^[0-9a-f]{16}$/);
-    assert.ok(gunzipSync(run.stdout.subarray(newline + 1)).toString('latin1').includes('package.json'));
+    assert.ok(gunzipSync(body).toString('latin1').includes('package.json'));
   });
 
   it('unpair removes the runner and says so; a second unpair says no', async () => {

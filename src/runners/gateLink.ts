@@ -5,7 +5,7 @@ import * as path from 'path';
 import { Duplex, Writable, type Readable } from 'stream';
 import { Client } from 'ssh2';
 import { getCaughtErrnoCode } from '../configDirFile';
-import { formatGateMarkerLine, linkUserName } from './gateProtocol';
+import { formatGateAnswerHead, linkUserName } from './gateProtocol';
 import { getRunnerLinkPaths, type HubContext } from './hubPaths';
 import { readHubKey } from './hubKey';
 import { readPairedFile } from './hubRegistry';
@@ -128,8 +128,10 @@ export function runGateLink(params: GateLinkParams): Promise<number> {
       isFinished = true;
       if (checkTimer !== null) clearInterval(checkTimer);
       for (const connection of openConnections) connection.destroy();
+      // The socket file is NOT deleted here: checking that the file is still this gate's and then deleting it is two steps, and a
+      // successor may rename its own socket onto the path between them. A leftover file only refuses connections (the runner reads as
+      // offline); the next gate renames over it and `cutRunnerLink` deletes it.
       server?.close();
-      if (boundInode !== null && readSocketInode() === boundInode) fs.rmSync(paths.socket, { force: true });
       const state = readLinkState(ctx.dir, runnerId);
       if (isReady && state?.pid === process.pid) writeState({ ...state, endedAtMs: now() });
       log(`link ended: ${reason}`);
@@ -207,7 +209,7 @@ export function runGateLink(params: GateLinkParams): Promise<number> {
       });
     };
 
-    params.output.write(formatGateMarkerLine('link', { package: params.packageId ?? noPackageId }));
+    params.output.write(formatGateAnswerHead('link', { package: params.packageId ?? noPackageId }));
     duplex.on('error', () => finish('the connection to the runner failed'));
     client.on('error', (error) => finish(`ssh: ${error.message}`));
     client.on('close', () => finish('the runner disconnected'));

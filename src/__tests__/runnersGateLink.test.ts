@@ -210,7 +210,7 @@ describe('the gate\'s link', () => {
     await settleWithin(gate.done, 'the gate to end with its transport');
   });
 
-  it('cleans up when the runner goes away: the socket is gone, the status says when, the runner reads offline', async () => {
+  it('when the runner goes away the socket no longer accepts, the status says when, and the runner reads offline', async () => {
     const runner = await pairRunner();
     const standIn = await startStandInRunner(runner);
     const gate = await startGate(runner.runnerId, standIn);
@@ -218,7 +218,7 @@ describe('the gate\'s link', () => {
     await waitUntil(() => fs.existsSync(paths.socket), 'the link socket');
     gate.transport.destroy();
     assert.equal(await settleWithin(gate.done, 'the gate to end'), 0);
-    assert.equal(fs.existsSync(paths.socket), false);
+    assert.equal(await probeSocket(paths.socket), false, 'nothing accepts any more');
     assert.notEqual(readLinkState(fixture.ctx.dir, runner.runnerId)?.endedAtMs, null);
     const status = await getRunnerLinkStatus(fixture.ctx.dir, runner.runnerId);
     assert.equal(status.isOnline, false);
@@ -242,7 +242,44 @@ describe('the gate\'s link', () => {
 
     second.transport.destroy();
     await settleWithin(second.done, 'the second gate to end');
-    assert.equal(fs.existsSync(paths.socket), false);
+    assert.equal(await probeSocket(paths.socket), false);
+  });
+
+  it('an ending gate never deletes the file at the link path: a socket another gate published meanwhile survives', async () => {
+    const runner = await pairRunner();
+    const standIn = await startStandInRunner(runner);
+    const gate = await startGate(runner.runnerId, standIn);
+    const paths = getRunnerLinkPaths(fixture.ctx.dir, runner.runnerId);
+    await waitUntil(() => fs.existsSync(paths.socket), 'the link socket');
+
+    // A successor publishes its socket the way a gate does: bind under its own name, rename onto the path.
+    const successorPath = `${paths.socket}.successor`;
+    const successor = net.createServer((connection) => { connection.end('successor'); });
+    await new Promise<void>((resolve) => { successor.listen(successorPath, resolve); });
+    teardown.push(() => successor.close());
+    fs.renameSync(successorPath, paths.socket);
+
+    gate.transport.destroy();
+    await settleWithin(gate.done, 'the replaced gate to end');
+    assert.equal(await probeSocket(paths.socket), true, 'the successor is still reachable after the older gate left');
+  });
+
+  it('a gate that ends leaves its socket file behind, which only refuses connections — and the next link renames over it', async () => {
+    const runner = await pairRunner();
+    const standIn = await startStandInRunner(runner);
+    const first = await startGate(runner.runnerId, standIn);
+    const paths = getRunnerLinkPaths(fixture.ctx.dir, runner.runnerId);
+    await waitUntil(() => fs.existsSync(paths.socket), 'the link socket');
+    first.transport.destroy();
+    await settleWithin(first.done, 'the first gate to end');
+    assert.equal(fs.existsSync(paths.socket), true);
+    assert.equal(await probeSocket(paths.socket), false);
+
+    const second = await startGate(runner.runnerId, standIn);
+    await waitUntil(() => probeSocket(paths.socket), 'the new link over the leftover file');
+    assert.equal(await execOverLink(runner.runnerId, 'again'), 'ran:again\n');
+    second.transport.destroy();
+    await settleWithin(second.done, 'the second gate to end');
   });
 
   it('a leftover file at the socket path (a gate that was killed) does not block a new link', async () => {
@@ -277,7 +314,7 @@ describe('the gate\'s link', () => {
     await waitUntil(() => fs.existsSync(paths.socket), 'the link socket');
     await removePairedRunner(fixture.ctx, runner.runnerId, startMs);
     cutRunnerLink(fixture.ctx.dir, runner.runnerId);
-    assert.equal(fs.existsSync(paths.socket), false);
+    assert.equal(fs.existsSync(paths.socket), false, 'cutting deletes the socket file');
     assert.equal(await settleWithin(gate.done, 'the gate of a removed runner to leave'), 0);
     assert.ok(gate.logs.some((line) => line.includes('another link took over') || line.includes('removed')), gate.logs.join('\n'));
   });

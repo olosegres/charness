@@ -9,14 +9,15 @@ import { runnerServiceKinds } from './hubRegistry';
  * @description What a runner and the hub's gate say to each other over the forced command of the runner's ssh key. The runner runs
  * `ssh … <request>`; sshd starts the gate with the request word in `SSH_ORIGINAL_COMMAND`.
  *
- *   temporary key (a pairing code):  `bootstrap`  the packed charness package, raw gzip, NOTHING else on stdout
+ *   temporary key (a pairing code):  `bootstrap`  marker line, then the packed charness package (raw gzip)
  *                                    `redeem`     stdin: a {@link RedeemRequest} as JSON; stdout: marker line, then a {@link RedeemReply}
  *   permanent key (a paired runner): `link`       marker line, then an ssh session in which the GATE is the client (see gateLink.ts)
  *                                    `package`    marker line, then the packed package (raw gzip)
  *                                    `unpair`     marker line, then {@link UnpairReply}
  *
- * The first line of every answer but `bootstrap` is a MARKER line: a shell that prints something before the forced command (a chatty
- * `.bashrc`) would otherwise corrupt the stream; the reader discards everything up to the marker.
+ * Every answer starts with a MARKER line (after a line break, see {@link formatGateAnswerHead}): a shell that prints something before the
+ * forced command (a chatty `.bashrc`) would otherwise corrupt the stream; the reader discards everything up to the marker — the runner
+ * utility with {@link readUntilGateMarker}, the pasted `sh` line with `grep -b` over the first {@link maxGateNoiseBytes} bytes.
  */
 
 /** The text every marker line starts with; the `1` is the protocol version. */
@@ -35,6 +36,14 @@ export const maxGateRequestBytes = 64 * 1024;
 const maxTextLength = 200;
 
 const markerLinePattern = new RegExp(`^${gateMarker} (${gateRequests.join('|')})((?: [a-z]+=[A-Za-z0-9._:@/-]*)*)$`);
+
+/**
+ * @description What every answer of the gate starts with: a line break, then the marker line. The break ends whatever unfinished line a
+ * shell rc printed before the gate ran (a banner without its newline), so the marker always opens a line of its own.
+ */
+export function formatGateAnswerHead(request: GateRequest, fields: Readonly<Record<string, string>> = {}): string {
+  return `\n${formatGateMarkerLine(request, fields)}`;
+}
 
 function checkIsGateRequest(value: string): value is GateRequest {
   return gateRequests.some((request) => request === value);

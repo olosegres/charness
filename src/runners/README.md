@@ -93,20 +93,24 @@ this machine's own loopback port — otherwise the runner would be told to pin a
 
 | Key | Request | Answer |
 |-----|---------|--------|
-| temporary | `bootstrap` | the packed package, raw gzip, nothing else on stdout (only while the code is open) |
+| temporary | `bootstrap` | marker line (`id=<package id>`), then the packed package as gzip (only while the code is open) |
 | temporary | `redeem` | marker line, then `{ok, runnerId, name, hubPublicKey, label, host, port}` or `{ok:false, reason}` |
 | runner | `link` | marker line (`package=<id>`), then the ssh session of `gateLink.ts` |
 | runner | `package` | marker line, then the packed package |
 | runner | `unpair` | marker line, then `{ok}`; the hub removes the runner and cuts its link |
 
-A **marker line** (`--charness-gate-1-- <request> key=value…`) opens every answer but `bootstrap`; the reader discards what comes before
-it, so a chatty shell rc on the hub cannot corrupt the stream. (`bootstrap` is piped straight into `tar` by the pasted line: a hub whose
-non-interactive shell prints something cannot serve it.) The package id in the `link` marker lets an idle runner notice that the hub
-changed and update itself.
+A **marker line** (`--charness-gate-1-- <request> key=value…`) opens every answer, after a line break that ends any unfinished line a shell
+rc printed; the reader discards what comes before it, so a chatty shell rc on the hub cannot corrupt the stream. The runner utility reads
+with `readUntilGateMarker`; the pasted `sh` line finds the marker with `grep -b` among the first 64 KiB and cuts the archive out with
+`tail -c` (a binary payload is never touched by a text tool). The package id in the `link` marker lets an idle runner notice that the
+hub changed and update itself.
 
 **The link** (`gateLink.ts`). The gate is an `ssh2` client over its own stdio, verifies the runner's server host key against the pinned one
-(ed25519 only), logs in with the hub key, and listens on `link/<id>.sock`. **Newest link wins**: a starting gate deletes the old socket
-file and binds a new one; the replaced gate sees its socket's inode change at its next check (10 s) and leaves. The same check ends a gate
+(ed25519 only), logs in with the hub key, and listens on `link/<id>.sock`. **Newest link wins**: a starting gate binds its socket under a name of
+its own and renames it onto `link/<id>.sock` (atomic; `net.Server.close()` deletes by path, so a gate that bound the link path itself
+would delete its successor's file when it left); the replaced gate sees the file at the path change at its next check (10 s) and leaves.
+A leaving gate never deletes the file at the path (check-then-delete is not atomic against a successor's rename): a leftover socket file only
+refuses connections, the next gate renames over it, and `remove` deletes it. The same check ends a gate
 whose runner left the registry. An ssh keepalive (15 s × 3) ends a gate whose peer is gone — a stock sshd with `ClientAliveInterval 0`
 never would. A runner is **online** when its socket accepts a connection (`linkControl.ts`); `link/<id>.json` says who holds it and
 when it was last seen. `remove` deletes the socket and stops the gate if the recorded pid still is that runner's gate (checked with `ps`).
@@ -118,7 +122,10 @@ is not connected» on stderr and exit 255 (ssh's own «connection failed»).
 
 The hub's own `package.json`, `remoteRun/runner.sh` and `dist/` (no tests, `.d.ts`, source maps) as a deterministic tar (`tarArchive.ts`:
 fixed times and order) in a gzip. Its **id** is the first 16 hex digits of the sha256 of the tar before compression. The cache in
-`package/` is reused while a stamp of the sources (path, size, mtime) is unchanged.
+`package/` is reused while a stamp of the sources (path, size, mtime) is unchanged. Gates and packers are not coordinated, so nothing is
+deleted on a packer's word: an archive is published whole by a rename, `current.json` is only a pointer that heals itself, a superseded
+archive is removed only after 10 minutes, and a gate opens the archive at once (`openHubPackage`) — a deleted file stays readable through
+the open handle.
 
 ## CLI
 

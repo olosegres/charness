@@ -1,4 +1,3 @@
-import * as fs from 'fs';
 import * as path from 'path';
 import { pipeline } from 'stream/promises';
 import type { Readable, Writable } from 'stream';
@@ -6,7 +5,7 @@ import { AuthorizedKeysBlockError } from './authorizedKeys';
 import { getCaughtErrnoCode } from '../configDirFile';
 import { runGateLink, type GateLinkTimings } from './gateLink';
 import {
-  formatGateMarkerLine,
+  formatGateAnswerHead,
   maxGateRequestBytes,
   redeemRequestSchema,
   runnerKeyRequests,
@@ -18,7 +17,7 @@ import {
 import { hubIdPattern } from './hubIds';
 import { createHubContext, type HubContext } from './hubPaths';
 import { HubRegistryError } from './hubRegistry';
-import { getHubPackage } from './hubPackage';
+import { getHubPackage, openHubPackage } from './hubPackage';
 import { checkIsPairingOpen, checkIsRunnerPaired, redeemPairing, removePairedRunner } from './hubPairing';
 import { cutRunnerLink } from './linkControl';
 
@@ -86,10 +85,11 @@ async function readLimitedText(stream: Readable, maxBytes: number): Promise<stri
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function writePackage(ctx: HubContext, io: GateIo, withMarker: boolean): Promise<number> {
-  const hubPackage = getHubPackage(ctx);
-  if (withMarker) io.stdout.write(formatGateMarkerLine('package', { id: hubPackage.id }));
-  await pipeline(fs.createReadStream(hubPackage.filePath), io.stdout, { end: false });
+/** Send the package: its marker (`request` says which answer it is), then the archive, read from a file opened BEFORE the marker is sent. */
+async function writePackage(ctx: HubContext, io: GateIo, request: 'bootstrap' | 'package'): Promise<number> {
+  const opened = await openHubPackage(ctx);
+  io.stdout.write(formatGateAnswerHead(request, { id: opened.id }));
+  await pipeline(opened.handle.createReadStream(), io.stdout, { end: false });
   return 0;
 }
 
@@ -105,7 +105,7 @@ async function handleRedeem(ctx: HubContext, pairId: string, io: GateIo, now: ()
       ? await redeemPairing(ctx, pairId, request.data, now(), getPackageIdOrNull(ctx, io.log))
       : { ok: false, reason: `the request is invalid: ${request.error.issues.map((issue) => `${issue.path.join('.') || '(root)'} ${issue.message}`).join('; ')}` };
   }
-  io.stdout.write(formatGateMarkerLine('redeem'));
+  io.stdout.write(formatGateAnswerHead('redeem'));
   io.stdout.write(`${JSON.stringify(reply)}\n`);
   return reply.ok ? 0 : failedExitCode;
 }
@@ -123,7 +123,7 @@ async function handleUnpair(ctx: HubContext, runnerId: string, io: GateIo, now: 
   const removed = await removePairedRunner(ctx, runnerId, now());
   if (removed !== null) cutRunnerLink(ctx.dir, runnerId);
   const reply: UnpairReply = { ok: removed !== null };
-  io.stdout.write(formatGateMarkerLine('unpair'));
+  io.stdout.write(formatGateAnswerHead('unpair'));
   io.stdout.write(`${JSON.stringify(reply)}\n`);
   return 0;
 }
@@ -165,7 +165,7 @@ export async function runRunnerGate(argv: readonly string[], env: NodeJS.Process
           io.log('refused: this pairing code is unknown, used or expired');
           return refusedExitCode;
         }
-        return await writePackage(ctx, io, false);
+        return await writePackage(ctx, io, 'bootstrap');
       }
       return await handleRedeem(ctx, invocation.pairId, io, now);
     }
@@ -179,7 +179,7 @@ export async function runRunnerGate(argv: readonly string[], env: NodeJS.Process
       case 'link':
         return await runGateLink({ ctx, runnerId: invocation.runnerId, input: io.stdin, output: io.stdout, packageId: getPackageIdOrNull(ctx, io.log), log: io.log, timings: options.linkTimings, now });
       case 'package':
-        return await writePackage(ctx, io, true);
+        return await writePackage(ctx, io, 'package');
       case 'unpair':
         return await handleUnpair(ctx, invocation.runnerId, io, now);
       default:

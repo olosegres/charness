@@ -14,13 +14,14 @@ import os from 'os';
 import path from 'path';
 import { gzipSync } from 'zlib';
 import { buildBootstrapLine } from '../runners/bootstrapLine';
+import { formatGateAnswerHead } from '../runners/gateProtocol';
 import { encodePairCode } from '../runners/pairCode';
 import { createTarArchive } from '../runners/tarArchive';
 import { createPairCodePayload } from './runnersTestKit';
 
 let workDir = '';
 
-/** A stand-in `ssh` that records what it was given and serves `package.tgz`. */
+/** A stand-in `ssh` that records what it was given and serves the file `answer.bin`. */
 function installStubSsh(binDir: string): void {
   fs.mkdirSync(binDir, { recursive: true });
   const script = [
@@ -33,15 +34,26 @@ function installStubSsh(binDir: string): void {
     '  esac',
     '  shift',
     'done',
-    `cat "${workDir}/package.tgz"`,
+    `cat "${workDir}/answer.bin"`,
     '',
   ].join('\n');
   fs.writeFileSync(path.join(binDir, 'ssh'), script, { mode: 0o755 });
 }
 
-function createPackageTgz(): void {
+/** What the hub's `bootstrap` sends: whatever its shell printed first (`noise`), then the gate's marker and the archive. */
+function createBootstrapAnswer(noise: string = ''): Buffer {
   const runnerCli = 'console.log("RUNNER_CLI " + process.argv.slice(2).join(" "));\n';
-  fs.writeFileSync(path.join(workDir, 'package.tgz'), gzipSync(createTarArchive([{ path: 'dist/runnerUtility/runnerCli.js', content: Buffer.from(runnerCli), mode: 0o644 }])));
+  const archive = gzipSync(createTarArchive([{ path: 'dist/runnerUtility/runnerCli.js', content: Buffer.from(runnerCli), mode: 0o644 }]));
+  const answer = Buffer.concat([Buffer.from(noise), Buffer.from(formatGateAnswerHead('bootstrap', { id: '0123456789abcdef' })), archive]);
+  fs.writeFileSync(path.join(workDir, 'answer.bin'), answer);
+  return answer;
+}
+
+function runLine(payload = createPairCodePayload()): ReturnType<typeof spawnSync> {
+  return spawnSync('sh', ['-c', buildBootstrapLine(payload)], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp') },
+  });
 }
 
 describe('bootstrap line', () => {
@@ -73,7 +85,7 @@ describe('bootstrap line', () => {
   it('fetches the package with the pairing\'s key, strict host key checking and no agent, then hands the code to the runner utility', () => {
     const payload = createPairCodePayload({ host: 'hub.example', port: 2222, user: 'hubuser' });
     installStubSsh(path.join(workDir, 'bin'));
-    createPackageTgz();
+    createBootstrapAnswer();
     const result = spawnSync('sh', ['-c', buildBootstrapLine(payload)], {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp') },
@@ -93,9 +105,28 @@ describe('bootstrap line', () => {
     assert.equal(fs.readFileSync(path.join(workDir, 'known_hosts.copy'), 'utf8'), `charness-hub ${payload.hostKey}\n`);
   });
 
+  it('skips what the hub\'s shell printed before the gate ran — a banner, a line without its newline — and unpacks the archive byte for byte', () => {
+    installStubSsh(path.join(workDir, 'bin'));
+    createBootstrapAnswer('Welcome to the hub!\nLast login: Sat Nov  1 12:00:00 2026\nunterminated banner');
+    const payload = createPairCodePayload();
+    const result = runLine(payload);
+    assert.equal(result.status, 0, String(result.stderr));
+    assert.match(String(result.stdout), /^RUNNER_CLI pair --bootstrap /m);
+  });
+
+  it('stops with a clear line when the answer has no marker (an expired line, a refusal), and cleans up', () => {
+    installStubSsh(path.join(workDir, 'bin'));
+    fs.writeFileSync(path.join(workDir, 'answer.bin'), 'Welcome to the hub!\n');
+    const result = runLine();
+    assert.notEqual(result.status, 0);
+    assert.match(String(result.stderr), /the hub did not send the package/);
+    assert.ok(!String(result.stdout).includes('RUNNER_CLI'));
+    assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), []);
+  });
+
   it('leaves nothing behind in the temp folder, not even the key', () => {
     installStubSsh(path.join(workDir, 'bin'));
-    createPackageTgz();
+    createBootstrapAnswer();
     const result = spawnSync('sh', ['-c', buildBootstrapLine(createPairCodePayload())], {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp') },
@@ -119,7 +150,7 @@ describe('bootstrap line', () => {
 
   it('says what is missing when node is absent or too old, and cleans up', () => {
     installStubSsh(path.join(workDir, 'bin'));
-    createPackageTgz();
+    createBootstrapAnswer();
     const toolsBin = path.join(workDir, 'tools');
     fs.mkdirSync(toolsBin);
     for (const tool of ['mktemp', 'rm', 'cat', 'tar', 'fold', 'mkdir', 'cp']) {

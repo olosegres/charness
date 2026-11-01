@@ -12,7 +12,7 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { gunzipSync } from 'zlib';
-import { getHubPackage } from '../runners/hubPackage';
+import { getHubPackage, openHubPackage, supersededArchiveGraceMs } from '../runners/hubPackage';
 import { getHubFilePaths } from '../runners/hubPaths';
 import { createTarArchive, splitTarPath } from '../runners/tarArchive';
 import { createHubFixture, type HubFixture } from './runnersTestKit';
@@ -85,13 +85,69 @@ describe('hub package', () => {
     assert.equal(fs.statSync(second.filePath).mtimeMs, modifiedAt);
   });
 
-  it('packs again when the source changes: another id, and only the current file is kept', () => {
+  function changeSource(content: string): void {
+    fs.writeFileSync(path.join(fixture.ctx.packageRoot, 'dist', 'runners', 'example.js'), content);
+  }
+
+  function listArchives(): string[] {
+    return fs.readdirSync(getHubFilePaths(fixture.ctx.dir).packageDir).filter((name) => name.endsWith('.tgz')).sort();
+  }
+
+  it('packs again when the source changes: another id, current.json points at the new archive', () => {
     const first = getHubPackage(fixture.ctx);
-    fs.writeFileSync(path.join(fixture.ctx.packageRoot, 'dist', 'runners', 'example.js'), 'module.exports = 42; // longer\n');
+    changeSource('module.exports = 42; // longer\n');
     const second = getHubPackage(fixture.ctx);
     assert.notEqual(second.id, first.id);
-    assert.equal(fs.existsSync(first.filePath), false);
-    assert.deepEqual(fs.readdirSync(getHubFilePaths(fixture.ctx.dir).packageDir).filter((name) => name.endsWith('.tgz')), [path.basename(second.filePath)]);
+    assert.equal(getHubPackage(fixture.ctx).filePath, second.filePath);
+  });
+
+  it('keeps the archive it replaced for the grace period: a gate that was handed its path a moment ago must still find it', () => {
+    const first = getHubPackage(fixture.ctx);
+    changeSource('module.exports = 42; // longer\n');
+    const second = getHubPackage(fixture.ctx);
+    assert.deepEqual(listArchives(), [path.basename(first.filePath), path.basename(second.filePath)].sort());
+    assert.ok(runTar(gunzipSync(fs.readFileSync(first.filePath)), ['-xOf', '-', 'dist/runners/example.js']).includes('module.exports = 1'));
+  });
+
+  it('removes a superseded archive once it is older than the grace period, and never the current one', () => {
+    const first = getHubPackage(fixture.ctx);
+    changeSource('module.exports = 42; // longer\n');
+    const second = getHubPackage(fixture.ctx);
+    const longAgo = new Date(Date.now() - supersededArchiveGraceMs - 60_000);
+    fs.utimesSync(first.filePath, longAgo, longAgo);
+    fs.utimesSync(second.filePath, longAgo, longAgo);
+    getHubPackage(fixture.ctx);
+    assert.deepEqual(listArchives(), [path.basename(second.filePath)]);
+  });
+
+  it('interleaved packers of two versions do not take each other\'s archive away, and a reader that opened one first reads it whole', async () => {
+    const reader = await openHubPackage(fixture.ctx);
+    const readerArchive = getHubPackage(fixture.ctx);
+    changeSource('module.exports = 42; // the next version\n');
+    const newer = getHubPackage(fixture.ctx);
+    // The older source is packed again late (a packer that was slow): its archive appears next to the newer one.
+    changeSource('module.exports = 1;\n');
+    const olderAgain = getHubPackage(fixture.ctx);
+    assert.equal(olderAgain.id, readerArchive.id);
+    assert.ok(fs.existsSync(newer.filePath), 'the newer archive is not removed by the late packer');
+    const archive = gunzipSync(await reader.handle.readFile());
+    await reader.handle.close();
+    assert.ok(runTar(archive, ['-xOf', '-', 'dist/runners/example.js']).includes('module.exports = 1'));
+  });
+
+  it('a reader holds its file open: removing the archive afterwards does not cut the download', async () => {
+    const reader = await openHubPackage(fixture.ctx);
+    const current = getHubPackage(fixture.ctx);
+    fs.rmSync(current.filePath);
+    const archive = gunzipSync(await reader.handle.readFile());
+    await reader.handle.close();
+    assert.ok(runTar(archive, ['-tf', '-']).includes('package.json'));
+  });
+
+  it('opening the package packs it when nothing is cached, and the id matches the file', async () => {
+    const reader = await openHubPackage(fixture.ctx);
+    await reader.handle.close();
+    assert.equal(reader.id, getHubPackage(fixture.ctx).id);
   });
 
   it('the id is a function of the content alone: the same files in another place give the same id', () => {
