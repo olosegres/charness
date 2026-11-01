@@ -16,7 +16,8 @@ import { getRemoteRunCacheDirCandidates } from './ssh';
  */
 
 const maxOsLabelLength = 40;
-const unsafeLabelCharacters = /[^A-Za-z0-9 ._+()-]/g;
+/** `/` stays: `/etc/os-release` names are «Debian GNU/Linux 12»; a slash cannot start a line, a bullet or markup. */
+const unsafeLabelCharacters = /[^A-Za-z0-9 ._+()/-]/g;
 
 /** @description The OS text of a runner as a short plain label: letters, digits and a few signs; no line break, no markup, 40 characters at most. */
 export function sanitizeOsLabel(reportedOs: string): string {

@@ -27,12 +27,12 @@ const paired: RunnerConfig = { name: 'mac', ssh: 'charness-runner-a1b2c3d4e5f6',
 
 describe('sanitizeOsLabel', () => {
   it('keeps the plain labels operating systems have', () => {
-    for (const label of ['macOS 15.1', 'Ubuntu 24.04', 'Debian GNU Linux 12', 'Fedora Linux 41 (Workstation)']) assert.equal(sanitizeOsLabel(label), label);
+    for (const label of ['macOS 15.1', 'Ubuntu 24.04', 'Debian GNU/Linux 12', 'Fedora Linux 41 (Workstation)']) assert.equal(sanitizeOsLabel(label), label);
   });
 
   it('drops line breaks, markup and signs, collapses spaces, cuts at 40 characters', () => {
     assert.equal(sanitizeOsLabel('Ubuntu\n24.04\r\n'), 'Ubuntu24.04');
-    assert.equal(sanitizeOsLabel('<b>macOS</b>  15 `rm -rf` | $(x) ;'), 'bmacOSb 15 rm -rf (x)');
+    assert.equal(sanitizeOsLabel('<b>macOS</b>  15 `rm -rf` | $(x) ;'), 'bmacOS/b 15 rm -rf (x)');
     assert.equal(sanitizeOsLabel('a'.repeat(100)).length, 40);
     assert.equal(sanitizeOsLabel(`${'a'.repeat(39)} bcd`), 'a'.repeat(39), 'a cut that ends on a space leaves no trailing space');
     assert.equal(sanitizeOsLabel('‮•»'), '');
