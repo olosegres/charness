@@ -10,6 +10,10 @@
  *   unanswered   — the connection was taken, no answer came in time, on every attempt: busy, starved or hung
  *
  * The attempt time and the number of retries are options so these tests need not wait out the production 2 s.
+ *
+ * `probeOpenCodePort` is the second half: before a server is started onto a port, the port is probed with a plain TCP connect, and
+ * only a REFUSED connection proves it free. A connect that is accepted means a holder; a connect that gets no answer (the accept
+ * queue of a hung or overloaded listener is full) or fails with anything else proves nothing, and is not taken for "free".
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -18,7 +22,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { getOpenCodeServerHealth, openCodeHealthAttemptTimeoutMs, openCodeHealthTimeoutRetries } from '../installManager';
+import { getOpenCodeServerHealth, openCodeHealthAttemptTimeoutMs, openCodeHealthTimeoutRetries, probeOpenCodePort } from '../installManager';
+import { startFullBacklogListener } from './fullBacklogListener';
 
 const testAttemptTimeoutMs = 100;
 /** Late enough for a test attempt to give up, soon enough that the next one meets an answer. */
@@ -112,5 +117,43 @@ describe('getOpenCodeServerHealth', () => {
   it('the defaults are the production ones: 2 s an attempt and two retries after the first', () => {
     assert.equal(openCodeHealthAttemptTimeoutMs, 2000);
     assert.equal(openCodeHealthTimeoutRetries, 2);
+  });
+});
+
+describe('probeOpenCodePort', () => {
+  /** A connect check short enough not to slow the tests. */
+  const testProbeTimeoutMs = 200;
+
+  it('a port whose listener takes the connection is in use', async () => {
+    await startServer(() => {});
+    const port = (server!.address() as AddressInfo).port.toString();
+    assert.equal((await probeOpenCodePort(port, { timeoutMs: testProbeTimeoutMs })).state, 'inUse');
+  });
+
+  it('a port that refuses the connection is free: the one answer that proves it', async () => {
+    await startServer(() => {});
+    const port = (server!.address() as AddressInfo).port.toString();
+    await new Promise<void>((resolve) => server!.close(() => resolve()));
+    server = null;
+    assert.deepEqual(await probeOpenCodePort(port, { timeoutMs: testProbeTimeoutMs }), { state: 'free', detail: 'the connection was refused' });
+  });
+
+  it('a port whose listener gives no answer to a connect (a full accept queue) is NOT free: unknown, not "nothing listens"', async () => {
+    const listener = await startFullBacklogListener();
+    try {
+      assert.deepEqual(
+        await probeOpenCodePort(listener.port.toString(), { timeoutMs: testProbeTimeoutMs }),
+        { state: 'unknown', detail: `the connection timed out after ${testProbeTimeoutMs} ms` },
+      );
+    } finally {
+      listener.stop();
+    }
+  });
+
+  it('a connect that fails with anything but a refusal is NOT free either: unknown', async () => {
+    // The limited broadcast address is unreachable at once (ENETUNREACH or EACCES, by the host), with no DNS and no wait.
+    const probe = await probeOpenCodePort('9', { host: '255.255.255.255', timeoutMs: testProbeTimeoutMs });
+    assert.equal(probe.state, 'unknown');
+    assert.match(probe.detail, /^the connection failed with E[A-Z]+$/);
   });
 });

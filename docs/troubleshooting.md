@@ -52,5 +52,6 @@ never starts a server onto a port that still takes connections: a server that an
 used as it is (a slow one too — a check with no answer is asked again, three tries of 2 s, before it counts),
 and one it did not start that stays silent gets the error "OpenCode server port N is in use by a process that
 did not answer its health probe … it will not start another server on the port" instead of a second server
-that dies on the busy port. A server the bot started itself that stays silent on all three tries is stopped
+that dies on the busy port. Only a refused connection proves a port free: a port that does not answer a connect
+at all (a hung listener with a full accept queue) gets "port N is not known to be free" and no new server either. A server the bot started itself that stays silent on all three tries is stopped
 and replaced. Pick a different port for the second instance (e.g. `4097`), or stop what holds the port.

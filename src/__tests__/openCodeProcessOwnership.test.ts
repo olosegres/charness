@@ -13,6 +13,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { createServer } from 'net';
 import { execFileSync, spawn } from 'child_process';
+import { startFullBacklogListener } from './fullBacklogListener';
 import {
   checkIsProcessIdentityCurrent,
   ensureOpenCodeServer,
@@ -1224,6 +1225,7 @@ test(
 /** What a health-probe test works with: one fixture server on a port the bot is pointed at, and its logs. */
 interface HealthFixture {
   testDirectory: string;
+  port: number;
   serverUrl: string;
   spawnLogPath: string;
   hangTargetPath: string;
@@ -1263,6 +1265,7 @@ async function runWithHealthFixture(extraEnv: Record<string, string>, body: (fix
   try {
     await body({
       testDirectory,
+      port,
       serverUrl,
       spawnLogPath,
       hangTargetPath,
@@ -1345,6 +1348,27 @@ test(
 
       assert.deepEqual(getSpawnedPids(fixture.spawnLogPath), [server.pid], 'no second server was started on the occupied port');
       assert.equal(checkIsTestProcessAlive(server.pid), true, 'and the one that holds it was left alone');
+    });
+  },
+);
+
+test(
+  'a port whose holder takes no connection at all (a full accept queue) is never started over: no answer proves nothing about the port',
+  { skip: process.platform === 'win32' },
+  async () => {
+    await runWithHealthFixture({}, async (fixture) => {
+      // The holder never accepts, so the health probes get no answer AND the plain connect check of the port hangs too: a hung
+      // or overloaded listener, not a free port. Only a refused connection proves a port free.
+      const holder = await startFullBacklogListener({ port: fixture.port });
+      try {
+        await assert.rejects(
+          ensureOpenCodeServer(),
+          /port \d+ is not known to be free .*will not start another/,
+        );
+        assert.deepEqual(getSpawnedPids(fixture.spawnLogPath), [], 'no server was started onto the port');
+      } finally {
+        holder.stop();
+      }
     });
   },
 );

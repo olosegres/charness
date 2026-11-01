@@ -862,31 +862,65 @@ export async function getOpenCodeServerHealth(options: OpenCodeServerHealthOptio
   }
 }
 
-/** How long the check for a listener on the server's port waits for the connection. */
-const portInUseProbeTimeoutMs = 1000;
+/** How long the connect check of the server's port waits for an answer. */
+const portProbeTimeoutMs = 1000;
+
+/** The address `opencode serve` is started on: the one a start would bind, and so the one to ask about. */
+const openCodeListenHost = '127.0.0.1';
 
 /**
- * Whether anything takes a connection on the loopback port `opencode serve` is started on (127.0.0.1): the answer to "may a
- * server be started here". A connection that is refused, or does not come, is not an occupant.
+ * @name OpenCodePortState
+ * @description What a plain TCP connect proves about a port:
+ *  - `inUse`   — the connection was accepted: a listener holds it;
+ *  - `free`    — the connection was REFUSED: nothing listens. The only answer that proves a port free;
+ *  - `unknown` — no answer in time (a hung or overloaded listener whose accept queue is full looks exactly like this) or any
+ *    other failure: nothing is proven, and the port must not be taken for free.
  */
-function checkIsOpenCodePortInUse(port: string): Promise<boolean> {
+export type OpenCodePortState = 'inUse' | 'free' | 'unknown';
+
+export interface OpenCodePortProbe {
+  state: OpenCodePortState;
+  /** What the connect did, for the message that refuses a start. */
+  detail: string;
+}
+
+export interface OpenCodePortProbeOptions {
+  /** Test seams; production keeps {@link openCodeListenHost} and {@link portProbeTimeoutMs}. */
+  host?: string;
+  timeoutMs?: number;
+}
+
+/**
+ * @description Probe the port `opencode serve` is about to be started on, with a plain TCP connect — the answer to "may a server
+ * be started here". Only a refusal says yes: a listener whose accept queue is full drops the connect (it times out) while it
+ * still owns the port, so a timeout, or an error that is not a refusal, is `unknown`, never `free`.
+ */
+export function probeOpenCodePort(port: string, options: OpenCodePortProbeOptions = {}): Promise<OpenCodePortProbe> {
+  const timeoutMs = options.timeoutMs ?? portProbeTimeoutMs;
   return new Promise((resolve) => {
-    const socket = net.connect({ host: '127.0.0.1', port: Number.parseInt(port, 10) });
-    socket.setTimeout(portInUseProbeTimeoutMs);
+    const socket = net.connect({ host: options.host ?? openCodeListenHost, port: Number.parseInt(port, 10) });
+    socket.setTimeout(timeoutMs);
     socket.once('connect', () => {
       socket.destroy();
-      resolve(true);
+      resolve({ state: 'inUse', detail: 'the connection was accepted' });
     });
     socket.once('timeout', () => {
       socket.destroy();
-      resolve(false);
+      resolve({ state: 'unknown', detail: `the connection timed out after ${timeoutMs} ms` });
     });
-    socket.once('error', () => resolve(false));
+    socket.once('error', (error: NodeJS.ErrnoException) => {
+      resolve(error.code === 'ECONNREFUSED'
+        ? { state: 'free', detail: 'the connection was refused' }
+        : { state: 'unknown', detail: `the connection failed with ${error.code ?? error.message}` });
+    });
   });
 }
 
-/** Why a server is not started on a port that is in use: who holds it, as far as the last health probe could tell. */
-function describeOccupiedOpenCodePort(port: string, health: OpenCodeServerHealth): string {
+/** Why a server is not started onto a port that is not proven free: who holds it, as far as the probes could tell. */
+function describeNotFreeOpenCodePort(port: string, portProbe: OpenCodePortProbe, health: OpenCodeServerHealth): string {
+  if (portProbe.state === 'unknown') {
+    return `OpenCode server port ${port} is not known to be free (${portProbe.detail}), and the bot did not start what may hold it: it will not start another server on the port`;
+  }
   const holder = health.outcome === 'unanswered'
     ? `by a process that did not answer its health probe (${1 + openCodeHealthTimeoutRetries} attempts of ${openCodeHealthAttemptTimeoutMs} ms)`
     : health.outcome === 'unhealthy'
@@ -1078,8 +1112,9 @@ async function stopAdoptedOpenCodeServer(serverUrl: URL): Promise<void> {
  * Waits until server responds to health check (up to 15s).
  *
  * A health probe that gets no answer in time is asked again ({@link openCodeHealthTimeoutRetries}) before it is read as
- * anything: a slow server is adopted, not started over. Whatever the probe said, a server is never started onto a port that
- * still takes connections — an owned server that is down or hung is stopped first, any other holder makes this throw.
+ * anything: a slow server is adopted, not started over. Whatever the probe said, a server is never started onto a port that is
+ * not proven free (a refused connection — {@link probeOpenCodePort}) — an owned server that is down or hung is stopped first,
+ * any other holder, or a port that does not answer a connect at all, makes this throw.
  *
  * If a server is already up but running an OUTDATED binary (version reported by
  * /global/health differs from the on-disk `opencode --version`), it is restarted
@@ -1112,10 +1147,12 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
     await stopAdoptedOpenCodeServer(serverUrl);
   }
 
-  // Never start a server onto a port that is in use: the new one would die of EADDRINUSE and the start would be reported as
-  // failed, with the real holder (a server that is only slow, or one the bot does not own) none the wiser.
-  if (await checkIsOpenCodePortInUse(port)) {
-    throw new Error(describeOccupiedOpenCodePort(port, health));
+  // Never start a server onto a port that is not PROVEN free: the new one would die of EADDRINUSE and the start would be reported
+  // as failed, with the real holder (a server that is only slow, one the bot does not own, one that does not even accept a
+  // connection) none the wiser. Only a refused connection proves a port free.
+  const portProbe = await probeOpenCodePort(port);
+  if (portProbe.state !== 'free') {
+    throw new Error(describeNotFreeOpenCodePort(port, portProbe, health));
   }
 
   const opencodeCmd = getToolCommand('opencode');
