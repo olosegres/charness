@@ -566,6 +566,7 @@ __metadata:
     zod: "npm:^4.4.3"
   bin:
     charness: dist/cli.js
+    charness-runner: dist/runnerUtility/runnerCli.js
     telegramCode: dist/cli.js
     telegramcode: dist/cli.js
   languageName: unknown
