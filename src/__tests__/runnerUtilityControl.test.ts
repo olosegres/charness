@@ -88,6 +88,21 @@ function createServiceDeps(commands: string[]): ServiceDeps {
 }
 
 /** The unpair command's collaborators: the service manager and the queue record their commands; no process is running. */
+/** A Pueue with one running task that `reset --force` ends: `status --json` shows it until the reset, an empty queue after. */
+function createBusyQueueRunner(commands: string[]): CommandRunner {
+  let isReset = false;
+  const answer = (isOk: boolean, stdout = ''): Awaited<ReturnType<CommandRunner>> => ({ ok: isOk, exitCode: isOk ? 0 : 1, stdout, stderr: '', isTimedOut: false });
+  return async (file, args) => {
+    commands.push(`${file} ${args.join(' ')}`);
+    if (args.includes('reset')) {
+      isReset = true;
+      return answer(true);
+    }
+    if (args.includes('status') && args.includes('--json')) return answer(true, JSON.stringify({ tasks: isReset ? {} : { 0: { status: { Running: {} } } } }));
+    return answer(false);
+  };
+}
+
 function createUnpairDeps(commands: string[], overrides: Partial<UnpairDeps> = {}): UnpairDeps {
   const idleProcess: ProcessControl = { checkIsAlive: () => false, readCommand: () => null, signal: () => undefined, terminateGraceMs: 50, killGraceMs: 50 };
   const queueRunner: CommandRunner = async (file, args) => {
@@ -264,7 +279,7 @@ describe('unpair', () => {
       terminateGraceMs: 500,
       killGraceMs: 500,
     };
-    assert.equal(await runUnpair({ isLocalOnly: true }, io, home, createUnpairDeps(commands, { process: control })), 0, errors);
+    assert.equal(await runUnpair({ isLocalOnly: true }, io, home, createUnpairDeps(commands, { process: control, queueRunner: createBusyQueueRunner(commands) })), 0, errors);
     assert.deepEqual(signals, ['SIGTERM']);
     assert.equal(alive.has(4242), false);
     assert.ok(commands.some((line) => line.endsWith('reset --force')), 'the queue was emptied: its running jobs are killed');

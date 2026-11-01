@@ -199,11 +199,11 @@ export function makePairingLine(layout: RunnerLinkLayout, extraEnv: NodeJS.Proce
   return line;
 }
 
-/** @description Run the pasted line on the runner machine. */
-export function runPairingLine(layout: RunnerLinkLayout, line: string): SpawnSyncReturns<string> {
+/** @description Run the pasted line on a runner machine (the flow's first one unless `home` names another). */
+export function runPairingLine(layout: RunnerLinkLayout, line: string, home: string = layout.runnerHome): SpawnSyncReturns<string> {
   return spawnSync('sh', ['-c', line], {
     encoding: 'utf8',
-    env: createEnv(layout.runnerHome, layout, { [testNodeModulesEnvName]: path.join(repoRoot, 'node_modules') }),
+    env: createEnv(home, layout, { [testNodeModulesEnvName]: path.join(repoRoot, 'node_modules') }),
     timeout: lineTimeoutMs,
   });
 }

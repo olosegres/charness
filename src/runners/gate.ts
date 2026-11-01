@@ -183,8 +183,10 @@ export async function runRunnerGate(argv: readonly string[], env: NodeJS.Process
       return await handleRedeem(ctx, invocation.pairId, io, now);
     }
     // The key line is only the way in: a runner that left the registry is refused whatever its line (or an ssh connection it already
-    // has open, which keeps the key's options) still allows.
-    if (request !== 'unpair' && !checkIsRunnerPaired(ctx, invocation.runnerId)) {
+    // has open, which keeps the key's options) still allows. Two requests are answered anyway, because their answer IS «not paired»:
+    // `unpair` (idempotent) and `identity` (a removed runner asks it after a refused `link` to tell a removal from a failure — it
+    // answers `{ok:false}` and discloses nothing).
+    if (request !== 'unpair' && request !== 'identity' && !checkIsRunnerPaired(ctx, invocation.runnerId)) {
       io.log('refused: this runner is not paired here');
       return refusedExitCode;
     }

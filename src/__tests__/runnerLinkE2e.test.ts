@@ -25,6 +25,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { decodePairCode } from '../runners/pairCode';
 import { redeemReplySchema, type RedeemRequest } from '../runners/gateProtocol';
+import { readPairedFile, writePairedFile } from '../runners/hubRegistry';
 import { connectToHub, HubConnectionError, requestGateJson } from '../runnerUtility/hubClient';
 import { readRunnerConfig, writePairingInProgress } from '../runnerUtility/runnerConfig';
 import { ensureRunnerKeys } from '../runnerUtility/runnerKeys';
@@ -328,6 +329,32 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     const status = spawnSync(process.execPath, [path.join(runnerPaths.currentApp, 'dist', 'runnerUtility', 'runnerCli.js'), 'status'], { encoding: 'utf8', env: { HOME: layout.runnerHome, PATH: process.env.PATH } });
     assert.match(status.stdout, /This runner was removed by @ExampleBot\. Pair again with a new line from \/runners\./);
     assert.equal(readHubPaired().runners.length, 0);
+  });
+
+  it('a key line that outlived its registry entry is a removal too: the real gate answers «not paired», the runner takes that for certain and stops the background job', async () => {
+    const home = createExtraMachine(layout, 'machine-three');
+    const paths = getRunnerHomePaths(home);
+    const paired = runPairingLine(layout, makePairingLine(layout), home);
+    assert.equal(paired.status, 0, `${paired.stderr}\n${paired.stdout}`);
+    const thirdId = readJson<RunnerConfig>(paths.config).runnerId;
+    const third = startRunner(layout, home);
+    await waitUntil(() => readStatusAt(paths)?.state === 'linked', 'the third machine to link', linkTimeoutMs);
+    const jobPidFile = path.join(layout.root, 'third-background-job.pid');
+    const started = sshThroughLink(layout, thirdId, `${path.join(paths.binDir, 'pueue')} --config ${paths.pueueConfig} add --immediate -- sh -c 'echo $$ > ${jobPidFile}; sleep 300'`);
+    assert.equal(started.status, 0, started.stderr);
+    await waitUntil(() => fs.existsSync(jobPidFile) && fs.readFileSync(jobPidFile, 'utf8').trim() !== '', 'the third machine\'s background job to start', linkTimeoutMs);
+    const jobPid = Number(fs.readFileSync(jobPidFile, 'utf8'));
+    assert.equal(isProcessAlive(jobPid), true);
+
+    // The registry entry goes, the key line stays (no hub operation runs, so nothing rewrites authorized_keys): sshd lets the runner in,
+    // the gate refuses `link` — and must still answer `identity`, or the runner sees only a failure and retries for ever.
+    const registry = readPairedFile(layout.hubDir);
+    writePairedFile(layout.hubDir, { ...registry, rev: registry.rev + 1, runners: registry.runners.filter((runner) => runner.id !== thirdId) });
+    assert.match(fs.readFileSync(path.join(layout.hubHome, '.ssh', 'authorized_keys'), 'utf8'), new RegExp(`charness-runner:${thirdId}`), 'the key line is still there');
+    process.kill(readJson<{ pid: number }>(path.join(layout.hubDir, 'link', `${thirdId}.json`)).pid, 'SIGKILL');
+    await waitUntil(() => readStatusAt(paths)?.state === 'removed', 'the third machine to learn it was removed from the gate\'s answer', linkTimeoutMs);
+    await waitUntil(() => !isProcessAlive(jobPid), 'the removed machine to stop its background job', linkTimeoutMs);
+    await stopRunner(layout, third);
   });
 
   it('a pairing whose answer was lost is recovered with the machine\'s own key — the temporary key is spent, the code is gone', async () => {

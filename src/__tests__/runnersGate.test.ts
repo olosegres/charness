@@ -223,8 +223,10 @@ describe('gate requests', () => {
     }
     await removePairedRunner(fixture.ctx, redeemed.runnerId, startMs);
     const afterRemoval = await runGate(gateArgs('runner', redeemed.runnerId), 'identity');
-    assert.equal(afterRemoval.code, 2);
-    assert.equal(afterRemoval.stdout.length, 0);
+    assert.equal(afterRemoval.code, 1);
+    assert.equal(splitMarker(afterRemoval.stdout).request, 'identity');
+    const removedReply = redeemReplySchema.parse(JSON.parse(splitMarker(afterRemoval.stdout).body.toString('utf8')));
+    assert.deepEqual(removedReply, { ok: false, reason: 'this runner is not paired here' }, 'the answer the runner reads as «removed» — and nothing else');
   });
 
   it('unpair removes the runner and says so; a second unpair says no', async () => {
@@ -236,10 +238,10 @@ describe('gate requests', () => {
     assert.deepEqual(JSON.parse(splitMarker((await runGate(gateArgs('runner', runnerId), 'unpair')).stdout).body.toString('utf8')), { ok: false });
   });
 
-  it('a runner that left the registry is refused by `package` and `link` whatever its key line still allows', async () => {
+  it('a runner that left the registry is refused by `package`, `link` and `version` whatever its key line still allows', async () => {
     const runnerId = await pairRunner();
     await removePairedRunner(fixture.ctx, runnerId, startMs);
-    for (const command of ['package', 'link', 'version', 'identity']) {
+    for (const command of ['package', 'link', 'version']) {
       const run = await runGate(gateArgs('runner', runnerId), command);
       assert.equal(run.code, 2, command);
       assert.equal(run.stdout.length, 0, command);

@@ -110,12 +110,18 @@ export async function shutDownPueue(paths: RunnerHomePaths, runner: CommandRunne
 
 /**
  * @description Stop every job of the queue and empty it (`pueue reset --force`: it kills the running tasks and their children and removes the
- * rest, so no queued task starts in their place), then check that nothing is left running. `true` also when no daemon answers (its jobs died
- * with it).
+ * rest, so no queued task starts in their place), then wait until nothing is left running. `true` also when no daemon answers (its jobs died
+ * with it). The reset only ASKS: Pueue 4 answers at once and its task handler kills the tasks a moment later, so one look right after the
+ * command would still see them `Running` — it looks again, until `settleTimeoutMs` is over.
  */
-export async function stopAllPueueJobs(paths: RunnerHomePaths, runner: CommandRunner = runCommand): Promise<boolean> {
+export async function stopAllPueueJobs(paths: RunnerHomePaths, runner: CommandRunner = runCommand, settleTimeoutMs: number = daemonStartTimeoutMs): Promise<boolean> {
   if ((await inspectPueue(paths, runner)).kind === 'absent') return true;
   await runner(path.join(paths.binDir, 'pueue'), ['--config', paths.pueueConfig, 'reset', '--force'], { timeoutMs: daemonStartTimeoutMs });
-  const after = await inspectPueue(paths, runner);
-  return after.kind === 'absent' || after.kind === 'idle';
+  const deadline = Date.now() + settleTimeoutMs;
+  for (;;) {
+    const after = await inspectPueue(paths, runner);
+    if (after.kind === 'absent' || after.kind === 'idle') return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => { setTimeout(resolve, pueueWaitPollMs); });
+  }
 }

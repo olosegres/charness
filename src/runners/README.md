@@ -55,8 +55,8 @@ first — a damaged one stops the operation before anything is written; (2) the 
 `ls` or sweep included, so a step that failed, or a crash between two writes, is mended by whatever runs next (a failed derived write is
 reported as `HubDerivedFilesError`). A code is single use because the runner is recorded with the id of the code that made it, even if the
 pending entry outlives a crash; the SAME machine asking again for a used code is answered again (idempotent). A runner that left
-`paired.json` is refused by every gate request (`package`, `link`) at once, whatever its key line — or an ssh connection it already has
-open, which keeps the key's options — still allows.
+`paired.json` is refused by every gate request (`package`, `link`, `version`) at once, whatever its key line — or an ssh connection it already has
+open, which keeps the key's options — still allows. Two requests are answered anyway, because their answer IS «not paired»: `unpair` (idempotent) and `identity` (`{ok:false}`, nothing else — it is how a runner whose `link` was refused tells a removal from a failure).
 
 **`authorized_keys`.** charness owns ONE marked block (`authorizedKeysBlockStart` … `End`), replaced as a whole; every other line is
 kept byte for byte; a damaged block (a marker without its twin, two blocks) is NOT edited. The file is written 0600 through a temp

@@ -40,18 +40,27 @@ describe('asking the daemon', () => {
   let daemonUp: boolean;
   let statusJson: string;
   let commands: string[];
+  /** After `reset --force` the tasks are still `Running` for this many looks (Pueue 4 answers the command at once and kills them later); `null` = no reset yet. */
+  let looksUntilKilled: number | null;
   const runner: CommandRunner = async (file, args) => {
     const line = `${path.basename(file)} ${args.join(' ')}`;
     commands.push(line);
     const result = (ok: boolean, stdout = ''): CommandResult => ({ ok, exitCode: ok ? 0 : 1, stdout, stderr: '', isTimedOut: false });
-    if (line.endsWith('status --json')) return result(daemonUp, statusJson);
+    if (line.endsWith('status --json')) {
+      if (looksUntilKilled === null) return result(daemonUp, statusJson);
+      if (looksUntilKilled > 0) {
+        looksUntilKilled -= 1;
+        return result(daemonUp, statusJson);
+      }
+      return result(daemonUp, tasks());
+    }
     if (line.endsWith(' status')) return result(daemonUp);
     if (line.endsWith('shutdown')) {
       daemonUp = false;
       return result(true);
     }
     if (line.endsWith('reset --force')) {
-      statusJson = tasks();
+      looksUntilKilled = 1;
       return result(true);
     }
     return result(true);
@@ -63,6 +72,7 @@ describe('asking the daemon', () => {
     daemonUp = true;
     statusJson = tasks();
     commands = [];
+    looksUntilKilled = null;
   });
   afterEach(() => {
     fs.rmSync(home, { recursive: true, force: true });
@@ -87,8 +97,9 @@ describe('asking the daemon', () => {
 
   it('stopping the jobs empties the queue and checks nothing is left running; with no daemon there is nothing to stop', async () => {
     statusJson = tasks({ Running: {} }, { Queued: {} });
-    assert.equal(await stopAllPueueJobs(paths, runner), true);
+    assert.equal(await stopAllPueueJobs(paths, runner), true, 'true although the first look after the reset still saw the task running: the kill is asynchronous');
     assert.ok(commands.some((line) => line.endsWith('reset --force')));
+    assert.ok(commands.filter((line) => line.endsWith('status --json')).length >= 3, 'it looked again until the queue was empty');
     assert.deepEqual(await inspectPueue(paths, runner), { kind: 'idle' });
 
     commands = [];
@@ -103,6 +114,6 @@ describe('asking the daemon', () => {
       if (args.includes('reset')) return { ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false };
       return runner(file, args, { timeoutMs: 1 });
     };
-    assert.equal(await stopAllPueueJobs(paths, stubborn), false);
+    assert.equal(await stopAllPueueJobs(paths, stubborn, 200), false);
   });
 });
