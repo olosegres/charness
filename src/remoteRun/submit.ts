@@ -62,6 +62,10 @@ export async function stageJob(params: {
 }): Promise<StagedJob> {
   const { client, project, options } = params;
   const runner = client.runner;
+  // First of all: it is a fact about this folder alone, and found out late it would be found out after the whole project was sent.
+  if (options.isWithGit && !fs.statSync(path.join(project.root, '.git')).isDirectory()) {
+    throw new RemoteRunError('--with-git needs the project\'s .git to be a directory (a worktree or submodule checkout keeps it elsewhere)');
+  }
   const group = options.group ?? defaultPueueGroup;
   if (group !== defaultPueueGroup && runner.groups?.[group] === undefined) {
     throw new RemoteRunError(`runner "${runner.name}" has no Pueue group "${group}" (its groups in runners.json: ${Object.keys(runner.groups ?? {}).join(', ') || 'none besides default'})`);
@@ -123,7 +127,6 @@ export async function stageJob(params: {
   );
   if (!sent.isOk) throw new RemoteRunError(`sending the files to "${runner.name}" failed — ${sent.errorTail}`);
   if (options.isWithGit) {
-    if (!fs.statSync(path.join(project.root, '.git')).isDirectory()) throw new RemoteRunError('--with-git needs the project\'s .git to be a directory (a worktree or submodule checkout keeps it elsewhere)');
     const sentGit = await runRsync(buildRsyncGitArgs({ sshCommand: client.rsyncSshCommand, sourceRoot: project.root, destination, copyDestination: `${copyDestination}/.git/` }));
     if (!sentGit.isOk) throw new RemoteRunError(`sending .git to "${runner.name}" failed — ${sentGit.errorTail}`);
   }
