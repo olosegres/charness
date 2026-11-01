@@ -2,7 +2,6 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
 import { McpServer, type ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { AnySchema, ZodRawShapeCompat } from '@modelcontextprotocol/sdk/server/zod-compat.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CancelledNotificationSchema,
@@ -29,6 +28,7 @@ import { defaultCheckTimeoutSec, maxCheckCommandLength, maxCheckTimeoutSec } fro
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import { workerWatchCheckCommand, workerWatchCheckCron, workerWatchPinArgument } from './workerWatch';
 import { describeSchedule, validateScheduleSpec } from './recurrence';
+import { createStrictToolInput, getUnknownKeysMessageOfUnion, type StrictToolInput } from './strictToolInput';
 import { createScheduleForThread } from './store';
 import type { ScheduleRecord, ScheduleSpec } from './types';
 import { formatDeprecation, warnLegacyNameOnce } from '../legacyNames';
@@ -491,11 +491,14 @@ export interface SchedulerMcpHandle {
   getToolDigest(platform: PlatformId | null, isBotSkillsEnabled: boolean): string;
 }
 
-/** The parts of a tool definition an MCP client sees at connect, as {@link McpServer.registerTool} takes them. */
-interface ToolRegistration<InputArgs extends ZodRawShapeCompat | AnySchema | undefined> {
+/**
+ * The parts of a tool definition an MCP client sees at connect, as {@link McpServer.registerTool} takes them. The input
+ * is a {@link StrictToolInput}: a tool registered with a plain raw shape would have an unknown key stripped unseen.
+ */
+interface ToolRegistration<InputArgs extends StrictToolInput> {
   title?: string;
   description?: string;
-  inputSchema?: InputArgs;
+  inputSchema: InputArgs;
 }
 
 /**
@@ -504,7 +507,7 @@ interface ToolRegistration<InputArgs extends ZodRawShapeCompat | AnySchema | und
  * digest) satisfies it next to the real server.
  */
 interface ToolRegistrar {
-  registerTool<InputArgs extends ZodRawShapeCompat | AnySchema | undefined = undefined>(
+  registerTool<InputArgs extends StrictToolInput>(
     name: string,
     config: ToolRegistration<InputArgs>,
     callback: ToolCallback<InputArgs>,
@@ -556,7 +559,7 @@ export function getBotMcpToolDefinitions(deps: SchedulerMcpDeps, platform: Platf
   const definitions: BotMcpToolDefinition[] = [];
   const recorder: ToolRegistrar = {
     registerTool: (name, config) => {
-      definitions.push({ name, title: config.title, description: config.description, inputKeys: Object.keys(config.inputSchema ?? {}).sort() });
+      definitions.push({ name, title: config.title, description: config.description, inputKeys: Object.keys(config.inputSchema.shape).sort() });
     },
   };
   registerBotTools(recorder, deps, digestScope, platform, undefined);
@@ -699,15 +702,18 @@ const scheduleCreateShape = {
     .describe('Pin the fire announcement silently (no member notification). Default false = notify all.'),
   threadKey: threadKeyArgSchema,
 };
+const scheduleCreateInput = createStrictToolInput(scheduleCreateShape);
 
 const scheduleListShape = {
   threadKey: threadKeyArgSchema,
 };
+const scheduleListInput = createStrictToolInput(scheduleListShape);
 
 const scheduleCancelShape = {
   id: z.string().min(1).describe('The schedule id to cancel (from schedule_list).'),
   threadKey: threadKeyArgSchema,
 };
+const scheduleCancelInput = createStrictToolInput(scheduleCancelShape);
 
 /**
  * Coerces an ARRAY tool argument into an actual array before validation. Some
@@ -756,46 +762,47 @@ const sendFileShape = {
     ),
   threadKey: threadKeyArgSchema,
 };
+const sendFileInput = createStrictToolInput(sendFileShape);
 
 /**
  * One batch item: EITHER a plain non-empty string (text-only message,
  * backward-compatible with the original string-array tool) OR an object that may
- * carry a text body, an attachment `path`, or both. The `.refine` rejects an
- * all-empty object so a stray `{}` never posts nothing.
+ * carry a text body, an attachment `path`, or both. The object is CLOSED: an
+ * agent that writes `filePath` for `path` must be told, not silently sent as a
+ * text-only message. The `.refine` rejects an all-empty object so a stray `{}`
+ * never posts nothing.
  */
-const sendMessageItemObjectSchema = z
-  .object({
-    text: z
-      .string()
-      .optional()
-      .describe(
-        'Message body. On an ATTACHMENT item (path set) it is the media caption, trimmed to 1024 chars — put long ' +
-          'prose in its OWN text-only item instead of an attachment caption.',
-      ),
-    path: z
-      .string()
-      .optional()
-      .describe(
-        "Optional attachment, RELATIVE to this topic's bound folder (an absolute path is accepted only if it " +
-          'resolves inside it; a path outside is rejected). Supported photos and MP4 videos are sent as native ' +
-          'media, GIFs as animations, and everything else as a document.',
-      ),
-    as_file: z
-      .boolean()
-      .optional()
-      .describe('Force sendDocument for THIS attachment (original quality, no inline preview), including for MP4s.'),
-  })
-  .refine(
-    (item) => (item.text?.trim().length ?? 0) > 0 || (item.path?.trim().length ?? 0) > 0,
-    { message: 'each message object must set a non-empty text or path' },
-  );
+const sendMessageItemObjectSchema = createStrictToolInput({
+  text: z
+    .string()
+    .optional()
+    .describe(
+      'Message body. On an ATTACHMENT item (path set) it is the media caption, trimmed to 1024 chars — put long ' +
+        'prose in its OWN text-only item instead of an attachment caption.',
+    ),
+  path: z
+    .string()
+    .optional()
+    .describe(
+      "Optional attachment, RELATIVE to this topic's bound folder (an absolute path is accepted only if it " +
+        'resolves inside it; a path outside is rejected). Supported photos and MP4 videos are sent as native ' +
+        'media, GIFs as animations, and everything else as a document.',
+    ),
+  as_file: z
+    .boolean()
+    .optional()
+    .describe('Force sendDocument for THIS attachment (original quality, no inline preview), including for MP4s.'),
+}).refine(
+  (item) => (item.text?.trim().length ?? 0) > 0 || (item.path?.trim().length ?? 0) > 0,
+  { message: 'each message object must set a non-empty text or path' },
+);
 
 const sendMessageShape = {
   messages: z
     .preprocess(
       coerceJsonArrayArg,
       z
-        .array(z.union([z.string().min(1), sendMessageItemObjectSchema]))
+        .array(z.union([z.string().min(1), sendMessageItemObjectSchema], { error: getUnknownKeysMessageOfUnion }))
         .min(1)
         .max(maxDiscreteMessages),
     )
@@ -813,6 +820,7 @@ const sendMessageShape = {
     ),
   threadKey: threadKeyArgSchema,
 };
+const sendMessageInput = createStrictToolInput(sendMessageShape);
 
 /**
  * The three valid call shapes, appended to structural errors so a bad first call
@@ -959,7 +967,7 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
         'the worker exits OR nothing in its run dir changed for 45 min, so the first failure is also the "worker finished" ' +
         'signal (hence the silent pin: a normal finish must not notify the user). Never `kill -0` alone: it stays green ' +
         'while a worker hangs. One check per worker run; schedule_cancel it once its wake is handled.',
-      inputSchema: scheduleCreateShape,
+      inputSchema: scheduleCreateInput,
     },
     async (args) => {
       const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
@@ -1016,7 +1024,7 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
     {
       title: 'List scheduled prompts',
       description: 'List the scheduled prompts for this topic (id, name, schedule, next run, paused flag).',
-      inputSchema: scheduleListShape,
+      inputSchema: scheduleListInput,
     },
     async (args) => {
       const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
@@ -1053,7 +1061,7 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
         'Cancel (delete) a scheduled prompt by its id. Only schedules owned by this topic can be cancelled. Cancelling a ' +
         'watchdog check also unpins the alerts it pinned — cancel a worker watch once its wake is handled, so a finished ' +
         'worker leaves no pinned alert behind.',
-      inputSchema: scheduleCancelShape,
+      inputSchema: scheduleCancelInput,
     },
     async (args) => {
       const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
@@ -1111,7 +1119,7 @@ function registerFileSendTool(
         'the whole album documents — which turns its MP4s into GIFs, so send videos in their own call. ' +
         'If a send fails, say so and give the file\'s path in your reply, then go on with the work — never stop over it. ' +
         'Caption is optional (trimmed to 1024 chars; on the first album item).',
-      inputSchema: sendFileShape,
+      inputSchema: sendFileInput,
     },
     async (args, extra) => {
       const signal = requestSignal
@@ -1167,7 +1175,7 @@ function registerMessageSendTool(
         'items; an over-long text item is split automatically. Note: this does NOT replace your normal single ' +
         'reply — only reach for it when multiple discrete messages are wanted, and do not also print the same ' +
         'content as your reply text (that would post it twice).',
-      inputSchema: sendMessageShape,
+      inputSchema: sendMessageInput,
     },
     async (args, extra) => {
       const signal = requestSignal
@@ -1220,12 +1228,12 @@ function registerCompactConversationTool(server: ToolRegistrar, deps: SchedulerM
         'never to "clean up". It does NOT compact mid-turn: it arms compaction and returns immediately; the ' +
         'bot runs the real compaction the moment this turn finishes. There is nothing for you to do ' +
         'afterwards — do not call it again for the same request.',
-      inputSchema: {
+      inputSchema: createStrictToolInput({
         reason: z
           .string()
           .optional()
           .describe('Optional short note on why the user asked to compact (for the bot log only).'),
-      },
+      }),
     },
     async (args) => {
       // A surviving session may call this before boot re-attached it.
@@ -1243,7 +1251,7 @@ function registerCompactConversationTool(server: ToolRegistrar, deps: SchedulerM
 const todoUpdateMaxItems = 30;
 const todoOrderMaxIds = 100;
 
-const todoItemPatchSchema = z.object({
+const todoItemPatchSchema = createStrictToolInput({
   id: z
     .string()
     .trim()
@@ -1279,6 +1287,7 @@ const todoUpdateShape = {
     .describe('Open item ids in the wanted queue order; the ones left out keep their relative order after them.'),
   threadKey: threadKeyArgSchema,
 };
+const todoUpdateInput = createStrictToolInput(todoUpdateShape);
 
 const todoReadShape = {
   scope: z
@@ -1288,6 +1297,7 @@ const todoReadShape = {
   includeHistory: z.boolean().optional().describe(`With scope own: also list older closed items (done / dropped), up to ${todoHistoryMaxItems}.`),
   threadKey: threadKeyArgSchema,
 };
+const todoReadInput = createStrictToolInput(todoReadShape);
 
 /**
  * @description Register `todo_update` / `todo_read` (shared todo registry D3–D5): the published list of the
@@ -1310,7 +1320,7 @@ function registerTodoTools(
         'test, a leak), naming the area concretely; mark it done / dropped as soon as it is. An UPSERT: an item ' +
         'without id is new; with an id only the fields given change. A call with no items and no order confirms the ' +
         'list is still accurate. The result is your list and what changed in the project\'s other topics since you last saw them.',
-      inputSchema: todoUpdateShape,
+      inputSchema: todoUpdateInput,
     },
     async (args) => {
       const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
@@ -1331,7 +1341,7 @@ function registerTodoTools(
         'Your published todo list (in work, the queue in order, recently done) and what changed in the project\'s other ' +
         'topics since you last saw them; with includeHistory also your older closed items; with scope project the whole board ' +
         'of the other topics.',
-      inputSchema: todoReadShape,
+      inputSchema: todoReadInput,
     },
     async (args) => {
       const resolved = resolveTargetThreadKey(scope, args.threadKey, deps.getThreadsForDirectory);
@@ -1365,9 +1375,9 @@ function registerJiraAttachmentTool(
         '"[image: shot.png — attachment 10234]". There is no size limit. What you do with the file is up to ' +
         'you: view an image with your file-reading tool, take frames or the audio of a video with ffmpeg ' +
         '(when it is on your PATH). Only this issue\'s own attachments can be fetched.',
-      inputSchema: {
+      inputSchema: createStrictToolInput({
         attachmentId: z.string().min(1).describe('The attachment id, e.g. "10234" from "[image: shot.png — attachment 10234]".'),
-      },
+      }),
     },
     async (args) => {
       await deps.whenSessionsRestored();
@@ -1418,6 +1428,7 @@ const answerRequestShape = {
     .max(answerBodyMaxLength)
     .describe(`The answer itself, in Markdown. The requester does not see your other output. ${answerStyleInstruction}`),
 };
+const answerRequestInput = createStrictToolInput(answerRequestShape);
 
 /** `answer_request` in a Jira session: the same, and the comments the answer replies to. */
 const jiraAnswerRequestShape = {
@@ -1431,6 +1442,7 @@ const jiraAnswerRequestShape = {
         'author at the top of your answer so they are notified. Only comments you were shown in this conversation count.',
     ),
 };
+const jiraAnswerRequestInput = createStrictToolInput(jiraAnswerRequestShape);
 
 /**
  * @description Register `answer_request` (request/answer core S3): the agent's
@@ -1462,8 +1474,8 @@ function registerAnswerRequestTool(server: ToolRegistrar, deps: SchedulerMcpDeps
     return outcome.ok ? textResult(outcome.message) : errorResult(outcome.error);
   };
   // The reply field names a tracker's comments: only a Jira session is offered it.
-  if (platform === 'jira') server.registerTool('answer_request', { ...definition, inputSchema: jiraAnswerRequestShape }, handle);
-  else server.registerTool('answer_request', { ...definition, inputSchema: answerRequestShape }, handle);
+  if (platform === 'jira') server.registerTool('answer_request', { ...definition, inputSchema: jiraAnswerRequestInput }, handle);
+  else server.registerTool('answer_request', { ...definition, inputSchema: answerRequestInput }, handle);
 }
 
 // ─── server factory ──────────────────────────────────────────────────
@@ -1705,7 +1717,7 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
         'of retrying; when `nextAvailable` is null too, tell the user and retry once in about 30 minutes. Call it BEFORE launching or resuming a child `claude` and start the child with ' +
         'CLAUDE_CONFIG_DIR=<configDir> in its environment — configDir null means the default profile: set nothing. ' +
         'Without the variable the child inherits the account of this very session.',
-      inputSchema: {
+      inputSchema: createStrictToolInput({
         model: z
           .string()
           .max(64)
@@ -1720,7 +1732,7 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
           .boolean()
           .optional()
           .describe('The resumed session broke off on a usage limit of `currentProfile`: that account is left out of this answer. Needs `currentProfile`.'),
-      },
+      }),
     },
     async (args) => {
       const currentProfile = args.currentProfile?.trim() || null;

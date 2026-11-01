@@ -174,7 +174,10 @@ registration. It is loopback-only (`127.0.0.1`, on an OS-chosen free port unless
 `SCHEDULER_MCP_PORT` explicitly pins one) and authenticated with per-session
 HMAC bearer tokens scoped to the thread / directory. Every generated registration
 also carries a unique client identity, so cancellation affects only the originating
-agent even when two clients use the same JSON-RPC request id. It exposes:
+agent even when two clients use the same JSON-RPC request id. Every tool takes a CLOSED
+input: a key the tool does not list — at the top of a call or inside an item — is a tool error
+that names the key, hints at the nearest allowed one (`filePath` → `path`) and lists the allowed
+keys, instead of being dropped unseen. It exposes:
 
 - `schedule_create` / `schedule_list` / `schedule_cancel` — the agent-side
   scheduling API behind `/schedule`;

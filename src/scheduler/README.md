@@ -52,6 +52,13 @@ constants in the code; this README keeps what the code cannot say.
   address, it cannot move a session). If the bind fails the bot still boots with injection inert — sessions
   spawned meanwhile lack the agent-facing tools, and a Claude one keeps lacking them (the heal never adds an
   absent server).
+- **Every tool's input is a `StrictToolInput`** (`strictToolInput.ts`): `registerTool` takes only a strict zod object, so a
+  tool built on a raw shape does not compile. The SDK wraps a raw shape in a STRIPPING object — a misnamed key
+  (`filePath` for `path`) vanished before the handler ran and the call still answered "delivered". An unknown key is now
+  a tool error naming it, hinting at the nearest allowed key and listing the allowed ones; an object nested in an array
+  item is built with `createStrictToolInput` too, and a union around it takes `getUnknownKeysMessageOfUnion` as its
+  `error` so zod's bare "Invalid input" carries that message. The digest hashes only the shape's keys, so closing the
+  objects did not move it. `schedulerMcpStrictInput.test.ts` walks every tool a session gets over the real server.
 - Bearer tokens are HMAC-signed and scoped `thread:` (Claude, one conversation) or `dir:` (OpenCode, every
   thread bound to the folder). `getSchedulerScopePlatform` reads the scope's platform: only a Telegram session
   gets `schedule_*`, `send_file_to_user` and `send_messages_to_user`; any other platform sees just

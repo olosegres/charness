@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**An agent that misnames a field when it calls one of the bot's tools now gets an error that says which field and what to write — attachments no longer vanish unseen.**
+Before, a key the tool does not know was dropped silently: an agent that sent three images to `send_messages_to_user` as `{text, filePath}` (the field is `path`) had them posted as three text-only messages, and the tool still answered «Delivered 3 messages».
+Now every bot tool refuses a key it does not list, at the top of a call or inside an item, and answers with the key, the nearest allowed one («unknown key `filePath` — did you mean `path`?») and the allowed keys; nothing is sent. `send_file_to_user` called with `path` instead of `paths` is told the same.
+
 **Agents can now send heavy commands — test suites, builds, emulator runs — to another machine with `charness remote-run`, and get the output, the exit code and the result files back as if the command had run here.**
 Before, everything an agent ran landed on the one machine the bot lives on, so a long test suite or an emulator run could take most of its CPU and memory for an hour while other agents waited on it.
 Now you list machines you reach by ssh in `~/.config/charness/runners.json` (set up by hand: an account of its own, `rsync`, Pueue — see `docs/remote-run.md`), and an agent runs `charness remote-run yarn test` (or `--bg` plus `wait` for a long run): the project is synced there (tracked and untracked files, never what `.gitignore` names, never secret-looking files unless `.remote-run` says so), the command runs in a copy, its output streams back, and an interrupt, a timeout or a lost connection stops the whole remote job.

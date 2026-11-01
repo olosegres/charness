@@ -300,8 +300,13 @@ describe('the tool set per platform (Jira connector plan J2, D18)', () => {
     const fetched = CallToolResultSchema.parse(await client.callTool({ name: 'jira_get_attachment', arguments: { attachmentId: '10234' } }));
     assert.equal(fetched.isError, undefined);
     assert.match(JSON.stringify(fetched.content), /saved at \/files\/10234-shot\.png/);
-    // A planted argument naming another issue is not an argument of the tool, whatever the agent adds.
-    const refused = CallToolResultSchema.parse(await client.callTool({ name: 'jira_get_attachment', arguments: { attachmentId: '99999', issueKey: 'OTHER-1', threadKey: keyToString(makeJiraKey('OTHER-1')) } }));
+    // A planted argument naming another issue is not an argument of the tool: the call is refused, nothing is fetched.
+    const planted = CallToolResultSchema.parse(await client.callTool({ name: 'jira_get_attachment', arguments: { attachmentId: '99999', issueKey: 'OTHER-1', threadKey: keyToString(makeJiraKey('OTHER-1')) } }));
+    assert.equal(planted.isError, true);
+    assert.match(JSON.stringify(planted.content), /unknown key `issueKey`.*unknown key `threadKey`.*Allowed: attachmentId/);
+    assert.deepEqual(attachmentCalls, [`${keyToString(makeJiraKey('PROJ-12'))} 10234`], 'the planted call fetched nothing');
+    // An attachment id that is not the session's own issue's is the port's refusal.
+    const refused = CallToolResultSchema.parse(await client.callTool({ name: 'jira_get_attachment', arguments: { attachmentId: '99999' } }));
     assert.equal(refused.isError, true);
     assert.match(JSON.stringify(refused.content), /is not an attachment of PROJ-12/);
     assert.deepEqual(attachmentCalls, [`${keyToString(makeJiraKey('PROJ-12'))} 10234`, `${keyToString(makeJiraKey('PROJ-12'))} 99999`]);
