@@ -79,10 +79,12 @@ still queued** (a job can wait behind a busy group for days), lease/probe scratc
 **The project lock** is a file created with the shell's own exclusive create (`set -C`, `open(O_EXCL)`) holding the holder's pid and job — never
 `mkdir`: the uutils coreutils that current Ubuntu installs as `/usr/bin/mkdir` let simultaneous `mkdir` of one path all succeed (265 of 1200 races with five
 contenders on the dev box), which gave two jobs of a project the lock together. A lock is stale when its process is gone, its job has an exit record, or
-it has no holder and is over a minute old; a stale lock is broken by ONE waiter, which checks and removes it inside a short-lived mutex of the same kind
-(`lock.breaking`; it holds its breaker's pid, and is cleared only when that process is gone — never by its age, so a slow breaker keeps it —
-by renaming it away first and judging what was claimed once more, so a fresh mutex of a live breaker is never removed by mistake), and a job
-gives back only a lock that is still its own.
+it has no holder and is over a minute old; a stale lock is broken by ONE waiter, the one that wins the *right* to break the lock of that very dead holder: a file
+`lock.breaking.<pid>.<job>.<n>` made with the same exclusive create (the others yield). Once the winner has seen the lock still carries that
+holder, nothing else can remove or replace it (the holder is gone for good and its job id is unique), and a lock another job took meanwhile is
+left alone. A winner that died leaves its file held by a gone process, and the next waiter takes generation `n+1` — never by the age of the
+file, so a slow breaker keeps its right; a job that takes the lock clears the files (they name holders that are gone). A job gives back only a
+lock that is still its own. The pause between a waiting job's attempts is `lock_poll_sec` (a second; the tests shorten it).
 
 **Job state** is the job's own files first (`exit` is authoritative); Pueue's task list (label `rr-<id>`) only when there is no exit file
 (a job killed hard). `pueue wait` exits 0 for a failed task: Pueue's result is never used as a code.

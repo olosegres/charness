@@ -705,6 +705,8 @@ describe('the project lock', () => {
   const contenders = 5;
   const rounds = 40;
   const criticalHoldSeconds = 0.05;
+  /** Waiters retry this often (the script's own pause is a second: 40 rounds of five would run for minutes, over the unit run's two minutes per file). */
+  const lockPollSeconds = 0.05;
   /** Exclusive create for the test's own overlap detector: not `mkdir` (see the guard below), or the detector would miss overlaps. */
   const claimCritical = '( set -C; echo claimed > "$proj/critical" ) 2> /dev/null';
 
@@ -722,16 +724,16 @@ describe('the project lock', () => {
     const project = path.join(workDir, 'p', slug);
     fs.mkdirSync(project, { recursive: true });
     const deadPid = spawnSync('true').pid;
-    // A breaker that died after it made its mutex: the mutex is there, held by a process that is gone.
-    const plantDeadBreaker = options.withDeadBreaker === true ? `printf '%s\\n%s\\n' ${deadPid} box1-deadbk > "$lock.breaking"` : ':';
+    // A breaker that died after it won the right to break this lock: its file is there, held by a process that is gone.
+    const plantDeadBreaker = options.withDeadBreaker === true ? `printf '%s\\n%s\\n' ${deadPid} box1-deadbk > "$lock.breaking.${deadPid}.box1-dead$round.0"` : ':';
     // The trap ends the waiters with the driver: when the lock is broken they spin for ever, and a driver that timed out must not leave them behind.
     const driver = `
-      work=${workDir}; killed=0
+      work=${workDir}; killed=0; lock_poll_sec=${lockPollSeconds}
       trap 'kill $(jobs -p) 2> /dev/null' EXIT TERM
       set_paths ${workDir} ${slug} box1-race00
       for round in $(seq 1 ${rounds}); do
-        rm -f "$lock" "$lock.breaking" "$proj/critical"
-        printf '%s\\n%s\\n' ${deadPid} box1-dead00 > "$lock"
+        rm -f "$lock" "$lock".breaking.* "$proj/critical"
+        printf '%s\\n%s\\n' ${deadPid} box1-dead$round > "$lock"
         ${plantDeadBreaker}
         for contender in $(seq 1 ${contenders}); do
           (
@@ -757,67 +759,87 @@ describe('the project lock', () => {
     assert.equal(outcome.overlaps, 0, `${outcome.overlaps} times two jobs held the lock together`);
   });
 
-  describe('the mutex of the waiter that breaks a stale lock', () => {
-    const breakerMutex = (): string => path.join(workDir, 'p', slug, 'lock.breaking');
-    const lockFile = (): string => path.join(workDir, 'p', slug, 'lock');
+  describe('the right to break a stale lock', () => {
+    const projectDirectory = (): string => path.join(workDir, 'p', slug);
+    const lockFile = (): string => path.join(projectDirectory(), 'lock');
+    const rightFile = (pid: number | string, job: string, generation: number): string => path.join(projectDirectory(), `lock.breaking.${pid}.${job}.${generation}`);
+    const listRights = (): string[] => fs.readdirSync(projectDirectory()).filter((name) => name.startsWith('lock.breaking.')).sort();
     const ageBy = (target: string, minutes: number): void => {
       const when = new Date(Date.now() - minutes * 60 * 1000);
       fs.utimesSync(target, when, when);
     };
-    /** `break_stale_lock` on a project whose lock has a dead holder and whose mutex holds `mutexContent` (aged by `mutexAgeMinutes`). */
-    function breakWithMutex(mutexContent: string, mutexAgeMinutes: number): { status: number | null; stdout: string; lockLeft: boolean; mutexLeft: boolean } {
-      const project = path.join(workDir, 'p', slug);
-      fs.mkdirSync(project, { recursive: true });
-      fs.writeFileSync(lockFile(), `${spawnSync('true').pid}\nbox1-dead00\n`);
-      fs.writeFileSync(breakerMutex(), mutexContent);
-      ageBy(breakerMutex(), mutexAgeMinutes);
-      const result = runBash(`work=${workDir}; killed=0; set_paths ${workDir} ${slug} box1-mine00; break_stale_lock; echo "returned=$?"`);
-      return { status: result.status, stdout: result.stdout.trim(), lockLeft: fs.existsSync(lockFile()), mutexLeft: fs.existsSync(breakerMutex()) };
+    const deadPid = (): number => spawnSync('true').pid ?? 0;
+    const aliveContent = `${process.pid}\nbox1-slow00\n`;
+
+    /** A project whose lock is held by `lockContent`; runs `body` as the waiter job and returns its status line. */
+    function runWaiter(lockContent: string, body: string): string {
+      fs.mkdirSync(projectDirectory(), { recursive: true });
+      fs.writeFileSync(lockFile(), lockContent);
+      return runBash(`work=${workDir}; killed=0; set_paths ${workDir} ${slug} box1-mine00; ${body}; echo "returned=$?"`).stdout.trim();
     }
 
-    it('a mutex whose breaker is ALIVE is never taken from it, however old it is — a slow breaker is not a dead one', () => {
-      const outcome = breakWithMutex(`${process.pid}\nbox1-slow00\n`, 30);
-      assert.equal(outcome.stdout, 'returned=1', 'the waiter yields: someone else is at it');
-      assert.equal(outcome.mutexLeft, true, 'the live breaker keeps its mutex');
-      assert.equal(fs.readFileSync(breakerMutex(), 'utf8'), `${process.pid}\nbox1-slow00\n`);
-      assert.equal(outcome.lockLeft, true, 'and the lock is not touched by the waiter that yielded');
+    it('a right held by a breaker that is ALIVE is never taken from it: the waiter yields and the lock is not touched', () => {
+      const dead = deadPid();
+      fs.mkdirSync(projectDirectory(), { recursive: true });
+      fs.writeFileSync(rightFile(dead, 'box1-dead00', 0), aliveContent);
+      ageBy(rightFile(dead, 'box1-dead00', 0), 30);
+      assert.equal(runWaiter(`${dead}\nbox1-dead00\n`, 'break_stale_lock'), 'returned=1', 'however old the file is: a slow breaker is not a dead one');
+      assert.equal(fs.existsSync(lockFile()), true);
+      assert.deepEqual(listRights(), [`lock.breaking.${dead}.box1-dead00.0`], 'and no second right was made');
+      assert.equal(fs.readFileSync(rightFile(dead, 'box1-dead00', 0), 'utf8'), aliveContent);
     });
 
-    it('a mutex whose breaker is DEAD is cleared at once, young or not, and the next attempt breaks the lock', () => {
-      const deadBreaker = `${spawnSync('true').pid}\nbox1-gone00\n`;
-      const first = breakWithMutex(deadBreaker, 0);
-      assert.equal(first.stdout, 'returned=1', 'this attempt only clears the dead mutex');
-      assert.equal(first.mutexLeft, false, 'the dead breaker\'s mutex is gone');
-      const second = runBash(`work=${workDir}; killed=0; set_paths ${workDir} ${slug} box1-mine00; break_stale_lock; echo "returned=$?"`);
-      assert.equal(second.stdout.trim(), 'returned=0');
-      assert.equal(fs.existsSync(lockFile()), false, 'and now the stale lock is broken');
-      assert.equal(fs.existsSync(breakerMutex()), false, 'leaving no mutex behind');
+    it('a right whose breaker is DEAD passes to the next generation at once: this waiter wins it and breaks the lock', () => {
+      const dead = deadPid();
+      fs.mkdirSync(projectDirectory(), { recursive: true });
+      fs.writeFileSync(rightFile(dead, 'box1-dead00', 0), `${deadPid()}\nbox1-gone00\n`);
+      assert.equal(runWaiter(`${dead}\nbox1-dead00\n`, 'break_stale_lock'), 'returned=0');
+      assert.equal(fs.existsSync(lockFile()), false, 'the stale lock is broken');
+      assert.deepEqual(listRights(), [`lock.breaking.${dead}.box1-dead00.0`, `lock.breaking.${dead}.box1-dead00.1`]);
     });
 
-    it('a mutex with no breaker written is left while it is young and cleared once it is over a minute old', () => {
-      assert.equal(breakWithMutex('', 0).mutexLeft, true);
-      assert.equal(breakWithMutex('', 2).mutexLeft, false);
+    it('a right with no breaker written is kept while it is young and passed on once it is over a minute old', () => {
+      const dead = deadPid();
+      fs.mkdirSync(projectDirectory(), { recursive: true });
+      fs.writeFileSync(rightFile(dead, 'box1-dead00', 0), '');
+      assert.equal(runWaiter(`${dead}\nbox1-dead00\n`, 'break_stale_lock'), 'returned=1', 'its creator may be a moment from writing its pid');
+      assert.equal(fs.existsSync(lockFile()), true);
+      ageBy(rightFile(dead, 'box1-dead00', 0), 2);
+      assert.equal(runWaiter(`${dead}\nbox1-dead00\n`, 'break_stale_lock'), 'returned=0', 'its creator died before it could');
+      assert.equal(fs.existsSync(lockFile()), false);
     });
 
-    it('a mutex judged dead that is alive after all is put back, not lost — a fresh one made between the look and the claim', () => {
-      const project = path.join(workDir, 'p', slug);
-      fs.mkdirSync(project, { recursive: true });
-      fs.writeFileSync(breakerMutex(), `${process.pid}\nbox1-fresh0\n`);
-      // The first look (before the claim) is made to say "dead", as it would have for the old mutex this one replaced; the second is the real one.
-      const result = runBash(`
-        work=${workDir}; set_paths ${workDir} ${slug} box1-mine00
-        real_check=$(declare -f check_breaker_mutex_is_stale | tail -n +2)
-        calls=0
-        check_breaker_mutex_is_stale() { calls=$((calls + 1)); [ "$calls" -eq 1 ] && return 0; eval "$real_check"; }
-        check_breaker_mutex_is_stale "$lock.breaking" && remove_dead_breaker_mutex
-        echo "calls=$calls"`);
-      assert.equal(result.status, 0, result.stdout);
-      assert.match(result.stdout, /calls=2/);
-      assert.equal(fs.readFileSync(breakerMutex(), 'utf8'), `${process.pid}\nbox1-fresh0\n`, 'the live breaker\'s mutex is back, unchanged');
-      assert.deepEqual(fs.readdirSync(path.join(workDir, 'p', slug)).filter((name) => name.startsWith('lock.breaking.')), [], 'and no claimed copy is left');
+    it('a lock that another job took after the dead holder was seen is NOT removed: the right names the dead holder, and the lock no longer carries it', () => {
+      const dead = deadPid();
+      const outcome = runWaiter(aliveContent, `break_lock_of_holder ${dead} box1-dead00`);
+      assert.equal(outcome, 'returned=0');
+      assert.equal(fs.readFileSync(lockFile(), 'utf8'), aliveContent, 'the live job keeps its lock');
     });
 
-    it('waiters that find a lock AND a breaker mutex both left by dead processes still break it ONE at a time', () => {
+    it('a lock that is not stale is left alone and no right is made', () => {
+      assert.equal(runWaiter(aliveContent, 'break_stale_lock'), 'returned=0');
+      assert.equal(fs.readFileSync(lockFile(), 'utf8'), aliveContent);
+      assert.deepEqual(listRights(), []);
+    });
+
+    it('what the lock file says never decides a path: a holder name with a slash in it names nothing outside the project folder', () => {
+      const dead = deadPid();
+      assert.equal(runWaiter(`${dead}\n../../escape\n`, 'break_stale_lock'), 'returned=0');
+      assert.equal(fs.existsSync(lockFile()), false, 'the lock is still broken');
+      assert.deepEqual(listRights(), [`lock.breaking.${dead}.none.0`]);
+      assert.equal(fs.existsSync(path.join(workDir, 'escape.0')), false);
+    });
+
+    it('a job that takes the lock clears the rights to break it: they name holders that are gone', () => {
+      fs.mkdirSync(projectDirectory(), { recursive: true });
+      fs.writeFileSync(rightFile(123456, 'box1-dead00', 0), aliveContent);
+      fs.writeFileSync(rightFile(123456, 'box1-dead00', 1), aliveContent);
+      const result = runBash(`work=${workDir}; killed=0; set_paths ${workDir} ${slug} box1-mine00; acquire_lock; echo "held=$lock_held"`);
+      assert.equal(result.stdout.trim(), 'held=1');
+      assert.deepEqual(listRights(), []);
+    });
+
+    it('waiters that find a lock AND the right to break it both left by dead processes still break it ONE at a time', () => {
       const outcome = raceForAStaleLock({ withDeadBreaker: true });
       assert.equal(outcome.finished, contenders * rounds, 'every waiter got the lock in the end');
       assert.equal(outcome.overlaps, 0, `${outcome.overlaps} times two jobs held the lock together`);

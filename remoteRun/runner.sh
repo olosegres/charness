@@ -44,6 +44,8 @@ probe_step_sec=4
 exit_file_wait_sec=5
 task_id_wait_sec=5
 heartbeat_poll_sec=1
+# How long a job waiting for its project's lock sleeps between two attempts (a test shortens it to race many waiters quickly).
+lock_poll_sec=1
 
 # ─────────────────────────── helpers ───────────────────────────
 
@@ -508,7 +510,6 @@ kill_job() {
     finish_killed_job
     return 0
   fi
-
   signal_job_group TERM || pq kill "$task" > /dev/null 2>&1
   local started=$SECONDS
   while [ $((SECONDS - started)) -lt "$kill_grace_sec" ]; do
@@ -812,45 +813,52 @@ check_lock_is_stale() {
   [ -z "$holder_pid" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2> /dev/null)" ]
 }
 
-# Break a stale lock — by ONE waiter, and only while it is still stale. Several waiters can see the same dead holder at once; if each simply
-# removed the lock, a slow one could remove the lock a faster one had already re-created, and two jobs of a project would run on one tree.
-# So the check and the removal both happen inside a short-lived mutex ($lock.breaking, made the same exclusive way): in there nothing can
-# change the lock but the breaker (a live holder is not stale, and a new lock cannot be created while the old one stands). Returns 1 when
-# another waiter is at it.
+# Break a stale lock — by ONE waiter at a time, and only the lock of the very holder that was seen dead. Several waiters can see the same
+# dead holder at once; if each simply removed the lock, a slow one could remove the lock a faster one had already re-created, and two jobs
+# of a project would run on one tree. So the RIGHT to break the lock of holder (pid, job) is a file named for that holder, made with the
+# exclusive create: of the waiters that saw it, one wins and the others yield. That holder can never hold the lock again (its process is
+# gone, its job id is unique), so once the winner has seen the lock still carries that holder, nothing but the winner can remove it, and a
+# lock some other job has taken since is not that holder's and is left alone. Returns 1 when another waiter is at it.
 break_stale_lock() {
-  if ! create_lock_file "$lock.breaking"; then
-    check_breaker_mutex_is_stale "$lock.breaking" && remove_dead_breaker_mutex
-    return 1
+  local holder_pid holder_job
+  read_lock_holder "$lock"
+  check_lock_is_stale || return 0
+  break_lock_of_holder "$holder_pid" "$holder_job"
+}
+
+# The right to break the lock of holder $1/$2 (pid, job): the file `$lock.breaking.<pid>.<job>.<generation>`. A winner that died leaves its
+# file behind, held by a process that is gone: the next waiter takes the next generation of the name — and again only one of them wins it.
+# A name is made of the holder's own words only (a lock file with something else in it must not name a path).
+break_lock_of_holder() {
+  local stale_pid=$1 stale_job=$2
+  case $stale_pid in *[!0-9]*) stale_pid= ;; esac
+  case $stale_job in *[!A-Za-z0-9._-]*) stale_job= ;; esac
+  local generation=0 right
+  while :; do
+    right="$lock.breaking.${stale_pid:-none}.${stale_job:-none}.$generation"
+    create_lock_file "$right" && break
+    check_breaker_is_alive "$right" && return 1
+    generation=$((generation + 1))
+  done
+  local holder_pid holder_job
+  read_lock_holder "$lock"
+  if [ "$holder_pid" = "$1" ] && [ "$holder_job" = "$2" ]; then
+    rm -f "$lock"
   fi
-  check_lock_is_stale && rm -f "$lock"
-  rm -f "$lock.breaking"
   return 0
 }
 
-# Is the breaker mutex file $1 held by nobody any more? Its breaker's process is gone — the same test as for the lock itself, so a breaker
-# that is merely slow (a busy disk) keeps its mutex however long it takes. One with no breaker written yet is judged by age (its creator
-# died between creating it and writing it).
-check_breaker_mutex_is_stale() {
+# Is the breaker that made the right file $1 still at it? Its process is alive — the test the lock itself uses, so a breaker that is merely
+# slow (a busy disk) keeps its right however long it takes. A file with no process written yet is a breaker between creating it and writing
+# it: it counts until it is over a minute old.
+check_breaker_is_alive() {
   local holder_pid holder_job
   read_lock_holder "$1"
   if [ -n "$holder_pid" ]; then
-    kill -0 "$holder_pid" 2> /dev/null && return 1
-    return 0
+    kill -0 "$holder_pid" 2> /dev/null
+    return
   fi
-  [ -n "$(find "$1" -maxdepth 0 -mmin +1 2> /dev/null)" ]
-}
-
-# Clear the mutex of a breaker that died. Several waiters can find it dead at once, and a plain `rm` of the path could remove the fresh
-# mutex a live breaker made in between (two breakers at once = the race the mutex is there to stop). So the dead mutex is first CLAIMED by
-# renaming it away — only one of those waiters wins the rename — and what was claimed is judged once more: a mutex that is alive after all
-# is put back (`ln` never overwrites one that has appeared since).
-remove_dead_breaker_mutex() {
-  local claimed="$lock.breaking.$$"
-  mv "$lock.breaking" "$claimed" 2> /dev/null || return 0
-  if ! check_breaker_mutex_is_stale "$claimed"; then
-    ln "$claimed" "$lock.breaking" 2> /dev/null
-  fi
-  rm -f "$claimed"
+  [ -z "$(find "$1" -maxdepth 0 -mmin +1 2> /dev/null)" ]
 }
 
 acquire_lock() {
@@ -866,9 +874,11 @@ acquire_lock() {
       say "waiting for job ${holder_job:-another job} of this project"
       noticed=1
     fi
-    nap 1
+    nap "$lock_poll_sec"
   done
   lock_held=1
+  # The rights to break the lock name holders that are gone and can never hold it again: nothing needs them any more.
+  rm -f "$lock".breaking.* 2> /dev/null
   return 0
 }
 
