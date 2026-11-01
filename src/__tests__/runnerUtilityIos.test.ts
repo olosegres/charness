@@ -155,14 +155,27 @@ describe('when the check runs again', () => {
       assert.equal(readIosCheck(paths), null);
     });
 
-    it('refresh runs the check and records it, and does not run it again while Xcode is the same; off macOS it does nothing', async () => {
-      const first = await refreshIosCheck(paths, createDeps());
+    it('a new start always checks again; within a run only a different Xcode does; off macOS nothing runs', async () => {
+      const first = await refreshIosCheck(paths, createDeps(), { isStartup: true });
       assert.equal(first?.status, 'pass');
       assert.deepEqual(readIosCheck(paths), first);
       calls = [];
-      assert.equal(await refreshIosCheck(paths, createDeps()), null);
-      assert.ok(!calls.some((line) => line.includes('simctl')), 'no second boot');
-      assert.equal(await refreshIosCheck(paths, createDeps({ platform: 'linux' })), null);
+      assert.equal(await refreshIosCheck(paths, createDeps(), { isStartup: false }), null, 'the hourly look: same Xcode, nothing to do');
+      assert.ok(!calls.some((line) => line.includes('simctl')), 'no second boot within the run');
+      assert.equal(await refreshIosCheck(paths, createDeps({ platform: 'linux' }), { isStartup: true }), null);
+    });
+
+    it('a persisted result does not survive a change of who runs the link: the same Xcode, a different boot outcome', async () => {
+      // A result from an interactive login ...
+      writeIosCheck(paths, { status: 'pass', checkedAtMs: 1, xcode: '16.2 (16C5032a)', reason: null });
+      // ... then the link starts as a daemon: the Simulator does not boot there, with the very same Xcode.
+      const asDaemon = await refreshIosCheck(paths, createDeps({ runner: createRunner({ boot: { ok: false, stderr: 'no login session' } }) }), { isStartup: true });
+      assert.equal(asDaemon?.status, 'fail');
+      assert.equal(readIosCheck(paths)?.status, 'fail');
+      // ... and back to a login session: the stale «fail» is replaced by a real answer.
+      const asLogin = await refreshIosCheck(paths, createDeps(), { isStartup: true });
+      assert.equal(asLogin?.status, 'pass');
+      assert.equal(readIosCheck(paths)?.status, 'pass');
     });
   });
 });

@@ -146,11 +146,21 @@ export function checkShouldRunIosCheck(last: IosCheckRecord | null, currentXcode
   return last === null || last.xcode !== currentXcode;
 }
 
-/** @description At the link's start and then once an hour: run the check if Xcode is not what the last result saw. */
-export async function refreshIosCheck(paths: RunnerHomePaths, deps: IosCheckDeps): Promise<IosCheckRecord | null> {
+export interface IosRefreshOptions {
+  /**
+   * The link just started (a terminal, a LaunchAgent, a LaunchDaemon): check regardless of what the last result says. Whether the Simulator
+   * boots depends on WHO runs the link — a result from an interactive login proves nothing for a daemon that replaced it, and a daemon's
+   * «fail» must not outlive a switch to a login session — so the same Xcode version is no reason to trust an older result. Within one run
+   * (the hourly look) only a different Xcode starts a check.
+   */
+  isStartup: boolean;
+}
+
+/** @description At the link's start (always) and then once an hour (when Xcode is not what the last result saw): run the boot check and record it. */
+export async function refreshIosCheck(paths: RunnerHomePaths, deps: IosCheckDeps, options: IosRefreshOptions): Promise<IosCheckRecord | null> {
   if (deps.platform !== 'darwin') return null;
   const current = await readXcodeVersion(deps);
-  if (!checkShouldRunIosCheck(readIosCheck(paths), current)) return null;
+  if (!options.isStartup && !checkShouldRunIosCheck(readIosCheck(paths), current)) return null;
   const record = await runIosBootCheck(deps);
   writeIosCheck(paths, record);
   return record;
