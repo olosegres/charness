@@ -133,6 +133,17 @@ export function pickRunner(config: RunnersConfig, reports: readonly RunnerReport
   return { ok: false, exitCode: remoteRunExitCodes.failed, message: `${reason}\n${formatRunnersView(reports)}` };
 }
 
+/**
+ * @description The runner `exec` goes to. `exec` runs in the runner's copy "as the last job left it", so without `--runner` that is the
+ * runner of this project's last job (`lastRunnerName`), not the first one that answers — with several runners the first could hold no copy
+ * of the project, or an old one. No job yet: `null` (any online runner); a last runner that left `runners.json`: `null` and a note.
+ */
+export function chooseExecRunnerName(config: RunnersConfig, named: string | null, lastRunnerName: string | null): { runnerName: string | null; note: string | null } {
+  if (named !== null || lastRunnerName === null) return { runnerName: named, note: null };
+  if (config.runners.some((runner) => runner.name === lastRunnerName)) return { runnerName: lastRunnerName, note: null };
+  return { runnerName: null, note: `the runner of this project's last job, "${lastRunnerName}", is not in runners.json any more — using the first online runner` };
+}
+
 /** @description The runner of a job id, from the config: an id of a runner that is no longer listed is an error. */
 export function findRunnerOfJob(config: RunnersConfig, runnerName: string): RunnerConfig {
   const runner = config.runners.find((candidate) => candidate.name === runnerName);

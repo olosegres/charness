@@ -709,6 +709,27 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       const viaExec = await run(['exec', 'cat marker.txt'], { cwd: path.join(project.root, 'packages/lib') });
       assert.match(viaExec.stdout, /in a subfolder/);
     });
+
+    it('with several runners and no --runner it goes to the runner of the project\'s LAST job — not to the first one in the file, which holds another copy', async () => {
+      // A second runner on the same sshd and Pueue, with a work dir of its own: its copy of the project is a different folder.
+      const secondWorkDir = path.join(layout.root, 'work-second');
+      writeRunnersJson(layout, [createRunnerEntry(layout), createRunnerEntry(layout, { name: 'box2', workDir: secondWorkDir })]);
+      try {
+        const ranOnSecond = await run(['--runner', 'box2', 'true']);
+        assert.equal(ranOnSecond.exitCode, 0, ranOnSecond.stderr);
+        const onSecond = await run(['exec', 'pwd']);
+        assert.equal(onSecond.exitCode, 0, onSecond.stderr);
+        assert.ok(onSecond.stdout.trim().startsWith(`${secondWorkDir}/`), `exec ran in ${onSecond.stdout.trim()}, not in the copy on box2`);
+        const ranOnFirst = await run(['--runner', 'box1', 'true']);
+        assert.equal(ranOnFirst.exitCode, 0, ranOnFirst.stderr);
+        const onFirst = await run(['exec', 'pwd']);
+        assert.ok(onFirst.stdout.trim().startsWith(`${layout.workDir}/`), `after a job on box1, exec ran in ${onFirst.stdout.trim()}`);
+        const named = await run(['exec', '--runner', 'box2', 'pwd']);
+        assert.ok(named.stdout.trim().startsWith(`${secondWorkDir}/`), '--runner still names the runner');
+      } finally {
+        writeRunnersJson(layout, [createRunnerEntry(layout)]);
+      }
+    });
   });
 
   describe('refusals', () => {

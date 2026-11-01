@@ -12,7 +12,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { parseProbeOutput, type RunnerReport } from '../remoteRun/probe';
-import { findRunnerOfJob, pickRunner, readLastProbe } from '../remoteRun/runners';
+import { chooseExecRunnerName, findRunnerOfJob, pickRunner, readLastProbe } from '../remoteRun/runners';
 import type { RunnersConfig } from '../remoteRun/runnersConfig';
 import { RemoteRunError } from '../remoteRun/remoteRunError';
 
@@ -90,6 +90,26 @@ describe('pickRunner — a runner named', () => {
   it('without the capability: 125 naming it', () => {
     const pick = pickRunner(config, reports, { runner: 'box1', needs: 'ios' });
     assert.ok(!pick.ok && pick.exitCode === 125 && pick.message.startsWith('runner "box1" cannot do "ios"'));
+  });
+});
+
+describe('chooseExecRunnerName', () => {
+  it('without --runner, exec goes where this project\'s last job ran — not to the first runner of the file, which may hold no copy', () => {
+    assert.deepEqual(chooseExecRunnerName(config, null, 'box2'), { runnerName: 'box2', note: null });
+  });
+
+  it('a named runner is used as it is, whatever the last job did', () => {
+    assert.deepEqual(chooseExecRunnerName(config, 'box1', 'box2'), { runnerName: 'box1', note: null });
+  });
+
+  it('no job yet from this project: no preference (the first online runner is picked later)', () => {
+    assert.deepEqual(chooseExecRunnerName(config, null, null), { runnerName: null, note: null });
+  });
+
+  it('the last job\'s runner has left runners.json: no preference, and the note says why exec went elsewhere', () => {
+    const chosen = chooseExecRunnerName(config, null, 'retired');
+    assert.equal(chosen.runnerName, null);
+    assert.match(chosen.note ?? '', /"retired", is not in runners\.json any more — using the first online runner/);
   });
 });
 

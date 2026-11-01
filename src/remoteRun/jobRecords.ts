@@ -52,6 +52,30 @@ export function readLocalJobRecord(cacheDir: string, jobId: string): LocalJobRec
   }
 }
 
+/**
+ * @description The runner that holds the most recent job of the project at `projectRoot` — the one whose copy of it is the latest — from
+ * the newest local job record; `null` when this machine has submitted nothing from that project. The runner is the one the job id names.
+ */
+export function readLastRunnerNameOfProject(cacheDir: string, projectRoot: string): string | null {
+  const directory = path.join(cacheDir, recordsDirectoryName);
+  let names: string[];
+  try {
+    names = fs.readdirSync(directory);
+  } catch {
+    return null;
+  }
+  let newest: { runnerName: string; submittedAtMs: number } | null = null;
+  for (const name of names) {
+    if (!name.endsWith(recordSuffix)) continue;
+    const jobId = name.slice(0, -recordSuffix.length);
+    const runnerName = parseJobId(jobId)?.runnerName;
+    const record = runnerName === undefined ? null : readLocalJobRecord(cacheDir, jobId);
+    if (runnerName === undefined || record === null || record.projectRoot !== projectRoot) continue;
+    if (newest === null || record.submittedAtMs > newest.submittedAtMs) newest = { runnerName, submittedAtMs: record.submittedAtMs };
+  }
+  return newest?.runnerName ?? null;
+}
+
 /** @description When a record has no use any more: the job's deadline, then the days the runner keeps a job that ended. */
 export function getRecordExpiryMs(record: LocalJobRecord): number {
   return record.submittedAtMs + (record.timeoutSeconds ?? maxTimeoutSeconds) * 1000 + recordKeepDays * millisecondsPerDay;

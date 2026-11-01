@@ -13,7 +13,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { resolveFetchTarget } from '../remoteRun/jobFiles';
-import { getRecordExpiryMs, readLocalJobRecord, writeLocalJobRecord } from '../remoteRun/jobRecords';
+import { getRecordExpiryMs, readLastRunnerNameOfProject, readLocalJobRecord, writeLocalJobRecord } from '../remoteRun/jobRecords';
 import { RemoteRunError } from '../remoteRun/remoteRunError';
 
 const jobId = 'box1-abc234';
@@ -95,6 +95,43 @@ describe('local job records', () => {
     fs.utimesSync(garbage, old, old);
     writeLocalJobRecord(cacheDir, jobId, { projectRoot, slug: 's', submittedAtMs: nowMs }, nowMs);
     assert.equal(fs.existsSync(garbage), false);
+  });
+});
+
+describe('readLastRunnerNameOfProject', () => {
+  beforeEach(() => {
+    workRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'last-runner-')));
+    cacheDir = path.join(workRoot, 'cache');
+    projectRoot = path.join(workRoot, 'project');
+    fs.mkdirSync(projectRoot);
+  });
+  afterEach(() => {
+    fs.rmSync(workRoot, { recursive: true, force: true });
+  });
+
+  it('the runner of the newest job of THIS project, whichever runner the older ones went to; other projects\' jobs do not count', () => {
+    const otherRoot = path.join(workRoot, 'other');
+    const nowMs = Date.UTC(2026, 10, 1);
+    writeLocalJobRecord(cacheDir, 'box1-aaaaa2', { projectRoot, slug: 's', submittedAtMs: nowMs - 3000 }, nowMs);
+    writeLocalJobRecord(cacheDir, 'box2-bbbbb3', { projectRoot, slug: 's', submittedAtMs: nowMs - 1000 }, nowMs);
+    writeLocalJobRecord(cacheDir, 'box1-ccccc4', { projectRoot, slug: 's', submittedAtMs: nowMs - 2000 }, nowMs);
+    writeLocalJobRecord(cacheDir, 'box1-ddddd5', { projectRoot: otherRoot, slug: 'o', submittedAtMs: nowMs }, nowMs);
+    assert.equal(readLastRunnerNameOfProject(cacheDir, projectRoot), 'box2');
+    assert.equal(readLastRunnerNameOfProject(cacheDir, otherRoot), 'box1');
+  });
+
+  it('a runner name that has dashes is read whole, and a damaged record or a file that is not a job id is ignored', () => {
+    const nowMs = Date.UTC(2026, 10, 1);
+    writeLocalJobRecord(cacheDir, 'build-box-eeeee6', { projectRoot, slug: 's', submittedAtMs: nowMs - 5000 }, nowMs);
+    fs.writeFileSync(path.join(cacheDir, 'jobs', 'box1-fffff7.json'), '{not json');
+    fs.writeFileSync(path.join(cacheDir, 'jobs', 'notes.json'), JSON.stringify({ projectRoot, slug: 's', submittedAtMs: nowMs }));
+    assert.equal(readLastRunnerNameOfProject(cacheDir, projectRoot), 'build-box');
+  });
+
+  it('no record, or no records folder at all: null', () => {
+    assert.equal(readLastRunnerNameOfProject(cacheDir, projectRoot), null);
+    writeLocalJobRecord(cacheDir, 'box1-aaaaa2', { projectRoot: path.join(workRoot, 'elsewhere'), slug: 's', submittedAtMs: Date.now() });
+    assert.equal(readLastRunnerNameOfProject(cacheDir, projectRoot), null);
   });
 });
 

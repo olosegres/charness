@@ -115,8 +115,9 @@ and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn 
   ends, prints the last 50 log lines, brings the result files back and exits with the job's code — Claude can run it in the
   background and is told when it ends. `ls` lists this project's jobs (`--all`: every project of this user), `status` shows one,
   `logs` its output (`-f` follows it), `kill` stops it, `fetch` brings its result files back again.
-- **`exec`**: a one-off command in the runner's copy as the last job left it, without syncing (`ls build/`, `adb logcat -d`). Not
-  for editing. Killed like a foreground job. Its exit code is the command's own, also 255 — only a connection that dropped before the
+- **`exec`**: a one-off command in the runner's copy as the last job left it, without syncing (`ls build/`, `adb logcat -d`). On the
+  runner of this project's last job unless you name another with `--runner` (with several runners the first one in the file may
+  hold no copy, or an old one); a project that has no job yet goes to the first online runner. Not for editing. Killed like a foreground job. Its exit code is the command's own, also 255 — only a connection that dropped before the
   runner reported the code ends with 125.
 - **`runners`**: one short block per runner, all probed at once (at most 20 s; a runner that does not answer in time is shown offline
   with its last snapshot):

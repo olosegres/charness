@@ -10,7 +10,7 @@ import { createFetchTarget, fetchJobFiles, resolveFetchTarget } from './jobFiles
 import { formatJobList, formatJobStatus, type JobEntry } from './jobFormat';
 import { getJobLabel, parseJobId } from './jobId';
 import { parseJobMeta } from './jobMeta';
-import { readLocalJobRecord } from './jobRecords';
+import { readLastRunnerNameOfProject, readLocalJobRecord } from './jobRecords';
 import { readJobOutcome } from './jobQuery';
 import { describeJobOutcome, parseJobFacts, parsePueueStatus } from './jobState';
 import { createJobOutputRouter, sayOwn, type CliIo } from './output';
@@ -18,7 +18,7 @@ import { formatRunnerBlock, type RunnerCapability } from './probe';
 import { getProjectContext } from './project';
 import { RemoteRunError, RunnerUnreachableError } from './remoteRunError';
 import { createRunnerClient, describeRunnerRefusal, type RunnerClient, type RunnerScript } from './runnerClient';
-import { findRunnerOfJob, pickRunner, probeRunners } from './runners';
+import { chooseExecRunnerName, findRunnerOfJob, pickRunner, probeRunners } from './runners';
 import type { RunnersConfig } from './runnersConfig';
 import { checkIsConnectionLost } from './ssh';
 import { getJobOwner, stageJob } from './submit';
@@ -269,6 +269,8 @@ export async function runKillCommand(command: Extract<RemoteRunCommand, { kind: 
 
 export async function runExecCommand(command: Extract<RemoteRunCommand, { kind: 'exec' }>, context: CommandContext): Promise<number> {
   const project = getProjectContext(context.io.cwd);
-  const client = await chooseClient(context, { runner: command.runner, needs: null });
+  const chosen = chooseExecRunnerName(context.config, command.runner, command.runner === null ? readLastRunnerNameOfProject(context.cacheDir, project.root) : null);
+  if (chosen.note !== null) sayOwn(context.io, chosen.note);
+  const client = await chooseClient(context, { runner: chosen.runnerName, needs: null });
   return runExec({ client, slug: project.slug, subfolder: project.subfolder, command: command.command, io: context.io, leaseMs: context.leaseMs });
 }
