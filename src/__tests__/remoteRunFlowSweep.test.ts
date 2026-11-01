@@ -130,6 +130,20 @@ describe('the runner flow layout sweep', () => {
     assert.deepEqual(reapDeadFlowLayouts(parentDirectory, layoutNamePrefix), [fresh]);
   });
 
+  it('a layout of another account is left alone — however dead its owner looks — and the reap goes on to this account\'s own', async () => {
+    // The other account's folder is private to it: its owner file cannot be read from here and removing the folder fails with EACCES,
+    // which used to end the whole flow's setup. Another account is simulated by asking the reap to run as a different uid.
+    const foreign = createLayout('foreign');
+    writeDeadOwner(foreign);
+    const foreignDecoy = startCwdDecoy(path.join(foreign, 'tree'));
+    const ownUid = os.userInfo().uid;
+    assert.deepEqual(reapDeadFlowLayouts(parentDirectory, layoutNamePrefix, ownUid + 1), [], 'nothing of this uid\'s is owned by the "other" account');
+    assert.equal(fs.existsSync(foreign), true, 'the foreign folder stays');
+    assert.equal(foreignDecoy.pid !== undefined && checkIsProcessRunning(foreignDecoy.pid), true, 'and so does what runs in it');
+    assert.deepEqual(reapDeadFlowLayouts(parentDirectory, layoutNamePrefix, ownUid), [foreign], 'the same folder IS reaped by its own account');
+    assert.equal(await waitUntilGone(foreignDecoy), true);
+  });
+
   it('only folders with the layout prefix are looked at', () => {
     const foreign = path.join(parentDirectory, 'someone-elses-folder');
     fs.mkdirSync(foreign);

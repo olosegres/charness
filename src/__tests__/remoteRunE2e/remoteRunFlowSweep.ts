@@ -94,14 +94,20 @@ export function sweepFlowLayout(root: string, options: { removeFiles?: boolean }
 }
 
 /**
- * @description Sweep every layout of an earlier run whose owner is gone; returns the folders reaped. `parentDirectory` and `prefix`
- * are the layouts' home (injectable for the test).
+ * @description Sweep every layout of an earlier run whose owner is gone; returns the folders reaped. `parentDirectory`, `prefix` and
+ * `accountUid` are the layouts' home and the account that reaps (injectable for the test). A layout of ANOTHER account is never touched:
+ * the folder is private (0700), so its owner file cannot be read and removing it fails — on a shared `/tmp` its own account reaps it.
  */
-export function reapDeadFlowLayouts(parentDirectory: string = path.dirname(flowLayoutPrefix), prefix: string = path.basename(flowLayoutPrefix)): string[] {
+export function reapDeadFlowLayouts(
+  parentDirectory: string = path.dirname(flowLayoutPrefix),
+  prefix: string = path.basename(flowLayoutPrefix),
+  accountUid: number = os.userInfo().uid,
+): string[] {
   const reaped: string[] = [];
   for (const entry of fs.readdirSync(parentDirectory, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
     const root = path.join(parentDirectory, entry.name);
+    if (fs.lstatSync(root).uid !== accountUid) continue;
     const owner = readFlowLayoutOwner(root);
     if (owner !== null && checkIsFlowLayoutOwnerAlive(owner)) continue;
     if (owner === null && Date.now() - fs.statSync(root).mtimeMs < ownerlessLayoutGraceMs) continue;
