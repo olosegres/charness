@@ -1,6 +1,7 @@
 import { execFileSync, exec, spawn, spawnSync } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { sleep } from './utils';
@@ -776,14 +777,45 @@ export function onOpenCodeServerExit(callback: (code: number | null, signal: str
   onServerExitCallback = callback;
 }
 
+/** The server answers its health probe (a silent probe is asked again before it counts as down: see {@link getOpenCodeServerHealth}). */
 export async function checkIsOpenCodeServerRunning(): Promise<boolean> {
   return (await getOpenCodeServerHealth()).healthy;
 }
+
+/**
+ * @name OpenCodeServerHealthOutcome
+ * @description How a health probe ended — what the bot may conclude from it:
+ *  - `healthy`     — answered 200;
+ *  - `unhealthy`   — answered, but not OK (a 503 while the server is not ready): asking again would get the same answer;
+ *  - `unreachable` — nothing took the connection (refused, reset, no route): no server listens, asking again changes nothing;
+ *  - `unanswered`  — the connection was taken and no answer came in time, on every attempt: a server that is busy, starved of
+ *    CPU or hung. NOT "no server": something holds the port.
+ */
+export type OpenCodeServerHealthOutcome = 'healthy' | 'unhealthy' | 'unreachable' | 'unanswered';
 
 export interface OpenCodeServerHealth {
   healthy: boolean;
   /** Version the running server reports, or null if unreachable / field absent. */
   version: string | null;
+  outcome: OpenCodeServerHealthOutcome;
+}
+
+/** How long one health probe waits for an answer. */
+export const openCodeHealthAttemptTimeoutMs = 2000;
+
+/**
+ * How many more times a probe that got no answer in time is asked. A server that answers 2.6 s late is busy, not gone: reading
+ * the first silence as "no server" made the bot start a duplicate on a port that was served (it died of EADDRINUSE and the
+ * start was reported as failed) or stop a server it owns that was merely slow. A server silent on every attempt (3 × 2 s) is
+ * taken for hung, which is handled as it always was: an owned one is stopped and replaced.
+ */
+export const openCodeHealthTimeoutRetries = 2;
+
+export interface OpenCodeServerHealthOptions {
+  /** Test seam; production keeps {@link openCodeHealthAttemptTimeoutMs}. */
+  attemptTimeoutMs?: number;
+  /** Retries after a silent first attempt; 0 for a read that only shows the version (`/status`). Default {@link openCodeHealthTimeoutRetries}. */
+  timeoutRetries?: number;
 }
 
 /**
@@ -807,17 +839,60 @@ export function extractOpenCodeVersion(raw: string | null | undefined): string |
  * a live process (it keeps the old code in memory), and a newer opencode run
  * can migrate the shared opencode.db underneath the old server — which then
  * dies on every prompt (e.g. `no such column: replacement_seq`).
+ *
+ * A probe that gets no answer within the attempt time is asked again ({@link openCodeHealthTimeoutRetries} more times) and
+ * ends as `unanswered` only when every attempt was silent; the `outcome` tells that, a refusal (`unreachable`) and an error
+ * answer (`unhealthy`) apart, since only the first means "something holds the port".
  */
-export async function getOpenCodeServerHealth(): Promise<OpenCodeServerHealth> {
+export async function getOpenCodeServerHealth(options: OpenCodeServerHealthOptions = {}): Promise<OpenCodeServerHealth> {
   const url = process.env.OPENCODE_URL || defaultOpenCodeUrl;
-  try {
-    const response = await fetch(`${url}/global/health`, { signal: AbortSignal.timeout(2000) });
-    if (!response.ok) return { healthy: false, version: null };
-    const body = (await response.json().catch(() => null)) as { version?: string } | null;
-    return { healthy: true, version: extractOpenCodeVersion(body?.version) };
-  } catch {
-    return { healthy: false, version: null };
+  const attemptTimeoutMs = options.attemptTimeoutMs ?? openCodeHealthAttemptTimeoutMs;
+  const timeoutRetries = options.timeoutRetries ?? openCodeHealthTimeoutRetries;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await fetch(`${url}/global/health`, { signal: AbortSignal.timeout(attemptTimeoutMs) });
+      if (!response.ok) return { healthy: false, version: null, outcome: 'unhealthy' };
+      const body = (await response.json().catch(() => null)) as { version?: string } | null;
+      return { healthy: true, version: extractOpenCodeVersion(body?.version), outcome: 'healthy' };
+    } catch (error) {
+      // Only silence is asked again; a refused or reset connection is a definite "nobody there".
+      if (!(error instanceof Error && error.name === 'TimeoutError')) return { healthy: false, version: null, outcome: 'unreachable' };
+      if (attempt >= timeoutRetries) return { healthy: false, version: null, outcome: 'unanswered' };
+    }
   }
+}
+
+/** How long the check for a listener on the server's port waits for the connection. */
+const portInUseProbeTimeoutMs = 1000;
+
+/**
+ * Whether anything takes a connection on the loopback port `opencode serve` is started on (127.0.0.1): the answer to "may a
+ * server be started here". A connection that is refused, or does not come, is not an occupant.
+ */
+function checkIsOpenCodePortInUse(port: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port: Number.parseInt(port, 10) });
+    socket.setTimeout(portInUseProbeTimeoutMs);
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.once('error', () => resolve(false));
+  });
+}
+
+/** Why a server is not started on a port that is in use: who holds it, as far as the last health probe could tell. */
+function describeOccupiedOpenCodePort(port: string, health: OpenCodeServerHealth): string {
+  const holder = health.outcome === 'unanswered'
+    ? `by a process that did not answer its health probe (${1 + openCodeHealthTimeoutRetries} attempts of ${openCodeHealthAttemptTimeoutMs} ms)`
+    : health.outcome === 'unhealthy'
+      ? 'by a process whose health probe answers with an error'
+      : 'by a process that takes connections';
+  return `OpenCode server port ${port} is in use ${holder}, and the bot did not start it: it will not start another server on the port`;
 }
 
 /** Cache so a boot-time reattach burst doesn't spawn `opencode --version` per call. */
@@ -1002,6 +1077,10 @@ async function stopAdoptedOpenCodeServer(serverUrl: URL): Promise<void> {
  * replacement generation is reparented outside nodemon's kill tree.
  * Waits until server responds to health check (up to 15s).
  *
+ * A health probe that gets no answer in time is asked again ({@link openCodeHealthTimeoutRetries}) before it is read as
+ * anything: a slow server is adopted, not started over. Whatever the probe said, a server is never started onto a port that
+ * still takes connections — an owned server that is down or hung is stopped first, any other holder makes this throw.
+ *
  * If a server is already up but running an OUTDATED binary (version reported by
  * /global/health differs from the on-disk `opencode --version`), it is restarted
  * onto the current binary instead of being adopted — otherwise a stale server
@@ -1029,7 +1108,14 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
   } else if (checkHasOwnedOpenCodeProcess(endpoint)) {
     // A persisted identity lets a fresh hot worker recover the supervisor's
     // initial server or a replacement started by an earlier worker generation.
+    // This is also what becomes of an owned server that stayed silent on every health attempt: a hung one is replaced.
     await stopAdoptedOpenCodeServer(serverUrl);
+  }
+
+  // Never start a server onto a port that is in use: the new one would die of EADDRINUSE and the start would be reported as
+  // failed, with the real holder (a server that is only slow, or one the bot does not own) none the wiser.
+  if (await checkIsOpenCodePortInUse(port)) {
+    throw new Error(describeOccupiedOpenCodePort(port, health));
   }
 
   const opencodeCmd = getToolCommand('opencode');

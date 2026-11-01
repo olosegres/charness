@@ -45,7 +45,12 @@ anyway, your local claude CLI is older than 2.1.x — upgrade with
 `npm i -g @anthropic-ai/claude-code` (the bot also auto-installs on
 first use, see `src/installManager.ts`).
 
-## OpenCode "address already in use"
+## OpenCode "address already in use" / "port … is in use … will not start another server"
 
-Two instances on the same host with the same `OPENCODE_URL`. Pick a
-different port for the second instance (e.g. `4097`).
+Two instances on the same host with the same `OPENCODE_URL`, or something else holding that port. The bot
+never starts a server onto a port that still takes connections: a server that answers its health check is
+used as it is (a slow one too — a check with no answer is asked again, three tries of 2 s, before it counts),
+and one it did not start that stays silent gets the error "OpenCode server port N is in use by a process that
+did not answer its health probe … it will not start another server on the port" instead of a second server
+that dies on the busy port. A server the bot started itself that stays silent on all three tries is stopped
+and replaced. Pick a different port for the second instance (e.g. `4097`), or stop what holds the port.

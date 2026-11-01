@@ -2874,7 +2874,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // then no model to look a limit up for; the two independent HTTP reads run
     // concurrently so `/status` waits for the slower one, not for their sum.
     const [health, providers] = await Promise.all([
-      getOpenCodeServerHealth(),
+      // One attempt: this only shows the version, and a hung server must not make `/status` wait for retries.
+      getOpenCodeServerHealth({ timeoutRetries: 0 }),
       runtimeModel
         ? this.getProvidersConfig().catch((error) => {
           console.warn('[OpenCode] getRuntimeInfo providers lookup failed:', error instanceof Error ? error.message : error);

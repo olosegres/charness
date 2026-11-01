@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**A busy OpenCode server is no longer mistaken for a missing one — the bot no longer starts a second server on its port, or replaces it, just because it answered late.**
+Before, a health check that got no answer within 2 seconds counted as «no server». On a slow or loaded host that made the bot start another OpenCode server on a port that was already served — it died of «address already in use» and the start was reported as failed — and a server the bot had started itself was stopped and replaced for being slow to answer.
+Now a silent check is asked again (three tries of 2 seconds) before it counts, and the bot never starts a server onto a port that still takes connections. A slow server is used as it is; a server the bot started that stays silent on all three tries is replaced as before, after about 6 seconds instead of 2; a port held by a silent process the bot did not start gets a clear error («port … is in use … will not start another server on the port») instead of a failed start. `/status` still waits for one try only.
+
 ## 3.7.0 — 2026-11-01
 
 **The answers of `send_messages_to_user` and `send_file_to_user` now say what was sent, per kind — «Delivered 3 messages: 1 text, 2 documents.», «Sent 3 files: 1 photo, 2 documents.» — so an agent can see when a file did not go out as the kind it meant.**

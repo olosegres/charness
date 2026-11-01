@@ -73,6 +73,19 @@ export function useStubbedOpenCodeServer(): StubbedOpenCodeServer {
     return new Response(JSON.stringify(await healthHandler()), { status: okStatus, headers: { 'content-type': jsonContentType } });
   };
 
+  /** A real `fetch` gives up when its signal aborts (a probe's own timeout); so does the stub, which lets a test make the server silent. */
+  const rejectWhenAborted = <Reply>(reply: Promise<Reply>, signal: AbortSignal | null | undefined): Promise<Reply> => {
+    if (!signal) return reply;
+    return new Promise<Reply>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      reply.then(resolve, reject);
+    });
+  };
+
   const answerApiRequest = async (url: string, init: RequestInit | undefined): Promise<Response> => {
     if (!apiHandler) throw new Error(`unexpected fetch in test: ${url}`);
     const requestBody: JsonValue | undefined = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
@@ -96,7 +109,7 @@ export function useStubbedOpenCodeServer(): StubbedOpenCodeServer {
     process.env.OPENCODE_BIN = stubOpenCodeBinary;
     globalThis.fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : input.toString();
-      if (url.endsWith(healthPath)) return answerHealthRequest();
+      if (url.endsWith(healthPath)) return rejectWhenAborted(answerHealthRequest(), init?.signal);
       return answerApiRequest(url, init);
     };
   });

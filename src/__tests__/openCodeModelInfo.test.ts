@@ -336,6 +336,25 @@ describe('OpenCode fetchModelInfo (B9)', () => {
     assert.equal(isProviderStartedBeforeHealthResolved, true, 'the provider read must not wait for the health read');
   });
 
+  it('reads the server version with ONE health attempt: a silent server makes `/status` wait for that, not for the probe\'s retries', async () => {
+    const { adapter } = createAdapterWithSession();
+    let healthRequests = 0;
+    openCodeServer.answerHealthWith(() => {
+      healthRequests += 1;
+      return new Promise<never>(() => {});
+    });
+
+    // The probe's own timeout (AbortSignal.timeout) does not keep the event loop alive; the bot has other handles, this test needs one.
+    const keepEventLoopAlive = setInterval(() => {}, 100);
+    try {
+      const info = await adapter.getRuntimeInfo(key);
+      assert.equal(info.version, null, 'a silent server shows no version');
+      assert.equal(healthRequests, 1);
+    } finally {
+      clearInterval(keepEventLoopAlive);
+    }
+  });
+
   it('degrades to an unknown context limit when the provider lookup fails', async () => {
     const { adapter, setConfigResponse } = createAdapterWithSession();
     setConfigResponse(async () => {
