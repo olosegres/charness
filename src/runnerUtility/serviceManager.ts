@@ -2,7 +2,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
-import { readRunnerConfig } from './runnerConfig';
+import { ensurePueueConfig, inspectPueue, shutDownPueue } from './pueueDaemon';
+import { readRunnerConfig, readRunnerStatus } from './runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from './runnerHome';
 import {
   describeLingerRemedy,
@@ -50,6 +51,8 @@ export interface ServiceDeps {
   platform: NodeJS.Platform;
   /** The uid of this process (a `--system` install must be root). */
   uid: number;
+  /** Does a process with this pid exist? (`kill(pid, 0)`; a test names its own.) */
+  checkIsProcessAlive: (pid: number) => boolean;
   /** The account that runs this process, and its home. */
   accountName: string;
   homeDir: string;
@@ -103,11 +106,21 @@ async function resolveMacAccount(name: string, runner: CommandRunner): Promise<T
   return { name, uid: Number(uid.stdout.trim()), gid: Number(gid.stdout.trim()), homeDir: homeDir ?? `/Users/${name}` };
 }
 
+function checkIsPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && 'code' in error && error.code === 'EPERM';
+  }
+}
+
 export function createServiceDeps(): ServiceDeps {
   return {
     runner: runCommand,
     platform: process.platform,
     uid: os.userInfo().uid,
+    checkIsProcessAlive: checkIsPidAlive,
     accountName: os.userInfo().username,
     homeDir: os.homedir(),
     nodePath: process.execPath,
@@ -160,20 +173,79 @@ function fail(...lines: string[]): ServiceResult {
   return { ok: false, lines };
 }
 
+const stillRunningStates: readonly string[] = ['active', 'activating', 'reloading', 'deactivating'];
+
+/** Give the whole folder to the account (the `--system` install runs as root and creates what the daemons, running as the account, must write). */
+function giveTreeTo(directory: string, owner: TargetAccount, chown: ServiceDeps['chown']): void {
+  chown(directory, owner.uid, owner.gid);
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) giveTreeTo(entryPath, owner, chown);
+    else chown(entryPath, owner.uid, owner.gid);
+  }
+}
+
+/**
+ * Everything that must be true BEFORE either service starts, or the services start into a mess:
+ *   - the Pueue binaries exist (a unit that cannot start would restart in a loop);
+ *   - no foreground `charness-runner run` is linked (two links for one runner fight for the hub's socket, and its Pueue daemon would
+ *     fight the managed one for Pueue's);
+ *   - a Pueue daemon that NO service owns is dealt with explicitly: while it runs jobs it is left alone and the install is refused —
+ *     Pueue kills the jobs it runs when it stops — and an idle one is shut down so the managed one can take the socket;
+ *   - Pueue's private configuration exists, and the service record is written, so the first start of the queue has its configuration and
+ *     the link, seeing the record, waits for the service's queue instead of starting a daemon of its own.
+ * Returns the refusal, or `null` when the services may start. `hadService` tells a re-install (the daemon is the service's own then).
+ */
+async function prepareManagedStart(paths: RunnerHomePaths, deps: ServiceDeps, kind: ServiceKind, owner: TargetAccount | null): Promise<{ refusal: ServiceResult | null; hadService: boolean }> {
+  const hadService = readServiceKind(paths) !== null;
+  const refuse = (...lines: string[]): { refusal: ServiceResult; hadService: boolean } => ({ refusal: fail(...lines), hadService });
+  if (!fs.existsSync(path.join(paths.binDir, 'pueued'))) return refuse('Pueue is not installed for this runner yet: run `charness-runner check` (it installs it), then install the service.');
+  if (!hadService) {
+    const status = readRunnerStatus(paths);
+    if (status !== null && deps.checkIsProcessAlive(status.pid)) {
+      return refuse(`A foreground \`charness-runner run\` is linked (pid ${status.pid}). Stop it (Ctrl-C in its terminal) and install the service again — the service takes over the link and the queue.`);
+    }
+    const queue = await inspectPueue(paths, deps.runner);
+    if (queue.kind === 'busy') return refuse(`The Pueue queue of this runner is running ${queue.activeJobs} job(s), and a service cannot take the queue over without stopping them. Install the service when they have finished (\`pueue --config ${paths.pueueConfig} status\`).`);
+    if (queue.kind === 'unreadable') return refuse('A Pueue daemon answers but its state cannot be read, so it cannot be told apart from one with running jobs. Stop it by hand and install the service again.');
+    if (queue.kind === 'idle' && !(await shutDownPueue(paths, deps.runner))) return refuse('An idle Pueue daemon is running and did not shut down; stop it by hand and install the service again.');
+  }
+  ensurePueueConfig(paths);
+  if (owner !== null) giveTreeTo(paths.pueueDir, owner, deps.chown);
+  writeMarker(paths, kind, owner, deps.chown);
+  return { refusal: null, hadService };
+}
+
+async function stopSystemdUnits(names: ServiceNames, deps: ServiceDeps): Promise<string | null> {
+  await deps.runner('systemctl', ['--user', 'disable', '--now', names.systemdLink, names.systemdPueued], { timeoutMs: commandTimeoutMs });
+  for (const unit of [names.systemdLink, names.systemdPueued]) {
+    const state = await deps.runner('systemctl', ['--user', 'show', '-p', 'ActiveState', '--value', unit], { timeoutMs: commandTimeoutMs });
+    if (!state.ok) return `systemd cannot be asked whether ${unit} still runs (${state.stderr.trim().split('\n').slice(-1)[0] || 'no answer'})`;
+    if (stillRunningStates.includes(state.stdout.trim())) return `${unit} is still running (${state.stdout.trim()})`;
+  }
+  return null;
+}
+
 async function installSystemd(paths: RunnerHomePaths, deps: ServiceDeps): Promise<ServiceResult> {
   const names = getServiceNames(paths.root);
   const files = getSystemdFiles(paths.homeDir, names);
+  const { refusal, hadService } = await prepareManagedStart(paths, deps, 'user-service', null);
+  if (refusal !== null) return refusal;
+  const rollBack = async (...reason: string[]): Promise<ServiceResult> => {
+    await stopSystemdUnits(names, deps);
+    for (const file of [files.link, files.pueued]) fs.rmSync(file, { force: true });
+    await deps.runner('systemctl', ['--user', 'daemon-reload'], { timeoutMs: commandTimeoutMs });
+    if (!hadService) fs.rmSync(paths.serviceMarker, { force: true });
+    return fail(...reason, 'Nothing was left installed.');
+  };
   writeDefinition(files.pueued, renderSystemdPueuedUnit(paths));
   writeDefinition(files.link, renderSystemdLinkUnit(paths, names));
   const reload = await deps.runner('systemctl', ['--user', 'daemon-reload'], { timeoutMs: commandTimeoutMs });
   if (!reload.ok) {
-    return fail(
-      'systemctl --user cannot reach a user session. Log in with ssh or the console (not `su` / `sudo -u`), or `export XDG_RUNTIME_DIR=/run/user/$(id -u)`, then run this again.',
-      `(the unit files are written in ${files.directory})`,
-    );
+    return rollBack('systemctl --user cannot reach a user session. Log in with ssh or the console (not `su` / `sudo -u`), or `export XDG_RUNTIME_DIR=/run/user/$(id -u)`, then run this again.');
   }
   const enable = await deps.runner('systemctl', ['--user', 'enable', '--now', names.systemdPueued, names.systemdLink], { timeoutMs: commandTimeoutMs });
-  if (!enable.ok) return fail(`systemctl --user enable failed: ${enable.stderr.trim().split('\n').slice(-1)[0]}`);
+  if (!enable.ok) return rollBack(`systemctl --user enable failed: ${enable.stderr.trim().split('\n').slice(-1)[0]}`);
   const lines = [`Installed two user services: ${names.systemdLink} (the link) and ${names.systemdPueued} (the queue).`];
   const lingering = await deps.runner('loginctl', ['show-user', deps.accountName, '-p', 'Linger'], { timeoutMs: commandTimeoutMs });
   if (parseLingerState(lingering.stdout) === 'yes') {
@@ -182,23 +254,35 @@ async function installSystemd(paths: RunnerHomePaths, deps: ServiceDeps): Promis
     const enableLinger = await deps.runner('loginctl', ['enable-linger'], { timeoutMs: commandTimeoutMs });
     lines.push(enableLinger.ok ? 'Lingering switched on: they run without a login and start at boot.' : describeLingerRemedy(deps.accountName));
   }
-  writeMarker(paths, 'user-service', null, deps.chown);
   return { ok: true, lines };
 }
 
 async function uninstallSystemd(paths: RunnerHomePaths, deps: ServiceDeps): Promise<ServiceResult> {
   const names = getServiceNames(paths.root);
   const files = getSystemdFiles(paths.homeDir, names);
-  await deps.runner('systemctl', ['--user', 'disable', '--now', names.systemdLink, names.systemdPueued], { timeoutMs: commandTimeoutMs });
+  const reason = await stopSystemdUnits(names, deps);
+  if (reason !== null) {
+    return fail(`The services were not removed: ${reason}.`, 'Their definitions and the record of them stay, so this can be run again; to stop them by hand: ' + `systemctl --user stop ${names.systemdLink} ${names.systemdPueued}`);
+  }
   for (const file of [files.link, files.pueued]) fs.rmSync(file, { force: true });
   await deps.runner('systemctl', ['--user', 'daemon-reload'], { timeoutMs: commandTimeoutMs });
   fs.rmSync(paths.serviceMarker, { force: true });
-  return { ok: true, lines: ['Removed the two user services. Lingering is left as it was.'] };
+  return { ok: true, lines: ['Removed the two user services (stopped, and checked to be stopped). Lingering is left as it was.'] };
 }
 
 interface LaunchdEntry {
   job: LaunchdJobSpec;
   file: string;
+}
+
+async function stopLaunchdJobs(labels: readonly string[], domain: string, deps: ServiceDeps): Promise<string | null> {
+  for (const label of labels) {
+    await deps.runner('launchctl', ['bootout', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
+    // `print` succeeds only for a job launchd still has loaded.
+    const loaded = await deps.runner('launchctl', ['print', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
+    if (loaded.ok) return `${label} is still loaded in ${domain}`;
+  }
+  return null;
 }
 
 async function loadLaunchdJobs(entries: readonly LaunchdEntry[], domain: string, deps: ServiceDeps, owner: TargetAccount | null, isSystem: boolean): Promise<ServiceResult> {
@@ -221,12 +305,19 @@ async function installLaunchd(request: ServiceRequest, deps: ServiceDeps, paths:
   if (fs.existsSync(otherFiles.link) || fs.existsSync(otherFiles.pueued)) {
     return fail(request.isSystem ? 'A user service (LaunchAgent) is installed for this runner: remove it first with `charness-runner service uninstall`.' : 'A system service (LaunchDaemon) is installed for this runner: remove it first with `sudo charness-runner service uninstall --system --user <account>`.');
   }
+  const kind: ServiceKind = request.isSystem ? 'system-service' : 'user-service';
+  const { refusal, hadService } = await prepareManagedStart(paths, deps, kind, owner);
+  if (refusal !== null) return refusal;
   const accountName = owner?.name ?? deps.accountName;
   const jobs = planLaunchdJobs(paths, names, accountName, path.dirname(deps.nodePath), request.isSystem ? accountName : null);
   const domain = request.isSystem ? 'system' : `gui/${deps.uid}`;
   const loaded = await loadLaunchdJobs([{ job: jobs.pueued, file: files.pueued }, { job: jobs.link, file: files.link }], domain, deps, owner, request.isSystem);
-  if (!loaded.ok) return loaded;
-  writeMarker(paths, request.isSystem ? 'system-service' : 'user-service', owner, deps.chown);
+  if (!loaded.ok) {
+    await stopLaunchdJobs([names.launchdLink, names.launchdPueued], domain, deps);
+    for (const file of [files.link, files.pueued]) fs.rmSync(file, { force: true });
+    if (!hadService) fs.rmSync(paths.serviceMarker, { force: true });
+    return fail(...loaded.lines, 'Nothing was left installed.');
+  }
   return {
     ok: true,
     lines: request.isSystem
@@ -239,10 +330,13 @@ async function uninstallLaunchd(request: ServiceRequest, deps: ServiceDeps, path
   const names = getServiceNames(paths.root);
   const files = getLaunchdFiles(request.isSystem, paths.homeDir, names, deps.launchDaemonsDir);
   const domain = request.isSystem ? 'system' : `gui/${deps.uid}`;
-  for (const label of [names.launchdLink, names.launchdPueued]) await deps.runner('launchctl', ['bootout', `${domain}/${label}`], { timeoutMs: commandTimeoutMs });
+  const reason = await stopLaunchdJobs([names.launchdLink, names.launchdPueued], domain, deps);
+  if (reason !== null) {
+    return fail(`The services were not removed: ${reason}.`, 'Their definitions and the record of them stay, so this can be run again.');
+  }
   for (const file of [files.link, files.pueued]) fs.rmSync(file, { force: true });
   fs.rmSync(paths.serviceMarker, { force: true });
-  return { ok: true, lines: [`Removed the two ${request.isSystem ? 'LaunchDaemons' : 'LaunchAgents'}.`] };
+  return { ok: true, lines: [`Removed the two ${request.isSystem ? 'LaunchDaemons' : 'LaunchAgents'} (stopped, and checked to be stopped).`] };
 }
 
 /** The paths of the account the request is about: this one, or — with `--system --user` — the named one. */

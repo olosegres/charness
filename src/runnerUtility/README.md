@@ -82,7 +82,22 @@ account never clashes with this one.
 served see their pipes close and finish by themselves (phase 1's lease watcher kills its job on the closed stream). For that to be
 enough the launcher passes TERM / INT / HUP on to the app. Pueue runs at `nice`, never `taskpolicy -b` (on Apple Silicon that pins jobs
 to the efficiency cores). One kind at a time: installing one while the other's files exist is refused with the command that removes it.
-`run` does not start its own Pueue daemon when a service manages it — it waits for the service's.
+
+**Install order** (`prepareManagedStart`) — nothing is started until all of it is true, and a start that fails is rolled back (the services
+stopped, their files and the record removed: nothing half-installed):
+1. the Pueue binaries exist (a unit that cannot start would restart in a loop);
+2. no foreground `charness-runner run` is linked (two links for one runner fight for the hub's socket) — install refuses and says to stop it;
+3. a Pueue daemon that NO service owns is dealt with explicitly: while it runs jobs (Running or Paused) it is left alone and the install is
+   refused — Pueue kills the jobs it runs when it stops — and an idle one is shut down so the managed one can take the socket. A
+   re-install (the record exists) leaves the service's own daemon alone;
+4. Pueue's private configuration is written, and the service record (`~/.charness-runner/service`) is written — so the queue starts WITH
+   its configuration, and the link, seeing the record, waits for the service's queue instead of starting a daemon of its own;
+5. for a LaunchDaemon (installed by root) the queue's folders and the record are handed to the account.
+
+**Uninstall** stops the units / jobs and CHECKS they stopped (`systemctl show -p ActiveState`, `launchctl print`) before it deletes
+anything: a service-manager failure, or a unit still running, is reported as not removed and the definitions and the record stay, so it
+can be run again; units that are already absent count as removed. `run` does not start its own Pueue daemon when a service manages it —
+it waits for the service's.
 
 ## State the probe reads (`runner.sh probe`, scope 4)
 

@@ -83,7 +83,7 @@ function createServiceDeps(commands: string[]): ServiceDeps {
     commands.push(`${file} ${args.join(' ')}`);
     return { ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false };
   };
-  return { runner, platform: 'linux', uid: 1000, accountName: 'runner', homeDir: home, nodePath: process.execPath, launchDaemonsDir: path.join(home, 'LaunchDaemons'), chown: () => undefined, resolveAccount: async () => null };
+  return { runner, platform: 'linux', uid: 1000, checkIsProcessAlive: () => false, accountName: 'runner', homeDir: home, nodePath: process.execPath, launchDaemonsDir: path.join(home, 'LaunchDaemons'), chown: () => undefined, resolveAccount: async () => null };
 }
 
 beforeEach(() => {

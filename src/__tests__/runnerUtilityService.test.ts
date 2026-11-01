@@ -134,15 +134,17 @@ interface Call {
 let home = '';
 let daemonsDir = '';
 let calls: Call[] = [];
-let failing: Set<string> = new Set();
 let chowned: string[] = [];
+
+/** What the machine says unless a test says otherwise: no Pueue daemon answers, and no launchd job is loaded. */
+const unansweredCommands = ['status --json', 'launchctl print'];
 
 function recordingRunner(answers: Record<string, Partial<CommandResult>> = {}): CommandRunner {
   return async (file, args) => {
     calls.push({ file, args });
     const key = `${file} ${args.join(' ')}`;
-    const answer = Object.entries(answers).find(([prefix]) => key.startsWith(prefix))?.[1];
-    const ok = answer?.ok ?? !failing.has(key.split(' ').slice(0, 3).join(' '));
+    const answer = Object.entries(answers).find(([fragment]) => key.includes(fragment))?.[1];
+    const ok = answer?.ok ?? !unansweredCommands.some((fragment) => key.includes(fragment));
     return { ok, exitCode: ok ? 0 : 1, stdout: '', stderr: '', isTimedOut: false, ...answer };
   };
 }
@@ -152,6 +154,7 @@ function createDeps(overrides: Partial<ServiceDeps> = {}): ServiceDeps {
     runner: recordingRunner(),
     platform: 'linux',
     uid: 1000,
+    checkIsProcessAlive: () => false,
     accountName: 'runner',
     homeDir: home,
     nodePath: '/opt/node/bin/node',
@@ -186,8 +189,9 @@ describe('installing and removing the services', () => {
     daemonsDir = path.join(home, 'LaunchDaemons');
     runnerPaths = getRunnerHomePaths(home);
     calls = [];
-    failing = new Set();
     chowned = [];
+    fs.mkdirSync(runnerPaths.binDir, { recursive: true });
+    fs.writeFileSync(path.join(runnerPaths.binDir, 'pueued'), '');
   });
   afterEach(() => {
     fs.rmSync(home, { recursive: true, force: true });
@@ -230,6 +234,7 @@ describe('installing and removing the services', () => {
     assert.equal(noSession.ok, false);
     assert.match(noSession.lines.join('\n'), /cannot reach a user session/);
     assert.equal(readServiceKind(runnerPaths), null);
+    assert.equal(fs.existsSync(path.join(home, '.config', 'systemd', 'user', getServiceNames(runnerPaths.root).systemdLink)), false, 'nothing is left installed');
     const system = await installService({ isSystem: true, userName: 'runner' }, createDeps());
     assert.equal(system.ok, false);
     assert.match(system.lines.join('\n'), /--system is for macOS/);
@@ -246,7 +251,12 @@ describe('installing and removing the services', () => {
     const result = await uninstallService({ isSystem: false, userName: null }, createDeps());
     const serviceNames = getServiceNames(runnerPaths.root);
     assert.equal(result.ok, true);
-    assert.deepEqual(commandLines(), [`systemctl --user disable --now ${serviceNames.systemdLink} ${serviceNames.systemdPueued}`, 'systemctl --user daemon-reload']);
+    assert.deepEqual(commandLines(), [
+      `systemctl --user disable --now ${serviceNames.systemdLink} ${serviceNames.systemdPueued}`,
+      `systemctl --user show -p ActiveState --value ${serviceNames.systemdLink}`,
+      `systemctl --user show -p ActiveState --value ${serviceNames.systemdPueued}`,
+      'systemctl --user daemon-reload',
+    ]);
     assert.equal(fs.existsSync(path.join(home, '.config', 'systemd', 'user', serviceNames.systemdLink)), false);
     assert.equal(readServiceKind(runnerPaths), null);
   });
@@ -307,9 +317,168 @@ describe('installing and removing the services', () => {
     const serviceNames = getServiceNames(runnerPaths.root);
     const result = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
     assert.equal(result.ok, true);
-    assert.deepEqual(commandLines(), [`launchctl bootout gui/501/${serviceNames.launchdLink}`, `launchctl bootout gui/501/${serviceNames.launchdPueued}`]);
+    assert.deepEqual(commandLines(), [
+      `launchctl bootout gui/501/${serviceNames.launchdLink}`,
+      `launchctl print gui/501/${serviceNames.launchdLink}`,
+      `launchctl bootout gui/501/${serviceNames.launchdPueued}`,
+      `launchctl print gui/501/${serviceNames.launchdPueued}`,
+    ]);
     assert.deepEqual(fs.readdirSync(path.join(home, 'Library', 'LaunchAgents')), []);
     assert.equal(readServiceKind(runnerPaths), null);
+  });
+
+  it('starts nothing before the queue\'s configuration exists and the service record is written — the queue must start with its configuration, and the link must know a service owns the queue', async () => {
+    pair();
+    const seenAtStart: Array<{ command: string; hasConfig: boolean; kind: string | null }> = [];
+    const inner = recordingRunner();
+    const runner: CommandRunner = async (file, args) => {
+      const command = `${file} ${args.join(' ')}`;
+      if (command.includes('enable --now')) seenAtStart.push({ command, hasConfig: fs.existsSync(runnerPaths.pueueConfig), kind: readServiceKind(runnerPaths) });
+      return inner(file, args, { timeoutMs: 1 });
+    };
+    assert.equal((await installService({ isSystem: false, userName: null }, createDeps({ runner }))).ok, true);
+    assert.equal(seenAtStart.length, 1);
+    assert.deepEqual({ hasConfig: seenAtStart[0].hasConfig, kind: seenAtStart[0].kind }, { hasConfig: true, kind: 'user-service' });
+
+    calls = [];
+    fs.rmSync(runnerPaths.serviceMarker);
+    fs.rmSync(runnerPaths.pueueDir, { recursive: true });
+    seenAtStart.length = 0;
+    const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: async (file, args) => {
+      if (args[0] === 'bootstrap') seenAtStart.push({ command: `${file} ${args.join(' ')}`, hasConfig: fs.existsSync(runnerPaths.pueueConfig), kind: readServiceKind(runnerPaths) });
+      return inner(file, args, { timeoutMs: 1 });
+    } }));
+    assert.equal(mac.ok, true, mac.lines.join('\n'));
+    assert.ok(seenAtStart.length === 2 && seenAtStart.every((seen) => seen.hasConfig && seen.kind === 'user-service'), 'both launchd jobs start into a prepared state');
+  });
+
+  it('refuses to install while a foreground `run` is linked — and changes nothing', async () => {
+    pair();
+    fs.writeFileSync(runnerPaths.status, JSON.stringify({ pid: 4242, state: 'linked', sinceMs: 1, updatedAtMs: 1, lastError: null, activeJobs: 0, packageId: null }));
+    const result = await installService({ isSystem: false, userName: null }, createDeps({ checkIsProcessAlive: (pid) => pid === 4242 }));
+    assert.equal(result.ok, false);
+    assert.match(result.lines.join('\n'), /foreground `charness-runner run` is linked \(pid 4242\)/);
+    assert.deepEqual(commandLines(), [], 'not a command was run');
+    assert.equal(readServiceKind(runnerPaths), null);
+    assert.equal(fs.existsSync(path.join(home, '.config', 'systemd')), false);
+  });
+
+  it('refuses to take over a queue that is running jobs — Pueue kills them when it stops — and an unreadable one', async () => {
+    pair();
+    const busy = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { stdout: JSON.stringify({ tasks: { 0: { status: { Running: {} } }, 1: { status: { Queued: {} } } } }) } }) }));
+    assert.equal(busy.ok, false);
+    assert.match(busy.lines.join('\n'), /running 1 job\(s\)/);
+    assert.ok(!commandLines().some((line) => line.includes('shutdown') || line.startsWith('systemctl')), 'the daemon was not asked to stop and nothing was started');
+    assert.equal(readServiceKind(runnerPaths), null);
+
+    calls = [];
+    const unreadable = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { stdout: 'not json' } }) }));
+    assert.equal(unreadable.ok, false);
+    assert.match(unreadable.lines.join('\n'), /cannot be read/);
+    assert.ok(!commandLines().some((line) => line.startsWith('systemctl')));
+  });
+
+  it('shuts an IDLE unmanaged daemon down first, so the managed one can take the socket', async () => {
+    pair();
+    let isDaemonUp = true;
+    const runner: CommandRunner = async (file, args) => {
+      const command = `${file} ${args.join(' ')}`;
+      calls.push({ file, args });
+      if (command.includes('status --json')) return { ok: isDaemonUp, exitCode: isDaemonUp ? 0 : 1, stdout: isDaemonUp ? JSON.stringify({ tasks: { 0: { status: { Done: {} } } } }) : '', stderr: '', isTimedOut: false };
+      if (command.includes(' shutdown')) isDaemonUp = false;
+      if (command.endsWith(' status')) return { ok: isDaemonUp, exitCode: isDaemonUp ? 0 : 1, stdout: '', stderr: '', isTimedOut: false };
+      return { ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false };
+    };
+    const result = await installService({ isSystem: false, userName: null }, createDeps({ runner }));
+    assert.equal(result.ok, true, result.lines.join('\n'));
+    const lines = commandLines();
+    assert.ok(lines.findIndex((line) => line.includes(' shutdown')) < lines.findIndex((line) => line.includes('enable --now')), 'the daemon was shut down before the services started');
+  });
+
+  it('a re-install leaves the queue alone: the daemon is the service\'s own', async () => {
+    pair();
+    fs.writeFileSync(runnerPaths.serviceMarker, 'user-service\n');
+    const result = await installService({ isSystem: false, userName: null }, createDeps());
+    assert.equal(result.ok, true);
+    assert.ok(!commandLines().some((line) => line.includes('status --json') || line.includes(' shutdown')));
+  });
+
+  it('refuses when Pueue is not installed yet: a unit that cannot start would only restart in a loop', async () => {
+    pair();
+    fs.rmSync(path.join(runnerPaths.binDir, 'pueued'));
+    const result = await installService({ isSystem: false, userName: null }, createDeps());
+    assert.equal(result.ok, false);
+    assert.match(result.lines.join('\n'), /charness-runner check/);
+    assert.deepEqual(commandLines(), []);
+  });
+
+  it('a start that fails is rolled back: the services are stopped, their files and the record removed — nothing half-installed', async () => {
+    pair();
+    const serviceNames = getServiceNames(runnerPaths.root);
+    const result = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'enable --now': { ok: false, stderr: 'Failed to enable unit: boom\n' } }) }));
+    assert.equal(result.ok, false);
+    assert.match(result.lines.join('\n'), /enable failed: Failed to enable unit: boom/);
+    assert.match(result.lines.join('\n'), /Nothing was left installed/);
+    assert.ok(commandLines().some((line) => line.startsWith(`systemctl --user disable --now ${serviceNames.systemdLink}`)), 'what may have started is stopped');
+    assert.equal(fs.existsSync(path.join(home, '.config', 'systemd', 'user', serviceNames.systemdLink)), false);
+    assert.equal(readServiceKind(runnerPaths), null);
+
+    calls = [];
+    const mac = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunner({ 'launchctl bootstrap': { ok: false, stderr: 'Bootstrap failed: 5\n' } }) }));
+    assert.equal(mac.ok, false);
+    assert.deepEqual(fs.readdirSync(path.join(home, 'Library', 'LaunchAgents')), []);
+    assert.equal(readServiceKind(runnerPaths), null);
+  });
+
+  it('the account gets the queue\'s folders and the record when an admin installs the daemons (root created them)', async () => {
+    pair();
+    const result = await installService({ isSystem: true, userName: 'runner' }, createDeps({ platform: 'darwin', uid: 0, accountName: 'root' }));
+    assert.equal(result.ok, true, result.lines.join('\n'));
+    assert.ok(chowned.includes(runnerPaths.pueueDir) && chowned.includes(runnerPaths.pueueConfig), 'the private Pueue folder and its configuration are the account\'s');
+  });
+
+  describe('removal that does not work', () => {
+    it('Linux: when the units cannot be stopped, or systemd cannot be asked, nothing is reported removed — the files and the record stay', async () => {
+      pair();
+      await installService({ isSystem: false, userName: null }, createDeps());
+      const serviceNames = getServiceNames(runnerPaths.root);
+      const linkUnit = path.join(home, '.config', 'systemd', 'user', serviceNames.systemdLink);
+
+      const stillActive = await uninstallService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'disable --now': { ok: false, stderr: 'Failed to stop\n' }, 'show -p ActiveState': { stdout: 'active\n' } }) }));
+      assert.equal(stillActive.ok, false);
+      assert.match(stillActive.lines.join('\n'), /not removed: .* is still running \(active\)/);
+      assert.equal(fs.existsSync(linkUnit), true);
+      assert.equal(readServiceKind(runnerPaths), 'user-service');
+
+      const noManager = await uninstallService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'disable --now': { ok: false }, 'show -p ActiveState': { ok: false, stderr: 'Failed to connect to bus\n' } }) }));
+      assert.equal(noManager.ok, false);
+      assert.match(noManager.lines.join('\n'), /cannot be asked whether/);
+      assert.equal(fs.existsSync(linkUnit), true);
+      assert.equal(readServiceKind(runnerPaths), 'user-service');
+    });
+
+    it('Linux: units that are already gone (disable fails, nothing is active) count as removed', async () => {
+      pair();
+      await installService({ isSystem: false, userName: null }, createDeps());
+      const result = await uninstallService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'disable --now': { ok: false, stderr: 'Unit file does not exist\n' }, 'show -p ActiveState': { stdout: 'inactive\n' } }) }));
+      assert.equal(result.ok, true);
+      assert.equal(readServiceKind(runnerPaths), null);
+    });
+
+    it('macOS: a job that is still loaded after the bootout is not removed; one that is not loaded counts as removed', async () => {
+      pair();
+      await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
+      const agentDir = path.join(home, 'Library', 'LaunchAgents');
+      const stillLoaded = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunner({ 'launchctl bootout': { ok: false, stderr: 'Boot-out failed: 5\n' }, 'launchctl print': { ok: true } }) }));
+      assert.equal(stillLoaded.ok, false);
+      assert.match(stillLoaded.lines.join('\n'), /not removed: .* is still loaded in gui\/501/);
+      assert.equal(fs.readdirSync(agentDir).length, 2);
+      assert.equal(readServiceKind(runnerPaths), 'user-service');
+
+      const gone = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunner({ 'launchctl bootout': { ok: false, stderr: 'Could not find service\n' } }) }));
+      assert.equal(gone.ok, true);
+      assert.deepEqual(fs.readdirSync(agentDir), []);
+    });
   });
 
   it('refuses a platform with neither systemd nor launchd', async () => {
