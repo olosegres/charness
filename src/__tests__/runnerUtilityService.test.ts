@@ -215,6 +215,11 @@ function commandLines(): string[] {
   return calls.map((call) => `${call.file} ${call.args.join(' ')}`);
 }
 
+/** The first thing an install asks: is a Pueue daemon already answering on the runner's queue (taking it over must not kill its jobs). */
+function queueStatusCommand(runnerPaths: RunnerHomePaths): string {
+  return `${path.join(runnerPaths.binDir, 'pueue')} --config ${runnerPaths.pueueConfig} status --json`;
+}
+
 describe('installing and removing the services', () => {
   let runnerPaths: RunnerHomePaths;
   beforeEach(() => {
@@ -239,6 +244,7 @@ describe('installing and removing the services', () => {
     assert.ok(fs.readFileSync(path.join(unitDir, serviceNames.systemdLink), 'utf8').includes('KillMode=process'));
     assert.ok(fs.existsSync(path.join(unitDir, serviceNames.systemdPueued)));
     assert.deepEqual(commandLines(), [
+      queueStatusCommand(runnerPaths),
       'systemctl --user daemon-reload',
       `systemctl --user enable --now ${serviceNames.systemdPueued} ${serviceNames.systemdLink}`,
       'loginctl show-user runner -p Linger',
@@ -303,9 +309,12 @@ describe('installing and removing the services', () => {
     const pueuedPlist = path.join(agentDir, `${serviceNames.launchdPueued}.plist`);
     const linkPlist = path.join(agentDir, `${serviceNames.launchdLink}.plist`);
     assert.deepEqual(commandLines(), [
+      queueStatusCommand(runnerPaths),
       `launchctl bootout gui/501/${serviceNames.launchdPueued}`,
+      `launchctl print gui/501/${serviceNames.launchdPueued}`,
       `launchctl bootstrap gui/501 ${pueuedPlist}`,
       `launchctl bootout gui/501/${serviceNames.launchdLink}`,
+      `launchctl print gui/501/${serviceNames.launchdLink}`,
       `launchctl bootstrap gui/501 ${linkPlist}`,
     ]);
     assert.ok(!fs.readFileSync(linkPlist, 'utf8').includes('UserName'));
@@ -406,14 +415,14 @@ describe('installing and removing the services', () => {
 
   it('refuses to take over a queue that is running jobs — Pueue kills them when it stops — and an unreadable one', async () => {
     pair();
-    const busy = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { stdout: JSON.stringify({ tasks: { 0: { status: { Running: {} } }, 1: { status: { Queued: {} } } } }) } }) }));
+    const busy = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { ok: true, stdout: JSON.stringify({ tasks: { 0: { status: { Running: {} } }, 1: { status: { Queued: {} } } } }) } }) }));
     assert.equal(busy.ok, false);
     assert.match(busy.lines.join('\n'), /running 1 job\(s\)/);
     assert.ok(!commandLines().some((line) => line.includes('shutdown') || line.startsWith('systemctl')), 'the daemon was not asked to stop and nothing was started');
     assert.equal(readServiceKind(runnerPaths), null);
 
     calls = [];
-    const unreadable = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { stdout: 'not json' } }) }));
+    const unreadable = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { ok: true, stdout: 'not json' } }) }));
     assert.equal(unreadable.ok, false);
     assert.match(unreadable.lines.join('\n'), /cannot be read/);
     assert.ok(!commandLines().some((line) => line.startsWith('systemctl')));

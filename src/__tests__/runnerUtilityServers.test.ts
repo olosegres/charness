@@ -138,7 +138,8 @@ describe('the runner\'s built-in servers', () => {
   it('reports a signal that ended the command', async () => {
     const session = await connectSession(await connectLink());
     const result = await exec(session, 'kill -TERM $$');
-    assert.equal(result.signal, 'TERM');
+    // The server sends the name the way RFC 4254 writes it (`TERM`, no prefix); ssh2's client puts `SIG` in front when it reports it, so `SIGTERM` is exactly one prefix.
+    assert.equal(result.signal, 'SIGTERM');
   });
 
   it('a command keeps running when its channel is closed — only its pipes close — and counts as busy until it ends', async () => {

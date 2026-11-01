@@ -262,7 +262,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
 }
 
 /** @description `charness-runner status`. */
-export function runStatus(io: CommandIo, homeDir: string = os.homedir()): number {
+export function runStatus(io: CommandIo, homeDir: string = os.homedir(), processControl: ProcessControl = createProcessControl()): number {
   const paths = getRunnerHomePaths(homeDir);
   const config = readRunnerConfig(paths);
   if (config === null) {
@@ -271,7 +271,7 @@ export function runStatus(io: CommandIo, homeDir: string = os.homedir()): number
   }
   const status = readRunnerStatus(paths);
   const lines = [`Runner “${config.name}” of charness ${config.hub.label} (${config.hub.host}:${config.hub.port})`];
-  if (status === null || !checkIsRunnerLinkProcess(status.pid)) {
+  if (status === null || !checkIsRunnerLinkProcess(status.pid, processControl)) {
     lines.push('  link: not running (start it with `charness-runner run`)');
   } else if (status.state === 'removed') {
     lines.push(`  ${formatRemovedMessage(config.hub.label)}`);

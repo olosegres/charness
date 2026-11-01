@@ -13,6 +13,7 @@ import path from 'path';
 import { checkIsAdminAccount, formatAdminWarning } from '../runnerUtility/adminCheck';
 import { collectMachineReport, formatMachineReport, getArchName, parseOsRelease, type MachineProbe } from '../runnerUtility/machineReport';
 import { formatKeepRunningHelp, formatRemovedMessage, runStatus } from '../runnerUtility/runnerCommands';
+import type { ProcessControl } from '../runnerUtility/localLinkStop';
 import { writeRunnerConfig, writeRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
@@ -104,9 +105,18 @@ describe('status text', () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
-  function run(): string {
+  /** A process table in which `pid` is a live `node …/runnerCli.js run` — the link `status.json` names. */
+  const linkProcess: ProcessControl = {
+    checkIsAlive: () => true,
+    readCommand: () => '/usr/bin/node /home/runner/.charness-runner/current/dist/runnerUtility/runnerCli.js run',
+    signal: () => undefined,
+    terminateGraceMs: 0,
+    killGraceMs: 0,
+  };
+
+  function run(processControl?: ProcessControl): string {
     let output = '';
-    runStatus({ stdout: (text) => { output += text; }, stderr: () => undefined }, home);
+    runStatus({ stdout: (text) => { output += text; }, stderr: () => undefined }, home, processControl);
     return output;
   }
 
@@ -131,10 +141,18 @@ describe('status text', () => {
     assert.match(run(), /Runner “mac” of charness @ExampleBot \(host\.example:22\)\n {2}link: not running/);
   });
 
+  it('a pid in status.json that is alive but is not the runner\'s link (a reboot, a reused pid) is «not running», whatever the record says — here the real process table, this test process is the live stranger', () => {
+    pair();
+    writeRunnerStatus(getRunnerHomePaths(home), { pid: process.pid, state: 'linked', sinceMs: 1, updatedAtMs: 1, lastError: null, activeJobs: 2, packageId: null });
+    const text = run();
+    assert.match(text, /link: not running/);
+    assert.doesNotMatch(text, /linked since|jobs running over the link/);
+  });
+
   it('shows the link state, the jobs and the package while it runs', () => {
     pair();
     writeRunnerStatus(getRunnerHomePaths(home), { pid: process.pid, state: 'linked', sinceMs: Date.UTC(2026, 10, 1, 12, 5, 0), updatedAtMs: 1, lastError: null, activeJobs: 2, packageId: '0123456789abcdef' });
-    const text = run();
+    const text = run(linkProcess);
     assert.match(text, /link: linked since \d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
     assert.match(text, /jobs running over the link: 2/);
     assert.match(text, /package: 0123456789abcdef/);
@@ -143,7 +161,7 @@ describe('status text', () => {
   it('a runner the hub removed is told so in the words of the plan', () => {
     pair();
     writeRunnerStatus(getRunnerHomePaths(home), { pid: process.pid, state: 'removed', sinceMs: 1, updatedAtMs: 1, lastError: 'removed by @ExampleBot', activeJobs: 0, packageId: null });
-    assert.ok(run().includes('This runner was removed by @ExampleBot. Pair again with a new line from /runners.'));
+    assert.ok(run(linkProcess).includes('This runner was removed by @ExampleBot. Pair again with a new line from /runners.'));
     assert.equal(formatRemovedMessage('@ExampleBot'), 'This runner was removed by @ExampleBot. Pair again with a new line from /runners.');
   });
 
