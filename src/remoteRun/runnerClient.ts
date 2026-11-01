@@ -62,13 +62,22 @@ export interface RunnerClient {
   stream: (subcommand: string, args: readonly string[]) => ReturnType<typeof spawnSshStream>;
 }
 
-/** @description The first useful line of a failed ssh's stderr, for a message (never the whole text: it may quote the destination). */
-export function describeSshFailure(result: SshRunResult): string {
+/**
+ * @description The first useful line of a failed ssh's stderr, for a message (never the whole text: it may quote the destination). A
+ * rejected key from a process with no ssh-agent (`SSH_AUTH_SOCK` unset — a tracker agent such as Jira's starts with a minimal environment
+ * that has none) says what that means and the way out: a key that is only held by an agent works for a Telegram agent and not for that one.
+ */
+export function describeSshFailure(result: SshRunResult, env: NodeJS.ProcessEnv = process.env): string {
   if (result.isTimedOut) return 'ssh: the command ran past its deadline';
   const lines = result.stderr.split('\n').map((line) => line.trim()).filter((line) => line !== '');
   const text = lines.length === 0 ? `ssh exited with ${result.exitCode ?? 'a signal'}` : lines[lines.length - 1];
   if (/host key verification failed/i.test(result.stderr)) return `ssh: the host key is not trusted yet — connect once by hand (ssh to this runner) so it is known`;
-  if (/permission denied/i.test(result.stderr)) return 'ssh: the key was rejected (permission denied)';
+  if (/permission denied/i.test(result.stderr)) {
+    const hasAgent = env.SSH_AUTH_SOCK !== undefined && env.SSH_AUTH_SOCK !== '';
+    return hasAgent
+      ? 'ssh: the key was rejected (permission denied)'
+      : 'ssh: the key was rejected (permission denied) — this process has no ssh-agent (SSH_AUTH_SOCK is unset, as for a Jira agent), so the key must work without one: a key file with no passphrase, given as "sshOptions": ["-i", "<path>"] in runners.json';
+  }
   return text.length > 200 ? `${text.slice(0, 200)}…` : text;
 }
 

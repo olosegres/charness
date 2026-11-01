@@ -53,6 +53,11 @@ WantedBy=default.target
 `ssh runner@runner.example true` work from the main machine's user by hand — key login, and the host key accepted once. It
 never turns host-key checking off; it uses whatever your ssh config says.
 
+The key must also work **without an ssh-agent and without a passphrase prompt**: agents of a tracker (Jira) start with a minimal
+environment that has no `SSH_AUTH_SOCK`, so a key that is only held by an agent works for a Telegram agent and is rejected
+(«permission denied») for a Jira one. Use a key file with no passphrase — `"sshOptions": ["-i", "/home/user/.ssh/runner_key"]` in
+`runners.json`, or an `IdentityFile` for the host in your ssh config — and make it a key that opens only the runner's account.
+
 ## `~/.config/charness/runners.json`
 
 One file per OS user, shared by every charness instance of that user (a Telegram one and an isolated Jira one alike):
@@ -195,7 +200,11 @@ next session start or idle cycle.
 
 A **Jira** agent runs with a minimal environment: it reaches `charness` through the bot's `PATH`. If the bot's `PATH` lacks it (or
 the instance's env file sets `PATH`), map it in `jira.json` `agentBinaries` (see [Jira setup](../SETUP.md#jira-setup)) — for example
-`"charness": "/home/user/.nvm/versions/node/v22/bin/charness"`.
+`"charness": "/home/user/.nvm/versions/node/v22/bin/charness"`. Its environment also lacks `SSH_AUTH_SOCK` (see
+[above](#reach-it-without-a-prompt-once)) and `XDG_CACHE_HOME`: the local cache (ssh control sockets, and the main machine's own note of
+which project each job came from) then follows `HOME` — `~/.cache/charness/remote-run/` — so when the other agents run with
+`XDG_CACHE_HOME` set, a job one of them submitted is not one a Jira agent can fetch the files of («this machine did not submit the job
+as this user»); its output and exit code still come with `wait`. Jobs belong to the agent that submitted them.
 
 ## Troubleshooting
 

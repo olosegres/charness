@@ -27,7 +27,17 @@ describe('describeSshFailure', () => {
   });
 
   it('a rejected key is named', () => {
-    assert.equal(describeSshFailure(failure('runner@host: Permission denied (publickey).\n')), 'ssh: the key was rejected (permission denied)');
+    assert.equal(describeSshFailure(failure('runner@host: Permission denied (publickey).\n'), { SSH_AUTH_SOCK: '/run/user/1000/agent.sock' }), 'ssh: the key was rejected (permission denied)');
+  });
+
+  it('a rejected key in a process with no ssh-agent (a Jira agent\'s environment has none) says so and names the way out — a key held only by an agent cannot work there', () => {
+    const rejected = failure('runner@host: Permission denied (publickey).\n');
+    for (const env of [{}, { SSH_AUTH_SOCK: '' }]) {
+      const text = describeSshFailure(rejected, env);
+      assert.match(text, /^ssh: the key was rejected \(permission denied\) — this process has no ssh-agent \(SSH_AUTH_SOCK is unset, as for a Jira agent\)/);
+      assert.match(text, /a key file with no passphrase, given as "sshOptions": \["-i", "<path>"\] in runners\.json/);
+    }
+    assert.ok(!describeSshFailure(failure('ssh: connect to host x port 22: Connection refused\n'), {}).includes('ssh-agent'), 'only a rejected key gets the hint');
   });
 
   it('otherwise the last line of stderr, cut when long; with no stderr, the exit status', () => {
