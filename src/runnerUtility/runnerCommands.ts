@@ -13,7 +13,7 @@ import { createLinkLoop } from './linkLoop';
 import { collectMachineReport, createMachineProbe, formatMachineReport, type MachineReport } from './machineReport';
 import { ensurePueueDaemon, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
 import { createIosCheckDeps, readIosCheck, refreshIosCheck } from './iosCheck';
-import { createProcessControl, stopLocalLink, type ProcessControl } from './localLinkStop';
+import { checkIsRunnerLinkProcess, createProcessControl, stopLocalLink, type ProcessControl } from './localLinkStop';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { checkIsRunnerPaused, setRunnerPaused } from './runnerFlags';
 import { createServiceDeps, installService, readServiceKind, uninstallService, parseServiceCommand, type ServiceDeps } from './serviceManager';
@@ -259,15 +259,6 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   return loopRef.current.run(controller.signal);
 }
 
-function checkIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** @description `charness-runner status`. */
 export function runStatus(io: CommandIo, homeDir: string = os.homedir()): number {
   const paths = getRunnerHomePaths(homeDir);
@@ -278,7 +269,7 @@ export function runStatus(io: CommandIo, homeDir: string = os.homedir()): number
   }
   const status = readRunnerStatus(paths);
   const lines = [`Runner “${config.name}” of charness ${config.hub.label} (${config.hub.host}:${config.hub.port})`];
-  if (status === null || !checkIsProcessAlive(status.pid)) {
+  if (status === null || !checkIsRunnerLinkProcess(status.pid)) {
     lines.push('  link: not running (start it with `charness-runner run`)');
   } else if (status.state === 'removed') {
     lines.push(`  ${formatRemovedMessage(config.hub.label)}`);

@@ -46,7 +46,7 @@ describe('the runner\'s queue and its services (real Pueue)', { skip: skipReason
       runner,
       platform: 'linux',
       uid: os.userInfo().uid,
-      checkIsProcessAlive: () => false,
+      checkIsRunnerLink: () => false,
       accountName: os.userInfo().username,
       homeDir: home,
       nodePath: process.execPath,

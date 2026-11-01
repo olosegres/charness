@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
+import { checkIsRunnerLinkProcess } from './localLinkStop';
 import { ensurePueueConfig, inspectPueue, shutDownPueue } from './pueueDaemon';
 import { readRunnerConfig, readRunnerStatus } from './runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from './runnerHome';
@@ -52,7 +53,8 @@ export interface ServiceDeps {
   /** The uid of this process (a `--system` install must be root). */
   uid: number;
   /** Does a process with this pid exist? (`kill(pid, 0)`; a test names its own.) */
-  checkIsProcessAlive: (pid: number) => boolean;
+  /** Is `pid` the runner's link (alive and running `runnerCli.js run`)? A stale or reused pid in `status.json` is not. */
+  checkIsRunnerLink: (pid: number) => boolean;
   /** The account that runs this process, and its home. */
   accountName: string;
   homeDir: string;
@@ -106,21 +108,12 @@ async function resolveMacAccount(name: string, runner: CommandRunner): Promise<T
   return { name, uid: Number(uid.stdout.trim()), gid: Number(gid.stdout.trim()), homeDir: homeDir ?? `/Users/${name}` };
 }
 
-function checkIsPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && 'code' in error && error.code === 'EPERM';
-  }
-}
-
 export function createServiceDeps(): ServiceDeps {
   return {
     runner: runCommand,
     platform: process.platform,
     uid: os.userInfo().uid,
-    checkIsProcessAlive: checkIsPidAlive,
+    checkIsRunnerLink: checkIsRunnerLinkProcess,
     accountName: os.userInfo().username,
     homeDir: os.homedir(),
     nodePath: process.execPath,
@@ -202,7 +195,7 @@ async function prepareManagedStart(paths: RunnerHomePaths, deps: ServiceDeps, ki
   if (!fs.existsSync(path.join(paths.binDir, 'pueued'))) return refuse('Pueue is not installed for this runner yet: run `charness-runner check` (it installs it), then install the service.');
   if (!hadService) {
     const status = readRunnerStatus(paths);
-    if (status !== null && deps.checkIsProcessAlive(status.pid)) {
+    if (status !== null && deps.checkIsRunnerLink(status.pid)) {
       return refuse(`A foreground \`charness-runner run\` is linked (pid ${status.pid}). Stop it (Ctrl-C in its terminal) and install the service again — the service takes over the link and the queue.`);
     }
     const queue = await inspectPueue(paths, deps.runner);

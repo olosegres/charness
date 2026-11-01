@@ -12,7 +12,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { checkIsRunnerLinkCommand, createProcessControl, stopLocalLink } from '../runnerUtility/localLinkStop';
+import { checkIsRunnerLinkCommand, checkIsRunnerLinkProcess, createProcessControl, stopLocalLink } from '../runnerUtility/localLinkStop';
 import { writeRunnerStatus } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { waitUntil } from './runnersTestKit';
@@ -54,6 +54,18 @@ describe('recognising the link', () => {
     assert.equal(checkIsRunnerLinkCommand('/usr/bin/node /home/runner/.charness-runner/current/dist/runnerUtility/runnerCli.js run'), true);
     assert.equal(checkIsRunnerLinkCommand('node runnerCli.js run --verbose'), true);
     for (const other of ['node runnerCli.js status', 'node runnerCli.js runaway', '/usr/bin/vim runnerCli.js', 'node other.js run', null]) assert.equal(checkIsRunnerLinkCommand(other), false, String(other));
+  });
+});
+
+describe('is a recorded pid the link', () => {
+  it('a live `runnerCli.js run` is; a live program of another kind (a reused pid) and a dead pid are not', async () => {
+    const link = startStandInLink({ ignoreTerm: false });
+    const linkPid = link.pid ?? 0;
+    assert.equal(checkIsRunnerLinkProcess(linkPid), true);
+    assert.equal(checkIsRunnerLinkProcess(process.pid), false, 'this test process is alive but is not the link');
+    link.kill('SIGKILL');
+    await new Promise((resolve) => { link.once('exit', resolve); });
+    assert.equal(checkIsRunnerLinkProcess(linkPid), false);
   });
 });
 

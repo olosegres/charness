@@ -49,6 +49,14 @@ export function checkIsRunnerLinkCommand(command: string | null): boolean {
   return command !== null && /runnerCli\.js\s+run(\s|$)/.test(command);
 }
 
+/**
+ * @description Is `pid` the runner's link — alive AND running `…/runnerCli.js run`? `status.json` is not removed when `run` exits, so after
+ * a reboot its pid may be dead or belong to an unrelated program: that is not a link (nothing to stop, nothing that blocks a service).
+ */
+export function checkIsRunnerLinkProcess(pid: number, control: ProcessControl = createProcessControl()): boolean {
+  return control.checkIsAlive(pid) && checkIsRunnerLinkCommand(control.readCommand(pid));
+}
+
 async function waitUntilGone(pid: number, control: ProcessControl, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -64,8 +72,7 @@ async function waitUntilGone(pid: number, control: ProcessControl, timeoutMs: nu
  */
 export async function stopLocalLink(paths: RunnerHomePaths, control: ProcessControl = createProcessControl()): Promise<string | null> {
   const status = readRunnerStatus(paths);
-  if (status === null || !control.checkIsAlive(status.pid)) return null;
-  if (!checkIsRunnerLinkCommand(control.readCommand(status.pid))) return null;
+  if (status === null || !checkIsRunnerLinkProcess(status.pid, control)) return null;
   try {
     control.signal(status.pid, 'SIGTERM');
     if (await waitUntilGone(status.pid, control, control.terminateGraceMs)) return null;

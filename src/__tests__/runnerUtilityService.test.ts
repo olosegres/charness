@@ -14,7 +14,7 @@ import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
 import { writeRunnerConfig, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
-import { installService, parseServiceCommand, readServiceKind, uninstallService, type ServiceDeps, type TargetAccount } from '../runnerUtility/serviceManager';
+import { createServiceDeps, installService, parseServiceCommand, readServiceKind, uninstallService, type ServiceDeps, type TargetAccount } from '../runnerUtility/serviceManager';
 import {
   describeLingerRemedy,
   getServiceNames,
@@ -154,7 +154,7 @@ function createDeps(overrides: Partial<ServiceDeps> = {}): ServiceDeps {
     runner: recordingRunner(),
     platform: 'linux',
     uid: 1000,
-    checkIsProcessAlive: () => false,
+    checkIsRunnerLink: () => false,
     accountName: 'runner',
     homeDir: home,
     nodePath: '/opt/node/bin/node',
@@ -355,12 +355,20 @@ describe('installing and removing the services', () => {
   it('refuses to install while a foreground `run` is linked — and changes nothing', async () => {
     pair();
     fs.writeFileSync(runnerPaths.status, JSON.stringify({ pid: 4242, state: 'linked', sinceMs: 1, updatedAtMs: 1, lastError: null, activeJobs: 0, packageId: null }));
-    const result = await installService({ isSystem: false, userName: null }, createDeps({ checkIsProcessAlive: (pid) => pid === 4242 }));
+    const result = await installService({ isSystem: false, userName: null }, createDeps({ checkIsRunnerLink: (pid) => pid === 4242 }));
     assert.equal(result.ok, false);
     assert.match(result.lines.join('\n'), /foreground `charness-runner run` is linked \(pid 4242\)/);
     assert.deepEqual(commandLines(), [], 'not a command was run');
     assert.equal(readServiceKind(runnerPaths), null);
     assert.equal(fs.existsSync(path.join(home, '.config', 'systemd')), false);
+  });
+
+  it('a pid left in status.json by an earlier run (a reboot, a pid since taken by another program) is not a linked `run` and blocks nothing', async () => {
+    pair();
+    // This test process is alive but is not `runnerCli.js run`: with the real check the install goes on, with a bare «is the pid alive» it was refused for ever.
+    fs.writeFileSync(runnerPaths.status, JSON.stringify({ pid: process.pid, state: 'linked', sinceMs: 1, updatedAtMs: 1, lastError: null, activeJobs: 0, packageId: null }));
+    const result = await installService({ isSystem: false, userName: null }, createDeps({ checkIsRunnerLink: createServiceDeps().checkIsRunnerLink }));
+    assert.doesNotMatch(result.lines.join('\n'), /foreground `charness-runner run` is linked/);
   });
 
   it('refuses to take over a queue that is running jobs — Pueue kills them when it stops — and an unreadable one', async () => {
