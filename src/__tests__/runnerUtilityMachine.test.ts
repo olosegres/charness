@@ -44,7 +44,7 @@ describe('admin account', () => {
   });
 
   it('the warning names the account and says what to do', () => {
-    assert.match(formatAdminWarning('olo').join('\n'), /«olo» is an admin account.*standard user/s);
+    assert.match(formatAdminWarning('example-user').join('\n'), /«example-user» is an admin account.*standard user/s);
   });
 });
 
