@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createProcessIo, remoteRunUsage, runRemoteRunCli } from '../remoteRun/remoteRunCli';
+import { createProcessIo, readCurrentRunners, remoteRunUsage, runRemoteRunCli } from '../remoteRun/remoteRunCli';
 import type { CliIo } from '../remoteRun/output';
 import { getRunnersConfigPath, resetRunnersConfigCache } from '../remoteRun/runnersConfig';
 
@@ -96,6 +96,30 @@ describe('runRemoteRunCli', () => {
     assert.match(text, /runners\.json runners\.0\.name:/);
     assert.match(text, /runners\.json runners\.0\.workDir:/);
     assert.ok(!text.includes('secret-host.example'), 'a value of the file is not echoed');
+  });
+});
+
+describe('the runners a look in the middle of a command reads', () => {
+  beforeEach(() => {
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-run-cli-'));
+    resetRunnersConfigCache();
+  });
+  afterEach(() => {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  it('a runners.json that is half-way through an edit does not end a wait: the list that last loaded is used, and the fixed file is read at once', () => {
+    writeRunnersFile(JSON.stringify({ runners: [{ name: 'box1', ssh: 'runner@runner.example', workDir: '/w' }] }));
+    assert.deepEqual(readCurrentRunners(homeDir).runners.map((runner) => runner.name), ['box1']);
+    writeRunnersFile('{ "runners": [');
+    assert.deepEqual(readCurrentRunners(homeDir).runners.map((runner) => runner.name), ['box1'], 'broken for the moment: the last good list');
+    writeRunnersFile(JSON.stringify({ runners: [{ name: 'box2', ssh: 'runner@runner.example', workDir: '/w' }] }));
+    assert.deepEqual(readCurrentRunners(homeDir).runners.map((runner) => runner.name), ['box2']);
+  });
+
+  it('with nothing ever loaded a broken file still stops the caller with its errors', () => {
+    writeRunnersFile(JSON.stringify({ runners: [{ name: 'Bad Name', ssh: 'x', workDir: 'relative' }] }));
+    assert.throws(() => readCurrentRunners(homeDir), /runners\.json runners\.0\.name:/);
   });
 });
 

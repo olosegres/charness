@@ -88,7 +88,7 @@ export interface RunnerWaitLoop<TChoice> {
  *
  * `--runner-wait` is a promise about when the command stops waiting, so once the wait has begun no attempt starts with less than
  * {@link minWaitAttemptMs} left, every attempt is told the time it has (its probe is cut at it), and an answer that comes after the
- * deadline is refused — the job is not started late.
+ * deadline is refused — the job is not started late. The last sleep is cut so that one more look still fits before the deadline.
  */
 export async function chooseRunnerWithWait<TChoice>(loop: RunnerWaitLoop<TChoice>): Promise<TChoice> {
   type FailedAttempt = Extract<RunnerAttempt<TChoice>, { ok: false }>;
@@ -107,12 +107,15 @@ export async function chooseRunnerWithWait<TChoice>(loop: RunnerWaitLoop<TChoice
       if (waiting === null || loop.now() <= deadlineMs) return attempt.choice;
       return giveUp(waiting.lastFailure, 'to come back — one answered only after the wait had ended, so the job was not started');
     }
-    if (attempt.wait === null || loop.waitSeconds <= 0 || loop.now() >= deadlineMs) return giveUp(attempt, 'to come back — none did');
+    // The last sleep ends minWaitAttemptMs before the deadline, so the wait ends with one more look instead of with a sleep nobody answers; with
+    // less than that left there is nothing to wait for.
+    const sleepMs = Math.min(loop.pollMs, deadlineMs - loop.now() - minWaitAttemptMs);
+    if (attempt.wait === null || loop.waitSeconds <= 0 || sleepMs <= 0) return giveUp(attempt, 'to come back — none did');
     if (waiting === null) {
       loop.say(`waiting for a runner with ${loop.needs} (${attempt.wait.description}) — looking again every ${formatPoll(loop.pollMs)}, up to ${formatWaitDuration(loop.waitSeconds)}`);
     }
     waiting = { lastFailure: attempt };
-    const interrupt = await loop.sleep(Math.min(loop.pollMs, deadlineMs - loop.now()));
+    const interrupt = await loop.sleep(sleepMs);
     if (interrupt !== null) throw new RemoteRunError('interrupted while waiting for a runner', planInterrupt(interrupt).exitCode);
   }
 }

@@ -55,10 +55,18 @@ Exit codes: the command's own; 125 remote-run failed, 124 timeout, 130/143/129 i
 Setup: docs/remote-run.md
 `;
 
-/** The runners as they are right now; a broken file or registry stops the caller with its errors, no runner at all is an empty list. */
-function readCurrentRunners(homeDir: string): RunnersConfig {
+/**
+ * @description The runners as they are right now, for a look in the middle of a command (the wait for an offline runner re-reads them at
+ * every look). A file that is half-way through an edit, or a name that clashes for a moment, must not end a wait that may be 15 minutes
+ * in: the list that last loaded is used. Only when nothing ever loaded does a broken file or registry stop the caller with its errors.
+ * No runner at all is an empty list.
+ */
+export function readCurrentRunners(homeDir: string): RunnersConfig {
   const load = loadRunnersCatalog(homeDir);
-  if (load.status === 'invalid') throw new RemoteRunError(load.errors.join('\n'));
+  if (load.status === 'invalid') {
+    if (load.config !== null) return load.config;
+    throw new RemoteRunError(load.errors.join('\n'));
+  }
   return load.config;
 }
 

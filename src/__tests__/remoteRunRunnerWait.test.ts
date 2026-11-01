@@ -168,24 +168,31 @@ describe('the wait loop', () => {
     await assert.rejects(runLoop(world, { waitSeconds: 25 }), (error: Error) => {
       assert.ok(error instanceof RemoteRunError);
       assert.equal(error.exitCode, 125);
-      assert.match(error.message, /^no online runner can do "android"\nmac — offline\nwaited 25 s for a runner with "android" to come back — none did$/);
+      assert.match(error.message, /^no online runner can do "android"\nmac — offline\nwaited 24 s for a runner with "android" to come back — none did$/);
       return true;
     });
-    assert.deepEqual(world.sleeps, [10_000, 10_000, 5_000], 'the last sleep is cut to what is left of the wait');
+    assert.deepEqual(world.sleeps, [10_000, 10_000, 4_000], 'the last sleep ends a second before the deadline, so that one more look fits');
   });
 
   it('every attempt of the wait is told what is left of it, so its probe can end in time — the first one, before any waiting, is not', async () => {
     const world = createWorld([waitingFailure]);
     await assert.rejects(runLoop(world, { waitSeconds: 25 }), RemoteRunError);
-    assert.deepEqual(world.budgets, [null, 15_000, 5_000]);
+    assert.deepEqual(world.budgets, [null, 15_000, 5_000, 1_000], 'the last look, a second before the end, is told it has that second');
   });
 
   it('with less than a second left no attempt is started — the wait is over, a probe could not answer in that time', async () => {
     assert.equal(minWaitAttemptMs, 1000);
     const world = createWorld([waitingFailure]);
-    await assert.rejects(runLoop(world, { waitSeconds: 10, pollMs: 9_500 }), (error: Error) => error instanceof RemoteRunError && /waited \d+ s for a runner with "android" to come back — none did$/.test(error.message));
-    assert.equal(world.attempts, 1, 'the half second that was left bought no second attempt');
-    assert.deepEqual(world.sleeps, [9_500]);
+    await assert.rejects(runLoop(world, { waitSeconds: 1 }), (error: Error) => error instanceof RemoteRunError && !/waited/.test(error.message));
+    assert.equal(world.attempts, 1, 'a wait of one second leaves no room for a second look, so there is no sleep either');
+    assert.deepEqual(world.sleeps, []);
+  });
+
+  it('the wait ends with one more look: a runner that comes back during the last sleep is seen, not missed by a sleep that ended on the deadline', async () => {
+    const world = createWorld([waitingFailure, waitingFailure, chosen]);
+    assert.equal(await runLoop(world, { waitSeconds: 12 }), 'mac');
+    assert.deepEqual(world.sleeps, [10_000, 1_000], 'the second sleep is what is left minus the second the last look needs');
+    assert.deepEqual(world.budgets, [null, 2_000, 1_000]);
   });
 
   it('a runner that answers only AFTER the deadline is refused — the job is not started late, however good the answer', async () => {
