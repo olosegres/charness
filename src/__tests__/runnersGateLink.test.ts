@@ -13,15 +13,16 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
+import { spawn } from 'child_process';
 import { PassThrough } from 'stream';
 import { Client, Server } from 'ssh2';
 import { createHubAuthenticator } from '../runnerUtility/runnerServers';
 import { runGateLink, type GateLinkTimings } from '../runners/gateLink';
 import { readUntilGateMarker, type GateMarker } from '../runners/gateProtocol';
 import { getRunnerLinkPaths } from '../runners/hubPaths';
-import { createPairing, redeemPairing, removePairedRunner } from '../runners/hubPairing';
+import { createPairing, redeemPairing, removePairedRunner, sweepExpiredPairings } from '../runners/hubPairing';
 import { readHubKey } from '../runners/hubKey';
-import { checkIsGateProcessOf, cutRunnerLink, getRunnerLinkStatus, probeSocket, readLinkState } from '../runners/linkControl';
+import { checkIsGateProcessOf, cutRunnerLink, getRunnerLinkStatus, probeSocket, readLinkState, sweepOrphanLinkRecords, writeLinkState } from '../runners/linkControl';
 import { runRunnerProxy } from '../runners/runnerProxy';
 import { generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
 import { createCollector, createHubFixture, createRedeemFixture, injectStreamIntoSshServer, waitUntil, type HubFixture } from './runnersTestKit';
@@ -324,6 +325,30 @@ describe('the gate\'s link', () => {
     assert.ok(gate.logs.some((line) => line.includes('another link took over') || line.includes('removed')), gate.logs.join('\n'));
   });
 
+  it('leaves no link record of a removed runner behind — neither its socket nor the status it kept while it held the link', async () => {
+    const runner = await pairRunner();
+    const standIn = await startStandInRunner(runner);
+    const gate = await startGate(runner.runnerId, standIn);
+    const paths = getRunnerLinkPaths(fixture.ctx.dir, runner.runnerId);
+    await waitUntil(() => readLinkState(fixture.ctx.dir, runner.runnerId) !== null, 'the gate to have written its status');
+    await removePairedRunner(fixture.ctx, runner.runnerId, startMs);
+    cutRunnerLink(fixture.ctx.dir, runner.runnerId);
+    await settleWithin(gate.done, 'the gate of a removed runner to leave');
+    assert.equal(fs.existsSync(paths.state), false, 'the status file is gone, and the gate did not write it again as it left');
+    assert.equal(fs.existsSync(paths.socket), false);
+    assert.deepEqual(fs.readdirSync(path.dirname(paths.state)), []);
+  });
+
+  it('a gate that ends for any OTHER reason still records when the runner was last seen', async () => {
+    const runner = await pairRunner();
+    const standIn = await startStandInRunner(runner);
+    const gate = await startGate(runner.runnerId, standIn);
+    await waitUntil(() => readLinkState(fixture.ctx.dir, runner.runnerId) !== null, 'the gate to have written its status');
+    gate.transport.destroy();
+    await settleWithin(gate.done, 'the gate to end');
+    assert.notEqual(readLinkState(fixture.ctx.dir, runner.runnerId)?.endedAtMs, null, 'offline since… needs it');
+  });
+
   it('refuses at once a runner that is not paired', async () => {
     const runner = await pairRunner();
     const standIn = await startStandInRunner(runner);
@@ -376,6 +401,66 @@ describe('link status and cutting', () => {
 
   it('cutting a link that never existed is harmless', () => {
     cutRunnerLink(fixture.ctx.dir, 'aaaaaaaaaaaa');
+  });
+
+  const linkState = { pid: 2 ** 22 + 12345, sinceMs: startMs, lastBeatMs: startMs, endedAtMs: null };
+
+  function listLinkFolder(): string[] {
+    return fs.readdirSync(getRunnerLinkPaths(fixture.ctx.dir, 'aaaaaaaaaaaa').state.replace(/[^/]+$/, '')).sort();
+  }
+
+  function writeSocketFile(runnerId: string): void {
+    fs.writeFileSync(getRunnerLinkPaths(fixture.ctx.dir, runnerId).socket, '');
+  }
+
+  it('cutting a link deletes the runner\'s status file with its socket, and only that runner\'s', () => {
+    writeLinkState(fixture.ctx.dir, 'aaaaaaaaaaaa', linkState);
+    writeLinkState(fixture.ctx.dir, 'bbbbbbbbbbbb', linkState);
+    writeSocketFile('aaaaaaaaaaaa');
+    writeSocketFile('bbbbbbbbbbbb');
+    cutRunnerLink(fixture.ctx.dir, 'aaaaaaaaaaaa');
+    assert.deepEqual(listLinkFolder(), ['bbbbbbbbbbbb.json', 'bbbbbbbbbbbb.sock']);
+  });
+
+  it('sweeps the link files of runners the registry does not know, and nothing else: registered runners, other files, a gate\'s pending socket stay', () => {
+    for (const runnerId of ['aaaaaaaaaaaa', 'bbbbbbbbbbbb']) {
+      writeLinkState(fixture.ctx.dir, runnerId, { ...linkState, endedAtMs: startMs });
+      writeSocketFile(runnerId);
+    }
+    const linkDir = getRunnerLinkPaths(fixture.ctx.dir, 'aaaaaaaaaaaa').state.replace(/[^/]+$/, '');
+    for (const foreign of ['notes.txt', 'bbbbbbbbbbbb.json.tmp', 'bbbbbbbbbbbb.sock.0123abcd', 'BBBBBBBBBBBB.json']) fs.writeFileSync(path.join(linkDir, foreign), '');
+    assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, ['aaaaaaaaaaaa']).sort(), ['bbbbbbbbbbbb.json', 'bbbbbbbbbbbb.sock']);
+    assert.deepEqual(listLinkFolder(), ['BBBBBBBBBBBB.json', 'aaaaaaaaaaaa.json', 'aaaaaaaaaaaa.sock', 'bbbbbbbbbbbb.json.tmp', 'bbbbbbbbbbbb.sock.0123abcd', 'notes.txt']);
+  });
+
+  it('a folder that does not exist yet has nothing to sweep', () => {
+    assert.deepEqual(sweepOrphanLinkRecords(path.join(fixture.root, 'no-such-hub'), []), []);
+  });
+
+  it('keeps the files of an unregistered runner whose gate is still running (cutting still needs its pid), and sweeps them once it is gone', async () => {
+    const runnerId = 'cccccccccccc';
+    // A process whose command line reads like that runner's gate: `ps` shows the name `exec -a` gives it.
+    const decoy = spawn('bash', ['-c', `exec -a "charness runner-gate runner ${runnerId}" sleep 120`], { stdio: 'ignore' });
+    teardown.push(() => { decoy.kill('SIGKILL'); });
+    const decoyPid = decoy.pid;
+    assert.notEqual(decoyPid, undefined);
+    await waitUntil(() => decoyPid !== undefined && checkIsGateProcessOf(decoyPid, runnerId), 'the decoy to read as the runner\'s gate');
+    writeLinkState(fixture.ctx.dir, runnerId, { ...linkState, pid: decoyPid ?? linkState.pid });
+    writeSocketFile(runnerId);
+    assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, []), []);
+    assert.deepEqual(listLinkFolder(), [`${runnerId}.json`, `${runnerId}.sock`]);
+    decoy.kill('SIGKILL');
+    await waitUntil(() => decoyPid !== undefined && !checkIsGateProcessOf(decoyPid, runnerId), 'the decoy to be gone');
+    assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, []).sort(), [`${runnerId}.json`, `${runnerId}.sock`]);
+  });
+
+  it('every registry operation sweeps them — a removal cut short, or a status written after it, is mended by whatever runs next', async () => {
+    const runner = await pairRunner();
+    writeLinkState(fixture.ctx.dir, runner.runnerId, { ...linkState, endedAtMs: startMs });
+    writeLinkState(fixture.ctx.dir, 'dddddddddddd', { ...linkState, endedAtMs: startMs });
+    writeSocketFile('dddddddddddd');
+    await sweepExpiredPairings(fixture.ctx, startMs);
+    assert.deepEqual(listLinkFolder(), [`${runner.runnerId}.json`], 'the registered runner keeps its record; the unknown one\'s files are gone');
   });
 });
 

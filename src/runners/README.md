@@ -42,7 +42,7 @@ runner name no hub path.
 | `known_hosts` | derived: `charness-runner-<id> <host key>` for the stock `ssh` calls through the links |
 | `gate` | the `sh` wrapper `exec '<node>' '<cli.js>' runner-gate "$@"`, rewritten at every start (`gateWrapper.ts`) |
 | `lock.<n>` | the registry lock (`hubLock.ts`): the holder is whoever made the highest number; no file is ever deleted on someone else's word, so two contenders that found one dead holder cannot both take over; a holder that is ALIVE (its pid and start time) is never overtaken — a hung one blocks the registry for the waiter, who fails after 15 s, instead of risking two writers |
-| `link/<id>.sock`, `link/<id>.json` | the socket of the gate that holds the link, and its pid / since / heartbeat / ended |
+| `link/<id>.sock`, `link/<id>.json` | the socket of the gate that holds the link, and its pid / since / heartbeat / ended; deleted when the runner is removed (`cutRunnerLink`), and any left for a runner the registry does not know are swept (`sweepOrphanLinkRecords`) |
 | `package/` | the packed hub package (`<id>.tgz`) and `current.json` (its source stamp) |
 
 Everything derived (`known_hosts`, the managed `authorized_keys` block) is rendered from the two registry files (`syncDerivedHubFiles`),
@@ -51,7 +51,7 @@ be rewritten empty.
 
 **Every change is a transaction under the registry lock** (`hubPairing.ts`, `runTransaction`): (1) the `authorized_keys` block is checked
 first — a damaged one stops the operation before anything is written; (2) the AUTHORITATIVE files are written, `paired.json` then
-`pending.json`; (3) the derived files are rewritten from the registry — and this step runs at the end of EVERY operation, a plain
+`pending.json`; (3) the derived files are rewritten from the registry (and the link files of runners it no longer holds are swept, unless that runner's gate is still running — cutting its link needs the pid) — and this step runs at the end of EVERY operation, a plain
 `ls` or sweep included, so a step that failed, or a crash between two writes, is mended by whatever runs next (a failed derived write is
 reported as `HubDerivedFilesError`). A code is single use because the runner is recorded with the id of the code that made it, even if the
 pending entry outlives a crash; the SAME machine asking again for a used code is answered again (idempotent). A runner that left

@@ -1,15 +1,18 @@
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
+import * as path from 'path';
 import { z } from 'zod';
 import { getCaughtErrnoCode, writeJsonFileAtomically } from '../configDirFile';
 import { getHubFilePaths, getRunnerLinkPaths } from './hubPaths';
+import { hubIdPattern } from './hubIds';
 
 /**
  * @description The hub's view of a runner's link: the gate that holds it writes `link/<id>.json` (its pid, since when, a heartbeat) and
  * listens on `link/<id>.sock`. A runner is ONLINE when its socket accepts a connection; the json only says who holds the socket and
  * when it was last seen. A removed runner's link is cut by deleting the socket (the gate notices within one check interval and
- * leaves) and, when the recorded pid still is that runner's gate, by stopping it at once.
+ * leaves) and, when the recorded pid still is that runner's gate, by stopping it at once; its two link files go with it, and any left behind
+ * for a runner the registry does not know are swept by {@link sweepOrphanLinkRecords}.
  */
 
 const stateFileMode = 0o600;
@@ -79,14 +82,11 @@ export function checkIsGateProcessOf(pid: number, runnerId: string): boolean {
   return listing.status === 0 && listing.stdout.includes('runner-gate') && listing.stdout.includes(` runner ${runnerId}`);
 }
 
-/** @description Cut the link of a runner that was removed: no new connection reaches it, and its gate leaves. */
+/** @description Cut the link of a runner that was removed: no new connection reaches it, its gate leaves, and its link files are deleted. */
 export function cutRunnerLink(dir: string, runnerId: string): void {
   const state = readLinkState(dir, runnerId);
-  try {
-    fs.rmSync(getRunnerLinkPaths(dir, runnerId).socket, { force: true });
-  } catch (error) {
-    if (getCaughtErrnoCode(error) !== 'ENOENT') throw error;
-  }
+  const paths = getRunnerLinkPaths(dir, runnerId);
+  fs.rmSync(paths.socket, { force: true });
   if (state !== null && state.endedAtMs === null && checkIsGateProcessOf(state.pid, runnerId)) {
     try {
       process.kill(state.pid, 'SIGTERM');
@@ -94,4 +94,44 @@ export function cutRunnerLink(dir: string, runnerId: string): void {
       if (getCaughtErrnoCode(error) !== 'ESRCH') throw error;
     }
   }
+  // Nobody reads the status of a runner that is gone, and a gate that leaves because of the removal writes none (`gateLink.ts`).
+  fs.rmSync(paths.state, { force: true });
+}
+
+const linkRecordExtensions = ['json', 'sock'];
+
+/** @description The runner id a link file belongs to (`<id>.json`, `<id>.sock`); `null` for anything else in the folder (a temp file of an atomic write, a gate's pending socket). */
+function getLinkRecordRunnerId(fileName: string): string | null {
+  const [runnerId, extension, ...rest] = fileName.split('.');
+  return hubIdPattern.test(runnerId) && linkRecordExtensions.includes(extension) && rest.length === 0 ? runnerId : null;
+}
+
+/**
+ * @description Delete the link files (`<id>.json`, `<id>.sock`) of every runner that is not in `registeredRunnerIds`: a removal that was cut
+ * short, a gate that wrote its status after the removal, a runner dropped from the registry by hand. Records of a runner whose gate is still
+ * running are kept — it is on its way out, and {@link cutRunnerLink} still needs the pid to stop it. Best effort: a file that cannot be
+ * deleted is harmless and is tried again by the next registry operation. Returns the names deleted.
+ */
+export function sweepOrphanLinkRecords(dir: string, registeredRunnerIds: readonly string[]): string[] {
+  let names: string[];
+  try {
+    names = fs.readdirSync(getHubFilePaths(dir).linkDir);
+  } catch (error) {
+    if (getCaughtErrnoCode(error) === 'ENOENT') return [];
+    throw error;
+  }
+  const deleted: string[] = [];
+  for (const name of names) {
+    const runnerId = getLinkRecordRunnerId(name);
+    if (runnerId === null || registeredRunnerIds.includes(runnerId)) continue;
+    const state = readLinkState(dir, runnerId);
+    if (state !== null && state.endedAtMs === null && checkIsGateProcessOf(state.pid, runnerId)) continue;
+    try {
+      fs.rmSync(path.join(getHubFilePaths(dir).linkDir, name), { force: true });
+      deleted.push(name);
+    } catch {
+      // See above: the next registry operation sweeps again.
+    }
+  }
+  return deleted;
 }

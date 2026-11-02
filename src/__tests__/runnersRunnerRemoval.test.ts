@@ -9,15 +9,20 @@
 
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { getPairedRunnerPueue } from '../remoteRun/pairedRunners';
 import type { SshRunParams } from '../remoteRun/ssh';
 import { getRunnerLinkPaths } from '../runners/hubPaths';
 import { readPairedFile, writePairedFile } from '../runners/hubRegistry';
+import { checkIsGateProcessOf, writeLinkState } from '../runners/linkControl';
 import { removeRunnerAndEndItsWork, type RunnerRemovalDeps } from '../runners/runnerRemoval';
 import { createPairedRunnerFixture, pairedRunnerId, pairedRunnerWorkDir } from './remoteRunPairedKit';
-import { createHubFixture, type HubFixture } from './runnersTestKit';
+import { createHubFixture, waitUntil, type HubFixture } from './runnersTestKit';
+
+/** A pid nothing runs under (above the kernel's usual maximum), so the status file names no live gate. */
+const unusedPid = 2 ** 22 + 12345;
 
 let hub: HubFixture;
 let sshCalls: SshRunParams[];
@@ -53,6 +58,11 @@ function pairRunner(workDir: string = pairedRunnerWorkDir): void {
   writePairedFile(hub.ctx.dir, { rev: 1, runners: [createPairedRunnerFixture({ workDir })] });
   fs.mkdirSync(path.dirname(getSocketPath()), { recursive: true });
   fs.writeFileSync(getSocketPath(), '');
+  writeLinkState(hub.ctx.dir, pairedRunnerId, { pid: unusedPid, sinceMs: 1, lastBeatMs: 2, endedAtMs: null });
+}
+
+function getLinkFiles(): string[] {
+  return fs.readdirSync(path.dirname(getSocketPath()));
 }
 
 beforeEach(() => {
@@ -81,6 +91,7 @@ describe('removing a runner that is online', () => {
     assert.deepEqual(stateAtCall, [{ runnersInRegistry: 1, isPaused: true, socketExists: true }], 'at the reset: still paired, already paused, link up');
     assert.equal(readPairedFile(hub.ctx.dir).runners.length, 0);
     assert.equal(fs.existsSync(getSocketPath()), false, 'and cut afterwards');
+    assert.deepEqual(getLinkFiles(), [], 'with its status file: a removed runner leaves no link record behind');
   });
 
   it('a Pueue that did not answer (ssh 255) is told as «failed», logged, and does not stop the removal: the runner is removed and its link cut', async () => {
@@ -111,6 +122,26 @@ describe('removing a runner that is online', () => {
   });
 });
 
+describe('removing a runner whose gate is still running', () => {
+  it('stops the gate and deletes its link files — the status file names the gate, so the cut must read it before it goes', async () => {
+    pairRunner();
+    // A process whose command line reads like that runner's gate: `ps` shows the name `exec -a` gives it.
+    const gate = spawn('bash', ['-c', `exec -a "charness runner-gate runner ${pairedRunnerId}" sleep 120`], { stdio: 'ignore' });
+    const exited = new Promise<void>((resolve) => { gate.once('exit', () => resolve()); });
+    try {
+      const gatePid = gate.pid;
+      assert.notEqual(gatePid, undefined);
+      await waitUntil(() => gatePid !== undefined && checkIsGateProcessOf(gatePid, pairedRunnerId), 'the stand-in to read as the runner\'s gate');
+      writeLinkState(hub.ctx.dir, pairedRunnerId, { pid: gatePid ?? unusedPid, sinceMs: 1, lastBeatMs: 2, endedAtMs: null });
+      await removeRunnerAndEndItsWork(hub.ctx, 'mac', 1000, createDeps({ isOnline: false }));
+      await Promise.race([exited, new Promise<void>((_resolve, reject) => { setTimeout(() => reject(new Error('the gate was not stopped')), 10_000); })]);
+      assert.deepEqual(getLinkFiles(), []);
+    } finally {
+      gate.kill('SIGKILL');
+    }
+  });
+});
+
 describe('removing a runner that is offline, or unknown', () => {
   it('an offline runner is not called (nothing answers) and is not paused first: it is removed and its link files cut, and it stops its own jobs when it finds out', async () => {
     pairRunner();
@@ -120,6 +151,7 @@ describe('removing a runner that is offline, or unknown', () => {
     assert.equal(removal?.runner.isPaused, false, 'not paused first: nothing to protect on a machine nobody can reach');
     assert.deepEqual(sshCalls, []);
     assert.equal(readPairedFile(hub.ctx.dir).runners.length, 0);
+    assert.deepEqual(getLinkFiles(), [], 'its link files are gone too');
   });
 
   it('a link state that cannot be read is NOT «offline»: it is logged and told as «failed», nothing is called, and the removal still goes through', async () => {

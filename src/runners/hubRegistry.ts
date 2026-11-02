@@ -6,6 +6,7 @@ import { buildRunnerKeyLine, buildTempKeyLine, writeManagedBlock } from './autho
 import { hubHostSchema, hubIdSchema, hubPortSchema } from './hubIds';
 import { getHubFilePaths, getRunnerHostAlias, type HubContext } from './hubPaths';
 import { ensureHubDir } from './hubLock';
+import { sweepOrphanLinkRecords } from './linkControl';
 import { getCaughtErrnoCode } from '../configDirFile';
 import { checkIsEd25519PublicKey } from './sshKeys';
 
@@ -165,7 +166,7 @@ function readTextIfPresent(filePath: string): string | null {
 
 /**
  * @description Bring the derived files in line with the two registry files: `known_hosts` and the `authorized_keys` block, each written
- * only when it differs. The registry lock must be held. The block goes LAST, so a key is never allowed before the files its gate reads
+ * only when it differs, and the link files of runners that are no longer registered deleted. The registry lock must be held. The block goes LAST, so a key is never allowed before the files its gate reads
  * are in place. The registry files are authoritative and are written BEFORE this runs; a failure here is reported as
  * {@link HubDerivedFilesError} and mends itself, because every locked operation ends with this same call.
  */
@@ -182,4 +183,6 @@ export function syncDerivedHubFiles(ctx: HubContext, pending: PendingFile, paire
   } catch (error) {
     throw new HubDerivedFilesError('authorized_keys', getCaughtErrnoCode(error));
   }
+  // The link files of a runner the registry does not know are leftovers (best effort, tried again by the next operation).
+  sweepOrphanLinkRecords(ctx.dir, paired.runners.map((runner) => runner.id));
 }
