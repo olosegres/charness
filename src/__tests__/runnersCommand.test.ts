@@ -31,6 +31,7 @@ import { ensureGateWrapper } from '../runners/gateWrapper';
 import type { HostKeyScanner, HubAddress } from '../runners/hubAddress';
 import { createPairing, redeemPairing, sweepExpiredPairings } from '../runners/hubPairing';
 import { readPairedFile, readPendingFile } from '../runners/hubRegistry';
+import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { readRunnersOverview, type RunnersOverview } from '../runners/runnersOverview';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { maxScreenTextChars } from '../utils/runnersScreenPlan';
@@ -728,7 +729,7 @@ describe('/runners over its ports', () => {
       assert.equal(fs.readFileSync(authorizedKeys, 'utf8').match(/charness-runner:/g)?.length, 1);
       assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '', 'the tap is answered at once with no toast: what happened is told in a message once it is known');
       // The machine is offline here (no link), so its jobs could not be stopped from the hub: the message says so instead of promising it.
-      assert.equal(harness.replies.at(-1)?.text, '✅ mac removed. Its key is deleted. The machine is offline, so its jobs were not stopped from here: it stops them itself once it finds out it was removed.');
+      assert.equal(harness.replies.at(-1)?.text, `✅ mac removed. Its key is deleted. The machine is offline, so its jobs were not stopped from here: it stops them itself once its key has been refused for ${unconfirmedRemovalStopAfterHours} h.`);
       assert.ok(!harness.edits.at(-1)?.text.includes('mac —') && harness.edits.at(-1)?.text.includes('box1 —'), harness.edits.at(-1)?.text);
     });
 
