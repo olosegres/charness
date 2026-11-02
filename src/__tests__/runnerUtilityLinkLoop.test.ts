@@ -111,6 +111,22 @@ describe('the link loop', () => {
     assert.equal(status?.lastError, 'removed by @ExampleBot');
   });
 
+  it('a refusal of the key that arrives after the stop is not a removal either: no job is stopped, the status is not «removed»', async () => {
+    const sleeps: number[] = [];
+    const abort = new AbortController();
+    let stops = 0;
+    let connects = 0;
+    const loop = createLoopFixture(async () => {
+      connects += 1;
+      if (connects === 2) abort.abort();
+      throw new HubConnectionError('auth', 'the hub refused the runner\'s key');
+    }, sleeps, abort, 99, { stopJobs: async () => { stops += 1; }, unconfirmedRemovalStopAfterMs: 0 });
+    assert.equal(await loop.run(abort.signal), 0);
+    assert.equal(connects, 2, 'the second refusal is the one that came after the stop');
+    assert.equal(stops, 0, 'with a window of nothing, an ordinary second refusal would have stopped the jobs');
+    assert.notEqual(readRunnerStatus(paths)?.state, 'removed');
+  });
+
   it('a refusal that lasts, hour after hour, without the hub ever saying more, finally stops the jobs — once the window is over', async () => {
     const sleeps: number[] = [];
     const abort = new AbortController();
@@ -241,6 +257,8 @@ interface HubStandIn {
   refuseLinkWith: { reply: string | null };
   /** While `until` is set the hub takes a `link` request and answers it (the link, or the refusal) only when that promise settles — a runner caught between «asked» and «linked». */
   holdLinkAnswer: { until: Promise<void> | null; requestCount: number };
+  /** While `until` is set the hub takes an `identity` request and answers it only when that promise settles — a runner caught asking «who am I» after a refused link. */
+  holdIdentityAnswer: { until: Promise<void> | null; requestCount: number };
   close: () => void;
 }
 
@@ -253,6 +271,7 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
   const versionRequests = { count: 0 };
   const refuseLinkWith: { reply: string | null } = { reply: null };
   const holdLinkAnswer: { until: Promise<void> | null; requestCount: number } = { until: null, requestCount: 0 };
+  const holdIdentityAnswer: { until: Promise<void> | null; requestCount: number } = { until: null, requestCount: 0 };
   const server = new Server({ hostKeys: [hostKey.privateKey] }, (connection) => {
     connections.opened += 1;
     connection.on('error', () => undefined);
@@ -273,11 +292,16 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
             if (holdLinkAnswer.until === null) refuseLink();
             else void holdLinkAnswer.until.then(refuseLink);
           } else if (info.command === 'identity' && refuseLinkWith.reply !== null) {
+            holdIdentityAnswer.requestCount += 1;
             const channel = accept();
-            channel.write(formatGateAnswerHead('identity'));
-            channel.write(`${refuseLinkWith.reply}\n`);
-            channel.exit(1);
-            channel.end();
+            const answerIdentity = (): void => {
+              channel.write(formatGateAnswerHead('identity'));
+              channel.write(`${refuseLinkWith.reply}\n`);
+              channel.exit(1);
+              channel.end();
+            };
+            if (holdIdentityAnswer.until === null) answerIdentity();
+            else void holdIdentityAnswer.until.then(answerIdentity);
           } else if (info.command === 'link') {
             holdLinkAnswer.requestCount += 1;
             const channel = accept();
@@ -303,7 +327,7 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
   await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('the stand-in has no port');
-  return { port: address.port, hostKey, currentPackageId, linkChannels, connections, versionRequests, refuseLinkWith, holdLinkAnswer, close: () => { server.close(); } };
+  return { port: address.port, hostKey, currentPackageId, linkChannels, connections, versionRequests, refuseLinkWith, holdLinkAnswer, holdIdentityAnswer, close: () => { server.close(); } };
 }
 
 const installedPackageId = '0123456789abcdef';
@@ -403,6 +427,22 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
     await waitUntil(() => hub.holdLinkAnswer.requestCount === 1, 'the link request to reach the hub', 15_000);
     abort.abort();
     answerLink();
+    const outcome = await Promise.race([finished, new Promise<string>((resolve) => { setTimeout(() => resolve('still running'), 5000); })]);
+    assert.equal(outcome, 0, 'the run ended with the stop');
+    await waitUntil(() => hub.connections.closed === 1, 'the runner to close its connection to the hub', 5_000);
+    assert.equal(stops, 0, 'the jobs were left alone');
+    assert.notEqual(readRunnerStatus(paths)?.state, 'removed');
+  });
+
+  it('a stop that comes while the hub has not yet answered «who am I» after a refused link is not turned into a removal by the answer — no job is killed, the status is not «removed»', async () => {
+    hub.refuseLinkWith.reply = JSON.stringify({ ok: false, reason: 'this runner is not paired here' });
+    let answerIdentity: () => void = () => undefined;
+    hub.holdIdentityAnswer.until = new Promise<void>((resolve) => { answerIdentity = resolve; });
+    let stops = 0;
+    const { finished, abort } = startLoop({ servers: createFakeServers({ busy: 0 }), stopJobs: async () => { stops += 1; } });
+    await waitUntil(() => hub.holdIdentityAnswer.requestCount === 1, 'the identity request to reach the hub', 15_000);
+    abort.abort();
+    answerIdentity();
     const outcome = await Promise.race([finished, new Promise<string>((resolve) => { setTimeout(() => resolve('still running'), 5000); })]);
     assert.equal(outcome, 0, 'the run ended with the stop');
     await waitUntil(() => hub.connections.closed === 1, 'the runner to close its connection to the hub', 5_000);

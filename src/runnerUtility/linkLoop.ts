@@ -256,6 +256,10 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
       while (!signal.aborted) {
         const result = await runOnce(signal);
         if (result.kind === 'restart') return restartExitCode;
+        // A stop that came while the attempt was under way (any of its awaits: the connect, the answers, an update) is not an event of the link:
+        // whatever the attempt ended with — a refusal read as a removal, a failure, a closed link — is not acted on. No «removed» status, no
+        // job stopped on a hub's answer to a runner that was already leaving, no error line.
+        if (signal.aborted) return 0;
         if (result.kind === 'removed') {
           const now0 = now();
           firstRefusalAtMs ??= now0;
