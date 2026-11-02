@@ -188,10 +188,13 @@ test('a reporter that throws never stops the job or the other reporters', async 
 
 test('production wiring: a real detached job is launched, followed through its progress file and ends on done', { timeout: 30_000 }, async () => {
   const productionDeps = createDefaultSttInstallJobDeps(() => dataDir);
+  // The job writes its next line only after the previous phase was reported (an ack file per phase), so every phase must be seen
+  // however late the poller runs — a free-running job outran a poller starved on a busy machine and skipped the first phase.
+  const ackDir = fs.mkdtempSync(path.join(dataDir, 'acks-'));
   const deps: SttInstallJobDeps = {
     ...productionDeps,
     launchEntry: async () => {
-      const identity = await startExternallyParentedProcess(process.execPath, [fakeEntryPath, dataDir, 'done', '--step-ms', '150'], process.env);
+      const identity = await startExternallyParentedProcess(process.execPath, [fakeEntryPath, dataDir, 'done', '--step-ms', '150', '--ack-dir', ackDir], process.env);
       launchedIdentities.push(identity);
       return identity;
     },
@@ -199,7 +202,7 @@ test('production wiring: a real detached job is launched, followed through its p
     log: () => {},
   };
   const reports: SttInstallProgress[] = [];
-  const result = await createSttInstallJobManager(deps).start({ reportTo: (progress) => { reports.push(progress); } });
+  const result = await createSttInstallJobManager(deps).start({ reportTo: (progress) => { reports.push(progress); fs.writeFileSync(path.join(ackDir, progress.phase), ''); } });
   assert.equal(result.phase, 'done');
   assert.deepEqual([...new Set(reports.map((report) => report.phase))], ['creatingEnvironment', 'installingPackages', 'downloadingModel', 'done']);
   assert.equal(fs.readFileSync(getSttPaths(dataDir).progressFile, 'utf8').trim().split('\n').length, 4, 'the job\'s own lines are what was followed');
