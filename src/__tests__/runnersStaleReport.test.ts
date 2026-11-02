@@ -92,7 +92,15 @@ describe('the saved report of a machine whose name is handed on', () => {
     assert.equal(fs.existsSync(getReportPath(name)), false);
   });
 
-  it('removing a runner whose report is not there, or cannot be deleted, still removes it — the failure is logged', async () => {
+  it('removing a runner that has no saved report is silent — a report that is not there is nothing to forget, not a failure', async () => {
+    const name = await pairMachine(firstPairingMs);
+    assert.equal(fs.existsSync(getReportPath(name)), false);
+    const removal = await removeRunnerAndEndItsWork(hub.ctx, name, removalMs, createOfflineRemovalDeps());
+    assert.equal(removal?.runner.name, name);
+    assert.deepEqual(logged, []);
+  });
+
+  it('removing a runner whose report cannot be deleted still removes it — the failure is logged', async () => {
     const name = await pairMachine(firstPairingMs);
     // A folder in the place of the file: deleting it as a file fails with EISDIR/EPERM, whatever the user's rights.
     fs.mkdirSync(getReportPath(name), { recursive: true });
