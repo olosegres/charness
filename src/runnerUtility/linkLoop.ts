@@ -2,6 +2,7 @@ import type { Client } from 'ssh2';
 import { restartExitCode } from './appInstall';
 import { decideUpdate, updateFromHub, type UpdateOutcome } from './appUpdate';
 import { redeemReplySchema } from '../runners/gateProtocol';
+import { unconfirmedRemovalStopAfterMs } from '../runners/removalTiming';
 import { callGate, connectToHub, HubConnectionError, requestGateJson, type HubEndpoint } from './hubClient';
 import { readRunnerVersionPollMs } from './versionPollTiming';
 import { writeRunnerStatus, type LinkState, type RunnerConfig } from './runnerConfig';
@@ -32,14 +33,6 @@ const stableLinkMs = 30 * 1000;
 export const removedRetryMs = 60 * 60 * 1000;
 /** How long after the first refusal of the key a second one confirms that the runner was removed. */
 export const removalConfirmMs = 15 * 1000;
-/**
- * How long the hub must have been refusing the key, without ever saying «this runner is not paired», before the runner takes the refusal
- * for a removal worth killing its jobs for. A refused key alone is also what a hub with a locked home folder, a changed file mode or an
- * edited sshd setting looks like, and those last hours (a night, until someone unlocks the volume); killing a long run for them is the
- * wrong mistake. A hub that removes an ONLINE runner stops its jobs itself over the link (`runners/runnerRemoval.ts`), and a hub that can
- * answer says so (`identity`), so this only covers a machine that was off when it was removed.
- */
-export const unconfirmedRemovalStopAfterMs = 12 * 60 * 60 * 1000;
 
 /** @description The wait before attempt number `failures + 1` (0 failures: the first retry); `random` is in [0, 1). */
 export function computeBackoffMs(failures: number, random: number): number {

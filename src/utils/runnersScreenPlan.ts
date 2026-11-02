@@ -16,6 +16,7 @@
 import type { Translate } from '../i18n';
 import { formatGigabytes, runnerCapabilities, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner, RunnerServiceKind } from '../runners/hubRegistry';
+import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import type { RunnerJobsStop } from '../runners/runnerRemoval';
 
 /** Telegram refuses callback data over 64 BYTES. */
@@ -254,8 +255,8 @@ export function buildRunnersScreen(model: RunnersScreenModel, t: Translate, form
 
 /**
  * @description The message that says what a removal came to: the key is deleted in every case, and the jobs were stopped from the hub, or the
- * machine was offline (it stops them itself once it finds out), or they could not be stopped from here (it does the same). Three outcomes,
- * three texts — «offline» is not what «failed» means.
+ * machine was offline (it stops them itself once its key has been refused for `unconfirmedRemovalStopAfterHours`), or they could not be stopped
+ * from here (it does the same). Three outcomes, three texts — «offline» is not what «failed» means.
  */
 export function buildRemovalOutcomeText(runnerName: string, jobs: RunnerJobsStop, t: Translate): string {
   const keyByOutcome: Record<RunnerJobsStop, 'runners.removedJobsStoppedText' | 'runners.removedJobsOfflineText' | 'runners.removedJobsFailedText'> = {
@@ -263,7 +264,7 @@ export function buildRemovalOutcomeText(runnerName: string, jobs: RunnerJobsStop
     offline: 'runners.removedJobsOfflineText',
     failed: 'runners.removedJobsFailedText',
   };
-  return t(keyByOutcome[jobs], { name: runnerName });
+  return t(keyByOutcome[jobs], { name: runnerName, hours: unconfirmedRemovalStopAfterHours });
 }
 
 /** @description The question a Remove button turns the screen into. */

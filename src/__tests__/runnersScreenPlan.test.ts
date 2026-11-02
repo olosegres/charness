@@ -9,9 +9,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { t } from '../i18n';
+import { localeCodes, runWithLocale, t } from '../i18n';
 import { parseProbeOutput, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner } from '../runners/hubRegistry';
+import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import {
   buildRunnersPageCallback,
   buildAddressStep,
@@ -333,5 +334,21 @@ describe('what a removal came to', () => {
     assert.match(texts[1], /machine is offline/);
     assert.doesNotMatch(texts[2], /offline/, '«could not be stopped» does not claim the machine is offline: it may well be online');
     assert.match(texts[2], /could not be stopped from here/);
+  });
+
+  it('says how long the machine waits before it stops its jobs itself — the link loop\'s own delay, in every language — and only where the hub could not stop them', () => {
+    const hours = unconfirmedRemovalStopAfterHours.toString();
+    const wordsOfHours = new RegExp(`(^|[^0-9])${hours}([^0-9]|$)`);
+    for (const locale of localeCodes) {
+      for (const jobs of ['offline', 'failed'] as const) {
+        const text = runWithLocale(locale, () => buildRemovalOutcomeText('mac', jobs, t));
+        assert.match(text, wordsOfHours, `${locale} ${jobs}: the delay is named`);
+        assert.doesNotMatch(text, /\{[a-z]+\}/, `${locale} ${jobs}: no placeholder is left unfilled`);
+        assert.doesNotMatch(text, /once it finds out|finds out it was removed/, `${locale} ${jobs}: no promise of an immediate stop`);
+      }
+      const stopped = runWithLocale(locale, () => buildRemovalOutcomeText('mac', 'stopped', t));
+      assert.doesNotMatch(stopped, wordsOfHours, `${locale}: jobs stopped from the hub name no delay`);
+    }
+    assert.match(buildRemovalOutcomeText('mac', 'offline', t), /refused for 12 h\./);
   });
 });

@@ -146,7 +146,7 @@ file modes changed or whose sshd setting was edited refuses the key the same way
   which the gate answers for a runner that is not paired (`{ok:false}`). That is certain: the runner records `removed` and stops its jobs at once.
 - **A refused key and nothing more** (the machine was off when it was removed, and the key line was deleted): after two refusals 15 s apart
   (one could be a key file being rewritten) the status says `removed` and the runner asks again every hour, but its jobs are left alone
-  until the hub has been refusing for 12 hours (`unconfirmedRemovalStopAfterMs`) without ever answering, or any other outcome — a network
+  until the hub has been refusing for 12 hours (`unconfirmedRemovalStopAfterMs` in `runners/removalTiming.ts`, which the `/runners` removal texts name too) without ever answering, or any other outcome — a network
   failure, a connection — starts the count again. A restart of the utility starts it again too.
 
 ## Tests
