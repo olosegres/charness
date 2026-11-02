@@ -17,7 +17,7 @@ import type { InterruptSignal } from '../remoteRun/exitCodes';
 import { chooseRunnerWithWait, formatWaitDuration, minWaitAttemptMs, planRunnerWait, sleepUntilStopped, type RunnerAttempt } from '../remoteRun/runnerWait';
 import { defaultRunnerWaitSeconds, readRunnerWaitPollMs, runnerWaitPollMinMs, runnerWaitPollMs } from '../remoteRun/runnerWaitTiming';
 
-const pairedLink = { runnerId: 'a1b2c3d4e5f6', hubDir: '/h', isPausedByHub: false, os: 'Ubuntu 24.04' };
+const pairedLink = { runnerId: 'a1b2c3d4e5f6', hubDir: '/h', isPausedByHub: false, os: 'Ubuntu 24.04', pairedAtMs: 0 };
 const config: RunnersConfig = {
   runners: [
     { name: 'plain', ssh: 'u@plain.example', workDir: '/w' },

@@ -132,7 +132,7 @@ describe('a registry entry as a RunnerConfig', () => {
     assert.equal(config.name, 'mac');
     assert.equal(config.ssh, `charness-runner-${runnerId}`);
     assert.equal(config.workDir, reportedWorkDir);
-    assert.deepEqual(config.paired, { runnerId, hubDir: hub.hubDir, isPausedByHub: true, os: 'macOS 15.1' });
+    assert.deepEqual(config.paired, { runnerId, hubDir: hub.hubDir, isPausedByHub: true, os: 'macOS 15.1', pairedAtMs: 1 });
     assert.equal(config.pueue?.config, getRunnerHomePaths('/Users/runner').pueueConfig);
   });
 });
@@ -221,12 +221,12 @@ describe('probing a paired runner', () => {
   let scriptChecks = 0;
 
   /** A client whose ssh is never used for the link check; `ensureScript` / `call` count what reaches the runner. */
-  function createClient(isPausedByHub: boolean): RunnerClient {
+  function createClient(isPausedByHub: boolean, pairedAtMs: number = 0): RunnerClient {
     const refuse = (): never => {
       throw new Error('not used by the probe');
     };
     return {
-      runner: { name: 'mac', ssh: `charness-runner-${runnerId}`, workDir: reportedWorkDir, paired: { runnerId, hubDir, isPausedByHub, os: 'Ubuntu 24.04' } },
+      runner: { name: 'mac', ssh: `charness-runner-${runnerId}`, workDir: reportedWorkDir, paired: { runnerId, hubDir, isPausedByHub, os: 'Ubuntu 24.04', pairedAtMs } },
       cacheDir,
       rsyncSshCommand: 'ssh',
       ensureScript: async () => { scriptChecks += 1; },
@@ -297,6 +297,14 @@ describe('probing a paired runner', () => {
     fs.rmSync(path.join(cacheDir, 'mac.probe.json'));
     const withNothing = await probeRunner(createClient(false));
     assert.ok(withNothing.status === 'offline' && withNothing.lastSeenAtMs === null && withNothing.lastProbe === null);
+  });
+
+  it('a snapshot taken before the runner was paired is an earlier machine\'s under the same name: not its last probe, not its last seen', async () => {
+    fs.writeFileSync(path.join(cacheDir, 'mac.probe.json'), JSON.stringify({ seenAtMs: probeSeenAtMs, text: probeText }));
+    const report = await probeRunner(createClient(false, probeSeenAtMs + 1));
+    assert.ok(report.status === 'offline' && report.lastSeenAtMs === null && report.lastProbe === null, JSON.stringify(report));
+    const own = await probeRunner(createClient(false, probeSeenAtMs));
+    assert.ok(own.status === 'offline' && own.lastSeenAtMs === probeSeenAtMs && own.lastProbe !== null);
   });
 
   it('the hub\'s pause is carried on the report, online or offline', async () => {

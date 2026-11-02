@@ -29,7 +29,7 @@ agents run it from project folders) and never touches `DATA_DIR` or the state st
   paired, a name in both is an error naming it. The bot MCP offers the instruction bullet while the catalog lists a runner
   (`runnerSummary.ts` reads the catalog on every connect, both files stamp-cached).
 - **Local cache** — `${XDG_CACHE_HOME:-~/.cache}/charness/remote-run/` (0700): ssh control sockets (`ssh/`), the last probe of each runner
-  (`<runner>.probe.json`), and `jobs/<id>.json` — the main box's own record of which local project a job came from.
+  (`<runner>.probe.json`: named by the runner, so a paired runner reads it only if it was taken since the runner was paired, and removing the runner deletes it — a name is handed on to the next machine), and `jobs/<id>.json` — the main box's own record of which local project a job came from.
   `XDG_CACHE_HOME` is on the tracker agents' environment allowlist (`utils/agentEnvironment.ts`), so the bot and every agent follow the same rule and
   share this one cache — the runner lines of the agents' bullet (`runnerSummary.ts`), the `/runners` screen and `remote-run` itself read the same snapshots.
   (Before, a tracker agent's cache followed `HOME` while the bot's did not, and what one wrote the other could not read.)

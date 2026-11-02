@@ -36,14 +36,25 @@ function getStoredProbePath(cacheDir: string, runnerName: string): string {
   return path.join(cacheDir, `${runnerName}${probeFileSuffix}`);
 }
 
-export function readLastProbe(cacheDir: string, runnerName: string): { seenAtMs: number; probe: RunnerProbe } | null {
+/**
+ * @description The last report of runner `runnerName`, `null` if there is none. The file is named by the runner's NAME, and a name outlives
+ * the machine: one that was removed hands it on to the next that gets it. A paired runner therefore passes the moment it was paired as
+ * `notBeforeMs`, and a report taken before that is not its own and is not read.
+ */
+export function readLastProbe(cacheDir: string, runnerName: string, notBeforeMs: number = 0): { seenAtMs: number; probe: RunnerProbe } | null {
   try {
     const stored: StoredProbe = JSON.parse(fs.readFileSync(getStoredProbePath(cacheDir, runnerName), 'utf8'));
     if (typeof stored.seenAtMs !== 'number' || typeof stored.text !== 'string') return null;
+    if (stored.seenAtMs < notBeforeMs) return null;
     return { seenAtMs: stored.seenAtMs, probe: parseProbeOutput(stored.text) };
   } catch {
     return null;
   }
+}
+
+/** @description Forget the last report of `runnerName` (a removed runner's: the name is free for the next machine). A report that is not there is nothing to forget. */
+export function removeLastProbe(cacheDir: string, runnerName: string): void {
+  fs.rmSync(getStoredProbePath(cacheDir, runnerName), { force: true });
 }
 
 function writeLastProbe(cacheDir: string, runnerName: string, text: string, seenAtMs: number): void {
@@ -61,7 +72,7 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
   const groupLimits = { ...(runner.groups ?? {}) };
   const isPausedByHub = runner.paired?.isPausedByHub ?? false;
   const offline = (reason: string, linkLastSeenMs: number | null = null): RunnerReport => {
-    const last = readLastProbe(client.cacheDir, runner.name);
+    const last = readLastProbe(client.cacheDir, runner.name, runner.paired?.pairedAtMs);
     return {
       name: runner.name,
       status: 'offline',

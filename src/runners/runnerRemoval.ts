@@ -1,5 +1,6 @@
 import { buildPairedRunnerConfig } from '../remoteRun/pairedRunners';
 import { ensureRemoteRunCacheDir, getRemoteRunCacheDir, joinShellWords, runSshCommand } from '../remoteRun/ssh';
+import { removeLastProbe } from '../remoteRun/runners';
 import { findPairedRunner, removePairedRunner, setPairedRunnerPaused } from './hubPairing';
 import type { HubContext } from './hubPaths';
 import { readPairedFile, type PairedRunner } from './hubRegistry';
@@ -69,6 +70,15 @@ async function resetQueueOverLink(ctx: HubContext, runner: PairedRunner, deps: R
   }
 }
 
+/** The removed runner's last saved report goes with it: the name is free again, and the next machine to get it must not start with this one's report. Never fails the removal. */
+function forgetLastReport(runner: PairedRunner, deps: RunnerRemovalDeps): void {
+  try {
+    removeLastProbe(deps.cacheDir, runner.name);
+  } catch (error) {
+    deps.log(`runners: could not delete the saved report of "${runner.name}" (${error instanceof Error ? error.message : 'unknown error'}); a machine paired under that name later ignores it anyway`);
+  }
+}
+
 /**
  * @description Remove `nameOrId`: while it is still paired, pause it and stop its jobs through the link (when it is online); then drop it
  * from the registry (its key line goes with it) and cut the link. `null` when no such runner is paired. A registry that cannot be
@@ -87,5 +97,6 @@ export async function removeRunnerAndEndItsWork(ctx: HubContext, nameOrId: strin
   }
   const removed = await removePairedRunner(ctx, found.id, nowMs);
   cutRunnerLink(ctx.dir, found.id);
+  if (removed !== null) forgetLastReport(removed, resolvedDeps);
   return removed === null ? null : { runner: removed, jobs };
 }

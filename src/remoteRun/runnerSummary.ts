@@ -59,5 +59,5 @@ export function formatRunnerSummaryLine(summary: RunnerSummary): string {
 export function getRunnerSummaryLines(homeDir: string = os.homedir(), env: NodeJS.ProcessEnv = process.env): string[] {
   const runners = loadRunnersCatalog(homeDir).config?.runners ?? [];
   const cacheDir = getRemoteRunCacheDir(env, homeDir);
-  return runners.map((runner) => formatRunnerSummaryLine(summarizeRunner(runner, readLastProbe(cacheDir, runner.name)?.probe ?? null)));
+  return runners.map((runner) => formatRunnerSummaryLine(summarizeRunner(runner, readLastProbe(cacheDir, runner.name, runner.paired?.pairedAtMs)?.probe ?? null)));
 }

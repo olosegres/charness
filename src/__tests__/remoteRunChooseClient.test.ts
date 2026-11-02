@@ -33,7 +33,7 @@ let interruptHandler: ((signal: 'SIGINT' | 'SIGTERM' | 'SIGHUP') => void) | null
 
 function createPairedRunner(overrides: { isPausedByHub?: boolean; name?: string } = {}): RunnerConfig {
   // No link directory exists under `root/hub`: the link accepts nothing, the runner is offline, and no ssh is ever started.
-  return { name: overrides.name ?? 'mac', ssh: `charness-runner-${runnerId}`, workDir: '/w', paired: { runnerId, hubDir: path.join(root, 'hub'), isPausedByHub: overrides.isPausedByHub ?? false, os: 'Ubuntu 24.04' } };
+  return { name: overrides.name ?? 'mac', ssh: `charness-runner-${runnerId}`, workDir: '/w', paired: { runnerId, hubDir: path.join(root, 'hub'), isPausedByHub: overrides.isPausedByHub ?? false, os: 'Ubuntu 24.04', pairedAtMs: 0 } };
 }
 
 function createContext(): CommandContext {
@@ -124,7 +124,7 @@ describe('the wait for a paired runner reads the catalog again at every attempt'
     const paired = createPairedRunner();
     const newRunnerId = 'ffffffffffff';
     const newHubDir = path.join(root, 'other-hub');
-    const pairedAgain = { ...paired, paired: { runnerId: newRunnerId, hubDir: newHubDir, isPausedByHub: false, os: 'Ubuntu 24.04' } };
+    const pairedAgain = { ...paired, paired: { runnerId: newRunnerId, hubDir: newHubDir, isPausedByHub: false, os: 'Ubuntu 24.04', pairedAtMs: 0 } };
     // The new link left a heartbeat of its own (the gate has gone: offline); the old one has none, so a client that stayed on the old
     // link could only show the time of the last probe snapshot (14:02).
     const linkDir = path.join(newHubDir, 'link');

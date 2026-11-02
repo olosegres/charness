@@ -25,7 +25,8 @@ export interface RunnersOverview {
 
 async function readEntry(ctx: HubContext, runner: PairedRunner, cacheDir: string): Promise<RunnerScreenEntry> {
   const status = await getRunnerLinkStatus(ctx.dir, runner.id);
-  const snapshot = readLastProbe(cacheDir, runner.name);
+  // Only a report taken since this machine was paired is its own: its name may have belonged to a machine that was removed.
+  const snapshot = readLastProbe(cacheDir, runner.name, runner.pairedAtMs);
   return { runner, isOnline: status.isOnline, lastSeenMs: status.lastSeenMs ?? snapshot?.seenAtMs ?? null, probe: snapshot?.probe ?? null };
 }
 

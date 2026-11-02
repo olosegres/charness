@@ -54,6 +54,8 @@ export interface PairedRunnerLink {
   isPausedByHub: boolean;
   /** The OS the runner reported at pairing (`macOS 15.1`) — text from the runner machine, to be cleaned before it is shown to an agent. */
   os: string;
+  /** When it was paired: a saved report of its name older than this belongs to an earlier machine of that name (`readLastProbe`). */
+  pairedAtMs: number;
 }
 
 /** @name RunnerConfig @description One runner: an entry of the file, or a paired runner built from the hub's registry. */

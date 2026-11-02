@@ -87,7 +87,7 @@ export interface PairedHubEnvironment {
 
 /** @description The `RunnerConfig` of one registry entry. Throws a {@link PairedRunnerSetupError} when the paths of this machine cannot be put on an ssh command line. */
 export function buildPairedRunnerConfig(runner: PairedRunner, hub: PairedHubEnvironment): RunnerConfig {
-  const link: PairedRunnerLink = { runnerId: runner.id, hubDir: hub.hubDir, isPausedByHub: runner.isPaused, os: runner.os };
+  const link: PairedRunnerLink = { runnerId: runner.id, hubDir: hub.hubDir, isPausedByHub: runner.isPaused, os: runner.os, pairedAtMs: runner.pairedAtMs };
   return {
     name: runner.name,
     ssh: getRunnerHostAlias(runner.id),

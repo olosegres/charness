@@ -21,7 +21,7 @@ import { createPairedRunnerFixture } from './remoteRunPairedKit';
 
 const ubuntuProbe = 'os=Linux\nos_name=Ubuntu\nos_version=24.04\npueue=4.0.4\ncap_android=yes\ncap_ios=no\ncap_docker=yes\ncap_playwright=yes\n';
 const handMade: RunnerConfig = { name: 'box1', ssh: 'runner@runner.example', workDir: '/w' };
-const pairedLink: PairedRunnerLink = { runnerId: 'a1b2c3d4e5f6', hubDir: '/h', isPausedByHub: false, os: 'macOS 15.1' };
+const pairedLink: PairedRunnerLink = { runnerId: 'a1b2c3d4e5f6', hubDir: '/h', isPausedByHub: false, os: 'macOS 15.1', pairedAtMs: 0 };
 const paired: RunnerConfig = { name: 'mac', ssh: 'charness-runner-a1b2c3d4e5f6', workDir: '/w', paired: pairedLink };
 
 describe('sanitizeOsLabel', () => {
@@ -79,10 +79,10 @@ describe('getRunnerSummaryLines (the real files)', () => {
     fs.writeFileSync(filePath, typeof content === 'string' ? content : JSON.stringify(content));
   }
 
-  function storeProbe(runnerName: string, text: string): void {
+  function storeProbe(runnerName: string, text: string, seenAtMs: number = 1): void {
     const dir = path.join(cacheHome, 'charness', 'remote-run');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${runnerName}.probe.json`), JSON.stringify({ seenAtMs: 1, text }));
+    fs.writeFileSync(path.join(dir, `${runnerName}.probe.json`), JSON.stringify({ seenAtMs, text }));
   }
 
   function readLines(): string[] {
@@ -108,6 +108,14 @@ describe('getRunnerSummaryLines (the real files)', () => {
     writePairedFile(createHubContext({ homeDir }).dir, { rev: 1, runners: [createPairedRunnerFixture({})] });
     storeProbe('box1', ubuntuProbe);
     assert.deepEqual(readLines(), ['box1 — Ubuntu 24.04, android, docker, playwright', 'box2', 'mac — macOS 15.1']);
+  });
+
+  it('a paired runner ignores a report older than its pairing — it belongs to an earlier machine that had the name — and reads one taken since', () => {
+    writePairedFile(createHubContext({ homeDir }).dir, { rev: 1, runners: [createPairedRunnerFixture({ pairedAtMs: 5000 })] });
+    storeProbe('mac', ubuntuProbe, 4999);
+    assert.deepEqual(readLines(), ['mac — macOS 15.1'], 'only what it said at pairing: no capabilities of the earlier machine');
+    storeProbe('mac', ubuntuProbe, 5000);
+    assert.deepEqual(readLines(), ['mac — Ubuntu 24.04, android, docker, playwright']);
   });
 
   it('the cache is the CLI\'s: XDG_CACHE_HOME when set, else ~/.cache of the home folder', () => {
