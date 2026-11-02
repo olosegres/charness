@@ -652,9 +652,12 @@ test('configureGlobalSendInterval: the boot\'s test-instance interval paces send
   configureGlobalSendInterval(testIntervalMs);
   try {
     const startedAt: number[] = [];
+    const enqueuedAt = Date.now();
     await Promise.all([k(7101, 1), k(7101, 2)].map((key) => enqueueSend(key, async () => { startedAt.push(Date.now()); })));
     const gapMs = startedAt[1] - startedAt[0];
-    assert.ok(gapMs >= testIntervalMs - 10, `the second send waited the configured interval (${gapMs} ms)`);
+    // The first permit is granted no earlier than the enqueue and the second one interval after it, so the second send cannot start earlier than
+    // `testIntervalMs` after the enqueue. Measured between the two callbacks instead, a busy machine that ran the FIRST callback 15 ms late made the gap 135 ms.
+    assert.ok(startedAt[1] - enqueuedAt >= testIntervalMs - 10, `the second send waited the configured interval (${startedAt[1] - enqueuedAt} ms after the enqueue)`);
     // Half the production interval: a 2 s timer that fires a millisecond early must not pass for the configured one.
     assert.ok(gapMs < globalSendIntervalMs / 2, `far below the production ${globalSendIntervalMs} ms (${gapMs} ms)`);
   } finally {
