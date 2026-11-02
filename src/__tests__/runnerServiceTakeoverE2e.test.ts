@@ -52,9 +52,6 @@ describe('the runner\'s queue and its services (real Pueue)', { skip: skipReason
       homeDir: home,
       nodePath: process.execPath,
       launchDaemonsDir: path.join(home, 'LaunchDaemons'),
-      chown: () => undefined,
-      resolveAccount: async () => null,
-      sleep: async () => undefined,
     };
   }
 

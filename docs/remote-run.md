@@ -38,16 +38,21 @@ A runner is attached in one of two ways:
 2. The bot posts **two lines for one code** (two messages — together they are longer than a Telegram message), valid 10 minutes and good
    once, whichever is used first. Either fetches charness's own package from the charness host over ssh (so the versions never differ),
    checks the machine and pairs it. Both messages then turn into «Runner “name” paired …» — or «Pairing code expired.» after 10 minutes.
-   - **From an admin account of the runner machine** (the first message), `sudo sh -c '…' sh '…' runner` — one paste does everything:
+   - **From an admin account of the runner machine** (the first message), `sudo sh -c '…' sh runner` — one paste does everything:
      it checks the account named by the **last word of the line** (`runner` unless you change it) — it must exist, must not be `root`
-     or an admin (the account runs the agents' code), and is never created by the line — then pairs **as that account** (`sudo -u
-     <account> -H`: its files belong to it, not to root) and installs its always-on service: on a Mac the LaunchDaemon that runs as the
-     account, on Linux its systemd user service with lingering switched on (`loginctl enable-linger`; the install itself runs as the
-     account). Only the account switch and that last step run as root; `sudo` asks for the admin's password once and writes the command
-     line to the system log — the code in it is worthless once used or expired. The pairing runs with `sudo`'s `PATH`, so Node has to be
-     installed system-wide (Homebrew, the OS package, nodejs.org): a Node that only the runner account's own login finds (nvm) is found by
-     the second line, not by this one. A failed service step leaves the account paired and prints the `sudo …/charness-runner service
-     install --system --user <account>` to run again.
+     or an admin (the account runs the agents' code), and is never created by the line. Then, still as root, it downloads charness's
+     package into a folder of its own in `/tmp` (root-owned, readable by the account, removed when the line ends), has the account **pair
+     itself from that copy** (`sudo -u <account> -H`: its files belong to it, not to root) and installs its always-on service from the same
+     copy: on a Mac the LaunchDaemon that runs as the account, on Linux its systemd user service with lingering switched on
+     (`loginctl enable-linger`; the install itself runs as the account). **Root never runs, reads through or writes into anything the
+     account can change** — the account runs the agents' code, so its folder is not trusted: root writes only the LaunchDaemon
+     definitions into `/Library/LaunchDaemons` and calls `launchctl` / `loginctl`; everything of the account's own (its Pueue, its record,
+     its user service) is done by the account's own program, started with `sudo -u`. `sudo` asks for the admin's password once and
+     writes the command line to the system log — the code in it is worthless once used or expired. Both root and the account run the
+     Node that `sudo` finds, so Node has to be installed system-wide (Homebrew, the OS package, nodejs.org): a Node that only the runner
+     account's own login finds (nvm) is found by the second line, not by this one. If the service step fails, the account stays paired and
+     the line says so: **paste a fresh admin line** (from `/runners`) after fixing what it printed — a line pasted for an account that is
+     already paired pairs nothing twice and only installs the service.
    - **As the runner account itself** (the second message), no admin rights: it pairs and prints how to keep the runner running (the table
      below).
 3. The runner appears in `/runners` (and in `charness remote-run runners`) with its OS, CPU, memory, disk, load, jobs and what it can
@@ -60,10 +65,12 @@ A runner is attached in one of two ways:
 |---|---|
 | `~/.charness-runner/bin/charness-runner run` | holds the link in this terminal (Ctrl-C stops) |
 | `charness-runner service install` | keeps it running in the background, no admin: a systemd user service on Linux (with `loginctl enable-linger`; where polkit asks for an admin, the one `sudo` line is printed), a LaunchAgent on macOS (while that account is logged in) |
-| `sudo …/charness-runner service install --system --user <account>` | once, from an admin account, for another account (what the admin line runs after pairing). macOS: always on — also logged out and across fast user switching — a LaunchDaemon that runs **as `<account>`**, with no extra rights. Linux: `<account>`'s systemd user service, with lingering switched on and the install run as the account; the account removes it itself (`charness-runner service uninstall`) |
+| an admin's fresh admin line (above) | always on — a Mac logged out too, across fast user switching: a LaunchDaemon that runs **as the runner account**, with no extra rights. This is the only way to install it: `service install --system` on the runner is refused, because root must not run the account's own program |
 | `charness-runner status` | whose charness it serves, the link state, how it is kept running, paused or not, running jobs |
 | `charness-runner pause` / `resume` | takes this machine out of rotation, or back in (the hub has its own pause, set in `/runners`) |
-| `charness-runner unpair` | tells the charness host to forget it, and stops the link and the queue's jobs here |
+| `charness-runner unpair` | tells the charness host to forget it, and stops the link and the queue's jobs here (an always-on service is removed first: see below) |
+
+**Removing an always-on service** (a Mac's LaunchDaemons) takes an admin, with plain commands — no charness program runs as root. `charness-runner service uninstall` on the runner account prints them (`sudo launchctl bootout system/<label>` for the queue and the link, `sudo rm /Library/LaunchDaemons/<label>.plist …`); once they have run, `charness-runner service uninstall` again forgets the service here, and `unpair` works.
 
 A restart of the link (an update, a crash) never kills queued or running jobs — Pueue is a service of its own. The link reconnects by
 itself after a reboot, sleep or network change, and updates itself from the charness host when it is idle.

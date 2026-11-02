@@ -17,7 +17,7 @@ import type { CommandRunner } from '../selfUpdate/commandRunner';
 import { formatGateAnswerHead } from '../runners/gateProtocol';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { writeIosCheck } from '../runnerUtility/iosCheck';
-import { formatKeepRunningHelp, runPause, runService, runStatus, runUnpair, type CommandIo, type UnpairDeps } from '../runnerUtility/runnerCommands';
+import { formatKeepRunningHelp, runPair, runPause, runService, runStatus, runUnpair, type CommandIo, type UnpairDeps } from '../runnerUtility/runnerCommands';
 import type { ProcessControl } from '../runnerUtility/localLinkStop';
 import { readRunnerConfig, writeRunnerConfig, writeRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { checkIsRunnerPaused } from '../runnerUtility/runnerFlags';
@@ -84,7 +84,7 @@ function createServiceDeps(commands: string[]): ServiceDeps {
     commands.push(`${file} ${args.join(' ')}`);
     return { ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false };
   };
-  return { runner, platform: 'linux', uid: 1000, checkIsRunnerLink: () => false, accountName: 'runner', homeDir: home, nodePath: process.execPath, launchDaemonsDir: path.join(home, 'LaunchDaemons'), chown: () => undefined, resolveAccount: async () => null, sleep: async () => undefined };
+  return { runner, platform: 'linux', uid: 1000, checkIsRunnerLink: () => false, accountName: 'runner', homeDir: home, nodePath: process.execPath, launchDaemonsDir: path.join(home, 'LaunchDaemons') };
 }
 
 /** A Pueue with one running task that `reset --force` ends: `status --json` shows it until the reset, an empty queue after. */
@@ -169,14 +169,15 @@ describe('status', () => {
 });
 
 describe('the pairing text', () => {
-  it('on a Mac offers the terminal, the user service and the always-on daemon; on Linux no daemon', () => {
-    const mac = formatKeepRunningHelp(paths, 'darwin', 'runner');
+  it('on a Mac offers the terminal, the user service and — through an admin line — the always-on daemon; on Linux no daemon', () => {
+    const mac = formatKeepRunningHelp(paths, 'darwin');
     assert.ok(mac.includes(`${paths.launcher} run`));
     assert.ok(mac.includes(`${paths.launcher} service install\n      in the background while this user is logged in`));
-    assert.ok(mac.includes(`sudo ${paths.launcher} service install --system --user runner\n      always, also logged out — once, from an admin account`));
-    const linux = formatKeepRunningHelp(paths, 'linux', 'runner');
+    assert.ok(mac.includes('an admin account\'s paste of a fresh admin line from /runners\n      always, also logged out'));
+    assert.ok(!mac.includes('sudo') && !mac.includes('--system'), 'no command that would have root run this account\'s own program');
+    const linux = formatKeepRunningHelp(paths, 'linux');
     assert.ok(linux.includes('also after a logout or a reboot'));
-    assert.ok(!linux.includes('--system'));
+    assert.ok(!linux.includes('--system') && !linux.includes('admin line'));
   });
 });
 
@@ -235,14 +236,15 @@ describe('unpair', () => {
     assert.equal(readRunnerConfig(paths), null);
   });
 
-  it('a system service is not touched from the account: unpair stops with the admin command and changes nothing — not even the hub is told', async () => {
+  it('a system service is not touched from the account: unpair stops with the admin\'s plain commands and changes nothing — not even the hub is told', async () => {
     const keys = ensureRunnerKeys(paths);
     const hub = await startHub(keys.client.publicKey);
     pair(hub.port, hub.hostKey);
     fs.writeFileSync(paths.serviceMarker, 'system-service\n');
     const commands: string[] = [];
     assert.equal(await runUnpair({ isLocalOnly: false }, io, home, createUnpairDeps(commands)), 1);
-    assert.match(errors, /sudo .*service uninstall --system --user .*Nothing was changed/);
+    assert.match(errors, /runs as a system service \(always on\), which only an admin can stop\. As an admin, run:\n {2}sudo launchctl bootout system\/com\.charness\.runner\.[0-9a-f]{8}\n {2}sudo launchctl bootout system\/com\.charness\.runner\.pueued\.[0-9a-f]{8}\n {2}sudo rm \S+\.plist \S+\.plist\nthen run `charness-runner service uninstall` here and unpair again\. Nothing was changed\./);
+    assert.doesNotMatch(errors, /--system/, 'no charness program is asked to run as root');
     assert.deepEqual(commands, []);
     assert.equal(hub.unpairRequests.count, 0);
     assert.notEqual(readRunnerConfig(paths), null);
@@ -328,7 +330,49 @@ describe('unpair', () => {
   });
 });
 
+describe('pairing an account that is already paired', () => {
+  it('an admin line pasted again (a failed service step, or a Mac that only lacks the always-on service) pairs nothing twice and lets the line go on to the service — a plain pair is still refused', async () => {
+    pair();
+    const before = fs.readFileSync(paths.config, 'utf8');
+    assert.equal(await runPair('cr1.never-read', '/app', null, io, home, { isServiceFollowing: true }), 0);
+    assert.match(output, /This account is already paired \(as “mac” with @ExampleBot\): it is not paired again\. Its always-on service is installed next, by the same line\./);
+    assert.equal(errors, '');
+    assert.equal(fs.readFileSync(paths.config, 'utf8'), before, 'the pairing is as it was');
+    output = '';
+    assert.equal(await runPair('cr1.never-read', '/app', null, io, home), 1);
+    assert.match(errors, /this account is already paired \(as “mac” with @ExampleBot\)/);
+    assert.equal(output, '');
+  });
+});
+
 describe('the service command', () => {
+  it('the account\'s side of the always-on install answers in one JSON line the admin step reads — its exit code says whether it may go on', async () => {
+    // No Pueue daemon answers on this account's queue.
+    const noQueue: CommandRunner = async () => ({ ok: false, exitCode: 1, stdout: '', stderr: '', isTimedOut: false });
+    const asAccount = { ...createServiceDeps([]), runner: noQueue, platform: 'darwin' as const, uid: 501, homeDir: home };
+    assert.equal(await runService(['system-step', 'prepare'], io, asAccount), 1);
+    assert.deepEqual(JSON.parse(output.trim()), { ok: false, lines: ['This account is not paired yet: run the line from /runners on this machine first, then install the service.'] });
+    output = '';
+    pair();
+    fs.mkdirSync(paths.binDir, { recursive: true });
+    fs.writeFileSync(path.join(paths.binDir, 'pueued'), '');
+    assert.equal(await runService(['system-step', 'prepare'], io, asAccount), 0);
+    assert.deepEqual(JSON.parse(output.trim()), { ok: true, hadService: false });
+    assert.equal(fs.readFileSync(paths.serviceMarker, 'utf8'), 'system-service\n');
+    output = '';
+    assert.equal(await runService(['system-step', 'abandon'], io, asAccount), 0);
+    assert.equal(fs.existsSync(paths.serviceMarker), false);
+    errors = '';
+    assert.equal(await runService(['system-step'], io, asAccount), 2);
+    assert.match(errors, /needs «prepare» or «abandon»/);
+  });
+
+  it('--system through the account\'s program is refused with the way that works (a root run of this program would be the account\'s own files running as root)', async () => {
+    const asAccount = { ...createServiceDeps([]), platform: 'darwin' as const, uid: 0, homeDir: home };
+    assert.equal(await runService(['install', '--system', '--user', 'runner'], io, asAccount), 1);
+    assert.match(output, /through a pairing line: paste a fresh admin line from \/runners/);
+  });
+
   it('a bad command line is a usage error, and install on an unpaired account is refused with what to do', async () => {
     assert.equal(await runService(['restart'], io, createServiceDeps([])), 2);
     assert.match(errors, /«install» or «uninstall»/);

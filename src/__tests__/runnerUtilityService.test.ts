@@ -14,7 +14,7 @@ import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
 import { writeRunnerConfig, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
-import { createServiceDeps, installService, parseServiceCommand, readServiceKind, resolveLinuxAccount, uninstallService, type ServiceDeps, type TargetAccount } from '../runnerUtility/serviceManager';
+import { createServiceDeps, formatSystemServiceRemoval, installService, parseServiceCommand, readServiceKind, runSystemStep, uninstallService, type ServiceDeps } from '../runnerUtility/serviceManager';
 import {
   describeLingerRemedy,
   getServiceNames,
@@ -134,7 +134,6 @@ interface Call {
 let home = '';
 let daemonsDir = '';
 let calls: Call[] = [];
-let chowned: string[] = [];
 
 /** What the machine says unless a test says otherwise: no Pueue daemon answers, and no launchd job is loaded. */
 const unansweredCommands = ['status --json', 'launchctl print'];
@@ -192,9 +191,6 @@ function createDeps(overrides: Partial<ServiceDeps> = {}): ServiceDeps {
     homeDir: home,
     nodePath: '/opt/node/bin/node',
     launchDaemonsDir: daemonsDir,
-    chown: (filePath) => { chowned.push(filePath); },
-    resolveAccount: async (name): Promise<TargetAccount | null> => (name === 'runner' ? { name, uid: 501, gid: 20, homeDir: home } : name === 'root' ? { name, uid: 0, gid: 0, homeDir: '/var/root' } : null),
-    sleep: async () => undefined,
     ...overrides,
   };
 }
@@ -228,7 +224,6 @@ describe('installing and removing the services', () => {
     daemonsDir = path.join(home, 'LaunchDaemons');
     runnerPaths = getRunnerHomePaths(home);
     calls = [];
-    chowned = [];
     fs.mkdirSync(runnerPaths.binDir, { recursive: true });
     fs.writeFileSync(path.join(runnerPaths.binDir, 'pueued'), '');
   });
@@ -298,117 +293,6 @@ describe('installing and removing the services', () => {
     assert.equal(readServiceKind(runnerPaths), null);
   });
 
-  describe('Linux: an admin installs the service for another account (--system --user, what the admin pairing line runs)', () => {
-    const asRunner = ['-u', 'runner', '-H', 'env', 'XDG_RUNTIME_DIR=/run/user/501'];
-    const managerCheck = `sudo ${asRunner.join(' ')} systemctl --user is-system-running`;
-    const installedLines = 'Installed two user services: a (the link) and b (the queue).\nLingering is on: they run without a login and start at boot.\n';
-
-    function createRootDeps(runner: CommandRunner, overrides: Partial<ServiceDeps> = {}): ServiceDeps {
-      return createDeps({ runner, uid: 0, accountName: 'root', ...overrides });
-    }
-
-    /** A runner whose user manager answers `states` to the first looks (the last one stays), and whose install says `installed`. */
-    function createSessionRunner(states: string[], installed: Partial<CommandResult> = { stdout: installedLines }): CommandRunner {
-      let looks = 0;
-      const base = recordingRunner({ 'service install': installed });
-      return async (file, args, runOptions) => {
-        const result = await base(file, args, runOptions);
-        if (file === 'sudo' && args.includes('is-system-running')) {
-          const state = states[Math.min(looks, states.length - 1)];
-          looks += 1;
-          return { ...result, ok: state === 'running', exitCode: state === 'running' ? 0 : 1, stdout: `${state}\n` };
-        }
-        return result;
-      };
-    }
-
-    it('switches lingering on as root, waits for the account\'s user manager, then runs the plain install AS the account — and returns what it said', async () => {
-      pair();
-      const result = await installService({ isSystem: true, userName: 'runner' }, createRootDeps(createSessionRunner(['running'])));
-      assert.equal(result.ok, true, result.lines.join('\n'));
-      assert.deepEqual(commandLines(), [
-        'loginctl enable-linger runner',
-        managerCheck,
-        `sudo ${asRunner.join(' ')} ${runnerPaths.launcher} service install`,
-      ]);
-      assert.deepEqual(result.lines, installedLines.trim().split('\n'));
-      assert.deepEqual(chowned, [], 'nothing is handed over: the account makes its own files');
-      assert.equal(fs.existsSync(path.join(home, '.config', 'systemd')), false, 'root writes no unit itself');
-    });
-
-    it('waits while the manager is starting (once a second, up to 20 times) and accepts a degraded one', async () => {
-      pair();
-      const sleeps: number[] = [];
-      const slowly = await installService({ isSystem: true, userName: 'runner' }, createRootDeps(createSessionRunner(['', 'starting', 'degraded']), { sleep: async (ms) => { sleeps.push(ms); } }));
-      assert.equal(slowly.ok, true, slowly.lines.join('\n'));
-      assert.deepEqual(sleeps, [1000, 1000], 'two looks failed, one wait after each');
-      assert.equal(commandLines().filter((line) => line === managerCheck).length, 3);
-    });
-
-    it('gives up on a manager that never comes up, says what to run again, and installs nothing', async () => {
-      pair();
-      const sleeps: number[] = [];
-      const result = await installService({ isSystem: true, userName: 'runner' }, createRootDeps(createSessionRunner(['']), { sleep: async (ms) => { sleeps.push(ms); } }));
-      assert.equal(result.ok, false);
-      assert.equal(sleeps.length, 19, '20 looks, a wait between each');
-      assert.match(result.lines.join('\n'), /The user manager of runner did not come up within 20 s/);
-      assert.match(result.lines.join('\n'), /The runner is paired, but its service is not installed\. Run again in a moment: sudo \S+charness-runner service install --system --user runner/);
-      assert.ok(!commandLines().some((line) => line.endsWith('service install')), 'the install did not run');
-    });
-
-    it('stops at once when lingering cannot be switched on', async () => {
-      pair();
-      // The admin's home is not the account's: the command to run again names the ACCOUNT's launcher.
-      const result = await installService({ isSystem: true, userName: 'runner' }, createRootDeps(recordingRunner({ 'loginctl enable-linger': { ok: false, stderr: 'Failed to enable linger: no systemd\n' } }), { homeDir: '/var/root' }));
-      assert.equal(result.ok, false);
-      assert.match(result.lines.join('\n'), /`loginctl enable-linger runner` failed: Failed to enable linger: no systemd/);
-      assert.ok(result.lines.includes(`The runner is paired, but its service is not installed. Fix this and run: sudo ${runnerPaths.launcher} service install --system --user runner`), result.lines.join('\n'));
-      assert.deepEqual(commandLines(), ['loginctl enable-linger runner']);
-    });
-
-    it('a failed install by the account is reported with its own words and the command to run again', async () => {
-      pair();
-      const result = await installService({ isSystem: true, userName: 'runner' }, createRootDeps(createSessionRunner(['running'], { ok: false, exitCode: 1, stdout: 'The Pueue queue of this runner is running 2 job(s).\n' })));
-      assert.equal(result.ok, false);
-      assert.deepEqual(result.lines.slice(0, 1), ['The Pueue queue of this runner is running 2 job(s).']);
-      assert.match(result.lines.join('\n'), /After fixing this run: sudo \S+ service install --system --user runner/);
-
-      const silent = await installService({ isSystem: true, userName: 'runner' }, createRootDeps(createSessionRunner(['running'], { ok: false, exitCode: 127, stdout: '', stderr: 'sudo: charness-runner: command not found\n' })));
-      assert.match(silent.lines.join('\n'), /sudo: charness-runner: command not found/);
-    });
-
-    it('needs root, an existing standard account, and a paired one — and says so before it runs anything', async () => {
-      pair();
-      const notRoot = await installService({ isSystem: true, userName: 'runner' }, createDeps());
-      assert.match(notRoot.lines.join('\n'), /sudo .*service install --system --user runner/);
-      const stranger = await installService({ isSystem: true, userName: 'nobody-here' }, createRootDeps(recordingRunner()));
-      assert.match(stranger.lines.join('\n'), /no account named «nobody-here»/);
-      const root = await installService({ isSystem: true, userName: 'root' }, createRootDeps(recordingRunner()));
-      assert.match(root.lines.join('\n'), /not as root/);
-      fs.rmSync(runnerPaths.config);
-      const unpaired = await installService({ isSystem: true, userName: 'runner' }, createRootDeps(recordingRunner()));
-      assert.match(unpaired.lines.join('\n'), /not paired yet/);
-      assert.deepEqual(commandLines(), [], 'no command ran for any of these');
-    });
-
-    it('uninstall for another account is refused with the way: the account removes its own user service', async () => {
-      pair();
-      const result = await uninstallService({ isSystem: true, userName: 'runner' }, createRootDeps(recordingRunner()));
-      assert.equal(result.ok, false);
-      assert.match(result.lines.join('\n'), /that account removes it itself: run `charness-runner service uninstall` as the account/);
-      assert.deepEqual(commandLines(), []);
-    });
-
-    it('finds the account in the passwd database: its uid, gid and home — and nothing for a name it does not answer for', async () => {
-      const answering = (stdout: string, ok = true): CommandRunner => async () => ({ ok, exitCode: ok ? 0 : 2, stdout, stderr: '', isTimedOut: false });
-      assert.deepEqual(await resolveLinuxAccount('runner', answering('runner:x:1002:1003:Runner,,,:/home/runner:/bin/bash\n')), { name: 'runner', uid: 1002, gid: 1003, homeDir: '/home/runner' });
-      assert.equal(await resolveLinuxAccount('ghost', answering('', false)), null);
-      assert.equal(await resolveLinuxAccount('runner', answering('someone:x:1:1::/home/someone:/bin/sh\n')), null, 'an answer for another name is no answer');
-      assert.equal(await resolveLinuxAccount('runner', answering('runner:x:abc:1003::/home/runner:/bin/sh\n')), null);
-      assert.equal(await resolveLinuxAccount('runner', answering('runner:x:1002:1003:::/bin/sh\n')), null, 'no home folder recorded');
-    });
-  });
-
   it('macOS: two LaunchAgents in the user domain, queue first; nothing needs an admin', async () => {
     pair();
     const result = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
@@ -428,37 +312,8 @@ describe('installing and removing the services', () => {
     ]);
     assert.ok(!fs.readFileSync(linkPlist, 'utf8').includes('UserName'));
     assert.equal(readServiceKind(runnerPaths), 'user-service');
-    assert.match(result.lines.join('\n'), /sudo .*service install --system --user runner/);
-  });
-
-  it('macOS: an admin installs two LaunchDaemons that run as the account, owned by root, with the state files given back to the account', async () => {
-    pair();
-    const result = await installService({ isSystem: true, userName: 'runner' }, createDeps({ platform: 'darwin', uid: 0, accountName: 'root' }));
-    assert.equal(result.ok, true, result.lines.join('\n'));
-    const serviceNames = getServiceNames(runnerPaths.root);
-    const linkPlist = path.join(daemonsDir, `${serviceNames.launchdLink}.plist`);
-    assert.ok(fs.readFileSync(linkPlist, 'utf8').includes('<key>UserName</key><string>runner</string>'));
-    assert.equal(fs.statSync(linkPlist).mode & 0o777, 0o644);
-    assert.ok(chowned.includes(linkPlist), 'the plist is handed to root:wheel, as launchd demands');
-    assert.ok(chowned.includes(runnerPaths.serviceMarker) && chowned.includes(runnerPaths.logsDir), 'what the account will read and write is the account\'s');
-    assert.ok(commandLines().includes(`launchctl bootstrap system ${linkPlist}`));
-    assert.equal(readServiceKind(runnerPaths), 'system-service');
-  });
-
-  it('macOS: a system service needs root, --user must name a standard account, and a user service of the same runner is not stepped on', async () => {
-    pair();
-    const notRoot = await installService({ isSystem: true, userName: 'runner' }, createDeps({ platform: 'darwin', uid: 501 }));
-    assert.equal(notRoot.ok, false);
-    assert.match(notRoot.lines.join('\n'), /sudo .*service install --system --user runner/);
-    const stranger = await installService({ isSystem: true, userName: 'nobody-here' }, createDeps({ platform: 'darwin', uid: 0 }));
-    assert.match(stranger.lines.join('\n'), /no account named «nobody-here»/);
-    const root = await installService({ isSystem: true, userName: 'root' }, createDeps({ platform: 'darwin', uid: 0 }));
-    assert.match(root.lines.join('\n'), /not as root/);
-
-    await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
-    const clash = await installService({ isSystem: true, userName: 'runner' }, createDeps({ platform: 'darwin', uid: 0 }));
-    assert.equal(clash.ok, false);
-    assert.match(clash.lines.join('\n'), /user service \(LaunchAgent\) is installed/);
+    assert.match(result.lines.join('\n'), /for always-on \(also logged out\), an admin can paste a fresh admin line from \/runners/i);
+    assert.doesNotMatch(result.lines.join('\n'), /sudo/, 'no command that would run this account\'s own program as root');
   });
 
   it('macOS: uninstall boots both jobs out and deletes their files', async () => {
@@ -679,18 +534,6 @@ describe('installing and removing the services', () => {
       }
     });
 
-    it('Mac, always-on (--system): a job that will not load again is named with the command that mends a SYSTEM service — the plain install would be refused', async () => {
-      pair();
-      const first = await installService({ isSystem: true, userName: 'runner' }, createDeps({ platform: 'darwin', uid: 0, accountName: 'root' }));
-      assert.equal(first.ok, true, first.lines.join('\n'));
-      const second = await installService({ isSystem: true, userName: 'runner' }, createDeps({ platform: 'darwin', uid: 0, accountName: 'root', runner: createLaunchdRunner({ failingBootstraps: [1, 2] }) }));
-      assert.equal(second.ok, false);
-      const text = second.lines.join('\n');
-      assert.match(text, /could NOT be loaded again/);
-      assert.match(text, /sudo .* service install --system --user runner/, text);
-      assert.doesNotMatch(text, /run `charness-runner service install` again/);
-    });
-
     it('Mac: a definition this install made new (it had no earlier file) is removed again', async () => {
       pair();
       fs.writeFileSync(runnerPaths.serviceMarker, 'user-service\n');
@@ -698,13 +541,6 @@ describe('installing and removing the services', () => {
       assert.equal(mac.ok, false);
       assert.deepEqual(fs.existsSync(agentDir()) ? fs.readdirSync(agentDir()) : [], [], 'no plist is left that was not there before');
     });
-  });
-
-  it('the account gets the queue\'s folders and the record when an admin installs the daemons (root created them)', async () => {
-    pair();
-    const result = await installService({ isSystem: true, userName: 'runner' }, createDeps({ platform: 'darwin', uid: 0, accountName: 'root' }));
-    assert.equal(result.ok, true, result.lines.join('\n'));
-    assert.ok(chowned.includes(runnerPaths.pueueDir) && chowned.includes(runnerPaths.pueueConfig), 'the private Pueue folder and its configuration are the account\'s');
   });
 
   describe('removal that does not work', () => {
@@ -756,6 +592,125 @@ describe('installing and removing the services', () => {
       const removed = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: createLaunchdRunner({ teardownPrints: 2 }) }));
       assert.equal(removed.ok, true, removed.lines.join('\n'));
       assert.deepEqual(fs.readdirSync(path.join(home, 'Library', 'LaunchAgents')), []);
+      assert.equal(readServiceKind(runnerPaths), null);
+    });
+  });
+
+  describe('the always-on service is the admin line\'s, not this program\'s', () => {
+    function daemonPlists(): string[] {
+      const serviceNames = getServiceNames(runnerPaths.root);
+      return [`${serviceNames.launchdLink}.plist`, `${serviceNames.launchdPueued}.plist`].map((name) => path.join(daemonsDir, name));
+    }
+
+    it('--system is refused for install and uninstall, with the way that works — nothing runs, nothing is written', async () => {
+      pair();
+      for (const platform of ['darwin', 'linux'] as const) {
+        const install = await installService({ isSystem: true, userName: 'runner' }, createDeps({ platform, uid: 0 }));
+        assert.equal(install.ok, false);
+        assert.match(install.lines.join('\n'), /An always-on service is installed by an admin, through a pairing line: paste a fresh admin line from \/runners/);
+        assert.match(install.lines.join('\n'), /because it would run this account's own files as root/);
+        const uninstall = await uninstallService({ isSystem: true, userName: 'runner' }, createDeps({ platform, uid: 0 }));
+        assert.equal(uninstall.ok, false);
+        assert.match(uninstall.lines.join('\n'), /removed by an admin with plain `launchctl` commands \(no charness program runs as root\)/);
+      }
+      assert.deepEqual(commandLines(), []);
+      assert.equal(readServiceKind(runnerPaths), null);
+    });
+
+    it('lists the admin\'s plain commands for the daemons of THIS runner, nothing more', () => {
+      const serviceNames = getServiceNames(runnerPaths.root);
+      assert.deepEqual(formatSystemServiceRemoval(runnerPaths, '/Library/LaunchDaemons'), [
+        `sudo launchctl bootout system/${serviceNames.launchdLink}`,
+        `sudo launchctl bootout system/${serviceNames.launchdPueued}`,
+        `sudo rm /Library/LaunchDaemons/${serviceNames.launchdLink}.plist /Library/LaunchDaemons/${serviceNames.launchdPueued}.plist`,
+      ]);
+    });
+
+    describe('system-step: the account\'s own side of the install', () => {
+      const asAccount = { platform: 'darwin' as const, uid: 501 };
+
+      it('prepare — as the account — does what a user service\'s install does first: Pueue\'s configuration and the record, and answers in a way the admin step can read', async () => {
+        pair();
+        const answer = await runSystemStep('prepare', createDeps(asAccount));
+        assert.deepEqual(answer, { ok: true, hadService: false });
+        assert.equal(readServiceKind(runnerPaths), 'system-service');
+        assert.equal(fs.existsSync(runnerPaths.pueueConfig), true);
+        assert.deepEqual(commandLines(), [queueStatusCommand(runnerPaths)], 'only the account\'s own queue was asked');
+        calls = [];
+        assert.deepEqual(await runSystemStep('prepare', createDeps(asAccount)), { ok: true, hadService: true }, 'a second time it is a re-install, and leaves the queue alone');
+        assert.deepEqual(commandLines(), []);
+      });
+
+      it('prepare refuses what a user service\'s install refuses — an unpaired account, a linked foreground run, a busy queue — and a LaunchAgent that would clash', async () => {
+        const unpaired = await runSystemStep('prepare', createDeps(asAccount));
+        assert.equal(unpaired.ok, false);
+        assert.match(unpaired.ok ? '' : unpaired.lines.join('\n'), /not paired yet/);
+        pair();
+        const serviceNames = getServiceNames(runnerPaths.root);
+        fs.mkdirSync(path.join(home, 'Library', 'LaunchAgents'), { recursive: true });
+        fs.writeFileSync(path.join(home, 'Library', 'LaunchAgents', `${serviceNames.launchdLink}.plist`), '');
+        const clash = await runSystemStep('prepare', createDeps(asAccount));
+        assert.match(clash.ok ? '' : clash.lines.join('\n'), /user service \(LaunchAgent\) is installed/);
+        fs.rmSync(path.join(home, 'Library'), { recursive: true });
+        const busy = await runSystemStep('prepare', createDeps({ ...asAccount, runner: recordingRunner({ 'status --json': { ok: true, stdout: JSON.stringify({ tasks: { 0: { status: { Running: {} } } } }) } }) }));
+        assert.match(busy.ok ? '' : busy.lines.join('\n'), /queue of this runner is running 1 job/);
+        assert.equal(readServiceKind(runnerPaths), null, 'a refusal leaves no record');
+      });
+
+      it('is the account\'s own: it refuses to run as root (root\'s home is not the account\'s), off a Mac, and for a step it does not know', async () => {
+        pair();
+        const asRoot = await runSystemStep('prepare', createDeps({ platform: 'darwin', uid: 0 }));
+        assert.match(asRoot.ok ? '' : asRoot.lines.join('\n'), /must not run as root/);
+        const onLinux = await runSystemStep('prepare', createDeps({ platform: 'linux', uid: 1000 }));
+        assert.match(onLinux.ok ? '' : onLinux.lines.join('\n'), /for macOS/);
+        const unknown = await runSystemStep('explode', createDeps(asAccount));
+        assert.match(unknown.ok ? '' : unknown.lines.join('\n'), /unknown step: explode/);
+        assert.equal(readServiceKind(runnerPaths), null);
+        assert.deepEqual(commandLines(), []);
+      });
+
+      it('abandon forgets the record that prepare wrote — and only that: a user service\'s record stays', async () => {
+        pair();
+        await runSystemStep('prepare', createDeps(asAccount));
+        assert.deepEqual(await runSystemStep('abandon', createDeps(asAccount)), { ok: true, hadService: false });
+        assert.equal(readServiceKind(runnerPaths), null);
+        fs.writeFileSync(runnerPaths.serviceMarker, 'user-service\n');
+        await runSystemStep('abandon', createDeps(asAccount));
+        assert.equal(readServiceKind(runnerPaths), 'user-service');
+      });
+    });
+
+    it('a user service is not installed over an always-on one', async () => {
+      pair();
+      fs.writeFileSync(runnerPaths.serviceMarker, 'system-service\n');
+      const result = await installService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
+      assert.equal(result.ok, false);
+      assert.match(result.lines.join('\n'), /runs as a system service already/);
+      assert.deepEqual(commandLines(), []);
+    });
+
+    it('uninstall of an always-on service from the account only PRINTS what the admin runs — it stops nothing and forgets nothing while the daemons are there', async () => {
+      pair();
+      fs.writeFileSync(runnerPaths.serviceMarker, 'system-service\n');
+      fs.mkdirSync(daemonsDir, { recursive: true });
+      for (const plist of daemonPlists()) fs.writeFileSync(plist, '');
+      const result = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.lines.slice(1, 4).map((line) => line.trim()), formatSystemServiceRemoval(runnerPaths, daemonsDir));
+      assert.match(result.lines.at(-1) ?? '', /run `charness-runner service uninstall` again here, as this account/);
+      assert.equal(readServiceKind(runnerPaths), 'system-service');
+      assert.ok(!commandLines().some((line) => line.includes('bootout') || line.includes('bootstrap')), 'no job is stopped from the account');
+      assert.ok(fs.existsSync(daemonPlists()[0]), 'and no definition is touched');
+    });
+
+    it('once the admin removed the daemons — files gone and not loaded — uninstall forgets the record; while one is still loaded it does not', async () => {
+      pair();
+      fs.writeFileSync(runnerPaths.serviceMarker, 'system-service\n');
+      const stillLoaded = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunner({ 'launchctl print': { ok: true } }) }));
+      assert.equal(stillLoaded.ok, false, 'no file left, but launchd still has a job');
+      assert.equal(readServiceKind(runnerPaths), 'system-service');
+      const gone = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
+      assert.equal(gone.ok, true, gone.lines.join('\n'));
       assert.equal(readServiceKind(runnerPaths), null);
     });
   });

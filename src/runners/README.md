@@ -79,12 +79,14 @@ escape a backslash in `command="…"`).
 2. `bootstrapLine.ts` renders the lines for the operator, both of one code. The PLAIN `sh -c '…'` line (run as the runner account): it writes
    the key and a `known_hosts` line to a private temp folder, runs `ssh … bootstrap > package.tgz`, unpacks it and starts `runnerCli.js pair
    --bootstrap <folder> <code>`. The unpacked package has no `node_modules`: the runner's `pair` step reaches its install step on Node
-   built-ins only. The ADMIN line, `sudo sh -c '<checks>' sh '<that same script>' <account>`: as root it checks the account (exists; not
-   root; not in the admin groups of `runnerUtility/adminCheck.ts`; the OS is macOS or Linux; it has a home), runs the script AS the
-   account (`sudo -u <account> -H`, with `--service-follows` so the pairing does not print the «keep it running» help), and then the
-   account's launcher runs `service install --system --user <account>` as root — the macOS LaunchDaemon, or on Linux lingering plus the
-   user service installed by the account (`runnerUtility/serviceManager.ts`). The script is the line's first ARGUMENT (no double quoting),
-   the account its LAST word (editable by hand; `charness runners pair --account`). A pairing is offered in TWO Telegram messages — the
+   built-ins only. The ADMIN line, `sudo sh -c '<script>' sh <account>`, keeps one rule: **root never executes, reads through or writes
+   into anything the runner account can change.** As root it checks the account (exists; not root; not in the admin groups of
+   `runnerUtility/adminCheck.ts`, and a failing `id -Gn` is a refusal; the OS is macOS or Linux), makes the SAME download as the plain line into
+   a root-owned folder in `/tmp` (readable by the account, `--no-same-owner`; the key files in it stay 0600), has the account pair itself from
+   that copy (`sudo -u <account> -H node …/runnerCli.js pair … --service-follows`), and runs `rootServiceCli.js install <account>` from the same
+   copy (Node built-ins only: the copy has no dependencies; `runnerUtility/adminService.ts`). The script is built from the same fetch steps
+   as the plain line (`renderFetchSteps`), the account is the line's LAST word (editable by hand; `charness runners pair --account`), and
+   a second paste for an account that is already paired only installs the service. A pairing is offered in TWO Telegram messages — the
    admin line alone is ~3.7 KB, two lines would not fit one message — which `connectors/telegram/runnerPairingMessages.ts` follows one
    entry per message.
 3. The runner calls `redeem` with its own new public key and host key (`gateProtocol.ts`). `redeemPairing` (one critical section):

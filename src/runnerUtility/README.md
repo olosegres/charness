@@ -73,7 +73,7 @@ account never clashes with this one.
 
 | | Linux | macOS | macOS, always on |
 |---|---|---|---|
-| command | `service install` | `service install` | `sudo …/charness-runner service install --system --user <account>`, once, by an admin |
+| command | `service install` | `service install` | the admin pairing line (below), once, by an admin |
 | what | two systemd USER units | two LaunchAgents | two LaunchDaemons with `UserName=<account>` |
 | runs | at boot and without a login, once lingering is on | while the account is logged in (switched away included) | always, also logged out and across fast user switching; as that account, with no extra rights |
 | admin | none; `loginctl enable-linger` is tried by the account itself, and where polkit wants an admin the one `sudo loginctl enable-linger <account>` line is printed (the units are installed anyway); an admin can also do it for the account (below) | none | once |
@@ -83,16 +83,31 @@ served see their pipes close and finish by themselves (phase 1's lease watcher k
 enough the launcher passes TERM / INT / HUP on to the app. Pueue runs at `nice`, never `taskpolicy -b` (on Apple Silicon that pins jobs
 to the efficiency cores). One kind at a time: installing one while the other's files exist is refused with the command that removes it.
 
-**The admin line** (`runners/bootstrapLine.ts`, `buildAdminBootstrapLine`) ends in `sudo …/charness-runner service install --system --user <account>`, run
-by root right after the pairing it ran as the account (`pair … --service-follows`: the pairing prints «the always-on service is installed
-next» instead of the «keep it running» commands — `pairArgs.ts`, builtins only because `runnerCli.ts` reads it before any dependency
-exists). The pairing runs with `sudo`'s `PATH`, not the account's login one, so Node must be installed system-wide. Root runs the account's launcher for this step only (the same exposure as the documented `sudo` line); nothing else of the
-account's code runs as root. macOS: the two LaunchDaemons above. Linux (`installSystemdForAccount`): root switches lingering on
-(`loginctl enable-linger <account>`), asks the account's user manager until it answers `running` or `degraded`
-(`sudo -u <account> -H env XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user is-system-running`, once a second, 20 tries), then runs the
-plain `service install` AS the account the same way. The result is the ordinary user service — `service` says `user-service`, the account
-removes it itself, `uninstall --system` on Linux is refused with that explanation. A failure says the runner is paired but the service is
-not, and prints the command to run again.
+**The admin line** (`runners/bootstrapLine.ts`, `buildAdminBootstrapLine`) does the always-on install, and the guarantee it keeps is: **root never
+executes, reads through or writes into anything the runner account can change** (that account runs the agents' code). So root does not run
+this program's `service install` from the account's folder, and `--system` on the runner is refused. Instead the line, as root, fetches the
+package into a root-owned folder in `/tmp` (readable by the account, `--no-same-owner`), has the account pair itself from that copy
+(`sudo -u <account> -H node …/runnerCli.js pair … --service-follows`: the pairing prints «the always-on service is installed next» instead of the
+«keep it running» commands — `pairArgs.ts`, builtins only because `runnerCli.ts` reads it before any dependency exists), and then runs
+`node <that copy>/dist/runnerUtility/rootServiceCli.js install <account>` — **Node built-ins only** (`adminService.ts`, `serviceCommon.ts`,
+`serviceUnits.ts`, `runnerHome.ts`, `commandRunner.ts`), because the copy has no `node_modules`. The account is looked up in the passwd
+database, never from its files. Root's whole part:
+
+- macOS: `sudo -u <account> -H <its launcher> service system-step prepare` — the ACCOUNT's side (`runSystemStep` in `serviceManager.ts`: it is
+  paired, no LaunchAgents, Pueue's queue handled, Pueue's configuration and the `system-service` record written; one JSON line back) — then
+  root renders the two LaunchDaemon definitions from the account's name and home alone (the answer decides nothing about their text), writes
+  them into `/Library/LaunchDaemons` (a folder only root can write), hands them to root:wheel with `lchown`, and loads them with
+  `launchctl` (`installLaunchdJobs` in `serviceCommon.ts`, the same rollback the LaunchAgents have). A first install that fails is rolled
+  back, and `system-step abandon` (again as the account) forgets the record.
+- Linux: `loginctl enable-linger <account>`, then the account's user manager is asked until it answers `running` or `degraded`
+  (`sudo -u <account> -H env XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user is-system-running`, once a second, 20 tries), then the plain
+  `service install` runs AS the account the same way. The result is the ordinary user service — the account removes it itself.
+
+A failed root step is the line's one «`<account>` is paired, but has no service: fix the above and paste a fresh admin line» (the same on both
+systems); a fresh line finds the account paired (`runPair` with `--service-follows` says so and returns 0) and only installs the service. The
+pairing runs with `sudo`'s `PATH`, not the account's login one, so Node must be installed system-wide. **Removing** an always-on service is plain
+`launchctl` / `rm` commands for an admin (`formatSystemServiceRemoval`); `service uninstall` on the account prints them, and forgets the
+record once the daemons are gone from `launchctl` and from `/Library/LaunchDaemons`; `unpair` points there.
 
 **Install order** (`prepareManagedStart`) — nothing is started until all of it is true, and a start that fails is rolled back (the services
 stopped, their files and the record removed: nothing half-installed):
@@ -165,8 +180,12 @@ file modes changed or whose sshd setting was edited refuses the key the same way
 `src/__tests__/runnerUtility*.test.ts` (env, home/launcher/config/keys, tools, machine report and admin check, the servers driven
 the way the hub drives them, the link loop's backoff / removed state / update decision) and the process-level flow
 `runnerAdminLineE2e.test.ts` (stand-ins for `sudo` / `id` / `getent` / `loginctl` / `systemctl` in `runnerAdminLineE2e/`; root is `fakeroot`): the
-admin line's refusals (no sudo; a missing, admin or root account; an edited name) before anything runs as the account, then pair-as-account →
-service step with the code unspent until then, a used line refused, and a failing service manager. `runnerLinkE2e.test.ts` (kit: `runnerLinkE2e/runnerLinkFlowKit.ts`): the real pasted line, `charness-runner run`, plain ssh through
+admin line's refusals (no sudo; a missing, admin or root account; an edited name) before anything is fetched or runs as the account, then
+pair-as-account from root's own copy → the root step (no dependencies) → the account's service, with the code unspent until then, a trap
+in the account's launcher that fails the flow if ROOT ever starts it, a used line refused, and a failing service manager followed by a fresh
+line that only installs the service. Unit tests: `runnersBootstrapLine.test.ts` (the line against a real `sh` with stand-ins),
+`runnerUtilityAdminService.test.ts` (root's step: every call that names the account's tree goes through `sudo -u`),
+`runnerUtilityService.test.ts` (the account's `system-step`, the removal commands). `runnerLinkE2e.test.ts` (kit: `runnerLinkE2e/runnerLinkFlowKit.ts`): the real pasted line, `charness-runner run`, plain ssh through
 `runner-proxy`, restart, gate killed, the runner key's refusals (each against an endpoint the test owns, with the session kept up), an expired
 line, a line aimed at a server with another host key, a runner whose hub changes its host key, a package change found by polling, a lost
 redemption answer, remove.

@@ -397,7 +397,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.equal(pairingMessage.reply_markup, undefined);
     assert.equal(plainMessage.reply_markup, undefined);
     const adminLine = readPairingLine(pairingMessage);
-    assert.match(adminLine, /^sudo sh -c '.*' sh '.*cr1\.[A-Za-z0-9_-]+.*' runner$/s);
+    assert.match(adminLine, /^sudo sh -c '.*cr1\.[A-Za-z0-9_-]+.*' sh runner$/s);
     firstPairingLine = readPairingLine(plainMessage);
     assert.match(firstPairingLine, /^sh -c '.*cr1\.[A-Za-z0-9_-]+.*'$/s);
     assert.equal(readLineCode(adminLine), readLineCode(firstPairingLine), 'one code behind both lines');

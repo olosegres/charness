@@ -1,18 +1,23 @@
 /**
- * @description The ADMIN pairing line at PROCESS level: `sudo sh -c '<checks>' sh '<pairing script>' <account>`, as `charness runners pair`
- * prints it, pasted into an ordinary shell. The hub is a loopback `sshd` plus a copy of the built charness, the runner machine a temp HOME
+ * @description The ADMIN pairing line at PROCESS level: `sudo sh -c '<script>' sh <account>`, as `charness runners pair` prints it, pasted
+ * into an ordinary shell. The hub is a loopback `sshd` plus a copy of the built charness, the runner machine a temp HOME
  * (`runnerLinkE2e/runnerLinkFlowKit.ts`), and what a flow cannot have is stood in for (`runnerAdminLineE2e/adminLineStandIns.ts`): `sudo`
  * (root through `fakeroot`; `sudo -u <account> -H` hands the command to the real user with the account's HOME), `id` / `getent` for the
- * stand-in accounts, and `loginctl` / `systemctl`. Everything else is real: the line's own sh, the download over ssh, the pairing, the
- * hub's redemption, and the runner utility's own `service install --system --user`. In order, on the state the step before left:
+ * stand-in accounts, and `loginctl` / `systemctl`. Everything else is real: the line's own sh, root's download of the package over ssh into
+ * a folder of its own, the account's pairing from that copy, the hub's redemption, and the root step — `rootServiceCli.js`, run from the
+ * root-owned copy, which has no `node_modules` (so the step must need none) — with the account's own `service install`. In order, on the
+ * state the step before left:
  *
  *   no sudo → refused; an account that does not exist, an admin account, root, a name edited into something that is no account name →
- *   each refused BEFORE anything runs as that account, nothing is paired, nothing is written to any account, and the code stays unspent
- *   → the same code, with a standard account: paired AS that account (its HOME holds the runner's state), the pairing says the service
- *   follows instead of printing the «keep it running» help, and then — only then — the service is installed for the account: lingering,
- *   the user manager awaited, the install run as the account (its units and its service record are in ITS home)
+ *   each refused BEFORE anything is fetched or runs as that account, nothing is paired, nothing is written to any account, and the code
+ *   stays unspent
+ *   → the same code, with a standard account: paired AS that account, from the copy root made (its HOME holds the runner's state), the pairing
+ *   says the service follows instead of printing the «keep it running» help, and then — only then — the service is installed for the
+ *   account: lingering, the user manager awaited, the install run as the account (its units and its service record are in ITS home).
+ *   Meanwhile the account has swapped its launcher for a trap that fires when ROOT starts it: it never does
  *   → the line used again is refused by the hub and installs nothing
- *   → a service manager that fails: the account stays paired, the line exits with a failure and names the command to run again
+ *   → a service manager that fails: the account stays paired, the line exits with a failure and says what to do; a fresh line then finds the
+ *   account paired, pairs nothing twice and installs the service
  *
  * Needs sshd, ssh, ssh-keyscan, rsync, Pueue, tar, fakeroot and the built CLI (`yarn build`): a local run without them is SKIPPED with the
  * reason, CI fails without. No registry and no download is used. Test case: N/A — Charness has no Jira tracker.
@@ -122,11 +127,11 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
   });
 
   it('stops on an account that does not exist — names it, creates nothing, pairs nothing', () => {
-    assertRefusedBeforeAnything(pasteLine(withAccount(adminLine, 'ghost')), /no account ghost here: create a standard user, or end the line with the right name/);
+    assertRefusedBeforeAnything(pasteLine(withAccount(adminLine, 'ghost')), /no account ghost here: create a standard user or fix the last word/);
   });
 
   it('refuses an admin account and root', () => {
-    assertRefusedBeforeAnything(pasteLine(withAccount(adminLine, 'boss')), /boss is an admin account: the agents code would run with its rights/);
+    assertRefusedBeforeAnything(pasteLine(withAccount(adminLine, 'boss')), /boss is an admin: the agents code runs with its rights/);
     assertRefusedBeforeAnything(pasteLine(withAccount(adminLine, 'rootish')), /rootish is root: use a standard user/);
   });
 
@@ -138,7 +143,7 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.equal(fs.existsSync(marker), false, 'nothing in the name was executed');
   });
 
-  it('pairs AS the account, says the service follows, and then installs the service for it — in its home, through lingering and the account\'s own install', () => {
+  it('pairs AS the account from root\'s own copy, says the service follows, then installs the service for it — in its home, through lingering and the account\'s own install — and root never starts anything of the account\'s', () => {
     const result = pasteLine(adminLine);
     assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
     assert.match(result.stdout, new RegExp(`Paired with charness @ExampleBot \\(127\\.0\\.0\\.1:${layout.sshPort}\\) as runner “`));
@@ -154,7 +159,7 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.equal(readHubRunners().length, 1);
     assert.equal(countOpenCodes(), 0, 'the code is spent');
 
-    // The service is the account\'s: units and record in its home, none in anybody else\'s.
+    // The service is the account's: units and record in its home, none in anybody else's.
     const names = getServiceNames(paths.root);
     const unitDir = path.join(runnerHome, '.config', 'systemd', 'user');
     assert.equal(fs.existsSync(path.join(unitDir, names.systemdLink)), true);
@@ -162,19 +167,25 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.equal(fs.readFileSync(paths.serviceMarker, 'utf8').trim(), 'user-service');
     for (const home of [failingHome, bossHome]) assertNothingPairedIn(home);
 
-    // The order of the whole line: the account\'s home asked for, the pairing as the account, lingering (as root), the user manager
-    // awaited, the install run AS the account, the units reloaded and enabled by the account.
+    // Root never ran the account's launcher (the trap the account put there after its pairing would have fired); the account's own
+    // steps did run through it.
+    assert.equal(fs.existsSync(standIns.trapFile), false, 'root started something of the account\'s');
+    assert.equal(fs.existsSync(`${paths.launcher}.real`), true, 'the trap was put in place after the pairing');
+
+    // The order of the whole line: the pairing as the account from root's copy in /tmp, lingering (as root), the user manager awaited,
+    // the install run AS the account through its launcher, the units reloaded and enabled by the account.
     const calls = readStandInCalls(standIns);
     const indexOf = (prefix: string, from = 0): number => calls.findIndex((call, index) => index >= from && call.startsWith(prefix));
     const asRunner = 'sudo -u runner -H';
-    const homeAsked = indexOf(asRunner);
-    const pairingRun = indexOf(asRunner, homeAsked + 1);
+    const pairingRun = indexOf(asRunner);
+    assert.match(calls[pairingRun], new RegExp(`^${asRunner.replace(/[-]/g, '\\-')} \\S+/node /tmp/charness-runner\\.[A-Za-z0-9]{8}/pkg/dist/runnerUtility/runnerCli\\.js pair\\b`), 'the account pairs from the copy root made');
     const lingering = indexOf('loginctl enable-linger runner');
     const managerAwaited = indexOf(`${asRunner} env XDG_RUNTIME_DIR=/run/user/${standardAccountUid} systemctl --user is-system-running`);
     const installRun = indexOf(`${asRunner} env XDG_RUNTIME_DIR=/run/user/${standardAccountUid} ${paths.launcher} service install`);
     const reloaded = indexOf('systemctl --user daemon-reload');
-    assert.ok(homeAsked >= 0 && pairingRun > homeAsked && lingering > pairingRun && managerAwaited > lingering && installRun > managerAwaited && reloaded > installRun, calls.join('\n'));
+    assert.ok(pairingRun >= 0 && lingering > pairingRun && managerAwaited > lingering && installRun > managerAwaited && reloaded > installRun, calls.join('\n'));
     assert.equal(calls.filter((call) => call.startsWith('loginctl enable-linger')).length, 1);
+    assert.equal(calls.filter((call) => call.startsWith(`${asRunner} `) && call.includes('runnerCli.js pair')).length, 1, 'the account was paired once');
   });
 
   it('the line used again is refused by the hub and installs nothing more', () => {
@@ -186,18 +197,30 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.ok(!readStandInCalls(standIns).slice(callsBefore).some((call) => call.startsWith('loginctl enable-linger')), 'no service was installed by the failed run');
   });
 
-  it('a service manager that fails leaves the account paired, exits with a failure and names the command to run again', () => {
+  it('a service manager that fails leaves the account paired, exits with a failure and says what to do — a fresh line then pairs nothing twice and installs the service', () => {
     fs.writeFileSync(standIns.failReloadFlag, '');
     const { adminLine: secondLine } = makePairingLines(layout, 'runner2');
     const result = pasteLine(secondLine);
     assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
     assert.match(result.stdout, /Paired with charness @ExampleBot/, 'the pairing itself went through');
-    assert.match(result.stdout, /systemctl --user cannot reach a user session/);
+    assert.match(result.stderr, /systemctl --user cannot reach a user session/);
+    assert.match(result.stderr, /^charness-runner: runner2 is paired, but has no service: fix the above and paste a fresh admin line$/m);
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, /sudo [^\n]*service install/, 'no command that has root run the account\'s program is offered');
     const paths = getRunnerHomePaths(failingHome);
-    assert.match(result.stdout, new RegExp(`The runner is paired, but its service is not installed\\. After fixing this run: sudo ${paths.launcher.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} service install --system --user runner2`));
     assert.equal(fs.existsSync(paths.config), true, 'the account stays paired');
     assert.equal(fs.existsSync(path.join(failingHome, '.config', 'systemd', 'user', getServiceNames(paths.root).systemdLink)), false, 'and nothing is left of a half-installed service');
     assert.equal(readHubRunners().length, 2);
+    assert.equal(fs.existsSync(standIns.trapFile), false);
+
+    // The service manager is mended; a FRESH admin line is the retry.
     fs.rmSync(standIns.failReloadFlag, { force: true });
+    const { adminLine: retryLine } = makePairingLines(layout, 'runner2');
+    const retried = pasteLine(retryLine);
+    assert.equal(retried.status, 0, `${retried.stderr}\n${retried.stdout}`);
+    assert.match(retried.stdout, /This account is already paired \(as “[^”]+” with @ExampleBot\): it is not paired again\. Its always-on service is installed next, by the same line\./);
+    assert.match(retried.stdout, /Installed two user services:/);
+    assert.equal(readHubRunners().length, 2, 'nothing was paired twice');
+    assert.equal(fs.existsSync(path.join(failingHome, '.config', 'systemd', 'user', getServiceNames(paths.root).systemdLink)), true);
+    assert.equal(fs.existsSync(standIns.trapFile), false, 'and root still started nothing of the account\'s');
   });
 });

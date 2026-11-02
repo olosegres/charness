@@ -9,8 +9,8 @@ import type { RunnerHomePaths } from './runnerHome';
  *
  *   Linux   two systemd USER units (no root); `KillMode=process` on the link: stopping it ends the launcher and nothing else, and the
  *           commands it started (a lease watcher among them) see the closed pipe and finish by themselves — they are not killed with it.
- *   macOS   two launchd jobs: LaunchAgents (run while the account is logged in, switched away included), or — with `--system` — LaunchDaemons
- *           with `UserName=<account>` (always, also logged out; they run as that account, with no extra rights). `AbandonProcessGroup`
+ *   macOS   two launchd jobs: LaunchAgents (run while the account is logged in, switched away included), or — installed by the admin pairing line
+ *           (`adminService.ts`) — LaunchDaemons with `UserName=<account>` (always, also logged out; they run as that account, with no extra rights). `AbandonProcessGroup`
  *           keeps launchd from killing what the link started when the link ends. Pueue runs at `nice`, never `taskpolicy -b` (on Apple
  *           Silicon that pins jobs to the efficiency cores).
  */

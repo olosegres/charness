@@ -16,7 +16,8 @@ import { createIosCheckDeps, readIosCheck, refreshIosCheck } from './iosCheck';
 import { checkIsRunnerLinkProcess, createProcessControl, stopLocalLink, type ProcessControl } from './localLinkStop';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { checkIsRunnerPaused, setRunnerPaused } from './runnerFlags';
-import { createServiceDeps, installService, readServiceKind, uninstallService, parseServiceCommand, type ServiceDeps } from './serviceManager';
+import { formatSystemStepAnswer } from './serviceCommon';
+import { createServiceDeps, formatSystemServiceRemoval, installService, readServiceKind, runSystemStep, uninstallService, parseServiceCommand, type ServiceDeps } from './serviceManager';
 import { readPairingInProgress, readRunnerConfig, readRunnerStatus, removePairingInProgress, writePairingInProgress, writeRunnerConfig, type RunnerConfig } from './runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from './runnerHome';
 import { ensureRunnerKeys, readRunnerKeys, type RunnerKeys } from './runnerKeys';
@@ -76,8 +77,8 @@ async function installTools(paths: RunnerHomePaths, deps: ToolDeps, io: CommandI
   for (const outcome of [pueue, rsync]) if (!outcome.ok) io.stderr(`charness-runner: ${outcome.reason}\n`);
 }
 
-/** @description The «Keep it running» part of the pairing text: the terminal, a service without admin, and — on a Mac — the always-on daemon. */
-export function formatKeepRunningHelp(paths: RunnerHomePaths, platform: NodeJS.Platform = process.platform, accountName: string = os.userInfo().username): string {
+/** @description The «Keep it running» part of the pairing text: the terminal, a service without admin, and — on a Mac — the admin line that makes it always on. */
+export function formatKeepRunningHelp(paths: RunnerHomePaths, platform: NodeJS.Platform = process.platform): string {
   const lines = [
     'Keep it running:',
     `  ${paths.launcher} run`,
@@ -86,7 +87,7 @@ export function formatKeepRunningHelp(paths: RunnerHomePaths, platform: NodeJS.P
     platform === 'darwin' ? '      in the background while this user is logged in' : '      in the background, also after a logout or a reboot (a systemd user service that lingers)',
   ];
   if (platform === 'darwin') {
-    lines.push(`  sudo ${paths.launcher} service install --system --user ${accountName}`, '      always, also logged out — once, from an admin account');
+    lines.push('  an admin account\'s paste of a fresh admin line from /runners', '      always, also logged out — the admin line installs the service for this account (it finds it paired)');
   }
   lines.push('');
   return lines.join('\n');
@@ -145,6 +146,12 @@ export async function runPair(code: string, appDir: string, packageId: string | 
   const paths = getRunnerHomePaths(homeDir);
   const existing = readRunnerConfig(paths);
   if (existing !== null) {
+    // An admin line pasted again for an account that is already paired (a service step that failed, or one only a Mac's always-on is missing):
+    // nothing is paired twice, and the line goes on to the service.
+    if (options.isServiceFollowing) {
+      io.stdout(`This account is already paired (as “${existing.name}” with ${existing.hub.label}): it is not paired again. Its always-on service is installed next, by the same line.\n`);
+      return 0;
+    }
     io.stderr(`charness-runner: this account is already paired (as “${existing.name}” with ${existing.hub.label}).\n`);
     return 1;
   }
@@ -319,8 +326,20 @@ export function runPause(isPaused: boolean, io: CommandIo, homeDir: string = os.
   return 0;
 }
 
-/** @description `charness-runner service install|uninstall [--system --user <account>]`. */
+/**
+ * @description `charness-runner service install|uninstall`, and the internal `service system-step prepare|abandon` (the account's side of
+ * the admin line's always-on install: one JSON line on stdout, see `serviceManager.ts`).
+ */
 export async function runService(args: readonly string[], io: CommandIo, deps: ServiceDeps = createServiceDeps()): Promise<number> {
+  if (args[0] === 'system-step') {
+    if (args.length !== 2) {
+      io.stderr('charness-runner: service system-step needs «prepare» or «abandon»\n');
+      return 2;
+    }
+    const answer = await runSystemStep(args[1], deps);
+    io.stdout(formatSystemStepAnswer(answer));
+    return answer.ok ? 0 : 1;
+  }
   const parsed = parseServiceCommand(args);
   if (!parsed.ok) {
     io.stderr(`charness-runner: ${parsed.error}\n`);
@@ -368,7 +387,7 @@ export async function runUnpair(options: UnpairOptions, io: CommandIo, homeDir: 
   }
   const serviceKind = readServiceKind(paths);
   if (serviceKind === 'system-service') {
-    io.stderr(`charness-runner: this runner runs as a system service, which only an admin can remove. Remove it first, then unpair: sudo ${paths.launcher} service uninstall --system --user ${os.userInfo().username}. Nothing was changed.\n`);
+    io.stderr(`charness-runner: this runner runs as a system service (always on), which only an admin can stop. As an admin, run:\n${formatSystemServiceRemoval(paths, deps.service.launchDaemonsDir).map((line) => `  ${line}`).join('\n')}\nthen run \`charness-runner service uninstall\` here and unpair again. Nothing was changed.\n`);
     return 1;
   }
   if (!options.isLocalOnly) {

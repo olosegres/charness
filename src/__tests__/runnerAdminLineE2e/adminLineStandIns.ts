@@ -2,9 +2,11 @@
  * @description What the admin pairing line needs from a machine that a flow cannot have: root, a second real account, and a service
  * manager. Stand-in programs in one folder that comes FIRST on `PATH` (the line is pasted into an ordinary shell, as an operator would):
  *
- *   sudo      `sudo <command>` makes the command run as "root" (under `fakeroot`: uid 0 for the line's checks and for the service step,
- *             nothing is really changed); `sudo -u <account> -H <command>` runs it as the real user again — with the stand-in account's
- *             HOME, USER and LOGNAME — the way sudo would hand the command to that account
+ *   sudo      `sudo <command>` makes the command run as "root" (under `fakeroot`: uid 0 for the line's checks, its download and the root
+ *             step, nothing is really changed); `sudo -u <account> -H <command>` runs it as the real user again — with the stand-in
+ *             account's HOME, USER and LOGNAME — the way sudo would hand the command to that account. Once an account's PAIRING has run,
+ *             the account's launcher is replaced by a TRAP (the account's own doing, as an agent's code could): started by root — uid 0
+ *             — it leaves the file `trap.hit` and the flow goes red; started as the account it just runs the real launcher
  *   id        answers for the stand-in accounts (uid, groups); everything else is the real `id`
  *   getent    the stand-in accounts' passwd entries; everything else is the real `getent`
  *   loginctl  records the call; `show-user … Linger` says yes
@@ -31,6 +33,8 @@ export interface AdminStandIns {
   logPath: string;
   /** While this file exists `systemctl --user daemon-reload` fails: the service manager of a machine without a user session. */
   failReloadFlag: string;
+  /** Appears when something started by ROOT ran the account's trapped launcher: root must never run anything of the account's. */
+  trapFile: string;
 }
 
 const logLineWidth = 140;
@@ -49,6 +53,7 @@ export function installAdminStandIns(rootDir: string, accounts: readonly StandIn
   fs.mkdirSync(binDir, { recursive: true });
   const logPath = path.join(binDir, 'calls.log');
   const failReloadFlag = path.join(binDir, 'fail-reload');
+  const trapFile = path.join(binDir, 'trap.hit');
   // One line per call: the pairing script is many lines long, and only its beginning says which call it is.
   const log = (tool: string): string => `echo "${tool} $*" | head -n 1 | cut -c1-${logLineWidth} >> "${logPath}"`;
   const realId = findRealTool('id');
@@ -75,7 +80,18 @@ export function installAdminStandIns(rootDir: string, accounts: readonly StandIn
     ...accounts.map((account) => `    ${account.name}) home="${account.homeDir}";;`),
     '    *) echo "sudo: unknown user $user" >&2; exit 1;;',
     '  esac',
-    '  exec env -u LD_PRELOAD -u FAKEROOTKEY -u FAKED_MODE HOME="$home" USER="$user" LOGNAME="$user" "$@"',
+    '  env -u LD_PRELOAD -u FAKEROOTKEY -u FAKED_MODE HOME="$home" USER="$user" LOGNAME="$user" "$@"',
+    '  code=$?',
+    '  case " $* " in',
+    '    *" pair "*)',
+    '      launcher="$home/.charness-runner/bin/charness-runner"',
+    '      if [ -f "$launcher" ] && [ ! -f "$launcher.real" ]; then',
+    '        mv "$launcher" "$launcher.real"',
+    `        printf '#!/bin/sh\\n[ "$(id -u)" = 0 ] && : > "${trapFile}"\\nexec "%s" "$@"\\n' "$launcher.real" > "$launcher"`,
+    '        chmod 755 "$launcher"',
+    '      fi;;',
+    '  esac',
+    '  exit $code',
     'fi',
     'exec fakeroot -- "$@"',
   ]);
@@ -93,7 +109,7 @@ export function installAdminStandIns(rootDir: string, accounts: readonly StandIn
     'esac',
     'exit 0',
   ]);
-  return { binDir, logPath, failReloadFlag };
+  return { binDir, logPath, failReloadFlag, trapFile };
 }
 
 /** @description The calls recorded so far, in order. */

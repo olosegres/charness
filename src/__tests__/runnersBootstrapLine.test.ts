@@ -18,7 +18,6 @@ import path from 'path';
 import { gzipSync } from 'zlib';
 import { buildAdminBootstrapLine, buildBootstrapLine, checkIsAccountName, defaultRunnerAccount } from '../runners/bootstrapLine';
 import { checkIsAdminAccount, linuxAdminGroups, macAdminGroup } from '../runnerUtility/adminCheck';
-import { launcherPathInHome } from '../runnerUtility/runnerHome';
 import { formatGateAnswerHead } from '../runners/gateProtocol';
 import { encodePairCode } from '../runners/pairCode';
 import { createTarArchive } from '../runners/tarArchive';
@@ -47,8 +46,28 @@ function installStubSsh(binDir: string): void {
 
 /** What the hub's `bootstrap` sends: whatever its shell printed first (`noise`), then the gate's marker and the archive. */
 function createBootstrapAnswer(noise: string = ''): Buffer {
-  const runnerCli = 'console.log("RUNNER_CLI " + process.argv.slice(2).join(" "));\n';
-  const archive = gzipSync(createTarArchive([{ path: 'dist/runnerUtility/runnerCli.js', content: Buffer.from(runnerCli), mode: 0o644 }]));
+  // The stand-in programs say where they run from and, for the admin line, how the root-made folder looks to another account.
+  const runnerCli = [
+    'const fs = require("fs"); const path = require("path");',
+    'const packageDir = path.resolve(__dirname, "..", "..");',
+    'const mode = (file) => (fs.statSync(file).mode & 0o777).toString(8);',
+    'console.log("RUNNER_CLI " + process.argv.slice(2).join(" "));',
+    'console.log("RUNNER_CLI_FROM " + packageDir);',
+    'console.log("MODES folder=" + mode(path.dirname(packageDir)) + " package=" + mode(packageDir) + " key=" + mode(path.join(path.dirname(packageDir), "key")));',
+    'if (process.env.STUB_PAIR_FAILS) process.exit(1);',
+    '',
+  ].join('\n');
+  const rootServiceCli = [
+    'const path = require("path");',
+    'console.log("ROOT_SERVICE " + process.argv.slice(2).join(" "));',
+    'console.log("ROOT_SERVICE_FROM " + path.resolve(__dirname, "..", ".."));',
+    'if (process.env.STUB_SERVICE_FAILS) process.exit(1);',
+    '',
+  ].join('\n');
+  const archive = gzipSync(createTarArchive([
+    { path: 'dist/runnerUtility/runnerCli.js', content: Buffer.from(runnerCli), mode: 0o644 },
+    { path: 'dist/runnerUtility/rootServiceCli.js', content: Buffer.from(rootServiceCli), mode: 0o644 },
+  ]));
   const answer = Buffer.concat([Buffer.from(noise), Buffer.from(formatGateAnswerHead('bootstrap', { id: '0123456789abcdef' })), archive]);
   fs.writeFileSync(path.join(workDir, 'answer.bin'), answer);
   return answer;
@@ -179,25 +198,27 @@ describe('bootstrap line', () => {
   });
 });
 
-/** The accounts of a stand-in machine: `<name>` → `{ uid, groups, home }`. */
+/** The accounts of a stand-in machine: `<name>` → `{ uid, groups }`; `groupsFail` makes `id -Gn <name>` fail the way a broken directory service does. */
 interface StubAccount {
   uid: number;
   groups: readonly string[];
+  groupsFail?: boolean;
 }
 
 const stubUserLine = 'sudo-stub';
 
 /**
  * Stand-ins for what the admin line asks the machine: `id` (who is running, which accounts exist and in which groups), `uname`, and `sudo`
- * (`-u <account> -H <command>` runs the command with that account's HOME; every call is logged). The real `id` answers nothing here: a
- * test cannot create an account. Calls are logged to `stub.log` in order.
+ * (`-u <account> -H <command>` runs the command with that account's HOME). The real `id` answers nothing here: a test cannot create an
+ * account. Every `sudo` call is logged to `stub.log` with the program it starts and that program's first argument — so the pairing and any
+ * other call as the account are told apart by what they run, not by how many there are.
  */
 function installAdminStubs(binDir: string, options: { runnerUid: number; os: string; accounts: Record<string, StubAccount> }): void {
   fs.mkdirSync(binDir, { recursive: true });
   const accountsDir = path.join(workDir, 'accounts');
   fs.mkdirSync(accountsDir, { recursive: true });
   for (const [name, account] of Object.entries(options.accounts)) {
-    fs.writeFileSync(path.join(accountsDir, name), `${account.uid} ${account.groups.join(' ')}\n`);
+    fs.writeFileSync(path.join(accountsDir, name), `${account.uid} ${account.groupsFail === true ? 'FAIL' : account.groups.join(' ')}\n`);
     fs.mkdirSync(path.join(workDir, 'homes', name), { recursive: true });
   }
   fs.writeFileSync(path.join(binDir, 'id'), [
@@ -206,25 +227,23 @@ function installAdminStubs(binDir: string, options: { runnerUid: number; os: str
     `f="${accountsDir}/$2"`,
     '[ -f "$f" ] || { echo "id: $2: no such user" >&2; exit 1; }',
     'read uid groups < "$f"',
-    'case "$1" in -u) echo "$uid";; -Gn) echo "$groups";; *) exit 2;; esac',
+    'case "$1" in',
+    '  -u) echo "$uid";;',
+    '  -Gn) if [ "$groups" = FAIL ]; then echo "id: cannot get groups" >&2; exit 1; fi; echo "$groups";;',
+    '  *) exit 2;;',
+    'esac',
     '',
   ].join('\n'), { mode: 0o755 });
   fs.writeFileSync(path.join(binDir, 'uname'), `#!/bin/sh\necho ${options.os}\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(binDir, 'sudo'), [
     '#!/bin/sh',
-    `echo "${stubUserLine} $1 $2 $3 $4" >> "${workDir}/stub.log"`,
+    // sudo -u <account> -H <program> <first argument of the program or its script> <next>
+    `echo "${stubUserLine} $1 $2 $3 $(basename "$4") $(basename "$5") $6" >> "${workDir}/stub.log"`,
     '[ "$1" = -u ] && [ "$3" = -H ] || exit 99',
     'user=$2; shift 3',
     `exec env HOME="${workDir}/homes/$user" USER="$user" LOGNAME="$user" "$@"`,
     '',
   ].join('\n'), { mode: 0o755 });
-}
-
-/** The account's launcher: logs its arguments. */
-function installStubLauncher(account: string, exitCode = 0): void {
-  const launcher = path.join(workDir, 'homes', account, launcherPathInHome);
-  fs.mkdirSync(path.dirname(launcher), { recursive: true });
-  fs.writeFileSync(launcher, `#!/bin/sh\necho "launcher $*" >> "${workDir}/stub.log"\nexit ${exitCode}\n`, { mode: 0o755 });
 }
 
 function readStubLog(): string[] {
@@ -235,21 +254,21 @@ function readStubLog(): string[] {
   }
 }
 
-function runAdminLine(account: string = defaultRunnerAccount, payload = createPairCodePayload()): ReturnType<typeof spawnSync> {
+function runAdminLine(account: string = defaultRunnerAccount, extraEnv: NodeJS.ProcessEnv = {}, payload = createPairCodePayload()): ReturnType<typeof spawnSync> {
   return spawnSync('sh', ['-c', buildAdminBootstrapLine(payload, account).replace(/^sudo /, '')], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp') },
+    env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp'), ...extraEnv },
   });
 }
 
-function splitAdminLine(line: string): { root: string; pairing: string; account: string } {
-  const match = /^sudo sh -c '([^']*)' sh '([^']*)' (\S+)$/.exec(line);
+function splitAdminLine(line: string): { script: string; account: string } {
+  const match = /^sudo sh -c '([^']*)' sh (\S+)$/.exec(line);
   if (match === null) throw new Error('not an admin line');
-  return { root: match[1], pairing: match[2], account: match[3] };
+  return { script: match[1], account: match[2] };
 }
 
 describe('admin bootstrap line: how it is built', () => {
-  it('is one line: sudo, the checks, then the pairing script as an argument, then the account as the LAST word («runner» unless named)', () => {
+  it('is one line: sudo, the script, then the account as the LAST word («runner» unless named)', () => {
     const payload = createPairCodePayload();
     const line = buildAdminBootstrapLine(payload);
     assert.ok(!line.includes('\n'));
@@ -257,33 +276,48 @@ describe('admin bootstrap line: how it is built', () => {
     assert.equal(parts.account, defaultRunnerAccount);
     assert.equal(defaultRunnerAccount, 'runner');
     assert.equal(splitAdminLine(buildAdminBootstrapLine(payload, 'ci.runner-2')).account, 'ci.runner-2');
-    assert.ok(parts.pairing.includes(encodePairCode(payload)), 'the pairing script carries the code');
-    for (const script of [parts.root, parts.pairing]) assert.equal(spawnSync('sh', ['-n', '-c', script]).status, 0, 'valid sh');
-    assert.ok(!parts.root.includes(encodePairCode(payload)), 'the root part never sees the code');
+    assert.equal(parts.script.split(encodePairCode(payload)).length, 2, 'the code is in the script once');
+    assert.equal(spawnSync('sh', ['-n', '-c', parts.script]).status, 0, 'valid sh');
   });
 
-  it('the pairing script is the plain line\'s script plus the one flag that tells the pairing a service follows — and nothing else differs', () => {
+  it('the root copy is made BY ROOT in a folder of its own that the account can read, without taking owners from the archive; the plain line has none of that', () => {
     const payload = createPairCodePayload();
+    const { script } = splitAdminLine(buildAdminBootstrapLine(payload));
+    assert.ok(script.includes('d=$(mktemp -d "/tmp/charness-runner.XXXXXXXX")'), 'not the admin\'s own private $TMPDIR, which the account could not enter');
+    assert.ok(script.includes('chmod 755 "$d"'));
+    assert.ok(script.includes('umask 022; tail -c'), 'the archive and the package are readable — after the key files were made private');
+    assert.ok(script.includes('tar --no-same-owner -xzf'), 'root\'s copy stays root\'s');
     const plain = /^sh -c '(.*)'$/.exec(buildBootstrapLine(payload))?.[1] ?? '';
-    const { pairing } = splitAdminLine(buildAdminBootstrapLine(payload));
-    assert.ok(!plain.includes('--service-follows'));
-    assert.equal(pairing.replace(' --service-follows', ''), plain);
-    assert.match(pairing, /--package-id "\$\{t##\*id=\}" --service-follows cr1\./);
+    for (const forAccountOnly of ['chmod 755', 'umask 022', '--no-same-owner', '"/tmp/charness-runner']) assert.ok(!plain.includes(forAccountOnly), forAccountOnly);
+    assert.ok(plain.includes('${TMPDIR:-/tmp}/charness-runner.'));
+  });
+
+  it('runs the root step from that copy — never from the account\'s folder — and the pairing as the account from the same copy, with the node root checked', () => {
+    const { script } = splitAdminLine(buildAdminBootstrapLine(createPairCodePayload()));
+    assert.match(script, /; n=\$\(command -v node\); sudo -u "\$a" -H "\$n" "\$d\/pkg\/dist\/runnerUtility\/runnerCli\.js" pair --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" --service-follows cr1\./);
+    assert.match(script, /; "\$n" "\$d\/pkg\/dist\/runnerUtility\/rootServiceCli\.js" install "\$a" \|\| f /);
+    assert.ok(!script.includes('.charness-runner'), 'root is never pointed at the account\'s state folder or launcher');
+    assert.ok(!script.includes('service install'), 'and never asked to run the account\'s `service install`');
+  });
+
+  it('says what to do when the service step fails, once, for macOS and Linux alike', () => {
+    const { script } = splitAdminLine(buildAdminBootstrapLine(createPairCodePayload()));
+    assert.equal(script.split('has no service').length, 2);
+    assert.ok(script.includes('f "$a is paired, but has no service: fix the above and paste a fresh admin line"'));
   });
 
   it('carries no value that could end its quoting, and the account is checked before it is written', () => {
     const line = buildAdminBootstrapLine(createPairCodePayload());
-    assert.equal(line.split("'").length, 5, 'exactly the four quotes that wrap the two scripts');
+    assert.equal(line.split("'").length, 3, 'exactly the two quotes that wrap the script');
     for (const bad of ['', '-n', 'a b', 'x;y', '$(id)', 'a\'b', 'a`b', 'a\\b', 'a\nb', 'ä']) {
       assert.equal(checkIsAccountName(bad), false, JSON.stringify(bad));
       assert.throws(() => buildAdminBootstrapLine(createPairCodePayload(), bad), /plain account name/);
     }
     for (const good of ['runner', 'ci-runner', 'ci.runner', 'Runner_2', '_svc', '9lives']) assert.equal(checkIsAccountName(good), true, good);
   });
-
 });
 
-describe('admin bootstrap line: the checks as root, the switch, the service', () => {
+describe('admin bootstrap line: the checks as root, the root-owned copy, the switch, the root step', () => {
   beforeEach(() => {
     workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abl-'));
     fs.mkdirSync(path.join(workDir, 'tmp'));
@@ -296,61 +330,90 @@ describe('admin bootstrap line: the checks as root, the switch, the service', ()
 
   const standardAccount: StubAccount = { uid: 4242, groups: ['runner', 'staff'] };
 
-  it('pairs AS the account and then installs its service — in that order — and the pairing is told a service follows', () => {
+  function readPrinted(result: ReturnType<typeof spawnSync>, label: string): string {
+    return new RegExp(`^${label} (.*)$`, 'm').exec(String(result.stdout))?.[1] ?? '';
+  }
+
+  it('fetches ONE copy as root, has the account pair itself from it, and runs the root step from the same copy — in that order, the pairing told a service follows', () => {
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
-    installStubLauncher('runner');
     const result = runAdminLine();
     assert.equal(result.status, 0, String(result.stderr));
     assert.match(String(result.stdout), /^RUNNER_CLI pair --bootstrap \S+\/pkg --archive \S+\/package\.tgz --package-id 0123456789abcdef --service-follows cr1\./m);
-    assert.deepEqual(readStubLog(), [
-      `${stubUserLine} -u runner -H cd&&pwd`.replace('cd&&pwd', 'sh'),
-      `${stubUserLine} -u runner -H sh`,
-      'launcher service install --system --user runner',
-    ]);
-    assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), [], 'the pairing script cleaned up');
+    assert.match(String(result.stdout), /^ROOT_SERVICE install runner$/m);
+    const pairedFrom = readPrinted(result, 'RUNNER_CLI_FROM');
+    assert.match(pairedFrom, /^\/tmp\/charness-runner\.[A-Za-z0-9]{8}\/pkg$/, 'a folder of root\'s own in /tmp');
+    assert.equal(readPrinted(result, 'ROOT_SERVICE_FROM'), pairedFrom, 'the account and root use the very copy root fetched');
+    assert.ok(!pairedFrom.startsWith(path.join(workDir, 'homes')), 'nothing runs from the account\'s home');
+    assert.ok(String(result.stdout).indexOf('RUNNER_CLI ') < String(result.stdout).indexOf('ROOT_SERVICE install'), 'the pairing first');
+    assert.equal(readFileLines(path.join(workDir, 'ssh.args')).length, 1, 'the package was downloaded once');
+    assert.equal(fs.existsSync(pairedFrom), false, 'and the copy is gone when the line ends');
+  });
+
+  it('calls sudo exactly once — for the pairing script of the package, under the node root checked — so a call for anything else would show', () => {
+    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Darwin', accounts: { runner: standardAccount } });
+    const result = runAdminLine();
+    assert.equal(result.status, 0, String(result.stderr));
+    assert.deepEqual(readStubLog(), [`${stubUserLine} -u runner -H node runnerCli.js pair`]);
+  });
+
+  it('shows the root-made folder to another account as readable, and the key as private — the root copy is world-readable, never writable, the key is not', () => {
+    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
+    const result = runAdminLine();
+    assert.equal(result.status, 0, String(result.stderr));
+    assert.equal(readPrinted(result, 'MODES'), 'folder=755 package=755 key=600');
   });
 
   it('works for the account named last, whatever it is called', () => {
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Darwin', accounts: { 'ci.runner': standardAccount } });
-    installStubLauncher('ci.runner');
     const result = runAdminLine('ci.runner');
     assert.equal(result.status, 0, String(result.stderr));
-    assert.equal(readStubLog().at(-1), 'launcher service install --system --user ci.runner');
+    assert.match(String(result.stdout), /^ROOT_SERVICE install ci\.runner$/m);
+    assert.deepEqual(readStubLog(), [`${stubUserLine} -u ci.runner -H node runnerCli.js pair`]);
   });
 
-  it('does not install the service when the pairing failed (and says nothing more than the pairing said)', () => {
+  it('does not run the root step when the pairing failed, and passes the failure on', () => {
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
-    installStubLauncher('runner');
+    const result = runAdminLine(defaultRunnerAccount, { STUB_PAIR_FAILS: '1' });
+    assert.notEqual(result.status, 0);
+    assert.ok(!String(result.stdout).includes('ROOT_SERVICE'), 'no service for an account that was not paired');
+    assert.doesNotMatch(String(result.stderr), /has no service/);
+    assert.equal(fs.existsSync(readPrinted(result, 'RUNNER_CLI_FROM')), false);
+  });
+
+  it('a failed root step says the account is paired and what to do — the same words on macOS and on Linux — and exits with a failure', () => {
+    for (const systemName of ['Darwin', 'Linux']) {
+      installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: systemName, accounts: { runner: standardAccount } });
+      const result = runAdminLine(defaultRunnerAccount, { STUB_SERVICE_FAILS: '1' });
+      assert.equal(result.status, 1, systemName);
+      assert.match(String(result.stderr), /^charness-runner: runner is paired, but has no service: fix the above and paste a fresh admin line$/m, systemName);
+      assert.equal(String(result.stderr).split('has no service').length, 2, 'said once');
+    }
+  });
+
+  it('stops with a clear line when the hub refuses the download — before the account is touched — and cleans up', () => {
+    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
     fs.writeFileSync(path.join(workDir, 'bin', 'ssh'), '#!/bin/sh\necho "Permission denied" >&2\nexit 255\n', { mode: 0o755 });
     const result = runAdminLine();
     assert.notEqual(result.status, 0);
     assert.match(String(result.stderr), /the hub refused or did not answer/);
-    assert.ok(!readStubLog().some((line) => line.startsWith('launcher')), 'no service for an account that was not paired');
-    assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), []);
+    assert.deepEqual(readStubLog(), [], 'nothing ran as the account');
   });
 
-  it('passes the failure of the service install on as its own exit status', () => {
-    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
-    installStubLauncher('runner', 3);
-    assert.equal(runAdminLine().status, 3);
-  });
-
-  it('refuses to run without root, before touching anything', () => {
+  it('refuses to run without root, before anything is fetched', () => {
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 1000, os: 'Linux', accounts: { runner: standardAccount } });
     const result = runAdminLine();
     assert.notEqual(result.status, 0);
     assert.match(String(result.stderr), /run this line with sudo/);
-    assert.deepEqual(readStubLog(), []);
+    assertNothingFetched();
   });
 
-  it('stops on an account that does not exist — names it, creates nothing, pairs nothing', () => {
+  it('stops on an account that does not exist — names it, creates nothing, fetches nothing, pairs nothing', () => {
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { someoneelse: standardAccount } });
     const result = runAdminLine('runner');
     assert.notEqual(result.status, 0);
-    assert.match(String(result.stderr), /no account runner here: create a standard user, or end the line with the right name/);
-    assert.deepEqual(readStubLog(), [], 'no sudo -u: nothing ran as anyone');
+    assert.match(String(result.stderr), /no account runner here: create a standard user or fix the last word/);
+    assertNothingFetched();
     assert.ok(!fs.existsSync(path.join(workDir, 'homes', 'runner')), 'no account or home was made');
-    assert.ok(!String(result.stdout).includes('RUNNER_CLI'));
   });
 
   it('refuses root as the account', () => {
@@ -358,7 +421,7 @@ describe('admin bootstrap line: the checks as root, the switch, the service', ()
     const result = runAdminLine('root');
     assert.notEqual(result.status, 0);
     assert.match(String(result.stderr), /root is root: use a standard user/);
-    assert.deepEqual(readStubLog(), []);
+    assertNothingFetched();
   });
 
   it('refuses a name that is not an account name — also when the line was edited by hand — without running any of it', () => {
@@ -375,25 +438,30 @@ describe('admin bootstrap line: the checks as root, the switch, the service', ()
       assert.match(String(result.stderr), /is not an account name/, JSON.stringify(edited));
     }
     assert.ok(!fs.existsSync(marker), 'nothing in the name was executed');
-    assert.deepEqual(readStubLog(), []);
+    assertNothingFetched();
   });
 
   it('refuses a system that is neither macOS nor Linux', () => {
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'FreeBSD', accounts: { runner: standardAccount } });
     const result = runAdminLine();
     assert.notEqual(result.status, 0);
-    assert.match(String(result.stderr), /only macOS and Linux are supported/);
-    assert.deepEqual(readStubLog(), []);
+    assert.match(String(result.stderr), /only macOS and Linux/);
+    assertNothingFetched();
   });
 
-  it('refuses an account without a home folder, before pairing it', () => {
-    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
-    fs.rmSync(path.join(workDir, 'homes', 'runner'), { recursive: true });
+  it('refuses when the account\'s groups cannot be read — a failing `id -Gn` must not pass as «not an admin»', () => {
+    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: { uid: 4242, groups: ['sudo'], groupsFail: true } } });
     const result = runAdminLine();
     assert.notEqual(result.status, 0);
-    assert.ok(!String(result.stdout).includes('RUNNER_CLI'));
-    assert.ok(!readStubLog().some((line) => line.startsWith('launcher')));
+    assert.match(String(result.stderr), /^charness-runner: no groups for runner$/m);
+    assertNothingFetched();
   });
+
+  /** Nothing was downloaded, nothing ran as an account: the hub was not asked and `sudo` was not called. */
+  function assertNothingFetched(): void {
+    assert.ok(!fs.existsSync(path.join(workDir, 'ssh.args')), 'the hub was not asked for the package');
+    assert.deepEqual(readStubLog(), [], 'nothing ran as the account');
+  }
 
   /** Every combination of system, uid and groups the runner-side check knows: the line and `checkIsAdminAccount` must say the same. */
   const adminFacts: Array<{ platform: NodeJS.Platform; os: string; groups: string[] }> = [
@@ -403,13 +471,12 @@ describe('admin bootstrap line: the checks as root, the switch, the service', ()
   for (const facts of adminFacts) {
     it(`${facts.os} with groups «${facts.groups.join(' ')}»: the line refuses exactly what checkIsAdminAccount calls admin`, () => {
       installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: facts.os, accounts: { runner: { uid: 4242, groups: facts.groups } } });
-      installStubLauncher('runner');
       const isAdmin = checkIsAdminAccount({ platform: facts.platform, uid: 4242, groups: facts.groups });
       const result = runAdminLine();
       if (isAdmin) {
         assert.notEqual(result.status, 0);
-        assert.match(String(result.stderr), /runner is an admin account: the agents code would run with its rights/);
-        assert.deepEqual(readStubLog(), [], 'refused before anything ran as the account');
+        assert.match(String(result.stderr), /runner is an admin: the agents code runs with its rights/);
+        assertNothingFetched();
       } else {
         assert.equal(result.status, 0, String(result.stderr));
       }
@@ -417,8 +484,12 @@ describe('admin bootstrap line: the checks as root, the switch, the service', ()
   }
 
   it('the admin groups of the line are the runner utility\'s own lists', () => {
-    const { root } = splitAdminLine(buildAdminBootstrapLine(createPairCodePayload()));
-    assert.ok(root.includes(`Darwin) g="${macAdminGroup}"`));
-    assert.ok(root.includes(`Linux) g="${linuxAdminGroups.join(' ')}"`));
+    const { script } = splitAdminLine(buildAdminBootstrapLine(createPairCodePayload()));
+    assert.ok(script.includes(`Darwin) g="${macAdminGroup}"`));
+    assert.ok(script.includes(`Linux) g="${linuxAdminGroups.join(' ')}"`));
   });
 });
+
+function readFileLines(file: string): string[] {
+  return fs.readFileSync(file, 'utf8').split('\n').filter((line) => line !== '');
+}

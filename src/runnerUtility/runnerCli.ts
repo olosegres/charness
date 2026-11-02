@@ -32,10 +32,8 @@ const usage = `Usage:
   charness-runner run                hold the link to the hub (Ctrl-C stops)
   charness-runner check              look at this machine; install Pueue and rsync when they are missing
   charness-runner service install    keep it running in the background (systemd user service on Linux, LaunchAgent on macOS)
-  sudo charness-runner service install --system --user <account>
-                                     by an admin, once, for another account: macOS — always on, also logged out (LaunchDaemon
-                                     running as <account>); Linux — <account>'s user service, with lingering switched on
-  charness-runner service uninstall  remove the services (with --system --user <account> for the daemons)
+                                     (always on, also logged out: an admin pastes the admin line from /runners, see docs/remote-run.md)
+  charness-runner service uninstall  remove the services (an always-on one: prints the admin's commands)
   charness-runner pause | resume     take this machine out of rotation, or back in
   charness-runner unpair [--local]   tell the hub and forget the pairing (--local: forget it here only)
 `;

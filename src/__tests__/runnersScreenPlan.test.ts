@@ -243,7 +243,7 @@ describe('runnersScreenPlan: the other screens and texts', () => {
     const payload = createPairCodePayload({ host: 'a-quite-long-name.example.com', user: 'a-hub-user-name' });
     const adminLine = buildAdminBootstrapLine(payload);
     const plainLine = buildBootstrapLine(payload);
-    const roomToSpare = 150;
+    const roomToSpare = 120;
     for (const locale of localeCodes) {
       runWithLocale(locale, () => {
         const parts = buildPairingMessageParts(10, defaultRunnerAccount, t);
