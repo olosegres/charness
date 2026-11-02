@@ -21,6 +21,7 @@ import { runGateLink, type GateLinkTimings } from '../runners/gateLink';
 import { readUntilGateMarker, type GateMarker } from '../runners/gateProtocol';
 import { getRunnerLinkPaths } from '../runners/hubPaths';
 import { createPairing, redeemPairing, removePairedRunner, sweepExpiredPairings } from '../runners/hubPairing';
+import { readPairedFile, writePairedFile } from '../runners/hubRegistry';
 import { readHubKey } from '../runners/hubKey';
 import { checkIsGateProcessOf, cutRunnerLink, getRunnerLinkStatus, probeSocket, readLinkState, sweepOrphanLinkRecords, writeLinkState } from '../runners/linkControl';
 import { runRunnerProxy } from '../runners/runnerProxy';
@@ -331,7 +332,11 @@ describe('the gate\'s link', () => {
     const gate = await startGate(runner.runnerId, standIn);
     const paths = getRunnerLinkPaths(fixture.ctx.dir, runner.runnerId);
     await waitUntil(() => readLinkState(fixture.ctx.dir, runner.runnerId) !== null, 'the gate to have written its status');
-    await removePairedRunner(fixture.ctx, runner.runnerId, startMs);
+    // The runner leaves the registry WITHOUT a registry operation: those sweep the link files of unknown runners themselves (this gate's pid is
+    // the test's, not a `runner-gate` command line, so the sweep would delete both files before the cut) — and then only the cut is under test.
+    const paired = readPairedFile(fixture.ctx.dir);
+    writePairedFile(fixture.ctx.dir, { ...paired, rev: paired.rev + 1, runners: paired.runners.filter((registered) => registered.id !== runner.runnerId) });
+    assert.equal(fs.existsSync(paths.socket) && fs.existsSync(paths.state), true, 'both files are still there when the link is cut');
     cutRunnerLink(fixture.ctx.dir, runner.runnerId);
     await settleWithin(gate.done, 'the gate of a removed runner to leave');
     assert.equal(fs.existsSync(paths.state), false, 'the status file is gone, and the gate did not write it again as it left');
