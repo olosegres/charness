@@ -76,9 +76,17 @@ escape a backslash in `command="…"`).
 1. `createPairing` (under the lock): a temporary ed25519 key, its `pending.json` entry, its `authorized_keys` line (expires in 10 min),
    and the **pair code** `cr1.<base64url JSON>` (`pairCode.ts`: host, port, account, the hub's ssh host key to pin, the temporary
    PRIVATE key, the pair id). The code is a secret until used or expired: never logged; decode errors name fields, never values.
-2. `bootstrapLine.ts` renders the one `sh -c '…'` line for the operator: it writes the key and a `known_hosts` line to a private temp
-   folder, runs `ssh … bootstrap > package.tgz`, unpacks it and starts `runnerCli.js pair --bootstrap <folder> <code>`. The
-   unpacked package has no `node_modules`: the runner's `pair` step reaches its install step on Node built-ins only.
+2. `bootstrapLine.ts` renders the lines for the operator, both of one code. The PLAIN `sh -c '…'` line (run as the runner account): it writes
+   the key and a `known_hosts` line to a private temp folder, runs `ssh … bootstrap > package.tgz`, unpacks it and starts `runnerCli.js pair
+   --bootstrap <folder> <code>`. The unpacked package has no `node_modules`: the runner's `pair` step reaches its install step on Node
+   built-ins only. The ADMIN line, `sudo sh -c '<checks>' sh '<that same script>' <account>`: as root it checks the account (exists; not
+   root; not in the admin groups of `runnerUtility/adminCheck.ts`; the OS is macOS or Linux; it has a home), runs the script AS the
+   account (`sudo -u <account> -H`, with `--service-follows` so the pairing does not print the «keep it running» help), and then the
+   account's launcher runs `service install --system --user <account>` as root — the macOS LaunchDaemon, or on Linux lingering plus the
+   user service installed by the account (`runnerUtility/serviceManager.ts`). The script is the line's first ARGUMENT (no double quoting),
+   the account its LAST word (editable by hand; `charness runners pair --account`). A pairing is offered in TWO Telegram messages — the
+   admin line alone is ~3.7 KB, two lines would not fit one message — which `connectors/telegram/runnerPairingMessages.ts` follows one
+   entry per message.
 3. The runner calls `redeem` with its own new public key and host key (`gateProtocol.ts`). `redeemPairing` (one critical section):
    code must be in `pending.json` and not expired, the key not yet registered; it adds the runner (a unique name — `-2`, `-3`, … —
    against paired AND hand-made runners), deletes the pending entry (**this is what makes the code single use**), rewrites

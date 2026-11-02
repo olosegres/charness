@@ -1,3 +1,6 @@
+import { linuxAdminGroups, macAdminGroup } from '../runnerUtility/adminCheck';
+import { serviceFollowsFlag } from '../runnerUtility/pairArgs';
+import { launcherPathInHome } from '../runnerUtility/runnerHome';
 import { gateMarker, maxGateNoiseBytes } from './gateProtocol';
 import { encodePairCode, type PairCodePayload } from './pairCode';
 
@@ -14,6 +17,13 @@ import { encodePairCode, type PairCodePayload } from './pairCode';
  *
  * Every value in the line passed a strict pattern (`pairCode.ts`) that has no quote, space, `$`, backtick or backslash; the line
  * itself is wrapped in single quotes and so holds none.
+ *
+ * The ADMIN line ({@link buildAdminBootstrapLine}) is the same script behind an account switch: `sudo sh -c '<checks>' sh '<script>'
+ * <account>`. As root the checks run first (the account exists, is not root and not an admin — it runs the agents' code — and the OS is
+ * known), then the script runs AS the account (`sudo -u <account> -H`: its files are the account's, never root's), then the account's
+ * launcher installs the always-on service (`service install --system --user <account>`: the one other thing that needs root). The script
+ * travels as the line's first argument, so it is not quoted twice; the account is the LAST word, where an edit after pasting is easiest.
+ * Nothing creates an account. The pairing code stays single use, 10 minutes, a secret; sudo logs the command line, and a spent code is worth nothing.
  */
 
 const minNodeMajor = 22;
@@ -30,8 +40,19 @@ function getPrivateKeyBody(privateKey: string): string {
   return privateKey.replace(privateKeyHeader, '').replace(privateKeyFooter, '').replace(/\s+/g, '');
 }
 
-/** @description The command to paste on the runner machine, for the pairing `payload`. */
-export function buildBootstrapLine(payload: PairCodePayload): string {
+/** @description The account the admin line pairs unless the operator changes its last word. */
+export const defaultRunnerAccount = 'runner';
+/** The characters of an account name the admin line lets through (a character class body): none is special to a shell, and a name never starts with `-`. */
+const accountNameChars = 'A-Za-z0-9._-';
+const accountNamePattern = new RegExp(`^(?!-)[${accountNameChars}]+$`);
+
+/** @description Is `name` a plain account name (letters, digits, `.`, `_`, `-`; no leading `-`)? The admin line refuses anything else. */
+export function checkIsAccountName(name: string): boolean {
+  return accountNamePattern.test(name);
+}
+
+/** The script that pairs the account running it: `sh` that needs nothing of charness. `isServiceFollowing`: an admin's line installs the service next. */
+function renderPairingScript(payload: PairCodePayload, isServiceFollowing: boolean): string {
   const code = encodePairCode(payload);
   const sshOptions = [
     '-T', '-F /dev/null', '-i "$d/key"',
@@ -61,8 +82,46 @@ export function buildBootstrapLine(payload: PairCodePayload): string {
     'tail -c +$((o + ${#t} + 2)) "$d/answer" > "$d/package.tgz"',
     'mkdir "$d/pkg"',
     'tar -xzf "$d/package.tgz" -C "$d/pkg"',
-    `node "$d/pkg/dist/runnerUtility/runnerCli.js" pair --bootstrap "$d/pkg" --archive "$d/package.tgz" --package-id "\${t##*id=}" ${code}`,
+    `node "$d/pkg/dist/runnerUtility/runnerCli.js" pair --bootstrap "$d/pkg" --archive "$d/package.tgz" --package-id "\${t##*id=}"${isServiceFollowing ? ` ${serviceFollowsFlag}` : ''} ${code}`,
   ].join('; ');
   if (script.includes("'")) throw new Error('the bootstrap script must not hold a single quote');
-  return `sh -c '${script}'`;
+  return script;
+}
+
+/**
+ * The root part of the admin line. `$1` is the pairing script, `$2` the account; `h` is the account's own idea of its home (`sudo -H` sets
+ * it), where its launcher lives — and an account without a usable home stops the line before anything is paired. Messages are plain ASCII
+ * with no apostrophe (the whole line sits in single quotes) and short: the line plus its text must fit one Telegram message.
+ */
+function renderAdminScript(): string {
+  const script = [
+    'set -eu',
+    'f() { echo "charness-runner: $*" >&2; exit 1; }',
+    'a=$2',
+    '[ "$(id -u)" = 0 ] || f "run this line with sudo"',
+    `case $a in ""|-*|*[!${accountNameChars}]*) f "$a is not an account name";; esac`,
+    'u=$(id -u "$a" 2>/dev/null) || f "no account $a here: create a standard user, or end the line with the right name"',
+    '[ "$u" != 0 ] || f "$a is root: use a standard user"',
+    `case $(uname -s) in Darwin) g="${macAdminGroup}";; Linux) g="${linuxAdminGroups.join(' ')}";; *) f "only macOS and Linux are supported";; esac`,
+    'for x in $(id -Gn "$a"); do case " $g " in *" $x "*) f "$a is an admin account: the agents code would run with its rights";; esac; done',
+    'h=$(sudo -u "$a" -H sh -c "cd&&pwd")',
+    'sudo -u "$a" -H sh -c "$1"',
+    `"$h/${launcherPathInHome}" service install --system --user "$a"`,
+  ].join('; ');
+  if (script.includes("'")) throw new Error('the admin script must not hold a single quote');
+  return script;
+}
+
+/** @description The command to paste on the runner machine, as the account that will run jobs, for the pairing `payload`. */
+export function buildBootstrapLine(payload: PairCodePayload): string {
+  return `sh -c '${renderPairingScript(payload, false)}'`;
+}
+
+/**
+ * @description The command to paste in an ADMIN account's terminal on the runner machine: it checks `account`, pairs it, and installs its
+ * always-on service. `account` is the line's last word, so the operator can change it by hand.
+ */
+export function buildAdminBootstrapLine(payload: PairCodePayload, account: string = defaultRunnerAccount): string {
+  if (!checkIsAccountName(account)) throw new Error('the runner account must be a plain account name');
+  return `sudo sh -c '${renderAdminScript()}' sh '${renderPairingScript(payload, true)}' ${account}`;
 }

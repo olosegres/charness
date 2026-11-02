@@ -84,7 +84,7 @@ function createServiceDeps(commands: string[]): ServiceDeps {
     commands.push(`${file} ${args.join(' ')}`);
     return { ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false };
   };
-  return { runner, platform: 'linux', uid: 1000, checkIsRunnerLink: () => false, accountName: 'runner', homeDir: home, nodePath: process.execPath, launchDaemonsDir: path.join(home, 'LaunchDaemons'), chown: () => undefined, resolveAccount: async () => null };
+  return { runner, platform: 'linux', uid: 1000, checkIsRunnerLink: () => false, accountName: 'runner', homeDir: home, nodePath: process.execPath, launchDaemonsDir: path.join(home, 'LaunchDaemons'), chown: () => undefined, resolveAccount: async () => null, sleep: async () => undefined };
 }
 
 /** A Pueue with one running task that `reset --force` ends: `status --json` shows it until the reset, an empty queue after. */

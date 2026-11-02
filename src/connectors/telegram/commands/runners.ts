@@ -1,21 +1,22 @@
 /**
  * `/runners` — the machines that run the agents' tests and builds, paired from Telegram. In General only (admins): one message that
  * lists the machines (online or not, what they are, what they can do) with Pause / Resume / Remove per machine, and a button that pairs
- * another one — a one-time line to paste on the new machine, valid 10 minutes, shown as a message that turns into «paired» or «expired».
+ * another one — two one-time lines for the new machine (one for an admin account, one for the runner account itself), valid 10 minutes, in
+ * two messages that turn into «paired» or «expired».
  * The hub itself is `src/runners/`; this file is only the screen, its buttons and the two background jobs (editing the pairing message,
  * refreshing a list with live data). See `src/runners/README.md` for the safety line and `utils/runnersScreenPlan.ts` for the texts.
  *
  * Two rules keep the screen true under concurrency. (1) A render is claimed BEFORE its Telegram edit is awaited: every message has a
  * generation, and a background job (the live probe) draws only if the message still carries the generation it started from — so a
  * question that replaced the list while its edit was still queued is never drawn over. (2) The messages that offer a pairing code are
- * this instance's own record (`runnerPairingMessages.ts`), kept until the edit that settles them was accepted.
+ * this instance's own record (`runnerPairingMessages.ts`, an entry per message), each kept until the edit that settles it was accepted.
  */
 import { Markup, type Context } from 'telegraf';
 import { getCaughtErrnoCode } from '../../../configDirFile';
 import { getActiveLang, t } from '../../../i18n';
 import { escapeHtmlText } from '../renderAgentHtml';
 import { keyFromString, keyToString, type SessionKey } from '../../../sessionKey';
-import { buildBootstrapLine } from '../../../runners/bootstrapLine';
+import { buildAdminBootstrapLine, buildBootstrapLine, defaultRunnerAccount } from '../../../runners/bootstrapLine';
 import { checkHubAddress, parseHubAddress, type HostKeyScanner, type HubAddress, type HubAddressCheck } from '../../../runners/hubAddress';
 import { findProposedHubAddress, formatHubAddress } from '../../../runners/hubAddressCandidates';
 import type { HubContext } from '../../../runners/hubPaths';
@@ -46,7 +47,7 @@ import {
   type RunnersCallback,
   type RunnersScreen,
 } from '../../../utils/runnersScreenPlan';
-import { addPairingMessage, markPairingMessageFailed, readPairingMessages, removePairingMessages } from '../runnerPairingMessages';
+import { addPairingMessage, getPairingMessageId, markPairingMessageFailed, readPairingMessages, removePairingMessages } from '../runnerPairingMessages';
 import type { BotCore } from './botCore';
 import { answerCallbackQuerySafely } from './callbackToast';
 import { buildMessageSnapshotKey, getCallbackMessageId, rememberBoundedSnapshot } from './callbackMessage';
@@ -132,7 +133,7 @@ export function createRunners(ports: RunnersPorts) {
   const addressProposals = new Map<string, HubAddress | null>();
   /** General keys whose next message is an address → when the wait began. */
   const addressWaits = new Map<string, number>();
-  /** Pairing messages whose edit failed: when the next try may be, and the delay after it (in memory — a restart tries at once). */
+  /** Pairing messages whose edit failed, by {@link getPairingMessageId}: when the next try may be, and the delay after it (in memory — a restart tries at once). */
   const settleRetries = new Map<string, { nextAttemptAtMs: number; delayMs: number }>();
   let isWatchTickRunning = false;
   let lastGeneration = 0;
@@ -237,7 +238,28 @@ export function createRunners(ports: RunnersPorts) {
     await replyToThread(key, t('runners.addressRejected', { reason }));
   }
 
-  /** Make a code and post the line that carries it — a secret: the trace keeps only the message's length. */
+  /** `intro`, the line in a `<pre>`, and `outro` when there is one — the HTML of a pairing message. */
+  function renderPairingMessage(intro: string, line: string, outro: string | null): string {
+    return `${escapeHtmlText(intro)}\n\n<pre>${escapeHtmlText(line)}</pre>${outro === null ? '' : `\n\n${escapeHtmlText(outro)}`}`;
+  }
+
+  /** Post a message that carries a pairing line (a secret: the trace keeps only its length) and remember it so it can turn into «paired» / «expired». */
+  async function postPairingLine(key: SessionKey, pairId: string, text: string): Promise<boolean> {
+    const messageId = await replyToThread(key, text, { parse_mode: 'HTML' }, { isSecret: true });
+    if (messageId === null) return false;
+    try {
+      addPairingMessage(ports.pairingMessagesPath, { pairId, key: keyToString(key), messageId, offeredAtMs: now() });
+    } catch (error) {
+      // The line is out and works; only its turning into «paired» / «expired» is lost.
+      console.warn(`[${logTag}] the pairing message could not be recorded (${getCaughtErrnoCode(error)}); it will not turn into «paired» or «expired»`);
+    }
+    return true;
+  }
+
+  /**
+   * Make a code and post the two lines that carry it, one message each (together they are longer than a Telegram message): the line for an
+   * ADMIN account first, the plain one second. Both settle together, whichever line is used.
+   */
   async function offerPairing(key: SessionKey, address: HubAddress, knownCheck: Extract<HubAddressCheck, { ok: true }> | null): Promise<void> {
     const check = knownCheck ?? (await checkHubAddress(address, ports.scanHostKey));
     if (!check.ok) {
@@ -247,18 +269,14 @@ export function createRunners(ports: RunnersPorts) {
     try {
       ports.ensureGateWrapper();
       const pairing = await createPairing(hub, { host: address.host, port: address.port, hostKey: check.hostKey, label: ports.getBotLabel(), nowMs: now() });
-      const parts = buildPairingMessageParts(pairingLifetimeMinutes, t);
-      const text = `${escapeHtmlText(parts.intro)}\n\n<pre>${escapeHtmlText(buildBootstrapLine(pairing.payload))}</pre>\n\n${escapeHtmlText(parts.outro)}`;
-      const messageId = await replyToThread(key, text, { parse_mode: 'HTML' }, { isSecret: true });
-      if (messageId === null) {
+      const parts = buildPairingMessageParts(pairingLifetimeMinutes, defaultRunnerAccount, t);
+      if (!(await postPairingLine(key, pairing.pairId, renderPairingMessage(parts.adminIntro, buildAdminBootstrapLine(pairing.payload, defaultRunnerAccount), null)))) {
         await replyToThread(key, t('runners.pairFailedText', { reason: 'the message could not be sent' }));
         return;
       }
-      try {
-        addPairingMessage(ports.pairingMessagesPath, { pairId: pairing.pairId, key: keyToString(key), messageId, offeredAtMs: now() });
-      } catch (error) {
-        // The line is out and works; only its turning into «paired» / «expired» is lost.
-        console.warn(`[${logTag}] the pairing message could not be recorded (${getCaughtErrnoCode(error)}); it will not turn into «paired» or «expired»`);
+      // The admin line is out and works whatever happens to this one.
+      if (!(await postPairingLine(key, pairing.pairId, renderPairingMessage(parts.alternativeIntro, buildBootstrapLine(pairing.payload), parts.alternativeOutro)))) {
+        console.warn(`[${logTag}] the second pairing message (the line for the runner account itself) could not be sent`);
       }
     } catch (error) {
       await replyToThread(key, t('runners.pairFailedText', { reason: describeCaughtError(error) }));
@@ -440,9 +458,10 @@ export function createRunners(ports: RunnersPorts) {
     if (problem !== null && problem !== lastStoreProblem) console.warn(`[${logTag}] ${problem}; the pairing messages it held are not followed`);
     lastStoreProblem = problem;
     if (pending.some((pairing) => pairing.expiresAtMs <= nowMs)) await ports.sweepExpiredCodes(nowMs);
-    const settledPairIds = new Set<string>();
+    const settledMessageIds = new Set<string>();
     for (const message of messages) {
-      if ((settleRetries.get(message.pairId)?.nextAttemptAtMs ?? 0) > nowMs) continue;
+      const messageId = getPairingMessageId(message);
+      if ((settleRetries.get(messageId)?.nextAttemptAtMs ?? 0) > nowMs) continue;
       const runner = runners.find((candidate) => candidate.pairId === message.pairId);
       const isOpen = pending.some((pairing) => pairing.pairId === message.pairId && pairing.expiresAtMs > nowMs);
       if (runner === undefined && isOpen) continue;
@@ -451,21 +470,21 @@ export function createRunners(ports: RunnersPorts) {
         editThreadMessage(key, message.messageId, runner === undefined ? buildExpiredText(t) : buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime)),
       );
       if (isEdited) {
-        settledPairIds.add(message.pairId);
-        settleRetries.delete(message.pairId);
+        settledMessageIds.add(messageId);
+        settleRetries.delete(messageId);
         continue;
       }
       if (nowMs - (message.firstFailedAtMs ?? nowMs) > pairingMessageGiveUpAfterFailingMs) {
         console.warn(`[${logTag}] a pairing message could not be edited for a day; giving up on it`);
-        settledPairIds.add(message.pairId);
-        settleRetries.delete(message.pairId);
+        settledMessageIds.add(messageId);
+        settleRetries.delete(messageId);
         continue;
       }
-      markPairingMessageFailed(ports.pairingMessagesPath, message.pairId, nowMs);
-      const delayMs = Math.min((settleRetries.get(message.pairId)?.delayMs ?? settleRetryFirstDelayMs / 2) * 2, settleRetryMaxDelayMs);
-      settleRetries.set(message.pairId, { nextAttemptAtMs: nowMs + delayMs, delayMs });
+      markPairingMessageFailed(ports.pairingMessagesPath, message, nowMs);
+      const delayMs = Math.min((settleRetries.get(messageId)?.delayMs ?? settleRetryFirstDelayMs / 2) * 2, settleRetryMaxDelayMs);
+      settleRetries.set(messageId, { nextAttemptAtMs: nowMs + delayMs, delayMs });
     }
-    if (settledPairIds.size > 0) removePairingMessages(ports.pairingMessagesPath, settledPairIds);
+    if (settledMessageIds.size > 0) removePairingMessages(ports.pairingMessagesPath, settledMessageIds);
   }
 
   /**

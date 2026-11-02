@@ -5,7 +5,8 @@ import { hubIdSchema } from '../../runners/hubIds';
 
 /**
  * @description The pairing messages this INSTANCE has sent and not yet settled — the one record of "which message offers which code"
- * (`DATA_DIR/runner-pairing-messages.json`). It is the instance's own: the hub registry is shared by every charness of the OS user and
+ * (`DATA_DIR/runner-pairing-messages.json`). One code is offered in TWO messages (the admin line and the plain one: together they would
+ * not fit one Telegram message), so an entry is one MESSAGE, found by {@link getPairingMessageId}, and a code has two entries. It is the instance's own: the hub registry is shared by every charness of the OS user and
  * holds the credentials only, so a message of this bot is never adopted by another bot, and a credential swept or spent (while this bot
  * was down, or by another instance) does not take the way back to its message with it. An entry stays until the message was edited to
  * what became of its code (paired / expired) and Telegram accepted the edit — or until edits of it have been FAILING for a day: the
@@ -59,21 +60,27 @@ export function writePairingMessages(filePath: string, messages: readonly Pairin
   writeJsonFileAtomically(filePath, { messages: messages.slice(-maxEntries) }, fileMode);
 }
 
-/** @description Add `message` (an older entry for the same code is replaced). */
+/** @description What names one message of the record: its code and its Telegram message id (a conversation holds both messages of a code). */
+export function getPairingMessageId(message: Pick<PairingMessage, 'pairId' | 'messageId'>): string {
+  return `${message.pairId}:${message.messageId}`;
+}
+
+/** @description Add `message` (an older entry for the same message is replaced; the code's other message stays). */
 export function addPairingMessage(filePath: string, message: PairingMessage): void {
   const { messages } = readPairingMessages(filePath);
-  writePairingMessages(filePath, [...messages.filter((candidate) => candidate.pairId !== message.pairId), message]);
+  writePairingMessages(filePath, [...messages.filter((candidate) => getPairingMessageId(candidate) !== getPairingMessageId(message)), message]);
 }
 
-/** @description Take the entries for `pairIds` out. */
-export function removePairingMessages(filePath: string, pairIds: ReadonlySet<string>): void {
+/** @description Take the entries named by `messageIds` ({@link getPairingMessageId}) out. */
+export function removePairingMessages(filePath: string, messageIds: ReadonlySet<string>): void {
   const { messages } = readPairingMessages(filePath);
-  writePairingMessages(filePath, messages.filter((candidate) => !pairIds.has(candidate.pairId)));
+  writePairingMessages(filePath, messages.filter((candidate) => !messageIds.has(getPairingMessageId(candidate))));
 }
 
-/** @description Note that an edit of the message for `pairId` failed at `nowMs`: the first failure is kept, later ones change nothing. */
-export function markPairingMessageFailed(filePath: string, pairId: string, nowMs: number): void {
+/** @description Note that an edit of `message` failed at `nowMs`: the first failure is kept, later ones change nothing. */
+export function markPairingMessageFailed(filePath: string, message: Pick<PairingMessage, 'pairId' | 'messageId'>, nowMs: number): void {
   const { messages } = readPairingMessages(filePath);
-  if (!messages.some((candidate) => candidate.pairId === pairId && candidate.firstFailedAtMs === undefined)) return;
-  writePairingMessages(filePath, messages.map((candidate) => (candidate.pairId === pairId && candidate.firstFailedAtMs === undefined ? { ...candidate, firstFailedAtMs: nowMs } : candidate)));
+  const messageId = getPairingMessageId(message);
+  if (!messages.some((candidate) => getPairingMessageId(candidate) === messageId && candidate.firstFailedAtMs === undefined)) return;
+  writePairingMessages(filePath, messages.map((candidate) => (getPairingMessageId(candidate) === messageId && candidate.firstFailedAtMs === undefined ? { ...candidate, firstFailedAtMs: nowMs } : candidate)));
 }

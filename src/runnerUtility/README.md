@@ -76,12 +76,23 @@ account never clashes with this one.
 | command | `service install` | `service install` | `sudo …/charness-runner service install --system --user <account>`, once, by an admin |
 | what | two systemd USER units | two LaunchAgents | two LaunchDaemons with `UserName=<account>` |
 | runs | at boot and without a login, once lingering is on | while the account is logged in (switched away included) | always, also logged out and across fast user switching; as that account, with no extra rights |
-| admin | none; `loginctl enable-linger` is tried by the account itself, and where polkit wants an admin the one `sudo loginctl enable-linger <account>` line is printed (the units are installed anyway) | none | once |
+| admin | none; `loginctl enable-linger` is tried by the account itself, and where polkit wants an admin the one `sudo loginctl enable-linger <account>` line is printed (the units are installed anyway); an admin can also do it for the account (below) | none | once |
 
 `KillMode=process` (systemd) and `AbandonProcessGroup` (launchd) keep a stop of the link from killing what it started: the commands it
 served see their pipes close and finish by themselves (phase 1's lease watcher kills its job on the closed stream). For that to be
 enough the launcher passes TERM / INT / HUP on to the app. Pueue runs at `nice`, never `taskpolicy -b` (on Apple Silicon that pins jobs
 to the efficiency cores). One kind at a time: installing one while the other's files exist is refused with the command that removes it.
+
+**The admin line** (`runners/bootstrapLine.ts`, `buildAdminBootstrapLine`) ends in `sudo …/charness-runner service install --system --user <account>`, run
+by root right after the pairing it ran as the account (`pair … --service-follows`: the pairing prints «the always-on service is installed
+next» instead of the «keep it running» commands — `pairArgs.ts`, builtins only because `runnerCli.ts` reads it before any dependency
+exists). The pairing runs with `sudo`'s `PATH`, not the account's login one, so Node must be installed system-wide. Root runs the account's launcher for this step only (the same exposure as the documented `sudo` line); nothing else of the
+account's code runs as root. macOS: the two LaunchDaemons above. Linux (`installSystemdForAccount`): root switches lingering on
+(`loginctl enable-linger <account>`), asks the account's user manager until it answers `running` or `degraded`
+(`sudo -u <account> -H env XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user is-system-running`, once a second, 20 tries), then runs the
+plain `service install` AS the account the same way. The result is the ordinary user service — `service` says `user-service`, the account
+removes it itself, `uninstall --system` on Linux is refused with that explanation. A failure says the runner is paired but the service is
+not, and prints the command to run again.
 
 **Install order** (`prepareManagedStart`) — nothing is started until all of it is true, and a start that fails is rolled back (the services
 stopped, their files and the record removed: nothing half-installed):
@@ -153,7 +164,9 @@ file modes changed or whose sshd setting was edited refuses the key the same way
 
 `src/__tests__/runnerUtility*.test.ts` (env, home/launcher/config/keys, tools, machine report and admin check, the servers driven
 the way the hub drives them, the link loop's backoff / removed state / update decision) and the process-level flow
-`runnerLinkE2e.test.ts` (kit: `runnerLinkE2e/runnerLinkFlowKit.ts`): the real pasted line, `charness-runner run`, plain ssh through
+`runnerAdminLineE2e.test.ts` (stand-ins for `sudo` / `id` / `getent` / `loginctl` / `systemctl` in `runnerAdminLineE2e/`; root is `fakeroot`): the
+admin line's refusals (no sudo; a missing, admin or root account; an edited name) before anything runs as the account, then pair-as-account →
+service step with the code unspent until then, a used line refused, and a failing service manager. `runnerLinkE2e.test.ts` (kit: `runnerLinkE2e/runnerLinkFlowKit.ts`): the real pasted line, `charness-runner run`, plain ssh through
 `runner-proxy`, restart, gate killed, the runner key's refusals (each against an endpoint the test owns, with the session kept up), an expired
 line, a line aimed at a server with another host key, a runner whose hub changes its host key, a package change found by polling, a lost
 redemption answer, remove.

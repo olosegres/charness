@@ -164,7 +164,9 @@ layout, from the teardown, from a detached reaper and at the next start.
 
 The paired-runner flows (`runnerLinkE2e.test.ts`, `remoteRunPairedE2e.test.ts`, `runnersScreenE2e.test.ts`) use the same loopback `sshd` as «the charness
 host» (its `AuthorizedKeysFile` pointed at a temp `.ssh`) and `charness-runner` in a temp `HOME`, so they never touch the real `~/.ssh`;
-`runnerServiceTakeoverE2e.test.ts` needs only real Pueue (the service manager is a recording stand-in). Same tools, same local skip and CI failure.
+`runnerServiceTakeoverE2e.test.ts` needs only real Pueue (the service manager is a recording stand-in). `runnerAdminLineE2e.test.ts` (the admin pairing line) also needs
+`fakeroot`: root, a second account and the service manager are stand-ins in `runnerAdminLineE2e/` (`sudo` runs the line under `fakeroot`, `sudo -u <account> -H` hands a
+command to the real user with the stand-in account's `HOME`); everything else — the line's own `sh`, the download, the pairing, the service install — is real. Same tools, same local skip and CI failure.
 
 Node applies `--test-timeout` to a whole test FILE (a `describe`'s own `timeout` cannot extend it), so a file that
 hangs or leaves a process alive fails by name when its limit passes, instead of hanging the run. A long-running

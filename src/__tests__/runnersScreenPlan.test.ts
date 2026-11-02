@@ -12,7 +12,9 @@ import assert from 'node:assert/strict';
 import { localeCodes, runWithLocale, t } from '../i18n';
 import { parseProbeOutput, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner } from '../runners/hubRegistry';
+import { buildAdminBootstrapLine, buildBootstrapLine, defaultRunnerAccount } from '../runners/bootstrapLine';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
+import { createPairCodePayload } from './runnersTestKit';
 import {
   buildRunnersPageCallback,
   buildAddressStep,
@@ -222,13 +224,36 @@ describe('runnersScreenPlan: the other screens and texts', () => {
     assert.deepEqual(without.rows.map((row) => row.map((button) => button.data)), [[runnersAddressOtherCallback]]);
   });
 
-  it('the pairing message is an intro and an outro around the line: the lifetime, the account to use, the warning', () => {
-    const parts = buildPairingMessageParts(10, t);
+  it('the pairing is two messages: the admin line\'s intro (lifetime, the account that is the last word), the plain line\'s intro and the outro (what the account must be, who can use a line)', () => {
+    const parts = buildPairingMessageParts(10, 'runner', t);
     assert.equal(
-      parts.intro,
-      "Pair a runner — valid 10 minutes, single use.\n\nRun this on the runner machine, as the account that will run jobs\n(not your main account — it runs the agents' code):",
+      parts.adminIntro,
+      'Pair a runner — valid 10 minutes, single use.\n\n① From an admin account of the runner machine: it pairs «runner» (the last word of the line — change it if the account is named otherwise) and keeps it running:',
     );
-    assert.equal(parts.outro, 'Anyone with this line can attach a machine to this charness until it is used or expires.');
+    assert.equal(parts.alternativeIntro, '② Without admin rights: run this one in the terminal of the runner account itself:');
+    assert.equal(
+      parts.alternativeOutro,
+      "The account must be an existing standard user, not your main account — it runs the agents' code. Anyone with either line can attach a machine to this charness until one of them is used or expires.",
+    );
+    assert.ok(buildPairingMessageParts(10, 'ci-runner', t).adminIntro.includes('«ci-runner»'), 'the account is named as given');
+  });
+
+  it('in every language each pairing message — its text and its line — fits a Telegram message (4096 characters) with room for a long address', () => {
+    // A 29-character host and a 15-character hub account: longer than a typical address.
+    const payload = createPairCodePayload({ host: 'a-quite-long-name.example.com', user: 'a-hub-user-name' });
+    const adminLine = buildAdminBootstrapLine(payload);
+    const plainLine = buildBootstrapLine(payload);
+    const roomToSpare = 150;
+    for (const locale of localeCodes) {
+      runWithLocale(locale, () => {
+        const parts = buildPairingMessageParts(10, defaultRunnerAccount, t);
+        const adminLength = `${parts.adminIntro}\n\n${adminLine}`.length;
+        const plainLength = `${parts.alternativeIntro}\n\n${plainLine}\n\n${parts.alternativeOutro}`.length;
+        assert.ok(adminLength < 4096 - roomToSpare, `${locale}: the admin message is ${adminLength} characters`);
+        assert.ok(plainLength < 4096 - roomToSpare, `${locale}: the plain message is ${plainLength} characters`);
+        assert.ok(parts.adminIntro.includes(`${defaultRunnerAccount}`), `${locale}: the account is named`);
+      });
+    }
   });
 
   it('what the pairing message becomes: paired (with the name and the time) or expired', () => {

@@ -77,12 +77,18 @@ describe('charness runners', () => {
     assert.match(run.stdout, /No runners paired yet/);
   });
 
-  it('pair prints the one line, writes the gate, and registers a code that is good for 10 minutes', async () => {
+  it('pair prints the admin line first and the plain one second — both for the same one code — writes the gate, and registers a code that is good for 10 minutes', async () => {
     const run = await runCli(['pair', '--host', 'host.example:2222', '--label', '@ExampleBot']);
     assert.equal(run.code, 0, run.stderr);
     assert.match(run.stdout, /valid 10 minutes, single use/);
     const lines = run.stdout.split('\n').filter((line) => line.startsWith("sh -c '"));
-    assert.equal(lines.length, 1);
+    assert.equal(lines.length, 1, 'one plain line');
+    const adminLines = run.stdout.split('\n').filter((line) => line.startsWith("sudo sh -c '"));
+    assert.equal(adminLines.length, 1, 'one admin line');
+    assert.ok(run.stdout.indexOf(adminLines[0]) < run.stdout.indexOf(lines[0]), 'the admin line comes first');
+    assert.ok(adminLines[0].endsWith(' runner'), 'the account is the last word, «runner» by default');
+    const code = (line: string): string => /cr1\.[A-Za-z0-9_-]+/.exec(line)?.[0] ?? '';
+    assert.ok(code(lines[0]) !== '' && code(lines[0]) === code(adminLines[0]), 'one code behind both lines');
     const pending = readPendingFile(fixture.ctx.dir).pending;
     assert.equal(pending.length, 1);
     assert.deepEqual({ host: pending[0].host, port: pending[0].port, label: pending[0].label, expiresAtMs: pending[0].expiresAtMs }, { host: 'host.example', port: 2222, label: '@ExampleBot', expiresAtMs: startMs + pairingLifetimeMs });
@@ -90,6 +96,21 @@ describe('charness runners', () => {
     assert.ok(lines[0].includes('h="host.example"') && lines[0].includes('p="2222"'));
     assert.match(fs.readFileSync(getHubFilePaths(fixture.ctx.dir).gate, 'utf8'), /runner-gate "\$@"/);
     assert.equal(extractManagedBlock(fs.readFileSync(fixture.ctx.authorizedKeysPath, 'utf8')).length, 1);
+  });
+
+  it('pair --account puts the named account at the end of the admin line, and refuses a name that is not a plain account name', async () => {
+    const run = await runCli(['pair', '--host', 'host.example', '--account', 'ci.runner-2']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.ok(run.stdout.split('\n').some((line) => line.startsWith("sudo sh -c '") && line.endsWith(" ci.runner-2")));
+    assert.match(run.stdout, /pairs "ci\.runner-2"/);
+    const before = readPendingFile(fixture.ctx.dir).pending.length;
+    for (const bad of ['-n', 'a b', 'x;y', '$(id)', '']) {
+      const refused = await runCli(['pair', '--host', 'host.example', '--account', bad]);
+      assert.equal(refused.code, 2, bad);
+      assert.match(refused.stderr, /--account must be a plain account name/);
+    }
+    assert.equal((await runCli(['pair', '--host', 'host.example', '--account'])).code, 2);
+    assert.equal(readPendingFile(fixture.ctx.dir).pending.length, before, 'a refused name makes no code');
   });
 
   it('pair honours the test seam that shortens a code (a flow cannot wait ten minutes)', async () => {

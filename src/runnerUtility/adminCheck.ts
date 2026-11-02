@@ -7,8 +7,8 @@ import * as os from 'os';
  * member of `sudo`, `wheel` or `admin`.
  */
 
-const linuxAdminGroups: readonly string[] = ['sudo', 'wheel', 'admin'];
-const macAdminGroup = 'admin';
+export const linuxAdminGroups: readonly string[] = ['sudo', 'wheel', 'admin'];
+export const macAdminGroup = 'admin';
 
 export interface AccountFacts {
   platform: NodeJS.Platform;

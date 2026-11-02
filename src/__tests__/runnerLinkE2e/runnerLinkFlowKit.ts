@@ -215,6 +215,16 @@ export function makePairingLine(layout: RunnerLinkLayout, extraEnv: NodeJS.Proce
   return line;
 }
 
+/** @description Make a pairing on the hub; returns both lines of it: the one for an ADMIN account (`sudo sh -c …`, `account` as its last word) and the plain one. */
+export function makePairingLines(layout: RunnerLinkLayout, account: string): { adminLine: string; plainLine: string } {
+  const result = runHubCli(layout, ['runners', 'pair', '--host', `127.0.0.1:${layout.sshPort}`, '--label', '@ExampleBot', '--account', account]);
+  const lines = result.stdout.split('\n');
+  const adminLine = lines.find((candidate) => candidate.startsWith("sudo sh -c '"));
+  const plainLine = lines.find((candidate) => candidate.startsWith("sh -c '"));
+  if (result.status !== 0 || adminLine === undefined || plainLine === undefined) throw new Error(`runners pair failed: ${result.stderr}${result.stdout}`);
+  return { adminLine, plainLine };
+}
+
 /** @description Run the pasted line on a runner machine (the flow's first one unless `home` names another). */
 export function runPairingLine(layout: RunnerLinkLayout, line: string, home: string = layout.runnerHome): SpawnSyncReturns<string> {
   return spawnSync('sh', ['-c', line], {

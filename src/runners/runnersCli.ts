@@ -1,7 +1,7 @@
 import * as os from 'os';
 import type { CliIo } from '../remoteRun/output';
 import { getRemoteRunCacheDir } from '../remoteRun/ssh';
-import { buildBootstrapLine } from './bootstrapLine';
+import { buildAdminBootstrapLine, buildBootstrapLine, checkIsAccountName, defaultRunnerAccount } from './bootstrapLine';
 import { ensureGateWrapper } from './gateWrapper';
 import { checkHubAddress, parseHubAddress, scanHostKey, type HostKeyScanner } from './hubAddress';
 import { createHubContext, type HubContext } from './hubPaths';
@@ -25,10 +25,12 @@ const waitPollMs = 1000;
 export const runnersUsage = `Usage:
   charness runners [ls]                       the machines paired as runners: online or not, OS, how they are kept running
                                               (as each machine last reported it; no ssh call)
-  charness runners pair --host <host[:port]> [--label <text>] [--wait]
-                                              make a pairing line (valid 10 minutes, single use) to run on the runner machine;
+  charness runners pair --host <host[:port]> [--label <text>] [--account <name>] [--wait]
+                                              make two pairing lines (valid 10 minutes, single use, the first one used wins) to run on
+                                              the runner machine: one for an ADMIN account there (it pairs <name>, default "runner", and
+                                              installs its always-on service), one for the runner account itself;
                                               <host[:port]> is the address the runner dials to reach this machine's sshd;
-                                              --wait blocks until the line is used or expires
+                                              --wait blocks until a line is used or the code expires
   charness runners remove <name>              detach a runner: its key is deleted and its link cut
   charness runners pause <name>               keep a runner attached but send it no jobs
   charness runners resume <name>
@@ -58,20 +60,23 @@ export function createRunnersCliDeps(io: Pick<CliIo, 'homeDir' | 'env'>): Runner
 interface PairOptions {
   host: string | null;
   label: string | null;
+  account: string;
   isWaiting: boolean;
 }
 
 function parsePairOptions(args: readonly string[]): PairOptions | string {
-  const options: PairOptions = { host: null, label: null, isWaiting: false };
+  const options: PairOptions = { host: null, label: null, account: defaultRunnerAccount, isWaiting: false };
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === '--wait') {
       options.isWaiting = true;
-    } else if (argument === '--host' || argument === '--label') {
+    } else if (argument === '--host' || argument === '--label' || argument === '--account') {
       const value = args[index + 1];
       if (value === undefined) return `${argument} needs a value`;
       if (argument === '--host') options.host = value;
-      else options.label = value;
+      else if (argument === '--label') options.label = value;
+      else if (checkIsAccountName(value)) options.account = value;
+      else return '--account must be a plain account name (letters, digits, ".", "_", "-")';
       index += 1;
     } else {
       return `unknown argument: ${argument}`;
@@ -109,10 +114,12 @@ async function runPairCommand(args: readonly string[], io: CliIo, deps: RunnersC
   });
   io.stdout(
     `Pair a runner — valid ${formatLifetime(readPairingLifetimeMs(io.env))}, single use.\n\n` +
-      `Run this on the runner machine, as the account that will run jobs\n` +
-      `(not your main account — it runs the agents' code):\n\n` +
+      `1) From an admin account of the runner machine: it pairs "${options.account}" (the last word of the line — change it if the account is named otherwise) and keeps it running:\n\n` +
+      `${buildAdminBootstrapLine(pairing.payload, options.account)}\n\n` +
+      `2) Without admin rights: run this one in the terminal of the runner account itself:\n\n` +
       `${buildBootstrapLine(pairing.payload)}\n\n` +
-      `Anyone with this line can attach a machine to this charness until it is used or expires.\n`,
+      `The account must be an existing standard user, not your main account — it runs the agents' code.\n` +
+      `Anyone with either line can attach a machine to this charness until one of them is used or expires.\n`,
   );
   return options.isWaiting ? waitForPairing(pairing.pairId, io, deps) : 0;
 }

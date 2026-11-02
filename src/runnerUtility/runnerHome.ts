@@ -15,6 +15,11 @@ import * as path from 'path';
  */
 
 const stateDirName = '.charness-runner';
+const binDirName = 'bin';
+const launcherName = 'charness-runner';
+
+/** @description The launcher relative to the account's home, `/`-separated — the admin pairing line (`runners/bootstrapLine.ts`) runs it by this name. */
+export const launcherPathInHome = [stateDirName, binDirName, launcherName].join('/');
 
 export interface RunnerHomePaths {
   homeDir: string;
@@ -58,8 +63,8 @@ export function getRunnerHomePaths(homeDir: string = os.homedir()): RunnerHomePa
     clientKey: path.join(root, 'keys', 'client_ed25519'),
     serverKey: path.join(root, 'keys', 'server_host_ed25519'),
     currentApp: path.join(root, 'current'),
-    binDir: path.join(root, 'bin'),
-    launcher: path.join(root, 'bin', 'charness-runner'),
+    binDir: path.join(root, binDirName),
+    launcher: path.join(root, binDirName, launcherName),
     envFile: path.join(root, 'env'),
     workDir: path.join(root, 'work'),
     pueueDir: path.join(root, 'pueue'),

@@ -297,9 +297,26 @@ export function buildAddressStep(proposedAddress: string | null, t: Translate): 
   };
 }
 
-/** @description The pairing message's text parts: what stands above the line and below it. The line itself sits between them. */
-export function buildPairingMessageParts(pairingLifetimeMinutes: number, t: Translate): { intro: string; outro: string } {
-  return { intro: t('runners.pairingIntro', { minutes: pairingLifetimeMinutes }), outro: t('runners.pairingOutro') };
+/** @name PairingMessageParts @description The text around the two lines of a pairing: each line sits between its intro and (for the second) the outro. */
+export interface PairingMessageParts {
+  /** Above the admin line: the lifetime, and which word of the line is the account. */
+  adminIntro: string;
+  /** Above the plain line (no admin rights). */
+  alternativeIntro: string;
+  /** Below the plain line: what the account must be, and who can use a line. */
+  alternativeOutro: string;
+}
+
+/**
+ * @description The pairing's text parts. A pairing is offered in TWO messages — the admin line first, the plain line second — because the
+ * two lines together are longer than a Telegram message; `account` is the one the admin line pairs unless its last word is changed.
+ */
+export function buildPairingMessageParts(pairingLifetimeMinutes: number, account: string, t: Translate): PairingMessageParts {
+  return {
+    adminIntro: t('runners.pairingAdminIntro', { minutes: pairingLifetimeMinutes, account }),
+    alternativeIntro: t('runners.pairingAlternativeIntro'),
+    alternativeOutro: t('runners.pairingAlternativeOutro'),
+  };
 }
 
 /** @description What the pairing message becomes once the code was used. */

@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
+import { getOutputTail, runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { checkIsRunnerLinkProcess } from './localLinkStop';
 import { ensurePueueConfig, inspectPueue, shutDownPueue } from './pueueDaemon';
 import { readRunnerConfig, readRunnerStatus } from './runnerConfig';
@@ -26,12 +26,22 @@ import {
  *   macOS            two LaunchAgents — no admin; they run while the account is logged in (switched away included)
  *   macOS --system   two LaunchDaemons with `UserName=<account>`, installed ONCE by an admin (`sudo … service install --system --user
  *                    <account>`): always on, also logged out, across fast user switching; the jobs run as that account, with no extra rights
+ *   Linux --system   the same command, from an admin, for ANOTHER account (what the admin pairing line runs): `loginctl enable-linger
+ *                    <account>`, wait for its user manager, then the plain user-service install RUN AS that account (`sudo -u`). The result is
+ *                    the Linux user service above — the account removes it itself; nothing runs as root but the lingering and the switch
  *
  * One kind at a time: installing one while the other's files exist is refused with the command that removes it. The kind is written to
  * `~/.charness-runner/service` (one word) for `status` and for `runner.sh probe`.
  */
 
 const commandTimeoutMs = 60 * 1000;
+/** The install run as the account starts two services and may wait for each. */
+const installAsAccountTimeoutMs = 120 * 1000;
+/** After `enable-linger` the user manager takes a moment to come up: it is asked once a second, for this many tries. */
+const userManagerPollMs = 1000;
+const userManagerPollAttempts = 20;
+/** What `systemctl --user is-system-running` prints once the manager can take units (`degraded`: up, with some unit failed). */
+const userManagerReadyStates: readonly string[] = ['running', 'degraded'];
 const unitFileMode = 0o644;
 const logsDirMode = 0o700;
 const rootUid = 0;
@@ -64,6 +74,8 @@ export interface ServiceDeps {
   chown: (filePath: string, uid: number, gid: number) => void;
   /** Who `--user <name>` names; `null` when there is no such account. */
   resolveAccount: (name: string) => Promise<TargetAccount | null>;
+  /** Wait between two looks at a starting user manager (a test does not wait). */
+  sleep: (ms: number) => Promise<void>;
 }
 
 export interface ServiceRequest {
@@ -107,6 +119,15 @@ async function resolveMacAccount(name: string, runner: CommandRunner): Promise<T
   return { name, uid: Number(uid.stdout.trim()), gid: Number(gid.stdout.trim()), homeDir: homeDir ?? `/Users/${name}` };
 }
 
+/** `getent passwd <name>` → `name:x:uid:gid:gecos:home:shell`. */
+export async function resolveLinuxAccount(name: string, runner: CommandRunner): Promise<TargetAccount | null> {
+  const entry = await runner('getent', ['passwd', name], { timeoutMs: commandTimeoutMs });
+  if (!entry.ok) return null;
+  const [accountName, , uid, gid, , homeDir] = entry.stdout.trim().split(':');
+  if (accountName !== name || homeDir === undefined || homeDir === '' || !/^\d+$/.test(uid) || !/^\d+$/.test(gid)) return null;
+  return { name, uid: Number(uid), gid: Number(gid), homeDir };
+}
+
 export function createServiceDeps(): ServiceDeps {
   return {
     runner: runCommand,
@@ -118,7 +139,8 @@ export function createServiceDeps(): ServiceDeps {
     nodePath: process.execPath,
     launchDaemonsDir: '/Library/LaunchDaemons',
     chown: fs.chownSync,
-    resolveAccount: (name) => resolveMacAccount(name, runCommand),
+    resolveAccount: (name) => (process.platform === 'darwin' ? resolveMacAccount(name, runCommand) : resolveLinuxAccount(name, runCommand)),
+    sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
   };
 }
 
@@ -396,10 +418,33 @@ async function uninstallLaunchd(request: ServiceRequest, deps: ServiceDeps, path
   return { ok: true, lines: [`Removed the two ${request.isSystem ? 'LaunchDaemons' : 'LaunchAgents'} (stopped, and checked to be stopped).`] };
 }
 
+/**
+ * Linux, from an admin, for ANOTHER account (the admin pairing line): lingering on, the account's user manager up, then the plain user
+ * service installed BY that account (`sudo -u`, with the runtime folder its login would have given it). The result is the user service of
+ * {@link installSystemd}; it is the account's own from then on, which also removes it. A failed install leaves lingering on — it is the
+ * account's setting and harmless without the units — and says what to run again.
+ */
+async function installSystemdForAccount(owner: TargetAccount, paths: RunnerHomePaths, deps: ServiceDeps): Promise<ServiceResult> {
+  const asAccount = ['-u', owner.name, '-H', 'env', `XDG_RUNTIME_DIR=/run/user/${owner.uid}`];
+  const retryCommand = `sudo ${paths.launcher} service install --system --user ${owner.name}`;
+  const linger = await deps.runner('loginctl', ['enable-linger', owner.name], { timeoutMs: commandTimeoutMs });
+  if (!linger.ok) return fail(`\`loginctl enable-linger ${owner.name}\` failed: ${getOutputTail(linger, 1) || 'no answer'}`, `The runner is paired, but its service is not installed. Fix this and run: ${retryCommand}`);
+  for (let attempt = 1; attempt <= userManagerPollAttempts; attempt += 1) {
+    const state = await deps.runner('sudo', [...asAccount, 'systemctl', '--user', 'is-system-running'], { timeoutMs: commandTimeoutMs });
+    if (userManagerReadyStates.includes(state.stdout.trim())) break;
+    if (attempt === userManagerPollAttempts) return fail(`The user manager of ${owner.name} did not come up within ${(userManagerPollAttempts * userManagerPollMs) / 1000} s after lingering was switched on.`, `The runner is paired, but its service is not installed. Run again in a moment: ${retryCommand}`);
+    await deps.sleep(userManagerPollMs);
+  }
+  const installed = await deps.runner('sudo', [...asAccount, paths.launcher, 'service', 'install'], { timeoutMs: installAsAccountTimeoutMs });
+  const lines = installed.stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '');
+  if (installed.ok) return { ok: true, lines };
+  return fail(...lines, ...(lines.length === 0 ? [getOutputTail(installed) || 'the install gave no output'] : []), `The runner is paired, but its service is not installed. After fixing this run: ${retryCommand}`);
+}
+
 /** The paths of the account the request is about: this one, or — with `--system --user` — the named one. */
 async function resolveTarget(request: ServiceRequest, action: 'install' | 'uninstall', deps: ServiceDeps): Promise<{ paths: RunnerHomePaths; owner: TargetAccount | null } | ServiceResult> {
   if (!request.isSystem) return { paths: getRunnerHomePaths(deps.homeDir), owner: null };
-  if (deps.platform !== 'darwin') return fail('--system is for macOS (a LaunchDaemon). On Linux `service install` makes a user service that lingers: no admin, it runs without a login.');
+  if (deps.platform === 'linux' && action === 'uninstall') return fail('On Linux an admin installs the service for an account, and that account removes it itself: run `charness-runner service uninstall` as the account.');
   if (deps.uid !== rootUid) return fail(`A system service is installed by an admin, once: sudo ${getRunnerHomePaths(deps.homeDir).launcher} service ${action} --system --user ${request.userName ?? '<account>'}`);
   const owner = request.userName === null ? null : await deps.resolveAccount(request.userName);
   if (owner === null) return fail(`There is no account named «${request.userName ?? ''}».`);
@@ -413,7 +458,8 @@ export async function installService(request: ServiceRequest, deps: ServiceDeps)
   const target = await resolveTarget(request, 'install', deps);
   if ('ok' in target) return target;
   if (readRunnerConfig(target.paths) === null) return fail('This account is not paired yet: run the line from /runners on this machine first, then install the service.');
-  return deps.platform === 'linux' ? installSystemd(target.paths, deps) : installLaunchd(request, deps, target.paths, target.owner);
+  if (deps.platform === 'darwin') return installLaunchd(request, deps, target.paths, target.owner);
+  return target.owner === null ? installSystemd(target.paths, deps) : installSystemdForAccount(target.owner, target.paths, deps);
 }
 
 /** @description `service uninstall` for `request`. */

@@ -96,6 +96,16 @@ export function formatRemovedMessage(label: string): string {
   return `This runner was removed by ${label}. Pair again with a new line from /runners.`;
 }
 
+/** @description What the pairing says in place of {@link formatKeepRunningHelp} when an admin's line installs the service next. */
+export function formatServiceFollowsNote(): string {
+  return 'Keeping it running: the always-on service for this account is installed next, by the same line.\n';
+}
+
+export interface PairingOptions {
+  /** An admin's line installs the service right after this pairing (`pairArgs.ts`): no help about keeping it running is printed. */
+  isServiceFollowing: boolean;
+}
+
 export interface PairingOutcomeInputs {
   endpoint: HubEndpoint;
   keys: RunnerKeys;
@@ -106,7 +116,7 @@ export interface PairingOutcomeInputs {
 }
 
 /** @description Record a pairing the hub has committed: folders, `current`, launcher, `config.json`; then the tools. Removes `pairing.json`. */
-async function finishPairing(paths: RunnerHomePaths, inputs: PairingOutcomeInputs, io: CommandIo, isRecovered: boolean): Promise<void> {
+async function finishPairing(paths: RunnerHomePaths, inputs: PairingOutcomeInputs, io: CommandIo, isRecovered: boolean, options: PairingOptions): Promise<void> {
   const { endpoint, reply } = inputs;
   const config: RunnerConfig = {
     runnerId: reply.runnerId,
@@ -124,14 +134,14 @@ async function finishPairing(paths: RunnerHomePaths, inputs: PairingOutcomeInput
   removeOldApps(paths);
   await installTools(paths, createToolDeps(), io);
   io.stdout(`\n${isRecovered ? 'Recovered a pairing whose answer was lost: paired' : 'Paired'} with charness ${reply.label} (${endpoint.host}:${endpoint.port}) as runner “${reply.name}”.\n`);
-  io.stdout(`Its agents will run their projects' code on this machine as user «${os.userInfo().username}».\n\n${formatKeepRunningHelp(paths)}`);
+  io.stdout(`Its agents will run their projects' code on this machine as user «${os.userInfo().username}».\n\n${options.isServiceFollowing ? formatServiceFollowsNote() : formatKeepRunningHelp(paths)}`);
 }
 
 /**
  * @description `charness-runner pair <code>` (run from the INSTALLED copy): redeem the code, record who the runner serves, install its
  * tools. A pairing that an earlier run left half done is recovered FIRST (with the runner's own key), whatever the new code is. Returns the exit code.
  */
-export async function runPair(code: string, appDir: string, packageId: string | null, io: CommandIo, homeDir: string = os.homedir()): Promise<number> {
+export async function runPair(code: string, appDir: string, packageId: string | null, io: CommandIo, homeDir: string = os.homedir(), options: PairingOptions = { isServiceFollowing: false }): Promise<number> {
   const paths = getRunnerHomePaths(homeDir);
   const existing = readRunnerConfig(paths);
   if (existing !== null) {
@@ -149,7 +159,7 @@ export async function runPair(code: string, appDir: string, packageId: string | 
   if (interrupted !== null) {
     const recovery = await recoverPairing({ host: interrupted.host, port: interrupted.port, user: interrupted.user, hostKey: interrupted.hostKey }, keys);
     if (recovery.kind === 'recovered') {
-      await finishPairing(paths, { endpoint: interrupted, keys, reply: recovery.reply, packageId: interrupted.packageId, appDir }, io, true);
+      await finishPairing(paths, { endpoint: interrupted, keys, reply: recovery.reply, packageId: interrupted.packageId, appDir }, io, true, options);
       return 0;
     }
     if (recovery.kind === 'unreachable') {
@@ -192,14 +202,14 @@ export async function runPair(code: string, appDir: string, packageId: string | 
     // No answer: the hub may have committed all the same (its answer lost on the way). The runner's own key can ask.
     const recovery = await recoverPairing(endpoint, keys);
     if (recovery.kind === 'recovered') {
-      await finishPairing(paths, { endpoint, keys, reply: recovery.reply, packageId, appDir }, io, true);
+      await finishPairing(paths, { endpoint, keys, reply: recovery.reply, packageId, appDir }, io, true, options);
       return 0;
     }
     if (recovery.kind === 'not-registered') removePairingInProgress(paths);
     io.stderr(`charness-runner: ${failure}${recovery.kind === 'unreachable' ? ' (run `charness-runner pair` again later to finish if the hub did register this machine)' : ''}\n`);
     return 1;
   }
-  await finishPairing(paths, { endpoint, keys, reply, packageId, appDir }, io, false);
+  await finishPairing(paths, { endpoint, keys, reply, packageId, appDir }, io, false, options);
   return 0;
 }
 
@@ -212,7 +222,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   if (interrupted !== null && keys !== null) {
     const recovery = await recoverPairing({ host: interrupted.host, port: interrupted.port, user: interrupted.user, hostKey: interrupted.hostKey }, keys);
     if (recovery.kind === 'recovered') {
-      await finishPairing(paths, { endpoint: interrupted, keys, reply: recovery.reply, packageId: interrupted.packageId, appDir }, io, true);
+      await finishPairing(paths, { endpoint: interrupted, keys, reply: recovery.reply, packageId: interrupted.packageId, appDir }, io, true, { isServiceFollowing: false });
       config = readRunnerConfig(paths);
     } else if (recovery.kind === 'not-registered') {
       removePairingInProgress(paths);

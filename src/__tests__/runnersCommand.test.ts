@@ -8,7 +8,7 @@
  *     that has become a question (even while the question's own edit is still queued) or was drawn again since; a long list is split over
  *     pages that each fit a Telegram message (checked against the fake Bot API's own limit), runner buttons keeping their place;
  *   • the first pairing: the address step (a proposal, none found), the typed address (refused with the reason and asked again, taken
- *     and saved), a slash command ends the wait; the pairing message is HTML in a `<pre>`, SECRET for the trace, and registered with its
+ *     and saved), a slash command ends the wait; the pairing is TWO messages (the admin line, then the plain one), each HTML in a `<pre>`, SECRET for the trace, and registered with its
  *     message note in the registry;
  *   • the pairing message turns into «paired» when its code is used and into «expired» when it runs out — also after a restart and for a
  *     code used while the bot was down (the instance's own record of its messages), a failed edit is tried again, and another instance
@@ -59,6 +59,8 @@ let isLengthChecked = false;
 let sweepGate: Promise<void> | null = null;
 /** Decides an edit before it reaches the harness: a promise of "go ahead" (true) or "this edit fails" (false); null leaves it alone. */
 let editHook: ((messageId: number, text: string) => Promise<boolean> | null) | null = null;
+/** Makes a send of the texts it returns true for fail (Telegram refused it): the bot gets no message id back. */
+let sendFailsFor: ((text: string) => boolean) | null = null;
 let clockMs = Date.now();
 let savedAddress: HubAddress | null = null;
 let candidates: string[] = [];
@@ -76,6 +78,7 @@ function buildPorts(): Parameters<typeof createRunners>[0] {
   return {
     ...harness.core,
     replyToThread: async (key, text, extra, options) => {
+      if (sendFailsFor?.(text) === true) return null;
       if (isLengthChecked) await harness.core.bot.telegram.sendMessage(harnessGroup.id, text, { message_thread_id: harnessThreadId });
       return harness.core.replyToThread(key, text, extra, options);
     },
@@ -168,6 +171,7 @@ describe('/runners over its ports', () => {
     liveProbeText = defaultProbeText;
     isLengthChecked = false;
     editHook = null;
+    sendFailsFor = null;
     sweepGate = null;
     clockMs = Date.now();
     savedAddress = null;
@@ -324,7 +328,7 @@ describe('/runners over its ports', () => {
       scanAnswers = { 'host.example:2222': ownKey, '127.0.0.1:2222': ownKey };
       assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example:2222'), true);
       assert.deepEqual(savedAddress, { host: 'host.example', port: 2222 });
-      const pairing = harness.replies.at(-1);
+      const pairing = harness.replies.at(-2);
       assert.ok(pairing?.text.startsWith('Pair a runner — valid 10 minutes, single use.'), pairing?.text);
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 1);
       assert.equal(await feature.handleRunnersAddressText(harness.key, 'hello'), false, 'the wait ended with the address');
@@ -353,7 +357,8 @@ describe('/runners over its ports', () => {
       assert.ok(step?.text.includes("Address runners will dial: 203.0.113.5:22 — found on this machine, answers with this machine's ssh key ✓"), step?.text);
       await harness.tapButton(step?.messageId ?? 0, 'rnr_aduse');
       assert.deepEqual(savedAddress, { host: '203.0.113.5', port: 22 });
-      assert.ok(harness.replies.at(-1)?.text.startsWith('Pair a runner'), harness.replies.at(-1)?.text);
+      assert.ok(harness.replies.at(-2)?.text.startsWith('Pair a runner'), harness.replies.at(-2)?.text);
+      assert.ok(harness.replies.at(-1)?.text.startsWith('② Without admin rights'), harness.replies.at(-1)?.text);
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending[0].host, '203.0.113.5');
     });
 
@@ -363,25 +368,54 @@ describe('/runners over its ports', () => {
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0);
     });
 
-    it('with an address saved there is no step: the pairing message at once — HTML in a <pre>, a SECRET for the trace, within one message, and recorded as this instance\'s own', async () => {
+    it('with an address saved there is no step: the pairing at once, as TWO messages — the admin line, then the plain one — each HTML in a <pre>, a SECRET for the trace, within Telegram\'s limit, both recorded as this instance\'s own', async () => {
+      savedAddress = { host: 'host.example', port: 22 };
+      scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
+      isLengthChecked = true;
+      await harness.runCommand('runners');
+      await harness.tapButton(findReply(() => true).messageId ?? 0, 'rnr_pair');
+      const [adminMessage, plainMessage] = harness.replies.slice(-2);
+      assert.ok(adminMessage !== undefined && plainMessage !== undefined);
+      for (const message of [adminMessage, plainMessage]) {
+        assert.deepEqual(message.extra, { parse_mode: 'HTML' });
+        assert.deepEqual(message.options, { isSecret: true });
+        assert.ok(message.text.length <= 4096, `a pairing message must fit one Telegram message, is ${message.text.length}`);
+        assert.ok(message.text.includes('cr1.'), 'the line carries the code');
+        assert.ok(!message.text.slice(message.text.indexOf('<pre>') + 5, message.text.indexOf('</pre>')).match(/[<>]/), 'the line is HTML-escaped inside the <pre>');
+      }
+      assert.match(adminMessage.text, /^Pair a runner — valid 10 minutes, single use\.\n\n① From an admin account of the runner machine: it pairs «runner» \(the last word of the line — change it if the account is named otherwise\) and keeps it running:\n\n<pre>sudo sh -c '/);
+      assert.ok(adminMessage.text.endsWith(' runner</pre>'), 'the account is the last word of the admin line, and nothing follows the line');
+      assert.match(plainMessage.text, /^② Without admin rights: run this one in the terminal of the runner account itself:\n\n<pre>sh -c '/);
+      assert.ok(plainMessage.text.endsWith("</pre>\n\nThe account must be an existing standard user, not your main account — it runs the agents' code. Anyone with either line can attach a machine to this charness until one of them is used or expires."), plainMessage.text.slice(-300));
+      const readCode = (text: string): string => /cr1\.[A-Za-z0-9_-]+/.exec(text)?.[0] ?? '';
+      assert.equal(readCode(adminMessage.text), readCode(plainMessage.text), 'one code behind both lines');
+      const [pending] = readPendingFile(hubFixture.ctx.dir).pending;
+      assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 1, 'one code, not one per message');
+      assert.equal(pending.messageRef, null, 'the shared registry carries credentials only: no note of this instance\'s message');
+      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages, [
+        { pairId: pending.pairId, key: keyToString(harness.key), messageId: adminMessage.messageId, offeredAtMs: clockMs },
+        { pairId: pending.pairId, key: keyToString(harness.key), messageId: plainMessage.messageId, offeredAtMs: clockMs },
+      ]);
+      assert.equal(pending.label, '@ExampleBot');
+      assert.ok(fs.existsSync(path.join(hubFixture.ctx.dir, 'gate')), 'the gate wrapper the key line runs is in place');
+    });
+
+    it('when the second message cannot be sent the admin line stands and is still followed; when the first cannot, nothing is offered and the failure is told', async () => {
       savedAddress = { host: 'host.example', port: 22 };
       scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
       await harness.runCommand('runners');
-      await harness.tapButton(findReply(() => true).messageId ?? 0, 'rnr_pair');
-      const pairing = harness.replies.at(-1);
-      assert.ok(pairing !== undefined);
-      assert.deepEqual(pairing.extra, { parse_mode: 'HTML' });
-      assert.deepEqual(pairing.options, { isSecret: true });
-      assert.match(pairing.text, /^Pair a runner — valid 10 minutes, single use\.\n\nRun this on the runner machine, as the account that will run jobs\n\(not your main account — it runs the agents' code\):\n\n<pre>sh -c '/);
-      assert.ok(pairing.text.endsWith('</pre>\n\nAnyone with this line can attach a machine to this charness until it is used or expires.'), pairing.text.slice(-200));
-      assert.ok(pairing.text.length <= 4096, `the message must fit one Telegram message, is ${pairing.text.length}`);
-      assert.ok(pairing.text.includes('cr1.'), 'the line carries the code');
-      assert.ok(!pairing.text.slice(pairing.text.indexOf('<pre>') + 5, pairing.text.indexOf('</pre>')).match(/[<>]/), 'the line is HTML-escaped inside the <pre>');
-      const [pending] = readPendingFile(hubFixture.ctx.dir).pending;
-      assert.equal(pending.messageRef, null, 'the shared registry carries credentials only: no note of this instance\'s message');
-      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages, [{ pairId: pending.pairId, key: keyToString(harness.key), messageId: pairing.messageId, offeredAtMs: clockMs }]);
-      assert.equal(pending.label, '@ExampleBot');
-      assert.ok(fs.existsSync(path.join(hubFixture.ctx.dir, 'gate')), 'the gate wrapper the key line runs is in place');
+      const listMessageId = findReply(() => true).messageId ?? 0;
+      sendFailsFor = (text) => text.startsWith('② Without admin rights');
+      await harness.tapButton(listMessageId, 'rnr_pair');
+      assert.equal(readPairingMessages(pairingMessagesPath).messages.length, 1, 'the admin message is recorded, the missing second one is not');
+      assert.ok(harness.replies.at(-1)?.text.startsWith('Pair a runner'), 'the admin line stands');
+      assert.ok(!harness.replies.some((reply) => reply.text.startsWith('⚠️ Could not make a pairing line')), 'the admin line works: no failure is told');
+
+      sendFailsFor = (text) => text.startsWith('Pair a runner');
+      await harness.tapButton(listMessageId, 'rnr_pair');
+      assert.equal(readPairingMessages(pairingMessagesPath).messages.length, 1, 'nothing more was recorded');
+      assert.equal(harness.replies.at(-1)?.text, '⚠️ Could not make a pairing line: the message could not be sent');
+      assert.ok(!harness.replies.slice(-2).some((reply) => reply.text.startsWith('② Without admin rights')), 'the second line is not offered without the first');
     });
 
     it('a saved address that stopped answering with this machine\'s key is refused with the reason, no code is made, and the next message may name another', async () => {
@@ -424,58 +458,71 @@ describe('/runners over its ports', () => {
       assert.equal(await feature.handleRunnersAddressText(harness.key, 'host.example'), true);
       const texts = harness.replies.map((reply) => reply.text);
       assert.ok(texts.some((text) => text.startsWith("ℹ️ this machine's own sshd could not be read on 127.0.0.1:22")), texts.join(' | '));
-      assert.ok(texts.at(-1)?.startsWith('Pair a runner'));
+      assert.ok(texts.at(-2)?.startsWith('Pair a runner'));
     });
   });
 
-  describe('the pairing message follows its code', () => {
-    async function offerPairing(): Promise<{ messageId: number; pairId: string }> {
+  describe('the pairing messages follow their code', () => {
+    /** A pairing is offered in two messages (the admin line, the plain one); `messageId` is the admin one. */
+    interface Offer {
+      messageId: number;
+      plainMessageId: number;
+      pairId: string;
+    }
+
+    async function offerPairing(): Promise<Offer> {
       savedAddress = { host: 'host.example', port: 22 };
       scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
       await harness.tapButton(900, 'rnr_pair');
-      const pairing = harness.replies.at(-1);
+      const [adminMessage, plainMessage] = harness.replies.slice(-2);
       const [pending] = readPendingFile(hubFixture.ctx.dir).pending.slice(-1);
-      assert.ok(pairing?.messageId !== null && pairing?.messageId !== undefined);
-      return { messageId: pairing.messageId, pairId: pending.pairId };
+      assert.ok(adminMessage?.messageId !== null && adminMessage?.messageId !== undefined && plainMessage?.messageId !== null && plainMessage?.messageId !== undefined);
+      return { messageId: adminMessage.messageId, plainMessageId: plainMessage.messageId, pairId: pending.pairId };
     }
 
+    /** The code ids of the record, one per recorded MESSAGE. */
     function readRecordedPairIds(): string[] {
       return readPairingMessages(pairingMessagesPath).messages.map((message) => message.pairId);
     }
 
-    it('used: the message becomes «Runner “<name>” paired <time>.» — one plain edit, no keyboard — and leaves the record', async () => {
-      const { messageId, pairId } = await offerPairing();
-      assert.deepEqual(readRecordedPairIds(), [pairId]);
-      await redeemPairing(hubFixture.ctx, pairId, createRedeemFixture({ suggestedName: 'Mac Mini' }).request, clockMs);
+    function expectBothMessages(offer: Pick<Offer, 'messageId' | 'plainMessageId'>, check: (text: string) => void): void {
+      check(readMessageText(offer.messageId));
+      check(readMessageText(offer.plainMessageId));
+    }
+
+    it('used: BOTH messages become «Runner “<name>” paired <time>.» — plain edits, no keyboard, the lines gone — and leave the record', async () => {
+      const offer = await offerPairing();
+      assert.deepEqual(readRecordedPairIds(), [offer.pairId, offer.pairId], 'both messages are followed');
+      await redeemPairing(hubFixture.ctx, offer.pairId, createRedeemFixture({ suggestedName: 'Mac Mini' }).request, clockMs);
       await feature.watchPairingsOnce();
-      const edit = harness.edits.at(-1);
-      assert.equal(edit?.messageId, messageId);
-      assert.match(edit?.text ?? '', /^Runner “mac-mini” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u);
-      assert.equal(edit?.extra, undefined, 'plain text: no parse mode, no keyboard');
-      assert.ok(!edit?.text.includes('cr1.'), 'the line is gone');
+      assert.deepEqual(harness.edits.map((edit) => edit.messageId).sort(), [offer.messageId, offer.plainMessageId].sort());
+      for (const edit of harness.edits) {
+        assert.match(edit.text, /^Runner “mac-mini” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u);
+        assert.equal(edit.extra, undefined, 'plain text: no parse mode, no keyboard');
+        assert.ok(!edit.text.includes('cr1.'), 'the line is gone');
+      }
       assert.deepEqual(readRecordedPairIds(), []);
       const editsAfterFirst = harness.edits.length;
       await feature.watchPairingsOnce();
       assert.equal(harness.edits.length, editsAfterFirst, 'edited once');
     });
 
-    it('expired: the message becomes «Pairing code expired.», the expired code is swept from the registry, the record is cleared', async () => {
-      const { messageId } = await offerPairing();
+    it('expired: both messages become «Pairing code expired.», the expired code is swept from the registry, the record is cleared', async () => {
+      const offer = await offerPairing();
       await feature.watchPairingsOnce();
       assert.equal(harness.edits.length, 0, 'still open: nothing to say');
       clockMs += 11 * minute;
       await feature.watchPairingsOnce();
-      assert.equal(harness.edits.at(-1)?.messageId, messageId);
-      assert.equal(harness.edits.at(-1)?.text, 'Pairing code expired.');
+      expectBothMessages(offer, (text) => assert.equal(text, 'Pairing code expired.'));
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0);
       assert.deepEqual(readRecordedPairIds(), []);
     });
 
-    it('after a restart (a new module over the same record) the message still turns to «expired» / «paired»', async () => {
+    it('after a restart (a new module over the same record) the messages still turn to «expired» / «paired»', async () => {
       const first = await offerPairing();
       clockMs += 11 * minute;
       await createRunners(buildPorts()).watchPairingsOnce();
-      assert.equal(readMessageText(first.messageId), 'Pairing code expired.');
+      expectBothMessages(first, (text) => assert.equal(text, 'Pairing code expired.'));
 
       harness.edits.length = 0;
       const second = await offerPairing();
@@ -484,33 +531,35 @@ describe('/runners over its ports', () => {
       assert.equal(harness.edits.length, 0, 'still open: nothing to say');
       await redeemPairing(hubFixture.ctx, second.pairId, createRedeemFixture({ suggestedName: 'box1' }).request, clockMs);
       await restarted.watchPairingsOnce();
-      assert.ok(readMessageText(second.messageId).startsWith('Runner “box1” paired'), readMessageText(second.messageId));
+      expectBothMessages(second, (text) => assert.ok(text.startsWith('Runner “box1” paired'), text));
     });
 
-    it('a code used while the bot was down: the restarted bot turns its message into «paired» — the credential\'s entry is gone from the registry, the instance\'s own record is not', async () => {
-      const { messageId, pairId } = await offerPairing();
-      await redeemPairing(hubFixture.ctx, pairId, createRedeemFixture({ suggestedName: 'box1' }).request, clockMs);
+    it('a code used while the bot was down: the restarted bot turns both messages into «paired» — the credential\'s entry is gone from the registry, the instance\'s own record is not', async () => {
+      const offer = await offerPairing();
+      await redeemPairing(hubFixture.ctx, offer.pairId, createRedeemFixture({ suggestedName: 'box1' }).request, clockMs);
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0, 'the registry no longer holds the code');
       await createRunners(buildPorts()).watchPairingsOnce();
-      assert.ok(readMessageText(messageId).startsWith('Runner “box1” paired'), readMessageText(messageId));
+      expectBothMessages(offer, (text) => assert.ok(text.startsWith('Runner “box1” paired'), text));
       assert.deepEqual(readRecordedPairIds(), []);
     });
 
-    it('a code that expired and was swept while the bot was down still gets its «expired» edit', async () => {
-      const { messageId } = await offerPairing();
+    it('a code that expired and was swept while the bot was down still gets its «expired» edits', async () => {
+      const offer = await offerPairing();
       clockMs += 11 * minute;
       await sweepExpiredPairings(hubFixture.ctx, clockMs);
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0);
       await createRunners(buildPorts()).watchPairingsOnce();
-      assert.equal(readMessageText(messageId), 'Pairing code expired.');
+      expectBothMessages(offer, (text) => assert.equal(text, 'Pairing code expired.'));
     });
 
-    it('a failed edit is kept and tried again later (5 s, then 10 s…), not given up on; a restart tries at once', async () => {
-      const { messageId } = await offerPairing();
+    it('a failed edit is kept and tried again later (5 s, then 10 s…), not given up on — and it holds back neither the code\'s other message nor a restart; a restart tries at once', async () => {
+      const offer = await offerPairing();
       clockMs += 11 * minute;
       let attempts = 0;
       let failuresLeft = 2;
-      editHook = () => {
+      // Only the admin message's edits fail: the plain one is settled at the first look.
+      editHook = (editedId) => {
+        if (editedId !== offer.messageId) return null;
         attempts += 1;
         if (failuresLeft > 0) {
           failuresLeft -= 1;
@@ -520,8 +569,9 @@ describe('/runners over its ports', () => {
       };
       await feature.watchPairingsOnce();
       assert.equal(attempts, 1);
-      assert.equal(harness.edits.length, 0);
-      assert.equal(readRecordedPairIds().length, 1, 'the failed edit leaves the record');
+      assert.equal(readMessageText(offer.plainMessageId), 'Pairing code expired.', 'the other message of the code is settled meanwhile');
+      assert.equal(harness.edits.length, 1);
+      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages.map((message) => message.messageId), [offer.messageId], 'only the failed one is kept');
       await feature.watchPairingsOnce();
       assert.equal(attempts, 1, 'not again before the delay');
       clockMs += 5 * 1000;
@@ -533,25 +583,26 @@ describe('/runners over its ports', () => {
       clockMs += 5 * 1000;
       await feature.watchPairingsOnce();
       assert.equal(attempts, 3);
-      assert.equal(readMessageText(messageId), 'Pairing code expired.');
+      assert.equal(readMessageText(offer.messageId), 'Pairing code expired.');
       assert.deepEqual(readRecordedPairIds(), []);
 
       // A restart forgets the delay: it tries at once.
       const second = await offerPairing();
       clockMs += 11 * minute;
       failuresLeft = 1;
+      editHook = (editedId) => (editedId === second.messageId && failuresLeft-- > 0 ? Promise.resolve(false) : null);
       await feature.watchPairingsOnce();
-      assert.equal(readRecordedPairIds().length, 1);
+      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages.map((message) => message.messageId), [second.messageId]);
       await createRunners(buildPorts()).watchPairingsOnce();
-      assert.equal(readMessageText(second.messageId), 'Pairing code expired.');
+      expectBothMessages(second, (text) => assert.equal(text, 'Pairing code expired.'));
       assert.deepEqual(readRecordedPairIds(), []);
     });
 
-    it('a bot restarted more than a day after the code was issued still tries the edit — and when Telegram accepts it, the old message is settled', async () => {
-      const { messageId } = await offerPairing();
+    it('a bot restarted more than a day after the code was issued still tries the edits — and when Telegram accepts them, the old messages are settled', async () => {
+      const offer = await offerPairing();
       clockMs += 25 * 60 * minute;
       await createRunners(buildPorts()).watchPairingsOnce();
-      assert.equal(readMessageText(messageId), 'Pairing code expired.');
+      expectBothMessages(offer, (text) => assert.equal(text, 'Pairing code expired.'));
       assert.deepEqual(readRecordedPairIds(), []);
 
       // Also a machine that paired during the long stop.
@@ -559,7 +610,7 @@ describe('/runners over its ports', () => {
       await redeemPairing(hubFixture.ctx, second.pairId, createRedeemFixture({ suggestedName: 'box1' }).request, clockMs);
       clockMs += 25 * 60 * minute;
       await createRunners(buildPorts()).watchPairingsOnce();
-      assert.ok(readMessageText(second.messageId).startsWith('Runner “box1” paired'), readMessageText(second.messageId));
+      expectBothMessages(second, (text) => assert.ok(text.startsWith('Runner “box1” paired'), text));
       assert.deepEqual(readRecordedPairIds(), []);
     });
 
@@ -568,31 +619,32 @@ describe('/runners over its ports', () => {
       clockMs += 11 * minute;
       editHook = () => Promise.resolve(false);
       await feature.watchPairingsOnce();
-      const [recorded] = readPairingMessages(pairingMessagesPath).messages;
-      assert.equal(recorded.firstFailedAtMs, clockMs, 'the first failure is written down');
+      const recorded = readPairingMessages(pairingMessagesPath).messages;
+      assert.equal(recorded.length, 2);
+      assert.deepEqual(recorded.map((message) => message.firstFailedAtMs), [clockMs, clockMs], 'the first failure is written down, for each message');
       clockMs += 12 * 60 * minute;
       await feature.watchPairingsOnce();
-      assert.equal(readRecordedPairIds().length, 1, 'half a day of failing: still kept');
-      assert.equal(readPairingMessages(pairingMessagesPath).messages[0].firstFailedAtMs, recorded.firstFailedAtMs, 'the first failure stays the first');
+      assert.equal(readRecordedPairIds().length, 2, 'half a day of failing: still kept');
+      assert.deepEqual(readPairingMessages(pairingMessagesPath).messages.map((message) => message.firstFailedAtMs), recorded.map((message) => message.firstFailedAtMs), 'the first failure stays the first');
       clockMs += 13 * 60 * minute;
       await feature.watchPairingsOnce();
       assert.deepEqual(readRecordedPairIds(), [], 'a day of failing: given up on, not retried for ever');
       assert.equal(harness.edits.length, 0);
     });
 
-    it('a message whose edits failed for a day and then are accepted is settled, not dropped', async () => {
-      const { messageId } = await offerPairing();
+    it('messages whose edits failed for a day and then are accepted are settled, not dropped', async () => {
+      const offer = await offerPairing();
       clockMs += 11 * minute;
       editHook = () => Promise.resolve(false);
       await feature.watchPairingsOnce();
       clockMs += 30 * 60 * minute;
       editHook = null;
       await createRunners(buildPorts()).watchPairingsOnce();
-      assert.equal(readMessageText(messageId), 'Pairing code expired.');
+      expectBothMessages(offer, (text) => assert.equal(text, 'Pairing code expired.'));
       assert.deepEqual(readRecordedPairIds(), []);
     });
 
-    it('an offer that finishes while the expiry sweep waits for the hub lock is judged against a registry that already holds its code — its live line stays', async () => {
+    it('an offer that finishes while the expiry sweep waits for the hub lock is judged against a registry that already holds its code — its live lines stay', async () => {
       const first = await offerPairing();
       clockMs += 11 * minute;
       // The sweep is queued (behind the hub lock); the watcher has already looked.
@@ -600,20 +652,21 @@ describe('/runners over its ports', () => {
       sweepGate = new Promise<void>((resolve) => { releaseSweep = resolve; });
       const look = feature.watchPairingsOnce();
       await new Promise((resolve) => { setTimeout(resolve, 20); });
-      // An offer finishes meanwhile: its code is created, its message sent and recorded.
+      // An offer finishes meanwhile: its code is created, its messages sent and recorded.
       sweepGate = null;
       const second = await offerPairing();
-      assert.deepEqual(readRecordedPairIds().sort(), [first.pairId, second.pairId].sort());
+      assert.deepEqual(readRecordedPairIds().sort(), [first.pairId, first.pairId, second.pairId, second.pairId].sort());
       releaseSweep();
       await look;
-      assert.equal(readMessageText(first.messageId), 'Pairing code expired.', 'the expired code\'s message is settled');
-      assert.ok(readMessageText(second.messageId).startsWith('Pair a runner'), 'the new, live message is untouched');
-      assert.deepEqual(readRecordedPairIds(), [second.pairId], 'and it is still followed');
+      expectBothMessages(first, (text) => assert.equal(text, 'Pairing code expired.', 'the expired code\'s messages are settled'));
+      assert.ok(readMessageText(second.messageId).startsWith('Pair a runner'), 'the new, live admin message is untouched');
+      assert.ok(readMessageText(second.plainMessageId).startsWith('② Without admin rights'), 'and so is the plain one');
+      assert.deepEqual(readRecordedPairIds(), [second.pairId, second.pairId], 'and they are still followed');
       assert.ok(readPendingFile(hubFixture.ctx.dir).pending.some((pairing) => pairing.pairId === second.pairId), 'its code is still open');
     });
 
-    it('another instance sharing the registry neither edits this one\'s message nor takes the way back to it by sweeping the credential', async () => {
-      const { messageId, pairId } = await offerPairing();
+    it('another instance sharing the registry neither edits this one\'s messages nor takes the way back to them by sweeping the credential', async () => {
+      const offer = await offerPairing();
       const otherEdits: Array<{ messageId: number; text: string }> = [];
       const otherPairingMessagesPath = path.join(hubFixture.root, 'other-instance-pairing-messages.json');
       const otherInstance = createRunners({
@@ -633,10 +686,10 @@ describe('/runners over its ports', () => {
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0, 'the credential was swept by the other instance');
       assert.deepEqual(otherEdits, [], 'but it edits no message of ours');
       assert.deepEqual(readPairingMessages(otherPairingMessagesPath).messages, []);
-      // …and the owner still reaches its message.
-      assert.deepEqual(readRecordedPairIds(), [pairId]);
+      // …and the owner still reaches its messages.
+      assert.deepEqual(readRecordedPairIds(), [offer.pairId, offer.pairId]);
       await feature.watchPairingsOnce();
-      assert.equal(readMessageText(messageId), 'Pairing code expired.');
+      expectBothMessages(offer, (text) => assert.equal(text, 'Pairing code expired.'));
     });
 
     it('a record that is not valid reads as empty (said once per look), and the next pairing replaces it', async () => {
@@ -644,7 +697,7 @@ describe('/runners over its ports', () => {
       await feature.watchPairingsOnce();
       assert.equal(harness.edits.length, 0);
       const { pairId } = await offerPairing();
-      assert.deepEqual(readRecordedPairIds(), [pairId]);
+      assert.deepEqual(readRecordedPairIds(), [pairId, pairId]);
     });
 
     it('the watcher starts with a look at once, refreshes the gate wrapper only when something is registered, and stops', async () => {

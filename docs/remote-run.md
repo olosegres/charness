@@ -9,7 +9,8 @@ shell.
 A runner is attached in one of two ways:
 
 - **Paired** (the normal way): you copy one line from Telegram (`/runners`) or from `charness runners pair` and run it on the runner
-  machine. No ssh keys, no account setup on the charness host, no Pueue or `PATH` work, no open port.
+  machine — from an admin account there, or as the runner account itself. No ssh keys, no account setup on the charness host, no Pueue
+  or `PATH` work, no open port.
 - **Plain ssh** (under [Advanced](#advanced-a-runner-over-plain-ssh)): a machine you reach by ordinary ssh, set up by hand and listed
   in `~/.config/charness/runners.json`. Both kinds can be used together; `remote-run` treats them alike.
 
@@ -26,18 +27,32 @@ A runner is attached in one of two ways:
   installs Pueue itself (pinned release, checksum-verified) and uses an `rsync` 3.1 or newer if it finds one — on a Mac without one
   (macOS 15.4 and later ship Apple's `openrsync`, which is not enough) it builds the pinned rsync with the Xcode command line tools, or
   names the one install command. Use **an account of its own** that you do not mind running the agents' code: a standard user, not an
-  admin (the utility warns about an admin account).
+  admin (the utility warns about an admin account, and the admin line below refuses it). Make the account yourself first (System
+  Settings → Users & Groups on a Mac, `adduser` on Linux) — nothing here creates one.
 
 **Pairing.**
 
 1. In Telegram, in General, send `/runners` and tap **＋ Pair a new runner** ([`/runners`](commands.md#runners)). The first time the
    bot asks which address runners dial and proposes the public address it finds, after checking that the address answers with this
    machine's own ssh key. Without Telegram (a Jira-only instance): `charness runners pair --host host.example[:port]`.
-2. The bot posts **one line**, valid 10 minutes and good once. Run it on the runner machine as the account that will run jobs. It fetches
-   charness's own package from the charness host over ssh (so the versions never differ), checks the machine, pairs and prints how to
-   keep it running. The pairing message turns into «Runner “name” paired …» — or «Pairing code expired.» after 10 minutes.
+2. The bot posts **two lines for one code** (two messages — together they are longer than a Telegram message), valid 10 minutes and good
+   once, whichever is used first. Either fetches charness's own package from the charness host over ssh (so the versions never differ),
+   checks the machine and pairs it. Both messages then turn into «Runner “name” paired …» — or «Pairing code expired.» after 10 minutes.
+   - **From an admin account of the runner machine** (the first message), `sudo sh -c '…' sh '…' runner` — one paste does everything:
+     it checks the account named by the **last word of the line** (`runner` unless you change it) — it must exist, must not be `root`
+     or an admin (the account runs the agents' code), and is never created by the line — then pairs **as that account** (`sudo -u
+     <account> -H`: its files belong to it, not to root) and installs its always-on service: on a Mac the LaunchDaemon that runs as the
+     account, on Linux its systemd user service with lingering switched on (`loginctl enable-linger`; the install itself runs as the
+     account). Only the account switch and that last step run as root; `sudo` asks for the admin's password once and writes the command
+     line to the system log — the code in it is worthless once used or expired. The pairing runs with `sudo`'s `PATH`, so Node has to be
+     installed system-wide (Homebrew, the OS package, nodejs.org): a Node that only the runner account's own login finds (nvm) is found by
+     the second line, not by this one. A failed service step leaves the account paired and prints the `sudo …/charness-runner service
+     install --system --user <account>` to run again.
+   - **As the runner account itself** (the second message), no admin rights: it pairs and prints how to keep the runner running (the table
+     below).
 3. The runner appears in `/runners` (and in `charness remote-run runners`) with its OS, CPU, memory, disk, load, jobs and what it can
-   do. Anyone you give the line to can attach a machine until it is used or expires — treat it like a password.
+   do. Anyone you give a line to can attach a machine until the code is used or expires — treat them like a password. Without Telegram,
+   `charness runners pair --host … [--account <name>]` prints both lines.
 
 **Keep it running.** The pairing is permanent; the link has to be up for jobs to arrive.
 
@@ -45,7 +60,7 @@ A runner is attached in one of two ways:
 |---|---|
 | `~/.charness-runner/bin/charness-runner run` | holds the link in this terminal (Ctrl-C stops) |
 | `charness-runner service install` | keeps it running in the background, no admin: a systemd user service on Linux (with `loginctl enable-linger`; where polkit asks for an admin, the one `sudo` line is printed), a LaunchAgent on macOS (while that account is logged in) |
-| `sudo …/charness-runner service install --system --user <account>` | macOS, always on — also logged out and across fast user switching — once, from an admin account: a LaunchDaemon that runs **as `<account>`**, with no extra rights |
+| `sudo …/charness-runner service install --system --user <account>` | once, from an admin account, for another account (what the admin line runs after pairing). macOS: always on — also logged out and across fast user switching — a LaunchDaemon that runs **as `<account>`**, with no extra rights. Linux: `<account>`'s systemd user service, with lingering switched on and the install run as the account; the account removes it itself (`charness-runner service uninstall`) |
 | `charness-runner status` | whose charness it serves, the link state, how it is kept running, paused or not, running jobs |
 | `charness-runner pause` / `resume` | takes this machine out of rotation, or back in (the hub has its own pause, set in `/runners`) |
 | `charness-runner unpair` | tells the charness host to forget it, and stops the link and the queue's jobs here |

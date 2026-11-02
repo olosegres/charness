@@ -25,8 +25,9 @@ jobs:
           cache: yarn
       - run: yarn install --immutable
       # The flows drive real tmux sessions; the remote-run flow a real loopback sshd and rsync (remoteRunE2e.test.ts, remoteRunLifecycleE2e.test.ts).
-      - name: Install tmux, openssh-server and rsync
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux openssh-server rsync
+      # ...and fakeroot: the admin pairing line's flow plays root with it (runnerAdminLineE2e.test.ts).
+      - name: Install tmux, openssh-server, rsync and fakeroot
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tmux openssh-server rsync fakeroot
       # ...and Pueue, the runner's job queue: two static binaries, pinned by checksum (the remote-run flow never skips in CI).
       - name: Install Pueue
         run: |

@@ -18,9 +18,11 @@
 
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { installAppFromDirectory, restartExitCode } from './appInstall';
 import { checkArchiveHasId, checkIsPackageId } from './packageId';
+import { serviceFollowsFlag, splitServiceFollowsFlag } from './pairArgs';
 import { getRunnerHomePaths } from './runnerHome';
 
 const usageExitCode = 2;
@@ -31,7 +33,8 @@ const usage = `Usage:
   charness-runner check              look at this machine; install Pueue and rsync when they are missing
   charness-runner service install    keep it running in the background (systemd user service on Linux, LaunchAgent on macOS)
   sudo charness-runner service install --system --user <account>
-                                     macOS: always on, also logged out (LaunchDaemon running as <account>), once, by an admin
+                                     by an admin, once, for another account: macOS — always on, also logged out (LaunchDaemon
+                                     running as <account>); Linux — <account>'s user service, with lingering switched on
   charness-runner service uninstall  remove the services (with --system --user <account> for the daemons)
   charness-runner pause | resume     take this machine out of rotation, or back in
   charness-runner unpair [--local]   tell the hub and forget the pairing (--local: forget it here only)
@@ -47,25 +50,29 @@ interface BootstrapArgs {
   archivePath: string;
   packageId: string;
   code: string;
+  /** An admin's line installs the service next (`pairArgs.ts`). */
+  isServiceFollowing: boolean;
 }
 
-/** `--bootstrap <folder> --archive <file> --package-id <id> <code>` — what the pasted line passes. */
+/** `--bootstrap <folder> --archive <file> --package-id <id> [--service-follows] <code>` — what the pasted line passes. */
 function parseBootstrapArgs(args: readonly string[]): BootstrapArgs | null {
-  const [bootstrapFlag, bootstrapDir, archiveFlag, archivePath, idFlag, packageId, code, ...rest] = args;
+  const { rest: plainArgs, isServiceFollowing } = splitServiceFollowsFlag(args);
+  const [bootstrapFlag, bootstrapDir, archiveFlag, archivePath, idFlag, packageId, code, ...rest] = plainArgs;
   if (bootstrapFlag !== '--bootstrap' || archiveFlag !== '--archive' || idFlag !== '--package-id' || rest.length > 0) return null;
-  return bootstrapDir === undefined || archivePath === undefined || packageId === undefined || code === undefined ? null : { bootstrapDir, archivePath, packageId, code };
+  return bootstrapDir === undefined || archivePath === undefined || packageId === undefined || code === undefined ? null : { bootstrapDir, archivePath, packageId, code, isServiceFollowing };
 }
 
-/** `<code> [--package-id <id>]` — `pair` from an installed copy. */
-function parsePairArgs(args: readonly string[]): { code: string; packageId: string | null } | null {
-  const [code, flag, packageId, ...rest] = args;
+/** `<code> [--package-id <id>] [--service-follows]` — `pair` from an installed copy. */
+function parsePairArgs(args: readonly string[]): { code: string; packageId: string | null; isServiceFollowing: boolean } | null {
+  const { rest: plainArgs, isServiceFollowing } = splitServiceFollowsFlag(args);
+  const [code, flag, packageId, ...rest] = plainArgs;
   if (code === undefined || rest.length > 0) return null;
-  if (flag === undefined) return { code, packageId: null };
-  return flag === '--package-id' && packageId !== undefined && checkIsPackageId(packageId) ? { code, packageId } : null;
+  if (flag === undefined) return { code, packageId: null, isServiceFollowing };
+  return flag === '--package-id' && packageId !== undefined && checkIsPackageId(packageId) ? { code, packageId, isServiceFollowing } : null;
 }
 
 function runBootstrap(args: BootstrapArgs): number {
-  const { bootstrapDir, archivePath, packageId, code } = args;
+  const { bootstrapDir, archivePath, packageId, code, isServiceFollowing } = args;
   // The archive is checked against the id the hub announced with it, and THAT id — not whatever the hub offers a moment later — is
   // what the runner records as installed.
   if (!checkArchiveHasId(archivePath, packageId)) {
@@ -81,7 +88,7 @@ function runBootstrap(args: BootstrapArgs): number {
     return 1;
   }
   const installedCli = path.join(appDir, 'dist', 'runnerUtility', 'runnerCli.js');
-  const result = spawnSync(process.execPath, [installedCli, 'pair', code, '--package-id', packageId], { stdio: 'inherit' });
+  const result = spawnSync(process.execPath, [installedCli, 'pair', code, '--package-id', packageId, ...(isServiceFollowing ? [serviceFollowsFlag] : [])], { stdio: 'inherit' });
   const isCurrent = fs.existsSync(paths.currentApp) && fs.realpathSync(paths.currentApp) === fs.realpathSync(appDir);
   if (!isCurrent) fs.rmSync(appDir, { recursive: true, force: true });
   return result.status ?? 1;
@@ -89,7 +96,7 @@ function runBootstrap(args: BootstrapArgs): number {
 
 async function main(): Promise<number> {
   const [command = 'status', ...args] = process.argv.slice(2);
-  if (command === 'pair' && args[0] === '--bootstrap') {
+  if (command === 'pair' && splitServiceFollowsFlag(args).rest[0] === '--bootstrap') {
     const bootstrapArgs = parseBootstrapArgs(args);
     if (bootstrapArgs === null) {
       process.stderr.write(usage);
@@ -106,7 +113,7 @@ async function main(): Promise<number> {
         return usageExitCode;
       }
       const { runPair } = await import('./runnerCommands');
-      return runPair(pairArgs.code, getOwnAppDir(), pairArgs.packageId, io);
+      return runPair(pairArgs.code, getOwnAppDir(), pairArgs.packageId, io, os.homedir(), { isServiceFollowing: pairArgs.isServiceFollowing });
     }
     case 'run': {
       const { runLink } = await import('./runnerCommands');

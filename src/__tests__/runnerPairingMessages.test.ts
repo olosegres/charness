@@ -1,6 +1,6 @@
 /**
  * @description `connectors/telegram/runnerPairingMessages.ts`: the instance's own record of the pairing messages it has sent and not yet
- * settled — a round trip through its file, an entry per code, a missing file is empty, a file that does not validate reads as empty and
+ * settled — a round trip through its file, an entry per MESSAGE (a code is offered in two), a missing file is empty, a file that does not validate reads as empty and
  * says why (the next write replaces it), and the record is bounded.
  *
  * Test case: N/A — Charness has no Jira tracker.
@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { addPairingMessage, markPairingMessageFailed, readPairingMessages, removePairingMessages, writePairingMessages, type PairingMessage } from '../connectors/telegram/runnerPairingMessages';
+import { addPairingMessage, getPairingMessageId, markPairingMessageFailed, readPairingMessages, removePairingMessages, writePairingMessages, type PairingMessage } from '../connectors/telegram/runnerPairingMessages';
 
 let tempDir = '';
 let filePath = '';
@@ -34,22 +34,24 @@ describe('runnerPairingMessages', () => {
     assert.deepEqual(readPairingMessages(filePath), { messages: [], problem: null });
   });
 
-  it('what is written is read back, the file is owner-only, and a second entry for the same code replaces the first', () => {
+  it('what is written is read back, the file is owner-only, the two messages of one code are both kept and the same message again replaces itself', () => {
     addPairingMessage(filePath, createMessage());
-    addPairingMessage(filePath, createMessage({ pairId: 'ba9876543210', messageId: 43 }));
-    assert.deepEqual(readPairingMessages(filePath).messages.map((message) => message.pairId), ['0123456789ab', 'ba9876543210']);
-    addPairingMessage(filePath, createMessage({ messageId: 99 }));
-    assert.deepEqual(readPairingMessages(filePath).messages.map((message) => [message.pairId, message.messageId]), [['ba9876543210', 43], ['0123456789ab', 99]]);
+    addPairingMessage(filePath, createMessage({ messageId: 43 }));
+    addPairingMessage(filePath, createMessage({ pairId: 'ba9876543210', messageId: 44 }));
+    assert.deepEqual(readPairingMessages(filePath).messages.map((message) => [message.pairId, message.messageId]), [['0123456789ab', 42], ['0123456789ab', 43], ['ba9876543210', 44]]);
+    addPairingMessage(filePath, createMessage({ messageId: 42, offeredAtMs: 2_000 }));
+    assert.deepEqual(readPairingMessages(filePath).messages.map((message) => [message.pairId, message.messageId, message.offeredAtMs]), [['0123456789ab', 43, 1_000], ['ba9876543210', 44, 1_000], ['0123456789ab', 42, 2_000]]);
     assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
   });
 
-  it('removing takes out the named codes only, and nothing named is no change', () => {
+  it('removing takes out the named messages only — one message of a code can go while the other stays — and nothing named is no change', () => {
     addPairingMessage(filePath, createMessage());
-    addPairingMessage(filePath, createMessage({ pairId: 'ba9876543210' }));
-    removePairingMessages(filePath, new Set(['0123456789ab', 'ffffffffffff']));
-    assert.deepEqual(readPairingMessages(filePath).messages.map((message) => message.pairId), ['ba9876543210']);
+    addPairingMessage(filePath, createMessage({ messageId: 43 }));
+    addPairingMessage(filePath, createMessage({ pairId: 'ba9876543210', messageId: 44 }));
+    removePairingMessages(filePath, new Set([getPairingMessageId({ pairId: '0123456789ab', messageId: 42 }), 'ffffffffffff:1']));
+    assert.deepEqual(readPairingMessages(filePath).messages.map((message) => [message.pairId, message.messageId]), [['0123456789ab', 43], ['ba9876543210', 44]]);
     removePairingMessages(filePath, new Set());
-    assert.equal(readPairingMessages(filePath).messages.length, 1);
+    assert.equal(readPairingMessages(filePath).messages.length, 2);
   });
 
   it('a file that is not JSON, or does not validate, reads as empty and names the problem; the next write replaces it', () => {
@@ -63,16 +65,18 @@ describe('runnerPairingMessages', () => {
     assert.deepEqual(readPairingMessages(filePath), { messages: [createMessage()], problem: null });
   });
 
-  it('the first failed edit of a message is written down and stays the first; other messages are not touched; an unknown code changes nothing', () => {
+  it('the first failed edit of a message is written down and stays the first; other messages — also the code\'s other one — are not touched; an unknown message changes nothing', () => {
     addPairingMessage(filePath, createMessage());
-    addPairingMessage(filePath, createMessage({ pairId: 'ba9876543210' }));
-    markPairingMessageFailed(filePath, '0123456789ab', 5_000);
-    markPairingMessageFailed(filePath, '0123456789ab', 9_000);
-    markPairingMessageFailed(filePath, 'ffffffffffff', 9_000);
-    assert.equal(readPairingMessages(filePath).messages.length, 2);
-    const byCode = new Map(readPairingMessages(filePath).messages.map((message) => [message.pairId, message.firstFailedAtMs]));
-    assert.equal(byCode.get('0123456789ab'), 5_000);
-    assert.equal(byCode.get('ba9876543210'), undefined);
+    addPairingMessage(filePath, createMessage({ messageId: 43 }));
+    addPairingMessage(filePath, createMessage({ pairId: 'ba9876543210', messageId: 44 }));
+    markPairingMessageFailed(filePath, { pairId: '0123456789ab', messageId: 42 }, 5_000);
+    markPairingMessageFailed(filePath, { pairId: '0123456789ab', messageId: 42 }, 9_000);
+    markPairingMessageFailed(filePath, { pairId: 'ffffffffffff', messageId: 1 }, 9_000);
+    assert.equal(readPairingMessages(filePath).messages.length, 3);
+    const byMessage = new Map(readPairingMessages(filePath).messages.map((message) => [getPairingMessageId(message), message.firstFailedAtMs]));
+    assert.equal(byMessage.get('0123456789ab:42'), 5_000);
+    assert.equal(byMessage.get('0123456789ab:43'), undefined);
+    assert.equal(byMessage.get('ba9876543210:44'), undefined);
   });
 
   it('keeps the newest fifty entries only', () => {

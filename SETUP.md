@@ -391,9 +391,10 @@ had run locally. Without a runner nothing changes for anyone, and agents are not
 **Pair it (the normal way).** Needs this machine's ordinary `sshd` (key login on) with an address the runner can reach — nothing else is
 opened or changed, no root, no VPN — and on the runner machine Node 22.12+, `ssh` and `tar`. In General send `/runners` → **＋ Pair a new
 runner**; the first time the bot asks which address runners dial (the `runnerHost` row of the [instance settings](#instance-settings-settingsjson)) and
-proposes the public address it finds. It posts one line (valid 10 minutes, single use): run it on the runner machine as the account that
-will run the jobs, then `charness-runner service install` there to keep it running. An instance without Telegram uses
-`charness runners pair --host host.example`. The steps, the services (a Mac that stays on while logged out), removing and the safety
+proposes the public address it finds. It posts two lines (valid 10 minutes, single use, one code): the first from an admin account of the
+runner machine — it pairs a standard user there (`runner` unless you change the last word of the line) and installs its always-on service
+in one go — the second as the account that will run the jobs, with `charness-runner service install` afterwards to keep it running. An
+instance without Telegram uses `charness runners pair --host host.example`. The steps, the services (a Mac that stays on while logged out), removing and the safety
 model: [docs/remote-run.md](docs/remote-run.md#pair-a-runner).
 
 **Or by hand over plain ssh** — for a machine that cannot dial this one: list it in `~/.config/charness/runners.json` (one file per OS
