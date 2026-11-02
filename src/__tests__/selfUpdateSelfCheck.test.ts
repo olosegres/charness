@@ -13,10 +13,12 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { listImportableModules, runSelfCheck } from '../selfUpdate/selfCheck';
+import { entryModules, listImportableModules, runSelfCheck } from '../selfUpdate/selfCheck';
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const builtCliPath = path.join(repoRoot, 'dist', 'cli.js');
+/** The one entry the fake tree holds as a sound module of its own (`beforeEach`): the self-check only syntax-checks it. */
+const botModule = 'bot.js';
 
 let packageRoot: string;
 
@@ -29,7 +31,7 @@ function writePackageFile(relativePath: string, content: string): void {
 beforeEach(() => {
   packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-selfcheck-test-'));
   writePackageFile('package.json', '{"name":"demo","version":"3.5.0"}\n');
-  writePackageFile('dist/bot.js', 'module.exports = {};\n');
+  writePackageFile(`dist/${botModule}`, 'module.exports = {};\n');
 });
 
 afterEach(() => {
@@ -38,7 +40,7 @@ afterEach(() => {
 
 describe('the modules a self-check imports', () => {
   test('every built .js except the entry points, tests and non-js files, sorted, with forward slashes', () => {
-    for (const entry of ['cli.js', 'index.js', 'cli/botEntry.js', 'stt/sttInstallEntry.js', 'runnerUtility/runnerCli.js', 'runnerUtility/rootServiceCli.js']) writePackageFile(`dist/${entry}`, 'throw new Error("an entry point was imported");\n');
+    for (const entry of entryModules) if (entry !== botModule) writePackageFile(`dist/${entry}`, 'throw new Error("an entry point was imported");\n');
     writePackageFile('dist/__tests__/some.test.js', 'throw new Error("a test was imported");\n');
     writePackageFile('dist/utils/b.js', 'module.exports = 1;\n');
     writePackageFile('dist/a.js', 'module.exports = 1;\n');

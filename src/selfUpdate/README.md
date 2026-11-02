@@ -40,6 +40,8 @@ throws, a result the caller words):
 - `selfCheck.ts` — `charness self-check [--expect <version>]` (hidden), run on a NEW install before the switch: the version,
   `node-pty`'s native binding, every built module importable (entry points and tests left out; `bot.js` only `node --check`ed,
   it exits without its settings), under a throwaway `DATA_DIR`.
+  A module that is a program guards itself with `require.main === module` and is added to `entryModules` (`selfCheck.ts`); `entryModules.test.ts`
+  enforces both — the list against a scan of the sources, and every module the check imports against a child `node` that must end by itself, clean.
 
 Restart and rollback:
 
