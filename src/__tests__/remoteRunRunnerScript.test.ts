@@ -728,9 +728,12 @@ describe('collecting the result files (collect_artifacts)', () => {
 
   /** Run `collect_artifacts` for the job, with a `find` in front of the real one that writes down what it was asked to walk. */
   function collect(): { status: number | null; stderr: string; walked: string } {
-    const result = spawnSync('bash', ['-c', `source ${scriptPath}; set_paths ${workDir} ${slug} ${jobId}; collect_artifacts`], {
+    // `--norc` and no stdin: a bash whose stdin is a socket (what a pipe to a child is) is taken for one started by sshd and reads `~/.bashrc`,
+    // which on a developer machine loads nvm — and nvm's own `find` calls land in the log below as if the script had made them.
+    const result = spawnSync('bash', ['--norc', '--noprofile', '-c', `source ${scriptPath}; set_paths ${workDir} ${slug} ${jobId}; collect_artifacts`], {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 60_000,
     });
     const logPath = path.join(binDir, findLogName);
