@@ -21,7 +21,7 @@ import { createAgentLogin, type AgentLoginPorts, type ClaudeLoginProfile } from 
 import type { ClaudeAuthStatus } from '../utils/claudeProfiles';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
-import { killRecordedProcess } from './recordedProcess';
+import { checkIsProcessAlive, killRecordedProcess } from './recordedProcess';
 
 const key: SessionKey = makeTelegramKey(-1001111111111, 4242);
 const pastedCode = 'fake-oauth-code-4711';
@@ -132,15 +132,6 @@ async function waitUntil(description: string, check: () => boolean): Promise<voi
   while (!check()) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${description}`);
     await new Promise((resolve) => setTimeout(resolve, stepMs));
-  }
-}
-
-function checkIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
   }
 }
 

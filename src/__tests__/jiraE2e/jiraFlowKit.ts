@@ -59,6 +59,7 @@ import { testTimingsEnvName, type TestTimings } from '../../testTimings';
 import { notTelegramChatPhrase } from '../../connectors/telegram/foreignKeyFallbacks';
 import { foreignKeyAccessorErrorPrefix } from '../../connectors/telegram/sessionKeyCodec';
 import { TelegramDisabledError, telegramCallRefusedLogPrefix } from '../../connectors/telegram/telegramCallGuard';
+import { checkIsProcessAlive } from '../recordedProcess';
 
 
 export const aiAccount = { accountId: 'ai-account', accountType: 'atlassian', displayName: 'AI' };
@@ -175,15 +176,8 @@ export function markToolDigestStale(conversationKeys: string[]): void {
   fs.writeFileSync(statePath, JSON.stringify(persisted));
 }
 
-/** Signal 0 probes the pid without touching it: alive (or not ours) → true, gone → `ESRCH`. */
-export function checkIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
-  }
-}
+/** The jira flows ask the kit; the one implementation is `recordedProcess.ts`. */
+export { checkIsProcessAlive };
 
 export function getTurns(issueKey: string): FakeClaudeTurn[] {
   return readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).filter((turn) => turn.issueKey === issueKey);

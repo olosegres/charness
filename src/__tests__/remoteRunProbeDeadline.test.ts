@@ -18,7 +18,7 @@ import { RunnerUnreachableError } from '../remoteRun/remoteRunError';
 import { createRunnerClient, type RunnerClient } from '../remoteRun/runnerClient';
 import { probeRunners, readLastProbe } from '../remoteRun/runners';
 import { runSshCommand } from '../remoteRun/ssh';
-import { killRecordedProcess, readRecordedPid } from './recordedProcess';
+import { checkIsProcessAlive, killRecordedProcess, readRecordedPid } from './recordedProcess';
 
 const probeText = 'os=Linux\nos_name=Ubuntu\nos_version=24.04\narch=x86_64\nkernel=6.8.0\ncpu_cores=4\ncpu_threads=8\npueue=4.0.4\ncap_android=no\ncap_ios=no\ncap_docker=no\ncap_playwright=no\n';
 const lastSeenAtMs = Date.UTC(2026, 9, 30, 14, 2);
@@ -203,16 +203,6 @@ describe('runSshCommand when the ssh it ran is only a client of a master that ho
     assert.notEqual(result, 'still waiting', `the call did not settle within ${settleBoundMs} ms of the abort (${Date.now() - startedAt} ms in all)`);
     assert.ok(typeof result !== 'string' && result.isTimedOut === true && result.exitCode === null);
   });
-
-  /** True while a process with this pid exists (signal 0 sends nothing); a child of this test process is reaped, so it stops existing once it has exited. */
-  function checkIsProcessAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  }
 
   /** Waits until the stand-in client has recorded its pid and that process is gone — the moment from which a cut-off is one that comes AFTER the client exited. */
   async function waitForClientToHaveExited(): Promise<void> {

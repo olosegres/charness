@@ -23,6 +23,7 @@ import { writeRunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { installService, readServiceKind, type ServiceDeps } from '../runnerUtility/serviceManager';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
+import { checkIsProcessAlive, readRecordedPid } from './recordedProcess';
 import { waitUntil } from './runnersTestKit';
 
 const isCi = process.env.CI === 'true' || process.env.CI === '1';
@@ -72,12 +73,8 @@ describe('the runner\'s queue and its services (real Pueue)', { skip: skipReason
   }
 
   function isAlive(pidFile: string): boolean {
-    try {
-      process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 0);
-      return true;
-    } catch {
-      return false;
-    }
+    const pid = readRecordedPid(pidFile);
+    return pid !== null && checkIsProcessAlive(pid);
   }
 
   beforeEach(() => {

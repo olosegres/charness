@@ -86,6 +86,7 @@ import {
 } from './e2e/isolatedCharness';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import { claudeJsonStreamUsageLogPrefix } from '../adapters/claudeJsonStreamAdapter';
+import { checkIsProcessAlive } from './recordedProcess';
 
 /** The repo's placeholder group and a topic in it; the operator is its creator. */
 const group = { id: -1001111111111, title: 'ExampleGroup' };
@@ -256,15 +257,6 @@ function readPersistedState(): PersistedStateSlice {
 
 function readPersistedTopicPrefs(): Record<string, string> | undefined {
   return readPersistedState().displayPrefs?.[threadKeyString];
-}
-
-function checkIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** The fake agent's turns whose text carried `label`. */

@@ -38,6 +38,7 @@ import {
 } from './e2e/isolatedCharness';
 import { launchLine, UpdateFlowDriver } from './e2e/updateFlowDriver';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { checkIsProcessAlive } from './recordedProcess';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -83,15 +84,6 @@ function removeInstanceSync(): void {
 /** The supervisor the entrypoint started: the pid it wrote, which is also what `charness-restart-bot` signals. */
 function readSupervisorPid(): number {
   return Number(fs.readFileSync(scripts.supervisorPidFile, 'utf8').trim());
-}
-
-function checkIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** The entrypoint IS the instance's process: its output carries the bot's and the entrypoint's own lines. */

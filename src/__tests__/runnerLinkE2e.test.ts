@@ -27,6 +27,7 @@ import { decodePairCode } from '../runners/pairCode';
 import { redeemReplySchema, type RedeemRequest } from '../runners/gateProtocol';
 import { readPairedFile, writePairedFile } from '../runners/hubRegistry';
 import { getRunnerLinkStatus } from '../runners/linkControl';
+import { checkIsProcessAlive } from './recordedProcess';
 import { connectToHub, HubConnectionError, requestGateJson } from '../runnerUtility/hubClient';
 import { readRunnerConfig, writePairingInProgress } from '../runnerUtility/runnerConfig';
 import { ensureRunnerKeys } from '../runnerUtility/runnerKeys';
@@ -324,15 +325,6 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     return `echo $$ > ${pidFile}; exec sleep 300`;
   }
 
-  function isProcessAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   it('after the hub removes the machine its link is cut, it says so, and the background job the hub\'s agents left running there is stopped', async () => {
     const name = readHubPaired().runners[0].name;
     // A background job, as `remote-run --bg` leaves one: it runs in the runner\'s Pueue, which outlives any link.
@@ -341,13 +333,13 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal(started.status, 0, started.stderr);
     await waitUntil(() => fs.existsSync(jobPidFile) && fs.readFileSync(jobPidFile, 'utf8').trim() !== '', 'the background job to start', linkTimeoutMs);
     const jobPid = Number(fs.readFileSync(jobPidFile, 'utf8'));
-    assert.equal(isProcessAlive(jobPid), true);
+    assert.equal(checkIsProcessAlive(jobPid), true);
 
     const removal = runHubCli(layout, ['runners', 'remove', name]);
     assert.equal(removal.status, 0, removal.stderr);
     assert.notEqual(sshThroughLink(layout, runnerId, 'echo nope').status, 0);
     await waitUntil(() => readStatus()?.state === 'removed', 'the runner to learn it was removed', linkTimeoutMs);
-    await waitUntil(() => !isProcessAlive(jobPid), 'the removed runner to stop the background job it was running', linkTimeoutMs);
+    await waitUntil(() => !checkIsProcessAlive(jobPid), 'the removed runner to stop the background job it was running', linkTimeoutMs);
     const status = spawnSync(process.execPath, [path.join(runnerPaths.currentApp, 'dist', 'runnerUtility', 'runnerCli.js'), 'status'], { encoding: 'utf8', env: { HOME: layout.runnerHome, PATH: process.env.PATH } });
     assert.match(status.stdout, /This runner was removed by @ExampleBot\. Pair again with a new line from \/runners\./);
     assert.equal(readHubPaired().runners.length, 0);
@@ -367,7 +359,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal(started.status, 0, started.stderr);
     await waitUntil(() => fs.existsSync(jobPidFile) && fs.readFileSync(jobPidFile, 'utf8').trim() !== '', 'the third machine\'s background job to start', linkTimeoutMs);
     const jobPid = Number(fs.readFileSync(jobPidFile, 'utf8'));
-    assert.equal(isProcessAlive(jobPid), true);
+    assert.equal(checkIsProcessAlive(jobPid), true);
 
     // The registry entry goes, the key line stays (no hub operation runs, so nothing rewrites authorized_keys): sshd lets the runner in,
     // the gate refuses `link` — and must still answer `identity`, or the runner sees only a failure and retries for ever.
@@ -376,7 +368,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.match(fs.readFileSync(path.join(layout.hubHome, '.ssh', 'authorized_keys'), 'utf8'), new RegExp(`charness-runner:${thirdId}`), 'the key line is still there');
     process.kill(readJson<{ pid: number }>(path.join(layout.hubDir, 'link', `${thirdId}.json`)).pid, 'SIGKILL');
     await waitUntil(() => readStatusAt(paths)?.state === 'removed', 'the third machine to learn it was removed from the gate\'s answer', linkTimeoutMs);
-    await waitUntil(() => !isProcessAlive(jobPid), 'the removed machine to stop its background job', linkTimeoutMs);
+    await waitUntil(() => !checkIsProcessAlive(jobPid), 'the removed machine to stop its background job', linkTimeoutMs);
     await stopRunner(layout, third);
   });
 
@@ -439,7 +431,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     });
     assert.equal(unpair.status, 0, unpair.stderr);
     assert.match(unpair.stdout, /Unpaired from charness @ExampleBot \(here only/);
-    assert.equal(isProcessAlive(linkPid), false, 'the runner process is gone — checked, not assumed');
+    assert.equal(checkIsProcessAlive(linkPid), false, 'the runner process is gone — checked, not assumed');
     assert.equal(fs.existsSync(paths.config), false);
     assert.equal(fs.existsSync(paths.keysDir), false);
 

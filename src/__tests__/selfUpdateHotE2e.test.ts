@@ -53,6 +53,7 @@ import { launchLine, UpdateFlowDriver } from './e2e/updateFlowDriver';
 import { tscWatchStaleGraceMs } from '../cli/tscWatchGuard';
 import { readHotSupervisorRecord } from '../selfUpdate/hotSupervisor';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { checkIsProcessAlive } from './recordedProcess';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -104,15 +105,6 @@ function removeInstanceSync(): void {
 
 function listServePids(): number[] {
   return fs.existsSync(servePidFile) ? fs.readFileSync(servePidFile, 'utf8').split('\n').filter(Boolean).map(Number) : [];
-}
-
-function checkIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** Start the HOT supervisor from the checkout and wait for its first worker's first poll to reach the fake Bot API. */
