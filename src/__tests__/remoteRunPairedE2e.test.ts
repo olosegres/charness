@@ -30,6 +30,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as net from 'node:net';
 import * as path from 'node:path';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import {
@@ -72,6 +73,8 @@ const linkTimeoutMs = 90_000;
 const ordinaryRunTimeoutMs = 120_000;
 const atOnceBoundMs = 30_000;
 const afterInterruptTimeoutMs = 60_000;
+/** A probe that is held would run for its own 20 s; a command told to stop ends well before that. */
+const heldProbeStopBoundMs = 15_000;
 
 describe('remote-run through a paired runner (process level)', { skip: skipReason }, () => {
   let layout: RunnerLinkLayout;
@@ -125,8 +128,8 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
     return runCli(cliLayout, args, { cwd: project.root, env: flowEnv, timeoutMs });
   }
 
-  function start(args: string[], env: NodeJS.ProcessEnv = flowEnv): CliRun {
-    return startCli(cliLayout, args, { cwd: project.root, env });
+  function start(args: string[]): CliRun {
+    return startCli(cliLayout, args, { cwd: project.root, env: flowEnv });
   }
 
   /** What `charness runners ls` of the hub says about the runner: `online`, or `offline`. */
@@ -287,17 +290,65 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
       assert.match(result.stderr, /waited \d+ s for a runner with "playwright" to come back — none did/);
     });
 
-    it('an interrupt while it waits ends it with 130 and starts no job', async () => {
-      // The wait listens for an interrupt only while it sleeps between two looks (a probe that is running is ended by the signal itself — the
-      // shell reads that as 130 too, a parent that spawns it directly as «killed by a signal»). With the flow's 1-second poll a test process
-      // that is slow on a busy machine sends its SIGINT into the NEXT probe; the production poll (10 s) keeps it in the first sleep.
-      const cli = start(['--needs', 'playwright', '--runner-wait', '10m', 'echo x'], { CHARNESS_TEST_TIMINGS: JSON.stringify({ remoteRunLeaseMs: leaseMs }) });
+    it('an interrupt while it waits ends it with 130 and starts no job — in a sleep or in a probe, whichever the signal finds', async () => {
+      const cli = start(['--needs', 'playwright', '--runner-wait', '10m', 'echo x']);
       await waitUntil(() => cli.stderr().includes('waiting for a runner with playwright'), 'the wait to begin', ordinaryRunTimeoutMs);
       cli.child.kill('SIGINT');
       assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 130, cli.stderr());
       assert.match(cli.stderr(), /interrupted while waiting for a runner/);
       assert.equal(cli.stdout(), '');
     });
+
+    /**
+     * A stand-in for the link of the offline runner that takes connections and never answers: the probe the next look makes goes through it and is
+     * held where it is — an ssh client waiting for a banner that does not come — until the command is told to stop. `hasProbeStarted` is true once
+     * ssh has spoken through the proxy, so the probe is certainly in flight.
+     */
+    async function holdLinkWithSilentSocket(): Promise<{ hasProbeStarted: () => boolean; getOpenConnectionCount: () => number; release: () => void }> {
+      const runnerId = readJson<{ runners: Array<{ id: string }> }>(path.join(layout.hubDir, 'paired.json')).runners[0].id;
+      const socketPath = path.join(layout.hubDir, 'link', `${runnerId}.sock`);
+      fs.rmSync(socketPath, { force: true });
+      const openConnections = new Set<net.Socket>();
+      let hasSsh = false;
+      const server = net.createServer((connection) => {
+        openConnections.add(connection);
+        connection.on('error', () => undefined);
+        connection.on('close', () => openConnections.delete(connection));
+        connection.on('data', () => { hasSsh = true; });
+      });
+      await new Promise<void>((resolve) => { server.listen(socketPath, resolve); });
+      return {
+        hasProbeStarted: () => hasSsh,
+        getOpenConnectionCount: () => openConnections.size,
+        release: () => {
+          for (const connection of openConnections) connection.destroy();
+          server.close();
+          fs.rmSync(socketPath, { force: true });
+        },
+      };
+    }
+
+    for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) {
+      it(`${signal} while a probe of the wait is held ends it with ${exitCode} at once — the probe's ssh is stopped, no runner is picked and no job starts`, async () => {
+        const markerName = `held-probe-${signal}.marker`;
+        const cli = start(['--needs', 'playwright', '--runner-wait', '10m', `touch ../${markerName}`]);
+        await waitUntil(() => cli.stderr().includes('waiting for a runner with playwright'), 'the wait to begin', ordinaryRunTimeoutMs);
+        const link = await holdLinkWithSilentSocket();
+        try {
+          await waitUntil(() => link.hasProbeStarted(), 'a probe to be held on the silent link', ordinaryRunTimeoutMs);
+          const signalledAtMs = Date.now();
+          cli.child.kill(signal);
+          assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), exitCode, cli.stderr());
+          assert.ok(Date.now() - signalledAtMs < heldProbeStopBoundMs, `it ended at once (${Date.now() - signalledAtMs} ms), not when the probe's own 20 s ran out`);
+          assert.match(cli.stderr(), /interrupted while waiting for a runner/);
+          assert.equal(cli.stdout(), '');
+          await waitUntil(() => link.getOpenConnectionCount() === 0, 'the probe\'s connection to the silent link to be closed', afterInterruptTimeoutMs);
+          assert.equal(fs.existsSync(path.join(project.runnerDirectory, markerName)), false, 'nothing was run on the runner');
+        } finally {
+          link.release();
+        }
+      });
+    }
 
     it('a runner paused from the hub while the command waits is given up on — and runs nothing when it comes back', async () => {
       const markerName = 'paused-wait.marker';

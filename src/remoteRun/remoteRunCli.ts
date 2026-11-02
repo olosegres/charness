@@ -12,14 +12,15 @@ import {
 } from './commands';
 import { parseRemoteRunArgs } from './cliArgs';
 import { remoteRunExitCodes } from './exitCodes';
+import { addInterruptHandler } from './interrupts';
 import { readRemoteRunLeaseMs } from './leaseTiming';
 import { createProcessIo, type CliIo } from './output';
 import { RemoteRunError } from './remoteRunError';
 import { readRunnerScript } from './runnerClient';
 import { getRunnersConfigPath, type RunnersConfig } from './runnersConfig';
 import { loadRunnersCatalog } from './runnersCatalog';
+import { sleepUntilStopped } from './runnerWait';
 import { readRunnerWaitPollMs } from './runnerWaitTiming';
-import { sleepUntilInterrupted } from './runnerWait';
 import { ensureRemoteRunCacheDir, getRemoteRunCacheDir } from './ssh';
 
 /**
@@ -88,7 +89,8 @@ function createContext(io: CliIo): CommandContext {
     now: Date.now,
     loadRunners: () => readCurrentRunners(io.homeDir),
     runnerPollMs: readRunnerWaitPollMs(io.env),
-    sleep: sleepUntilInterrupted,
+    sleep: sleepUntilStopped,
+    watchInterrupts: addInterruptHandler,
   };
 }
 

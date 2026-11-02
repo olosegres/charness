@@ -28,6 +28,8 @@ let loads = 0;
 /** What `loadRunners` returns at each look (the last repeats); a sleep may change what comes next. */
 let catalogs: RunnersConfig[] = [];
 let onSleep: (sleepNumber: number) => void = () => undefined;
+/** What the loop gave `watchInterrupts` while it runs; a test calls it to interrupt. `null` once the loop has stopped listening. */
+let interruptHandler: ((signal: 'SIGINT' | 'SIGTERM' | 'SIGHUP') => void) | null = null;
 
 function createPairedRunner(overrides: { isPausedByHub?: boolean; name?: string } = {}): RunnerConfig {
   // No link directory exists under `root/hub`: the link accepts nothing, the runner is offline, and no ssh is ever started.
@@ -51,7 +53,10 @@ function createContext(): CommandContext {
       sleeps.push(ms);
       nowMs += ms;
       onSleep(sleeps.length);
-      return null;
+    },
+    watchInterrupts: (onInterrupt) => {
+      interruptHandler = onInterrupt;
+      return () => { interruptHandler = null; };
     },
   };
 }
@@ -66,6 +71,7 @@ beforeEach(() => {
   loads = 0;
   catalogs = [];
   onSleep = () => undefined;
+  interruptHandler = null;
 });
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
@@ -82,6 +88,16 @@ describe('the wait for a paired runner reads the catalog again at every attempt'
     assert.equal(loads, 2, 'read at the first attempt and once more after the first sleep');
     assert.equal(stderr.filter((line) => line.includes('waiting for a runner with playwright')).length, 1);
     assert.match(stderr.join(''), /waiting for a runner with playwright \(mac offline since 2026-11-01 14:02 UTC\)/);
+  });
+
+  it('an interrupt that reaches the loop through the command\'s context ends the wait with the code of the signal, and the loop stops listening', async () => {
+    catalogs = [{ runners: [createPairedRunner()] }];
+    onSleep = (sleepNumber) => {
+      if (sleepNumber === 2) interruptHandler?.('SIGTERM');
+    };
+    await assert.rejects(chooseClient(createContext(), { runner: null, needs: 'playwright', waitSeconds: 900 }), (error: Error) => error instanceof RemoteRunError && error.exitCode === 143 && /interrupted while waiting for a runner/.test(error.message));
+    assert.deepEqual(sleeps, [10_000, 10_000], 'no look after the interrupt');
+    assert.equal(interruptHandler, null);
   });
 
   it('a runner PAUSED from the hub while the command waits is no longer waited for — it would be skipped when it came back', async () => {

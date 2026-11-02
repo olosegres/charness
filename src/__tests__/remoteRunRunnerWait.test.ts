@@ -2,7 +2,7 @@
  * @description The wait of `charness remote-run --needs <capability>` for an offline PAIRED runner (`remoteRun/runnerWait.ts`,
  * `runnerWaitTiming.ts`): what is worth waiting for (a paired runner that, when last seen, had the capability and Pueue and is not
  * paused — never a hand-made one, a named one or a capability nobody has), the loop that announces once, looks again every poll and gives
- * up after `--runner-wait` (`0` = at once), an interrupt that ends it with the shell's code, and the test window of the poll.
+ * up after `--runner-wait` (`0` = at once), an interrupt — in a sleep or in a probe — that ends it with the shell's code, and the test window of the poll.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -13,7 +13,8 @@ import { parseProbeOutput, type RunnerReport } from '../remoteRun/probe';
 import { RemoteRunError } from '../remoteRun/remoteRunError';
 import { pickRunner } from '../remoteRun/runners';
 import type { RunnersConfig } from '../remoteRun/runnersConfig';
-import { chooseRunnerWithWait, formatWaitDuration, minWaitAttemptMs, planRunnerWait, type RunnerAttempt } from '../remoteRun/runnerWait';
+import type { InterruptSignal } from '../remoteRun/exitCodes';
+import { chooseRunnerWithWait, formatWaitDuration, minWaitAttemptMs, planRunnerWait, sleepUntilStopped, type RunnerAttempt } from '../remoteRun/runnerWait';
 import { defaultRunnerWaitSeconds, readRunnerWaitPollMs, runnerWaitPollMinMs, runnerWaitPollMs } from '../remoteRun/runnerWaitTiming';
 
 const pairedLink = { runnerId: 'a1b2c3d4e5f6', hubDir: '/h', isPausedByHub: false, os: 'Ubuntu 24.04' };
@@ -91,7 +92,7 @@ describe('formatWaitDuration', () => {
 });
 
 /** What an attempt does: answers, or (a function) first spends time or changes the world — as a slow probe would — and then answers. */
-type FakeAnswer = RunnerAttempt<string> | ((world: FakeWorld) => RunnerAttempt<string>);
+type FakeAnswer = RunnerAttempt<string> | ((world: FakeWorld, stop: AbortSignal) => RunnerAttempt<string> | Promise<RunnerAttempt<string>>);
 
 interface FakeWorld {
   nowMs: number;
@@ -102,20 +103,29 @@ interface FakeWorld {
   budgets: Array<number | null>;
   /** The attempt's answer by number (from 1); the last one repeats. */
   answers: FakeAnswer[];
-  interruptAtSleep: { sleepNumber: number; signal: 'SIGINT' | 'SIGTERM' | 'SIGHUP' } | null;
+  /** An interrupt that comes while the given sleep is under way. */
+  interruptAtSleep: { sleepNumber: number; signal: InterruptSignal } | null;
+  /** What the loop gave `watchInterrupts` while it runs (a test calls it to interrupt), and how many watchers are still on. */
+  onInterrupt: ((signal: InterruptSignal) => void) | null;
+  watchersOn: number;
+  /** The `stop` signal each attempt was given. */
+  stopSignals: AbortSignal[];
+  /** The signal a held probe interrupts with, as it starts. */
+  interruptAtProbe: InterruptSignal | null;
 }
 
 function createWorld(answers: FakeAnswer[]): FakeWorld {
-  return { nowMs: 1_000_000, said: [], sleeps: [], attempts: 0, budgets: [], answers, interruptAtSleep: null };
+  return { nowMs: 1_000_000, said: [], sleeps: [], attempts: 0, budgets: [], answers, interruptAtSleep: null, onInterrupt: null, watchersOn: 0, stopSignals: [], interruptAtProbe: null };
 }
 
 function runLoop(world: FakeWorld, options: { waitSeconds: number; needs?: 'android' | null; pollMs?: number }): Promise<string> {
   return chooseRunnerWithWait<string>({
-    attempt: async (budgetMs) => {
+    attempt: async (budgetMs, stop) => {
       world.attempts += 1;
       world.budgets.push(budgetMs);
+      world.stopSignals.push(stop);
       const answer = world.answers[Math.min(world.attempts, world.answers.length) - 1];
-      return typeof answer === 'function' ? answer(world) : answer;
+      return typeof answer === 'function' ? answer(world, stop) : answer;
     },
     needs: options.needs === undefined ? 'android' : options.needs,
     waitSeconds: options.waitSeconds,
@@ -124,7 +134,15 @@ function runLoop(world: FakeWorld, options: { waitSeconds: number; needs?: 'andr
     sleep: async (ms) => {
       world.sleeps.push(ms);
       world.nowMs += ms;
-      return world.interruptAtSleep !== null && world.interruptAtSleep.sleepNumber === world.sleeps.length ? world.interruptAtSleep.signal : null;
+      if (world.interruptAtSleep !== null && world.interruptAtSleep.sleepNumber === world.sleeps.length) world.onInterrupt?.(world.interruptAtSleep.signal);
+    },
+    watchInterrupts: (onInterrupt) => {
+      world.onInterrupt = onInterrupt;
+      world.watchersOn += 1;
+      return () => {
+        world.onInterrupt = null;
+        world.watchersOn -= 1;
+      };
     },
     say: (line) => world.said.push(line),
   });
@@ -238,13 +256,71 @@ describe('the wait loop', () => {
     assert.equal(world.said.length, 1);
   });
 
-  it('an interrupt while waiting ends it with the exit code of the signal (130 / 143 / 129) and no more attempts', async () => {
-    for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) {
+  const interruptSignals = [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const;
+
+  /** A probe that is still running when the interrupt comes: it ends when it is told to stop, and then reports a runner that WOULD have been picked. */
+  const heldProbe = (world: FakeWorld, stop: AbortSignal): Promise<RunnerAttempt<string>> => new Promise((resolve) => {
+    stop.addEventListener('abort', () => resolve({ ok: true, choice: 'a runner that answered after the interrupt' }), { once: true });
+    world.onInterrupt?.(world.interruptAtProbe ?? 'SIGINT');
+  });
+
+  it('an interrupt during a sleep of the wait ends it with the exit code of the signal (130 / 143 / 129) and no more attempts', async () => {
+    for (const [signal, exitCode] of interruptSignals) {
       const world = createWorld([waitingFailure]);
       world.interruptAtSleep = { sleepNumber: 2, signal };
-      await assert.rejects(runLoop(world, { waitSeconds: 900 }), (error: Error) => error instanceof RemoteRunError && error.exitCode === exitCode && /interrupted while waiting/.test(error.message), signal);
+      await assert.rejects(runLoop(world, { waitSeconds: 900 }), (error: Error) => error instanceof RemoteRunError && error.exitCode === exitCode && /interrupted while waiting for a runner/.test(error.message), signal);
       assert.equal(world.attempts, 2, 'no attempt after the interrupt');
+      assert.equal(world.watchersOn, 0, 'nothing keeps listening once the loop has ended');
     }
+  });
+
+  it('an interrupt during a PROBE of the wait does the same — the probe is told to stop, and a runner it answers with after that is not picked', async () => {
+    for (const [signal, exitCode] of interruptSignals) {
+      const world = createWorld([waitingFailure, heldProbe]);
+      world.interruptAtProbe = signal;
+      await assert.rejects(runLoop(world, { waitSeconds: 900 }), (error: Error) => error instanceof RemoteRunError && error.exitCode === exitCode && /interrupted while waiting for a runner/.test(error.message), signal);
+      assert.equal(world.attempts, 2, 'the held probe was the last attempt');
+      assert.equal(world.stopSignals[1].aborted, true, 'its ssh calls were told to end');
+      assert.equal(world.watchersOn, 0);
+    }
+  });
+
+  it('an interrupt during the FIRST probe (the wait has not begun) ends with the same codes and says it was looking, not waiting', async () => {
+    for (const [signal, exitCode] of interruptSignals) {
+      const world = createWorld([heldProbe]);
+      world.interruptAtProbe = signal;
+      await assert.rejects(runLoop(world, { waitSeconds: 900 }), (error: Error) => error instanceof RemoteRunError && error.exitCode === exitCode && /interrupted while looking for a runner/.test(error.message), signal);
+      assert.equal(world.attempts, 1);
+      assert.deepEqual(world.sleeps, []);
+      assert.equal(world.watchersOn, 0);
+    }
+  });
+
+  it('with no interrupt the listening ends with the loop too — the runner that was picked, and the failure that gave up', async () => {
+    const picked = createWorld([{ ok: true, choice: 'mac' }]);
+    assert.equal(await runLoop(picked, { waitSeconds: 900 }), 'mac');
+    assert.equal(picked.watchersOn, 0);
+    const failed = createWorld([hopelessFailure]);
+    await assert.rejects(runLoop(failed, { waitSeconds: 900 }), RemoteRunError);
+    assert.equal(failed.watchersOn, 0);
+  });
+});
+
+describe('the sleep of the wait', () => {
+  it('ends when it is told to stop, long before its time, and leaves no timer to keep the process alive', async () => {
+    const stop = new AbortController();
+    const startedAtMs = Date.now();
+    const sleeping = sleepUntilStopped(60_000, stop.signal);
+    stop.abort();
+    await sleeping;
+    assert.ok(Date.now() - startedAtMs < 5_000);
+    await sleepUntilStopped(60_000, stop.signal);
+  });
+
+  it('ends after its time when nobody stops it', async () => {
+    const startedAtMs = Date.now();
+    await sleepUntilStopped(50, new AbortController().signal);
+    assert.ok(Date.now() - startedAtMs >= 40);
   });
 });
 

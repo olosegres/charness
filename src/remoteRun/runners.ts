@@ -93,13 +93,14 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
 /**
  * @description Probe every client at once under ONE deadline (20 s): a runner that has not answered by then is reported offline with its
  * last snapshot and its ssh calls are killed, so the view ends on time and nothing keeps the process alive afterwards. The others are not
- * held back by it.
+ * held back by it. `stop` ends the same ssh calls from outside — the user interrupted the command that asked.
  */
-export async function probeRunners(clients: readonly RunnerClient[], nowMs: number = Date.now(), deadlineMs: number = probeAllTimeoutMs): Promise<RunnerReport[]> {
+export async function probeRunners(clients: readonly RunnerClient[], nowMs: number = Date.now(), deadlineMs: number = probeAllTimeoutMs, stop?: AbortSignal): Promise<RunnerReport[]> {
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort(), deadlineMs);
+  const signal = stop === undefined ? deadline.signal : AbortSignal.any([deadline.signal, stop]);
   try {
-    return await Promise.all(clients.map((client) => probeRunner(client, nowMs, deadline.signal, deadlineMs)));
+    return await Promise.all(clients.map((client) => probeRunner(client, nowMs, signal, deadlineMs)));
   } finally {
     clearTimeout(timer);
   }

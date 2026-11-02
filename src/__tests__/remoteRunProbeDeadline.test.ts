@@ -117,6 +117,28 @@ describe('probeRunners under one deadline', () => {
     assert.ok(report.status === 'offline' && report.reason === 'ssh: connect to host refused.example port 22: Connection refused' && report.lastSeenAtMs === lastSeenAtMs, JSON.stringify(report));
   });
 
+  it('a stop from outside (the user interrupted the command) ends the calls in flight at once, long before the deadline', async () => {
+    let abortedScriptChecks = 0;
+    let abortedProbes = 0;
+    const stuckInScript = createFakeClient({
+      name: 'stuck-in-script',
+      ensureScript: async (signal) => {
+        await hangUntilAborted(signal);
+        abortedScriptChecks += 1;
+        throw new RunnerUnreachableError('stuck-in-script', 'ssh: cut off');
+      },
+    });
+    const stuckInProbe = createFakeClient({ name: 'stuck-in-probe', probe: async (signal) => { const result = await hangUntilAborted(signal); abortedProbes += 1; return result; } });
+    const stop = new AbortController();
+    const startedAt = Date.now();
+    const probing = probeRunners([stuckInScript, stuckInProbe], Date.now(), 60_000, stop.signal);
+    setTimeout(() => stop.abort(), 100).unref();
+    const reports = await withinBound(probing);
+    assert.ok(Date.now() - startedAt < testBoundMs / 3, `ended with the stop (${Date.now() - startedAt} ms), not with the 60 s deadline`);
+    assert.deepEqual(reports.map((report) => report.status), ['offline', 'offline']);
+    assert.deepEqual([abortedScriptChecks, abortedProbes], [1, 1], 'both calls in flight were ended from outside');
+  });
+
   it('the deadline timer is cleared when everyone answered first: nothing keeps the process alive after the view', async () => {
     const timeoutsBefore = process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
     const reports = await probeRunners([createFakeClient({ name: 'a' }), createFakeClient({ name: 'b' })], Date.now(), 60_000);

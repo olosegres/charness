@@ -1,5 +1,4 @@
 import { planInterrupt, type InterruptSignal } from './exitCodes';
-import { addInterruptHandler } from './interrupts';
 import { checkHasCapability, checkIsRunnerPaused, formatLastSeen, type RunnerCapability, type RunnerReport } from './probe';
 import { RemoteRunError } from './remoteRunError';
 import type { RunnerPick } from './runners';
@@ -69,22 +68,30 @@ export type RunnerAttempt<TChoice> =
   | { ok: false; failure: Extract<RunnerPick, { ok: false }>; wait: RunnerWaitPlan | null };
 
 export interface RunnerWaitLoop<TChoice> {
-  /** Probe and pick once. `budgetMs` is what is left of the wait once it has begun (the probe must end within it), `null` for the first attempt. */
-  attempt: (budgetMs: number | null) => Promise<RunnerAttempt<TChoice>>;
+  /**
+   * Probe and pick once. `budgetMs` is what is left of the wait once it has begun (the probe must end within it), `null` for the first attempt.
+   * `stop` aborts when the user interrupts: the attempt ends what it started (its ssh calls) at once, and whatever it returns after that is not used.
+   */
+  attempt: (budgetMs: number | null, stop: AbortSignal) => Promise<RunnerAttempt<TChoice>>;
   needs: RunnerCapability | null;
   /** `--runner-wait` in seconds; `0` = never wait. */
   waitSeconds: number;
   pollMs: number;
   now: () => number;
-  /** Resolves after `ms`, or earlier with the signal that interrupted it. */
-  sleep: (ms: number) => Promise<InterruptSignal | null>;
+  /** Resolves after `ms`, or at once when `stop` aborts. */
+  sleep: (ms: number, stop: AbortSignal) => Promise<void>;
+  /** Calls `onInterrupt` with the signal when the user interrupts (Ctrl-C, SIGTERM, SIGHUP), until the returned function is called. */
+  watchInterrupts: (onInterrupt: (signal: InterruptSignal) => void) => () => void;
   say: (line: string) => void;
 }
 
 /**
  * @description Choose a runner, waiting for an offline paired one when that is worth it: the choice as soon as an attempt gives one IN TIME;
  * a {@link RemoteRunError} with the pick's own message (and, after waiting, how long it waited) when nothing can be waited for or the wait
- * ran out; and, if the wait is interrupted, the interrupt's exit code (130 / 143 / 129).
+ * ran out; and, if the user interrupts, the interrupt's exit code (130 / 143 / 129).
+ *
+ * An interrupt is heard from the first attempt to the last, in a sleep AND in a probe: it aborts what is in flight, and after every await the
+ * loop looks at it first — a runner an attempt picked after the interrupt is not taken, and no other attempt starts.
  *
  * `--runner-wait` is a promise about when the command stops waiting, so once the wait has begun no attempt starts with less than
  * {@link minWaitAttemptMs} left, every attempt is told the time it has (its probe is cut at it), and an answer that comes after the
@@ -96,42 +103,60 @@ export async function chooseRunnerWithWait<TChoice>(loop: RunnerWaitLoop<TChoice
   const deadlineMs = startedAtMs + loop.waitSeconds * msPerSecond;
   /** Set once the wait has begun (announced): the attempt that made it worth waiting, then the latest failed one. */
   let waiting: { lastFailure: FailedAttempt } | null = null;
+  const stop = new AbortController();
+  const interrupted: { signal: InterruptSignal | null } = { signal: null };
+  const stopWatching = loop.watchInterrupts((signal) => {
+    interrupted.signal ??= signal;
+    stop.abort();
+  });
+  const throwIfInterrupted = (): void => {
+    if (interrupted.signal === null) return;
+    throw new RemoteRunError(waiting === null ? 'interrupted while looking for a runner' : 'interrupted while waiting for a runner', planInterrupt(interrupted.signal).exitCode);
+  };
   const giveUp = (failure: FailedAttempt, endNote: string): never => {
     const waited = waiting === null ? '' : `\nwaited ${formatWaitDuration(Math.round((loop.now() - startedAtMs) / msPerSecond))} for a runner with "${loop.needs}" ${endNote}`;
     throw new RemoteRunError(`${failure.failure.message}${waited}`, failure.failure.exitCode);
   };
-  for (;;) {
-    if (waiting !== null && deadlineMs - loop.now() < minWaitAttemptMs) giveUp(waiting.lastFailure, 'to come back — none did');
-    const attempt = await loop.attempt(waiting === null ? null : deadlineMs - loop.now());
-    if (attempt.ok) {
-      if (waiting === null || loop.now() <= deadlineMs) return attempt.choice;
-      return giveUp(waiting.lastFailure, 'to come back — one answered only after the wait had ended, so the job was not started');
+  try {
+    for (;;) {
+      if (waiting !== null && deadlineMs - loop.now() < minWaitAttemptMs) giveUp(waiting.lastFailure, 'to come back — none did');
+      const attempt = await loop.attempt(waiting === null ? null : deadlineMs - loop.now(), stop.signal);
+      throwIfInterrupted();
+      if (attempt.ok) {
+        if (waiting === null || loop.now() <= deadlineMs) return attempt.choice;
+        return giveUp(waiting.lastFailure, 'to come back — one answered only after the wait had ended, so the job was not started');
+      }
+      // The last sleep ends minWaitAttemptMs before the deadline, so the wait ends with one more look instead of with a sleep nobody answers; with
+      // less than that left there is nothing to wait for.
+      const sleepMs = Math.min(loop.pollMs, deadlineMs - loop.now() - minWaitAttemptMs);
+      if (attempt.wait === null || loop.waitSeconds <= 0 || sleepMs <= 0) return giveUp(attempt, 'to come back — none did');
+      if (waiting === null) {
+        loop.say(`waiting for a runner with ${loop.needs} (${attempt.wait.description}) — looking again every ${formatPoll(loop.pollMs)}, up to ${formatWaitDuration(loop.waitSeconds)}`);
+      }
+      waiting = { lastFailure: attempt };
+      await loop.sleep(sleepMs, stop.signal);
+      throwIfInterrupted();
     }
-    // The last sleep ends minWaitAttemptMs before the deadline, so the wait ends with one more look instead of with a sleep nobody answers; with
-    // less than that left there is nothing to wait for.
-    const sleepMs = Math.min(loop.pollMs, deadlineMs - loop.now() - minWaitAttemptMs);
-    if (attempt.wait === null || loop.waitSeconds <= 0 || sleepMs <= 0) return giveUp(attempt, 'to come back — none did');
-    if (waiting === null) {
-      loop.say(`waiting for a runner with ${loop.needs} (${attempt.wait.description}) — looking again every ${formatPoll(loop.pollMs)}, up to ${formatWaitDuration(loop.waitSeconds)}`);
-    }
-    waiting = { lastFailure: attempt };
-    const interrupt = await loop.sleep(sleepMs);
-    if (interrupt !== null) throw new RemoteRunError('interrupted while waiting for a runner', planInterrupt(interrupt).exitCode);
+  } finally {
+    stopWatching();
   }
 }
 
-/** @description `sleep` for {@link chooseRunnerWithWait}: ends early, with the signal, when the user interrupts (Ctrl-C, SIGTERM, SIGHUP). The handler lives only for the sleep: while a probe runs, an interrupt ends the process as it always did (there is no job to stop yet). */
-export function sleepUntilInterrupted(ms: number): Promise<InterruptSignal | null> {
+/** @description `sleep` for {@link chooseRunnerWithWait}: ends after `ms`, or at once when `stop` aborts; its timer never outlives the call. */
+export function sleepUntilStopped(ms: number, stop: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    let removeHandler: () => void = () => undefined;
-    const timer = setTimeout(() => {
-      removeHandler();
-      resolve(null);
-    }, ms);
-    removeHandler = addInterruptHandler((signal) => {
+    if (stop.aborted) {
+      resolve();
+      return;
+    }
+    const onStop = (): void => {
       clearTimeout(timer);
-      removeHandler();
-      resolve(signal);
-    });
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      stop.removeEventListener('abort', onStop);
+      resolve();
+    }, ms);
+    stop.addEventListener('abort', onStop, { once: true });
   });
 }

@@ -42,8 +42,10 @@ export interface CommandContext {
   loadRunners: () => RunnersConfig;
   /** How often the wait for an offline paired runner looks again (`runnerWaitTiming.ts`). */
   runnerPollMs: number;
-  /** Resolves after `ms`, or earlier with the signal that interrupted it; a test replaces it. */
-  sleep: (ms: number) => Promise<InterruptSignal | null>;
+  /** Resolves after `ms`, or at once when `stop` aborts; a test replaces it. */
+  sleep: (ms: number, stop: AbortSignal) => Promise<void>;
+  /** Calls back with the signal when the user interrupts (Ctrl-C, SIGTERM, SIGHUP), until the returned function is called; a test replaces it. */
+  watchInterrupts: (onInterrupt: (signal: InterruptSignal) => void) => () => void;
 }
 
 /** The last lines of a finished job's log that `wait` prints. */
@@ -68,12 +70,12 @@ function createClient(context: CommandContext, config: RunnersConfig, runnerName
  */
 export async function chooseClient(context: CommandContext, wanted: { runner: string | null; needs: RunnerCapability | null; waitSeconds: number }): Promise<RunnerClient> {
   return chooseRunnerWithWait<RunnerClient>({
-    attempt: async (budgetMs) => {
+    attempt: async (budgetMs, stop) => {
       const config = context.loadRunners();
       const clients = wanted.runner === null
         ? config.runners.map((runner) => createClient(context, config, runner.name))
         : [createClient(context, config, wanted.runner)];
-      const reports = await probeRunners(clients, context.now(), budgetMs === null ? probeAllTimeoutMs : Math.min(probeAllTimeoutMs, budgetMs));
+      const reports = await probeRunners(clients, context.now(), budgetMs === null ? probeAllTimeoutMs : Math.min(probeAllTimeoutMs, budgetMs), stop);
       const pick = pickRunner(config, reports, wanted);
       if (!pick.ok) return { ok: false, failure: pick, wait: planRunnerWait(config, reports, wanted) };
       const client = clients.find((candidate) => candidate.runner.name === pick.runnerName);
@@ -85,6 +87,7 @@ export async function chooseClient(context: CommandContext, wanted: { runner: st
     pollMs: context.runnerPollMs,
     now: context.now,
     sleep: context.sleep,
+    watchInterrupts: context.watchInterrupts,
     say: (line) => sayOwn(context.io, line),
   });
 }
