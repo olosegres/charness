@@ -147,6 +147,85 @@ describe('probeRunners under one deadline', () => {
   });
 });
 
+describe('runSshCommand when the ssh it ran is only a client of a master that holds its pipes', () => {
+  const settleBoundMs = 5_000;
+  const decoyLifetimeSec = 120;
+  let decoyDir = '';
+  let originalPath: string | undefined;
+  let masterPidFile = '';
+
+  /**
+   * An `ssh` that behaves like the client of a ControlMaster after login: the «master» is a sleeping grandchild that inherits the pipes the CLI
+   * reads and outlives the client, and the client itself is another sleep. Killing the client leaves the pipes open, so a `close` that is
+   * waited for comes only when the master ends — a network drop or the remote command ending, in real life.
+   */
+  function putDecoySshOnPath(): void {
+    fs.writeFileSync(path.join(decoyDir, 'ssh'), `#!/bin/sh\nsleep ${decoyLifetimeSec} &\necho $! > "${masterPidFile}"\nexec sleep ${decoyLifetimeSec}\n`, { mode: 0o755 });
+    process.env.PATH = `${decoyDir}:${originalPath}`;
+  }
+
+  function killMaster(): void {
+    if (!fs.existsSync(masterPidFile)) return;
+    const pid = Number(fs.readFileSync(masterPidFile, 'utf8'));
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      /* already gone */
+    }
+  }
+
+  const decoyRunner = { ssh: 'u@decoy.example', sshOptions: [] as string[] };
+
+  beforeEach(() => {
+    cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-master-'));
+    decoyDir = path.join(cacheDir, 'bin');
+    fs.mkdirSync(decoyDir);
+    masterPidFile = path.join(cacheDir, 'master.pid');
+    originalPath = process.env.PATH;
+    putDecoySshOnPath();
+  });
+  afterEach(() => {
+    killMaster();
+    process.env.PATH = originalPath;
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  async function waitForMaster(): Promise<void> {
+    const deadline = Date.now() + settleBoundMs;
+    while (!fs.existsSync(masterPidFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(fs.existsSync(masterPidFile), 'the decoy started');
+  }
+
+  it('an abort ends the call at once although the master still holds the pipes — the call settles when the client has exited, not when the master has', async () => {
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const pending = runSshCommand({ runner: decoyRunner, cacheDir, remoteCommand: 'true', timeoutMs: 600_000, signal: controller.signal });
+    await waitForMaster();
+    controller.abort();
+    const result = await Promise.race([pending, new Promise<'still waiting'>((resolve) => setTimeout(() => resolve('still waiting'), settleBoundMs))]);
+    assert.notEqual(result, 'still waiting', `the call did not settle within ${settleBoundMs} ms of the abort (${Date.now() - startedAt} ms in all)`);
+    assert.ok(typeof result !== 'string' && result.isTimedOut === true && result.exitCode === null);
+  });
+
+  it('the call\'s own deadline ends it the same way: the probe\'s 20 s no longer waits for a master that holds the pipes', async () => {
+    const startedAt = Date.now();
+    const result = await Promise.race([
+      runSshCommand({ runner: decoyRunner, cacheDir, remoteCommand: 'true', timeoutMs: 300 }),
+      new Promise<'still waiting'>((resolve) => setTimeout(() => resolve('still waiting'), settleBoundMs)),
+    ]);
+    assert.notEqual(result, 'still waiting', `the call did not settle within ${settleBoundMs} ms of its deadline (${Date.now() - startedAt} ms in all)`);
+    assert.ok(typeof result !== 'string' && result.isTimedOut === true);
+  });
+
+  it('a call that was not cut off still waits for `close`: the output the master sends after the client exited is not lost', async () => {
+    fs.writeFileSync(path.join(decoyDir, 'ssh'), `#!/bin/sh\n( sleep 0.3; echo late-output ) &\nexit 0\n`, { mode: 0o755 });
+    const result = await runSshCommand({ runner: decoyRunner, cacheDir, remoteCommand: 'true', timeoutMs: 60_000 });
+    assert.equal(result.isTimedOut, false);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout.trim(), 'late-output');
+  });
+});
+
 describe('runSshCommand with an outside deadline', () => {
   const hasSsh = spawnSync('ssh', ['-V'], { stdio: 'ignore' }).status === 0;
   const isCi = process.env.CI === 'true' || process.env.CI === '1';

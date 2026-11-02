@@ -350,6 +350,37 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
       });
     }
 
+    it('SIGINT during a probe that has already LOGGED IN — its ssh only a client of a ControlPersist master that keeps the pipes — ends the command at once with 130; the master is not waited for', async () => {
+      // A stand-in `ssh` first on the CLI's PATH: «the master» is a sleeping grandchild that inherits the pipes the CLI reads and outlives the client,
+      // the client is another sleep. Killing the client leaves the pipes open, so a call that waits for `close` waits for the master.
+      const decoyDir = path.join(layout.root, 'decoy-ssh-bin');
+      const masterPidFile = path.join(layout.root, 'decoy-master.pid');
+      fs.mkdirSync(decoyDir, { recursive: true });
+      fs.rmSync(masterPidFile, { force: true });
+      fs.writeFileSync(path.join(decoyDir, 'ssh'), `#!/bin/sh\nsleep 300 &\necho $! > "${masterPidFile}"\nexec sleep 300\n`, { mode: 0o755 });
+      const markerName = 'logged-in-probe.marker';
+      const cli = startCli(cliLayout, ['--needs', 'playwright', '--runner-wait', '10m', `touch ../${markerName}`], { cwd: project.root, env: { ...flowEnv, PATH: `${decoyDir}:${process.env.PATH}` } });
+      await waitUntil(() => cli.stderr().includes('waiting for a runner with playwright'), 'the wait to begin', ordinaryRunTimeoutMs);
+      const link = await holdLinkWithSilentSocket();
+      try {
+        await waitUntil(() => fs.existsSync(masterPidFile) && fs.readFileSync(masterPidFile, 'utf8').trim() !== '', 'the probe to be held by the stand-in ssh', ordinaryRunTimeoutMs);
+        const signalledAtMs = Date.now();
+        cli.child.kill('SIGINT');
+        assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 130, cli.stderr());
+        assert.ok(Date.now() - signalledAtMs < heldProbeStopBoundMs, `it ended at once (${Date.now() - signalledAtMs} ms), not when the master ended`);
+        assert.match(cli.stderr(), /interrupted while waiting for a runner/);
+        assert.equal(cli.stdout(), '');
+        assert.equal(fs.existsSync(path.join(project.runnerDirectory, markerName)), false, 'nothing was run on the runner');
+      } finally {
+        link.release();
+        try {
+          process.kill(Number(fs.readFileSync(masterPidFile, 'utf8')), 'SIGKILL');
+        } catch {
+          /* already gone */
+        }
+      }
+    });
+
     it('a runner paused from the hub while the command waits is given up on — and runs nothing when it comes back', async () => {
       const markerName = 'paused-wait.marker';
       const cli = start(['--needs', 'playwright', '--runner-wait', '5m', `touch ../${markerName}`]);

@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { shellSingleQuote } from '../utils/tmuxExec';
+import { waitForChildEnd } from './interrupts';
 import type { RunnerConfig } from './runnersConfig';
 
 /**
@@ -197,7 +198,9 @@ export function runSshCommand(params: SshRunParams): Promise<SshRunResult> {
       settle();
       resolve({ exitCode: sshFailureExitCode, stdout, stderr: `${stderr}${error.message}\n`, isTimedOut });
     });
-    child.on('close', (exitCode) => {
+    // Once cut off, its `exit` is enough: after login this ssh is only a client of a ControlPersist master that holds its pipes, so `close` would
+    // come when the remote command ends (or the master gives up), not when the client is gone — the call, a probe's deadline or a Ctrl-C, would hang.
+    void waitForChildEnd(child, () => isTimedOut).then((exitCode) => {
       settle();
       resolve({ exitCode, stdout, stderr, isTimedOut });
     });
