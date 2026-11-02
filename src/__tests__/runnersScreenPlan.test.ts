@@ -101,6 +101,20 @@ describe('runnersScreenPlan: the list', () => {
     assert.ok(!text.includes('jobs:') && !text.includes('can:') && !text.includes('load'), text);
   });
 
+  it('how a machine is kept running is what its probe says NOW, not the registry\'s word from the day it was paired (\"run by hand\" until `service install`)', () => {
+    const installedLater = createEntry({ runner: createRunner({ serviceKind: 'foreground' }), probe: parseProbeOutput(`${probeText}\nservice=user-service`) });
+    const { text } = buildRunnersScreen({ revision, entries: [installedLater], openPairingExpiries: [], isChecking: false }, t, formatTime);
+    assert.ok(text.includes('mac — online · macOS 15.1 (arm64) · user service\n'), text);
+    assert.ok(!text.includes('run by hand'), text);
+    const lastSeen = createEntry({ isOnline: false, lastSeenMs: 5_000, runner: createRunner({ serviceKind: 'foreground' }), probe: parseProbeOutput(`${probeText}\nservice=system-service`) });
+    assert.ok(buildRunnersScreen({ revision, entries: [lastSeen], openPairingExpiries: [], isChecking: false }, t, formatTime).text.includes('mac — offline since T5000 · macOS 15.1 (arm64) · always on (system service)\n'));
+  });
+
+  it('a probe that says nothing about it (no `service=` line: an older runner script) leaves the registry\'s word standing', () => {
+    const entry = createEntry({ runner: createRunner({ serviceKind: 'user-service' }), probe: parseProbeOutput(probeText) });
+    assert.ok(buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text.includes('mac — online · macOS 15.1 (arm64) · user service\n'));
+  });
+
   it('a machine never seen says so, and with no snapshot only its heading shows (its registry facts stand in for the probe)', () => {
     const entry = createEntry({ isOnline: false, lastSeenMs: null, probe: null });
     const { text } = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime);
