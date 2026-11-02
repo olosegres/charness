@@ -112,10 +112,11 @@ function getLinkRecordRunnerId(fileName: string): string | null {
  * running are kept — it is on its way out, and {@link cutRunnerLink} still needs the pid to stop it.
  *
  * Best effort, and it NEVER throws: the registry operation that calls it has already written its files, and a folder that cannot be listed
- * or a file that cannot be deleted is only leftover clutter, tried again by the next operation. What went wrong is handed to `onProblem`
- * (a missing folder is not a problem: nothing was ever linked). Returns the names deleted.
+ * or a file that cannot be deleted is only leftover clutter, tried again by the next operation. What went wrong is handed to `onProblem`,
+ * which the caller must give (a sweep that cannot say what failed would hide exactly what it exists to report); a missing folder is not a
+ * problem: nothing was ever linked. Returns the names deleted.
  */
-export function sweepOrphanLinkRecords(dir: string, registeredRunnerIds: readonly string[], onProblem: (message: string) => void = () => undefined): string[] {
+export function sweepOrphanLinkRecords(dir: string, registeredRunnerIds: readonly string[], onProblem: (message: string) => void): string[] {
   const linkDir = getHubFilePaths(dir).linkDir;
   let names: string[];
   try {

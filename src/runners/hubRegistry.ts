@@ -184,5 +184,5 @@ export function syncDerivedHubFiles(ctx: HubContext, pending: PendingFile, paire
     throw new HubDerivedFilesError('authorized_keys', getCaughtErrnoCode(error));
   }
   // The link files of a runner the registry does not know are leftovers: best effort, it cannot fail the operation that has already written its files.
-  sweepOrphanLinkRecords(ctx.dir, paired.runners.map((runner) => runner.id), (problem) => { console.warn(`[runners] ${problem}`); });
+  sweepOrphanLinkRecords(ctx.dir, paired.runners.map((runner) => runner.id), ctx.log);
 }

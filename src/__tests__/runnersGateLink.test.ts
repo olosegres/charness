@@ -414,6 +414,8 @@ describe('link status and cutting', () => {
     return fs.readdirSync(getRunnerLinkPaths(fixture.ctx.dir, 'aaaaaaaaaaaa').state.replace(/[^/]+$/, '')).sort();
   }
 
+  const expectNoProblem = (problem: string): void => { assert.fail(`the sweep reported a problem: ${problem}`); };
+
   /** A file where the link folder should be: listing it fails (ENOTDIR) for any user, root included. */
   function makeLinkFolderUnreadable(): void {
     const linkDir = path.join(fixture.ctx.dir, 'link');
@@ -442,12 +444,12 @@ describe('link status and cutting', () => {
     }
     const linkDir = getRunnerLinkPaths(fixture.ctx.dir, 'aaaaaaaaaaaa').state.replace(/[^/]+$/, '');
     for (const foreign of ['notes.txt', 'bbbbbbbbbbbb.json.tmp', 'bbbbbbbbbbbb.sock.0123abcd', 'BBBBBBBBBBBB.json']) fs.writeFileSync(path.join(linkDir, foreign), '');
-    assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, ['aaaaaaaaaaaa']).sort(), ['bbbbbbbbbbbb.json', 'bbbbbbbbbbbb.sock']);
+    assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, ['aaaaaaaaaaaa'], expectNoProblem).sort(), ['bbbbbbbbbbbb.json', 'bbbbbbbbbbbb.sock']);
     assert.deepEqual(listLinkFolder(), ['BBBBBBBBBBBB.json', 'aaaaaaaaaaaa.json', 'aaaaaaaaaaaa.sock', 'bbbbbbbbbbbb.json.tmp', 'bbbbbbbbbbbb.sock.0123abcd', 'notes.txt']);
   });
 
   it('a folder that does not exist yet has nothing to sweep', () => {
-    assert.deepEqual(sweepOrphanLinkRecords(path.join(fixture.root, 'no-such-hub'), []), []);
+    assert.deepEqual(sweepOrphanLinkRecords(path.join(fixture.root, 'no-such-hub'), [], expectNoProblem), []);
   });
 
   it('keeps the files of an unregistered runner whose gate is still running (cutting still needs its pid), and sweeps them once it is gone', async () => {
@@ -460,11 +462,11 @@ describe('link status and cutting', () => {
     await waitUntil(() => decoyPid !== undefined && checkIsGateProcessOf(decoyPid, runnerId), 'the decoy to read as the runner\'s gate');
     writeLinkState(fixture.ctx.dir, runnerId, { ...linkState, pid: decoyPid ?? linkState.pid });
     writeSocketFile(runnerId);
-    assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, []), []);
+    assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, [], expectNoProblem), []);
     assert.deepEqual(listLinkFolder(), [`${runnerId}.json`, `${runnerId}.sock`]);
     decoy.kill('SIGKILL');
     await waitUntil(() => decoyPid !== undefined && !checkIsGateProcessOf(decoyPid, runnerId), 'the decoy to be gone');
-    assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, []).sort(), [`${runnerId}.json`, `${runnerId}.sock`]);
+    assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, [], expectNoProblem).sort(), [`${runnerId}.json`, `${runnerId}.sock`]);
   });
 
   it('the sweep never throws: a link folder that cannot be listed is reported, not raised', () => {
@@ -479,16 +481,11 @@ describe('link status and cutting', () => {
     const runner = await pairRunner();
     makeLinkFolderUnreadable();
     const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (...parts: unknown[]) => { warnings.push(parts.join(' ')); };
-    try {
-      const removed = await removePairedRunner(fixture.ctx, runner.runnerId, startMs);
-      assert.equal(removed?.id, runner.runnerId, 'removed although the link folder is unreadable');
-      await pairRunner();
-    } finally {
-      console.warn = originalWarn;
-    }
-    assert.ok(warnings.some((line) => line.includes('link folder could not be listed')), warnings.join('\n'));
+    fixture.ctx.log = (line) => { warnings.push(line); };
+    const removed = await removePairedRunner(fixture.ctx, runner.runnerId, startMs);
+    assert.equal(removed?.id, runner.runnerId, 'removed although the link folder is unreadable');
+    await pairRunner();
+    assert.ok(warnings.some((line) => line.includes('link folder could not be listed')), 'the context\'s log is told: ' + warnings.join('\n'));
   });
 
   it('every registry operation sweeps them — a removal cut short, or a status written after it, is mended by whatever runs next', async () => {

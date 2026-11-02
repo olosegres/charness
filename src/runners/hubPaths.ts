@@ -24,6 +24,8 @@ export interface HubContext {
   cliPath: string;
   /** The folder with `package.json`, `dist/` and `remoteRun/` — the package a runner installs. */
   packageRoot: string;
+  /** Where the hub side says that something went wrong which did NOT stop what it was doing (a leftover file it could not clean up). */
+  log: (line: string) => void;
 }
 
 export interface HubFilePaths {
@@ -62,6 +64,7 @@ export function createHubContext(overrides: Partial<HubContext> & { homeDir?: st
     nodePath: overrides.nodePath ?? process.execPath,
     cliPath,
     packageRoot: overrides.packageRoot ?? path.resolve(path.dirname(cliPath), '..'),
+    log: overrides.log ?? ((line) => { console.warn(`[runners] ${line}`); }),
   };
 }
 
