@@ -111,7 +111,6 @@ describe('launchd property lists', () => {
     const accountHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dmn-'));
     try {
       const logPath = path.join(accountHome, 'logs', 'link.log');
-      fs.mkdirSync(path.dirname(logPath));
       const parsed = parseLaunchdPlist(renderLaunchdPlist({ ...daemonJobs.link, programArguments: ['/bin/sh', '-c', 'pwd; echo to-stderr >&2'], homeDir: accountHome, logPath }));
       const [shell, ...args] = parsed.programArguments;
       const result = spawnSync(shell, args, { encoding: 'utf8', cwd: '/' });
@@ -120,6 +119,10 @@ describe('launchd property lists', () => {
       assert.equal(result.stdout + result.stderr, '', 'what launchd itself holds (/dev/null) gets nothing');
       assert.equal(spawnSync(shell, args, { encoding: 'utf8', cwd: '/' }).status, 0);
       assert.equal(fs.readFileSync(logPath, 'utf8').split('\n').length, 5, 'a second start appends');
+      // The folder is gone (the account cleaned it): the shell makes it again instead of failing without a word into /dev/null.
+      fs.rmSync(path.dirname(logPath), { recursive: true });
+      assert.equal(spawnSync(shell, args, { encoding: 'utf8', cwd: '/' }).status, 0);
+      assert.equal(fs.readFileSync(logPath, 'utf8'), `${fs.realpathSync(accountHome)}\nto-stderr\n`);
     } finally {
       fs.rmSync(accountHome, { recursive: true, force: true });
     }
@@ -678,7 +681,7 @@ describe('installing and removing the services', () => {
         assert.deepEqual(answer, { ok: true, hadService: false });
         assert.equal(readServiceKind(runnerPaths), 'system-service');
         assert.equal(fs.existsSync(runnerPaths.pueueConfig), true);
-        assert.equal(fs.statSync(runnerPaths.logsDir).isDirectory(), true, 'the folder the daemons\' shell logs into is made by the account');
+        assert.equal(fs.existsSync(runnerPaths.logsDir), false, 'the logs folder is the daemon shell\'s to make, not this step\'s');
         assert.deepEqual(commandLines(), [queueStatusCommand(runnerPaths)], 'only the account\'s own queue was asked');
         calls = [];
         assert.deepEqual(await runSystemStep('prepare', createDeps(asAccount)), { ok: true, hadService: true }, 'a second time it is a re-install, and leaves the queue alone');

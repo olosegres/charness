@@ -1204,11 +1204,12 @@ export const uzDict: Record<string, string> = {
   'runners.addressRejected': '⚠️ {reason}\n\nBoshqa manzil yuboring yoki /runners ni qayta oching.',
   'runners.addressNote': 'ℹ️ {note}',
   'runners.addressExpired': 'Bu savol eskirgan — /runners ni ochib, qaytadan boshlang.',
-  'runners.pairingAdminIntro': 'Runner ulash — {minutes} daqiqa amal qiladi, bir martalik.\n\n① Runner mashinasidagi administrator hisobidan: “{account}” hisobini ulaydi (oxirgi so‘z — kerak bo‘lsa o‘zgartiring) va ishlatib turadi. Qo‘yish vaqtida shu charness hostiga o‘sha yerda root huquqini beradi:',
+  'runners.pairingAdminIntro': 'Runner ulash — {minutes} daqiqa amal qiladi, bir martalik.\n\n① Runner mashinasidagi administrator hisobidan: “{account}” hisobini ulaydi (oxirgi so‘z — kerak bo‘lsa o‘zgartiring) va ishlatib turadi. Shu charness hostidagi kodni o‘sha mashinada root sifatida bajaradi:',
   'runners.pairingAlternativeIntro': '② Administrator huquqlarisiz: bu qatorni runner hisobining o‘z terminalida ishga tushiring:',
   'runners.pairingAlternativeOutro': 'Hisob allaqachon mavjud va oddiy bo‘lishi kerak, asosiy hisobingiz emas — u agentlar kodini bajaradi. Ikkala qatordan biriga ega har kim, ulardan biri ishlatilguncha yoki muddati tugaguncha, mashinani shu charnessga ulashi mumkin.',
   'runners.pairedText': 'Runner “{name}” {time} da ulandi.',
   'runners.expiredText': 'Ulash kodining muddati tugadi.',
+  'runners.closedText': 'Bu qator allaqachon ulangan mashinada ishlatildi — yangi hech narsa ulanmadi.',
   'runners.pairFailedText': '⚠️ Ulash qatorini yaratib bo‘lmadi: {reason}',
   'runners.registryErrorText': '⚠️ Runnerlar reyestrini o‘qib bo‘lmadi: {reason}',
 };

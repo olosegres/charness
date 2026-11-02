@@ -1204,11 +1204,12 @@ export const frDict: Record<string, string> = {
   'runners.addressRejected': '⚠️ {reason}\n\nEnvoyez une autre adresse, ou rouvrez /runners.',
   'runners.addressNote': 'ℹ️ {note}',
   'runners.addressExpired': 'Cette question est périmée — rouvrez /runners et recommencez.',
-  'runners.pairingAdminIntro': 'Associer un runner — valable {minutes} minutes, à usage unique.\n\n① Depuis un compte administrateur de la machine du runner : associe « {account} » (le dernier mot — changez-le si besoin) et le garde en marche. Donne à cet hôte charness root là-bas, le temps du collage :',
+  'runners.pairingAdminIntro': 'Associer un runner — valable {minutes} minutes, à usage unique.\n\n① Depuis un compte administrateur de la machine du runner : associe « {account} » (le dernier mot — changez-le si besoin) et le garde en marche. Exécute du code de cet hôte charness en tant que root sur cette machine :',
   'runners.pairingAlternativeIntro': '② Sans droits d’administrateur : exécutez cette ligne dans le terminal du compte du runner lui-même :',
   'runners.pairingAlternativeOutro': 'Le compte doit déjà exister et être un compte standard, pas votre compte principal — il exécute le code des agents. Quiconque a l’une des deux lignes peut rattacher une machine à ce charness tant qu’une des deux n’est pas utilisée ou expirée.',
   'runners.pairedText': 'Runner « {name} » associé {time}.',
   'runners.expiredText': 'Le code d’association a expiré.',
+  'runners.closedText': 'Cette ligne a été utilisée sur une machine déjà associée — rien de nouveau n’a été associé.',
   'runners.pairFailedText': '⚠️ Impossible de créer la ligne d’association : {reason}',
   'runners.registryErrorText': '⚠️ Le registre des runners est illisible : {reason}',
 };

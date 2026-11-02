@@ -1203,11 +1203,12 @@ export const hiDict: Record<string, string> = {
   'runners.addressRejected': '⚠️ {reason}\n\nदूसरा पता भेजें, या /runners फिर से खोलें।',
   'runners.addressNote': 'ℹ️ {note}',
   'runners.addressExpired': 'यह सवाल पुराना हो गया — /runners खोलकर फिर से शुरू करें।',
-  'runners.pairingAdminIntro': 'रनर जोड़ें — {minutes} मिनट मान्य, एक बार इस्तेमाल के लिए।\n\n① रनर मशीन के एडमिन अकाउंट से: “{account}” को जोड़ता है (आख़िरी शब्द — ज़रूरत हो तो बदलें) और चालू रखता है। चिपकाने के दौरान इस charness होस्ट को वहाँ root देता है:',
+  'runners.pairingAdminIntro': 'रनर जोड़ें — {minutes} मिनट मान्य, एक बार इस्तेमाल के लिए।\n\n① रनर मशीन के एडमिन अकाउंट से: “{account}” को जोड़ता है (आख़िरी शब्द — ज़रूरत हो तो बदलें) और चालू रखता है। इस charness होस्ट का कोड उस मशीन पर root के रूप में चलाता है:',
   'runners.pairingAlternativeIntro': '② एडमिन अधिकारों के बिना: इस लाइन को रनर अकाउंट के अपने टर्मिनल में चलाएँ:',
   'runners.pairingAlternativeOutro': 'अकाउंट पहले से मौजूद और सामान्य (स्टैंडर्ड) होना चाहिए, आपका मुख्य अकाउंट नहीं — वह एजेंटों का कोड चलाता है। इन दोनों में से कोई भी लाइन जिसके पास है, वह इसके इस्तेमाल होने या समाप्त होने तक इस charness से कोई मशीन जोड़ सकता है।',
   'runners.pairedText': 'रनर “{name}” {time} को जोड़ा गया।',
   'runners.expiredText': 'पेयरिंग कोड समाप्त हो गया।',
+  'runners.closedText': 'यह लाइन ऐसी मशीन पर इस्तेमाल हुई जो पहले से जुड़ी थी — कुछ नया नहीं जोड़ा गया।',
   'runners.pairFailedText': '⚠️ पेयरिंग लाइन नहीं बन सकी: {reason}',
   'runners.registryErrorText': '⚠️ रनर रजिस्ट्री पढ़ी नहीं जा सकती: {reason}',
 };

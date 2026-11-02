@@ -4,6 +4,7 @@ import { assertManagedBlockIntact } from './authorizedKeys';
 import type { RedeemReply, RedeemRequest } from './gateProtocol';
 import { getHandMadeRunnersPath, type HubContext } from './hubPaths';
 import { withHubLock } from './hubLock';
+import { recordClosedCode } from './hubClosedCodes';
 import { readHubKey, readOrCreateHubKeyLocked } from './hubKey';
 import {
   HubRegistryError,
@@ -140,13 +141,14 @@ export function checkIsPairingOpen(ctx: HubContext, pairId: string, nowMs: numbe
 /**
  * @description Close the pairing code `pairId` before it runs out: its entry leaves `pending.json` and its key line `authorized_keys`, so
  * the line it was in can no longer be used. `true` when the code was open (made, not used, not expired); `false` — and nothing changes —
- * for one that is unknown, used or expired. The offering instance sees a code that is neither open nor a runner and settles its messages
- * the way it does for an expired one.
+ * for one that is unknown, used or expired. The closing is NOTED first (`hubClosedCodes.ts`, in the same transaction), so the offering
+ * instance and `--wait` can tell a code that was closed — its line was used on a machine that was already paired — from one that ran out.
  */
 export function cancelPairing(ctx: HubContext, pairId: string, nowMs: number): Promise<boolean> {
   return runTransaction(ctx, nowMs, (state) => {
     const pairing = state.pending.pending.find((candidate) => candidate.pairId === pairId);
     if (pairing === undefined || pairing.expiresAtMs <= nowMs) return { result: false };
+    recordClosedCode(ctx, pairId, nowMs);
     return { result: true, pending: { pending: state.pending.pending.filter((candidate) => candidate.pairId !== pairId) } };
   });
 }

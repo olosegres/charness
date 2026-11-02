@@ -37,7 +37,7 @@ A runner is attached in one of two ways:
    machine's own ssh key. Without Telegram (a Jira-only instance): `charness runners pair --host host.example[:port]`.
 2. The bot posts **two lines for one code** (two messages — together they are longer than a Telegram message), valid 10 minutes and good
    once, whichever is used first. Either fetches charness's own package from the charness host over ssh (so the versions never differ),
-   checks the machine and pairs it. Both messages then turn into «Runner “name” paired …» — or «Pairing code expired.» after 10 minutes.
+   checks the machine and pairs it. Both messages then turn into «Runner “name” paired …» — or «Pairing code expired.» after 10 minutes, or «This line was used on a machine that was already paired — nothing new was paired.» when the line was pasted for a machine that is already paired (a retry, below).
    - **From an admin account of the runner machine** (the first message), `sudo sh -c '…' sh runner` — one paste does everything:
      it checks the account named by the **last word of the line** (`runner` unless you change it) — it must exist, must not be `root`
      or an admin (the account runs the agents' code), and is never created by the line. Then, still as root, it downloads charness's
@@ -48,10 +48,11 @@ A runner is attached in one of two ways:
      account can change** — the account runs the agents' code, so its folder is not trusted: root writes only the LaunchDaemon
      definitions into `/Library/LaunchDaemons` and calls `launchctl` / `loginctl`; everything of the account's own (its Pueue, its record,
      its user service) is done by the account's own program, started with `sudo -u`.
-   - **What the admin line trusts.** Pasting it **trusts this charness host with root on this machine for that paste**: the line is text
+   - **What the admin line trusts.** Pasting it **runs code from this charness host as root on this machine**: the line is text
      the charness host made, and the program root runs from it is the one in the charness host's own install — so whoever can change that
-     install (its user, and the agents that run as that user) could have root here. The plain line trusts the charness host only with the
-     runner account. Paste the admin line only for a charness host you would let run a command as root on this machine.
+     install (its user, and the agents that run as that user) controls what runs as root here, and what it installs stays after the paste.
+     The plain line trusts the charness host only with the runner account. Paste the admin line only for a charness host you would let run
+     code as root on this machine.
    - **The code in the line.** `sudo` asks for the admin's password once and writes the command line — the pairing code with it — to the
      system log. The code is single use and good for 10 minutes: a line that was used is dead, and so is a retry's (see below), which
      closes its own code. A line that was refused (no such account, an admin account…) leaves its code open until it expires — on purpose,
@@ -63,7 +64,7 @@ A runner is attached in one of two ways:
      system-wide, or run `charness runners pair` again for a fresh line after the move.
    - **Retry.** If the service step fails, the account stays paired and the line says so: **paste a fresh admin line** (from `/runners`)
      after fixing what it printed. A line pasted for an account that is already paired pairs nothing twice, closes its own code on the
-     charness host (its Telegram messages then read «Pairing code expired.»), and only installs the service.
+     charness host and only installs the service. That is no failure: its Telegram messages read «This line was used on a machine that was already paired — nothing new was paired.», and `charness runners pair --wait` prints the same and exits 0.
    - **As the runner account itself** (the second message), no admin rights: it pairs and prints how to keep the runner running (the table
      below).
 3. The runner appears in `/runners` (and in `charness remote-run runners`) with its OS, CPU, memory, disk, load, jobs and what it can

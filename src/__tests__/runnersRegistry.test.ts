@@ -18,6 +18,7 @@ import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { AuthorizedKeysBlockError, authorizedKeysBlockStart } from '../runners/authorizedKeys';
 import { HubDerivedFilesError, HubRegistryError, readPairedFile, readPendingFile, writePendingFile } from '../runners/hubRegistry';
 import { generateEd25519KeyPair, getPublicKeyFingerprint } from '../runners/sshKeys';
+import { readClosedCodes } from '../runners/hubClosedCodes';
 import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 
 const startMs = Date.UTC(2026, 10, 1, 12, 0, 0);
@@ -162,6 +163,7 @@ describe('pairing', () => {
     const closed = await createTestPairing();
     const kept = await createTestPairing();
     assert.equal(await cancelPairing(fixture.ctx, closed.pairId, startMs + 1000), true);
+    assert.deepEqual(readClosedCodes(fixture.ctx), [{ pairId: closed.pairId, closedAtMs: startMs + 1000 }], 'the closing leaves a trace, so it is not mistaken for an expiry');
     assert.deepEqual(readPendingFile(fixture.ctx.dir).pending.map((entry) => entry.pairId), [kept.pairId]);
     assert.equal(readBlock().length, 1, 'the other code\'s line stays');
     assert.equal(checkIsPairingOpen(fixture.ctx, closed.pairId, startMs + 1000), false);
@@ -179,6 +181,7 @@ describe('pairing', () => {
     assert.equal(await cancelPairing(fixture.ctx, 'ffffffffffff', startMs + 2000), false);
     assert.equal(await cancelPairing(fixture.ctx, expired.pairId, startMs + pairingLifetimeMs), false);
     assert.equal(JSON.stringify([readPairedFile(fixture.ctx.dir), readPendingFile(fixture.ctx.dir)]), before);
+    assert.deepEqual(readClosedCodes(fixture.ctx), [], 'and leaves no trace of a closing that did not happen');
   });
 
   it('the sweep keeps a code that is still open, and a code made later does not swallow an expired one', async () => {

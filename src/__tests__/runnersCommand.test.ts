@@ -29,7 +29,7 @@ import { keyToString } from '../sessionKey';
 import { parseProbeOutput } from '../remoteRun/probe';
 import { ensureGateWrapper } from '../runners/gateWrapper';
 import type { HostKeyScanner, HubAddress } from '../runners/hubAddress';
-import { createPairing, redeemPairing, sweepExpiredPairings } from '../runners/hubPairing';
+import { cancelPairing, createPairing, redeemPairing, sweepExpiredPairings } from '../runners/hubPairing';
 import { readPairedFile, readPendingFile } from '../runners/hubRegistry';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { readRunnersOverview, type RunnersOverview } from '../runners/runnersOverview';
@@ -383,7 +383,7 @@ describe('/runners over its ports', () => {
         assert.ok(message.text.includes('cr1.'), 'the line carries the code');
         assert.ok(!message.text.slice(message.text.indexOf('<pre>') + 5, message.text.indexOf('</pre>')).match(/[<>]/), 'the line is HTML-escaped inside the <pre>');
       }
-      assert.match(adminMessage.text, /^Pair a runner — valid 10 minutes, single use\.\n\n① From an admin account of the runner machine: pairs «runner» \(the last word — change it if needed\) and keeps it running\. Trusts this charness host with root there, for the paste:\n\n<pre>sudo sh -c '/);
+      assert.match(adminMessage.text, /^Pair a runner — valid 10 minutes, single use\.\n\n① From an admin account of the runner machine: pairs «runner» \(the last word — change it if needed\) and keeps it running\. Runs code from this charness host as root on that machine:\n\n<pre>sudo sh -c '/);
       assert.ok(adminMessage.text.endsWith(' runner</pre>'), 'the account is the last word of the admin line, and nothing follows the line');
       assert.match(plainMessage.text, /^② Without admin rights: run this one in the terminal of the runner account itself:\n\n<pre>sh -c '/);
       assert.ok(plainMessage.text.endsWith("</pre>\n\nThe account must be an existing standard user, not your main account — it runs the agents' code. Anyone with either line can attach a machine to this charness until one of them is used or expires."), plainMessage.text.slice(-300));
@@ -516,6 +516,28 @@ describe('/runners over its ports', () => {
       expectBothMessages(offer, (text) => assert.equal(text, 'Pairing code expired.'));
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0);
       assert.deepEqual(readRecordedPairIds(), []);
+    });
+
+    it('closed: a code closed unused (its line was pasted for a machine that was already paired) turns BOTH messages into «This line was used on a machine that was already paired» — not «expired» — and a code that merely ran out still reads «expired»', async () => {
+      const offer = await offerPairing();
+      assert.equal(await cancelPairing(hubFixture.ctx, offer.pairId, clockMs + 1000), true);
+      await feature.watchPairingsOnce();
+      expectBothMessages(offer, (text) => assert.equal(text, 'This line was used on a machine that was already paired — nothing new was paired.'));
+      assert.deepEqual(readRecordedPairIds(), []);
+      assert.equal(readPairedFile(hubFixture.ctx.dir).runners.length, 0, 'nothing was paired');
+
+      const ranOut = await offerPairing();
+      clockMs += 11 * minute;
+      await feature.watchPairingsOnce();
+      expectBothMessages(ranOut, (text) => assert.equal(text, 'Pairing code expired.'));
+    });
+
+    it('closed, and the bot was down: the restarted bot still settles the messages as closed — the trace lives in the registry, not in memory', async () => {
+      const offer = await offerPairing();
+      await cancelPairing(hubFixture.ctx, offer.pairId, clockMs + 1000);
+      clockMs += 25 * minute;
+      await createRunners(buildPorts()).watchPairingsOnce();
+      expectBothMessages(offer, (text) => assert.ok(text.startsWith('This line was used on a machine that was already paired'), text));
     });
 
     it('after a restart (a new module over the same record) the messages still turn to «expired» / «paired»', async () => {

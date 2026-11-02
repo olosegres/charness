@@ -33,8 +33,9 @@ import { encodePairCode, type PairCodePayload } from './pairCode';
  * the service — that is its way to retry.
  *
  * What the admin line trusts: the charness host. The line is text the host made, and the program root runs from it is the one in the host's
- * own install, so whoever can change that install (its user, and the agents that run as that user) could have root on the runner machine for
- * the paste. The plain line trusts the host only with the runner account. The pairing message says so (`runners.pairingAdminIntro`).
+ * own install, so whoever can change that install (its user, and the agents that run as that user) controls code that runs as root on the
+ * runner machine — and what it installs outlasts the paste. The plain line trusts the host only with the runner account. Every place that
+ * offers the line says so: the Telegram message (`runners.pairingAdminIntro`) and the CLI's text (`adminLineTrustSentence` in `runnersCli.ts`).
  */
 
 const minNodeMajor = 22;

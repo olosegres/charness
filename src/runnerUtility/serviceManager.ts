@@ -335,7 +335,5 @@ export async function runSystemStep(step: string, deps: ServiceDeps): Promise<Sy
     return { ok: false, lines: ['A user service (LaunchAgent) is installed for this runner: remove it first with `charness-runner service uninstall`.'] };
   }
   const { refusal, hadService } = await prepareManagedStart(paths, deps, 'system-service');
-  // The daemons log through the account's own shell (`serviceUnits.ts`), which finds this folder and cannot make it.
-  if (refusal === null) fs.mkdirSync(paths.logsDir, { recursive: true, mode: 0o700 });
   return refusal === null ? { ok: true, hadService } : { ok: false, lines: refusal.lines };
 }

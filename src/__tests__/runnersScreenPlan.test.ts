@@ -18,6 +18,7 @@ import { createPairCodePayload } from './runnersTestKit';
 import {
   buildRunnersPageCallback,
   buildAddressStep,
+  buildClosedText,
   buildExpiredText,
   buildPairedText,
   buildPairingMessageParts,
@@ -228,7 +229,7 @@ describe('runnersScreenPlan: the other screens and texts', () => {
     const parts = buildPairingMessageParts(10, 'runner', t);
     assert.equal(
       parts.adminIntro,
-      'Pair a runner — valid 10 minutes, single use.\n\n① From an admin account of the runner machine: pairs «runner» (the last word — change it if needed) and keeps it running. Trusts this charness host with root there, for the paste:',
+      'Pair a runner — valid 10 minutes, single use.\n\n① From an admin account of the runner machine: pairs «runner» (the last word — change it if needed) and keeps it running. Runs code from this charness host as root on that machine:',
     );
     assert.equal(parts.alternativeIntro, '② Without admin rights: run this one in the terminal of the runner account itself:');
     assert.equal(
@@ -262,6 +263,7 @@ describe('runnersScreenPlan: the other screens and texts', () => {
   it('what the pairing message becomes: paired (with the name and the time) or expired', () => {
     assert.equal(buildPairedText('mac', 42, t, formatTime), 'Runner “mac” paired T42.');
     assert.equal(buildExpiredText(t), 'Pairing code expired.');
+    assert.equal(buildClosedText(t), 'This line was used on a machine that was already paired — nothing new was paired.');
   });
 });
 

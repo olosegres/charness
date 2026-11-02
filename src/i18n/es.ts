@@ -1204,11 +1204,12 @@ export const esDict: Record<string, string> = {
   'runners.addressRejected': '⚠️ {reason}\n\nEnvía otra dirección o abre /runners de nuevo.',
   'runners.addressNote': 'ℹ️ {note}',
   'runners.addressExpired': 'Esta pregunta está desactualizada — abre /runners y empieza de nuevo.',
-  'runners.pairingAdminIntro': 'Vincular un runner — válido {minutes} minutos, de un solo uso.\n\n① Desde una cuenta de administrador de la máquina del runner: vincula «{account}» (la última palabra — cámbiala si hace falta) y la mantiene en marcha. Da a este host de charness root allí, durante el pegado:',
+  'runners.pairingAdminIntro': 'Vincular un runner — válido {minutes} minutos, de un solo uso.\n\n① Desde una cuenta de administrador de la máquina del runner: vincula «{account}» (la última palabra — cámbiala si hace falta) y la mantiene en marcha. Ejecuta código de este host de charness como root en esa máquina:',
   'runners.pairingAlternativeIntro': '② Sin permisos de administrador: ejecuta esta línea en el terminal de la propia cuenta del runner:',
   'runners.pairingAlternativeOutro': 'La cuenta debe existir ya y ser una cuenta estándar, no tu cuenta principal — ejecuta el código de los agentes. Quien tenga cualquiera de las dos líneas puede vincular una máquina a este charness hasta que una se use o caduque.',
   'runners.pairedText': 'Runner «{name}» vinculado {time}.',
   'runners.expiredText': 'El código de vinculación caducó.',
+  'runners.closedText': 'Esta línea se usó en una máquina que ya estaba vinculada — no se vinculó nada nuevo.',
   'runners.pairFailedText': '⚠️ No se pudo crear la línea de vinculación: {reason}',
   'runners.registryErrorText': '⚠️ No se puede leer el registro de runners: {reason}',
 };

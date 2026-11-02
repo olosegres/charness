@@ -13,11 +13,11 @@ import path from 'path';
 import { parseProbeOutput } from '../remoteRun/probe';
 import { extractManagedBlock } from '../runners/authorizedKeys';
 import { getHubFilePaths } from '../runners/hubPaths';
-import { redeemPairing } from '../runners/hubPairing';
+import { cancelPairing, redeemPairing } from '../runners/hubPairing';
 import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { readPairedFile, readPendingFile, type PairedRunner } from '../runners/hubRegistry';
 import { getCurrentServiceKind } from '../runners/runnerServiceKind';
-import { runRunnersCli, type RunnersCliDeps } from '../runners/runnersCli';
+import { adminLineTrustSentence, runRunnersCli, type RunnersCliDeps } from '../runners/runnersCli';
 import { formatRunnerList, formatRunnerListLine } from '../runners/runnersList';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
@@ -89,6 +89,14 @@ describe('charness runners', () => {
     assert.ok(adminLines[0].endsWith(' runner'), 'the account is the last word, «runner» by default');
     const code = (line: string): string => /cr1\.[A-Za-z0-9_-]+/.exec(line)?.[0] ?? '';
     assert.ok(code(lines[0]) !== '' && code(lines[0]) === code(adminLines[0]), 'one code behind both lines');
+    // The CLI is the other place the admin line is offered (the one agents use): it says what the line does to the machine, as the Telegram message does.
+    assert.equal(adminLineTrustSentence, 'It runs code from this charness host as root on that machine');
+    const textLines = run.stdout.split('\n');
+    const adminIntro = textLines[textLines.indexOf(adminLines[0]) - 2];
+    assert.match(adminIntro, /^1\) From an admin account of the runner machine: it pairs "runner" .* and keeps it running\. It runs code from this charness host as root on that machine:$/);
+    const plainIntro = textLines[textLines.indexOf(lines[0]) - 2];
+    assert.match(plainIntro, /^2\) Without admin rights: /);
+    assert.doesNotMatch(plainIntro, /root/, 'the plain line gives the host no such power');
     const pending = readPendingFile(fixture.ctx.dir).pending;
     assert.equal(pending.length, 1);
     assert.deepEqual({ host: pending[0].host, port: pending[0].port, label: pending[0].label, expiresAtMs: pending[0].expiresAtMs }, { host: 'host.example', port: 2222, label: '@ExampleBot', expiresAtMs: startMs + pairingLifetimeMs });
@@ -150,6 +158,23 @@ describe('charness runners', () => {
     const run = await runCli(['pair', '--host', 'host.example', '--wait'], deps);
     assert.equal(run.code, 0, run.stderr);
     assert.match(run.stdout, /Runner "mac" paired/);
+  });
+
+  it('pair --wait ends with exit 0 when the line was pasted for a machine that was already paired (its code is closed, not used): nothing new was paired, and it is no failure', async () => {
+    let sleeps = 0;
+    const deps = createDeps({
+      sleep: async () => {
+        sleeps += 1;
+        const pairing = readPendingFile(fixture.ctx.dir).pending[0];
+        if (sleeps === 2) assert.equal(await cancelPairing(fixture.ctx, pairing.pairId, nowMs), true);
+      },
+    });
+    const run = await runCli(['pair', '--host', 'host.example', '--wait'], deps);
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal(run.stderr, '');
+    assert.match(run.stdout, /The pairing line was used on a machine that was already paired: nothing new was paired\.\n$/);
+    assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 0);
+    assert.equal(readPendingFile(fixture.ctx.dir).pending.length, 0);
   });
 
   it('pair --wait ends with «expired» when the line is not used in time, and the code is gone', async () => {

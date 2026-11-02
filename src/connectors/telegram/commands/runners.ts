@@ -9,7 +9,9 @@
  * Two rules keep the screen true under concurrency. (1) A render is claimed BEFORE its Telegram edit is awaited: every message has a
  * generation, and a background job (the live probe) draws only if the message still carries the generation it started from — so a
  * question that replaced the list while its edit was still queued is never drawn over. (2) The messages that offer a pairing code are
- * this instance's own record (`runnerPairingMessages.ts`, an entry per message), each kept until the edit that settles it was accepted.
+ * this instance's own record (`runnerPairingMessages.ts`, an entry per message), each kept until the edit that settles it was accepted. A
+ * message settles to «paired» (a runner carries its code), «closed» (the code was closed unused: its line was pasted for a machine that
+ * was already paired) or «expired».
  */
 import { Markup, type Context } from 'telegraf';
 import { getCaughtErrnoCode } from '../../../configDirFile';
@@ -24,12 +26,14 @@ import {
   createPairing,
   setPairedRunnerPaused,
 } from '../../../runners/hubPairing';
+import { readClosedCodes } from '../../../runners/hubClosedCodes';
 import { HubRegistryError, readPairedFile, readPendingFile } from '../../../runners/hubRegistry';
 import { pairingLifetimeMinutes } from '../../../runners/pairingTiming';
 import { removeRunnerAndEndItsWork } from '../../../runners/runnerRemoval';
 import type { RunnersOverview } from '../../../runners/runnersOverview';
 import {
   buildAddressStep,
+  buildClosedText,
   buildExpiredText,
   buildPairedText,
   buildPairingMessageParts,
@@ -454,6 +458,8 @@ export function createRunners(ports: RunnersPorts) {
     const { messages, problem } = readPairingMessages(ports.pairingMessagesPath);
     const pending = readPendingFile(hub.dir).pending;
     const runners = readPairedFile(hub.dir).runners;
+    // After the pending list: a code is noted as closed BEFORE it leaves that list, so a code seen gone from it is already noted here.
+    const closedPairIds = new Set(readClosedCodes(hub).map((entry) => entry.pairId));
     // A broken record fails every look: say it once, not every five seconds.
     if (problem !== null && problem !== lastStoreProblem) console.warn(`[${logTag}] ${problem}; the pairing messages it held are not followed`);
     lastStoreProblem = problem;
@@ -467,7 +473,7 @@ export function createRunners(ports: RunnersPorts) {
       if (runner === undefined && isOpen) continue;
       const key = keyFromString(message.key);
       const isEdited = await withThreadLocale(key, () =>
-        editThreadMessage(key, message.messageId, runner === undefined ? buildExpiredText(t) : buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime)),
+        editThreadMessage(key, message.messageId, runner !== undefined ? buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime) : closedPairIds.has(message.pairId) ? buildClosedText(t) : buildExpiredText(t)),
       );
       if (isEdited) {
         settledMessageIds.add(messageId);

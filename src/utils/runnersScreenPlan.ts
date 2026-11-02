@@ -328,3 +328,8 @@ export function buildPairedText(runnerName: string, pairedAtMs: number, t: Trans
 export function buildExpiredText(t: Translate): string {
   return t('runners.expiredText');
 }
+
+/** @description What the pairing message becomes once its code was CLOSED unused: the line was pasted for a machine that was already paired, so it only installed the service. */
+export function buildClosedText(t: Translate): string {
+  return t('runners.closedText');
+}

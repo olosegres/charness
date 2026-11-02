@@ -8,6 +8,7 @@ import { createHubContext, type HubContext } from './hubPaths';
 import { createPairing, findPairedRunner, setPairedRunnerPaused, sweepExpiredPairings } from './hubPairing';
 import { formatLifetime, readPairingLifetimeMs } from './pairingTiming';
 import { HubRegistryError, readPairedFile, readPendingFile } from './hubRegistry';
+import { readClosedCodes } from './hubClosedCodes';
 import { removeRunnerAndEndItsWork } from './runnerRemoval';
 import { readRunnersOverview } from './runnersOverview';
 import { formatListTimestamp, formatRunnerList } from './runnersList';
@@ -17,6 +18,9 @@ import { formatListTimestamp, formatRunnerList } from './runnersList';
  * instance without Telegram (a Jira-only one) and for the flow tests. It works on the registry of the OS user
  * (`~/.config/charness/runners/`), loads no env file and never touches `DATA_DIR`.
  */
+
+/** What the admin line does to the machine it is pasted on, in the words every place that offers it uses (the Telegram message has it in each language). */
+export const adminLineTrustSentence = 'It runs code from this charness host as root on that machine';
 
 const usageExitCode = 2;
 const failedExitCode = 1;
@@ -30,7 +34,8 @@ export const runnersUsage = `Usage:
                                               the runner machine: one for an ADMIN account there (it pairs <name>, default "runner", and
                                               installs its always-on service), one for the runner account itself;
                                               <host[:port]> is the address the runner dials to reach this machine's sshd;
-                                              --wait blocks until a line is used or the code expires
+                                              --wait blocks until a line is used or the code expires (a line pasted for a machine that
+                                              was already paired ends it too, with exit 0: nothing new was paired)
   charness runners remove <name>              detach a runner: its key is deleted and its link cut
   charness runners pause <name>               keep a runner attached but send it no jobs
   charness runners resume <name>
@@ -114,7 +119,7 @@ async function runPairCommand(args: readonly string[], io: CliIo, deps: RunnersC
   });
   io.stdout(
     `Pair a runner — valid ${formatLifetime(readPairingLifetimeMs(io.env))}, single use.\n\n` +
-      `1) From an admin account of the runner machine: it pairs "${options.account}" (the last word of the line — change it if the account is named otherwise) and keeps it running:\n\n` +
+      `1) From an admin account of the runner machine: it pairs "${options.account}" (the last word of the line — change it if the account is named otherwise) and keeps it running. ${adminLineTrustSentence}:\n\n` +
       `${buildAdminBootstrapLine(pairing.payload, options.account)}\n\n` +
       `2) Without admin rights: run this one in the terminal of the runner account itself:\n\n` +
       `${buildBootstrapLine(pairing.payload)}\n\n` +
@@ -132,6 +137,11 @@ async function waitForPairing(pairId: string, io: CliIo, deps: RunnersCliDeps): 
       return 0;
     }
     const pairing = readPendingFile(deps.ctx.dir).pending.find((candidate) => candidate.pairId === pairId);
+    // A code closed unused is not a failure: its line was pasted for a machine that was already paired, and did its job (the service).
+    if (pairing === undefined && readClosedCodes(deps.ctx).some((entry) => entry.pairId === pairId)) {
+      io.stdout('The pairing line was used on a machine that was already paired: nothing new was paired.\n');
+      return 0;
+    }
     if (pairing === undefined || pairing.expiresAtMs <= deps.now()) {
       await sweepExpiredPairings(deps.ctx, deps.now());
       io.stderr('runners: the pairing code expired unused.\n');

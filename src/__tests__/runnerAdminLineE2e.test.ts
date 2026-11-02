@@ -224,6 +224,8 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.match(retried.stdout, /Installed two user services:/);
     assert.equal(readHubRunners().length, 2, 'nothing was paired twice');
     assert.equal(countOpenCodes(), 0, 'and the retry\'s code is closed on the hub, not left open (and logged by sudo) until it runs out');
+    // …with a trace, so the Telegram messages and `--wait` can tell it from a code that ran out (and say the line did its job).
+    assert.equal(readJson<{ closed: unknown[] }>(path.join(layout.hubDir, 'closed.json')).closed.length, 1);
     assert.equal(fs.existsSync(path.join(failingHome, '.config', 'systemd', 'user', getServiceNames(paths.root).systemdLink)), true);
     assert.equal(fs.existsSync(standIns.trapFile), false, 'and root still started nothing of the account\'s');
   });

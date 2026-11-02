@@ -109,8 +109,12 @@ function escapeXml(text: string): string {
  */
 const daemonOutputPath = '/dev/null';
 const daemonShell = '/bin/sh';
-/** `$0` is the log, `$1` the home, the rest the program: the account's shell enters the home, then execs the program with its output in the log. */
-const daemonShellScript = 'cd "$1" && shift && exec "$@" >> "$0" 2>&1';
+/**
+ * `$0` is the log, `$1` the home, the rest the program: the account's shell makes the log's folder (it cannot be left to anyone else: a
+ * failure to open the log goes to `/dev/null`, and a job that restarts every 10 s without a word is the worst way to fail), enters the
+ * home, then execs the program with its output in the log.
+ */
+const daemonShellScript = 'mkdir -p "${0%/*}" && cd "$1" && shift && exec "$@" >> "$0" 2>&1';
 
 /** The program and arguments launchd starts: the job's own for a LaunchAgent, the account's shell around them for a LaunchDaemon. */
 export function getLaunchdProgramArguments(spec: LaunchdJobSpec): readonly string[] {

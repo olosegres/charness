@@ -1248,11 +1248,12 @@ export const enDict: Record<string, string> = {
   'runners.addressRejected': '⚠️ {reason}\n\nSend another address, or open /runners again.',
   'runners.addressNote': 'ℹ️ {note}',
   'runners.addressExpired': 'This question is out of date — open /runners and start again.',
-  'runners.pairingAdminIntro': 'Pair a runner — valid {minutes} minutes, single use.\n\n① From an admin account of the runner machine: pairs «{account}» (the last word — change it if needed) and keeps it running. Trusts this charness host with root there, for the paste:',
+  'runners.pairingAdminIntro': 'Pair a runner — valid {minutes} minutes, single use.\n\n① From an admin account of the runner machine: pairs «{account}» (the last word — change it if needed) and keeps it running. Runs code from this charness host as root on that machine:',
   'runners.pairingAlternativeIntro': '② Without admin rights: run this one in the terminal of the runner account itself:',
   'runners.pairingAlternativeOutro': 'The account must be an existing standard user, not your main account — it runs the agents\' code. Anyone with either line can attach a machine to this charness until one of them is used or expires.',
   'runners.pairedText': 'Runner “{name}” paired {time}.',
   'runners.expiredText': 'Pairing code expired.',
+  'runners.closedText': 'This line was used on a machine that was already paired — nothing new was paired.',
   'runners.pairFailedText': '⚠️ Could not make a pairing line: {reason}',
   'runners.registryErrorText': '⚠️ The runners registry cannot be read: {reason}',
 };

@@ -1340,6 +1340,7 @@ test('the /runners keys exist in every locale and keep their placeholders', () =
     'runners.pairingAlternativeIntro': [],
     'runners.pairingAlternativeOutro': [],
     'runners.pairedText': ['{name}', '{time}'],
+    'runners.closedText': [],
     'runners.pairFailedText': ['{reason}'],
     'runners.registryErrorText': ['{reason}'],
   };
