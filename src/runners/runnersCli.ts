@@ -1,5 +1,6 @@
 import * as os from 'os';
 import type { CliIo } from '../remoteRun/output';
+import { getRemoteRunCacheDir } from '../remoteRun/ssh';
 import { buildBootstrapLine } from './bootstrapLine';
 import { ensureGateWrapper } from './gateWrapper';
 import { checkHubAddress, parseHubAddress, scanHostKey, type HostKeyScanner } from './hubAddress';
@@ -7,8 +8,8 @@ import { createHubContext, type HubContext } from './hubPaths';
 import { createPairing, findPairedRunner, setPairedRunnerPaused, sweepExpiredPairings } from './hubPairing';
 import { formatLifetime, readPairingLifetimeMs } from './pairingTiming';
 import { HubRegistryError, readPairedFile, readPendingFile } from './hubRegistry';
-import { getRunnerLinkStatus } from './linkControl';
 import { removeRunnerAndEndItsWork } from './runnerRemoval';
+import { probeRunnersOverview, readRunnersOverview } from './runnersOverview';
 import { formatListTimestamp, formatRunnerList } from './runnersList';
 
 /**
@@ -22,7 +23,8 @@ const failedExitCode = 1;
 const waitPollMs = 1000;
 
 export const runnersUsage = `Usage:
-  charness runners [ls]                       the machines paired as runners: online or not, OS, how they are kept running
+  charness runners [ls]                       the machines paired as runners: online or not, OS, how they are kept running now
+                                              (the online ones are asked, as /runners does)
   charness runners pair --host <host[:port]> [--label <text>] [--wait]
                                               make a pairing line (valid 10 minutes, single use) to run on the runner machine;
                                               <host[:port]> is the address the runner dials to reach this machine's sshd;
@@ -35,15 +37,21 @@ export const runnersUsage = `Usage:
 /** @description What the CLI needs from outside; tests replace the scanner, the clock and the wait. */
 export interface RunnersCliDeps {
   ctx: HubContext;
+  /** Where remote-run keeps its probe snapshots and ssh sockets: `ls` reads the snapshots and asks the machines that are online. */
+  cacheDir: string;
+  /** Asks the machines that are online what they are like right now (default: the `/runners` screen's own probe). */
+  probeOverview: typeof probeRunnersOverview;
   scanHostKey: HostKeyScanner;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   sshUser?: string;
 }
 
-export function createRunnersCliDeps(io: Pick<CliIo, 'homeDir'>): RunnersCliDeps {
+export function createRunnersCliDeps(io: Pick<CliIo, 'homeDir' | 'env'>): RunnersCliDeps {
   return {
     ctx: createHubContext({ homeDir: io.homeDir }),
+    cacheDir: getRemoteRunCacheDir(io.env, io.homeDir),
+    probeOverview: probeRunnersOverview,
     scanHostKey,
     now: Date.now,
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
@@ -131,9 +139,9 @@ async function waitForPairing(pairId: string, io: CliIo, deps: RunnersCliDeps): 
 
 async function runListCommand(io: CliIo, deps: RunnersCliDeps): Promise<number> {
   await sweepExpiredPairings(deps.ctx, deps.now());
-  const paired = readPairedFile(deps.ctx.dir);
-  const entries = await Promise.all(paired.runners.map(async (runner) => ({ runner, status: await getRunnerLinkStatus(deps.ctx.dir, runner.id) })));
-  io.stdout(formatRunnerList(entries, readPendingFile(deps.ctx.dir).pending, deps.now()));
+  // The same two steps as the `/runners` screen: the registry, the links and the last snapshots, then a live look at the machines that are up.
+  const overview = await deps.probeOverview(deps.ctx, await readRunnersOverview(deps.ctx, deps.cacheDir, deps.now()), deps.cacheDir, deps.now());
+  io.stdout(formatRunnerList(overview.entries, readPendingFile(deps.ctx.dir).pending, deps.now()));
   return 0;
 }
 

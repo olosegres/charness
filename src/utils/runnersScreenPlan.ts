@@ -17,6 +17,7 @@ import type { Translate } from '../i18n';
 import { formatGigabytes, runnerCapabilities, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner, RunnerServiceKind } from '../runners/hubRegistry';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
+import { getCurrentServiceKind } from '../runners/runnerServiceKind';
 import type { RunnerJobsStop } from '../runners/runnerRemoval';
 
 /** Telegram refuses callback data over 64 BYTES. */
@@ -165,9 +166,7 @@ function buildEntryBlock(entry: RunnerScreenEntry, t: Translate, formatTime: For
     : entry.lastSeenMs === null
       ? t('runners.statusNeverSeen')
       : t('runners.statusOffline', { time: formatTime(entry.lastSeenMs) });
-  // How it is kept running is what the probe reports (the last one, for an offline machine): the registry holds only what the runner said when it was
-  // paired — «run by hand», since `service install` comes after — and never learns of the install. Its own word stands where the probe has none.
-  const serviceKind = probe?.serviceKind ?? runner.serviceKind;
+  const serviceKind = getCurrentServiceKind(runner, probe);
   const heading = [status, ...(runner.isPaused ? [t('runners.pausedMark')] : []), describeSystem(entry), t(serviceKindKeys[serviceKind])].join(' · ');
   const lines = [`${runner.name} — ${heading}`];
   if (probe === null) return lines.join('\n');

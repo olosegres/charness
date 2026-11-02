@@ -9,12 +9,16 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
+import path from 'path';
+import { parseProbeOutput } from '../remoteRun/probe';
 import { extractManagedBlock } from '../runners/authorizedKeys';
 import { getHubFilePaths } from '../runners/hubPaths';
 import { redeemPairing } from '../runners/hubPairing';
 import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { readPairedFile, readPendingFile, type PairedRunner } from '../runners/hubRegistry';
+import { getCurrentServiceKind } from '../runners/runnerServiceKind';
 import { runRunnersCli, type RunnersCliDeps } from '../runners/runnersCli';
+import { probeRunnersOverview } from '../runners/runnersOverview';
 import { formatRunnerList, formatRunnerListLine } from '../runners/runnersList';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
@@ -34,6 +38,8 @@ interface CliRun {
 function createDeps(overrides: Partial<RunnersCliDeps> = {}): RunnersCliDeps {
   return {
     ctx: fixture.ctx,
+    cacheDir: path.join(fixture.root, 'cache'),
+    probeOverview: probeRunnersOverview,
     scanHostKey: async () => hubHostKey,
     now: () => nowMs,
     sleep: async () => undefined,
@@ -145,6 +151,20 @@ describe('charness runners', () => {
     assert.match(run.stdout, /Pairing code open until .* \(host\.example:22\)/);
   });
 
+  it('ls says how a runner is kept running as the machine reports it NOW, not as the registry recorded it at pairing', async () => {
+    await pairMachine('Mac Mini');
+    assert.match((await runCli(['ls'])).stdout, / · run by hand · /, 'the registry knows only the pairing-time word');
+    const asked: string[] = [];
+    const probeOverview: RunnersCliDeps['probeOverview'] = async (_ctx, overview, cacheDir) => {
+      asked.push(cacheDir);
+      return { ...overview, entries: overview.entries.map((entry) => ({ ...entry, isOnline: true, probe: parseProbeOutput('os_name=macOS\nservice=user-service') })) };
+    };
+    const run = await runCli(['ls'], createDeps({ probeOverview }));
+    assert.match(run.stdout, /^mac-mini — online · macOS 15\.1 \(arm64\) · user service · charness 3\.7\.0 · paired /m);
+    assert.doesNotMatch(run.stdout, /run by hand/);
+    assert.deepEqual(asked, [path.join(fixture.root, 'cache')], 'the machines are asked once, through the same probe as the /runners screen');
+  });
+
   it('ls forgets a code that has expired', async () => {
     await runCli(['pair', '--host', 'host.example']);
     nowMs += pairingLifetimeMs + 1;
@@ -217,8 +237,22 @@ describe('runner list text', () => {
   };
 
   it('says online, or since when it is offline, and what is paused', () => {
-    assert.match(formatRunnerListLine({ runner, status: { isOnline: true, sinceMs: startMs, lastSeenMs: startMs } }), /^box1 — online · paused · Ubuntu 24\.04 \(x86_64\) · system service · charness 3\.7\.0 · paired \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
-    assert.match(formatRunnerListLine({ runner: { ...runner, isPaused: false }, status: { isOnline: false, sinceMs: null, lastSeenMs: startMs } }), /^box1 — offline since \d{4}-\d{2}-\d{2} \d{2}:\d{2} · Ubuntu/);
+    assert.match(formatRunnerListLine({ runner, isOnline: true, lastSeenMs: startMs, probe: null }), /^box1 — online · paused · Ubuntu 24\.04 \(x86_64\) · system service · charness 3\.7\.0 · paired \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    assert.match(formatRunnerListLine({ runner: { ...runner, isPaused: false }, isOnline: false, lastSeenMs: startMs, probe: null }), /^box1 — offline since \d{4}-\d{2}-\d{2} \d{2}:\d{2} · Ubuntu/);
+    assert.match(formatRunnerListLine({ runner: { ...runner, isPaused: false }, isOnline: false, lastSeenMs: null, probe: null }), /^box1 — offline, never connected · Ubuntu/);
+  });
+
+  it('how it is kept running: the latest probe first (live, or the last snapshot of a machine that is off), the registry only where the probe has none', () => {
+    const registryByHand = { ...runner, serviceKind: 'foreground' } as const;
+    assert.equal(getCurrentServiceKind(registryByHand, parseProbeOutput('service=user-service')), 'user-service');
+    assert.equal(getCurrentServiceKind(registryByHand, parseProbeOutput('service=system-service')), 'system-service');
+    assert.equal(getCurrentServiceKind(registryByHand, parseProbeOutput('os_name=Ubuntu')), 'foreground', 'a probe with no word on it leaves the registry\'s');
+    assert.equal(getCurrentServiceKind(registryByHand, null), 'foreground', 'never probed');
+    const line = (probeText: string | null, isOnline: boolean): string =>
+      formatRunnerListLine({ runner: registryByHand, isOnline, lastSeenMs: startMs, probe: probeText === null ? null : parseProbeOutput(probeText) });
+    assert.match(line('service=user-service', true), / · user service · /);
+    assert.match(line('service=system-service', false), / · system service · /, 'the last snapshot of an offline machine speaks too');
+    assert.match(line(null, true), / · run by hand · /);
   });
 
   it('lists only the codes that are still open', () => {
