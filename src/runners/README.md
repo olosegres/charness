@@ -51,7 +51,7 @@ be rewritten empty.
 
 **Every change is a transaction under the registry lock** (`hubPairing.ts`, `runTransaction`): (1) the `authorized_keys` block is checked
 first — a damaged one stops the operation before anything is written; (2) the AUTHORITATIVE files are written, `paired.json` then
-`pending.json`; (3) the derived files are rewritten from the registry (and the link files of runners it no longer holds are swept, unless that runner's gate is still running — cutting its link needs the pid) — and this step runs at the end of EVERY operation, a plain
+`pending.json`; (3) the derived files are rewritten from the registry (and the link files of runners it no longer holds are swept, unless that runner's gate is still running — cutting its link needs the pid; best effort: a folder that cannot be listed is warned about and never fails the operation) — and this step runs at the end of EVERY operation, a plain
 `ls` or sweep included, so a step that failed, or a crash between two writes, is mended by whatever runs next (a failed derived write is
 reported as `HubDerivedFilesError`). A code is single use because the runner is recorded with the id of the code that made it, even if the
 pending entry outlives a crash; the SAME machine asking again for a used code is answered again (idempotent). A runner that left

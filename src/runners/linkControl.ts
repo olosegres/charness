@@ -109,16 +109,21 @@ function getLinkRecordRunnerId(fileName: string): string | null {
 /**
  * @description Delete the link files (`<id>.json`, `<id>.sock`) of every runner that is not in `registeredRunnerIds`: a removal that was cut
  * short, a gate that wrote its status after the removal, a runner dropped from the registry by hand. Records of a runner whose gate is still
- * running are kept — it is on its way out, and {@link cutRunnerLink} still needs the pid to stop it. Best effort: a file that cannot be
- * deleted is harmless and is tried again by the next registry operation. Returns the names deleted.
+ * running are kept — it is on its way out, and {@link cutRunnerLink} still needs the pid to stop it.
+ *
+ * Best effort, and it NEVER throws: the registry operation that calls it has already written its files, and a folder that cannot be listed
+ * or a file that cannot be deleted is only leftover clutter, tried again by the next operation. What went wrong is handed to `onProblem`
+ * (a missing folder is not a problem: nothing was ever linked). Returns the names deleted.
  */
-export function sweepOrphanLinkRecords(dir: string, registeredRunnerIds: readonly string[]): string[] {
+export function sweepOrphanLinkRecords(dir: string, registeredRunnerIds: readonly string[], onProblem: (message: string) => void = () => undefined): string[] {
+  const linkDir = getHubFilePaths(dir).linkDir;
   let names: string[];
   try {
-    names = fs.readdirSync(getHubFilePaths(dir).linkDir);
+    names = fs.readdirSync(linkDir);
   } catch (error) {
-    if (getCaughtErrnoCode(error) === 'ENOENT') return [];
-    throw error;
+    const code = getCaughtErrnoCode(error);
+    if (code !== 'ENOENT') onProblem(`the link folder could not be listed (${code}); leftover link files stay until it can be`);
+    return [];
   }
   const deleted: string[] = [];
   for (const name of names) {
@@ -127,10 +132,10 @@ export function sweepOrphanLinkRecords(dir: string, registeredRunnerIds: readonl
     const state = readLinkState(dir, runnerId);
     if (state !== null && state.endedAtMs === null && checkIsGateProcessOf(state.pid, runnerId)) continue;
     try {
-      fs.rmSync(path.join(getHubFilePaths(dir).linkDir, name), { force: true });
+      fs.rmSync(path.join(linkDir, name), { force: true });
       deleted.push(name);
-    } catch {
-      // See above: the next registry operation sweeps again.
+    } catch (error) {
+      onProblem(`the leftover link file ${name} could not be deleted (${getCaughtErrnoCode(error)})`);
     }
   }
   return deleted;

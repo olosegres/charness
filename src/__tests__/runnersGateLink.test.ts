@@ -409,6 +409,14 @@ describe('link status and cutting', () => {
     return fs.readdirSync(getRunnerLinkPaths(fixture.ctx.dir, 'aaaaaaaaaaaa').state.replace(/[^/]+$/, '')).sort();
   }
 
+  /** A file where the link folder should be: listing it fails (ENOTDIR) for any user, root included. */
+  function makeLinkFolderUnreadable(): void {
+    const linkDir = path.join(fixture.ctx.dir, 'link');
+    fs.mkdirSync(fixture.ctx.dir, { recursive: true });
+    fs.rmSync(linkDir, { recursive: true, force: true });
+    fs.writeFileSync(linkDir, 'not a folder');
+  }
+
   function writeSocketFile(runnerId: string): void {
     fs.writeFileSync(getRunnerLinkPaths(fixture.ctx.dir, runnerId).socket, '');
   }
@@ -452,6 +460,30 @@ describe('link status and cutting', () => {
     decoy.kill('SIGKILL');
     await waitUntil(() => decoyPid !== undefined && !checkIsGateProcessOf(decoyPid, runnerId), 'the decoy to be gone');
     assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, []).sort(), [`${runnerId}.json`, `${runnerId}.sock`]);
+  });
+
+  it('the sweep never throws: a link folder that cannot be listed is reported, not raised', () => {
+    makeLinkFolderUnreadable();
+    const problems: string[] = [];
+    assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, [], (problem) => problems.push(problem)), []);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /link folder could not be listed \(ENOTDIR\)/);
+  });
+
+  it('a leftover that cannot be listed or deleted never fails the registry operation that sweeps — the runner is still removed, the pairing still goes through', async () => {
+    const runner = await pairRunner();
+    makeLinkFolderUnreadable();
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...parts: unknown[]) => { warnings.push(parts.join(' ')); };
+    try {
+      const removed = await removePairedRunner(fixture.ctx, runner.runnerId, startMs);
+      assert.equal(removed?.id, runner.runnerId, 'removed although the link folder is unreadable');
+      await pairRunner();
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.ok(warnings.some((line) => line.includes('link folder could not be listed')), warnings.join('\n'));
   });
 
   it('every registry operation sweeps them — a removal cut short, or a status written after it, is mended by whatever runs next', async () => {
