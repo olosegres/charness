@@ -394,6 +394,8 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.equal(sendCall?.payload.parse_mode, 'HTML');
     const [pending] = readJson<{ pending: Array<{ pairId: string; messageRef: string | null; label: string; host: string; port: number }> }>(path.join(getRegistryDir(), 'pending.json')).pending;
     assert.equal(pending.messageRef, null, 'the shared registry carries credentials only');
+    // The instance writes its record after the send has been answered, so the message can be on the fake Bot API a moment before the record is.
+    await waitUntil(() => readPairingStore().length === 1, 'the instance to record the message it sent', 10_000);
     assert.deepEqual(readPairingStore().map((message) => [message.pairId, message.key, message.messageId]), [[pending.pairId, `${group.id}:${generalTopicThreadId}`, pairingMessage.message_id]], 'the instance keeps its own record of the message');
     assert.deepEqual([pending.label, pending.host, pending.port], ['@fake_charness_bot', '127.0.0.1', link.sshPort]);
     assert.match(readAuthorizedKeys(), /charness-pairing:/);
