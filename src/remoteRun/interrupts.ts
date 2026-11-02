@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'child_process';
-import { interruptSignals, killGraceSeconds, type InterruptSignal } from './exitCodes';
+import { interruptSignals, killGraceSeconds, planInterrupt, type InterruptSignal } from './exitCodes';
 
 /** A `kill` call waits for the runner's grace time, then its own SIGKILL and the call itself. */
 const killCallMarginSeconds = 30;
@@ -16,6 +16,27 @@ export function addInterruptHandler(handler: (signal: InterruptSignal) => void):
     return { signal, listener };
   });
   return () => listeners.forEach(({ signal, listener }) => process.off(signal, listener));
+}
+
+/**
+ * @description The handler of an interrupt that is given time to clean up: the FIRST interrupt goes to `onInterrupt`; a SECOND one — the user does
+ * not want to wait for the clean-up — ends the process at once with the code of the first, so a call that does not stop can never swallow Ctrl-C.
+ */
+export function createHardStopHandler(onInterrupt: (signal: InterruptSignal) => void, exit: (exitCode: number) => void): (signal: InterruptSignal) => void {
+  let firstExitCode: number | null = null;
+  return (signal) => {
+    if (firstExitCode !== null) {
+      exit(firstExitCode);
+      return;
+    }
+    firstExitCode = planInterrupt(signal).exitCode;
+    onInterrupt(signal);
+  };
+}
+
+/** @description {@link addInterruptHandler} with {@link createHardStopHandler}: a second interrupt ends the process (`process.exit`) at once. */
+export function addInterruptHandlerWithHardStop(onInterrupt: (signal: InterruptSignal) => void): () => void {
+  return addInterruptHandler(createHardStopHandler(onInterrupt, (exitCode) => process.exit(exitCode)));
 }
 
 /**

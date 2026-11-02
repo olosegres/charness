@@ -12,7 +12,7 @@ import {
 } from './commands';
 import { parseRemoteRunArgs } from './cliArgs';
 import { remoteRunExitCodes } from './exitCodes';
-import { addInterruptHandler } from './interrupts';
+import { addInterruptHandlerWithHardStop } from './interrupts';
 import { readRemoteRunLeaseMs } from './leaseTiming';
 import { createProcessIo, type CliIo } from './output';
 import { RemoteRunError } from './remoteRunError';
@@ -90,7 +90,7 @@ function createContext(io: CliIo): CommandContext {
     loadRunners: () => readCurrentRunners(io.homeDir),
     runnerPollMs: readRunnerWaitPollMs(io.env),
     sleep: sleepUntilStopped,
-    watchInterrupts: addInterruptHandler,
+    watchInterrupts: addInterruptHandlerWithHardStop,
   };
 }
 

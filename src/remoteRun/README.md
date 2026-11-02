@@ -56,8 +56,11 @@ config are found from the reported work dir with the layout `runnerUtility/runne
   (`runnerWait.ts`): it says so once, looks again every 10 s (`runnerWaitTiming.ts`; the test seam `CHARNESS_TEST_TIMINGS` `remoteRunRunnerPollMs`
   may only shorten it) and gives up after `--runner-wait` (default 15 min, `0` = fail at once) with the pick's own message and 125. A runner nobody
   can say can do the job (no runner has the capability, one never seen, a hand-made one, a named one) is not waited for: 125 at once, as in phase 1.
-  An interrupt — heard from the first look to the last, in a sleep AND in a probe (the ssh calls of a probe in flight are stopped; a runner a probe
-  answers with after the interrupt is not taken) — ends it with 130 / 143 / 129 and starts no job. The deadline is hard: the catalog is read AGAIN at every look (a runner
+  An interrupt — heard from the first look to the last, in a sleep AND in a probe — ends it with 130 / 143 / 129 and starts no job: the ssh calls of
+  a probe in flight are killed and the call settles when its client has exited (`runSshCommand` does not wait for `close`: after login the client only
+  holds the pipes of a ControlPersist master, which ends by itself after its 60 s idle), and a runner a probe answers with after the interrupt is not
+  taken. A SECOND interrupt during the wait ends the process at once with the first one's code (`interrupts.ts`), so a call that did not stop can never
+  swallow Ctrl-C. The deadline is hard: the catalog is read AGAIN at every look (a runner
   paused or removed from the hub meanwhile is given up on, whatever it does next), every look is told what is left of the wait and its probe is cut
   there, none starts with under a second left, and a runner that answers after the deadline is refused — the job is never started late.
 - **What a paired runner says in `probe`** (`runner.sh`, read from its state folder — the parent of the work dir, recognised by `config.json` and
