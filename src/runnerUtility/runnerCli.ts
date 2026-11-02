@@ -153,14 +153,17 @@ async function main(): Promise<number> {
   }
 }
 
-main().then(
-  (code) => {
-    process.exitCode = code;
-    // `run` holds sockets, a Pueue probe and timers: it leaves by itself — also with the restart code after an update; every other command ends when its output is flushed.
-    if (process.argv[2] === 'run' || code === restartExitCode) process.exit(code);
-  },
-  (error: Error) => {
-    process.stderr.write(`charness-runner: ${error.message}\n`);
-    process.exit(1);
-  },
-);
+// Only when this file IS the program (`charness-runner`, `node …/runnerCli.js`): importing it, as the self-check does, runs no command.
+if (require.main === module) {
+  main().then(
+    (code) => {
+      process.exitCode = code;
+      // `run` holds sockets, a Pueue probe and timers: it leaves by itself — also with the restart code after an update; every other command ends when its output is flushed.
+      if (process.argv[2] === 'run' || code === restartExitCode) process.exit(code);
+    },
+    (error: Error) => {
+      process.stderr.write(`charness-runner: ${error.message}\n`);
+      process.exit(1);
+    },
+  );
+}

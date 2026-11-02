@@ -24,10 +24,13 @@ async function main(): Promise<number> {
   return result.reason === 'locked' ? exitLocked : exitFailed;
 }
 
-main().then(
-  (exitCode) => process.exit(exitCode),
-  (error) => {
-    console.error('[STT] install job crashed:', error instanceof Error ? error.message : error);
-    process.exit(exitFailed);
-  },
-);
+// Only when this file IS the job (`node dist/stt/sttInstallEntry.js <dataDir>`): importing it, as the self-check does, starts no install.
+if (require.main === module) {
+  main().then(
+    (exitCode) => process.exit(exitCode),
+    (error) => {
+      console.error('[STT] install job crashed:', error instanceof Error ? error.message : error);
+      process.exit(exitFailed);
+    },
+  );
+}

@@ -10,8 +10,13 @@ import * as path from 'path';
  * `bot.js` reads its settings at module scope and exits the process without them. Hidden: it is not in `--help`.
  */
 
-/** Entry points: importing one starts something (the CLI, the bot, the install job, the runner utility's command line, the admin line's root step). */
-const entryModules: ReadonlySet<string> = new Set(['cli.js', 'index.js', 'bot.js', 'cli/botEntry.js', 'stt/sttInstallEntry.js', 'runnerUtility/runnerCli.js', 'runnerUtility/rootServiceCli.js']);
+/**
+ * Entry points: modules that are meant to be RUN, not imported (the CLI, the bot, the install job, the runner utility's command line, the admin
+ * line's root step). Importing `bot.js` or `cli/botEntry.js` starts the bot (the bot reads its settings at module scope and exits without them);
+ * every other one is guarded by `require.main === module` and starts nothing when imported, so this list is the second line of defence for them.
+ * A module that runs a promise chain or `main()` at module scope MUST be here (`entryModules.test.ts` scans the sources for one that is not).
+ */
+export const entryModules: ReadonlySet<string> = new Set(['cli.js', 'index.js', 'bot.js', 'cli/botEntry.js', 'stt/sttInstallEntry.js', 'runnerUtility/runnerCli.js', 'runnerUtility/rootServiceCli.js']);
 const testsFolderName = '__tests__';
 const botModule = 'bot.js';
 const syntaxCheckTimeoutMs = 30 * 1000;

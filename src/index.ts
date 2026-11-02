@@ -5,4 +5,6 @@
 // All real entrypoint logic — DNS fix, env loading, subcommand dispatch —
 // lives in `./cli.ts`, which is the `bin` target as of the iter-1 CLI
 // wrapper.
-import './cli';
+import { runCli } from './cli';
+
+if (require.main === module) runCli();

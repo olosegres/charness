@@ -8,8 +8,6 @@ import { applyDnsFix } from './cli/applyDnsFix';
 import { runBot } from './cli/bot';
 import { runHot } from './cli/hot';
 
-applyDnsFix();
-
 /** How long a finished `runner-gate` waits for its stdout to drain before it ends the process. */
 const gateExitGraceMs = 5000;
 
@@ -179,7 +177,14 @@ async function main(): Promise<void> {
   process.exit(2);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+/** @description Run the command line (`process.argv`); a failure is printed and ends the process with 1. */
+export function runCli(): void {
+  applyDnsFix();
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+
+// Only when this file IS the program (`node dist/cli.js`, the `charness` bin, `tsx src/cli.ts`): importing it — `index.ts`, the self-check — starts nothing.
+if (require.main === module) runCli();

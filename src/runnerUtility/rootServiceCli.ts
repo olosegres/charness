@@ -21,12 +21,15 @@ async function main(): Promise<number> {
   return result.ok ? 0 : 1;
 }
 
-main().then(
-  (code) => {
-    process.exitCode = code;
-  },
-  (error: Error) => {
-    process.stderr.write(`charness-runner: ${error.message}\n`);
-    process.exit(1);
-  },
-);
+// Only when this file IS the program (`node <copy>/rootServiceCli.js install <account>`): importing it, as the self-check does, installs nothing.
+if (require.main === module) {
+  main().then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (error: Error) => {
+      process.stderr.write(`charness-runner: ${error.message}\n`);
+      process.exit(1);
+    },
+  );
+}
