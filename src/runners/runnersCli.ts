@@ -7,8 +7,7 @@ import { checkHubAddress, parseHubAddress, scanHostKey, type HostKeyScanner } fr
 import { createHubContext, type HubContext } from './hubPaths';
 import { createPairing, findPairedRunner, setPairedRunnerPaused, sweepExpiredPairings } from './hubPairing';
 import { formatLifetime, readPairingLifetimeMs } from './pairingTiming';
-import { HubRegistryError, readPairedFile, readPendingFile } from './hubRegistry';
-import { readClosedCodes } from './hubClosedCodes';
+import { HubRegistryError, readClosedCodes, readPairedFile, readPendingFile } from './hubRegistry';
 import { removeRunnerAndEndItsWork } from './runnerRemoval';
 import { readRunnersOverview } from './runnersOverview';
 import { formatListTimestamp, formatRunnerList } from './runnersList';
@@ -138,9 +137,13 @@ async function waitForPairing(pairId: string, io: CliIo, deps: RunnersCliDeps): 
     }
     const pairing = readPendingFile(deps.ctx.dir).pending.find((candidate) => candidate.pairId === pairId);
     // A code closed unused is not a failure: its line was pasted for a machine that was already paired, and did its job (the service).
-    if (pairing === undefined && readClosedCodes(deps.ctx).some((entry) => entry.pairId === pairId)) {
-      io.stdout('The pairing line was used on a machine that was already paired: nothing new was paired.\n');
-      return 0;
+    if (pairing === undefined) {
+      const { codes, problem } = readClosedCodes(deps.ctx.dir);
+      if (problem !== null) io.stderr(`runners: ${problem}\n`);
+      if (codes.some((entry) => entry.pairId === pairId)) {
+        io.stdout('The pairing line was used on a machine that was already paired: nothing new was paired.\n');
+        return 0;
+      }
     }
     if (pairing === undefined || pairing.expiresAtMs <= deps.now()) {
       await sweepExpiredPairings(deps.ctx, deps.now());

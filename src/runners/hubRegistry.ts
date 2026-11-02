@@ -11,13 +11,19 @@ import { getCaughtErrnoCode } from '../configDirFile';
 import { checkIsEd25519PublicKey } from './sshKeys';
 
 /**
- * @description The hub's two registry files and what is derived from them. `paired.json` is the machines that are attached,
+ * @description The hub's registry files and what is derived from them. `paired.json` is the machines that are attached,
  * `pending.json` the pairing codes that are out. Both are read freely (every write is a rename, a reader sees a whole file) and
  * written only under the registry lock (`hubLock.ts`). `known_hosts` (the runners' host keys, for the ssh calls through the link)
  * and the managed `authorized_keys` block are DERIVED from the two on every change — never edited on their own.
  *
  * A file that does not parse or validate stops the caller with the problem named (field and rule, no values): a registry that is
  * silently treated as empty would be rewritten empty and lose every pairing.
+ *
+ * `closed.json` is the odd one out: a TRACE, not part of the registry's truth — the codes that were closed unused, so a code that was
+ * closed (its line was pasted for a machine that was already paired) can be told from one that ran out. Nothing depends on it for
+ * correctness, so it is read leniently (a file that cannot be used reads as none, and the problem is handed to the caller to say once) and
+ * its write never blocks the close it describes. It is a file of its own, not a field of a pending entry: the sweep drops pending entries
+ * at expiry, which would lose the trace for an instance that was down, and every reader of the pending list would have to honour it.
  */
 
 const registryFileMode = 0o600;
@@ -76,6 +82,11 @@ const pendingPairingSchema = z.strictObject({
 
 const pendingFileSchema = z.strictObject({ pending: z.array(pendingPairingSchema) });
 
+const closedCodeSchema = z.strictObject({ pairId: hubIdSchema, closedAtMs: z.number().int().nonnegative() });
+const closedFileSchema = z.strictObject({ closed: z.array(closedCodeSchema) });
+/** The newest this many closings are kept: a closing is rare and its trace is wanted by a message that is still unsettled, so a cap is all the bound it needs. */
+const maxClosedCodes = 50;
+
 /** @name PairedRunner @description One attached machine. */
 export type PairedRunner = z.infer<typeof pairedRunnerSchema>;
 /** @name PairedFile @description `paired.json`. */
@@ -84,6 +95,14 @@ export type PairedFile = z.infer<typeof pairedFileSchema>;
 export type PendingPairing = z.infer<typeof pendingPairingSchema>;
 /** @name PendingFile @description `pending.json`. */
 export type PendingFile = z.infer<typeof pendingFileSchema>;
+/** @name ClosedCode @description A pairing code that was closed unused, and when. */
+export type ClosedCode = z.infer<typeof closedCodeSchema>;
+
+/** @name ClosedCodesRead @description What `closed.json` holds, and — when it could not be used — why (the caller says it, once). */
+export interface ClosedCodesRead {
+  codes: ClosedCode[];
+  problem: string | null;
+}
 
 export class HubRegistryError extends Error {
   constructor(message: string) {
@@ -127,6 +146,35 @@ export function readPairedFile(dir: string): PairedFile {
 /** @description `pending.json` right now (missing = no code out). */
 export function readPendingFile(dir: string): PendingFile {
   return readRegistryFile(getHubFilePaths(dir).pending, 'pending.json', pendingFileSchema, () => ({ pending: [] }));
+}
+
+/**
+ * @description `closed.json` right now: its codes, or none — with the problem named — when it cannot be read or does not validate. A trace
+ * must never stop the caller, so unlike the registry files this does not throw; the caller says the problem once.
+ */
+export function readClosedCodes(dir: string): ClosedCodesRead {
+  try {
+    return { codes: readRegistryFile(getHubFilePaths(dir).closed, 'closed.json', closedFileSchema, () => ({ closed: [] })).closed, problem: null };
+  } catch (error) {
+    if (error instanceof HubRegistryError) return { codes: [], problem: `${error.message}; the codes in it read as expired` };
+    throw error;
+  }
+}
+
+/**
+ * @description Note that the code `pairId` was closed at `nowMs` (the newest {@link maxClosedCodes} are kept); the registry lock must be held. BEST
+ * EFFORT: a trace that cannot be written is said through `ctx.log` and costs only the nicer text («this line was used on a machine that was
+ * already paired» reads «expired»), never the closing it describes. A file that cannot be used is replaced.
+ */
+export function recordClosedCode(ctx: HubContext, pairId: string, nowMs: number): void {
+  const { codes, problem } = readClosedCodes(ctx.dir);
+  if (problem !== null) ctx.log(`${problem}; it is written anew`);
+  try {
+    ensureHubDir(ctx.dir);
+    writeJsonFileAtomically(getHubFilePaths(ctx.dir).closed, closedFileSchema.parse({ closed: [...codes.filter((entry) => entry.pairId !== pairId), { pairId, closedAtMs: nowMs }].slice(-maxClosedCodes) }), registryFileMode);
+  } catch (error) {
+    ctx.log(`closed.json could not be written (${getCaughtErrnoCode(error)}); the messages of the code that was just closed will read as expired`);
+  }
 }
 
 /** @description Write `paired.json`; the registry lock must be held. */

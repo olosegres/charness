@@ -31,6 +31,8 @@ export interface HubContext {
 export interface HubFilePaths {
   paired: string;
   pending: string;
+  /** The trace of the codes that were closed unused (`hubRegistry.ts`). */
+  closed: string;
   hubKey: string;
   hubPublicKey: string;
   knownHosts: string;
@@ -72,6 +74,7 @@ export function getHubFilePaths(dir: string): HubFilePaths {
   return {
     paired: path.join(dir, 'paired.json'),
     pending: path.join(dir, 'pending.json'),
+    closed: path.join(dir, 'closed.json'),
     hubKey: path.join(dir, 'hub_ed25519'),
     hubPublicKey: path.join(dir, 'hub_ed25519.pub'),
     knownHosts: path.join(dir, 'known_hosts'),

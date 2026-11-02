@@ -18,7 +18,7 @@
  * Test case: N/A — Charness has no Jira tracker.
  */
 
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -30,7 +30,7 @@ import { parseProbeOutput } from '../remoteRun/probe';
 import { ensureGateWrapper } from '../runners/gateWrapper';
 import type { HostKeyScanner, HubAddress } from '../runners/hubAddress';
 import { cancelPairing, createPairing, redeemPairing, sweepExpiredPairings } from '../runners/hubPairing';
-import { readPairedFile, readPendingFile } from '../runners/hubRegistry';
+import { readPairedFile, readPendingFile, recordClosedCode } from '../runners/hubRegistry';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { readRunnersOverview, type RunnersOverview } from '../runners/runnersOverview';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
@@ -530,6 +530,55 @@ describe('/runners over its ports', () => {
       clockMs += 11 * minute;
       await feature.watchPairingsOnce();
       expectBothMessages(ranOut, (text) => assert.equal(text, 'Pairing code expired.'));
+    });
+
+    it('a trace for a code that is still LISTED is no closing: it ran out (the closing\'s later writes failed), so the messages read «expired» — the rule `--wait` uses too', async () => {
+      const offer = await offerPairing();
+      recordClosedCode(hubFixture.ctx, offer.pairId, clockMs + 1000);
+      assert.deepEqual(readPendingFile(hubFixture.ctx.dir).pending.map((pairing) => pairing.pairId), [offer.pairId], 'the code is still in the pending list');
+      clockMs += 11 * minute;
+      await feature.watchPairingsOnce();
+      expectBothMessages(offer, (text) => assert.equal(text, 'Pairing code expired.'));
+    });
+
+    describe('a closed.json that cannot be used', () => {
+      let warnings: string[] = [];
+      let warnMock: ReturnType<typeof mock.method>;
+      beforeEach(() => {
+        warnings = [];
+        warnMock = mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); });
+      });
+      afterEach(() => {
+        warnMock.mock.restore();
+      });
+
+      it('is read only when a message settles without a runner — a look with nothing to settle never touches it — and the problem is said ONCE across looks, not at every one', async () => {
+        const open = await offerPairing();
+        fs.writeFileSync(path.join(hubFixture.ctx.dir, 'closed.json'), '{ not json');
+        for (let look = 0; look < 3; look += 1) await feature.watchPairingsOnce();
+        assert.deepEqual(warnings.filter((line) => line.includes('closed.json')), [], 'the code is still open: no message settles, the file is not read');
+
+        // The code runs out, but Telegram refuses the edits for a while: every try settles without a runner and reads the trace.
+        clockMs += 11 * minute;
+        editHook = () => Promise.resolve(false);
+        await feature.watchPairingsOnce();
+        clockMs += 6 * 1000;
+        await feature.watchPairingsOnce();
+        clockMs += 11 * 1000;
+        await feature.watchPairingsOnce();
+        clockMs += 21 * 1000;
+        await feature.watchPairingsOnce();
+        const closedWarnings = warnings.filter((line) => line.includes('closed.json'));
+        assert.equal(closedWarnings.length, 1, closedWarnings.join(' | '));
+        assert.match(closedWarnings[0], /^\[runners\] closed\.json is not valid JSON; .*the codes in it read as expired$/);
+
+        // Edits are accepted again: the messages read «expired» (the trace cannot be used), and the record is cleared.
+        editHook = null;
+        clockMs += 6 * 60 * 1000;
+        await feature.watchPairingsOnce();
+        expectBothMessages(open, (text) => assert.equal(text, 'Pairing code expired.'));
+        assert.deepEqual(readRecordedPairIds(), []);
+      });
     });
 
     it('closed, and the bot was down: the restarted bot still settles the messages as closed — the trace lives in the registry, not in memory', async () => {

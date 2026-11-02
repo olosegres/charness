@@ -26,8 +26,7 @@ import {
   createPairing,
   setPairedRunnerPaused,
 } from '../../../runners/hubPairing';
-import { readClosedCodes } from '../../../runners/hubClosedCodes';
-import { HubRegistryError, readPairedFile, readPendingFile } from '../../../runners/hubRegistry';
+import { HubRegistryError, readClosedCodes, readPairedFile, readPendingFile } from '../../../runners/hubRegistry';
 import { pairingLifetimeMinutes } from '../../../runners/pairingTiming';
 import { removeRunnerAndEndItsWork } from '../../../runners/runnerRemoval';
 import type { RunnersOverview } from '../../../runners/runnersOverview';
@@ -142,6 +141,7 @@ export function createRunners(ports: RunnersPorts) {
   let isWatchTickRunning = false;
   let lastGeneration = 0;
   let lastStoreProblem: string | null = null;
+  let lastClosedProblem: string | null = null;
 
   /** Claim `messageId` for a render: whatever started from an earlier claim no longer draws on it. Returns the claim. */
   function claimMessage(key: SessionKey, messageId: number, kind: ShownScreen['kind'], page: number): ShownScreen {
@@ -458,13 +458,26 @@ export function createRunners(ports: RunnersPorts) {
     const { messages, problem } = readPairingMessages(ports.pairingMessagesPath);
     const pending = readPendingFile(hub.dir).pending;
     const runners = readPairedFile(hub.dir).runners;
-    // After the pending list: a code is noted as closed BEFORE it leaves that list, so a code seen gone from it is already noted here.
-    const closedPairIds = new Set(readClosedCodes(hub).map((entry) => entry.pairId));
     // A broken record fails every look: say it once, not every five seconds.
     if (problem !== null && problem !== lastStoreProblem) console.warn(`[${logTag}] ${problem}; the pairing messages it held are not followed`);
     lastStoreProblem = problem;
     if (pending.some((pairing) => pairing.expiresAtMs <= nowMs)) await ports.sweepExpiredCodes(nowMs);
     const settledMessageIds = new Set<string>();
+    /** The closed codes — read when a message first settles without a runner, and not before, and not on a look that has nothing to settle. */
+    let closedPairIds: Set<string> | null = null;
+    /** Is `pairId` a code that was closed unused AND is gone from the pending list? A trace of a code that is still listed (its write was followed by a failed one) is not a closing. */
+    const checkIsClosed = (pairId: string): boolean => {
+      if (pending.some((pairing) => pairing.pairId === pairId)) return false;
+      if (closedPairIds === null) {
+        // After the pending list: a code is noted as closed BEFORE it leaves that list, so a code seen gone from it is already noted here.
+        const { codes, problem } = readClosedCodes(hub.dir);
+        // A broken trace file fails every read: say it once, not at every look.
+        if (problem !== null && problem !== lastClosedProblem) console.warn(`[${logTag}] ${problem}`);
+        lastClosedProblem = problem;
+        closedPairIds = new Set(codes.map((entry) => entry.pairId));
+      }
+      return closedPairIds.has(pairId);
+    };
     for (const message of messages) {
       const messageId = getPairingMessageId(message);
       if ((settleRetries.get(messageId)?.nextAttemptAtMs ?? 0) > nowMs) continue;
@@ -473,7 +486,7 @@ export function createRunners(ports: RunnersPorts) {
       if (runner === undefined && isOpen) continue;
       const key = keyFromString(message.key);
       const isEdited = await withThreadLocale(key, () =>
-        editThreadMessage(key, message.messageId, runner !== undefined ? buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime) : closedPairIds.has(message.pairId) ? buildClosedText(t) : buildExpiredText(t)),
+        editThreadMessage(key, message.messageId, runner !== undefined ? buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime) : checkIsClosed(message.pairId) ? buildClosedText(t) : buildExpiredText(t)),
       );
       if (isEdited) {
         settledMessageIds.add(messageId);

@@ -177,6 +177,25 @@ describe('charness runners', () => {
     assert.equal(readPendingFile(fixture.ctx.dir).pending.length, 0);
   });
 
+  it('pair --wait with a closed.json that cannot be used says so ONCE on stderr and ends like an expiry (exit 1): the code is gone and nothing says it was closed', async () => {
+    let sleeps = 0;
+    const deps = createDeps({
+      sleep: async () => {
+        sleeps += 1;
+        const pairing = readPendingFile(fixture.ctx.dir).pending[0];
+        if (sleeps === 2) {
+          assert.equal(await cancelPairing(fixture.ctx, pairing.pairId, nowMs), true);
+          fs.writeFileSync(getHubFilePaths(fixture.ctx.dir).closed, '{ not json');
+        }
+      },
+    });
+    const run = await runCli(['pair', '--host', 'host.example', '--wait'], deps);
+    assert.equal(run.code, 1);
+    assert.equal(run.stderr.split('closed.json is not valid JSON').length, 2, run.stderr);
+    assert.match(run.stderr, /expired unused/);
+    assert.doesNotMatch(run.stdout, /already paired/);
+  });
+
   it('pair --wait ends with «expired» when the line is not used in time, and the code is gone', async () => {
     const deps = createDeps({ sleep: async () => { nowMs += pairingLifetimeMs; } });
     const run = await runCli(['pair', '--host', 'host.example', '--wait'], deps);

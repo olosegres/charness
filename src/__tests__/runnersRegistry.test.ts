@@ -16,9 +16,8 @@ import { createHubContext, getHandMadeRunnersPath, getHubFilePaths, getRunnerHos
 import { cancelPairing, checkIsPairingOpen, createPairing, describeRunnerIdentity, pickFreeRunnerName, redeemPairing, removePairedRunner, sanitizeRunnerName, setPairedRunnerPaused, sweepExpiredPairings } from '../runners/hubPairing';
 import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { AuthorizedKeysBlockError, authorizedKeysBlockStart } from '../runners/authorizedKeys';
-import { HubDerivedFilesError, HubRegistryError, readPairedFile, readPendingFile, writePendingFile } from '../runners/hubRegistry';
+import { HubDerivedFilesError, HubRegistryError, readClosedCodes, readPairedFile, readPendingFile, writePendingFile } from '../runners/hubRegistry';
 import { generateEd25519KeyPair, getPublicKeyFingerprint } from '../runners/sshKeys';
-import { readClosedCodes } from '../runners/hubClosedCodes';
 import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 
 const startMs = Date.UTC(2026, 10, 1, 12, 0, 0);
@@ -163,12 +162,23 @@ describe('pairing', () => {
     const closed = await createTestPairing();
     const kept = await createTestPairing();
     assert.equal(await cancelPairing(fixture.ctx, closed.pairId, startMs + 1000), true);
-    assert.deepEqual(readClosedCodes(fixture.ctx), [{ pairId: closed.pairId, closedAtMs: startMs + 1000 }], 'the closing leaves a trace, so it is not mistaken for an expiry');
+    assert.deepEqual(readClosedCodes(fixture.ctx.dir).codes, [{ pairId: closed.pairId, closedAtMs: startMs + 1000 }], 'the closing leaves a trace, so it is not mistaken for an expiry');
     assert.deepEqual(readPendingFile(fixture.ctx.dir).pending.map((entry) => entry.pairId), [kept.pairId]);
     assert.equal(readBlock().length, 1, 'the other code\'s line stays');
     assert.equal(checkIsPairingOpen(fixture.ctx, closed.pairId, startMs + 1000), false);
     assert.deepEqual(await redeemPairing(fixture.ctx, closed.pairId, createRedeemFixture().request, startMs + 2000), { ok: false, reason: 'this pairing code is unknown or already used' });
     assert.deepEqual(await sweepExpiredPairings(fixture.ctx, startMs + pairingLifetimeMs + 1000).then((entries) => entries.map((entry) => entry.pairId)), [kept.pairId], 'only the code still listed is ever handed back');
+  });
+
+  it('a trace that cannot be written never blocks the close: the code is closed, its key line is gone, and the failure is a log line', async () => {
+    const logged: string[] = [];
+    const ctx = { ...fixture.ctx, log: (line: string) => { logged.push(line); } };
+    const pairing = await createPairing(ctx, { host: 'host.example', port: 22, hostKey: generateEd25519KeyPair('hub-host').publicKey, label: '@ExampleBot', nowMs: startMs, sshUser: 'hubuser' });
+    fs.mkdirSync(path.join(ctx.dir, 'closed.json')); // a folder where the trace file should be
+    assert.equal(await cancelPairing(ctx, pairing.pairId, startMs + 1000), true);
+    assert.deepEqual(readPendingFile(ctx.dir).pending, []);
+    assert.deepEqual(readBlock(), []);
+    assert.ok(logged.some((line) => line.startsWith('closed.json could not be written')), logged.join(' | '));
   });
 
   it('cancelling a code that is unknown, spent or expired changes nothing and says so', async () => {
@@ -181,7 +191,7 @@ describe('pairing', () => {
     assert.equal(await cancelPairing(fixture.ctx, 'ffffffffffff', startMs + 2000), false);
     assert.equal(await cancelPairing(fixture.ctx, expired.pairId, startMs + pairingLifetimeMs), false);
     assert.equal(JSON.stringify([readPairedFile(fixture.ctx.dir), readPendingFile(fixture.ctx.dir)]), before);
-    assert.deepEqual(readClosedCodes(fixture.ctx), [], 'and leaves no trace of a closing that did not happen');
+    assert.deepEqual(readClosedCodes(fixture.ctx.dir).codes, [], 'and leaves no trace of a closing that did not happen');
   });
 
   it('the sweep keeps a code that is still open, and a code made later does not swallow an expired one', async () => {
