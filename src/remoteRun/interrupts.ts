@@ -39,21 +39,36 @@ export function addInterruptHandlerWithHardStop(onInterrupt: (signal: InterruptS
   return addInterruptHandler(createHardStopHandler(onInterrupt, (exitCode) => process.exit(exitCode)));
 }
 
+/** How often a child that has exited by itself is asked whether it has been stopped since (`waitForChildEnd`). */
+const stopAfterExitPollMs = 50;
+
 /**
  * @description Resolves with the exit code when `child` has ended. Normally that is its `close` (the process is gone AND its output
  * has been read to the end). Once `getIsStopped()` says the caller ended it on purpose, its `exit` is enough and the caller's end of
  * its pipes is released: an ssh client that shares a master connection passes its stdio to the master, which keeps those pipes open
  * until the REMOTE command ends — so after a kill the process is dead, `close` never comes, and the command would hang for as long as
  * the remote side runs (hours, for a `wait`).
+ *
+ * The stop may come AFTER the process exited by itself (the client was done, the master still held the pipes, then the deadline passed or the
+ * user interrupted): between its `exit` and its `close` the stop is asked about every {@link stopAfterExitPollMs}, and then the pipes are let go the same way.
  */
 export function waitForChildEnd(child: ChildProcess, getIsStopped: () => boolean): Promise<number | null> {
   return new Promise((resolve) => {
-    child.once('close', (exitCode) => resolve(exitCode));
-    child.once('exit', (exitCode) => {
-      if (!getIsStopped()) return;
-      child.stdout?.destroy();
-      child.stderr?.destroy();
+    let pollTimer: NodeJS.Timeout | null = null;
+    const settle = (exitCode: number | null): void => {
+      if (pollTimer !== null) clearInterval(pollTimer);
       resolve(exitCode);
+    };
+    child.once('close', (exitCode) => settle(exitCode));
+    child.once('exit', (exitCode) => {
+      const settleIfStopped = (): boolean => {
+        if (!getIsStopped()) return false;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        settle(exitCode);
+        return true;
+      };
+      if (!settleIfStopped()) pollTimer = setInterval(settleIfStopped, stopAfterExitPollMs);
     });
   });
 }

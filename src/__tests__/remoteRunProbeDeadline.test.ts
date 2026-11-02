@@ -18,6 +18,7 @@ import { RunnerUnreachableError } from '../remoteRun/remoteRunError';
 import type { RunnerClient } from '../remoteRun/runnerClient';
 import { probeRunners } from '../remoteRun/runners';
 import { runSshCommand } from '../remoteRun/ssh';
+import { killRecordedProcess, readRecordedPid } from './recordedProcess';
 
 const probeText = 'os=Linux\nos_name=Ubuntu\nos_version=24.04\narch=x86_64\nkernel=6.8.0\ncpu_cores=4\ncpu_threads=8\npueue=4.0.4\ncap_android=no\ncap_ios=no\ncap_docker=no\ncap_playwright=no\n';
 const lastSeenAtMs = Date.UTC(2026, 9, 30, 14, 2);
@@ -150,6 +151,8 @@ describe('probeRunners under one deadline', () => {
 describe('runSshCommand when the ssh it ran is only a client of a master that holds its pipes', () => {
   const settleBoundMs = 5_000;
   const decoyLifetimeSec = 120;
+  /** Long enough for the stand-in's shell to start and fork its «master» even on a loaded machine, short enough for a test. */
+  const deadlineBeforeMasterMs = 3_000;
   let decoyDir = '';
   let originalPath: string | undefined;
   let masterPidFile = '';
@@ -164,16 +167,6 @@ describe('runSshCommand when the ssh it ran is only a client of a master that ho
     process.env.PATH = `${decoyDir}:${originalPath}`;
   }
 
-  function killMaster(): void {
-    if (!fs.existsSync(masterPidFile)) return;
-    const pid = Number(fs.readFileSync(masterPidFile, 'utf8'));
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      /* already gone */
-    }
-  }
-
   const decoyRunner = { ssh: 'u@decoy.example', sshOptions: [] as string[] };
 
   beforeEach(() => {
@@ -185,15 +178,16 @@ describe('runSshCommand when the ssh it ran is only a client of a master that ho
     putDecoySshOnPath();
   });
   afterEach(() => {
-    killMaster();
+    killRecordedProcess(masterPidFile);
     process.env.PATH = originalPath;
     fs.rmSync(cacheDir, { recursive: true, force: true });
   });
 
+  /** Waits for a valid pid, not for the file: the stand-in's shell creates the file before it writes the pid. */
   async function waitForMaster(): Promise<void> {
     const deadline = Date.now() + settleBoundMs;
-    while (!fs.existsSync(masterPidFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.ok(fs.existsSync(masterPidFile), 'the decoy started');
+    while (readRecordedPid(masterPidFile) === null && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.notEqual(readRecordedPid(masterPidFile), null, 'the stand-in master started and recorded its pid');
   }
 
   it('an abort ends the call at once although the master still holds the pipes — the call settles when the client has exited, not when the master has', async () => {
@@ -207,12 +201,25 @@ describe('runSshCommand when the ssh it ran is only a client of a master that ho
     assert.ok(typeof result !== 'string' && result.isTimedOut === true && result.exitCode === null);
   });
 
+  it('an abort AFTER the client exited by itself — the master still holding the pipes — ends the call at once too, and says it was cut off', async () => {
+    fs.writeFileSync(path.join(decoyDir, 'ssh'), `#!/bin/sh\nsleep ${decoyLifetimeSec} &\necho $! > "${masterPidFile}"\nexit 0\n`, { mode: 0o755 });
+    const controller = new AbortController();
+    const pending = runSshCommand({ runner: decoyRunner, cacheDir, remoteCommand: 'true', timeoutMs: 600_000, signal: controller.signal });
+    await waitForMaster();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    controller.abort();
+    const result = await Promise.race([pending, new Promise<'still waiting'>((resolve) => setTimeout(() => resolve('still waiting'), settleBoundMs))]);
+    assert.notEqual(result, 'still waiting', `the call did not settle within ${settleBoundMs} ms of the abort that came after the client had exited`);
+    assert.ok(typeof result !== 'string' && result.isTimedOut === true && result.exitCode === 0, JSON.stringify(result));
+  });
+
   it('the call\'s own deadline ends it the same way: the probe\'s 20 s no longer waits for a master that holds the pipes', async () => {
     const startedAt = Date.now();
-    const result = await Promise.race([
-      runSshCommand({ runner: decoyRunner, cacheDir, remoteCommand: 'true', timeoutMs: 300 }),
-      new Promise<'still waiting'>((resolve) => setTimeout(() => resolve('still waiting'), settleBoundMs)),
-    ]);
+    const pending = runSshCommand({ runner: decoyRunner, cacheDir, remoteCommand: 'true', timeoutMs: deadlineBeforeMasterMs });
+    // Without the master holding the pipes, `close` would come at once and this test would pass on the old code too: it proves the master was up.
+    await waitForMaster();
+    assert.ok(Date.now() - startedAt < deadlineBeforeMasterMs, 'the stand-in master was running before the deadline fired');
+    const result = await Promise.race([pending, new Promise<'still waiting'>((resolve) => setTimeout(() => resolve('still waiting'), settleBoundMs))]);
     assert.notEqual(result, 'still waiting', `the call did not settle within ${settleBoundMs} ms of its deadline (${Date.now() - startedAt} ms in all)`);
     assert.ok(typeof result !== 'string' && result.isTimedOut === true);
   });
