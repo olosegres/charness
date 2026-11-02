@@ -18,7 +18,6 @@ import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { readPairedFile, readPendingFile, type PairedRunner } from '../runners/hubRegistry';
 import { getCurrentServiceKind } from '../runners/runnerServiceKind';
 import { runRunnersCli, type RunnersCliDeps } from '../runners/runnersCli';
-import { probeRunnersOverview } from '../runners/runnersOverview';
 import { formatRunnerList, formatRunnerListLine } from '../runners/runnersList';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
@@ -39,7 +38,6 @@ function createDeps(overrides: Partial<RunnersCliDeps> = {}): RunnersCliDeps {
   return {
     ctx: fixture.ctx,
     cacheDir: path.join(fixture.root, 'cache'),
-    probeOverview: probeRunnersOverview,
     scanHostKey: async () => hubHostKey,
     now: () => nowMs,
     sleep: async () => undefined,
@@ -151,18 +149,15 @@ describe('charness runners', () => {
     assert.match(run.stdout, /Pairing code open until .* \(host\.example:22\)/);
   });
 
-  it('ls says how a runner is kept running as the machine reports it NOW, not as the registry recorded it at pairing', async () => {
-    await pairMachine('Mac Mini');
-    assert.match((await runCli(['ls'])).stdout, / · run by hand · /, 'the registry knows only the pairing-time word');
-    const asked: string[] = [];
-    const probeOverview: RunnersCliDeps['probeOverview'] = async (_ctx, overview, cacheDir) => {
-      asked.push(cacheDir);
-      return { ...overview, entries: overview.entries.map((entry) => ({ ...entry, isOnline: true, probe: parseProbeOutput('os_name=macOS\nservice=user-service') })) };
-    };
-    const run = await runCli(['ls'], createDeps({ probeOverview }));
-    assert.match(run.stdout, /^mac-mini — online · macOS 15\.1 \(arm64\) · user service · charness 3\.7\.0 · paired /m);
+  it('ls says how a runner is kept running as the machine last reported it, not as the registry recorded it at pairing — and makes no ssh call', async () => {
+    const name = await pairMachine('Mac Mini');
+    const deps = createDeps();
+    assert.match((await runCli(['ls'], deps)).stdout, / · run by hand · /, 'never probed: the registry\'s pairing-time word is all there is');
+    fs.mkdirSync(deps.cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(deps.cacheDir, `${name}.probe.json`), JSON.stringify({ seenAtMs: nowMs, text: 'os_name=macOS\nservice=user-service' }));
+    const run = await runCli(['ls'], deps);
+    assert.match(run.stdout, /^mac-mini — offline since [\d-]+ [\d:]+ · macOS 15\.1 \(arm64\) · user service · charness 3\.7\.0 · paired /m, 'the snapshot speaks; the link, which is down, still decides online or not');
     assert.doesNotMatch(run.stdout, /run by hand/);
-    assert.deepEqual(asked, [path.join(fixture.root, 'cache')], 'the machines are asked once, through the same probe as the /runners screen');
   });
 
   it('ls forgets a code that has expired', async () => {

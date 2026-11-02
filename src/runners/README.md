@@ -145,7 +145,7 @@ instance's own record (`connectors/telegram/runnerPairingMessages.ts`), so a sec
 ## CLI
 
 `charness runners [ls | pair --host <host[:port]> [--label] [--wait] | remove <name> | pause <name> | resume <name>]` (`runnersCli.ts`)
-is the headless twin of `/runners`: it loads no env file and never touches `DATA_DIR`. `ls` reads the same overview as the screen (`runnersOverview.ts`: registry, links, last snapshots) and then asks the machines that are online what they are like now (one shared 20 s deadline), so "how it is kept running" is what the machine reports (`getCurrentServiceKind`), not the word the registry took at pairing. `charness runner-gate` and `charness runner-proxy`
+is the headless twin of `/runners`: it loads no env file and never touches `DATA_DIR`. `ls` reads the screen's first step (`runnersOverview.ts`: registry, links, last snapshots) and makes no ssh call, so it is instant and "online" is exactly "the link is up"; "how it is kept running" is what the machine last reported (`getCurrentServiceKind`, fed by every probe: the `/runners` screen, `remote-run runners`, a job start), not the word the registry took at pairing — and the registry's word only for a machine nobody has probed yet. `charness runner-gate` and `charness runner-proxy`
 are hidden (named by `authorized_keys` and `ProxyCommand`). `src/cli.ts` is a hot-supervisor file: a deploy that touches it needs a full
 service restart after `tsc -w` is green.
 
