@@ -29,7 +29,10 @@ describe('createMediaGroupCollector — debounced batching', () => {
     assert.equal(collector.size, 0, 'group dropped after flush');
   });
 
-  it('resets the debounce when a late item arrives (no premature flush)', async () => {
+  it('resets the debounce when a late item arrives (no premature flush)', (testContext) => {
+    // A clock the test drives: with real timers this asserts «not yet» 30 ms after a 50 ms timer was armed, and a busy machine that is late by
+    // 20 ms flushes in between — the test failed for that, not for anything in the collector.
+    testContext.mock.timers.enable({ apis: ['setTimeout'] });
     const flushes: number[][] = [];
     const collector = createMediaGroupCollector<number>({
       debounceMs: testDebounceMs,
@@ -37,14 +40,14 @@ describe('createMediaGroupCollector — debounced batching', () => {
     });
 
     collector.collect('g', 1);
-    // Wait almost the full window, then add a late item that must re-arm it.
-    await wait(testDebounceMs * 0.6);
+    // Almost the full window passes, then a late item that must re-arm it.
+    testContext.mock.timers.tick(testDebounceMs * 0.6);
     collector.collect('g', 2);
-    // Original timer would have fired by now had it NOT reset.
-    await wait(testDebounceMs * 0.6);
+    // The original timer would have fired by now had it NOT been reset.
+    testContext.mock.timers.tick(testDebounceMs * 0.6);
     assert.equal(flushes.length, 0, 'late item must reset the timer');
 
-    await wait(testDebounceMs);
+    testContext.mock.timers.tick(testDebounceMs);
     assert.deepEqual(flushes, [[1, 2]], 'both items flush together after the reset window');
   });
 
