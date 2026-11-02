@@ -125,8 +125,8 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
     return runCli(cliLayout, args, { cwd: project.root, env: flowEnv, timeoutMs });
   }
 
-  function start(args: string[]): CliRun {
-    return startCli(cliLayout, args, { cwd: project.root, env: flowEnv });
+  function start(args: string[], env: NodeJS.ProcessEnv = flowEnv): CliRun {
+    return startCli(cliLayout, args, { cwd: project.root, env });
   }
 
   /** What `charness runners ls` of the hub says about the runner: `online`, or `offline`. */
@@ -288,7 +288,10 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
     });
 
     it('an interrupt while it waits ends it with 130 and starts no job', async () => {
-      const cli = start(['--needs', 'playwright', '--runner-wait', '10m', 'echo x']);
+      // The wait listens for an interrupt only while it sleeps between two looks (a probe that is running is ended by the signal itself — the
+      // shell reads that as 130 too, a parent that spawns it directly as «killed by a signal»). With the flow's 1-second poll a test process
+      // that is slow on a busy machine sends its SIGINT into the NEXT probe; the production poll (10 s) keeps it in the first sleep.
+      const cli = start(['--needs', 'playwright', '--runner-wait', '10m', 'echo x'], { CHARNESS_TEST_TIMINGS: JSON.stringify({ remoteRunLeaseMs: leaseMs }) });
       await waitUntil(() => cli.stderr().includes('waiting for a runner with playwright'), 'the wait to begin', ordinaryRunTimeoutMs);
       cli.child.kill('SIGINT');
       assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 130, cli.stderr());
