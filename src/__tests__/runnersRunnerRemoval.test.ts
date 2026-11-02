@@ -19,10 +19,11 @@ import { readPairedFile, writePairedFile } from '../runners/hubRegistry';
 import { checkIsGateProcessOf, writeLinkState } from '../runners/linkControl';
 import { removeRunnerAndEndItsWork, type RunnerRemovalDeps } from '../runners/runnerRemoval';
 import { createPairedRunnerFixture, pairedRunnerId, pairedRunnerWorkDir } from './remoteRunPairedKit';
-import { createHubFixture, waitUntil, type HubFixture } from './runnersTestKit';
+import { createHubFixture, settleWithin, waitUntil, type HubFixture } from './runnersTestKit';
 
 /** A pid nothing runs under (above the kernel's usual maximum), so the status file names no live gate. */
 const unusedPid = 2 ** 22 + 12345;
+const gateStopWaitMs = 10_000;
 
 let hub: HubFixture;
 let sshCalls: SshRunParams[];
@@ -134,7 +135,7 @@ describe('removing a runner whose gate is still running', () => {
       await waitUntil(() => gatePid !== undefined && checkIsGateProcessOf(gatePid, pairedRunnerId), 'the stand-in to read as the runner\'s gate');
       writeLinkState(hub.ctx.dir, pairedRunnerId, { pid: gatePid ?? unusedPid, sinceMs: 1, lastBeatMs: 2, endedAtMs: null });
       await removeRunnerAndEndItsWork(hub.ctx, 'mac', 1000, createDeps({ isOnline: false }));
-      await Promise.race([exited, new Promise<void>((_resolve, reject) => { setTimeout(() => reject(new Error('the gate was not stopped')), 10_000); })]);
+      await settleWithin(exited, 'the gate to be stopped', gateStopWaitMs);
       assert.deepEqual(getLinkFiles(), []);
     } finally {
       gate.kill('SIGKILL');

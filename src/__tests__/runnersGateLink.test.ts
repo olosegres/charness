@@ -25,7 +25,7 @@ import { readHubKey } from '../runners/hubKey';
 import { checkIsGateProcessOf, cutRunnerLink, getRunnerLinkStatus, probeSocket, readLinkState, sweepOrphanLinkRecords, writeLinkState } from '../runners/linkControl';
 import { runRunnerProxy } from '../runners/runnerProxy';
 import { generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
-import { createCollector, createHubFixture, createRedeemFixture, injectStreamIntoSshServer, waitUntil, type HubFixture } from './runnersTestKit';
+import { createCollector, createHubFixture, createRedeemFixture, injectStreamIntoSshServer, settleWithin as settleWithinKit, waitUntil, type HubFixture } from './runnersTestKit';
 
 const startMs = Date.UTC(2026, 10, 1, 12, 0, 0);
 const fastTimings: Partial<GateLinkTimings> = { checkIntervalMs: 100 };
@@ -165,7 +165,7 @@ async function execOverLink(runnerId: string, command: string): Promise<string> 
 }
 
 function settleWithin(done: Promise<number>, description: string): Promise<number> {
-  return Promise.race([done, new Promise<number>((_resolve, reject) => { setTimeout(() => reject(new Error(`timed out: ${description}`)), gateWaitMs); })]);
+  return settleWithinKit(done, description, gateWaitMs);
 }
 
 describe('the gate\'s link', () => {

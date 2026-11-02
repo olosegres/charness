@@ -105,4 +105,18 @@ export async function waitUntil(check: () => boolean | Promise<boolean>, descrip
   }
 }
 
+/**
+ * Wait for `promise`; reject with `description` if it takes longer than `timeoutMs`. The timer is cleared as soon as either side settles: an
+ * uncleared one keeps the test process alive for its whole length after the promise has long been settled.
+ */
+export async function settleWithin<T>(promise: Promise<T>, description: string, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`timed out: ${description}`)), timeoutMs); });
+  try {
+    return await Promise.race([promise, timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export { injectStreamIntoSshServer };
