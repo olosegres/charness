@@ -15,8 +15,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { RunnerUnreachableError } from '../remoteRun/remoteRunError';
-import type { RunnerClient } from '../remoteRun/runnerClient';
-import { probeRunners } from '../remoteRun/runners';
+import { createRunnerClient, type RunnerClient } from '../remoteRun/runnerClient';
+import { probeRunners, readLastProbe } from '../remoteRun/runners';
 import { runSshCommand } from '../remoteRun/ssh';
 import { killRecordedProcess, readRecordedPid } from './recordedProcess';
 
@@ -156,6 +156,7 @@ describe('runSshCommand when the ssh it ran is only a client of a master that ho
   let decoyDir = '';
   let originalPath: string | undefined;
   let masterPidFile = '';
+  let clientPidFile = '';
 
   /**
    * An `ssh` that behaves like the client of a ControlMaster after login: the «master» is a sleeping grandchild that inherits the pipes the CLI
@@ -174,11 +175,13 @@ describe('runSshCommand when the ssh it ran is only a client of a master that ho
     decoyDir = path.join(cacheDir, 'bin');
     fs.mkdirSync(decoyDir);
     masterPidFile = path.join(cacheDir, 'master.pid');
+    clientPidFile = path.join(cacheDir, 'client.pid');
     originalPath = process.env.PATH;
     putDecoySshOnPath();
   });
   afterEach(() => {
     killRecordedProcess(masterPidFile);
+    killRecordedProcess(clientPidFile);
     process.env.PATH = originalPath;
     fs.rmSync(cacheDir, { recursive: true, force: true });
   });
@@ -201,16 +204,64 @@ describe('runSshCommand when the ssh it ran is only a client of a master that ho
     assert.ok(typeof result !== 'string' && result.isTimedOut === true && result.exitCode === null);
   });
 
-  it('an abort AFTER the client exited by itself — the master still holding the pipes — ends the call at once too, and says it was cut off', async () => {
-    fs.writeFileSync(path.join(decoyDir, 'ssh'), `#!/bin/sh\nsleep ${decoyLifetimeSec} &\necho $! > "${masterPidFile}"\nexit 0\n`, { mode: 0o755 });
+  /** True while a process with this pid exists (signal 0 sends nothing); a child of this test process is reaped, so it stops existing once it has exited. */
+  function checkIsProcessAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Waits until the stand-in client has recorded its pid and that process is gone — the moment from which a cut-off is one that comes AFTER the client exited. */
+  async function waitForClientToHaveExited(): Promise<void> {
+    const deadline = Date.now() + settleBoundMs;
+    let pid = readRecordedPid(clientPidFile);
+    while ((pid === null || checkIsProcessAlive(pid)) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      pid = readRecordedPid(clientPidFile);
+    }
+    assert.ok(pid !== null && !checkIsProcessAlive(pid), 'the stand-in client has exited');
+  }
+
+  it('an abort AFTER the client exited by itself — the master still holding the pipes — ends the call at once too, says it was cut off, and carries no exit code (the output may be incomplete)', async () => {
+    fs.writeFileSync(path.join(decoyDir, 'ssh'), `#!/bin/sh\necho $$ > "${clientPidFile}"\nsleep ${decoyLifetimeSec} &\necho $! > "${masterPidFile}"\nexit 0\n`, { mode: 0o755 });
     const controller = new AbortController();
     const pending = runSshCommand({ runner: decoyRunner, cacheDir, remoteCommand: 'true', timeoutMs: 600_000, signal: controller.signal });
     await waitForMaster();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await waitForClientToHaveExited();
     controller.abort();
     const result = await Promise.race([pending, new Promise<'still waiting'>((resolve) => setTimeout(() => resolve('still waiting'), settleBoundMs))]);
     assert.notEqual(result, 'still waiting', `the call did not settle within ${settleBoundMs} ms of the abort that came after the client had exited`);
-    assert.ok(typeof result !== 'string' && result.isTimedOut === true && result.exitCode === 0, JSON.stringify(result));
+    // `SshRunResult.exitCode` is `null` for a call that was cut off: with the pipes let go before `close` its output can be a part of what the master was sending,
+    // and a client's `0` must not vouch for that.
+    assert.ok(typeof result !== 'string' && result.isTimedOut === true && result.exitCode === null, JSON.stringify(result));
+  });
+
+  it('a probe cut off after its ssh client exited with only the first lines of its answer is NOT an answer: the runner is offline and nothing is saved as its last probe', async () => {
+    // The first ssh call (is the script there?) succeeds at once. The second (the probe) prints the start of a probe text, exits 0 and leaves the master holding the pipes.
+    const callCountFile = path.join(cacheDir, 'ssh-calls');
+    fs.writeFileSync(path.join(decoyDir, 'ssh'), [
+      '#!/bin/sh',
+      `n=$(cat "${callCountFile}" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "${callCountFile}"`,
+      'if [ "$n" -eq 1 ]; then exit 0; fi',
+      `echo $$ > "${clientPidFile}"`,
+      `sleep ${decoyLifetimeSec} &`,
+      `echo $! > "${masterPidFile}"`,
+      `printf 'os=Linux\\nos_name=Ubuntu\\n'`,
+      'exit 0',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const client = createRunnerClient({ name: 'partial', ssh: 'u@decoy.example', workDir: '/w' }, cacheDir, { name: 'runner-test.sh', text: '' });
+    const stop = new AbortController();
+    const probing = probeRunners([client], Date.now(), 600_000, stop.signal);
+    await waitForMaster();
+    await waitForClientToHaveExited();
+    stop.abort();
+    const [report] = await withinBound(probing);
+    assert.equal(report.status, 'offline', JSON.stringify(report));
+    assert.equal(readLastProbe(cacheDir, 'partial'), null, 'a part of a probe text was not saved as the runner\'s last probe');
   });
 
   it('the call\'s own deadline ends it the same way: the probe\'s 20 s no longer waits for a master that holds the pipes', async () => {

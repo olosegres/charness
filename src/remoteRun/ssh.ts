@@ -152,7 +152,10 @@ export function checkIsConnectionLost(exitCode: number | null): boolean {
 }
 
 export interface SshRunResult {
-  /** `null` when the process was killed (a timeout). */
+  /**
+   * `null` when the call was cut off (a timeout, or the caller's own stop) — also when the ssh client had already exited by itself: its pipes are let go
+   * before `close` then, the output can be a part of what a master connection was still sending, and the client's own code must not vouch for it.
+   */
   exitCode: number | null;
   stdout: string;
   stderr: string;
@@ -202,7 +205,7 @@ export function runSshCommand(params: SshRunParams): Promise<SshRunResult> {
     // come when the remote command ends (or the master gives up), not when the client is gone — the call, a probe's deadline or a Ctrl-C, would hang.
     void waitForChildEnd(child, () => isTimedOut).then((exitCode) => {
       settle();
-      resolve({ exitCode, stdout, stderr, isTimedOut });
+      resolve({ exitCode: isTimedOut ? null : exitCode, stdout, stderr, isTimedOut });
     });
     child.stdin.end(params.input ?? '');
   });
