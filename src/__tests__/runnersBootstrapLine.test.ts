@@ -136,7 +136,7 @@ describe('bootstrap line', () => {
     assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), []);
   });
 
-  it('stops with a clear line when ssh cannot fetch the package, and still cleans up', () => {
+  it('stops with a clear line when ssh cannot fetch the package — an expired or used line is a refused key, not an empty answer — and still cleans up', () => {
     installStubSsh(path.join(workDir, 'bin'));
     fs.writeFileSync(path.join(workDir, 'bin', 'ssh'), '#!/bin/sh\necho "Permission denied" >&2\nexit 255\n', { mode: 0o755 });
     const result = spawnSync('sh', ['-c', buildBootstrapLine(createPairCodePayload())], {
@@ -144,7 +144,8 @@ describe('bootstrap line', () => {
       env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp') },
     });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Permission denied/);
+    assert.match(result.stderr, /Permission denied/, 'ssh\'s own message stays');
+    assert.match(result.stderr, /the hub refused or did not answer \(has the line expired or been used already\?/, 'and the line says what it probably means, which `set -e` used to cut off');
     assert.ok(!result.stdout.includes('RUNNER_CLI'));
     assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), []);
   });

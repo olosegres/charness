@@ -54,7 +54,7 @@ export function buildBootstrapLine(payload: PairCodePayload): string {
     `command -v node >/dev/null 2>&1 && node -e "var v=process.versions.node.split(/[.]/);process.exit(v[0]>${minNodeMajor}||v[0]==${minNodeMajor}&&v[1]>=${minNodeMinor}?0:1)" || { echo "charness-runner: Node.js ${minNodeMajor}.${minNodeMinor} or newer is needed on this machine (https://nodejs.org)" >&2; exit 1; }`,
     `{ printf "%s\\n" "${privateKeyHeader}"; printf "%s" "$b" | fold -w ${privateKeyFoldWidth}; printf "\\n%s\\n" "${privateKeyFooter}"; } > "$d/key"`,
     `printf "%s %s\\n" ${hubHostAlias} "$k" > "$d/kh"`,
-    `ssh ${sshOptions} "$u@$h" bootstrap > "$d/answer"`,
+    `ssh ${sshOptions} "$u@$h" bootstrap > "$d/answer" || { echo "charness-runner: the hub refused or did not answer (has the line expired or been used already? the ssh message above says which)" >&2; exit 1; }`,
     `hit=$(head -c ${maxGateNoiseBytes} "$d/answer" | LC_ALL=C grep -a -b -o -E -e "${bootstrapMarkerPattern}" | head -n 1)`,
     '[ -n "$hit" ] || { echo "charness-runner: the hub did not send the package (has the line expired or been used already?)" >&2; exit 1; }',
     'o=${hit%%:*}; t=${hit#*:}',
