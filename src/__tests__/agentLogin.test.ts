@@ -21,6 +21,7 @@ import { createAgentLogin, type AgentLoginPorts, type ClaudeLoginProfile } from 
 import type { ClaudeAuthStatus } from '../utils/claudeProfiles';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { killRecordedProcess } from './recordedProcess';
 
 const key: SessionKey = makeTelegramKey(-1001111111111, 4242);
 const pastedCode = 'fake-oauth-code-4711';
@@ -162,8 +163,7 @@ describe('agentLogin: the sign-in drivers', () => {
   after(() => {
     // A failed assertion must not leave a stand-in CLI behind: its pty would keep the test process alive.
     for (const pidFile of ['claude.pid', 'opencode.pid']) {
-      const pidPath = path.join(workDir, pidFile);
-      if (fs.existsSync(pidPath) && checkIsProcessAlive(Number(fs.readFileSync(pidPath, 'utf8')))) process.kill(Number(fs.readFileSync(pidPath, 'utf8')));
+      killRecordedProcess(path.join(workDir, pidFile), 'SIGTERM');
     }
     for (const [name, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[name];

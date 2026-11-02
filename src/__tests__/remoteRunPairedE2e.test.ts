@@ -61,6 +61,7 @@ import {
   waitUntil,
   type RunnerLinkLayout,
 } from './runnerLinkE2e/runnerLinkFlowKit';
+import { killRecordedProcess, readRecordedPid } from './recordedProcess';
 
 const missingTools = [...getMissingTools(), ...(spawnSync('which', ['git'], { stdio: 'ignore' }).status === 0 ? [] : ['git'])];
 const skipReason = missingTools.length > 0 && !isCi ? `missing: ${missingTools.join(', ')}` : false;
@@ -363,7 +364,7 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
       await waitUntil(() => cli.stderr().includes('waiting for a runner with playwright'), 'the wait to begin', ordinaryRunTimeoutMs);
       const link = await holdLinkWithSilentSocket();
       try {
-        await waitUntil(() => fs.existsSync(masterPidFile) && fs.readFileSync(masterPidFile, 'utf8').trim() !== '', 'the probe to be held by the stand-in ssh', ordinaryRunTimeoutMs);
+        await waitUntil(() => readRecordedPid(masterPidFile) !== null, 'the probe to be held by the stand-in ssh', ordinaryRunTimeoutMs);
         const signalledAtMs = Date.now();
         cli.child.kill('SIGINT');
         assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 130, cli.stderr());
@@ -373,11 +374,7 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
         assert.equal(fs.existsSync(path.join(project.runnerDirectory, markerName)), false, 'nothing was run on the runner');
       } finally {
         link.release();
-        try {
-          process.kill(Number(fs.readFileSync(masterPidFile, 'utf8')), 'SIGKILL');
-        } catch {
-          /* already gone */
-        }
+        killRecordedProcess(masterPidFile);
       }
     });
 
