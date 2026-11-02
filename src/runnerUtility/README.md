@@ -103,8 +103,15 @@ database, never from its files. Root's whole part:
   (`sudo -u <account> -H env XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user is-system-running`, once a second, 20 tries), then the plain
   `service install` runs AS the account the same way. The result is the ordinary user service — the account removes it itself.
 
+**What the admin line trusts.** Pasting it trusts the charness host with root on this machine for that paste (see `src/runners/README.md`); the plain
+line trusts it only with the runner account. A Mac's launcher and the daemons' `PATH` carry the Node that `sudo` found, so a Node under a home
+folder (nvm) breaks when it is upgraded — documented in `docs/remote-run.md`, not refused. The daemons log through the account's own shell
+(`serviceUnits.ts`): launchd is given `/dev/null` for output and no working directory, because it may open them as root before it switches to
+`UserName` and the account could have swapped the logs folder for a link; `sh`, already the account, enters the home and opens `logs/<job>.log`
+itself (`system-step prepare` makes the folder).
+
 A failed root step is the line's one «`<account>` is paired, but has no service: fix the above and paste a fresh admin line» (the same on both
-systems); a fresh line finds the account paired (`runPair` with `--service-follows` says so and returns 0) and only installs the service. The
+systems); a fresh line finds the account paired (`runPair` with `--service-follows` says so, CLOSES its own code on the hub with `cancel`, and returns 0) and only installs the service. The
 pairing runs with `sudo`'s `PATH`, not the account's login one, so Node must be installed system-wide. **Removing** an always-on service is plain
 `launchctl` / `rm` commands for an admin (`formatSystemServiceRemoval`); `service uninstall` on the account prints them, and forgets the
 record once the daemons are gone from `launchctl` and from `/Library/LaunchDaemons`; `unpair` points there.

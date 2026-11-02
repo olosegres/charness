@@ -89,6 +89,12 @@ escape a backslash in `command="…"`).
    a second paste for an account that is already paired only installs the service. A pairing is offered in TWO Telegram messages — the
    admin line alone is ~3.7 KB, two lines would not fit one message — which `connectors/telegram/runnerPairingMessages.ts` follows one
    entry per message.
+
+   **What the admin line trusts.** Pasting it trusts this charness host with root on the runner machine for that paste: the line is
+   hub-generated text run under `sudo`, and the program root runs from it is `rootServiceCli.js` out of the hub's own install (packed into
+   `package/`), both owned by the hub's OS user — and its agents. The plain line trusts the hub only with the runner account. The Telegram
+   message says it (`runners.pairingAdminIntro`, all locales), and `docs/remote-run.md` does too. The code is in `sudo`'s log: a refused line
+   leaves it open on purpose (fix the account, paste again); an already-paired account's line closes its own code with `cancel`.
 3. The runner calls `redeem` with its own new public key and host key (`gateProtocol.ts`). `redeemPairing` (one critical section):
    code must be in `pending.json` and not expired, the key not yet registered; it adds the runner (a unique name — `-2`, `-3`, … —
    against paired AND hand-made runners), deletes the pending entry (**this is what makes the code single use**), rewrites
@@ -108,6 +114,7 @@ this machine's own loopback port — otherwise the runner would be told to pin a
 |-----|---------|--------|
 | temporary | `bootstrap` | marker line (`id=<package id>`), then the packed package as gzip (only while the code is open) |
 | temporary | `redeem` | marker line, then `{ok, runnerId, name, hubPublicKey, label, host, port}` or `{ok:false, reason}` |
+| temporary | `cancel` | marker line, then `{ok}` (`true`: the code was open and is closed now — its entry and key line are gone; `false`: unknown, spent or expired). Idempotent. Sent by an admin line pasted for an account that is already paired (`runPair`): the code will never be redeemed |
 | runner | `link` | marker line (`package=<id>`), then the ssh session of `gateLink.ts` |
 | runner | `package` | marker line, then the packed package |
 | runner | `version` | marker line with the hub's current `package=<id>`, nothing else — a linked runner asks every few minutes over its open connection |

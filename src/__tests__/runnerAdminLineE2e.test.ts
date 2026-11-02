@@ -17,7 +17,7 @@
  *   Meanwhile the account has swapped its launcher for a trap that fires when ROOT starts it: it never does
  *   → the line used again is refused by the hub and installs nothing
  *   → a service manager that fails: the account stays paired, the line exits with a failure and says what to do; a fresh line then finds the
- *   account paired, pairs nothing twice and installs the service
+ *   account paired, pairs nothing twice, CLOSES its own code on the hub (the gate's `cancel`) and installs the service
  *
  * Needs sshd, ssh, ssh-keyscan, rsync, Pueue, tar, fakeroot and the built CLI (`yarn build`): a local run without them is SKIPPED with the
  * reason, CI fails without. No registry and no download is used. Test case: N/A — Charness has no Jira tracker.
@@ -192,7 +192,9 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     const callsBefore = readStandInCalls(standIns).length;
     const again = pasteLine(adminLine);
     assert.notEqual(again.status, 0);
-    assert.match(again.stderr, /this account is already paired|the hub refused or did not answer/);
+    // The refusal is the HUB's, at the download: a spent code's key is gone, so the line stops before the account or any service is asked.
+    assert.match(again.stderr, /^charness-runner: the hub refused or did not answer \(has the line expired or been used already\?/m);
+    assert.doesNotMatch(`${again.stdout}${again.stderr}`, /already paired|Paired with/);
     assert.equal(readHubRunners().length, 1);
     assert.ok(!readStandInCalls(standIns).slice(callsBefore).some((call) => call.startsWith('loginctl enable-linger')), 'no service was installed by the failed run');
   });
@@ -215,11 +217,13 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     // The service manager is mended; a FRESH admin line is the retry.
     fs.rmSync(standIns.failReloadFlag, { force: true });
     const { adminLine: retryLine } = makePairingLines(layout, 'runner2');
+    assert.equal(countOpenCodes(), 1, 'the retry\'s code is open until the line closes it');
     const retried = pasteLine(retryLine);
     assert.equal(retried.status, 0, `${retried.stderr}\n${retried.stdout}`);
     assert.match(retried.stdout, /This account is already paired \(as “[^”]+” with @ExampleBot\): it is not paired again\. Its always-on service is installed next, by the same line\./);
     assert.match(retried.stdout, /Installed two user services:/);
     assert.equal(readHubRunners().length, 2, 'nothing was paired twice');
+    assert.equal(countOpenCodes(), 0, 'and the retry\'s code is closed on the hub, not left open (and logged by sudo) until it runs out');
     assert.equal(fs.existsSync(path.join(failingHome, '.config', 'systemd', 'user', getServiceNames(paths.root).systemdLink)), true);
     assert.equal(fs.existsSync(standIns.trapFile), false, 'and root still started nothing of the account\'s');
   });

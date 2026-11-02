@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -25,6 +26,7 @@ import {
   renderSystemdPueuedUnit,
 } from '../runnerUtility/serviceUnits';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
+import { launchdOwnPathKeys, parseLaunchdPlist } from './launchdPlistKit';
 
 const paths = getRunnerHomePaths('/home/runner');
 const names = getServiceNames(paths.root);
@@ -87,6 +89,47 @@ describe('launchd property lists', () => {
     const plist = renderLaunchdPlist(daemonJobs.link);
     assert.ok(plist.includes('<key>UserName</key><string>runner</string>'));
     assert.ok(!plist.includes('<key>UserName</key><string>root</string>'));
+  });
+
+  it('a LaunchDaemon names no path in the account\'s folder for anything launchd opens or enters itself — its output is /dev/null, it has no working directory, and its program starts through the account\'s own shell', () => {
+    for (const job of [daemonJobs.link, daemonJobs.pueued]) {
+      const parsed = parseLaunchdPlist(renderLaunchdPlist(job));
+      assert.equal(parsed.strings.get('StandardOutPath'), '/dev/null');
+      assert.equal(parsed.strings.get('StandardErrorPath'), '/dev/null');
+      assert.ok(!parsed.keys.includes('WorkingDirectory'), 'launchd would enter the home itself');
+      for (const key of launchdOwnPathKeys) {
+        const value = parsed.strings.get(key);
+        assert.ok(value === undefined || !value.startsWith(paths.homeDir), `${key} = ${value ?? ''}`);
+      }
+      assert.deepEqual(parsed.programArguments.slice(0, 2), ['/bin/sh', '-c'], 'the first thing launchd starts is a system program');
+      assert.deepEqual(parsed.programArguments.slice(3, 5), [job.logPath, paths.homeDir], 'the log and the home are the shell\'s arguments, opened and entered by the account');
+      assert.deepEqual(parsed.programArguments.slice(5), job.programArguments);
+    }
+  });
+
+  it('the daemon\'s shell, started as the account, enters the home, runs the program and puts both its output and its errors in the log', () => {
+    const accountHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dmn-'));
+    try {
+      const logPath = path.join(accountHome, 'logs', 'link.log');
+      fs.mkdirSync(path.dirname(logPath));
+      const parsed = parseLaunchdPlist(renderLaunchdPlist({ ...daemonJobs.link, programArguments: ['/bin/sh', '-c', 'pwd; echo to-stderr >&2'], homeDir: accountHome, logPath }));
+      const [shell, ...args] = parsed.programArguments;
+      const result = spawnSync(shell, args, { encoding: 'utf8', cwd: '/' });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(fs.readFileSync(logPath, 'utf8'), `${fs.realpathSync(accountHome)}\nto-stderr\n`);
+      assert.equal(result.stdout + result.stderr, '', 'what launchd itself holds (/dev/null) gets nothing');
+      assert.equal(spawnSync(shell, args, { encoding: 'utf8', cwd: '/' }).status, 0);
+      assert.equal(fs.readFileSync(logPath, 'utf8').split('\n').length, 5, 'a second start appends');
+    } finally {
+      fs.rmSync(accountHome, { recursive: true, force: true });
+    }
+  });
+
+  it('a LaunchAgent still logs to the file it is told and enters the home itself — it is launchd\'s job in the account\'s own domain', () => {
+    const parsed = parseLaunchdPlist(renderLaunchdPlist(jobs.link));
+    assert.equal(parsed.strings.get('StandardOutPath'), path.join(paths.logsDir, 'link.log'));
+    assert.equal(parsed.strings.get('WorkingDirectory'), paths.homeDir);
+    assert.deepEqual(parsed.programArguments, [paths.launcher, 'run']);
   });
 
   it('Pueue runs at nice 10 — and never under taskpolicy, which on Apple Silicon pins jobs to the efficiency cores', () => {
@@ -635,6 +678,7 @@ describe('installing and removing the services', () => {
         assert.deepEqual(answer, { ok: true, hadService: false });
         assert.equal(readServiceKind(runnerPaths), 'system-service');
         assert.equal(fs.existsSync(runnerPaths.pueueConfig), true);
+        assert.equal(fs.statSync(runnerPaths.logsDir).isDirectory(), true, 'the folder the daemons\' shell logs into is made by the account');
         assert.deepEqual(commandLines(), [queueStatusCommand(runnerPaths)], 'only the account\'s own queue was asked');
         calls = [];
         assert.deepEqual(await runSystemStep('prepare', createDeps(asAccount)), { ok: true, hadService: true }, 'a second time it is a re-install, and leaves the queue alone');

@@ -125,7 +125,7 @@ export async function installServiceForAccount(accountName: string, deps: AdminS
   if (deps.platform !== 'linux' && deps.platform !== 'darwin') return fail(`Services are supported on Linux (systemd) and macOS (launchd), not on ${deps.platform}.`);
   if (deps.uid !== rootUid) return fail('This step is root\'s: it is started by the admin pairing line from /runners, which asks for sudo.');
   const account = await deps.resolveAccount(accountName);
-  if (account === null) return fail(`There is no account named «${accountName}».`);
+  if (account === null) return fail(`There is no account named «${accountName}», or its home folder cannot be read from the directory service.`);
   if (account.uid === rootUid) return fail('The service must run as a standard account, not as root.');
   return deps.platform === 'darwin' ? installDaemons(account, deps) : installUserServiceFor(account, deps);
 }

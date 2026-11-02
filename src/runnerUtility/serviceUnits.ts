@@ -88,7 +88,7 @@ export function renderSystemdPueuedUnit(paths: RunnerHomePaths): string {
 export interface LaunchdJobSpec {
   label: string;
   programArguments: readonly string[];
-  /** Set for a LaunchDaemon: the account the job runs as. */
+  /** Set for a LaunchDaemon: the account the job runs as (and the job then logs through its own shell, see {@link getLaunchdProgramArguments}). */
   userName: string | null;
   homeDir: string;
   accountName: string;
@@ -101,8 +101,25 @@ function escapeXml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/**
+ * What launchd opens or enters ITSELF, as root, before it hands a LaunchDaemon to its `UserName` (whether it does so before or after the
+ * switch is not documented): none of it may be a path the account can swap for a link. So a daemon names `/dev/null` for its output, no
+ * `WorkingDirectory`, and runs its program through `sh`, which — already the account — enters the home, opens the log by `>>` and execs
+ * the program. A LaunchAgent is launchd's job in the account's own domain and needs none of this.
+ */
+const daemonOutputPath = '/dev/null';
+const daemonShell = '/bin/sh';
+/** `$0` is the log, `$1` the home, the rest the program: the account's shell enters the home, then execs the program with its output in the log. */
+const daemonShellScript = 'cd "$1" && shift && exec "$@" >> "$0" 2>&1';
+
+/** The program and arguments launchd starts: the job's own for a LaunchAgent, the account's shell around them for a LaunchDaemon. */
+export function getLaunchdProgramArguments(spec: LaunchdJobSpec): readonly string[] {
+  return spec.userName === null ? spec.programArguments : [daemonShell, '-c', daemonShellScript, spec.logPath, spec.homeDir, ...spec.programArguments];
+}
+
 /** @description The property list of one launchd job. */
 export function renderLaunchdPlist(spec: LaunchdJobSpec): string {
+  const isDaemon = spec.userName !== null;
   const pathValue = [...new Set([path.join(spec.homeDir, '.charness-runner', 'bin'), spec.nodeDir, ...systemPathDirs])].join(':');
   const entry = (key: string, value: string): string => `    <key>${key}</key><string>${escapeXml(value)}</string>`;
   return [
@@ -113,7 +130,7 @@ export function renderLaunchdPlist(spec: LaunchdJobSpec): string {
     `  <key>Label</key><string>${escapeXml(spec.label)}</string>`,
     '  <key>ProgramArguments</key>',
     '  <array>',
-    ...spec.programArguments.map((argument) => `    <string>${escapeXml(argument)}</string>`),
+    ...getLaunchdProgramArguments(spec).map((argument) => `    <string>${escapeXml(argument)}</string>`),
     '  </array>',
     ...(spec.userName === null ? [] : [`  <key>UserName</key><string>${escapeXml(spec.userName)}</string>`]),
     '  <key>RunAtLoad</key><true/>',
@@ -121,7 +138,7 @@ export function renderLaunchdPlist(spec: LaunchdJobSpec): string {
     `  <key>ThrottleInterval</key><integer>${throttleSeconds}</integer>`,
     '  <key>AbandonProcessGroup</key><true/>',
     ...(spec.niceness === null ? [] : [`  <key>Nice</key><integer>${spec.niceness}</integer>`]),
-    `  <key>WorkingDirectory</key><string>${escapeXml(spec.homeDir)}</string>`,
+    ...(isDaemon ? [] : [`  <key>WorkingDirectory</key><string>${escapeXml(spec.homeDir)}</string>`]),
     '  <key>EnvironmentVariables</key>',
     '  <dict>',
     entry('HOME', spec.homeDir),
@@ -129,8 +146,8 @@ export function renderLaunchdPlist(spec: LaunchdJobSpec): string {
     entry('LOGNAME', spec.accountName),
     entry('PATH', pathValue),
     '  </dict>',
-    `  <key>StandardOutPath</key><string>${escapeXml(spec.logPath)}</string>`,
-    `  <key>StandardErrorPath</key><string>${escapeXml(spec.logPath)}</string>`,
+    `  <key>StandardOutPath</key><string>${escapeXml(isDaemon ? daemonOutputPath : spec.logPath)}</string>`,
+    `  <key>StandardErrorPath</key><string>${escapeXml(isDaemon ? daemonOutputPath : spec.logPath)}</string>`,
     '</dict>',
     '</plist>',
     '',

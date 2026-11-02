@@ -457,6 +457,30 @@ describe('admin bootstrap line: the checks as root, the root-owned copy, the swi
     assertNothingFetched();
   });
 
+  it('says that sudo found no Node 22.12+ on its PATH when it did not — not that the machine has none — before anything is fetched', () => {
+    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
+    const toolsBin = path.join(workDir, 'tools');
+    fs.mkdirSync(toolsBin);
+    for (const tool of ['sh', 'mktemp', 'rm', 'chmod', 'cat', 'cp', 'tar', 'fold', 'mkdir', 'head', 'grep', 'tail']) {
+      const resolved = spawnSync('sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
+      if (resolved.startsWith('/')) fs.symlinkSync(resolved, path.join(toolsBin, tool));
+    }
+    const oldNodeBin = path.join(workDir, 'oldnode');
+    fs.mkdirSync(oldNodeBin);
+    fs.writeFileSync(path.join(oldNodeBin, 'node'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    for (const pathValue of [`${path.join(workDir, 'bin')}:${toolsBin}`, `${path.join(workDir, 'bin')}:${oldNodeBin}:${toolsBin}`]) {
+      const result = spawnSync('/bin/sh', ['-c', buildAdminBootstrapLine(createPairCodePayload()).replace(/^sudo /, '')], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: pathValue, TMPDIR: path.join(workDir, 'tmp') },
+      });
+      assert.notEqual(result.status, 0, pathValue);
+      assert.match(String(result.stderr), /^charness-runner: sudo finds no Node\.js 22\.12 or newer on its PATH \(install it system-wide\)$/m, pathValue);
+      assertNothingFetched();
+    }
+    const plainMessage = /Node\.js 22\.12 or newer is needed on this machine/;
+    assert.ok(plainMessage.test(buildBootstrapLine(createPairCodePayload())), 'the plain line keeps its own wording');
+  });
+
   /** Nothing was downloaded, nothing ran as an account: the hub was not asked and `sudo` was not called. */
   function assertNothingFetched(): void {
     assert.ok(!fs.existsSync(path.join(workDir, 'ssh.args')), 'the hub was not asked for the package');

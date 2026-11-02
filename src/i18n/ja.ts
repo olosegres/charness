@@ -1198,7 +1198,7 @@ export const jaDict: Record<string, string> = {
   'runners.addressRejected': '⚠️ {reason}\n\n別のアドレスを送るか、/runners をもう一度開いてください。',
   'runners.addressNote': 'ℹ️ {note}',
   'runners.addressExpired': 'この質問は古くなりました。/runners を開いてやり直してください。',
-  'runners.pairingAdminIntro': 'ランナーのペアリング — 有効 {minutes} 分、1 回限り。\n\n① ランナーのマシンの管理者アカウントから: 「{account}」をペアリングし、常時稼働させます（行の最後の単語です — アカウント名が違う場合は書き換えてください）:',
+  'runners.pairingAdminIntro': 'ランナーのペアリング — 有効 {minutes} 分、1 回限り。\n\n① ランナーのマシンの管理者アカウントから: 「{account}」をペアリングして稼働させます（行の最後の単語です — 必要なら書き換えてください）。貼り付けの間、このcharnessホストにそこでのroot権限を与えます:',
   'runners.pairingAlternativeIntro': '② 管理者権限がない場合: この行をランナーのアカウント自身のターミナルで実行してください:',
   'runners.pairingAlternativeOutro': 'アカウントは既に存在する標準ユーザーで、メインのアカウントではないものにしてください — エージェントのコードが動きます。どちらかの行を持つ人は、そのどちらかが使用済みになるか期限が切れるまで、このcharnessにマシンを接続できます。',
   'runners.pairedText': 'ランナー「{name}」を {time} にペアリングしました。',

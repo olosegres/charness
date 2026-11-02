@@ -27,11 +27,11 @@ import { runnerServiceKinds } from './hubRegistry';
 
 /** The text every marker line starts with; the `1` is the protocol version. */
 export const gateMarker = '--charness-gate-1--';
-export const gateRequests = ['bootstrap', 'redeem', 'link', 'package', 'version', 'identity', 'unpair'] as const;
+export const gateRequests = ['bootstrap', 'redeem', 'cancel', 'link', 'package', 'version', 'identity', 'unpair'] as const;
 /** @name GateRequest @description One of the words a runner may send. */
 export type GateRequest = (typeof gateRequests)[number];
 
-export const temporaryKeyRequests: readonly GateRequest[] = ['bootstrap', 'redeem'];
+export const temporaryKeyRequests: readonly GateRequest[] = ['bootstrap', 'redeem', 'cancel'];
 export const runnerKeyRequests: readonly GateRequest[] = ['link', 'package', 'version', 'identity', 'unpair'];
 
 /** What a `link` / `version` answer names as the package when the hub cannot pack one. */
@@ -164,5 +164,10 @@ export const redeemReplySchema = z.discriminatedUnion('ok', [
 export type RedeemReply = z.infer<typeof redeemReplySchema>;
 
 export const unpairReplySchema = z.strictObject({ ok: z.boolean() });
+
+/** `ok`: the code was open and is closed now; `false`: there was nothing to close (spent, expired, or cancelled already). */
+export const cancelReplySchema = z.strictObject({ ok: z.boolean() });
+/** @name CancelReply @description What `cancel` answers. */
+export type CancelReply = z.infer<typeof cancelReplySchema>;
 /** @name UnpairReply @description What `unpair` answers. */
 export type UnpairReply = z.infer<typeof unpairReplySchema>;

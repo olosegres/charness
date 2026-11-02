@@ -11,6 +11,7 @@ import {
   redeemRequestSchema,
   runnerKeyRequests,
   temporaryKeyRequests,
+  type CancelReply,
   type GateRequest,
   type RedeemReply,
   type UnpairReply,
@@ -19,7 +20,7 @@ import { hubIdPattern } from './hubIds';
 import { createHubContext, type HubContext } from './hubPaths';
 import { HubRegistryError } from './hubRegistry';
 import { getHubPackage, openHubPackage } from './hubPackage';
-import { checkIsPairingOpen, checkIsRunnerPaired, describeRunnerIdentity, redeemPairing, removePairedRunner } from './hubPairing';
+import { cancelPairing, checkIsPairingOpen, checkIsRunnerPaired, describeRunnerIdentity, redeemPairing, removePairedRunner } from './hubPairing';
 import { cutRunnerLink } from './linkControl';
 
 /**
@@ -120,6 +121,14 @@ function safeParseJson(text: string): object | null {
   }
 }
 
+/** `cancel`: the line that held this code is done without using it (an admin line pasted again for a machine that is already paired). Idempotent. */
+async function handleCancel(ctx: HubContext, pairId: string, io: GateIo, now: () => number): Promise<number> {
+  const reply: CancelReply = { ok: await cancelPairing(ctx, pairId, now()) };
+  io.stdout.write(formatGateAnswerHead('cancel'));
+  io.stdout.write(`${JSON.stringify(reply)}\n`);
+  return 0;
+}
+
 async function handleUnpair(ctx: HubContext, runnerId: string, io: GateIo, now: () => number): Promise<number> {
   const removed = await removePairedRunner(ctx, runnerId, now());
   if (removed !== null) cutRunnerLink(ctx.dir, runnerId);
@@ -180,6 +189,7 @@ export async function runRunnerGate(argv: readonly string[], env: NodeJS.Process
         }
         return await writePackage(ctx, io, 'bootstrap');
       }
+      if (request === 'cancel') return await handleCancel(ctx, invocation.pairId, io, now);
       return await handleRedeem(ctx, invocation.pairId, io, now);
     }
     // The key line is only the way in: a runner that left the registry is refused whatever its line (or an ssh connection it already

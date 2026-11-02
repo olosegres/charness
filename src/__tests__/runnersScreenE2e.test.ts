@@ -392,7 +392,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.deepEqual(readSettingsRunnerHost(), { host: '127.0.0.1', port: link.sshPort });
     const pairingMessage = await general.waitForMessage('the admin pairing message', (message) => message.text.startsWith('Pair a runner'));
     const plainMessage = await general.waitForMessage('the plain pairing message', (message) => message.text.startsWith('② Without admin rights') && message.message_id > pairingMessage.message_id);
-    assert.ok(pairingMessage.text.includes('① From an admin account of the runner machine: it pairs «runner» (the last word of the line'), pairingMessage.text);
+    assert.ok(pairingMessage.text.includes('① From an admin account of the runner machine: pairs «runner» (the last word'), pairingMessage.text);
     assert.ok(plainMessage.text.endsWith('Anyone with either line can attach a machine to this charness until one of them is used or expires.'));
     assert.equal(pairingMessage.reply_markup, undefined);
     assert.equal(plainMessage.reply_markup, undefined);

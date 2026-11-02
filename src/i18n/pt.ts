@@ -1205,7 +1205,7 @@ export const ptDict: Record<string, string> = {
   'runners.addressRejected': '⚠️ {reason}\n\nEnvie outro endereço ou abra /runners de novo.',
   'runners.addressNote': 'ℹ️ {note}',
   'runners.addressExpired': 'Esta pergunta está desatualizada — abra /runners e comece de novo.',
-  'runners.pairingAdminIntro': 'Emparelhar um runner — válido por {minutes} minutos, uso único.\n\n① De uma conta de administrador da máquina do runner: emparelha “{account}” (a última palavra da linha — troque-a se a conta tiver outro nome) e a mantém em execução:',
+  'runners.pairingAdminIntro': 'Emparelhar um runner — válido por {minutes} minutos, uso único.\n\n① De uma conta de administrador da máquina do runner: emparelha “{account}” (a última palavra — troque-a se preciso) e a mantém em execução. Dá a este host do charness root lá, durante a colagem:',
   'runners.pairingAlternativeIntro': '② Sem direitos de administrador: execute esta linha no terminal da própria conta do runner:',
   'runners.pairingAlternativeOutro': 'A conta deve já existir e ser uma conta padrão, não a sua conta principal — ela executa o código dos agentes. Quem tiver qualquer uma das duas linhas pode conectar uma máquina a este charness até uma delas ser usada ou expirar.',
   'runners.pairedText': 'Runner “{name}” emparelhado {time}.',

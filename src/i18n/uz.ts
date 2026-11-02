@@ -1204,7 +1204,7 @@ export const uzDict: Record<string, string> = {
   'runners.addressRejected': '⚠️ {reason}\n\nBoshqa manzil yuboring yoki /runners ni qayta oching.',
   'runners.addressNote': 'ℹ️ {note}',
   'runners.addressExpired': 'Bu savol eskirgan — /runners ni ochib, qaytadan boshlang.',
-  'runners.pairingAdminIntro': 'Runner ulash — {minutes} daqiqa amal qiladi, bir martalik.\n\n① Runner mashinasidagi administrator hisobidan: “{account}” hisobini ulaydi (qatorning oxirgi so‘zi — hisob boshqacha nomlansa, uni o‘zgartiring) va doimiy ishlab turadigan qiladi:',
+  'runners.pairingAdminIntro': 'Runner ulash — {minutes} daqiqa amal qiladi, bir martalik.\n\n① Runner mashinasidagi administrator hisobidan: “{account}” hisobini ulaydi (oxirgi so‘z — kerak bo‘lsa o‘zgartiring) va ishlatib turadi. Qo‘yish vaqtida shu charness hostiga o‘sha yerda root huquqini beradi:',
   'runners.pairingAlternativeIntro': '② Administrator huquqlarisiz: bu qatorni runner hisobining o‘z terminalida ishga tushiring:',
   'runners.pairingAlternativeOutro': 'Hisob allaqachon mavjud va oddiy bo‘lishi kerak, asosiy hisobingiz emas — u agentlar kodini bajaradi. Ikkala qatordan biriga ega har kim, ulardan biri ishlatilguncha yoki muddati tugaguncha, mashinani shu charnessga ulashi mumkin.',
   'runners.pairedText': 'Runner “{name}” {time} da ulandi.',

@@ -1198,7 +1198,7 @@ export const zhDict: Record<string, string> = {
   'runners.addressRejected': '⚠️ {reason}\n\n请发送其他地址，或重新打开 /runners。',
   'runners.addressNote': 'ℹ️ {note}',
   'runners.addressExpired': '此问题已过期 — 请打开 /runners 重新开始。',
-  'runners.pairingAdminIntro': '配对 runner — 有效期 {minutes} 分钟，仅可使用一次。\n\n① 在 runner 机器的管理员账户下执行：它会配对“{account}”（命令行的最后一个词 — 账户名不同时请改掉）并让它持续运行：',
+  'runners.pairingAdminIntro': '配对 runner — 有效期 {minutes} 分钟，仅可使用一次。\n\n① 在 runner 机器的管理员账户下执行：它会配对“{account}”（最后一个词 — 需要时请改掉）并让它持续运行。粘贴期间会授予此 charness 主机在那台机器上的 root 权限：',
   'runners.pairingAlternativeIntro': '② 没有管理员权限：请在 runner 账户自己的终端中执行这一行：',
   'runners.pairingAlternativeOutro': '该账户必须已存在且是标准账户，不能是你的主账户 — 它会运行智能体的代码。拿到这两行命令中任意一行的人，在其中一行被使用或过期之前，都可以把一台机器接入这个 charness。',
   'runners.pairedText': 'runner“{name}”已于 {time} 配对。',

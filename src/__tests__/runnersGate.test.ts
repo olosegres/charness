@@ -13,10 +13,10 @@ import { Readable } from 'stream';
 import { gunzipSync } from 'zlib';
 import { parseGateArgs, routeGateRequest, runRunnerGate, type GateInvocation } from '../runners/gate';
 import { ensureGateWrapper, renderGateWrapper } from '../runners/gateWrapper';
-import { gateMarker, maxGateRequestBytes, parseGateMarkerLine, redeemReplySchema, type GateMarker } from '../runners/gateProtocol';
+import { cancelReplySchema, gateMarker, maxGateRequestBytes, parseGateMarkerLine, redeemReplySchema, type GateMarker } from '../runners/gateProtocol';
 import { getHubFilePaths } from '../runners/hubPaths';
 import { createPairing, redeemPairing, removePairedRunner } from '../runners/hubPairing';
-import { readPairedFile } from '../runners/hubRegistry';
+import { readPairedFile, readPendingFile } from '../runners/hubRegistry';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { createCollector, createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 
@@ -80,9 +80,10 @@ describe('gate arguments', () => {
 });
 
 describe('gate routing', () => {
-  it('a pairing\'s key may bootstrap and redeem — nothing else', () => {
+  it('a pairing\'s key may bootstrap, redeem and cancel its own code — nothing else', () => {
     assert.equal(routeGateRequest('temporary', 'bootstrap'), 'bootstrap');
     assert.equal(routeGateRequest('temporary', 'redeem'), 'redeem');
+    assert.equal(routeGateRequest('temporary', 'cancel'), 'cancel');
     for (const command of ['link', 'package', 'version', 'identity', 'unpair', 'bootstrap now', 'redeem; id', ' redeem', '', 'sh', '$(id)', undefined]) {
       assert.equal(routeGateRequest('temporary', command), null, String(command));
     }
@@ -94,7 +95,7 @@ describe('gate routing', () => {
     assert.equal(routeGateRequest('runner', 'version'), 'version');
     assert.equal(routeGateRequest('runner', 'identity'), 'identity');
     assert.equal(routeGateRequest('runner', 'unpair'), 'unpair');
-    for (const command of ['bootstrap', 'redeem', 'link extra', 'scp -t /tmp', 'cat /etc/passwd', 'sftp', '', undefined]) {
+    for (const command of ['bootstrap', 'redeem', 'cancel', 'link extra', 'scp -t /tmp', 'cat /etc/passwd', 'sftp', '', undefined]) {
       assert.equal(routeGateRequest('runner', command), null, String(command));
     }
   });
@@ -146,6 +147,35 @@ describe('gate requests', () => {
     const unknown = await runGate(gateArgs('redeem', knownId), 'bootstrap');
     assert.equal(unknown.code, 2);
     assert.equal(unknown.stdout.length, 0);
+  });
+
+  it('cancel closes the code the key belongs to: the package is no longer sent, the code cannot be redeemed, its key line is gone — and asking again is harmless', async () => {
+    const pairId = await createOpenPairing();
+    assert.match(fs.readFileSync(fixture.ctx.authorizedKeysPath, 'utf8'), /charness-pairing:/);
+    const run = await runGate(gateArgs('redeem', pairId), 'cancel');
+    assert.equal(run.code, 0, run.log.join('\n'));
+    const { request, body } = splitMarker(run.stdout);
+    assert.equal(request, 'cancel');
+    assert.deepEqual(cancelReplySchema.parse(JSON.parse(body.toString('utf8'))), { ok: true });
+    assert.deepEqual(readPendingFile(fixture.ctx.dir).pending, []);
+    assert.doesNotMatch(fs.readFileSync(fixture.ctx.authorizedKeysPath, 'utf8'), /charness-pairing:/, 'the key line is gone with the code');
+    assert.equal((await runGate(gateArgs('redeem', pairId), 'bootstrap')).code, 2, 'no package for a closed code');
+    const redeem = await runGate(gateArgs('redeem', pairId), 'redeem', JSON.stringify(createRedeemFixture().request));
+    assert.equal(redeemReplySchema.parse(JSON.parse(splitMarker(redeem.stdout).body.toString('utf8'))).ok, false);
+    const again = await runGate(gateArgs('redeem', pairId), 'cancel');
+    assert.equal(again.code, 0);
+    assert.deepEqual(cancelReplySchema.parse(JSON.parse(splitMarker(again.stdout).body.toString('utf8'))), { ok: false });
+  });
+
+  it('cancel never touches another code or a runner that used its code', async () => {
+    const other = await createOpenPairing();
+    const usedPairId = await createOpenPairing();
+    const redeemed = await redeemPairing(fixture.ctx, usedPairId, createRedeemFixture().request, startMs);
+    assert.equal(redeemed.ok, true);
+    const cancelUsed = await runGate(gateArgs('redeem', usedPairId), 'cancel');
+    assert.deepEqual(cancelReplySchema.parse(JSON.parse(splitMarker(cancelUsed.stdout).body.toString('utf8'))), { ok: false }, 'a spent code has nothing to close');
+    assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 1, 'and the runner it made stays');
+    assert.deepEqual(readPendingFile(fixture.ctx.dir).pending.map((pairing) => pairing.pairId), [other], 'the other open code stays open');
   });
 
   it('redeem registers the runner and answers with the marker, then the reply', async () => {

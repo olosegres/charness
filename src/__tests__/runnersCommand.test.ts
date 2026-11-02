@@ -383,7 +383,7 @@ describe('/runners over its ports', () => {
         assert.ok(message.text.includes('cr1.'), 'the line carries the code');
         assert.ok(!message.text.slice(message.text.indexOf('<pre>') + 5, message.text.indexOf('</pre>')).match(/[<>]/), 'the line is HTML-escaped inside the <pre>');
       }
-      assert.match(adminMessage.text, /^Pair a runner — valid 10 minutes, single use\.\n\n① From an admin account of the runner machine: it pairs «runner» \(the last word of the line — change it if the account is named otherwise\) and keeps it running:\n\n<pre>sudo sh -c '/);
+      assert.match(adminMessage.text, /^Pair a runner — valid 10 minutes, single use\.\n\n① From an admin account of the runner machine: pairs «runner» \(the last word — change it if needed\) and keeps it running\. Trusts this charness host with root there, for the paste:\n\n<pre>sudo sh -c '/);
       assert.ok(adminMessage.text.endsWith(' runner</pre>'), 'the account is the last word of the admin line, and nothing follows the line');
       assert.match(plainMessage.text, /^② Without admin rights: run this one in the terminal of the runner account itself:\n\n<pre>sh -c '/);
       assert.ok(plainMessage.text.endsWith("</pre>\n\nThe account must be an existing standard user, not your main account — it runs the agents' code. Anyone with either line can attach a machine to this charness until one of them is used or expires."), plainMessage.text.slice(-300));

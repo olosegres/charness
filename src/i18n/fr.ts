@@ -1204,7 +1204,7 @@ export const frDict: Record<string, string> = {
   'runners.addressRejected': '⚠️ {reason}\n\nEnvoyez une autre adresse, ou rouvrez /runners.',
   'runners.addressNote': 'ℹ️ {note}',
   'runners.addressExpired': 'Cette question est périmée — rouvrez /runners et recommencez.',
-  'runners.pairingAdminIntro': 'Associer un runner — valable {minutes} minutes, à usage unique.\n\n① Depuis un compte administrateur de la machine du runner : associe « {account} » (le dernier mot de la ligne — changez-le si le compte porte un autre nom) et le garde en marche :',
+  'runners.pairingAdminIntro': 'Associer un runner — valable {minutes} minutes, à usage unique.\n\n① Depuis un compte administrateur de la machine du runner : associe « {account} » (le dernier mot — changez-le si besoin) et le garde en marche. Donne à cet hôte charness root là-bas, le temps du collage :',
   'runners.pairingAlternativeIntro': '② Sans droits d’administrateur : exécutez cette ligne dans le terminal du compte du runner lui-même :',
   'runners.pairingAlternativeOutro': 'Le compte doit déjà exister et être un compte standard, pas votre compte principal — il exécute le code des agents. Quiconque a l’une des deux lignes peut rattacher une machine à ce charness tant qu’une des deux n’est pas utilisée ou expirée.',
   'runners.pairedText': 'Runner « {name} » associé {time}.',

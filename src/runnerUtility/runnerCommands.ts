@@ -2,8 +2,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { formatListTimestamp } from '../runners/runnersList';
-import { redeemReplySchema, unpairReplySchema, type RedeemReply, type RedeemRequest } from '../runners/gateProtocol';
-import { decodePairCode } from '../runners/pairCode';
+import { cancelReplySchema, redeemReplySchema, unpairReplySchema, type RedeemReply, type RedeemRequest } from '../runners/gateProtocol';
+import { decodePairCode, type PairCodePayload } from '../runners/pairCode';
 import { checkIsAdminAccount, formatAdminWarning, readAccountFacts } from './adminCheck';
 import { ensureLauncher } from './launcher';
 import { removeOldApps, switchCurrentApp } from './appInstall';
@@ -138,6 +138,20 @@ async function finishPairing(paths: RunnerHomePaths, inputs: PairingOutcomeInput
   io.stdout(`Its agents will run their projects' code on this machine as user «${os.userInfo().username}».\n\n${options.isServiceFollowing ? formatServiceFollowsNote() : formatKeepRunningHelp(paths)}`);
 }
 
+/** @description Close `payload`'s code on the hub (the `cancel` request, with the code's own key); a hub that cannot be reached is said, never fatal: the code then runs out by itself. */
+async function cancelPairingCode(payload: PairCodePayload, io: CommandIo): Promise<void> {
+  try {
+    const client = await connectToHub({ host: payload.host, port: payload.port, user: payload.user, hostKey: payload.hostKey }, payload.privateKey);
+    try {
+      await requestGateJson(client, 'cancel', null, cancelReplySchema);
+    } finally {
+      client.end();
+    }
+  } catch (error) {
+    io.stderr(`charness-runner: the pairing code of this line could not be closed on the hub (${error instanceof Error ? error.message : 'unknown error'}); it stays open until it expires\n`);
+  }
+}
+
 /**
  * @description `charness-runner pair <code>` (run from the INSTALLED copy): redeem the code, record who the runner serves, install its
  * tools. A pairing that an earlier run left half done is recovered FIRST (with the runner's own key), whatever the new code is. Returns the exit code.
@@ -147,9 +161,16 @@ export async function runPair(code: string, appDir: string, packageId: string | 
   const existing = readRunnerConfig(paths);
   if (existing !== null) {
     // An admin line pasted again for an account that is already paired (a service step that failed, or one only a Mac's always-on is missing):
-    // nothing is paired twice, and the line goes on to the service.
+    // nothing is paired twice, the line's code is closed on the hub (it will never be redeemed, and must not stay open in sudo's log and
+    // keep its Telegram messages waiting), and the line goes on to the service.
     if (options.isServiceFollowing) {
+      const decodedRetry = decodePairCode(code);
+      if (!decodedRetry.ok) {
+        io.stderr(`charness-runner: ${decodedRetry.error}\n`);
+        return 1;
+      }
       io.stdout(`This account is already paired (as “${existing.name}” with ${existing.hub.label}): it is not paired again. Its always-on service is installed next, by the same line.\n`);
+      await cancelPairingCode(decodedRetry.payload, io);
       return 0;
     }
     io.stderr(`charness-runner: this account is already paired (as “${existing.name}” with ${existing.hub.label}).\n`);

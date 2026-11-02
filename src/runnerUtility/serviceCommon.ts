@@ -72,13 +72,18 @@ export function getLaunchdFiles(isSystem: boolean, homeDir: string, names: Servi
   return { directory, link: path.join(directory, `${names.launchdLink}.plist`), pueued: path.join(directory, `${names.launchdPueued}.plist`) };
 }
 
+/**
+ * The account from `id` and the directory service (`dscl`). A home folder that cannot be read from there is NOT guessed: root writes
+ * definitions that name it, so no answer means no account.
+ */
 export async function resolveMacAccount(name: string, runner: CommandRunner): Promise<TargetAccount | null> {
   const uid = await runner('id', ['-u', name], { timeoutMs: commandTimeoutMs });
   const gid = await runner('id', ['-g', name], { timeoutMs: commandTimeoutMs });
   if (!uid.ok || !gid.ok) return null;
   const home = await runner('dscl', ['.', '-read', `/Users/${name}`, 'NFSHomeDirectory'], { timeoutMs: commandTimeoutMs });
   const homeDir = home.ok ? /NFSHomeDirectory:\s*(\S.*)$/m.exec(home.stdout)?.[1].trim() : undefined;
-  return { name, uid: Number(uid.stdout.trim()), gid: Number(gid.stdout.trim()), homeDir: homeDir ?? `/Users/${name}` };
+  if (homeDir === undefined || !path.isAbsolute(homeDir)) return null;
+  return { name, uid: Number(uid.stdout.trim()), gid: Number(gid.stdout.trim()), homeDir };
 }
 
 /** `getent passwd <name>` → `name:x:uid:gid:gecos:home:shell`. */

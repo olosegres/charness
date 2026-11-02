@@ -1204,7 +1204,7 @@ export const deDict: Record<string, string> = {
   'runners.addressRejected': '⚠️ {reason}\n\nSende eine andere Adresse oder öffne /runners erneut.',
   'runners.addressNote': 'ℹ️ {note}',
   'runners.addressExpired': 'Diese Frage ist veraltet — öffne /runners und beginne neu.',
-  'runners.pairingAdminIntro': 'Runner koppeln — gültig {minutes} Minuten, einmalig verwendbar.\n\n① Von einem Administratorkonto der Runner-Maschine: koppelt „{account}“ (das letzte Wort der Zeile — ändere es, wenn das Konto anders heißt) und hält es dauerhaft am Laufen:',
+  'runners.pairingAdminIntro': 'Runner koppeln — gültig {minutes} Minuten, einmalig verwendbar.\n\n① Von einem Administratorkonto der Runner-Maschine: koppelt „{account}“ (das letzte Wort — bei Bedarf ändern) und hält es am Laufen. Gibt diesem charness-Host dort root-Rechte, für das Einfügen:',
   'runners.pairingAlternativeIntro': '② Ohne Administratorrechte: Führe diese Zeile im Terminal des Runner-Kontos selbst aus:',
   'runners.pairingAlternativeOutro': 'Das Konto muss bereits existieren und ein normales Konto sein, nicht dein Hauptkonto — es führt den Code der Agenten aus. Wer eine der beiden Zeilen hat, kann eine Maschine mit diesem charness verbinden, bis eine davon benutzt wird oder abläuft.',
   'runners.pairedText': 'Runner „{name}“ gekoppelt {time}.',

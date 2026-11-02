@@ -228,7 +228,7 @@ describe('runnersScreenPlan: the other screens and texts', () => {
     const parts = buildPairingMessageParts(10, 'runner', t);
     assert.equal(
       parts.adminIntro,
-      'Pair a runner — valid 10 minutes, single use.\n\n① From an admin account of the runner machine: it pairs «runner» (the last word of the line — change it if the account is named otherwise) and keeps it running:',
+      'Pair a runner — valid 10 minutes, single use.\n\n① From an admin account of the runner machine: pairs «runner» (the last word — change it if needed) and keeps it running. Trusts this charness host with root there, for the paste:',
     );
     assert.equal(parts.alternativeIntro, '② Without admin rights: run this one in the terminal of the runner account itself:');
     assert.equal(
@@ -243,7 +243,7 @@ describe('runnersScreenPlan: the other screens and texts', () => {
     const payload = createPairCodePayload({ host: 'a-quite-long-name.example.com', user: 'a-hub-user-name' });
     const adminLine = buildAdminBootstrapLine(payload);
     const plainLine = buildBootstrapLine(payload);
-    const roomToSpare = 120;
+    const roomToSpare = 100;
     for (const locale of localeCodes) {
       runWithLocale(locale, () => {
         const parts = buildPairingMessageParts(10, defaultRunnerAccount, t);
@@ -252,6 +252,9 @@ describe('runnersScreenPlan: the other screens and texts', () => {
         assert.ok(adminLength < 4096 - roomToSpare, `${locale}: the admin message is ${adminLength} characters`);
         assert.ok(plainLength < 4096 - roomToSpare, `${locale}: the plain message is ${plainLength} characters`);
         assert.ok(parts.adminIntro.includes(`${defaultRunnerAccount}`), `${locale}: the account is named`);
+        // The admin line gives the charness host root on that machine for the paste: the message says so in every language (the plain line does not).
+        assert.ok(parts.adminIntro.includes('root') && parts.adminIntro.includes('charness'), `${locale}: the admin intro names the trust it gives`);
+        assert.ok(!parts.alternativeIntro.includes('root'), `${locale}: the plain line gives no such trust`);
       });
     }
   });

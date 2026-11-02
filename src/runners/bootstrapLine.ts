@@ -26,9 +26,15 @@ import { encodePairCode, type PairCodePayload } from './pairCode';
  * — (3) has the account pair itself from that copy (`sudo -u <account> -H node …/runnerCli.js pair`: its files are the account's, never
  * root's), and (4) runs the root step from the same root-owned copy (`rootServiceCli.js install <account>`: Node built-ins only, because
  * the copy has no dependencies — it installs the always-on service, and touches the account's side only through `sudo -u`, see
- * `runnerUtility/adminService.ts`). The pairing code stays single use, 10 minutes, a secret; sudo logs the command line, and a spent code
- * is worth nothing. Nothing creates an account. Run again for an account that is already paired, the line pairs nothing twice and
- * installs the service — that is its way to retry.
+ * `runnerUtility/adminService.ts`). The pairing code stays single use, 10 minutes, a secret; sudo logs the command line, so a code that
+ * is neither used nor closed stays live in that log until it runs out: a refused line (no such account, an admin account) leaves it open ON
+ * PURPOSE — the operator fixes the last word and pastes the same line again — and an already-paired account's line closes its own code (the
+ * gate's `cancel`). Nothing creates an account. Run again for an account that is already paired, the line pairs nothing twice and installs
+ * the service — that is its way to retry.
+ *
+ * What the admin line trusts: the charness host. The line is text the host made, and the program root runs from it is the one in the host's
+ * own install, so whoever can change that install (its user, and the agents that run as that user) could have root on the runner machine for
+ * the paste. The plain line trusts the host only with the runner account. The pairing message says so (`runners.pairingAdminIntro`).
  */
 
 const minNodeMajor = 22;
@@ -84,7 +90,7 @@ function renderFetchSteps(payload: PairCodePayload, isForAccount: boolean): stri
     `p="${payload.port}"`,
     `k="${payload.hostKey}"`,
     `b="${getPrivateKeyBody(payload.privateKey)}"`,
-    `command -v node >/dev/null 2>&1 && node -e "var v=process.versions.node.split(/[.]/);process.exit(v[0]>${minNodeMajor}||v[0]==${minNodeMajor}&&v[1]>=${minNodeMinor}?0:1)" || { echo "charness-runner: Node.js ${minNodeMajor}.${minNodeMinor} or newer is needed on this machine (https://nodejs.org)" >&2; exit 1; }`,
+    `command -v node >/dev/null 2>&1 && node -e "var v=process.versions.node.split(/[.]/);process.exit(v[0]>${minNodeMajor}||v[0]==${minNodeMajor}&&v[1]>=${minNodeMinor}?0:1)" || { echo "charness-runner: ${isForAccount ? `sudo finds no Node.js ${minNodeMajor}.${minNodeMinor} or newer on its PATH (install it system-wide)` : `Node.js ${minNodeMajor}.${minNodeMinor} or newer is needed on this machine (https://nodejs.org)`}" >&2; exit 1; }`,
     `{ printf "%s\\n" "${privateKeyHeader}"; printf "%s" "$b" | fold -w ${privateKeyFoldWidth}; printf "\\n%s\\n" "${privateKeyFooter}"; } > "$d/key"`,
     `printf "%s %s\\n" ${hubHostAlias} "$k" > "$d/kh"`,
     `ssh ${sshOptions} "$u@$h" bootstrap > "$d/answer" || { echo "charness-runner: the hub refused or did not answer (has the line expired or been used already? the ssh message above says which)" >&2; exit 1; }`,

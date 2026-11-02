@@ -47,12 +47,23 @@ A runner is attached in one of two ways:
      (`loginctl enable-linger`; the install itself runs as the account). **Root never runs, reads through or writes into anything the
      account can change** — the account runs the agents' code, so its folder is not trusted: root writes only the LaunchDaemon
      definitions into `/Library/LaunchDaemons` and calls `launchctl` / `loginctl`; everything of the account's own (its Pueue, its record,
-     its user service) is done by the account's own program, started with `sudo -u`. `sudo` asks for the admin's password once and
-     writes the command line to the system log — the code in it is worthless once used or expired. Both root and the account run the
-     Node that `sudo` finds, so Node has to be installed system-wide (Homebrew, the OS package, nodejs.org): a Node that only the runner
-     account's own login finds (nvm) is found by the second line, not by this one. If the service step fails, the account stays paired and
-     the line says so: **paste a fresh admin line** (from `/runners`) after fixing what it printed — a line pasted for an account that is
-     already paired pairs nothing twice and only installs the service.
+     its user service) is done by the account's own program, started with `sudo -u`.
+   - **What the admin line trusts.** Pasting it **trusts this charness host with root on this machine for that paste**: the line is text
+     the charness host made, and the program root runs from it is the one in the charness host's own install — so whoever can change that
+     install (its user, and the agents that run as that user) could have root here. The plain line trusts the charness host only with the
+     runner account. Paste the admin line only for a charness host you would let run a command as root on this machine.
+   - **The code in the line.** `sudo` asks for the admin's password once and writes the command line — the pairing code with it — to the
+     system log. The code is single use and good for 10 minutes: a line that was used is dead, and so is a retry's (see below), which
+     closes its own code. A line that was refused (no such account, an admin account…) leaves its code open until it expires — on purpose,
+     so you can fix the account and paste it again.
+   - **Node.** Both root and the account run the Node that `sudo` finds, so Node has to be installed system-wide (Homebrew, the OS
+     package, nodejs.org): a Node that only the runner account's own login finds (nvm) is found by the second line, not by this one, and the
+     line then says that sudo found no Node 22.12 or newer on its PATH. On a Mac the Node's path is written into the runner's launcher and
+     the daemons' `PATH`, so a Node under a home folder (nvm, Volta) stops working when that version is upgraded or removed: install it
+     system-wide, or run `charness runners pair` again for a fresh line after the move.
+   - **Retry.** If the service step fails, the account stays paired and the line says so: **paste a fresh admin line** (from `/runners`)
+     after fixing what it printed. A line pasted for an account that is already paired pairs nothing twice, closes its own code on the
+     charness host (its Telegram messages then read «Pairing code expired.»), and only installs the service.
    - **As the runner account itself** (the second message), no admin rights: it pairs and prints how to keep the runner running (the table
      below).
 3. The runner appears in `/runners` (and in `charness remote-run runners`) with its OS, CPU, memory, disk, load, jobs and what it can
@@ -65,7 +76,7 @@ A runner is attached in one of two ways:
 |---|---|
 | `~/.charness-runner/bin/charness-runner run` | holds the link in this terminal (Ctrl-C stops) |
 | `charness-runner service install` | keeps it running in the background, no admin: a systemd user service on Linux (with `loginctl enable-linger`; where polkit asks for an admin, the one `sudo` line is printed), a LaunchAgent on macOS (while that account is logged in) |
-| an admin's fresh admin line (above) | always on — a Mac logged out too, across fast user switching: a LaunchDaemon that runs **as the runner account**, with no extra rights. This is the only way to install it: `service install --system` on the runner is refused, because root must not run the account's own program |
+| an admin's fresh admin line (above) | always on — a Mac logged out too, across fast user switching: a LaunchDaemon that runs **as the runner account**, with no extra rights (its output goes to `~/.charness-runner/logs/` written by the account itself, never opened by root). This is the only way to install it: `service install --system` on the runner is refused, because root must not run the account's own program |
 | `charness-runner status` | whose charness it serves, the link state, how it is kept running, paused or not, running jobs |
 | `charness-runner pause` / `resume` | takes this machine out of rotation, or back in (the hub has its own pause, set in `/runners`) |
 | `charness-runner unpair` | tells the charness host to forget it, and stops the link and the queue's jobs here (an always-on service is removed first: see below) |

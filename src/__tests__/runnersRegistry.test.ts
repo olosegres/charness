@@ -13,7 +13,7 @@ import path from 'path';
 import { extractManagedBlock } from '../runners/authorizedKeys';
 import { decodePairCode } from '../runners/pairCode';
 import { createHubContext, getHandMadeRunnersPath, getHubFilePaths, getRunnerHostAlias } from '../runners/hubPaths';
-import { checkIsPairingOpen, createPairing, describeRunnerIdentity, pickFreeRunnerName, redeemPairing, removePairedRunner, sanitizeRunnerName, setPairedRunnerPaused, sweepExpiredPairings } from '../runners/hubPairing';
+import { cancelPairing, checkIsPairingOpen, createPairing, describeRunnerIdentity, pickFreeRunnerName, redeemPairing, removePairedRunner, sanitizeRunnerName, setPairedRunnerPaused, sweepExpiredPairings } from '../runners/hubPairing';
 import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { AuthorizedKeysBlockError, authorizedKeysBlockStart } from '../runners/authorizedKeys';
 import { HubDerivedFilesError, HubRegistryError, readPairedFile, readPendingFile, writePendingFile } from '../runners/hubRegistry';
@@ -156,6 +156,29 @@ describe('pairing', () => {
     assert.deepEqual(expired.map((entry) => entry.pairId), [pairing.pairId]);
     assert.equal(readPendingFile(fixture.ctx.dir).pending.length, 0);
     assert.deepEqual(readBlock(), []);
+  });
+
+  it('cancelling an open code closes it: the entry and its key line are gone at once, nothing is handed back as expired, and no runner comes of it', async () => {
+    const closed = await createTestPairing();
+    const kept = await createTestPairing();
+    assert.equal(await cancelPairing(fixture.ctx, closed.pairId, startMs + 1000), true);
+    assert.deepEqual(readPendingFile(fixture.ctx.dir).pending.map((entry) => entry.pairId), [kept.pairId]);
+    assert.equal(readBlock().length, 1, 'the other code\'s line stays');
+    assert.equal(checkIsPairingOpen(fixture.ctx, closed.pairId, startMs + 1000), false);
+    assert.deepEqual(await redeemPairing(fixture.ctx, closed.pairId, createRedeemFixture().request, startMs + 2000), { ok: false, reason: 'this pairing code is unknown or already used' });
+    assert.deepEqual(await sweepExpiredPairings(fixture.ctx, startMs + pairingLifetimeMs + 1000).then((entries) => entries.map((entry) => entry.pairId)), [kept.pairId], 'only the code still listed is ever handed back');
+  });
+
+  it('cancelling a code that is unknown, spent or expired changes nothing and says so', async () => {
+    const spent = await createTestPairing();
+    const reply = await redeemPairing(fixture.ctx, spent.pairId, createRedeemFixture().request, startMs + 1000);
+    assert.equal(reply.ok, true);
+    const expired = await createTestPairing();
+    const before = JSON.stringify([readPairedFile(fixture.ctx.dir), readPendingFile(fixture.ctx.dir)]);
+    assert.equal(await cancelPairing(fixture.ctx, spent.pairId, startMs + 2000), false);
+    assert.equal(await cancelPairing(fixture.ctx, 'ffffffffffff', startMs + 2000), false);
+    assert.equal(await cancelPairing(fixture.ctx, expired.pairId, startMs + pairingLifetimeMs), false);
+    assert.equal(JSON.stringify([readPairedFile(fixture.ctx.dir), readPendingFile(fixture.ctx.dir)]), before);
   });
 
   it('the sweep keeps a code that is still open, and a code made later does not swallow an expired one', async () => {

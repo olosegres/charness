@@ -15,7 +15,9 @@ import path from 'path';
 import { Server } from 'ssh2';
 import type { CommandRunner } from '../selfUpdate/commandRunner';
 import { formatGateAnswerHead } from '../runners/gateProtocol';
+import { encodePairCode } from '../runners/pairCode';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
+import { createPairCodePayload } from './runnersTestKit';
 import { writeIosCheck } from '../runnerUtility/iosCheck';
 import { formatKeepRunningHelp, runPair, runPause, runService, runStatus, runUnpair, type CommandIo, type UnpairDeps } from '../runnerUtility/runnerCommands';
 import type { ProcessControl } from '../runnerUtility/localLinkStop';
@@ -48,23 +50,24 @@ function pair(port = 22, hostKey = generateEd25519KeyPair('h').publicKey): Runne
 }
 
 /** The hub as far as `unpair` can tell: it knows the runner's key (or does not) and answers the `unpair` word. */
-async function startHub(knownKey: string): Promise<{ port: number; hostKey: string; unpairRequests: { count: number } }> {
+async function startHub(knownKey: string): Promise<{ port: number; hostKey: string; unpairRequests: { count: number }; cancelRequests: { count: number } }> {
   const hostKey = generateEd25519KeyPair('hub-host');
   const authenticate = createHubAuthenticator(knownKey);
   const unpairRequests = { count: 0 };
+  const cancelRequests = { count: 0 };
   const server = new Server({ hostKeys: [hostKey.privateKey] }, (connection) => {
     connection.on('error', () => undefined);
     connection.on('authentication', authenticate);
     connection.on('ready', () => {
       connection.on('session', (acceptSession) => {
         acceptSession().on('exec', (accept, reject, info) => {
-          if (info.command !== 'unpair') {
+          if (info.command !== 'unpair' && info.command !== 'cancel') {
             reject();
             return;
           }
-          unpairRequests.count += 1;
+          (info.command === 'unpair' ? unpairRequests : cancelRequests).count += 1;
           const channel = accept();
-          channel.write(formatGateAnswerHead('unpair'));
+          channel.write(formatGateAnswerHead(info.command));
           channel.write('{"ok":true}\n');
           channel.exit(0);
           channel.end();
@@ -76,7 +79,7 @@ async function startHub(knownKey: string): Promise<{ port: number; hostKey: stri
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('no port');
   hubs.push({ close: () => { server.close(); } });
-  return { port: address.port, hostKey: hostKey.publicKey, unpairRequests };
+  return { port: address.port, hostKey: hostKey.publicKey, unpairRequests, cancelRequests };
 }
 
 function createServiceDeps(commands: string[]): ServiceDeps {
@@ -331,16 +334,43 @@ describe('unpair', () => {
 });
 
 describe('pairing an account that is already paired', () => {
-  it('an admin line pasted again (a failed service step, or a Mac that only lacks the always-on service) pairs nothing twice and lets the line go on to the service — a plain pair is still refused', async () => {
+  /** A pairing code whose temporary key a stand-in hub knows; the hub counts the `cancel` requests it gets. */
+  async function createCodeOnHub(): Promise<{ code: string; hub: Awaited<ReturnType<typeof startHub>> }> {
+    const temporaryKey = generateEd25519KeyPair('temporary');
+    const hub = await startHub(temporaryKey.publicKey);
+    return { code: encodePairCode(createPairCodePayload({ host: '127.0.0.1', port: hub.port, user: 'hubuser', hostKey: hub.hostKey, privateKey: temporaryKey.privateKey })), hub };
+  }
+
+  it('an admin line pasted again (a failed service step, or a Mac that only lacks the always-on service) pairs nothing twice, CLOSES its code on the hub, and lets the line go on to the service — a plain pair is still refused', async () => {
     pair();
+    const { code, hub } = await createCodeOnHub();
     const before = fs.readFileSync(paths.config, 'utf8');
-    assert.equal(await runPair('cr1.never-read', '/app', null, io, home, { isServiceFollowing: true }), 0);
+    assert.equal(await runPair(code, '/app', null, io, home, { isServiceFollowing: true }), 0);
     assert.match(output, /This account is already paired \(as “mac” with @ExampleBot\): it is not paired again\. Its always-on service is installed next, by the same line\./);
     assert.equal(errors, '');
+    assert.equal(hub.cancelRequests.count, 1, 'the code is closed with its own key: it is not left open in sudo\'s log, and its Telegram messages settle');
     assert.equal(fs.readFileSync(paths.config, 'utf8'), before, 'the pairing is as it was');
     output = '';
-    assert.equal(await runPair('cr1.never-read', '/app', null, io, home), 1);
+    assert.equal(await runPair(code, '/app', null, io, home), 1);
     assert.match(errors, /this account is already paired \(as “mac” with @ExampleBot\)/);
+    assert.equal(output, '');
+    assert.equal(hub.cancelRequests.count, 1, 'a plain pair closes nothing');
+  });
+
+  it('a hub that cannot be reached for the closing is said, and the line still goes on to the service — the code then runs out by itself', async () => {
+    pair();
+    const { code, hub } = await createCodeOnHub();
+    hubs.pop()?.close();
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+    assert.equal(hub.cancelRequests.count, 0);
+    assert.equal(await runPair(code, '/app', null, io, home, { isServiceFollowing: true }), 0);
+    assert.match(errors, /the pairing code of this line could not be closed on the hub \(.+\); it stays open until it expires/);
+  });
+
+  it('a code that is not a pairing code is refused even for an admin line, and nothing is asked of any hub', async () => {
+    pair();
+    assert.equal(await runPair('cr1.never-read', '/app', null, io, home, { isServiceFollowing: true }), 1);
+    assert.match(errors, /the pairing code is damaged/);
     assert.equal(output, '');
   });
 });

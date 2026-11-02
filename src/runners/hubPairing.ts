@@ -138,6 +138,20 @@ export function checkIsPairingOpen(ctx: HubContext, pairId: string, nowMs: numbe
 }
 
 /**
+ * @description Close the pairing code `pairId` before it runs out: its entry leaves `pending.json` and its key line `authorized_keys`, so
+ * the line it was in can no longer be used. `true` when the code was open (made, not used, not expired); `false` — and nothing changes —
+ * for one that is unknown, used or expired. The offering instance sees a code that is neither open nor a runner and settles its messages
+ * the way it does for an expired one.
+ */
+export function cancelPairing(ctx: HubContext, pairId: string, nowMs: number): Promise<boolean> {
+  return runTransaction(ctx, nowMs, (state) => {
+    const pairing = state.pending.pending.find((candidate) => candidate.pairId === pairId);
+    if (pairing === undefined || pairing.expiresAtMs <= nowMs) return { result: false };
+    return { result: true, pending: { pending: state.pending.pending.filter((candidate) => candidate.pairId !== pairId) } };
+  });
+}
+
+/**
  * @description Forget the pairing codes that have expired (their lines are gone from `authorized_keys` too) and return them, so the
  * offering instance can edit its messages. A code that was used but whose entry outlived a crash is dropped without being returned.
  * Run at boot, on a timer and by the CLI; sshd already refuses an expired key by itself.

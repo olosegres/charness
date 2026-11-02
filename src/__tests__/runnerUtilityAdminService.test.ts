@@ -15,9 +15,10 @@ import os from 'os';
 import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
 import { createAdminServiceDeps, installServiceForAccount, type AdminServiceDeps } from '../runnerUtility/adminService';
-import { formatSystemStepAnswer, resolveLinuxAccount, type SystemStepAnswer, type TargetAccount } from '../runnerUtility/serviceCommon';
+import { formatSystemStepAnswer, resolveLinuxAccount, resolveMacAccount, type SystemStepAnswer, type TargetAccount } from '../runnerUtility/serviceCommon';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { getServiceNames } from '../runnerUtility/serviceUnits';
+import { launchdOwnPathKeys, parseLaunchdPlist } from './launchdPlistKit';
 
 interface Call {
   file: string;
@@ -112,6 +113,20 @@ describe('macOS: the daemons', () => {
     assert.deepEqual(result.lines, [`Installed two LaunchDaemons (${names.launchdLink}, ${names.launchdPueued}) that run as runner: always on, also logged out.`]);
   });
 
+  it('the definitions root writes name nothing in the account\'s folder for anything launchd opens or enters itself (its output is /dev/null) — a link planted there reaches nothing of root\'s', async () => {
+    const result = await installServiceForAccount('runner', createDeps());
+    assert.equal(result.ok, true, result.lines.join('\n'));
+    const files = fs.readdirSync(daemonsDir);
+    assert.equal(files.length, 2);
+    for (const file of files) {
+      const parsed = parseLaunchdPlist(fs.readFileSync(path.join(daemonsDir, file), 'utf8'));
+      assert.equal(parsed.strings.get('StandardOutPath'), '/dev/null', file);
+      assert.equal(parsed.strings.get('StandardErrorPath'), '/dev/null', file);
+      for (const key of launchdOwnPathKeys) assert.ok(!(parsed.strings.get(key) ?? '').startsWith(home), `${file}: ${key}`);
+      assert.equal(parsed.programArguments[0], '/bin/sh');
+    }
+  });
+
   it('touches nothing of the account\'s but through the account: every call that names a path under its home is a `sudo -u <account> -H`, and root writes nothing there', async () => {
     const homeEntriesBefore = fs.readdirSync(home);
     await installServiceForAccount('runner', createDeps());
@@ -128,11 +143,14 @@ describe('macOS: the daemons', () => {
     const lying = JSON.stringify({ ok: true, hadService: false, UserName: 'root', lines: ['UserName root'], program: '/bin/sh' });
     const result = await installServiceForAccount('runner', createDeps({ runner: createRunner({}, lying) }));
     assert.equal(result.ok, true, result.lines.join('\n'));
+    const programs: string[][] = [];
     for (const file of fs.readdirSync(daemonsDir)) {
       const plist = fs.readFileSync(path.join(daemonsDir, file), 'utf8');
-      assert.ok(!plist.includes('<string>root</string>') && !plist.includes('/bin/sh'), file);
+      assert.ok(!plist.includes('<string>root</string>'), file);
       assert.ok(plist.includes('<key>UserName</key><string>runner</string>'), file);
+      programs.push(parseLaunchdPlist(plist).programArguments.slice(5));
     }
+    assert.deepEqual(programs.map((program) => path.basename(program[0])).sort(), ['charness-runner', 'pueued'], 'only the account\'s own launcher and queue, as the account\'s shell runs them');
   });
 
   it('stops with the account\'s own words when its preparation refuses, and loads nothing', async () => {
@@ -270,6 +288,22 @@ describe('who may be served', () => {
     assert.equal(await resolveLinuxAccount('runner', answering('someone:x:1:1::/home/someone:/bin/sh\n')), null, 'an answer for another name is no answer');
     assert.equal(await resolveLinuxAccount('runner', answering('runner:x:abc:1003::/home/runner:/bin/sh\n')), null);
     assert.equal(await resolveLinuxAccount('runner', answering('runner:x:1002:1003:::/bin/sh\n')), null, 'no home folder recorded');
+  });
+
+  it('finds a Mac account from id and dscl — and refuses one whose home folder the directory service does not give, instead of guessing /Users/<name>', async () => {
+    const mac = (answers: { uid?: boolean; dscl?: string | null }): CommandRunner => async (file, args) => {
+      if (file === 'id') return answer({ ok: answers.uid !== false, stdout: args[0] === '-u' ? '501\n' : '20\n' });
+      return answers.dscl === null || answers.dscl === undefined ? answer({ ok: false, exitCode: 56, stderr: 'DS Error: -14136 (eDSRecordNotFound)' }) : answer({ stdout: answers.dscl });
+    };
+    assert.deepEqual(await resolveMacAccount('runner', mac({ dscl: 'NFSHomeDirectory: /Users/runner\n' })), { name: 'runner', uid: 501, gid: 20, homeDir: '/Users/runner' });
+    assert.deepEqual(await resolveMacAccount('runner', mac({ dscl: 'NFSHomeDirectory: /Volumes/Data/people/runner\n' })), { name: 'runner', uid: 501, gid: 20, homeDir: '/Volumes/Data/people/runner' }, 'the home is the directory service\'s word, wherever it is');
+    assert.equal(await resolveMacAccount('runner', mac({ dscl: null })), null, 'no answer from dscl: no guess');
+    assert.equal(await resolveMacAccount('runner', mac({ dscl: 'NFSHomeDirectory: relative/home\n' })), null);
+    assert.equal(await resolveMacAccount('runner', mac({ dscl: 'something else\n' })), null);
+    assert.equal(await resolveMacAccount('runner', mac({ uid: false, dscl: 'NFSHomeDirectory: /Users/runner\n' })), null);
+    const refused = await installServiceForAccount('runner', createDeps({ resolveAccount: async () => null }));
+    assert.match(refused.lines.join('\n'), /There is no account named «runner», or its home folder cannot be read from the directory service\./);
+    assert.deepEqual(commandLines(), []);
   });
 
   it('the real dependencies are the real thing: root-owned folder for the daemons, lchown for the definitions', () => {
