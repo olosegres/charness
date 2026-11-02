@@ -38,7 +38,7 @@ afterEach(() => {
 
 describe('the modules a self-check imports', () => {
   test('every built .js except the entry points, tests and non-js files, sorted, with forward slashes', () => {
-    for (const entry of ['cli.js', 'index.js', 'cli/botEntry.js', 'stt/sttInstallEntry.js', 'runnerUtility/runnerCli.js']) writePackageFile(`dist/${entry}`, 'throw new Error("an entry point was imported");\n');
+    for (const entry of ['cli.js', 'index.js', 'cli/botEntry.js', 'stt/sttInstallEntry.js', 'runnerUtility/runnerCli.js', 'runnerUtility/rootServiceCli.js']) writePackageFile(`dist/${entry}`, 'throw new Error("an entry point was imported");\n');
     writePackageFile('dist/__tests__/some.test.js', 'throw new Error("a test was imported");\n');
     writePackageFile('dist/utils/b.js', 'module.exports = 1;\n');
     writePackageFile('dist/a.js', 'module.exports = 1;\n');
