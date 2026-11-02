@@ -1,6 +1,6 @@
 {
   "name": "charness",
-  "version": "3.7.0",
+  "version": "3.8.0",
   "license": "MIT",
   "author": "Sergei Solo",
   "description": "Harness for running Claude Code / OpenCode agents in the cloud or on your laptop, controlled from Telegram or Jira.",
