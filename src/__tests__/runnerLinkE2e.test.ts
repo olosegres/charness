@@ -146,6 +146,8 @@ describe('runner link (process level)', { skip: skipReason }, () => {
   it('holds the link: plain ssh from the hub runs commands on the machine, with a clean environment', async () => {
     runner = startRunner(layout);
     await waitForLink();
+    // The runner says «linked» before the hub counts it online (see `waitForHubToSeeLink`): the list is read once the hub sees the link.
+    await waitForHubToSeeLink(runnerId);
     assert.match(runHubCli(layout, ['runners', 'ls']).stdout, / — online/);
     assert.equal((await waitForSsh('echo from-runner')).trim(), 'from-runner');
     const environment = sshThroughLink(layout, runnerId, 'echo "[$FLOW_SECRET][$HOME]"');
