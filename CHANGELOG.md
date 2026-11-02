@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.8.0 — 2026-11-02
+
 **Charness can now make a one-time pairing line for a runner machine — `charness runners pair` — and keeps the machines that used it in a registry (`charness runners ls | remove | pause | resume`); the runner's own side and the use of paired runners by `remote-run` follow in the same release.**
 Before, a runner was set up by hand over plain ssh: an account, a key, Pueue and `rsync` in the right places, and an entry in `runners.json`.
 Now the hub side of pairing exists, with nothing to open and nothing to run as root on the charness host: `charness runners pair --host <address>` checks that the address answers with this machine's own ssh server, then prints one line (valid 10 minutes, single use) to run on the runner machine. A runner's key in `~/.ssh/authorized_keys` — kept in one marked block, every other line left as it is — may run nothing but charness's own `runner-gate`: no shell, no port or unix-socket forwarding (OpenSSH cannot limit forwarding of unix sockets, and a key that could forward one could open the bot's tmux sockets). The gate hands the machine the hub's own charness package, takes its keys when the line is used, and then holds the machine's permanent connection: the runner dials out to the hub, the hub reaches it through a unix socket (`charness runner-proxy`), so the runner needs no open port and no VPN.
