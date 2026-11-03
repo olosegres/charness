@@ -171,6 +171,31 @@ describe('runnersScreenPlan: the list', () => {
     );
   });
 
+  it('the Node and yarn the jobs run with are one line under what it can do — a version, «none» or «gave no answer»; nothing when its script did not report them', () => {
+    const withTools = (tools: string[]): RunnerScreenEntry => createEntry({ probe: parseProbeOutput([probeText, ...tools].join('\n')) });
+    const lineOf = (entry: RunnerScreenEntry): string | undefined => buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text.split('\n').find((line) => line.includes('jobs run with'));
+    assert.equal(lineOf(withTools(['job_node=v24.22.2', 'job_yarn=1.22.22'])), '  jobs run with: Node v24.22.2 · yarn 1.22.22');
+    assert.equal(lineOf(withTools(['job_node=v24.22.2', 'job_yarn=none'])), '  jobs run with: Node v24.22.2 · yarn none (a job that calls it fails)');
+    assert.equal(lineOf(withTools(['job_node=none', 'job_yarn=unknown'])), '  jobs run with: Node none (a job that calls it fails) · yarn there, but gave no answer');
+    assert.equal(lineOf(createEntry()), undefined);
+    const offline = withTools(['job_node=v24.22.2', 'job_yarn=1.22.22']);
+    assert.equal(lineOf({ ...offline, isOnline: false }), undefined, 'a machine that is offline shows no live tools');
+  });
+
+  it('in every language the line names both versions and leaves no placeholder behind', () => {
+    const entry = createEntry({ probe: parseProbeOutput([probeText, 'job_node=v24.22.2', 'job_yarn=none'].join('\n')) });
+    const english = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+    for (const locale of localeCodes) {
+      runWithLocale(locale, () => {
+        const text = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+        const line = text.split('\n').find((candidate) => candidate.includes('v24.22.2'));
+        assert.ok(line !== undefined && line.includes('Node') && line.includes('yarn'), `${locale}: ${line}`);
+        assert.doesNotMatch(text, /\{[a-zA-Z]+\}/, `${locale}: no placeholder is left`);
+        if (locale !== 'en') assert.notEqual(text, english, `${locale}: translated, not the English fallback`);
+      });
+    }
+  });
+
   it('an offline machine shows when it was last seen and its last snapshot, marked as old — no jobs, no capabilities, no load', () => {
     const entry = createEntry({ isOnline: false, lastSeenMs: 5_000, runner: createRunner({ name: 'box1', isPaused: true, serviceKind: 'user-service' }) });
     const { text } = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime);

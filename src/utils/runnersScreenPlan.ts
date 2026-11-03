@@ -14,7 +14,7 @@
  */
 
 import type { Translate } from '../i18n';
-import { formatGigabytes, runnerCapabilities, type RunnerProbe } from '../remoteRun/probe';
+import { formatGigabytes, jobToolNone, jobToolUnknown, runnerCapabilities, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner, RunnerServiceKind } from '../runners/hubRegistry';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { getCurrentServiceKind } from '../runners/runnerServiceKind';
@@ -162,6 +162,13 @@ function describeCapabilities(probe: RunnerProbe, t: Translate): string {
   return t('runners.capabilitiesLine', { list: [...available, ...unavailable].join(' · ') });
 }
 
+/** The Node and yarn a job runs with, one line (nothing when the runner's script did not report them): a Node that changed under a restarted link shows here. */
+function describeJobTools(probe: RunnerProbe, t: Translate): string[] {
+  if (probe.jobTools === null) return [];
+  const describe = (version: string): string => (version === jobToolNone ? t('runners.jobToolNone') : version === jobToolUnknown ? t('runners.jobToolUnknown') : version);
+  return [`  ${t('runners.jobToolsLine', { node: describe(probe.jobTools.node), yarn: describe(probe.jobTools.yarn) })}`];
+}
+
 /** @description The warning about a machine whose link comes from another place than it did, or whose links fight — under its block on the screen, and in the message that tells it once. */
 export function buildLinkConcernNote(concern: LinkConcern, t: Translate, formatTime: FormatTime): string {
   if (concern.kind === 'fighting') return t('runners.linkFightNote', { sources: concern.sources.join(', '), count: concern.changeCount });
@@ -191,6 +198,7 @@ function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: For
       `  ${t('runners.hardwareLine', { cpu: describeCpu(probe, t, true), ramTotal: formatGigabytes(probe.ramTotalMb), ramFree: formatGigabytes(probe.ramFreeMb), disk: formatGigabytes(probe.diskFreeMb) })}`,
       `  ${t('runners.jobsLine', { running: probe.jobsRunning, queued: probe.jobsQueued, projects: probe.jobsProjects })}${probe.pueueVersion === null ? ` · ${t('runners.pueueMissing')}` : ''}`,
       `  ${describeCapabilities(probe, t)}`,
+      ...describeJobTools(probe, t),
     );
   } else {
     lines.push(`  ${t('runners.hardwareOldLine', { cpu: describeCpu(probe, t, false), ramTotal: formatGigabytes(probe.ramTotalMb), disk: formatGigabytes(probe.diskFreeMb) })}`);

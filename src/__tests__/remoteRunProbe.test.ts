@@ -47,6 +47,25 @@ describe('parseProbeOutput', () => {
   });
 });
 
+describe('the tools a job runs with', () => {
+  it('job_node and job_yarn are read as they came: a version, `none` (not on the PATH) or `unknown` (there, no answer); an older script says neither — never a guess', () => {
+    assert.deepEqual(parseProbeOutput(`${linuxProbeText}\njob_node=v24.22.2\njob_yarn=1.22.22`).jobTools, { node: 'v24.22.2', yarn: '1.22.22' });
+    assert.deepEqual(parseProbeOutput('job_node=v22.11.0\njob_yarn=none').jobTools, { node: 'v22.11.0', yarn: 'none' });
+    assert.deepEqual(parseProbeOutput('job_node=unknown\njob_yarn=4.5.0').jobTools, { node: 'unknown', yarn: '4.5.0' });
+    assert.equal(parseProbeOutput(linuxProbeText).jobTools, null);
+    assert.equal(parseProbeOutput('job_node=v22.11.0\n').jobTools, null);
+    assert.equal(parseProbeOutput('job_node=\njob_yarn=\n').jobTools, null);
+  });
+
+  it('`runners` shows them on a line of their own, a missing yarn loudly as what makes a job end with exit 127', () => {
+    const block = (tools: string): string => formatRunnerBlock({ name: 'mac', status: 'online', probe: parseProbeOutput(`${linuxProbeText}\n${tools}`), groupLimits: {}, isPausedByHub: false });
+    assert.match(block('job_node=v24.22.2\njob_yarn=1.22.22'), /\n {2}jobs run with: Node v24\.22\.2 · yarn 1\.22\.22$/m);
+    assert.match(block('job_node=v24.22.2\njob_yarn=none'), /jobs run with: Node v24\.22\.2 · yarn: NONE \(a job that calls it ends with exit 127 — see docs\/remote-run\.md\)/);
+    assert.match(block('job_node=none\njob_yarn=unknown'), /jobs run with: Node: NONE \(.*\) · yarn: present, no answer in time/);
+    assert.ok(!block('').includes('jobs run with'));
+  });
+});
+
 describe('what a paired runner adds to the probe', () => {
   const pairedProbeText = `${linuxProbeText}\npaused=no\nservice=system-service\nrunner_version=3.8.0\nios_boot=failed\nios_boot_detail=no login session`;
 

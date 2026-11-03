@@ -25,6 +25,7 @@ import { ensureRunnerKeys, readRunnerKeys, type RunnerKeys } from './runnerKeys'
 import { readExecEnv } from './execEnv';
 import { createRunnerServers } from './runnerServers';
 import { createStepRunner, stepLabels, type RunStep } from './progress';
+import { createShimDeps, ensurePackageManagerShims, formatShimLine, type ShimOutcome } from './packageManagerShims';
 import { createToolDeps, ensurePueue, ensureRsync, findPueue, findRsync, type ToolDeps, type ToolInstallOutcome } from './toolInstall';
 
 /**
@@ -78,12 +79,29 @@ async function printMachineCheck(paths: RunnerHomePaths, io: CommandIo): Promise
   return report;
 }
 
+/**
+ * @description Make the job PATH offer `yarn` and `pnpm` (`ensurePackageManagerShims`) and say what it offers. A manager it cannot offer is a
+ * warning in the log and in `runners` — the link goes up anyway, as it does without Pueue; a failure of the preparation itself is told, never fatal.
+ */
+async function prepareJobPackageManagers(paths: RunnerHomePaths, io: CommandIo): Promise<void> {
+  let outcomes: ShimOutcome[];
+  try {
+    outcomes = await ensurePackageManagerShims(paths, createShimDeps());
+  } catch (error) {
+    io.stderr(`charness-runner: the package managers for jobs could not be prepared (${error instanceof Error ? error.message : 'unknown error'})\n`);
+    return;
+  }
+  io.stdout(`${formatShimLine(outcomes)}\n`);
+  if (outcomes.some((outcome) => outcome.kind === 'missing')) io.stderr('charness-runner: a job that calls a missing package manager ends with exit 127 — `charness remote-run runners` shows what jobs run with.\n');
+}
+
 async function installTools(paths: RunnerHomePaths, deps: ToolDeps, io: CommandIo): Promise<void> {
   const runStep = getStepRunner(io);
   const pueue = await runStep(stepLabels.getPueue, () => ensurePueue(paths, deps), (outcome) => !outcome.ok);
   const rsync = await runStep(stepLabels.findRsync, () => ensureRsync(paths, deps), (outcome) => !outcome.ok);
   io.stdout(`${formatToolLine(rsync, pueue)}\n`);
   for (const outcome of [pueue, rsync]) if (!outcome.ok) io.stderr(`charness-runner: ${outcome.reason}\n`);
+  await prepareJobPackageManagers(paths, io);
 }
 
 /** @description The «Keep it running» part of the pairing text: the terminal, a service without admin, and — on a Mac — the admin line that makes it always on. */
@@ -290,6 +308,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   ensureLauncher(paths, process.execPath);
   const toolDeps = createToolDeps();
   if (!(await findPueue(paths, toolDeps))) await ensurePueue(paths, toolDeps);
+  await prepareJobPackageManagers(paths, io);
   // A service that manages Pueue owns the daemon: starting a second one here would only fight it for the socket.
   const isPueueRunning = readServiceKind(paths) === null ? await ensurePueueDaemon(paths) : await waitForPueueDaemon(paths, pueueServiceWaitMs);
   if (!isPueueRunning) io.stderr('charness-runner: Pueue is not running; jobs cannot be queued until it is (the link goes up anyway).\n');

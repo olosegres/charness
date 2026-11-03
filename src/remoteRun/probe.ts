@@ -48,6 +48,11 @@ export interface RunnerProbe {
   runnerVersion: string | null;
   /** The runner's iOS Simulator boot check; `null` when the runner did not report one. */
   iosBoot: { status: IosBootStatus; detail: string } | null;
+  /**
+   * The Node and yarn a job runs with (`--version` under the probe's own PATH, which is a job's): a version, `none` (not on the PATH: a job that calls
+   * it ends with exit 127) or `unknown` (there, but no answer in time). `null` when the runner's script did not report them (an older one).
+   */
+  jobTools: { node: string; yarn: string } | null;
 }
 
 const megabytesPerGigabyte = 1024;
@@ -56,6 +61,15 @@ function readNumber(value: string | undefined): number | null {
   if (value === undefined || value.trim() === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+export const jobToolNone = 'none';
+export const jobToolUnknown = 'unknown';
+
+function parseJobTools(fields: ReadonlyMap<string, string>): RunnerProbe['jobTools'] {
+  const node = fields.get('job_node');
+  const yarn = fields.get('job_yarn');
+  return node === undefined || yarn === undefined || node === '' || yarn === '' ? null : { node, yarn };
 }
 
 /** @description Parse the `key=value` lines of `runner.sh probe`. */
@@ -98,6 +112,7 @@ export function parseProbeOutput(text: string): RunnerProbe {
     serviceKind: runnerServiceKinds.find((kind) => kind === fields.get('service')) ?? null,
     runnerVersion: fields.get('runner_version') || null,
     iosBoot: iosBootStatus === undefined ? null : { status: iosBootStatus, detail: fields.get('ios_boot_detail') ?? '' },
+    jobTools: parseJobTools(fields),
   };
 }
 
@@ -140,6 +155,17 @@ function formatCapabilities(probe: RunnerProbe): string[] {
   return [...available, ...unavailable];
 }
 
+/** `jobs run with: Node v24.22.2 · yarn 1.22.22` — a changed Node shows here; a tool that is not there is said loudly, as the thing that makes a job end with exit 127. */
+function formatJobTools(probe: RunnerProbe): string[] {
+  if (probe.jobTools === null) return [];
+  const describe = (name: string, version: string): string => {
+    if (version === jobToolNone) return `${name}: NONE (a job that calls it ends with exit 127 — see docs/remote-run.md)`;
+    if (version === jobToolUnknown) return `${name}: present, no answer in time`;
+    return `${name} ${version}`;
+  };
+  return [`  jobs run with: ${describe('Node', probe.jobTools.node)} · ${describe('yarn', probe.jobTools.yarn)}`];
+}
+
 /** The line of a paired runner under its capabilities: the charness it runs and how it is kept running. Nothing for a hand-made one. */
 function formatRunnerProgram(probe: RunnerProbe): string[] {
   const parts = [
@@ -157,6 +183,7 @@ export function formatRunnerDetails(probe: RunnerProbe, groupLimits: Readonly<Re
     `  ${formatCpu(probe)} · RAM ${formatGigabytes(probe.ramTotalMb)}, ${formatGigabytes(probe.ramFreeMb)} free · disk ${formatGigabytes(probe.diskFreeMb)} free (work dir)`,
     `  ${jobs}${groups === '' ? '' : ` · groups: ${groups}`}${probe.pueueVersion === null ? ' · Pueue: MISSING (install it, see docs/remote-run.md)' : ''}`,
     `  can: ${formatCapabilities(probe).join(' · ')}`,
+    ...formatJobTools(probe),
     ...formatRunnerProgram(probe),
   ];
 }

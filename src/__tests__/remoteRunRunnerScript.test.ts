@@ -922,10 +922,10 @@ describe('the probe fits its 20 s however many of its questions hang', () => {
   }
 
   /** `probe_slow` of a Mac whose tools are the fakes in `fakeBin`, run as a sourced function; returns its lines and how long it took. */
-  function probeSlowOfAMac(): { lines: Record<string, string>; elapsedSec: number } {
+  function probeSlowOfAMac(basePath: string = process.env.PATH ?? ''): { lines: Record<string, string>; elapsedSec: number } {
     const result = spawnSync('bash', ['-c', `source ${scriptPath}; uname() { echo Darwin; }; work=${workDir}; read_runner_state; start=$SECONDS; probe_slow; echo "elapsed=$((SECONDS - start))"`], {
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}`, PUEUE_BIN: path.join(fakeBin, 'pueue') },
+      env: { ...process.env, PATH: `${fakeBin}:${basePath}`, PUEUE_BIN: path.join(fakeBin, 'pueue') },
       timeout: 60_000,
     });
     const lines: Record<string, string> = {};
@@ -973,6 +973,32 @@ describe('the probe fits its 20 s however many of its questions hang', () => {
     assert.equal(lines.cap_ios, 'yes');
     assert.equal(lines.cap_ios_detail, 'Xcode 16.2, 2 simulators');
     assert.equal(lines.cap_docker, 'yes');
+  });
+
+  it('the tools a job runs with: the versions `node` and `yarn` print, `none` for one that is not on the PATH, `unknown` for one that does not answer in time — within the step limit', () => {
+    writeFake('node', 'echo v24.22.2');
+    writeFake('yarn', 'echo 1.22.22; echo "a second line"');
+    let { lines } = probeSlowOfAMac();
+    assert.equal(lines.job_node, 'v24.22.2');
+    assert.equal(lines.job_yarn, '1.22.22');
+    writeFake('yarn', 'exec sleep 120');
+    let elapsedSec: number;
+    ({ lines, elapsedSec } = probeSlowOfAMac());
+    assert.equal(lines.job_yarn, 'unknown');
+    assert.ok(elapsedSec <= stepLimitSec + 3, `${elapsedSec} s: a yarn that hangs costs one step limit`);
+    // This machine's own yarn (a Corepack shim that would run the fake node) must not answer for the absent one: the system folders only.
+    fs.rmSync(path.join(fakeBin, 'yarn'));
+    ({ lines } = probeSlowOfAMac('/usr/bin:/bin'));
+    assert.equal(lines.job_yarn, 'none');
+    fs.rmSync(path.join(fakeBin, 'node'));
+    ({ lines } = probeSlowOfAMac('/usr/bin:/bin'));
+    assert.equal(lines.job_node, 'none');
+  });
+
+  it('yarn is never asked to prompt: Corepack\'s download question is off for the version call', () => {
+    writeFake('node', 'echo v24.22.2');
+    writeFake('yarn', 'echo "prompt=$COREPACK_ENABLE_DOWNLOAD_PROMPT"');
+    assert.equal(probeSlowOfAMac().lines.job_yarn, 'prompt=0');
   });
 
   it('an Xcode that is not there is "not found" (not "did not answer"), and the probe leaves no scratch state behind', () => {

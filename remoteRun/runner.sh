@@ -310,6 +310,18 @@ probe_step_output() {
   read_file "$probe_dir/$1.out"
 }
 
+# What a tool answered to `--version` (its first line, cut short): `none` when it is not on this PATH — a job that calls it ends with exit 127 —
+# and `unknown` when it is there but did not answer in time.
+probe_tool_version() {
+  local name=$1
+  command -v "$name" > /dev/null 2>&1 || { echo none; return 0; }
+  if [ "$(probe_step_status "$name")" = 0 ]; then
+    probe_step_output "$name" | head -n 1 | cut -c1-40
+  else
+    echo unknown
+  fi
+}
+
 probe_slow() {
   mkdir -p "$work/tmp"
   probe_dir="$work/tmp/probe.$$.$RANDOM"
@@ -325,9 +337,15 @@ probe_slow() {
     start_probe_step simctl "$probe_step_sec" xcrun simctl list devices available
   fi
   [ "$has_docker" -eq 1 ] && start_probe_step docker "$probe_step_sec" docker info
+  # The tools of a job as THIS call sees them: the PATH a job runs with is the one of the ssh command that queued it, and so is the probe's.
+  # `yarn` may be Corepack's shim, which would fetch a yarn on its first run — never ask it to wait for an answer from the user.
+  command -v node > /dev/null 2>&1 && start_probe_step node "$probe_step_sec" node --version
+  command -v yarn > /dev/null 2>&1 && start_probe_step yarn "$probe_step_sec" env COREPACK_ENABLE_DOWNLOAD_PROMPT=0 yarn --version
   wait
 
   echo "disk_free_mb=$(kb_to_mb "$(probe_step_output disk | awk 'NR == 2 { print $4 }')")"
+  echo "job_node=$(probe_tool_version node)"
+  echo "job_yarn=$(probe_tool_version yarn)"
   if [ "$(probe_step_status pueue)" = 0 ]; then
     echo "pueue=$(probe_step_output pueue | awk '{ print $NF }')"
   else

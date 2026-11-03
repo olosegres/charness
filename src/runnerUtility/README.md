@@ -40,7 +40,10 @@ the queue), `logs/`, `build/`.
   shell, pty, subsystem, x11, agent, or forwarding in either direction; `env` requests are accepted and ignored. The link server serves no
   session at all, it only passes `direct-tcpip` channels to the session server.
 - **Exec semantics are sshd's.** `bash -c <cmd>` in a clean environment (`execEnv.ts`: HOME, USER, LOGNAME, LANG, TMPDIR, a PATH of
-  `~/.charness-runner/bin` + the `node` folder + Homebrew + system, the Android SDK where installers put it, then the `env` file); the
+  `~/.charness-runner/bin` + the `node` folder + Homebrew + system — `getJobPathDirectories`, the one place that order is written —, the Android SDK where installers put it, then the `env` file); the
+  `yarn` / `pnpm` of that PATH are made sure of at every link start and `check` (`packageManagerShims.ts`: a manager neither the Node's folder nor the
+  system offers gets Corepack's shim in `<root>/bin`, a shim the Node now makes unnecessary is removed; a Node without Corepack is reported, never fatal —
+  a link restarted under another Node otherwise lost `yarn` for every job, exit 127), and `runner.sh probe` reports `job_node` / `job_yarn` under that same PATH (`runners` shows them); the
   client's EOF is the command's EOF (phase 1's lease relies on it); a CLOSED channel closes the pipes and does not kill the command; the
   exit status or signal goes back. A running command counts as busy until the process really ends.
 - **The attempt ends with the `link` CHANNEL.** The hub's gate dying, or the link being cut, closes that channel while the connection

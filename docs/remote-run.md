@@ -121,6 +121,15 @@ cut, the jobs it was running are stopped (through the link, at once, when it is 
 usual installers put it — and nothing of the charness host's environment. Anything else (`PATH` additions for a Node from nvm, `JAVA_HOME`,
 a token) goes into `~/.charness-runner/env`, one `KEY=VALUE` per line, read again for every job.
 
+**`yarn` and `pnpm` survive a change of Node.** A Node from nvm, Volta or Homebrew has Corepack but not its shims, so `yarn` is on a job's
+`PATH` only when somebody enabled it for exactly that Node — and a link restarted under another Node (nvm's default changed, a service
+moved) lost it, and every job ended with `yarn: command not found`, exit 127. At every link start, and on `charness-runner check`, the
+runner now offers each of `yarn` and `pnpm` that neither the Node's folder nor the system folders have as a Corepack shim in
+`~/.charness-runner/bin` (`corepack enable --install-directory`: symlinks, nothing is downloaded before a job first runs it), and removes a
+shim it made earlier once the Node itself offers the manager again. A Node without Corepack (25 and later) cannot be helped: the runner says
+so in its log, and `charness remote-run runners` shows what jobs run with — `jobs run with: Node v24.22.2 · yarn 1.22.22`, or
+`yarn: NONE (a job that calls it ends with exit 127)` — so a Node that changed under a restarted link is visible there, not found by a failed job.
+
 **What a job can reach — the machine's own network.** A job runs as the runner account on the runner machine, so it shares that machine's network: the
 home or office LAN (the router's admin page, printers, other computers), every VPN or tunnel interface the machine is on (a WireGuard network included), and
 the machine's own localhost services — and so does any npm package a job installs. Nothing in charness fences that: on the charness host a job cannot see

@@ -50,15 +50,19 @@ export interface ExecEnvInputs {
   androidSdk: string | null;
 }
 
+/** @description The folders of a job's PATH, in order: the runner's own `bin`, the folder of the Node that runs the link, then Homebrew's and the system's. */
+export function getJobPathDirectories(paths: RunnerHomePaths, nodeDir: string): string[] {
+  return [...new Set([paths.binDir, nodeDir, ...systemPathDirs])];
+}
+
 export function buildExecEnv(inputs: ExecEnvInputs): NodeJS.ProcessEnv {
-  const pathDirs = [inputs.paths.binDir, inputs.nodeDir, ...systemPathDirs];
   return {
     HOME: inputs.paths.homeDir,
     USER: inputs.accountName,
     LOGNAME: inputs.accountName,
     LANG: inputs.environment.LANG ?? defaultLang,
     TMPDIR: inputs.environment.TMPDIR ?? os.tmpdir(),
-    PATH: [...new Set(pathDirs)].join(path.delimiter),
+    PATH: getJobPathDirectories(inputs.paths, inputs.nodeDir).join(path.delimiter),
     ...(inputs.androidSdk === null ? {} : { ANDROID_HOME: inputs.androidSdk, ANDROID_SDK_ROOT: inputs.androidSdk }),
     ...inputs.operatorEnv,
   };

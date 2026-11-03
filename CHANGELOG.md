@@ -30,6 +30,10 @@ Now the job's log ends with the first eight error-looking lines of the step and 
 Before, a `.env.test` or a `.pem` fixture that a test needs on the runner could only be opted in with `send:` in the project's `.remote-run` — a file a read-only checkout cannot take — and a project with sixteen such fixtures printed all sixteen names before every single run, until nobody read the line.
 Now `--send <path>` (repeatable, a pattern relative to the project root, also for a file git ignores) sends the named files for that call alone and says so; the held-back line names the first five files and comes again only when the list changes — a file added, removed or opted in.
 
+**A runner's jobs keep `yarn` and `pnpm` when the link restarts under another Node, and `charness remote-run runners` shows which Node and yarn the jobs run with.**
+Before, `yarn` was on a job's PATH only when somebody had enabled it for the very Node that ran the link — a Node from nvm ships Corepack without its shims — so when the link restarted under another Node (nvm's default changed), the next job ended with `yarn: command not found` (exit 127) and nothing in `runners` hinted at why.
+Now the runner offers `yarn` and `pnpm` as Corepack shims in its own `bin` whenever the Node and the system do not have them (at every link start and on `charness-runner check`; a Node without Corepack is reported in the log), and `runners` — in the terminal and in `/runners` — has a line `jobs run with: Node v24.22.2 · yarn 1.22.22`, with `yarn: NONE` when a job that calls it would fail.
+
 ## 3.9.1 — 2026-11-04
 
 **An @-mention of the AI account in a Jira issue it is already working on no longer makes it believe the issue is not handed to it, and no longer stops its build.**
