@@ -199,7 +199,7 @@ describe('JiraInbound', () => {
       contextLedger,
       trust: null,
       isMentionWakeOn: false,
-      listOpenRequests: (key) => (openRequestOrigins.get(key.thread) ?? []).map((origin) => ({ origin })),
+      listOpenRequests: (key) => (openRequestOrigins.get(key.thread) ?? []).map((origin, index) => ({ id: `req_open_${index + 1}`, origin })),
       parkMention: async (issueKey) => {
         recorded.calls.push(`parkMention ${issueKey}`);
         recorded.mentionParked.push(issueKey);
@@ -1173,10 +1173,10 @@ describe('JiraInbound', () => {
       };
     };
 
-    /** The issue as it stands when its prompt is built: assigned to the AI account, in the status `statusId` / `statusName`. */
+    /** The issue as it stands when its prompt is built: assigned to the AI account, in the status `statusId` / `statusName`, reported by `colleague`. */
     const createAiAssignedIssue = (key: string, statusId: string, statusName: string): JiraIssue => {
       const base = createUnhandedIssue(key);
-      return { ...base, fields: { ...base.fields, assignee: { accountId: aiAccountId }, status: { id: statusId, name: statusName } } };
+      return { ...base, fields: { ...base.fields, assignee: { accountId: aiAccountId }, status: { id: statusId, name: statusName }, reporter: colleague } };
     };
 
     function createMentionClient(searched: () => JiraIssue[], read: (key: string) => JiraIssue = createUnhandedIssue): JiraInboundDeps['client'] {
@@ -1290,7 +1290,7 @@ describe('JiraInbound', () => {
       assert.deepEqual(recorded.untrusted, []);
     });
 
-    it('the issue\'s assignee is read for the note: a mention while the issue is assigned to the AI account in a work status says it is HANDED to it — not "not handed to you"', async () => {
+    it('the issue\'s assignee is read for the note: a mention while the issue is assigned to the AI account in a work status, with a hand-over request open, says it is HANDED to it and names that request', async () => {
       // A build in progress: the hand-over request is open and its trigger is recorded; another trusted person mentions the AI.
       const aiAssigned = createAiAssignedIssue(issueKey, '10001', 'To Do');
       triggerLog.record({ issueKey, triggerId: '100', outcome: 'request', at: nowMs - 30 * minuteMs });
@@ -1302,14 +1302,49 @@ describe('JiraInbound', () => {
       assert.equal(recorded.origins[0].kind, 'trackerMention');
       assert.equal(recorded.origins[0].attributes.requester, member.accountId);
       assert.ok(recorded.prompts[0].includes(
-        'You were mentioned in comment 10240 by Member. The issue is handed to you: it is assigned to you and its status (To Do) is one you work in (in this project: "To Do"). ',
+        'You were mentioned in comment 10240 by Member. The issue is handed to you: it is assigned to you, its status (To Do) is one you work in (in this project: "To Do"), ' +
+        'and the hand-over request req_open_1 of Colleague is open. ',
       ), recorded.prompts[0]);
-      assert.ok(recorded.prompts[0].includes('any hand-over request of this conversation that is open goes on unchanged'), recorded.prompts[0]);
+      assert.ok(recorded.prompts[0].includes('request req_open_1 of Colleague goes on unchanged'), recorded.prompts[0]);
       assert.ok(!recorded.prompts[0].includes('not handed to you'), recorded.prompts[0]);
       assert.ok(!recorded.prompts[0].includes('assignee: nobody'), recorded.prompts[0]);
     });
 
-    it('assigned to the AI account in a status the project does not work in: the note says only the status is missing', async () => {
+    it('assigned to the AI account in a work status but NO hand-over request open (a hand-over without a requester finished, or the issue waits for a slot): answer only, nothing is handed over by the mention', async () => {
+      const aiAssigned = createAiAssignedIssue(issueKey, '10001', 'To Do');
+      triggerLog.record({ issueKey, triggerId: '100', outcome: 'request', at: nowMs - 30 * minuteMs });
+      comments = [createMentionComment('10240', member)];
+      const decisions = await createMentionInbound({ client: createMentionClient(() => [aiAssigned], () => aiAssigned) }).pollOnce();
+      assert.deepEqual([...decisions], [[issueKey, 'seen'], [`${issueKey}#mention:10240`, 'request']]);
+      await flushPosts();
+      assert.ok(recorded.prompts[0].includes(
+        'The issue is assigned to you and its status (To Do) is one you work in (in this project: "To Do"), but no hand-over request is open in this conversation, so no work is handed to you now. Answer only:',
+      ), recorded.prompts[0]);
+      assert.ok(!recorded.prompts[0].includes('The issue is handed to you'), recorded.prompts[0]);
+      assert.ok(!recorded.prompts[0].includes('goes on unchanged'), recorded.prompts[0]);
+    });
+
+    it('only HAND-OVER requests count as open work: an open mention request of someone else leaves the "none open" note', async () => {
+      const aiAssigned = createAiAssignedIssue(issueKey, '10001', 'To Do');
+      triggerLog.record({ issueKey, triggerId: '100', outcome: 'request', at: nowMs - 30 * minuteMs });
+      openRequestOrigins.set(issueKey, [{ kind: 'trackerMention', attributes: { issueKey, triggerId: 'mention:10239', requester: colleague.accountId } }]);
+      comments = [createMentionComment('10240', member)];
+      await createMentionInbound({ client: createMentionClient(() => [aiAssigned], () => aiAssigned) }).pollOnce();
+      await flushPosts();
+      assert.ok(recorded.prompts[0].includes('but no hand-over request is open in this conversation'), recorded.prompts[0]);
+    });
+
+    it('a requester the issue\'s data does not name is left out of the note; the request is still named', async () => {
+      const aiAssigned = createAiAssignedIssue(issueKey, '10001', 'To Do');
+      triggerLog.record({ issueKey, triggerId: '100', outcome: 'request', at: nowMs - 30 * minuteMs });
+      openRequestOrigins.set(issueKey, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: 'stranger-account' } }]);
+      comments = [createMentionComment('10240', member)];
+      await createMentionInbound({ client: createMentionClient(() => [aiAssigned], () => aiAssigned) }).pollOnce();
+      await flushPosts();
+      assert.ok(recorded.prompts[0].includes('and the hand-over request req_open_1 is open. '), recorded.prompts[0]);
+    });
+
+    it('assigned to the AI account in a status the project does not work in: the note says only the status is missing — and, with a hand-over request open, that it is not affected', async () => {
       const inBacklog = createAiAssignedIssue(issueKey, '10000', 'Backlog');
       comments = [createMentionComment('10240', member)];
       await createMentionInbound({ client: createMentionClient(() => [inBacklog], () => inBacklog) }).pollOnce();
@@ -1318,6 +1353,14 @@ describe('JiraInbound', () => {
         'The issue is assigned to you, but its status (Backlog) is not one you work in (in this project: "To Do"), so it is not handed to you. ',
       ), recorded.prompts[0]);
       assert.ok(!recorded.prompts[0].includes('The issue is handed to you'), recorded.prompts[0]);
+      assert.ok(!recorded.prompts[0].includes('is not affected'), 'no hand-over request is open: nothing to protect');
+      // The agent moved the issue on before its final answer: the hand-over request is still open.
+      recorded.prompts.length = 0;
+      openRequestOrigins.set(issueKey, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: colleague.accountId } }]);
+      comments = [createMentionComment('10241', member)];
+      await createMentionInbound({ client: createMentionClient(() => [inBacklog], () => inBacklog) }).pollOnce();
+      await flushPosts();
+      assert.ok(recorded.prompts[0].includes('This is about this answer only; the open hand-over request req_open_1 of Colleague is not affected. '), recorded.prompts[0]);
     });
 
     it('D10: a mention bypasses the cap on task agents — with every slot busy the mention still opens its answer-only request, and joins no list', async () => {
@@ -1451,6 +1494,8 @@ describe('JiraInbound', () => {
       assert.deepEqual([...await createMentionInbound().pollOnce()], [[issueKey, 'notMatching'], [`${issueKey}#mention:10240`, 'request']]);
       assert.equal(recorded.origins[0].attributes.requester, colleague.accountId);
       assert.equal(recorded.origins[0].kind, 'trackerMention');
+      await flushPosts();
+      assert.ok(recorded.prompts[0].includes('This is about this answer only; the open hand-over request req_open_1 is not affected. '), recorded.prompts[0]);
     });
 
     it('D9 covers hand-overs only: the requester of an open MENTION request who mentions again opens the next request', async () => {

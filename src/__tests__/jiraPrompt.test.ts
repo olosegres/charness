@@ -204,14 +204,16 @@ describe('a mention request (T2, T3)', () => {
     assert.ok(!mine.includes('has to be assigned to you in'), mine);
   });
 
-  describe('the three cases of the note: not handed, assigned in a status it does not work in, handed', () => {
+  describe('the cases of the note: not handed, assigned in a status it does not work in, assigned in a work status with or without a hand-over request open', () => {
     const ai = { accountId: testAiAccountId, accountType: 'app', displayName: 'Ada' };
+    const owner = { accountId: 'owner-account', accountType: 'atlassian', displayName: 'Build Owner' };
     const triggerStatusNames = ['In Progress', 'To Do'];
     const inProgress = createIssueContext({ comments: [createTestComment('10240', 1, 'status?')], fields: { status: { id: '3', name: 'In Progress' } } });
     const noteOf = (prompt: string): string => prompt.split('\n').find((line) => line.startsWith('You were mentioned in comment')) ?? '';
     const mention = (overrides: Partial<JiraRequestPromptInput>): string =>
       noteOf(buildJiraRequestPrompt(createPromptInput(inProgress, { trigger: mentionTrigger, triggerStatusNames, ...overrides })));
     const limitText = 'change nothing — no code changes, no commits or pushes, no edits in Jira. ';
+    const openOne = [{ requestId: 'req_build', requester: owner }];
 
     it('not assigned to the AI account (even in a status it works in): not handed to you, answer only, assign it in a status you work in', () => {
       const note = mention({ assignee, isAssignedToYou: false, isInWorkStatus: true });
@@ -219,6 +221,7 @@ describe('a mention request (T2, T3)', () => {
       assert.ok(note.includes(limitText), note);
       assert.ok(note.includes('has to be assigned to you in a status you work in (in this project: "In Progress", "To Do") for that.'), note);
       assert.ok(!note.includes('handed to you:'), note);
+      assert.ok(!note.includes('is not affected'), note);
       assert.ok(mention({ assignee: null }).includes('(assignee: nobody, status: In Progress)'));
     });
 
@@ -228,32 +231,74 @@ describe('a mention request (T2, T3)', () => {
       assert.ok(note.includes(limitText), note);
       assert.ok(note.includes('has to be moved to a status you work in (in this project: "In Progress", "To Do") for that — it is already assigned to you.'), note);
       assert.ok(!note.includes('handed to you:'), note);
+      assert.ok(!note.includes('is not affected'), note);
     });
 
-    it('assigned to the AI account AND in a status it works in: handed to it — the limit is for this answer only, an open hand-over request goes on', () => {
-      const note = mention({ assignee: ai, isAssignedToYou: true, isInWorkStatus: true });
+    it('a hand-over request open, the issue not handed to the AI (someone else holds it, or it moved the issue on): the note says it is about this answer only and the request is not affected', () => {
+      const sentence = 'This is about this answer only; the open hand-over request req_build of Build Owner is not affected. ';
+      const elsewhere = mention({ assignee, isAssignedToYou: false, isInWorkStatus: true, openHandOvers: openOne });
+      assert.ok(elsewhere.includes(`${limitText}${sentence}If the comment asks you to do work, answer that the issue has to be assigned to you`), elsewhere);
+      const moved = mention({ assignee: ai, isAssignedToYou: true, isInWorkStatus: false, openHandOvers: openOne });
+      assert.ok(moved.includes(`${limitText}${sentence}If the comment asks you to do work, answer that the issue has to be moved to a status you work in`), moved);
+      const two = mention({ assignee, isAssignedToYou: false, isInWorkStatus: false, openHandOvers: [...openOne, { requestId: 'req_second', requester: null }] });
+      assert.ok(two.includes('This is about this answer only; the open hand-over requests req_build of Build Owner and req_second are not affected. '), two);
+    });
+
+    it('assigned to the AI account AND in a work status with a hand-over request open: handed to it — the limit is for this answer only, the request goes on, a mention does not add work', () => {
+      const note = mention({ assignee: ai, isAssignedToYou: true, isInWorkStatus: true, openHandOvers: openOne });
       assert.equal(
         note,
         'You were mentioned in comment 10240 by Requester Person. ' +
-        'The issue is handed to you: it is assigned to you and its status (In Progress) is one you work in (in this project: "In Progress", "To Do"). ' +
-        'Answer this comment first, and change nothing while you write that answer: you may read the issue and the code and run read-only checks, ' +
-        'but no code changes, no commits or pushes, no edits in Jira. ' +
-        'That limit applies only to this answer to the mention, not to the issue: any hand-over request of this conversation that is open ' +
-        'goes on unchanged — carry on with that work after you have answered, and do not stop, drop or end it because of this mention. ' +
-        'If the comment asks you to do work, answer that it belongs to the work already handed to you on this issue, not to this answer. ' +
+        'The issue is handed to you: it is assigned to you, its status (In Progress) is one you work in (in this project: "In Progress", "To Do"), ' +
+        'and the hand-over request req_build of Build Owner is open. ' +
+        'Answer this comment between steps of your work, not in the middle of one, and change nothing while you write that answer: ' +
+        'you may read the issue and the code and run read-only checks, but change nothing — no code changes, no commits or pushes, no edits in Jira. ' +
+        'That limit applies only to this answer to the mention, not to the work: request req_build of Build Owner goes on unchanged — ' +
+        'carry on with it after you have answered, and do not stop, drop or end it because of this mention. ' +
+        'If the comment asks you to do work, do not take it on because of this comment: ' +
+        "answer that the work on this issue is what its hand-over asked for, and that a change to it must come from that hand-over's requester (or a new hand-over). " +
+        'Do only what that hand-over already covers. ' +
         'Your answer becomes a comment on the issue; it does not reassign the issue.',
       );
       assert.ok(!note.includes('not handed to you'), note);
       assert.ok(!note.includes('has to be assigned to you'), note);
+      assert.ok(!note.includes('belongs to the work already handed'), note);
+      assert.ok(!note.includes(' first'), 'no "first": the agent is not told to break off a step');
     });
 
-    it('the delta prompt of a mention carries the handed-to-you note too', () => {
+    it('the handed-to-you note with several hand-over requests open names them all and speaks of them in the plural; a requester nobody names is left out', () => {
+      const note = mention({ assignee: ai, isAssignedToYou: true, isInWorkStatus: true, openHandOvers: [...openOne, { requestId: 'req_second', requester: null }] });
+      assert.ok(note.includes('and the hand-over requests req_build of Build Owner and req_second are open. '), note);
+      assert.ok(note.includes('requests req_build of Build Owner and req_second go on unchanged'), note);
+      assert.ok(note.includes('what its hand-overs asked for, and that a change to it must come from the requesters of those hand-overs (or a new hand-over). Do only what those hand-overs already cover. '), note);
+      assert.ok(mention({ assignee: ai, isAssignedToYou: true, isInWorkStatus: true, openHandOvers: [{ requestId: 'req_build', requester: null }] }).includes('and the hand-over request req_build is open. '));
+    });
+
+    it('assigned to the AI account AND in a work status but NO hand-over request open: answer only — it does not start work, a hand-over does', () => {
+      for (const openHandOvers of [undefined, []]) {
+        const note = mention({ assignee: ai, isAssignedToYou: true, isInWorkStatus: true, openHandOvers });
+        assert.equal(
+          note,
+          'You were mentioned in comment 10240 by Requester Person. ' +
+          'The issue is assigned to you and its status (In Progress) is one you work in (in this project: "In Progress", "To Do"), ' +
+          'but no hand-over request is open in this conversation, so no work is handed to you now. ' +
+          'Answer only: you may read the issue and the code and run read-only checks, but change nothing — no code changes, no commits or pushes, no edits in Jira. ' +
+          'If the comment asks you to do work, answer that it does not start work: a hand-over does — the issue assigned to you, or moved into a status you work in, as a new change. ' +
+          'Your answer becomes a comment on the issue; it does not reassign the issue.',
+        );
+        assert.ok(!note.includes('handed to you:'), note);
+        assert.ok(!note.includes('goes on unchanged'), note);
+      }
+    });
+
+    it('the delta prompt of a mention carries the same notes', () => {
       const blocks = buildIssueBlocks(inProgress, [], testAiAccountId);
-      const delta = buildJiraDeltaPrompt({
-        ...createPromptInput(inProgress, { trigger: mentionTrigger, triggerStatusNames, assignee: ai, isAssignedToYou: true, isInWorkStatus: true }),
+      const delta = (overrides: Partial<JiraRequestPromptInput>): string => buildJiraDeltaPrompt({
+        ...createPromptInput(inProgress, { trigger: mentionTrigger, triggerStatusNames, assignee: ai, isAssignedToYou: true, isInWorkStatus: true, ...overrides }),
         delta: getIssueDelta(blocks, {}),
       });
-      assert.ok(noteOf(delta).includes('The issue is handed to you: it is assigned to you and its status (In Progress) is one you work in'), delta);
+      assert.ok(noteOf(delta({ openHandOvers: openOne })).includes('The issue is handed to you: it is assigned to you, its status (In Progress) is one you work in'));
+      assert.ok(noteOf(delta({})).includes('but no hand-over request is open in this conversation'));
     });
   });
 

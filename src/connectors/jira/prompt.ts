@@ -50,26 +50,54 @@ export function getJiraOriginDescription(issueKey: string, trigger: JiraIssueTri
   }
 }
 
+/** `request req_1 of Ann`, `requests req_1 of Ann and req_2` — the open hand-over requests the way the mention notes name them. */
+function getOpenHandOverText(openHandOvers: readonly JiraOpenHandOver[]): string {
+  const names = openHandOvers.map((handOver) => `${handOver.requestId}${handOver.requester ? ` of ${getAccountName(handOver.requester)}` : ''}`);
+  const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
+  return `${names.length > 1 ? 'requests' : 'request'} ${list}`;
+}
+
 /**
- * What a mention request adds after the requester line. Three cases: the issue is not handed over (assigned to
- * someone else or nobody), assigned to the AI account in a status it does not work in (not handed over either), or
- * handed to it (assigned AND in a work status) — then the read-only limit is for this one answer, and the work the
- * conversation already has, an open hand-over request, goes on.
+ * What a mention request adds after the requester line. Four cases, from the issue as it stands and from the
+ * conversation's open hand-over requests: not handed over (assigned to someone else or nobody); assigned to the AI
+ * account in a status it does not work in (not handed over either); assigned AND in a work status with no hand-over
+ * request open (nothing is running, so answer only); handed to it — assigned AND in a work status with a hand-over
+ * request open: the read-only limit is for this one answer, and that request, the work the conversation already has,
+ * goes on. Whenever a hand-over request is open, every note says the limit is about this answer only.
  */
 function getMentionNote(input: JiraRequestPromptBase, commentId: string): string {
   const assigneeName = input.assignee ? getAccountName(input.assignee) : 'nobody';
   const statusName = getSingleLineText(input.statusName ?? '') || 'unknown';
   const workStatuses = (input.triggerStatusNames ?? []).map((name) => `"${getSingleLineText(name)}"`).join(', ');
   const workStatusText = workStatuses ? ` (in this project: ${workStatuses})` : '';
+  const openHandOvers = input.openHandOvers ?? [];
+  const openText = openHandOvers.length > 0 ? getOpenHandOverText(openHandOvers) : '';
+  const isPlural = openHandOvers.length > 1;
+  const mentionedText = `You were mentioned in comment ${getSingleLineText(commentId)} by ${getAccountName(input.trigger.author)}. `;
+  const limitText = 'you may read the issue and the code and run read-only checks, but change nothing — no code changes, no commits or pushes, no edits in Jira. ';
+  const answerText = 'Your answer becomes a comment on the issue; it does not reassign the issue.';
   if (input.isAssignedToYou && input.isInWorkStatus) {
-    return `You were mentioned in comment ${getSingleLineText(commentId)} by ${getAccountName(input.trigger.author)}. ` +
-      `The issue is handed to you: it is assigned to you and its status (${statusName}) is one you work in${workStatusText}. ` +
-      'Answer this comment first, and change nothing while you write that answer: you may read the issue and the code and run read-only checks, ' +
-      'but no code changes, no commits or pushes, no edits in Jira. ' +
-      'That limit applies only to this answer to the mention, not to the issue: any hand-over request of this conversation that is open ' +
-      'goes on unchanged — carry on with that work after you have answered, and do not stop, drop or end it because of this mention. ' +
-      'If the comment asks you to do work, answer that it belongs to the work already handed to you on this issue, not to this answer. ' +
-      'Your answer becomes a comment on the issue; it does not reassign the issue.';
+    if (openHandOvers.length === 0) {
+      return mentionedText +
+        `The issue is assigned to you and its status (${statusName}) is one you work in${workStatusText}, ` +
+        'but no hand-over request is open in this conversation, so no work is handed to you now. ' +
+        `Answer only: ${limitText}` +
+        'If the comment asks you to do work, answer that it does not start work: a hand-over does — the issue assigned to you, or moved into a status you work in, as a new change. ' +
+        answerText;
+    }
+    const handOver = isPlural ? 'its hand-overs' : 'its hand-over';
+    const thatHandOver = isPlural ? 'those hand-overs' : 'that hand-over';
+    const requesterText = isPlural ? 'the requesters of those hand-overs' : "that hand-over's requester";
+    return mentionedText +
+      `The issue is handed to you: it is assigned to you, its status (${statusName}) is one you work in${workStatusText}, ` +
+      `and the hand-over ${openText} ${isPlural ? 'are' : 'is'} open. ` +
+      `Answer this comment between steps of your work, not in the middle of one, and change nothing while you write that answer: ${limitText}` +
+      `That limit applies only to this answer to the mention, not to the work: ${openText} ${isPlural ? 'go' : 'goes'} on unchanged — ` +
+      'carry on with it after you have answered, and do not stop, drop or end it because of this mention. ' +
+      'If the comment asks you to do work, do not take it on because of this comment: ' +
+      `answer that the work on this issue is what ${handOver} asked for, and that a change to it must come from ${requesterText} (or a new hand-over). ` +
+      `Do only what ${thatHandOver} already ${isPlural ? 'cover' : 'covers'}. ` +
+      answerText;
   }
   // Assigned to the AI account in a status it does not work in: "assign it to me" would be wrong — the status is what is missing.
   const notHandedText = input.isAssignedToYou
@@ -78,12 +106,21 @@ function getMentionNote(input: JiraRequestPromptBase, commentId: string): string
   const handOverText = input.isAssignedToYou
     ? `answer that the issue has to be moved to a status you work in${workStatusText} for that — it is already assigned to you. `
     : `answer that the issue has to be assigned to you in a status you work in${workStatusText} for that. `;
-  return `You were mentioned in comment ${getSingleLineText(commentId)} by ${getAccountName(input.trigger.author)}. ` +
+  // A hand-over request can be open on an issue that is no longer handed to the AI (it moved the issue on): the note must not end that work.
+  const openRequestText = openText ? `This is about this answer only; the open hand-over ${openText} ${isPlural ? 'are' : 'is'} not affected. ` : '';
+  return mentionedText +
     notHandedText +
-    'Answer only: you may read the issue and the code and run read-only checks, but change nothing — ' +
-    'no code changes, no commits or pushes, no edits in Jira. ' +
+    `Answer only: ${limitText}` +
+    openRequestText +
     `If the comment asks you to do work, ${handOverText}` +
-    'Your answer becomes a comment on the issue; it does not reassign the issue.';
+    answerText;
+}
+
+/** An open hand-over request (`trackerEvent`) of the conversation, as a mention note names it. */
+export interface JiraOpenHandOver {
+  requestId: string;
+  /** Who handed the issue over, as the issue's own data names them; null when the request has no requester or no data names them. */
+  requester: JiraAccount | null;
 }
 
 /** What every prompt of a request says before the issue itself: who, which issue, where answers go. */
@@ -102,6 +139,8 @@ export interface JiraRequestPromptBase {
   isAssignedToYou?: boolean;
   /** A mention request: the issue's status is one the project hands work over in (`triggerStatusIds`, matched by id). */
   isInWorkStatus?: boolean;
+  /** A mention request: the hand-over requests of the conversation that are open now — the work a mention must not stop. */
+  openHandOvers?: readonly JiraOpenHandOver[];
   /** A mention request: the statuses the issue's project hands work over in (`jira.json` `triggerStatuses`), as configured. */
   triggerStatusNames?: readonly string[];
   /** The same requester's earlier requests of the issue this one replaced (R34); the header names them. */

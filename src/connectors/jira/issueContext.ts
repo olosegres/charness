@@ -1,4 +1,4 @@
-import { checkIsLastOffsetPage, jiraChangelogPageSize, type JiraChangelogHistory, type JiraClient, type JiraComment, type JiraIssue, type JiraRemoteLink } from './client';
+import { checkIsLastOffsetPage, jiraChangelogPageSize, type JiraAccount, type JiraChangelogHistory, type JiraClient, type JiraComment, type JiraIssue, type JiraRemoteLink } from './client';
 
 /**
  * @description Everything one request's prompt says about an issue (plan C1,
@@ -35,6 +35,22 @@ export interface JiraIssueContext {
   children: JiraIssue[];
   /** The whole changelog, oldest first — read only when the caller asked for it (`isChangelogNeeded`), else empty. */
   changelog: JiraChangelogHistory[];
+}
+
+/**
+ * @description The account `accountId` as the issue's own data names it — reporter, creator, assignee, the authors of
+ * the comments and of the changelog entries — or null when none of them does (or none carries a display name): a
+ * request's ledger record holds an account id only.
+ */
+export function findAccountInContext(context: JiraIssueContext, accountId: string): JiraAccount | null {
+  if (!accountId) return null;
+  const { reporter, creator, assignee } = context.issue.fields;
+  const candidates = [
+    reporter, creator, assignee,
+    ...context.comments.flatMap((comment) => [comment.author, comment.updateAuthor]),
+    ...context.changelog.map((history) => history.author),
+  ];
+  return candidates.find((account) => account?.accountId === accountId && account.displayName) ?? null;
 }
 
 /** A JQL string literal: the key is Jira's own, but a quote or backslash in it must never end the literal. */

@@ -7,8 +7,8 @@ import { getJiraIssueProjectKey, makeJiraKey } from './sessionKeyCodec';
 import { createMentionTrigger, findNewestTrigger, getIssueTrigger, getRequester, mentionTriggerIdPrefix, type JiraIssueTrigger } from './trigger';
 import type { JiraTriggerLog, JiraTriggerRecord } from './triggerLog';
 import { buildIssueBlocks, checkIsCommentTrusted, getShownIssueSummary, type JiraBlockTrust, type JiraExtraField } from './issueBlocks';
-import { fetchJiraIssueContext } from './issueContext';
-import { buildJiraDeltaPrompt, buildJiraRequestPrompt } from './prompt';
+import { fetchJiraIssueContext, findAccountInContext, type JiraIssueContext } from './issueContext';
+import { buildJiraDeltaPrompt, buildJiraRequestPrompt, type JiraOpenHandOver } from './prompt';
 import { getIssueDelta } from './issueDelta';
 import type { JiraContextLedger } from './contextLedger';
 import type { SessionPromptText } from '../../postToSession';
@@ -132,7 +132,7 @@ export interface JiraInboundDeps {
   /** An @-mention of the AI account wakes it (`config.isMentionWakeOn`); never without {@link trust} — nobody could be judged. */
   isMentionWakeOn: boolean;
   /** The open requests of an issue's conversation — a hand-over's requester who mentions the AI is already served (D9). */
-  listOpenRequests: (key: SessionKey) => ReadonlyArray<Pick<OpenRequestState, 'origin'>>;
+  listOpenRequests: (key: SessionKey) => ReadonlyArray<Pick<OpenRequestState, 'id' | 'origin'>>;
   now: () => number;
   /** Bind the issue's conversation to its project's folder. */
   bindConversation: (key: SessionKey, folder: string) => Promise<void>;
@@ -473,6 +473,16 @@ export class JiraInbound {
     return this.openRequest(issue, project, trigger, comment.author ?? null, at);
   }
 
+  /**
+   * The hand-over requests (`trackerEvent`) the conversation has open, each with its requester named as the issue's own
+   * data names them — what a mention note says goes on. A mention request itself is not one: it hands nothing over.
+   */
+  private getOpenHandOvers(key: SessionKey, context: JiraIssueContext): JiraOpenHandOver[] {
+    return this.deps.listOpenRequests(key)
+      .filter((request) => request.origin.kind === 'trackerEvent')
+      .map((request) => ({ requestId: request.id, requester: findAccountInContext(context, getRequestRequester(request.origin)) }));
+  }
+
   private async openRequest(
     issue: JiraIssue,
     project: JiraProjectTrigger,
@@ -502,6 +512,8 @@ export class JiraInbound {
       assignee: context.issue.fields.assignee ?? null,
       isAssignedToYou: context.issue.fields.assignee?.accountId === deps.aiAccountId,
       isInWorkStatus: statusId !== undefined && project.triggerStatusIds.has(statusId),
+      // Read after the issue was fetched, right before the request opens: what the note says is running is running now.
+      openHandOvers: trigger.kind === 'mentioned' ? this.getOpenHandOvers(key, context) : [],
       triggerStatusNames: project.triggerStatusNames,
       isTextFiltered: trust !== null,
     };

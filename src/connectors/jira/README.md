@@ -106,15 +106,21 @@ the issue has to be assigned to it in one of the project's trigger statuses, whi
 issue is already assigned to the AI account in another status, that only the status is missing. That is an instruction in the prompt, like the agent's other rules, not a technical lock: the agent still runs
 with the instance's rights.
 
-- **The note has three cases** (`prompt.ts` `getMentionNote`), chosen from the issue as it stands when the prompt is
+- **The note has four cases** (`prompt.ts` `getMentionNote`), chosen from the issue as it stands when the prompt is
   built — `assignee` is one of `jiraPromptIssueFields`, the status is matched by id against the project's
-  `triggerStatusIds`: (1) not assigned to the AI account — «not handed to you (assignee: …, status: …)», answer
-  only; (2) assigned to it in a status it does not work in — «not handed to you», only the status is missing,
-  answer only; (3) assigned to it AND in a trigger status — «handed to you»: the read-only limit applies to this
-  one answer to the mention only, and any open hand-over request of the conversation goes on unchanged (a
-  mention by someone other than that request's requester lands in the same session, mid-build, and must not
-  stop the work). The note is the agent's only account of who holds the issue, so the prompt's issue read must
-  carry the assignee.
+  `triggerStatusIds` — and from the conversation's OPEN hand-over requests (`trackerEvent`, read through
+  `listOpenRequests` right before the request opens; the requester is named from the issue's own data, left out
+  when nothing names them): (1) not assigned to the AI account — «not handed to you (assignee: …, status: …)»,
+  answer only; (2) assigned to it in a status it does not work in — «not handed to you», only the status is
+  missing, answer only; (3) assigned to it AND in a trigger status, with NO hand-over request open — answer only,
+  and a request for work is told that a hand-over starts work, not a comment; (4) assigned to it AND in a trigger
+  status, WITH a hand-over request open — «handed to you»: the read-only limit applies to this one answer (given
+  between steps of the work, not in the middle of one), the open request is named and goes on unchanged, and a
+  request for work in the comment is not taken on — a change to that work comes from its hand-over's requester or
+  a new hand-over. Whenever a hand-over request is open, the notes of cases 1 and 2 say too that the limit is
+  about this answer only and the request is not affected: a mention by someone other than that request's
+  requester lands in the same session, mid-build, and must never stop the work. The note is the agent's only
+  account of who holds the issue, so the prompt's issue read must carry the assignee.
 - **Finding it.** Jira's `comment ~ currentUser()`, run as the AI account, matches a comment that holds a
   mention node of it — not a typed `@name`, not the account's display name written as text. Measured against a
   live site: a fresh mention is returned by the search within about two seconds, and a comment edit moves the
