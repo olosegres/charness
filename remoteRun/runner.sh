@@ -54,6 +54,10 @@ task_id_wait_sec=5
 heartbeat_poll_sec=1
 # How long a job waiting for its project's lock sleeps between two attempts (a test shortens it to race many waiters quickly).
 lock_poll_sec=1
+# A failed dependencies step names this many of its first error lines (and of its build log's) — few enough that `wait`'s last 50 lines hold them all.
+failed_step_error_lines=8
+# What makes a line of a tool's output an error line.
+error_line_pattern='error|fatal|fail|exception|cannot|couldn|not found|no such|denied'
 
 # ─────────────────────────── helpers ───────────────────────────
 
@@ -1037,6 +1041,32 @@ cmd_sync_tree() {
   sync_tree || die "apply failed"
 }
 
+# The first lines of what is on stdin that look like an error, each cut short and none twice (this script's own lines excluded). The ROOT cause
+# comes first: what a tool prints last is its summary of the failure («couldn't be built successfully», «exit code 1»), and the last lines are
+# all `wait` shows.
+first_error_lines() {
+  grep -a -v '^remote-run: ' | grep -a -i -E "$error_line_pattern" | tr -d '\033\r' | cut -c1-240 | awk '!seen[$0]++' | head -n "$failed_step_error_lines"
+}
+
+# The dependencies step failed: say why in the job's log, from the step's own output (everything of the log after byte offset $1) — its first
+# error lines, and the first error lines of the build log the tool names (yarn: «logs can be found here: …/build.log»; yarn removes it with its
+# temp folder when it exits, then the way to get the build output into the log is said instead).
+describe_failed_step() {
+  local first_errors build_log
+  first_errors=$(tail -c +"$(($1 + 1))" "$jd/log" 2> /dev/null | first_error_lines)
+  [ -n "$first_errors" ] || return 0
+  say "the first errors of the dependencies step (all of its output is in the log):"
+  printf '%s\n' "$first_errors" | sed 's/^/remote-run:   /'
+  for build_log in $(tail -c +"$(($1 + 1))" "$jd/log" 2> /dev/null | grep -a -o -E 'logs can be found here: [^[:space:])]+/build\.log' | sed 's/.*here: //' | awk '!seen[$0]++' | head -n 2); do
+    if [ -f "$build_log" ]; then
+      say "the build log the tool names, $build_log — its first errors:"
+      first_error_lines < "$build_log" | sed 's/^/remote-run:   /'
+    else
+      say "the build log the tool names, $build_log, is gone (the tool removes it when it exits): run the step again with -e YARN_ENABLE_INLINE_BUILDS=1 to get the build output into the log"
+    fi
+  done
+}
+
 # bash -c <command> in <directory>, with the job's -e variables, output into the log; sets step_code. Runs as a child so a
 # SIGTERM to the job (the `killed` flag) does not abandon it half-way.
 run_step() {
@@ -1214,11 +1244,14 @@ cmd_job() {
   if [ -n "$install_command" ] && [ "$(read_file "$proj/deps.hash")" != "$install_key" ]; then
     set_phase deps
     say "installing dependencies: $install_command"
+    local step_log_offset
+    step_log_offset=$(wc -c < "$jd/log" | tr -d ' ')
     run_step "$tree" "$install_command"
     if [ "$step_code" -ne 0 ]; then
       rm -f "$proj/deps.hash"
       echo deps > "$jd/failed-step"
       say "the dependencies step failed with exit code $step_code"
+      describe_failed_step "$step_log_offset"
       finish_job 125
     fi
     printf '%s\n' "$install_key" > "$proj/deps.hash"

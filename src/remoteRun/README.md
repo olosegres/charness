@@ -84,7 +84,7 @@ a name with a newline is refused. `.git` only with `--with-git`.
 **Submit = stage, the job applies.** The main box stages the tree into `stage/<job>/` (`rsync --copy-dest=<tree>`, never `--link-dest`: a job
 rewriting a file in place would change a queued job's stage; `--modify-window=-1`: compare nanoseconds, rsync's whole-second quick
 check skips a same-length edit made within a second). The job (`runner.sh job`) takes the project lock, deletes
-`old manifest − new manifest` from `tree/`, applies the stage, runs the dependencies step when its key differs from `deps.hash`, runs the
+`old manifest − new manifest` from `tree/`, applies the stage, runs the dependencies step when its key differs from `deps.hash` (a failed one ends with `describe_failed_step`: the FIRST error lines of its output and of the `build.log` the tool names — what `wait`'s last 50 lines do not hold), runs the
 command (`bash -c`, `-e` variables, own timeout watchdog), copies the files that match `pull.ere` and are newer than the start marker into
 `jobs/<job>/artifacts/` (walking only the folders of `pull.roots` — the fixed prefixes of the `pull:` patterns, `getPathPatternSearchRoots` —
 never `node_modules` or a build folder; `.` when a pattern starts with a wildcard; no `pull.roots` from an older main box = the whole copy; a

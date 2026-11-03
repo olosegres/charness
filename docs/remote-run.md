@@ -386,6 +386,12 @@ exclude: fixtures/huge                     # more paths that are never sent
 send: .env.test                            # opt a held-back secret-looking file in
 ```
 
+A failed dependencies step ends with the **first** error lines of its output (up to 8) and, when the tool names a `build.log` («logs can
+be found here: …/build.log» — yarn), the first error lines of that file: a tool's own last lines are its summary («couldn't be built
+successfully»), and the cause — a missing Python module, a compiler — is far above them, out of reach of `wait`'s last 50 lines. When
+the tool has already removed the build log, the line says so and names the way to get the build output into the job's log:
+`-e YARN_ENABLE_INLINE_BUILDS=1` on the call. The step's whole output is in `logs <id>`.
+
 Patterns are relative to the project root. `*` is any run of characters inside one path segment, `?` one character, `**` a whole
 segment of any depth; a pattern naming a folder brings everything below it. `snapshots` is the folder at the root only —
 `**/snapshots` any folder of that name.

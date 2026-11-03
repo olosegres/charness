@@ -226,12 +226,60 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.equal(failed.exitCode, 125, failed.stderr);
       assert.match(failed.stdout, /broken-install/, 'the step\'s own output is shown');
       assert.match(failed.stderr, /the dependencies step failed/);
+      assert.ok(!failed.stderr.includes('the first errors'), 'a step that printed no error-looking line gets no summary');
       assert.ok(!failed.stdout.includes('never runs'));
       fs.writeFileSync(path.join(project.runnerDirectory, 'deps-ok'), '');
       const retried = await run(['echo', 'now it runs']);
       assert.equal(retried.exitCode, 0, retried.stderr);
       assert.match(retried.stderr, /installing dependencies:/, 'the key had not changed, but the last install failed: it runs again');
       assert.match(retried.stdout, /now it runs/);
+      writeRemoteRunConfig(baseRemoteRunConfig);
+    });
+  });
+
+  describe('a failed dependencies step says why', () => {
+    /** A step like a yarn install that fails to build one package: the root cause first, then 80 lines of noise, then the tool's own summary line naming a build log. */
+    const failingInstallScript = [
+      'echo "starting install"',
+      'echo "ERROR: could not resolve dependency foo"',
+      'i=0; while [ $i -lt 80 ]; do echo "noise $i"; i=$((i+1)); done',
+      'dir=$(mktemp -d)',
+      "printf 'gyp info it worked\\nModuleNotFoundError: No module named distutils\\n' > \"$dir/build.log\"",
+      'echo "YN0009: sqlite3 could not be built successfully (exit code 1, logs can be found here: $dir/build.log)"',
+      '[ -f ../keep-build-log ] || rm -rf "$dir"',
+      'exit 1',
+      '',
+    ].join('\n');
+
+    async function waitForFailedBackgroundJob(): Promise<{ stdout: string; stderr: string }> {
+      const submitted = await run(['--bg', 'echo', 'never runs']);
+      assert.equal(submitted.exitCode, 0, submitted.stderr);
+      const waited = await run(['wait', readJobId(submitted)]);
+      assert.equal(waited.exitCode, 125, waited.stderr);
+      return waited;
+    }
+
+    it('`wait` shows the FIRST error lines of the step and of the build log it names — not only the last 50 lines, where the cause is not', async () => {
+      writeProjectFile(project, 'install.sh', failingInstallScript);
+      writeRemoteRunConfig('pull: out test-results\ninstall: sh install.sh\n');
+      fs.writeFileSync(path.join(project.runnerDirectory, 'keep-build-log'), '');
+      try {
+        const waited = await waitForFailedBackgroundJob();
+        assert.ok(!waited.stdout.includes('could not resolve dependency'), 'the last 50 lines of the log are noise: the cause is above them');
+        assert.match(waited.stderr, /remote-run: the first errors of the dependencies step/);
+        assert.match(waited.stderr, /remote-run:   ERROR: could not resolve dependency foo/);
+        assert.match(waited.stderr, /remote-run: the build log the tool names, \S+\/build\.log — its first errors:\nremote-run:   ModuleNotFoundError: No module named distutils/);
+        assert.ok(!waited.stderr.includes('noise '), 'noise lines are not error lines');
+      } finally {
+        fs.rmSync(path.join(project.runnerDirectory, 'keep-build-log'), { force: true });
+      }
+    });
+
+    it('a build log the tool has already removed is named as gone, with the way to get the build output into the log', async () => {
+      const waited = await waitForFailedBackgroundJob();
+      assert.match(waited.stderr, /remote-run:   ERROR: could not resolve dependency foo/);
+      assert.match(waited.stderr, /remote-run: the build log the tool names, \S+\/build\.log, is gone \(the tool removes it when it exits\): run the step again with -e YARN_ENABLE_INLINE_BUILDS=1/);
+      fs.rmSync(path.join(project.root, 'install.sh'), { force: true });
       writeRemoteRunConfig(baseRemoteRunConfig);
     });
   });
