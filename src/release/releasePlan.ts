@@ -17,6 +17,7 @@ export const requiredPackFiles = [
   'dist/cli.js',
   'stt/gigaam_sidecar.py',
   'remoteRun/runner-package-lock.json',
+  'remoteRun/pickNode.sh',
   'agent-plugin/.claude-plugin/plugin.json',
   'agent-plugin/skills/charness-manager/SKILL.md',
   'CHANGELOG.md',

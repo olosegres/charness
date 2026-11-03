@@ -87,6 +87,8 @@ export function installAdminStandIns(rootDir: string, accounts: readonly StandIn
     ...accounts.map((account) => `    ${account.name}) home="${account.homeDir}";;`),
     '    *) echo "sudo: unknown user $user" >&2; exit 1;;',
     '  esac',
+    // `test -w <path>`: the stand-in accounts own nothing the flow\'s folders are made of — the real user the flow runs as does, and would answer yes.
+    '  if [ "$1" = test ] && [ "$2" = -w ]; then exit 1; fi',
     '  env -u LD_PRELOAD -u FAKEROOTKEY -u FAKED_MODE HOME="$home" USER="$user" LOGNAME="$user" "$@"',
     '  code=$?',
     '  case " $* " in',

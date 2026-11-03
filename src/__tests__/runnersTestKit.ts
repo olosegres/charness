@@ -53,6 +53,7 @@ export function createHubFixture(): HubFixture {
   fs.writeFileSync(path.join(packageRoot, 'package.json'), `${JSON.stringify(fixturePackageJson, null, 2)}\n`);
   fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'runner-package-lock.json'), `${JSON.stringify(fixtureRunnerLock, null, 2)}\n`);
   fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'runner.sh'), '#!/usr/bin/env bash\necho runner\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'pickNode.sh'), '#!/bin/sh\necho picked\n', { mode: 0o755 });
   fs.writeFileSync(path.join(packageRoot, 'dist', 'cli.js'), 'console.log("cli");\n', { mode: 0o755 });
   fs.writeFileSync(path.join(packageRoot, 'dist', 'runners', 'example.js'), 'module.exports = 1;\n');
   fs.writeFileSync(path.join(packageRoot, 'dist', 'runners', 'example.d.ts'), 'export {};\n');

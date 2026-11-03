@@ -33,6 +33,7 @@
     "stt/gigaam_sidecar.py",
     "remoteRun/runner.sh",
     "remoteRun/runner-package-lock.json",
+    "remoteRun/pickNode.sh",
     "agent-plugin/",
     "CHANGELOG.md",
     "README.md",

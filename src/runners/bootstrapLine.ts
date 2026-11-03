@@ -60,27 +60,8 @@ function nodeVersionCheck(program: string): string {
   return `${program} -e "var v=process.versions.node.split(/[.]/);process.exit(v[0]>${minNodeMajor}||v[0]==${minNodeMajor}&&v[1]>=${minNodeMinor}?0:1)"`;
 }
 
-/** The `case` patterns of the paths inside people's homes and root's: a Node in one of them is never picked by the admin line (the same places as `homeFolders.ts`). */
-export const adminLineHomePatterns: readonly string[] = ['/Users/*', '/home/*', '*/root/*'];
-/** The places a system-wide Node is looked for after the `node` of sudo's own PATH (Homebrew on Apple Silicon and on Intel, the system's). */
-const systemNodeCandidates: readonly string[] = ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node'];
-
-/**
- * The steps that choose the Node.js the admin line runs as root (and the runner's service will run under) into `$n`, or refuse. A Node qualifies
- * when it is outside every home folder (`/Users/<name>`, `/home/<name>`, root's own: a path with a `root` folder; judged on its REAL path — a link in `/usr/local/bin` into somebody's `~/.nvm` is a
- * home Node too), the account can run it (`sudo -u "$a" test -x`: nothing of the account's is executed by the shell) and it is new enough. Root runs a program from a home only if it is the admin's, and the service would then stop working the day that home is
- * closed (`chmod 700`) or the version manager moves on; the account's own home is no place for a program root runs either. The candidates are
- * sudo's own `node` first, then {@link systemNodeCandidates}. `homePatterns` (`case` patterns) and `systemCandidates` are parameters for the test that runs these steps for real.
- */
-export function renderNodePickSteps(homePatterns: readonly string[] = adminLineHomePatterns, systemCandidates: readonly string[] = systemNodeCandidates): string[] {
-  // Unquoted on purpose: no `node` on the PATH is no word at all (an empty one would be read as the current folder), and a path that a shell would split is no candidate.
-  const candidates = ['$(command -v node)', ...systemCandidates].join(' ');
-  return [
-    'n=',
-    `for c in ${candidates}; do r=$(readlink -f "$c" 2>&-) || continue; case $r in ${homePatterns.join('|')}) continue;; esac; sudo -u "$a" test -x "$r" || continue; ${nodeVersionCheck('"$r"')} || continue; n=$r; break; done`,
-    `[ -n "$n" ] || f "no Node.js ${minNodeMajor}.${minNodeMinor}+ outside home folders: install one system-wide (macOS: brew install node), paste again"`,
-  ];
-}
+/** The Node pick the admin line runs as root from its copy of the package (see the script's own head): prints the real path of the Node root and the service run under. */
+const pickNodeInPackage = 'remoteRun/pickNode.sh';
 
 const runnerCliInPackage = 'dist/runnerUtility/runnerCli.js';
 const rootServiceCliInPackage = 'dist/runnerUtility/rootServiceCli.js';
@@ -176,8 +157,8 @@ function renderAdminScript(payload: PairCodePayload): string {
     'for x in $gs; do case " $g " in *" $x "*) f "$a is an admin: the agents code runs with its rights";; esac; done',
   ];
   const steps = [
-    ...renderNodePickSteps(),
     ...renderFetchSteps(payload, true),
+    `n=$(sh "$d/pkg/${pickNodeInPackage}" "$a")`,
     `"$n" "$d/pkg/${rootServiceCliInPackage}" install "$a" ${renderPairArguments(encodePairCode(payload))}`,
   ];
   return checkScriptHasNoQuote(['set -eu', ...checks, ...steps].join('; '), 'admin');

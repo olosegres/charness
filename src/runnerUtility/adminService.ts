@@ -162,7 +162,19 @@ async function resolveServedAccount(accountName: string, deps: AdminServiceDeps)
   const account = await deps.resolveAccount(accountName);
   if (account === null) return fail(`There is no account named «${accountName}», or its home folder cannot be read from the directory service.`);
   if (account.uid === rootUid) return fail('The service must run as a standard account, not as root.');
+  // And a Node the account can change is no Node for root to run: the account runs the agents' code. `remoteRun/pickNode.sh` asks the same before it picks.
+  const changeable = await findPathAccountCanWrite(deps.nodePath, account, deps);
+  if (changeable !== null) return fail(`This step runs under the Node.js at ${deps.nodePath}, which the account ${account.name} can change (it can write ${changeable}): root runs nothing the account can change. Install Node.js system-wide (macOS: brew install node) and paste the admin line again.`);
   return account;
+}
+
+/** @description The first of `programPath` and the folders above it (up to, not including, `/`) that `account` can write — judged AS the account, `sudo -u <account> -H test -w` — or `null`. */
+async function findPathAccountCanWrite(programPath: string, account: TargetAccount, deps: AdminServiceDeps): Promise<string | null> {
+  for (let location = programPath; location !== '' && location !== path.parse(location).root; location = path.dirname(location)) {
+    const probe = await deps.runner('sudo', [...asAccountArgs(account), 'test', '-w', location], { timeoutMs: commandTimeoutMs });
+    if (probe.ok) return location;
+  }
+  return null;
 }
 
 function checkIsTargetAccount(resolved: TargetAccount | ServiceResult): resolved is TargetAccount {

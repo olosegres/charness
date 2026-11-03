@@ -34,6 +34,9 @@ let accountPaths: RunnerHomePaths;
 /** The output sinks the steps handed to the runner (a step that wants its output relayed passes one). */
 let onOutputSeen: Array<NonNullable<Parameters<IsolatedCommandRunner>[2]['onOutput']>> = [];
 let written: Array<[string, string]> = [];
+/** The paths the account can write (`sudo -u … test -w <path>` says yes for them); the probes themselves are kept apart from `calls`, which are what the step RUNS. */
+let writablePaths = new Set<string>();
+let writeProbes: string[] = [];
 
 const accountUid = 501;
 const installedLines = 'Installed two user services: a (the link) and b (the queue).\nLingering is on: they run without a login and start at boot.\n';
@@ -57,6 +60,11 @@ function answer(overrides: Partial<CommandResult> = {}): CommandResult {
  */
 function createRunner(answers: Record<string, Partial<CommandResult>> = {}, prepared: SystemStepAnswer | string = { ok: true, hadService: false }): IsolatedCommandRunner {
   return async (file, args, options) => {
+    if (file === 'sudo' && args.includes('test') && args.includes('-w')) {
+      const probed = args.at(-1) ?? '';
+      writeProbes.push(probed);
+      return answer({ ok: writablePaths.has(probed), exitCode: writablePaths.has(probed) ? 0 : 1 });
+    }
     calls.push({ file, args });
     if (options.onOutput !== undefined) onOutputSeen.push(options.onOutput);
     const key = `${file} ${args.join(' ')}`;
@@ -94,6 +102,8 @@ beforeEach(() => {
   given = [];
   onOutputSeen = [];
   written = [];
+  writablePaths = new Set();
+  writeProbes = [];
 });
 
 afterEach(() => {
@@ -400,6 +410,31 @@ describe('a Node.js in a home folder', () => {
     for (const nodePath of ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node']) {
       assert.equal((await pairAccountFromPackage('runner', request, createDeps({ nodePath }))).ok, true, nodePath);
     }
+  });
+});
+
+describe('a Node.js the account can write', () => {
+  const request: PairRequest = { bootstrapDir: '/tmp/charness-runner.abc/pkg', archivePath: '/tmp/charness-runner.abc/package.tgz', packageId: '0123456789abcdef', code: 'cr1.exampleCode' };
+
+  it('is no Node for root to run — the account runs the agents\' code — whether it can write the program or a folder above it: the step stops before anything runs, naming what it can write', async () => {
+    for (const writable of ['/opt/node/bin/node', '/opt/node/bin', '/opt/node', '/opt']) {
+      calls = [];
+      writablePaths = new Set([writable]);
+      const deps = createDeps({ nodePath: '/opt/node/bin/node' });
+      const refusal = new RegExp(`the account runner can change \\(it can write ${writable.replace(/[/.]/g, '\\$&')}\\): root runs nothing the account can change\\. Install Node\\.js system-wide`);
+      assert.match((await pairAccountFromPackage('runner', request, deps)).lines.join(' '), refusal, writable);
+      assert.match((await installServiceForAccount('runner', deps)).lines.join(' '), refusal, writable);
+      assert.deepEqual(calls, [], `nothing ran (${writable})`);
+    }
+  });
+
+  it('is asked as the account (`sudo -u <account> -H test -w`) of the program and every folder above it, up to — not including — the root folder', async () => {
+    await pairAccountFromPackage('runner', request, createDeps({ nodePath: '/opt/node/bin/node' }));
+    assert.deepEqual(writeProbes, ['/opt/node/bin/node', '/opt/node/bin', '/opt/node', '/opt']);
+  });
+
+  it('lets a Node through that the account can write nowhere', async () => {
+    assert.equal((await pairAccountFromPackage('runner', request, createDeps({ nodePath: '/opt/homebrew/bin/node' }))).ok, true);
   });
 });
 

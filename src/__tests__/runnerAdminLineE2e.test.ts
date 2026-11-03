@@ -188,7 +188,7 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     const calls = readStandInCalls(standIns);
     const indexOf = (prefix: string, from = 0): number => calls.findIndex((call, index) => index >= from && call.startsWith(prefix));
     const asRunner = 'sudo -u runner -H';
-    const pairingRun = indexOf(asRunner);
+    const pairingRun = calls.findIndex((call) => call.startsWith(asRunner) && call.includes('runnerCli.js pair'));
     assert.match(calls[pairingRun], new RegExp(`^${asRunner.replace(/[-]/g, '\\-')} \\S+/node /tmp/charness-runner\\.[A-Za-z0-9]{8}/pkg/dist/runnerUtility/runnerCli\\.js pair\\b`), 'the account pairs from the copy root made');
     // The Node everything runs under is the one outside the homes — not the test's own, in somebody's home, though that comes later on the PATH —
     // and the account's launcher (what its service starts) names that one: the service depends on no home.
@@ -202,13 +202,20 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.equal(calls.filter((call) => call.startsWith('loginctl enable-linger')).length, 1);
     assert.equal(calls.filter((call) => call.startsWith(`${asRunner} `) && call.includes('runnerCli.js pair')).length, 1, 'the account was paired once');
 
-    // Nothing the account runs has the admin's terminal: each call started with /dev/null for input, as the head of a session of its own — no
-    // controlling terminal, whatever terminal the line was pasted in. The one call the shell itself makes as the account is the probe of the Node
-    // (`test -x`): it executes nothing of the account's.
-    const [probe, ...isolation] = readStandInIsolation(standIns);
-    assert.match(probe, new RegExp(`^stdin=\\S+ leader=no terminal=\\S+ test -x ${systemNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), 'the shell asks only whether the account may run the Node');
+    // Nothing the account runs has the admin's terminal: each call the ROOT STEP makes started with /dev/null for input, as the head of a session of its
+    // own — no controlling terminal, whatever terminal the line was pasted in. The calls the Node pick (a plain script) makes as the account are
+    // probes — `test -x` and `test -w` — that execute nothing of the account's.
+    const lines = readStandInIsolation(standIns);
+    const isProbeOfPick = (line: string): boolean => /^stdin=\S+ leader=no terminal=\S+ test -[xw] /.test(line);
+    const probes = lines.filter(isProbeOfPick);
+    const isolation = lines.filter((line) => !isProbeOfPick(line));
+    const escapedNode = systemNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.ok(probes.some((line) => new RegExp(` test -x ${escapedNode}$`).test(line)), 'the pick asked whether the account may run the Node');
+    assert.ok(probes.some((line) => new RegExp(` test -w ${escapedNode}$`).test(line)) && probes.some((line) => new RegExp(` test -w ${path.dirname(escapedNode)}$`).test(line)), 'and whether it can write the Node or its folder');
+    assert.ok(probes.every((line) => / test -[xw] \/\S+$/.test(line)), 'and asked nothing else');
     assert.ok(isolation.some((line) => line.includes('runnerCli.js pair')), 'the pairing among them — it was the shell\'s own `sudo -u` before');
     assert.ok(isolation.some((line) => line.includes('is-system-running')) && isolation.some((line) => line.includes('service install')), 'and the user manager and the install');
+    assert.ok(isolation.some((line) => / test -w \/\S+$/.test(line)), 'and the root step\'s own look at the Node, as the account');
     assert.ok(isolation.some((line) => / test -r \/\S+ -a -x \/\S+$/.test(line)) || !fs.existsSync('/home'), 'and the look at the homes of other users that the account can read, as the account');
     for (const line of isolation) {
       assert.match(line, /^stdin=\/dev\/null leader=yes terminal=\?{1,2} /, line);

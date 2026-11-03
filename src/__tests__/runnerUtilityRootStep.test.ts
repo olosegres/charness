@@ -95,7 +95,8 @@ describe('the root step\'s whole run', () => {
       const call = `${file} ${callArgs.join(' ')}`;
       calls.push(call);
       const isHomeCheck = call.includes(' test -r ');
-      const isOk = isHomeCheck ? readableHomes.some((home) => call.includes(`test -r ${home} `)) : answerFor(call);
+      // The account can write nothing (the Node the step runs under is checked first, `test -w`).
+      const isOk = call.includes(' test -w ') ? false : isHomeCheck ? readableHomes.some((home) => call.includes(`test -r ${home} `)) : answerFor(call);
       return { ok: isOk, exitCode: isOk ? 0 : 1, stdout: call.includes('system-step prepare') ? '{"ok":true,"hadService":false}\n' : '', stderr: '', isTimedOut: false };
     };
     const deps: AdminServiceDeps = {
@@ -133,10 +134,12 @@ describe('the root step\'s whole run', () => {
   it('pairs first, then installs the service, then — last — warns about the homes of other users that the account can read, naming them with the fix', async () => {
     const result = await run(pairingArgs, () => true, ['/Users/alice']);
     assert.equal(result.code, 0, result.err);
-    const pairing = result.calls.findIndex((call) => call.includes('runnerCli.js pair'));
-    const service = result.calls.findIndex((call) => call.includes('system-step prepare'));
-    const homes = result.calls.findIndex((call) => call.includes(' test -r '));
-    assert.ok(pairing === 0 && service > pairing && homes > service, result.calls.join('\n'));
+    // (The probes of the Node, `test -w`, come before each step: they run nothing.)
+    const ran = result.calls.filter((call) => !call.includes(' test -w '));
+    const pairing = ran.findIndex((call) => call.includes('runnerCli.js pair'));
+    const service = ran.findIndex((call) => call.includes('system-step prepare'));
+    const homes = ran.findIndex((call) => call.includes(' test -r '));
+    assert.ok(pairing === 0 && service > pairing && homes > service, ran.join('\n'));
     assert.match(result.out, /\nWarning: the account runner can read the home folders of other users on this machine: \/Users\/alice\.[^]*sudo chmod 700 \/Users\/alice\n$/);
   });
 

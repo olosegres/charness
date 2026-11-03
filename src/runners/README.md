@@ -89,7 +89,7 @@ escape a backslash in `command="…"`).
    --service-follows`) and then installs the service; the shell runs nothing as the account. Every step that runs as the account has NO
    terminal: a session of its own, `/dev/null` for input, its output piped through the root step with the control characters stripped
    (`runnerUtility/isolatedCommand.ts`) — the account runs the agents' code, and code it can change must not get the admin's terminal. The
-   script also PICKS the Node root and the service run under (`renderNodePickSteps`): never one inside a home folder, judged by its real path;
+   script also PICKS the Node root and the service run under — by the package's own `remoteRun/pickNode.sh`, run as root from the root-owned copy right after the download (kept out of the pasted line: a Telegram message holds 4096 characters): never one inside a home folder, judged by its real path (`readlink -f`, or by hand where it is missing), never one the account can WRITE or whose folder it can write (`sudo -u <account> test -w`: root must never run what the account can change; the root step asks the same again),
    the root step warns last about the homes of other users that the account can read (`sudo chmod 700 <home>`). The script is built from the same fetch steps
    as the plain line (`renderFetchSteps`), the account is the line's LAST word (editable by hand; `charness runners pair --account`), and
    a second paste for an account that is already paired only installs the service. A pairing is offered in TWO Telegram messages — the

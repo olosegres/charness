@@ -65,13 +65,15 @@ A runner is attached in one of two ways:
      system log. The code is single use and good for 10 minutes: a line that was used is dead, and so is a retry's (see below), which
      closes its own code. A line that was refused (no such account, an admin account…) leaves its code open until it expires — on purpose,
      so you can fix the account and paste it again.
-   - **Node.** Both root and the account run one Node, and the line picks it itself: the `node` that `sudo` finds, else
-     `/opt/homebrew/bin/node`, `/usr/local/bin/node` or `/usr/bin/node` — **never a Node inside a home folder** (`/Users/<name>`, `/home/<name>`,
-     root's own; judged by its real path, so a link that leads into one does not count), one the account can run, 22.12 or newer. Root runs nothing
-     from somebody's home, and the runner's launcher and the daemons' `PATH` carry this Node, so a runner must not stop the day that home is closed
-     or nvm moves on. With none, the line stops before anything is fetched and says to install Node system-wide (`brew install node` on a Mac, the OS
-     package, nodejs.org); the plain line (the second message) uses the Node of the runner account's own login and warns when it lives in
-     another user's home, and `charness-runner service install` refuses one.
+   - **Node.** Both root and the account run one Node, and the line picks it itself, with a script of the package it has just fetched
+     (`remoteRun/pickNode.sh`, run as root from the root-owned copy): the `node` that `sudo` finds, else `/opt/homebrew/bin/node` or
+     `/usr/local/bin/node` — **never a Node inside a home folder** (`/Users/<name>`, `/home/<name>`, root's own; judged by its real path, so a link that
+     leads into one does not count), one the account can run and **cannot write — nor any folder above it** (root must never run what the account, who
+     runs the agents' code, can change: a Node in a prefix the runner account owns, such as an `n` or `fnm` folder or a `/usr/local` handed to it, is
+     refused), 22.12 or newer. Root runs nothing from somebody's home, and the runner's launcher and the daemons' `PATH` carry this Node, so a runner
+     must not stop the day that home is closed or nvm moves on. With none, the line stops before anything runs and says to install Node system-wide
+     (`brew install node` on a Mac, the OS package, nodejs.org); the plain line (the second message) uses the Node of the runner account's own login
+     and warns when it lives in another user's home, and `charness-runner service install` refuses one.
    - **Homes the runner account can read.** macOS makes every home `750` with group `staff`, and a standard account is in `staff`, so by default
      the agents' jobs — and the npm packages they install — can read the source code, keys and tokens of the people who use the machine. **Both
      lines** end with a warning naming the homes the runner account can read (the admin line asks as that account, not with root's rights) and the
