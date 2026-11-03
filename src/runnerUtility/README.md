@@ -189,6 +189,9 @@ do sleep 2; done'` (the lock lasts while that loop does, within two seconds of t
 ends it and removes the file. The state is `<state>/awake` — `caffeinate 123`, `systemd-inhibit 123` or `none <reason>` — which `runner.sh probe` turns into `awake=` /
 `awake_detail=` (a holder that is gone is `no` whatever the file says) and `runners` shows as `keeps awake: …`. Never `pmset`, nothing that needs an admin; the
 display may still turn off; a closed lid still sleeps the machine (verify on the Mac). On an always-on Mac the daemon link holds it (the login session's agent does not).
+A stop reaches the app twice (the launcher forwards the TERM it got, a terminal's Ctrl-C or a group kill hands the app its own, milliseconds apart): `onStopSignals`
+(`stopSignals.ts`) keeps its handlers installed and stops at the first signal only — a `once` handler let the second take the default action and kill the process
+under its own clean-up (no `finally`, no `exit` handlers: the state file stayed). The login-session agent stops the same way.
 
 ## The login session's agent (`guiAgent.ts`)
 

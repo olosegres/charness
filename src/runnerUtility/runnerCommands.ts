@@ -16,6 +16,7 @@ import { createGuiAgentDeps, runGuiAgent } from './guiAgent';
 import { describeKeepAwakeMethod } from '../remoteRun/probe';
 import { createKeepAwakeDeps, startKeepAwake, type KeepAwakeState } from './keepAwake';
 import { createIosCheckDeps, readIosCheck, refreshIosCheck } from './iosCheck';
+import { onStopSignals } from './stopSignals';
 import { createSilencerDeps, createSilencerLook, createSimulatorSilencer, silencerPollMs } from './simulatorSilencer';
 import { checkIsRunnerLinkProcess, createProcessControl, stopLocalLink, type ProcessControl } from './localLinkStop';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
@@ -370,10 +371,7 @@ export async function runGuiAgentCommand(io: CommandIo, homeDir: string = os.hom
   const silencerDeps = createSilencerDeps(log);
   const lookAtSimulators = createSilencerLook(createSimulatorSilencer(silencerDeps), silencerDeps);
   const controller = new AbortController();
-  if (overrides.signal === undefined) {
-    process.once('SIGINT', () => { controller.abort(); });
-    process.once('SIGTERM', () => { controller.abort(); });
-  }
+  const removeStopSignals = overrides.signal === undefined ? onStopSignals(() => { controller.abort(); }) : null;
   io.stdout(`charness-runner: the login session's agent is up (${os.userInfo().username}); iOS steps run here\n`);
   const names = getServiceNames(paths.root);
   const result = await runGuiAgent(paths, createGuiAgentDeps(() => readExecEnv(paths)), {
@@ -383,6 +381,7 @@ export async function runGuiAgentCommand(io: CommandIo, homeDir: string = os.hom
     checkIsServiceRemoved: () => !fs.existsSync(path.join(overrides.launchDaemonsDir ?? systemLaunchDaemonsDir, `${names.launchdLink}.plist`)),
     serviceCheckIntervalMs: overrides.serviceCheckIntervalMs,
   });
+  removeStopSignals?.();
   if (result === 'removed') {
     // The admin removed the daemons: nothing is left to serve. The definition is the account's own file — it goes too, so the agent does not come back at the next login.
     fs.rmSync(getGuiAgentFile(paths.homeDir, names), { force: true });
@@ -445,8 +444,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     controller.abort();
     setTimeout(() => process.exit(0), shutdownGraceMs).unref();
   };
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
+  onStopSignals(stop);
   // The machine is kept awake while the link runs; the holder is tied to this process (it ends with it, however it ends), and `stop` runs from `exit` too.
   const keepAwake = await startKeepAwake(createKeepAwakeDeps(paths));
   process.once('exit', () => { keepAwake.stop(); });
