@@ -53,7 +53,14 @@ A runner is attached in one of two ways:
      the charness host made, and the program root runs from it is the one in the charness host's own install — so whoever can change that
      install (its user, and the agents that run as that user) controls what runs as root here, and what it installs stays after the paste.
      The plain line trusts the charness host only with the runner account. Paste the admin line only for a charness host you would let run
-     code as root on this machine.
+     code as root on this machine. **Each paste gives that host root on this machine once, at that moment** — one `sudo`, one run: no root
+     process stays afterwards (the daemons run as the runner account), and pasting a line again gives the same root again.
+   - **Do not paste the admin line again on a machine whose runner account has already run jobs — recreate the account instead — unless your
+     charness is the version that runs the account's steps with no terminal attached** (the CHANGELOG entry «Everything the admin line runs as the
+     account … runs with no terminal attached»). The runner account's files are the agents' to change: a job, or a package it installed, may have
+     planted code there. From that version on, root never runs or reads the account's files and the account's own steps run with no terminal, so a
+     second paste (the retry below) is safe in that respect; with an older charness the account's code was started with the admin's terminal, which
+     it could write over and type into. If the service has to be reinstalled on an older one, delete the account and make a fresh one first.
    - **The code in the line.** `sudo` asks for the admin's password once and writes the command line — the pairing code with it — to the
      system log. The code is single use and good for 10 minutes: a line that was used is dead, and so is a retry's (see below), which
      closes its own code. A line that was refused (no such account, an admin account…) leaves its code open until it expires — on purpose,
@@ -110,6 +117,42 @@ cut, the jobs it was running are stopped (through the link, at once, when it is 
 `~/.charness-runner/bin`, the folder of the `node` that runs the utility, Homebrew and the system folders, the Android SDK where the
 usual installers put it — and nothing of the charness host's environment. Anything else (`PATH` additions for a Node from nvm, `JAVA_HOME`,
 a token) goes into `~/.charness-runner/env`, one `KEY=VALUE` per line, read again for every job.
+
+**What a job can reach — the machine's own network.** A job runs as the runner account on the runner machine, so it shares that machine's network: the
+home or office LAN (the router's admin page, printers, other computers), every VPN or tunnel interface the machine is on (a WireGuard network included), and
+the machine's own localhost services — and so does any npm package a job installs. Nothing in charness fences that: on the charness host a job cannot see
+your home devices, on the runner machine it can. If that machine sits inside a network you care about, fence the **runner account** with the machine's own
+firewall, by account — the link to the charness host keeps working when the charness host is reached by its public address (if it is reached by a private
+or VPN address, let that one through first, as in the examples). Replace `runner` with the account's name and `<hub>` with the address the pairing line dials.
+
+macOS (`pf`; its `user` keyword matches the account that owns the socket):
+
+```
+# /etc/pf.anchors/charness.runner
+pass out quick proto tcp from any to <hub> port 22 user runner
+block return out quick proto { tcp udp } from any to { 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 } user runner
+# and, to keep jobs off the machine's own services: block return out quick on lo0 all user runner
+```
+
+Add `anchor "charness.runner"` and `load anchor "charness.runner" from "/etc/pf.anchors/charness.runner"` to `/etc/pf.conf`, then `sudo pfctl -f /etc/pf.conf` and
+`sudo pfctl -E`. Check it before relying on it: as the runner account (a job: `charness remote-run exec -- curl -m 3 http://<a device on your LAN>/`) a connection to a private address
+must fail, and one to the charness host must still work.
+
+Linux (`nftables`; `meta skuid` matches the account that owns the socket):
+
+```
+# /etc/nftables.d/charness-runner.nft — load with: sudo nft -f /etc/nftables.d/charness-runner.nft
+table inet charness_runner {
+  chain output {
+    type filter hook output priority 0; policy accept;
+    meta skuid "runner" ip daddr <hub> tcp dport 22 accept
+    meta skuid "runner" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } reject
+    meta skuid "runner" ip6 daddr { fc00::/7, fe80::/10 } reject
+  }
+}
+```
+
+The same check applies. A fence by account protects the network; it does not hide the machine's files from the runner account — see the homes warning above.
 
 **iOS on a Mac LaunchDaemon.** Apple does not give the iOS Simulator to a daemon or to a process started as another user. The utility
 tries for real — it boots and deletes a Simulator when the service starts and when Xcode changes — and reports `ios` only if that
