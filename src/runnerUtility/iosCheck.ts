@@ -49,6 +49,8 @@ interface SimctlRuntime {
   version: string;
   platform?: string;
   isAvailable?: boolean;
+  /** The device types THIS runtime can run (`simctl list runtimes -j`); absent in an older simctl. */
+  supportedDeviceTypes?: SimctlDeviceType[];
 }
 
 interface SimctlDeviceType {
@@ -74,14 +76,22 @@ function parseJsonObject<TValue>(text: string): TValue | null {
   }
 }
 
-/** @description The newest available iOS runtime and an iPhone device type (the newest the list names), out of `simctl list runtimes -j` and `list devicetypes -j`. */
+/**
+ * @description The newest available iOS runtime that can run an iPhone, and an iPhone device type THAT RUNTIME supports (its own `supportedDeviceTypes` in
+ * `simctl list runtimes -j`; the newest iPhone the list names). The pair of the newest runtime and the last iPhone of `list devicetypes -j` is no pair:
+ * a new runtime runs few device types (iOS 27.1 ran only «iPhone Duo»), and the last of the list was an iPod touch it does not support — `simctl create`
+ * said «Incompatible device» and the runner reported `ios: no` on a Mac whose Simulator works. A simctl that names no supported types per runtime (an older
+ * one) is read as before: every iPhone device type of `list devicetypes -j`. A runtime with no iPhone is passed over for the next one.
+ */
 export function chooseSimulator(runtimesJson: string, deviceTypesJson: string): SimulatorChoice | null {
   const runtimes = parseJsonObject<{ runtimes?: SimctlRuntime[] }>(runtimesJson)?.runtimes ?? [];
   const deviceTypes = parseJsonObject<{ devicetypes?: SimctlDeviceType[] }>(deviceTypesJson)?.devicetypes ?? [];
   const ios = runtimes.filter((runtime) => runtime.platform === 'iOS' && runtime.isAvailable !== false).sort((left, right) => compareVersions(right.version, left.version));
-  const iphones = deviceTypes.filter((deviceType) => deviceType.productFamily === 'iPhone');
-  const iphone = iphones.at(-1);
-  return ios.length === 0 || iphone === undefined ? null : { runtimeId: ios[0].identifier, deviceTypeId: iphone.identifier };
+  for (const runtime of ios) {
+    const iphone = (runtime.supportedDeviceTypes ?? deviceTypes).filter((deviceType) => deviceType.productFamily === 'iPhone').at(-1);
+    if (iphone !== undefined) return { runtimeId: runtime.identifier, deviceTypeId: iphone.identifier };
+  }
+  return null;
 }
 
 /** @description `16.2 (16C5032a)` out of `xcodebuild -version`, or `null`. */

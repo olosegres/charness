@@ -34,6 +34,7 @@
 #   prune        remove old jobs, stale stage dirs and unused project copies
 #   sync-tree    the apply step alone (tests)
 
+# The script's own tools (sort, sed, grep) run in the C locale: byte-wise and the same everywhere. The user's commands do NOT — see job_locale.
 LC_ALL=C
 export LC_ALL
 set -u
@@ -55,6 +56,20 @@ heartbeat_poll_sec=1
 lock_poll_sec=1
 
 # ─────────────────────────── helpers ───────────────────────────
+
+# The locale a job's commands run in: a UTF-8 one, never `C`. Tools that read the locale refuse or crash on `C` (CocoaPods: «Unicode Normalization
+# not appropriate for ASCII-8BIT»), and a job that wants another one says so with -e LC_ALL=… (the job's variables are applied after this). The first
+# of C.UTF-8 (Linux) and en_US.UTF-8 (macOS) that this machine has — judged by the charmap it gives — else C: a machine with neither is no worse.
+pick_job_locale() {
+  local candidate
+  for candidate in C.UTF-8 en_US.UTF-8 en_US.utf8; do
+    case $(LC_ALL=$candidate locale charmap 2> /dev/null) in
+      [Uu][Tt][Ff]-8 | [Uu][Tt][Ff]8) printf '%s\n' "$candidate"; return 0 ;;
+    esac
+  done
+  printf 'C\n'
+}
+job_locale=$(pick_job_locale)
 
 die() {
   printf 'remote-run-runner: %s\n' "$*" >&2
@@ -1029,6 +1044,8 @@ run_step() {
   local command_text=$2
   (
     cd "$directory" || exit 126
+    LC_ALL=$job_locale
+    export LC_ALL
     if [ -s "$jd/env" ]; then
       while IFS= read -r env_line; do export "$env_line"; done < "$jd/env"
     fi
@@ -1227,7 +1244,7 @@ cmd_exec() {
   exec 3<&0
   # Own process group, so the lease can stop the command and everything it started.
   set -m
-  ( cd "$tree/$subfolder" && exec bash -c "$*" ) < /dev/null &
+  ( cd "$tree/$subfolder" && LC_ALL=$job_locale && export LC_ALL && exec bash -c "$*" ) < /dev/null &
   local exec_pid=$!
   keep_awake_while "$exec_pid"
   set +m

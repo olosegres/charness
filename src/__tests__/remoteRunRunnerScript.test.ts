@@ -432,6 +432,22 @@ describe('the lease (through `exec`, which uses the same watcher as a foreground
     }
   });
 
+  it('a command runs in a UTF-8 locale, never `C` — CocoaPods dies on «Unicode Normalization not appropriate for ASCII-8BIT» there — although the script\'s own tools run in `C`', async () => {
+    const leased = startLeasedRun('echo "[$LC_ALL]"; locale charmap');
+    leased.write('h');
+    const result = await leased.finished;
+    assert.equal(result.code, 0, result.stderr);
+    const [localeLine, charmap] = result.stdout.trim().split('\n');
+    assert.match(localeLine, /^\[(C\.UTF-8|en_US\.UTF-8|en_US\.utf8)\]$/, 'one of the UTF-8 locales the script looks for');
+    assert.equal(charmap, 'UTF-8');
+  });
+
+  it('a job that asks for another locale still gets it: `-e LC_ALL=…` is applied after the script\'s choice', () => {
+    const text = fs.readFileSync(scriptPath, 'utf8');
+    const step = /run_step\(\) \{[^]*?\n\}/.exec(text)?.[0] ?? '';
+    assert.ok(step.indexOf('LC_ALL=$job_locale') > 0 && step.indexOf('LC_ALL=$job_locale') < step.indexOf('export "$env_line"'), 'the choice comes first, the job\'s variables after it');
+  });
+
   it('commands that end at once leave no lease state: the watcher is told to stop before it has done anything', async () => {
     const quickRuns = 25;
     for (let run = 0; run < quickRuns; run += 1) {

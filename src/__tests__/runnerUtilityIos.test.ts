@@ -69,6 +69,37 @@ describe('choosing a simulator', () => {
     assert.deepEqual(chooseSimulator(runtimesJson, deviceTypesJson), { runtimeId: 'com.apple.CoreSimulator.SimRuntime.iOS-18-2', deviceTypeId: 'com.apple.CoreSimulator.SimDeviceType.iPhone-16' });
   });
 
+  describe('with the device types each runtime supports (the first real run on a Mac)', () => {
+    const iphone = (name: string): { identifier: string; name: string; productFamily: string } => ({ identifier: `com.apple.CoreSimulator.SimDeviceType.${name}`, name, productFamily: 'iPhone' });
+    const deviceTypesOfTheMac = JSON.stringify({ devicetypes: [iphone('iPhone-17'), iphone('iPhone-Duo'), iphone('iPod-touch--7th-generation-')] });
+
+    it('takes the newest runtime together with a device type IT supports — not the last iPhone of the whole list, an iPod touch iOS 27.1 cannot run', () => {
+      const runtimes = JSON.stringify({
+        runtimes: [
+          { identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-26-5', version: '26.5', platform: 'iOS', isAvailable: true, supportedDeviceTypes: [iphone('iPhone-17'), iphone('iPod-touch--7th-generation-')] },
+          { identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-27-1', version: '27.1', platform: 'iOS', isAvailable: true, supportedDeviceTypes: [iphone('iPhone-Duo')] },
+        ],
+      });
+      assert.deepEqual(chooseSimulator(runtimes, deviceTypesOfTheMac), { runtimeId: 'com.apple.CoreSimulator.SimRuntime.iOS-27-1', deviceTypeId: 'com.apple.CoreSimulator.SimDeviceType.iPhone-Duo' });
+    });
+
+    it('passes over a runtime that supports no iPhone, and an unavailable one, for the next', () => {
+      const runtimes = JSON.stringify({
+        runtimes: [
+          { identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-28-0', version: '28.0', platform: 'iOS', isAvailable: true, supportedDeviceTypes: [{ identifier: 'ipad', productFamily: 'iPad' }] },
+          { identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-27-9', version: '27.9', platform: 'iOS', isAvailable: false, supportedDeviceTypes: [iphone('iPhone-18')] },
+          { identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-26-5', version: '26.5', platform: 'iOS', isAvailable: true, supportedDeviceTypes: [iphone('iPhone-16'), iphone('iPhone-17')] },
+        ],
+      });
+      assert.deepEqual(chooseSimulator(runtimes, deviceTypesOfTheMac), { runtimeId: 'com.apple.CoreSimulator.SimRuntime.iOS-26-5', deviceTypeId: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17' });
+    });
+
+    it('is null when no runtime supports an iPhone — the list of device types of the whole machine is no answer for a runtime that names its own', () => {
+      const runtimes = JSON.stringify({ runtimes: [{ identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-28-0', version: '28.0', platform: 'iOS', isAvailable: true, supportedDeviceTypes: [] }] });
+      assert.equal(chooseSimulator(runtimes, deviceTypesOfTheMac), null);
+    });
+  });
+
   it('is null when there is no iOS runtime or no iPhone, or the JSON is not JSON', () => {
     assert.equal(chooseSimulator(JSON.stringify({ runtimes: [] }), deviceTypesJson), null);
     assert.equal(chooseSimulator(runtimesJson, JSON.stringify({ devicetypes: [{ identifier: 'x', productFamily: 'iPad' }] })), null);
