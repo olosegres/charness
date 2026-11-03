@@ -19,17 +19,24 @@ import { runCommandIsolated, stripControlCharacters, type IsolatedCommandRunner 
 const generousTimeoutMs = 20_000;
 const pollIntervalMs = 25;
 const pollDeadlineMs = 5_000;
+/** How long a killed process may take to be gone: on a box with a load average of 40 a signalled process waits seconds for its turn to die. */
+const processExitDeadlineMs = 30_000;
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-async function waitFor(check: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + pollDeadlineMs;
+async function waitFor(check: () => boolean, what: string | (() => string), deadlineMs: number = pollDeadlineMs): Promise<void> {
+  const deadline = Date.now() + deadlineMs;
   while (!check()) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${typeof what === 'string' ? what : what()}`);
     await wait(pollIntervalMs);
   }
+}
+
+/** What `ps` says of `pid`, for a failure's message. */
+function describeProcess(pid: number): string {
+  return spawnSync('ps', ['-o', 'pid,ppid,pgid,stat,etime,args', '-p', pid.toString()], { encoding: 'utf8' }).stdout.trim();
 }
 
 /** Is `pid` running? A zombie — dead, its parent gone, and no init yet to collect it — is not: `kill(pid, 0)` still finds one, `ps` says `Z`. */
@@ -117,7 +124,7 @@ describe('a command run isolated', () => {
       assert.equal(result.isTimedOut, true);
       assert.equal(result.ok, false);
       const grandchild = Number(fs.readFileSync(pidFile, 'utf8'));
-      await waitFor(() => !checkIsProcessAlive(grandchild), 'the grandchild to be killed with the group');
+      await waitFor(() => !checkIsProcessAlive(grandchild), () => `the grandchild to be killed with the group (${describeProcess(grandchild)})`, processExitDeadlineMs);
     } finally {
       fs.rmSync(folder, { recursive: true, force: true });
     }
@@ -142,7 +149,7 @@ describe('a command run isolated', () => {
       const outcome = await exited;
       assert.equal(outcome.signal, 'SIGTERM', `the driver dies of the signal (${JSON.stringify(outcome)})`);
       assert.equal(stdout, '', 'and does not carry on');
-      await waitFor(() => !checkIsProcessAlive(sleeper), 'the child\'s group to be stopped');
+      await waitFor(() => !checkIsProcessAlive(sleeper), () => `the child's group to be stopped (${describeProcess(sleeper)})`, processExitDeadlineMs);
     } finally {
       fs.rmSync(folder, { recursive: true, force: true });
     }
