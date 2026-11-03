@@ -26,6 +26,10 @@ Now a foreground run or `exec` whose stdout was closed stops its job at once, sa
 Before, `charness remote-run wait` showed the last 50 lines of a failed `yarn install`, which were yarn's own summary («sqlite3 couldn't be built successfully, logs can be found here: …/build.log»); the real error — a Python without `distutils` in the native build — sat far above, and the build log was in a temp folder on the runner, so finding the cause took a hand-made `exec` of the step again.
 Now the job's log ends with the first eight error-looking lines of the step and the first eight of each `build.log` it names (a log the tool already removed is named as gone, with `-e YARN_ENABLE_INLINE_BUILDS=1` to get the build output into the log), so the cause is in what `wait` and a foreground run print.
 
+**`charness remote-run --send <path>` sends a held-back secret-looking file for one call, and the «held back» line is said once per change instead of before every run.**
+Before, a `.env.test` or a `.pem` fixture that a test needs on the runner could only be opted in with `send:` in the project's `.remote-run` — a file a read-only checkout cannot take — and a project with sixteen such fixtures printed all sixteen names before every single run, until nobody read the line.
+Now `--send <path>` (repeatable, a pattern relative to the project root, also for a file git ignores) sends the named files for that call alone and says so; the held-back line names the first five files and comes again only when the list changes — a file added, removed or opted in.
+
 ## 3.9.1 — 2026-11-04
 
 **An @-mention of the AI account in a Jira issue it is already working on no longer makes it believe the issue is not handed to it, and no longer stops its build.**

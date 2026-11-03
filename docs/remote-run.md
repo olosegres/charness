@@ -287,7 +287,7 @@ call, so an edit applies at once; agents learn that runners exist when the first
 
 ```
 charness remote-run [--runner <name>] [--needs <cap>] [--runner-wait <dur>] [--group <g>] [--timeout <dur>]
-                    [--with-git] [-e NAME=VALUE]… [--bg] <command…>
+                    [--with-git] [--send <path>]… [-e NAME=VALUE]… [--bg] <command…>
 charness remote-run runners
 charness remote-run ls [--all]
 charness remote-run status <id>
@@ -357,8 +357,11 @@ The project is the git working tree the command runs in (anything else is refuse
 - **Sent**: tracked and untracked files that `.gitignore` does not name, submodules included, deletions mirrored. Files the runner
   keeps for itself (`node_modules`, `build`, `Pods`, caches — everything ignored) are never touched. `.git` is not sent unless
   `--with-git`, and a copy that got one for a run does not keep it for the next plain run.
-- **Never sent** unless `.remote-run` opts them in with `send:`: secret-looking files — `.env`, `.env.*` (except `.env.example`,
-  `.env.sample`, `.env.template`), `*.pem`, `*.p12`, `*.key`, `.npmrc`. `remote-run` says which ones it held back. A file name with a
+- **Never sent** unless `.remote-run` opts them in with `send:` (for every call) or the call does with `--send <path>` (for that call
+  alone, repeatable, the same patterns relative to the project root — also for a file git ignores): secret-looking files — `.env`,
+  `.env.*` (except `.env.example`, `.env.sample`, `.env.template`), `*.pem`, `*.p12`, `*.key`, `.npmrc`. `remote-run` says which ones it
+  held back — **once**: the line comes again only when the list changes (a file added, removed or opted in), not before every run; a file
+  sent by `--send` is named on every call that sends it, and a `--send` pattern that matches nothing is said too. A file name with a
   newline is refused (named); drop it with `exclude:`.
 - **Dependencies**: the install step runs on the runner only when its key changed since the last successful install in that copy (or
   the last one failed). By lockfile: `yarn.lock` → `yarn install --immutable`, `pnpm-lock.yaml` → `pnpm install --frozen-lockfile`,

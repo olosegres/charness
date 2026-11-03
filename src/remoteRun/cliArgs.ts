@@ -1,4 +1,5 @@
 import { parseJobId } from './jobId';
+import { getPathPatternProblem } from './pathPatterns';
 import { runnerCapabilities, type RunnerCapability } from './probe';
 
 /**
@@ -23,6 +24,8 @@ export interface RemoteRunOptions {
   timeoutSeconds: number | null;
   /** `--with-git`: send `.git` too. */
   isWithGit: boolean;
+  /** `--send <path>`, in order: files (patterns, as `send:` of `.remote-run`) sent for this call although they look like secrets or git ignores them. */
+  send: string[];
   /** `-e NAME=VALUE`, in order. */
   env: Array<{ name: string; value: string }>;
   /** `--bg`: print the job id and return. */
@@ -61,7 +64,7 @@ export function parseDuration(text: string): number | null {
 }
 
 function createDefaultOptions(): RemoteRunOptions {
-  return { runner: null, needs: null, runnerWaitSeconds: null, group: null, timeoutSeconds: null, isWithGit: false, env: [], isBackground: false };
+  return { runner: null, needs: null, runnerWaitSeconds: null, group: null, timeoutSeconds: null, isWithGit: false, send: [], env: [], isBackground: false };
 }
 
 /** The value of `--name value` / `--name=value` at `index`, and how many words it took; `null` when this word is not that option. */
@@ -142,6 +145,10 @@ function applyRunOption(options: RemoteRunOptions, name: string, value: string):
   } else if (name === '--group') {
     if (!groupNamePattern.test(value)) return '--group needs a Pueue group name (letters, digits, - and _)';
     options.group = value;
+  } else if (name === '--send') {
+    const problem = getPathPatternProblem(value);
+    if (problem !== null) return `--send pattern ${problem}`;
+    options.send.push(value);
   } else if (name === '--timeout') {
     const seconds = parseDuration(value);
     if (seconds === null) return '--timeout needs a duration such as 90m, 3h, 1h30m or 600 (seconds)';
@@ -158,7 +165,7 @@ function applyRunOption(options: RemoteRunOptions, name: string, value: string):
   return null;
 }
 
-const runValueOptions: readonly string[] = ['--runner', '--needs', '--runner-wait', '--group', '--timeout'];
+const runValueOptions: readonly string[] = ['--runner', '--needs', '--runner-wait', '--group', '--timeout', '--send'];
 
 /** The words that name a subcommand when they come first; after options they are read as the subcommand or refused (`parseOptionsBeforeSubcommand`). */
 const subcommandNames: readonly string[] = ['help', 'ls', 'runners', 'logs', 'exec', 'status', 'wait', 'kill', 'fetch'];

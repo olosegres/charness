@@ -103,11 +103,12 @@ function listIgnoredFiles(root: string): string[] {
   return splitNul(runGit(root, ['ls-files', '-o', '-i', '--exclude-standard', '--directory', '-z'])).filter((entry) => !entry.endsWith('/'));
 }
 
-/** @description What goes to the runner for this project: git's lists, trimmed and opted in by `.remote-run` (`planSendList`). */
-export function planProjectSend(project: ProjectContext): SendPlan {
+/** @description What goes to the runner for this project: git's lists, trimmed and opted in by `.remote-run` and by this call's `--send` (`planSendList`). */
+export function planProjectSend(project: ProjectContext, callSend: readonly string[] = []): SendPlan {
   const files = listFilesRecursively(project.root, '').filter((file) => checkIsSendable(project.root, file));
-  const ignoredFiles = project.config.send.length === 0 ? [] : listIgnoredFiles(project.root).filter((file) => checkIsSendable(project.root, file));
-  return planSendList({ files, ignoredFiles, exclude: project.config.exclude, send: project.config.send });
+  const isOptInAsked = project.config.send.length > 0 || callSend.length > 0;
+  const ignoredFiles = isOptInAsked ? listIgnoredFiles(project.root).filter((file) => checkIsSendable(project.root, file)) : [];
+  return planSendList({ files, ignoredFiles, exclude: project.config.exclude, send: project.config.send, callSend });
 }
 
 /** The folders hook managers conventionally keep git hooks in (husky's, and the common `.githooks`): protected whether or not git points at them yet. */

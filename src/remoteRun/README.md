@@ -75,8 +75,10 @@ config are found from the reported work dir with the layout `runnerUtility/runne
 ## Contracts
 
 **Which files.** `git ls-files -co --exclude-standard -z`, per checked-out submodule; minus `exclude:`; secret-looking names
-(`.env`, `.env.*` except `.example/.sample/.template`, `*.pem`, `*.p12`, `*.key`, `.npmrc`) held back unless `send:` names them;
-a name with a newline is refused. `.git` only with `--with-git`.
+(`.env`, `.env.*` except `.example/.sample/.template`, `*.pem`, `*.p12`, `*.key`, `.npmrc`) held back unless `send:` names them — or this
+call's `--send` does (`planSendList`'s `callSend`; the files only it opted in are `sentOnRequest` and named on every call); the held-back line is
+said when the list changes, not on every submit (`heldBackNotice.ts`: a hash per project in `<cache>/held-back/`); a name with a newline is refused.
+`.git` only with `--with-git`.
 
 **Path patterns** (`pull:`, `exclude:`, `send:`, `install-key:`) are compiled once to extended regular expressions that `RegExp` (main box) and
 `grep -E` / bash `=~` (runner) read the same way — `remoteRunPathPatterns.test.ts` runs all three over the same samples.

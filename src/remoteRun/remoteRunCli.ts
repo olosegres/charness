@@ -36,10 +36,11 @@ export { createProcessIo };
 
 export const remoteRunUsage = `Usage:
   charness remote-run [--runner <name>] [--needs android|ios|docker|playwright] [--runner-wait <dur>] [--group <g>]
-                      [--timeout <dur>] [--with-git] [-e NAME=VALUE]… [--bg] <command…>
+                      [--timeout <dur>] [--with-git] [--send <path>]… [-e NAME=VALUE]… [--bg] <command…>
                               run <command> on a runner, in the same folder of a copy of this git project;
                               output and exit code come back, interrupt or timeout kills the remote job.
                               --bg prints a job id and returns (long runs).
+                              --send <path> sends a held-back secret-looking file (a pattern, relative to the project root) for this call only.
                               --needs with a paired runner that has it but is offline waits for it up to --runner-wait
                               (default 15m, 0 = fail at once).
                               Options go BEFORE the command; a command that starts with a subcommand name goes after --

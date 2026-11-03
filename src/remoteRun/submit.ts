@@ -7,13 +7,14 @@ import { computeDepsKey, hashContent, planDepsStep } from './depsPlan';
 import { createJobId } from './jobId';
 import type { JobMeta } from './jobMeta';
 import { writeLocalJobRecord } from './jobRecords';
-import { compilePathPatterns, getPathPatternSearchRoots } from './pathPatterns';
+import { recordHeldBackFiles } from './heldBackNotice';
+import { compilePathPatterns, createPathMatcher, getPathPatternSearchRoots } from './pathPatterns';
 import { planProjectSend, type ProjectContext } from './project';
 import { RemoteRunError } from './remoteRunError';
 import { runRsync } from './rsync';
 import type { RunnerClient } from './runnerClient';
 import { defaultPueueGroup, formatGroupLimits } from './runnersConfig';
-import { buildRsyncGitArgs, buildRsyncMetaArgs, buildRsyncSendArgs, formatManifest, formatNulSeparatedList } from './sendPlan';
+import { buildRsyncGitArgs, buildRsyncMetaArgs, buildRsyncSendArgs, formatHeldBackNotice, formatManifest, formatNulSeparatedList, formatSentOnRequestNotice } from './sendPlan';
 
 /**
  * @description Stage a job on a runner: send the project's files into `stage/<job>/` (only what changed crosses the network — unchanged
@@ -70,13 +71,18 @@ export async function stageJob(params: {
   if (group !== defaultPueueGroup && runner.groups?.[group] === undefined) {
     throw new RemoteRunError(`runner "${runner.name}" has no Pueue group "${group}" (its groups in runners.json: ${Object.keys(runner.groups ?? {}).join(', ') || 'none besides default'})`);
   }
-  const plan = planProjectSend(project);
+  const plan = planProjectSend(project, options.send);
   if (plan.refused.length > 0) {
     throw new RemoteRunError(`file names with a newline cannot be sent: ${plan.refused.map((file) => JSON.stringify(file)).join(', ')} — rename them or list them under "exclude:" in .remote-run`);
   }
-  if (plan.heldBack.length > 0) {
-    params.say(`held back ${plan.heldBack.length} secret-looking file${plan.heldBack.length === 1 ? '' : 's'}: ${plan.heldBack.join(', ')} — opt in with "send: <path>" in .remote-run`);
+  for (const pattern of options.send) {
+    if (![...plan.files, ...plan.heldBack].some(createPathMatcher([pattern]))) {
+      params.say(`--send ${pattern} matched no file that can be sent (patterns are relative to the project root, as in "send:" of .remote-run; "exclude:" wins)`);
+    }
   }
+  if (plan.sentOnRequest.length > 0) params.say(formatSentOnRequestNotice(plan.sentOnRequest));
+  const isHeldBackNews = recordHeldBackFiles(client.cacheDir, project.slug, [...plan.heldBack, ...plan.sentOnRequest]);
+  if (plan.heldBack.length > 0 && isHeldBackNews) params.say(formatHeldBackNotice(plan.heldBack));
   const deps = planDepsStep(plan.files, project.config);
   const depsKey = deps === null
     ? null

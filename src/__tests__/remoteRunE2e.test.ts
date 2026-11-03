@@ -169,12 +169,30 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.equal(fs.existsSync(path.join(project.runnerDirectory, 'tree', 'src', 'to-delete.txt')), false);
     });
 
-    it('a .env is held back and says so; `send:` brings it', async () => {
+    it('a .env is held back and says so ONCE; `--send` brings it for one call; `send:` brings it for all', async () => {
       writeProjectFile(project, '.env', 'SECRET=1\n');
       const held = await run(["sh -c 'test ! -e .env && echo env-absent'"]);
       assert.equal(held.exitCode, 0, held.stderr);
       assert.match(held.stdout, /env-absent/);
-      assert.match(held.stderr, /remote-run: held back 1 secret-looking file: \.env — opt in with "send: <path>" in \.remote-run/);
+      assert.match(held.stderr, /remote-run: held back 1 secret-looking file: \.env — send them for this call with --send <path>, or for every call with "send: <path>" in \.remote-run/);
+      const heldAgain = await run(["sh -c 'test ! -e .env && echo env-still-absent'"]);
+      assert.equal(heldAgain.exitCode, 0, heldAgain.stderr);
+      assert.match(heldAgain.stdout, /env-still-absent/);
+      assert.ok(!heldAgain.stderr.includes('held back'), `the same list is not said again: ${heldAgain.stderr}`);
+      const sentForOneCall = await run(['--send', '.env', 'cat .env']);
+      assert.equal(sentForOneCall.exitCode, 0, sentForOneCall.stderr);
+      assert.match(sentForOneCall.stdout, /SECRET=1/);
+      assert.match(sentForOneCall.stderr, /remote-run: sending 1 secret-looking file named by --send: \.env/);
+      assert.ok(!sentForOneCall.stderr.includes('held back'), sentForOneCall.stderr);
+      const heldAfterwards = await run(["sh -c 'test ! -e .env && echo env-gone-again'"]);
+      assert.equal(heldAfterwards.exitCode, 0, `the next call without --send holds it back again: ${heldAfterwards.stderr}`);
+      assert.match(heldAfterwards.stdout, /env-gone-again/);
+      assert.ok(!heldAfterwards.stderr.includes('held back'), `the list is the one said before: ${heldAfterwards.stderr}`);
+      writeProjectFile(project, 'keys/extra.pem', 'PEM\n');
+      const grown = await run(['--send', 'nothing/here', 'echo grown']);
+      assert.match(grown.stderr, /remote-run: held back 2 secret-looking files: \.env, keys\/extra\.pem — /, 'a list that changed is said again');
+      assert.match(grown.stderr, /remote-run: --send nothing\/here matched no file that can be sent/);
+      fs.rmSync(path.join(project.root, 'keys'), { recursive: true, force: true });
       writeRemoteRunConfig(`${baseRemoteRunConfig}send: .env\n`);
       const sent = await run(['cat .env']);
       assert.equal(sent.exitCode, 0, sent.stderr);

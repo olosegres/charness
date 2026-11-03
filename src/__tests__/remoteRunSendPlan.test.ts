@@ -14,8 +14,10 @@ import {
   buildRsyncMetaArgs,
   buildRsyncSendArgs,
   checkIsSecretLookingFile,
+  formatHeldBackNotice,
   formatManifest,
   formatNulSeparatedList,
+  formatSentOnRequestNotice,
   planSendList,
   rsyncNanosecondWindowArg,
 } from '../remoteRun/sendPlan';
@@ -50,6 +52,23 @@ describe('planSendList', () => {
     assert.deepEqual(plan.heldBack, ['.env', 'keys/deploy.pem']);
   });
 
+  it('`--send` (callSend) opts a file in for the call: sent, listed as sent on request, not held back; `send:` files are not «on request»', () => {
+    const plan = planSendList({ ...base, callSend: ['.env', 'keys/*.pem'], send: ['cfg/.env.test'] });
+    assert.ok(['.env', 'keys/deploy.pem', 'cfg/.env.test'].every((file) => plan.files.includes(file)));
+    assert.deepEqual(plan.heldBack, []);
+    assert.deepEqual(plan.sentOnRequest, ['.env', 'keys/deploy.pem']);
+    const without = planSendList(base);
+    assert.deepEqual(without.sentOnRequest, []);
+    assert.ok(!without.files.includes('.env'));
+  });
+
+  it('`--send` also reaches a file git ignores, and `exclude:` still wins over it', () => {
+    const plan = planSendList({ ...base, ignoredFiles: ['.env.local', 'build/out.js'], callSend: ['.env.local', 'build/out.js'], exclude: ['build'] });
+    assert.ok(plan.files.includes('.env.local'));
+    assert.deepEqual(plan.sentOnRequest, ['.env.local']);
+    assert.ok(!plan.files.includes('build/out.js'));
+  });
+
   it('`send:` also brings in a file git ignores (the usual state of an .env), but only what it names', () => {
     const plan = planSendList({ ...base, ignoredFiles: ['.env.test', 'node_modules/x/index.js', 'build/out.js'], send: ['.env.test'] });
     assert.ok(plan.files.includes('.env.test'));
@@ -78,6 +97,23 @@ describe('planSendList', () => {
     const excluded = planSendList({ ...base, files: ['ok.ts', 'bad\nname.ts'], exclude: ['bad?name.ts'] });
     assert.deepEqual(excluded.refused, []);
     assert.deepEqual(excluded.files, ['ok.ts']);
+  });
+});
+
+describe('the notices about secret-looking files', () => {
+  it('held back: the count, the names (five, then «and N more») and both ways to send them', () => {
+    assert.equal(
+      formatHeldBackNotice(['.env']),
+      'held back 1 secret-looking file: .env — send them for this call with --send <path>, or for every call with "send: <path>" in .remote-run (this line is said again only when the list changes)',
+    );
+    const many = Array.from({ length: 16 }, (_, index) => `fixtures/key${index}.pem`);
+    const notice = formatHeldBackNotice(many);
+    assert.match(notice, /^held back 16 secret-looking files: fixtures\/key0\.pem, fixtures\/key1\.pem, fixtures\/key2\.pem, fixtures\/key3\.pem, fixtures\/key4\.pem and 11 more — /);
+    assert.ok(!notice.includes('key5.pem'));
+  });
+
+  it('sent on request: said as it is', () => {
+    assert.equal(formatSentOnRequestNotice(['.env.test', 'keys/a.pem']), 'sending 2 secret-looking files named by --send: .env.test, keys/a.pem');
   });
 });
 

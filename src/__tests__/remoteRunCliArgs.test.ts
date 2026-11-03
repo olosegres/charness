@@ -32,10 +32,10 @@ describe('running a command', () => {
   });
 
   it('every option, before the command', () => {
-    const command = parseOk(['--runner', 'box1', '--needs=android', '--runner-wait', '20m', '--group', 'emulator', '--timeout', '1h30m', '--with-git', '-e', 'A=1', '-e', 'B=x=y', '--bg', 'yarn', 'e2e']);
+    const command = parseOk(['--runner', 'box1', '--needs=android', '--runner-wait', '20m', '--group', 'emulator', '--timeout', '1h30m', '--with-git', '--send', '.env.test', '--send=keys/*.pem', '-e', 'A=1', '-e', 'B=x=y', '--bg', 'yarn', 'e2e']);
     assert.equal(command.kind, 'run');
     if (command.kind !== 'run') return;
-    assert.deepEqual(command.options, { runner: 'box1', needs: 'android', runnerWaitSeconds: 1200, group: 'emulator', timeoutSeconds: 5400, isWithGit: true, env: [{ name: 'A', value: '1' }, { name: 'B', value: 'x=y' }], isBackground: true });
+    assert.deepEqual(command.options, { runner: 'box1', needs: 'android', runnerWaitSeconds: 1200, group: 'emulator', timeoutSeconds: 5400, isWithGit: true, send: ['.env.test', 'keys/*.pem'], env: [{ name: 'A', value: '1' }, { name: 'B', value: 'x=y' }], isBackground: true });
     assert.equal(command.command, 'yarn e2e');
   });
 
@@ -52,6 +52,17 @@ describe('running a command', () => {
     assert.equal(waitOf(['x']), null);
     const both = parseOk(['--runner', 'box1', '--runner-wait', '5m', 'x']);
     assert.ok(both.kind === 'run' && both.options.runner === 'box1' && both.options.runnerWaitSeconds === 300);
+  });
+
+  it('--send: one pattern per option, repeatable, kept in order; a bad pattern or none is an error; before exec it does not apply', () => {
+    const command = parseOk(['--send', '.env', '--send', 'cfg/*.pem', 'yarn', 'test']);
+    assert.ok(command.kind === 'run' && command.options.send.join('|') === '.env|cfg/*.pem');
+    const noneGiven = parseOk(['yarn', 'test']);
+    assert.ok(noneGiven.kind === 'run' && noneGiven.options.send.length === 0);
+    assert.match(parseError(['--send']), /--send needs a value/);
+    assert.match(parseError(['--send', '/etc/passwd', 'x']), /--send pattern /);
+    assert.match(parseError(['--send', '../up', 'x']), /--send pattern /);
+    assert.match(parseError(['--send', '.env', 'exec', 'ls']), /^--send does not apply to exec/);
   });
 
   it('defaults: no options set, the timeout left to the default', () => {

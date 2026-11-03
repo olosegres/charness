@@ -6,7 +6,8 @@ import { createPathMatcher } from './pathPatterns';
  * because they look like secrets, and the rsync argument lists. Pure — the git calls and the process spawns are elsewhere.
  *
  * Sent: tracked and untracked-not-ignored files, submodules included. Never sent: what `.gitignore` names (the runner keeps its own
- * `node_modules`, `build`, caches), `.git` unless `--with-git`, `exclude:` paths, and secret-looking files unless `send:` names them.
+ * `node_modules`, `build`, caches), `.git` unless `--with-git`, `exclude:` paths, and secret-looking files unless `send:` names them —
+ * or `--send` does, for the one call.
  */
 
 /**
@@ -34,7 +35,10 @@ export interface SendListInput {
   /** Ignored files that exist (git's `-o -i`), consulted ONLY for what `send:` names. */
   ignoredFiles: readonly string[];
   exclude: readonly string[];
+  /** `send:` of `.remote-run`: opted in for every call. */
   send: readonly string[];
+  /** `--send` of THIS call: opted in for it alone (the same patterns, the same reach — also a file git ignores). */
+  callSend?: readonly string[];
 }
 
 export interface SendPlan {
@@ -42,6 +46,8 @@ export interface SendPlan {
   files: string[];
   /** Secret-looking files NOT sent (the caller says which and how to opt in). */
   heldBack: string[];
+  /** Secret-looking files sent only because THIS call's `--send` named them (`send:` did not): the next call without it holds them back again. */
+  sentOnRequest: string[];
   /** Names with a newline that `exclude:` does not drop: the whole run is refused (the runner reads its lists one name per line). */
   refused: string[];
 }
@@ -50,18 +56,44 @@ export interface SendPlan {
 export function planSendList(input: SendListInput): SendPlan {
   const isExcluded = createPathMatcher(input.exclude);
   const isOptedIn = createPathMatcher(input.send);
+  const isOptedInForCall = createPathMatcher(input.callSend ?? []);
   const candidates = new Set<string>(input.files);
   for (const ignoredFile of input.ignoredFiles) {
-    if (isOptedIn(ignoredFile)) candidates.add(ignoredFile);
+    if (isOptedIn(ignoredFile) || isOptedInForCall(ignoredFile)) candidates.add(ignoredFile);
   }
-  const plan: SendPlan = { files: [], heldBack: [], refused: [] };
+  const plan: SendPlan = { files: [], heldBack: [], sentOnRequest: [], refused: [] };
   for (const file of [...candidates].sort()) {
     if (isExcluded(file)) continue;
     if (file.includes('\n')) plan.refused.push(file);
-    else if (checkIsSecretLookingFile(file) && !isOptedIn(file)) plan.heldBack.push(file);
-    else plan.files.push(file);
+    else if (checkIsSecretLookingFile(file) && !isOptedIn(file) && !isOptedInForCall(file)) plan.heldBack.push(file);
+    else {
+      plan.files.push(file);
+      if (checkIsSecretLookingFile(file) && !isOptedIn(file)) plan.sentOnRequest.push(file);
+    }
   }
   return plan;
+}
+
+/** How many names the notices about secret-looking files spell out before «and N more». */
+const noticeNamesShown = 5;
+
+function formatFileCount(files: readonly string[]): string {
+  return `${files.length} secret-looking file${files.length === 1 ? '' : 's'}`;
+}
+
+function formatNoticeNames(files: readonly string[]): string {
+  const rest = files.length - noticeNamesShown;
+  return rest > 0 ? `${files.slice(0, noticeNamesShown).join(', ')} and ${rest} more` : files.join(', ');
+}
+
+/** @description The line about secret-looking files that stay home: what they are and the two ways to send them (this call, every call). */
+export function formatHeldBackNotice(heldBack: readonly string[]): string {
+  return `held back ${formatFileCount(heldBack)}: ${formatNoticeNames(heldBack)} — send them for this call with --send <path>, or for every call with "send: <path>" in .remote-run (this line is said again only when the list changes)`;
+}
+
+/** @description The line about secret-looking files that go because this call's `--send` named them. */
+export function formatSentOnRequestNotice(sentOnRequest: readonly string[]): string {
+  return `sending ${formatFileCount(sentOnRequest)} named by --send: ${formatNoticeNames(sentOnRequest)}`;
 }
 
 /** @description The NUL-separated list `rsync --files-from=- --from0` reads. */
