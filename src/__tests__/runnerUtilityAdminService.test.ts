@@ -14,7 +14,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
-import { createAdminServiceDeps, installServiceForAccount, type AdminServiceDeps } from '../runnerUtility/adminService';
+import { createAdminServiceDeps, installServiceForAccount, pairAccountFromPackage, type AdminServiceDeps, type PairRequest } from '../runnerUtility/adminService';
+import { runCommandIsolated, type IsolatedCommandRunner } from '../runnerUtility/isolatedCommand';
 import { formatSystemStepAnswer, resolveLinuxAccount, resolveMacAccount, type SystemStepAnswer, type TargetAccount } from '../runnerUtility/serviceCommon';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { getServiceNames } from '../runnerUtility/serviceUnits';
@@ -30,6 +31,9 @@ let daemonsDir = '';
 let calls: Call[] = [];
 let given: Array<[string, number, number]> = [];
 let accountPaths: RunnerHomePaths;
+/** The output sinks the steps handed to the runner (a step that wants its output relayed passes one). */
+let onOutputSeen: Array<NonNullable<Parameters<IsolatedCommandRunner>[2]['onOutput']>> = [];
+let written: Array<[string, string]> = [];
 
 const accountUid = 501;
 const installedLines = 'Installed two user services: a (the link) and b (the queue).\nLingering is on: they run without a login and start at boot.\n';
@@ -51,9 +55,10 @@ function answer(overrides: Partial<CommandResult> = {}): CommandResult {
  * A runner that records every call and answers by fragment of the command line (first match wins): the account's preparation says
  * `prepared`, launchd has no job loaded unless a `launchctl print` answer says otherwise.
  */
-function createRunner(answers: Record<string, Partial<CommandResult>> = {}, prepared: SystemStepAnswer | string = { ok: true, hadService: false }): CommandRunner {
-  return async (file, args) => {
+function createRunner(answers: Record<string, Partial<CommandResult>> = {}, prepared: SystemStepAnswer | string = { ok: true, hadService: false }): IsolatedCommandRunner {
+  return async (file, args, options) => {
     calls.push({ file, args });
+    if (options.onOutput !== undefined) onOutputSeen.push(options.onOutput);
     const key = `${file} ${args.join(' ')}`;
     const matched = Object.entries(answers).find(([fragment]) => key.includes(fragment))?.[1];
     if (matched !== undefined) return answer({ ok: matched.ok ?? true, exitCode: (matched.ok ?? true) ? 0 : 1, ...matched });
@@ -66,6 +71,9 @@ function createRunner(answers: Record<string, Partial<CommandResult>> = {}, prep
 function createDeps(overrides: Partial<AdminServiceDeps> = {}): AdminServiceDeps {
   return {
     runner: createRunner(),
+    write: (stream, text) => { written.push([stream, text]); },
+    nodePath: '/opt/node/bin/node',
+    runnerCliPath: '/tmp/charness-runner.abc/pkg/dist/runnerUtility/runnerCli.js',
     platform: 'darwin',
     uid: 0,
     nodeDir: '/opt/node/bin',
@@ -83,6 +91,8 @@ beforeEach(() => {
   accountPaths = getRunnerHomePaths(home);
   calls = [];
   given = [];
+  onOutputSeen = [];
+  written = [];
 });
 
 afterEach(() => {
@@ -311,5 +321,63 @@ describe('who may be served', () => {
     assert.equal(deps.launchDaemonsDir, '/Library/LaunchDaemons');
     assert.equal(deps.giveToRoot, fs.lchownSync, 'a link in the daemons folder is never followed');
     assert.equal(deps.uid, os.userInfo().uid);
+  });
+});
+
+describe('the pairing of the account, run from root\'s copy of the package', () => {
+  const request: PairRequest = { bootstrapDir: '/tmp/charness-runner.abc/pkg', archivePath: '/tmp/charness-runner.abc/package.tgz', packageId: '0123456789abcdef', code: 'cr1.exampleCode' };
+
+  it('runs the copy\'s pairing program AS the account (`sudo -u <account> -H <node> <program> pair …`), told that the service follows — not a program of the account\'s own', async () => {
+    const result = await pairAccountFromPackage('runner', request, createDeps());
+    assert.deepEqual(result, { ok: true, lines: [] });
+    assert.deepEqual(commandLines(), ['sudo -u runner -H /opt/node/bin/node /tmp/charness-runner.abc/pkg/dist/runnerUtility/runnerCli.js pair --bootstrap /tmp/charness-runner.abc/pkg --archive /tmp/charness-runner.abc/package.tgz --package-id 0123456789abcdef --service-follows cr1.exampleCode']);
+    assert.ok(!commandLines()[0].includes(accountPaths.root), 'nothing under the account\'s state folder is run');
+  });
+
+  it('hands its output sink to the runner, so what the account prints is relayed as it arrives — through the deps\' writer, to stdout or stderr as it was said', async () => {
+    await pairAccountFromPackage('runner', request, createDeps());
+    assert.equal(onOutputSeen.length, 1);
+    onOutputSeen[0]('charness-runner: pairing with the hub\n', 'stdout');
+    onOutputSeen[0]('trouble\n', 'stderr');
+    assert.deepEqual(written, [['stdout', 'charness-runner: pairing with the hub\n'], ['stderr', 'trouble\n']]);
+  });
+
+  it('a failed pairing is a failure that says so — and names no service: nothing is installed for an account that was not paired', async () => {
+    const result = await pairAccountFromPackage('runner', request, createDeps({ runner: createRunner({ 'runnerCli.js pair': { ok: false, exitCode: 1 } }) }));
+    assert.equal(result.ok, false);
+    assert.match(result.lines.join(' '), /pairing of runner failed \(exit 1\); see above/);
+    assert.deepEqual(commandLines().filter((line) => line.includes('launchctl') || line.includes('loginctl') || line.includes('system-step')), []);
+  });
+
+  it('says so when the pairing does not finish within its deadline, and when it did not run at all', async () => {
+    const timedOut = await pairAccountFromPackage('runner', request, createDeps({ runner: createRunner({ 'runnerCli.js pair': { ok: false, exitCode: null, isTimedOut: true } }) }));
+    assert.match(timedOut.lines.join(' '), /did not finish within 30 minutes/);
+    const notRun = await pairAccountFromPackage('runner', request, createDeps({ runner: createRunner({ 'runnerCli.js pair': { ok: false, exitCode: null } }) }));
+    assert.match(notRun.lines.join(' '), /did not run to its end/);
+  });
+
+  it('is root\'s, for a standard account that exists, on a platform with a service manager — like the service step — and runs nothing otherwise', async () => {
+    for (const [overrides, pattern] of [
+      [{ uid: 1000 }, /This step is root's/],
+      [{ platform: 'win32' as const }, /Services are supported on Linux/],
+    ] as const) {
+      calls = [];
+      const result = await pairAccountFromPackage('runner', request, createDeps(overrides));
+      assert.match(result.lines.join(' '), pattern);
+      assert.deepEqual(calls, []);
+    }
+    assert.match((await pairAccountFromPackage('ghost', request, createDeps())).lines.join(' '), /There is no account named «ghost»/);
+    assert.match((await pairAccountFromPackage('root', request, createDeps())).lines.join(' '), /not as root/);
+    assert.deepEqual(calls, []);
+  });
+});
+
+describe('no step of the account\'s has a terminal', () => {
+  it('the real dependencies run everything as the account through the terminal-less runner — the pairing, the preparation, the user manager, the install and the account lookups alike', () => {
+    const deps = createAdminServiceDeps();
+    assert.equal(deps.runner, runCommandIsolated);
+    assert.equal(deps.nodePath, process.execPath);
+    assert.equal(path.basename(deps.runnerCliPath), 'runnerCli.js');
+    assert.equal(path.dirname(deps.runnerCliPath), path.dirname(path.resolve(__dirname, '..', 'runnerUtility', 'adminService.ts')), 'next to this step\'s own file in the copy');
   });
 });

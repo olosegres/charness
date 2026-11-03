@@ -1,5 +1,4 @@
 import { linuxAdminGroups, macAdminGroup } from '../runnerUtility/adminCheck';
-import { serviceFollowsFlag } from '../runnerUtility/pairArgs';
 import { gateMarker, maxGateNoiseBytes } from './gateProtocol';
 import { encodePairCode, type PairCodePayload } from './pairCode';
 
@@ -23,10 +22,12 @@ import { encodePairCode, type PairCodePayload } from './pairCode';
  * for the account named by its last word. The runner account runs the agents' code, so ROOT never executes, reads through or writes into
  * anything that account can change. As root the script (1) checks the account (it exists; not root; not an admin; the OS is known),
  * (2) downloads the package into a folder of ITS OWN in `/tmp` — root-owned, readable by the account, extracted with `--no-same-owner`
- * — (3) has the account pair itself from that copy (`sudo -u <account> -H node …/runnerCli.js pair`: its files are the account's, never
- * root's), and (4) runs the root step from the same root-owned copy (`rootServiceCli.js install <account>`: Node built-ins only, because
- * the copy has no dependencies — it installs the always-on service, and touches the account's side only through `sudo -u`, see
- * `runnerUtility/adminService.ts`). The pairing code stays single use, 10 minutes, a secret; sudo logs the command line, so a code that
+ * — and (3) runs the root step from the same root-owned copy (`rootServiceCli.js install <account> --bootstrap …`: Node built-ins only,
+ * because the copy has no dependencies). The root step has the account pair itself from that copy (`sudo -u <account> -H node
+ * …/runnerCli.js pair`: its files are the account's, never root's) and then installs the always-on service. EVERY step that runs as the
+ * account goes through one runner with no terminal attached (a session of its own, no standard input, its output piped through the root
+ * step with the control characters stripped), see `runnerUtility/adminService.ts` and `isolatedCommand.ts`: the account runs the agents'
+ * code, and code it can change must not get the admin's terminal. The pairing code stays single use, 10 minutes, a secret; sudo logs the command line, so a code that
  * is neither used nor closed stays live in that log until it runs out: a refused line (no such account, an admin account) leaves it open ON
  * PURPOSE — the operator fixes the last word and pastes the same line again — and an already-paired account's line closes its own code (the
  * gate's `cancel`). Nothing creates an account. Run again for an account that is already paired, the line pairs nothing twice and installs
@@ -113,9 +114,9 @@ function renderFetchSteps(payload: PairCodePayload, isForAccount: boolean): stri
   ];
 }
 
-/** The `pair` command on the unpacked package, for the pairing `code`. */
-function renderPairCommand(code: string, isServiceFollowing: boolean): string {
-  return `"$d/pkg/${runnerCliInPackage}" pair --bootstrap "$d/pkg" --archive "$d/package.tgz" --package-id "\${t##*id=}"${isServiceFollowing ? ` ${serviceFollowsFlag}` : ''} ${code}`;
+/** The arguments of a pairing from the unpacked package, for the pairing `code`: the folder, the archive and the id the hub announced for it. */
+function renderPairArguments(code: string): string {
+  return `--bootstrap "$d/pkg" --archive "$d/package.tgz" --package-id "\${t##*id=}" ${code}`;
 }
 
 function checkScriptHasNoQuote(script: string, what: string): string {
@@ -125,7 +126,7 @@ function checkScriptHasNoQuote(script: string, what: string): string {
 
 /** @description The command to paste on the runner machine, as the account that will run jobs, for the pairing `payload`. */
 export function buildBootstrapLine(payload: PairCodePayload): string {
-  const script = [...renderFetchSteps(payload, false), `node ${renderPairCommand(encodePairCode(payload), false)}`];
+  const script = [...renderFetchSteps(payload, false), `node "$d/pkg/${runnerCliInPackage}" pair ${renderPairArguments(encodePairCode(payload))}`];
   return `sh -c '${checkScriptHasNoQuote(['set -eu', sayFunction, failFunction, ...script].join('; '), 'bootstrap')}'`;
 }
 
@@ -150,8 +151,7 @@ function renderAdminScript(payload: PairCodePayload): string {
   const steps = [
     ...renderFetchSteps(payload, true),
     'n=$(command -v node)',
-    `sudo -u "$a" -H "$n" ${renderPairCommand(encodePairCode(payload), true)}`,
-    `"$n" "$d/pkg/${rootServiceCliInPackage}" install "$a" || f "$a is paired, but has no service: fix the above and paste a fresh admin line"`,
+    `"$n" "$d/pkg/${rootServiceCliInPackage}" install "$a" ${renderPairArguments(encodePairCode(payload))}`,
   ];
   return checkScriptHasNoQuote(['set -eu', ...checks, ...steps].join('; '), 'admin');
 }

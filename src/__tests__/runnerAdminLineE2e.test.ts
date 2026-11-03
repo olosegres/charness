@@ -31,7 +31,7 @@ import * as path from 'node:path';
 import { testNodeModulesEnvName } from '../runnerUtility/appInstall';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { getServiceNames } from '../runnerUtility/serviceUnits';
-import { installAdminStandIns, readStandInCalls, type AdminStandIns } from './runnerAdminLineE2e/adminLineStandIns';
+import { installAdminStandIns, readStandInCalls, readStandInIsolation, type AdminStandIns } from './runnerAdminLineE2e/adminLineStandIns';
 import {
   createExtraMachine,
   createRunnerLinkLayout,
@@ -191,6 +191,15 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.ok(pairingRun >= 0 && lingering > pairingRun && managerAwaited > lingering && installRun > managerAwaited && reloaded > installRun, calls.join('\n'));
     assert.equal(calls.filter((call) => call.startsWith('loginctl enable-linger')).length, 1);
     assert.equal(calls.filter((call) => call.startsWith(`${asRunner} `) && call.includes('runnerCli.js pair')).length, 1, 'the account was paired once');
+
+    // Nothing the account runs has the admin's terminal: each call started with /dev/null for input, as the head of a session of its own — no
+    // controlling terminal, whatever terminal the line was pasted in.
+    const isolation = readStandInIsolation(standIns);
+    assert.equal(isolation.length, 3, `the pairing, the wait for the user manager and the install ran as the account: ${isolation.join('\n')}`);
+    assert.ok(isolation.some((line) => line.includes('runnerCli.js pair')), 'the pairing among them — it was the shell\'s own `sudo -u` before');
+    for (const line of isolation) {
+      assert.match(line, /^stdin=\/dev\/null leader=yes terminal=\?{1,2} /, line);
+    }
   });
 
   it('the line used again is refused by the hub and installs nothing more', () => {

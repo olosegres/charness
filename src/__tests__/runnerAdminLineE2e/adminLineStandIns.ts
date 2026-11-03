@@ -35,9 +35,13 @@ export interface AdminStandIns {
   failReloadFlag: string;
   /** Appears when something started by ROOT ran the account's trapped launcher: root must never run anything of the account's. */
   trapFile: string;
+  /** One line per `sudo -u <account>` call: what the call was started with — its standard input, its group, its terminal (see {@link readStandInIsolation}). */
+  isolationLogPath: string;
 }
 
 const logLineWidth = 140;
+/** Wider: the line starts with what the call was started with, and the pairing's own words come after the long path of the program. */
+const isolationLogLineWidth = 320;
 
 function findRealTool(name: string): string {
   return execFileSync('which', [name], { encoding: 'utf8' }).trim();
@@ -54,6 +58,7 @@ export function installAdminStandIns(rootDir: string, accounts: readonly StandIn
   const logPath = path.join(binDir, 'calls.log');
   const failReloadFlag = path.join(binDir, 'fail-reload');
   const trapFile = path.join(binDir, 'trap.hit');
+  const isolationLogPath = path.join(binDir, 'isolation.log');
   // One line per call: the pairing script is many lines long, and only its beginning says which call it is.
   const log = (tool: string): string => `echo "${tool} $*" | head -n 1 | cut -c1-${logLineWidth} >> "${logPath}"`;
   const realId = findRealTool('id');
@@ -76,6 +81,8 @@ export function installAdminStandIns(rootDir: string, accounts: readonly StandIn
     'if [ "$1" = -u ]; then',
     '  user=$2; shift 2',
     '  [ "$1" = -H ] && shift',
+    // What the root step started this call with: /dev/null for input, the head of a group (and session) of its own, no controlling terminal.
+    `  echo "stdin=$(readlink /proc/$$/fd/0) leader=$([ "$(ps -o pgid= -p $$ | tr -d ' ')" = "$$" ] && echo yes || echo no) terminal=$(ps -o tty= -p $$ | tr -d ' ') $*" | cut -c1-${isolationLogLineWidth} >> "${isolationLogPath}"`,
     '  case "$user" in',
     ...accounts.map((account) => `    ${account.name}) home="${account.homeDir}";;`),
     '    *) echo "sudo: unknown user $user" >&2; exit 1;;',
@@ -109,13 +116,22 @@ export function installAdminStandIns(rootDir: string, accounts: readonly StandIn
     'esac',
     'exit 0',
   ]);
-  return { binDir, logPath, failReloadFlag, trapFile };
+  return { binDir, logPath, failReloadFlag, trapFile, isolationLogPath };
 }
 
 /** @description The calls recorded so far, in order. */
 export function readStandInCalls(standIns: AdminStandIns): string[] {
   try {
     return fs.readFileSync(standIns.logPath, 'utf8').split('\n').filter((line) => line !== '');
+  } catch {
+    return [];
+  }
+}
+
+/** @description How each `sudo -u <account>` call was started, in order: `stdin=<what fd 0 is> leader=<yes|no> terminal=<its tty> <the call>`. */
+export function readStandInIsolation(standIns: AdminStandIns): string[] {
+  try {
+    return fs.readFileSync(standIns.isolationLogPath, 'utf8').split('\n').filter((line) => line !== '');
   } catch {
     return [];
   }

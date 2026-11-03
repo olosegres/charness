@@ -58,10 +58,13 @@ function createBootstrapAnswer(noise: string = ''): Buffer {
     '',
   ].join('\n');
   const rootServiceCli = [
-    'const path = require("path");',
+    'const fs = require("fs"); const path = require("path");',
+    'const packageDir = path.resolve(__dirname, "..", "..");',
+    'const mode = (file) => (fs.statSync(file).mode & 0o777).toString(8);',
     'console.log("ROOT_SERVICE " + process.argv.slice(2).join(" "));',
-    'console.log("ROOT_SERVICE_FROM " + path.resolve(__dirname, "..", ".."));',
-    'if (process.env.STUB_SERVICE_FAILS) process.exit(1);',
+    'console.log("ROOT_SERVICE_FROM " + packageDir);',
+    'console.log("MODES folder=" + mode(path.dirname(packageDir)) + " package=" + mode(packageDir) + " key=" + mode(path.join(path.dirname(packageDir), "key")));',
+    'if (process.env.STUB_ROOT_STEP_FAILS) process.exit(3);',
     '',
   ].join('\n');
   const archive = gzipSync(createTarArchive([
@@ -311,18 +314,13 @@ describe('admin bootstrap line: how it is built', () => {
     assert.ok(plain.includes('${TMPDIR:-/tmp}/charness-runner.'));
   });
 
-  it('runs the root step from that copy — never from the account\'s folder — and the pairing as the account from the same copy, with the node root checked', () => {
+  it('runs the root step from that copy — never from the account\'s folder — and hands it the pairing: the shell has no `sudo -u` of its own, so nothing of the account\'s runs outside the root step\'s terminal-less runner', () => {
     const { script } = splitAdminLine(buildAdminBootstrapLine(createPairCodePayload()));
-    assert.match(script, /; n=\$\(command -v node\); sudo -u "\$a" -H "\$n" "\$d\/pkg\/dist\/runnerUtility\/runnerCli\.js" pair --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" --service-follows cr1\./);
-    assert.match(script, /; "\$n" "\$d\/pkg\/dist\/runnerUtility\/rootServiceCli\.js" install "\$a" \|\| f /);
+    assert.match(script, /; n=\$\(command -v node\); "\$n" "\$d\/pkg\/dist\/runnerUtility\/rootServiceCli\.js" install "\$a" --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" cr1\./);
+    assert.ok(!script.includes('sudo -u'), 'no step of the account\'s is run by the shell, with the admin\'s terminal attached');
+    assert.ok(!script.includes('runnerCli.js'), 'the account\'s pairing program is started by the root step');
     assert.ok(!script.includes('.charness-runner'), 'root is never pointed at the account\'s state folder or launcher');
     assert.ok(!script.includes('service install'), 'and never asked to run the account\'s `service install`');
-  });
-
-  it('says what to do when the service step fails, once, for macOS and Linux alike', () => {
-    const { script } = splitAdminLine(buildAdminBootstrapLine(createPairCodePayload()));
-    assert.equal(script.split('has no service').length, 2);
-    assert.ok(script.includes('f "$a is paired, but has no service: fix the above and paste a fresh admin line"'));
   });
 
   it('carries no value that could end its quoting, and the account is checked before it is written', () => {
@@ -353,27 +351,24 @@ describe('admin bootstrap line: the checks as root, the root-owned copy, the swi
     return new RegExp(`^${label} (.*)$`, 'm').exec(String(result.stdout))?.[1] ?? '';
   }
 
-  it('fetches ONE copy as root, has the account pair itself from it, and runs the root step from the same copy — in that order, the pairing told a service follows', () => {
+  it('fetches ONE copy as root and runs the root step from it, handing it the pairing — the shell itself runs nothing as the account', () => {
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
     const result = runAdminLine();
     assert.equal(result.status, 0, String(result.stderr));
-    assert.match(String(result.stdout), /^RUNNER_CLI pair --bootstrap \S+\/pkg --archive \S+\/package\.tgz --package-id 0123456789abcdef --service-follows cr1\./m);
-    assert.match(String(result.stdout), /^ROOT_SERVICE install runner$/m);
-    const pairedFrom = readPrinted(result, 'RUNNER_CLI_FROM');
+    assert.match(String(result.stdout), /^ROOT_SERVICE install runner --bootstrap \S+\/pkg --archive \S+\/package\.tgz --package-id 0123456789abcdef cr1\./m, 'one program does the pairing and then the service: it is handed the pairing');
+    const pairedFrom = readPrinted(result, 'ROOT_SERVICE_FROM');
     assert.match(pairedFrom, /^\/tmp\/charness-runner\.[A-Za-z0-9]{8}\/pkg$/, 'a folder of root\'s own in /tmp');
-    assert.equal(readPrinted(result, 'ROOT_SERVICE_FROM'), pairedFrom, 'the account and root use the very copy root fetched');
     assert.ok(!pairedFrom.startsWith(path.join(workDir, 'homes')), 'nothing runs from the account\'s home');
-    assert.ok(String(result.stdout).indexOf('RUNNER_CLI ') < String(result.stdout).indexOf('ROOT_SERVICE install'), 'the pairing first');
     assert.equal(readFileLines(path.join(workDir, 'ssh.args')).length, 1, 'the package was downloaded once');
     assert.equal(fs.existsSync(pairedFrom), false, 'and the copy is gone when the line ends');
   });
 
-  it('names each step as it goes, on stdout: the account check (naming the account), then the download — before the pairing and the root step, which print their own', () => {
+  it('names each step as it goes, on stdout: the account check (naming the account), then the download — before the root step, which prints its own', () => {
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
     const result = runAdminLine();
     assert.equal(result.status, 0, String(result.stderr));
     const output = String(result.stdout);
-    const positions = ['charness-runner: checking the account runner\n', 'charness-runner: downloading the package from the hub\n', 'RUNNER_CLI ', 'ROOT_SERVICE install'].map((text) => output.indexOf(text));
+    const positions = ['charness-runner: checking the account runner\n', 'charness-runner: downloading the package from the hub\n', 'ROOT_SERVICE install'].map((text) => output.indexOf(text));
     assert.ok(positions.every((position) => position >= 0), output);
     assert.deepEqual([...positions].sort((left, right) => left - right), positions, 'in that order');
   });
@@ -386,11 +381,11 @@ describe('admin bootstrap line: the checks as root, the root-owned copy, the swi
     assert.match(String(result.stderr), /no account runner here/);
   });
 
-  it('calls sudo exactly once — for the pairing script of the package, under the node root checked — so a call for anything else would show', () => {
+  it('calls sudo not at all: everything that runs as the account is the root step\'s, which runs it with no terminal (`isolatedCommand.ts`) — a call for anything else would show', () => {
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Darwin', accounts: { runner: standardAccount } });
     const result = runAdminLine();
     assert.equal(result.status, 0, String(result.stderr));
-    assert.deepEqual(readStubLog(), [`${stubUserLine} -u runner -H node runnerCli.js pair`]);
+    assert.deepEqual(readStubLog(), []);
   });
 
   it('shows the root-made folder to another account as readable, and the key as private — the root copy is world-readable, never writable, the key is not', () => {
@@ -404,26 +399,16 @@ describe('admin bootstrap line: the checks as root, the root-owned copy, the swi
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Darwin', accounts: { 'ci.runner': standardAccount } });
     const result = runAdminLine('ci.runner');
     assert.equal(result.status, 0, String(result.stderr));
-    assert.match(String(result.stdout), /^ROOT_SERVICE install ci\.runner$/m);
-    assert.deepEqual(readStubLog(), [`${stubUserLine} -u ci.runner -H node runnerCli.js pair`]);
+    assert.match(String(result.stdout), /^ROOT_SERVICE install ci\.runner --bootstrap /m);
+    assert.deepEqual(readStubLog(), []);
   });
 
-  it('does not run the root step when the pairing failed, and passes the failure on', () => {
-    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
-    const result = runAdminLine(defaultRunnerAccount, { STUB_PAIR_FAILS: '1' });
-    assert.notEqual(result.status, 0);
-    assert.ok(!String(result.stdout).includes('ROOT_SERVICE'), 'no service for an account that was not paired');
-    assert.doesNotMatch(String(result.stderr), /has no service/);
-    assert.equal(fs.existsSync(readPrinted(result, 'RUNNER_CLI_FROM')), false);
-  });
-
-  it('a failed root step says the account is paired and what to do — the same words on macOS and on Linux — and exits with a failure', () => {
+  it('a failed root step (its own words say whether the pairing or the service failed) fails the line with the step\'s own status, and the copy is gone', () => {
     for (const systemName of ['Darwin', 'Linux']) {
       installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: systemName, accounts: { runner: standardAccount } });
-      const result = runAdminLine(defaultRunnerAccount, { STUB_SERVICE_FAILS: '1' });
-      assert.equal(result.status, 1, systemName);
-      assert.match(String(result.stderr), /^charness-runner: runner is paired, but has no service: fix the above and paste a fresh admin line$/m, systemName);
-      assert.equal(String(result.stderr).split('has no service').length, 2, 'said once');
+      const result = runAdminLine(defaultRunnerAccount, { STUB_ROOT_STEP_FAILS: '1' });
+      assert.equal(result.status, 3, systemName);
+      assert.equal(fs.existsSync(readPrinted(result, 'ROOT_SERVICE_FROM')), false, 'the root-made copy is removed on the way out');
     }
   });
 

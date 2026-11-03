@@ -84,8 +84,11 @@ escape a backslash in `command="…"`).
    into anything the runner account can change.** As root it checks the account (exists; not root; not in the admin groups of
    `runnerUtility/adminCheck.ts`, and a failing `id -Gn` is a refusal; the OS is macOS or Linux), makes the SAME download as the plain line into
    a root-owned folder in `/tmp` (readable by the account, `--no-same-owner`; the key files in it stay 0600), has the account pair itself from
-   that copy (`sudo -u <account> -H node …/runnerCli.js pair … --service-follows`), and runs `rootServiceCli.js install <account>` from the same
-   copy (Node built-ins only: the copy has no dependencies; `runnerUtility/adminService.ts`). The script is built from the same fetch steps
+   that copy, and runs `rootServiceCli.js install <account> --bootstrap … <code>` from the same copy (Node built-ins only: the copy has no
+   dependencies; `runnerUtility/adminService.ts`). That ONE program has the account pair itself (`sudo -u <account> -H node …/runnerCli.js pair …
+   --service-follows`) and then installs the service; the shell runs nothing as the account. Every step that runs as the account has NO
+   terminal: a session of its own, `/dev/null` for input, its output piped through the root step with the control characters stripped
+   (`runnerUtility/isolatedCommand.ts`) — the account runs the agents' code, and code it can change must not get the admin's terminal. The script is built from the same fetch steps
    as the plain line (`renderFetchSteps`), the account is the line's LAST word (editable by hand; `charness runners pair --account`), and
    a second paste for an account that is already paired only installs the service. A pairing is offered in TWO Telegram messages — the
    admin line alone is ~3.7 KB, two lines would not fit one message — which `connectors/telegram/runnerPairingMessages.ts` follows one

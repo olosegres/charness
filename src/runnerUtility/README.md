@@ -89,12 +89,22 @@ to the efficiency cores). One kind at a time: installing one while the other's f
 **The admin line** (`runners/bootstrapLine.ts`, `buildAdminBootstrapLine`) does the always-on install, and the guarantee it keeps is: **root never
 executes, reads through or writes into anything the runner account can change** (that account runs the agents' code). So root does not run
 this program's `service install` from the account's folder, and `--system` on the runner is refused. Instead the line, as root, fetches the
-package into a root-owned folder in `/tmp` (readable by the account, `--no-same-owner`), has the account pair itself from that copy
-(`sudo -u <account> -H node …/runnerCli.js pair … --service-follows`: the pairing prints «the always-on service is installed next» instead of the
-«keep it running» commands — `pairArgs.ts`, builtins only because `runnerCli.ts` reads it before any dependency exists), and then runs
-`node <that copy>/dist/runnerUtility/rootServiceCli.js install <account>` — **Node built-ins only** (`adminService.ts`, `serviceCommon.ts`,
-`serviceUnits.ts`, `runnerHome.ts`, `commandRunner.ts`, `progress.ts`), because the copy has no `node_modules`. The account is looked up in the passwd
-database, never from its files. Root's whole part:
+package into a root-owned folder in `/tmp` (readable by the account, `--no-same-owner`), and runs
+`node <that copy>/dist/runnerUtility/rootServiceCli.js install <account> --bootstrap <folder> --archive <file> --package-id <id> <code>` —
+**Node built-ins only** (`adminService.ts`, `isolatedCommand.ts`, `pairArgs.ts`, `serviceCommon.ts`, `serviceUnits.ts`, `runnerHome.ts`,
+`commandRunner.ts`, `progress.ts`), because the copy has no `node_modules`. That one program has the account pair itself from the copy
+(`sudo -u <account> -H node <copy>/dist/runnerUtility/runnerCli.js pair … --service-follows`: the pairing prints «the always-on service is installed
+next» instead of the «keep it running» commands — `pairArgs.ts`, builtins only because `runnerCli.ts` reads it before any dependency exists) and, only
+when that worked, installs the service. The account is looked up in the passwd database, never from its files.
+
+**No step of the account's has a terminal.** The account runs the agents' code, so what it can change must not get the admin's terminal — through
+`/dev/tty` a child can write over the screen and, where the system allows it, type into the admin's shell once `sudo` has ended. Every call that
+runs AS the account (the pairing, the preparation, the user manager, the service install, the account lookups) goes through ONE runner
+(`isolatedCommand.ts`, `runCommandIsolated`): the child starts in a session of its own (`setsid`: no controlling terminal), its standard input is
+`/dev/null`, and its output is piped through the root step, which strips the control characters (escape sequences, carriage returns, bells,
+bidirectional overrides) before printing or parsing it — what the account says reaches the operator as plain text. A signal to the root step (Ctrl-C)
+is passed on to the child's whole group and the root step then dies of it itself; a deadline kills the whole group. (The pairing's own progress
+lines come through as plain lines — a terminal-less child draws no dots.) Root's whole part:
 
 - macOS: `sudo -u <account> -H <its launcher> service system-step prepare` — the ACCOUNT's side (`runSystemStep` in `serviceManager.ts`: it is
   paired, no LaunchAgents, Pueue's queue handled, Pueue's configuration and the `system-service` record written; one JSON line back) — then

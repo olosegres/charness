@@ -15,6 +15,7 @@ import { builtinModules } from 'node:module';
 import fs from 'fs';
 import path from 'path';
 import ts from 'typescript';
+import { parseInstallArguments } from '../runnerUtility/rootServiceCli';
 
 const projectRoot = path.resolve(__dirname, '..', '..');
 const rootStepEntry = path.resolve(__dirname, '..', 'runnerUtility', 'rootServiceCli.ts');
@@ -67,6 +68,8 @@ describe('the admin line\'s root step: built-ins only', () => {
   it('is the small graph it is meant to be — and the walk really follows the imports (a deeper file would show here)', () => {
     assert.deepEqual([...names].sort(), [
       'runnerUtility/adminService.ts',
+      'runnerUtility/isolatedCommand.ts',
+      'runnerUtility/pairArgs.ts',
       'runnerUtility/progress.ts',
       'runnerUtility/rootServiceCli.ts',
       'runnerUtility/runnerHome.ts',
@@ -87,5 +90,27 @@ describe('the admin line\'s root step: built-ins only', () => {
     // Down-levelled async code needs a helper (`__awaiter`): with helpers imported it comes from `tslib`.
     const withHelpers = walkImportGraph(rootStepEntry, { ...options, importHelpers: true, target: ts.ScriptTarget.ES2015 });
     assert.ok(withHelpers.others.some(({ specifier }) => specifier === 'tslib'), 'an emit option that adds a require is caught');
+  });
+});
+
+describe('the root step\'s arguments', () => {
+  it('takes `install <account>` alone (a service for an account that is paired) or with the pairing the admin line hands over: the package folder, the archive, the id and the code', () => {
+    assert.deepEqual(parseInstallArguments(['install', 'runner']), { account: 'runner', pairRequest: null });
+    assert.deepEqual(
+      parseInstallArguments(['install', 'runner', '--bootstrap', '/tmp/x/pkg', '--archive', '/tmp/x/package.tgz', '--package-id', '0123456789abcdef', 'cr1.code']),
+      { account: 'runner', pairRequest: { bootstrapDir: '/tmp/x/pkg', archivePath: '/tmp/x/package.tgz', packageId: '0123456789abcdef', code: 'cr1.code' } },
+    );
+  });
+
+  it('refuses anything else — another command, no account, a half-given pairing, flags in another order or a stray word — so that nothing is guessed at as root', () => {
+    for (const bad of [
+      [],
+      ['install'],
+      ['uninstall', 'runner'],
+      ['install', 'runner', '--bootstrap', '/tmp/x/pkg'],
+      ['install', 'runner', '--archive', '/a', '--bootstrap', '/b', '--package-id', 'id', 'code'],
+      ['install', 'runner', '--bootstrap', '/b', '--archive', '/a', '--package-id', 'id', 'code', 'extra'],
+      ['install', 'runner', 'code'],
+    ]) assert.equal(parseInstallArguments(bad), null, JSON.stringify(bad));
   });
 });
