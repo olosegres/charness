@@ -46,6 +46,10 @@ Now the admin line also loads a small LaunchAgent into the account's own login s
 Before, a step the agent ran (an `xcodebuild`, say) was its own process group that a dying agent did not take along, so the job was cut with 125, its project lock went to the next job, and the orphaned build kept writing into the same tree and the job's log.
 Now the agent records each step's process group and the job script ends that group (TERM, KILL after 10 s) before it goes on; an agent that starts ends the groups of the instance before it.
 
+**The Simulator silencer no longer boots a Simulator that a job has just shut down, and it also runs on a Mac whose link runs in a login session.**
+Before, it waited for a device's boot with `simctl bootstatus -b`, which boots a device that is not booted — a device shut down between the list and the call stayed up with nobody to stop it — and it ran only inside the always-on Mac's login-session agent, so a Mac kept running by a user service or by `charness-runner run` was not silenced at all.
+Now it asks `bootstatus` without `-b`, and a link that runs in a login session silences its own Simulators the same way; what a Simulator booted from the System session looks like to it is not verified and is said so in the docs.
+
 ## 3.9.1 — 2026-11-04
 
 **An @-mention of the AI account in a Jira issue it is already working on no longer makes it believe the issue is not handed to it, and no longer stops its build.**

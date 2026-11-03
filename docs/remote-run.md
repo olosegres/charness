@@ -197,14 +197,18 @@ Android emulators (`-no-window`), Jest, Playwright and Docker work from the daem
 
 **Silent jobs.** A Simulator plays through the HOST's audio output, whichever account runs it — on the first real run the owner, in a call in another
 account of the same Mac, heard an app's voice preview. So the runner keeps every iOS Simulator silent, by the Simulator's own volume and nothing else:
-for each booted device, once its boot has finished, `xcrun simctl spawn <udid> notifyutil -s com.apple.springboard.volumestate 0` and `-p` the same
-notification — never the Mac's output, volume or mute, never anything of the owner's account. The device's volume is back at 60 after every boot, so a
+for each booted device, once its boot has finished (`bootstatus` WITHOUT `-b`, which would boot a device that a job's teardown has just shut down),
+`xcrun simctl spawn <udid> notifyutil -s com.apple.springboard.volumestate 0` and `-p` the same notification — never the Mac's output, volume or mute, never
+anything of the owner's account. It runs where the Simulators are: in the login session's agent on an always-on Mac, in the link itself when the link runs in a
+login session (a user service, `charness-runner run`); `~/.charness-runner/logs/` has the log of either. The device's volume is back at 60 after every boot, so a
 device that boots again is silenced again, one whose volume (`sim_volume` in its `audiosettings.plist`) does not read back as 0 is told again a few
 times, and a failure is a line in `~/.charness-runner/logs/gui-agent.log`, never a stop of a job. **What is and is not known:** the command is a
 third-party measurement (the Simlock project's spike on iOS 26.4 and 27.0, Xcode 27.0), not Apple documentation — Apple's Device Hub has the same
 control only as a menu (Device > Sound) — and it takes effect 4–13 s after the command, so the first seconds after a boot are not covered. Look at it
 once on the Mac: run an iOS job that speaks and listen from another account; if the preview is still heard, `cat ~/.charness-runner/logs/gui-agent.log`
-says what the silencer did.
+says what the silencer did. **A known limit:** every login session has its own CoreSimulator service, and what a Simulator booted from the System session
+(`remote-run exec`, which runs where the link does, or a job while nobody is logged in as the account) looks like to the agent's `simctl list` has not been
+verified — it may not see it, and then that Simulator is not silenced. Jobs of an always-on Mac run in the login session while it exists, so theirs are.
 
 ## Advanced: a runner over plain ssh
 

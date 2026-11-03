@@ -12,7 +12,8 @@ import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
  *
  * The device's volume goes back to 60 on every boot (also after `erase` and `clone`) and the change reads back (`sim_volume` in
  * `<device data>/var/run/simulatoraudio/audiosettings.plist`) only 4–13 s after the command on iOS 26.4 / 27.0 — so every device that is booted gets
- * the command once its boot has finished (`bootstatus -b`), a device that boots again is treated as new, and a device whose plist still reads
+ * the command once its boot has finished (`bootstatus`, never `-b`: that BOOTS a device that is not booted, and a device that a job's teardown or the iOS
+ * check shut down between the list and the call would be booted again, with nobody to shut it down), a device that boots again is treated as new, and a device whose plist still reads
  * something else {@link verifyAfterMs} later gets it again (up to {@link maxAttempts} times, then a warning in the log and no more). The source of this
  * mechanism is a third-party measurement (the Simlock project's spike, iOS 26.4 and 27.0, Xcode 27.0), not Apple documentation — Apple's Device
  * Hub has the same control as a menu (Device > Sound), with no command line — so the first seconds after a boot are not covered and the effect on
@@ -26,7 +27,7 @@ export const verifyAfterMs = 30 * 1000;
 export const maxAttempts = 3;
 /** After a command that failed (SpringBoard not up yet, the device busy) the next try waits this long. */
 export const retryAfterMs = 10 * 1000;
-/** How often the agent's silencer looks at the booted devices. */
+/** How often the silencer looks at the booted devices. */
 export const silencerPollMs = 2 * 1000;
 const udidPattern = /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/;
 const audioSettingsRelativePath = path.join('var', 'run', 'simulatoraudio', 'audiosettings.plist');
@@ -81,6 +82,21 @@ interface DeviceState {
   isGivenUp: boolean;
 }
 
+/**
+ * @description The silencer's tick as a function whoever drives it may call as often as it likes (the login session's agent's 300 ms loop, a link's timer): at most
+ * one tick runs at a time, none starts before {@link silencerPollMs} has passed since the last one started, and a tick that throws is a line in the log.
+ */
+export function createSilencerLook(silencer: SimulatorSilencer, deps: Pick<SilencerDeps, 'now' | 'log'>): () => void {
+  let lastLookMs = Number.NEGATIVE_INFINITY;
+  let isLooking = false;
+  return () => {
+    if (isLooking || deps.now() - lastLookMs < silencerPollMs) return;
+    isLooking = true;
+    lastLookMs = deps.now();
+    silencer.tick().catch((error: unknown) => { deps.log(`the Simulator silencer failed (${error instanceof Error ? error.message : 'unknown error'})`); }).finally(() => { isLooking = false; });
+  };
+}
+
 export interface SimulatorSilencer {
   /** One look at the booted devices: silence the new ones, check the old ones; resolves when every command it started has ended. */
   tick: () => Promise<void>;
@@ -95,7 +111,8 @@ export function createSimulatorSilencer(deps: SilencerDeps): SimulatorSilencer {
   const runSimctl = (args: string[], timeoutMs: number): ReturnType<CommandRunner> => deps.runner('xcrun', ['simctl', ...args], { timeoutMs });
 
   const applyVolume = async (udid: string): Promise<string | null> => {
-    const boot = await runSimctl(['bootstatus', udid, '-b'], bootStatusDeadlineMs);
+    // No `-b`: that boots a device that is not booted — a device shut down since the list was read (a job's teardown, the iOS check's delete) must stay down.
+    const boot = await runSimctl(['bootstatus', udid], bootStatusDeadlineMs);
     if (!boot.ok) return `its boot did not finish (${boot.isTimedOut ? 'no answer in time' : boot.stderr.trim().split('\n').pop() ?? 'unknown'})`;
     const set = await runSimctl(['spawn', udid, 'notifyutil', '-s', volumeStateNotification, '0'], commandDeadlineMs);
     if (!set.ok) return `notifyutil -s failed (${set.isTimedOut ? 'no answer in time' : set.stderr.trim().split('\n').pop() ?? 'unknown'})`;

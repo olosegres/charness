@@ -11,11 +11,13 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { CommandOptions, CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
 import {
+  createSilencerLook,
   createSimulatorSilencer,
   maxAttempts,
   parseBootedSimulators,
   parseSimulatorVolume,
   retryAfterMs,
+  silencerPollMs,
   verifyAfterMs,
   volumeStateNotification,
   type SilencerDeps,
@@ -64,7 +66,7 @@ function createHarness(): Harness {
 
 const setCommand = (udid: string): string => `xcrun simctl spawn ${udid} notifyutil -s ${volumeStateNotification} 0`;
 const postCommand = (udid: string): string => `xcrun simctl spawn ${udid} notifyutil -p ${volumeStateNotification}`;
-const bootStatusCommand = (udid: string): string => `xcrun simctl bootstatus ${udid} -b`;
+const bootStatusCommand = (udid: string): string => `xcrun simctl bootstatus ${udid}`;
 
 describe('parsing what simctl says', () => {
   it('lists the booted devices with their data folder; a device that is not booted, or has no UUID for an id, is left out', () => {
@@ -105,13 +107,25 @@ describe('the silencer', () => {
     await silencer.tick();
     const allowed = [
       /^xcrun simctl list devices booted -j$/,
-      /^xcrun simctl bootstatus [0-9A-F-]{36} -b$/,
+      /^xcrun simctl bootstatus [0-9A-F-]{36}$/,
       new RegExp(`^xcrun simctl spawn [0-9A-F-]{36} notifyutil -s ${volumeStateNotification.replace(/\./g, '\\.')} 0$`),
       new RegExp(`^xcrun simctl spawn [0-9A-F-]{36} notifyutil -p ${volumeStateNotification.replace(/\./g, '\\.')}$`),
       /^plutil -extract sim_volume raw -o - \/data\/[0-9A-F-]{36}\/var\/run\/simulatoraudio\/audiosettings\.plist$/,
     ];
     for (const command of harness.commands) assert.ok(allowed.some((pattern) => pattern.test(command)), `not on the allowlist: ${command}`);
     assert.ok(harness.commands.length >= 8);
+  });
+
+  it('never boots a device: bootstatus is asked WITHOUT -b, so a device shut down since the list was read (a job\'s teardown, the iOS check\'s delete) stays down', async () => {
+    const harness = createHarness();
+    const silencer = createSimulatorSilencer(harness.deps);
+    harness.setBooted([phoneA, phoneB]);
+    await silencer.tick();
+    harness.setNow(1_000_000 + verifyAfterMs + 1);
+    await silencer.tick();
+    assert.ok(harness.commands.some((command) => command.includes('bootstatus')), 'the boot is still awaited');
+    for (const command of harness.commands) assert.ok(!/(^|\s)-b(\s|$)/.test(command), `no -b anywhere: ${command}`);
+    assert.ok(!harness.commands.some((command) => / (boot|shutdown|erase|delete) /.test(command)), 'and nothing that changes a device\'s state');
   });
 
   it('every booted device is silenced on its own; a device that boots later is silenced when it appears', async () => {
@@ -215,5 +229,36 @@ describe('the silencer', () => {
     await silencer.tick();
     assert.ok(harness.commands.includes(setCommand(phoneA)));
     assert.ok(!harness.commands.some((command) => command.startsWith('plutil')));
+  });
+});
+
+describe('the look a driver calls as often as it likes', () => {
+  it('starts a tick at most once per poll interval, never while one runs, and says a tick that throws', async () => {
+    let ticks = 0;
+    let release: () => void = () => undefined;
+    const logs: string[] = [];
+    let nowMs = 1_000_000;
+    const slow = { tick: () => { ticks += 1; return new Promise<void>((resolve) => { release = resolve; }); }, getKnownDeviceCount: () => 0 };
+    const look = createSilencerLook(slow, { now: () => nowMs, log: (line) => logs.push(line) });
+    look();
+    look();
+    assert.equal(ticks, 1, 'the second call is inside the interval');
+    nowMs += silencerPollMs + 1;
+    look();
+    assert.equal(ticks, 1, 'the first tick has not ended: never two at once');
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    nowMs += silencerPollMs + 1;
+    look();
+    assert.equal(ticks, 2, 'after the interval and the end of the first');
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const failing = { tick: () => Promise.reject(new Error('simctl went away')), getKnownDeviceCount: () => 0 };
+    const failingLook = createSilencerLook(failing, { now: () => nowMs, log: (line) => logs.push(line) });
+    nowMs += silencerPollMs + 1;
+    failingLook();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(logs, ['the Simulator silencer failed (simctl went away)']);
   });
 });

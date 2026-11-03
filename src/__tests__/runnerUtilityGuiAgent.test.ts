@@ -28,7 +28,7 @@ import {
   type GuiAgentDeps,
 } from '../runnerUtility/guiAgent';
 import { restartExitCode } from '../runnerUtility/appInstall';
-import { runGuiAgentCommand } from '../runnerUtility/runnerCommands';
+import { planSimulatorWork, runGuiAgentCommand } from '../runnerUtility/runnerCommands';
 import { writeRunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { getGuiAgentFile } from '../runnerUtility/serviceCommon';
@@ -426,5 +426,19 @@ describe('`charness-runner gui-agent`, the command a LaunchAgent runs', () => {
     assert.equal(await runGuiAgentCommand(io, paths.homeDir, { launchDaemonsDir: daemonsDir, signal: new AbortController().signal }), 0);
     assert.match(output, /this account is not paired: the login session's agent has nothing to do and ends/);
     assert.equal(fs.existsSync(paths.guiAgentStatus), false);
+  });
+});
+
+describe('who does the Simulator work', () => {
+  it('on an always-on Mac the login session\'s agent does the check and the silencing — the daemon link does neither', () => {
+    assert.deepEqual(planSimulatorWork('darwin', 'system-service'), { linkChecksSimulator: false, linkSilencesSimulators: false });
+  });
+
+  it('a Mac link that is in a login session itself (a user service, `charness-runner run`) checks AND silences: jobs and link share the session, so the Simulators a job boots are the ones the silencer lists', () => {
+    for (const kind of ['user-service', null]) assert.deepEqual(planSimulatorWork('darwin', kind), { linkChecksSimulator: true, linkSilencesSimulators: true }, String(kind));
+  });
+
+  it('off a Mac there is no Simulator to silence (the check records «skipped» as before)', () => {
+    for (const kind of ['user-service', 'system-service', null]) assert.deepEqual(planSimulatorWork('linux', kind), { linkChecksSimulator: true, linkSilencesSimulators: false }, String(kind));
   });
 });

@@ -14,7 +14,7 @@ import { collectMachineReport, createMachineProbe, formatMachineReport, type Mac
 import { ensurePueueDaemon, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
 import { createGuiAgentDeps, runGuiAgent } from './guiAgent';
 import { createIosCheckDeps, readIosCheck, refreshIosCheck } from './iosCheck';
-import { createSilencerDeps, createSimulatorSilencer, silencerPollMs } from './simulatorSilencer';
+import { createSilencerDeps, createSilencerLook, createSimulatorSilencer, silencerPollMs } from './simulatorSilencer';
 import { checkIsRunnerLinkProcess, createProcessControl, stopLocalLink, type ProcessControl } from './localLinkStop';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { checkIsRunnerPaused, setRunnerPaused } from './runnerFlags';
@@ -289,9 +289,30 @@ export async function runPair(code: string, appDir: string, packageId: string | 
   return 0;
 }
 
-/** Is this runner kept running by an always-on service on a Mac — its link in the System session, the login session's agent beside it? */
-function checkIsLoginSessionAgentRunner(paths: RunnerHomePaths, platform: NodeJS.Platform = process.platform): boolean {
-  return platform === 'darwin' && readServiceKind(paths) === 'system-service';
+/** What the Simulator work (the boot check, the silencer) is done by, for a link or a login session's agent. */
+export interface SimulatorWorkPlan {
+  /** The link runs the iOS Simulator check (every platform: it records «skipped» off a Mac). */
+  linkChecksSimulator: boolean;
+  /** The link runs the silencer: only on a Mac, and only when the link itself is in a login session. */
+  linkSilencesSimulators: boolean;
+}
+
+/**
+ * @description Who does the Simulator work. On an always-on Mac (`system-service`) the link is a LaunchDaemon in the System session: it can neither judge the
+ * Simulator (a check from it would only write «needs the runner user's login session» over the agent's) nor see the Simulators of the account's session, so the
+ * login session's agent does both. A Mac link that IS in a login session (a user service, `charness-runner run`) does them itself — jobs and link share the
+ * session, so the Simulators a job boots are the ones the silencer lists.
+ */
+export function planSimulatorWork(platform: NodeJS.Platform, serviceKind: string | null): SimulatorWorkPlan {
+  const isAgentsWork = platform === 'darwin' && serviceKind === 'system-service';
+  return { linkChecksSimulator: !isAgentsWork, linkSilencesSimulators: platform === 'darwin' && !isAgentsWork };
+}
+
+/** Start the silencer of the Simulators in this process' own session, looking every {@link silencerPollMs}. */
+function startSimulatorSilencing(io: CommandIo): void {
+  const deps = createSilencerDeps((line) => { io.stderr(`charness-runner: ${line}\n`); });
+  const look = createSilencerLook(createSimulatorSilencer(deps), deps);
+  setInterval(look, silencerPollMs).unref();
 }
 
 /**
@@ -337,15 +358,8 @@ export async function runGuiAgentCommand(io: CommandIo, homeDir: string = os.hom
   }
   const log = (line: string): void => { io.stderr(`charness-runner: ${line}\n`); };
   startIosCheck(paths, io);
-  const silencer = createSimulatorSilencer(createSilencerDeps(log));
-  let lastSilencerLookMs = 0;
-  let isSilencerLooking = false;
-  const lookAtSimulators = (): void => {
-    if (isSilencerLooking || Date.now() - lastSilencerLookMs < silencerPollMs) return;
-    isSilencerLooking = true;
-    lastSilencerLookMs = Date.now();
-    void silencer.tick().catch((error: unknown) => { log(`the Simulator silencer failed (${error instanceof Error ? error.message : 'unknown error'})`); }).finally(() => { isSilencerLooking = false; });
-  };
+  const silencerDeps = createSilencerDeps(log);
+  const lookAtSimulators = createSilencerLook(createSimulatorSilencer(silencerDeps), silencerDeps);
   const controller = new AbortController();
   if (overrides.signal === undefined) {
     process.once('SIGINT', () => { controller.abort(); });
@@ -397,9 +411,10 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   // A service that manages Pueue owns the daemon: starting a second one here would only fight it for the socket.
   const isPueueRunning = readServiceKind(paths) === null ? await ensurePueueDaemon(paths) : await waitForPueueDaemon(paths, pueueServiceWaitMs);
   if (!isPueueRunning) io.stderr('charness-runner: Pueue is not running; jobs cannot be queued until it is (the link goes up anyway).\n');
-  // On an always-on Mac the Simulator can only be judged from the account's login session: that is the login session's agent's check (`runGuiAgentCommand`),
-  // and a check from this daemon would only write «needs the runner user's login session» over it.
-  if (!checkIsLoginSessionAgentRunner(paths)) startIosCheck(paths, io);
+  // On an always-on Mac the Simulator work is the login session's agent's (`runGuiAgentCommand`); a link in a login session does it itself.
+  const simulatorWork = planSimulatorWork(process.platform, readServiceKind(paths));
+  if (simulatorWork.linkChecksSimulator) startIosCheck(paths, io);
+  if (simulatorWork.linkSilencesSimulators) startSimulatorSilencing(io);
   const loopRef: { current: ReturnType<typeof createLinkLoop> | null } = { current: null };
   const servers = createRunnerServers({
     serverPrivateKey: keys.server.privateKey,

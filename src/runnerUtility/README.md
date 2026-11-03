@@ -210,14 +210,17 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
 
 ## Silent Simulators (`simulatorSilencer.ts`)
 
-A Simulator plays through the HOST's audio output, so an iOS job on a Mac would be heard by whoever sits at it. The login session's agent (below) runs
-`createSimulatorSilencer` every 2 s: each booted device gets `xcrun simctl spawn <udid> notifyutil -s com.apple.springboard.volumestate 0` and `-p`
-once `bootstatus -b` has returned — per-device state, nothing of the Mac's own volume, output or mute. The volume is 60 again after every boot (also
+A Simulator plays through the HOST's audio output, so an iOS job on a Mac would be heard by whoever sits at it. The login session's agent (below) — or the
+link itself, when the link runs in a login session (`planSimulatorWork`: a user service, `charness-runner run`) — runs `createSimulatorSilencer` every 2 s
+(`createSilencerLook`: never two ticks at once): each booted device gets `xcrun simctl spawn <udid> notifyutil -s com.apple.springboard.volumestate 0` and `-p`
+once `bootstatus` has returned — never `bootstatus -b`, which BOOTS a device that is not booted (one a job's teardown, or the iOS check's `delete`, shut down
+since the list was read) — per-device state, nothing of the Mac's own volume, output or mute. The volume is 60 again after every boot (also
 `erase`, `clone`), so a device that is no longer booted is forgotten and its next boot is new; `sim_volume` in
 `<device data>/var/run/simulatoraudio/audiosettings.plist` (`plutil -extract sim_volume raw`) is read back after 30 s and the command repeated, three
 times in all, then one warning in `gui-agent.log` and no more for that boot; a failing command waits 10 s before the next try. The commands run are
 exactly the five of the allowlist the test pins (no shell, a device id that is not a UUID is dropped). The mechanism is a third-party measurement, not
-Apple's documentation, and its effect lags the command by 4–13 s: what a real Simulator then plays is for the first real run on a Mac to confirm.
+Apple's documentation, and its effect lags the command by 4–13 s: what a real Simulator then plays is for the first real run on a Mac to confirm. Unverified too: a
+Simulator booted from the System session (an `exec` on an always-on Mac) may not be listed by the agent's `simctl` (each session has its own CoreSimulator service).
 
 ## `pause`, `resume`, `unpair`
 
