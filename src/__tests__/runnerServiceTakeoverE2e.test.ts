@@ -50,7 +50,9 @@ describe('the runner\'s queue and its services (real Pueue)', { skip: skipReason
       checkIsRunnerLink: () => false,
       accountName: os.userInfo().username,
       homeDir: home,
-      nodePath: process.execPath,
+      // The program the service would run: outside every home folder, wherever THIS machine keeps its Node (nvm under /home/<user> is common, and the service
+      // manager rightly refuses a Node that lives in another user's home). Only its location is looked at here — nothing runs it.
+      nodePath: path.join(home, 'system-node', 'node'),
       launchDaemonsDir: path.join(home, 'LaunchDaemons'),
     };
   }
