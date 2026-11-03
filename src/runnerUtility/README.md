@@ -209,7 +209,16 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   The script cuts a step with 125 when the heartbeat is gone or another `startedAtMs` answers — and ENDS its process group first (`pgid` in the request folder,
   written by the agent: TERM, KILL after the runner's grace), because a step is a `setsid` group that a dying agent does not take along: without it an `xcodebuild`
   would run on in the tree while the job's lock went to the next job. An agent that starts ends the groups of the instance before it the same way
-  (`reapStepsOfEarlierInstances`) and answers a waiting script 125; a vanished script's folder is removed with its group ended.
+  (`reapStepsOfEarlierInstances`) and answers a waiting script 125 with a `cut` marker — which makes the script end the group before it goes on, as on its own cut
+  path; a vanished script's folder is removed with its group ended.
+- **A recorded pid is never trusted by itself.** The folders live on disk, pids restart after a boot, and an old number can name an unrelated group of the account
+  (Finder, the Dock, the new agent). A folder written before the system booted (`Date.now() - os.uptime()`: its `started`, else its `go`) is removed with NOTHING
+  signalled and no step run. Otherwise a group is signalled only while the process with that pid still has the start recorded beside the id (`pgid-start`, written
+  FIRST, from `ps -o lstart=` in the C locale, whitespace squeezed — the agent and `runner.sh` read it the same way), or while no process has it but the group still
+  has members (a pid is not handed out while a group carries it); no recorded start, a `ps` that cannot be asked, a damaged id (empty, text, 0, 1): not signalled.
+  The job script's pid is the same (`owner`, `owner-start`): a live pid with another start is a script that is gone. A group that cannot be recorded is ended at
+  once and answered 126; a request folder that is gone is no error anywhere (files are written without making folders), and one request that cannot be handled
+  is told and never takes the agent down. A `needs-ios` step with no agent beating is refused at the step (no request is written).
 - **No session** → a job that does not need iOS runs in the daemon as before; `submit` / `lease` refuse a `needs-ios` job with `ios build: needs a login of <account>`, a queued one refuses at its start, `probe` says
   `cap_ios=no` with the same words (ahead of the boot check's own answer). A runner kept running as a user service, or by hand, is in a session already: none of this applies.
 - **The link of an always-on Mac runs no Simulator check** (`checkIsLoginSessionAgentRunner`): the agent does, from the session where the Simulator can boot.

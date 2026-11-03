@@ -13,7 +13,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { checkIsProcessAlive, createGuiAgent, createGuiAgentDeps, writeGuiAgentStatus, type GuiAgent } from '../runnerUtility/guiAgent';
+import { checkIsProcessAlive, createGuiAgent, createGuiAgentDeps, readProcessStart, writeGuiAgentStatus, type GuiAgent } from '../runnerUtility/guiAgent';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { jobId, scriptPath, slug } from './remoteRunRunnerScriptKit';
 
@@ -283,6 +283,89 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     assert.equal(run.stdout.trim().split('\n').at(-1), 'code=125', run.stderr);
     assert.match(run.stdout, /the login session's agent stopped while this step ran/);
     await waitForProcessesGone(await readGroupPids(pidFile));
+  });
+
+  it('a job that needs iOS, with no agent beating, is refused AT THE STEP with the reason: code 125, no request written (an agent that appears a moment later must not start a step nobody waits for)', async () => {
+    markNeedsIos();
+    const run = await runSourced(`run_step ${workDir} 'echo never'; echo "code=$step_code"`);
+    assert.deepEqual(run.stdout.trim().split('\n'), [`remote-run: ios build: needs a login of ${accountName}`, 'code=125'], run.stderr);
+    assert.equal(fs.existsSync(paths.guiRequestsDir), false, 'no request folder was written');
+  });
+
+  it('the script records its own pid AND its start time in the request, in the very form the agent compares (`ps -o lstart=`, whitespace squeezed) — a reused pid is told from the script by it', async () => {
+    markNeedsIos();
+    startAgent();
+    const running = runSourced(`run_step ${workDir} 'sleep 2'; echo "code=$step_code"`);
+    const requestDir = path.join(paths.guiRequestsDir, `${jobId}.1`);
+    const deadline = Date.now() + waitBoundMs;
+    // The shell creates the file before `ps` has said what goes in it: wait for the content, not the file.
+    while (!(fs.existsSync(path.join(requestDir, 'owner-start')) && fs.readFileSync(path.join(requestDir, 'owner-start'), 'utf8').trim() !== '') && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    const ownerPid = Number(fs.readFileSync(path.join(requestDir, 'owner'), 'utf8'));
+    const recorded = fs.readFileSync(path.join(requestDir, 'owner-start'), 'utf8').trim();
+    const known = readProcessStart(ownerPid);
+    assert.equal(known.kind, 'known');
+    assert.equal(recorded, known.kind === 'known' ? known.text : '', 'the script and the agent read the same start for the same process');
+    assert.equal((await running).stdout.trim(), 'code=0');
+  });
+
+  it('a restarted agent that answered 125 and ended the group only with TERM: a step that ignores TERM is ended by the SCRIPT before it goes on — the lock is not released beside a live group', async () => {
+    markNeedsIos();
+    startAgent();
+    const pidFile = path.join(root, 'cut-answer.pids');
+    const running = runSourced(`kill_grace_sec=1; run_step ${workDir} '${createGroupRecordingStep(pidFile, { isStubborn: true })}'; echo "code=$step_code"`);
+    const pids = await readGroupPids(pidFile);
+    // The next instance: it finds the step, TERMs its group (ignored), answers 125 with `cut`, and — its own grace being a minute — would KILL it long after the script went on.
+    if (ticker !== null) clearInterval(ticker);
+    createGuiAgent(paths, { ...createGuiAgentDeps(() => ({ PATH: process.env.PATH, HOME: paths.homeDir })), killGraceMs: 60_000 });
+    const run = await running;
+    assert.equal(run.stdout.trim().split('\n').at(-1), 'code=125', run.stderr);
+    for (const pid of pids) assert.equal(checkIsProcessAlive(pid), false, `pid ${pid} is gone by the time the script goes on`);
+  });
+
+  describe('gui_end_step_group signals only the group that was recorded', () => {
+    function startDecoy(): Promise<{ pgid: number; sleepPid: number; start: string }> {
+      const pidFile = path.join(root, `decoy-${Math.random().toString(36).slice(2)}.pid`);
+      const child = spawn('sh', ['-c', `sleep 300 & echo $! > "${pidFile}"; wait`], { detached: true, stdio: 'ignore' });
+      child.unref();
+      return (async () => {
+        const deadline = Date.now() + waitBoundMs;
+        while (!fs.existsSync(pidFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+        const start = readProcessStart(child.pid ?? 0);
+        assert.equal(start.kind, 'known');
+        return { pgid: child.pid ?? 0, sleepPid: Number(fs.readFileSync(pidFile, 'utf8').trim()), start: start.kind === 'known' ? start.text : '' };
+      })();
+    }
+
+    it('a group whose leader has the recorded start is ended; one whose pid now has ANOTHER start (a reused pid) is left alone — and so is a request with no start recorded', async () => {
+      const decoy = await startDecoy();
+      const folder = path.join(root, 'request-folder');
+      fs.mkdirSync(folder);
+      fs.writeFileSync(path.join(folder, 'pgid'), `${decoy.pgid}\n`);
+      await runSourced(`kill_grace_sec=1; gui_end_step_group ${folder}`);
+      assert.equal(checkIsProcessAlive(decoy.sleepPid), true, 'no start recorded: nothing is signalled');
+      fs.writeFileSync(path.join(folder, 'pgid-start'), 'Mon Jan  1 00:00:00 2001\n');
+      await runSourced(`kill_grace_sec=1; gui_end_step_group ${folder}`);
+      assert.equal(checkIsProcessAlive(decoy.sleepPid), true, 'another start: the pid is somebody else\'s now');
+      fs.writeFileSync(path.join(folder, 'pgid-start'), `${decoy.start}\n`);
+      await runSourced(`kill_grace_sec=1; gui_end_step_group ${folder}`);
+      const deadline = Date.now() + 15_000;
+      while (checkIsProcessAlive(decoy.sleepPid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(checkIsProcessAlive(decoy.sleepPid), false, 'the recorded group is ended');
+    });
+
+    it('a damaged id (empty, text, 0, 1) is never signalled', async () => {
+      const decoy = await startDecoy();
+      const folder = path.join(root, 'damaged-folder');
+      fs.mkdirSync(folder);
+      for (const text of ['', 'abc', '0', '1', '-7']) {
+        fs.writeFileSync(path.join(folder, 'pgid'), text);
+        fs.writeFileSync(path.join(folder, 'pgid-start'), `${decoy.start}\n`);
+        const run = await runSourced(`kill_grace_sec=1; gui_end_step_group ${folder}; echo done`);
+        assert.equal(run.stdout.trim(), 'done', text);
+      }
+      assert.equal(checkIsProcessAlive(decoy.sleepPid), true);
+      process.kill(-decoy.pgid, 'SIGKILL');
+    });
   });
 
   it('a step the agent cannot start (its folder is gone) comes back as 126', async () => {

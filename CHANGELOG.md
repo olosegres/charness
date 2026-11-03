@@ -58,6 +58,10 @@ Now every job's steps go through the agent while the session exists; with no ses
 Before, a Mac runner that went idle between two jobs fell asleep, dropped the link, and the next job found it offline — the thing `caffeinate` does by hand — and nothing told the owner it was the Mac's sleep.
 Now the link holds an idle-sleep assertion for as long as it runs — `caffeinate -i` on a Mac, `systemd-inhibit --what=idle` on Linux — tied to the link's process, so stopping, removing or crashing the runner lets the machine sleep again with no orphan; it never touches `pmset` or any admin power setting. Where it cannot (no tool, no D-Bus) `charness remote-run runners` and `/runners` (all 12 languages) say `keeps awake: NO — <why>`, otherwise `keeps awake: yes (…)`. A closed lid still sleeps the machine, and a laptop left open on battery drains it.
 
+**After a reboot the login-session agent never signals a process it merely finds recorded on disk — an old process-group number may name Finder or the Dock by now.**
+Before, the request folders of an always-on Mac survived a reboot, and the agent that started at the account's next login sent SIGTERM and then SIGKILL to the process group written in them; pids restart after a boot, so that number could belong to an unrelated group of the account (Finder, the Dock, a Simulator, the new agent itself), and a reused pid could make a dead job script look alive.
+Now a request folder written before the system booted is removed without a signal, a recorded group is signalled only while its leader still has the start time recorded beside it, the job script's pid is checked the same way, an iOS step with no agent beating is refused at once with «ios build: needs a login of <account>», the job script ends a step's group before it goes on even when a restarted agent answered 125 itself, and a request folder that vanishes under the agent — or a group that cannot be recorded — no longer crashes it or leaves a build running.
+
 ## 3.9.1 — 2026-11-04
 
 **An @-mention of the AI account in a Jira issue it is already working on no longer makes it believe the issue is not handed to it, and no longer stops its build.**

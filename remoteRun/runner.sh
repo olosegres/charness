@@ -214,29 +214,58 @@ refuse_without_gui_session() {
   gui_agent_alive || die "$(gui_refusal_text)"
 }
 
-# End the process group of a step the agent started (its id is in the request folder's `pgid`): TERM, and KILL after the grace if anything is left. A step is
-# a process group of its own (`setsid`), so an agent that died did not take it down — and the job's lock is released next, to a job that would run in the
-# same tree beside an `xcodebuild` still writing into it.
+# The start time of process $1 as `ps` says it, whitespace squeezed — the way runnerUtility/guiAgent.ts records and compares it (the C locale is this script's own).
+gui_process_start() {
+  ps -o lstart= -p "$1" 2> /dev/null | tr -s ' \t' ' ' | sed 's/^ //; s/ $//'
+}
+
+# Is process group $1 the group of the step whose leader started at $2 (`pgid-start` of the request folder)? The folders live on disk and a pid is handed out again
+# — after a reboot, after a wrap — to something unrelated of the account (the Dock, the agent itself). So a recorded id is signalled only while the process with
+# that pid still has the recorded start; or while no process has it and the group still has members (a pid is not handed out while a group carries it).
+# No recorded start, or no `ps` to ask: not a group to signal.
+gui_group_is_recorded() {
+  local current
+  [ -n "$2" ] && command -v ps > /dev/null 2>&1 || return 1
+  current=$(gui_process_start "$1")
+  if [ -n "$current" ]; then
+    [ "$current" = "$2" ]
+    return
+  fi
+  kill -0 -- "-$1" 2> /dev/null
+}
+
+# End the process group of a step the agent started (its id is in the request folder's `pgid`, its leader's start beside it): TERM, and KILL after the grace if
+# anything is left. A step is a process group of its own (`setsid`), so an agent that died did not take it down — and the job's lock is released next, to a job
+# that would run in the same tree beside an `xcodebuild` still writing into it.
 gui_end_step_group() {
-  local pgid waited=0
+  local pgid recorded waited=0
   pgid=$(cat "$1/pgid" 2> /dev/null)
+  recorded=$(tr -s ' \t' ' ' < "$1/pgid-start" 2> /dev/null | sed 's/^ //; s/ $//')
   case $pgid in '' | *[!0-9]*) return 0 ;; esac
   [ "$pgid" -gt 1 ] || return 0
+  gui_group_is_recorded "$pgid" "$recorded" || return 0
   kill -TERM -- "-$pgid" 2> /dev/null || return 0
   while kill -0 -- "-$pgid" 2> /dev/null && [ "$waited" -lt $((kill_grace_sec * 5)) ]; do
     nap 0.2
     waited=$((waited + 1))
   done
-  kill -KILL -- "-$pgid" 2> /dev/null
+  gui_group_is_recorded "$pgid" "$recorded" && kill -KILL -- "-$pgid" 2> /dev/null
   return 0
 }
 
-# One step of a job that needs iOS, run by the agent in the login session: a request folder it picks up (`go` last), the step's output appended to
-# the job's log by the agent itself, the exit code in `exit`. A kill is a `kill` file; the agent kills a step whose job script (`owner`) is gone.
-# The step is cut with 125 — and its process group ended here, see gui_end_step_group — when the agent stops, or is another instance than the one asked.
+# One step of a job, run by the agent in the login session: a request folder it picks up (`go` last), the step's output appended to the job's log by the agent
+# itself, the exit code in `exit`. A kill is a `kill` file; the agent kills a step whose job script (`owner`, its start in `owner-start`) is gone.
+# A job that needs iOS with no agent beating is refused here — no request is written for an agent that may appear a moment later and start a step nobody
+# waits for. The step is cut with 125 when the agent stops, or is another instance than the one asked — and its process group is ended HERE, before the folder
+# goes and the job's lock with it, on that path and on the one where a restarted agent answered 125 itself (`cut`); see gui_end_step_group.
 gui_run_step() {
   local directory=$1
   local command_text=$2
+  if [ -f "$jd/needs-ios" ] && ! gui_agent_alive; then
+    say "$(gui_refusal_text)"
+    step_code=125
+    return 0
+  fi
   gui_step_count=$((${gui_step_count:-0} + 1))
   local request="$runner_state/gui/requests/$job.$gui_step_count"
   local started_at
@@ -252,6 +281,7 @@ gui_run_step() {
   printf '%s' "$job_locale" > "$request/locale"
   printf '%s' "$jd/log" > "$request/log"
   printf '%s' "$$" > "$request/owner"
+  gui_process_start "$$" > "$request/owner-start"
   if [ -s "$jd/env" ]; then cp "$jd/env" "$request/env"; else : > "$request/env"; fi
   : > "$request/go"
   local looks=0
@@ -269,6 +299,8 @@ gui_run_step() {
   done
   step_code=$(cat "$request/exit")
   case $step_code in '' | *[!0-9]*) step_code=125 ;; esac
+  # A restarted agent cut the step (and told us so): its group got a TERM and gets its KILL after the grace — the job must not go on before it is gone.
+  [ -f "$request/cut" ] && gui_end_step_group "$request"
   rm -rf "$request"
 }
 
