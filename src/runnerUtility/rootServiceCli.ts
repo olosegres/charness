@@ -7,7 +7,7 @@
  */
 
 import { createAdminServiceDeps, installServiceForAccount } from './adminService';
-import { checkIsTerminal, createStepRunner } from './progress';
+import { checkIsTerminal, createStepRunner, stepLabels } from './progress';
 
 const usageExitCode = 2;
 
@@ -17,8 +17,8 @@ async function main(): Promise<number> {
     process.stderr.write('Usage: rootServiceCli.js install <account>\n');
     return usageExitCode;
   }
-  const runStep = createStepRunner({ write: (text) => { process.stdout.write(text); }, isTerminal: checkIsTerminal(process.stdout) });
-  const result = await runStep(`installing the always-on service for ${account}`, () => installServiceForAccount(account, createAdminServiceDeps()));
+  const runStep = createStepRunner({ write: (text) => { process.stdout.write(text); }, isTerminal: checkIsTerminal(process.stdout), getColumns: () => process.stdout.columns });
+  const result = await runStep(stepLabels.installService(account), () => installServiceForAccount(account, createAdminServiceDeps()), (outcome) => !outcome.ok);
   if (result.lines.length > 0) (result.ok ? process.stdout : process.stderr).write(`${result.lines.join('\n')}\n`);
   return result.ok ? 0 : 1;
 }

@@ -23,7 +23,7 @@ import * as path from 'path';
 import { installAppFromDirectory, restartExitCode } from './appInstall';
 import { checkArchiveHasId, checkIsPackageId } from './packageId';
 import { serviceFollowsFlag, splitServiceFollowsFlag } from './pairArgs';
-import { checkIsTerminal, createStepRunner, stepLinePrefix, type RunStep } from './progress';
+import { checkIsTerminal, createStepRunner, stepLabels, stepLinePrefix, type RunStep } from './progress';
 import { getRunnerHomePaths } from './runnerHome';
 
 const usageExitCode = 2;
@@ -81,7 +81,7 @@ async function runBootstrap(args: BootstrapArgs, runStep: RunStep): Promise<numb
   const paths = getRunnerHomePaths();
   let appDir: string;
   try {
-    appDir = await runStep('installing the runner program and its dependencies (npm, about a minute)', () => installAppFromDirectory(bootstrapDir, paths));
+    appDir = await runStep(stepLabels.installProgram, () => installAppFromDirectory(bootstrapDir, paths));
   } catch (error) {
     process.stderr.write(`${stepLinePrefix}${error instanceof Error ? error.message : 'could not install'}\n`);
     return 1;
@@ -95,7 +95,7 @@ async function runBootstrap(args: BootstrapArgs, runStep: RunStep): Promise<numb
 
 async function main(): Promise<number> {
   const [command = 'status', ...args] = process.argv.slice(2);
-  const runStep = createStepRunner({ write: (text) => { process.stdout.write(text); }, isTerminal: checkIsTerminal(process.stdout) });
+  const runStep = createStepRunner({ write: (text) => { process.stdout.write(text); }, isTerminal: checkIsTerminal(process.stdout), getColumns: () => process.stdout.columns });
   if (command === 'pair' && splitServiceFollowsFlag(args).rest[0] === '--bootstrap') {
     const bootstrapArgs = parseBootstrapArgs(args);
     if (bootstrapArgs === null) {

@@ -23,7 +23,7 @@ import { getRunnerHomePaths, type RunnerHomePaths } from './runnerHome';
 import { ensureRunnerKeys, readRunnerKeys, type RunnerKeys } from './runnerKeys';
 import { readExecEnv } from './execEnv';
 import { createRunnerServers } from './runnerServers';
-import { createStepRunner, type RunStep } from './progress';
+import { createStepRunner, stepLabels, type RunStep } from './progress';
 import { createToolDeps, ensurePueue, ensureRsync, findPueue, findRsync, type ToolDeps, type ToolInstallOutcome } from './toolInstall';
 
 /**
@@ -70,7 +70,7 @@ function formatToolLine(rsync: ToolInstallOutcome | null, pueue: ToolInstallOutc
 }
 
 async function printMachineCheck(paths: RunnerHomePaths, io: CommandIo): Promise<MachineReport> {
-  const report = await getStepRunner(io)('checking this machine', () => collectMachineReport(createMachineProbe(paths.homeDir), paths.root));
+  const report = await getStepRunner(io)(stepLabels.checkMachine, () => collectMachineReport(createMachineProbe(paths.homeDir), paths.root));
   io.stdout(`${formatMachineReport(report).join('\n')}\n`);
   const account = os.userInfo().username;
   if (checkIsAdminAccount(readAccountFacts())) io.stdout(`${formatAdminWarning(account).join('\n')}\n`);
@@ -79,8 +79,8 @@ async function printMachineCheck(paths: RunnerHomePaths, io: CommandIo): Promise
 
 async function installTools(paths: RunnerHomePaths, deps: ToolDeps, io: CommandIo): Promise<void> {
   const runStep = getStepRunner(io);
-  const pueue = await runStep('getting Pueue, the job queue (a download, checked against its checksum)', () => ensurePueue(paths, deps));
-  const rsync = await runStep('finding rsync (building it from source when the machine has none)', () => ensureRsync(paths, deps));
+  const pueue = await runStep(stepLabels.getPueue, () => ensurePueue(paths, deps), (outcome) => !outcome.ok);
+  const rsync = await runStep(stepLabels.findRsync, () => ensureRsync(paths, deps), (outcome) => !outcome.ok);
   io.stdout(`${formatToolLine(rsync, pueue)}\n`);
   for (const outcome of [pueue, rsync]) if (!outcome.ok) io.stderr(`charness-runner: ${outcome.reason}\n`);
 }
@@ -220,7 +220,7 @@ export async function runPair(code: string, appDir: string, packageId: string | 
   let reply: RedeemReply | null = null;
   let failure = 'pairing failed';
   try {
-    reply = await getStepRunner(io)('pairing with the hub', async () => {
+    reply = await getStepRunner(io)(stepLabels.pair, async () => {
       const client = await connectToHub(endpoint, payload.privateKey);
       try {
         return await requestGateJson(client, 'redeem', JSON.stringify(request), redeemReplySchema);

@@ -2,7 +2,8 @@
  * @description `runners/runnersOverview.ts` for a one-shot listing: a machine is STALE when it is online and its last report is older than its
  * link — a service installed after the pairing starts the link anew, and the report taken before says «run by hand» — or it has none; only stale
  * machines are asked (a listing that finds every report fresh makes no ssh call), the answer replaces their report, and «online» stays what the
- * link says: a probe that fails never turns a linked machine offline in the list.
+ * link says: a probe that fails never turns a linked machine offline in the list. The wait is short, and a machine that gave no answer is
+ * remembered (until its link begins anew, or for a while) so that a listing never waits for the same silence twice.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -16,7 +17,8 @@ import { parseProbeOutput } from '../remoteRun/probe';
 import { getRunnerLinkPaths } from '../runners/hubPaths';
 import { writePairedFile } from '../runners/hubRegistry';
 import { writeLinkState } from '../runners/linkControl';
-import { readRunnersOverview, refreshStaleSnapshots, type RunnersOverview } from '../runners/runnersOverview';
+import { readProbeFailure, removeLastProbe, writeProbeFailure } from '../remoteRun/runners';
+import { probeRetryAfterMs, readRunnersOverview, refreshStaleSnapshots, staleRefreshDeadlineMs, type RunnersOverview } from '../runners/runnersOverview';
 import { createPairedRunnerFixture } from './remoteRunPairedKit';
 import { createHubFixture, type HubFixture } from './runnersTestKit';
 
@@ -121,5 +123,99 @@ describe('refreshing the stale ones for a listing', () => {
     assert.equal(refreshed.entries[0].isOnline, true);
     assert.notEqual(refreshed.entries[0].lastSeenMs, 1, 'and its last-seen is the link\'s own');
     assert.equal(refreshed.entries[0].probe?.serviceKind, 'foreground');
+  });
+});
+
+describe('a machine that does not answer a listing', () => {
+  const aFewSecondsMs = 10 * 1000;
+
+  /** A probe that records who it was asked about and with what deadline, and answers as the real one does when the ssh call fails: the machine «offline», its last report kept. */
+  function createSilentProbe(): { asked: string[]; deadlines: Array<number | undefined>; probe: Parameters<typeof refreshStaleSnapshots>[4] } {
+    const asked: string[] = [];
+    const deadlines: Array<number | undefined> = [];
+    return {
+      asked,
+      deadlines,
+      probe: async (_ctx, overview, _cacheDir, _nowMs, deadlineMs): Promise<RunnersOverview> => {
+        asked.push(...overview.entries.map((entry) => entry.runner.name));
+        deadlines.push(deadlineMs);
+        return { ...overview, entries: overview.entries.map((entry) => ({ ...entry, isOnline: false })) };
+      },
+    };
+  }
+
+  /** One listing the way `charness runners ls` makes it: read, then refresh the stale ones. */
+  async function list(probe: Parameters<typeof refreshStaleSnapshots>[4], atMs: number): Promise<RunnersOverview> {
+    return refreshStaleSnapshots(hub.ctx, await readRunnersOverview(hub.ctx, cacheDir, atMs), cacheDir, atMs, probe);
+  }
+
+  async function arrangeStaleMac(): Promise<void> {
+    pairBoth();
+    await putLinkUp('a1b2c3d4e5f6', linkStartMs);
+    saveReport('mac', linkStartMs - 1000, byHandReport);
+  }
+
+  it('is waited for only a few seconds — the listing asks with its own short deadline, not the screen\'s 20 s', async () => {
+    await arrangeStaleMac();
+    const { deadlines, probe } = createSilentProbe();
+    await list(probe, nowMs);
+    assert.deepEqual(deadlines, [staleRefreshDeadlineMs]);
+    assert.ok(staleRefreshDeadlineMs <= aFewSecondsMs, `${staleRefreshDeadlineMs} ms is not «a few seconds»`);
+  });
+
+  it('is asked ONCE: the next listings show it as it was last known at once, without asking again', async () => {
+    await arrangeStaleMac();
+    const { asked, probe } = createSilentProbe();
+    await list(probe, nowMs);
+    assert.deepEqual(readProbeFailure(cacheDir, 'mac'), { attemptedAtMs: nowMs, linkSinceMs: linkStartMs }, 'the silence is remembered with the link it was met on');
+    const second = await list(probe, nowMs + 60 * 1000);
+    const third = await list(probe, nowMs + 5 * 60 * 1000);
+    assert.deepEqual(asked, ['mac'], 'one question for three listings');
+    assert.equal(second.entries[0].probe?.serviceKind, 'foreground', 'it is shown as last known');
+    assert.equal(third.entries[0].isOnline, true, 'and still online, as its link says');
+  });
+
+  it('is asked again when its link began anew — a service installed or a restart is a new situation', async () => {
+    await arrangeStaleMac();
+    const { asked, probe } = createSilentProbe();
+    await list(probe, nowMs);
+    // The link restarts: the socket still accepts (the same server), its status file now says it began later.
+    writeLinkState(hub.ctx.dir, 'a1b2c3d4e5f6', { pid: process.pid, sinceMs: linkStartMs + 5 * 60 * 1000, lastBeatMs: nowMs, endedAtMs: null });
+    await list(probe, nowMs + 10 * 1000);
+    assert.deepEqual(asked, ['mac', 'mac']);
+    assert.equal(readProbeFailure(cacheDir, 'mac')?.linkSinceMs, linkStartMs + 5 * 60 * 1000, 'the new silence is remembered with the new link');
+  });
+
+  it('is asked again after a while on the same link, so that a machine that was only slow is not left unrefreshed for good', async () => {
+    await arrangeStaleMac();
+    const { asked, probe } = createSilentProbe();
+    await list(probe, nowMs);
+    await list(probe, nowMs + probeRetryAfterMs - 1);
+    assert.deepEqual(asked, ['mac'], 'still remembered just before the time is up');
+    await list(probe, nowMs + probeRetryAfterMs);
+    assert.deepEqual(asked, ['mac', 'mac'], 'asked again once it is');
+  });
+
+  it('a machine that answered leaves no memory of silence, and a silence remembered for an earlier machine of that name is not this one\'s', async () => {
+    await arrangeStaleMac();
+    writeProbeFailure(cacheDir, 'mac', { attemptedAtMs: 1, linkSinceMs: linkStartMs });
+    const answering = { asked: [] as string[] };
+    const probe: Parameters<typeof refreshStaleSnapshots>[4] = async (_ctx, overview) => {
+      answering.asked.push(...overview.entries.map((entry) => entry.runner.name));
+      return overview;
+    };
+    const refreshed = await list(probe, nowMs);
+    assert.deepEqual(answering.asked, ['mac'], 'the old silence (before this machine was paired) did not keep it from being asked');
+    assert.equal(refreshed.entries[0].isSnapshotStale, false);
+    assert.deepEqual(readProbeFailure(cacheDir, 'mac'), { attemptedAtMs: 1, linkSinceMs: linkStartMs }, 'an answer writes no silence of its own');
+  });
+
+  it('is forgotten with the runner\'s last report when the runner is removed', () => {
+    saveReport('mac', linkStartMs, byHandReport);
+    writeProbeFailure(cacheDir, 'mac', { attemptedAtMs: nowMs, linkSinceMs: null });
+    removeLastProbe(cacheDir, 'mac');
+    assert.equal(readProbeFailure(cacheDir, 'mac'), null);
+    assert.ok(!fs.existsSync(path.join(cacheDir, 'mac.probe.json')));
+    removeLastProbe(cacheDir, 'mac');
   });
 });

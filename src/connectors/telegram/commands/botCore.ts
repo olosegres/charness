@@ -18,6 +18,20 @@ export type RegisterCommand = (
   handler: (ctx: CommandContext, key: SessionKey, parsed: InboundCommand) => Promise<void> | void,
 ) => void;
 
+/**
+ * @description How an edit of a thread message ended: `edited` (a no-change edit counts); `gone` — the message is not there (the
+ * person deleted it by hand, say): there is nothing to edit and nothing to retry; `failed` — anything else, the message may still
+ * be there and a caller that must change it tries again.
+ */
+export type ThreadMessageEdit = 'edited' | 'gone' | 'failed';
+
+/**
+ * @description How a delete of a thread message ended: `deleted`; `gone` — it was not there (the person deleted it by hand, say):
+ * nothing left to tidy; `stayed` — Telegram refused (older than 48 hours, no right), or no Telegram topic's key: the message is
+ * still there.
+ */
+export type ThreadMessageDeletion = 'deleted' | 'gone' | 'stayed';
+
 export interface BotCore {
   bot: Telegraf;
   command: RegisterCommand;
@@ -33,6 +47,8 @@ export interface BotCore {
   replyToThread: (key: SessionKey, text: string, extra?: object, options?: { unpaced?: boolean; isSecret?: boolean }) => Promise<number | null>;
   /** Edit a message of the topic in place; `false` when the edit failed. */
   editThreadMessage: (key: SessionKey, messageId: number, text: string, extra?: object) => Promise<boolean>;
+  /** The same edit, telling a message that is gone from one that failed to change — for a caller that must not retry a message nobody can edit any more. */
+  editThreadMessageDetailed: (key: SessionKey, messageId: number, text: string, extra?: object) => Promise<ThreadMessageEdit>;
   /**
    * Replace the inline keyboard of a message of the topic through the paced send queue (`null` removes it). A no-change
    * edit is no failure; any other failure is logged under `logTag` and answered with `false`.
@@ -40,6 +56,8 @@ export interface BotCore {
   editThreadKeyboard: (key: SessionKey, messageId: number, keyboard: InlineKeyboardMarkup | null, logTag: string) => Promise<boolean>;
   /** Delete a message of the topic; `false` when it stayed (older than 48 hours, already gone, not a topic of Telegram). */
   deleteThreadMessage: (key: SessionKey, messageId: number) => Promise<boolean>;
+  /** The same delete, telling a message that was already gone from one that stayed — for a caller that must not retry a message nobody can delete any more. */
+  deleteThreadMessageDetailed: (key: SessionKey, messageId: number) => Promise<ThreadMessageDeletion>;
   /** Gate a callback or message to an admin of the served group; the topic's key, or `null` when it is refused. */
   authoriseContext: (ctx: Context) => Promise<SessionKey | null>;
   /** Run `fn` with the topic's resolved locale for `t(…)`. */

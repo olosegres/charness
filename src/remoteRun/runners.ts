@@ -24,6 +24,7 @@ import type { RunnerConfig, RunnersConfig } from './runnersConfig';
 /** The whole probing of all runners ends by then (a dead host costs its ssh connect timeout, once, in parallel with the others). */
 export const probeAllTimeoutMs = 20 * 1000;
 const probeFileSuffix = '.probe.json';
+const probeFailureFileSuffix = '.probe-failed.json';
 const millisecondsPerSecond = 1000;
 
 interface StoredProbe {
@@ -34,6 +35,36 @@ interface StoredProbe {
 
 function getStoredProbePath(cacheDir: string, runnerName: string): string {
   return path.join(cacheDir, `${runnerName}${probeFileSuffix}`);
+}
+
+function getProbeFailurePath(cacheDir: string, runnerName: string): string {
+  return path.join(cacheDir, `${runnerName}${probeFailureFileSuffix}`);
+}
+
+/**
+ * @description A probe of a runner that got no answer, remembered so that a quick look (`charness runners ls`) does not wait for the same
+ * silence again and again: when it was made, and since when the runner's link had been up (`null` = not known) — a link that began anew is
+ * a different situation and deserves a new question.
+ */
+export interface ProbeFailure {
+  attemptedAtMs: number;
+  linkSinceMs: number | null;
+}
+
+/** @description The remembered failed probe of `runnerName`, `null` if there is none or it was made before `notBeforeMs` (it belongs to an earlier machine of that name, as for {@link readLastProbe}). */
+export function readProbeFailure(cacheDir: string, runnerName: string, notBeforeMs: number = 0): ProbeFailure | null {
+  try {
+    const stored: ProbeFailure = JSON.parse(fs.readFileSync(getProbeFailurePath(cacheDir, runnerName), 'utf8'));
+    if (typeof stored.attemptedAtMs !== 'number' || (stored.linkSinceMs !== null && typeof stored.linkSinceMs !== 'number')) return null;
+    return stored.attemptedAtMs < notBeforeMs ? null : { attemptedAtMs: stored.attemptedAtMs, linkSinceMs: stored.linkSinceMs };
+  } catch {
+    return null;
+  }
+}
+
+/** @description Remember that a probe of `runnerName` got no answer. */
+export function writeProbeFailure(cacheDir: string, runnerName: string, failure: ProbeFailure): void {
+  fs.writeFileSync(getProbeFailurePath(cacheDir, runnerName), JSON.stringify(failure), { mode: 0o600 });
 }
 
 /**
@@ -52,9 +83,10 @@ export function readLastProbe(cacheDir: string, runnerName: string, notBeforeMs:
   }
 }
 
-/** @description Forget the last report of `runnerName` (a removed runner's: the name is free for the next machine). A report that is not there is nothing to forget. */
+/** @description Forget the last report of `runnerName`, and the failed probe it may have left (a removed runner's: the name is free for the next machine). What is not there is nothing to forget. */
 export function removeLastProbe(cacheDir: string, runnerName: string): void {
   fs.rmSync(getStoredProbePath(cacheDir, runnerName), { force: true });
+  fs.rmSync(getProbeFailurePath(cacheDir, runnerName), { force: true });
 }
 
 function writeLastProbe(cacheDir: string, runnerName: string, text: string, seenAtMs: number): void {

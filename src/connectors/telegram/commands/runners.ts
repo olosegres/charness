@@ -62,7 +62,7 @@ const messageSnapshotLimit = 50;
 const addressWaitMs = 10 * 60 * 1000;
 /** How often the pairing messages are checked for «used» or «expired» (the registry is two small files). */
 export const runnersWatchIntervalMs = 5 * 1000;
-/** A pairing message whose edits have been failing for a day is given up on (the code lived 10 minutes; the message may be gone). */
+/** A pairing message whose edits have been failing for a day is given up on (the code lived 10 minutes). A message Telegram says is gone is settled at once, not waited out. */
 const pairingMessageGiveUpAfterFailingMs = 24 * 60 * 60 * 1000;
 /** After a failed edit of a pairing message the next try waits this long, doubling each time up to the cap. */
 const settleRetryFirstDelayMs = 5 * 1000;
@@ -70,7 +70,7 @@ const settleRetryMaxDelayMs = 5 * 60 * 1000;
 const logTag = 'runners';
 
 /** What the module needs from the bot: the shared core, the hub and the few readings only the composition root has. */
-export interface RunnersPorts extends Pick<BotCore, 'bot' | 'command' | 'replyToThread' | 'editThreadMessage' | 'deleteThreadMessage' | 'editThreadKeyboard' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'> {
+export interface RunnersPorts extends Pick<BotCore, 'bot' | 'command' | 'replyToThread' | 'editThreadMessage' | 'editThreadMessageDetailed' | 'deleteThreadMessageDetailed' | 'editThreadKeyboard' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'> {
   /** The hub registry of this OS user (`src/runners/`). */
   hub: HubContext;
   /** The address runners dial, as `settings.json` holds it; `null` = never chosen. */
@@ -131,7 +131,7 @@ interface ShownScreen {
  * look of that job, for a test to run on its own clock).
  */
 export function createRunners(ports: RunnersPorts) {
-  const { bot, command, replyToThread, editThreadMessage, deleteThreadMessage, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, hub, now } = ports;
+  const { bot, command, replyToThread, editThreadMessage, editThreadMessageDetailed, deleteThreadMessageDetailed, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, hub, now } = ports;
 
   const shownScreens = new Map<string, ShownScreen>();
   const addressProposals = new Map<string, HubAddress | null>();
@@ -444,7 +444,7 @@ export function createRunners(ports: RunnersPorts) {
   /**
    * @description One look at this instance's unsettled pairing messages (`runnerPairingMessages.ts`): a code that became a runner turns its
    * message into «paired», one that is no longer open (expired, swept) into «expired». An entry is dropped only after Telegram accepted
-   * the edit — a failed one is tried again later (5 s, doubling to 5 min) and survives a restart; one whose edits have been failing for a
+   * the edit, or said the message is gone (the operator deleted it by hand) — a failed one is tried again later (5 s, doubling to 5 min) and survives a restart; one whose edits have been failing for a
    * day is given up on (counted from the first failed attempt: a message older than that is still tried once). Expired credentials are
    * swept from the shared registry here too, but the messages never depend on what the sweep left (they are this instance's own record,
    * and another instance may have swept or even spent the code while this one was down).
@@ -487,9 +487,13 @@ export function createRunners(ports: RunnersPorts) {
       if (runner === undefined && isOpen) continue;
       const key = keyFromString(message.key);
       // The FIRST line shows what became of the code; the SECOND is deleted — two «paired» messages read as a bug — or, when Telegram will not delete it, points at the first.
+      // A message that is no longer there (the operator deleted it by hand) is settled all the same: there is nothing to edit and retrying would only fail for a day.
       const isSettled = await withThreadLocale(key, async () => {
-        if (checkIsSecondLine(message, messages)) return (await deleteThreadMessage(key, message.messageId)) || editThreadMessage(key, message.messageId, buildSeeFirstMessageText(t));
-        return editThreadMessage(key, message.messageId, runner !== undefined ? buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime) : checkIsClosed(message.pairId) ? buildClosedText(t) : buildExpiredText(t));
+        if (checkIsSecondLine(message, messages)) {
+          if ((await deleteThreadMessageDetailed(key, message.messageId)) !== 'stayed') return true;
+          return (await editThreadMessageDetailed(key, message.messageId, buildSeeFirstMessageText(t))) !== 'failed';
+        }
+        return (await editThreadMessageDetailed(key, message.messageId, runner !== undefined ? buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime) : checkIsClosed(message.pairId) ? buildClosedText(t) : buildExpiredText(t))) !== 'failed';
       });
       if (isSettled) {
         settledMessageIds.add(messageId);

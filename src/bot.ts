@@ -422,7 +422,7 @@ import {
   parseOAuthCallbackFromReply,
 } from './utils/openCodeAuthLogin';
 import { createAgentLogin, type ClaudeLoginProfile } from './agentLogin/agentLogin';
-import type { BotCore, CommandContext } from './connectors/telegram/commands/botCore';
+import type { BotCore, CommandContext, ThreadMessageDeletion, ThreadMessageEdit } from './connectors/telegram/commands/botCore';
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from './connectors/telegram/questionKeyboards';
 import { createDisplayModes, formatTopicView } from './connectors/telegram/commands/displayModes';
 import { createReminders, type ReminderWizardSession } from './connectors/telegram/commands/reminders';
@@ -3936,7 +3936,21 @@ async function editThreadMessage(
   extra: SendExtra = {},
   plainFallbackText: string = text,
 ): Promise<boolean> {
-  if (!checkIsTelegramPrimitiveKey(key, 'editThreadMessage')) return false;
+  return (await editThreadMessageDetailed(key, messageId, text, extra, plainFallbackText)) === 'edited';
+}
+
+/**
+ * @description {@link editThreadMessage} telling a message that is not there (deleted by hand: «message to edit not found») from any
+ * other failure — see {@link ThreadMessageEdit}. The failure is logged either way, as before.
+ */
+async function editThreadMessageDetailed(
+  key: SessionKey,
+  messageId: number,
+  text: string,
+  extra: SendExtra = {},
+  plainFallbackText: string = text,
+): Promise<ThreadMessageEdit> {
+  if (!checkIsTelegramPrimitiveKey(key, 'editThreadMessage')) return 'failed';
   const editOnce = (editText: string, editExtra: Record<string, unknown>) =>
     enqueueSend(key, () =>
       bot.telegram.editMessageText(
@@ -3947,15 +3961,15 @@ async function editThreadMessage(
 
   try {
     await editOnce(text, extra as Record<string, unknown>);
-    return true;
+    return 'edited';
   } catch (e) {
     const desc = checkIsApiError(e) ? getErrorDescription(e) : '';
-    if (/message is not modified/i.test(desc)) return true; // benign
+    if (/message is not modified/i.test(desc)) return 'edited'; // benign
     if (
       /thread not found|TOPIC_CLOSED|topic is closed/i.test(desc)
     ) {
       await handleSendError(key, e);
-      return false;
+      return 'failed';
     }
     // Symmetric markdown-parse-fail fallback to `replyToThread`. See the
     // long comment there — same rationale: prefer a plain-text edit over
@@ -3970,16 +3984,16 @@ async function editThreadMessage(
       delete plainExtra.parse_mode;
       try {
         await editOnce(plainFallbackText, plainExtra);
-        return true;
+        return 'edited';
       } catch (e2) {
         const desc2 = checkIsApiError(e2) ? getErrorDescription(e2) : '';
-        if (/message is not modified/i.test(desc2)) return true;
+        if (/message is not modified/i.test(desc2)) return 'edited';
         console.error(`[edit] ${keyToString(key)}#${messageId} retry failed:`, desc2 || e2);
-        return false;
+        return checkIsMessageNotFoundError(e2) ? 'gone' : 'failed';
       }
     }
     console.error(`[edit] ${keyToString(key)}#${messageId}:`, desc || e);
-    return false;
+    return checkIsMessageNotFoundError(e) ? 'gone' : 'failed';
   }
 }
 
@@ -4006,13 +4020,7 @@ async function editThreadKeyboard(
   }
 }
 
-/**
- * @description How a delete of a thread message ended: `deleted`; `gone` — it was not there (the person deleted it by hand,
- * say): nothing left to tidy; `stayed` — Telegram refused (older than 48 hours, no right), or no Telegram topic's key: the
- * message is still there. None of them is logged: all are expected.
- */
-type ThreadMessageDeletion = 'deleted' | 'gone' | 'stayed';
-
+/** @description {@link deleteThreadMessage} telling a message that was already gone from one that stayed — see {@link ThreadMessageDeletion}. None of them is logged: all are expected. */
 async function deleteThreadMessageDetailed(
   key: SessionKey,
   messageId: number,
@@ -6005,8 +6013,10 @@ const botCore: BotCore = {
   getState: () => state,
   replyToThread,
   editThreadMessage,
+  editThreadMessageDetailed,
   editThreadKeyboard,
   deleteThreadMessage,
+  deleteThreadMessageDetailed,
   authoriseContext,
   withThreadLocale,
   checkIsGeneral,

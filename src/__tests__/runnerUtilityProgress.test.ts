@@ -8,18 +8,25 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkIsTerminal, createStepRunner, stepLinePrefix } from '../runnerUtility/progress';
+import { checkIsTerminal, createStepRunner, stepLabels, stepLinePrefix, type StepOutput } from '../runnerUtility/progress';
 
 const dotIntervalMs = 15;
 const longEnoughForSeveralFramesMs = 140;
+/** macOS Terminal's default width — the narrowest a person runs the pairing line in. */
+const defaultTerminalColumns = 80;
+const unreadableTerminalColumns = 20;
+/** The width of what a frame draws: the text after its leading carriage return, without the line end. */
+function getDrawnWidth(frame: string): number {
+  return frame.replace(/^\r/, '').replace(/\n$/, '').length;
+}
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-function createOutput(isTerminal: boolean): { written: string[]; write: (text: string) => void; isTerminal: boolean } {
+function createOutput(isTerminal: boolean, getColumns: StepOutput['getColumns'] = () => defaultTerminalColumns): StepOutput & { written: string[] } {
   const written: string[] = [];
-  return { written, write: (text) => { written.push(text); }, isTerminal };
+  return { written, write: (text) => { written.push(text); }, isTerminal, getColumns };
 }
 
 describe('a step on a pipe or a file', () => {
@@ -69,6 +76,83 @@ describe('a step on a terminal', () => {
     const before = process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
     await createStepRunner(createOutput(true), dotIntervalMs)('a quick one', () => wait(5));
     assert.equal(process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length, before);
+  });
+});
+
+describe('a step whose work reports its failure in the result instead of throwing', () => {
+  it('ends «— failed» when the result is judged a failure, and still returns the result', async () => {
+    const output = createOutput(true);
+    const outcome = { ok: false, lines: ['no sudo'] };
+    const result = await createStepRunner(output, dotIntervalMs)('installing the service', async () => outcome, (candidate) => !candidate.ok);
+    assert.equal(result, outcome, 'the result is the work\'s own');
+    assert.equal(output.written.at(-1), `\r${stepLinePrefix}installing the service — failed\n`);
+    assert.ok(!output.written.some((frame) => frame.includes('— done')), 'never «done» for a failed result');
+  });
+
+  it('ends «— done» when the same judge accepts the result', async () => {
+    const output = createOutput(true);
+    await createStepRunner(output, dotIntervalMs)('installing the service', async () => ({ ok: true, lines: [] }), (candidate) => !candidate.ok);
+    assert.equal(output.written.at(-1), `\r${stepLinePrefix}installing the service — done\n`);
+  });
+
+  it('adds nothing on a pipe, where a step is only its start line', async () => {
+    const output = createOutput(false);
+    await createStepRunner(output, dotIntervalMs)('installing the service', async () => ({ ok: false }), (candidate) => !candidate.ok);
+    assert.deepEqual(output.written, [`${stepLinePrefix}installing the service\n`]);
+  });
+});
+
+describe('a step on a narrow terminal', () => {
+  it('draws every name of the long steps whole on an 80-column terminal, with the longest ending, never wider than the terminal', async () => {
+    const names = [stepLabels.installProgram, stepLabels.checkMachine, stepLabels.pair, stepLabels.getPueue, stepLabels.findRsync, stepLabels.installService('runner')];
+    for (const name of names) {
+      const output = createOutput(true);
+      await assert.rejects(createStepRunner(output, dotIntervalMs)(name, async () => { throw new Error('x'); }), /x/);
+      assert.ok(output.written.every((frame) => getDrawnWidth(frame) < defaultTerminalColumns), `${name}: a line of ${defaultTerminalColumns} columns or more wraps`);
+      assert.equal(output.written.at(-1), `\r${stepLinePrefix}${name} — failed\n`, `${name}: whole, not cut`);
+    }
+  });
+
+  it('cuts a name that does not fit (a long account name) with an ellipsis so that no frame reaches the last column', async () => {
+    const output = createOutput(true);
+    const longName = stepLabels.installService('an-account-with-a-very-long-name-that-goes-on-and-on-and-on');
+    await createStepRunner(output, dotIntervalMs)(longName, () => wait(longEnoughForSeveralFramesMs));
+    assert.ok(output.written.length >= 4);
+    assert.ok(output.written.every((frame) => getDrawnWidth(frame) < defaultTerminalColumns), `a frame wraps: ${JSON.stringify(output.written)}`);
+    assert.match(output.written[0], /…\.\s*$/, 'the cut is marked');
+    assert.equal(output.written.at(-1)?.endsWith(' — done\n'), true, 'the result still closes the line');
+  });
+
+  it('follows a resize: each frame is cut to the width the terminal has at THAT moment', async () => {
+    let columns = 120;
+    const output = createOutput(true, () => columns);
+    const longName = stepLabels.installService('an-account-with-a-very-long-name-that-goes-on-and-on-and-on');
+    await createStepRunner(output, dotIntervalMs)(longName, async () => {
+      await wait(longEnoughForSeveralFramesMs / 2);
+      columns = 60;
+      await wait(longEnoughForSeveralFramesMs / 2);
+    });
+    assert.ok(output.written.some((frame) => getDrawnWidth(frame) >= 80), 'the wide frames use the room they had');
+    assert.ok(getDrawnWidth(output.written.at(-1) ?? '') < 60, 'the last line fits the narrowed terminal');
+    assert.ok(output.written.every((frame) => getDrawnWidth(frame) < 120));
+  });
+
+  it('is one plain line when the width is not known (a terminal that does not say)', async () => {
+    const output = createOutput(true, () => undefined);
+    await createStepRunner(output, dotIntervalMs)('pairing', () => wait(longEnoughForSeveralFramesMs));
+    assert.deepEqual(output.written, [`${stepLinePrefix}pairing\n`]);
+  });
+
+  it('is one plain line when the terminal is too narrow to redraw a line in', async () => {
+    const output = createOutput(true, () => unreadableTerminalColumns);
+    await createStepRunner(output, dotIntervalMs)('pairing', () => wait(longEnoughForSeveralFramesMs));
+    assert.deepEqual(output.written, [`${stepLinePrefix}pairing\n`]);
+  });
+
+  it('is one plain line when the output offers no width at all', async () => {
+    const written: string[] = [];
+    await createStepRunner({ write: (text) => { written.push(text); }, isTerminal: true }, dotIntervalMs)('pairing', async () => 1);
+    assert.deepEqual(written, [`${stepLinePrefix}pairing\n`]);
   });
 });
 

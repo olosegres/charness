@@ -133,7 +133,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.match(result.stdout, new RegExp(`Paired with charness @ExampleBot \\(127\\.0\\.0\\.1:${layout.sshPort}\\) as runner “`));
     assert.match(result.stdout, /Keep it running:/);
     // What the paste tells as it goes (stdout is a pipe here: one plain line per step), in the order the steps happen.
-    const stepLines = ['downloading the package from the hub', 'installing the runner program and its dependencies', 'checking this machine', 'pairing with the hub', 'getting Pueue', 'finding rsync'].map((step) => result.stdout.indexOf(`charness-runner: ${step}`));
+    const stepLines = ['downloading the package from the hub', 'installing the runner program', 'checking this machine', 'pairing with the hub', 'getting Pueue', 'finding rsync'].map((step) => result.stdout.indexOf(`charness-runner: ${step}`));
     assert.ok(stepLines.every((position) => position >= 0), `a step line is missing: ${result.stdout}`);
     assert.deepEqual([...stepLines].sort((left, right) => left - right), stepLines, 'the steps are told in the order they happen');
     const paired = readHubPaired();

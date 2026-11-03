@@ -76,6 +76,19 @@ let feature: ReturnType<typeof createRunners>;
 
 const scanHostKey: HostKeyScanner = async (host, port) => scanAnswers[`${host}:${port}`] ?? null;
 
+const editWithHooks: Parameters<typeof createRunners>[0]['editThreadMessageDetailed'] = async (key, messageId, text, extra) => {
+  const decision = editHook?.(messageId, text) ?? null;
+  if (decision !== null && !(await decision)) return 'failed';
+  if (isLengthChecked) await harness.core.bot.telegram.sendMessage(harnessGroup.id, text, { message_thread_id: harnessThreadId });
+  return harness.core.editThreadMessageDetailed(key, messageId, text, extra);
+};
+
+const deleteWithHooks: Parameters<typeof createRunners>[0]['deleteThreadMessageDetailed'] = async (key, messageId) => {
+  const decision = deleteHook?.(messageId) ?? null;
+  if (decision !== null && !(await decision)) return 'stayed';
+  return harness.core.deleteThreadMessageDetailed(key, messageId);
+};
+
 function buildPorts(): Parameters<typeof createRunners>[0] {
   return {
     ...harness.core,
@@ -84,17 +97,9 @@ function buildPorts(): Parameters<typeof createRunners>[0] {
       if (isLengthChecked) await harness.core.bot.telegram.sendMessage(harnessGroup.id, text, { message_thread_id: harnessThreadId });
       return harness.core.replyToThread(key, text, extra, options);
     },
-    editThreadMessage: async (key, messageId, text, extra) => {
-      const decision = editHook?.(messageId, text) ?? null;
-      if (decision !== null && !(await decision)) return false;
-      if (isLengthChecked) await harness.core.bot.telegram.sendMessage(harnessGroup.id, text, { message_thread_id: harnessThreadId });
-      return harness.core.editThreadMessage(key, messageId, text, extra);
-    },
-    deleteThreadMessage: async (key, messageId) => {
-      const decision = deleteHook?.(messageId) ?? null;
-      if (decision !== null && !(await decision)) return false;
-      return harness.core.deleteThreadMessage(key, messageId);
-    },
+    editThreadMessage: async (key, messageId, text, extra) => (await editWithHooks(key, messageId, text, extra)) === 'edited',
+    editThreadMessageDetailed: editWithHooks,
+    deleteThreadMessageDetailed: deleteWithHooks,
     hub: hubFixture.ctx,
     pairingMessagesPath,
     sweepExpiredCodes: async (nowMs) => {
@@ -528,6 +533,52 @@ describe('/runners over its ports', () => {
       assert.deepEqual(readRecordedPairIds(), []);
     });
 
+    it('the FIRST message was deleted by hand: the code still settles — nothing to edit, nothing retried — and the SECOND is deleted as always', async () => {
+      const offer = await offerPairing();
+      harness.goneMessageIds.add(offer.messageId);
+      await redeemPairing(hubFixture.ctx, offer.pairId, createRedeemFixture({ suggestedName: 'Mac Mini' }).request, clockMs);
+      await feature.watchPairingsOnce();
+      assert.deepEqual(readRecordedPairIds(), [], 'both leave the record at once: a message nobody can edit is not retried for a day');
+      assert.deepEqual(harness.deletedMessageIds, [offer.plainMessageId], 'the second message is deleted');
+      assert.deepEqual(harness.edits, [], 'nothing was edited');
+      clockMs += 6 * 1000;
+      await feature.watchPairingsOnce();
+      assert.equal(harness.deletedMessageIds.length, 1, 'and nothing is tried again');
+    });
+
+    it('the SECOND message was deleted by hand: nothing is left to tidy — no pointer edit, not retried — and the first shows the result', async () => {
+      const offer = await offerPairing();
+      harness.goneMessageIds.add(offer.plainMessageId);
+      clockMs += 11 * minute;
+      await feature.watchPairingsOnce();
+      assert.equal(readMessageText(offer.messageId), 'Pairing code expired.');
+      assert.ok(!harness.edits.some((edit) => edit.messageId === offer.plainMessageId), 'no pointer is written to a message that is gone');
+      assert.deepEqual(readRecordedPairIds(), []);
+    });
+
+    it('a second message that Telegram will not delete and that is gone for the edit (deleted meanwhile) is settled too', async () => {
+      const offer = await offerPairing();
+      deleteHook = (deletedId) => (deletedId === offer.plainMessageId ? Promise.resolve(false) : null);
+      editHook = (editedId) => {
+        if (editedId === offer.plainMessageId) harness.goneMessageIds.add(editedId);
+        return null;
+      };
+      clockMs += 11 * minute;
+      await feature.watchPairingsOnce();
+      assert.deepEqual(readRecordedPairIds(), [], 'the edit found no message, so there is nothing to wait for');
+    });
+
+    it('both messages deleted by hand: the code settles at the first look, with nothing edited and nothing to retry', async () => {
+      const offer = await offerPairing();
+      harness.goneMessageIds.add(offer.messageId);
+      harness.goneMessageIds.add(offer.plainMessageId);
+      clockMs += 11 * minute;
+      await feature.watchPairingsOnce();
+      assert.deepEqual(readRecordedPairIds(), []);
+      assert.deepEqual(harness.edits, []);
+      assert.deepEqual(harness.deletedMessageIds, []);
+    });
+
     it('the pointer says the same for a code that expired or was closed, and when neither the delete nor the edit is accepted the message is KEPT and tried again — the delete first, every time', async () => {
       const offer = await offerPairing();
       clockMs += 11 * minute;
@@ -790,9 +841,9 @@ describe('/runners over its ports', () => {
       const otherInstance = createRunners({
         ...buildPorts(),
         pairingMessagesPath: otherPairingMessagesPath,
-        editThreadMessage: async (_key, otherMessageId, text) => {
+        editThreadMessageDetailed: async (_key, otherMessageId, text) => {
           otherEdits.push({ messageId: otherMessageId, text });
-          return true;
+          return 'edited';
         },
       });
       // While the code is open, and after it is used: nothing for the other instance to do.

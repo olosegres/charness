@@ -50,6 +50,8 @@ export class CommandHarness {
   readonly replies: RecordedSend[] = [];
   readonly edits: RecordedSend[] = [];
   readonly deletedMessageIds: number[] = [];
+  /** The messages the person deleted by hand: an edit or a delete finds nothing («message … not found»). */
+  readonly goneMessageIds = new Set<number>();
   readonly cancelledRequestKeys: SessionKey[] = [];
   readonly pinnedStatusUpdateKeys: SessionKey[] = [];
   readonly registeredCommandNames: string[] = [];
@@ -90,9 +92,11 @@ export class CommandHarness {
         this.replies.push({ messageId, text, extra, ...(options === undefined ? {} : { options }) });
         return messageId;
       },
-      editThreadMessage: async (_key, messageId, text, extra) => {
+      editThreadMessage: async (key, messageId, text, extra) => (await this.core.editThreadMessageDetailed(key, messageId, text, extra)) === 'edited',
+      editThreadMessageDetailed: async (_key, messageId, text, extra) => {
+        if (this.goneMessageIds.has(messageId)) return 'gone';
         this.edits.push({ messageId, text, extra });
-        return true;
+        return 'edited';
       },
       // Straight to the fake Bot API, so a test counts the keyboard edits the way it counts any other call; a refused edit
       // is `false`, as the bot's own helper answers it (the ids the harness gives its sends are no messages of the fake).
@@ -104,9 +108,11 @@ export class CommandHarness {
           return false;
         }
       },
-      deleteThreadMessage: async (_key, messageId) => {
+      deleteThreadMessage: async (key, messageId) => (await this.core.deleteThreadMessageDetailed(key, messageId)) === 'deleted',
+      deleteThreadMessageDetailed: async (_key, messageId) => {
+        if (this.goneMessageIds.has(messageId)) return 'gone';
         this.deletedMessageIds.push(messageId);
-        return true;
+        return 'deleted';
       },
       authoriseContext: async () => this.foreignChatKey ?? this.key,
       withThreadLocale: (_key, run) => run(),
@@ -200,8 +206,10 @@ export function createInertBotCore(): BotCore {
     },
     replyToThread: async () => null,
     editThreadMessage: async () => false,
+    editThreadMessageDetailed: async () => 'failed',
     editThreadKeyboard: async () => false,
     deleteThreadMessage: async () => false,
+    deleteThreadMessageDetailed: async () => 'stayed',
     authoriseContext: async () => null,
     withThreadLocale: (_key, run) => run(),
     checkIsGeneral: () => false,

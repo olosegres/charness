@@ -22,6 +22,8 @@
  *     record and turns into «Pairing code expired.» when its code runs out — while Telegram refuses to delete the second message, which
  *     then points at the first — and the expired code is gone from authorized_keys; the first line, already used, and the expired one
  *     are refused on the runner machine
+ *   → a pairing whose FIRST message the person deleted by hand: when its code runs out the code still settles (Telegram answers «message to
+ *     edit not found», which is settled, not retried), the second message is deleted and the instance's record is empty
  *   → a third code is used on a second machine while the bot is STOPPED: the restarted bot turns its first message into «paired» and
  *     deletes the second
  *   → thirty seeded machines (a registry written by hand, a snapshot each) make a list of several pages: Next / Previous edit the SAME
@@ -528,6 +530,21 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.equal(readPaired().runners.length, 0, 'neither paired a machine');
   });
 
+  it('a pairing message the person deleted by hand: the code still settles when it runs out — the second message is deleted, the instance\'s record empties, nothing is retried', async () => {
+    const list = await general.sendAndAwaitReply('/runners', 'No runners yet.');
+    await general.tapAndAwaitAnswer(list, 'rnr_pair');
+    const fourth = await general.waitForMessage('the fourth pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
+    const fourthPlain = await general.waitForMessage('the fourth pairing\'s plain message', (message) => message.text.startsWith('② Without admin rights') && message.message_id > fourth.message_id);
+    assert.equal(readPairingStore().length, 2, 'both messages are followed');
+    // The person deletes the admin message by hand (the fake Bot API then answers «message to edit not found» to an edit of it, like Telegram).
+    fourth.isDeleted = true;
+    expireOpenPairings();
+    await waitUntil(() => fourthPlain.isDeleted === true, 'the second pairing message to be deleted', 10_000);
+    await waitUntil(() => readPairingStore().length === 0, 'both messages to leave the instance\'s record, though the first could not be edited', 10_000);
+    assert.equal(readJson<{ pending: unknown[] }>(path.join(getRegistryDir(), 'pending.json')).pending.length, 0, 'the expired code is swept');
+    assert.equal(readPaired().runners.length, 0, 'nothing was paired');
+  });
+
   it('a code used while the bot is stopped: the restarted bot turns its first message into «paired» and deletes the second', async () => {
     const list = await general.sendAndAwaitReply('/runners', 'No runners yet.');
     await general.tapAndAwaitAnswer(list, 'rnr_pair');
@@ -604,6 +621,8 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     await general.tapAndAwaitAnswer(list, freshRemoveData);
     await general.waitForMessageText('the question again', list, (text) => text.startsWith(`Remove ${target}?`));
     assert.equal(await general.tapAndAwaitAnswer(list, `rnr_${revision}_${targetIndex}_xy`), '');
+    // The tap is answered at once and the removal follows (it may take long when the machine is online): the registry is read when it is done.
+    await waitUntil(() => readPaired().runners.length < registryNames.length, 'the removal to reach the registry', 10_000);
     assert.deepEqual(readPaired().runners.map((runner) => runner.name), registryNames.filter((name) => name !== target), 'exactly that machine is gone');
     await general.waitForMessageText('the list on page 2 again', list, (text) => text.includes('Page 2 of ') && !text.includes(`${target} — `));
   });
