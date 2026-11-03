@@ -1,9 +1,12 @@
 import * as path from 'path';
 import type { RunnerProbe } from '../remoteRun/probe';
+import { readLastProbe } from '../remoteRun/runners';
 import { getLaunchdFiles } from '../runnerUtility/serviceCommon';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { getServiceNames } from '../runnerUtility/serviceUnits';
-import type { PairedRunner } from './hubRegistry';
+import type { HubContext } from './hubPaths';
+import { findPairedRunner } from './hubPairing';
+import { readPairedFile, type PairedRunner, type RunnerServiceKind } from './hubRegistry';
 import { getCurrentServiceKind } from './runnerServiceKind';
 
 /**
@@ -42,6 +45,26 @@ export function getSystemServiceRemovalCommands(runner: PairedRunner): string[] 
  */
 export function getServiceRemovalLines(runner: PairedRunner, probe: RunnerProbe | null): string[] {
   return getCurrentServiceKind(runner, probe) === 'system-service' ? (getSystemServiceRemovalCommands(runner) ?? []) : [];
+}
+
+/** What an always-on service's removal needs, for one runner: how the machine is kept running now, and the admin's commands (`[]` when there are none to give). */
+export interface ServiceRemovalFacts {
+  runner: PairedRunner;
+  kind: RunnerServiceKind;
+  commands: string[];
+}
+
+/**
+ * @description The ONE reading behind every place that tells an admin how to remove a runner's always-on service (`charness runners remove` and
+ * `service-removal`, the Remove button of `/runners`): the registry's runner `nameOrId` and its last report, nothing else — no link probe, no pairing
+ * codes, so a slow or damaged part of the hub cannot get in the way of the removal it accompanies. `null` when no runner is paired by that name or id.
+ * Read BEFORE the removal, which deletes the runner's last report.
+ */
+export function readServiceRemovalForRunner(ctx: HubContext, cacheDir: string, nameOrId: string): ServiceRemovalFacts | null {
+  const runner = findPairedRunner(readPairedFile(ctx.dir).runners, nameOrId);
+  if (runner === undefined) return null;
+  const probe = readLastProbe(cacheDir, runner.name, runner.pairedAtMs)?.probe ?? null;
+  return { runner, kind: getCurrentServiceKind(runner, probe), commands: getServiceRemovalLines(runner, probe) };
 }
 
 /** The way to find the daemons by hand, for the machine the hub cannot name them for. */

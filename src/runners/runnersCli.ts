@@ -1,6 +1,5 @@
 import * as os from 'os';
 import type { CliIo } from '../remoteRun/output';
-import { readLastProbe } from '../remoteRun/runners';
 import { getRemoteRunCacheDir } from '../remoteRun/ssh';
 import { buildAdminBootstrapLine, buildBootstrapLine, checkIsAccountName, defaultRunnerAccount } from './bootstrapLine';
 import { ensureGateWrapper } from './gateWrapper';
@@ -8,12 +7,11 @@ import { checkHubAddress, parseHubAddress, scanHostKey, type HostKeyScanner } fr
 import { createHubContext, type HubContext } from './hubPaths';
 import { createPairing, findPairedRunner, setPairedRunnerPaused, sweepExpiredPairings } from './hubPairing';
 import { formatLifetime, readPairingLifetimeMs } from './pairingTiming';
-import { HubRegistryError, readClosedCodes, readPairedFile, readPendingFile, type PairedRunner, type RunnerServiceKind } from './hubRegistry';
+import { HubRegistryError, readClosedCodes, readPairedFile, readPendingFile } from './hubRegistry';
 import { removeRunnerAndEndItsWork } from './runnerRemoval';
-import { getCurrentServiceKind } from './runnerServiceKind';
 import { readRunnersOverview, refreshStaleSnapshots } from './runnersOverview';
 import { formatListTimestamp, formatRunnerList, serviceKindLabels } from './runnersList';
-import { formatServiceRemovalNote, formatServiceRemovalUnknownNote, getServiceRemovalLines } from './serviceRemoval';
+import { formatServiceRemovalNote, formatServiceRemovalUnknownNote, readServiceRemovalForRunner } from './serviceRemoval';
 
 /**
  * @description `charness runners [ls | pair | remove <name> | service-removal <name> | pause <name> | resume <name>]` — the headless twin of `/runners`, for an
@@ -172,16 +170,8 @@ async function runListCommand(io: CliIo, deps: RunnersCliDeps): Promise<number> 
   return 0;
 }
 
-/** What an always-on service's removal needs, read from the registry and the last report of the runner — `null` when `name` is no paired runner. */
-function readServiceRemoval(name: string, deps: RunnersCliDeps): { runner: PairedRunner; kind: RunnerServiceKind; commands: string[] } | null {
-  const runner = findPairedRunner(readPairedFile(deps.ctx.dir).runners, name);
-  if (runner === undefined) return null;
-  const probe = readLastProbe(deps.cacheDir, runner.name, runner.pairedAtMs)?.probe ?? null;
-  return { runner, kind: getCurrentServiceKind(runner, probe), commands: getServiceRemovalLines(runner, probe) };
-}
-
 async function runServiceRemovalCommand(name: string, io: CliIo, deps: RunnersCliDeps): Promise<number> {
-  const found = readServiceRemoval(name, deps);
+  const found = readServiceRemovalForRunner(deps.ctx, deps.cacheDir, name);
   if (found === null) {
     io.stderr(`runners: no runner named "${name}"\n`);
     return failedExitCode;
@@ -196,7 +186,7 @@ async function runServiceRemovalCommand(name: string, io: CliIo, deps: RunnersCl
 
 async function runRemoveCommand(name: string, io: CliIo, deps: RunnersCliDeps): Promise<number> {
   // Read BEFORE the removal: it deletes the runner's last report, which says how the machine is kept running.
-  const serviceRemoval = readServiceRemoval(name, deps);
+  const serviceRemoval = readServiceRemovalForRunner(deps.ctx, deps.cacheDir, name);
   const removal = await removeRunnerAndEndItsWork(deps.ctx, name, deps.now());
   if (removal === null) {
     io.stderr(`runners: no runner named "${name}"\n`);

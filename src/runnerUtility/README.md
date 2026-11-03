@@ -138,8 +138,9 @@ opens `logs/<job>.log` itself (so a folder the account cleaned away never leaves
 A failed root step is the line's one «`<account>` is paired, but has no service: fix the above and paste a fresh admin line» (the same on both
 systems); a fresh line finds the account paired (`runPair` with `--service-follows` says so, CLOSES its own code on the hub with `cancel`, and returns 0) and only installs the service. The
 pairing runs with `sudo`'s `PATH`, not the account's login one, so Node must be installed system-wide. **Removing** an always-on service is plain
-`launchctl` / `rm` commands for an admin (`formatSystemServiceRemoval`); `service uninstall` on the account prints them, and forgets the
-record once the daemons are gone from `launchctl` and from `/Library/LaunchDaemons`; `unpair` points there.
+`launchctl` / `rm` commands for an admin, made by the HUB (`runners/serviceRemoval.ts`: `charness runners remove` / `service-removal <name>`, the Remove button of
+`/runners`); `service uninstall` on the account prints only a pointer to them, and forgets the record once the daemons are gone from `launchctl` and from
+`/Library/LaunchDaemons`; `unpair` points there.
 
 **Install order** (`prepareManagedStart`) — nothing is started until all of it is true, and a start that fails is rolled back (the services
 stopped, their files and the record removed: nothing half-installed):

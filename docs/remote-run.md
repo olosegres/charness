@@ -43,9 +43,10 @@ A runner is attached in one of two ways:
      or an admin (the account runs the agents' code), and is never created by the line. Then, still as root, it downloads charness's
      package into a folder of its own in `/tmp` (root-owned, readable by the account, removed when the line ends), has the account **pair
      itself from that copy** (`sudo -u <account> -H`: its files belong to it, not to root) and installs its always-on service from the same
-     copy — and **everything it runs as the account has no terminal**: a session of its own, no standard input, its output passed through the
-     admin's process with the control characters removed, so code the account can change never gets the admin's terminal: on a Mac the LaunchDaemon that runs as the account, on Linux its systemd user service with lingering switched on
-     (`loginctl enable-linger`; the install itself runs as the account). **Root never runs, reads through or writes into anything the
+     copy: on a Mac the LaunchDaemon that runs as the account, on Linux its systemd user service with lingering switched on
+     (`loginctl enable-linger`; the install itself runs as the account). **Everything it runs as the account has no terminal**: a session of its
+     own, no standard input, its output passed through the admin's process with the control characters removed, so code the account can change never
+     gets the admin's terminal. **Root never runs, reads through or writes into anything the
      account can change** — the account runs the agents' code, so its folder is not trusted: root writes only the LaunchDaemon
      definitions into `/Library/LaunchDaemons` and calls `launchctl` / `loginctl`; everything of the account's own (its Pueue, its record,
      its user service) is done by the account's own program, started with `sudo -u`.
@@ -132,12 +133,16 @@ macOS (`pf`; its `user` keyword matches the account that owns the socket):
 ```
 # /etc/pf.anchors/charness.runner
 pass out quick proto tcp from any to <hub> port 22 user runner
-block return out quick proto { tcp udp } from any to { 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 } user runner
-# and, to keep jobs off the machine's own services: block return out quick on lo0 all user runner
+# if the machine's DNS resolver is a device on the LAN (the router), let the runner account reach it, before the block:
+# pass out quick proto { tcp udp } from any to <resolver> port 53 user runner
+block return out quick proto { tcp udp } from any to { 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fc00::/7 fe80::/10 } user runner
 ```
 
-Add `anchor "charness.runner"` and `load anchor "charness.runner" from "/etc/pf.anchors/charness.runner"` to `/etc/pf.conf`, then `sudo pfctl -f /etc/pf.conf` and
-`sudo pfctl -E`. Check it before relying on it: as the runner account (a job: `charness remote-run exec -- curl -m 3 http://<a device on your LAN>/`) a connection to a private address
+The IPv6 ranges (unique-local `fc00::/7`, link-local `fe80::/10`) matter as much as the IPv4 ones: a LAN device is as reachable over IPv6. `pf` takes `user` only on
+`tcp`/`udp` rules, hence `proto`; check the file first with `sudo pfctl -nf /etc/pf.anchors/charness.runner`. **Do not block `lo0`**: a job's own
+localhost — the dev server of a project, Metro, the web server a Playwright test starts — is what the e2e jobs run against. Add `anchor "charness.runner"`
+and `load anchor "charness.runner" from "/etc/pf.anchors/charness.runner"` to `/etc/pf.conf`, then `sudo pfctl -f /etc/pf.conf` and `sudo pfctl -E`. Check it
+before relying on it: as the runner account (a job: `charness remote-run exec -- curl -m 3 http://<a device on your LAN>/`) a connection to a private address
 must fail, and one to the charness host must still work.
 
 Linux (`nftables`; `meta skuid` matches the account that owns the socket):
@@ -148,13 +153,16 @@ table inet charness_runner {
   chain output {
     type filter hook output priority 0; policy accept;
     meta skuid "runner" ip daddr <hub> tcp dport 22 accept
+    # if /etc/resolv.conf names a resolver inside the private ranges (the router), the rejects below stop the runner account's DNS too: let it through first,
+    # meta skuid "runner" ip daddr <resolver> udp dport 53 accept
+    # meta skuid "runner" ip daddr <resolver> tcp dport 53 accept
     meta skuid "runner" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } reject
     meta skuid "runner" ip6 daddr { fc00::/7, fe80::/10 } reject
   }
 }
 ```
 
-The same check applies. A fence by account protects the network; it does not hide the machine's files from the runner account — see the homes warning above.
+The same check applies, and so does the DNS exception on a Mac (a resolver on the LAN is inside the blocked ranges); a local stub resolver (`127.0.0.53`) needs none. A fence by account protects the network; it does not hide the machine's files from the runner account — see the homes warning above.
 
 **iOS on a Mac LaunchDaemon.** Apple does not give the iOS Simulator to a daemon or to a process started as another user. The utility
 tries for real — it boots and deletes a Simulator when the service starts and when Xcode changes — and reports `ios` only if that

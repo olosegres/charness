@@ -7810,6 +7810,7 @@ const { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressT
   pairingMessagesPath: path.join(resolveDataDir(), 'runner-pairing-messages.json'),
   // What this instance has told about where the runners' links come from: once per new concern, pinned in General.
   linkNoticesPath: path.join(resolveDataDir(), 'runner-link-notices.json'),
+  cacheDir: runnersCacheDir,
   getGeneralKey: () => getOperatorGeneralKey(),
   pinMessage: (key, messageId) => pinMessageQuiet(key, messageId, { disableNotification: false }),
   sweepExpiredCodes: async (nowMs) => { await sweepExpiredPairings(runnersHub, nowMs); },

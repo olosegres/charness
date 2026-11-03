@@ -7,11 +7,16 @@
  * Test case: N/A — Charness has no Jira tracker.
  */
 
-import { describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { parseProbeOutput } from '../remoteRun/probe';
 import type { PairedRunner } from '../runners/hubRegistry';
-import { formatServiceRemovalNote, formatServiceRemovalUnknownNote, getServiceRemovalLines, getSystemServiceRemovalCommands, launchDaemonsDir } from '../runners/serviceRemoval';
+import { createPairing, redeemPairing } from '../runners/hubPairing';
+import { generateEd25519KeyPair } from '../runners/sshKeys';
+import { formatServiceRemovalNote, formatServiceRemovalUnknownNote, getServiceRemovalLines, getSystemServiceRemovalCommands, launchDaemonsDir, readServiceRemovalForRunner } from '../runners/serviceRemoval';
+import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { getServiceNames } from '../runnerUtility/serviceUnits';
 
@@ -106,5 +111,45 @@ describe('the note the CLI prints', () => {
         '',
       ].join('\n'),
     );
+  });
+});
+
+describe('the one reading behind every place that tells how to remove a service', () => {
+  let fixture: HubFixture;
+  let cacheDir: string;
+  beforeEach(() => {
+    fixture = createHubFixture();
+    cacheDir = path.join(fixture.root, 'cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+  });
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  async function pairMachine(overrides: Parameters<typeof createRedeemFixture>[0]): Promise<string> {
+    const hostKey = generateEd25519KeyPair('hub-host').publicKey;
+    const pairing = await createPairing(fixture.ctx, { host: 'host.example', port: 22, hostKey, label: 'x', nowMs: 1000, sshUser: 'hubuser' });
+    const reply = await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture({ workDir: getRunnerHomePaths('/Users/runner').workDir, ...overrides }).request, 1000);
+    if (!reply.ok) throw new Error(reply.reason);
+    return reply.name;
+  }
+
+  it('finds a runner by name or id and says how it is kept running and what the admin runs — by the registry\'s word, or by its last report when it has one', async () => {
+    const name = await pairMachine({ suggestedName: 'Mac', serviceKind: 'system-service' });
+    const found = readServiceRemovalForRunner(fixture.ctx, cacheDir, name);
+    assert.equal(found?.runner.name, name);
+    assert.equal(found?.kind, 'system-service');
+    assert.equal(found?.commands.length, 3);
+    assert.equal(readServiceRemovalForRunner(fixture.ctx, cacheDir, found?.runner.id ?? '')?.runner.name, name, 'by id too');
+    fs.writeFileSync(path.join(cacheDir, `${name}.probe.json`), JSON.stringify({ seenAtMs: 2000, text: 'os_name=macOS\nservice=user-service' }));
+    const reported = readServiceRemovalForRunner(fixture.ctx, cacheDir, name);
+    assert.deepEqual([reported?.kind, reported?.commands], ['user-service', []], 'the report is newer than the registry\'s word');
+  });
+
+  it('is nothing for a runner that is not paired — and needs nothing but the registry\'s list and the last report: a damaged pairing list or a missing cache folder is no obstacle', async () => {
+    const name = await pairMachine({ suggestedName: 'Mac', serviceKind: 'system-service' });
+    assert.equal(readServiceRemovalForRunner(fixture.ctx, cacheDir, 'nobody'), null);
+    fs.writeFileSync(path.join(fixture.ctx.dir, 'pending.json'), '{ not json');
+    assert.equal(readServiceRemovalForRunner(fixture.ctx, path.join(fixture.root, 'no-such-cache'), name)?.commands.length, 3);
   });
 });

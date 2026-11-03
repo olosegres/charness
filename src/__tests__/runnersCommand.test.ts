@@ -111,6 +111,7 @@ function buildPorts(): Parameters<typeof createRunners>[0] {
     hub: hubFixture.ctx,
     pairingMessagesPath,
     linkNoticesPath,
+    cacheDir,
     getGeneralKey: () => generalKey,
     pinMessage: async (_key, messageId) => {
       pinnedMessageIds.push(messageId);
