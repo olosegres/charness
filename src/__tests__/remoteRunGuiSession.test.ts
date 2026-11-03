@@ -210,10 +210,31 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     assert.equal(fs.readFileSync(path.join(jobDir, 'log'), 'utf8'), 'hello world\n');
   });
 
-  it('a job that does not need iOS runs its steps where it is, with no agent involved', async () => {
+  it('EVERY job of an always-on Mac runs its steps through the agent while the login session exists — a build that was not marked `--needs ios` included (it would crash in the System session)', async () => {
+    startAgent();
+    const treeDir = path.join(workDir, 'p', slug, 'tree');
+    const run = await runSourced(`run_step ${treeDir} 'echo "in $(basename "$PWD") through the agent"; exit 3'; echo "code=$step_code"`);
+    assert.equal(run.stdout.trim(), 'code=3', run.stderr);
+    assert.equal(fs.readFileSync(path.join(jobDir, 'log'), 'utf8'), 'in tree through the agent\n', 'the agent wrote it: the script ran nothing itself');
+    assert.deepEqual(fs.readdirSync(paths.guiRequestsDir), [], 'and left nothing behind');
+  });
+
+  it('with no session a job that does not need iOS still runs in the daemon, as it always did — only `--needs ios` is refused', async () => {
     const run = await runSourced(`run_step ${workDir} 'echo local'; echo "code=$step_code"`);
     assert.equal(run.stdout.trim(), 'local\ncode=0', run.stderr);
     assert.equal(fs.existsSync(paths.guiRequestsDir), false);
+    const stale = os.userInfo().uid;
+    writeGuiAgentStatus(paths, { pid: process.pid, uid: stale, account: accountName, startedAtMs: 1, beatAtMs: Date.now() - 25_000 });
+    const staleRun = await runSourced(`run_step ${workDir} 'echo still local'; echo "code=$step_code"`);
+    assert.equal(staleRun.stdout.trim(), 'still local\ncode=0', 'an agent whose beat is stale is no session');
+  });
+
+  it('a job that is not an always-on Mac\'s (a user service, run by hand) runs where it is even with an agent heartbeat lying about: it is already in a session', async () => {
+    startAgent();
+    fs.writeFileSync(path.join(stateDir, 'service'), 'user-service\n');
+    const run = await runSourced(`run_step ${workDir} 'echo local'; echo "code=$step_code"`);
+    assert.equal(run.stdout.trim(), 'local\ncode=0', run.stderr);
+    assert.deepEqual(fs.readdirSync(paths.guiRequestsDir), []);
   });
 
   it('SIGTERM to the job script (a kill) reaches the step through the agent: it ends with 143 and the script goes on', async () => {

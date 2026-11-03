@@ -190,8 +190,9 @@ after a crash, no `AbandonProcessGroup`, which ends what the agent itself left i
 first: `bootstrap` right after `bootout` fails with error 5), and says in a line, never as a failure, when there is none (it then loads at the account's next
 login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts would cut it).
 - **The protocol** (`<state>/gui/`): `agent.json` is the heartbeat (pid, uid, `startedAtMs`, `beatAtMs`, every 5 s; `runner.sh` calls it gone after 20 s or
-  when the pid is not alive; `stop` removes it at once). A job that needs iOS (`needs-ios` in its folder, written for `--needs ios`) on a runner whose
-  `service` is `system-service` runs each step (`run_step`) as `requests/<job>.<n>/`: `cwd`, `command`, `locale`, `log`, `env` (the job's `-e` lines), `owner`
+  when the pid is not alive; `stop` removes it at once). On a runner whose `service` is `system-service`, EVERY job's steps go through the agent while it beats
+  (`gui_step_uses_agent`; a job marked `needs-ios` — written for `--needs ios` — does even when it cannot, and is cut, never run in the System session), each step
+  (`run_step`) as `requests/<job>.<n>/`: `cwd`, `command`, `locale`, `log`, `env` (the job's `-e` lines), `owner`
   (the job script's pid), then `go`. The agent starts `bash -c <command>` in a process group of its own — the environment of an ssh exec (`readExecEnv`),
   `LC_ALL`, then the job's lines — with the job's log opened for append, and writes `exit` (a signal is 128 + its number; a folder that is gone is 126).
   `kill` ends the group (TERM, KILL after 10 s); a dead `owner` ends it too and removes the folder; a started request is never started twice (`started`).
@@ -199,7 +200,7 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   written by the agent: TERM, KILL after the runner's grace), because a step is a `setsid` group that a dying agent does not take along: without it an `xcodebuild`
   would run on in the tree while the job's lock went to the next job. An agent that starts ends the groups of the instance before it the same way
   (`reapStepsOfEarlierInstances`) and answers a waiting script 125; a vanished script's folder is removed with its group ended.
-- **No session** → `submit` / `lease` refuse the job with `ios build: needs a login of <account>`, a queued job refuses at its start, `probe` says
+- **No session** → a job that does not need iOS runs in the daemon as before; `submit` / `lease` refuse a `needs-ios` job with `ios build: needs a login of <account>`, a queued one refuses at its start, `probe` says
   `cap_ios=no` with the same words (ahead of the boot check's own answer). A runner kept running as a user service, or by hand, is in a session already: none of this applies.
 - **The link of an always-on Mac runs no Simulator check** (`checkIsLoginSessionAgentRunner`): the agent does, from the session where the Simulator can boot.
 - **It leaves** with the restart code when an update replaced the package and no step runs (launchd starts it again on the new program), and for good —

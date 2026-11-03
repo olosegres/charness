@@ -42,7 +42,8 @@ export const remoteRunUsage = `Usage:
                               --bg prints a job id and returns (long runs).
                               --send <path> sends a held-back secret-looking file (a pattern, relative to the project root) for this call only.
                               --needs with a paired runner that has it but is offline waits for it up to --runner-wait
-                              (default 15m, 0 = fail at once).
+                              (default 15m, 0 = fail at once). An iOS build or a Simulator test always carries --needs ios: an
+                              always-on Mac runs such a job in its login session and refuses it with the reason when there is none.
                               Options go BEFORE the command; a command that starts with a subcommand name goes after --
                               (--runner <name> exec … is exec on that runner; other options before a subcommand name are refused)
   charness remote-run runners                 the runners: online, hardware, load, what each can do

@@ -165,8 +165,9 @@ keep_awake_while() {
 
 # A Mac runner kept running by LaunchDaemons has no login session of its own, and Xcode's nested builds crash in the System session the daemons
 # run in. The runner account's LaunchAgent (`charness-runner gui-agent`, runnerUtility/guiAgent.ts) runs in the account's GUI session while there
-# is one; a job that needs iOS (`needs-ios` in its folder, written for `--needs ios`) runs its steps THERE, through request folders under
-# <state>/gui/requests/. Without the session the job is refused with the reason, and `probe` says the same: no auto-login, no guess.
+# is one; EVERY job's steps run THERE while it does (`gui_step_uses_agent`), through request folders under <state>/gui/requests/. A job that needs iOS
+# (`needs-ios` in its folder, written for `--needs ios`) is refused with the reason when there is none, and `probe` says the same of `ios`; any other job
+# then runs in the daemon as before. No auto-login, no guess.
 
 # Does this runner's work go through a login session's agent: a paired runner that is kept running by an always-on service?
 gui_session_expected() {
@@ -195,14 +196,21 @@ gui_refusal_text() {
   printf 'ios build: needs a login of %s' "$(id -un)"
 }
 
-# Does THIS job's work go through the agent: it needs iOS, and the runner is an always-on service?
-gui_needs_agent() {
+# Does THIS job need the login session — it needs iOS (`needs-ios`), and the runner is an always-on service? Such a job is refused without one.
+gui_job_needs_session() {
   [ -n "${jd:-}" ] && [ -f "$jd/needs-ios" ] && gui_session_expected
+}
+
+# Does THIS step go through the agent? On an always-on Mac EVERY job's steps do, while the login session exists (an iOS build is not always marked, and
+# the session is what the account's own jobs would see); a job that needs iOS does even when it cannot (its step is cut, never run in the System session);
+# any other job, with no session, runs in the daemon as it always did.
+gui_step_uses_agent() {
+  [ -n "${jd:-}" ] && gui_session_expected && { [ -f "$jd/needs-ios" ] || gui_agent_alive; }
 }
 
 # Refuse a job that needs iOS before it is queued when there is no session to run it in.
 refuse_without_gui_session() {
-  gui_needs_agent || return 0
+  gui_job_needs_session || return 0
   gui_agent_alive || die "$(gui_refusal_text)"
 }
 
@@ -1203,7 +1211,7 @@ describe_failed_step() {
 run_step() {
   local directory=$1
   local command_text=$2
-  if gui_needs_agent; then
+  if gui_step_uses_agent; then
     gui_run_step "$directory" "$command_text"
     return 0
   fi
@@ -1363,7 +1371,7 @@ cmd_job() {
   start_watchdog "$limit_sec"
 
   # The session may have ended while the job waited in the queue.
-  if gui_needs_agent && ! gui_agent_alive; then
+  if gui_job_needs_session && ! gui_agent_alive; then
     say "$(gui_refusal_text)"
     finish_job 125
   fi

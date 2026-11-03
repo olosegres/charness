@@ -50,6 +50,10 @@ Now the agent records each step's process group and the job script ends that gro
 Before, it waited for a device's boot with `simctl bootstatus -b`, which boots a device that is not booted — a device shut down between the list and the call stayed up with nobody to stop it — and it ran only inside the always-on Mac's login-session agent, so a Mac kept running by a user service or by `charness-runner run` was not silenced at all.
 Now it asks `bootstatus` without `-b`, and a link that runs in a login session silences its own Simulators the same way; what a Simulator booted from the System session looks like to it is not verified and is said so in the docs.
 
+**On an always-on Mac every job now runs in the runner account's login session while it exists — an iOS build no longer needs to be marked to avoid the System session's crash.**
+Before, only a job started with `--needs ios` went through the login-session agent, so an iOS build sent to the Mac with `--runner mac` and no `--needs ios` still ran in the System session and hit the nested-`xcodebuild` crash with no hint of why.
+Now every job's steps go through the agent while the session exists; with no session the jobs that do not need iOS run in the daemon as before, and `--needs ios` is refused with «ios build: needs a login of <account>». The agents' instructions and `charness remote-run --help` now say that an iOS build or a Simulator test always carries `--needs ios`.
+
 ## 3.9.1 — 2026-11-04
 
 **An @-mention of the AI account in a Jira issue it is already working on no longer makes it believe the issue is not handed to it, and no longer stops its build.**

@@ -75,6 +75,10 @@ describe('runRemoteRunCli', () => {
     assert.match(remoteRunUsage, /125 remote-run failed, 124 timeout, 130\/143\/129 interrupted/);
   });
 
+  it('the usage says an iOS build or a Simulator test always carries --needs ios (an always-on Mac refuses it without a login session, and runs it there with one)', () => {
+    assert.match(remoteRunUsage, /An iOS build or a Simulator test always carries --needs ios: an\s+always-on Mac runs such a job in its login session and refuses it with the reason when there is none/);
+  });
+
   it('without a runners.json: exit 125, naming where the file belongs', async () => {
     const { io, err } = createTestIo();
     assert.equal(await runRemoteRunCli(['runners'], io), 125);

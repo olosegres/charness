@@ -120,6 +120,7 @@ describe('the instructions built for a platform', () => {
     assert.match(bullet, /test suite, build, e2e run/);
     assert.match(bullet, /`charness remote-run runners` lists them and what each can do/);
     assert.match(bullet, /edit files only here/);
+    assert.match(bullet, /\(iOS: `--needs ios`\)/, 'an iOS build must carry --needs ios: without it an always-on Mac runs it where Xcode\'s nested builds crash');
     assert.match(bullet, /Longer than your tool timeout: `charness remote-run --bg <command>`.*`charness remote-run wait <id>` in the background/);
   });
 

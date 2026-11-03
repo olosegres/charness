@@ -176,9 +176,11 @@ The same check applies, and so does the DNS exception on a Mac (a resolver on th
 **iOS on an always-on Mac: the account's login session.** A LaunchDaemon lives in launchd's System session, and Apple gives neither the iOS Simulator
 nor Xcode's nested builds (a package build inside `expo-modules`, SIGTRAP at «Resolve Package Graph») to it. So the admin line also installs a small
 **LaunchAgent in the runner account's own login session** (`charness-runner gui-agent`; its definition is the account's own file in `~/Library/LaunchAgents`,
-which the admin line loads into the session when there is one and which loads by itself at every login of the account). A job started with `--needs ios`
-runs its steps — dependencies and command — THERE, as the same account with the same environment; everything else, and every job of a runner kept running
-as a user service or by hand (already in a session), runs where it always did. The agent also owns the Mac's Simulator check (it boots and deletes a
+which the admin line loads into the session when there is one and which loads by itself at every login of the account). **While the session exists EVERY
+job of an always-on Mac runs its steps — dependencies and command — THERE**, as the same account with the same environment (an iOS build that was not
+marked would otherwise crash in the System session without a hint); a runner kept running as a user service or by hand is in a session already and runs
+everything where it always did. Without the session, jobs that do not need iOS run in the daemon as before and only `--needs ios` is refused — so an iOS
+build or a Simulator test always passes `--needs ios` (the agents' instructions and `remote-run --help` say so). `remote-run exec` runs where the link does. The agent also owns the Mac's Simulator check (it boots and deletes a
 Simulator when it starts and when Xcode changes) and keeps every Simulator silent (below).
 - **No session, no iOS — honestly.** With nobody logged in as the account, `runners` says «ios: no — ios build: needs a login of runner», `--needs ios`
   finds no runner for it, and a job that was queued before the session ended is refused with the same words. Nothing logs in by itself: after a reboot,
