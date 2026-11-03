@@ -42,6 +42,10 @@ Now the runner silences each booted Simulator itself — its own volume state, s
 Before, every job of a Mac kept running by the admin line's LaunchDaemons ran in launchd's System session, where the nested `xcodebuild` of an Expo build crashed (SIGTRAP at «Resolve Package Graph»; the same build passed from a LaunchAgent in the account's session), so an iOS build needed a hand-made wrapper around every command — and the runner said «ios: no — needs the runner user's login session» whenever the Simulator would not boot.
 Now the admin line also loads a small LaunchAgent into the account's own login session (at once when there is one, at its next login otherwise): a job with `--needs ios` runs its dependencies and command there, as the same account with the same environment; with no session `charness remote-run runners` says «ios build: needs a login of runner», the job is refused with those words, and nothing logs in by itself — after a reboot, log in as the account once and switch back. Replacing a loaded service by pasting the admin line again waits for running jobs (it is refused until they are done), and removing the daemons removes the agent with them.
 
+**A crash or restart of the login session's agent no longer leaves an iOS build running beside the next job.**
+Before, a step the agent ran (an `xcodebuild`, say) was its own process group that a dying agent did not take along, so the job was cut with 125, its project lock went to the next job, and the orphaned build kept writing into the same tree and the job's log.
+Now the agent records each step's process group and the job script ends that group (TERM, KILL after 10 s) before it goes on; an agent that starts ends the groups of the instance before it.
+
 ## 3.9.1 — 2026-11-04
 
 **An @-mention of the AI account in a Jira issue it is already working on no longer makes it believe the issue is not handed to it, and no longer stops its build.**

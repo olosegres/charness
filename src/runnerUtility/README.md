@@ -184,7 +184,7 @@ never offered meanwhile. A record that cannot be written is logged by `run`, and
 
 An always-on Mac's link and queue are LaunchDaemons in the System session, where Xcode's nested builds crash and the Simulator will not boot. The admin
 line therefore also loads a LaunchAgent into the account's own GUI session (`com.charness.runner.gui.<hash>`, `LimitLoadToSessionType` Aqua, restarted only
-after a crash, no `AbandonProcessGroup` — its steps go down with it): `charness-runner gui-agent`. Its definition is the account's own file in
+after a crash, no `AbandonProcessGroup`, which ends what the agent itself left in its own group — NOT its steps, each a process group of its own): `charness-runner gui-agent`. Its definition is the account's own file in
 `~/Library/LaunchAgents` (written by `service system-step prepare`, run as the account; root never writes in the account's tree) — the root step only
 `launchctl bootstrap gui/<uid>`s it when `print gui/<uid>` says there is a session (booting a loaded one out and waiting until `print` no longer finds it
 first: `bootstrap` right after `bootout` fails with error 5), and says in a line, never as a failure, when there is none (it then loads at the account's next
@@ -195,7 +195,10 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   (the job script's pid), then `go`. The agent starts `bash -c <command>` in a process group of its own — the environment of an ssh exec (`readExecEnv`),
   `LC_ALL`, then the job's lines — with the job's log opened for append, and writes `exit` (a signal is 128 + its number; a folder that is gone is 126).
   `kill` ends the group (TERM, KILL after 10 s); a dead `owner` ends it too and removes the folder; a started request is never started twice (`started`).
-  The script cuts a step with 125 when the heartbeat is gone or another `startedAtMs` answers.
+  The script cuts a step with 125 when the heartbeat is gone or another `startedAtMs` answers — and ENDS its process group first (`pgid` in the request folder,
+  written by the agent: TERM, KILL after the runner's grace), because a step is a `setsid` group that a dying agent does not take along: without it an `xcodebuild`
+  would run on in the tree while the job's lock went to the next job. An agent that starts ends the groups of the instance before it the same way
+  (`reapStepsOfEarlierInstances`) and answers a waiting script 125; a vanished script's folder is removed with its group ended.
 - **No session** → `submit` / `lease` refuse the job with `ios build: needs a login of <account>`, a queued job refuses at its start, `probe` says
   `cap_ios=no` with the same words (ahead of the boot check's own answer). A runner kept running as a user service, or by hand, is in a session already: none of this applies.
 - **The link of an always-on Mac runs no Simulator check** (`checkIsLoginSessionAgentRunner`): the agent does, from the session where the Simulator can boot.

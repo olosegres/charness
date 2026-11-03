@@ -206,9 +206,26 @@ refuse_without_gui_session() {
   gui_agent_alive || die "$(gui_refusal_text)"
 }
 
+# End the process group of a step the agent started (its id is in the request folder's `pgid`): TERM, and KILL after the grace if anything is left. A step is
+# a process group of its own (`setsid`), so an agent that died did not take it down — and the job's lock is released next, to a job that would run in the
+# same tree beside an `xcodebuild` still writing into it.
+gui_end_step_group() {
+  local pgid waited=0
+  pgid=$(cat "$1/pgid" 2> /dev/null)
+  case $pgid in '' | *[!0-9]*) return 0 ;; esac
+  [ "$pgid" -gt 1 ] || return 0
+  kill -TERM -- "-$pgid" 2> /dev/null || return 0
+  while kill -0 -- "-$pgid" 2> /dev/null && [ "$waited" -lt $((kill_grace_sec * 5)) ]; do
+    nap 0.2
+    waited=$((waited + 1))
+  done
+  kill -KILL -- "-$pgid" 2> /dev/null
+  return 0
+}
+
 # One step of a job that needs iOS, run by the agent in the login session: a request folder it picks up (`go` last), the step's output appended to
 # the job's log by the agent itself, the exit code in `exit`. A kill is a `kill` file; the agent kills a step whose job script (`owner`) is gone.
-# The step is cut with 125 when the agent stops, or is another instance than the one asked.
+# The step is cut with 125 — and its process group ended here, see gui_end_step_group — when the agent stops, or is another instance than the one asked.
 gui_run_step() {
   local directory=$1
   local command_text=$2
@@ -235,6 +252,7 @@ gui_run_step() {
     looks=$((looks + 1))
     if [ $((looks % 5)) -eq 0 ] && { ! gui_agent_alive || [ "$(gui_agent_field startedAtMs)" != "$started_at" ]; }; then
       say "the login session's agent stopped while this step ran: the step was cut"
+      gui_end_step_group "$request"
       step_code=125
       rm -rf "$request"
       return 0

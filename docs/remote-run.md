@@ -183,8 +183,10 @@ Simulator when it starts and when Xcode changes) and keeps every Simulator silen
 - **No session, no iOS — honestly.** With nobody logged in as the account, `runners` says «ios: no — ios build: needs a login of runner», `--needs ios`
   finds no runner for it, and a job that was queued before the session ended is refused with the same words. Nothing logs in by itself: after a reboot,
   log in as the account once at the Mac and switch back to your own account (Fast User Switching keeps its session); the agent starts at that login.
-- **The agent stops mid-step** (the session ended, an update restarted it): the step ends with 125 and the log says so — never a wait for an answer that
-  will not come. A kill, a timeout or a vanished job script ends the step's whole process group (TERM, KILL after 10 s).
+- **The agent stops mid-step** (the session ended, it crashed, an update restarted it): the step ends with 125 and the log says so — never a wait for an
+  answer that will not come — and the step's whole process group is ended (TERM, KILL after 10 s) BEFORE the job goes on and its project lock is released,
+  so a build the agent left behind never runs on beside the next job; an agent that starts ends the groups of the one before it too. A kill, a timeout or a
+  vanished job script ends the step's process group the same way.
 - **Replacing a loaded service waits for the jobs.** Pasting a fresh admin line over an installed one boots the loaded daemons (and the agent) out and in
   again — `launchctl bootout`, wait until `print` no longer finds them, `bootstrap` (right after a bootout it fails with error 5) — and is refused,
   before anything is touched, while the queue is running a job: let it finish or `charness remote-run kill <id>` it, then paste again.

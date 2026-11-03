@@ -100,8 +100,9 @@ export interface LaunchdJobSpec {
   niceness: number | null;
   /**
    * The login session's agent: a LaunchAgent that exists only in the account's GUI session (`LimitLoadToSessionType` Aqua), comes back only after a crash
-   * (`KeepAlive` on an unsuccessful exit: a clean exit is «done», and an update's restart exits with the restart code) and takes its steps down with it
-   * (no `AbandonProcessGroup`: a step nobody can wait for any more must not run on).
+   * (`KeepAlive` on an unsuccessful exit: a clean exit is «done», and an update's restart exits with the restart code). No `AbandonProcessGroup`, so launchd
+   * ends what the agent itself left in its own process group (the Simulator silencer's `xcrun`) — but NOT its steps: each is a process group of its own
+   * (`setsid`), which launchd does not reach. A step an agent leaves behind is ended by its job script, or by the next agent (`guiAgent.ts`: the group id in the request folder).
    */
   isGuiAgent?: boolean;
 }

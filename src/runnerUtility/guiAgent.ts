@@ -12,13 +12,17 @@ import type { RunnerHomePaths } from './runnerHome';
  * LaunchAgent in `gui/<uid>` runs this program while the account has a login session; a job that needs iOS runs its steps through it.
  *
  *   `runner.sh`  (job script, System session)       writes <state>/gui/requests/<id>/ — cwd, command, locale, log, env, owner, then `go` last
- *   this agent   (account's GUI session)            starts `bash -c <command>` there, its output appended to the job's log, writes `exit`
+ *   this agent   (account's GUI session)            starts `bash -c <command>` there as the leader of a process group of its own, writes that group's id
+ *                                                   (`pgid`), its output appended to the job's log, and `exit` when it ends
  *   a kill       the script touches `kill`           the agent ends the step's process group (TERM, KILL after the runner's grace)
  *   a lost owner the script is gone (SIGKILLed)      the agent ends the step too: nothing runs on for a job nobody waits for
  *
  * The agent beats into `agent.json` every few seconds (`runner.sh` reads it: no beat for {@link guiAgentStaleAfterMs} = no agent = no session, and
- * says so instead of queueing into nothing). A step is the agent's child, so an agent that stops cuts it (launchd ends its process group), and the
- * script sees the heartbeat go, or another `startedAtMs`, and cuts the step with 125. No auto-login: the session is the owner's to open once.
+ * says so instead of queueing into nothing). A step is NOT taken down with the agent: it is a process group of its own (`detached` is `setsid`), which
+ * neither a crash of the agent nor launchd ending the agent's own group reaches — so the group id is in the request folder, and whoever cuts a step ends
+ * its group: the script, when it cuts the step with 125 because the heartbeat is gone or another instance answers (TERM, KILL after the grace), and an
+ * agent that starts and finds the groups of an earlier instance (`reapStepsOfEarlierInstances`). Without that a dying agent would orphan an `xcodebuild`
+ * while the script released the project's lock to the next job. No auto-login: the session is the owner's to open once.
  */
 
 /** How often the agent beats, and how long without a beat is «gone» — `gui_agent_stale_sec` in `remoteRun/runner.sh` is the same number (a test pins both). */
@@ -30,7 +34,9 @@ export const guiAgentServiceCheckIntervalMs = 30 * 1000;
 /** After SIGTERM a step gets this long before SIGKILL: `kill_grace_sec` of `runner.sh`. */
 const stepKillGraceMs = 10 * 1000;
 const statusFileMode = 0o644;
-const requestFileNames = { cwd: 'cwd', command: 'command', locale: 'locale', log: 'log', env: 'env', owner: 'owner', go: 'go', started: 'started', kill: 'kill', exit: 'exit' } as const;
+const requestFileNames = { cwd: 'cwd', command: 'command', locale: 'locale', log: 'log', env: 'env', owner: 'owner', go: 'go', started: 'started', pgid: 'pgid', kill: 'kill', exit: 'exit' } as const;
+/** The exit code of a step that was cut (its agent was replaced, its script went): what `runner.sh` says for a cut step. */
+const cutStepExitCode = 125;
 /** `cd "$directory" || exit 126` of `run_step`: a step whose folder is gone ends with the shell's code for it. */
 const cannotStartExitCode = 126;
 const signalExitCodeBase = 128;
@@ -123,6 +129,7 @@ function readStepRequest(requestDir: string): StepRequest | null {
   };
 }
 
+/** Start a step as the LEADER of a process group of its own (its pgid is its pid): the group is what a cut ends. */
 export type StepStarter = (request: { directory: string; command: string; env: NodeJS.ProcessEnv; logFd: number }) => ChildProcess;
 
 export interface GuiAgentDeps {
@@ -133,6 +140,8 @@ export interface GuiAgentDeps {
   startStep: StepStarter;
   /** SIGTERM / SIGKILL to a step's whole process group. */
   signalGroup: (pid: number, signal: NodeJS.Signals) => void;
+  /** Is any process left in the group? */
+  isGroupAlive: (pgid: number) => boolean;
   pid: number;
   uid: number;
   account: string;
@@ -150,6 +159,14 @@ export function createGuiAgentDeps(readEnv: () => NodeJS.ProcessEnv): GuiAgentDe
         process.kill(-pid, signal);
       } catch {
         /* the group is gone already */
+      }
+    },
+    isGroupAlive: (pgid) => {
+      try {
+        process.kill(-pgid, 0);
+        return true;
+      } catch (error) {
+        return error instanceof Error && 'code' in error && error.code === 'EPERM';
       }
     },
     pid: process.pid,
@@ -185,6 +202,8 @@ function describeExit(code: number | null, signal: NodeJS.Signals | null): numbe
 export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiAgent {
   const startedAtMs = deps.now();
   const running = new Map<string, RunningStep>();
+  /** Process groups of steps nobody runs any more (an earlier agent's, a vanished script's), asked to end and not yet gone: killed after the grace. */
+  const groupsEnding: Array<{ pgid: number; terminatedAtMs: number }> = [];
   let lastBeatAtMs = 0;
 
   const writeExit = (requestDir: string, code: number): void => {
@@ -196,6 +215,54 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
     writeGuiAgentStatus(paths, { pid: deps.pid, uid: deps.uid, account: deps.account, startedAtMs, beatAtMs: lastBeatAtMs });
   };
 
+  const readPgid = (requestDir: string): number | null => {
+    const text = readTextFile(path.join(requestDir, requestFileNames.pgid))?.trim() ?? '';
+    // 1 is not a group a step can lead (it would be everything): a damaged file never reaches it.
+    return /^\d+$/.test(text) && Number(text) > 1 ? Number(text) : null;
+  };
+
+  /** End the process group of a step that is not (or is no longer) this agent's own to run: TERM now, KILL after the grace if anything is left. */
+  const endGroupOfOrphan = (requestDir: string): void => {
+    const pgid = readPgid(requestDir);
+    if (pgid === null || groupsEnding.some((entry) => entry.pgid === pgid)) return;
+    deps.signalGroup(pgid, 'SIGTERM');
+    groupsEnding.push({ pgid, terminatedAtMs: deps.now() });
+  };
+
+  const finishEndingGroups = (): void => {
+    for (let index = groupsEnding.length - 1; index >= 0; index -= 1) {
+      const { pgid, terminatedAtMs } = groupsEnding[index];
+      if (!deps.isGroupAlive(pgid)) groupsEnding.splice(index, 1);
+      else if (deps.now() - terminatedAtMs >= deps.killGraceMs) {
+        deps.signalGroup(pgid, 'SIGKILL');
+        groupsEnding.splice(index, 1);
+      }
+    }
+  };
+
+  /**
+   * An agent that starts finds the steps of the one before it: it was replaced or crashed under them, and a step is a process group of its own that nothing
+   * took down. Every step that never wrote its `exit` has its group ended; a script that still waits is answered 125 (it cuts the step itself when it notices
+   * the new instance — the same code, the same group), a script that is gone leaves its folder to be removed.
+   */
+  const reapStepsOfEarlierInstances = (): void => {
+    let ids: string[] = [];
+    try {
+      ids = fs.readdirSync(paths.guiRequestsDir);
+    } catch {
+      return;
+    }
+    for (const id of ids) {
+      const requestDir = path.join(paths.guiRequestsDir, id);
+      if (fs.existsSync(path.join(requestDir, requestFileNames.exit)) || !fs.existsSync(path.join(requestDir, requestFileNames.started))) continue;
+      endGroupOfOrphan(requestDir);
+      const ownerText = readTextFile(path.join(requestDir, requestFileNames.owner))?.trim() ?? '';
+      const isOwnerAlive = /^\d+$/.test(ownerText) && deps.isProcessAlive(Number(ownerText));
+      if (isOwnerAlive) writeExit(requestDir, cutStepExitCode);
+      else fs.rmSync(requestDir, { recursive: true, force: true });
+    }
+  };
+
   const startRequest = (id: string, requestDir: string, request: StepRequest): void => {
     fs.writeFileSync(path.join(requestDir, requestFileNames.started), `${deps.now()}\n`);
     const env: NodeJS.ProcessEnv = { ...deps.readEnv(), ...(request.locale === '' ? {} : { LC_ALL: request.locale }), ...parseJobEnvLines(request.jobEnvText) };
@@ -205,6 +272,7 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
       const child = deps.startStep({ directory: request.directory, command: request.command, env, logFd });
       const step: RunningStep = { child, terminatedAtMs: null, isKilled: false };
       running.set(id, step);
+      if (child.pid !== undefined) writeTextFileAtomically(path.join(requestDir, requestFileNames.pgid), `${child.pid}\n`, 0o644);
       child.once('error', () => {
         if (running.get(id) === step) running.delete(id);
         writeExit(requestDir, cannotStartExitCode);
@@ -243,17 +311,22 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
       if (isOwnerGone || fs.existsSync(path.join(requestDir, requestFileNames.kill)) || step.terminatedAtMs !== null) endStep(step);
       return;
     }
-    // Not running: a script that is gone leaves nothing behind; a request already started (by an earlier agent) is never started again.
+    // Not running: a script that is gone leaves nothing behind — its step's group, if an earlier agent started one, is ended — and a request already
+    // started (by an earlier agent) is never started again.
     if (isOwnerGone) {
+      if (!fs.existsSync(path.join(requestDir, requestFileNames.exit))) endGroupOfOrphan(requestDir);
       fs.rmSync(requestDir, { recursive: true, force: true });
       return;
     }
     if (!fs.existsSync(path.join(requestDir, requestFileNames.started)) && !fs.existsSync(path.join(requestDir, requestFileNames.exit))) startRequest(id, requestDir, request);
   };
 
+  reapStepsOfEarlierInstances();
+
   return {
     tick: () => {
       if (deps.now() - lastBeatAtMs >= guiAgentBeatIntervalMs) beat();
+      finishEndingGroups();
       let ids: string[] = [];
       try {
         ids = fs.readdirSync(paths.guiRequestsDir);

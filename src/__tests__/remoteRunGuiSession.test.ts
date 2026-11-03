@@ -13,7 +13,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createGuiAgent, createGuiAgentDeps, writeGuiAgentStatus, type GuiAgent } from '../runnerUtility/guiAgent';
+import { checkIsProcessAlive, createGuiAgent, createGuiAgentDeps, writeGuiAgentStatus, type GuiAgent } from '../runnerUtility/guiAgent';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { jobId, scriptPath, slug } from './remoteRunRunnerScriptKit';
 
@@ -173,6 +173,23 @@ describe('the probe of an always-on Mac', () => {
   });
 });
 
+/** A step command that records the pid of its shell (the leader of its group) and of a `sleep` in the group, then waits: what «the group must be gone» is asserted on. */
+function createGroupRecordingStep(pidFile: string, options: { isStubborn?: boolean } = {}): string {
+  return `${options.isStubborn === true ? "trap \"\" TERM; " : ''}sleep 300 & echo \"$$ $!\" > ${pidFile}; wait`;
+}
+
+async function readGroupPids(pidFile: string): Promise<number[]> {
+  const deadline = Date.now() + waitBoundMs;
+  while (!(fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim().includes(' ')) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+  return fs.readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
+}
+
+async function waitForProcessesGone(pids: number[]): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (pids.some((pid) => checkIsProcessAlive(pid)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(pids.filter((pid) => checkIsProcessAlive(pid)), [], 'the step\'s process group is gone');
+}
+
 describe('a step of a job that needs iOS, run through the agent', () => {
   it('runs in the agent: its exit code comes back, its output is in the job\'s log, and nothing is left in the request folders', async () => {
     markNeedsIos();
@@ -208,26 +225,43 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     assert.equal(run.stdout.trim(), 'code=143', run.stderr);
   });
 
-  it('an agent that is gone under a running step (the process died: no exit file will ever come) cuts it with 125 and says so', async () => {
+  it('an agent that is gone under a running step (the process died: no exit file will ever come) cuts it with 125, says so — and the step\'s whole process group is GONE before the job goes on', async () => {
     markNeedsIos();
     startAgent();
-    const marker = path.join(root, 'cut.started');
-    // The agent process dying: nothing looks at the folder any more and its heartbeat is gone (its step, an orphan, is ended by the test's cleanup).
+    const pidFile = path.join(root, 'cut.pids');
+    // The agent process dying: nothing looks at the folder any more and its heartbeat is gone. Its step, a process group of its own, is still running.
     setTimeout(() => { if (ticker !== null) clearInterval(ticker); fs.rmSync(paths.guiAgentStatus, { force: true }); }, 1500);
-    const run = await runSourced(`run_step ${workDir} 'touch ${marker}; exec sleep 300'; echo "code=$step_code"`);
+    const running = runSourced(`run_step ${workDir} '${createGroupRecordingStep(pidFile)}'; echo "code=$step_code"`);
+    const pids = await readGroupPids(pidFile);
+    assert.ok(pids.every((pid) => checkIsProcessAlive(pid)), 'the step is running');
+    const run = await running;
     assert.deepEqual(run.stdout.trim().split('\n'), ["remote-run: the login session's agent stopped while this step ran: the step was cut", 'code=125'], run.stderr);
+    for (const pid of pids) assert.equal(checkIsProcessAlive(pid), false, `pid ${pid} is gone by the time the script goes on (the lock is released next)`);
   });
 
-  it('an agent that came back as ANOTHER instance (a restart) has lost the step: it is cut with 125, never waited for', async () => {
+  it('a step that ignores TERM is killed after the grace — the script never goes on with an orphan running in the tree', async () => {
+    markNeedsIos();
+    startAgent();
+    const pidFile = path.join(root, 'stubborn.pids');
+    setTimeout(() => { if (ticker !== null) clearInterval(ticker); fs.rmSync(paths.guiAgentStatus, { force: true }); }, 1500);
+    const cutAt = Date.now() + 1500;
+    const run = await runSourced(`kill_grace_sec=1; run_step ${workDir} '${createGroupRecordingStep(pidFile, { isStubborn: true })}'; echo "code=$step_code"`);
+    assert.equal(run.stdout.trim().split('\n').at(-1), 'code=125', run.stderr);
+    assert.ok(Date.now() - cutAt >= 900, 'the grace was given before the kill');
+    for (const pid of await readGroupPids(pidFile)) assert.equal(checkIsProcessAlive(pid), false, `pid ${pid}`);
+  });
+
+  it('an agent that came back as ANOTHER instance (a restart) has lost the step: it is cut with 125, never waited for — and its group is ended', async () => {
     markNeedsIos();
     const first = startAgent();
-    const marker = path.join(root, 'restarted.started');
+    const pidFile = path.join(root, 'restarted.pids');
     setTimeout(() => {
       writeGuiAgentStatus(paths, { pid: process.pid, uid: os.userInfo().uid, account: accountName, startedAtMs: first.getStartedAtMs() + 123_456, beatAtMs: Date.now() });
     }, 1500);
-    const run = await runSourced(`run_step ${workDir} 'touch ${marker}; exec sleep 300'; echo "code=$step_code"`);
+    const run = await runSourced(`run_step ${workDir} '${createGroupRecordingStep(pidFile)}'; echo "code=$step_code"`);
     assert.equal(run.stdout.trim().split('\n').at(-1), 'code=125', run.stderr);
     assert.match(run.stdout, /the login session's agent stopped while this step ran/);
+    await waitForProcessesGone(await readGroupPids(pidFile));
   });
 
   it('a step the agent cannot start (its folder is gone) comes back as 126', async () => {
