@@ -1042,8 +1042,11 @@ watch_lease() {
 
 # The time of the latest heartbeat, replaced atomically: a plain `> beat` truncates the file first, and a watcher that read it in
 # that instant got an empty string, whose arithmetic is a syntax error that ended the watcher without a verdict.
+# SILENT: the watcher's end removes the directory while the reader may be between its `date` and its `mv`, and that `mv: cannot stat …` came out on the
+# caller's stderr AFTER the exit marker of `exec` — the marker must be the last thing there (a flake of the exec test under load). A beat that cannot be
+# written for a directory that is gone is nothing to say.
 write_lease_beat() {
-  date +%s > "$lease_state_dir/beat.new" && mv -f "$lease_state_dir/beat.new" "$lease_state_dir/beat"
+  { date +%s > "$lease_state_dir/beat.new" && mv -f "$lease_state_dir/beat.new" "$lease_state_dir/beat"; } 2> /dev/null
 }
 
 end_lease_watch() {

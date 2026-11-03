@@ -442,6 +442,16 @@ describe('the lease (through `exec`, which uses the same watcher as a foreground
     assert.equal(charmap, 'UTF-8');
   });
 
+  it('a heartbeat written into a lease directory that has just been removed (the watcher ended while the reader was between its two steps) says nothing — nothing may follow the exit marker on stderr', () => {
+    const result = spawnSync('bash', ['-c', `source ${scriptPath}; lease_state_dir=${path.join(workRoot, 'removed-already', 'lease.1')}; write_lease_beat; echo "status=$?"`], { encoding: 'utf8' });
+    assert.equal(result.stderr, '', 'no «mv: cannot stat …», no «No such file or directory»');
+    assert.match(result.stdout, /^status=[1-9]/, 'the failure itself is still a failure for the caller');
+    fs.mkdirSync(path.join(workRoot, 'lease-live'));
+    const written = spawnSync('bash', ['-c', `source ${scriptPath}; lease_state_dir=${path.join(workRoot, 'lease-live')}; write_lease_beat; echo "status=$?"`], { encoding: 'utf8' });
+    assert.equal(written.stdout.trim(), 'status=0');
+    assert.match(fs.readFileSync(path.join(workRoot, 'lease-live', 'beat'), 'utf8').trim(), /^\d+$/, 'a live directory still gets its beat');
+  });
+
   it('a job that asks for another locale still gets it: `-e LC_ALL=…` is applied after the script\'s choice', () => {
     const text = fs.readFileSync(scriptPath, 'utf8');
     const step = /^run_step\(\) \{[^]*?\n\}/m.exec(text)?.[0] ?? '';
