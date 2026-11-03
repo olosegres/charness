@@ -23,6 +23,7 @@ import {
   buildPairedText,
   buildPairingMessageParts,
   buildRemovalOutcomeText,
+  buildServiceRemovalText,
   buildRemoveConfirmation,
   buildRunnerActionCallback,
   buildRunnersScreen,
@@ -80,6 +81,31 @@ const probeText = [
 function createEntry(overrides: Partial<RunnerScreenEntry> = {}): RunnerScreenEntry {
   return { runner: createRunner(), isOnline: true, lastSeenMs: 2_000, probe: parseProbeOutput(probeText), ...overrides };
 }
+
+describe('runnersScreenPlan: what is told after removing an always-on service', () => {
+  const commands = ['sudo launchctl bootout system/com.charness.runner.0a1b2c3d', 'sudo rm /Library/LaunchDaemons/com.charness.runner.0a1b2c3d.plist'];
+
+  it('says that the service keeps running until an admin there removes it, gives the commands one per line and says where they come from', () => {
+    assert.equal(
+      buildServiceRemovalText('mac', commands, t),
+      `⚠️ mac runs as an always-on service on that machine, and only an admin there can stop it (nothing of charness runs as root). It keeps running until then. As an admin on that machine, run:\n${commands.join('\n')}\nThese commands come from this charness host, not from the machine itself.`,
+    );
+  });
+
+  it('in every language names the machine, carries every command whole and leaves no placeholder behind', () => {
+    const english = buildServiceRemovalText('mac', commands, t);
+    for (const locale of localeCodes) {
+      runWithLocale(locale, () => {
+        const text = buildServiceRemovalText('mac', commands, t);
+        assert.ok(text.includes('mac'), `${locale}: the machine`);
+        for (const command of commands) assert.ok(text.split('\n').includes(command), `${locale}: «${command}» on a line of its own`);
+        assert.doesNotMatch(text, /\{[a-z]+\}/, `${locale}: no placeholder is left`);
+        assert.ok(text.length < 1500, `${locale}: ${text.length} characters`);
+        if (locale !== 'en') assert.notEqual(text, english, `${locale}: translated, not the English fallback`);
+      });
+    }
+  });
+});
 
 describe('runnersScreenPlan: where a machine\'s link comes from', () => {
   const screenOf = (entry: RunnerScreenEntry): string => buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text;

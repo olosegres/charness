@@ -1195,6 +1195,7 @@ export const frDict: Record<string, string> = {
   'runners.removedJobsStoppedText': '✅ {name} retiré. Sa clé est supprimée et les tâches qu’il exécutait sont arrêtées.',
   'runners.removedJobsOfflineText': '✅ {name} retiré. Sa clé est supprimée. La machine est hors ligne : ses tâches n’ont donc pas été arrêtées d’ici, elle les arrête elle-même quand sa clé est refusée depuis {hours} h.',
   'runners.removedJobsFailedText': '✅ {name} retiré. Sa clé est supprimée, mais les tâches qu’il exécutait n’ont pas pu être arrêtées d’ici : la machine les arrête elle-même quand sa clé est refusée depuis {hours} h.',
+  'runners.removedServiceText': '⚠️ {name} tourne comme service permanent sur cette machine, et seul un admin de là-bas peut l’arrêter (rien de charness ne tourne en root). Il continue de tourner jusque-là. En tant qu’admin sur cette machine, exécutez :\n{commands}\nCes commandes viennent de cet hôte charness, pas de la machine elle-même.',
   'runners.removeConfirmText': 'Retirer {name} ? Sa clé est supprimée et il ne se connecte plus. Les jobs qui y tournent sont arrêtés.',
   'runners.removeConfirmButton': 'Retirer',
   'runners.removeCancelButton': 'Annuler',

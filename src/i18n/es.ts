@@ -1195,6 +1195,7 @@ export const esDict: Record<string, string> = {
   'runners.removedJobsStoppedText': '✅ {name} quitado. Su clave está borrada y los trabajos que ejecutaba están detenidos.',
   'runners.removedJobsOfflineText': '✅ {name} quitado. Su clave está borrada. La máquina está sin conexión, así que sus trabajos no se detuvieron desde aquí: ella misma los detiene cuando su clave lleva {hours} h siendo rechazada.',
   'runners.removedJobsFailedText': '✅ {name} quitado. Su clave está borrada, pero los trabajos que ejecutaba no se pudieron detener desde aquí: la máquina los detiene ella misma cuando su clave lleva {hours} h siendo rechazada.',
+  'runners.removedServiceText': '⚠️ {name} se ejecuta como servicio permanente en esa máquina y solo un admin de allí puede detenerlo (nada de charness corre como root). Seguirá funcionando hasta entonces. Como admin en esa máquina, ejecuta:\n{commands}\nEstos comandos vienen de este host de charness, no de la propia máquina.',
   'runners.removeConfirmText': '¿Quitar {name}? Su clave se borra y deja de conectarse. Los trabajos que corren allí se detienen.',
   'runners.removeConfirmButton': 'Quitar',
   'runners.removeCancelButton': 'Cancelar',

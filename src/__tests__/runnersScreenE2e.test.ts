@@ -535,7 +535,8 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     await general.tapAndAwaitAnswer(list, 'rnr_pair');
     const fourth = await general.waitForMessage('the fourth pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
     const fourthPlain = await general.waitForMessage('the fourth pairing\'s plain message', (message) => message.text.startsWith('② Without admin rights') && message.message_id > fourth.message_id);
-    assert.equal(readPairingStore().length, 2, 'both messages are followed');
+    // The bot records a message just after Telegram has it: the record is read once both are in it.
+    await waitUntil(() => readPairingStore().length === 2, 'both messages to be followed', 10_000);
     // The person deletes the admin message by hand (the fake Bot API then answers «message to edit not found» to an edit of it, like Telegram).
     fourth.isDeleted = true;
     expireOpenPairings();

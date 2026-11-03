@@ -29,6 +29,7 @@ import {
 import { HubRegistryError, readClosedCodes, readPairedFile, readPendingFile } from '../../../runners/hubRegistry';
 import { pairingLifetimeMinutes } from '../../../runners/pairingTiming';
 import { removeRunnerAndEndItsWork } from '../../../runners/runnerRemoval';
+import { getServiceRemovalLines } from '../../../runners/serviceRemoval';
 import type { RunnersOverview } from '../../../runners/runnersOverview';
 import {
   buildAddressStep,
@@ -39,6 +40,7 @@ import {
   buildPairingMessageParts,
   buildRemoveConfirmation,
   buildRemovalOutcomeText,
+  buildServiceRemovalText,
   buildRunnersScreen,
   parseRunnersCallback,
   runnerActionCallbackRe,
@@ -344,6 +346,12 @@ export function createRunners(ports: RunnersPorts) {
     return true;
   }
 
+  /** The admin's commands that remove the always-on service of runner `runnerId`, by what the hub knows of it now; `[]` when it runs as no such service. */
+  async function readServiceRemovalCommands(runnerId: string): Promise<string[]> {
+    const entry = (await ports.readOverview(now())).entries.find((candidate) => candidate.runner.id === runnerId);
+    return entry === undefined ? [] : getServiceRemovalLines(entry.runner, entry.probe);
+  }
+
   async function handleRunnerAction(ctx: Context, key: SessionKey, messageId: number | null, callback: Extract<RunnersCallback, { kind: 'runner' }>): Promise<void> {
     let paired: ReturnType<typeof readPairedFile>;
     try {
@@ -378,8 +386,14 @@ export function createRunners(ports: RunnersPorts) {
         // long is «too old». What happened — including whether the jobs were stopped — is told in a message of its own once it is known.
         await answerCallbackQuerySafely(ctx);
         try {
+          // Read BEFORE the removal, which deletes the machine's last report: the always-on service stays on the machine, and the commands that
+          // remove it are made here, by the hub — not by the machine's own program, which the agents can change.
+          const serviceCommands = await readServiceRemovalCommands(runner.id);
           const removal = await removeRunnerAndEndItsWork(hub, runner.id, now());
-          if (removal !== null) await replyToThread(key, buildRemovalOutcomeText(removal.runner.name, removal.jobs, t));
+          if (removal !== null) {
+            await replyToThread(key, buildRemovalOutcomeText(removal.runner.name, removal.jobs, t));
+            if (serviceCommands.length > 0) await replyToThread(key, buildServiceRemovalText(removal.runner.name, serviceCommands, t));
+          }
         } catch (error) {
           await reportRegistryError(key, error);
           return;

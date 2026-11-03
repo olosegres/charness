@@ -1239,6 +1239,7 @@ export const enDict: Record<string, string> = {
   'runners.removedJobsStoppedText': '✅ {name} removed. Its key is deleted and the jobs it was running are stopped.',
   'runners.removedJobsOfflineText': '✅ {name} removed. Its key is deleted. The machine is offline, so its jobs were not stopped from here: it stops them itself once its key has been refused for {hours} h.',
   'runners.removedJobsFailedText': '✅ {name} removed. Its key is deleted, but the jobs it was running could not be stopped from here: the machine stops them itself once its key has been refused for {hours} h.',
+  'runners.removedServiceText': '⚠️ {name} runs as an always-on service on that machine, and only an admin there can stop it (nothing of charness runs as root). It keeps running until then. As an admin on that machine, run:\n{commands}\nThese commands come from this charness host, not from the machine itself.',
   'runners.removeConfirmText': 'Remove {name}? Its key is deleted and it stops connecting. Jobs running there are killed.',
   'runners.removeConfirmButton': 'Remove',
   'runners.removeCancelButton': 'Cancel',

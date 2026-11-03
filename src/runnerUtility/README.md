@@ -116,6 +116,11 @@ lines come through as plain lines — a terminal-less child draws no dots.) Root
   (`sudo -u <account> -H env XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user is-system-running`, once a second, 20 tries), then the plain
   `service install` runs AS the account the same way. The result is the ordinary user service — the account removes it itself.
 
+**Removing an always-on service is not this program's to say.** An admin stops the two LaunchDaemons with plain `launchctl` / `rm`, and the commands come
+from the hub (`charness runners service-removal <name>`, `charness runners remove`, the Remove button of `/runners`; `src/runners/serviceRemoval.ts`) —
+`service uninstall` and `unpair` on the runner print only a pointer to them (`systemServiceRemovalPointer`) and, once the daemons are gone, forget the
+service's record. The agents run as this account and can change what this program prints, so a command it printed could be anything.
+
 **What the admin line trusts.** Pasting it runs code from the charness host as root on this machine (see `src/runners/README.md`); the plain
 line trusts the host only with the runner account. A Mac's launcher and the daemons' `PATH` carry the Node the line picked: the shell
 chooses it (`renderNodePickSteps`: `sudo`'s own `node`, then `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`; never one whose REAL path is under a home

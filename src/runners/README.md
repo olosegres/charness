@@ -156,6 +156,16 @@ puts it in parentheses on the machine's row and the `/runners` screen under its 
 `…FightNote`, every language). What it cannot see: two machines that share one address (one network behind one NAT show one source), and
 a source that is unknown (no `SSH_CLIENT`, a status file an older gate wrote) never counts as a change.
 
+**Removing an always-on service** (`serviceRemoval.ts`). Removing a runner here leaves its two LaunchDaemons running on the machine until an admin
+removes them (nothing of charness runs as root there). The commands — `sudo launchctl bootout system/<link label>`, the same for the queue's label,
+`sudo rm /Library/LaunchDaemons/<link label>.plist /Library/LaunchDaemons/<queue label>.plist` — are made by the HUB, not by the account's own program
+(the agents run as that account and can change what it prints, and an admin would run the line with `sudo`): the labels are a hash in hex of the
+state folder (`getServiceNames`), which the hub gets from the work folder the runner reported at pairing (`getRunnerHomePaths(home).workDir`; one that
+is not a state folder's own gets no commands, and a note on how to find the daemons by hand). They are shown where the operator removes a runner —
+`charness runners remove` prints them after the removal, the `/runners` Remove button answers with a second message (`runners.removedServiceText`, every
+language) — and by `charness runners service-removal <name>` for a runner that stays. The account's `charness-runner service uninstall` / `unpair` print
+a POINTER to those, never a command.
+
 **`runner-proxy <socket>`** is the `ProxyCommand` of the ssh calls: it joins ssh's stdio to the socket; nothing listening → «the runner
 is not connected» on stderr and exit 255 (ssh's own «connection failed»).
 

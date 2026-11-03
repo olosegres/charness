@@ -18,7 +18,7 @@ import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { checkIsRunnerPaused, setRunnerPaused } from './runnerFlags';
 import { formatSystemStepAnswer } from './serviceCommon';
 import { checkCanReadAsSelf, findReadableHomes, formatForeignNodeWarning, formatReadableHomesWarning, listSubfolders } from './homeFolders';
-import { createServiceDeps, formatSystemServiceRemoval, installService, readServiceKind, runSystemStep, uninstallService, parseServiceCommand, type ServiceDeps } from './serviceManager';
+import { createServiceDeps, installService, readServiceKind, runSystemStep, uninstallService, parseServiceCommand, systemServiceRemovalPointer, type ServiceDeps } from './serviceManager';
 import { readPairingInProgress, readRunnerConfig, readRunnerStatus, removePairingInProgress, writePairingInProgress, writeRunnerConfig, type RunnerConfig } from './runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from './runnerHome';
 import { ensureRunnerKeys, readRunnerKeys, type RunnerKeys } from './runnerKeys';
@@ -435,7 +435,7 @@ export async function runUnpair(options: UnpairOptions, io: CommandIo, homeDir: 
   }
   const serviceKind = readServiceKind(paths);
   if (serviceKind === 'system-service') {
-    io.stderr(`charness-runner: this runner runs as a system service (always on), which only an admin can stop. As an admin, run:\n${formatSystemServiceRemoval(paths, deps.service.launchDaemonsDir).map((line) => `  ${line}`).join('\n')}\nthen run \`charness-runner service uninstall\` here and unpair again. Nothing was changed.\n`);
+    io.stderr(`charness-runner: this runner runs as a system service (always on), which only an admin can stop. ${systemServiceRemovalPointer}\nOnce an admin has run them, run \`charness-runner service uninstall\` here and unpair again. Nothing was changed.\n`);
     return 1;
   }
   if (!options.isLocalOnly) {

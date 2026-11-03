@@ -1195,6 +1195,7 @@ export const uzDict: Record<string, string> = {
   'runners.removedJobsStoppedText': '✅ {name} o‘chirildi. Uning kaliti o‘chirildi va unda ishlayotgan vazifalar to‘xtatildi.',
   'runners.removedJobsOfflineText': '✅ {name} o‘chirildi. Uning kaliti o‘chirildi. Mashina oflayn, shuning uchun uning vazifalari bu yerdan to‘xtatilmadi: kaliti {hours} soat davomida rad etilgach, ularni o‘zi to‘xtatadi.',
   'runners.removedJobsFailedText': '✅ {name} o‘chirildi. Uning kaliti o‘chirildi, lekin unda ishlayotgan vazifalarni bu yerdan to‘xtatib bo‘lmadi: mashina kaliti {hours} soat davomida rad etilgach, ularni o‘zi to‘xtatadi.',
+  'runners.removedServiceText': '⚠️ {name} o‘sha mashinada doimiy xizmat sifatida ishlaydi va uni faqat o‘sha yerdagi admin to‘xtata oladi (charnessdan hech narsa root sifatida ishlamaydi). Shu paytgacha u ishlashda davom etadi. O‘sha mashinada admin sifatida bajaring:\n{commands}\nBu buyruqlar mashinaning o‘zidan emas, shu charness xostidan keladi.',
   'runners.removeConfirmText': '{name} o‘chirilsinmi? Uning kaliti o‘chiriladi va u ulanmaydi. U yerda ishlayotgan ishlar to‘xtatiladi.',
   'runners.removeConfirmButton': 'O‘chirish',
   'runners.removeCancelButton': 'Bekor qilish',

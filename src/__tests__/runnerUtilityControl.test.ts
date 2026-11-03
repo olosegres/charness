@@ -246,8 +246,8 @@ describe('unpair', () => {
     fs.writeFileSync(paths.serviceMarker, 'system-service\n');
     const commands: string[] = [];
     assert.equal(await runUnpair({ isLocalOnly: false }, io, home, createUnpairDeps(commands)), 1);
-    assert.match(errors, /runs as a system service \(always on\), which only an admin can stop\. As an admin, run:\n {2}sudo launchctl bootout system\/com\.charness\.runner\.[0-9a-f]{8}\n {2}sudo launchctl bootout system\/com\.charness\.runner\.pueued\.[0-9a-f]{8}\n {2}sudo rm \S+\.plist \S+\.plist\nthen run `charness-runner service uninstall` here and unpair again\. Nothing was changed\./);
-    assert.doesNotMatch(errors, /--system/, 'no charness program is asked to run as root');
+    assert.match(errors, /runs as a system service \(always on\), which only an admin can stop\. The commands that remove it come from the charness host that paired this machine — `charness runners service-removal <name>` there .* — and not from this program: the agents run as this account and can change what it prints\.\nOnce an admin has run them, run `charness-runner service uninstall` here and unpair again\. Nothing was changed\./);
+    assert.doesNotMatch(errors, /launchctl|sudo|\/Library\/LaunchDaemons|--system/, 'no command comes from this program, and none asks a charness program to run as root');
     assert.deepEqual(commands, []);
     assert.equal(hub.unpairRequests.count, 0);
     assert.notEqual(readRunnerConfig(paths), null);

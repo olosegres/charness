@@ -15,7 +15,7 @@ import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
 import { writeRunnerConfig, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
-import { createServiceDeps, formatSystemServiceRemoval, installService, parseServiceCommand, readServiceKind, runSystemStep, uninstallService, type ServiceDeps } from '../runnerUtility/serviceManager';
+import { createServiceDeps, installService, parseServiceCommand, readServiceKind, runSystemStep, systemServiceRemovalPointer, uninstallService, type ServiceDeps } from '../runnerUtility/serviceManager';
 import {
   describeLingerRemedy,
   getServiceNames,
@@ -677,15 +677,6 @@ describe('installing and removing the services', () => {
       assert.equal(readServiceKind(runnerPaths), null);
     });
 
-    it('lists the admin\'s plain commands for the daemons of THIS runner, nothing more', () => {
-      const serviceNames = getServiceNames(runnerPaths.root);
-      assert.deepEqual(formatSystemServiceRemoval(runnerPaths, '/Library/LaunchDaemons'), [
-        `sudo launchctl bootout system/${serviceNames.launchdLink}`,
-        `sudo launchctl bootout system/${serviceNames.launchdPueued}`,
-        `sudo rm /Library/LaunchDaemons/${serviceNames.launchdLink}.plist /Library/LaunchDaemons/${serviceNames.launchdPueued}.plist`,
-      ]);
-    });
-
     describe('system-step: the account\'s own side of the install', () => {
       const asAccount = { platform: 'darwin' as const, uid: 501 };
 
@@ -750,14 +741,15 @@ describe('installing and removing the services', () => {
       assert.deepEqual(commandLines(), []);
     });
 
-    it('uninstall of an always-on service from the account only PRINTS what the admin runs — it stops nothing and forgets nothing while the daemons are there', async () => {
+    it('uninstall of an always-on service from the account prints NO command — it points at the hub for them — stops nothing and forgets nothing while the daemons are there', async () => {
       pair();
       fs.writeFileSync(runnerPaths.serviceMarker, 'system-service\n');
       fs.mkdirSync(daemonsDir, { recursive: true });
       for (const plist of daemonPlists()) fs.writeFileSync(plist, '');
       const result = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
       assert.equal(result.ok, false);
-      assert.deepEqual(result.lines.slice(1, 4).map((line) => line.trim()), formatSystemServiceRemoval(runnerPaths, daemonsDir));
+      assert.deepEqual(result.lines.slice(0, 2), ['This runner runs as a system service (always on), which only an admin can stop.', systemServiceRemovalPointer]);
+      assert.ok(!result.lines.join('\n').match(/launchctl|sudo|\/Library\/LaunchDaemons/), 'no command comes from the account\'s own program — the agents can change what it prints');
       assert.match(result.lines.at(-1) ?? '', /run `charness-runner service uninstall` again here, as this account/);
       assert.equal(readServiceKind(runnerPaths), 'system-service');
       assert.ok(!commandLines().some((line) => line.includes('bootout') || line.includes('bootstrap')), 'no job is stopped from the account');

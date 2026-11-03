@@ -1189,6 +1189,7 @@ export const zhDict: Record<string, string> = {
   'runners.removedJobsStoppedText': '✅ 已移除 {name}。它的密钥已删除，其上运行的任务已停止。',
   'runners.removedJobsOfflineText': '✅ 已移除 {name}。它的密钥已删除。机器处于离线状态，因此没有从这里停止其任务：它的密钥被拒绝满 {hours} 小时后会自行停止这些任务。',
   'runners.removedJobsFailedText': '✅ 已移除 {name}。它的密钥已删除，但无法从这里停止其上运行的任务：机器的密钥被拒绝满 {hours} 小时后会自行停止这些任务。',
+  'runners.removedServiceText': '⚠️ {name} 在那台机器上作为常驻服务运行,只有那里的管理员才能停止它(charness 的任何部分都不会以 root 运行)。在此之前它会一直运行。请在那台机器上以管理员身份执行:\n{commands}\n这些命令来自此 charness 主机,而不是那台机器本身。',
   'runners.removeConfirmText': '移除 {name}？它的密钥将被删除，不再连接。其上正在运行的任务将被终止。',
   'runners.removeConfirmButton': '移除',
   'runners.removeCancelButton': '取消',

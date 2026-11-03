@@ -1195,6 +1195,7 @@ export const deDict: Record<string, string> = {
   'runners.removedJobsStoppedText': '✅ {name} entfernt. Sein Schlüssel ist gelöscht, die Jobs, die dort liefen, sind beendet.',
   'runners.removedJobsOfflineText': '✅ {name} entfernt. Sein Schlüssel ist gelöscht. Der Rechner ist offline, daher wurden seine Jobs von hier aus nicht beendet: Er beendet sie selbst, sobald sein Schlüssel {hours} h lang abgelehnt wird.',
   'runners.removedJobsFailedText': '✅ {name} entfernt. Sein Schlüssel ist gelöscht, aber die Jobs, die dort liefen, konnten von hier aus nicht beendet werden: Der Rechner beendet sie selbst, sobald sein Schlüssel {hours} h lang abgelehnt wird.',
+  'runners.removedServiceText': '⚠️ {name} läuft auf jener Maschine als Dauerdienst, den nur ein Admin dort beenden kann (nichts von charness läuft als root). Er läuft bis dahin weiter. Führen Sie als Admin auf dieser Maschine aus:\n{commands}\nDiese Befehle stammen von diesem charness-Host, nicht von der Maschine selbst.',
   'runners.removeConfirmText': '{name} entfernen? Sein Schlüssel wird gelöscht und er verbindet sich nicht mehr. Dort laufende Jobs werden beendet.',
   'runners.removeConfirmButton': 'Entfernen',
   'runners.removeCancelButton': 'Abbrechen',

@@ -263,6 +263,76 @@ describe('charness runners', () => {
     assert.deepEqual(extractManagedBlock(fs.readFileSync(fixture.ctx.authorizedKeysPath, 'utf8')), []);
   });
 
+  describe('an always-on service', () => {
+    const systemWorkDir = '/Users/runner/.charness-runner/work';
+    const daemonCommands = [
+      /sudo launchctl bootout system\/com\.charness\.runner\.[0-9a-f]{8}\n/,
+      /sudo launchctl bootout system\/com\.charness\.runner\.pueued\.[0-9a-f]{8}\n/,
+      /sudo rm \/Library\/LaunchDaemons\/com\.charness\.runner\.[0-9a-f]{8}\.plist \/Library\/LaunchDaemons\/com\.charness\.runner\.pueued\.[0-9a-f]{8}\.plist\n/,
+    ];
+
+    async function pairWith(overrides: Parameters<typeof createRedeemFixture>[0]): Promise<string> {
+      await runCli(['pair', '--host', 'host.example']);
+      const pairing = readPendingFile(fixture.ctx.dir).pending.at(-1);
+      if (pairing === undefined) throw new Error('no pairing');
+      const reply = await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture({ suggestedName: 'Mac Mini', workDir: systemWorkDir, ...overrides }).request, nowMs);
+      if (!reply.ok) throw new Error(reply.reason);
+      return reply.name;
+    }
+
+    it('`remove` of a machine that runs as an always-on service says it keeps running there until an admin removes it, with the commands — made by this hub', async () => {
+      const name = await pairWith({ serviceKind: 'system-service' });
+      const removed = await runCli(['remove', name]);
+      assert.equal(removed.code, 0);
+      assert.match(removed.stdout, /^Runner "mac-mini" removed: its key is deleted and its link cut; /);
+      assert.match(removed.stdout, /\n"mac-mini" runs as an always-on service on that machine \(two LaunchDaemons\), which only an admin there can stop — nothing of charness runs as root\. As an admin on that machine, run:\n/);
+      for (const command of daemonCommands) assert.match(removed.stdout, command);
+      assert.match(removed.stdout, /These commands come from this charness host, not from the machine itself\.\n$/);
+    });
+
+    it('`remove` goes by what the machine last REPORTED: «run by hand» in the registry, an always-on service in its last report', async () => {
+      const name = await pairWith({ serviceKind: 'foreground' });
+      const deps = createDeps();
+      fs.mkdirSync(deps.cacheDir, { recursive: true });
+      fs.writeFileSync(path.join(deps.cacheDir, `${name}.probe.json`), JSON.stringify({ seenAtMs: nowMs, text: 'os_name=macOS\nservice=system-service' }));
+      const removed = await runCli(['remove', name], deps);
+      assert.match(removed.stdout, /runs as an always-on service on that machine/);
+    });
+
+    it('`remove` of any other machine says nothing about a service', async () => {
+      for (const serviceKind of ['foreground', 'user-service'] as const) {
+        const name = await pairWith({ serviceKind, suggestedName: serviceKind });
+        const removed = await runCli(['remove', name]);
+        assert.equal(removed.code, 0);
+        assert.doesNotMatch(removed.stdout, /always-on|launchctl/, serviceKind);
+      }
+    });
+
+    it('`service-removal <name>` prints the commands without removing anything', async () => {
+      const name = await pairWith({ serviceKind: 'system-service' });
+      const shown = await runCli(['service-removal', name]);
+      assert.equal(shown.code, 0);
+      for (const command of daemonCommands) assert.match(shown.stdout, command);
+      assert.equal(readPairedFile(fixture.ctx.dir).runners.length, 1, 'the runner is still paired');
+    });
+
+    it('`service-removal` of a machine that is not an always-on service says there is nothing to remove; of an unknown runner it fails; of one whose folder the hub cannot place it says how to look on the machine', async () => {
+      const byHand = await pairWith({ serviceKind: 'foreground', suggestedName: 'by hand' });
+      const none = await runCli(['service-removal', byHand]);
+      assert.equal(none.code, 0);
+      assert.match(none.stdout, /^Runner "by-hand" does not run as an always-on service \(run by hand\): there is nothing for an admin to remove\.\n$/);
+      const unknown = await runCli(['service-removal', 'nobody']);
+      assert.equal(unknown.code, 1);
+      assert.match(unknown.stderr, /no runner named "nobody"/);
+      const odd = await pairWith({ serviceKind: 'system-service', suggestedName: 'odd', workDir: '/srv/runner-work' });
+      const unplaced = await runCli(['service-removal', odd]);
+      assert.equal(unplaced.code, 0);
+      assert.match(unplaced.stdout, /cannot say which daemons are its/);
+      assert.equal((await runCli(['service-removal'])).code, 2);
+      assert.match((await runCli(['help'])).stdout, /charness runners service-removal <name> {5}the admin's commands that remove a runner's always-on service/);
+    });
+  });
+
   it('remove, pause and resume of an unknown runner fail; a wrong number of names is a usage error', async () => {
     for (const command of ['remove', 'pause', 'resume']) {
       const unknown = await runCli([command, 'nobody']);

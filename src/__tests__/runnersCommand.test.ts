@@ -143,9 +143,9 @@ function writeProbeSnapshot(name: string, text: string, seenAtMs: number): void 
 }
 
 /** Pair a machine through the real registry: a code, then its use. Returns the code's id. */
-async function pairMachine(suggestedName: string): Promise<string> {
+async function pairMachine(suggestedName: string, reported: Parameters<typeof createRedeemFixture>[0] = {}): Promise<string> {
   const pairing = await createPairing(hubFixture.ctx, { host: 'host.example', port: 22, hostKey: ownKey, label: '@ExampleBot', nowMs: clockMs });
-  const reply = await redeemPairing(hubFixture.ctx, pairing.pairId, createRedeemFixture({ suggestedName }).request, clockMs);
+  const reply = await redeemPairing(hubFixture.ctx, pairing.pairId, createRedeemFixture({ suggestedName, ...reported }).request, clockMs);
   assert.equal(reply.ok, true);
   return pairing.pairId;
 }
@@ -953,6 +953,27 @@ describe('/runners over its ports', () => {
       // The machine is offline here (no link), so its jobs could not be stopped from the hub: the message says so instead of promising it.
       assert.equal(harness.replies.at(-1)?.text, `✅ mac removed. Its key is deleted. The machine is offline, so its jobs were not stopped from here: it stops them itself once its key has been refused for ${unconfirmedRemovalStopAfterHours} h.`);
       assert.ok(!harness.edits.at(-1)?.text.includes('mac —') && harness.edits.at(-1)?.text.includes('box1 —'), harness.edits.at(-1)?.text);
+    });
+
+    it('removing a machine that runs as an always-on service tells, in a message of its own, that it keeps running there until an admin removes it — with the commands the HUB made; any other machine gets no such message', async () => {
+      await pairMachine('mac', { serviceKind: 'system-service', workDir: '/Users/runner/.charness-runner/work' });
+      await pairMachine('box1');
+      await harness.runCommand('runners');
+      const screen = harness.replies.at(-1);
+      const revision = readPairedFile(hubFixture.ctx.dir).rev;
+      const repliesBefore = harness.replies.length;
+      await harness.tapButton(screen?.messageId ?? 0, `rnr_${revision}_0_xy`);
+      const texts = harness.replies.slice(repliesBefore).map((reply) => reply.text);
+      assert.equal(texts.length, 2, texts.join('\n---\n'));
+      assert.match(texts[0], /^✅ mac removed\./);
+      assert.match(texts[1], /^⚠️ mac runs as an always-on service on that machine, and only an admin there can stop it \(nothing of charness runs as root\)\. It keeps running until then\. As an admin on that machine, run:\nsudo launchctl bootout system\/com\.charness\.runner\.[0-9a-f]{8}\nsudo launchctl bootout system\/com\.charness\.runner\.pueued\.[0-9a-f]{8}\nsudo rm \/Library\/LaunchDaemons\/com\.charness\.runner\.[0-9a-f]{8}\.plist \/Library\/LaunchDaemons\/com\.charness\.runner\.pueued\.[0-9a-f]{8}\.plist\nThese commands come from this charness host, not from the machine itself\.$/);
+
+      const secondRevision = readPairedFile(hubFixture.ctx.dir).rev;
+      const secondBefore = harness.replies.length;
+      await harness.tapButton(screen?.messageId ?? 0, `rnr_${secondRevision}_0_xy`);
+      const second = harness.replies.slice(secondBefore).map((reply) => reply.text);
+      assert.equal(second.length, 1, 'box1 runs by hand: only the outcome');
+      assert.match(second[0], /^✅ box1 removed\./);
     });
 
     it('a removal that fails (a damaged authorized_keys block) is reported in General after the empty answer — never «removed» — and the machine stays listed', async () => {

@@ -282,6 +282,14 @@ export function buildRemovalOutcomeText(runnerName: string, jobs: RunnerJobsStop
   return t(keyByOutcome[jobs], { name: runnerName, hours: unconfirmedRemovalStopAfterHours });
 }
 
+/**
+ * @description What the operator is told after removing a machine that runs as an always-on service: it keeps running there until an admin removes it
+ * (nothing of charness runs as root), the commands — made by this hub, not by the machine — one per line.
+ */
+export function buildServiceRemovalText(runnerName: string, commands: readonly string[], t: Translate): string {
+  return t('runners.removedServiceText', { name: runnerName, commands: commands.join('\n') });
+}
+
 /** @description The question a Remove button turns the screen into. */
 export function buildRemoveConfirmation(runnerName: string, revision: number, index: number, t: Translate): RunnersScreen {
   return {

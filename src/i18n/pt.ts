@@ -1196,6 +1196,7 @@ export const ptDict: Record<string, string> = {
   'runners.removedJobsStoppedText': '✅ {name} removido. A chave dele foi apagada e os trabalhos que ele executava foram parados.',
   'runners.removedJobsOfflineText': '✅ {name} removido. A chave dele foi apagada. A máquina está offline, então os trabalhos dela não foram parados daqui: ela mesma os para quando a chave dela estiver sendo recusada há {hours} h.',
   'runners.removedJobsFailedText': '✅ {name} removido. A chave dele foi apagada, mas os trabalhos que ele executava não puderam ser parados daqui: a máquina os para sozinha quando a chave dela estiver sendo recusada há {hours} h.',
+  'runners.removedServiceText': '⚠️ {name} roda como serviço permanente naquela máquina, e só um admin de lá pode pará-lo (nada do charness roda como root). Ele continua rodando até lá. Como admin naquela máquina, execute:\n{commands}\nEstes comandos vêm deste host do charness, não da própria máquina.',
   'runners.removeConfirmText': 'Remover {name}? A chave dele é apagada e ele deixa de se conectar. Os jobs que rodam lá são encerrados.',
   'runners.removeConfirmButton': 'Remover',
   'runners.removeCancelButton': 'Cancelar',

@@ -89,7 +89,15 @@ A runner is attached in one of two ways:
 | `charness-runner pause` / `resume` | takes this machine out of rotation, or back in (the hub has its own pause, set in `/runners`) |
 | `charness-runner unpair` | tells the charness host to forget it, and stops the link and the queue's jobs here (an always-on service is removed first: see below) |
 
-**Removing an always-on service** (a Mac's LaunchDaemons) takes an admin, with plain commands — no charness program runs as root. `charness-runner service uninstall` on the runner account prints them (`sudo launchctl bootout system/<label>` for the queue and the link, `sudo rm /Library/LaunchDaemons/<label>.plist …`); once they have run, `charness-runner service uninstall` again forgets the service here, and `unpair` works.
+**Removing an always-on service** (a Mac's LaunchDaemons) takes an admin, with plain commands — no charness program runs as root — and **the commands come from the charness host, never from the runner machine's own program**: the agents run as the runner account and can change what `charness-runner` prints, and an admin would run the line with `sudo`. On the charness host, `charness runners remove <name>` prints them after the removal, the `/runners` **Remove** button sends them in a second message, and `charness runners service-removal <name>` prints them for a runner that stays. They are always these three, with the labels the host derives for that machine (`com.charness.runner.<8 hex digits>` for the link, `com.charness.runner.pueued.<8 hex digits>` for the queue):
+
+```
+sudo launchctl bootout system/com.charness.runner.<hash>
+sudo launchctl bootout system/com.charness.runner.pueued.<hash>
+sudo rm /Library/LaunchDaemons/com.charness.runner.<hash>.plist /Library/LaunchDaemons/com.charness.runner.pueued.<hash>.plist
+```
+
+If the machine was removed from the host earlier, `ls /Library/LaunchDaemons | grep com.charness.runner` on it lists the daemons by hand. `charness-runner service uninstall` on the runner account only points back here; once the commands have run, running it again forgets the service there, and `unpair` works.
 
 A restart of the link (an update, a crash) never kills queued or running jobs — Pueue is a service of its own. The link reconnects by
 itself after a reboot, sleep or network change, and updates itself from the charness host when it is idle.

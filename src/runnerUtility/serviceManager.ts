@@ -252,16 +252,11 @@ async function installLaunchd(deps: ServiceDeps, paths: RunnerHomePaths): Promis
   return { ok: true, lines: [`Installed two LaunchAgents (${names.launchdLink}, ${names.launchdPueued}): they run while ${deps.accountName} is logged in. For always-on (also logged out), an admin can ${adminLineText}.`] };
 }
 
-/** The admin's commands that remove a runner's always-on service: plain `launchctl` and `rm`, no charness code runs as root. */
-export function formatSystemServiceRemoval(paths: RunnerHomePaths, daemonsDir: string): string[] {
-  const names = getServiceNames(paths.root);
-  const files = getLaunchdFiles(true, paths.homeDir, names, daemonsDir);
-  return [
-    `sudo launchctl bootout system/${names.launchdLink}`,
-    `sudo launchctl bootout system/${names.launchdPueued}`,
-    `sudo rm ${files.link} ${files.pueued}`,
-  ];
-}
+/**
+ * Where an admin gets the commands that remove an always-on service: from the HUB (`runners/serviceRemoval.ts`), never from this program. The agents
+ * run as this account and can change what the program prints, so a command it printed could be anything an admin would then run with `sudo`.
+ */
+export const systemServiceRemovalPointer = 'The commands that remove it come from the charness host that paired this machine — `charness runners service-removal <name>` there (`charness runners remove <name>` prints them too, and so does the Remove button of /runners) — and not from this program: the agents run as this account and can change what it prints.';
 
 /**
  * The runner is an always-on (system) service: only an admin can stop it, and root must not run this program to do it (see the file's
@@ -274,7 +269,7 @@ async function removeSystemService(paths: RunnerHomePaths, deps: ServiceDeps): P
   const isLoaded = async (label: string): Promise<boolean> => (await deps.runner('launchctl', ['print', `system/${label}`], { timeoutMs: commandTimeoutMs })).ok;
   const isPresent = fs.existsSync(files.link) || fs.existsSync(files.pueued) || (await isLoaded(names.launchdLink)) || (await isLoaded(names.launchdPueued));
   if (isPresent) {
-    return fail('This runner runs as a system service (always on), which only an admin can stop. As an admin, run:', ...formatSystemServiceRemoval(paths, deps.launchDaemonsDir).map((line) => `  ${line}`), 'then run `charness-runner service uninstall` again here, as this account: it forgets the service once they are gone.');
+    return fail('This runner runs as a system service (always on), which only an admin can stop.', systemServiceRemovalPointer, 'Once an admin has run them, run `charness-runner service uninstall` again here, as this account: it forgets the service once they are gone.');
   }
   fs.rmSync(paths.serviceMarker, { force: true });
   return { ok: true, lines: ['The always-on service is gone (stopped and removed by an admin): its record here is forgotten.'] };
@@ -310,7 +305,7 @@ export async function installService(request: ServiceRequest, deps: ServiceDeps)
 /** @description `service uninstall` for `request`. */
 export async function uninstallService(request: ServiceRequest, deps: ServiceDeps): Promise<ServiceResult> {
   if (deps.platform !== 'linux' && deps.platform !== 'darwin') return fail(`Services are supported on Linux (systemd) and macOS (launchd), not on ${deps.platform}.`);
-  if (request.isSystem) return fail('An always-on service is removed by an admin with plain `launchctl` commands (no charness program runs as root): `charness-runner service uninstall` as the account prints them.');
+  if (request.isSystem) return fail('An always-on service is removed by an admin with plain `launchctl` commands (no charness program runs as root).', systemServiceRemovalPointer);
   const paths = getRunnerHomePaths(deps.homeDir);
   if (readServiceKind(paths) === 'system-service') return removeSystemService(paths, deps);
   return deps.platform === 'linux' ? uninstallSystemd(paths, deps) : uninstallLaunchd(deps, paths);

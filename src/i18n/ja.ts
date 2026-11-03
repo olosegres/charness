@@ -1189,6 +1189,7 @@ export const jaDict: Record<string, string> = {
   'runners.removedJobsStoppedText': '✅ {name} を削除しました。キーは削除され、実行中だったジョブは停止されました。',
   'runners.removedJobsOfflineText': '✅ {name} を削除しました。キーは削除されました。マシンがオフラインのため、ジョブはここから停止していません。キーが {hours} 時間拒否され続けた時点で、マシン自身が停止します。',
   'runners.removedJobsFailedText': '✅ {name} を削除しました。キーは削除されましたが、実行中だったジョブはここから停止できませんでした。キーが {hours} 時間拒否され続けた時点で、マシン自身が停止します。',
+  'runners.removedServiceText': '⚠️ {name} はそのマシンで常時稼働サービスとして動いており、止められるのはそこの管理者だけです(charness のものは root では動きません)。それまで動き続けます。そのマシンで管理者として次を実行してください:\n{commands}\nこれらのコマンドはマシン自身ではなく、この charness ホストが作ったものです。',
   'runners.removeConfirmText': '{name} を削除しますか？ そのキーは削除され、接続しなくなります。そこで実行中のジョブは停止されます。',
   'runners.removeConfirmButton': '削除',
   'runners.removeCancelButton': 'キャンセル',

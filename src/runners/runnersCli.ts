@@ -1,5 +1,6 @@
 import * as os from 'os';
 import type { CliIo } from '../remoteRun/output';
+import { readLastProbe } from '../remoteRun/runners';
 import { getRemoteRunCacheDir } from '../remoteRun/ssh';
 import { buildAdminBootstrapLine, buildBootstrapLine, checkIsAccountName, defaultRunnerAccount } from './bootstrapLine';
 import { ensureGateWrapper } from './gateWrapper';
@@ -7,13 +8,15 @@ import { checkHubAddress, parseHubAddress, scanHostKey, type HostKeyScanner } fr
 import { createHubContext, type HubContext } from './hubPaths';
 import { createPairing, findPairedRunner, setPairedRunnerPaused, sweepExpiredPairings } from './hubPairing';
 import { formatLifetime, readPairingLifetimeMs } from './pairingTiming';
-import { HubRegistryError, readClosedCodes, readPairedFile, readPendingFile } from './hubRegistry';
+import { HubRegistryError, readClosedCodes, readPairedFile, readPendingFile, type PairedRunner, type RunnerServiceKind } from './hubRegistry';
 import { removeRunnerAndEndItsWork } from './runnerRemoval';
+import { getCurrentServiceKind } from './runnerServiceKind';
 import { readRunnersOverview, refreshStaleSnapshots } from './runnersOverview';
-import { formatListTimestamp, formatRunnerList } from './runnersList';
+import { formatListTimestamp, formatRunnerList, serviceKindLabels } from './runnersList';
+import { formatServiceRemovalNote, formatServiceRemovalUnknownNote, getServiceRemovalLines } from './serviceRemoval';
 
 /**
- * @description `charness runners [ls | pair | remove <name> | pause <name> | resume <name>]` — the headless twin of `/runners`, for an
+ * @description `charness runners [ls | pair | remove <name> | service-removal <name> | pause <name> | resume <name>]` — the headless twin of `/runners`, for an
  * instance without Telegram (a Jira-only one) and for the flow tests. It works on the registry of the OS user
  * (`~/.config/charness/runners/`), loads no env file and never touches `DATA_DIR`.
  */
@@ -35,7 +38,9 @@ export const runnersUsage = `Usage:
                                               <host[:port]> is the address the runner dials to reach this machine's sshd;
                                               --wait blocks until a line is used or the code expires (a line pasted for a machine that
                                               was already paired ends it too, with exit 0: nothing new was paired)
-  charness runners remove <name>              detach a runner: its key is deleted and its link cut
+  charness runners remove <name>              detach a runner: its key is deleted and its link cut (a machine that runs as an always-on
+                                              service keeps it until an admin there removes it: the commands are printed)
+  charness runners service-removal <name>     the admin's commands that remove a runner's always-on service on its machine
   charness runners pause <name>               keep a runner attached but send it no jobs
   charness runners resume <name>
 `;
@@ -167,7 +172,31 @@ async function runListCommand(io: CliIo, deps: RunnersCliDeps): Promise<number> 
   return 0;
 }
 
+/** What an always-on service's removal needs, read from the registry and the last report of the runner — `null` when `name` is no paired runner. */
+function readServiceRemoval(name: string, deps: RunnersCliDeps): { runner: PairedRunner; kind: RunnerServiceKind; commands: string[] } | null {
+  const runner = findPairedRunner(readPairedFile(deps.ctx.dir).runners, name);
+  if (runner === undefined) return null;
+  const probe = readLastProbe(deps.cacheDir, runner.name, runner.pairedAtMs)?.probe ?? null;
+  return { runner, kind: getCurrentServiceKind(runner, probe), commands: getServiceRemovalLines(runner, probe) };
+}
+
+async function runServiceRemovalCommand(name: string, io: CliIo, deps: RunnersCliDeps): Promise<number> {
+  const found = readServiceRemoval(name, deps);
+  if (found === null) {
+    io.stderr(`runners: no runner named "${name}"\n`);
+    return failedExitCode;
+  }
+  if (found.kind !== 'system-service') {
+    io.stdout(`Runner "${found.runner.name}" does not run as an always-on service (${serviceKindLabels[found.kind]}): there is nothing for an admin to remove.\n`);
+    return 0;
+  }
+  io.stdout(found.commands.length > 0 ? formatServiceRemovalNote(found.runner.name, found.commands) : formatServiceRemovalUnknownNote(found.runner.name));
+  return 0;
+}
+
 async function runRemoveCommand(name: string, io: CliIo, deps: RunnersCliDeps): Promise<number> {
+  // Read BEFORE the removal: it deletes the runner's last report, which says how the machine is kept running.
+  const serviceRemoval = readServiceRemoval(name, deps);
   const removal = await removeRunnerAndEndItsWork(deps.ctx, name, deps.now());
   if (removal === null) {
     io.stderr(`runners: no runner named "${name}"\n`);
@@ -179,6 +208,10 @@ async function runRemoveCommand(name: string, io: CliIo, deps: RunnersCliDeps): 
     offline: 'it is offline: it stops the jobs it had running itself once it finds out it was removed',
   }[removal.jobs];
   io.stdout(`Runner "${removal.runner.name}" removed: its key is deleted and its link cut; ${jobsNote}.\n`);
+  // The always-on service is the machine's, and root's: removing the runner here leaves it running there until an admin removes it.
+  if (serviceRemoval !== null && serviceRemoval.kind === 'system-service') {
+    io.stdout(`\n${serviceRemoval.commands.length > 0 ? formatServiceRemovalNote(removal.runner.name, serviceRemoval.commands) : formatServiceRemovalUnknownNote(removal.runner.name)}`);
+  }
   return 0;
 }
 
@@ -202,6 +235,7 @@ export async function runRunnersCli(argv: readonly string[], io: CliIo, deps: Ru
         return await runListCommand(io, deps);
       case 'pair':
         return await runPairCommand(args, io, deps);
+      case 'service-removal':
       case 'remove':
       case 'pause':
       case 'resume': {
@@ -209,6 +243,7 @@ export async function runRunnersCli(argv: readonly string[], io: CliIo, deps: Ru
           io.stderr(`runners: ${command} needs exactly one runner name\n\n${runnersUsage}`);
           return usageExitCode;
         }
+        if (command === 'service-removal') return await runServiceRemovalCommand(args[0], io, deps);
         return command === 'remove' ? await runRemoveCommand(args[0], io, deps) : await runPauseCommand(args[0], command === 'pause', io, deps);
       }
       case '--help':
