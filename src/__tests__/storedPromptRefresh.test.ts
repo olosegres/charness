@@ -1,7 +1,6 @@
 /**
- * @description `requests/storedPromptRefresh.ts`: a connector's refresher brings a stored request prompt up to date at the
- * places that turn it into delivered text — the untaken prompt a wake-up or a usage-limit resume resends, and the copy
- * held through a usage-limit wait (which must not be delivered a second time next to the refreshed one).
+ * @description `requests/storedPromptRefresh.ts`: a connector's refresher brings a stored request prompt up to date where
+ * the untaken prompt is read for delivery — what a wake-up or the resume of a usage-limit wait resends.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -10,7 +9,6 @@ import { afterEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { clearStoredPromptRefresher, refreshStoredPrompt, setStoredPromptRefresher } from '../requests/storedPromptRefresh';
 import { getPromptNotTakenIn, getWakeUpMessage, joinPromptsNotTakenIn } from '../requests/requestHeader';
-import { getHeldPromptsText, getTextWithHeldPrompts } from '../utils/limitHeldPrompts';
 import type { OpenRequestState } from '../requests/types';
 
 const storedText = '[Request req_1 · from: PROJ-1: you were mentioned] the note as it was';
@@ -77,12 +75,5 @@ describe('refreshStoredPrompt', () => {
     assert.equal(joinPromptsNotTakenIn([untaken, createOpenRequest('req_2', '[Request req_2] other', false)]), `${freshText}\n\n[Request req_2] other`);
     assert.equal(getPromptNotTakenIn(createOpenRequest('req_1', storedText, true)), undefined);
     assert.equal(getPromptNotTakenIn(createOpenRequest('req_1', undefined, undefined)), undefined);
-  });
-
-  it('a copy held through a usage-limit wait is delivered refreshed — and once, next to the refreshed resend of the same request', () => {
-    setStoredPromptRefresher(refresher);
-    assert.equal(getTextWithHeldPrompts(freshText, [{ text: storedText }]), freshText, 'the held copy of the request being resent is the same run');
-    assert.equal(getTextWithHeldPrompts('the continue nudge', [{ text: storedText }]), `the continue nudge\n\n${freshText}`);
-    assert.equal(getHeldPromptsText([{ text: storedText }, { text: 'a scheduled run' }]), `${freshText}\n\na scheduled run`);
   });
 });

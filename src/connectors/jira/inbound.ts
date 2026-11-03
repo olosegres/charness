@@ -70,10 +70,6 @@ export function getJiraRetryDelayMs(baseMs: number, failureCount: number): numbe
   return Math.min(baseMs * 2 ** failureCount, Math.max(baseMs, jiraRetryBackoffCapMs));
 }
 /** `updated` tells the mention scan whether an issue changed at all since it last read its comments. */
-/** The first line of a stored request prompt names its request: `[Request req_… · from: …]`. */
-const storedPromptRequestIdPattern = /^\[Request (req_[A-Za-z0-9_-]+) · /;
-/** How many mention prompts can be rebuilt at delivery at once (each keeps its issue in memory). */
-const promptRebuildersMax = 32;
 export const jiraSearchFields = ['status', 'assignee', 'reporter', 'creator', 'updated'];
 
 /**
@@ -187,6 +183,11 @@ export function buildJiraTriggerJql(projects: ReadonlyMap<string, JiraProjectTri
   const windowMinutes = Math.ceil(mentionWindowMs / msPerMinute);
   return `project in (${projectKeys}) AND ((${assignedBranch}) OR (comment ~ currentUser() AND updated >= -${windowMinutes}m)) ORDER BY created ASC`;
 }
+
+/** The first line of a stored request prompt names its request: `[Request req_… · from: …]`. */
+const storedPromptRequestIdPattern = /^\[Request (req_[A-Za-z0-9_-]+) · /;
+/** How many mention prompts can be rebuilt at delivery at once (each keeps its issue in memory). */
+const promptRebuildersMax = 32;
 
 export class JiraInbound {
   private timer: NodeJS.Timeout | null = null;
@@ -496,6 +497,16 @@ export class JiraInbound {
       .map((request) => ({ requestId: request.id, requester: findAccountInContext(context, getRequestRequester(request.origin)) }));
   }
 
+  /**
+   * `handOvers` — the ones the note named when the prompt was built — without those that have finished since. Never more:
+   * the rest of the note (who holds the issue, in which status) is as of that moment, and a hand-over that opened later
+   * would be «open when this comment came in» next to an issue state it does not fit.
+   */
+  private getStillOpenHandOvers(key: SessionKey, handOvers: readonly JiraOpenHandOver[]): JiraOpenHandOver[] {
+    const openIds = new Set(this.deps.listOpenRequests(key).map((request) => request.id));
+    return handOvers.filter((handOver) => openIds.has(handOver.requestId));
+  }
+
   private rememberPromptRebuilder(key: SessionKey, requestId: string, rebuild: () => string): void {
     for (const [id, entry] of this.promptRebuilders) {
       if (!this.deps.listOpenRequests(entry.key).some((request) => request.id === id)) this.promptRebuilders.delete(id);
@@ -508,9 +519,9 @@ export class JiraInbound {
   }
 
   /**
-   * @description The `StoredPromptRefresher` of this poller: a stored mention prompt (a resend, a prompt held through a
-   * usage-limit wait) with the hand-over requests that are open now. Any other text — or a prompt of a request that is
-   * no longer open, or one built before a restart — comes back as it is.
+   * @description The `StoredPromptRefresher` of this poller: a stored mention prompt (a wake-up's resend, the resume of a
+   * usage-limit wait) without the hand-over requests that have finished since it was built. Any other text — or a prompt
+   * of a request that is no longer open, or one built before a restart — comes back as it is.
    */
   readonly refreshPromptText = (promptText: string): string => {
     const requestId = storedPromptRequestIdPattern.exec(promptText)?.[1];
@@ -582,7 +593,7 @@ export class JiraInbound {
     }, createPrompt);
     const supersededRequestIds = request.supersededRequestIds ?? [];
     const fullText = createPrompt(request.id, supersededRequestIds);
-    if (isMention) this.rememberPromptRebuilder(key, request.id, () => createPrompt(request.id, supersededRequestIds, this.getOpenHandOvers(key, context)));
+    if (isMention) this.rememberPromptRebuilder(key, request.id, () => createPrompt(request.id, supersededRequestIds, this.getStillOpenHandOvers(key, promptInput.openHandOvers)));
     const prompt: SessionPromptText = {
       fullText,
       // C5: built only once the post knows whether the session is fresh — right before the forward.
@@ -592,8 +603,8 @@ export class JiraInbound {
         const delta = getIssueDelta(fitted.blocks, isWhole ? {} : snapshot.sent);
         // Counted as sent only once the agent takes it in (C4): the connector commits it then.
         deps.contextLedger.recordBuild(issue.key, request.id, snapshot.generation, delta.sent);
-        // The hand-over requests the mention note names are read again here: the post may have waited behind a running turn.
-        const openHandOvers = isMention ? this.getOpenHandOvers(key, context) : [];
+        // The hand-over requests the mention note names are checked again here: the post may have waited behind a running turn.
+        const openHandOvers = this.getStillOpenHandOvers(key, promptInput.openHandOvers);
         return isWhole
           ? createPrompt(request.id, supersededRequestIds, openHandOvers)
           : buildJiraDeltaPrompt({ ...promptInput, openHandOvers, requestId: request.id, supersededRequestIds, delta });

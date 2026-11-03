@@ -1,5 +1,3 @@
-import { refreshStoredPrompt } from '../requests/storedPromptRefresh';
-
 /**
  * @description Prompts that arrived during an armed usage-limit wait (Jira plan
  * R23): posting them would only run into the limit again, so they are HELD and
@@ -27,9 +25,9 @@ export interface LimitHeldPrompt {
   heldText?: string;
 }
 
-/** What a held prompt says when it is finally delivered — a request's prompt brought up to date, as its resend is (`refreshStoredPrompt`). */
+/** What a held prompt says when it is finally delivered. */
 function getDeliveredText(prompt: LimitHeldPrompt): string {
-  return refreshStoredPrompt(prompt.heldText ?? prompt.text);
+  return prompt.heldText ?? prompt.text;
 }
 
 /**
@@ -51,10 +49,10 @@ export function getHeldPromptsWith(
 /**
  * @description The forwarded `text` with the held prompts after it, in arrival
  * order — one message, so nothing can slip between them. A held copy of `text`
- * itself is not repeated: it is being delivered right now — also when `text` is that prompt brought up to date.
+ * itself is not repeated: it is being delivered right now.
  */
 export function getTextWithHeldPrompts(text: string, held: readonly LimitHeldPrompt[]): string {
-  return [text, ...held.filter((prompt) => prompt.text !== text && refreshStoredPrompt(prompt.text) !== text).map(getDeliveredText)].join(heldPromptSeparator);
+  return [text, ...held.filter((prompt) => prompt.text !== text).map(getDeliveredText)].join(heldPromptSeparator);
 }
 
 /**

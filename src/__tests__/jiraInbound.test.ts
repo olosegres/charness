@@ -1369,7 +1369,7 @@ describe('JiraInbound', () => {
       ), recorded.prompts[0]);
     });
 
-    describe('the hand-over requests the note names are read again when the prompt is delivered', () => {
+    describe('the hand-over requests the note names are checked again when the prompt is delivered — finished ones are dropped, new ones never added', () => {
       const aiAssigned = (): JiraIssue => createAiAssignedIssue(issueKey, '10001', 'To Do');
       const buildOrigin = (): RequestOrigin => ({ kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: colleague.accountId, testRequestId: 'req_build' } });
       /** The mention request itself, once the ledger lists it as open (the fake `createRequest` does not). */
@@ -1386,6 +1386,7 @@ describe('JiraInbound', () => {
         comments = [createMentionComment('10240', member)];
         inbound = createMentionInbound({
           client: createMentionClient(() => [aiAssigned()], () => aiAssigned()),
+          runBudgetPer24h: 10,
           postRequest: async (_key, _requestId, prompt) => {
             posted.push(prompt);
           },
@@ -1395,15 +1396,60 @@ describe('JiraInbound', () => {
         assert.equal(posted.length, 1);
       });
 
-      it('the text built right before the forward names the hand-over requests open THEN — the build\'s final answer was given while the post waited', () => {
+      it('the text built right before the forward drops the hand-over request that finished while the post waited — and adds none that opened since', () => {
         assert.ok(posted[0].fullText.includes('the hand-over request req_build of Colleague was open when this comment came in'), 'the stored text is as of the request\'s opening');
+        openRequestOrigins.set(issueKey, [buildOrigin()]);
+        assert.equal(posted[0].buildText({ isFresh: true }), posted[0].fullText, 'nothing finished: the text is the stored one');
         openRequestOrigins.set(issueKey, []);
         const whole = posted[0].buildText({ isFresh: true });
         assert.ok(whole.includes(closedNote), whole);
         assert.ok(!whole.includes('req_build'), whole);
         assert.ok(!whole.includes('goes on unchanged'), whole);
         openRequestOrigins.set(issueKey, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: '101', requester: owner.accountId, testRequestId: 'req_next' } }]);
-        assert.ok(posted[0].buildText({ isFresh: true }).includes('the hand-over request req_next was open when this comment came in'), 'a hand-over opened meanwhile is named; its requester is in no data of the issue');
+        const later = posted[0].buildText({ isFresh: true });
+        assert.ok(!later.includes('req_next'), 'a hand-over opened after the comment is not "open when this comment came in"');
+        assert.ok(later.includes(closedNote), later);
+      });
+
+      it('of several hand-over requests, only the ones that finished are dropped from the note', async () => {
+        const twoOpen = [buildOrigin(), { kind: 'trackerEvent' as const, attributes: { issueKey, triggerId: '101', requester: owner.accountId, testRequestId: 'req_second' } }];
+        openRequestOrigins.set(issueKey, twoOpen);
+        comments = [createMentionComment('10241', member)];
+        issueUpdated = 'updated-2';
+        await inbound.pollOnce();
+        await flushPosts();
+        assert.equal(posted.length, 2);
+        assert.ok(posted[1].fullText.includes('the hand-over requests req_build of Colleague and req_second were open when this comment came in'), posted[1].fullText);
+        openRequestOrigins.set(issueKey, [twoOpen[1]]);
+        const text = posted[1].buildText({ isFresh: true });
+        assert.ok(text.includes('the hand-over request req_second was open when this comment came in; '), text);
+        assert.ok(!text.includes('req_build'), text);
+        assert.ok(text.includes('if request req_second is not finished, it goes on unchanged'), text);
+      });
+
+      it('a hand-over that opens after a mention on an issue NOT handed to the AI is never put into its note — neither at the forward nor in a resend', async () => {
+        // The mention comes in while the issue is held by someone else and nothing is open; then the issue is handed to the AI.
+        openRequestOrigins.set(issueKey, []);
+        const heldByOwner = createUnhandedIssue(issueKey);
+        comments = [createMentionComment('10241', member)];
+        const other = createMentionInbound({
+          client: createMentionClient(() => [heldByOwner], () => heldByOwner),
+          runBudgetPer24h: 10,
+          postRequest: async (_key, _requestId, prompt) => {
+            posted.push(prompt);
+          },
+        });
+        await other.pollOnce();
+        await flushPosts();
+        assert.equal(posted.length, 2);
+        const stored = posted[1].fullText;
+        assert.ok(stored.includes('The issue is not handed to you (assignee: Owner, status: Backlog). '), stored);
+        const handedOver: RequestOrigin = { kind: 'trackerEvent', attributes: { issueKey, triggerId: '102', requester: colleague.accountId, testRequestId: 'req_late' } };
+        openRequestOrigins.set(issueKey, [handedOver, { kind: 'trackerMention', attributes: { issueKey, triggerId: 'mention:10241', requester: member.accountId, testRequestId: 'req_2' } }]);
+        for (const text of [posted[1].buildText({ isFresh: true }), other.refreshPromptText(stored)]) {
+          assert.equal(text, stored, 'the note is exactly the one built: no hand-over request of the later hand-over');
+          assert.ok(!text.includes('req_late') && !text.includes('was open when this comment came in'), text);
+        }
       });
 
       it('a delta prompt (the session already knows the issue) carries the note rebuilt too', () => {

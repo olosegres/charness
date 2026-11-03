@@ -121,14 +121,16 @@ with the instance's rights.
   about this answer only and the request is not affected: a mention by someone other than that request's
   requester lands in the same session, mid-build, and must never stop the work. The note is the agent's only
   account of who holds the issue, so the prompt's issue read must carry the assignee.
-- **The open hand-over requests are read again when the prompt is delivered.** The prompt may wait behind a
-  running turn or a usage-limit wait for hours, and the hand-over it names may get its final answer meanwhile. The
-  note is therefore rebuilt from `listOpenRequests` right before the forward (`buildText`, whole and delta prompts)
-  and whenever a stored copy is read for a resend or for the resume of a limit wait (`JiraInbound.refreshPromptText`,
-  the connector's `StoredPromptRefresher` of `requests/storedPromptRefresh.ts`, registered while the poller runs;
-  held in memory for at most 32 open mention requests — after a restart the stored text is delivered as it is).
-  Wherever neither happens the wording holds on its own: the requests «were open when this comment came in», and one
-  whose final answer the agent has already given is finished — it is not resumed.
+- **Hand-overs that finished are dropped from the note when the prompt is delivered.** The prompt may wait behind a
+  running turn or a usage-limit wait for hours, and the hand-over it names may get its final answer meanwhile. Right
+  before the forward (`buildText`, whole and delta prompts) and whenever a stored copy is read for a resend or for
+  the resume of a limit wait (`JiraInbound.refreshPromptText`, the connector's `StoredPromptRefresher` of
+  `requests/storedPromptRefresh.ts`, registered while the poller runs), the note is rebuilt from the hand-overs it
+  named WITHOUT those no longer in `listOpenRequests` — never with a newer one, so «was open when this comment came
+  in» stays true and the rest of the note (who holds the issue, in which status) is not mixed with a later state.
+  The rebuilders are held in memory for at most 32 open mention requests; after a restart the stored text is
+  delivered as it is. Wherever no rebuild happens the wording holds on its own: the requests «were open when this
+  comment came in», and one whose final answer the agent has already given is finished — it is not resumed.
 - **Finding it.** Jira's `comment ~ currentUser()`, run as the AI account, matches a comment that holds a
   mention node of it — not a typed `@name`, not the account's display name written as text. Measured against a
   live site: a fresh mention is returned by the search within about two seconds, and a comment edit moves the
