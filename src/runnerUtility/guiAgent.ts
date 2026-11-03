@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -23,6 +23,11 @@ import type { RunnerHomePaths } from './runnerHome';
  * its group: the script, when it cuts the step with 125 because the heartbeat is gone or another instance answers (TERM, KILL after the grace), and an
  * agent that starts and finds the groups of an earlier instance (`reapStepsOfEarlierInstances`). Without that a dying agent would orphan an `xcodebuild`
  * while the script released the project's lock to the next job. No auto-login: the session is the owner's to open once.
+ *
+ * A recorded id is NEVER signalled on trust: the folders live on disk and survive a reboot, pids restart after one, and an old number can name an unrelated
+ * group of the account (Finder, the Dock, the new agent). A folder older than the system's boot is removed without a signal; otherwise the id is signalled only
+ * while the process of that pid still has the start time recorded beside it (`pgid-start`, from `ps -o lstart=`) — or is gone while the group's other members
+ * keep the id from being handed out again. The same goes for the job script's pid (`owner`, `owner-start`): a reused pid does not make a dead script look alive.
  */
 
 /** How often the agent beats, and how long without a beat is «gone» — `gui_agent_stale_sec` in `remoteRun/runner.sh` is the same number (a test pins both). */
@@ -34,7 +39,7 @@ export const guiAgentServiceCheckIntervalMs = 30 * 1000;
 /** After SIGTERM a step gets this long before SIGKILL: `kill_grace_sec` of `runner.sh`. */
 const stepKillGraceMs = 10 * 1000;
 const statusFileMode = 0o644;
-const requestFileNames = { cwd: 'cwd', command: 'command', locale: 'locale', log: 'log', env: 'env', owner: 'owner', go: 'go', started: 'started', pgid: 'pgid', kill: 'kill', exit: 'exit' } as const;
+const requestFileNames = { cwd: 'cwd', command: 'command', locale: 'locale', log: 'log', env: 'env', owner: 'owner', go: 'go', started: 'started', pgid: 'pgid', pgidStart: 'pgid-start', ownerStart: 'owner-start', cut: 'cut', kill: 'kill', exit: 'exit' } as const;
 /** The exit code of a step that was cut (its agent was replaced, its script went): what `runner.sh` says for a cut step. */
 const cutStepExitCode = 125;
 /** `cd "$directory" || exit 126` of `run_step`: a step whose folder is gone ends with the shell's code for it. */
@@ -100,6 +105,32 @@ interface StepRequest {
   logFile: string;
   jobEnvText: string;
   ownerPid: number | null;
+  /** The script's start time as `ps` says it (recorded by the script), `null` from a script that did not record it. */
+  ownerStart: string | null;
+}
+
+/** What `ps -o lstart=` says of a process's start, the way both sides compare it: whitespace squeezed, so «Tue Nov  4 02:10:11 2026» is one string everywhere. */
+export function normalizeProcessStart(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/** What is known of a process's start: the text (`known`), that there is no such process (`none`), or that `ps` could not be asked (`unknown`). */
+export type ProcessStart = { kind: 'known'; text: string } | { kind: 'none' } | { kind: 'unknown' };
+
+const processStartDeadlineMs = 5 * 1000;
+
+/** @description The start time of process `pid` from `ps -o lstart= -p` (C locale: one format on Linux and macOS, and the one `runner.sh` reads). */
+export function readProcessStart(pid: number): ProcessStart {
+  const result = spawnSync('ps', ['-o', 'lstart=', '-p', `${pid}`], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: processStartDeadlineMs });
+  if (result.error !== undefined || result.signal !== null || result.status === null) return { kind: 'unknown' };
+  const text = normalizeProcessStart(result.stdout);
+  if (result.status === 0 && text !== '') return { kind: 'known', text };
+  return result.status === 1 && text === '' ? { kind: 'none' } : { kind: 'unknown' };
+}
+
+/** When the system booted, from its uptime: what a folder written before it must not be trusted past (`Date.now() - os.uptime()`). */
+export function getBootTimeMs(): number {
+  return Date.now() - os.uptime() * 1000;
 }
 
 function readTextFile(filePath: string): string | null {
@@ -126,6 +157,7 @@ function readStepRequest(requestDir: string): StepRequest | null {
     locale: read(requestFileNames.locale) ?? '',
     jobEnvText: read(requestFileNames.env) ?? '',
     ownerPid: /^\d+$/.test(ownerText) ? Number(ownerText) : null,
+    ownerStart: normalizeProcessStart(read(requestFileNames.ownerStart) ?? '') || null,
   };
 }
 
@@ -142,6 +174,12 @@ export interface GuiAgentDeps {
   signalGroup: (pid: number, signal: NodeJS.Signals) => void;
   /** Is any process left in the group? */
   isGroupAlive: (pgid: number) => boolean;
+  /** The start time of a process (`readProcessStart`): what keeps a recorded pid from being trusted once it names someone else. */
+  readProcessStart: (pid: number) => ProcessStart;
+  /** When the system booted: a request folder from before it is stale, whatever its pids say. */
+  getBootTimeMs: () => number;
+  /** A problem of one request that must not take the agent down (a full disk, a folder nobody can write): told, and the agent goes on. */
+  reportError: (line: string) => void;
   pid: number;
   uid: number;
   account: string;
@@ -161,14 +199,10 @@ export function createGuiAgentDeps(readEnv: () => NodeJS.ProcessEnv): GuiAgentDe
         /* the group is gone already */
       }
     },
-    isGroupAlive: (pgid) => {
-      try {
-        process.kill(-pgid, 0);
-        return true;
-      } catch (error) {
-        return error instanceof Error && 'code' in error && error.code === 'EPERM';
-      }
-    },
+    isGroupAlive: (pgid) => checkIsProcessAlive(-pgid),
+    readProcessStart,
+    getBootTimeMs,
+    reportError: (line) => { process.stderr.write(`charness-runner: ${line}\n`); },
     pid: process.pid,
     uid: os.userInfo().uid,
     account: os.userInfo().username,
@@ -203,29 +237,40 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
   const startedAtMs = deps.now();
   const running = new Map<string, RunningStep>();
   /** Process groups of steps nobody runs any more (an earlier agent's, a vanished script's), asked to end and not yet gone: killed after the grace. */
-  const groupsEnding: Array<{ pgid: number; terminatedAtMs: number }> = [];
+  const groupsEnding: Array<{ pgid: number; recordedStart: string; terminatedAtMs: number }> = [];
   let lastBeatAtMs = 0;
 
   /**
    * A file of a request folder, through a temp file and a rename so a script never reads half of it — and NOT through `writeTextFileAtomically`, which makes missing
    * folders: the script that cut the step has removed its request folder already (it ended the step's group and went on), nobody is left to read the answer, and a
-   * folder made again for it would be litter nothing removes. This runs from the step's `close` event: a throw here would be an uncaught exception that kills the
-   * whole agent, so a folder that is gone is no error.
+   * folder made again for it would be litter nothing removes. Some of this runs from the step's `close` event: a throw there would be an uncaught exception that kills
+   * the whole agent, so a folder that is gone is no error — `false` says so — while any other failure (a full disk, no permission) is thrown for the caller to answer.
    */
-  const writeIntoRequest = (requestDir: string, name: string, text: string): void => {
+  const writeIntoRequest = (requestDir: string, name: string, text: string): boolean => {
     const file = path.join(requestDir, name);
     const tempFile = `${file}.${process.pid}.tmp`;
     try {
       fs.writeFileSync(tempFile, text, { mode: 0o644 });
       fs.renameSync(tempFile, file);
+      return true;
     } catch (error) {
       fs.rmSync(tempFile, { force: true });
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
+      throw error;
     }
   };
 
   const writeExit = (requestDir: string, code: number): void => {
     writeIntoRequest(requestDir, requestFileNames.exit, `${code}\n`);
+  };
+
+  /** Answer «the step could not be started» — and if even that cannot be written, say it: the script cuts the step by itself when it sees the heartbeat go. */
+  const answerCannotStart = (requestDir: string): void => {
+    try {
+      writeExit(requestDir, cannotStartExitCode);
+    } catch (error) {
+      deps.reportError(`the answer of a step that could not be started could not be written (${error instanceof Error ? error.message : 'unknown error'})`);
+    }
   };
 
   const beat = (): void => {
@@ -239,20 +284,60 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
     return /^\d+$/.test(text) && Number(text) > 1 ? Number(text) : null;
   };
 
-  /** End the process group of a step that is not (or is no longer) this agent's own to run: TERM now, KILL after the grace if anything is left. */
+  const readRecordedGroupStart = (requestDir: string): string | null => normalizeProcessStart(readTextFile(path.join(requestDir, requestFileNames.pgidStart)) ?? '') || null;
+
+  /**
+   * Is `pgid` still the group of the step whose leader started at `recordedStart`? The leader is there with that very start (it is ours); or the leader is gone while the
+   * group still has members — a pid is not handed out while a group carries it, so that is the same group; anything else (another process with that pid, no start
+   * recorded, `ps` that cannot be asked, nothing left) is not a group to signal.
+   */
+  const checkIsRecordedGroup = (pgid: number, recordedStart: string | null): boolean => {
+    if (recordedStart === null) return false;
+    const current = deps.readProcessStart(pgid);
+    if (current.kind === 'known') return current.text === recordedStart;
+    if (current.kind === 'unknown') return false;
+    return deps.isGroupAlive(pgid);
+  };
+
+  /** Is the job script of a request still there? Its pid alive AND, where the script recorded its start, still that process. */
+  const checkIsOwnerAlive = (request: StepRequest): boolean => {
+    if (request.ownerPid === null) return true;
+    if (!deps.isProcessAlive(request.ownerPid)) return false;
+    if (request.ownerStart === null) return true;
+    const current = deps.readProcessStart(request.ownerPid);
+    return current.kind === 'unknown' || (current.kind === 'known' && current.text === request.ownerStart);
+  };
+
+  const getFileTimeMs = (filePath: string): number | null => {
+    try {
+      return fs.statSync(filePath).mtimeMs;
+    } catch {
+      return null;
+    }
+  };
+
+  /** Was the request written before the system booted? By the time the step started, else by its `go` (or the folder's own time): nothing in it — a pid, a group — can be trusted. */
+  const checkIsFromEarlierBoot = (requestDir: string): boolean => {
+    const startedText = readTextFile(path.join(requestDir, requestFileNames.started))?.trim() ?? '';
+    const referenceMs = /^\d+$/.test(startedText) ? Number(startedText) : (getFileTimeMs(path.join(requestDir, requestFileNames.go)) ?? getFileTimeMs(requestDir));
+    return referenceMs !== null && referenceMs < deps.getBootTimeMs();
+  };
+
+  /** End the process group of a step that is not (or is no longer) this agent's own to run — if it is the group that was recorded: TERM now, KILL after the grace if anything is left. */
   const endGroupOfOrphan = (requestDir: string): void => {
     const pgid = readPgid(requestDir);
-    if (pgid === null || groupsEnding.some((entry) => entry.pgid === pgid)) return;
+    const recordedStart = readRecordedGroupStart(requestDir);
+    if (pgid === null || recordedStart === null || groupsEnding.some((entry) => entry.pgid === pgid) || !checkIsRecordedGroup(pgid, recordedStart)) return;
     deps.signalGroup(pgid, 'SIGTERM');
-    groupsEnding.push({ pgid, terminatedAtMs: deps.now() });
+    groupsEnding.push({ pgid, recordedStart, terminatedAtMs: deps.now() });
   };
 
   const finishEndingGroups = (): void => {
     for (let index = groupsEnding.length - 1; index >= 0; index -= 1) {
-      const { pgid, terminatedAtMs } = groupsEnding[index];
+      const { pgid, recordedStart, terminatedAtMs } = groupsEnding[index];
       if (!deps.isGroupAlive(pgid)) groupsEnding.splice(index, 1);
       else if (deps.now() - terminatedAtMs >= deps.killGraceMs) {
-        deps.signalGroup(pgid, 'SIGKILL');
+        if (checkIsRecordedGroup(pgid, recordedStart)) deps.signalGroup(pgid, 'SIGKILL');
         groupsEnding.splice(index, 1);
       }
     }
@@ -260,8 +345,9 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
 
   /**
    * An agent that starts finds the steps of the one before it: it was replaced or crashed under them, and a step is a process group of its own that nothing
-   * took down. Every step that never wrote its `exit` has its group ended; a script that still waits is answered 125 (it cuts the step itself when it notices
-   * the new instance — the same code, the same group), a script that is gone leaves its folder to be removed.
+   * took down. A folder from before the system booted is removed with nothing signalled. Every other step that never wrote its `exit` has its (recorded) group ended;
+   * a script that still waits is answered 125 and told by `cut` that its step was cut (it ends the group itself before it goes on), a script that is gone leaves its
+   * folder to be removed.
    */
   const reapStepsOfEarlierInstances = (): void => {
     let ids: string[] = [];
@@ -272,17 +358,33 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
     }
     for (const id of ids) {
       const requestDir = path.join(paths.guiRequestsDir, id);
+      if (checkIsFromEarlierBoot(requestDir)) {
+        fs.rmSync(requestDir, { recursive: true, force: true });
+        continue;
+      }
       if (fs.existsSync(path.join(requestDir, requestFileNames.exit)) || !fs.existsSync(path.join(requestDir, requestFileNames.started))) continue;
       endGroupOfOrphan(requestDir);
-      const ownerText = readTextFile(path.join(requestDir, requestFileNames.owner))?.trim() ?? '';
-      const isOwnerAlive = /^\d+$/.test(ownerText) && deps.isProcessAlive(Number(ownerText));
-      if (isOwnerAlive) writeExit(requestDir, cutStepExitCode);
-      else fs.rmSync(requestDir, { recursive: true, force: true });
+      const request = readStepRequest(requestDir);
+      if (request !== null && checkIsOwnerAlive(request)) {
+        writeIntoRequest(requestDir, requestFileNames.cut, '');
+        writeExit(requestDir, cutStepExitCode);
+      } else {
+        fs.rmSync(requestDir, { recursive: true, force: true });
+      }
     }
   };
 
+  /** Record the group of a step just started — its leader's start time first, then the id, so that an id is never there without the start that vouches for it. */
+  const recordGroup = (requestDir: string, pgid: number): 'recorded' | 'skipped' | 'gone' => {
+    const start = deps.readProcessStart(pgid);
+    if (start.kind !== 'known') return 'skipped';
+    if (!writeIntoRequest(requestDir, requestFileNames.pgidStart, `${start.text}\n`)) return 'gone';
+    return writeIntoRequest(requestDir, requestFileNames.pgid, `${pgid}\n`) ? 'recorded' : 'gone';
+  };
+
   const startRequest = (id: string, requestDir: string, request: StepRequest): void => {
-    fs.writeFileSync(path.join(requestDir, requestFileNames.started), `${deps.now()}\n`);
+    // The script cut its step and removed the folder in the meantime: nothing is left to run for.
+    if (!writeIntoRequest(requestDir, requestFileNames.started, `${deps.now()}\n`)) return;
     const env: NodeJS.ProcessEnv = { ...deps.readEnv(), ...(request.locale === '' ? {} : { LC_ALL: request.locale }), ...parseJobEnvLines(request.jobEnvText) };
     let logFd: number | null = null;
     try {
@@ -290,7 +392,6 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
       const child = deps.startStep({ directory: request.directory, command: request.command, env, logFd });
       const step: RunningStep = { child, terminatedAtMs: null, isKilled: false };
       running.set(id, step);
-      if (child.pid !== undefined) writeIntoRequest(requestDir, requestFileNames.pgid, `${child.pid}\n`);
       child.once('error', () => {
         if (running.get(id) === step) running.delete(id);
         writeExit(requestDir, cannotStartExitCode);
@@ -300,8 +401,24 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
         running.delete(id);
         writeExit(requestDir, describeExit(code, signal));
       });
+      let recording: 'recorded' | 'skipped' | 'gone' = 'skipped';
+      try {
+        if (child.pid !== undefined) recording = recordGroup(requestDir, child.pid);
+      } catch (error) {
+        // The group cannot be recorded (a full disk, no permission): it must not run where no cut could find it. It ends here, and the answer is «could not start».
+        running.delete(id);
+        if (child.pid !== undefined) deps.signalGroup(child.pid, 'SIGKILL');
+        deps.reportError(`the process group of a step could not be recorded (${error instanceof Error ? error.message : 'unknown error'}): the step was ended`);
+        answerCannotStart(requestDir);
+        return;
+      }
+      if (recording === 'gone') {
+        // The folder went while the step started: the script is gone with it, and nobody will read an answer.
+        running.delete(id);
+        if (child.pid !== undefined) deps.signalGroup(child.pid, 'SIGKILL');
+      }
     } catch {
-      writeExit(requestDir, cannotStartExitCode);
+      answerCannotStart(requestDir);
     } finally {
       if (logFd !== null) fs.closeSync(logFd);
     }
@@ -321,10 +438,15 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
 
   const lookAtRequest = (id: string): void => {
     const requestDir = path.join(paths.guiRequestsDir, id);
+    const step = running.get(id);
+    // A folder from before the system booted — whatever its pids and groups now name — is removed with nothing signalled. (Never a folder this agent runs a step for.)
+    if (step === undefined && checkIsFromEarlierBoot(requestDir)) {
+      fs.rmSync(requestDir, { recursive: true, force: true });
+      return;
+    }
     const request = readStepRequest(requestDir);
     if (request === null) return;
-    const step = running.get(id);
-    const isOwnerGone = request.ownerPid !== null && !deps.isProcessAlive(request.ownerPid);
+    const isOwnerGone = !checkIsOwnerAlive(request);
     if (step !== undefined) {
       if (isOwnerGone || fs.existsSync(path.join(requestDir, requestFileNames.kill)) || step.terminatedAtMs !== null) endStep(step);
       return;
@@ -351,7 +473,13 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
       } catch {
         ids = [];
       }
-      for (const id of ids) lookAtRequest(id);
+      for (const id of ids) {
+        try {
+          lookAtRequest(id);
+        } catch (error) {
+          deps.reportError(`a request of the login session's agent could not be handled (${id}: ${error instanceof Error ? error.message : 'unknown error'})`);
+        }
+      }
     },
     getRunningCount: () => running.size,
     stop: () => {

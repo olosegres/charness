@@ -22,6 +22,7 @@ import {
   guiAgentStaleAfterMs,
   parseJobEnvLines,
   readGuiAgentStatus,
+  readProcessStart,
   runGuiAgent,
   writeGuiAgentStatus,
   type GuiAgent,
@@ -148,7 +149,7 @@ describe('a step of a job', () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(fs.readFileSync(marker, 'utf8'), 'run\n');
     const earlier = writeRequest('job3.1', { command: `echo run >> "${marker}"` });
-    fs.writeFileSync(path.join(earlier.dir, 'started'), '1\n');
+    fs.writeFileSync(path.join(earlier.dir, 'started'), `${Date.now()}\n`);
     for (let look = 0; look < 5; look += 1) agent.tick();
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(fs.readFileSync(marker, 'utf8'), 'run\n', 'the step an earlier agent started is not run again');
@@ -236,14 +237,22 @@ describe('a step of a job', () => {
 });
 
 /** A process group an agent never saw die: a shell that is the leader of its group and a `sleep` in it (`isStubborn`: both ignore TERM). Returns the group's id and the sleeper's pid. */
-async function startOrphanGroup(name: string, isStubborn = false): Promise<{ pgid: number; sleepPid: number }> {
+async function startOrphanGroup(name: string, isStubborn = false): Promise<{ pgid: number; sleepPid: number; start: string }> {
   const pidFile = path.join(root, `${name}.pids`);
   const child = spawn('sh', ['-c', `${isStubborn ? "trap '' TERM; " : ''}sleep 300 & echo $! > "${pidFile}"; wait`], { detached: true, stdio: 'ignore' });
   child.unref();
   const deadline = Date.now() + waitBoundMs;
   while (!fs.existsSync(pidFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
   assert.ok(child.pid !== undefined && fs.existsSync(pidFile), 'the orphan group started');
-  return { pgid: child.pid ?? 0, sleepPid: Number(fs.readFileSync(pidFile, 'utf8').trim()) };
+  const start = readProcessStart(child.pid ?? 0);
+  assert.equal(start.kind, 'known', 'the leader of the orphan group is there');
+  return { pgid: child.pid ?? 0, sleepPid: Number(fs.readFileSync(pidFile, 'utf8').trim()), start: start.kind === 'known' ? start.text : '' };
+}
+
+/** What an agent that died under a step left in the request folder: the group's id and the start time of its leader (written start first, as the agent does). */
+function recordGroup(dir: string, group: { pgid: number; start: string }): void {
+  fs.writeFileSync(path.join(dir, 'pgid-start'), `${group.start}\n`);
+  fs.writeFileSync(path.join(dir, 'pgid'), `${group.pgid}\n`);
 }
 
 describe('a step is a process group of its own, and a cut ends the group', () => {
@@ -265,8 +274,8 @@ describe('a step is a process group of its own, and a cut ends the group', () =>
     const waiting = writeRequest('job21.1', { command: 'echo never' });
     const stubbornRequest = writeRequest('job21.2', { command: 'echo never' });
     for (const [request, group] of [[waiting, polite], [stubbornRequest, stubborn]] as const) {
-      fs.writeFileSync(path.join(request.dir, 'started'), '1\n');
-      fs.writeFileSync(path.join(request.dir, 'pgid'), `${group.pgid}\n`);
+      fs.writeFileSync(path.join(request.dir, 'started'), `${Date.now()}\n`);
+      recordGroup(request.dir, group);
     }
     const agent = createGuiAgent(paths, createDeps());
     await tickUntil(agent, 'both groups to be gone', () => !checkIsProcessAlive(polite.sleepPid) && !checkIsProcessAlive(stubborn.sleepPid) && !checkIsProcessAlive(stubborn.pgid));
@@ -279,8 +288,8 @@ describe('a step is a process group of its own, and a cut ends the group', () =>
     const orphan = await startOrphanGroup('orphan-of-a-dead-script');
     const dead = spawnSync('true');
     const request = writeRequest('job22.1', { command: 'echo never', ownerPid: dead.pid });
-    fs.writeFileSync(path.join(request.dir, 'started'), '1\n');
-    fs.writeFileSync(path.join(request.dir, 'pgid'), `${orphan.pgid}\n`);
+    fs.writeFileSync(path.join(request.dir, 'started'), `${Date.now()}\n`);
+    recordGroup(request.dir, orphan);
     const agent = createGuiAgent(paths, createDeps());
     await tickUntil(agent, 'the group to be gone and the folder removed', () => !checkIsProcessAlive(orphan.sleepPid) && !fs.existsSync(request.dir));
   });
@@ -290,8 +299,8 @@ describe('a step is a process group of its own, and a cut ends the group', () =>
     const orphan = await startOrphanGroup('orphan-seen-later');
     const dead = spawnSync('true');
     const request = writeRequest('job23.1', { command: 'echo never', ownerPid: dead.pid });
-    fs.writeFileSync(path.join(request.dir, 'started'), '1\n');
-    fs.writeFileSync(path.join(request.dir, 'pgid'), `${orphan.pgid}\n`);
+    fs.writeFileSync(path.join(request.dir, 'started'), `${Date.now()}\n`);
+    recordGroup(request.dir, orphan);
     await tickUntil(agent, 'the group to be gone and the folder removed', () => !checkIsProcessAlive(orphan.sleepPid) && !fs.existsSync(request.dir));
   });
 
@@ -300,10 +309,178 @@ describe('a step is a process group of its own, and a cut ends the group', () =>
     const dead = spawnSync('true');
     for (const [index, text] of ['', 'abc', '1', '0', '-5'].entries()) {
       const request = writeRequest(`job24.${index}`, { command: 'echo never', ownerPid: dead.pid });
-      fs.writeFileSync(path.join(request.dir, 'started'), '1\n');
+      fs.writeFileSync(path.join(request.dir, 'started'), `${Date.now()}\n`);
       fs.writeFileSync(path.join(request.dir, 'pgid'), text);
+      fs.writeFileSync(path.join(request.dir, 'pgid-start'), 'Mon Jan  1 00:00:00 2001\n');
     }
     await tickUntil(agent, 'the folders to be removed', () => fs.readdirSync(paths.guiRequestsDir).length === 0);
+  });
+});
+
+describe('a folder on disk is not trusted: an earlier boot, a reused pid', () => {
+  const longAgoMs = (): number => Date.now() - 10 * 60 * 1000;
+  /** The system booted a second ago, whatever the real one did: what the folders below were written before. */
+  const bootedJustNow = (): number => Date.now() - 1000;
+
+  async function stepFolderOf(name: string, group: { pgid: number; start: string }, startedAtMs: number, options: { ownerPid?: number; ownerStart?: string } = {}): Promise<{ dir: string; log: string }> {
+    const request = writeRequest(name, { command: 'echo never', ownerPid: options.ownerPid });
+    fs.writeFileSync(path.join(request.dir, 'started'), `${startedAtMs}\n`);
+    recordGroup(request.dir, group);
+    if (options.ownerStart !== undefined) fs.writeFileSync(path.join(request.dir, 'owner-start'), `${options.ownerStart}\n`);
+    return request;
+  }
+
+  async function lookAtThem(agent: GuiAgent, check: () => boolean, description: string): Promise<void> {
+    await tickUntil(agent, description, check);
+    for (let look = 0; look < 6; look += 1) {
+      agent.tick();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+  }
+
+  it('a folder from before the system booted is removed with NOTHING signalled — the group its pgid names is somebody else\'s now (Finder, the Dock, the agent itself): the decoy survives, whether the agent starts after the folder or sees it later', async () => {
+    const decoy = await startOrphanGroup('decoy-after-reboot');
+    const request = await stepFolderOf('job30.1', decoy, longAgoMs());
+    const agent = createGuiAgent(paths, createDeps({ getBootTimeMs: bootedJustNow, signalGroup: () => { throw new Error('nothing may be signalled for a folder of an earlier boot'); } }));
+    await lookAtThem(agent, () => !fs.existsSync(request.dir), 'the stale folder to be removed');
+    assert.equal(checkIsProcessAlive(decoy.sleepPid), true, 'the decoy group lives');
+    assert.equal(checkIsProcessAlive(decoy.pgid), true);
+
+    const later = await stepFolderOf('job30.2', decoy, longAgoMs());
+    await lookAtThem(agent, () => !fs.existsSync(later.dir), 'the stale folder written after the agent started to be removed');
+    assert.equal(checkIsProcessAlive(decoy.sleepPid), true, 'still alive');
+    process.kill(-decoy.pgid, 'SIGKILL');
+  });
+
+  it('a request that never started but was written before the boot is not run either — its script died with the boot, and a reused pid must not make it look alive', async () => {
+    const marker = path.join(root, 'stale-ran');
+    const request = writeRequest('job31.1', { command: `touch "${marker}"` });
+    fs.utimesSync(path.join(request.dir, 'go'), new Date(longAgoMs()), new Date(longAgoMs()));
+    const agent = createGuiAgent(paths, createDeps({ getBootTimeMs: bootedJustNow }));
+    await lookAtThem(agent, () => !fs.existsSync(request.dir), 'the stale request to be removed');
+    assert.equal(fs.existsSync(marker), false, 'the step of an earlier boot was not run');
+  });
+
+  it('within one boot a recorded group is signalled only while its leader still has the recorded start: a decoy that took the pid over is left alone', async () => {
+    const decoy = await startOrphanGroup('decoy-same-boot');
+    const dead = spawnSync('true');
+    const request = await stepFolderOf('job32.1', { pgid: decoy.pgid, start: 'Mon Jan  1 00:00:00 2001' }, Date.now(), { ownerPid: dead.pid });
+    const agent = createGuiAgent(paths, createDeps({ signalGroup: () => { throw new Error('a group with another start must not be signalled'); } }));
+    await lookAtThem(agent, () => !fs.existsSync(request.dir), 'the folder of the dead script to be removed');
+    assert.equal(checkIsProcessAlive(decoy.sleepPid), true, 'the decoy group lives');
+    process.kill(-decoy.pgid, 'SIGKILL');
+  });
+
+  it('a recorded start that cannot be checked (no `ps`) signals nothing — and a missing start record signals nothing', async () => {
+    const decoy = await startOrphanGroup('decoy-no-ps');
+    const dead = spawnSync('true');
+    const noStart = writeRequest('job33.1', { command: 'echo never', ownerPid: dead.pid });
+    fs.writeFileSync(path.join(noStart.dir, 'started'), `${Date.now()}\n`);
+    fs.writeFileSync(path.join(noStart.dir, 'pgid'), `${decoy.pgid}\n`);
+    const unknown = await stepFolderOf('job33.2', decoy, Date.now(), { ownerPid: dead.pid });
+    const agent = createGuiAgent(paths, createDeps({ readProcessStart: () => ({ kind: 'unknown' }), signalGroup: () => { throw new Error('nothing may be signalled'); } }));
+    await lookAtThem(agent, () => !fs.existsSync(noStart.dir) && !fs.existsSync(unknown.dir), 'both folders to be removed');
+    assert.equal(checkIsProcessAlive(decoy.sleepPid), true);
+    process.kill(-decoy.pgid, 'SIGKILL');
+  });
+
+  it('a leader that is gone while its group still has members is still the group (a pid is not handed out while a group carries it): the members are ended', async () => {
+    const gate = path.join(root, 'leader-may-go');
+    const pidFile = path.join(root, 'leaderless.pids');
+    const leader = spawn('sh', ['-c', `sleep 300 & echo $! > "${pidFile}"; while [ ! -f "${gate}" ]; do sleep 0.05; done; exit 0`], { detached: true, stdio: 'ignore' });
+    leader.unref();
+    const deadline = Date.now() + waitBoundMs;
+    while (!fs.existsSync(pidFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    const start = readProcessStart(leader.pid ?? 0);
+    assert.equal(start.kind, 'known');
+    const sleepPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+    fs.writeFileSync(gate, '');
+    while (checkIsProcessAlive(leader.pid ?? 0) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(checkIsProcessAlive(sleepPid), true, 'the leader is gone, a member of its group is not');
+    const dead = spawnSync('true');
+    const request = await stepFolderOf('job34.1', { pgid: leader.pid ?? 0, start: start.kind === 'known' ? start.text : '' }, Date.now(), { ownerPid: dead.pid });
+    const agent = createGuiAgent(paths, createDeps());
+    await tickUntil(agent, 'the leaderless group to be gone', () => !checkIsProcessAlive(sleepPid));
+    await tickUntil(agent, 'the folder to be removed', () => !fs.existsSync(request.dir));
+  });
+
+  it('the job script\'s pid counts as alive only while it is still that process: a live pid with another start (reused after a boot) is a script that is gone — its request is removed, not started, not answered', async () => {
+    const marker = path.join(root, 'reused-owner-ran');
+    const reused = writeRequest('job35.1', { command: `touch "${marker}"`, ownerPid: process.pid });
+    fs.writeFileSync(path.join(reused.dir, 'owner-start'), 'Mon Jan  1 00:00:00 2001\n');
+    const agent = createGuiAgent(paths, createDeps());
+    await lookAtThem(agent, () => !fs.existsSync(reused.dir), 'the request of the reused pid to be removed');
+    assert.equal(fs.existsSync(marker), false, 'the step was not run');
+
+    const own = readProcessStart(process.pid);
+    assert.equal(own.kind, 'known');
+    const genuine = writeRequest('job35.2', { command: 'exit 4', ownerPid: process.pid });
+    fs.writeFileSync(path.join(genuine.dir, 'owner-start'), `${own.kind === 'known' ? own.text : ''}\n`);
+    await tickUntil(agent, 'the exit code', () => readExit(genuine.dir) !== null);
+    assert.equal(readExit(genuine.dir), '4', 'a script that IS the recorded process gets its step run');
+  });
+
+  it('a request folder removed between the agent reading it and starting it is no crash and no step: `started` is written without making the folder, and nothing runs for a script that is gone', async () => {
+    const marker = path.join(root, 'gone-before-start');
+    const request = writeRequest('job36.1', { command: `touch "${marker}"; exec sleep 300` });
+    let isRemoved = false;
+    const reported: string[] = [];
+    const agent = createGuiAgent(paths, createDeps({
+      reportError: (line) => reported.push(line),
+      // The look at the script's pid is the last thing before the step starts: the script cuts its step and removes the folder right then.
+      isProcessAlive: (pid) => {
+        if (!isRemoved && pid === process.pid) {
+          isRemoved = true;
+          fs.rmSync(request.dir, { recursive: true, force: true });
+        }
+        return checkIsProcessAlive(pid);
+      },
+    }));
+    for (let look = 0; look < 8; look += 1) {
+      agent.tick();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    assert.equal(isRemoved, true);
+    assert.deepEqual(reported, [], 'a folder that is gone is not even an error to report');
+    assert.equal(fs.existsSync(request.dir), false, 'the folder was not made again');
+    assert.equal(fs.existsSync(marker), false, 'no step was started for it');
+    assert.equal(agent.getRunningCount(), 0);
+  });
+
+  it('a group that cannot be recorded (the `pgid` file cannot be written) is ended at once — it must not run where no cut could find it — and the answer is 126', async () => {
+    const pidFile = path.join(root, 'unrecorded.pid');
+    const reported: string[] = [];
+    const agent = createGuiAgent(paths, createDeps({ reportError: (line) => reported.push(line) }));
+    const { dir } = writeRequest('job37.1', { command: `echo $$ > "${pidFile}"; exec sleep 300` });
+    // A folder where the file should go: the rename of `pgid` fails with something that is not «the request is gone».
+    fs.mkdirSync(path.join(dir, 'pgid'));
+    await tickUntil(agent, 'the answer', () => readExit(dir) !== null);
+    assert.equal(readExit(dir), '126');
+    assert.match(reported.join('\n'), /the process group of a step could not be recorded/);
+    await tickUntil(agent, 'the step\'s process to be gone', () => fs.existsSync(pidFile) && !checkIsProcessAlive(Number(fs.readFileSync(pidFile, 'utf8').trim())));
+    assert.equal(agent.getRunningCount(), 0);
+  });
+
+  it('a request that cannot be handled at all is told and the agent goes on with the others: one bad folder never takes the agent down', async () => {
+    const reported: string[] = [];
+    let isFirstRead = true;
+    const agent = createGuiAgent(paths, createDeps({
+      reportError: (line) => reported.push(line),
+      readEnv: () => {
+        if (isFirstRead) {
+          isFirstRead = false;
+          throw new Error('the environment cannot be read');
+        }
+        return { PATH: process.env.PATH, HOME: paths.homeDir };
+      },
+    }));
+    const first = writeRequest('job38.1', { command: 'exit 0' });
+    agent.tick();
+    assert.match(reported.join('\n'), /could not be handled \(job38\.1: the environment cannot be read\)/);
+    fs.rmSync(first.dir, { recursive: true, force: true });
+    const second = writeRequest('job38.2', { command: 'exit 6' });
+    await tickUntil(agent, 'the other request to be answered', () => readExit(second.dir) !== null);
+    assert.equal(readExit(second.dir), '6');
   });
 });
 
