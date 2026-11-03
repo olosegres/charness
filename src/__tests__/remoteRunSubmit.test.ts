@@ -51,17 +51,16 @@ function createRecordingClient(): { client: RunnerClient; calls: string[] } {
 
 const withGitOptions: RemoteRunOptions = { runner: null, needs: null, runnerWaitSeconds: null, group: null, timeoutSeconds: null, isWithGit: true, send: [], env: [], isBackground: false };
 
-async function stage(projectRoot: string, options: RemoteRunOptions): Promise<{ error: Error | null; calls: string[]; cacheEntries: string[] }> {
+async function stage(projectRoot: string, options: RemoteRunOptions): Promise<{ error: Error | null; calls: string[]; cacheEntries: string[]; metaFiles: string[] }> {
   const { client, calls } = createRecordingClient();
-  const metaDirectory = path.join(workRoot, 'meta');
-  fs.mkdirSync(metaDirectory, { recursive: true });
+  const metaDirectory = fs.mkdtempSync(path.join(workRoot, 'meta-'));
   let error: Error | null = null;
   try {
     await stageJob({ client, project: getProjectContext(projectRoot), command: 'true', options, metaDirectory, say: () => undefined });
   } catch (caught) {
     error = caught instanceof Error ? caught : new Error('not an error');
   }
-  return { error, calls, cacheEntries: fs.existsSync(client.cacheDir) ? fs.readdirSync(client.cacheDir) : [] };
+  return { error, calls, cacheEntries: fs.existsSync(client.cacheDir) ? fs.readdirSync(client.cacheDir) : [], metaFiles: fs.readdirSync(metaDirectory) };
 }
 
 describe('stageJob with --with-git', () => {
@@ -110,5 +109,27 @@ describe('stageJob with --with-git', () => {
     const withoutGit = await stage(linked, { ...withGitOptions, isWithGit: false });
     assert.equal(withoutGit.error?.message, reachedRunnerMessage);
     assert.deepEqual(withoutGit.calls, ['callOrThrow']);
+  });
+});
+
+describe('stageJob and a job that needs iOS', () => {
+  beforeEach(() => {
+    workRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-run-submit-')));
+  });
+
+  afterEach(() => {
+    fs.rmSync(workRoot, { recursive: true, force: true });
+  });
+
+  it('`--needs ios` marks the job (`needs-ios` among its files, which the runner reads to run it in a login session); any other need does not', async () => {
+    const project = path.join(workRoot, 'project');
+    fs.mkdirSync(project);
+    git(project, 'init', '-q', '-b', 'main');
+    const ios = await stage(project, { ...withGitOptions, isWithGit: false, needs: 'ios' });
+    assert.ok(ios.metaFiles.includes('needs-ios'), ios.metaFiles.join(', '));
+    for (const needs of ['android', 'docker', 'playwright', null] as const) {
+      const other = await stage(project, { ...withGitOptions, isWithGit: false, needs });
+      assert.ok(!other.metaFiles.includes('needs-ios'), `${needs}: ${other.metaFiles.join(', ')}`);
+    }
   });
 });

@@ -10,6 +10,7 @@
  *   charness-runner check                  look at this machine and install what a runner needs (Pueue, rsync)
  *   charness-runner service install        keep it running without a terminal (see `serviceManager.ts`)
  *   charness-runner pause | resume | unpair
+ *   charness-runner gui-agent              (internal) the LaunchAgent of an always-on Mac's login session: runs iOS steps there, silences the Simulators
  *
  * This file is the FIRST thing a pairing runs, from a package that has no `node_modules` yet (`pair --bootstrap <folder> <code>`,
  * started by the pasted line): it imports Node built-ins only, installs the package's dependencies into a new app folder, and starts
@@ -119,6 +120,10 @@ async function main(): Promise<number> {
       const { runLink } = await import('./runnerCommands');
       return runLink(io, getOwnAppDir());
     }
+    case 'gui-agent': {
+      const { runGuiAgentCommand } = await import('./runnerCommands');
+      return runGuiAgentCommand(io);
+    }
     case 'status': {
       const { runStatus } = await import('./runnerCommands');
       return runStatus(io);
@@ -161,7 +166,7 @@ if (require.main === module) {
     (code) => {
       process.exitCode = code;
       // `run` holds sockets, a Pueue probe and timers: it leaves by itself — also with the restart code after an update; every other command ends when its output is flushed.
-      if (process.argv[2] === 'run' || code === restartExitCode) process.exit(code);
+      if (process.argv[2] === 'run' || process.argv[2] === 'gui-agent' || code === restartExitCode) process.exit(code);
     },
     (error: Error) => {
       process.stderr.write(`charness-runner: ${error.message}\n`);

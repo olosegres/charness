@@ -175,10 +175,46 @@ boot it, wait for `bootstatus`, delete it (bounded, 180 s; the device is deleted
 `fail` → «ios: no — needs the runner user's login session» when the Simulator itself refused to boot (the reason begins with
 `iosBootFailureReasonPrefix`); any other failed check shows its own reason — `simctl <step> failed: <its error>` when a simctl command does
 not work at all (CoreSimulator cannot be reached), «no iOS simulator runtime and iPhone device type are installed» only for a list that
-worked and came back empty, «the Simulator device could not be created». A helper in that user's GUI session is a follow-up, only if the
-check fails where it matters. The previous record is DELETED when the link starts, and a paired Mac with Xcode and no record answers «ios: no
+worked and came back empty, «the Simulator device could not be created». On an always-on Mac the check is the login session's agent's (below), not the
+daemon's link (which would only write «needs the runner user's login session» over it). The previous record is DELETED when the link starts, and a paired Mac with Xcode and no record answers «ios: no
 — the iOS Simulator is being checked» until the new one is written (`runner.sh`), so an answer given by another account or kind of service is
 never offered meanwhile. A record that cannot be written is logged by `run`, and the Mac then stays «being checked».
+
+## The login session's agent (`guiAgent.ts`)
+
+An always-on Mac's link and queue are LaunchDaemons in the System session, where Xcode's nested builds crash and the Simulator will not boot. The admin
+line therefore also loads a LaunchAgent into the account's own GUI session (`com.charness.runner.gui.<hash>`, `LimitLoadToSessionType` Aqua, restarted only
+after a crash, no `AbandonProcessGroup` — its steps go down with it): `charness-runner gui-agent`. Its definition is the account's own file in
+`~/Library/LaunchAgents` (written by `service system-step prepare`, run as the account; root never writes in the account's tree) — the root step only
+`launchctl bootstrap gui/<uid>`s it when `print gui/<uid>` says there is a session (booting a loaded one out and waiting until `print` no longer finds it
+first: `bootstrap` right after `bootout` fails with error 5), and says in a line, never as a failure, when there is none (it then loads at the account's next
+login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts would cut it).
+- **The protocol** (`<state>/gui/`): `agent.json` is the heartbeat (pid, uid, `startedAtMs`, `beatAtMs`, every 5 s; `runner.sh` calls it gone after 20 s or
+  when the pid is not alive; `stop` removes it at once). A job that needs iOS (`needs-ios` in its folder, written for `--needs ios`) on a runner whose
+  `service` is `system-service` runs each step (`run_step`) as `requests/<job>.<n>/`: `cwd`, `command`, `locale`, `log`, `env` (the job's `-e` lines), `owner`
+  (the job script's pid), then `go`. The agent starts `bash -c <command>` in a process group of its own — the environment of an ssh exec (`readExecEnv`),
+  `LC_ALL`, then the job's lines — with the job's log opened for append, and writes `exit` (a signal is 128 + its number; a folder that is gone is 126).
+  `kill` ends the group (TERM, KILL after 10 s); a dead `owner` ends it too and removes the folder; a started request is never started twice (`started`).
+  The script cuts a step with 125 when the heartbeat is gone or another `startedAtMs` answers.
+- **No session** → `submit` / `lease` refuse the job with `ios build: needs a login of <account>`, a queued job refuses at its start, `probe` says
+  `cap_ios=no` with the same words (ahead of the boot check's own answer). A runner kept running as a user service, or by hand, is in a session already: none of this applies.
+- **The link of an always-on Mac runs no Simulator check** (`checkIsLoginSessionAgentRunner`): the agent does, from the session where the Simulator can boot.
+- **It leaves** with the restart code when an update replaced the package and no step runs (launchd starts it again on the new program), and for good —
+  removing its own definition — when its daemons' definitions are gone from `/Library/LaunchDaemons`, which is how it goes away with them.
+- **Not verifiable on Linux**: what launchd does with the definition (the `bootstrap` into `gui/<uid>`, `LimitLoadToSessionType`, the session ending
+  under the agent) and whether Xcode's nested build then really passes in that session — the real run's own finding (it passed from a transient LaunchAgent in
+  `gui/<uid>`); the protocol, the script's routing and every command line are tested with real bash on Linux.
+
+## Silent Simulators (`simulatorSilencer.ts`)
+
+A Simulator plays through the HOST's audio output, so an iOS job on a Mac would be heard by whoever sits at it. The login session's agent (below) runs
+`createSimulatorSilencer` every 2 s: each booted device gets `xcrun simctl spawn <udid> notifyutil -s com.apple.springboard.volumestate 0` and `-p`
+once `bootstatus -b` has returned — per-device state, nothing of the Mac's own volume, output or mute. The volume is 60 again after every boot (also
+`erase`, `clone`), so a device that is no longer booted is forgotten and its next boot is new; `sim_volume` in
+`<device data>/var/run/simulatoraudio/audiosettings.plist` (`plutil -extract sim_volume raw`) is read back after 30 s and the command repeated, three
+times in all, then one warning in `gui-agent.log` and no more for that boot; a failing command waits 10 s before the next try. The commands run are
+exactly the five of the allowlist the test pins (no shell, a device id that is not a UUID is dropped). The mechanism is a third-party measurement, not
+Apple's documentation, and its effect lags the command by 4–13 s: what a real Simulator then plays is for the first real run on a Mac to confirm.
 
 ## `pause`, `resume`, `unpair`
 

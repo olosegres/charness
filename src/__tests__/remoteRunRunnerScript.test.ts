@@ -444,7 +444,7 @@ describe('the lease (through `exec`, which uses the same watcher as a foreground
 
   it('a job that asks for another locale still gets it: `-e LC_ALL=…` is applied after the script\'s choice', () => {
     const text = fs.readFileSync(scriptPath, 'utf8');
-    const step = /run_step\(\) \{[^]*?\n\}/.exec(text)?.[0] ?? '';
+    const step = /^run_step\(\) \{[^]*?\n\}/m.exec(text)?.[0] ?? '';
     assert.ok(step.indexOf('LC_ALL=$job_locale') > 0 && step.indexOf('LC_ALL=$job_locale') < step.indexOf('export "$env_line"'), 'the choice comes first, the job\'s variables after it');
   });
 

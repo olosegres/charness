@@ -68,7 +68,10 @@ config are found from the reported work dir with the layout `runnerUtility/runne
   `keys/`; a hand-made runner has none of it): `paused=` (the file `paused` exists), `service=` (the file `service`: `user-service` | `system-service`;
   none = `foreground`), `runner_version=` (`current/package.json`), and from `ios-check.json` (`"status": "pass"|"fail"|"skipped"`, `"reason"` — the line `runnerUtility/iosCheck.ts` writes; a paired Mac with Xcode and no record yet answers `ios: no — the iOS Simulator is being checked`) `ios_boot=` /
   `ios_boot_detail=`. A failed boot check turns `cap_ios` into `no — needs the runner user's login session` when the Simulator itself refused to boot (Apple does not
-  give one to a LaunchDaemon), and into `no — the iOS Simulator check failed: <reason>` for any other failure (no runtime installed, the device could not be created). The files are written by `charness-runner` (`pause`, `service install`, the iOS check of the service).
+  give one to a LaunchDaemon), and into `no — the iOS Simulator check failed: <reason>` for any other failure (no runtime installed, the device could not be created). On a Mac kept
+  running as an always-on service (`service=system-service`) the answer comes first from the login session's agent (`gui/agent.json`, see «the login session» in
+  `runner.sh`): no agent beating means `cap_ios=no` with `ios build: needs a login of <account>`; a job staged with `--needs ios` (`needs-ios` in its folder) is refused with those
+  words by `submit` / `lease` / its own start, and with an agent its steps run in the account's login session through `gui/requests/`. The files are written by `charness-runner` (`pause`, `service install`, the iOS check of the service).
 - **A Mac does not sleep under a job**: the job's command (and `exec`) runs with a sibling `caffeinate -i -w <pid>` (it ends with the process; the
   command keeps its signals and exit status). Nothing off a Mac or without `caffeinate`.
 

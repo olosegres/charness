@@ -173,12 +173,36 @@ table inet charness_runner {
 
 The same check applies, and so does the DNS exception on a Mac (a resolver on the LAN is inside the blocked ranges); a local stub resolver (`127.0.0.53`) needs none. A fence by account protects the network; it does not hide the machine's files from the runner account — see the homes warning above.
 
-**iOS on a Mac LaunchDaemon.** Apple does not give the iOS Simulator to a daemon or to a process started as another user. The utility
-tries for real — it boots and deletes a Simulator when the service starts and when Xcode changes — and reports `ios` only if that
-worked. If the Simulator refuses to boot, `runners` says «ios: no — needs the runner user's login session»; if the check fails for another reason (no
-runtime installed, `simctl` cannot be run) it shows that reason; and while the check of a fresh start is still running it says «the iOS Simulator is
-being checked». Android emulators (`-no-window`), Jest, Playwright
-and Docker work from the daemon.
+**iOS on an always-on Mac: the account's login session.** A LaunchDaemon lives in launchd's System session, and Apple gives neither the iOS Simulator
+nor Xcode's nested builds (a package build inside `expo-modules`, SIGTRAP at «Resolve Package Graph») to it. So the admin line also installs a small
+**LaunchAgent in the runner account's own login session** (`charness-runner gui-agent`; its definition is the account's own file in `~/Library/LaunchAgents`,
+which the admin line loads into the session when there is one and which loads by itself at every login of the account). A job started with `--needs ios`
+runs its steps — dependencies and command — THERE, as the same account with the same environment; everything else, and every job of a runner kept running
+as a user service or by hand (already in a session), runs where it always did. The agent also owns the Mac's Simulator check (it boots and deletes a
+Simulator when it starts and when Xcode changes) and keeps every Simulator silent (below).
+- **No session, no iOS — honestly.** With nobody logged in as the account, `runners` says «ios: no — ios build: needs a login of runner», `--needs ios`
+  finds no runner for it, and a job that was queued before the session ended is refused with the same words. Nothing logs in by itself: after a reboot,
+  log in as the account once at the Mac and switch back to your own account (Fast User Switching keeps its session); the agent starts at that login.
+- **The agent stops mid-step** (the session ended, an update restarted it): the step ends with 125 and the log says so — never a wait for an answer that
+  will not come. A kill, a timeout or a vanished job script ends the step's whole process group (TERM, KILL after 10 s).
+- **Replacing a loaded service waits for the jobs.** Pasting a fresh admin line over an installed one boots the loaded daemons (and the agent) out and in
+  again — `launchctl bootout`, wait until `print` no longer finds them, `bootstrap` (right after a bootout it fails with error 5) — and is refused,
+  before anything is touched, while the queue is running a job: let it finish or `charness remote-run kill <id>` it, then paste again.
+- **Removing it** needs nothing more than the daemons' commands: the agent notices that its daemons' definitions are gone, removes its own definition
+  and leaves (no command an admin pastes names the account's folders — what a runner reports about itself never goes into a `sudo` line).
+Android emulators (`-no-window`), Jest, Playwright and Docker work from the daemon as before. If the Simulator refuses to boot even in the session,
+`runners` shows the reason of the check («the iOS Simulator check failed: …»), and while a fresh start's check runs, «the iOS Simulator is being checked».
+
+**Silent jobs.** A Simulator plays through the HOST's audio output, whichever account runs it — on the first real run the owner, in a call in another
+account of the same Mac, heard an app's voice preview. So the runner keeps every iOS Simulator silent, by the Simulator's own volume and nothing else:
+for each booted device, once its boot has finished, `xcrun simctl spawn <udid> notifyutil -s com.apple.springboard.volumestate 0` and `-p` the same
+notification — never the Mac's output, volume or mute, never anything of the owner's account. The device's volume is back at 60 after every boot, so a
+device that boots again is silenced again, one whose volume (`sim_volume` in its `audiosettings.plist`) does not read back as 0 is told again a few
+times, and a failure is a line in `~/.charness-runner/logs/gui-agent.log`, never a stop of a job. **What is and is not known:** the command is a
+third-party measurement (the Simlock project's spike on iOS 26.4 and 27.0, Xcode 27.0), not Apple documentation — Apple's Device Hub has the same
+control only as a menu (Device > Sound) — and it takes effect 4–13 s after the command, so the first seconds after a boot are not covered. Look at it
+once on the Mac: run an iOS job that speaks and listen from another account; if the preview is still heard, `cat ~/.charness-runner/logs/gui-agent.log`
+says what the silencer did.
 
 ## Advanced: a runner over plain ssh
 

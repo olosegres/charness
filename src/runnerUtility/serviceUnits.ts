@@ -27,6 +27,8 @@ export interface ServiceNames {
   systemdPueued: string;
   launchdLink: string;
   launchdPueued: string;
+  /** The LaunchAgent of the account's login session on an always-on Mac (`guiAgent.ts`). */
+  launchdGui: string;
 }
 
 export function getServiceNames(stateRoot: string): ServiceNames {
@@ -37,6 +39,7 @@ export function getServiceNames(stateRoot: string): ServiceNames {
     systemdPueued: `charness-runner-pueued-${hash}.service`,
     launchdLink: `com.charness.runner.${hash}`,
     launchdPueued: `com.charness.runner.pueued.${hash}`,
+    launchdGui: `com.charness.runner.gui.${hash}`,
   };
 }
 
@@ -95,6 +98,12 @@ export interface LaunchdJobSpec {
   nodeDir: string;
   logPath: string;
   niceness: number | null;
+  /**
+   * The login session's agent: a LaunchAgent that exists only in the account's GUI session (`LimitLoadToSessionType` Aqua), comes back only after a crash
+   * (`KeepAlive` on an unsuccessful exit: a clean exit is «done», and an update's restart exits with the restart code) and takes its steps down with it
+   * (no `AbandonProcessGroup`: a step nobody can wait for any more must not run on).
+   */
+  isGuiAgent?: boolean;
 }
 
 function escapeXml(text: string): string {
@@ -138,9 +147,9 @@ export function renderLaunchdPlist(spec: LaunchdJobSpec): string {
     '  </array>',
     ...(spec.userName === null ? [] : [`  <key>UserName</key><string>${escapeXml(spec.userName)}</string>`]),
     '  <key>RunAtLoad</key><true/>',
-    '  <key>KeepAlive</key><true/>',
+    ...(spec.isGuiAgent === true ? ['  <key>KeepAlive</key>', '  <dict><key>SuccessfulExit</key><false/></dict>', '  <key>LimitLoadToSessionType</key><string>Aqua</string>'] : ['  <key>KeepAlive</key><true/>']),
     `  <key>ThrottleInterval</key><integer>${throttleSeconds}</integer>`,
-    '  <key>AbandonProcessGroup</key><true/>',
+    ...(spec.isGuiAgent === true ? [] : ['  <key>AbandonProcessGroup</key><true/>']),
     ...(spec.niceness === null ? [] : [`  <key>Nice</key><integer>${spec.niceness}</integer>`]),
     ...(isDaemon ? [] : [`  <key>WorkingDirectory</key><string>${escapeXml(spec.homeDir)}</string>`]),
     '  <key>EnvironmentVariables</key>',
@@ -170,6 +179,11 @@ export function planLaunchdJobs(paths: RunnerHomePaths, names: ServiceNames, acc
     link: { ...common, label: names.launchdLink, programArguments: [paths.launcher, 'run'], logPath: path.join(paths.logsDir, 'link.log'), niceness: null },
     pueued: { ...common, label: names.launchdPueued, programArguments: [path.join(paths.binDir, 'pueued'), '--config', paths.pueueConfig], logPath: path.join(paths.logsDir, 'pueued.log'), niceness: pueuedNiceness },
   };
+}
+
+/** @description The login session's agent's job: the launcher's `gui-agent`, run as a LaunchAgent in the account's own GUI session (never a daemon: it must be IN that session). */
+export function planGuiAgentJob(paths: RunnerHomePaths, names: ServiceNames, accountName: string, nodeDir: string): LaunchdJobSpec {
+  return { label: names.launchdGui, programArguments: [paths.launcher, 'gui-agent'], userName: null, homeDir: paths.homeDir, accountName, nodeDir, logPath: path.join(paths.logsDir, 'gui-agent.log'), niceness: null, isGuiAgent: true };
 }
 
 export type LingerState = 'yes' | 'no' | 'unknown';

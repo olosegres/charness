@@ -469,12 +469,24 @@ describe('installing and removing the services', () => {
     assert.ok(lines.findIndex((line) => line.includes(' shutdown')) < lines.findIndex((line) => line.includes('enable --now')), 'the daemon was shut down before the services started');
   });
 
-  it('a re-install leaves the queue alone: the daemon is the service\'s own', async () => {
+  it('a re-install leaves the queue alone — the daemon is the service\'s own, never shut down — and looks at it first: replacing the service while a job runs would cut the job, so it is refused until the jobs are done', async () => {
     pair();
     fs.writeFileSync(runnerPaths.serviceMarker, 'user-service\n');
     const result = await installService({ isSystem: false, userName: null }, createDeps());
     assert.equal(result.ok, true);
-    assert.ok(!commandLines().some((line) => line.includes('status --json') || line.includes(' shutdown')));
+    assert.ok(commandLines().some((line) => line.includes('status --json')), 'the queue was looked at');
+    assert.ok(!commandLines().some((line) => line.includes(' shutdown')), 'and never asked to stop');
+
+    calls = [];
+    const busy = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { ok: true, stdout: JSON.stringify({ tasks: { 0: { status: { Running: {} } }, 1: { status: { Running: {} } } } }) } }) }));
+    assert.equal(busy.ok, false);
+    assert.match(busy.lines.join('\n'), /running 2 job\(s\): replacing the service now would cut them\. Let them finish .* or stop them .*charness remote-run kill <id>/);
+    assert.ok(!commandLines().some((line) => line.startsWith('systemctl') || line.includes('enable --now')), 'nothing of the service was touched');
+
+    calls = [];
+    const unreadable = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { ok: true, stdout: 'not json' } }) }));
+    assert.equal(unreadable.ok, false);
+    assert.match(unreadable.lines.join('\n'), /cannot be read, so it cannot be told apart from one with running jobs: replacing the service now could cut them/);
   });
 
   it('refuses when Pueue is not installed yet: a unit that cannot start would only restart in a loop', async () => {
@@ -686,11 +698,41 @@ describe('installing and removing the services', () => {
         assert.deepEqual(answer, { ok: true, hadService: false });
         assert.equal(readServiceKind(runnerPaths), 'system-service');
         assert.equal(fs.existsSync(runnerPaths.pueueConfig), true);
-        assert.equal(fs.existsSync(runnerPaths.logsDir), false, 'the logs folder is the daemon shell\'s to make, not this step\'s');
+        assert.equal(fs.existsSync(runnerPaths.logsDir), true, 'the logs folder: the login session\'s agent, a LaunchAgent, logs into it');
         assert.deepEqual(commandLines(), [queueStatusCommand(runnerPaths)], 'only the account\'s own queue was asked');
         calls = [];
         assert.deepEqual(await runSystemStep('prepare', createDeps(asAccount)), { ok: true, hadService: true }, 'a second time it is a re-install, and leaves the queue alone');
-        assert.deepEqual(commandLines(), []);
+        assert.deepEqual(commandLines(), [queueStatusCommand(runnerPaths)], 'a re-install looks at the queue (it is refused while jobs run), and only looks');
+      });
+
+      it('prepare writes the login session\'s agent\'s definition into the ACCOUNT\'S OWN LaunchAgents folder: a job in its GUI session only, back after a crash only, its steps taken down with it', async () => {
+        pair();
+        await runSystemStep('prepare', createDeps(asAccount));
+        const serviceNames = getServiceNames(runnerPaths.root);
+        const agentFile = path.join(home, 'Library', 'LaunchAgents', `${serviceNames.launchdGui}.plist`);
+        const text = fs.readFileSync(agentFile, 'utf8');
+        const parsed = parseLaunchdPlist(text);
+        assert.equal(parsed.strings.get('Label'), serviceNames.launchdGui);
+        assert.deepEqual(parsed.programArguments, [runnerPaths.launcher, 'gui-agent']);
+        assert.equal(parsed.strings.get('LimitLoadToSessionType'), 'Aqua');
+        assert.ok(text.includes('<key>KeepAlive</key>\n  <dict><key>SuccessfulExit</key><false/></dict>'), 'restarted after a crash or an update\'s restart code, not after a clean exit');
+        assert.ok(!text.includes('AbandonProcessGroup'), 'the steps go down with the agent');
+        assert.ok(!parsed.keys.includes('UserName'), 'a LaunchAgent: it runs as whoever is logged in, in that session');
+        assert.equal(parsed.strings.get('StandardOutPath'), path.join(runnerPaths.logsDir, 'gui-agent.log'));
+        assert.equal(fs.statSync(agentFile).mode & 0o777, 0o644);
+      });
+
+      it('a re-install is refused while the queue is running jobs — nothing is rewritten, the record and the agent\'s definition stay as they were', async () => {
+        pair();
+        await runSystemStep('prepare', createDeps(asAccount));
+        const serviceNames = getServiceNames(runnerPaths.root);
+        const agentFile = path.join(home, 'Library', 'LaunchAgents', `${serviceNames.launchdGui}.plist`);
+        fs.writeFileSync(agentFile, 'the definition of the earlier install');
+        const busy = await runSystemStep('prepare', createDeps({ ...asAccount, runner: recordingRunner({ 'status --json': { ok: true, stdout: JSON.stringify({ tasks: { 0: { status: { Running: {} } } } }) } }) }));
+        assert.equal(busy.ok, false);
+        assert.match(busy.ok ? '' : busy.lines.join('\n'), /running 1 job\(s\): replacing the service now would cut them/);
+        assert.equal(fs.readFileSync(agentFile, 'utf8'), 'the definition of the earlier install');
+        assert.equal(readServiceKind(runnerPaths), 'system-service');
       });
 
       it('prepare refuses what a user service\'s install refuses — an unpaired account, a linked foreground run, a busy queue — and a LaunchAgent that would clash', async () => {
@@ -724,8 +766,11 @@ describe('installing and removing the services', () => {
       it('abandon forgets the record that prepare wrote — and only that: a user service\'s record stays', async () => {
         pair();
         await runSystemStep('prepare', createDeps(asAccount));
+        const agentFile = path.join(home, 'Library', 'LaunchAgents', `${getServiceNames(runnerPaths.root).launchdGui}.plist`);
+        assert.ok(fs.existsSync(agentFile));
         assert.deepEqual(await runSystemStep('abandon', createDeps(asAccount)), { ok: true, hadService: false });
         assert.equal(readServiceKind(runnerPaths), null);
+        assert.equal(fs.existsSync(agentFile), false, 'the agent\'s definition of an install that did not happen goes too');
         fs.writeFileSync(runnerPaths.serviceMarker, 'user-service\n');
         await runSystemStep('abandon', createDeps(asAccount));
         assert.equal(readServiceKind(runnerPaths), 'user-service');
@@ -762,9 +807,15 @@ describe('installing and removing the services', () => {
       const stillLoaded = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501, runner: recordingRunner({ 'launchctl print': { ok: true } }) }));
       assert.equal(stillLoaded.ok, false, 'no file left, but launchd still has a job');
       assert.equal(readServiceKind(runnerPaths), 'system-service');
+      calls = [];
+      const agentFile = path.join(home, 'Library', 'LaunchAgents', `${getServiceNames(runnerPaths.root).launchdGui}.plist`);
+      fs.mkdirSync(path.dirname(agentFile), { recursive: true });
+      fs.writeFileSync(agentFile, 'the agent');
       const gone = await uninstallService({ isSystem: false, userName: null }, createDeps({ platform: 'darwin', uid: 501 }));
       assert.equal(gone.ok, true, gone.lines.join('\n'));
       assert.equal(readServiceKind(runnerPaths), null);
+      assert.equal(fs.existsSync(agentFile), false, 'the login session\'s agent goes with the service');
+      assert.ok(commandLines().includes(`launchctl bootout gui/501/${getServiceNames(runnerPaths.root).launchdGui}`), 'and is asked to leave the account\'s session');
     });
   });
 

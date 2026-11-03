@@ -3,14 +3,17 @@ import * as os from 'os';
 import * as path from 'path';
 import { getOutputTail } from '../selfUpdate/commandRunner';
 import {
+  bootOutAndWaitUntilGone,
   commandTimeoutMs,
   fail,
+  getGuiAgentFile,
   getLaunchdFiles,
   installLaunchdJobs,
   parseSystemStepAnswer,
   resolveLinuxAccount,
   resolveMacAccount,
   rootUid,
+  systemLaunchDaemonsDir,
   type ServiceResult,
   type TargetAccount,
 } from './serviceCommon';
@@ -18,7 +21,7 @@ import { findHomeContaining, findReadableHomes, formatReadableHomesWarning, list
 import { runCommandIsolated, type IsolatedCommandRunner } from './isolatedCommand';
 import { serviceFollowsFlag } from './pairArgs';
 import { getRunnerHomePaths } from './runnerHome';
-import { getServiceNames, planLaunchdJobs, renderLaunchdPlist } from './serviceUnits';
+import { getServiceNames, planLaunchdJobs, renderLaunchdPlist, type ServiceNames } from './serviceUnits';
 
 /**
  * @description The ROOT step of the admin pairing line: install the always-on service of a runner account that the line has just paired.
@@ -95,7 +98,7 @@ export function createAdminServiceDeps(): AdminServiceDeps {
     platform: process.platform,
     uid: os.userInfo().uid,
     nodeDir: path.dirname(process.execPath),
-    launchDaemonsDir: '/Library/LaunchDaemons',
+    launchDaemonsDir: systemLaunchDaemonsDir,
     giveToRoot: fs.lchownSync,
     resolveAccount: (name) => (process.platform === 'darwin' ? resolveMacAccount(name, runCommandIsolated) : resolveLinuxAccount(name, runCommandIsolated)),
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
@@ -106,6 +109,30 @@ export function createAdminServiceDeps(): AdminServiceDeps {
 /** The arguments of `sudo` that run the account's own launcher AS the account. */
 function asAccountArgs(account: TargetAccount): string[] {
   return ['-u', account.name, '-H'];
+}
+
+/**
+ * The login session's agent (`guiAgent.ts`): the account's own LaunchAgent, whose definition the account wrote into its own `~/Library/LaunchAgents` during
+ * `prepare` (it loads by itself at every login of the account). Here root only loads it into the account's GUI session when there IS one: `launchctl
+ * bootstrap gui/<uid>` puts it in the account's own launchd, which runs it as the account like any LaunchAgent of its own folder — it gains nothing it
+ * would not have at the next login. A loaded one is booted out first and waited for (`bootstrap` right after `bootout` fails with error 5 while the old
+ * job is still being torn down); the jobs of the queue were checked idle by `prepare`, so nothing is cut. With no session there is nothing to load: the
+ * account logs in once (nothing logs in by itself) and the agent starts. Never a failure of the install: the daemons are in, and the lines say what is not.
+ */
+async function loadLoginSessionAgent(account: TargetAccount, names: ServiceNames, deps: AdminServiceDeps): Promise<string[]> {
+  const domain = `gui/${account.uid}`;
+  const session = await deps.runner('launchctl', ['print', domain], { timeoutMs: commandTimeoutMs });
+  if (!session.ok) {
+    return [`${account.name} has no login session right now, so iOS builds are refused until it has one: log in as ${account.name} once, then switch back to your own account — the login session's agent (${names.launchdGui}) starts by itself at that login; nothing logs in automatically.`];
+  }
+  if (!(await bootOutAndWaitUntilGone(names.launchdGui, domain, deps.runner))) {
+    return [`The login session's agent (${names.launchdGui}) is still loaded in ${domain} after being asked to stop: iOS builds keep running on the old one — paste a fresh admin line from /runners to try again.`];
+  }
+  const loaded = await deps.runner('launchctl', ['bootstrap', domain, getGuiAgentFile(account.homeDir, names)], { timeoutMs: commandTimeoutMs });
+  if (!loaded.ok) {
+    return [`The login session's agent could not be loaded into ${domain} (${getOutputTail(loaded, 1) || 'no answer'}): iOS builds are refused until ${account.name} logs out and in again, or a fresh admin line from /runners succeeds.`];
+  }
+  return [`Loaded the login session's agent (${names.launchdGui}) into ${domain}: iOS builds run in ${account.name}'s login session.`];
 }
 
 async function installDaemons(account: TargetAccount, deps: AdminServiceDeps): Promise<ServiceResult> {
@@ -131,7 +158,8 @@ async function installDaemons(account: TargetAccount, deps: AdminServiceDeps): P
     render: renderLaunchdPlist,
   });
   if (!result.ok) return result;
-  return { ok: true, lines: [`Installed two LaunchDaemons (${names.launchdLink}, ${names.launchdPueued}) that run as ${account.name}: always on, also logged out.`] };
+  const agentLines = await loadLoginSessionAgent(account, names, deps);
+  return { ok: true, lines: [`Installed two LaunchDaemons (${names.launchdLink}, ${names.launchdPueued}) that run as ${account.name}: always on, also logged out.`, ...agentLines] };
 }
 
 async function installUserServiceFor(account: TargetAccount, deps: AdminServiceDeps): Promise<ServiceResult> {

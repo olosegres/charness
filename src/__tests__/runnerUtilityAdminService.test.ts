@@ -125,13 +125,59 @@ describe('macOS: the daemons', () => {
       `launchctl bootout system/${names.launchdLink}`,
       `launchctl print system/${names.launchdLink}`,
       `launchctl bootstrap system ${linkPlist}`,
+      `launchctl print gui/${accountUid}`,
     ]);
     const plist = fs.readFileSync(linkPlist, 'utf8');
     assert.ok(plist.includes('<key>UserName</key><string>runner</string>'));
     assert.ok(plist.includes(accountPaths.launcher), 'the job runs the account\'s launcher — as the account');
     assert.equal(fs.statSync(linkPlist).mode & 0o777, 0o644);
     assert.deepEqual(given, [[pueuedPlist, 0, 0], [linkPlist, 0, 0]], 'only the definitions are given to root, and nothing of the account\'s');
-    assert.deepEqual(result.lines, [`Installed two LaunchDaemons (${names.launchdLink}, ${names.launchdPueued}) that run as runner: always on, also logged out.`]);
+    assert.equal(result.lines[0], `Installed two LaunchDaemons (${names.launchdLink}, ${names.launchdPueued}) that run as runner: always on, also logged out.`);
+    assert.equal(result.lines.length, 2, 'and one line about the login session');
+    assert.match(result.lines[1], /^runner has no login session right now, so iOS builds are refused until it has one: log in as runner once, then switch back to your own account — the login session's agent \(com\.charness\.runner\.gui\.[0-9a-f]{8}\) starts by itself at that login; nothing logs in automatically\.$/);
+  });
+
+  describe('the login session\'s agent', () => {
+    /** The account has a session (`print gui/<uid>` answers) while the agent itself is not loaded in it (`print gui/<uid>/<label>` does not). */
+    function sessionOpen(extra: Record<string, Partial<CommandResult>> = {}): Record<string, Partial<CommandResult>> {
+      return { [`launchctl print gui/${accountUid}/`]: { ok: false }, [`launchctl print gui/${accountUid}`]: { ok: true }, ...extra };
+    }
+
+    it('with a login session: the agent is booted out of it and waited for, then loaded — root only loads the account\'s own definition, it writes nothing there', async () => {
+      const result = await installServiceForAccount('runner', createDeps({ runner: createRunner(sessionOpen()) }));
+      assert.equal(result.ok, true, result.lines.join('\n'));
+      const names = getServiceNames(accountPaths.root);
+      const agentFile = path.join(home, 'Library', 'LaunchAgents', `${names.launchdGui}.plist`);
+      assert.deepEqual(commandLines().slice(-4), [
+        `launchctl print gui/${accountUid}`,
+        `launchctl bootout gui/${accountUid}/${names.launchdGui}`,
+        `launchctl print gui/${accountUid}/${names.launchdGui}`,
+        `launchctl bootstrap gui/${accountUid} ${agentFile}`,
+      ]);
+      assert.equal(result.lines.at(-1), `Loaded the login session's agent (${names.launchdGui}) into gui/${accountUid}: iOS builds run in runner's login session.`);
+      assert.equal(fs.existsSync(path.join(home, 'Library')), false, 'nothing was written into the account\'s tree by root');
+      assert.ok(!given.some(([file]) => file === agentFile), 'and nothing of the account\'s was given to root');
+    });
+
+    it('an agent that is still loaded after its bootout is not bootstrapped over — the line says so and the daemons stay installed', async () => {
+      const result = await installServiceForAccount('runner', createDeps({ runner: createRunner({ [`launchctl print gui/${accountUid}`]: { ok: true } }) }));
+      assert.equal(result.ok, true, 'the daemons are in');
+      assert.ok(!commandLines().some((line) => line.startsWith(`launchctl bootstrap gui/${accountUid}`)));
+      assert.match(result.lines.at(-1) ?? '', /^The login session's agent \(com\.charness\.runner\.gui\.[0-9a-f]{8}\) is still loaded in gui\/501 after being asked to stop: iOS builds keep running on the old one — paste a fresh admin line from \/runners to try again\.$/);
+    });
+
+    it('a bootstrap that fails is a line, not a failed install', async () => {
+      const result = await installServiceForAccount('runner', createDeps({ runner: createRunner(sessionOpen({ [`launchctl bootstrap gui/${accountUid}`]: { ok: false, stderr: 'Bootstrap failed: 5: Input/output error\n' } })) }));
+      assert.equal(result.ok, true, 'the daemons are in');
+      assert.match(result.lines.at(-1) ?? '', /^The login session's agent could not be loaded into gui\/501 \(Bootstrap failed: 5: Input\/output error\): iOS builds are refused until runner logs out and in again, or a fresh admin line from \/runners succeeds\.$/);
+    });
+
+    it('is looked at only after the daemons are loaded: a failed daemon install never reaches the account\'s session', async () => {
+      const failing = createRunner({ [`launchctl bootstrap system`]: { ok: false, stderr: 'boom\n' } });
+      const result = await installServiceForAccount('runner', createDeps({ runner: failing }));
+      assert.equal(result.ok, false);
+      assert.ok(!commandLines().some((line) => line.includes(`gui/${accountUid}`)));
+    });
   });
 
   it('the definitions root writes name nothing in the account\'s folder for anything launchd opens or enters itself (its output is /dev/null) — a link planted there reaches nothing of root\'s', async () => {

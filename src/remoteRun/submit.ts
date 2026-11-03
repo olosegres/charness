@@ -117,6 +117,8 @@ export async function stageJob(params: {
     'pull.roots': getPathPatternSearchRoots(project.config.pull).map((root) => `${root}\n`).join(''),
     'meta.json': `${JSON.stringify(meta)}\n`,
     ...(deps === null || depsKey === null ? {} : { 'install-command': deps.command, 'install-key': depsKey }),
+    // An always-on Mac runs such a job in the account's login session, or refuses it with the reason (`runner.sh`, «the login session»).
+    ...(options.needs === 'ios' ? { 'needs-ios': '' } : {}),
   });
 
   const prepared = await client.callOrThrow('prepare', [project.slug, jobId, formatGroupLimits(runner.groups)]);

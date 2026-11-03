@@ -11,6 +11,8 @@ import type { LaunchdJobSpec, ServiceNames } from './serviceUnits';
  */
 
 export const commandTimeoutMs = 60 * 1000;
+/** Where the admin line puts the always-on service's LaunchDaemon definitions (a folder only root can write). */
+export const systemLaunchDaemonsDir = '/Library/LaunchDaemons';
 export const rootUid = 0;
 const wheelGid = 0;
 const unitFileMode = 0o644;
@@ -70,6 +72,11 @@ export interface ServiceFiles {
 export function getLaunchdFiles(isSystem: boolean, homeDir: string, names: ServiceNames, daemonsDir: string): ServiceFiles {
   const directory = isSystem ? daemonsDir : path.join(homeDir, 'Library', 'LaunchAgents');
   return { directory, link: path.join(directory, `${names.launchdLink}.plist`), pueued: path.join(directory, `${names.launchdPueued}.plist`) };
+}
+
+/** @description Where the login session's agent's definition lives: in the ACCOUNT's own `~/Library/LaunchAgents` — the account writes it, root only loads it. */
+export function getGuiAgentFile(homeDir: string, names: ServiceNames): string {
+  return path.join(homeDir, 'Library', 'LaunchAgents', `${names.launchdGui}.plist`);
 }
 
 /**

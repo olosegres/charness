@@ -10,11 +10,13 @@ import { getRunnerHomePaths, type RunnerHomePaths } from './runnerHome';
 import {
   commandTimeoutMs,
   fail,
+  getGuiAgentFile,
   getLaunchdFiles,
   installLaunchdJobs,
   readPreviousDefinitions,
   restorePreviousDefinitions,
   stopLaunchdJobs,
+  systemLaunchDaemonsDir,
   writeDefinition,
   type ServiceFiles,
   type ServiceResult,
@@ -24,6 +26,7 @@ import {
   describeLingerRemedy,
   getServiceNames,
   parseLingerState,
+  planGuiAgentJob,
   planLaunchdJobs,
   renderLaunchdPlist,
   renderSystemdLinkUnit,
@@ -104,7 +107,7 @@ export function createServiceDeps(): ServiceDeps {
     accountName: os.userInfo().username,
     homeDir: os.homedir(),
     nodePath: process.execPath,
-    launchDaemonsDir: '/Library/LaunchDaemons',
+    launchDaemonsDir: systemLaunchDaemonsDir,
   };
 }
 
@@ -146,6 +149,13 @@ async function prepareManagedStart(paths: RunnerHomePaths, deps: ServiceDeps, ki
   const hadService = readServiceKind(paths) !== null;
   const refuse = (...lines: string[]): { refusal: ServiceResult; hadService: boolean } => ({ refusal: fail(...lines), hadService });
   if (!fs.existsSync(path.join(paths.binDir, 'pueued'))) return refuse('Pueue is not installed for this runner yet: run `charness-runner check` (it installs it), then install the service.');
+  if (hadService) {
+    // Replacing a loaded service boots its jobs out (`launchctl bootout` / `systemctl`): the queue's running jobs, and the login session's agent's steps,
+    // would be cut with it. A runner that is working is left alone; the install is asked for again when its jobs are done (or killed).
+    const queue = await inspectPueue(paths, deps.runner);
+    if (queue.kind === 'busy') return refuse(`The Pueue queue of this runner is running ${queue.activeJobs} job(s): replacing the service now would cut them. Let them finish (\`charness remote-run ls\` shows them) or stop them (\`charness remote-run kill <id>\`), then install the service again.`);
+    if (queue.kind === 'unreadable') return refuse('A Pueue daemon answers but its state cannot be read, so it cannot be told apart from one with running jobs: replacing the service now could cut them. Stop the daemon by hand and install the service again.');
+  }
   if (!hadService) {
     const status = readRunnerStatus(paths);
     if (status !== null && deps.checkIsRunnerLink(status.pid)) {
@@ -271,6 +281,9 @@ async function removeSystemService(paths: RunnerHomePaths, deps: ServiceDeps): P
   if (isPresent) {
     return fail('This runner runs as a system service (always on), which only an admin can stop.', systemServiceRemovalPointer, 'Once an admin has run them, run `charness-runner service uninstall` again here, as this account: it forgets the service once they are gone.');
   }
+  // The login session's agent goes with the service (best effort: from here only the account's own session can still reach it).
+  await deps.runner('launchctl', ['bootout', `gui/${deps.uid}/${names.launchdGui}`], { timeoutMs: commandTimeoutMs });
+  fs.rmSync(getGuiAgentFile(paths.homeDir, names), { force: true });
   fs.rmSync(paths.serviceMarker, { force: true });
   return { ok: true, lines: ['The always-on service is gone (stopped and removed by an admin): its record here is forgotten.'] };
 }
@@ -322,7 +335,10 @@ export async function runSystemStep(step: string, deps: ServiceDeps): Promise<Sy
   if (deps.uid === 0) return { ok: false, lines: ['This step is the account\'s own: it must not run as root.'] };
   const paths = getRunnerHomePaths(deps.homeDir);
   if (step === 'abandon') {
-    if (readServiceKind(paths) === 'system-service') fs.rmSync(paths.serviceMarker, { force: true });
+    if (readServiceKind(paths) === 'system-service') {
+      fs.rmSync(paths.serviceMarker, { force: true });
+      fs.rmSync(getGuiAgentFile(paths.homeDir, getServiceNames(paths.root)), { force: true });
+    }
     return { ok: true, hadService: false };
   }
   if (step !== 'prepare') return { ok: false, lines: [`unknown step: ${step}`] };
@@ -333,5 +349,11 @@ export async function runSystemStep(step: string, deps: ServiceDeps): Promise<Sy
     return { ok: false, lines: ['A user service (LaunchAgent) is installed for this runner: remove it first with `charness-runner service uninstall`.'] };
   }
   const { refusal, hadService } = await prepareManagedStart(paths, deps, 'system-service');
-  return refusal === null ? { ok: true, hadService } : { ok: false, lines: refusal.lines };
+  if (refusal !== null) return { ok: false, lines: refusal.lines };
+  // The login session's agent's definition is the account's own file in its own LaunchAgents folder (root never writes into the account's tree); the admin
+  // step only loads it into the account's GUI session — now when there is one, at the account's next login when there is not.
+  const guiJob = planGuiAgentJob(paths, names, deps.accountName, path.dirname(deps.nodePath));
+  fs.mkdirSync(paths.logsDir, { recursive: true, mode: 0o700 });
+  writeDefinition(getGuiAgentFile(paths.homeDir, names), renderLaunchdPlist(guiJob));
+  return { ok: true, hadService };
 }

@@ -15,7 +15,8 @@ import { getCurrentServiceKind } from './runnerServiceKind';
  * the commands must not come from the runner account's own program either: the account runs the agents' code and can change what that program prints,
  * so a line it printed could be anything an admin would then run with `sudo`. The hub derives the two labels itself (a short hash of the account's state
  * folder, `serviceUnits.ts`) from the work folder the runner reported when it was paired — which only picks WHICH two labels: a hash in hex and a
- * fixed path, never text the account chose — and shows them where the operator removes a runner (`charness runners remove`, the `/runners` Remove
+ * fixed path, never text the account chose (so NO command here names the account's home or anything else the runner reported: the login session's agent,
+ * which lives in that home, leaves by itself once the daemons' definitions are gone — `guiAgent.ts`) — and shows them where the operator removes a runner (`charness runners remove`, the `/runners` Remove
  * button), in `charness runners service-removal`, and in `docs/remote-run.md`.
  */
 

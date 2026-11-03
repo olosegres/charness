@@ -6,17 +6,20 @@ import { cancelReplySchema, redeemReplySchema, unpairReplySchema, type RedeemRep
 import { decodePairCode, type PairCodePayload } from '../runners/pairCode';
 import { checkIsAdminAccount, formatAdminWarning, readAccountFacts } from './adminCheck';
 import { ensureLauncher } from './launcher';
-import { removeOldApps, switchCurrentApp } from './appInstall';
+import { removeOldApps, restartExitCode, switchCurrentApp } from './appInstall';
 import { connectToHub, HubConnectionError, requestGateJson, type HubEndpoint } from './hubClient';
 import { recoverPairing } from './pairingRecovery';
 import { createLinkLoop } from './linkLoop';
 import { collectMachineReport, createMachineProbe, formatMachineReport, type MachineReport } from './machineReport';
 import { ensurePueueDaemon, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
+import { createGuiAgentDeps, runGuiAgent } from './guiAgent';
 import { createIosCheckDeps, readIosCheck, refreshIosCheck } from './iosCheck';
+import { createSilencerDeps, createSimulatorSilencer, silencerPollMs } from './simulatorSilencer';
 import { checkIsRunnerLinkProcess, createProcessControl, stopLocalLink, type ProcessControl } from './localLinkStop';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { checkIsRunnerPaused, setRunnerPaused } from './runnerFlags';
-import { formatSystemStepAnswer } from './serviceCommon';
+import { formatSystemStepAnswer, getGuiAgentFile, systemLaunchDaemonsDir } from './serviceCommon';
+import { getServiceNames } from './serviceUnits';
 import { checkCanReadAsSelf, findReadableHomes, formatForeignNodeWarning, formatReadableHomesWarning, listSubfolders } from './homeFolders';
 import { createServiceDeps, installService, readServiceKind, runSystemStep, uninstallService, parseServiceCommand, systemServiceRemovalPointer, type ServiceDeps } from './serviceManager';
 import { readPairingInProgress, readRunnerConfig, readRunnerStatus, removePairingInProgress, writePairingInProgress, writeRunnerConfig, type RunnerConfig } from './runnerConfig';
@@ -286,6 +289,88 @@ export async function runPair(code: string, appDir: string, packageId: string | 
   return 0;
 }
 
+/** Is this runner kept running by an always-on service on a Mac — its link in the System session, the login session's agent beside it? */
+function checkIsLoginSessionAgentRunner(paths: RunnerHomePaths, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'darwin' && readServiceKind(paths) === 'system-service';
+}
+
+/**
+ * The record cannot be written (the state folder, a full disk): the Mac then says «being checked» — and why is in the log, not nowhere. Runs the iOS
+ * Simulator check now and then once an hour, the way a link in a login session (or the login session's agent) judges the Simulator.
+ */
+function startIosCheck(paths: RunnerHomePaths, io: CommandIo): void {
+  const iosDeps = createIosCheckDeps();
+  const logIosCheckError = (error: unknown): void => { io.stderr(`charness-runner: the iOS Simulator check could not be recorded (${error instanceof Error ? error.message : 'unknown error'})\n`); };
+  void refreshIosCheck(paths, iosDeps, { isStartup: true }).catch(logIosCheckError);
+  const iosTimer = setInterval(() => { void refreshIosCheck(paths, iosDeps, { isStartup: false }).catch(logIosCheckError); }, iosRecheckIntervalMs);
+  iosTimer.unref();
+}
+
+/** The id of the package copy that `current` points at (`app.<id>`); `null` when it cannot be read. */
+function readCurrentAppName(paths: RunnerHomePaths): string | null {
+  try {
+    return path.basename(fs.realpathSync(paths.currentApp));
+  } catch {
+    return null;
+  }
+}
+
+/** What a test may change of the agent's command: where the always-on definitions live, how often it looks for them, and its own stop signal (no process handlers then). */
+export interface GuiAgentCommandOverrides {
+  launchDaemonsDir?: string;
+  serviceCheckIntervalMs?: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * @description `charness-runner gui-agent` (internal: the LaunchAgent in the account's login session starts it; see `guiAgent.ts`): runs the steps of the
+ * jobs that need iOS where Xcode can build, keeps the Simulator check of the Mac, and keeps every Simulator silent. Removes itself and leaves when the always-on
+ * service it belongs to is gone (the admin removed the daemons; no command of theirs names this account's folders). Leaves for a restart (exit 0, the
+ * LaunchAgent starts it again) when an update replaced the package and no step runs.
+ */
+export async function runGuiAgentCommand(io: CommandIo, homeDir: string = os.homedir(), overrides: GuiAgentCommandOverrides = {}): Promise<number> {
+  const paths = getRunnerHomePaths(homeDir);
+  if (readRunnerConfig(paths) === null) {
+    // The agent comes back only after a crash: an unpaired account (removed, unpaired by hand) is done with it, not a reason to start it every ten seconds.
+    io.stderr('charness-runner: this account is not paired: the login session\'s agent has nothing to do and ends.\n');
+    return 0;
+  }
+  const log = (line: string): void => { io.stderr(`charness-runner: ${line}\n`); };
+  startIosCheck(paths, io);
+  const silencer = createSimulatorSilencer(createSilencerDeps(log));
+  let lastSilencerLookMs = 0;
+  let isSilencerLooking = false;
+  const lookAtSimulators = (): void => {
+    if (isSilencerLooking || Date.now() - lastSilencerLookMs < silencerPollMs) return;
+    isSilencerLooking = true;
+    lastSilencerLookMs = Date.now();
+    void silencer.tick().catch((error: unknown) => { log(`the Simulator silencer failed (${error instanceof Error ? error.message : 'unknown error'})`); }).finally(() => { isSilencerLooking = false; });
+  };
+  const controller = new AbortController();
+  if (overrides.signal === undefined) {
+    process.once('SIGINT', () => { controller.abort(); });
+    process.once('SIGTERM', () => { controller.abort(); });
+  }
+  io.stdout(`charness-runner: the login session's agent is up (${os.userInfo().username}); iOS steps run here\n`);
+  const names = getServiceNames(paths.root);
+  const result = await runGuiAgent(paths, createGuiAgentDeps(() => readExecEnv(paths)), {
+    signal: overrides.signal ?? controller.signal,
+    getAppId: () => readCurrentAppName(paths),
+    onTick: lookAtSimulators,
+    checkIsServiceRemoved: () => !fs.existsSync(path.join(overrides.launchDaemonsDir ?? systemLaunchDaemonsDir, `${names.launchdLink}.plist`)),
+    serviceCheckIntervalMs: overrides.serviceCheckIntervalMs,
+  });
+  if (result === 'removed') {
+    // The admin removed the daemons: nothing is left to serve. The definition is the account's own file — it goes too, so the agent does not come back at the next login.
+    fs.rmSync(getGuiAgentFile(paths.homeDir, names), { force: true });
+    io.stdout('charness-runner: the always-on service of this account was removed: the login session\'s agent removes itself and leaves\n');
+    return 0;
+  }
+  io.stdout(`charness-runner: the login session's agent ${result === 'restart' ? 'leaves for a restart onto the updated program' : 'stopped'}\n`);
+  // The restart code is an unsuccessful exit as far as launchd is concerned (`KeepAlive` on `SuccessfulExit` false): it starts the agent again, on the new program.
+  return result === 'restart' ? restartExitCode : 0;
+}
+
 /** @description `charness-runner run`: ensure the tools and Pueue, then hold the link until stopped. Returns the exit code (75 = restart onto an update). */
 export async function runLink(io: CommandIo, appDir: string, homeDir: string = os.homedir()): Promise<number> {
   const paths = getRunnerHomePaths(homeDir);
@@ -312,12 +397,9 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   // A service that manages Pueue owns the daemon: starting a second one here would only fight it for the socket.
   const isPueueRunning = readServiceKind(paths) === null ? await ensurePueueDaemon(paths) : await waitForPueueDaemon(paths, pueueServiceWaitMs);
   if (!isPueueRunning) io.stderr('charness-runner: Pueue is not running; jobs cannot be queued until it is (the link goes up anyway).\n');
-  const iosDeps = createIosCheckDeps();
-  // The record cannot be written (the state folder, a full disk): the Mac then says «being checked» — and why is in the log, not nowhere.
-  const logIosCheckError = (error: unknown): void => { io.stderr(`charness-runner: the iOS Simulator check could not be recorded (${error instanceof Error ? error.message : 'unknown error'})\n`); };
-  void refreshIosCheck(paths, iosDeps, { isStartup: true }).catch(logIosCheckError);
-  const iosTimer = setInterval(() => { void refreshIosCheck(paths, iosDeps, { isStartup: false }).catch(logIosCheckError); }, iosRecheckIntervalMs);
-  iosTimer.unref();
+  // On an always-on Mac the Simulator can only be judged from the account's login session: that is the login session's agent's check (`runGuiAgentCommand`),
+  // and a check from this daemon would only write «needs the runner user's login session» over it.
+  if (!checkIsLoginSessionAgentRunner(paths)) startIosCheck(paths, io);
   const loopRef: { current: ReturnType<typeof createLinkLoop> | null } = { current: null };
   const servers = createRunnerServers({
     serverPrivateKey: keys.server.privateKey,

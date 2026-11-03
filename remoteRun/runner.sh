@@ -10,6 +10,8 @@
 #   <state>/paused          exists → paused=yes (written by `charness-runner pause`; the main box never sends a job to a paused runner)
 #   <state>/service         one word: user-service | system-service (no file = run by hand: service=foreground)
 #   <state>/ios-check.json  the runner's iOS Simulator boot check (one JSON line): "status": "pass"|"fail"|"skipped" and "reason": "…"|null
+#   <state>/gui/            the login session's agent of an always-on Mac (service=system-service): agent.json is its heartbeat, requests/<id>/ the steps
+#                           it runs for a job that needs iOS (`needs-ios` in the job folder) — see «the login session» below
 # <state> counts only when it holds config.json and keys/ (a work dir that merely is called «work» is not one).
 #
 # bash 3.2-compatible on purpose (the stock bash of macOS): no associative arrays, no `wait -n`, no `mapfile`, no
@@ -56,6 +58,8 @@ heartbeat_poll_sec=1
 lock_poll_sec=1
 # A failed dependencies step names this many of its first error lines (and of its build log's) — few enough that `wait`'s last 50 lines hold them all.
 failed_step_error_lines=8
+# The login session's agent (`charness-runner gui-agent`) beats every 5 s; one that has not for this long is gone (or the session is).
+gui_agent_stale_sec=20
 # What makes a line of a tool's output an error line.
 error_line_pattern='error|fatal|fail|exception|cannot|couldn|not found|no such|denied'
 
@@ -155,6 +159,91 @@ read_file() {
 keep_awake_while() {
   [ "$(uname -s)" = Darwin ] && command -v caffeinate > /dev/null 2>&1 || return 0
   caffeinate -i -w "$1" > /dev/null 2>&1 < /dev/null &
+}
+
+# ─────────────────────────── the login session (always-on Mac) ───────────────────────────
+
+# A Mac runner kept running by LaunchDaemons has no login session of its own, and Xcode's nested builds crash in the System session the daemons
+# run in. The runner account's LaunchAgent (`charness-runner gui-agent`, runnerUtility/guiAgent.ts) runs in the account's GUI session while there
+# is one; a job that needs iOS (`needs-ios` in its folder, written for `--needs ios`) runs its steps THERE, through request folders under
+# <state>/gui/requests/. Without the session the job is refused with the reason, and `probe` says the same: no auto-login, no guess.
+
+# Does this runner's work go through a login session's agent: a paired runner that is kept running by an always-on service?
+gui_session_expected() {
+  read_runner_state
+  [ -n "$runner_state" ] && [ "$(head -n 1 "$runner_state/service" 2> /dev/null)" = system-service ]
+}
+
+# A whole-number field of the agent's heartbeat file (one JSON line).
+gui_agent_field() {
+  sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$runner_state/gui/agent.json" 2> /dev/null | head -n 1
+}
+
+# Is the agent there: its process alive and its heartbeat fresh?
+gui_agent_alive() {
+  local pid beat now
+  pid=$(gui_agent_field pid)
+  beat=$(gui_agent_field beatAtMs)
+  [ -n "$pid" ] && [ -n "$beat" ] || return 1
+  kill -0 "$pid" 2> /dev/null || return 1
+  now=$(($(date +%s) * 1000))
+  [ $((now - beat)) -le $((gui_agent_stale_sec * 1000)) ]
+}
+
+# What a job that needs iOS is told when there is no login session to run it in (also what `probe` says of `ios`).
+gui_refusal_text() {
+  printf 'ios build: needs a login of %s' "$(id -un)"
+}
+
+# Does THIS job's work go through the agent: it needs iOS, and the runner is an always-on service?
+gui_needs_agent() {
+  [ -n "${jd:-}" ] && [ -f "$jd/needs-ios" ] && gui_session_expected
+}
+
+# Refuse a job that needs iOS before it is queued when there is no session to run it in.
+refuse_without_gui_session() {
+  gui_needs_agent || return 0
+  gui_agent_alive || die "$(gui_refusal_text)"
+}
+
+# One step of a job that needs iOS, run by the agent in the login session: a request folder it picks up (`go` last), the step's output appended to
+# the job's log by the agent itself, the exit code in `exit`. A kill is a `kill` file; the agent kills a step whose job script (`owner`) is gone.
+# The step is cut with 125 when the agent stops, or is another instance than the one asked.
+gui_run_step() {
+  local directory=$1
+  local command_text=$2
+  gui_step_count=$((${gui_step_count:-0} + 1))
+  local request="$runner_state/gui/requests/$job.$gui_step_count"
+  local started_at
+  started_at=$(gui_agent_field startedAtMs)
+  rm -rf "$request"
+  if ! mkdir -p "$request" 2> /dev/null; then
+    say "the login session's agent folder cannot be written ($request)"
+    step_code=125
+    return 0
+  fi
+  printf '%s' "$directory" > "$request/cwd"
+  printf '%s' "$command_text" > "$request/command"
+  printf '%s' "$job_locale" > "$request/locale"
+  printf '%s' "$jd/log" > "$request/log"
+  printf '%s' "$$" > "$request/owner"
+  if [ -s "$jd/env" ]; then cp "$jd/env" "$request/env"; else : > "$request/env"; fi
+  : > "$request/go"
+  local looks=0
+  while [ ! -f "$request/exit" ]; do
+    [ "$killed" -eq 1 ] && [ ! -f "$request/kill" ] && : > "$request/kill"
+    looks=$((looks + 1))
+    if [ $((looks % 5)) -eq 0 ] && { ! gui_agent_alive || [ "$(gui_agent_field startedAtMs)" != "$started_at" ]; }; then
+      say "the login session's agent stopped while this step ran: the step was cut"
+      step_code=125
+      rm -rf "$request"
+      return 0
+    fi
+    nap 0.2
+  done
+  step_code=$(cat "$request/exit")
+  case $step_code in '' | *[!0-9]*) step_code=125 ;; esac
+  rm -rf "$request"
 }
 
 # ─────────────────────────── probe ───────────────────────────
@@ -357,7 +446,11 @@ probe_slow() {
   elif [ "$(probe_step_status xcode)" = 0 ]; then
     local xcode_version
     xcode_version=$(probe_step_output xcode | head -n 1 | sed 's/^Xcode //')
-    if [ "${ios_boot_status:-}" = failed ]; then
+    if gui_session_expected && ! gui_agent_alive; then
+      # An always-on Mac runs its iOS work in the account's login session: with none, builds crash (Xcode's nested builds) and the Simulator will not boot.
+      echo "cap_ios=no"
+      echo "cap_ios_detail=$(gui_refusal_text)"
+    elif [ "${ios_boot_status:-}" = failed ]; then
       # Xcode is there, but the runner's own check failed. The Simulator refusing to boot is Apple's rule (none is available outside a login
       # session); any other reason (no runtime installed, the device could not be created) is shown as it is — the login session would be a
       # wrong cure. «the Simulator did not» is `iosBootFailureReasonPrefix` in runnerUtility/iosCheck.ts.
@@ -580,6 +673,7 @@ add_job() {
 
 cmd_submit() {
   set_paths "$1" "$2" "$3"
+  refuse_without_gui_session
   add_job "${4:-default}" || die "pueue add failed (does the group \"${4:-default}\" exist on this runner?)"
   echo queued
 }
@@ -879,6 +973,7 @@ cmd_lease() {
   local group=$4
   local lease_sec
   lease_sec=$(ms_to_sec "$5")
+  refuse_without_gui_session
   # A background job gets /dev/null as stdin unless job control is on: keep the caller's stream on fd 3 for the watcher.
   exec 3<&0
   add_job "$group" || die "pueue add failed (does the group \"$group\" exist on this runner?)"
@@ -1090,6 +1185,10 @@ describe_failed_step() {
 run_step() {
   local directory=$1
   local command_text=$2
+  if gui_needs_agent; then
+    gui_run_step "$directory" "$command_text"
+    return 0
+  fi
   (
     cd "$directory" || exit 126
     LC_ALL=$job_locale
@@ -1244,6 +1343,12 @@ cmd_job() {
     finish_job 124
   fi
   start_watchdog "$limit_sec"
+
+  # The session may have ended while the job waited in the queue.
+  if gui_needs_agent && ! gui_agent_alive; then
+    say "$(gui_refusal_text)"
+    finish_job 125
+  fi
 
   set_phase waiting-lock
   acquire_lock || finish_job 137

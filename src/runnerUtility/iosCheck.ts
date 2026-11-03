@@ -11,7 +11,7 @@ import type { RunnerHomePaths } from './runnerHome';
  * changes, and its result is written to `ios-check.json`, one line, for `runner.sh probe` to turn into the `ios` capability:
  *
  *   pass     the Simulator boots here → `ios`
- *   fail     it does not → «ios: no — needs the runner user's login session» (a helper in that user's GUI session is a follow-up)
+ *   fail     it does not → «ios: no — needs the runner user's login session» (on an always-on Mac the check is the login session's agent's: `guiAgent.ts`)
  *   skipped  not macOS, or no Xcode → nothing to say
  *
  * Whatever happens, the simulator device the check made is deleted again.

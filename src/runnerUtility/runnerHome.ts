@@ -12,6 +12,7 @@ import * as path from 'path';
  *   bin/          the `charness-runner` launcher, pueue, pueued, rsync when built
  *   env           the operator's KEY=VALUE lines, added to every job's environment
  *   work/         the work dir of remote-run (phase 1); pueue/ the private Pueue; logs/; build/ scratch for the rsync build
+ *   gui/          the login session's agent of an always-on Mac (`guiAgent.ts`): `agent.json` its heartbeat, `requests/<id>/` the steps it runs
  */
 
 const stateDirName = '.charness-runner';
@@ -27,6 +28,10 @@ export interface RunnerHomePaths {
   pausedFlag: string;
   /** One word, `user-service` or `system-service`, while a service is installed. Read by `runner.sh probe` as `service=`. */
   serviceMarker: string;
+  /** The login session's agent's heartbeat (`guiAgent.ts`): its pid, when it started, when it last beat. Read by `runner.sh`. */
+  guiAgentStatus: string;
+  /** The steps the login session's agent is asked to run: one folder each (`runner.sh` writes them, the agent answers in them). */
+  guiRequestsDir: string;
   /** The iOS Simulator boot check's last result (`iosCheck.ts`). Read by `runner.sh probe` as `ios_boot=`. */
   iosCheck: string;
   keysDir: string;
@@ -53,6 +58,8 @@ export function getRunnerHomePaths(homeDir: string = os.homedir()): RunnerHomePa
     pairing: path.join(root, 'pairing.json'),
     pausedFlag: path.join(root, 'paused'),
     serviceMarker: path.join(root, 'service'),
+    guiAgentStatus: path.join(root, 'gui', 'agent.json'),
+    guiRequestsDir: path.join(root, 'gui', 'requests'),
     iosCheck: path.join(root, 'ios-check.json'),
     keysDir: path.join(root, 'keys'),
     clientKey: path.join(root, 'keys', 'client_ed25519'),
