@@ -8,7 +8,7 @@ Node ≥ 22.12, `ssh`, `tar`; Pueue and rsync it installs or finds itself.
 
 ```
 pasted line (sh) ──ssh bootstrap──► unpacked hub package, NO node_modules
-   └► runnerCli.js pair --bootstrap <folder> <code>       builtins only (appInstall.ts, runnerHome.ts)
+   └► runnerCli.js pair --bootstrap <folder> <code>       builtins only (appInstall.ts, progress.ts, runnerHome.ts)
          └► npm install --omit=dev --ignore-scripts into ~/.charness-runner/app.<id>/, then starts THAT copy: `pair <code>`
                └► runnerCommands.runPair: check screen → redeem over ssh (temp key, pinned hub host key) → config.json,
                   `current` → app.<id>, launcher, tools (Pueue, rsync) → «Paired with charness …»
@@ -30,8 +30,11 @@ the queue), `logs/`, `build/`.
 
 ## Contracts
 
-- **The first step runs without dependencies.** `runnerCli.ts` imports Node built-ins and `appInstall.ts` only; everything else is
-  loaded lazily after the install. `installDependencies` runs `npm install --omit=dev --ignore-scripts`. The test seam
+- **The first step runs without dependencies.** `runnerCli.ts` imports Node built-ins, `appInstall.ts` and `progress.ts` only; everything else is
+  loaded lazily after the install. `installDependencies` runs `npm install --omit=dev --ignore-scripts` ASYNCHRONOUSLY, so the step line can show that something is happening.
+- **Every long step is named in one line** (`progress.ts`, builtins only — the root step uses it too): on a terminal the line is redrawn with dots that
+  cycle (`.`, `..`, `...`) while the step runs and ends with «— done» / «— failed»; on a pipe or a file it is one plain line when the step starts. The
+  shell part of the pasted lines prints its own two or three first (`bootstrapLine.ts`); the work of a step must not block the event loop. The test seam
   `CHARNESS_TEST_RUNNER_NODE_MODULES` (set only by a flow's environment) links a folder as `node_modules` instead — no registry in a flow.
 - **The servers accept ONE key** — the hub's, with a real signature check (`createHubAuthenticator`) — and serve nothing but `exec`: no
   shell, pty, subsystem, x11, agent, or forwarding in either direction; `env` requests are accepted and ignored. The link server serves no
@@ -90,7 +93,7 @@ package into a root-owned folder in `/tmp` (readable by the account, `--no-same-
 (`sudo -u <account> -H node …/runnerCli.js pair … --service-follows`: the pairing prints «the always-on service is installed next» instead of the
 «keep it running» commands — `pairArgs.ts`, builtins only because `runnerCli.ts` reads it before any dependency exists), and then runs
 `node <that copy>/dist/runnerUtility/rootServiceCli.js install <account>` — **Node built-ins only** (`adminService.ts`, `serviceCommon.ts`,
-`serviceUnits.ts`, `runnerHome.ts`, `commandRunner.ts`), because the copy has no `node_modules`. The account is looked up in the passwd
+`serviceUnits.ts`, `runnerHome.ts`, `commandRunner.ts`, `progress.ts`), because the copy has no `node_modules`. The account is looked up in the passwd
 database, never from its files. Root's whole part:
 
 - macOS: `sudo -u <account> -H <its launcher> service system-step prepare` — the ACCOUNT's side (`runSystemStep` in `serviceManager.ts`: it is

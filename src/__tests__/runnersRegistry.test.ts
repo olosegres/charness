@@ -240,11 +240,22 @@ describe('pairing', () => {
 describe('runner names', () => {
   it('turns what a machine calls itself into a valid name', () => {
     assert.equal(sanitizeRunnerName('Mac Mini'), 'mac-mini');
-    assert.equal(sanitizeRunnerName('  My_Mac.local '), 'my-mac-local');
+    assert.equal(sanitizeRunnerName('  My_Mac.local '), 'my-mac', 'the ending the network adds is not part of the name');
     assert.equal(sanitizeRunnerName('---'), 'runner');
     assert.equal(sanitizeRunnerName(''), 'runner');
     const long = sanitizeRunnerName('a'.repeat(23) + '-bbbbbbbb');
     assert.ok(long.length <= 24 && !long.endsWith('-'), long);
+  });
+
+  it('drops the ending a home network adds to a host name — `.local` (mDNS) and its like — once, and only at the END', () => {
+    assert.equal(sanitizeRunnerName('studio-mac.local'), 'studio-mac');
+    assert.equal(sanitizeRunnerName('Studio-Mac.LOCAL.'), 'studio-mac', 'any case, a final dot');
+    for (const suffix of ['.localdomain', '.lan', '.home', '.home.arpa', '.internal']) assert.equal(sanitizeRunnerName(`studio-mac${suffix}`), 'studio-mac', suffix);
+    assert.equal(sanitizeRunnerName('studio.local.lan'), 'studio-local', 'one ending is dropped, not a chain');
+    assert.equal(sanitizeRunnerName('my.local.box'), 'my-local-box', 'only at the end');
+    assert.equal(sanitizeRunnerName('local'), 'local', 'a machine called «local» keeps its name');
+    assert.equal(sanitizeRunnerName('.local'), 'runner', 'nothing left: the fallback name');
+    assert.equal(sanitizeRunnerName('host.localhost'), 'host-localhost', 'a longer last label is not the ending');
   });
 
   it('adds -2, -3 … until the name is free', () => {
@@ -259,6 +270,13 @@ describe('runner names', () => {
     });
     afterEach(() => {
       fixture.cleanup();
+    });
+
+    it('a Mac that calls itself «name.local» is registered as «name» — the name the owner reads in /runners and passes to `--runner`', async () => {
+      const pairing = await createTestPairing();
+      const reply = await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture({ suggestedName: 'studio-mac.local' }).request, startMs);
+      assert.ok(reply.ok && reply.name === 'studio-mac', JSON.stringify(reply));
+      assert.deepEqual(readPairedFile(fixture.ctx.dir).runners.map((runner) => runner.name), ['studio-mac']);
     });
 
     it('two machines with one host name get two names; a hand-made runner of that name counts too', async () => {

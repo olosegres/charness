@@ -1209,6 +1209,7 @@ export const frDict: Record<string, string> = {
   'runners.pairingAlternativeOutro': 'Le compte doit déjà exister et être un compte standard, pas votre compte principal — il exécute le code des agents. Quiconque a l’une des deux lignes peut rattacher une machine à ce charness tant qu’une des deux n’est pas utilisée ou expirée.',
   'runners.pairedText': 'Runner « {name} » associé {time}.',
   'runners.expiredText': 'Le code d’association a expiré.',
+  'runners.pairingSettledSeeAboveText': 'Le code de cette ligne est réglé — le résultat est dans le message ci-dessus.',
   'runners.closedText': 'Cette ligne a été utilisée sur une machine déjà associée — rien de nouveau n’a été associé.',
   'runners.pairFailedText': '⚠️ Impossible de créer la ligne d’association : {reason}',
   'runners.registryErrorText': '⚠️ Le registre des runners est illisible : {reason}',

@@ -139,6 +139,25 @@ describe('bootstrap line', () => {
     assert.match(String(result.stdout), /--package-id 0123456789abcdef /, 'the id the hub announced travels on');
   });
 
+  it('says what it is doing before the long step, on stdout: «downloading the package from the hub», and only then the runner utility takes over', () => {
+    installStubSsh(path.join(workDir, 'bin'));
+    createBootstrapAnswer();
+    const result = runLine();
+    assert.equal(result.status, 0, String(result.stderr));
+    const lines = String(result.stdout).split('\n');
+    assert.equal(lines[0], 'charness-runner: downloading the package from the hub');
+    assert.ok(lines.findIndex((line) => line.startsWith('RUNNER_CLI ')) > 0, 'the runner utility starts after the step line');
+  });
+
+  it('names the download step also when the hub then refuses it: the step on stdout, the refusal on stderr', () => {
+    installStubSsh(path.join(workDir, 'bin'));
+    fs.writeFileSync(path.join(workDir, 'bin', 'ssh'), '#!/bin/sh\necho "Permission denied" >&2\nexit 255\n', { mode: 0o755 });
+    const result = runLine();
+    assert.notEqual(result.status, 0);
+    assert.equal(String(result.stdout), 'charness-runner: downloading the package from the hub\n');
+    assert.match(String(result.stderr), /charness-runner: the hub refused or did not answer/);
+  });
+
   it('stops with a clear line when the answer has no marker (an expired line, a refusal), and cleans up', () => {
     installStubSsh(path.join(workDir, 'bin'));
     fs.writeFileSync(path.join(workDir, 'answer.bin'), 'Welcome to the hub!\n');
@@ -347,6 +366,24 @@ describe('admin bootstrap line: the checks as root, the root-owned copy, the swi
     assert.ok(String(result.stdout).indexOf('RUNNER_CLI ') < String(result.stdout).indexOf('ROOT_SERVICE install'), 'the pairing first');
     assert.equal(readFileLines(path.join(workDir, 'ssh.args')).length, 1, 'the package was downloaded once');
     assert.equal(fs.existsSync(pairedFrom), false, 'and the copy is gone when the line ends');
+  });
+
+  it('names each step as it goes, on stdout: the account check (naming the account), then the download — before the pairing and the root step, which print their own', () => {
+    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
+    const result = runAdminLine();
+    assert.equal(result.status, 0, String(result.stderr));
+    const output = String(result.stdout);
+    const positions = ['charness-runner: checking the account runner\n', 'charness-runner: downloading the package from the hub\n', 'RUNNER_CLI ', 'ROOT_SERVICE install'].map((text) => output.indexOf(text));
+    assert.ok(positions.every((position) => position >= 0), output);
+    assert.deepEqual([...positions].sort((left, right) => left - right), positions, 'in that order');
+  });
+
+  it('a refused account has said its check step and never reaches the download', () => {
+    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { someoneelse: standardAccount } });
+    const result = runAdminLine('runner');
+    assert.notEqual(result.status, 0);
+    assert.equal(String(result.stdout), 'charness-runner: checking the account runner\n');
+    assert.match(String(result.stderr), /no account runner here/);
   });
 
   it('calls sudo exactly once — for the pairing script of the package, under the node root checked — so a call for anything else would show', () => {

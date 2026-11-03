@@ -67,6 +67,7 @@ describe('the admin line\'s root step: built-ins only', () => {
   it('is the small graph it is meant to be — and the walk really follows the imports (a deeper file would show here)', () => {
     assert.deepEqual([...names].sort(), [
       'runnerUtility/adminService.ts',
+      'runnerUtility/progress.ts',
       'runnerUtility/rootServiceCli.ts',
       'runnerUtility/runnerHome.ts',
       'runnerUtility/serviceCommon.ts',

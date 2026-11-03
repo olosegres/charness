@@ -132,6 +132,10 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
     assert.match(result.stdout, new RegExp(`Paired with charness @ExampleBot \\(127\\.0\\.0\\.1:${layout.sshPort}\\) as runner “`));
     assert.match(result.stdout, /Keep it running:/);
+    // What the paste tells as it goes (stdout is a pipe here: one plain line per step), in the order the steps happen.
+    const stepLines = ['downloading the package from the hub', 'installing the runner program and its dependencies', 'checking this machine', 'pairing with the hub', 'getting Pueue', 'finding rsync'].map((step) => result.stdout.indexOf(`charness-runner: ${step}`));
+    assert.ok(stepLines.every((position) => position >= 0), `a step line is missing: ${result.stdout}`);
+    assert.deepEqual([...stepLines].sort((left, right) => left - right), stepLines, 'the steps are told in the order they happen');
     const paired = readHubPaired();
     assert.equal(paired.runners.length, 1);
     runnerId = paired.runners[0].id;
@@ -376,7 +380,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     const home = createExtraMachine(layout, 'machine-two');
     secondHome = home;
     const paths = getRunnerHomePaths(home);
-    installRunnerApp(layout, home);
+    await installRunnerApp(layout, home);
     const line = makePairingLine(layout);
     const code = /cr1\.[A-Za-z0-9_-]+/.exec(line)?.[0] ?? '';
     const decoded = decodePairCode(code);

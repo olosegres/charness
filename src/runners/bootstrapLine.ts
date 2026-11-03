@@ -47,6 +47,13 @@ const privateKeyFooter = '-----END OPENSSH PRIVATE KEY-----';
 const connectTimeoutSeconds = 20;
 /** The marker line of a `bootstrap` answer as an extended regular expression: the marker, the request, optional `key=value` fields. */
 const bootstrapMarkerPattern = `^${gateMarker} bootstrap( [a-z]+=[A-Za-z0-9._:@/-]*)*$`;
+/**
+ * The step line of the shell part, before Node starts (the runner utility's own steps are `runnerUtility/progress.ts`): `s checking the account` prints
+ * `charness-runner: checking the account`. A function in the script, defined once, so each step costs a few characters of the Telegram message.
+ */
+const sayFunction = 's() { echo "charness-runner: $*"; }';
+/** The same for a refusal: the line on stderr, then out. A function, defined once — three refusals of the fetch steps and the admin checks share it. */
+const failFunction = 'f() { echo "charness-runner: $*" >&2; exit 1; }';
 const runnerCliInPackage = 'dist/runnerUtility/runnerCli.js';
 const rootServiceCliInPackage = 'dist/runnerUtility/rootServiceCli.js';
 /** Where the admin line's root-owned copy is made: a folder the account can read, which `$TMPDIR` (the admin's own, private) is not. */
@@ -91,12 +98,13 @@ function renderFetchSteps(payload: PairCodePayload, isForAccount: boolean): stri
     `p="${payload.port}"`,
     `k="${payload.hostKey}"`,
     `b="${getPrivateKeyBody(payload.privateKey)}"`,
-    `command -v node >/dev/null 2>&1 && node -e "var v=process.versions.node.split(/[.]/);process.exit(v[0]>${minNodeMajor}||v[0]==${minNodeMajor}&&v[1]>=${minNodeMinor}?0:1)" || { echo "charness-runner: ${isForAccount ? `sudo finds no Node.js ${minNodeMajor}.${minNodeMinor} or newer on its PATH (install it system-wide)` : `Node.js ${minNodeMajor}.${minNodeMinor} or newer is needed on this machine (https://nodejs.org)`}" >&2; exit 1; }`,
+    `command -v node >/dev/null 2>&1 && node -e "var v=process.versions.node.split(/[.]/);process.exit(v[0]>${minNodeMajor}||v[0]==${minNodeMajor}&&v[1]>=${minNodeMinor}?0:1)" || f "${isForAccount ? `sudo finds no Node.js ${minNodeMajor}.${minNodeMinor} or newer on its PATH (install it system-wide)` : `Node.js ${minNodeMajor}.${minNodeMinor} or newer is needed on this machine (https://nodejs.org)`}"`,
     `{ printf "%s\\n" "${privateKeyHeader}"; printf "%s" "$b" | fold -w ${privateKeyFoldWidth}; printf "\\n%s\\n" "${privateKeyFooter}"; } > "$d/key"`,
     `printf "%s %s\\n" ${hubHostAlias} "$k" > "$d/kh"`,
-    `ssh ${sshOptions} "$u@$h" bootstrap > "$d/answer" || { echo "charness-runner: the hub refused or did not answer (has the line expired or been used already? the ssh message above says which)" >&2; exit 1; }`,
+    's "downloading the package from the hub"',
+    `ssh ${sshOptions} "$u@$h" bootstrap > "$d/answer" || f "the hub refused or did not answer (has the line expired or been used already? the ssh message above says which)"`,
     `hit=$(head -c ${maxGateNoiseBytes} "$d/answer" | LC_ALL=C grep -a -b -o -E -e "${bootstrapMarkerPattern}" | head -n 1)`,
-    '[ -n "$hit" ] || { echo "charness-runner: the hub did not send the package (has the line expired or been used already?)" >&2; exit 1; }',
+    '[ -n "$hit" ] || f "the hub did not send the package (has the line expired or been used already?)"',
     'o=${hit%%:*}; t=${hit#*:}',
     ...(isForAccount ? ['umask 022'] : []),
     'tail -c +$((o + ${#t} + 2)) "$d/answer" > "$d/package.tgz"',
@@ -118,7 +126,7 @@ function checkScriptHasNoQuote(script: string, what: string): string {
 /** @description The command to paste on the runner machine, as the account that will run jobs, for the pairing `payload`. */
 export function buildBootstrapLine(payload: PairCodePayload): string {
   const script = [...renderFetchSteps(payload, false), `node ${renderPairCommand(encodePairCode(payload), false)}`];
-  return `sh -c '${checkScriptHasNoQuote(['set -eu', ...script].join('; '), 'bootstrap')}'`;
+  return `sh -c '${checkScriptHasNoQuote(['set -eu', sayFunction, failFunction, ...script].join('; '), 'bootstrap')}'`;
 }
 
 /**
@@ -127,9 +135,11 @@ export function buildBootstrapLine(payload: PairCodePayload): string {
  */
 function renderAdminScript(payload: PairCodePayload): string {
   const checks = [
-    'f() { echo "charness-runner: $*" >&2; exit 1; }',
+    sayFunction,
+    failFunction,
     'a=$1',
     '[ "$(id -u)" = 0 ] || f "run this line with sudo"',
+    's "checking the account $a"',
     `case $a in ""|-*|*[!${accountNameChars}]*) f "$a is not an account name";; esac`,
     'i=$(id -u "$a" 2>/dev/null) || f "no account $a here: create a standard user or fix the last word"',
     '[ "$i" != 0 ] || f "$a is root: use a standard user"',

@@ -1210,6 +1210,7 @@ export const ptDict: Record<string, string> = {
   'runners.pairingAlternativeOutro': 'A conta deve já existir e ser uma conta padrão, não a sua conta principal — ela executa o código dos agentes. Quem tiver qualquer uma das duas linhas pode conectar uma máquina a este charness até uma delas ser usada ou expirar.',
   'runners.pairedText': 'Runner “{name}” emparelhado {time}.',
   'runners.expiredText': 'O código de emparelhamento expirou.',
+  'runners.pairingSettledSeeAboveText': 'O código desta linha foi encerrado — o resultado está na mensagem acima.',
   'runners.closedText': 'Esta linha foi usada numa máquina que já estava emparelhada — nada de novo foi emparelhado.',
   'runners.pairFailedText': '⚠️ Não foi possível criar a linha de emparelhamento: {reason}',
   'runners.registryErrorText': '⚠️ O registro de runners não pode ser lido: {reason}',

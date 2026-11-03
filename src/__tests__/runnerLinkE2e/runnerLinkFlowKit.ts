@@ -178,7 +178,7 @@ export function createExtraMachine(layout: RunnerLinkLayout, name: string): stri
 }
 
 /** @description What the pasted line does on a machine up to the redemption: install the charness package, point `current` at it, write the launcher. */
-export function installRunnerApp(layout: RunnerLinkLayout, home: string): void {
+export async function installRunnerApp(layout: RunnerLinkLayout, home: string): Promise<void> {
   const paths = getRunnerHomePaths(home);
   const previous = process.env[testNodeModulesEnvName];
   process.env[testNodeModulesEnvName] = path.join(repoRoot, 'node_modules');
@@ -186,7 +186,7 @@ export function installRunnerApp(layout: RunnerLinkLayout, home: string): void {
   fs.rmSync(unpackedPackage, { recursive: true, force: true });
   fs.cpSync(layout.hubInstall, unpackedPackage, { recursive: true, filter: (source) => path.basename(source) !== 'node_modules' });
   try {
-    switchCurrentApp(paths, installAppFromDirectory(unpackedPackage, paths));
+    switchCurrentApp(paths, await installAppFromDirectory(unpackedPackage, paths));
   } finally {
     if (previous === undefined) delete process.env[testNodeModulesEnvName];
     else process.env[testNodeModulesEnvName] = previous;

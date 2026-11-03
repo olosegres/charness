@@ -15,19 +15,26 @@ import { getRunnerLinkStatus } from './linkControl';
  * probe), keeping the snapshot of a machine that does not answer.
  */
 
+/**
+ * One machine of the overview. `isSnapshotStale`: it is online (its link is up) and its last report is older than that link — or it has none —
+ * so what the report says (above all how it is kept running: a service installed after the report began the link anew) may no longer be true.
+ */
+export type OverviewEntry = RunnerScreenEntry & { isSnapshotStale?: boolean };
+
 export interface RunnersOverview {
   /** The registry revision (`paired.json` `rev`): what a keyboard built from this overview is valid for. */
   revision: number;
-  entries: RunnerScreenEntry[];
+  entries: OverviewEntry[];
   /** Expiry of every pairing code that is still open. */
   openPairingExpiries: number[];
 }
 
-async function readEntry(ctx: HubContext, runner: PairedRunner, cacheDir: string): Promise<RunnerScreenEntry> {
+async function readEntry(ctx: HubContext, runner: PairedRunner, cacheDir: string): Promise<OverviewEntry> {
   const status = await getRunnerLinkStatus(ctx.dir, runner.id);
   // Only a report taken since this machine was paired is its own: its name may have belonged to a machine that was removed.
   const snapshot = readLastProbe(cacheDir, runner.name, runner.pairedAtMs);
-  return { runner, isOnline: status.isOnline, lastSeenMs: status.lastSeenMs ?? snapshot?.seenAtMs ?? null, probe: snapshot?.probe ?? null };
+  const isSnapshotStale = status.isOnline && (snapshot === null || (status.sinceMs !== null && snapshot.seenAtMs < status.sinceMs));
+  return { runner, isOnline: status.isOnline, lastSeenMs: status.lastSeenMs ?? snapshot?.seenAtMs ?? null, probe: snapshot?.probe ?? null, isSnapshotStale };
 }
 
 /** @description The overview without any ssh call: the registry, which links are up, the last snapshots. */
@@ -65,4 +72,23 @@ export async function probeRunnersOverview(ctx: HubContext, overview: RunnersOve
   ensureRemoteRunCacheDir(cacheDir);
   const reports = await probeRunners(clients, nowMs);
   return { ...overview, entries: overview.entries.map((entry) => applyReport(entry, reports.find((report) => report.name === entry.runner.name))) };
+}
+
+/**
+ * @description The overview for a one-shot listing (`charness runners ls`): as read, with the machines whose report is stale (see
+ * {@link OverviewEntry}) asked what they are like now — only those, so a listing that finds every report fresh makes no ssh call, and the report
+ * that every probe leaves behind is refreshed for the next reader too. Only the REPORT is taken from the answer: whether a machine is online stays
+ * what its link says, so a probe that fails (an ssh that cannot start, a slow machine) never turns a linked machine «offline» in the list.
+ */
+export async function refreshStaleSnapshots(ctx: HubContext, overview: RunnersOverview, cacheDir: string, nowMs: number, probe: typeof probeRunnersOverview = probeRunnersOverview): Promise<RunnersOverview> {
+  const stale = overview.entries.filter((entry) => entry.isSnapshotStale === true);
+  if (stale.length === 0) return overview;
+  const asked = await probe(ctx, { ...overview, entries: stale }, cacheDir, nowMs);
+  return {
+    ...overview,
+    entries: overview.entries.map((entry) => {
+      const answer = asked.entries.find((candidate) => candidate.runner.id === entry.runner.id);
+      return answer === undefined ? entry : { ...entry, probe: answer.probe, isSnapshotStale: false };
+    }),
+  };
 }

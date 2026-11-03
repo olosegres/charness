@@ -19,6 +19,7 @@ import { readPairedFile, readPendingFile, type PairedRunner } from '../runners/h
 import { getCurrentServiceKind } from '../runners/runnerServiceKind';
 import { adminLineTrustSentence, runRunnersCli, type RunnersCliDeps } from '../runners/runnersCli';
 import { formatRunnerList, formatRunnerListLine } from '../runners/runnersList';
+import { refreshStaleSnapshots } from '../runners/runnersOverview';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 
@@ -38,6 +39,7 @@ function createDeps(overrides: Partial<RunnersCliDeps> = {}): RunnersCliDeps {
   return {
     ctx: fixture.ctx,
     cacheDir: path.join(fixture.root, 'cache'),
+    refreshStale: refreshStaleSnapshots,
     scanHostKey: async () => hubHostKey,
     now: () => nowMs,
     sleep: async () => undefined,
@@ -214,7 +216,7 @@ describe('charness runners', () => {
     assert.match(run.stdout, /Pairing code open until .* \(host\.example:22\)/);
   });
 
-  it('ls says how a runner is kept running as the machine last reported it, not as the registry recorded it at pairing — and makes no ssh call', async () => {
+  it('ls says how a runner is kept running as the machine last reported it, not as the registry recorded it at pairing — and, for a machine that is not online, makes no ssh call', async () => {
     const name = await pairMachine('Mac Mini');
     const deps = createDeps();
     assert.match((await runCli(['ls'], deps)).stdout, / · run by hand · /, 'never probed: the registry\'s pairing-time word is all there is');
@@ -222,6 +224,19 @@ describe('charness runners', () => {
     fs.writeFileSync(path.join(deps.cacheDir, `${name}.probe.json`), JSON.stringify({ seenAtMs: nowMs, text: 'os_name=macOS\nservice=user-service' }));
     const run = await runCli(['ls'], deps);
     assert.match(run.stdout, /^mac-mini — offline since [\d-]+ [\d:]+ · macOS 15\.1 \(arm64\) · user service · charness 3\.7\.0 · paired /m, 'the snapshot speaks; the link, which is down, still decides online or not');
+    assert.doesNotMatch(run.stdout, /run by hand/);
+  });
+
+  it('ls asks the machines whose report is stale (the list says which) before it prints, and shows what they answer — the link still decides «online»', async () => {
+    await pairMachine('Mac Mini');
+    const asked: string[] = [];
+    const refreshStale: RunnersCliDeps['refreshStale'] = async (_ctx, overview) => {
+      asked.push(...overview.entries.map((entry) => entry.runner.name));
+      return { ...overview, entries: overview.entries.map((entry) => ({ ...entry, isOnline: true, probe: parseProbeOutput('os_name=macOS\nservice=system-service') })) };
+    };
+    const run = await runCli(['ls'], createDeps({ refreshStale }));
+    assert.deepEqual(asked, ['mac-mini'], 'asked once, by the very overview ls read');
+    assert.match(run.stdout, /^mac-mini — online · macOS 15\.1 \(arm64\) · system service · charness 3\.7\.0 · paired /m);
     assert.doesNotMatch(run.stdout, /run by hand/);
   });
 

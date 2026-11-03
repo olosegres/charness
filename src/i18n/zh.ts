@@ -1203,6 +1203,7 @@ export const zhDict: Record<string, string> = {
   'runners.pairingAlternativeOutro': '该账户必须已存在且是标准账户，不能是你的主账户 — 它会运行智能体的代码。拿到这两行命令中任意一行的人，在其中一行被使用或过期之前，都可以把一台机器接入这个 charness。',
   'runners.pairedText': 'runner“{name}”已于 {time} 配对。',
   'runners.expiredText': '配对码已过期。',
+  'runners.pairingSettledSeeAboveText': '这一行的代码已处理完毕——结果见上一条消息。',
   'runners.closedText': '这条命令用在了一台已配对的机器上 — 没有新增配对。',
   'runners.pairFailedText': '⚠️ 无法生成配对命令：{reason}',
   'runners.registryErrorText': '⚠️ 无法读取 runner 登记表：{reason}',

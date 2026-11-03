@@ -38,6 +38,11 @@ import { createRandomId, generateEd25519KeyPair, getPublicKeyFingerprint } from 
 
 const maxRunnerNameLength = 24;
 const fallbackRunnerName = 'runner';
+/**
+ * The ending a home network gives a host name — a Mac says `studio-mac.local` (mDNS), a router `.lan` / `.home` / `.home.arpa`, a
+ * resolver `.localdomain` / `.internal` — is not part of what the machine is called: the name would read `studio-mac-local`.
+ */
+const networkSuffixPattern = /\.(?:local|localdomain|lan|home\.arpa|home|internal)\.?$/i;
 
 export interface CreatePairingParams {
   /** The address the runner dials, and the hub's ssh host key found there. */
@@ -165,9 +170,11 @@ export function sweepExpiredPairings(ctx: HubContext, nowMs: number): Promise<Pe
   });
 }
 
-/** @description What a runner may call itself: lowercase letters and digits with single dashes, short, never empty. */
+/** @description What a runner may call itself: lowercase letters and digits with single dashes, short, never empty — from its host name without the ending its network adds (`.local`). */
 export function sanitizeRunnerName(suggestedName: string): string {
   const cleaned = suggestedName
+    .trim()
+    .replace(networkSuffixPattern, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')

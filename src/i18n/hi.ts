@@ -1208,6 +1208,7 @@ export const hiDict: Record<string, string> = {
   'runners.pairingAlternativeOutro': 'अकाउंट पहले से मौजूद और सामान्य (स्टैंडर्ड) होना चाहिए, आपका मुख्य अकाउंट नहीं — वह एजेंटों का कोड चलाता है। इन दोनों में से कोई भी लाइन जिसके पास है, वह इसके इस्तेमाल होने या समाप्त होने तक इस charness से कोई मशीन जोड़ सकता है।',
   'runners.pairedText': 'रनर “{name}” {time} को जोड़ा गया।',
   'runners.expiredText': 'पेयरिंग कोड समाप्त हो गया।',
+  'runners.pairingSettledSeeAboveText': 'इस लाइन का कोड निपट गया है — नतीजा ऊपर वाले संदेश में है।',
   'runners.closedText': 'यह लाइन ऐसी मशीन पर इस्तेमाल हुई जो पहले से जुड़ी थी — कुछ नया नहीं जोड़ा गया।',
   'runners.pairFailedText': '⚠️ पेयरिंग लाइन नहीं बन सकी: {reason}',
   'runners.registryErrorText': '⚠️ रनर रजिस्ट्री पढ़ी नहीं जा सकती: {reason}',

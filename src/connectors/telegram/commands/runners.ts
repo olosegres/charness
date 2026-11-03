@@ -34,6 +34,7 @@ import {
   buildAddressStep,
   buildClosedText,
   buildExpiredText,
+  buildSeeFirstMessageText,
   buildPairedText,
   buildPairingMessageParts,
   buildRemoveConfirmation,
@@ -50,7 +51,7 @@ import {
   type RunnersCallback,
   type RunnersScreen,
 } from '../../../utils/runnersScreenPlan';
-import { addPairingMessage, getPairingMessageId, markPairingMessageFailed, readPairingMessages, removePairingMessages } from '../runnerPairingMessages';
+import { addPairingMessage, checkIsSecondLine, getPairingMessageId, markPairingMessageFailed, readPairingMessages, removePairingMessages, type PairingMessage } from '../runnerPairingMessages';
 import type { BotCore } from './botCore';
 import { answerCallbackQuerySafely } from './callbackToast';
 import { buildMessageSnapshotKey, getCallbackMessageId, rememberBoundedSnapshot } from './callbackMessage';
@@ -69,7 +70,7 @@ const settleRetryMaxDelayMs = 5 * 60 * 1000;
 const logTag = 'runners';
 
 /** What the module needs from the bot: the shared core, the hub and the few readings only the composition root has. */
-export interface RunnersPorts extends Pick<BotCore, 'bot' | 'command' | 'replyToThread' | 'editThreadMessage' | 'editThreadKeyboard' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'> {
+export interface RunnersPorts extends Pick<BotCore, 'bot' | 'command' | 'replyToThread' | 'editThreadMessage' | 'deleteThreadMessage' | 'editThreadKeyboard' | 'authoriseContext' | 'withThreadLocale' | 'checkIsGeneral'> {
   /** The hub registry of this OS user (`src/runners/`). */
   hub: HubContext;
   /** The address runners dial, as `settings.json` holds it; `null` = never chosen. */
@@ -130,7 +131,7 @@ interface ShownScreen {
  * look of that job, for a test to run on its own clock).
  */
 export function createRunners(ports: RunnersPorts) {
-  const { bot, command, replyToThread, editThreadMessage, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, hub, now } = ports;
+  const { bot, command, replyToThread, editThreadMessage, deleteThreadMessage, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, hub, now } = ports;
 
   const shownScreens = new Map<string, ShownScreen>();
   const addressProposals = new Map<string, HubAddress | null>();
@@ -248,11 +249,11 @@ export function createRunners(ports: RunnersPorts) {
   }
 
   /** Post a message that carries a pairing line (a secret: the trace keeps only its length) and remember it so it can turn into «paired» / «expired». */
-  async function postPairingLine(key: SessionKey, pairId: string, text: string): Promise<boolean> {
+  async function postPairingLine(key: SessionKey, pairId: string, text: string, role: NonNullable<PairingMessage['role']>): Promise<boolean> {
     const messageId = await replyToThread(key, text, { parse_mode: 'HTML' }, { isSecret: true });
     if (messageId === null) return false;
     try {
-      addPairingMessage(ports.pairingMessagesPath, { pairId, key: keyToString(key), messageId, offeredAtMs: now() });
+      addPairingMessage(ports.pairingMessagesPath, { pairId, key: keyToString(key), messageId, offeredAtMs: now(), role });
     } catch (error) {
       // The line is out and works; only its turning into «paired» / «expired» is lost.
       console.warn(`[${logTag}] the pairing message could not be recorded (${getCaughtErrnoCode(error)}); it will not turn into «paired» or «expired»`);
@@ -262,7 +263,7 @@ export function createRunners(ports: RunnersPorts) {
 
   /**
    * Make a code and post the two lines that carry it, one message each (together they are longer than a Telegram message): the line for an
-   * ADMIN account first, the plain one second. Both settle together, whichever line is used.
+   * ADMIN account first, the plain one second. They settle together, whichever line is used: the first message shows the result, the second is deleted.
    */
   async function offerPairing(key: SessionKey, address: HubAddress, knownCheck: Extract<HubAddressCheck, { ok: true }> | null): Promise<void> {
     const check = knownCheck ?? (await checkHubAddress(address, ports.scanHostKey));
@@ -274,12 +275,12 @@ export function createRunners(ports: RunnersPorts) {
       ports.ensureGateWrapper();
       const pairing = await createPairing(hub, { host: address.host, port: address.port, hostKey: check.hostKey, label: ports.getBotLabel(), nowMs: now() });
       const parts = buildPairingMessageParts(pairingLifetimeMinutes, defaultRunnerAccount, t);
-      if (!(await postPairingLine(key, pairing.pairId, renderPairingMessage(parts.adminIntro, buildAdminBootstrapLine(pairing.payload, defaultRunnerAccount), null)))) {
+      if (!(await postPairingLine(key, pairing.pairId, renderPairingMessage(parts.adminIntro, buildAdminBootstrapLine(pairing.payload, defaultRunnerAccount), null), 'first'))) {
         await replyToThread(key, t('runners.pairFailedText', { reason: 'the message could not be sent' }));
         return;
       }
       // The admin line is out and works whatever happens to this one.
-      if (!(await postPairingLine(key, pairing.pairId, renderPairingMessage(parts.alternativeIntro, buildBootstrapLine(pairing.payload), parts.alternativeOutro)))) {
+      if (!(await postPairingLine(key, pairing.pairId, renderPairingMessage(parts.alternativeIntro, buildBootstrapLine(pairing.payload), parts.alternativeOutro), 'second'))) {
         console.warn(`[${logTag}] the second pairing message (the line for the runner account itself) could not be sent`);
       }
     } catch (error) {
@@ -485,16 +486,18 @@ export function createRunners(ports: RunnersPorts) {
       const isOpen = pending.some((pairing) => pairing.pairId === message.pairId && pairing.expiresAtMs > nowMs);
       if (runner === undefined && isOpen) continue;
       const key = keyFromString(message.key);
-      const isEdited = await withThreadLocale(key, () =>
-        editThreadMessage(key, message.messageId, runner !== undefined ? buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime) : checkIsClosed(message.pairId) ? buildClosedText(t) : buildExpiredText(t)),
-      );
-      if (isEdited) {
+      // The FIRST line shows what became of the code; the SECOND is deleted — two «paired» messages read as a bug — or, when Telegram will not delete it, points at the first.
+      const isSettled = await withThreadLocale(key, async () => {
+        if (checkIsSecondLine(message, messages)) return (await deleteThreadMessage(key, message.messageId)) || editThreadMessage(key, message.messageId, buildSeeFirstMessageText(t));
+        return editThreadMessage(key, message.messageId, runner !== undefined ? buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime) : checkIsClosed(message.pairId) ? buildClosedText(t) : buildExpiredText(t));
+      });
+      if (isSettled) {
         settledMessageIds.add(messageId);
         settleRetries.delete(messageId);
         continue;
       }
       if (nowMs - (message.firstFailedAtMs ?? nowMs) > pairingMessageGiveUpAfterFailingMs) {
-        console.warn(`[${logTag}] a pairing message could not be edited for a day; giving up on it`);
+        console.warn(`[${logTag}] a pairing message could not be settled for a day; giving up on it`);
         settledMessageIds.add(messageId);
         settleRetries.delete(messageId);
         continue;

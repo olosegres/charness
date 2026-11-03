@@ -38,7 +38,7 @@ export async function updateFromHub(params: UpdateParams): Promise<UpdateOutcome
       const archive = Buffer.concat(chunks);
       if (getPackageIdOfArchive(archive) !== expectedId) return { ok: false, reason: 'the package the hub sent does not match the id it announced' };
       fs.writeFileSync(archivePath, archive, { mode: 0o600 });
-      const appDir = installAppFromArchive(archivePath, params.paths);
+      const appDir = await installAppFromArchive(archivePath, params.paths);
       switchCurrentApp(params.paths, appDir);
       writeRunnerConfig(params.paths, { ...params.config, packageId: expectedId });
       removeOldApps(params.paths);

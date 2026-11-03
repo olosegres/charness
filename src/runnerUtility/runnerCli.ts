@@ -23,6 +23,7 @@ import * as path from 'path';
 import { installAppFromDirectory, restartExitCode } from './appInstall';
 import { checkArchiveHasId, checkIsPackageId } from './packageId';
 import { serviceFollowsFlag, splitServiceFollowsFlag } from './pairArgs';
+import { checkIsTerminal, createStepRunner, stepLinePrefix, type RunStep } from './progress';
 import { getRunnerHomePaths } from './runnerHome';
 
 const usageExitCode = 2;
@@ -69,20 +70,20 @@ function parsePairArgs(args: readonly string[]): { code: string; packageId: stri
   return flag === '--package-id' && packageId !== undefined && checkIsPackageId(packageId) ? { code, packageId, isServiceFollowing } : null;
 }
 
-function runBootstrap(args: BootstrapArgs): number {
+async function runBootstrap(args: BootstrapArgs, runStep: RunStep): Promise<number> {
   const { bootstrapDir, archivePath, packageId, code, isServiceFollowing } = args;
   // The archive is checked against the id the hub announced with it, and THAT id — not whatever the hub offers a moment later — is
   // what the runner records as installed.
   if (!checkArchiveHasId(archivePath, packageId)) {
-    process.stderr.write('charness-runner: the package that was downloaded is not the one the hub announced; run the line again\n');
+    process.stderr.write(`${stepLinePrefix}the package that was downloaded is not the one the hub announced; run the line again\n`);
     return 1;
   }
   const paths = getRunnerHomePaths();
   let appDir: string;
   try {
-    appDir = installAppFromDirectory(bootstrapDir, paths);
+    appDir = await runStep('installing the runner program and its dependencies (npm, about a minute)', () => installAppFromDirectory(bootstrapDir, paths));
   } catch (error) {
-    process.stderr.write(`charness-runner: ${error instanceof Error ? error.message : 'could not install'}\n`);
+    process.stderr.write(`${stepLinePrefix}${error instanceof Error ? error.message : 'could not install'}\n`);
     return 1;
   }
   const installedCli = path.join(appDir, 'dist', 'runnerUtility', 'runnerCli.js');
@@ -94,15 +95,16 @@ function runBootstrap(args: BootstrapArgs): number {
 
 async function main(): Promise<number> {
   const [command = 'status', ...args] = process.argv.slice(2);
+  const runStep = createStepRunner({ write: (text) => { process.stdout.write(text); }, isTerminal: checkIsTerminal(process.stdout) });
   if (command === 'pair' && splitServiceFollowsFlag(args).rest[0] === '--bootstrap') {
     const bootstrapArgs = parseBootstrapArgs(args);
     if (bootstrapArgs === null) {
       process.stderr.write(usage);
       return usageExitCode;
     }
-    return runBootstrap(bootstrapArgs);
+    return runBootstrap(bootstrapArgs, runStep);
   }
-  const io = { stdout: (text: string): void => { process.stdout.write(text); }, stderr: (text: string): void => { process.stderr.write(text); } };
+  const io = { stdout: (text: string): void => { process.stdout.write(text); }, stderr: (text: string): void => { process.stderr.write(text); }, runStep };
   switch (command) {
     case 'pair': {
       const pairArgs = parsePairArgs(args);

@@ -64,28 +64,28 @@ describe('installed copies', () => {
     assert.notEqual(createAppId(), createAppId());
   });
 
-  it('the test seam links a node_modules folder instead of running npm; without it npm would run', () => {
+  it('the test seam links a node_modules folder instead of running npm; without it npm would run', async () => {
     const appDir = path.join(home, 'app');
     fs.mkdirSync(appDir);
     const modules = path.join(home, 'modules');
     fs.mkdirSync(modules);
-    installDependencies(appDir, { [testNodeModulesEnvName]: modules });
+    await installDependencies(appDir, { [testNodeModulesEnvName]: modules });
     assert.equal(fs.realpathSync(path.join(appDir, 'node_modules')), fs.realpathSync(modules));
   });
 
-  it('copies the package into a new app folder and installs into it; every install gets a folder of its own', () => {
+  it('copies the package into a new app folder and installs into it; every install gets a folder of its own', async () => {
     const modules = path.join(home, 'modules');
     fs.mkdirSync(modules);
     const previous = process.env[testNodeModulesEnvName];
     process.env[testNodeModulesEnvName] = modules;
     try {
-      const appDir = installAppFromDirectory(createPackage(), paths);
+      const appDir = await installAppFromDirectory(createPackage(), paths);
       assert.match(path.basename(appDir), /^app\.[0-9a-f]{12}$/);
       assert.ok(fs.existsSync(path.join(appDir, 'dist', 'runnerUtility', 'runnerCli.js')));
       assert.ok(fs.existsSync(path.join(appDir, 'node_modules')));
       process.env[testNodeModulesEnvName] = path.join(home, 'missing-folder-links-fine');
       const before = fs.readdirSync(paths.root).length;
-      assert.doesNotThrow(() => installAppFromDirectory(createPackage(), paths), 'a dangling link is still a link');
+      await assert.doesNotReject(installAppFromDirectory(createPackage(), paths), 'a dangling link is still a link');
       assert.equal(fs.readdirSync(paths.root).length, before + 1);
     } finally {
       if (previous === undefined) delete process.env[testNodeModulesEnvName];

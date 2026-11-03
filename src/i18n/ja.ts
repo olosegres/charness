@@ -1203,6 +1203,7 @@ export const jaDict: Record<string, string> = {
   'runners.pairingAlternativeOutro': 'アカウントは既に存在する標準ユーザーで、メインのアカウントではないものにしてください — エージェントのコードが動きます。どちらかの行を持つ人は、そのどちらかが使用済みになるか期限が切れるまで、このcharnessにマシンを接続できます。',
   'runners.pairedText': 'ランナー「{name}」を {time} にペアリングしました。',
   'runners.expiredText': 'ペアリングコードの期限が切れました。',
+  'runners.pairingSettledSeeAboveText': 'この行のコードは決着しました — 結果は上のメッセージにあります。',
   'runners.closedText': 'この行はすでにペアリング済みのマシンで使われました — 新しくペアリングされたものはありません。',
   'runners.pairFailedText': '⚠️ ペアリング行を作成できませんでした: {reason}',
   'runners.registryErrorText': '⚠️ ランナーのレジストリを読み取れません: {reason}',

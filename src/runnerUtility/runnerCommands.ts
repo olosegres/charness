@@ -23,6 +23,7 @@ import { getRunnerHomePaths, type RunnerHomePaths } from './runnerHome';
 import { ensureRunnerKeys, readRunnerKeys, type RunnerKeys } from './runnerKeys';
 import { readExecEnv } from './execEnv';
 import { createRunnerServers } from './runnerServers';
+import { createStepRunner, type RunStep } from './progress';
 import { createToolDeps, ensurePueue, ensureRsync, findPueue, findRsync, type ToolDeps, type ToolInstallOutcome } from './toolInstall';
 
 /**
@@ -33,6 +34,13 @@ import { createToolDeps, ensurePueue, ensureRsync, findPueue, findRsync, type To
 export interface CommandIo {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
+  /** How the long steps are shown (`progress.ts`); absent = one plain line per step on `stdout`. */
+  runStep?: RunStep;
+}
+
+/** The step runner of `io`: its own, or plain lines on its `stdout`. */
+function getStepRunner(io: CommandIo): RunStep {
+  return io.runStep ?? createStepRunner({ write: io.stdout, isTerminal: false });
 }
 
 const envFileTemplate = '# KEY=VALUE lines, added to the environment of every job that runs on this machine (read again for each job).\n';
@@ -62,8 +70,7 @@ function formatToolLine(rsync: ToolInstallOutcome | null, pueue: ToolInstallOutc
 }
 
 async function printMachineCheck(paths: RunnerHomePaths, io: CommandIo): Promise<MachineReport> {
-  io.stdout('charness-runner — checking this machine\n');
-  const report = await collectMachineReport(createMachineProbe(paths.homeDir), paths.root);
+  const report = await getStepRunner(io)('checking this machine', () => collectMachineReport(createMachineProbe(paths.homeDir), paths.root));
   io.stdout(`${formatMachineReport(report).join('\n')}\n`);
   const account = os.userInfo().username;
   if (checkIsAdminAccount(readAccountFacts())) io.stdout(`${formatAdminWarning(account).join('\n')}\n`);
@@ -71,8 +78,9 @@ async function printMachineCheck(paths: RunnerHomePaths, io: CommandIo): Promise
 }
 
 async function installTools(paths: RunnerHomePaths, deps: ToolDeps, io: CommandIo): Promise<void> {
-  const pueue = await ensurePueue(paths, deps);
-  const rsync = await ensureRsync(paths, deps);
+  const runStep = getStepRunner(io);
+  const pueue = await runStep('getting Pueue, the job queue (a download, checked against its checksum)', () => ensurePueue(paths, deps));
+  const rsync = await runStep('finding rsync (building it from source when the machine has none)', () => ensureRsync(paths, deps));
   io.stdout(`${formatToolLine(rsync, pueue)}\n`);
   for (const outcome of [pueue, rsync]) if (!outcome.ok) io.stderr(`charness-runner: ${outcome.reason}\n`);
 }
@@ -212,12 +220,14 @@ export async function runPair(code: string, appDir: string, packageId: string | 
   let reply: RedeemReply | null = null;
   let failure = 'pairing failed';
   try {
-    const client = await connectToHub(endpoint, payload.privateKey);
-    try {
-      reply = await requestGateJson(client, 'redeem', JSON.stringify(request), redeemReplySchema);
-    } finally {
-      client.end();
-    }
+    reply = await getStepRunner(io)('pairing with the hub', async () => {
+      const client = await connectToHub(endpoint, payload.privateKey);
+      try {
+        return await requestGateJson(client, 'redeem', JSON.stringify(request), redeemReplySchema);
+      } finally {
+        client.end();
+      }
+    });
   } catch (error) {
     failure = error instanceof HubConnectionError && error.failure === 'auth' ? 'the hub refused this pairing line — it has expired or has been used already; make a new one' : error instanceof Error ? error.message : failure;
   }

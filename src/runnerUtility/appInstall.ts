@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getAppDirPath, type RunnerHomePaths } from './runnerHome';
@@ -18,7 +18,6 @@ const npmInstallTimeoutMs = 10 * 60 * 1000;
 const appsToKeep = 2;
 const appDirPattern = /^app\.[0-9a-f]+$/;
 const randomIdBytes = 6;
-const maxBufferBytes = 64 * 1024 * 1024;
 
 /** Test seam, set only by a flow's environment: the folder to link as `node_modules` instead of running `npm install` (no registry in a flow). */
 export const testNodeModulesEnvName = 'CHARNESS_TEST_RUNNER_NODE_MODULES';
@@ -34,33 +33,53 @@ function findNpm(): string {
   return fs.existsSync(besideNode) ? besideNode : 'npm';
 }
 
-/** Install the production dependencies of the package in `appDir`; scripts are not run (nothing the runner needs builds). Throws with npm's last words. */
-export function installDependencies(appDir: string, env: NodeJS.ProcessEnv = process.env): void {
+/** How much of npm's stderr is kept to say what went wrong: its last words are the useful ones. */
+const maxKeptStderrBytes = 16 * 1024;
+const stderrTailLines = 3;
+
+/**
+ * Install the production dependencies of the package in `appDir`; scripts are not run (nothing the runner needs builds). Asynchronous, so the
+ * step line can show that something is happening while npm works (it takes a minute). Rejects with npm's last words.
+ */
+export function installDependencies(appDir: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const linked = env[testNodeModulesEnvName];
   if (linked !== undefined && linked !== '') {
     fs.symlinkSync(linked, path.join(appDir, 'node_modules'), 'dir');
-    return;
+    return Promise.resolve();
   }
-  const result = spawnSync(findNpm(), ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--no-progress'], {
-    cwd: appDir,
-    encoding: 'utf8',
-    timeout: npmInstallTimeoutMs,
-    maxBuffer: maxBufferBytes,
-    env,
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(findNpm(), ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--no-progress'], { cwd: appDir, env, stdio: ['ignore', 'ignore', 'pipe'] });
+    let keptStderr = '';
+    let isTimedOut = false;
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => { keptStderr = (keptStderr + chunk).slice(-maxKeptStderrBytes); });
+    const timer = setTimeout(() => {
+      isTimedOut = true;
+      child.kill('SIGKILL');
+    }, npmInstallTimeoutMs);
+    const fail = (cause: string): void => {
+      clearTimeout(timer);
+      const detail = keptStderr.trim().split('\n').slice(-stderrTailLines).join(' | ');
+      reject(new Error(`npm install failed${cause === '' ? '' : ` (${cause})`}${detail === '' ? '' : `: ${detail}`}`));
+    };
+    child.once('error', (error) => fail(error.message));
+    child.once('close', (code) => {
+      if (isTimedOut) fail(`timed out after ${npmInstallTimeoutMs / 60_000} minutes`);
+      else if (code === 0) {
+        clearTimeout(timer);
+        resolve();
+      } else fail('');
+    });
   });
-  if (result.error !== undefined || result.status !== 0) {
-    const detail = `${result.stderr ?? ''}`.trim().split('\n').slice(-3).join(' | ');
-    throw new Error(`npm install failed${result.error === undefined ? '' : ` (${result.error.message})`}${detail === '' ? '' : `: ${detail}`}`);
-  }
 }
 
 /** @description Copy an unpacked package into a new app folder and install its dependencies; returns the folder. Removes it again if the install fails. */
-export function installAppFromDirectory(sourceDir: string, paths: RunnerHomePaths): string {
+export async function installAppFromDirectory(sourceDir: string, paths: RunnerHomePaths): Promise<string> {
   const appDir = getAppDirPath(paths, createAppId());
   fs.mkdirSync(paths.root, { recursive: true, mode: 0o700 });
   fs.cpSync(sourceDir, appDir, { recursive: true });
   try {
-    installDependencies(appDir);
+    await installDependencies(appDir);
   } catch (error) {
     fs.rmSync(appDir, { recursive: true, force: true });
     throw error;
@@ -69,13 +88,13 @@ export function installAppFromDirectory(sourceDir: string, paths: RunnerHomePath
 }
 
 /** @description Unpack a gzip tar archive (the hub's package) into a new app folder with the system `tar`, and install its dependencies. */
-export function installAppFromArchive(archivePath: string, paths: RunnerHomePaths): string {
+export async function installAppFromArchive(archivePath: string, paths: RunnerHomePaths): Promise<string> {
   const appDir = getAppDirPath(paths, createAppId());
   fs.mkdirSync(appDir, { recursive: true, mode: 0o700 });
   try {
     const unpacked = spawnSync('tar', ['-xzf', archivePath, '-C', appDir], { encoding: 'utf8' });
     if (unpacked.status !== 0) throw new Error(`could not unpack the package (tar exit ${unpacked.status ?? 'none'})`);
-    installDependencies(appDir);
+    await installDependencies(appDir);
   } catch (error) {
     fs.rmSync(appDir, { recursive: true, force: true });
     throw error;

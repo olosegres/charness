@@ -1213,6 +1213,7 @@ export const ruDict: Record<string, string> = {
   'runners.pairingAlternativeOutro': 'Учётная запись должна уже существовать и быть обычной, не основной — под ней исполняется код агентов. Любой, у кого есть любая из этих строк, может подключить машину к этому charness, пока одна из них не использована и не истекла.',
   'runners.pairedText': 'Раннер «{name}» подключён {time}.',
   'runners.expiredText': 'Код подключения истёк.',
+  'runners.pairingSettledSeeAboveText': 'Код этой строки завершён — результат смотрите в сообщении выше.',
   'runners.closedText': 'Эта строка использована на машине, которая уже была подключена, — ничего нового не подключено.',
   'runners.pairFailedText': '⚠️ Не удалось создать строку подключения: {reason}',
   'runners.registryErrorText': '⚠️ Реестр раннеров не читается: {reason}',

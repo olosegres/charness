@@ -149,6 +149,11 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.match(result.stdout, new RegExp(`Paired with charness @ExampleBot \\(127\\.0\\.0\\.1:${layout.sshPort}\\) as runner “`));
     assert.match(result.stdout, /Keeping it running: the always-on service for this account is installed next, by the same line\./);
     assert.doesNotMatch(result.stdout, /Keep it running:/, 'the commands of the plain line\'s help would be wrong here');
+    // Each step is told as it happens (stdout is a pipe here: one plain line per step) — the shell's own first, then the runner utility's, the root step's last.
+    const stepPositions = ['checking the account runner', 'downloading the package from the hub', 'installing the runner program and its dependencies', 'checking this machine', 'pairing with the hub', 'getting Pueue', 'finding rsync', 'installing the always-on service for runner']
+      .map((step) => result.stdout.indexOf(`charness-runner: ${step}`));
+    assert.ok(stepPositions.every((position) => position >= 0), `a step line is missing: ${result.stdout}`);
+    assert.deepEqual([...stepPositions].sort((left, right) => left - right), stepPositions, 'the steps are told in the order they happen');
     assert.match(result.stdout, /Installed two user services: charness-runner-[0-9a-f]{8}\.service \(the link\) and charness-runner-pueued-[0-9a-f]{8}\.service \(the queue\)\./);
     assert.match(result.stdout, /Lingering is on: they run without a login and start at boot\./);
 

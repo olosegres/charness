@@ -1209,6 +1209,7 @@ export const uzDict: Record<string, string> = {
   'runners.pairingAlternativeOutro': 'Hisob allaqachon mavjud va oddiy bo‘lishi kerak, asosiy hisobingiz emas — u agentlar kodini bajaradi. Ikkala qatordan biriga ega har kim, ulardan biri ishlatilguncha yoki muddati tugaguncha, mashinani shu charnessga ulashi mumkin.',
   'runners.pairedText': 'Runner “{name}” {time} da ulandi.',
   'runners.expiredText': 'Ulash kodining muddati tugadi.',
+  'runners.pairingSettledSeeAboveText': 'Bu qatorning kodi hal bo‘ldi — natija yuqoridagi xabarda.',
   'runners.closedText': 'Bu qator allaqachon ulangan mashinada ishlatildi — yangi hech narsa ulanmadi.',
   'runners.pairFailedText': '⚠️ Ulash qatorini yaratib bo‘lmadi: {reason}',
   'runners.registryErrorText': '⚠️ Runnerlar reyestrini o‘qib bo‘lmadi: {reason}',

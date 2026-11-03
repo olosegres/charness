@@ -1253,6 +1253,7 @@ export const enDict: Record<string, string> = {
   'runners.pairingAlternativeOutro': 'The account must be an existing standard user, not your main account — it runs the agents\' code. Anyone with either line can attach a machine to this charness until one of them is used or expires.',
   'runners.pairedText': 'Runner “{name}” paired {time}.',
   'runners.expiredText': 'Pairing code expired.',
+  'runners.pairingSettledSeeAboveText': 'The code of this line is settled — see the message above for the result.',
   'runners.closedText': 'This line was used on a machine that was already paired — nothing new was paired.',
   'runners.pairFailedText': '⚠️ Could not make a pairing line: {reason}',
   'runners.registryErrorText': '⚠️ The runners registry cannot be read: {reason}',

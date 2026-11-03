@@ -1209,6 +1209,7 @@ export const deDict: Record<string, string> = {
   'runners.pairingAlternativeOutro': 'Das Konto muss bereits existieren und ein normales Konto sein, nicht dein Hauptkonto — es führt den Code der Agenten aus. Wer eine der beiden Zeilen hat, kann eine Maschine mit diesem charness verbinden, bis eine davon benutzt wird oder abläuft.',
   'runners.pairedText': 'Runner „{name}“ gekoppelt {time}.',
   'runners.expiredText': 'Der Kopplungscode ist abgelaufen.',
+  'runners.pairingSettledSeeAboveText': 'Der Code dieser Zeile ist erledigt — das Ergebnis steht in der Nachricht darüber.',
   'runners.closedText': 'Diese Zeile wurde auf einer bereits gekoppelten Maschine verwendet — es wurde nichts Neues gekoppelt.',
   'runners.pairFailedText': '⚠️ Die Kopplungszeile konnte nicht erstellt werden: {reason}',
   'runners.registryErrorText': '⚠️ Das Runner-Register ist nicht lesbar: {reason}',

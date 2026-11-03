@@ -329,6 +329,11 @@ export function buildExpiredText(t: Translate): string {
   return t('runners.expiredText');
 }
 
+/** @description What the SECOND pairing message becomes when Telegram will not delete it once the code is settled: a pointer at the first, which shows the result. */
+export function buildSeeFirstMessageText(t: Translate): string {
+  return t('runners.pairingSettledSeeAboveText');
+}
+
 /** @description What the pairing message becomes once its code was CLOSED unused: the line was pasted for a machine that was already paired, so it only installed the service. */
 export function buildClosedText(t: Translate): string {
   return t('runners.closedText');

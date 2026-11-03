@@ -1209,6 +1209,7 @@ export const esDict: Record<string, string> = {
   'runners.pairingAlternativeOutro': 'La cuenta debe existir ya y ser una cuenta estándar, no tu cuenta principal — ejecuta el código de los agentes. Quien tenga cualquiera de las dos líneas puede vincular una máquina a este charness hasta que una se use o caduque.',
   'runners.pairedText': 'Runner «{name}» vinculado {time}.',
   'runners.expiredText': 'El código de vinculación caducó.',
+  'runners.pairingSettledSeeAboveText': 'El código de esta línea ya se resolvió — el resultado está en el mensaje de arriba.',
   'runners.closedText': 'Esta línea se usó en una máquina que ya estaba vinculada — no se vinculó nada nuevo.',
   'runners.pairFailedText': '⚠️ No se pudo crear la línea de vinculación: {reason}',
   'runners.registryErrorText': '⚠️ No se puede leer el registro de runners: {reason}',

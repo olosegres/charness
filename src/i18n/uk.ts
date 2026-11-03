@@ -1215,6 +1215,7 @@ export const ukDict: Record<string, string> = {
   'runners.pairingAlternativeOutro': 'Обліковий запис має вже існувати й бути звичайним, не основним — під ним виконується код агентів. Будь-хто, у кого є будь-який із цих рядків, може підключити машину до цього charness, доки один із них не використано й не сплив.',
   'runners.pairedText': 'Раннер «{name}» підключено {time}.',
   'runners.expiredText': 'Код підключення сплив.',
+  'runners.pairingSettledSeeAboveText': 'Код цього рядка завершено — результат дивіться у повідомленні вище.',
   'runners.closedText': 'Цей рядок використано на машині, яка вже була підключена, — нічого нового не підключено.',
   'runners.pairFailedText': '⚠️ Не вдалося створити рядок підключення: {reason}',
   'runners.registryErrorText': '⚠️ Реєстр раннерів не читається: {reason}',

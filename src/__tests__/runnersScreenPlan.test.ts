@@ -26,6 +26,7 @@ import {
   buildRemoveConfirmation,
   buildRunnerActionCallback,
   buildRunnersScreen,
+  buildSeeFirstMessageText,
   clipReportedText,
   maxCallbackDataBytes,
   maxReportedTextChars,
@@ -239,6 +240,16 @@ describe('runnersScreenPlan: the other screens and texts', () => {
     assert.ok(buildPairingMessageParts(10, 'ci-runner', t).adminIntro.includes('«ci-runner»'), 'the account is named as given');
   });
 
+  it('the pointer a second pairing message becomes when Telegram will not delete it is told in every language — its own words, no placeholder, a short line', () => {
+    const english = buildSeeFirstMessageText(t);
+    for (const locale of localeCodes) {
+      const text = runWithLocale(locale, () => buildSeeFirstMessageText(t));
+      assert.ok(text.length > 10 && text.length < 120, `${locale}: «${text}»`);
+      assert.doesNotMatch(text, /\{[a-z]+\}/, `${locale}: no placeholder is left`);
+      if (locale !== 'en') assert.notEqual(text, english, `${locale}: translated, not the English fallback`);
+    }
+  });
+
   it('in every language each pairing message — its text and its line — fits a Telegram message (4096 characters) with room for a long address', () => {
     // A 29-character host and a 15-character hub account: longer than a typical address.
     const payload = createPairCodePayload({ host: 'a-quite-long-name.example.com', user: 'a-hub-user-name' });
@@ -264,6 +275,7 @@ describe('runnersScreenPlan: the other screens and texts', () => {
     assert.equal(buildPairedText('mac', 42, t, formatTime), 'Runner “mac” paired T42.');
     assert.equal(buildExpiredText(t), 'Pairing code expired.');
     assert.equal(buildClosedText(t), 'This line was used on a machine that was already paired — nothing new was paired.');
+    assert.equal(buildSeeFirstMessageText(t), 'The code of this line is settled — see the message above for the result.');
   });
 });
 
