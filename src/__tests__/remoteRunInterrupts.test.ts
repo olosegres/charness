@@ -2,7 +2,8 @@
  * @description The interrupt handling of `remote-run` that gets time to clean up (`remoteRun/interrupts.ts`): the first interrupt goes to the
  * command, a SECOND one ends the process at once with the code of the first — so a call that does not stop can never swallow Ctrl-C. The
  * policy is tested with a fake `exit`; the production wiring (`addInterruptHandlerWithHardStop`: real signals, `process.exit`) in a real process.
- * And `waitForChildEnd`: a call that is ended on purpose settles when its process has exited, whenever that was decided — also after the process
+ * A closed stdout (`remote-run … | head`) is an interrupt of its own — SIGPIPE, 141 — raised by `createProcessIo` from the EPIPE of the write, in a
+ * real process on a real pipe. And `waitForChildEnd`: a call that is ended on purpose settles when its process has exited, whenever that was decided — also after the process
  * had exited by itself while a master connection kept its pipes.
  *
  * Test case: N/A — Charness has no Jira tracker.
@@ -11,11 +12,14 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { InterruptSignal } from '../remoteRun/exitCodes';
-import { createHardStopHandler, waitForChildEnd } from '../remoteRun/interrupts';
+import { interruptSignals, planInterrupt, remoteRunExitCodes, type InterruptSignal } from '../remoteRun/exitCodes';
+import { describeInterruptCause } from '../remoteRun/foreground';
+import { addInterruptHandler, createHardStopHandler, raiseStdoutClosed, waitForChildEnd } from '../remoteRun/interrupts';
+import { watchClosedOutput } from '../remoteRun/output';
 import { killRecordedProcess, readRecordedPid } from './recordedProcess';
 
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -34,13 +38,86 @@ describe('the hard stop of a second interrupt (policy)', () => {
     assert.deepEqual(exits, [143, 143], 'SIGTERM was the first: its code, whatever came after');
   });
 
-  it('each signal\'s own code when it is the first: 130 / 143 / 129', () => {
-    for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) {
+  it('each signal\'s own code when it is the first: 130 / 143 / 129 / 141 (a closed stdout)', () => {
+    for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129], ['SIGPIPE', 141]] as const) {
       const exits: number[] = [];
       const handler = createHardStopHandler(() => undefined, (code) => exits.push(code));
       handler(signal);
       handler(signal);
       assert.deepEqual(exits, [exitCode], signal);
+    }
+  });
+});
+
+describe('a closed stdout is an interrupt: SIGPIPE, 141', () => {
+  it('the signals listened for are the three of the user\'s; SIGPIPE ends the run with the shell\'s code 141', () => {
+    assert.deepEqual([...interruptSignals], ['SIGINT', 'SIGTERM', 'SIGHUP']);
+    assert.equal(planInterrupt('SIGPIPE').exitCode, 141);
+    assert.equal(remoteRunExitCodes.brokenPipe, 141);
+  });
+
+  it('a closed stdout reaches every handler as SIGPIPE, a removed handler no more — and the real SIGPIPE is never listened for (Node would stop ignoring it)', () => {
+    const received: InterruptSignal[] = [];
+    const removeHandler = addInterruptHandler((signal) => received.push(signal));
+    assert.equal(process.listenerCount('SIGPIPE'), 0);
+    raiseStdoutClosed();
+    process.emit('SIGHUP', 'SIGHUP');
+    removeHandler();
+    raiseStdoutClosed();
+    process.emit('SIGHUP', 'SIGHUP');
+    assert.deepEqual(received, ['SIGPIPE', 'SIGHUP']);
+    assert.equal(process.listenerCount('SIGPIPE'), 0);
+  });
+
+  it('the first EPIPE of a stream is reported once and later writes are dropped; any other stream error is not swallowed', () => {
+    const stream = new EventEmitter();
+    let reports = 0;
+    const watch = watchClosedOutput(stream, () => { reports += 1; });
+    assert.equal(watch.getIsClosed(), false);
+    stream.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    stream.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    assert.deepEqual([reports, watch.getIsClosed()], [1, true]);
+    const other = Object.assign(new Error('disk on fire'), { code: 'EIO' });
+    assert.throws(() => stream.emit('error', other), /disk on fire/);
+    assert.equal(reports, 1);
+  });
+
+  it('a user\'s signal says «interrupted»; a closed stdout says why the job was stopped and how to read a part of a long output', () => {
+    assert.equal(describeInterruptCause('SIGINT', 'job box1-abc234', 'box1', '`logs`'), 'interrupted — job box1-abc234 was stopped on box1');
+    const closed = describeInterruptCause('SIGPIPE', 'job box1-abc234', 'box1', '`charness remote-run logs box1-abc234 --tail <lines>`');
+    assert.match(closed, /^stdout was closed \(what reads it, a pipe into `head` for one, is gone\) — job box1-abc234 was stopped on box1; /);
+    assert.match(closed, /--bg and use `charness remote-run logs box1-abc234 --tail <lines>`$/);
+  });
+
+  /**
+   * The production wiring in a real process on a real pipe: `createProcessIo` + the interrupt handler a run that owns a job registers. The
+   * parent closes its end of the child's stdout the way `head` does after its lines; the child's next write meets the closed pipe.
+   */
+  it('a real process whose stdout reader goes away gets SIGPIPE through the interrupt handler instead of crashing on the EPIPE', async () => {
+    const script = `
+      const { createProcessIo } = require('./src/remoteRun/output');
+      const { addInterruptHandler } = require('./src/remoteRun/interrupts');
+      const io = createProcessIo();
+      addInterruptHandler((signal) => { io.stderr('interrupt: ' + signal + '\\n'); setTimeout(() => process.exit(141), 50); });
+      io.stderr('ready\\n');
+      setInterval(() => io.stdout('line\\n'), 20);
+    `;
+    const child = spawn(process.execPath, ['--import', 'tsx', '--eval', script], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk: string) => { stderr += chunk; });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => { child.once('exit', (code, signal) => resolve({ code, signal })); });
+    try {
+      const deadline = Date.now() + processBoundMs;
+      while (!stderr.includes('ready') && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.ok(stderr.includes('ready'), `the process never came up; stderr: ${stderr}`);
+      child.stdout?.destroy();
+      const outcome = await Promise.race([exited, new Promise<'still running'>((resolve) => { setTimeout(() => resolve('still running'), processBoundMs); })]);
+      assert.deepEqual(outcome, { code: 141, signal: null }, stderr);
+      assert.equal(stderr.match(/interrupt: SIGPIPE/g)?.length, 1, `the interrupt arrives once, however many writes follow; stderr: ${stderr}`);
+      assert.doesNotMatch(stderr, /EPIPE|Unhandled 'error'/);
+    } finally {
+      child.kill('SIGKILL');
     }
   });
 });

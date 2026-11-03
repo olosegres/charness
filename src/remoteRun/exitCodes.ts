@@ -16,13 +16,24 @@ export const remoteRunExitCodes = {
   interrupted: 130,
   /** The job was killed (`remote-run kill`, a lost lease). */
   killed: 137,
+  /** The local run was ended by SIGPIPE, or by its stdout being closed (the reader of a pipe, `| head`, is gone). */
+  brokenPipe: 141,
   /** The local run was ended by SIGTERM. */
   terminated: 143,
 } as const;
 
-export type InterruptSignal = 'SIGINT' | 'SIGTERM' | 'SIGHUP';
+/** The interrupts that arrive as signals of the operating system. */
+export type OsInterruptSignal = 'SIGINT' | 'SIGTERM' | 'SIGHUP';
 
-export const interruptSignals: readonly InterruptSignal[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+/**
+ * An interrupt: one of the signals, or SIGPIPE — the closed stdout. Node ignores the real SIGPIPE and reports a write to a pipe nobody reads
+ * as an EPIPE error, which `createProcessIo` raises as this interrupt (`raiseStdoutClosed`), so a run that is read through `| head` ends like
+ * any interrupted one — the job it owns is stopped. The real signal is never listened for: removing the last listener of SIGPIPE makes Node stop
+ * ignoring it, and the next write to any closed pipe of the process would end the process.
+ */
+export type InterruptSignal = OsInterruptSignal | 'SIGPIPE';
+
+export const interruptSignals: readonly OsInterruptSignal[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
 /** @description How a local interrupt ends the run: the remote job is killed first (TERM, then KILL after the grace), then this code. */
 export interface InterruptPlan {
@@ -40,6 +51,7 @@ export function planInterrupt(signal: InterruptSignal): InterruptPlan {
     SIGINT: remoteRunExitCodes.interrupted,
     SIGTERM: remoteRunExitCodes.terminated,
     SIGHUP: remoteRunExitCodes.hangup,
+    SIGPIPE: remoteRunExitCodes.brokenPipe,
   };
   return { exitCode: exitCodeBySignal[signal], killGraceSeconds };
 }

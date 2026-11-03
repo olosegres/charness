@@ -6,6 +6,8 @@
  */
 
 import * as os from 'os';
+import type { EventEmitter } from 'events';
+import { raiseStdoutClosed } from './interrupts';
 
 export const ownLinePrefix = 'remote-run: ';
 
@@ -17,10 +19,37 @@ export interface CliIo {
   homeDir: string;
 }
 
-/** @description The io of the real process. */
+export interface ClosedOutputWatch {
+  /** Whether the reader of the stream is gone: what is written to it from now on is dropped. */
+  getIsClosed: () => boolean;
+}
+
+/**
+ * @description Watch an output stream for its reader going away (`remote-run … | head`): the write that hits the closed pipe fails with an
+ * EPIPE error, which would otherwise end the process on the spot — its jobs left to the runner's lease to stop, with nobody saying why.
+ * `onClosed` is called once, at the first EPIPE; any other stream error is left to end the process as before.
+ */
+export function watchClosedOutput(stream: EventEmitter, onClosed: () => void): ClosedOutputWatch {
+  let isClosed = false;
+  stream.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code !== 'EPIPE') throw error;
+    if (isClosed) return;
+    isClosed = true;
+    onClosed();
+  });
+  return { getIsClosed: () => isClosed };
+}
+
+/**
+ * @description The io of the real process. A closed stdout is raised as the SIGPIPE interrupt (`raiseStdoutClosed`), the way the shell's own tools
+ * meet it, so every run that owns a job stops it and says why (`followForeground`, `runExec`); a command with nothing to stop (`ls`, `runners`) simply ends.
+ * A closed stderr cannot be told about anything: its errors are dropped.
+ */
 export function createProcessIo(): CliIo {
+  const stdoutWatch = watchClosedOutput(process.stdout, raiseStdoutClosed);
+  process.stderr.on('error', () => { /* nowhere left to say it */ });
   return {
-    stdout: (text) => { process.stdout.write(text); },
+    stdout: (text) => { if (!stdoutWatch.getIsClosed()) process.stdout.write(text); },
     stderr: (text) => { process.stderr.write(text); },
     cwd: process.cwd(),
     env: process.env,

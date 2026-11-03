@@ -352,6 +352,11 @@ export function createDecoyCommand(name: string, options: { isIgnoringTerm?: boo
   return `sh -c '${trap}echo $$ > ../${name}.pid; sleep 300 & echo $! > ../${name}.child; wait'`;
 }
 
+/** @description A decoy (`createDecoyCommand`'s pids) that prints a line every 0.2 s for as long as it runs: a job whose output someone reads — or stops reading. */
+export function createChattyDecoyCommand(name: string): string {
+  return `sh -c 'echo $$ > ../${name}.pid; sleep 300 & echo $! > ../${name}.child; while :; do echo line; sleep 0.2; done'`;
+}
+
 /** The longest a gated command waits for its gate: a bound for a test that failed before it opened it (a cleanup kills the job anyway). */
 const gateWaitMaxSeconds = 180;
 const gatePollSeconds = 0.2;

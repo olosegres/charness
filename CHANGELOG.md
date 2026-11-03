@@ -18,6 +18,10 @@ Now the check takes the device types each runtime itself lists as supported and 
 Before, options came first and the first word after them was always the job's command, so `--runner studio-mac exec ls` queued a job `exec ls` — the shell's own `exec` builtin, which replaces the job's shell and ends it — and the agent got a job result instead of the listing it asked for.
 Now `exec` after `--runner` is the `exec` subcommand on that runner, any other option before `exec` is refused with a line saying `exec` takes only `--runner`, and any other subcommand name after options (`--bg ls build`) is refused with the way to run a command that is called so: put `--` before it.
 
+**`charness remote-run … | head` no longer dies with a stack trace and a job killed for no visible reason — it stops its job and says why.**
+Before, once the reader of the pipe had gone, the next line of output hit the closed pipe, remote-run crashed on the write error, and its job was left to the runner's lease to kill a few seconds later (exit 137) — with nothing on the screen naming the closed stdout.
+Now a foreground run or `exec` whose stdout was closed stops its job at once, says «stdout was closed … — job box1-abc234 was stopped on box1; to read only a part of a long output, start it with --bg and use `logs <id> --tail <lines>`» on stderr and exits 141 (the shell's code for SIGPIPE); `logs -f`, `wait` and `ls` simply end.
+
 ## 3.9.1 — 2026-11-04
 
 **An @-mention of the AI account in a Jira issue it is already working on no longer makes it believe the issue is not handed to it, and no longer stops its build.**

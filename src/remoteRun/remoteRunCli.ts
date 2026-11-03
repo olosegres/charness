@@ -53,7 +53,7 @@ export const remoteRunUsage = `Usage:
   charness remote-run fetch <id>              bring a finished job's result files back (again)
   charness remote-run exec [--runner <name>] <command…>
                               one-off command in the runner's copy as the last job left it (no sync)
-Exit codes: the command's own; 125 remote-run failed, 124 timeout, 130/143/129 interrupted (SIGINT/SIGTERM/SIGHUP), 137 job killed, 2 bad usage.
+Exit codes: the command's own; 125 remote-run failed, 124 timeout, 130/143/129 interrupted (SIGINT/SIGTERM/SIGHUP), 141 stdout closed (| head), 137 job killed, 2 bad usage.
 Setup: docs/remote-run.md
 `;
 

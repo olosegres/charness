@@ -4,6 +4,7 @@
  * Pueue), so it runs side by side with the first half:
  *
  *   SIGINT, SIGTERM, SIGHUP of a foreground run kill the whole remote job (also a command that ignores SIGTERM)
+ *   → a closed stdout (`remote-run … | head`) stops the job and SAYS why, `exec` too; a read-only `ls` / `logs -f` just ends
  *   → SIGKILL of a foreground run, and a frozen one (no heartbeat), end the job when the lease runs out
  *   → `--timeout` and `kill <id>` leave nothing, a job killed while queued, a task number Pueue gives to another job
  *   → `exec` runs in the copy of the project's latest job and is killed like a foreground job
@@ -22,6 +23,7 @@ import * as path from 'node:path';
 import {
   createRunnerEntry,
   openGate,
+  createChattyDecoyCommand,
   createDecoyCommand,
   createGatedCommand,
   startCli,
@@ -74,6 +76,45 @@ describe('charness remote-run against a loopback runner — what ends a job', { 
       assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 130, cli.stderr());
       assert.ok(Date.now() - interruptedAt >= 9000, 'the grace time was given before the kill');
       await expectNothingLeft(decoyPid, childPid, 20_000);
+    });
+  });
+
+  describe('a caller that stops reading', () => {
+    registerOpenJobCleanup();
+    it('a foreground run whose stdout is closed (piped into `head`) stops its job, says why on stderr and ends with 141 — nothing is left', async () => {
+      const name = 'decoy-chatty';
+      const cli = startCli(layout, [createChattyDecoyCommand(name)], { cwd: project.root, env: flowEnv });
+      const decoyPid = await waitForPidFile(project, `${name}.pid`);
+      const childPid = await waitForPidFile(project, `${name}.child`);
+      await waitUntil('the first line of the job to arrive', 30_000, () => cli.stdout().includes('line\n'));
+      cli.child.stdout?.destroy();
+      assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 141, cli.stderr());
+      assert.match(cli.stderr(), /remote-run: stdout was closed \(what reads it, a pipe into `head` for one, is gone\) — job box1-[a-z2-7]{6} was stopped on box1; to read only a part of a long output, start it with --bg and use `charness remote-run logs box1-[a-z2-7]{6} --tail <lines>`/);
+      assert.doesNotMatch(cli.stderr(), /interrupted —|unexpected error|EPIPE/);
+      await expectNothingLeft(decoyPid, childPid, 20_000);
+      assert.match(await readNewestJobState(), /\bkilled\b/);
+    });
+
+    it('`exec` whose stdout is closed stops its command and says why', async () => {
+      const name = 'decoy-chatty-exec';
+      const cli = startCli(layout, ['exec', createChattyDecoyCommand(name)], { cwd: project.root, env: flowEnv });
+      const decoyPid = await waitForPidFile(project, `${name}.pid`);
+      const childPid = await waitForPidFile(project, `${name}.child`);
+      await waitUntil('the first line of the command to arrive', 30_000, () => cli.stdout().includes('line\n'));
+      cli.child.stdout?.destroy();
+      assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 141, cli.stderr());
+      assert.match(cli.stderr(), /remote-run: stdout was closed \(what reads it, a pipe into `head` for one, is gone\) — the command was stopped on box1; /);
+      await expectNothingLeft(decoyPid, childPid, 20_000);
+    });
+
+    it('`ls`, which owns no job, ends with its own code when its stdout is closed — no crash, no message', async () => {
+      const listed = await run(['ls']);
+      assert.equal(listed.exitCode, 0, listed.stderr);
+      const cli = startCli(layout, ['ls', '--all'], { cwd: project.root, env: flowEnv });
+      cli.child.stdout?.destroy();
+      const exitCode = await waitForExit(cli, afterInterruptTimeoutMs);
+      assert.ok(exitCode === 0 || exitCode === 141, `ended with ${exitCode}; ${cli.stderr()}`);
+      assert.doesNotMatch(cli.stderr(), /unexpected error|EPIPE|at .*\.js:/);
     });
   });
 

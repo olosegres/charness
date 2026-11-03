@@ -345,8 +345,10 @@ runner otherwise.
 
 The command's own code passes through. `remote-run` itself uses **125** when it failed (no runner, ssh, the file sync, the
 dependencies step — the message says which), **124** for a timeout, **130 / 143 / 129** when it was interrupted locally (SIGINT /
-SIGTERM / SIGHUP), **137** when the job was killed (`kill`, a lost lease), **2** for a command line it cannot read. Its own lines go
-to stderr prefixed `remote-run:`; the job's output goes to stdout.
+SIGTERM / SIGHUP), **141** when its stdout was closed — `charness remote-run … | head` — and it stopped the job it owned (the line on
+stderr says so; to read only a part of a long output, start the job with `--bg` and use `logs <id> --tail <lines>`), **137** when the
+job was killed (`kill`, a lost lease), **2** for a command line it cannot read. Its own lines go to stderr prefixed `remote-run:`; the
+job's output goes to stdout.
 
 ## Files there, and back
 

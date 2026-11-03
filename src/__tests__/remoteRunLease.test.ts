@@ -38,14 +38,15 @@ describe('readRemoteRunLeaseMs', () => {
 });
 
 describe('planInterrupt', () => {
-  it('SIGINT, SIGTERM and SIGHUP end the run with the shell\'s 128 + signal, after the job is killed', () => {
+  it('SIGINT, SIGTERM, SIGHUP and SIGPIPE (a closed stdout) end the run with the shell\'s 128 + signal, after the job is killed', () => {
     assert.equal(planInterrupt('SIGINT').exitCode, 130);
     assert.equal(planInterrupt('SIGTERM').exitCode, 143);
     assert.equal(planInterrupt('SIGHUP').exitCode, 129);
+    assert.equal(planInterrupt('SIGPIPE').exitCode, 141);
     assert.equal(planInterrupt('SIGINT').killGraceSeconds, 10);
   });
 
   it('the codes remote-run reports itself are the documented ones', () => {
-    assert.deepEqual(remoteRunExitCodes, { usage: 2, timedOut: 124, failed: 125, hangup: 129, interrupted: 130, killed: 137, terminated: 143 });
+    assert.deepEqual(remoteRunExitCodes, { usage: 2, timedOut: 124, failed: 125, hangup: 129, interrupted: 130, killed: 137, brokenPipe: 141, terminated: 143 });
   });
 });

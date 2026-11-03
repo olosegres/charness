@@ -18,6 +18,15 @@ import type { JobOutcome } from './jobState';
  * shell's code for the signal; the local `--timeout` does the same and exits 124.
  */
 
+/**
+ * @description Why a run that owns a job stopped it, for the interrupt that ended it: the user's own signal needs no cause, a closed stdout
+ * does — the job is killed with nobody at the terminal to see it. It also says how to look at a part of a long output without that.
+ */
+export function describeInterruptCause(signal: InterruptSignal, stoppedThing: string, runnerName: string, logsHint: string): string {
+  if (signal !== 'SIGPIPE') return `interrupted — ${stoppedThing} was stopped on ${runnerName}`;
+  return `stdout was closed (what reads it, a pipe into \`head\` for one, is gone) — ${stoppedThing} was stopped on ${runnerName}; to read only a part of a long output, start it with --bg and use ${logsHint}`;
+}
+
 /** The reason `runner.sh kill` takes for a kill that is the caller's time limit running out. */
 const killReasonTimeout = 'timeout';
 
@@ -96,7 +105,7 @@ export async function followForeground(params: {
   if (killing !== null) await killing;
 
   if (interrupt !== null) {
-    sayOwn(io, `interrupted — job ${staged.jobId} was stopped on ${client.runner.name}`);
+    sayOwn(io, describeInterruptCause(interrupt, `job ${staged.jobId}`, client.runner.name, `\`charness remote-run logs ${staged.jobId} --tail <lines>\``));
     return planInterrupt(interrupt).exitCode;
   }
   let result: Awaited<ReturnType<typeof readJobOutcome>>;
@@ -147,7 +156,10 @@ export async function runExec(params: { client: RunnerClient; slug: string; subf
   clearInterval(heartbeatTimer);
   removeSignalHandlers();
   stderr.flush();
-  if (interrupt !== null) return planInterrupt(interrupt).exitCode;
+  if (interrupt !== null) {
+    if (interrupt === 'SIGPIPE') sayOwn(io, describeInterruptCause(interrupt, 'the command', client.runner.name, 'a job (`--bg`, then `logs <id> --tail <lines>`)'));
+    return planInterrupt(interrupt).exitCode;
+  }
   // The command's own code, as the runner reported it: a command that exits 255 is not a lost connection. Without the report the session
   // died before the command ended, or ssh itself failed.
   const reportedCode = stderr.getExitCode();

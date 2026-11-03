@@ -1,13 +1,24 @@
 import type { ChildProcess } from 'child_process';
+import { EventEmitter } from 'events';
 import { interruptSignals, killGraceSeconds, planInterrupt, type InterruptSignal } from './exitCodes';
 
 /** A `kill` call waits for the runner's grace time, then its own SIGKILL and the call itself. */
 const killCallMarginSeconds = 30;
 export const killCallTimeoutMs = (killGraceSeconds + killCallMarginSeconds) * 1000;
 
+const stdoutClosedEvent = 'stdoutClosed';
+const stdoutClosedEvents = new EventEmitter();
+
+/** @description The reader of stdout is gone (`createProcessIo` calls this at the first EPIPE): every handler of {@link addInterruptHandler} gets `SIGPIPE`. */
+export function raiseStdoutClosed(): void {
+  stdoutClosedEvents.emit(stdoutClosedEvent);
+}
+
 /**
- * @description Run `handler` for SIGINT, SIGTERM and SIGHUP — a listener also keeps Node from ending the process by itself, so the
- * command decides how it ends (kill the remote job first). Returns the function that removes the listeners.
+ * @description Run `handler` for SIGINT, SIGTERM and SIGHUP, and for `SIGPIPE` when stdout is closed ({@link raiseStdoutClosed}) — a listener also
+ * keeps Node from ending the process by itself, so the command decides how it ends (kill the remote job first). Returns the function that removes
+ * the listeners. The real SIGPIPE is not listened for: once the last listener of it is removed Node stops ignoring it, and a later write to
+ * any closed pipe of the process would end the process.
  */
 export function addInterruptHandler(handler: (signal: InterruptSignal) => void): () => void {
   const listeners = interruptSignals.map((signal) => {
@@ -15,7 +26,12 @@ export function addInterruptHandler(handler: (signal: InterruptSignal) => void):
     process.on(signal, listener);
     return { signal, listener };
   });
-  return () => listeners.forEach(({ signal, listener }) => process.off(signal, listener));
+  const onStdoutClosed = (): void => handler('SIGPIPE');
+  stdoutClosedEvents.on(stdoutClosedEvent, onStdoutClosed);
+  return () => {
+    listeners.forEach(({ signal, listener }) => process.off(signal, listener));
+    stdoutClosedEvents.off(stdoutClosedEvent, onStdoutClosed);
+  };
 }
 
 /**
