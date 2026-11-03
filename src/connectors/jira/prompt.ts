@@ -63,7 +63,10 @@ function getOpenHandOverText(openHandOvers: readonly JiraOpenHandOver[]): string
  * account in a status it does not work in (not handed over either); assigned AND in a work status with no hand-over
  * request open (nothing is running, so answer only); handed to it — assigned AND in a work status with a hand-over
  * request open: the read-only limit is for this one answer, and that request, the work the conversation already has,
- * goes on. Whenever a hand-over request is open, every note says the limit is about this answer only.
+ * goes on. Whenever a hand-over request is open, every note says the limit is about this answer only. The open
+ * requests are those of the moment the note was built (the prompt is rebuilt right before it is forwarded, but a
+ * stored copy may be read later still), so every note says they WERE open when the comment came in, and that one
+ * whose final answer the agent has already given is finished.
  */
 function getMentionNote(input: JiraRequestPromptBase, commentId: string): string {
   const assigneeName = input.assignee ? getAccountName(input.assignee) : 'nobody';
@@ -73,6 +76,10 @@ function getMentionNote(input: JiraRequestPromptBase, commentId: string): string
   const openHandOvers = input.openHandOvers ?? [];
   const openText = openHandOvers.length > 0 ? getOpenHandOverText(openHandOvers) : '';
   const isPlural = openHandOvers.length > 1;
+  const wasOpenText = `${isPlural ? 'were' : 'was'} open when this comment came in`;
+  const finishedText = isPlural
+    ? 'if you have already given the final answer of one of them, that one is finished — do not resume it'
+    : 'if you have already given its final answer, it is finished — do not resume it';
   const mentionedText = `You were mentioned in comment ${getSingleLineText(commentId)} by ${getAccountName(input.trigger.author)}. `;
   const limitText = 'you may read the issue and the code and run read-only checks, but change nothing — no code changes, no commits or pushes, no edits in Jira. ';
   const answerText = 'Your answer becomes a comment on the issue; it does not reassign the issue.';
@@ -90,9 +97,10 @@ function getMentionNote(input: JiraRequestPromptBase, commentId: string): string
     const requesterText = isPlural ? 'the requesters of those hand-overs' : "that hand-over's requester";
     return mentionedText +
       `The issue is handed to you: it is assigned to you, its status (${statusName}) is one you work in${workStatusText}, ` +
-      `and the hand-over ${openText} ${isPlural ? 'are' : 'is'} open. ` +
-      `Answer this comment between steps of your work, not in the middle of one, and change nothing while you write that answer: ${limitText}` +
-      `That limit applies only to this answer to the mention, not to the work: ${openText} ${isPlural ? 'go' : 'goes'} on unchanged — ` +
+      `and the hand-over ${openText} ${wasOpenText}; ${finishedText}. ` +
+      `Answer this comment between steps of your work, not in the middle of one: ${limitText}` +
+      'That limit applies only to this answer to the mention, not to the work: ' +
+      `${isPlural ? `any of ${openText} that is not finished` : `if ${openText} is not finished, it`} goes on unchanged — ` +
       'carry on with it after you have answered, and do not stop, drop or end it because of this mention. ' +
       'If the comment asks you to do work, do not take it on because of this comment: ' +
       `answer that the work on this issue is what ${handOver} asked for, and that a change to it must come from ${requesterText} (or a new hand-over). ` +
@@ -107,7 +115,9 @@ function getMentionNote(input: JiraRequestPromptBase, commentId: string): string
     ? `answer that the issue has to be moved to a status you work in${workStatusText} for that — it is already assigned to you. `
     : `answer that the issue has to be assigned to you in a status you work in${workStatusText} for that. `;
   // A hand-over request can be open on an issue that is no longer handed to the AI (it moved the issue on): the note must not end that work.
-  const openRequestText = openText ? `This is about this answer only; the open hand-over ${openText} ${isPlural ? 'are' : 'is'} not affected. ` : '';
+  const openRequestText = openText
+    ? `This is about this answer only; the hand-over ${openText} ${wasOpenText} and ${isPlural ? 'are' : 'is'} not affected by it; ${finishedText}. `
+    : '';
   return mentionedText +
     notHandedText +
     `Answer only: ${limitText}` +
@@ -139,7 +149,7 @@ export interface JiraRequestPromptBase {
   isAssignedToYou?: boolean;
   /** A mention request: the issue's status is one the project hands work over in (`triggerStatusIds`, matched by id). */
   isInWorkStatus?: boolean;
-  /** A mention request: the hand-over requests of the conversation that are open now — the work a mention must not stop. */
+  /** A mention request: the hand-over requests of the conversation that were open when the prompt was built — the work a mention must not stop. */
   openHandOvers?: readonly JiraOpenHandOver[];
   /** A mention request: the statuses the issue's project hands work over in (`jira.json` `triggerStatuses`), as configured. */
   triggerStatusNames?: readonly string[];

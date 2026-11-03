@@ -234,32 +234,39 @@ describe('a mention request (T2, T3)', () => {
       assert.ok(!note.includes('is not affected'), note);
     });
 
-    it('a hand-over request open, the issue not handed to the AI (someone else holds it, or it moved the issue on): the note says it is about this answer only and the request is not affected', () => {
-      const sentence = 'This is about this answer only; the open hand-over request req_build of Build Owner is not affected. ';
+    it('a hand-over request open, the issue not handed to the AI (someone else holds it, or it moved the issue on): the note says it is about this answer only, that the request is not affected, and that a finished one is not resumed', () => {
+      const sentence = 'This is about this answer only; the hand-over request req_build of Build Owner was open when this comment came in and is not affected by it; ' +
+        'if you have already given its final answer, it is finished — do not resume it. ';
       const elsewhere = mention({ assignee, isAssignedToYou: false, isInWorkStatus: true, openHandOvers: openOne });
       assert.ok(elsewhere.includes(`${limitText}${sentence}If the comment asks you to do work, answer that the issue has to be assigned to you`), elsewhere);
       const moved = mention({ assignee: ai, isAssignedToYou: true, isInWorkStatus: false, openHandOvers: openOne });
       assert.ok(moved.includes(`${limitText}${sentence}If the comment asks you to do work, answer that the issue has to be moved to a status you work in`), moved);
       const two = mention({ assignee, isAssignedToYou: false, isInWorkStatus: false, openHandOvers: [...openOne, { requestId: 'req_second', requester: null }] });
-      assert.ok(two.includes('This is about this answer only; the open hand-over requests req_build of Build Owner and req_second are not affected. '), two);
+      assert.ok(two.includes(
+        'This is about this answer only; the hand-over requests req_build of Build Owner and req_second were open when this comment came in and are not affected by it; ' +
+        'if you have already given the final answer of one of them, that one is finished — do not resume it. ',
+      ), two);
     });
 
-    it('assigned to the AI account AND in a work status with a hand-over request open: handed to it — the limit is for this answer only, the request goes on, a mention does not add work', () => {
+    it('assigned to the AI account AND in a work status with a hand-over request open: handed to it — the limit is for this answer only, the request goes on unless it is finished, a mention does not add work', () => {
       const note = mention({ assignee: ai, isAssignedToYou: true, isInWorkStatus: true, openHandOvers: openOne });
       assert.equal(
         note,
         'You were mentioned in comment 10240 by Requester Person. ' +
         'The issue is handed to you: it is assigned to you, its status (In Progress) is one you work in (in this project: "In Progress", "To Do"), ' +
-        'and the hand-over request req_build of Build Owner is open. ' +
-        'Answer this comment between steps of your work, not in the middle of one, and change nothing while you write that answer: ' +
+        'and the hand-over request req_build of Build Owner was open when this comment came in; ' +
+        'if you have already given its final answer, it is finished — do not resume it. ' +
+        'Answer this comment between steps of your work, not in the middle of one: ' +
         'you may read the issue and the code and run read-only checks, but change nothing — no code changes, no commits or pushes, no edits in Jira. ' +
-        'That limit applies only to this answer to the mention, not to the work: request req_build of Build Owner goes on unchanged — ' +
+        'That limit applies only to this answer to the mention, not to the work: ' +
+        'if request req_build of Build Owner is not finished, it goes on unchanged — ' +
         'carry on with it after you have answered, and do not stop, drop or end it because of this mention. ' +
         'If the comment asks you to do work, do not take it on because of this comment: ' +
         "answer that the work on this issue is what its hand-over asked for, and that a change to it must come from that hand-over's requester (or a new hand-over). " +
         'Do only what that hand-over already covers. ' +
         'Your answer becomes a comment on the issue; it does not reassign the issue.',
       );
+      assert.equal(note.split('change nothing').length - 1, 1, '"change nothing" is said once');
       assert.ok(!note.includes('not handed to you'), note);
       assert.ok(!note.includes('has to be assigned to you'), note);
       assert.ok(!note.includes('belongs to the work already handed'), note);
@@ -268,10 +275,13 @@ describe('a mention request (T2, T3)', () => {
 
     it('the handed-to-you note with several hand-over requests open names them all and speaks of them in the plural; a requester nobody names is left out', () => {
       const note = mention({ assignee: ai, isAssignedToYou: true, isInWorkStatus: true, openHandOvers: [...openOne, { requestId: 'req_second', requester: null }] });
-      assert.ok(note.includes('and the hand-over requests req_build of Build Owner and req_second are open. '), note);
-      assert.ok(note.includes('requests req_build of Build Owner and req_second go on unchanged'), note);
+      assert.ok(note.includes(
+        'and the hand-over requests req_build of Build Owner and req_second were open when this comment came in; ' +
+        'if you have already given the final answer of one of them, that one is finished — do not resume it. ',
+      ), note);
+      assert.ok(note.includes('any of requests req_build of Build Owner and req_second that is not finished goes on unchanged — carry on with it after you have answered'), note);
       assert.ok(note.includes('what its hand-overs asked for, and that a change to it must come from the requesters of those hand-overs (or a new hand-over). Do only what those hand-overs already cover. '), note);
-      assert.ok(mention({ assignee: ai, isAssignedToYou: true, isInWorkStatus: true, openHandOvers: [{ requestId: 'req_build', requester: null }] }).includes('and the hand-over request req_build is open. '));
+      assert.ok(mention({ assignee: ai, isAssignedToYou: true, isInWorkStatus: true, openHandOvers: [{ requestId: 'req_build', requester: null }] }).includes('and the hand-over request req_build was open when this comment came in; '));
     });
 
     it('assigned to the AI account AND in a work status but NO hand-over request open: answer only — it does not start work, a hand-over does', () => {

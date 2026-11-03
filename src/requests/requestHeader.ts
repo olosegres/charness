@@ -1,4 +1,5 @@
 import { answerStyleInstruction } from './answerStyle';
+import { refreshStoredPrompt } from './storedPromptRefresh';
 import type { OpenRequestState, RequestWakeUpReason } from './types';
 
 /**
@@ -77,10 +78,12 @@ export interface WakeUpMessage {
 /**
  * @description The request's own prompt while the session never took it in — its
  * post failed, a restart came first, a usage-limit wait held it (R21); `undefined`
- * once it was taken in, or when the request keeps no prompt.
+ * once it was taken in, or when the request keeps no prompt. Brought up to date as it is read
+ * (`refreshStoredPrompt`): it may have waited hours.
  */
 export function getPromptNotTakenIn(request: OpenRequestState | null | undefined): string | undefined {
-  return request?.isPromptTakenIn === true ? undefined : request?.prompt;
+  if (request?.isPromptTakenIn === true || request?.prompt === undefined) return undefined;
+  return refreshStoredPrompt(request.prompt);
 }
 
 /** Between two requests' prompts re-posted in one message (each prompt ends with its own text, not a blank line). */

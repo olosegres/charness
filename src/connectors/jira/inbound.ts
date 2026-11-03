@@ -12,6 +12,7 @@ import { buildJiraDeltaPrompt, buildJiraRequestPrompt, type JiraOpenHandOver } f
 import { getIssueDelta } from './issueDelta';
 import type { JiraContextLedger } from './contextLedger';
 import type { SessionPromptText } from '../../postToSession';
+import { clearStoredPromptRefresher, setStoredPromptRefresher } from '../../requests/storedPromptRefresh';
 import { fitBlocksToPrompt, standInRequestId } from './promptSpill';
 import { JiraTrustedGroupGoneError, type JiraTrust } from './trustedGroup';
 import type { TaskAgentSlotDecision, TaskAgentSlots } from '../../trackers/taskAgentSlots';
@@ -69,6 +70,10 @@ export function getJiraRetryDelayMs(baseMs: number, failureCount: number): numbe
   return Math.min(baseMs * 2 ** failureCount, Math.max(baseMs, jiraRetryBackoffCapMs));
 }
 /** `updated` tells the mention scan whether an issue changed at all since it last read its comments. */
+/** The first line of a stored request prompt names its request: `[Request req_… · from: …]`. */
+const storedPromptRequestIdPattern = /^\[Request (req_[A-Za-z0-9_-]+) · /;
+/** How many mention prompts can be rebuilt at delivery at once (each keeps its issue in memory). */
+const promptRebuildersMax = 32;
 export const jiraSearchFields = ['status', 'assignee', 'reporter', 'creator', 'updated'];
 
 /**
@@ -197,6 +202,12 @@ export class JiraInbound {
   private readonly postingIssueKeys = new Set<string>();
   /** Per issue, its `updated` as of the last mention scan that decided every comment — in memory only: a restart scans once more. */
   private readonly lastUpdatedByIssue = new Map<string, string>();
+  /**
+   * The mention requests whose stored prompt can be rebuilt with the hand-over requests that are open NOW, by request id —
+   * in memory only (a restart leaves the stored text, whose wording holds on its own) and bounded: an entry of a request
+   * that is no longer open is dropped whenever another is added.
+   */
+  private readonly promptRebuilders = new Map<string, { key: SessionKey; rebuild: () => string }>();
 
   constructor(private readonly deps: JiraInboundDeps) {}
 
@@ -204,12 +215,14 @@ export class JiraInbound {
   start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
+    setStoredPromptRefresher(this.refreshPromptText);
     this.stopListeningForSlots = this.deps.slots.onSlotFreed(() => this.pollSoon());
     this.scheduleNext(0);
   }
 
   stop(): void {
     this.isRunning = false;
+    clearStoredPromptRefresher(this.refreshPromptText);
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.stopListeningForSlots?.();
@@ -483,6 +496,33 @@ export class JiraInbound {
       .map((request) => ({ requestId: request.id, requester: findAccountInContext(context, getRequestRequester(request.origin)) }));
   }
 
+  private rememberPromptRebuilder(key: SessionKey, requestId: string, rebuild: () => string): void {
+    for (const [id, entry] of this.promptRebuilders) {
+      if (!this.deps.listOpenRequests(entry.key).some((request) => request.id === id)) this.promptRebuilders.delete(id);
+    }
+    this.promptRebuilders.set(requestId, { key, rebuild });
+    for (const id of this.promptRebuilders.keys()) {
+      if (this.promptRebuilders.size <= promptRebuildersMax) break;
+      this.promptRebuilders.delete(id);
+    }
+  }
+
+  /**
+   * @description The `StoredPromptRefresher` of this poller: a stored mention prompt (a resend, a prompt held through a
+   * usage-limit wait) with the hand-over requests that are open now. Any other text — or a prompt of a request that is
+   * no longer open, or one built before a restart — comes back as it is.
+   */
+  readonly refreshPromptText = (promptText: string): string => {
+    const requestId = storedPromptRequestIdPattern.exec(promptText)?.[1];
+    const entry = requestId === undefined ? undefined : this.promptRebuilders.get(requestId);
+    if (requestId === undefined || !entry) return promptText;
+    if (!this.deps.listOpenRequests(entry.key).some((request) => request.id === requestId)) {
+      this.promptRebuilders.delete(requestId);
+      return promptText;
+    }
+    return entry.rebuild();
+  };
+
   private async openRequest(
     issue: JiraIssue,
     project: JiraProjectTrigger,
@@ -503,6 +543,7 @@ export class JiraInbound {
     deps.noteShownSummary?.(issue.key, getShownIssueSummary(context, blockTrust));
     const key = makeJiraKey(issue.key);
     const statusId = context.issue.fields.status?.id;
+    const isMention = trigger.kind === 'mentioned';
     const promptInput = {
       issueKey: issue.key,
       statusName: context.issue.fields.status?.name,
@@ -512,8 +553,9 @@ export class JiraInbound {
       assignee: context.issue.fields.assignee ?? null,
       isAssignedToYou: context.issue.fields.assignee?.accountId === deps.aiAccountId,
       isInWorkStatus: statusId !== undefined && project.triggerStatusIds.has(statusId),
-      // Read after the issue was fetched, right before the request opens: what the note says is running is running now.
-      openHandOvers: trigger.kind === 'mentioned' ? this.getOpenHandOvers(key, context) : [],
+      // As of building the prompt only: the text is rebuilt right before it is forwarded (`buildText`) and when a stored copy
+      // is read for a resend (`refreshPromptText`), and the note's wording holds where neither happens (a restart in between).
+      openHandOvers: isMention ? this.getOpenHandOvers(key, context) : [],
       triggerStatusNames: project.triggerStatusNames,
       isTextFiltered: trust !== null,
     };
@@ -524,8 +566,9 @@ export class JiraInbound {
       measure: (candidate) => buildJiraRequestPrompt({ ...promptInput, requestId: standInRequestId, ...candidate }).length,
     });
     await deps.bindConversation(key, project.folder);
-    const createPrompt = (requestId: string, supersededRequestIds: readonly string[]): string => buildJiraRequestPrompt({
+    const createPrompt = (requestId: string, supersededRequestIds: readonly string[], openHandOvers = promptInput.openHandOvers): string => buildJiraRequestPrompt({
       ...promptInput,
+      openHandOvers,
       requestId,
       ...fitted,
       supersededRequestIds,
@@ -539,6 +582,7 @@ export class JiraInbound {
     }, createPrompt);
     const supersededRequestIds = request.supersededRequestIds ?? [];
     const fullText = createPrompt(request.id, supersededRequestIds);
+    if (isMention) this.rememberPromptRebuilder(key, request.id, () => createPrompt(request.id, supersededRequestIds, this.getOpenHandOvers(key, context)));
     const prompt: SessionPromptText = {
       fullText,
       // C5: built only once the post knows whether the session is fresh — right before the forward.
@@ -548,7 +592,11 @@ export class JiraInbound {
         const delta = getIssueDelta(fitted.blocks, isWhole ? {} : snapshot.sent);
         // Counted as sent only once the agent takes it in (C4): the connector commits it then.
         deps.contextLedger.recordBuild(issue.key, request.id, snapshot.generation, delta.sent);
-        return isWhole ? fullText : buildJiraDeltaPrompt({ ...promptInput, requestId: request.id, supersededRequestIds, delta });
+        // The hand-over requests the mention note names are read again here: the post may have waited behind a running turn.
+        const openHandOvers = isMention ? this.getOpenHandOvers(key, context) : [];
+        return isWhole
+          ? createPrompt(request.id, supersededRequestIds, openHandOvers)
+          : buildJiraDeltaPrompt({ ...promptInput, openHandOvers, requestId: request.id, supersededRequestIds, delta });
       },
     };
     // Not awaited: a busy session may take minutes to take the prompt, and the rest of

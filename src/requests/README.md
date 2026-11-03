@@ -42,7 +42,13 @@ Numeric bounds are named constants in the files below; this README says only wha
   succeeded; `load` releases every leftover, so a crash never leaves an alert pinned for good.
 - **The prompt is kept** (`createPrompt`) until the agent took it in (`isPromptTakenIn`), so a failed post, a
   restart or a limit wait re-delivers the real prompt — a bare reminder would name a request the agent never
-  read. It is never written to the closed history.
+  read. It is never written to the closed history. A prompt can wait for hours before it is delivered, so a
+  connector whose prompt states something that changes meanwhile registers ONE refresher
+  (`storedPromptRefresh.ts`); every place that turns a stored prompt into delivered text — `getPromptNotTakenIn`
+  (the wake-up's resend, the resume of a limit wait, a new session's first prompt) and the copy held through a limit
+  wait (`limitHeldPrompts.ts`, which also keeps the two from being delivered side by side) — asks it first. It is the
+  text itself for anything the refresher did not build; a refresher that throws leaves the stored text. Jira's
+  mention note is the one user (`connectors/jira/README.md`).
 - Closed ids stay known only up to `closedRequestIndexMaxSize`; an older one reads as unknown.
 - **`onRequestClosed`** reports every request that leaves the open set (an answer, a cancel, a supersede), from inside the close — a
   listener only schedules. The task-agent slots (`trackers/`) read the open set for their count and use the report to wake a
