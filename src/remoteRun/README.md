@@ -73,6 +73,8 @@ config are found from the reported work dir with the layout `runnerUtility/runne
   `runner.sh`): no agent beating means `cap_ios=no` with `ios build: needs a login of <account>`; a job staged with `--needs ios` (`needs-ios` in its folder) is refused with those
   words by `submit` / `lease` / its own start; with an agent EVERY job's steps (marked or not) run in the account's login session through `gui/requests/`, and without one the
   jobs that do not need iOS run in the daemon as before. `exec` is not routed. The files are written by `charness-runner` (`pause`, `service install`, the iOS check of the service).
+- **How the link keeps the machine awake** (`awake=` caffeinate | systemd-inhibit | no, `awake_detail=`; `probe_awake` reads `<state>/awake`, `keepAwake.ts` writes it): a holder
+  that is no longer alive is `no`; no file says nothing. `runners` shows it as `keeps awake: yes (…)` / `keeps awake: NO — <why>`.
 - **A Mac does not sleep under a job**: the job's command (and `exec`) runs with a sibling `caffeinate -i -w <pid>` (it ends with the process; the
   command keeps its signals and exit status). Nothing off a Mac or without `caffeinate`.
 

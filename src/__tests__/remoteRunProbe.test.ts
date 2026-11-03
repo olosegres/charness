@@ -66,6 +66,26 @@ describe('the tools a job runs with', () => {
   });
 });
 
+describe('how a runner keeps its machine awake', () => {
+  it('awake= and awake_detail= are read as they came: a method, or «no» with why; an older script says neither — never a guess', () => {
+    assert.deepEqual(parseProbeOutput(`${linuxProbeText}\nawake=caffeinate`).keepsAwake, { method: 'caffeinate' });
+    assert.deepEqual(parseProbeOutput('awake=systemd-inhibit').keepsAwake, { method: 'systemd-inhibit' });
+    assert.deepEqual(parseProbeOutput('awake=no\nawake_detail=systemd-inhibit was not found').keepsAwake, { method: null, reason: 'systemd-inhibit was not found' });
+    assert.deepEqual(parseProbeOutput('awake=no').keepsAwake, { method: null, reason: '' });
+    assert.equal(parseProbeOutput(linuxProbeText).keepsAwake, null);
+    assert.equal(parseProbeOutput('awake=maybe').keepsAwake, null);
+  });
+
+  it('`runners` says «keeps awake: yes (…; a closed lid still sleeps it)» or «NO — why (the machine may sleep when idle)», on a line of its own, and nothing when the runner did not say', () => {
+    const block = (text: string): string => formatRunnerBlock({ name: 'mac', status: 'online', probe: parseProbeOutput(`${linuxProbeText}\n${text}`), groupLimits: {}, isPausedByHub: false });
+    assert.match(block('awake=caffeinate'), /\n {2}keeps awake: yes \(caffeinate -i; a closed lid still sleeps it\)/);
+    assert.match(block('awake=systemd-inhibit'), /\n {2}keeps awake: yes \(systemd-inhibit --what=idle; a closed lid still sleeps it\)/);
+    assert.match(block('awake=no\nawake_detail=caffeinate was not found on this Mac'), /\n {2}keeps awake: NO — caffeinate was not found on this Mac \(the machine may sleep when idle\)/);
+    assert.match(block('awake=no'), /\n {2}keeps awake: NO \(the machine may sleep when idle\)/);
+    assert.ok(!block('').includes('keeps awake'));
+  });
+});
+
 describe('what a paired runner adds to the probe', () => {
   const pairedProbeText = `${linuxProbeText}\npaused=no\nservice=system-service\nrunner_version=3.8.0\nios_boot=failed\nios_boot_detail=no login session`;
 

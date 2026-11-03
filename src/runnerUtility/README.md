@@ -180,6 +180,16 @@ daemon's link (which would only write «needs the runner user's login session» 
 — the iOS Simulator is being checked» until the new one is written (`runner.sh`), so an answer given by another account or kind of service is
 never offered meanwhile. A record that cannot be written is logged by `run`, and the Mac then stays «being checked».
 
+## Keeping the machine awake (`keepAwake.ts`)
+
+`runLink` holds an idle-sleep assertion for as long as the link runs (`startKeepAwake`): on macOS `caffeinate -i -w <the link's pid>` (a child that ends by itself
+when the link's process does — a stop, a removal, a crash, a SIGKILL — so no orphan), on Linux `systemd-inhibit --what=idle --mode=block sh -c 'while kill -0 <pid>;
+do sleep 2; done'` (the lock lasts while that loop does, within two seconds of the link). A holder that ends within 500 ms is no lock (no D-Bus for
+`systemd-inhibit`): the state is `none <reason>`; one that ends later is noted and tried again every 30 s; `stop` (end of `runLink`, and the process's `exit`)
+ends it and removes the file. The state is `<state>/awake` — `caffeinate 123`, `systemd-inhibit 123` or `none <reason>` — which `runner.sh probe` turns into `awake=` /
+`awake_detail=` (a holder that is gone is `no` whatever the file says) and `runners` shows as `keeps awake: …`. Never `pmset`, nothing that needs an admin; the
+display may still turn off; a closed lid still sleeps the machine (verify on the Mac). On an always-on Mac the daemon link holds it (the login session's agent does not).
+
 ## The login session's agent (`guiAgent.ts`)
 
 An always-on Mac's link and queue are LaunchDaemons in the System session, where Xcode's nested builds crash and the Simulator will not boot. The admin

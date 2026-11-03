@@ -49,6 +49,11 @@ export interface RunnerProbe {
   /** The runner's iOS Simulator boot check; `null` when the runner did not report one. */
   iosBoot: { status: IosBootStatus; detail: string } | null;
   /**
+   * How the runner's link keeps its machine awake (`runnerUtility/keepAwake.ts`): by `caffeinate` / `systemd-inhibit`, or not (`method: null`, and why).
+   * `null` when the runner did not say (a hand-made one, a link of an older version).
+   */
+  keepsAwake: { method: KeepAwakeMethod } | { method: null; reason: string } | null;
+  /**
    * The Node and yarn a job runs with (`--version` under the probe's own PATH, which is a job's): a version, `none` (not on the PATH: a job that calls
    * it ends with exit 127) or `unknown` (there, but no answer in time). `null` when the runner's script did not report them (an older one).
    */
@@ -70,6 +75,16 @@ function parseJobTools(fields: ReadonlyMap<string, string>): RunnerProbe['jobToo
   const node = fields.get('job_node');
   const yarn = fields.get('job_yarn');
   return node === undefined || yarn === undefined || node === '' || yarn === '' ? null : { node, yarn };
+}
+
+export type KeepAwakeMethod = 'caffeinate' | 'systemd-inhibit';
+const keepAwakeMethods: readonly KeepAwakeMethod[] = ['caffeinate', 'systemd-inhibit'];
+
+function parseKeepsAwake(fields: ReadonlyMap<string, string>): RunnerProbe['keepsAwake'] {
+  const awake = fields.get('awake');
+  const method = keepAwakeMethods.find((candidate) => candidate === awake);
+  if (method !== undefined) return { method };
+  return awake === 'no' ? { method: null, reason: fields.get('awake_detail') ?? '' } : null;
 }
 
 /** @description Parse the `key=value` lines of `runner.sh probe`. */
@@ -113,6 +128,7 @@ export function parseProbeOutput(text: string): RunnerProbe {
     runnerVersion: fields.get('runner_version') || null,
     iosBoot: iosBootStatus === undefined ? null : { status: iosBootStatus, detail: fields.get('ios_boot_detail') ?? '' },
     jobTools: parseJobTools(fields),
+    keepsAwake: parseKeepsAwake(fields),
   };
 }
 
@@ -166,6 +182,13 @@ function formatJobTools(probe: RunnerProbe): string[] {
   return [`  jobs run with: ${describe('Node', probe.jobTools.node)} · ${describe('yarn', probe.jobTools.yarn)}`];
 }
 
+/** `keeps awake: yes (caffeinate -i)` — or `NO` with why: a Mac that sleeps under a job drops the link (the thing `runners` is there to show). Nothing when the runner did not say. */
+function formatKeepsAwake(probe: RunnerProbe): string[] {
+  if (probe.keepsAwake === null) return [];
+  if (probe.keepsAwake.method === null) return [`  keeps awake: NO${probe.keepsAwake.reason === '' ? '' : ` — ${probe.keepsAwake.reason}`} (the machine may sleep when idle)`];
+  return [`  keeps awake: yes (${probe.keepsAwake.method === 'caffeinate' ? 'caffeinate -i' : 'systemd-inhibit --what=idle'}; a closed lid still sleeps it)`];
+}
+
 /** The line of a paired runner under its capabilities: the charness it runs and how it is kept running. Nothing for a hand-made one. */
 function formatRunnerProgram(probe: RunnerProbe): string[] {
   const parts = [
@@ -184,6 +207,7 @@ export function formatRunnerDetails(probe: RunnerProbe, groupLimits: Readonly<Re
     `  ${jobs}${groups === '' ? '' : ` · groups: ${groups}`}${probe.pueueVersion === null ? ' · Pueue: MISSING (install it, see docs/remote-run.md)' : ''}`,
     `  can: ${formatCapabilities(probe).join(' · ')}`,
     ...formatJobTools(probe),
+    ...formatKeepsAwake(probe),
     ...formatRunnerProgram(probe),
   ];
 }

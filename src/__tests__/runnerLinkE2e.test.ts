@@ -126,6 +126,16 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     return output;
   }
 
+  /** `<state>/awake` as the link wrote it: the holder of the idle-sleep assertion (method + pid), or why there is none; `null` while there is no file. */
+  function readAwakeState(): { method: string; detail: string } | null {
+    try {
+      const [method, ...rest] = fs.readFileSync(runnerPaths.awakeFile, 'utf8').trim().split(' ');
+      return { method, detail: rest.join(' ') };
+    } catch {
+      return null;
+    }
+  }
+
   it('pairs from the pasted line, once: the machine is registered and the same line again is refused', () => {
     const line = makePairingLine(layout);
     const result = runPairingLine(layout, line);
@@ -165,14 +175,33 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal(sshThroughLink(layout, runnerId, 'exit 7').status, 7);
   });
 
-  it('survives a restart of the utility with no new pairing', async () => {
+  it('the link keeps the machine awake while it runs: its state file names the holder process (alive), or says why there is none', async () => {
+    await waitUntil(() => readAwakeState() !== null, 'the link to write how it keeps the machine awake', linkTimeoutMs);
+    const awake = readAwakeState();
+    assert.ok(awake !== null);
+    if (awake.method === 'none') {
+      assert.match(awake.detail, /systemd-inhibit/, 'no holder: the reason names the tool (no bus for it here, or none installed)');
+    } else {
+      assert.equal(awake.method, 'systemd-inhibit', 'Linux: the idle-sleep lock of systemd-inhibit');
+      assert.equal(checkIsProcessAlive(Number(awake.detail)), true, 'the holder is running');
+    }
+  });
+
+  it('survives a restart of the utility with no new pairing — and the machine is let go in between: the old assertion\'s holder is gone once the link has stopped', async () => {
     const before = await waitForLink();
     assert.ok(runner !== null);
+    const awakeBefore = readAwakeState();
     await stopRunner(layout, runner);
+    assert.equal(readAwakeState(), null, 'a stopped link leaves no state behind');
+    if (awakeBefore !== null && awakeBefore.method !== 'none') {
+      await waitUntil(() => !checkIsProcessAlive(Number(awakeBefore.detail)), 'the old holder to be gone (no orphan keeps the machine awake after the runner stops)', 30_000);
+    }
     runner = startRunner(layout);
     await waitForLink(before.pid);
     assert.equal((await waitForSsh('echo again')).trim(), 'again');
     assert.equal(readHubPaired().rev, 1);
+    await waitUntil(() => readAwakeState() !== null, 'the new link to write its state', linkTimeoutMs);
+    if (awakeBefore !== null && awakeBefore.method !== 'none') assert.notEqual(readAwakeState()?.detail, awakeBefore.detail, 'a new holder for the new link');
   });
 
   it('comes back when the gate on the hub is killed', async () => {

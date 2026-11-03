@@ -1071,7 +1071,37 @@ describe('what the probe says of a paired runner (its state folder is the parent
 
   it('a hand-made runner (no state folder around its work dir) prints none of it', () => {
     const { text } = probe();
-    assert.ok(!/^(paused|service|runner_version|ios_boot)/m.test(text), text);
+    assert.ok(!/^(paused|service|runner_version|ios_boot|awake)/m.test(text), text);
+  });
+
+  describe('how the link keeps the machine awake (`<state>/awake`)', () => {
+    it('no file (a link of an older version, none ever started) says nothing — never a guess', () => {
+      makeStateFolder();
+      const { text, parsed } = probe();
+      assert.ok(!/^awake/m.test(text), text);
+      assert.equal(parsed.keepsAwake, null);
+    });
+
+    it('`<method> <pid>` of a holder that is alive is that method; a holder that is gone is «no», whatever the file says', () => {
+      makeStateFolder();
+      for (const method of ['caffeinate', 'systemd-inhibit'] as const) {
+        writeFile(workRoot, 'awake', `${method} ${process.pid}\n`);
+        assert.deepEqual(probe().parsed.keepsAwake, { method }, method);
+      }
+      const dead = spawnSync('true');
+      writeFile(workRoot, 'awake', `caffeinate ${dead.pid}\n`);
+      assert.deepEqual(probe().parsed.keepsAwake, { method: null, reason: 'the caffeinate process of the link is gone' });
+    });
+
+    it('`none <reason>` is «no» with the reason; a damaged pid is «no» too; a word nobody knows says nothing', () => {
+      makeStateFolder();
+      writeFile(workRoot, 'awake', 'none systemd-inhibit was not found (no systemd here)\n');
+      assert.deepEqual(probe().parsed.keepsAwake, { method: null, reason: 'systemd-inhibit was not found (no systemd here)' });
+      writeFile(workRoot, 'awake', 'caffeinate not-a-pid\n');
+      assert.deepEqual(probe().parsed.keepsAwake, { method: null, reason: 'the state of the sleep assertion is unreadable' });
+      writeFile(workRoot, 'awake', 'whatever 12\n');
+      assert.equal(probe().parsed.keepsAwake, null);
+    });
   });
 
   it('a work dir that is merely called work, beside a config.json but no keys/, is not a runner state folder', () => {

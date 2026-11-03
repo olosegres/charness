@@ -543,7 +543,35 @@ read_runner_state() {
   ios_boot_detail=$(sed -n 's/.*"reason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$check" | head -n 1)
 }
 
-# paused= / service= / runner_version= / ios_boot= of a paired runner (nothing for a hand-made one).
+# awake= (caffeinate | systemd-inhibit | no) and awake_detail= of a paired runner: how its link keeps the machine awake, from `<state>/awake` (one line,
+# `<method> <holder pid>` or `none <reason>`; runnerUtility/keepAwake.ts). A holder that is gone is `no`, whatever the file says; no file (a link of an older
+# version, or none ever started) says nothing.
+probe_awake() {
+  local awake_file="$runner_state/awake" method detail
+  [ -f "$awake_file" ] || return 0
+  read -r method detail < "$awake_file"
+  case $method in
+    caffeinate | systemd-inhibit)
+      case $detail in
+        '' | *[!0-9]*) echo "awake=no"; echo "awake_detail=the state of the sleep assertion is unreadable" ;;
+        *)
+          if kill -0 "$detail" 2> /dev/null; then
+            echo "awake=$method"
+          else
+            echo "awake=no"
+            echo "awake_detail=the $method process of the link is gone"
+          fi
+          ;;
+      esac
+      ;;
+    none)
+      echo "awake=no"
+      echo "awake_detail=$detail"
+      ;;
+  esac
+}
+
+# paused= / service= / runner_version= / ios_boot= / awake= of a paired runner (nothing for a hand-made one).
 probe_runner_state() {
   [ -n "$runner_state" ] || return 0
   if [ -f "$runner_state/paused" ]; then echo "paused=yes"; else echo "paused=no"; fi
@@ -557,6 +585,7 @@ probe_runner_state() {
   echo "runner_version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$runner_state/current/package.json" 2> /dev/null | head -n 1)"
   [ -n "$ios_boot_status" ] && echo "ios_boot=$ios_boot_status"
   [ -n "$ios_boot_detail" ] && echo "ios_boot_detail=$ios_boot_detail"
+  probe_awake
   return 0
 }
 

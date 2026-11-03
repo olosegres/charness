@@ -121,6 +121,19 @@ cut, the jobs it was running are stopped (through the link, at once, when it is 
 usual installers put it — and nothing of the charness host's environment. Anything else (`PATH` additions for a Node from nvm, `JAVA_HOME`,
 a token) goes into `~/.charness-runner/env`, one `KEY=VALUE` per line, read again for every job.
 
+**A runner keeps its machine awake — lid open, never asleep; lid closed, asleep as usual.** While the link runs it holds an IDLE-sleep assertion, the way
+`caffeinate -i` does: on a Mac `caffeinate -i -w <the link's pid>`, on Linux `systemd-inhibit --what=idle` around a loop that lasts as long as the link's
+process. The holder is tied to the link's process, so a stop, a removal, a crash or a SIGKILL of the runner ends it with the runner — the machine sleeps
+normally again, no orphan keeps it awake. Where there is no way (no `caffeinate` or `systemd-inhibit` on the PATH, no D-Bus for the latter, another system)
+the link says so in its log and `charness remote-run runners` / `/runners` show `keeps awake: NO — <why>` instead of `keeps awake: yes (…)`; the link comes
+up all the same. It never touches `pmset` or any admin power setting, so nothing has to be set on the Mac.
+- **What it does not do.** Closing the lid is not idleness: a laptop whose lid is closed sleeps as it always did (and the runner goes offline until it wakes).
+  The display may still turn off. The assertion is held on battery too, so a laptop left open on battery under a runner drains it — plug it in. Whether a
+  Mac with an external display and power in clamshell mode stays awake is Apple's rule, not the runner's.
+- **Only verifiable on the real Mac:** that `caffeinate -i -w` lets a closed lid sleep the machine, and that a SIGKILLed link frees the Mac to sleep again
+  (the holder ends with `-w`). On Linux both are tested with the real `systemd-inhibit` (the lock shows in `systemd-inhibit --list` and is gone, holder
+  and all, within seconds of the link being SIGKILLed).
+
 **`yarn` and `pnpm` survive a change of Node.** A Node from nvm, Volta or Homebrew has Corepack but not its shims, so `yarn` is on a job's
 `PATH` only when somebody enabled it for exactly that Node — and a link restarted under another Node (nvm's default changed, a service
 moved) lost it, and every job ended with `yarn: command not found`, exit 127. At every link start, and on `charness-runner check`, the

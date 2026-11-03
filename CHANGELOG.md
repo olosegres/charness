@@ -54,6 +54,10 @@ Now it asks `bootstatus` without `-b`, and a link that runs in a login session s
 Before, only a job started with `--needs ios` went through the login-session agent, so an iOS build sent to the Mac with `--runner mac` and no `--needs ios` still ran in the System session and hit the nested-`xcodebuild` crash with no hint of why.
 Now every job's steps go through the agent while the session exists; with no session the jobs that do not need iOS run in the daemon as before, and `--needs ios` is refused with «ios build: needs a login of <account>». The agents' instructions and `charness remote-run --help` now say that an iOS build or a Simulator test always carries `--needs ios`.
 
+**A runner now keeps its machine awake while it runs — lid open, the Mac never sleeps; lid closed, it sleeps as usual — and `runners` says whether it does.**
+Before, a Mac runner that went idle between two jobs fell asleep, dropped the link, and the next job found it offline — the thing `caffeinate` does by hand — and nothing told the owner it was the Mac's sleep.
+Now the link holds an idle-sleep assertion for as long as it runs — `caffeinate -i` on a Mac, `systemd-inhibit --what=idle` on Linux — tied to the link's process, so stopping, removing or crashing the runner lets the machine sleep again with no orphan; it never touches `pmset` or any admin power setting. Where it cannot (no tool, no D-Bus) `charness remote-run runners` and `/runners` (all 12 languages) say `keeps awake: NO — <why>`, otherwise `keeps awake: yes (…)`. A closed lid still sleeps the machine, and a laptop left open on battery drains it.
+
 ## 3.9.1 — 2026-11-04
 
 **An @-mention of the AI account in a Jira issue it is already working on no longer makes it believe the issue is not handed to it, and no longer stops its build.**

@@ -162,6 +162,15 @@ function describeCapabilities(probe: RunnerProbe, t: Translate): string {
   return t('runners.capabilitiesLine', { list: [...available, ...unavailable].join(' · ') });
 }
 
+/** How the link keeps the machine awake, one line (nothing when the runner did not say): a machine that sleeps under a job drops the link, so the answer is on the list. */
+function describeKeepsAwake(probe: RunnerProbe, t: Translate): string[] {
+  if (probe.keepsAwake === null) return [];
+  const how = probe.keepsAwake.method === null
+    ? t('runners.keepsAwakeNo', { reason: probe.keepsAwake.reason === '' ? t('runners.keepsAwakeNoReason') : clipReportedText(probe.keepsAwake.reason) })
+    : probe.keepsAwake.method === 'caffeinate' ? t('runners.keepsAwakeCaffeinate') : t('runners.keepsAwakeInhibit');
+  return [`  ${t('runners.keepsAwakeLine', { how })}`];
+}
+
 /** The Node and yarn a job runs with, one line (nothing when the runner's script did not report them): a Node that changed under a restarted link shows here. */
 function describeJobTools(probe: RunnerProbe, t: Translate): string[] {
   if (probe.jobTools === null) return [];
@@ -199,6 +208,7 @@ function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: For
       `  ${t('runners.jobsLine', { running: probe.jobsRunning, queued: probe.jobsQueued, projects: probe.jobsProjects })}${probe.pueueVersion === null ? ` · ${t('runners.pueueMissing')}` : ''}`,
       `  ${describeCapabilities(probe, t)}`,
       ...describeJobTools(probe, t),
+      ...describeKeepsAwake(probe, t),
     );
   } else {
     lines.push(`  ${t('runners.hardwareOldLine', { cpu: describeCpu(probe, t, false), ramTotal: formatGigabytes(probe.ramTotalMb), disk: formatGigabytes(probe.diskFreeMb) })}`);

@@ -182,6 +182,35 @@ describe('runnersScreenPlan: the list', () => {
     assert.equal(lineOf({ ...offline, isOnline: false }), undefined, 'a machine that is offline shows no live tools');
   });
 
+  it('how the link keeps the machine awake is one line under the tools — yes with how, or NO with why; nothing when the runner did not say, and a reason it reported is clipped', () => {
+    const withAwake = (lines: string[]): RunnerScreenEntry => createEntry({ probe: parseProbeOutput([probeText, ...lines].join('\n')) });
+    const lineOf = (entry: RunnerScreenEntry): string | undefined => buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text.split('\n').find((line) => line.includes('keeps awake'));
+    assert.equal(lineOf(withAwake(['awake=caffeinate'])), '  keeps awake: yes (caffeinate; a closed lid still sleeps it)');
+    assert.equal(lineOf(withAwake(['awake=systemd-inhibit'])), '  keeps awake: yes (systemd-inhibit; a closed lid still sleeps it)');
+    assert.equal(lineOf(withAwake(['awake=no', 'awake_detail=systemd-inhibit was not found'])), '  keeps awake: NO — systemd-inhibit was not found; it may sleep when idle');
+    assert.equal(lineOf(withAwake(['awake=no'])), '  keeps awake: NO — no reason given; it may sleep when idle');
+    assert.equal(lineOf(createEntry()), undefined);
+    assert.ok((lineOf(withAwake(['awake=no', `awake_detail=${'x'.repeat(2000)}`])) ?? '').length < 400, 'a reason the machine reported is clipped');
+    assert.equal(lineOf({ ...withAwake(['awake=caffeinate']), isOnline: false }), undefined, 'an offline machine shows no live state');
+  });
+
+  it('in every language the awake line says how and leaves no placeholder behind', () => {
+    const entry = createEntry({ probe: parseProbeOutput([probeText, 'awake=no', 'awake_detail=SOMETHING-REPORTED'].join('\n')) });
+    const yes = createEntry({ probe: parseProbeOutput([probeText, 'awake=caffeinate'].join('\n')) });
+    const english = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+    for (const locale of localeCodes) {
+      runWithLocale(locale, () => {
+        const text = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+        assert.ok(text.includes('SOMETHING-REPORTED'), `${locale}: the reason`);
+        assert.doesNotMatch(text, /\{[a-zA-Z]+\}/, `${locale}: no placeholder is left`);
+        const yesText = buildRunnersScreen({ revision, entries: [yes], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+        assert.ok(yesText.includes('caffeinate'), `${locale}: the method`);
+        assert.doesNotMatch(yesText, /\{[a-zA-Z]+\}/, `${locale}: no placeholder is left (yes)`);
+        if (locale !== 'en') assert.notEqual(text, english, `${locale}: translated, not the English fallback`);
+      });
+    }
+  });
+
   it('in every language the line names both versions and leaves no placeholder behind', () => {
     const entry = createEntry({ probe: parseProbeOutput([probeText, 'job_node=v24.22.2', 'job_yarn=none'].join('\n')) });
     const english = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text;

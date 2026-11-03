@@ -12,6 +12,7 @@ import * as path from 'path';
  *   bin/          the `charness-runner` launcher, pueue, pueued, rsync when built
  *   env           the operator's KEY=VALUE lines, added to every job's environment
  *   work/         the work dir of remote-run (phase 1); pueue/ the private Pueue; logs/; build/ scratch for the rsync build
+ *   awake         how the link keeps the machine awake (`keepAwake.ts`): `caffeinate 123`, `systemd-inhibit 123` or `none <reason>`; read by `runner.sh probe`
  *   gui/          the login session's agent of an always-on Mac (`guiAgent.ts`): `agent.json` its heartbeat, `requests/<id>/` the steps it runs
  */
 
@@ -28,6 +29,8 @@ export interface RunnerHomePaths {
   pausedFlag: string;
   /** One word, `user-service` or `system-service`, while a service is installed. Read by `runner.sh probe` as `service=`. */
   serviceMarker: string;
+  /** How the link keeps the machine awake while it runs (`keepAwake.ts`): the holder process, or why none. Read by `runner.sh probe` as `awake=`. */
+  awakeFile: string;
   /** The login session's agent's heartbeat (`guiAgent.ts`): its pid, when it started, when it last beat. Read by `runner.sh`. */
   guiAgentStatus: string;
   /** The steps the login session's agent is asked to run: one folder each (`runner.sh` writes them, the agent answers in them). */
@@ -58,6 +61,7 @@ export function getRunnerHomePaths(homeDir: string = os.homedir()): RunnerHomePa
     pairing: path.join(root, 'pairing.json'),
     pausedFlag: path.join(root, 'paused'),
     serviceMarker: path.join(root, 'service'),
+    awakeFile: path.join(root, 'awake'),
     guiAgentStatus: path.join(root, 'gui', 'agent.json'),
     guiRequestsDir: path.join(root, 'gui', 'requests'),
     iosCheck: path.join(root, 'ios-check.json'),

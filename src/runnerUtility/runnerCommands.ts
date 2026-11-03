@@ -13,6 +13,7 @@ import { createLinkLoop } from './linkLoop';
 import { collectMachineReport, createMachineProbe, formatMachineReport, type MachineReport } from './machineReport';
 import { ensurePueueDaemon, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
 import { createGuiAgentDeps, runGuiAgent } from './guiAgent';
+import { createKeepAwakeDeps, startKeepAwake, type KeepAwakeState } from './keepAwake';
 import { createIosCheckDeps, readIosCheck, refreshIosCheck } from './iosCheck';
 import { createSilencerDeps, createSilencerLook, createSimulatorSilencer, silencerPollMs } from './simulatorSilencer';
 import { checkIsRunnerLinkProcess, createProcessControl, stopLocalLink, type ProcessControl } from './localLinkStop';
@@ -308,6 +309,13 @@ export function planSimulatorWork(platform: NodeJS.Platform, serviceKind: string
   return { linkChecksSimulator: !isAgentsWork, linkSilencesSimulators: platform === 'darwin' && !isAgentsWork };
 }
 
+/** @description What the link says of keeping the machine awake as it starts: the method, or that it is not and why (also what `runners` shows). */
+export function describeKeepAwake(state: KeepAwakeState): string {
+  return state.method === null
+    ? `charness-runner: this machine is NOT kept awake while the link runs (${state.reason}) — it may sleep when idle`
+    : `charness-runner: keeping this machine awake while the link runs (${state.method === 'caffeinate' ? 'caffeinate -i' : 'systemd-inhibit --what=idle'}; a closed lid still sleeps it)`;
+}
+
 /** Start the silencer of the Simulators in this process' own session, looking every {@link silencerPollMs}. */
 function startSimulatorSilencing(io: CommandIo): void {
   const deps = createSilencerDeps((line) => { io.stderr(`charness-runner: ${line}\n`); });
@@ -438,8 +446,16 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+  // The machine is kept awake while the link runs; the holder is tied to this process (it ends with it, however it ends), and `stop` runs from `exit` too.
+  const keepAwake = await startKeepAwake(createKeepAwakeDeps(paths));
+  process.once('exit', () => { keepAwake.stop(); });
+  io.stdout(`${describeKeepAwake(keepAwake.getState())}\n`);
   io.stdout(`charness-runner: serving ${config.hub.label} as “${config.name}” (Ctrl-C stops)\n`);
-  return loopRef.current.run(controller.signal);
+  try {
+    return await loopRef.current.run(controller.signal);
+  } finally {
+    keepAwake.stop();
+  }
 }
 
 /** @description `charness-runner status`. */

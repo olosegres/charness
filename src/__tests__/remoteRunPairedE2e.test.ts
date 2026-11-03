@@ -170,6 +170,9 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
     assert.match(result.stdout, /ios: no \(Linux\)/);
     assert.match(result.stdout, /^ {2}charness-runner \S+ · run by hand$/m);
     assert.ok(!result.stdout.includes('MISSING'), 'the runner has its Pueue');
+    // The link keeps its machine awake — by systemd-inhibit where this box lets it, and then `runners` says so; where it does not, it says NO and why.
+    const hasWorkingSystemdInhibit = spawnSync('systemd-inhibit', ['--what=idle', '--why=test', '--mode=block', 'true']).status === 0;
+    assert.match(result.stdout, hasWorkingSystemdInhibit ? /^ {2}keeps awake: yes \(systemd-inhibit --what=idle; a closed lid still sleeps it\)$/m : /^ {2}keeps awake: NO — /m);
   });
 
   it('a passing and a failing command: output and exit code come back through the link', async () => {
