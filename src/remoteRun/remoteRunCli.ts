@@ -43,6 +43,7 @@ export const remoteRunUsage = `Usage:
                               --needs with a paired runner that has it but is offline waits for it up to --runner-wait
                               (default 15m, 0 = fail at once).
                               Options go BEFORE the command; a command that starts with a subcommand name goes after --
+                              (--runner <name> exec … is exec on that runner; other options before a subcommand name are refused)
   charness remote-run runners                 the runners: online, hardware, load, what each can do
   charness remote-run ls [--all]              jobs of this project (all projects with --all)
   charness remote-run status <id>             one job

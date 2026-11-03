@@ -1,6 +1,7 @@
 /**
  * @description `remoteRun/cliArgs.ts`: the command line — options only BEFORE the command, parsing stops at the first non-option word,
- * a subcommand name is recognised only as the first word (a command that starts with one goes after `--`), the command words are
+ * a subcommand name is recognised as the first word (a command that starts with one goes after `--`), a subcommand name that FOLLOWS
+ * options is read as the subcommand or refused with the way out — never run as a job of that name — the command words are
  * joined with spaces, durations, and a usage error that says what was wrong.
  *
  * Test case: N/A — Charness has no Jira tracker.
@@ -56,7 +57,7 @@ describe('running a command', () => {
   it('defaults: no options set, the timeout left to the default', () => {
     const command = parseOk(['ls']);
     assert.equal(command.kind, 'ls');
-    const run = parseOk(['--bg', 'ls', 'build']);
+    const run = parseOk(['--bg', '--', 'ls', 'build']);
     assert.equal(run.kind === 'run' && run.command, 'ls build');
     assert.equal(run.kind === 'run' && run.options.timeoutSeconds, null);
     assert.equal(defaultTimeoutSeconds, 3 * 3600);
@@ -151,6 +152,39 @@ describe('subcommands', () => {
     assert.deepEqual(parseOk(['logs', '--tail=5', '-f', jobId]), { kind: 'logs', jobId, isFollow: true, tail: 5 });
     assert.match(parseError(['logs', jobId, '--tail', '0']), /--tail needs/);
     assert.match(parseError(['logs', jobId, '--nope']), /unknown option for logs/);
+  });
+
+  it('options BEFORE exec: --runner is understood (the exec runs on that runner), the other run options are refused — exec is never run as a shell builtin job', () => {
+    assert.deepEqual(parseOk(['--runner', 'box1', 'exec', 'ls', 'build/']), { kind: 'exec', runner: 'box1', command: 'ls build/' });
+    assert.deepEqual(parseOk(['--runner=box1', 'exec', 'adb', 'logcat', '-d']), { kind: 'exec', runner: 'box1', command: 'adb logcat -d' });
+    assert.deepEqual(parseOk(['--runner', 'box1', 'exec', '--runner', 'box1', 'ls']), { kind: 'exec', runner: 'box1', command: 'ls' });
+    assert.deepEqual(parseOk(['--runner', 'box1', 'exec', '--', 'ls']), { kind: 'exec', runner: 'box1', command: 'ls' });
+    assert.match(parseError(['--runner', 'box1', 'exec', '--runner', 'box2', 'ls']), /two runners for exec: box1 before it, box2 after it/);
+    assert.match(parseError(['--runner', 'box1', 'exec']), /exec needs a command/);
+    for (const option of [['--bg'], ['--with-git'], ['--timeout', '1h'], ['--needs', 'ios'], ['--group', 'emulator'], ['--runner-wait', '5m'], ['-e', 'A=1']]) {
+      const message = parseError([...option, 'exec', 'ls']);
+      assert.match(message, new RegExp(`^${option[0]} does not apply to exec — before exec only --runner is understood`), message);
+      assert.match(message, /called "exec" goes after -- \(charness remote-run \[options\] -- exec/);
+    }
+    assert.match(parseError(['--runner', 'box1', '--bg', 'exec', 'ls']), /^--bg does not apply to exec/);
+  });
+
+  it('options before any other subcommand name are refused with the way out, and `--` runs a command that is called so', () => {
+    for (const name of ['ls', 'runners', 'logs', 'status', 'wait', 'kill', 'fetch', 'help']) {
+      const message = parseError(['--runner', 'box1', name, 'x']);
+      assert.match(message, new RegExp(`^"${name}" is a remote-run subcommand and subcommands come first \\(charness remote-run ${name} …\\)`), message);
+      assert.match(message, new RegExp(`called "${name}" goes after -- \\(charness remote-run \\[options\\] -- ${name} …\\)`), message);
+      const asJob = parseOk(['--runner', 'box1', '--', name, 'x']);
+      assert.ok(asJob.kind === 'run' && asJob.command === `${name} x` && asJob.options.runner === 'box1');
+    }
+    assert.match(parseError(['--bg', 'ls', 'build']), /"ls" is a remote-run subcommand/);
+  });
+
+  it('a subcommand name that is not the first word of the command is just part of the command', () => {
+    const command = parseOk(['--bg', 'yarn', 'exec', 'ls']);
+    assert.ok(command.kind === 'run' && command.command === 'yarn exec ls');
+    const hyphenated = parseOk(['--runner', 'box1', 'ls-files']);
+    assert.ok(hyphenated.kind === 'run' && hyphenated.command === 'ls-files');
   });
 
   it('exec: --runner before the command, the rest is the command', () => {

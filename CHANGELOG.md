@@ -14,6 +14,10 @@ Now a job (and `remote-run exec`) gets `LC_ALL=C.UTF-8`, or `en_US.UTF-8` where 
 Before, the boot check paired the newest iOS runtime with the last iPhone of the device-type list — and a new runtime runs only a few device types (one Xcode's newest runtime ran just «iPhone Duo»), so `simctl create` refused the pair with «Incompatible device» and `charness remote-run runners` showed the Mac as unable to build for iOS.
 Now the check takes the device types each runtime itself lists as supported and boots the newest iPhone of the newest runtime that has one.
 
+**`charness remote-run --runner <name> exec <command>` now runs the command on that runner instead of starting a job whose command is the word `exec`.**
+Before, options came first and the first word after them was always the job's command, so `--runner studio-mac exec ls` queued a job `exec ls` — the shell's own `exec` builtin, which replaces the job's shell and ends it — and the agent got a job result instead of the listing it asked for.
+Now `exec` after `--runner` is the `exec` subcommand on that runner, any other option before `exec` is refused with a line saying `exec` takes only `--runner`, and any other subcommand name after options (`--bg ls build`) is refused with the way to run a command that is called so: put `--` before it.
+
 ## 3.9.1 — 2026-11-04
 
 **An @-mention of the AI account in a Jira issue it is already working on no longer makes it believe the issue is not handed to it, and no longer stops its build.**

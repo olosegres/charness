@@ -299,7 +299,9 @@ charness remote-run exec [--runner <name>] <command…>
 ```
 
 Options go **before** the command; parsing stops at the first word that is not an option (like `env` and `ssh`). A command whose
-first word is a subcommand name goes after `--`: `charness remote-run -- ls build/`. The words of the command are joined with spaces
+first word is a subcommand name goes after `--`: `charness remote-run -- ls build/`. A subcommand name that follows options is never
+run as a job of that name: `--runner box1 exec ls build/` is the `exec` of `ls build/` on `box1` (before `exec` only `--runner` is
+understood), and `--bg ls build/` is refused with the way out — put `--` before it. The words of the command are joined with spaces
 and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn test'` works.
 
 - **Foreground (default)**: syncs the project, runs the dependencies step when needed, runs the command in the same subfolder of the

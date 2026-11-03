@@ -4,7 +4,10 @@ import { runnerCapabilities, type RunnerCapability } from './probe';
 /**
  * @description The command line of `charness remote-run`, parsed. Options come only BEFORE the command and parsing stops at the first
  * non-option word (like `env` and `ssh`); a command whose first word is a subcommand name goes after `--`. A subcommand is recognised
- * only as the very first word, so `remote-run --bg ls build` runs `ls build` and `remote-run ls` lists jobs.
+ * as the very first word (`remote-run ls` lists jobs); a subcommand name that follows options is never run as a job of that name — it
+ * is read as the subcommand when the options fit it (`--runner box1 exec ls`), and refused with the way out when they do not
+ * (`--bg ls build` → «put -- before a command called ls»): `exec` is a shell builtin that replaces the job's shell, and `ls` run
+ * where `ls` the subcommand was meant answers a different question without a word.
  */
 
 export interface RemoteRunOptions {
@@ -157,22 +160,47 @@ function applyRunOption(options: RemoteRunOptions, name: string, value: string):
 
 const runValueOptions: readonly string[] = ['--runner', '--needs', '--runner-wait', '--group', '--timeout'];
 
+/** The words that name a subcommand when they come first; after options they are read as the subcommand or refused (`parseOptionsBeforeSubcommand`). */
+const subcommandNames: readonly string[] = ['help', 'ls', 'runners', 'logs', 'exec', 'status', 'wait', 'kill', 'fetch'];
+
+/**
+ * @description A subcommand name that follows options. `exec` takes `--runner`, so `--runner box1 exec ls` is the exec of `ls` on box1 (a
+ * `--runner` after `exec` too must name the same runner); any other option does not apply to exec, and the other subcommands take none
+ * of the run options — those are refused with the way to run a command that is simply called so.
+ */
+function parseOptionsBeforeSubcommand(name: string, rest: readonly string[], runner: string | null, usedOptions: readonly string[]): RemoteRunArgsParse {
+  const wayOut = `a command that is called "${name}" goes after -- (charness remote-run [options] -- ${name} …)`;
+  if (name !== 'exec') return { ok: false, error: `"${name}" is a remote-run subcommand and subcommands come first (charness remote-run ${name} …), so the options before it have no effect; ${wayOut}` };
+  const notForExec = usedOptions.find((option) => option !== '--runner');
+  if (notForExec !== undefined) return { ok: false, error: `${notForExec} does not apply to exec — before exec only --runner is understood (charness remote-run exec [--runner <name>] <command…>); ${wayOut}` };
+  const parsed = parseExecArguments(rest);
+  if (!parsed.ok || parsed.command.kind !== 'exec') return parsed;
+  const { runner: runnerAfter, command } = parsed.command;
+  if (runner !== null && runnerAfter !== null && runner !== runnerAfter) return { ok: false, error: `--runner names two runners for exec: ${runner} before it, ${runnerAfter} after it` };
+  return { ok: true, command: { kind: 'exec', runner: runnerAfter ?? runner, command } };
+}
+
 function parseRunArguments(words: readonly string[]): RemoteRunArgsParse {
   const options = createDefaultOptions();
+  const usedOptions: string[] = [];
+  let isCommandAfterSeparator = false;
   let index = 0;
   for (; index < words.length; index += 1) {
     const word = words[index];
     if (word === '--') {
+      isCommandAfterSeparator = true;
       index += 1;
       break;
     }
     if (!word.startsWith('-') || word === '-') break;
     if (word === '--bg') {
       options.isBackground = true;
+      usedOptions.push(word);
       continue;
     }
     if (word === '--with-git') {
       options.isWithGit = true;
+      usedOptions.push(word);
       continue;
     }
     const optionName = word === '-e' ? '-e' : runValueOptions.find((name) => word === name || word.startsWith(`${name}=`));
@@ -181,10 +209,12 @@ function parseRunArguments(words: readonly string[]): RemoteRunArgsParse {
     if (reading === null || reading.value === undefined) return { ok: false, error: `${optionName} needs a value` };
     const problem = applyRunOption(options, optionName, reading.value);
     if (problem !== null) return { ok: false, error: problem };
+    usedOptions.push(optionName);
     index += reading.consumed - 1;
   }
   const commandWords = words.slice(index);
   if (commandWords.length === 0) return { ok: false, error: 'no command given' };
+  if (!isCommandAfterSeparator && subcommandNames.includes(commandWords[0])) return parseOptionsBeforeSubcommand(commandWords[0], commandWords.slice(1), options.runner, usedOptions);
   return { ok: true, command: { kind: 'run', options, command: commandWords.join(' ') } };
 }
 
