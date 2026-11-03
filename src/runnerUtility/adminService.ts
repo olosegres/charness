@@ -14,6 +14,7 @@ import {
   type ServiceResult,
   type TargetAccount,
 } from './serviceCommon';
+import { findHomeContaining, findReadableHomes, formatReadableHomesWarning, listSubfolders } from './homeFolders';
 import { runCommandIsolated, type IsolatedCommandRunner } from './isolatedCommand';
 import { serviceFollowsFlag } from './pairArgs';
 import { getRunnerHomePaths } from './runnerHome';
@@ -81,6 +82,8 @@ export interface AdminServiceDeps {
   resolveAccount: (name: string) => Promise<TargetAccount | null>;
   /** Wait between two looks at a starting user manager (a test does not wait). */
   sleep: (ms: number) => Promise<void>;
+  /** The sub-folders of a folder (`/Users`, `/home`), for the look at the homes the account can read; a test's own. */
+  listFolders: (parent: string) => string[];
 }
 
 export function createAdminServiceDeps(): AdminServiceDeps {
@@ -96,6 +99,7 @@ export function createAdminServiceDeps(): AdminServiceDeps {
     giveToRoot: fs.lchownSync,
     resolveAccount: (name) => (process.platform === 'darwin' ? resolveMacAccount(name, runCommandIsolated) : resolveLinuxAccount(name, runCommandIsolated)),
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+    listFolders: listSubfolders,
   };
 }
 
@@ -151,6 +155,10 @@ async function installUserServiceFor(account: TargetAccount, deps: AdminServiceD
 async function resolveServedAccount(accountName: string, deps: AdminServiceDeps): Promise<TargetAccount | ServiceResult> {
   if (deps.platform !== 'linux' && deps.platform !== 'darwin') return fail(`Services are supported on Linux (systemd) and macOS (launchd), not on ${deps.platform}.`);
   if (deps.uid !== rootUid) return fail('This step is root\'s: it is started by the admin pairing line from /runners, which asks for sudo.');
+  // The line picks a Node outside the home folders; a root step that still finds itself under one stops here — the service would depend on a folder
+  // that is someone's to change and to close, and root would run a program from it.
+  const nodeHome = findHomeContaining(deps.nodePath);
+  if (nodeHome !== null) return fail(`This step runs under the Node.js at ${deps.nodePath}, which lives in a home folder (${nodeHome}): root runs nothing from a home, and the service must not depend on one. Install Node.js system-wide (macOS: brew install node) and paste the admin line again.`);
   const account = await deps.resolveAccount(accountName);
   if (account === null) return fail(`There is no account named «${accountName}», or its home folder cannot be read from the directory service.`);
   if (account.uid === rootUid) return fail('The service must run as a standard account, not as root.');
@@ -174,6 +182,21 @@ export async function pairAccountFromPackage(accountName: string, request: PairR
   if (paired.ok) return { ok: true, lines: [] };
   // Its own words were relayed above.
   return fail(paired.isTimedOut ? `The pairing of ${account.name} did not finish within ${pairAsAccountTimeoutMs / 60_000} minutes.` : `The pairing of ${account.name} failed (${paired.exitCode === null ? 'it did not run to its end' : `exit ${paired.exitCode}`}); see above.`);
+}
+
+/**
+ * @description The lines that warn the admin when `accountName` — the account that runs the agents' code — can read the home folders of other
+ * users (macOS makes them `750`, group `staff`, and a standard account is in `staff`), naming them with the one-line fix; `[]` when it can read
+ * none, or the account cannot be found. Judged AS the account (`sudo -u <account> test -r … -a -x …`, no terminal), never by root's own rights.
+ */
+export async function warnAboutReadableHomes(accountName: string, deps: AdminServiceDeps): Promise<string[]> {
+  const account = await deps.resolveAccount(accountName);
+  if (account === null) return [];
+  const homes = await findReadableHomes(account.name, account.homeDir, {
+    listFolders: deps.listFolders,
+    checkCanRead: async (folder) => (await deps.runner('sudo', [...asAccountArgs(account), 'test', '-r', folder, '-a', '-x', folder], { timeoutMs: commandTimeoutMs })).ok,
+  });
+  return formatReadableHomesWarning(account.name, homes);
 }
 
 /** @description Install the always-on service of `accountName`, an account that is already paired. Needs root; touches nothing of the account's but through the account. */

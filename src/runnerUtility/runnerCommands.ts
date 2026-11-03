@@ -17,6 +17,7 @@ import { checkIsRunnerLinkProcess, createProcessControl, stopLocalLink, type Pro
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { checkIsRunnerPaused, setRunnerPaused } from './runnerFlags';
 import { formatSystemStepAnswer } from './serviceCommon';
+import { checkCanReadAsSelf, findReadableHomes, formatForeignNodeWarning, formatReadableHomesWarning, listSubfolders } from './homeFolders';
 import { createServiceDeps, formatSystemServiceRemoval, installService, readServiceKind, runSystemStep, uninstallService, parseServiceCommand, type ServiceDeps } from './serviceManager';
 import { readPairingInProgress, readRunnerConfig, readRunnerStatus, removePairingInProgress, writePairingInProgress, writeRunnerConfig, type RunnerConfig } from './runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from './runnerHome';
@@ -113,6 +114,8 @@ export function formatServiceFollowsNote(): string {
 export interface PairingOptions {
   /** An admin's line installs the service right after this pairing (`pairArgs.ts`): no help about keeping it running is printed. */
   isServiceFollowing: boolean;
+  /** The homes of other users this account can read (the plain line says so, with the fix); a test's own. Default: look at `/Users` and `/home` as this account. */
+  scanReadableHomes?: () => Promise<string[]>;
 }
 
 export interface PairingOutcomeInputs {
@@ -144,6 +147,20 @@ async function finishPairing(paths: RunnerHomePaths, inputs: PairingOutcomeInput
   await installTools(paths, createToolDeps(), io);
   io.stdout(`\n${isRecovered ? 'Recovered a pairing whose answer was lost: paired' : 'Paired'} with charness ${reply.label} (${endpoint.host}:${endpoint.port}) as runner “${reply.name}”.\n`);
   io.stdout(`Its agents will run their projects' code on this machine as user «${os.userInfo().username}».\n\n${options.isServiceFollowing ? formatServiceFollowsNote() : formatKeepRunningHelp(paths)}`);
+  // The admin line's root step looks at the homes itself, as the account, and says so after its own work: what this program prints is the account's word.
+  if (options.isServiceFollowing) return;
+  const accountName = os.userInfo().username;
+  const readableHomes = await (options.scanReadableHomes ?? ((): Promise<string[]> => findReadableHomes(accountName, paths.homeDir, { listFolders: listSubfolders, checkCanRead: checkCanReadAsSelf })))();
+  const warnings = formatPairingWarnings({ accountName, homeDir: paths.homeDir, nodePath: process.execPath, readableHomes });
+  if (warnings.length > 0) io.stdout(`\n${warnings.join('\n')}\n`);
+}
+
+/**
+ * @description What the plain pairing line warns about once the machine is paired: the homes of other users that this account can read (with the
+ * one-line fix for each), and a Node.js that lives in another user's home. `[]` when there is nothing to say.
+ */
+export function formatPairingWarnings(inputs: { accountName: string; homeDir: string; nodePath: string; readableHomes: readonly string[] }): string[] {
+  return [...formatReadableHomesWarning(inputs.accountName, inputs.readableHomes), ...formatForeignNodeWarning(inputs.nodePath, inputs.homeDir)];
 }
 
 /** @description Close `payload`'s code on the hub (the `cancel` request, with the code's own key); a hub that cannot be reached is said, never fatal: the code then runs out by itself. */

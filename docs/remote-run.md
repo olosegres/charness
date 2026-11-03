@@ -58,11 +58,17 @@ A runner is attached in one of two ways:
      system log. The code is single use and good for 10 minutes: a line that was used is dead, and so is a retry's (see below), which
      closes its own code. A line that was refused (no such account, an admin account…) leaves its code open until it expires — on purpose,
      so you can fix the account and paste it again.
-   - **Node.** Both root and the account run the Node that `sudo` finds, so Node has to be installed system-wide (Homebrew, the OS
-     package, nodejs.org): a Node that only the runner account's own login finds (nvm) is found by the second line, not by this one, and the
-     line then says that sudo found no Node 22.12 or newer on its PATH. On a Mac the Node's path is written into the runner's launcher and
-     the daemons' `PATH`, so a Node under a home folder (nvm, Volta) stops working when that version is upgraded or removed: install it
-     system-wide, or run `charness runners pair` again for a fresh line after the move.
+   - **Node.** Both root and the account run one Node, and the line picks it itself: the `node` that `sudo` finds, else
+     `/opt/homebrew/bin/node`, `/usr/local/bin/node` or `/usr/bin/node` — **never a Node inside a home folder** (`/Users/<name>`, `/home/<name>`,
+     root's own; judged by its real path, so a link that leads into one does not count), one the account can run, 22.12 or newer. Root runs nothing
+     from somebody's home, and the runner's launcher and the daemons' `PATH` carry this Node, so a runner must not stop the day that home is closed
+     or nvm moves on. With none, the line stops before anything is fetched and says to install Node system-wide (`brew install node` on a Mac, the OS
+     package, nodejs.org); the plain line (the second message) uses the Node of the runner account's own login and warns when it lives in
+     another user's home, and `charness-runner service install` refuses one.
+   - **Homes the runner account can read.** macOS makes every home `750` with group `staff`, and a standard account is in `staff`, so by default
+     the agents' jobs — and the npm packages they install — can read the source code, keys and tokens of the people who use the machine. **Both
+     lines** end with a warning naming the homes the runner account can read (the admin line asks as that account, not with root's rights) and the
+     one-line fix for each: `sudo chmod 700 /Users/<name>`. After closing a home that used to hold the Node, install Node system-wide first.
    - **Retry.** If the service step fails, the account stays paired and the line says so: **paste a fresh admin line** (from `/runners`)
      after fixing what it printed. A line pasted for an account that is already paired pairs nothing twice, closes its own code on the
      charness host and only installs the service. That is no failure: its Telegram messages read «This line was used on a machine that was already paired — nothing new was paired.», and `charness runners pair --wait` prints the same and exits 0.

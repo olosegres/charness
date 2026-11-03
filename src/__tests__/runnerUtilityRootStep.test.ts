@@ -13,9 +13,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { builtinModules } from 'node:module';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import ts from 'typescript';
-import { parseInstallArguments } from '../runnerUtility/rootServiceCli';
+import { parseInstallArguments, runInstallCommand, type RootStepIo } from '../runnerUtility/rootServiceCli';
+import type { AdminServiceDeps } from '../runnerUtility/adminService';
+import type { IsolatedCommandRunner } from '../runnerUtility/isolatedCommand';
 
 const projectRoot = path.resolve(__dirname, '..', '..');
 const rootStepEntry = path.resolve(__dirname, '..', 'runnerUtility', 'rootServiceCli.ts');
@@ -68,6 +71,7 @@ describe('the admin line\'s root step: built-ins only', () => {
   it('is the small graph it is meant to be — and the walk really follows the imports (a deeper file would show here)', () => {
     assert.deepEqual([...names].sort(), [
       'runnerUtility/adminService.ts',
+      'runnerUtility/homeFolders.ts',
       'runnerUtility/isolatedCommand.ts',
       'runnerUtility/pairArgs.ts',
       'runnerUtility/progress.ts',
@@ -114,3 +118,90 @@ describe('the root step\'s arguments', () => {
     ]) assert.equal(parseInstallArguments(bad), null, JSON.stringify(bad));
   });
 });
+
+describe('the root step\'s whole run', () => {
+  interface Run { code: number; out: string; err: string; calls: string[] }
+
+  /** `args` run against a root step whose account calls are answered by `answerFor` (by the call's text), and whose homes the account can read are `readableHomes`. */
+  async function run(args: readonly string[], answerFor: (call: string) => boolean = () => true, readableHomes: readonly string[] = []): Promise<Run> {
+    const calls: string[] = [];
+    let out = '';
+    let err = '';
+    const runner: IsolatedCommandRunner = async (file, callArgs) => {
+      const call = `${file} ${callArgs.join(' ')}`;
+      calls.push(call);
+      const isHomeCheck = call.includes(' test -r ');
+      const isOk = isHomeCheck ? readableHomes.some((home) => call.includes(`test -r ${home} `)) : answerFor(call);
+      return { ok: isOk, exitCode: isOk ? 0 : 1, stdout: call.includes('system-step prepare') ? '{"ok":true,"hadService":false}\n' : '', stderr: '', isTimedOut: false };
+    };
+    const deps: AdminServiceDeps = {
+      runner,
+      write: (stream, text) => { if (stream === 'stdout') out += text; else err += text; },
+      nodePath: '/opt/homebrew/bin/node',
+      runnerCliPath: '/tmp/charness-runner.x/pkg/dist/runnerUtility/runnerCli.js',
+      platform: 'darwin',
+      uid: 0,
+      nodeDir: '/opt/homebrew/bin',
+      launchDaemonsDir: fs.mkdtempSync(path.join(os.tmpdir(), 'rs-')),
+      giveToRoot: () => undefined,
+      resolveAccount: async (name) => ({ name, uid: 501, gid: 20, homeDir: `/Users/${name}` }),
+      sleep: async () => undefined,
+      listFolders: (parent) => (parent === '/Users' ? ['alice', 'runner'] : []),
+    };
+    const io: RootStepIo = { stdout: (text) => { out += text; }, stderr: (text) => { err += text; }, runStep: async (_label, work) => work() };
+    try {
+      const code = await runInstallCommand(args, deps, io);
+      return { code, out, err, calls };
+    } finally {
+      fs.rmSync(deps.launchDaemonsDir, { recursive: true, force: true });
+    }
+  }
+
+  const pairingArgs = ['install', 'runner', '--bootstrap', '/tmp/x/pkg', '--archive', '/tmp/x/package.tgz', '--package-id', '0123456789abcdef', 'cr1.code'];
+
+  it('prints the usage and exits 2 for arguments it does not know — and runs nothing', async () => {
+    const result = await run(['install']);
+    assert.equal(result.code, 2);
+    assert.match(result.err, /^Usage: rootServiceCli\.js install <account>/);
+    assert.deepEqual(result.calls, []);
+  });
+
+  it('pairs first, then installs the service, then — last — warns about the homes of other users that the account can read, naming them with the fix', async () => {
+    const result = await run(pairingArgs, () => true, ['/Users/alice']);
+    assert.equal(result.code, 0, result.err);
+    const pairing = result.calls.findIndex((call) => call.includes('runnerCli.js pair'));
+    const service = result.calls.findIndex((call) => call.includes('system-step prepare'));
+    const homes = result.calls.findIndex((call) => call.includes(' test -r '));
+    assert.ok(pairing === 0 && service > pairing && homes > service, result.calls.join('\n'));
+    assert.match(result.out, /\nWarning: the account runner can read the home folders of other users on this machine: \/Users\/alice\.[^]*sudo chmod 700 \/Users\/alice\n$/);
+  });
+
+  it('says nothing about homes when the account can read none', async () => {
+    const result = await run(pairingArgs, () => true, []);
+    assert.equal(result.code, 0);
+    assert.doesNotMatch(result.out + result.err, /Warning/);
+  });
+
+  it('a failed pairing ends the step: no service, no warning, exit 1', async () => {
+    const result = await run(pairingArgs, (call) => !call.includes('runnerCli.js pair'), ['/Users/alice']);
+    assert.equal(result.code, 1);
+    assert.match(result.err, /The pairing of runner failed \(exit 1\); see above\./);
+    assert.deepEqual(result.calls.filter((call) => call.includes('system-step') || call.includes('launchctl') || call.includes(' test -r ')), []);
+    assert.doesNotMatch(result.out, /Warning/);
+  });
+
+  it('a failed service after a pairing says the account is paired and what to do — and still warns about the homes: the account is paired and can read them', async () => {
+    const result = await run(pairingArgs, (call) => !call.includes('launchctl'), ['/Users/alice']);
+    assert.equal(result.code, 1);
+    assert.match(result.err, /charness-runner: runner is paired, but has no service: fix the above and paste a fresh admin line\n$/m);
+    assert.match(result.out, /Warning: the account runner can read/);
+  });
+
+  it('without the pairing arguments it only installs the service of an account that is paired, and says no «paired, but» about it', async () => {
+    const result = await run(['install', 'runner'], (call) => !call.includes('launchctl'));
+    assert.equal(result.code, 1);
+    assert.ok(!result.calls.some((call) => call.includes('runnerCli.js pair')));
+    assert.doesNotMatch(result.err, /is paired, but has no service/);
+  });
+});
+

@@ -14,7 +14,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
-import { createAdminServiceDeps, installServiceForAccount, pairAccountFromPackage, type AdminServiceDeps, type PairRequest } from '../runnerUtility/adminService';
+import { createAdminServiceDeps, installServiceForAccount, pairAccountFromPackage, warnAboutReadableHomes, type AdminServiceDeps, type PairRequest } from '../runnerUtility/adminService';
 import { runCommandIsolated, type IsolatedCommandRunner } from '../runnerUtility/isolatedCommand';
 import { formatSystemStepAnswer, resolveLinuxAccount, resolveMacAccount, type SystemStepAnswer, type TargetAccount } from '../runnerUtility/serviceCommon';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
@@ -81,6 +81,7 @@ function createDeps(overrides: Partial<AdminServiceDeps> = {}): AdminServiceDeps
     giveToRoot: (filePath, uid, gid) => { given.push([filePath, uid, gid]); },
     resolveAccount: async (name): Promise<TargetAccount | null> => (name === 'runner' ? { name, uid: accountUid, gid: 20, homeDir: home } : name === 'root' ? { name, uid: 0, gid: 0, homeDir: '/var/root' } : null),
     sleep: async () => undefined,
+    listFolders: () => [],
     ...overrides,
   };
 }
@@ -381,3 +382,51 @@ describe('no step of the account\'s has a terminal', () => {
     assert.equal(path.dirname(deps.runnerCliPath), path.dirname(path.resolve(__dirname, '..', 'runnerUtility', 'adminService.ts')), 'next to this step\'s own file in the copy');
   });
 });
+
+describe('a Node.js in a home folder', () => {
+  const request: PairRequest = { bootstrapDir: '/tmp/charness-runner.abc/pkg', archivePath: '/tmp/charness-runner.abc/package.tgz', packageId: '0123456789abcdef', code: 'cr1.exampleCode' };
+
+  it('stops the root step before anything runs — the pairing and the service alike — when the Node it runs under is inside a home: root runs nothing from a home, and the service must not depend on one', async () => {
+    for (const nodePath of ['/Users/alice/.nvm/versions/node/v22.12.0/bin/node', '/home/bob/.local/bin/node', '/Users/runner/.nvm/bin/node', '/var/root/node']) {
+      calls = [];
+      const refusal = /lives in a home folder \(\S+\): root runs nothing from a home, and the service must not depend on one\. Install Node\.js system-wide \(macOS: brew install node\) and paste the admin line again\./;
+      assert.match((await pairAccountFromPackage('runner', request, createDeps({ nodePath }))).lines.join(' '), refusal, nodePath);
+      assert.match((await installServiceForAccount('runner', createDeps({ nodePath }))).lines.join(' '), refusal, nodePath);
+      assert.deepEqual(calls, [], nodePath);
+    }
+  });
+
+  it('lets a system-wide Node through', async () => {
+    for (const nodePath of ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node']) {
+      assert.equal((await pairAccountFromPackage('runner', request, createDeps({ nodePath }))).ok, true, nodePath);
+    }
+  });
+});
+
+describe('the homes the account can read', () => {
+  const readableOnly = (readable: readonly string[]): IsolatedCommandRunner => async (file, args) => {
+    calls.push({ file, args });
+    const folder = args[args.indexOf('-r') + 1];
+    return answer({ ok: readable.includes(folder), exitCode: readable.includes(folder) ? 0 : 1 });
+  };
+
+  it('asks AS the account (`sudo -u <account> -H test -r <home> -a -x <home>`, never root\'s own rights) about every home but its own, and names the ones it can enter — with the fix for each', async () => {
+    const lines = await warnAboutReadableHomes('runner', createDeps({
+      runner: readableOnly(['/Users/alice']),
+      listFolders: (parent) => (parent === '/Users' ? ['alice', 'bob', 'runner', 'Shared'] : []),
+    }));
+    assert.deepEqual(commandLines(), ['sudo -u runner -H test -r /Users/alice -a -x /Users/alice', 'sudo -u runner -H test -r /Users/bob -a -x /Users/bob']);
+    assert.equal(lines[0], 'Warning: the account runner can read the home folders of other users on this machine: /Users/alice.');
+    assert.ok(lines.includes('  sudo chmod 700 /Users/alice'));
+    assert.ok(!lines.join('\n').includes('/Users/bob'));
+  });
+
+  it('says nothing when every other home is closed, when there are none, and when the account cannot be found', async () => {
+    assert.deepEqual(await warnAboutReadableHomes('runner', createDeps({ runner: readableOnly([]), listFolders: (parent) => (parent === '/Users' ? ['alice'] : []) })), []);
+    assert.deepEqual(await warnAboutReadableHomes('runner', createDeps({ listFolders: () => [] })), []);
+    calls = [];
+    assert.deepEqual(await warnAboutReadableHomes('ghost', createDeps({ listFolders: () => ['alice'] })), []);
+    assert.deepEqual(calls, []);
+  });
+});
+

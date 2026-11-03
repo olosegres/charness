@@ -41,7 +41,7 @@ import { encodePairCode, type PairCodePayload } from './pairCode';
 
 const minNodeMajor = 22;
 const minNodeMinor = 12;
-const hubHostAlias = 'charness-hub';
+const hubHostAlias = 'hub';
 const privateKeyFoldWidth = 70;
 const privateKeyHeader = '-----BEGIN OPENSSH PRIVATE KEY-----';
 const privateKeyFooter = '-----END OPENSSH PRIVATE KEY-----';
@@ -55,6 +55,33 @@ const bootstrapMarkerPattern = `^${gateMarker} bootstrap( [a-z]+=[A-Za-z0-9._:@/
 const sayFunction = 's() { echo "charness-runner: $*"; }';
 /** The same for a refusal: the line on stderr, then out. A function, defined once — three refusals of the fetch steps and the admin checks share it. */
 const failFunction = 'f() { echo "charness-runner: $*" >&2; exit 1; }';
+/** The test of a `node` program (`$1` is the program): exit status 0 when it is `minNodeMajor.minNodeMinor` or newer. */
+function nodeVersionCheck(program: string): string {
+  return `${program} -e "var v=process.versions.node.split(/[.]/);process.exit(v[0]>${minNodeMajor}||v[0]==${minNodeMajor}&&v[1]>=${minNodeMinor}?0:1)"`;
+}
+
+/** The `case` patterns of the paths inside people's homes and root's: a Node in one of them is never picked by the admin line (the same places as `homeFolders.ts`). */
+export const adminLineHomePatterns: readonly string[] = ['/Users/*', '/home/*', '*/root/*'];
+/** The places a system-wide Node is looked for after the `node` of sudo's own PATH (Homebrew on Apple Silicon and on Intel, the system's). */
+const systemNodeCandidates: readonly string[] = ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node'];
+
+/**
+ * The steps that choose the Node.js the admin line runs as root (and the runner's service will run under) into `$n`, or refuse. A Node qualifies
+ * when it is outside every home folder (`/Users/<name>`, `/home/<name>`, root's own: a path with a `root` folder; judged on its REAL path — a link in `/usr/local/bin` into somebody's `~/.nvm` is a
+ * home Node too), the account can run it (`sudo -u "$a" test -x`: nothing of the account's is executed by the shell) and it is new enough. Root runs a program from a home only if it is the admin's, and the service would then stop working the day that home is
+ * closed (`chmod 700`) or the version manager moves on; the account's own home is no place for a program root runs either. The candidates are
+ * sudo's own `node` first, then {@link systemNodeCandidates}. `homePatterns` (`case` patterns) and `systemCandidates` are parameters for the test that runs these steps for real.
+ */
+export function renderNodePickSteps(homePatterns: readonly string[] = adminLineHomePatterns, systemCandidates: readonly string[] = systemNodeCandidates): string[] {
+  // Unquoted on purpose: no `node` on the PATH is no word at all (an empty one would be read as the current folder), and a path that a shell would split is no candidate.
+  const candidates = ['$(command -v node)', ...systemCandidates].join(' ');
+  return [
+    'n=',
+    `for c in ${candidates}; do r=$(readlink -f "$c" 2>&-) || continue; case $r in ${homePatterns.join('|')}) continue;; esac; sudo -u "$a" test -x "$r" || continue; ${nodeVersionCheck('"$r"')} || continue; n=$r; break; done`,
+    `[ -n "$n" ] || f "no Node.js ${minNodeMajor}.${minNodeMinor}+ outside home folders: install one system-wide (macOS: brew install node), paste again"`,
+  ];
+}
+
 const runnerCliInPackage = 'dist/runnerUtility/runnerCli.js';
 const rootServiceCliInPackage = 'dist/runnerUtility/rootServiceCli.js';
 /** Where the admin line's root-owned copy is made: a folder the account can read, which `$TMPDIR` (the admin's own, private) is not. */
@@ -99,13 +126,13 @@ function renderFetchSteps(payload: PairCodePayload, isForAccount: boolean): stri
     `p="${payload.port}"`,
     `k="${payload.hostKey}"`,
     `b="${getPrivateKeyBody(payload.privateKey)}"`,
-    `command -v node >/dev/null 2>&1 && node -e "var v=process.versions.node.split(/[.]/);process.exit(v[0]>${minNodeMajor}||v[0]==${minNodeMajor}&&v[1]>=${minNodeMinor}?0:1)" || f "${isForAccount ? `sudo finds no Node.js ${minNodeMajor}.${minNodeMinor} or newer on its PATH (install it system-wide)` : `Node.js ${minNodeMajor}.${minNodeMinor} or newer is needed on this machine (https://nodejs.org)`}"`,
+    ...(isForAccount ? [] : [`command -v node >/dev/null 2>&1 && ${nodeVersionCheck('node')} || f "Node.js ${minNodeMajor}.${minNodeMinor} or newer is needed on this machine (https://nodejs.org)"`]),
     `{ printf "%s\\n" "${privateKeyHeader}"; printf "%s" "$b" | fold -w ${privateKeyFoldWidth}; printf "\\n%s\\n" "${privateKeyFooter}"; } > "$d/key"`,
     `printf "%s %s\\n" ${hubHostAlias} "$k" > "$d/kh"`,
     's "downloading the package from the hub"',
-    `ssh ${sshOptions} "$u@$h" bootstrap > "$d/answer" || f "the hub refused or did not answer (has the line expired or been used already? the ssh message above says which)"`,
+    `ssh ${sshOptions} "$u@$h" bootstrap > "$d/answer" || f "the hub refused or did not answer: expired or used line? see the ssh message above"`,
     `hit=$(head -c ${maxGateNoiseBytes} "$d/answer" | LC_ALL=C grep -a -b -o -E -e "${bootstrapMarkerPattern}" | head -n 1)`,
-    '[ -n "$hit" ] || f "the hub did not send the package (has the line expired or been used already?)"',
+    '[ -n "$hit" ] || f "no package from the hub: expired or used line?"',
     'o=${hit%%:*}; t=${hit#*:}',
     ...(isForAccount ? ['umask 022'] : []),
     'tail -c +$((o + ${#t} + 2)) "$d/answer" > "$d/package.tgz"',
@@ -149,8 +176,8 @@ function renderAdminScript(payload: PairCodePayload): string {
     'for x in $gs; do case " $g " in *" $x "*) f "$a is an admin: the agents code runs with its rights";; esac; done',
   ];
   const steps = [
+    ...renderNodePickSteps(),
     ...renderFetchSteps(payload, true),
-    'n=$(command -v node)',
     `"$n" "$d/pkg/${rootServiceCliInPackage}" install "$a" ${renderPairArguments(encodePairCode(payload))}`,
   ];
   return checkScriptHasNoQuote(['set -eu', ...checks, ...steps].join('; '), 'admin');

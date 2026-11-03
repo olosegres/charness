@@ -296,6 +296,20 @@ describe('installing and removing the services', () => {
     assert.equal(readServiceKind(runnerPaths), 'user-service');
   });
 
+  it('refuses to install a service that would run under a Node.js in ANOTHER user\'s home — it would stop working the day that home is closed — and installs under one in the account\'s own home or a system place', async () => {
+    pair();
+    for (const nodePath of ['/Users/alice/.nvm/versions/node/v22/bin/node', '/home/bob/.local/bin/node']) {
+      calls = [];
+      const refused = await installService({ isSystem: false, userName: null }, createDeps({ nodePath }));
+      assert.equal(refused.ok, false, nodePath);
+      assert.match(refused.lines.join(' '), /^The service would depend on the Node\.js at \S+, which lives in the home folder of another user \(\S+\)\. It stops working when that folder is closed.*Install Node\.js system-wide \(macOS: brew install node\) and use that one, then run this again\.$/, nodePath);
+      assert.deepEqual(calls, [], 'nothing was asked of a service manager');
+    }
+    for (const nodePath of [path.join(home, '.nvm', 'bin', 'node'), '/opt/homebrew/bin/node', '/usr/bin/node']) {
+      assert.equal((await installService({ isSystem: false, userName: null }, createDeps({ nodePath }))).ok, true, nodePath);
+    }
+  });
+
   it('Linux: lingering that is already on is left alone; one that needs an admin prints the sudo line and still installs', async () => {
     pair();
     const already = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'loginctl show-user': { stdout: 'Linger=yes\n' } }) }));

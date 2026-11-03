@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
+import { describeForeignNode, findForeignHome } from './homeFolders';
 import { checkIsRunnerLinkProcess } from './localLinkStop';
 import { ensurePueueConfig, inspectPueue, shutDownPueue } from './pueueDaemon';
 import { readRunnerConfig, readRunnerStatus } from './runnerConfig';
@@ -301,6 +302,8 @@ export async function installService(request: ServiceRequest, deps: ServiceDeps)
   const paths = getRunnerHomePaths(deps.homeDir);
   if (readRunnerConfig(paths) === null) return fail('This account is not paired yet: run the line from /runners on this machine first, then install the service.');
   if (readServiceKind(paths) === 'system-service') return fail('This runner runs as a system service already; `charness-runner service uninstall` shows how an admin removes it.');
+  const foreignHome = findForeignHome(deps.nodePath, paths.homeDir);
+  if (foreignHome !== null) return fail(`The service would depend on ${describeForeignNode(deps.nodePath, foreignHome)}, then run this again.`);
   return deps.platform === 'linux' ? installSystemd(paths, deps) : installLaunchd(deps, paths);
 }
 

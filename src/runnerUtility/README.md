@@ -117,8 +117,13 @@ lines come through as plain lines — a terminal-less child draws no dots.) Root
   `service install` runs AS the account the same way. The result is the ordinary user service — the account removes it itself.
 
 **What the admin line trusts.** Pasting it runs code from the charness host as root on this machine (see `src/runners/README.md`); the plain
-line trusts the host only with the runner account. A Mac's launcher and the daemons' `PATH` carry the Node that `sudo` found, so a Node under a home
-folder (nvm) breaks when it is upgraded — documented in `docs/remote-run.md`, not refused. The daemons log through the account's own shell
+line trusts the host only with the runner account. A Mac's launcher and the daemons' `PATH` carry the Node the line picked: the shell
+chooses it (`renderNodePickSteps`: `sudo`'s own `node`, then `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`; never one whose REAL path is under a home
+folder, one the account can run, ≥ 22.12) and refuses with the way out when none fits; the root step stops again when it still finds itself under a home
+(`homeFolders.ts`, `findHomeContaining`), and `service install` as the account refuses a Node in ANOTHER user's home. **Homes the account can read**
+(`homeFolders.ts`): the admin line's root step asks AS the account (`sudo -u <account> -H test -r <home> -a -x <home>`) about every folder under `/Users` and
+`/home` but its own and says last which it can read, with `sudo chmod 700 <home>` for each; the plain line's pairing does the same as the account
+itself (and warns about a Node in another user's home). What the account's own program prints is not the admin's source for this. The daemons log through the account's own shell
 (`serviceUnits.ts`): launchd is given `/dev/null` for output and no working directory, because it may open them as root before it switches to
 `UserName` and the account could have swapped the logs folder for a link; `sh`, already the account, makes the logs folder, enters the home and
 opens `logs/<job>.log` itself (so a folder the account cleaned away never leaves a job failing silently into `/dev/null`).

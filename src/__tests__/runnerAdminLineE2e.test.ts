@@ -57,10 +57,16 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
   let runnerHome = '';
   let failingHome = '';
   let bossHome = '';
+  /** A copy of the Node binary outside every home folder, which the admin line must pick: the test's own Node may live in somebody's `~/.nvm`, which it refuses. */
+  let systemNode = '';
 
   before(async () => {
     assert.deepEqual(missingTools, [], 'CI installs everything this flow needs');
     layout = await createRunnerLinkLayout();
+    systemNode = path.join(layout.root, 'system-node', 'node');
+    fs.mkdirSync(path.dirname(systemNode), { recursive: true });
+    fs.copyFileSync(process.execPath, systemNode);
+    fs.chmodSync(systemNode, 0o755);
     runnerHome = createExtraMachine(layout, 'acct-runner');
     failingHome = createExtraMachine(layout, 'acct-runner2');
     bossHome = createExtraMachine(layout, 'acct-boss');
@@ -83,7 +89,7 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
       timeout: lineTimeoutMs,
       env: {
         HOME: path.join(layout.root, 'admin-home'),
-        PATH: `${standIns.binDir}:${path.dirname(process.execPath)}:${process.env.PATH ?? ''}`,
+        PATH: `${standIns.binDir}:${path.dirname(systemNode)}:${path.dirname(process.execPath)}:${process.env.PATH ?? ''}`,
         TMPDIR: path.join(layout.root, 'tmp'),
         LANG: 'C.UTF-8',
         [testNodeModulesEnvName]: path.join(repoRoot, 'node_modules'),
@@ -184,6 +190,10 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     const asRunner = 'sudo -u runner -H';
     const pairingRun = indexOf(asRunner);
     assert.match(calls[pairingRun], new RegExp(`^${asRunner.replace(/[-]/g, '\\-')} \\S+/node /tmp/charness-runner\\.[A-Za-z0-9]{8}/pkg/dist/runnerUtility/runnerCli\\.js pair\\b`), 'the account pairs from the copy root made');
+    // The Node everything runs under is the one outside the homes — not the test's own, in somebody's home, though that comes later on the PATH —
+    // and the account's launcher (what its service starts) names that one: the service depends on no home.
+    assert.ok(calls[pairingRun].startsWith(`${asRunner} ${systemNode} `), `the pairing ran under ${systemNode}: ${calls[pairingRun]}`);
+    assert.ok(fs.readFileSync(paths.launcher, 'utf8').includes(`NODE='${systemNode}'`) || fs.readFileSync(`${paths.launcher}.real`, 'utf8').includes(`NODE='${systemNode}'`), 'the launcher starts the Node outside the homes');
     const lingering = indexOf('loginctl enable-linger runner');
     const managerAwaited = indexOf(`${asRunner} env XDG_RUNTIME_DIR=/run/user/${standardAccountUid} systemctl --user is-system-running`);
     const installRun = indexOf(`${asRunner} env XDG_RUNTIME_DIR=/run/user/${standardAccountUid} ${paths.launcher} service install`);
@@ -193,10 +203,13 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.equal(calls.filter((call) => call.startsWith(`${asRunner} `) && call.includes('runnerCli.js pair')).length, 1, 'the account was paired once');
 
     // Nothing the account runs has the admin's terminal: each call started with /dev/null for input, as the head of a session of its own — no
-    // controlling terminal, whatever terminal the line was pasted in.
-    const isolation = readStandInIsolation(standIns);
-    assert.equal(isolation.length, 3, `the pairing, the wait for the user manager and the install ran as the account: ${isolation.join('\n')}`);
+    // controlling terminal, whatever terminal the line was pasted in. The one call the shell itself makes as the account is the probe of the Node
+    // (`test -x`): it executes nothing of the account's.
+    const [probe, ...isolation] = readStandInIsolation(standIns);
+    assert.match(probe, new RegExp(`^stdin=\\S+ leader=no terminal=\\S+ test -x ${systemNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), 'the shell asks only whether the account may run the Node');
     assert.ok(isolation.some((line) => line.includes('runnerCli.js pair')), 'the pairing among them — it was the shell\'s own `sudo -u` before');
+    assert.ok(isolation.some((line) => line.includes('is-system-running')) && isolation.some((line) => line.includes('service install')), 'and the user manager and the install');
+    assert.ok(isolation.some((line) => / test -r \/\S+ -a -x \/\S+$/.test(line)) || !fs.existsSync('/home'), 'and the look at the homes of other users that the account can read, as the account');
     for (const line of isolation) {
       assert.match(line, /^stdin=\/dev\/null leader=yes terminal=\?{1,2} /, line);
     }
@@ -207,7 +220,7 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     const again = pasteLine(adminLine);
     assert.notEqual(again.status, 0);
     // The refusal is the HUB's, at the download: a spent code's key is gone, so the line stops before the account or any service is asked.
-    assert.match(again.stderr, /^charness-runner: the hub refused or did not answer \(has the line expired or been used already\?/m);
+    assert.match(again.stderr, /^charness-runner: the hub refused or did not answer: expired or used line\? see the ssh message above/m);
     assert.doesNotMatch(`${again.stdout}${again.stderr}`, /already paired|Paired with/);
     assert.equal(readHubRunners().length, 1);
     assert.ok(!readStandInCalls(standIns).slice(callsBefore).some((call) => call.startsWith('loginctl enable-linger')), 'no service was installed by the failed run');
