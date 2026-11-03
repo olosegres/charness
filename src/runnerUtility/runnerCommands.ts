@@ -13,6 +13,7 @@ import { createLinkLoop } from './linkLoop';
 import { collectMachineReport, createMachineProbe, formatMachineReport, type MachineReport } from './machineReport';
 import { ensurePueueDaemon, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
 import { createGuiAgentDeps, runGuiAgent } from './guiAgent';
+import { describeKeepAwakeMethod } from '../remoteRun/probe';
 import { createKeepAwakeDeps, startKeepAwake, type KeepAwakeState } from './keepAwake';
 import { createIosCheckDeps, readIosCheck, refreshIosCheck } from './iosCheck';
 import { createSilencerDeps, createSilencerLook, createSimulatorSilencer, silencerPollMs } from './simulatorSilencer';
@@ -313,7 +314,7 @@ export function planSimulatorWork(platform: NodeJS.Platform, serviceKind: string
 export function describeKeepAwake(state: KeepAwakeState): string {
   return state.method === null
     ? `charness-runner: this machine is NOT kept awake while the link runs (${state.reason}) — it may sleep when idle`
-    : `charness-runner: keeping this machine awake while the link runs (${state.method === 'caffeinate' ? 'caffeinate -i' : 'systemd-inhibit --what=idle'}; a closed lid still sleeps it)`;
+    : `charness-runner: keeping this machine awake while the link runs (${describeKeepAwakeMethod(state.method)})`;
 }
 
 /** Start the silencer of the Simulators in this process' own session, looking every {@link silencerPollMs}. */

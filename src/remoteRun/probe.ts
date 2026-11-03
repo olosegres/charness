@@ -80,6 +80,11 @@ function parseJobTools(fields: ReadonlyMap<string, string>): RunnerProbe['jobToo
 export type KeepAwakeMethod = 'caffeinate' | 'systemd-inhibit';
 const keepAwakeMethods: readonly KeepAwakeMethod[] = ['caffeinate', 'systemd-inhibit'];
 
+/** @description What a method is, in the words every place that says how a machine is kept awake uses (the link's own start line, `runners`): the command, and that a closed lid still sleeps it. */
+export function describeKeepAwakeMethod(method: KeepAwakeMethod): string {
+  return `${method === 'caffeinate' ? 'caffeinate -i' : 'systemd-inhibit --what=idle'}; a closed lid still sleeps it`;
+}
+
 function parseKeepsAwake(fields: ReadonlyMap<string, string>): RunnerProbe['keepsAwake'] {
   const awake = fields.get('awake');
   const method = keepAwakeMethods.find((candidate) => candidate === awake);
@@ -186,7 +191,7 @@ function formatJobTools(probe: RunnerProbe): string[] {
 function formatKeepsAwake(probe: RunnerProbe): string[] {
   if (probe.keepsAwake === null) return [];
   if (probe.keepsAwake.method === null) return [`  keeps awake: NO${probe.keepsAwake.reason === '' ? '' : ` — ${probe.keepsAwake.reason}`} (the machine may sleep when idle)`];
-  return [`  keeps awake: yes (${probe.keepsAwake.method === 'caffeinate' ? 'caffeinate -i' : 'systemd-inhibit --what=idle'}; a closed lid still sleeps it)`];
+  return [`  keeps awake: yes (${describeKeepAwakeMethod(probe.keepsAwake.method)})`];
 }
 
 /** The line of a paired runner under its capabilities: the charness it runs and how it is kept running. Nothing for a hand-made one. */

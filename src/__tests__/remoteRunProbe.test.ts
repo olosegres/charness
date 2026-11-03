@@ -8,7 +8,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkHasCapability, checkIsRunnerPaused, formatRunnerBlock, parseProbeOutput, type RunnerReport } from '../remoteRun/probe';
+import { checkHasCapability, checkIsRunnerPaused, describeKeepAwakeMethod, formatRunnerBlock, parseProbeOutput, type RunnerReport } from '../remoteRun/probe';
 
 const linuxProbeText = [
   'os=Linux', 'arch=x86_64', 'kernel=6.8.0-45-generic', 'os_name=Ubuntu', 'os_version=24.04',
@@ -67,6 +67,15 @@ describe('the tools a job runs with', () => {
 });
 
 describe('how a runner keeps its machine awake', () => {
+  it('one description of a method serves the link\'s own start line and `runners`: the command, and that a closed lid still sleeps it', () => {
+    assert.equal(describeKeepAwakeMethod('caffeinate'), 'caffeinate -i; a closed lid still sleeps it');
+    assert.equal(describeKeepAwakeMethod('systemd-inhibit'), 'systemd-inhibit --what=idle; a closed lid still sleeps it');
+    for (const method of ['caffeinate', 'systemd-inhibit'] as const) {
+      const runnersLine = formatRunnerBlock({ name: 'mac', status: 'online', probe: parseProbeOutput(`${linuxProbeText}\nawake=${method}`), groupLimits: {}, isPausedByHub: false });
+      assert.ok(runnersLine.includes(`keeps awake: yes (${describeKeepAwakeMethod(method)})`), method);
+    }
+  });
+
   it('awake= and awake_detail= are read as they came: a method, or «no» with why; an older script says neither — never a guess', () => {
     assert.deepEqual(parseProbeOutput(`${linuxProbeText}\nawake=caffeinate`).keepsAwake, { method: 'caffeinate' });
     assert.deepEqual(parseProbeOutput('awake=systemd-inhibit').keepsAwake, { method: 'systemd-inhibit' });
