@@ -32,13 +32,11 @@ async function waitFor(check: () => boolean, what: string): Promise<void> {
   }
 }
 
+/** Is `pid` running? A zombie — dead, its parent gone, and no init yet to collect it — is not: `kill(pid, 0)` still finds one, `ps` says `Z`. */
 function checkIsProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  const listing = spawnSync('ps', ['-o', 'stat=', '-p', pid.toString()], { encoding: 'utf8' });
+  const state = listing.stdout.trim();
+  return state !== '' && !state.startsWith('Z');
 }
 
 /** What a child looks like from inside: who leads its group (`ps`), what its standard input is, and whether it can open a controlling terminal. */
