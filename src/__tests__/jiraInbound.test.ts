@@ -74,6 +74,12 @@ function createIssue(issueKey: string, options: { histories?: JiraChangelogHisto
   };
 }
 
+/** What Jira answers a read with: only the fields it was asked for (`id`, `key` and the changelog come with any read). */
+function pickIssueFields(issue: JiraIssue, fields: readonly string[]): JiraIssue {
+  const picked = Object.fromEntries(Object.entries(issue.fields).filter(([name]) => fields.includes(name)));
+  return { ...issue, fields: picked as JiraIssue['fields'] };
+}
+
 interface Recorded {
   calls: string[];
   searches: JiraSearchRequest[];
@@ -149,7 +155,7 @@ describe('JiraInbound', () => {
         getIssue: async (issueKey, fields, expand) => {
           recorded.calls.push(`getIssue ${issueKey}`);
           recorded.issueReads.push({ fields, expand });
-          return createIssue(issueKey);
+          return pickIssueFields(createIssue(issueKey), fields);
         },
         getComments: async (issueKey) => {
           recorded.calls.push(`getComments ${issueKey}`);
@@ -241,6 +247,7 @@ describe('JiraInbound', () => {
     assert.match(recorded.prompts[0], /^\[Request req_1 · from: PROJ-12 assigned to you by Requester\]/);
     assert.match(recorded.prompts[0], /Link: https:\/\/example\.atlassian\.net\/browse\/PROJ-12/);
     assert.equal(recorded.searches[0].isChangelogExpanded, true);
+    assert.ok(recorded.issueReads[0].fields.includes('assignee'), 'the prompt context asks for the assignee: the mention note reads it');
   });
 
   it('R21: the request keeps exactly the prompt that is posted, header and all', async () => {
@@ -354,7 +361,7 @@ describe('JiraInbound', () => {
         getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
         getIssue: async (_issueKey, fields, expand) => {
           recorded.issueReads.push({ fields, expand });
-          return options.issue;
+          return pickIssueFields(options.issue, fields);
         },
         getComments: async () => options.comments ?? [],
         getRecentComments: async () => [],
@@ -506,9 +513,9 @@ describe('JiraInbound', () => {
         client: {
           searchIssues: async () => ({ issues: [createIssue(issueKey, { histories: triggerHistories })], isLast: true }),
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-          getIssue: async () => {
+          getIssue: async (_key, fields) => {
             const base = createIssue(issueKey);
-            return { ...base, fields: { ...base.fields, description: convertMarkdownToAdf(description) } };
+            return pickIssueFields({ ...base, fields: { ...base.fields, description: convertMarkdownToAdf(description) } }, fields);
           },
           getComments: async () => comments,
           getRecentComments: async () => [],
@@ -1166,7 +1173,13 @@ describe('JiraInbound', () => {
       };
     };
 
-    function createMentionClient(searched: () => JiraIssue[]): JiraInboundDeps['client'] {
+    /** The issue as it stands when its prompt is built: assigned to the AI account, in the status `statusId` / `statusName`. */
+    const createAiAssignedIssue = (key: string, statusId: string, statusName: string): JiraIssue => {
+      const base = createUnhandedIssue(key);
+      return { ...base, fields: { ...base.fields, assignee: { accountId: aiAccountId }, status: { id: statusId, name: statusName } } };
+    };
+
+    function createMentionClient(searched: () => JiraIssue[], read: (key: string) => JiraIssue = createUnhandedIssue): JiraInboundDeps['client'] {
       return {
         searchIssues: async (search) => {
           recorded.searches.push(search);
@@ -1174,9 +1187,9 @@ describe('JiraInbound', () => {
           return { issues: searched(), isLast: true };
         },
         getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-        getIssue: async (key) => {
+        getIssue: async (key, fields) => {
           recorded.calls.push(`getIssue ${key}`);
-          return createUnhandedIssue(key);
+          return pickIssueFields(read(key), fields);
         },
         getComments: async () => [...comments],
         getRecentComments: async (key, maxResults) => {
@@ -1275,6 +1288,36 @@ describe('JiraInbound', () => {
       assert.equal(triggerLog.checkIsSeen(issueKey, 'mention:10240'), true, 'recorded once the post settled');
       assert.equal(triggerLog.getRequestCountLastDay(issueKey, nowMs), 1, 'a mention request counts in the run budget');
       assert.deepEqual(recorded.untrusted, []);
+    });
+
+    it('the issue\'s assignee is read for the note: a mention while the issue is assigned to the AI account in a work status says it is HANDED to it — not "not handed to you"', async () => {
+      // A build in progress: the hand-over request is open and its trigger is recorded; another trusted person mentions the AI.
+      const aiAssigned = createAiAssignedIssue(issueKey, '10001', 'To Do');
+      triggerLog.record({ issueKey, triggerId: '100', outcome: 'request', at: nowMs - 30 * minuteMs });
+      openRequestOrigins.set(issueKey, [{ kind: 'trackerEvent', attributes: { issueKey, triggerId: '100', requester: colleague.accountId } }]);
+      comments = [createMentionComment('10240', member)];
+      const decisions = await createMentionInbound({ client: createMentionClient(() => [aiAssigned], () => aiAssigned) }).pollOnce();
+      assert.deepEqual([...decisions], [[issueKey, 'seen'], [`${issueKey}#mention:10240`, 'request']]);
+      await flushPosts();
+      assert.equal(recorded.origins[0].kind, 'trackerMention');
+      assert.equal(recorded.origins[0].attributes.requester, member.accountId);
+      assert.ok(recorded.prompts[0].includes(
+        'You were mentioned in comment 10240 by Member. The issue is handed to you: it is assigned to you and its status (To Do) is one you work in (in this project: "To Do"). ',
+      ), recorded.prompts[0]);
+      assert.ok(recorded.prompts[0].includes('any hand-over request of this conversation that is open goes on unchanged'), recorded.prompts[0]);
+      assert.ok(!recorded.prompts[0].includes('not handed to you'), recorded.prompts[0]);
+      assert.ok(!recorded.prompts[0].includes('assignee: nobody'), recorded.prompts[0]);
+    });
+
+    it('assigned to the AI account in a status the project does not work in: the note says only the status is missing', async () => {
+      const inBacklog = createAiAssignedIssue(issueKey, '10000', 'Backlog');
+      comments = [createMentionComment('10240', member)];
+      await createMentionInbound({ client: createMentionClient(() => [inBacklog], () => inBacklog) }).pollOnce();
+      await flushPosts();
+      assert.ok(recorded.prompts[0].includes(
+        'The issue is assigned to you, but its status (Backlog) is not one you work in (in this project: "To Do"), so it is not handed to you. ',
+      ), recorded.prompts[0]);
+      assert.ok(!recorded.prompts[0].includes('The issue is handed to you'), recorded.prompts[0]);
     });
 
     it('D10: a mention bypasses the cap on task agents — with every slot busy the mention still opens its answer-only request, and joins no list', async () => {
@@ -1685,7 +1728,7 @@ describe('JiraInbound', () => {
             throw new Error('Jira 503');
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-          getIssue: async (issueKey) => createIssue(issueKey),
+          getIssue: async (issueKey, fields) => pickIssueFields(createIssue(issueKey), fields),
           ...emptyIssueContext,
         },
       });
@@ -1700,7 +1743,7 @@ describe('JiraInbound', () => {
         client: {
           searchIssues: async () => searchPages.shift() ?? { issues: [] },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-          getIssue: async (issueKey) => createIssue(issueKey),
+          getIssue: async (issueKey, fields) => pickIssueFields(createIssue(issueKey), fields),
           getComments: async () => {
             if (isCommentReadFailing) throw new Error('Jira 503');
             return [];
@@ -1727,7 +1770,7 @@ describe('JiraInbound', () => {
       return {
         searchIssues: async () => searchPages[pageIndex++] ?? { issues: [] },
         getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-        getIssue: async (issueKey) => createIssue(issueKey),
+        getIssue: async (issueKey, fields) => pickIssueFields(createIssue(issueKey), fields),
         getComments: async (issueKey) => {
           if (issueKey === brokenIssueKey && isBroken()) throw new Error('Jira 503');
           return [];
@@ -1808,7 +1851,7 @@ describe('JiraInbound', () => {
               : { issues: [createIssue('PROJ-2')], isLast: true };
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-          getIssue: async (issueKey) => createIssue(issueKey),
+          getIssue: async (issueKey, fields) => pickIssueFields(createIssue(issueKey), fields),
           ...emptyIssueContext,
         },
       });
@@ -1849,7 +1892,7 @@ describe('JiraInbound', () => {
             throw new Error('Jira 503');
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-          getIssue: async (issueKey) => createIssue(issueKey),
+          getIssue: async (issueKey, fields) => pickIssueFields(createIssue(issueKey), fields),
           ...emptyIssueContext,
         },
       });
@@ -1885,7 +1928,7 @@ describe('JiraInbound', () => {
             return { issues: [], isLast: true };
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-          getIssue: async (issueKey) => createIssue(issueKey),
+          getIssue: async (issueKey, fields) => pickIssueFields(createIssue(issueKey), fields),
           ...emptyIssueContext,
         },
       });
@@ -1926,7 +1969,7 @@ describe('JiraInbound', () => {
             return { issues: [] };
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-          getIssue: async (issueKey) => createIssue(issueKey),
+          getIssue: async (issueKey, fields) => pickIssueFields(createIssue(issueKey), fields),
           ...emptyIssueContext,
         },
       });
@@ -1954,7 +1997,7 @@ describe('JiraInbound', () => {
             throw new Error('Jira 503');
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-          getIssue: async (issueKey) => createIssue(issueKey),
+          getIssue: async (issueKey, fields) => pickIssueFields(createIssue(issueKey), fields),
           ...emptyIssueContext,
         },
       });
@@ -1987,7 +2030,7 @@ describe('JiraInbound', () => {
             return { issues: [] };
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-          getIssue: async (issueKey) => createIssue(issueKey),
+          getIssue: async (issueKey, fields) => pickIssueFields(createIssue(issueKey), fields),
           ...emptyIssueContext,
         },
       });
@@ -2016,7 +2059,7 @@ describe('JiraInbound', () => {
             throw new JiraAuthError(401, 'POST', '/rest/api/3/search/jql');
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-          getIssue: async (issueKey) => createIssue(issueKey),
+          getIssue: async (issueKey, fields) => pickIssueFields(createIssue(issueKey), fields),
           ...emptyIssueContext,
         },
       });
@@ -2034,7 +2077,7 @@ describe('JiraInbound', () => {
             throw new Error('Jira 503');
           },
           getChangelogPage: async () => ({ startAt: 0, maxResults: 0, total: 0, values: [] }),
-          getIssue: async (issueKey) => createIssue(issueKey),
+          getIssue: async (issueKey, fields) => pickIssueFields(createIssue(issueKey), fields),
           ...emptyIssueContext,
         },
       });

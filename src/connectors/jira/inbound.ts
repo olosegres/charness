@@ -492,6 +492,7 @@ export class JiraInbound {
     const blocks = buildIssueBlocks(context, project.extraFields, deps.aiAccountId, blockTrust);
     deps.noteShownSummary?.(issue.key, getShownIssueSummary(context, blockTrust));
     const key = makeJiraKey(issue.key);
+    const statusId = context.issue.fields.status?.id;
     const promptInput = {
       issueKey: issue.key,
       statusName: context.issue.fields.status?.name,
@@ -500,6 +501,7 @@ export class JiraInbound {
       requester,
       assignee: context.issue.fields.assignee ?? null,
       isAssignedToYou: context.issue.fields.assignee?.accountId === deps.aiAccountId,
+      isInWorkStatus: statusId !== undefined && project.triggerStatusIds.has(statusId),
       triggerStatusNames: project.triggerStatusNames,
       isTextFiltered: trust !== null,
     };

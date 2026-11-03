@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**An @-mention of the AI account in a Jira issue it is already working on no longer makes it believe the issue is not handed to it, and no longer stops its build.**
+Before, the prompt for every @-mention said «The issue is not handed to you (assignee: nobody, …) — answer only, change nothing», because the bot never read the issue's assignee for that prompt. On an issue assigned to the AI account in a work status, with its hand-over request still open, a mention by another trusted person landed in the same session: the agent took the note for the state of the issue, dropped its build, and the bot's normal hand-back then reassigned the issue to the requester.
+Now the assignee is read, and the note has a third case: an issue assigned to the AI account in one of the project's trigger statuses is «handed to you» — the read-only limit applies only to that one answer to the mention, and any open hand-over request of the conversation goes on unchanged. An issue held by someone else, or assigned to the AI account in a status it does not work in, still gets the answer-only note, now naming the real assignee.
+
 ## 3.9.0 — 2026-11-03
 
 **Pairing a runner from an admin account is now one paste: the pairing offers a `sudo` line that checks the account, pairs it and keeps it running — the line for the runner account itself stays as the second option.**

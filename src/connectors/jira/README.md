@@ -100,12 +100,21 @@ cap for every project and every tracker connector (`trackers/README.md`). Only a
 ### An @-mention wakes the AI — it answers only (`inbound.ts` `getMentionDecisions`)
 
 With a `trustedGroup` (and `wakeOnMention` not `false`) a comment that @-mentions the AI account starts a request
-on an issue that is NOT handed to it — any assignee, any status. The agent may read the issue and the code and
-run read-only checks; it changes nothing, and asked to do work it answers that the issue has to be assigned to
-it in one of the project's trigger statuses, which the note lists — or, when the issue is already assigned to the
-AI account in another status, that only the status is missing. That is an instruction in the prompt, like the agent's other rules, not a technical lock: the agent still runs
+on any issue of an allowlisted project — any assignee, any status. On an issue that is NOT handed to it the agent
+may read the issue and the code and run read-only checks; it changes nothing, and asked to do work it answers that
+the issue has to be assigned to it in one of the project's trigger statuses, which the note lists — or, when the
+issue is already assigned to the AI account in another status, that only the status is missing. That is an instruction in the prompt, like the agent's other rules, not a technical lock: the agent still runs
 with the instance's rights.
 
+- **The note has three cases** (`prompt.ts` `getMentionNote`), chosen from the issue as it stands when the prompt is
+  built — `assignee` is one of `jiraPromptIssueFields`, the status is matched by id against the project's
+  `triggerStatusIds`: (1) not assigned to the AI account — «not handed to you (assignee: …, status: …)», answer
+  only; (2) assigned to it in a status it does not work in — «not handed to you», only the status is missing,
+  answer only; (3) assigned to it AND in a trigger status — «handed to you»: the read-only limit applies to this
+  one answer to the mention only, and any open hand-over request of the conversation goes on unchanged (a
+  mention by someone other than that request's requester lands in the same session, mid-build, and must not
+  stop the work). The note is the agent's only account of who holds the issue, so the prompt's issue read must
+  carry the assignee.
 - **Finding it.** Jira's `comment ~ currentUser()`, run as the AI account, matches a comment that holds a
   mention node of it — not a typed `@name`, not the account's display name written as text. Measured against a
   live site: a fresh mention is returned by the search within about two seconds, and a comment edit moves the

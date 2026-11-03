@@ -9,9 +9,12 @@ import { checkIsLastOffsetPage, jiraChangelogPageSize, type JiraChangelogHistory
  * WHOLE changelog is read too: it names who wrote what every field says now.
  */
 
-/** The fields every prompt reads; a project's `extraFields` ids are added to them. */
+/**
+ * The fields every prompt reads; a project's `extraFields` ids are added to them. `assignee` is not rendered in the
+ * issue's blocks: the mention note reads it (who has the issue, and whether it is handed to the AI account).
+ */
 export const jiraPromptIssueFields = [
-  'summary', 'status', 'issuetype', 'priority', 'parent', 'subtasks', 'issuelinks', 'fixVersions', 'labels',
+  'summary', 'status', 'assignee', 'issuetype', 'priority', 'parent', 'subtasks', 'issuelinks', 'fixVersions', 'labels',
   'components', 'attachment', 'description', 'reporter', 'creator',
 ];
 /** Only the description's HTML is asked for: it names the attachment behind an inline file (C9). */

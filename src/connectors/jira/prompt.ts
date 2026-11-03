@@ -50,12 +50,27 @@ export function getJiraOriginDescription(issueKey: string, trigger: JiraIssueTri
   }
 }
 
-/** What a mention request adds after the requester line: the issue is not handed over, so the agent only answers. */
+/**
+ * What a mention request adds after the requester line. Three cases: the issue is not handed over (assigned to
+ * someone else or nobody), assigned to the AI account in a status it does not work in (not handed over either), or
+ * handed to it (assigned AND in a work status) — then the read-only limit is for this one answer, and the work the
+ * conversation already has, an open hand-over request, goes on.
+ */
 function getMentionNote(input: JiraRequestPromptBase, commentId: string): string {
   const assigneeName = input.assignee ? getAccountName(input.assignee) : 'nobody';
   const statusName = getSingleLineText(input.statusName ?? '') || 'unknown';
   const workStatuses = (input.triggerStatusNames ?? []).map((name) => `"${getSingleLineText(name)}"`).join(', ');
   const workStatusText = workStatuses ? ` (in this project: ${workStatuses})` : '';
+  if (input.isAssignedToYou && input.isInWorkStatus) {
+    return `You were mentioned in comment ${getSingleLineText(commentId)} by ${getAccountName(input.trigger.author)}. ` +
+      `The issue is handed to you: it is assigned to you and its status (${statusName}) is one you work in${workStatusText}. ` +
+      'Answer this comment first, and change nothing while you write that answer: you may read the issue and the code and run read-only checks, ' +
+      'but no code changes, no commits or pushes, no edits in Jira. ' +
+      'That limit applies only to this answer to the mention, not to the issue: any hand-over request of this conversation that is open ' +
+      'goes on unchanged — carry on with that work after you have answered, and do not stop, drop or end it because of this mention. ' +
+      'If the comment asks you to do work, answer that it belongs to the work already handed to you on this issue, not to this answer. ' +
+      'Your answer becomes a comment on the issue; it does not reassign the issue.';
+  }
   // Assigned to the AI account in a status it does not work in: "assign it to me" would be wrong — the status is what is missing.
   const notHandedText = input.isAssignedToYou
     ? `The issue is assigned to you, but its status (${statusName}) is not one you work in${workStatusText}, so it is not handed to you. `
@@ -81,10 +96,12 @@ export interface JiraRequestPromptBase {
   issueUrl: string;
   trigger: JiraIssueTrigger;
   requester: JiraAccount | null;
-  /** The issue's assignee when the request is a mention (the issue is not handed over; the note names who has it). */
+  /** The issue's assignee when the request is a mention (the note names who has it). */
   assignee?: JiraAccount | null;
-  /** A mention request: the issue is assigned to the AI account (its status is what keeps it from being handed over). */
+  /** A mention request: the issue is assigned to the AI account (with `isInWorkStatus` it is handed to it, else its status is what keeps it from being handed over). */
   isAssignedToYou?: boolean;
+  /** A mention request: the issue's status is one the project hands work over in (`triggerStatusIds`, matched by id). */
+  isInWorkStatus?: boolean;
   /** A mention request: the statuses the issue's project hands work over in (`jira.json` `triggerStatuses`), as configured. */
   triggerStatusNames?: readonly string[];
   /** The same requester's earlier requests of the issue this one replaced (R34); the header names them. */
