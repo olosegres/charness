@@ -149,8 +149,15 @@ is not connected» on stderr and exit 255 (ssh's own «connection failed»).
 
 ## The package (`hubPackage.ts`)
 
-The hub's own `package.json`, `remoteRun/runner.sh` and `dist/` (no tests, `.d.ts`, source maps) as a deterministic tar (`tarArchive.ts`:
-fixed times and order) in a gzip. Its **id** is the first 16 hex digits of the sha256 of the tar before compression. The cache in
+The hub's own `remoteRun/runner.sh` and `dist/` (no tests, `.d.ts`, source maps), a `package.json` CUT DOWN to the runner's own runtime
+dependencies (`ssh2`, `zod`: `runnerRuntimePackages`; the hub's name, version, licence and engines) and the `package-lock.json` that pins them, as a
+deterministic tar (`tarArchive.ts`: fixed times and order) in a gzip. The lock (`runnerLock.ts`) is made from `yarn.lock` for exactly that closure
+(six packages: `ssh2`, its three runtime dependencies, `tweetnacl`, `zod`; optional native add-ons and Yarn's implicit `node-gyp` are left out), pins
+each package by registry tarball AND `sha512` integrity (`yarn.lock` has no such hash: `yarn runner-lock` fetches them once from the registry and keeps
+them), is committed as `remoteRun/runner-package-lock.json` and shipped by the npm package; a unit test fails while it does not match `yarn.lock` /
+`package.json`, or when the runner's own code imports a package it lacks. The runner installs it with `npm ci --omit=dev --ignore-scripts`, so what a
+runner runs is what the hub has run and never a version published since (the audit's finding: `npm install` against open ranges would have pulled a
+hijacked release into an always-on process at the next auto-update). Its **id** is the first 16 hex digits of the sha256 of the tar before compression. The cache in
 `package/` is reused while a stamp of the sources (path, size, mtime) is unchanged. Gates and packers are not coordinated, so nothing is
 deleted on a packer's word: an archive is published whole by a rename, `current.json` is only a pointer that heals itself, a superseded
 archive is removed only after 10 minutes, and a gate opens the archive at once (`openHubPackage`) — a deleted file stays readable through

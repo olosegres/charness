@@ -63,11 +63,55 @@ describe('hub package', () => {
     fixture.cleanup();
   });
 
-  it('holds package.json, the runner script and dist — without tests, declarations or source maps', () => {
+  it('holds package.json, its lock, the runner script and dist — without tests, declarations or source maps', () => {
     const hubPackage = getHubPackage(fixture.ctx);
     assert.match(hubPackage.id, /^[0-9a-f]{16}$/);
     const names = runTar(gunzipSync(fs.readFileSync(hubPackage.filePath)), ['-tf', '-']).trim().split('\n');
-    assert.deepEqual(names, ['package.json', 'remoteRun/runner.sh', 'dist/cli.js', 'dist/runners/example.js']);
+    assert.deepEqual(names, ['package.json', 'package-lock.json', 'remoteRun/runner.sh', 'dist/cli.js', 'dist/runners/example.js']);
+  });
+
+  it('gives the runner a package.json cut down to the dependencies the runner needs — the hub\'s name, version and engines, none of its other dependencies or scripts', () => {
+    const archive = gunzipSync(fs.readFileSync(getHubPackage(fixture.ctx).filePath));
+    assert.deepEqual(JSON.parse(runTar(archive, ['-xOf', '-', 'package.json'])), {
+      name: 'charness',
+      version: '0.0.0-test',
+      license: 'MIT',
+      engines: { node: '>=22.12' },
+      dependencies: { ssh2: '^1.17.0', zod: '^4.4.3' },
+    });
+  });
+
+  it('ships the runner\'s lock as package-lock.json — for `npm ci` to install exactly what it records — with the hub\'s own version on it, and every package at a registry tarball with its hash', () => {
+    const archive = gunzipSync(fs.readFileSync(getHubPackage(fixture.ctx).filePath));
+    const lock = JSON.parse(runTar(archive, ['-xOf', '-', 'package-lock.json']));
+    assert.equal(lock.lockfileVersion, 3);
+    assert.deepEqual([lock.name, lock.version, lock.packages[''].name, lock.packages[''].version], ['charness', '0.0.0-test', 'charness', '0.0.0-test']);
+    assert.deepEqual(lock.packages[''].dependencies, { ssh2: '^1.17.0', zod: '^4.4.3' });
+    assert.deepEqual(Object.keys(lock.packages), ['', 'node_modules/ssh2', 'node_modules/zod']);
+    for (const [key, entry] of Object.entries<{ resolved: string; integrity: string }>(lock.packages)) {
+      if (key === '') continue;
+      assert.match(entry.resolved, /^https:\/\/registry\.npmjs\.org\/\S+\.tgz$/, key);
+      assert.match(entry.integrity, /^sha512-/, key);
+    }
+  });
+
+  it('is a different package — a different id — when only the lock changes: what a runner installs is part of what it runs', () => {
+    const before = getHubPackage(fixture.ctx).id;
+    const lockPath = path.join(fixture.ctx.packageRoot, 'remoteRun', 'runner-package-lock.json');
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    lock.packages['node_modules/zod'].version = '4.4.4';
+    fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+    assert.notEqual(getHubPackage(fixture.ctx).id, before);
+  });
+
+  it('refuses to pack when the lock no longer matches package.json — saying how to bring it up to date — and when the lock is missing', () => {
+    const packageJsonPath = path.join(fixture.ctx.packageRoot, 'package.json');
+    const original = fs.readFileSync(packageJsonPath, 'utf8');
+    fs.writeFileSync(packageJsonPath, original.replace('"ssh2": "^1.17.0"', '"ssh2": "^1.18.0"'));
+    assert.throws(() => getHubPackage(fixture.ctx), /the runner's lock expects ssh2@\^1\.17\.0, but package\.json says \^1\.18\.0: run `yarn runner-lock`/);
+    fs.writeFileSync(packageJsonPath, original);
+    fs.rmSync(path.join(fixture.ctx.packageRoot, 'remoteRun', 'runner-package-lock.json'));
+    assert.throws(() => getHubPackage(fixture.ctx), /ENOENT/);
   });
 
   it('keeps the executable bit of a script', () => {

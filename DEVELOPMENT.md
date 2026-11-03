@@ -138,6 +138,9 @@ yarn test         # test:unit, then test:flows (node test runner + tsx); build
 yarn test:unit    # every file but the flows; each file must finish in 2 min
 yarn test:flows   # the `*E2e.test.ts` flows, 16 files at a time (they mostly wait
                   # on their fakes, not the CPU); each file must finish in 20 min
+yarn runner-lock  # after ANY dependency change: rewrite remoteRun/runner-package-lock.json (the
+                  # lock the runners install from, made from yarn.lock; fetches the sha512
+                  # hashes of new versions from the registry). A unit test fails until you do
 yarn hot          # hot-reload mode: tsc -w + nodemon on dist/ (also
                    # `charness hot` from anywhere) — a broken edit can't
                    # take the bot down; OpenCode generations stay outside the

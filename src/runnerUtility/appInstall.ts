@@ -38,17 +38,24 @@ const maxKeptStderrBytes = 16 * 1024;
 const stderrTailLines = 3;
 
 /**
- * Install the production dependencies of the package in `appDir`; scripts are not run (nothing the runner needs builds). Asynchronous, so the
- * step line can show that something is happening while npm works (it takes a minute). Rejects with npm's last words.
+ * What the install runs. `npm ci` installs EXACTLY what the package's `package-lock.json` records — the versions, tarballs and hashes the hub made
+ * its lock from (`runners/runnerLock.ts`) — and fails when the lock and `package.json` disagree, where `npm install` would resolve open ranges
+ * to whatever was published since. Only production dependencies, and no scripts (nothing the runner needs builds).
  */
-export function installDependencies(appDir: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export const npmInstallArgs: readonly string[] = ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--no-progress'];
+
+/**
+ * Install the production dependencies of the package in `appDir` as its lock records them ({@link npmInstallArgs}). Asynchronous, so the step line can
+ * show that something is happening while npm works (it takes a minute). Rejects with npm's last words. `npmCommand`: the `npm` to run (a test's own).
+ */
+export function installDependencies(appDir: string, env: NodeJS.ProcessEnv = process.env, npmCommand: string = findNpm()): Promise<void> {
   const linked = env[testNodeModulesEnvName];
   if (linked !== undefined && linked !== '') {
     fs.symlinkSync(linked, path.join(appDir, 'node_modules'), 'dir');
     return Promise.resolve();
   }
   return new Promise<void>((resolve, reject) => {
-    const child = spawn(findNpm(), ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--no-progress'], { cwd: appDir, env, stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn(npmCommand, [...npmInstallArgs], { cwd: appDir, env, stdio: ['ignore', 'ignore', 'pipe'] });
     let keptStderr = '';
     let isTimedOut = false;
     child.stderr.setEncoding('utf8');
@@ -60,7 +67,7 @@ export function installDependencies(appDir: string, env: NodeJS.ProcessEnv = pro
     const fail = (cause: string): void => {
       clearTimeout(timer);
       const detail = keptStderr.trim().split('\n').slice(-stderrTailLines).join(' | ');
-      reject(new Error(`npm install failed${cause === '' ? '' : ` (${cause})`}${detail === '' ? '' : `: ${detail}`}`));
+      reject(new Error(`npm ci failed${cause === '' ? '' : ` (${cause})`}${detail === '' ? '' : `: ${detail}`}`));
     };
     child.once('error', (error) => fail(error.message));
     child.once('close', (code) => {

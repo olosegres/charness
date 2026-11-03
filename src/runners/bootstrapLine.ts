@@ -10,7 +10,7 @@ import { encodePairCode, type PairCodePayload } from './pairCode';
  * which `grep -b` finds among the first {@link maxGateNoiseBytes} bytes, and the archive is cut out from the byte after it.
  *
  * Contract with the runner utility: `runnerCli.js pair --bootstrap <unpacked folder> --archive <file> --package-id <id> <code>` is started with a package that has NO
- * `node_modules` yet, so it reaches its install step (`npm install --omit=dev --ignore-scripts` into its own app folder) using
+ * `node_modules` yet, so it reaches its install step (`npm ci --omit=dev --ignore-scripts` into its own app folder, against the lock the package carries) using
  * Node's built-ins only.
  *
  * Every value in the line passed a strict pattern (`pairCode.ts`) that has no quote, space, `$`, backtick or backslash; the line

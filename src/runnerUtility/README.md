@@ -9,7 +9,7 @@ Node ≥ 22.12, `ssh`, `tar`; Pueue and rsync it installs or finds itself.
 ```
 pasted line (sh) ──ssh bootstrap──► unpacked hub package, NO node_modules
    └► runnerCli.js pair --bootstrap <folder> <code>       builtins only (appInstall.ts, progress.ts, runnerHome.ts)
-         └► npm install --omit=dev --ignore-scripts into ~/.charness-runner/app.<id>/, then starts THAT copy: `pair <code>`
+         └► npm ci --omit=dev --ignore-scripts (the package's own lock) into ~/.charness-runner/app.<id>/, then starts THAT copy: `pair <code>`
                └► runnerCommands.runPair: check screen → redeem over ssh (temp key, pinned hub host key) → config.json,
                   `current` → app.<id>, launcher, tools (Pueue, rsync) → «Paired with charness …»
 charness-runner run  (through bin/charness-runner, a sh loop: exit 75 = restart onto an update)
@@ -31,7 +31,7 @@ the queue), `logs/`, `build/`.
 ## Contracts
 
 - **The first step runs without dependencies.** `runnerCli.ts` imports Node built-ins, `appInstall.ts` and `progress.ts` only; everything else is
-  loaded lazily after the install. `installDependencies` runs `npm install --omit=dev --ignore-scripts` ASYNCHRONOUSLY, so the step line can show that something is happening.
+  loaded lazily after the install. `installDependencies` runs `npm ci --omit=dev --ignore-scripts` (`npmInstallArgs`: exactly what the package's lock records — `runners/runnerLock.ts`) ASYNCHRONOUSLY, so the step line can show that something is happening.
 - **Every long step is named in one line** (`progress.ts`, builtins only — the root step uses it too): on a terminal the line is redrawn with dots that
   cycle (`.`, `..`, `...`) while the step runs and ends with «— done» / «— failed» (also when the work returns a failure instead of throwing: `checkIsFailure`); the drawn line is cut to the terminal's width less one column, asked at every redraw, and the step names (`stepLabels`) are short enough to fit 80 columns whole — a line that wraps leaves a new row behind at every redraw; on a pipe or a file, or on a terminal whose width is unknown or under 40 columns, it is one plain line when the step starts. The
   shell part of the pasted lines prints its own two or three first (`bootstrapLine.ts`); the work of a step must not block the event loop. The test seam

@@ -7,11 +7,14 @@ import { z } from 'zod';
 import { getCaughtErrnoCode, writeJsonFileAtomically } from '../configDirFile';
 import { ensureHubDir } from './hubLock';
 import { getHubFilePaths, type HubContext } from './hubPaths';
+import { parseRootPackageJson, parseRunnerLock, renderRunnerLockForPackage, renderRunnerPackageJson, runnerLockRelativePath } from './runnerLock';
 import { createTarArchive, type TarEntry } from './tarArchive';
 
 /**
- * @description The charness package a runner installs: the hub's OWN `dist/`, `package.json` and `remoteRun/runner.sh`, packed into a
- * gzip tar, so a runner and its hub never run different code and no npm release is needed. Its id is the sha256 of the tar before
+ * @description The charness package a runner installs: the hub's OWN `dist/` and `remoteRun/runner.sh`, a `package.json` cut down to the runner's
+ * own dependencies and the `package-lock.json` that pins them (`runnerLock.ts`: made from `yarn.lock`, so the runner installs with `npm ci` exactly
+ * what the hub has run and never a version published since), packed into a gzip tar, so a runner and its hub never run different code and no npm
+ * release is needed. Its id is the sha256 of the tar before
  * compression (stable — gzip's bytes depend on the zlib build), 16 hex digits. The packed file is cached in `package/`; whether the
  * cache is current is decided by a stamp of the source files (path, size, mtime), so asking for the id costs a walk of `stat`s.
  *
@@ -39,6 +42,8 @@ const skippedFilePattern = /(?:\.d\.ts|\.d\.ts\.map|\.js\.map)$/;
 const skippedFolderName = '__tests__';
 const runnerScriptRelativePath = 'remoteRun/runner.sh';
 const packageJsonRelativePath = 'package.json';
+/** What the lock is called inside the package: where `npm ci` looks for it. */
+const packagedLockFileName = 'package-lock.json';
 const distRelativePath = 'dist';
 
 const currentSchema = z.strictObject({ stamp: z.string(), id: z.string(), fileName: z.string() });
@@ -77,10 +82,10 @@ function statSourceFile(root: string, relativePath: string): SourceFile {
   return { relativePath, absolutePath, size: stat.size, mtimeMs: stat.mtimeMs, mode: stat.mode };
 }
 
-/** The files in archive order: `package.json`, the runner script, then everything under `dist/` sorted by path. */
+/** The source files in archive order: `package.json`, the runner's lock, the runner script, then everything under `dist/` sorted by path. */
 function listPackageFiles(packageRoot: string): SourceFile[] {
   const distFiles = listDistFiles(packageRoot, distRelativePath);
-  return [statSourceFile(packageRoot, packageJsonRelativePath), statSourceFile(packageRoot, runnerScriptRelativePath), ...distFiles];
+  return [statSourceFile(packageRoot, packageJsonRelativePath), statSourceFile(packageRoot, runnerLockRelativePath), statSourceFile(packageRoot, runnerScriptRelativePath), ...distFiles];
 }
 
 function createSourceStamp(files: readonly SourceFile[]): string {
@@ -98,19 +103,31 @@ function readCurrent(packageDir: string): z.infer<typeof currentSchema> | null {
   }
 }
 
+/** The archive entry of a source file: most are copied as they are; the hub's `package.json` and the runner's lock become the runner's own (see the head of the file). */
+function createArchiveEntries(files: readonly SourceFile[]): TarEntry[] {
+  const readSource = (relativePath: string): string => {
+    const source = files.find((file) => file.relativePath === relativePath);
+    if (source === undefined) throw new Error(`the package source has no ${relativePath}`);
+    return fs.readFileSync(source.absolutePath, 'utf8');
+  };
+  const rootPackageJson = parseRootPackageJson(readSource(packageJsonRelativePath));
+  const lock = parseRunnerLock(readSource(runnerLockRelativePath));
+  return files.map((file) => {
+    if (file.relativePath === packageJsonRelativePath) return { path: packageJsonRelativePath, content: Buffer.from(renderRunnerPackageJson(rootPackageJson, lock)), mode: plainFileMode };
+    if (file.relativePath === runnerLockRelativePath) return { path: packagedLockFileName, content: Buffer.from(renderRunnerLockForPackage(lock, rootPackageJson)), mode: plainFileMode };
+    return { path: file.relativePath, content: fs.readFileSync(file.absolutePath), mode: (file.mode & executableBits) === 0 ? plainFileMode : executableMode };
+  });
+}
+
 function packFiles(files: readonly SourceFile[]): { id: string; gzip: Buffer } {
-  const entries: TarEntry[] = files.map((file) => ({
-    path: file.relativePath,
-    content: fs.readFileSync(file.absolutePath),
-    mode: (file.mode & executableBits) === 0 ? plainFileMode : executableMode,
-  }));
-  const tar = createTarArchive(entries);
+  const tar = createTarArchive(createArchiveEntries(files));
   return { id: createHash('sha256').update(tar).digest('hex').slice(0, packageIdLength), gzip: gzipSync(tar, { level: gzipLevel }) };
 }
 
 /**
  * @description The current package of this hub, packed now unless the cache already holds this exact source. Throws when the source
- * (`dist/`, `package.json`, `remoteRun/runner.sh` under `ctx.packageRoot`) is missing. Safe without the registry lock: a cache file
+ * (`dist/`, `package.json`, `remoteRun/runner.sh`, `remoteRun/runner-package-lock.json` under `ctx.packageRoot`) is missing, or the lock no longer
+ * matches `package.json` (`yarn runner-lock` brings it up to date). Safe without the registry lock: a cache file
  * is written whole and named by its id, and two packers of one source write identical bytes.
  */
 export function getHubPackage(ctx: HubContext): HubPackage {

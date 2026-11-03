@@ -12,7 +12,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { spawn, spawnSync } from 'child_process';
-import { createAppId, installAppFromDirectory, installDependencies, removeOldApps, restartExitCode, switchCurrentApp, testNodeModulesEnvName } from '../runnerUtility/appInstall';
+import { createAppId, installAppFromDirectory, installDependencies, npmInstallArgs, removeOldApps, restartExitCode, switchCurrentApp, testNodeModulesEnvName } from '../runnerUtility/appInstall';
 import { ensureLauncher, renderLauncher } from '../runnerUtility/launcher';
 import { readRunnerConfig, readRunnerStatus, RunnerConfigError, writeRunnerConfig, writeRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getAppDirPath, getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
@@ -71,6 +71,28 @@ describe('installed copies', () => {
     fs.mkdirSync(modules);
     await installDependencies(appDir, { [testNodeModulesEnvName]: modules });
     assert.equal(fs.realpathSync(path.join(appDir, 'node_modules')), fs.realpathSync(modules));
+  });
+
+  it('installs with `npm ci` — exactly what the package\'s lock records, production dependencies only, no scripts — and not with `npm install`, which would resolve open ranges to whatever was published since', async () => {
+    assert.deepEqual(npmInstallArgs, ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--no-progress']);
+    const appDir = path.join(home, 'app');
+    fs.mkdirSync(appDir);
+    const record = path.join(home, 'npm.args');
+    const fakeNpm = path.join(home, 'npm');
+    fs.writeFileSync(fakeNpm, `#!/bin/sh\necho "$@" > "${record}"\npwd >> "${record}"\nmkdir node_modules\n`, { mode: 0o755 });
+    await installDependencies(appDir, {}, fakeNpm);
+    assert.deepEqual(fs.readFileSync(record, 'utf8').split('\n').filter((line) => line !== ''), ['ci --omit=dev --ignore-scripts --no-audit --no-fund --no-progress', fs.realpathSync(appDir)], 'in the app folder, with these arguments');
+    assert.ok(fs.existsSync(path.join(appDir, 'node_modules')), 'and the fake npm did its work there');
+  });
+
+  it('a failing install says so with npm\'s last words — a lock that does not match package.json is refused by `npm ci`, and the app is not installed', async () => {
+    const appDir = path.join(home, 'app');
+    fs.mkdirSync(appDir);
+    const fakeNpm = path.join(home, 'npm');
+    fs.writeFileSync(fakeNpm, '#!/bin/sh\necho "npm error npm ci can only install packages when your package.json and package-lock.json are in sync" >&2\nexit 1\n', { mode: 0o755 });
+    await assert.rejects(installDependencies(appDir, {}, fakeNpm), /^Error: npm ci failed: npm error npm ci can only install packages when your package\.json and package-lock\.json are in sync$/);
+    const missingNpm = path.join(home, 'no-such-npm');
+    await assert.rejects(installDependencies(appDir, {}, missingNpm), /npm ci failed \(spawn .*no-such-npm ENOENT\)/);
   });
 
   it('copies the package into a new app folder and installs into it; every install gets a folder of its own', async () => {

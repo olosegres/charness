@@ -19,6 +19,30 @@ export interface HubFixture {
   cleanup: () => void;
 }
 
+/** The hub's `package.json` in a fixture: more dependencies than the runner needs (the bot's own), so that the packer's cutting down shows. */
+export const fixturePackageJson = {
+  name: 'charness',
+  version: '0.0.0-test',
+  license: 'MIT',
+  engines: { node: '>=22.12' },
+  scripts: { build: 'tsc' },
+  dependencies: { ssh2: '^1.17.0', telegraf: '^4.16.3', zod: '^4.4.3' },
+  devDependencies: { typescript: '^5.7.0' },
+};
+
+/** The runner's lock in a fixture: the two packages the runner needs, the way `yarn runner-lock` writes them. */
+export const fixtureRunnerLock = {
+  name: 'charness',
+  version: '0.0.0',
+  lockfileVersion: 3,
+  requires: true,
+  packages: {
+    '': { name: 'charness', version: '0.0.0', dependencies: { ssh2: '^1.17.0', zod: '^4.4.3' }, engines: { node: '>=22.12' } },
+    'node_modules/ssh2': { version: '1.17.0', resolved: 'https://registry.npmjs.org/ssh2/-/ssh2-1.17.0.tgz', integrity: 'sha512-ssh2ExampleIntegrity==' },
+    'node_modules/zod': { version: '4.4.3', resolved: 'https://registry.npmjs.org/zod/-/zod-4.4.3.tgz', integrity: 'sha512-zodExampleIntegrity==' },
+  },
+};
+
 /** A hub in a temp folder. The registry folder has a short name so the unix socket paths below it stay far under the OS limit. */
 export function createHubFixture(): HubFixture {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rnr-'));
@@ -26,7 +50,8 @@ export function createHubFixture(): HubFixture {
   fs.mkdirSync(path.join(packageRoot, 'dist', 'runners'), { recursive: true });
   fs.mkdirSync(path.join(packageRoot, 'dist', '__tests__'), { recursive: true });
   fs.mkdirSync(path.join(packageRoot, 'remoteRun'), { recursive: true });
-  fs.writeFileSync(path.join(packageRoot, 'package.json'), '{"name":"charness","version":"0.0.0-test"}\n');
+  fs.writeFileSync(path.join(packageRoot, 'package.json'), `${JSON.stringify(fixturePackageJson, null, 2)}\n`);
+  fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'runner-package-lock.json'), `${JSON.stringify(fixtureRunnerLock, null, 2)}\n`);
   fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'runner.sh'), '#!/usr/bin/env bash\necho runner\n', { mode: 0o755 });
   fs.writeFileSync(path.join(packageRoot, 'dist', 'cli.js'), 'console.log("cli");\n', { mode: 0o755 });
   fs.writeFileSync(path.join(packageRoot, 'dist', 'runners', 'example.js'), 'module.exports = 1;\n');

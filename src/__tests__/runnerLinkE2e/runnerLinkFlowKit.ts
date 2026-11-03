@@ -18,6 +18,7 @@ import { flowLayoutPrefix, reapDeadFlowLayouts, sweepFlowLayout, writeFlowLayout
 import { installAppFromDirectory, switchCurrentApp, testNodeModulesEnvName } from '../../runnerUtility/appInstall';
 import { ensureLauncher } from '../../runnerUtility/launcher';
 import { getRunnerHomePaths } from '../../runnerUtility/runnerHome';
+import { runnerLockRelativePath } from '../../runners/runnerLock';
 
 export { waitUntil } from '../runnersTestKit';
 
@@ -63,6 +64,8 @@ function copyBuiltCharness(destination: string): void {
   fs.copyFileSync(path.join(repoRoot, 'package.json'), path.join(destination, 'package.json'));
   fs.mkdirSync(path.join(destination, 'remoteRun'));
   fs.copyFileSync(path.join(repoRoot, 'remoteRun', 'runner.sh'), path.join(destination, 'remoteRun', 'runner.sh'));
+  // The lock the hub packs for the runner (`runners/runnerLock.ts`): a package is made of it and `package.json`, and refused without it.
+  fs.copyFileSync(path.join(repoRoot, runnerLockRelativePath), path.join(destination, runnerLockRelativePath));
   fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(destination, 'node_modules'), 'dir');
 }
 
