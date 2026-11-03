@@ -103,7 +103,9 @@ runs AS the account (the pairing, the preparation, the user manager, the service
 (`isolatedCommand.ts`, `runCommandIsolated`): the child starts in a session of its own (`setsid`: no controlling terminal), its standard input is
 `/dev/null`, and its output is piped through the root step, which strips the control characters (escape sequences, carriage returns, bells,
 bidirectional overrides) before printing or parsing it — what the account says reaches the operator as plain text. A signal to the root step (Ctrl-C)
-is passed on to the child's whole group and the root step then dies of it itself; a deadline kills the whole group. (The pairing's own progress
+is passed on to the child's whole group and the root step then dies of it itself (a second signal kills the group outright and ends it at once); a deadline kills the whole group. The
+step is settled by the child's EXIT and not only by its pipes closing: a descendant of the account's code that left the group (`setsid`) and keeps the output
+open would otherwise hold the paste for ever, so the pipes are cut a short grace after the exit, the deadline or the first signal. (The pairing's own progress
 lines come through as plain lines — a terminal-less child draws no dots.) Root's whole part:
 
 - macOS: `sudo -u <account> -H <its launcher> service system-step prepare` — the ACCOUNT's side (`runSystemStep` in `serviceManager.ts`: it is

@@ -9,7 +9,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -150,6 +150,113 @@ describe('a command run isolated', () => {
       assert.equal(outcome.signal, 'SIGTERM', `the driver dies of the signal (${JSON.stringify(outcome)})`);
       assert.equal(stdout, '', 'and does not carry on');
       await waitFor(() => !checkIsProcessAlive(sleeper), () => `the child's group to be stopped (${describeProcess(sleeper)})`, processExitDeadlineMs);
+    } finally {
+      fs.rmSync(folder, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a descendant that leaves the group and keeps the output open', () => {
+  /**
+   * A child program (node) that starts `sleep 60` in a SESSION OF ITS OWN (`detached`), handing it the output pipes, records its pid, and then runs
+   * `body` — what a launcher the agents rewrote could do: the deadline's kill of the child's group misses the sleeper, and `close` waits for it.
+   */
+  function createLaunchedChild(pidFile: string, body: string): string[] {
+    const script = [
+      'const { spawn } = require("child_process"); const fs = require("fs");',
+      'const sleeper = spawn("sleep", ["60"], { detached: true, stdio: ["ignore", "inherit", "inherit"] });',
+      `fs.writeFileSync(${JSON.stringify(pidFile)}, String(sleeper.pid)); sleeper.unref();`,
+      body,
+    ].join('\n');
+    return ['-e', script];
+  }
+
+  function readSleeper(pidFile: string): number {
+    return Number(fs.readFileSync(pidFile, 'utf8'));
+  }
+
+  async function withFolder(run: (folder: string, killSleeper: () => void) => Promise<void>): Promise<void> {
+    const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'iso-'));
+    const killSleeper = (): void => {
+      try {
+        process.kill(readSleeper(path.join(folder, 'sleeper.pid')), 'SIGKILL');
+      } catch {
+        // Never started, or gone.
+      }
+    };
+    try {
+      await run(folder, killSleeper);
+    } finally {
+      killSleeper();
+      fs.rmSync(folder, { recursive: true, force: true });
+    }
+  }
+
+  it('still ends at the deadline — isTimedOut, not ok — within a short grace, though the output never closes; the sleeper that left the group is not the runner\'s to kill', async () => {
+    await withFolder(async (folder) => {
+      const pidFile = path.join(folder, 'sleeper.pid');
+      const startedAtMs = Date.now();
+      const result = await runCommandIsolated(process.execPath, createLaunchedChild(pidFile, 'setInterval(() => {}, 1000);'), { timeoutMs: 500 });
+      assert.equal(result.isTimedOut, true);
+      assert.equal(result.ok, false);
+      assert.ok(Date.now() - startedAtMs < 15_000, `ended in ${Date.now() - startedAtMs} ms`);
+      assert.equal(checkIsProcessAlive(readSleeper(pidFile)), true, 'control: the sleeper has its own session, so the group\'s kill missed it — and it held the output open');
+    });
+  });
+
+  it('ends a step whose child exited long ago — with what it printed and its exit status — instead of waiting for the sleeper to let go of the output', async () => {
+    await withFolder(async (folder) => {
+      const pidFile = path.join(folder, 'sleeper.pid');
+      const startedAtMs = Date.now();
+      const result = await runCommandIsolated(process.execPath, createLaunchedChild(pidFile, 'process.stdout.write("done\\n"); process.exit(0);'), { timeoutMs: generousTimeoutMs * 3 });
+      assert.deepEqual([result.ok, result.exitCode, result.stdout, result.isTimedOut], [true, 0, 'done\n', false]);
+      assert.ok(Date.now() - startedAtMs < 20_000, `ended in ${Date.now() - startedAtMs} ms, not at the 60 s of the sleeper`);
+    });
+  });
+
+  /** A driver process that runs `command` through the runner (the way the root step does), prints `survived` if the step ever ends, and is signalled from here. */
+  function startDriver(command: string, args: string[]): { process: ChildProcess; exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>; output: () => string } {
+    const programPath = path.resolve(__dirname, '..', 'runnerUtility', 'isolatedCommand.ts');
+    const script = [
+      `const { runCommandIsolated } = require(${JSON.stringify(programPath)});`,
+      `runCommandIsolated(${JSON.stringify(command)}, ${JSON.stringify(args)}, { timeoutMs: 120000 }).then(() => { process.stdout.write('survived\\n'); });`,
+    ].join('\n');
+    const driver = spawn(process.execPath, ['--import', 'tsx', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    driver.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => { driver.once('exit', (code, signal) => resolve({ code, signal })); });
+    return { process: driver, exited, output: () => output };
+  }
+
+  it('an interrupt ends the step and the program — the sleeper holds the output, and the signal, taken over, is not left passed on to a group that is gone — within a short grace', async () => {
+    await withFolder(async (folder) => {
+      const pidFile = path.join(folder, 'sleeper.pid');
+      const driver = startDriver(process.execPath, createLaunchedChild(pidFile, 'setInterval(() => {}, 1000);'));
+      await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '', 'the child to start');
+      const signalledAtMs = Date.now();
+      driver.process.kill('SIGTERM');
+      const outcome = await driver.exited;
+      assert.equal(outcome.signal, 'SIGTERM', `the driver dies of the signal (${JSON.stringify(outcome)})`);
+      assert.equal(driver.output(), '', 'and does not carry on');
+      assert.ok(Date.now() - signalledAtMs < 20_000, `ended in ${Date.now() - signalledAtMs} ms`);
+    });
+  });
+
+  it('a child that ignores the signal is left alone for the first one and killed outright at the SECOND — the step ends at once and the program dies of the signal', async () => {
+    const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'iso-'));
+    try {
+      const pidFile = path.join(folder, 'stubborn.pid');
+      const driver = startDriver('sh', ['-c', `trap "" TERM; echo $$ > "${pidFile}"; while :; do sleep 1; done`]);
+      await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '', 'the stubborn child to start');
+      const stubborn = Number(fs.readFileSync(pidFile, 'utf8'));
+      driver.process.kill('SIGTERM');
+      await wait(700);
+      assert.equal(checkIsProcessAlive(stubborn), true, 'the first signal was ignored by the child');
+      assert.equal(driver.process.exitCode === null && driver.process.signalCode === null, true, 'and the program is still waiting for it');
+      driver.process.kill('SIGTERM');
+      const outcome = await driver.exited;
+      assert.equal(outcome.signal, 'SIGTERM', `the second signal ends the program (${JSON.stringify(outcome)})`);
+      await waitFor(() => !checkIsProcessAlive(stubborn), () => `the stubborn child to be killed (${describeProcess(stubborn)})`, processExitDeadlineMs);
     } finally {
       fs.rmSync(folder, { recursive: true, force: true });
     }

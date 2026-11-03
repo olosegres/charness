@@ -53,7 +53,20 @@ function keepTail(kept: string, chunk: string): string {
   return joined.length > maxKeptOutputBytes ? joined.slice(-maxKeptOutputBytes) : joined;
 }
 
-/** @description The isolated runner: see the head of the file. */
+/** After the child has exited, how long its output pipes may stay open before they are cut: output still in flight is read in that time, a descendant that left the group and holds them is not waited for. */
+const pipeDrainGraceMs = 5000;
+/** The same once a deadline has passed or a signal was passed on: the operator is waiting, and nothing more is wanted from the child. */
+const killedPipeGraceMs = 1000;
+/** After a signal was passed on, how long the child has to end before its whole group is killed. */
+const signalEscalationMs = 5000;
+
+/**
+ * @description The isolated runner: see the head of the file. It is settled by the child's EXIT, not only by its pipes closing: the account runs the agents'
+ * code, and a program of it may start a descendant that leaves the group (`setsid`) and keeps the output open — `close` would then never come, the
+ * deadline's kill of the group would miss it and the signals, all taken over here, would only be passed on to a group that is gone. So once the child
+ * has exited — or the deadline has passed, or a signal was passed on — the pipes are cut after a short grace and the step ends with what it has. A
+ * SECOND signal ends it at once: the group is killed outright and this process dies of the signal.
+ */
 export const runCommandIsolated: IsolatedCommandRunner = (file, args, options) =>
   new Promise((resolve) => {
     const child = spawn(file, [...args], { cwd: options.cwd, env: options.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -62,26 +75,52 @@ export const runCommandIsolated: IsolatedCommandRunner = (file, args, options) =
     let isTimedOut = false;
     let interruptedBy: NodeJS.Signals | null = null;
     let isSettled = false;
-    const forward = (signal: NodeJS.Signals): void => {
-      interruptedBy = signal;
-      killGroup(child, signal);
-    };
+    let hasExited = false;
+    let exitCode: number | null = null;
+    let graceTimer: NodeJS.Timeout | null = null;
+    let escalationTimer: NodeJS.Timeout | null = null;
+
     const handlers = forwardedSignals.map((signal) => ({ signal, handler: (): void => forward(signal) }));
-    for (const { signal, handler } of handlers) process.on(signal, handler);
-    const timer = setTimeout(() => {
+    const deadlineTimer = setTimeout(() => {
       isTimedOut = true;
       killGroup(child, 'SIGKILL');
+      armGrace(killedPipeGraceMs);
     }, options.timeoutMs);
 
-    const settle = (result: CommandResult): void => {
+    const finish = (result: CommandResult): void => {
       if (isSettled) return;
       isSettled = true;
-      clearTimeout(timer);
+      for (const timer of [deadlineTimer, graceTimer, escalationTimer]) if (timer !== null) clearTimeout(timer);
       for (const { signal, handler } of handlers) process.removeListener(signal, handler);
-      // The operator interrupted: now that the child is gone this process goes too, as an unhandled signal would have ended it.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      // The operator interrupted: now that the step is over this process goes too, as an unhandled signal would have ended it.
       if (interruptedBy !== null) process.kill(process.pid, interruptedBy);
       resolve(result);
     };
+    const settle = (): void => {
+      finish({ ok: hasExited && exitCode === 0 && !isTimedOut, exitCode: hasExited ? exitCode : null, stdout, stderr, isTimedOut });
+    };
+    function armGrace(graceMs: number): void {
+      if (graceTimer !== null) clearTimeout(graceTimer);
+      graceTimer = setTimeout(settle, graceMs);
+    }
+    function forward(signal: NodeJS.Signals): void {
+      const isSecond = interruptedBy !== null;
+      interruptedBy = signal;
+      if (isSecond) {
+        killGroup(child, 'SIGKILL');
+        settle();
+        return;
+      }
+      killGroup(child, signal);
+      escalationTimer = setTimeout(() => {
+        killGroup(child, 'SIGKILL');
+        armGrace(killedPipeGraceMs);
+      }, signalEscalationMs);
+      if (hasExited) armGrace(killedPipeGraceMs);
+    }
+    for (const { signal, handler } of handlers) process.on(signal, handler);
 
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
@@ -96,10 +135,13 @@ export const runCommandIsolated: IsolatedCommandRunner = (file, args, options) =
       options.onOutput?.(clean, 'stderr');
     });
     child.once('error', (error) => {
-      settle({ ok: false, exitCode: null, stdout, stderr: stderr || stripControlCharacters(error.message), isTimedOut: false });
+      finish({ ok: false, exitCode: null, stdout, stderr: stderr || stripControlCharacters(error.message), isTimedOut: false });
     });
-    // `close`, not `exit`: the output pipes are drained by then.
-    child.once('close', (code) => {
-      settle({ ok: code === 0 && !isTimedOut, exitCode: code, stdout, stderr, isTimedOut });
+    child.once('exit', (code) => {
+      hasExited = true;
+      exitCode = code;
+      armGrace(isTimedOut || interruptedBy !== null ? killedPipeGraceMs : pipeDrainGraceMs);
     });
+    // `close` comes once the output pipes are drained too: the usual end, at once.
+    child.once('close', settle);
   });
