@@ -174,6 +174,27 @@ describe('a step of a job', () => {
     assert.equal(readExit(dir), '126');
   });
 
+  it('a script that removed the request folder while its step ran (it cut the step) is no crash of the agent when the step\'s end is noticed — nobody is left to read the code', async () => {
+    const agent = createGuiAgent(paths, createDeps());
+    const started = path.join(root, 'cut-away.started');
+    const { dir } = writeRequest('job12.1', { command: `touch "${started}"; exec sleep 300` });
+    await tickUntil(agent, 'the step to start', () => fs.existsSync(started) && fs.existsSync(path.join(dir, 'pgid')));
+    const pgid = Number(fs.readFileSync(path.join(dir, 'pgid'), 'utf8').trim());
+    const failures: Error[] = [];
+    const onUncaught = (error: Error): void => { failures.push(error); };
+    process.on('uncaughtException', onUncaught);
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      process.kill(-pgid, 'SIGKILL');
+      await tickUntil(agent, 'the step to be noticed as ended', () => agent.getRunningCount() === 0);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } finally {
+      process.off('uncaughtException', onUncaught);
+    }
+    assert.deepEqual(failures.map((failure) => failure.message), [], 'no uncaught exception');
+    assert.equal(fs.existsSync(dir), false, 'and the folder is not made again for an answer nobody will read');
+  });
+
   it('a `kill` file ends the step\'s whole process group with TERM; one that ignores TERM is killed after the grace — nothing is left', async () => {
     const agent = createGuiAgent(paths, createDeps());
     const pidFile = path.join(root, 'stubborn.pids');

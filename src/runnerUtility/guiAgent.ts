@@ -206,8 +206,26 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
   const groupsEnding: Array<{ pgid: number; terminatedAtMs: number }> = [];
   let lastBeatAtMs = 0;
 
+  /**
+   * A file of a request folder, through a temp file and a rename so a script never reads half of it — and NOT through `writeTextFileAtomically`, which makes missing
+   * folders: the script that cut the step has removed its request folder already (it ended the step's group and went on), nobody is left to read the answer, and a
+   * folder made again for it would be litter nothing removes. This runs from the step's `close` event: a throw here would be an uncaught exception that kills the
+   * whole agent, so a folder that is gone is no error.
+   */
+  const writeIntoRequest = (requestDir: string, name: string, text: string): void => {
+    const file = path.join(requestDir, name);
+    const tempFile = `${file}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(tempFile, text, { mode: 0o644 });
+      fs.renameSync(tempFile, file);
+    } catch (error) {
+      fs.rmSync(tempFile, { force: true });
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    }
+  };
+
   const writeExit = (requestDir: string, code: number): void => {
-    writeTextFileAtomically(path.join(requestDir, requestFileNames.exit), `${code}\n`, 0o644);
+    writeIntoRequest(requestDir, requestFileNames.exit, `${code}\n`);
   };
 
   const beat = (): void => {
@@ -272,7 +290,7 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
       const child = deps.startStep({ directory: request.directory, command: request.command, env, logFd });
       const step: RunningStep = { child, terminatedAtMs: null, isKilled: false };
       running.set(id, step);
-      if (child.pid !== undefined) writeTextFileAtomically(path.join(requestDir, requestFileNames.pgid), `${child.pid}\n`, 0o644);
+      if (child.pid !== undefined) writeIntoRequest(requestDir, requestFileNames.pgid, `${child.pid}\n`);
       child.once('error', () => {
         if (running.get(id) === step) running.delete(id);
         writeExit(requestDir, cannotStartExitCode);
