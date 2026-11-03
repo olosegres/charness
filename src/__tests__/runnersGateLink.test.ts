@@ -340,7 +340,7 @@ describe('the gate\'s link', () => {
         gate = next;
       }
       const concern = (await getRunnerLinkStatus(fixture.ctx.dir, runner.runnerId)).concern;
-      assert.deepEqual(concern, { kind: 'fighting', sources: [homeAddress, otherAddress], changeCount: 3 });
+      assert.deepEqual(concern && { ...concern, atMs: 0 }, { kind: 'fighting', sources: [homeAddress, otherAddress], changeCount: 3, atMs: 0 });
       gate.transport.destroy();
       await settleWithin(gate.done, 'the last gate to end');
     });

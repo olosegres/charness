@@ -13,7 +13,9 @@
  *   • the pairing message turns into «paired» when its code is used and into «expired» when it runs out — also after a restart and for a
  *     code used while the bot was down (the instance's own record of its messages), a failed edit is tried again, and another instance
  *     sharing the registry neither edits nor takes away the way back to a message;
- *   • Pause / Resume / Remove: revisioned buttons, a stale keyboard only redraws, Remove asks first and Cancel puts the list back.
+ *   • Pause / Resume / Remove: revisioned buttons, a stale keyboard only redraws, Remove asks first and Cancel puts the list back;
+ *   • a runner's link that changes address, or links that fight, are said ONCE in General and pinned — not again at the next look, after a restart or
+ *     for the rest of a fight — and told again when there is something newer; no General, or a failed send, is tried again.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -25,12 +27,14 @@ import * as path from 'path';
 import { createRunners, runnersWatchIntervalMs } from '../connectors/telegram/commands/runners';
 import { readPairingMessages, writePairingMessages } from '../connectors/telegram/runnerPairingMessages';
 import { readLastProbe } from '../remoteRun/runners';
-import { keyToString } from '../sessionKey';
+import { keyToString, type SessionKey } from '../sessionKey';
 import { parseProbeOutput } from '../remoteRun/probe';
 import { ensureGateWrapper } from '../runners/gateWrapper';
 import type { HostKeyScanner, HubAddress } from '../runners/hubAddress';
 import { cancelPairing, createPairing, redeemPairing, sweepExpiredPairings } from '../runners/hubPairing';
 import { readPairedFile, readPendingFile, recordClosedCode } from '../runners/hubRegistry';
+import { writeLinkState } from '../runners/linkControl';
+import type { LinkSourceChange } from '../runners/linkConcern';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { readRunnersOverview, type RunnersOverview } from '../runners/runnersOverview';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
@@ -51,6 +55,10 @@ let harness: CommandHarness;
 let hubFixture: HubFixture;
 let cacheDir: string;
 let pairingMessagesPath: string;
+let linkNoticesPath: string;
+/** The General the module posts link notices in (`null` = none yet) and the messages it pinned there. */
+let generalKey: SessionKey | null = null;
+let pinnedMessageIds: number[] = [];
 /** What the canned live probe says every online machine is like. */
 let liveProbeText = defaultProbeText;
 /** When set, every send and edit of the module also goes through the fake Bot API, which refuses a text over Telegram's limit. */
@@ -102,6 +110,12 @@ function buildPorts(): Parameters<typeof createRunners>[0] {
     deleteThreadMessageDetailed: deleteWithHooks,
     hub: hubFixture.ctx,
     pairingMessagesPath,
+    linkNoticesPath,
+    getGeneralKey: () => generalKey,
+    pinMessage: async (_key, messageId) => {
+      pinnedMessageIds.push(messageId);
+      return true;
+    },
     sweepExpiredCodes: async (nowMs) => {
       if (sweepGate !== null) await sweepGate;
       await sweepExpiredPairings(hubFixture.ctx, nowMs);
@@ -178,6 +192,9 @@ describe('/runners over its ports', () => {
     hubFixture = createHubFixture();
     cacheDir = path.join(hubFixture.root, 'cache');
     pairingMessagesPath = path.join(hubFixture.root, 'pairing-messages.json');
+    linkNoticesPath = path.join(hubFixture.root, 'link-notices.json');
+    generalKey = harness.key;
+    pinnedMessageIds = [];
     fs.mkdirSync(cacheDir, { recursive: true });
     harness.isGeneral = true;
     liveProbeText = defaultProbeText;
@@ -997,6 +1014,120 @@ describe('/runners over its ports', () => {
       fs.writeFileSync(path.join(hubFixture.ctx.dir, 'paired.json'), '{ not json');
       await harness.runCommand('runners');
       assert.equal(harness.replies.at(-1)?.text, '⚠️ The runners registry cannot be read: paired.json is not valid JSON; fix or remove it by hand (nothing was changed)');
+    });
+  });
+
+  describe('where a runner\'s link comes from', () => {
+    const homeAddress = '198.51.100.7';
+    const otherAddress = '203.0.113.9';
+
+    /** The runner's link status as its gate leaves it: the address it comes from now and the changes it recorded. */
+    function putLinkChanges(runnerId: string, changes: LinkSourceChange[]): void {
+      writeLinkState(hubFixture.ctx.dir, runnerId, { pid: process.pid, sinceMs: clockMs, lastBeatMs: clockMs, endedAtMs: null, source: changes.at(-1)?.toSource ?? homeAddress, sourceChanges: changes });
+    }
+
+    async function pairAndGetId(name: string): Promise<string> {
+      await pairMachine(name);
+      const runner = readPairedFile(hubFixture.ctx.dir).runners.find((candidate) => candidate.name === name);
+      assert.ok(runner !== undefined);
+      return runner.id;
+    }
+
+    const changeAt = (atMs: number, from: string, to: string, isLiveReplacement = false): LinkSourceChange => ({ fromSource: from, toSource: to, atMs, isLiveReplacement });
+
+    it('says it ONCE in General — the machine\'s name and what changed — and pins the message; the next look tells nothing, and nothing is told for a link that never changed', async () => {
+      const runnerId = await pairAndGetId('mac');
+      await pairMachine('box1');
+      putLinkChanges(runnerId, [changeAt(clockMs, homeAddress, otherAddress, true)]);
+      const repliesBefore = harness.replies.length;
+      await feature.watchLinkConcernsOnce();
+      const told = harness.replies.slice(repliesBefore);
+      assert.equal(told.length, 1, told.map((reply) => reply.text).join('\n'));
+      assert.match(told[0].text, /^mac: ⚠️ A link from 203\.0\.113\.9 took over while the one from 198\.51\.100\.7 was still up \(.+\)\. If that is not you changing networks, remove this runner and pair it again: its key may be in use elsewhere\.$/);
+      assert.deepEqual(pinnedMessageIds, [told[0].messageId], 'pinned — the pin is what pierces a muted topic');
+      await feature.watchLinkConcernsOnce();
+      await feature.watchLinkConcernsOnce();
+      assert.equal(harness.replies.length, repliesBefore + 1, 'not again');
+      assert.equal(pinnedMessageIds.length, 1);
+    });
+
+    it('is not told again after a restart: what was told is the instance\'s own record — and a NEWER change is told, as a message of its own', async () => {
+      const runnerId = await pairAndGetId('mac');
+      putLinkChanges(runnerId, [changeAt(clockMs, homeAddress, otherAddress)]);
+      await feature.watchLinkConcernsOnce();
+      const afterFirst = harness.replies.length;
+      const restarted = createRunners(buildPorts());
+      await restarted.watchLinkConcernsOnce();
+      assert.equal(harness.replies.length, afterFirst, 'a restarted bot reads its record');
+      putLinkChanges(runnerId, [changeAt(clockMs, homeAddress, otherAddress), changeAt(clockMs + 3 * 60 * 60 * 1000, otherAddress, homeAddress)]);
+      await restarted.watchLinkConcernsOnce();
+      assert.equal(harness.replies.length, afterFirst + 1);
+      assert.match(harness.replies.at(-1)?.text ?? '', /^mac: ⚠️ Its link now comes from 198\.51\.100\.7 \(it came from 203\.0\.113\.9 before, /);
+      assert.equal(pinnedMessageIds.length, 2);
+    });
+
+    it('says a fight once — «links keep replacing each other» — and not again for the changes that go on within its window', async () => {
+      const runnerId = await pairAndGetId('mac');
+      const first = [changeAt(clockMs, homeAddress, otherAddress), changeAt(clockMs + minute, otherAddress, homeAddress), changeAt(clockMs + 2 * minute, homeAddress, otherAddress)];
+      putLinkChanges(runnerId, first);
+      const repliesBefore = harness.replies.length;
+      await feature.watchLinkConcernsOnce();
+      const texts = harness.replies.slice(repliesBefore).map((reply) => reply.text);
+      assert.equal(texts.length, 1, texts.join('\n'));
+      assert.match(texts[0], /^mac: ⚠️ Links from 198\.51\.100\.7, 203\.0\.113\.9 keep replacing each other \(3 switches in 10 minutes\)\./);
+      putLinkChanges(runnerId, [...first, changeAt(clockMs + 3 * minute, otherAddress, homeAddress), changeAt(clockMs + 4 * minute, homeAddress, otherAddress)]);
+      await feature.watchLinkConcernsOnce();
+      assert.equal(harness.replies.length, repliesBefore + 1, 'the same fight goes on: nothing new to say');
+      // (a status file keeps the last five changes)
+      putLinkChanges(runnerId, [...first.slice(1), changeAt(clockMs + 3 * minute, otherAddress, homeAddress), changeAt(clockMs + 4 * minute, homeAddress, otherAddress), changeAt(clockMs + 3 * 60 * minute, otherAddress, homeAddress)]);
+      await feature.watchLinkConcernsOnce();
+      assert.equal(harness.replies.length, repliesBefore + 2, 'a change long after it is news again');
+    });
+
+    it('waits for a General to post in, and tries again when the send fails — it is only recorded as told once it was', async () => {
+      const runnerId = await pairAndGetId('mac');
+      putLinkChanges(runnerId, [changeAt(clockMs, homeAddress, otherAddress)]);
+      generalKey = null;
+      const repliesBefore = harness.replies.length;
+      await feature.watchLinkConcernsOnce();
+      assert.equal(harness.replies.length, repliesBefore, 'no General');
+      assert.equal(fs.existsSync(linkNoticesPath), false, 'and nothing recorded as told');
+      generalKey = harness.key;
+      sendFailsFor = (text) => text.startsWith('mac: ⚠️');
+      await feature.watchLinkConcernsOnce();
+      assert.equal(harness.replies.length, repliesBefore, 'the send failed');
+      assert.deepEqual(pinnedMessageIds, [], 'nothing to pin');
+      sendFailsFor = null;
+      await feature.watchLinkConcernsOnce();
+      assert.equal(harness.replies.length, repliesBefore + 1, 'told at the next look');
+      assert.equal(pinnedMessageIds.length, 1);
+    });
+
+    it('keeps the record to the runners that are still paired: a removed one leaves it', async () => {
+      const runnerId = await pairAndGetId('mac');
+      await pairMachine('box1');
+      putLinkChanges(runnerId, [changeAt(clockMs, homeAddress, otherAddress)]);
+      await feature.watchLinkConcernsOnce();
+      assert.equal(JSON.parse(fs.readFileSync(linkNoticesPath, 'utf8')).notices.length, 1);
+      const { removePairedRunner } = await import('../runners/hubPairing');
+      await removePairedRunner(hubFixture.ctx, runnerId, clockMs);
+      putLinkChanges(readPairedFile(hubFixture.ctx.dir).runners[0].id, [changeAt(clockMs, homeAddress, otherAddress)]);
+      await feature.watchLinkConcernsOnce();
+      const record = JSON.parse(fs.readFileSync(linkNoticesPath, 'utf8')).notices as Array<{ runnerId: string }>;
+      assert.deepEqual(record.map((notice) => notice.runnerId), [readPairedFile(hubFixture.ctx.dir).runners[0].id], 'only the machine still paired');
+    });
+
+    it('the watcher runs it with the pairing look — one interval, one tick', async () => {
+      const runnerId = await pairAndGetId('mac');
+      putLinkChanges(runnerId, [changeAt(clockMs, homeAddress, otherAddress)]);
+      const repliesBefore = harness.replies.length;
+      const stop = feature.startRunnersWatcher();
+      try {
+        await waitUntilAsync('the watcher\'s first look to tell it', () => harness.replies.length > repliesBefore);
+        assert.equal(harness.replies.length, repliesBefore + 1);
+      } finally {
+        stop();
+      }
     });
   });
 

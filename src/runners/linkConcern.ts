@@ -12,16 +12,17 @@ import { z } from 'zod';
  *   - a FIGHT: several such changes within minutes — two links, two addresses, each replacing the other (the runner reconnects by itself).
  *
  * It tells nothing when both machines share an address (one network behind one NAT shows one source), and only that the address changed when the
- * machine itself moved: the note says what was seen and leaves the judgement to the operator. Pure, so `runners ls` and the Telegram screen word it
- * from the same facts.
+ * machine itself moved: the note says what was seen and leaves the judgement to the operator. A concern does not expire by itself: it stays on the
+ * `/runners` screen and in `charness runners ls` until the runner is removed or paired again (the status file goes with it), because an impostor that
+ * took the link while the real machine slept would otherwise be forgotten in a day. The bot also SAYS it once — one pinned message in General per new
+ * concern (`connectors/telegram/runnerLinkNotices.ts`), told apart by `atMs`, the time of the change it is about. Pure, so `runners ls`, the
+ * Telegram screen and the message word it from the same facts.
  */
 
 /** Longest address recorded: an IPv6 address with its zone is 45 characters or a little more. */
 export const maxSourceLength = 64;
 /** How many changes a link's status file remembers. */
 export const maxRecordedSourceChanges = 5;
-/** How long after a change the operator is told about it. */
-export const sourceChangeNoticeWindowMs = 24 * 60 * 60 * 1000;
 /** Changes within this many minutes... */
 export const linkFightWindowMs = 10 * 60 * 1000;
 /** ...of at least this many are a fight, not a move. */
@@ -41,10 +42,14 @@ export const linkSourceChangeSchema = z.strictObject({
 
 export type LinkSourceChange = z.infer<typeof linkSourceChangeSchema>;
 
-/** @name LinkConcern @description What the operator is told about a runner's link. */
+/**
+ * @name LinkConcern
+ * @description What the operator is told about a runner's link. `atMs`: when the newest change it is about happened — what one message about it is told
+ * apart by (a fight is about its newest change too).
+ */
 export type LinkConcern =
   | { kind: 'sourceChanged'; fromSource: string; toSource: string; atMs: number; isLiveReplacement: boolean }
-  | { kind: 'fighting'; sources: string[]; changeCount: number };
+  | { kind: 'fighting'; sources: string[]; changeCount: number; atMs: number };
 
 /** @description The address in sshd's `SSH_CLIENT` (`203.0.113.7 51820 22`); `null` when it is absent or not an address — nothing else is ever recorded. */
 export function parseSshClientSource(sshClient: string | undefined): string | null {
@@ -69,15 +74,19 @@ export function recordLinkSource(previous: PreviousLinkRecord | null, source: st
   return { source, sourceChanges: sourceChanges.slice(-maxRecordedSourceChanges) };
 }
 
-/** @description What is worth telling about a link whose recorded changes are `sourceChanges`, at `nowMs`; `null` when nothing is. A fight says more than the change in it. */
-export function getLinkConcern(sourceChanges: readonly LinkSourceChange[] | undefined, nowMs: number): LinkConcern | null {
-  const recent = (sourceChanges ?? []).filter((change) => nowMs - change.atMs < sourceChangeNoticeWindowMs);
-  const latest = recent.at(-1);
+/**
+ * @description What is worth telling about a link whose recorded changes are `sourceChanges`; `null` when it never changed address. About the NEWEST change;
+ * when it ends a burst — at least {@link linkFightChangeCount} changes, the first and the last within {@link linkFightWindowMs} — a fight says more than
+ * the change in it.
+ */
+export function getLinkConcern(sourceChanges: readonly LinkSourceChange[] | undefined): LinkConcern | null {
+  const changes = sourceChanges ?? [];
+  const latest = changes.at(-1);
   if (latest === undefined) return null;
-  const burst = recent.filter((change) => nowMs - change.atMs < linkFightWindowMs);
+  const burst = changes.filter((change) => latest.atMs - change.atMs < linkFightWindowMs);
   if (burst.length >= linkFightChangeCount) {
     const sources = [...new Set(burst.flatMap((change) => [change.fromSource, change.toSource]))].slice(0, fightSourcesNamed);
-    return { kind: 'fighting', sources, changeCount: burst.length };
+    return { kind: 'fighting', sources, changeCount: burst.length, atMs: latest.atMs };
   }
   return { kind: 'sourceChanged', fromSource: latest.fromSource, toSource: latest.toSource, atMs: latest.atMs, isLiveReplacement: latest.isLiveReplacement };
 }

@@ -39,7 +39,7 @@ export interface RunnersOverview {
 }
 
 async function readEntry(ctx: HubContext, runner: PairedRunner, cacheDir: string, nowMs: number): Promise<OverviewEntry> {
-  const status = await getRunnerLinkStatus(ctx.dir, runner.id, nowMs);
+  const status = await getRunnerLinkStatus(ctx.dir, runner.id);
   // Only a report taken since this machine was paired is its own: its name may have belonged to a machine that was removed.
   const snapshot = readLastProbe(cacheDir, runner.name, runner.pairedAtMs);
   const failure = readProbeFailure(cacheDir, runner.name, runner.pairedAtMs);

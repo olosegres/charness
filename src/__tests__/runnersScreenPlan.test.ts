@@ -121,12 +121,12 @@ describe('runnersScreenPlan: where a machine\'s link comes from', () => {
   });
 
   it('links that fight say so, with the addresses and the count', () => {
-    const text = screenOf(createEntry({ linkConcern: { kind: 'fighting', sources: ['198.51.100.7', '203.0.113.9'], changeCount: 3 } }));
+    const text = screenOf(createEntry({ linkConcern: { kind: 'fighting', sources: ['198.51.100.7', '203.0.113.9'], changeCount: 3, atMs: 7_000 } }));
     assert.match(text, /\n  ⚠️ Links from 198\.51\.100\.7, 203\.0\.113\.9 keep replacing each other \(3 switches in 10 minutes\)\. Two machines may be using this runner’s key: remove it and pair it again if that is not intended\.$/);
   });
 
   it('also under a machine that was never probed (a line of its own after the heading), and nothing without a concern', () => {
-    assert.ok(screenOf(createEntry({ probe: null, linkConcern: { kind: 'fighting', sources: ['a', 'b'], changeCount: 3 } })).includes('\n  ⚠️ Links from a, b keep replacing'));
+    assert.ok(screenOf(createEntry({ probe: null, linkConcern: { kind: 'fighting', sources: ['a', 'b'], changeCount: 3, atMs: 7_000 } })).includes('\n  ⚠️ Links from a, b keep replacing'));
     assert.ok(!screenOf(createEntry({ linkConcern: null })).includes('⚠️'));
     assert.ok(!screenOf(createEntry()).includes('⚠️'));
   });
@@ -135,7 +135,7 @@ describe('runnersScreenPlan: where a machine\'s link comes from', () => {
     const concerns = [
       { kind: 'sourceChanged' as const, fromSource: '198.51.100.7', toSource: '203.0.113.9', atMs: 7_000, isLiveReplacement: false },
       { kind: 'sourceChanged' as const, fromSource: '198.51.100.7', toSource: '203.0.113.9', atMs: 7_000, isLiveReplacement: true },
-      { kind: 'fighting' as const, sources: ['198.51.100.7', '203.0.113.9'], changeCount: 3 },
+      { kind: 'fighting' as const, sources: ['198.51.100.7', '203.0.113.9'], changeCount: 3, atMs: 7_000 },
     ];
     const lastLineOf = (concern: (typeof concerns)[number]): string => screenOf(createEntry({ linkConcern: concern })).split('\n').at(-1) ?? '';
     const english = runWithLocale('en', () => concerns.map(lastLineOf));

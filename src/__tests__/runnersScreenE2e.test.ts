@@ -26,6 +26,8 @@
  *     edit not found», which is settled, not retried), the second message is deleted and the instance's record is empty
  *   → a third code is used on a second machine while the bot is STOPPED: the restarted bot turns its first message into «paired» and
  *     deletes the second
+ *   → a runner's link that changes address (its status file says so) is said once in General and pinned — not at the next looks, not after a
+ *     restart — and the note stays on the list
  *   → thirty seeded machines (a registry written by hand, a snapshot each) make a list of several pages: Next / Previous edit the SAME
  *     message, every page fits Telegram's limit (the fake Bot API refuses a longer text, as the real one does), and a button on a later
  *     page pauses and removes the machine it names — by its place in the whole list and the revision — and nothing else
@@ -40,7 +42,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
-import { getRunnerLinkStatus } from '../runners/linkControl';
+import { getRunnerLinkStatus, writeLinkState } from '../runners/linkControl';
 import * as path from 'node:path';
 import { testNodeModulesEnvName } from '../runnerUtility/appInstall';
 import { readLastProbe } from '../remoteRun/runners';
@@ -565,6 +567,34 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.ok(!third.text.includes('cr1.'), 'the line is gone');
     await waitUntil(() => thirdPlain.isDeleted === true, 'the second pairing message to be deleted', 10_000);
     await waitUntil(() => readPairingStore().length === 0, 'the settled messages to leave the instance\'s record', 10_000);
+  });
+
+  it('a link that changes address is said ONCE in General, pinned — also across a restart of the bot — and its note stays on the list and in `ls`', async () => {
+    // The second machine has no gate holding a link here, so its status file is the test's to write (a gate would rewrite it at every heartbeat).
+    const [{ id: secondId, name: secondName }] = readPaired().runners;
+    const changedAtMs = Date.now();
+    writeLinkState(getRegistryDir(), secondId, {
+      pid: process.pid,
+      sinceMs: changedAtMs,
+      lastBeatMs: changedAtMs,
+      endedAtMs: null,
+      source: '203.0.113.9',
+      sourceChanges: [{ fromSource: '198.51.100.7', toSource: '203.0.113.9', atMs: changedAtMs, isLiveReplacement: true }],
+    });
+    const isNotice = (message: { text: string }): boolean => message.text.startsWith(`${secondName}: ⚠️ A link from 203.0.113.9 took over while the one from 198.51.100.7 was still up`);
+    await waitUntil(() => general.listMessages().some(isNotice), 'the bot to say it in General', 15_000);
+    const notice = general.listMessages().find(isNotice);
+    assert.ok(notice !== undefined);
+    await waitUntil(() => fakeTelegram.listPinnedMessageIds().includes(notice.message_id), 'the notice to be pinned — a pin pierces a muted topic', 10_000);
+    // Not again at the next looks of the watcher (5 s apart), nor after the bot restarts: what it told is its own record on disk.
+    await new Promise((resolve) => { setTimeout(resolve, 8_000); });
+    assert.equal(general.listMessages().filter(isNotice).length, 1, 'told once');
+    await getCharness().stop();
+    await startCharness();
+    await new Promise((resolve) => { setTimeout(resolve, 8_000); });
+    assert.equal(general.listMessages().filter(isNotice).length, 1, 'and not again after a restart');
+    const list = await general.sendAndAwaitReply('/runners', `${secondName} —`);
+    assert.match(list.text, /⚠️ A link from 203\.0\.113\.9 took over while the one from 198\.51\.100\.7 was still up/, 'the list keeps the note');
   });
 
   it('a long list is split over pages through the built bot: Next / Previous edit the same message within Telegram\'s limit, and a later page\'s buttons act on the machine they name', async () => {

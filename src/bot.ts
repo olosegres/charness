@@ -7808,6 +7808,10 @@ const { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressT
   hub: runnersHub,
   // The pairing messages this instance sent: its own record (the hub registry is shared by every instance of the OS user).
   pairingMessagesPath: path.join(resolveDataDir(), 'runner-pairing-messages.json'),
+  // What this instance has told about where the runners' links come from: once per new concern, pinned in General.
+  linkNoticesPath: path.join(resolveDataDir(), 'runner-link-notices.json'),
+  getGeneralKey: () => getOperatorGeneralKey(),
+  pinMessage: (key, messageId) => pinMessageQuiet(key, messageId, { disableNotification: false }),
   sweepExpiredCodes: async (nowMs) => { await sweepExpiredPairings(runnersHub, nowMs); },
   readRunnerHost: createRunnerHostReader(() => getInstanceSettingsPath(), (line) => console.error(line)),
   saveRunnerHost: (address) => saveInstanceSettingsChange(getInstanceSettingsPath(), { runnerHost: address }),

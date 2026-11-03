@@ -162,8 +162,8 @@ function describeCapabilities(probe: RunnerProbe, t: Translate): string {
   return t('runners.capabilitiesLine', { list: [...available, ...unavailable].join(' · ') });
 }
 
-/** The warning line under a machine whose link comes from another place than it did, or whose links fight. */
-function describeLinkConcern(concern: LinkConcern, t: Translate, formatTime: FormatTime): string {
+/** @description The warning about a machine whose link comes from another place than it did, or whose links fight — under its block on the screen, and in the message that tells it once. */
+export function buildLinkConcernNote(concern: LinkConcern, t: Translate, formatTime: FormatTime): string {
   if (concern.kind === 'fighting') return t('runners.linkFightNote', { sources: concern.sources.join(', '), count: concern.changeCount });
   const vars = { from: concern.fromSource, to: concern.toSource, time: formatTime(concern.atMs) };
   return t(concern.isLiveReplacement ? 'runners.linkSourceReplacedNote' : 'runners.linkSourceChangedNote', vars);
@@ -171,7 +171,7 @@ function describeLinkConcern(concern: LinkConcern, t: Translate, formatTime: For
 
 function buildEntryBlock(entry: RunnerScreenEntry, t: Translate, formatTime: FormatTime): string {
   const lines = buildEntryLines(entry, t, formatTime);
-  if (entry.linkConcern != null) lines.push(`  ${describeLinkConcern(entry.linkConcern, t, formatTime)}`);
+  if (entry.linkConcern != null) lines.push(`  ${buildLinkConcernNote(entry.linkConcern, t, formatTime)}`);
   return lines.join('\n');
 }
 

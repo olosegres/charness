@@ -18,6 +18,7 @@ import { getCaughtErrnoCode } from '../../../configDirFile';
 import { getActiveLang, t } from '../../../i18n';
 import { escapeHtmlText } from '../renderAgentHtml';
 import { keyFromString, keyToString, type SessionKey } from '../../../sessionKey';
+import { checkIsNewConcern, createLinkNotice, readLinkNotices, writeLinkNotices, type LinkNotice } from '../runnerLinkNotices';
 import { buildAdminBootstrapLine, buildBootstrapLine, defaultRunnerAccount } from '../../../runners/bootstrapLine';
 import { checkHubAddress, parseHubAddress, type HostKeyScanner, type HubAddress, type HubAddressCheck } from '../../../runners/hubAddress';
 import { findProposedHubAddress, formatHubAddress } from '../../../runners/hubAddressCandidates';
@@ -28,6 +29,8 @@ import {
 } from '../../../runners/hubPairing';
 import { HubRegistryError, readClosedCodes, readPairedFile, readPendingFile } from '../../../runners/hubRegistry';
 import { pairingLifetimeMinutes } from '../../../runners/pairingTiming';
+import { getLinkConcern } from '../../../runners/linkConcern';
+import { readLinkState } from '../../../runners/linkControl';
 import { removeRunnerAndEndItsWork } from '../../../runners/runnerRemoval';
 import { getServiceRemovalLines } from '../../../runners/serviceRemoval';
 import type { RunnersOverview } from '../../../runners/runnersOverview';
@@ -39,6 +42,7 @@ import {
   buildPairedText,
   buildPairingMessageParts,
   buildRemoveConfirmation,
+  buildLinkConcernNote,
   buildRemovalOutcomeText,
   buildServiceRemovalText,
   buildRunnersScreen,
@@ -83,6 +87,12 @@ export interface RunnersPorts extends Pick<BotCore, 'bot' | 'command' | 'replyTo
   getBotLabel: () => string;
   /** The file this instance keeps its unsettled pairing messages in (`DATA_DIR/runner-pairing-messages.json`). */
   pairingMessagesPath: string;
+  /** The file this instance keeps what it has told about the runners' links in (`DATA_DIR/runner-link-notices.json`). */
+  linkNoticesPath: string;
+  /** The key of the operator's General topic, where a runner's link that changed address is said; `null` when there is none to post in. */
+  getGeneralKey: () => SessionKey | null;
+  /** Pin a message of a topic, notifying (a pin is what pierces a muted topic); `false` when it could not. */
+  pinMessage: (key: SessionKey, messageId: number) => Promise<boolean>;
   /** Drop the expired pairing codes (and their key lines) from the shared hub registry. */
   sweepExpiredCodes: (nowMs: number) => Promise<void>;
   /** The registry, the links and the last snapshots — no ssh. */
@@ -145,6 +155,9 @@ export function createRunners(ports: RunnersPorts) {
   let lastGeneration = 0;
   let lastStoreProblem: string | null = null;
   let lastClosedProblem: string | null = null;
+  let lastNoticesProblem: string | null = null;
+  /** What was told this run, by runner id: a record that cannot be written must not make the next look tell it again. */
+  const toldThisRun = new Map<string, LinkNotice>();
 
   /** Claim `messageId` for a render: whatever started from an earlier claim no longer draws on it. Returns the claim. */
   function claimMessage(key: SessionKey, messageId: number, kind: ShownScreen['kind'], page: number): ShownScreen {
@@ -528,6 +541,40 @@ export function createRunners(ports: RunnersPorts) {
   }
 
   /**
+   * @description One look at where the runners' links come from (`runners/linkConcern.ts`): a link that came from another address than it did, or
+   * links that keep replacing each other, is posted ONCE in General and pinned — the operator runs every topic muted, and a pin pierces it. A concern
+   * is told apart by the time of its newest change (`runnerLinkNotices.ts`), so a look five seconds later, a restart or a longer fight tells nothing
+   * again; with no General to post in, or a send that failed, it is simply tried again at the next look. The `/runners` screen and `ls` keep the note
+   * until the runner is removed or paired again.
+   */
+  async function watchLinkConcernsOnce(): Promise<void> {
+    const { runners } = readPairedFile(hub.dir);
+    const { notices, problem } = readLinkNotices(ports.linkNoticesPath);
+    if (problem !== null && problem !== lastNoticesProblem) console.warn(`[${logTag}] ${problem}; what was told about the links is not known`);
+    lastNoticesProblem = problem;
+    const kept = notices.filter((notice) => runners.some((runner) => runner.id === notice.runnerId));
+    let record = kept;
+    let isRecordChanged = kept.length !== notices.length;
+    for (const runner of runners) {
+      const concern = getLinkConcern(readLinkState(hub.dir, runner.id)?.sourceChanges);
+      if (concern === null) continue;
+      const announced = toldThisRun.get(runner.id) ?? record.find((notice) => notice.runnerId === runner.id);
+      if (!checkIsNewConcern(concern, announced)) continue;
+      const generalKey = ports.getGeneralKey();
+      if (generalKey === null) continue;
+      const text = withThreadLocale(generalKey, () => `${runner.name}: ${buildLinkConcernNote(concern, t, formatRunnersTime)}`);
+      const messageId = await replyToThread(generalKey, text);
+      if (messageId === null) continue;
+      await ports.pinMessage(generalKey, messageId);
+      const told = createLinkNotice(runner.id, concern);
+      toldThisRun.set(runner.id, told);
+      record = [...record.filter((notice) => notice.runnerId !== runner.id), told];
+      isRecordChanged = true;
+    }
+    if (isRecordChanged) writeLinkNotices(ports.linkNoticesPath, record);
+  }
+
+  /**
    * Keep the `gate` wrapper that the runners' `authorized_keys` lines run pointing at THIS install (a Node upgrade or a moved checkout would
    * leave them pointing at nothing). Done only for an instance that has runners or open codes: another one touches nothing under `~/.config`.
    */
@@ -547,6 +594,7 @@ export function createRunners(ports: RunnersPorts) {
       if (isWatchTickRunning) return;
       isWatchTickRunning = true;
       watchPairingsOnce()
+        .then(() => watchLinkConcernsOnce())
         .then(() => { lastFailure = ''; })
         .catch((error) => {
           // A broken registry file fails every look: say it once, not every five seconds.
@@ -589,5 +637,5 @@ export function createRunners(ports: RunnersPorts) {
     }
   }
 
-  return { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressText, cancelRunnersAddressWait, startRunnersWatcher, watchPairingsOnce };
+  return { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressText, cancelRunnersAddressWait, startRunnersWatcher, watchPairingsOnce, watchLinkConcernsOnce };
 }

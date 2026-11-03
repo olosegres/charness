@@ -149,11 +149,15 @@ connection with it silently replaces the first — whoever holds the key could b
 answer with made-up results. So the gate records the address of each link (`parseSshClientSource`: the first word of sshd's `SSH_CLIENT`, an IP
 address and nothing else) in `link/<id>.json` (`source`), and when a link comes from another address than the one before it, the change
 (`sourceChanges`: from, to, when, and whether the old link was still up — its heartbeat younger than three check intervals — when the new one took its
-place; the last five are kept). `getLinkConcern` turns them into what is worth telling: **the source changed** (within a day: where from now,
+place; the last five are kept). `getLinkConcern` turns them into what is worth telling: **the source changed** (it does NOT expire: it stays until the runner is removed or paired again, the status file goes with it — where from now,
 where from before, when, and — for a live replacement — «if that is not your change of network, remove this runner and pair it again») or **a fight**
 (three changes within ten minutes: two links, two addresses, each replacing the other, the runner reconnecting by itself). `charness runners ls`
 puts it in parentheses on the machine's row and the `/runners` screen under its block (`runners.linkSourceChangedNote`, `…ReplacedNote`,
-`…FightNote`, every language). What it cannot see: two machines that share one address (one network behind one NAT show one source), and
+`…FightNote`, every language), and the bot SAYS it once: `watchLinkConcernsOnce` (every look of the watcher, with the pairing messages) posts ONE message
+in General per new concern — `<name>: <the note>` — and pins it (the operator runs every topic muted; a pin pierces it). What it already told is the
+instance's own record, `DATA_DIR/runner-link-notices.json` (`connectors/telegram/runnerLinkNotices.ts`): a concern is told apart by the time of its
+newest change, so the next look, a restart and the rest of a fight tell nothing again; with no General to post in, or a send that failed, it is tried
+again at the next look. What it cannot see: two machines that share one address (one network behind one NAT show one source), and
 a source that is unknown (no `SSH_CLIENT`, a status file an older gate wrote) never counts as a change.
 
 **Removing an always-on service** (`serviceRemoval.ts`). Removing a runner here leaves its two LaunchDaemons running on the machine until an admin

@@ -42,7 +42,7 @@ export interface RunnerLinkStatus {
   lastSeenMs: number | null;
   /** Where the link in force (or the last one) connects from; `null` when not known. */
   source: string | null;
-  /** What is worth telling about where the link comes from (`linkConcern.ts`); `null` when nothing is. */
+  /** What is worth telling about where the link comes from (`linkConcern.ts`) — it stays until the runner is removed or paired again; `null` when the link never changed address. */
   concern: LinkConcern | null;
 }
 
@@ -75,7 +75,7 @@ export function probeSocket(socketPath: string, timeoutMs: number = probeTimeout
   });
 }
 
-export async function getRunnerLinkStatus(dir: string, runnerId: string, nowMs: number = Date.now()): Promise<RunnerLinkStatus> {
+export async function getRunnerLinkStatus(dir: string, runnerId: string): Promise<RunnerLinkStatus> {
   const state = readLinkState(dir, runnerId);
   const isOnline = await probeSocket(getRunnerLinkPaths(dir, runnerId).socket);
   return {
@@ -83,7 +83,7 @@ export async function getRunnerLinkStatus(dir: string, runnerId: string, nowMs: 
     sinceMs: isOnline ? (state?.sinceMs ?? null) : null,
     lastSeenMs: state === null ? null : (state.endedAtMs ?? state.lastBeatMs),
     source: state?.source ?? null,
-    concern: getLinkConcern(state?.sourceChanges, nowMs),
+    concern: getLinkConcern(state?.sourceChanges),
   };
 }
 

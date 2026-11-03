@@ -17,7 +17,6 @@ import {
   maxRecordedSourceChanges,
   parseSshClientSource,
   recordLinkSource,
-  sourceChangeNoticeWindowMs,
   type LinkSourceChange,
   type PreviousLinkRecord,
 } from '../runners/linkConcern';
@@ -77,15 +76,19 @@ describe('recording where a link comes from', () => {
 });
 
 describe('what is worth telling', () => {
-  it('nothing without a change, or when the change is older than a day', () => {
-    assert.equal(getLinkConcern(undefined, nowMs), null);
-    assert.equal(getLinkConcern([], nowMs), null);
-    assert.equal(getLinkConcern([change(homeAddress, otherAddress, sourceChangeNoticeWindowMs)], nowMs), null);
-    assert.notEqual(getLinkConcern([change(homeAddress, otherAddress, sourceChangeNoticeWindowMs - 1)], nowMs), null);
+  it('nothing for a link that never changed address', () => {
+    assert.equal(getLinkConcern(undefined), null);
+    assert.equal(getLinkConcern([]), null);
   });
 
-  it('one change within a day: the source changed — newest change, from where, to where, and whether it took a live link\'s place', () => {
-    assert.deepEqual(getLinkConcern([change('192.0.2.1', homeAddress, 3 * 60 * 60 * 1000), change(homeAddress, otherAddress, 60 * 60 * 1000, true)], nowMs), {
+  it('a change tells for as long as the record holds it — a day, a week, a month — until the runner is removed or paired again: an impostor that took the link while the real machine slept must not be forgotten', () => {
+    for (const ageMs of [60 * 1000, 25 * 60 * 60 * 1000, 40 * 24 * 60 * 60 * 1000]) {
+      assert.equal(getLinkConcern([change(homeAddress, otherAddress, ageMs)])?.kind, 'sourceChanged', `${ageMs} ms`);
+    }
+  });
+
+  it('one change: the source changed — the newest change, from where, to where, when, and whether it took a live link\'s place', () => {
+    assert.deepEqual(getLinkConcern([change('192.0.2.1', homeAddress, 3 * 60 * 60 * 1000), change(homeAddress, otherAddress, 60 * 60 * 1000, true)]), {
       kind: 'sourceChanged',
       fromSource: homeAddress,
       toSource: otherAddress,
@@ -94,22 +97,26 @@ describe('what is worth telling', () => {
     });
   });
 
-  it('three changes within ten minutes are a fight — the two addresses and how many times', () => {
+  it('three changes within ten minutes of the newest are a fight — the two addresses, how many times, and the time of the newest — and it stays one: it does not turn into a plain change after ten minutes', () => {
     const burst = [change(homeAddress, otherAddress, 8 * 60 * 1000), change(otherAddress, homeAddress, 5 * 60 * 1000), change(homeAddress, otherAddress, 60 * 1000)];
     assert.equal(burst.length, linkFightChangeCount);
-    assert.deepEqual(getLinkConcern(burst, nowMs), { kind: 'fighting', sources: [homeAddress, otherAddress], changeCount: 3 });
+    assert.deepEqual(getLinkConcern(burst), { kind: 'fighting', sources: [homeAddress, otherAddress], changeCount: 3, atMs: nowMs - 60 * 1000 });
+    const longAfter = burst.map((entry) => ({ ...entry, atMs: entry.atMs - 3 * 24 * 60 * 60 * 1000 }));
+    assert.equal(getLinkConcern(longAfter)?.kind, 'fighting', 'judged against the newest change, not the clock');
   });
 
-  it('the same changes spread over hours are only a change — a machine that moved between networks twice is no fight', () => {
+  it('the same changes spread over hours are only a change — a machine that moved between networks twice is no fight — and a change after a fight is a change again', () => {
     const spread = [change(homeAddress, otherAddress, 5 * 60 * 60 * 1000), change(otherAddress, homeAddress, 3 * 60 * 60 * 1000), change(homeAddress, otherAddress, 60 * 60 * 1000)];
-    assert.equal(getLinkConcern(spread, nowMs)?.kind, 'sourceChanged');
-    const edge = [change(homeAddress, otherAddress, linkFightWindowMs), change(otherAddress, homeAddress, 5 * 60 * 1000), change(homeAddress, otherAddress, 60 * 1000)];
-    assert.equal(getLinkConcern(edge, nowMs)?.kind, 'sourceChanged', 'a change just outside the window is not in the burst');
+    assert.equal(getLinkConcern(spread)?.kind, 'sourceChanged');
+    const edge = [change(homeAddress, otherAddress, linkFightWindowMs + 60 * 1000), change(otherAddress, homeAddress, 5 * 60 * 1000), change(homeAddress, otherAddress, 60 * 1000)];
+    assert.equal(getLinkConcern(edge)?.kind, 'sourceChanged', 'a change outside the window of the newest is not in the burst');
+    const afterAFight = [change(homeAddress, otherAddress, 3 * 60 * 60 * 1000 + 8 * 60 * 1000), change(otherAddress, homeAddress, 3 * 60 * 60 * 1000 + 5 * 60 * 1000), change(homeAddress, otherAddress, 3 * 60 * 60 * 1000), change(otherAddress, thirdAddress, 60 * 1000)];
+    assert.equal(getLinkConcern(afterAFight)?.kind, 'sourceChanged');
   });
 
   it('names at most three addresses of a fight', () => {
     const burst = [change(homeAddress, otherAddress, 4 * 60 * 1000), change(otherAddress, thirdAddress, 3 * 60 * 1000), change(thirdAddress, '192.0.2.1', 2 * 60 * 1000)];
-    const concern = getLinkConcern(burst, nowMs);
+    const concern = getLinkConcern(burst);
     assert.equal(concern?.kind === 'fighting' ? concern.sources.length : -1, 3);
   });
 });
@@ -128,7 +135,7 @@ describe('the note of `charness runners ls`', () => {
   });
 
   it('says that links keep replacing each other, with the addresses and the number, and what to do', () => {
-    const note = formatLinkConcernNote({ kind: 'fighting', sources: [homeAddress, otherAddress], changeCount: 4 }, formatTime);
+    const note = formatLinkConcernNote({ kind: 'fighting', sources: [homeAddress, otherAddress], changeCount: 4, atMs: nowMs }, formatTime);
     assert.equal(note, `(links from ${homeAddress}, ${otherAddress} keep replacing each other: 4 switches in 10 minutes — two machines may be using this runner's key; remove it and pair it again if that is not intended)`);
   });
 });
