@@ -1,6 +1,6 @@
-import type { RunnerScreenEntry } from '../utils/runnersScreenPlan';
 import type { PendingPairing, RunnerServiceKind } from './hubRegistry';
 import { getCurrentServiceKind } from './runnerServiceKind';
+import type { OverviewEntry } from './runnersOverview';
 
 /**
  * @description The text of `charness runners ls`: one line per paired runner (name, online or offline since when, paused, OS, how it
@@ -22,12 +22,17 @@ export function formatListTimestamp(epochMs: number): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function describeConnection(entry: RunnerScreenEntry): string {
+function describeConnection(entry: OverviewEntry): string {
   if (entry.isOnline) return 'online';
   return entry.lastSeenMs === null ? 'offline, never connected' : `offline since ${formatListTimestamp(entry.lastSeenMs)}`;
 }
 
-export function formatRunnerListLine(entry: RunnerScreenEntry): string {
+/** What stands beside a row whose «how it is kept running» may be out of date: the machine is online but its report is older than its link (or missing) and it did not answer. */
+function describeDoubtfulReport(entry: OverviewEntry): string {
+  return `(${entry.probe === null ? 'no report yet' : 'last report from before its link started'}; it did not answer)`;
+}
+
+export function formatRunnerListLine(entry: OverviewEntry): string {
   const { runner, probe } = entry;
   const parts = [
     describeConnection(entry),
@@ -37,11 +42,11 @@ export function formatRunnerListLine(entry: RunnerScreenEntry): string {
     `charness ${runner.version}`,
     `paired ${formatListTimestamp(runner.pairedAtMs)}`,
   ];
-  return `${runner.name} — ${parts.join(' · ')}`;
+  return `${runner.name} — ${parts.join(' · ')}${entry.isOnline && entry.isReportDoubtful === true ? ` ${describeDoubtfulReport(entry)}` : ''}`;
 }
 
 /** @description The whole `ls` output. */
-export function formatRunnerList(entries: readonly RunnerScreenEntry[], pending: readonly PendingPairing[], nowMs: number): string {
+export function formatRunnerList(entries: readonly OverviewEntry[], pending: readonly PendingPairing[], nowMs: number): string {
   const lines = entries.length === 0 ? ['No runners paired yet. `charness runners pair --host <address>` makes a pairing line.'] : entries.map(formatRunnerListLine);
   const open = pending.filter((pairing) => pairing.expiresAtMs > nowMs);
   if (open.length > 0) {

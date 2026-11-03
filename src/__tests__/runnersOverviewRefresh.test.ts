@@ -18,6 +18,7 @@ import { getRunnerLinkPaths } from '../runners/hubPaths';
 import { writePairedFile } from '../runners/hubRegistry';
 import { writeLinkState } from '../runners/linkControl';
 import { readProbeFailure, removeLastProbe, writeProbeFailure } from '../remoteRun/runners';
+import { formatRunnerList } from '../runners/runnersList';
 import { probeRetryAfterMs, readRunnersOverview, refreshStaleSnapshots, staleRefreshDeadlineMs, type RunnersOverview } from '../runners/runnersOverview';
 import { createPairedRunnerFixture } from './remoteRunPairedKit';
 import { createHubFixture, type HubFixture } from './runnersTestKit';
@@ -202,7 +203,7 @@ describe('a machine that does not answer a listing', () => {
     const answering = { asked: [] as string[] };
     const probe: Parameters<typeof refreshStaleSnapshots>[4] = async (_ctx, overview) => {
       answering.asked.push(...overview.entries.map((entry) => entry.runner.name));
-      return overview;
+      return { ...overview, entries: overview.entries.map((entry) => ({ ...entry, probe: parseProbeOutput(systemServiceReport) })) };
     };
     const refreshed = await list(probe, nowMs);
     assert.deepEqual(answering.asked, ['mac'], 'the old silence (before this machine was paired) did not keep it from being asked');
@@ -217,5 +218,49 @@ describe('a machine that does not answer a listing', () => {
     assert.equal(readProbeFailure(cacheDir, 'mac'), null);
     assert.ok(!fs.existsSync(path.join(cacheDir, 'mac.probe.json')));
     removeLastProbe(cacheDir, 'mac');
+  });
+
+  describe('what the listing says beside it', () => {
+    const doubtfulNote = '(last report from before its link started; it did not answer)';
+
+    it('names the doubt on the row of an online machine whose report predates its link and that did not answer — at that listing and at every later one that does not ask again', async () => {
+      await arrangeStaleMac();
+      const { probe } = createSilentProbe();
+      const first = await list(probe, nowMs);
+      const later = await list(probe, nowMs + 60 * 1000);
+      for (const overview of [first, later]) {
+        const rows = formatRunnerList(overview.entries, [], nowMs).split('\n');
+        assert.match(rows[0], /^mac — online · .* · run by hand · .*/, 'the row still says what is last known');
+        assert.ok(rows[0].endsWith(doubtfulNote), rows[0]);
+        assert.ok(!rows[1].includes('did not answer'), `a machine that is not online carries no note: ${rows[1]}`);
+      }
+    });
+
+    it('says «no report yet» for an online machine that has never reported and did not answer', async () => {
+      pairBoth();
+      await putLinkUp('a1b2c3d4e5f6', linkStartMs);
+      const { probe } = createSilentProbe();
+      const refreshed = await list(probe, nowMs);
+      assert.ok(formatRunnerList(refreshed.entries, [], nowMs).split('\n')[0].endsWith('(no report yet; it did not answer)'));
+    });
+
+    it('is silent when the machine answered, when its report is newer than its link, and when it is offline', async () => {
+      pairBoth();
+      await putLinkUp('a1b2c3d4e5f6', linkStartMs);
+      await putLinkUp(secondRunnerId, linkStartMs);
+      saveReport('mac', linkStartMs - 1000, byHandReport);
+      saveReport('box', linkStartMs + 1, byHandReport);
+      const answers: Parameters<typeof refreshStaleSnapshots>[4] = async (_ctx, overview) => ({ ...overview, entries: overview.entries.map((entry) => ({ ...entry, probe: parseProbeOutput(systemServiceReport) })) });
+      const text = formatRunnerList((await list(answers, nowMs)).entries, [], nowMs);
+      assert.ok(!text.includes('did not answer'), text);
+      assert.ok(text.split('\n')[0].includes('system service'), 'the refreshed report is the one shown');
+    });
+
+    it('is also named for a machine the probe could not ask at all (it returns the entry as it was): that is no answer either', async () => {
+      await arrangeStaleMac();
+      const unasked: Parameters<typeof refreshStaleSnapshots>[4] = async (_ctx, overview) => overview;
+      const refreshed = await list(unasked, nowMs);
+      assert.ok(formatRunnerList(refreshed.entries, [], nowMs).split('\n')[0].endsWith(doubtfulNote));
+    });
   });
 });

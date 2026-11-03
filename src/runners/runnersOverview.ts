@@ -24,9 +24,11 @@ export const probeRetryAfterMs = 10 * 60 * 1000;
  * One machine of the overview. `isSnapshotStale`: it is online (its link is up) and its last report is older than that link — or it has none —
  * so what the report says (above all how it is kept running: a service installed after the report began the link anew) may no longer be true;
  * a machine that did not answer a listing's probe lately is not stale again until its link begins anew or {@link probeRetryAfterMs} passes.
+ * `isReportDoubtful`: it is online and its report is still older than its link (or missing) — it was not refreshed, because it did not answer
+ * or was not asked lately — so the listing says so beside its row instead of presenting the report as how things are now.
  * `linkSinceMs`: since when its link has been up, as its status file says (`null` = not known).
  */
-export type OverviewEntry = RunnerScreenEntry & { isSnapshotStale?: boolean; linkSinceMs?: number | null };
+export type OverviewEntry = RunnerScreenEntry & { isSnapshotStale?: boolean; isReportDoubtful?: boolean; linkSinceMs?: number | null };
 
 export interface RunnersOverview {
   /** The registry revision (`paired.json` `rev`): what a keyboard built from this overview is valid for. */
@@ -42,8 +44,16 @@ async function readEntry(ctx: HubContext, runner: PairedRunner, cacheDir: string
   const snapshot = readLastProbe(cacheDir, runner.name, runner.pairedAtMs);
   const failure = readProbeFailure(cacheDir, runner.name, runner.pairedAtMs);
   const isRecentlySilent = failure !== null && failure.linkSinceMs === status.sinceMs && nowMs - failure.attemptedAtMs < probeRetryAfterMs;
-  const isSnapshotStale = status.isOnline && !isRecentlySilent && (snapshot === null || (status.sinceMs !== null && snapshot.seenAtMs < status.sinceMs));
-  return { runner, isOnline: status.isOnline, lastSeenMs: status.lastSeenMs ?? snapshot?.seenAtMs ?? null, probe: snapshot?.probe ?? null, isSnapshotStale, linkSinceMs: status.sinceMs };
+  const isReportOutOfDate = status.isOnline && (snapshot === null || (status.sinceMs !== null && snapshot.seenAtMs < status.sinceMs));
+  return {
+    runner,
+    isOnline: status.isOnline,
+    lastSeenMs: status.lastSeenMs ?? snapshot?.seenAtMs ?? null,
+    probe: snapshot?.probe ?? null,
+    isSnapshotStale: isReportOutOfDate && !isRecentlySilent,
+    isReportDoubtful: isReportOutOfDate,
+    linkSinceMs: status.sinceMs,
+  };
 }
 
 /** @description The overview without any ssh call: the registry, which links are up, the last snapshots. */
@@ -109,8 +119,11 @@ export async function refreshStaleSnapshots(ctx: HubContext, overview: RunnersOv
     entries: overview.entries.map((entry) => {
       const answer = asked.entries.find((candidate) => candidate.runner.id === entry.runner.id);
       if (answer === undefined) return entry;
+      // An answer is a machine that is online AND handed back a report of its own: the probe returns an entry as it was when it could not
+      // ask it (an ssh that cannot be started safely), and that is no answer either.
+      const isAnswered = answer.isOnline && answer.probe !== entry.probe;
       if (!answer.isOnline) rememberSilence(cacheDir, entry, nowMs);
-      return { ...entry, probe: answer.probe, isSnapshotStale: false };
+      return { ...entry, probe: answer.probe, isSnapshotStale: false, isReportDoubtful: !isAnswered };
     }),
   };
 }
