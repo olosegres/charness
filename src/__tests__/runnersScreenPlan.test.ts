@@ -81,6 +81,53 @@ function createEntry(overrides: Partial<RunnerScreenEntry> = {}): RunnerScreenEn
   return { runner: createRunner(), isOnline: true, lastSeenMs: 2_000, probe: parseProbeOutput(probeText), ...overrides };
 }
 
+describe('runnersScreenPlan: where a machine\'s link comes from', () => {
+  const screenOf = (entry: RunnerScreenEntry): string => buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+
+  it('a machine whose link came from another address says so under its block: where from now, where from before, when', () => {
+    const text = screenOf(createEntry({ linkConcern: { kind: 'sourceChanged', fromSource: '198.51.100.7', toSource: '203.0.113.9', atMs: 7_000, isLiveReplacement: false } }));
+    assert.ok(text.endsWith('\n  ⚠️ Its link now comes from 203.0.113.9 (it came from 198.51.100.7 before, T7000).'), text);
+  });
+
+  it('a link that took the place of one still up says what to do', () => {
+    const text = screenOf(createEntry({ linkConcern: { kind: 'sourceChanged', fromSource: '198.51.100.7', toSource: '203.0.113.9', atMs: 7_000, isLiveReplacement: true } }));
+    assert.match(text, /\n  ⚠️ A link from 203\.0\.113\.9 took over while the one from 198\.51\.100\.7 was still up \(T7000\)\. If that is not you changing networks, remove this runner and pair it again: its key may be in use elsewhere\.$/);
+  });
+
+  it('links that fight say so, with the addresses and the count', () => {
+    const text = screenOf(createEntry({ linkConcern: { kind: 'fighting', sources: ['198.51.100.7', '203.0.113.9'], changeCount: 3 } }));
+    assert.match(text, /\n  ⚠️ Links from 198\.51\.100\.7, 203\.0\.113\.9 keep replacing each other \(3 switches in 10 minutes\)\. Two machines may be using this runner’s key: remove it and pair it again if that is not intended\.$/);
+  });
+
+  it('also under a machine that was never probed (a line of its own after the heading), and nothing without a concern', () => {
+    assert.ok(screenOf(createEntry({ probe: null, linkConcern: { kind: 'fighting', sources: ['a', 'b'], changeCount: 3 } })).includes('\n  ⚠️ Links from a, b keep replacing'));
+    assert.ok(!screenOf(createEntry({ linkConcern: null })).includes('⚠️'));
+    assert.ok(!screenOf(createEntry()).includes('⚠️'));
+  });
+
+  it('in every language the three notes name every address and time they are given, and leave no placeholder behind', () => {
+    const concerns = [
+      { kind: 'sourceChanged' as const, fromSource: '198.51.100.7', toSource: '203.0.113.9', atMs: 7_000, isLiveReplacement: false },
+      { kind: 'sourceChanged' as const, fromSource: '198.51.100.7', toSource: '203.0.113.9', atMs: 7_000, isLiveReplacement: true },
+      { kind: 'fighting' as const, sources: ['198.51.100.7', '203.0.113.9'], changeCount: 3 },
+    ];
+    const lastLineOf = (concern: (typeof concerns)[number]): string => screenOf(createEntry({ linkConcern: concern })).split('\n').at(-1) ?? '';
+    const english = runWithLocale('en', () => concerns.map(lastLineOf));
+    for (const locale of localeCodes) {
+      runWithLocale(locale, () => {
+        concerns.forEach((concern, index) => {
+          const line = lastLineOf(concern);
+          assert.ok(line.includes('203.0.113.9') && line.includes('198.51.100.7'), `${locale}: ${line}`);
+          assert.doesNotMatch(line, /\{[a-z]+\}/, `${locale}: no placeholder is left`);
+          if (concern.kind === 'fighting') assert.ok(line.includes('3'), `${locale}: the count`);
+          else assert.ok(line.includes('T7000'), `${locale}: the time`);
+          if (locale !== 'en') assert.notEqual(line, english[index], `${locale}: translated, not the English fallback`);
+        });
+      });
+    }
+  });
+});
+
 describe('runnersScreenPlan: the list', () => {
   it('an online machine shows its system, how it is kept running, hardware, jobs and what it can do — what it can do first, what it cannot with why', () => {
     const screen = buildRunnersScreen({ revision, entries: [createEntry()], openPairingExpiries: [], isChecking: false }, t, formatTime);

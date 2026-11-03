@@ -144,6 +144,18 @@ whose runner left the registry. An ssh keepalive (15 s × 3) ends a gate whose p
 never would. A runner is **online** when its socket accepts a connection (`linkControl.ts`); `link/<id>.json` says who holds it and
 when it was last seen. `remove` deletes the socket and stops the gate if the recorded pid still is that runner's gate (checked with `ps`).
 
+**Where a link comes from** (`linkConcern.ts`). A job on the runner's machine can read the runner's key, and «newest link wins» means a second
+connection with it silently replaces the first — whoever holds the key could be that machine, receive the project code the agents send to it and
+answer with made-up results. So the gate records the address of each link (`parseSshClientSource`: the first word of sshd's `SSH_CLIENT`, an IP
+address and nothing else) in `link/<id>.json` (`source`), and when a link comes from another address than the one before it, the change
+(`sourceChanges`: from, to, when, and whether the old link was still up — its heartbeat younger than three check intervals — when the new one took its
+place; the last five are kept). `getLinkConcern` turns them into what is worth telling: **the source changed** (within a day: where from now,
+where from before, when, and — for a live replacement — «if that is not your change of network, remove this runner and pair it again») or **a fight**
+(three changes within ten minutes: two links, two addresses, each replacing the other, the runner reconnecting by itself). `charness runners ls`
+puts it in parentheses on the machine's row and the `/runners` screen under its block (`runners.linkSourceChangedNote`, `…ReplacedNote`,
+`…FightNote`, every language). What it cannot see: two machines that share one address (one network behind one NAT show one source), and
+a source that is unknown (no `SSH_CLIENT`, a status file an older gate wrote) never counts as a change.
+
 **`runner-proxy <socket>`** is the `ProxyCommand` of the ssh calls: it joins ssh's stdio to the socket; nothing listening → «the runner
 is not connected» on stderr and exit 255 (ssh's own «connection failed»).
 

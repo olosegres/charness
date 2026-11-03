@@ -1,4 +1,5 @@
 import type { PendingPairing, RunnerServiceKind } from './hubRegistry';
+import { formatLinkConcernNote } from './linkConcern';
 import { getCurrentServiceKind } from './runnerServiceKind';
 import type { OverviewEntry } from './runnersOverview';
 
@@ -42,7 +43,8 @@ export function formatRunnerListLine(entry: OverviewEntry): string {
     `charness ${runner.version}`,
     `paired ${formatListTimestamp(runner.pairedAtMs)}`,
   ];
-  return `${runner.name} — ${parts.join(' · ')}${entry.isOnline && entry.isReportDoubtful === true ? ` ${describeDoubtfulReport(entry)}` : ''}`;
+  const notes = [...(entry.isOnline && entry.isReportDoubtful === true ? [describeDoubtfulReport(entry)] : []), ...(entry.linkConcern == null ? [] : [formatLinkConcernNote(entry.linkConcern, formatListTimestamp)])];
+  return `${runner.name} — ${parts.join(' · ')}${notes.map((note) => ` ${note}`).join('')}`;
 }
 
 /** @description The whole `ls` output. */

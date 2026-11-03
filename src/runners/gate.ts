@@ -21,6 +21,7 @@ import { createHubContext, type HubContext } from './hubPaths';
 import { HubRegistryError } from './hubRegistry';
 import { getHubPackage, openHubPackage } from './hubPackage';
 import { cancelPairing, checkIsPairingOpen, checkIsRunnerPaired, describeRunnerIdentity, redeemPairing, removePairedRunner } from './hubPairing';
+import { parseSshClientSource } from './linkConcern';
 import { cutRunnerLink } from './linkControl';
 
 /**
@@ -202,7 +203,7 @@ export async function runRunnerGate(argv: readonly string[], env: NodeJS.Process
     }
     switch (request) {
       case 'link':
-        return await runGateLink({ ctx, runnerId: invocation.runnerId, input: io.stdin, output: io.stdout, packageId: getPackageIdOrNull(ctx, io.log), log: io.log, timings: options.linkTimings, now });
+        return await runGateLink({ ctx, runnerId: invocation.runnerId, input: io.stdin, output: io.stdout, packageId: getPackageIdOrNull(ctx, io.log), source: parseSshClientSource(env.SSH_CLIENT), log: io.log, timings: options.linkTimings, now });
       case 'package':
         return await writePackage(ctx, io, 'package');
       case 'version':

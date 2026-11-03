@@ -9,6 +9,7 @@ import { formatGateAnswerHead, linkUserName, noPackageMarker } from './gateProto
 import { getRunnerLinkPaths, type HubContext } from './hubPaths';
 import { readHubKey } from './hubKey';
 import { readPairedFile } from './hubRegistry';
+import { recordLinkSource, type LinkSourceChange } from './linkConcern';
 import { readLinkState, writeLinkState, type LinkState } from './linkControl';
 import { parsePublicKey } from './sshKeys';
 
@@ -39,6 +40,8 @@ const socketMode = 0o600;
 const linkDirMode = 0o700;
 const socketSuffixBytes = 3;
 const keepaliveCountMax = 3;
+/** A link whose heartbeat is younger than this many check intervals was still up when a newer one took its place (see `linkConcern.ts`). */
+const liveLinkHeartbeats = 3;
 const sshHostKeyAlgorithm = 'ssh-ed25519';
 
 export interface GateLinkTimings {
@@ -60,6 +63,8 @@ export interface GateLinkParams {
   output: Writable;
   /** The id of the hub's current package, told to the runner in the marker line (`null` when it cannot be packed). */
   packageId: string | null;
+  /** The address the link connects from, as sshd told the gate (`parseSshClientSource`); `null`/absent when it did not. Recorded in the status file. */
+  source?: string | null;
   log: (line: string) => void;
   timings?: Partial<GateLinkTimings>;
   now?: () => number;
@@ -138,8 +143,20 @@ export function runGateLink(params: GateLinkParams): Promise<number> {
       resolve(isReady ? 0 : 1);
     };
 
+    // Where this link comes from, and whether that is another place than the link before it (and whether that one was still up): decided once, when
+    // this gate takes the socket over, from the status file the previous gate left, and written with every heartbeat.
+    let linkSource: string | null = params.source ?? null;
+    let sourceChanges: LinkSourceChange[] = [];
+    const recordSource = (): void => {
+      const previous = readLinkState(ctx.dir, runnerId);
+      const isPreviousLive = previous !== null && previous.endedAtMs === null && now() - previous.lastBeatMs < timings.checkIntervalMs * liveLinkHeartbeats;
+      const recorded = recordLinkSource(previous === null ? null : { source: previous.source ?? null, sourceChanges: previous.sourceChanges ?? [] }, params.source ?? null, now(), isPreviousLive);
+      linkSource = recorded.source;
+      sourceChanges = recorded.sourceChanges;
+    };
+
     const beat = (): void => {
-      writeState({ pid: process.pid, sinceMs, lastBeatMs: now(), endedAtMs: null });
+      writeState({ pid: process.pid, sinceMs, lastBeatMs: now(), endedAtMs: null, source: linkSource, sourceChanges });
     };
 
     const check = (): void => {
@@ -202,6 +219,7 @@ export function runGateLink(params: GateLinkParams): Promise<number> {
           return;
         }
         isReady = true;
+        recordSource();
         beat();
         checkTimer = setInterval(check, timings.checkIntervalMs);
       });

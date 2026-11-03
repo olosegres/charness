@@ -317,6 +317,18 @@ describe('runner list text', () => {
     assert.match(formatRunnerListLine({ runner: { ...runner, isPaused: false }, isOnline: false, lastSeenMs: null, probe: null }), /^box1 — offline, never connected · Ubuntu/);
   });
 
+  it('a row carries the note of a link that came from another address, or whose links fight — and nothing when the link is as it was', () => {
+    const base = { runner: { ...runner, isPaused: false }, isOnline: true, lastSeenMs: startMs, probe: null };
+    const changed = formatRunnerListLine({ ...base, linkConcern: { kind: 'sourceChanged', fromSource: '198.51.100.7', toSource: '203.0.113.9', atMs: startMs, isLiveReplacement: false } });
+    assert.match(changed, / \(its link now comes from 203\.0\.113\.9, before from 198\.51\.100\.7, \d{4}-\d{2}-\d{2} \d{2}:\d{2}\)$/);
+    const fight = formatRunnerListLine({ ...base, linkConcern: { kind: 'fighting', sources: ['198.51.100.7', '203.0.113.9'], changeCount: 3 } });
+    assert.match(fight, / \(links from 198\.51\.100\.7, 203\.0\.113\.9 keep replacing each other: 3 switches in 10 minutes — two machines may be using this runner's key;/);
+    assert.ok(!formatRunnerListLine({ ...base, linkConcern: null }).includes('link'), 'nothing to say');
+    assert.ok(!formatRunnerListLine(base).includes('(its link'), 'nothing to say');
+    const both = formatRunnerListLine({ ...base, isReportDoubtful: true, linkConcern: { kind: 'fighting', sources: ['a', 'b'], changeCount: 3 } });
+    assert.ok(both.indexOf('(no report yet; it did not answer)') > 0 && both.indexOf('(links from') > both.indexOf('(no report yet'), 'both notes, the report\'s first');
+  });
+
   it('how it is kept running: the latest probe first (live, or the last snapshot of a machine that is off), the registry only where the probe has none', () => {
     const registryByHand = { ...runner, serviceKind: 'foreground' } as const;
     assert.equal(getCurrentServiceKind(registryByHand, parseProbeOutput('service=user-service')), 'user-service');

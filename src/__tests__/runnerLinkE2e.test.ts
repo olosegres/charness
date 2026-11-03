@@ -154,6 +154,11 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     // The runner says «linked» before the hub counts it online (see `waitForHubToSeeLink`): the list is read once the hub sees the link.
     await waitForHubToSeeLink(runnerId);
     assert.match(runHubCli(layout, ['runners', 'ls']).stdout, / — online/);
+    // The gate that holds the link recorded where sshd says it connects from (`SSH_CLIENT`; the loopback here) — and nothing is worth a note yet.
+    const linkState = readJson<{ source: string | null; sourceChanges: unknown[] }>(path.join(layout.hubDir, 'link', `${runnerId}.json`));
+    assert.equal(linkState.source, '127.0.0.1');
+    assert.deepEqual(linkState.sourceChanges, []);
+    assert.doesNotMatch(runHubCli(layout, ['runners', 'ls']).stdout, /its link now comes from|keep replacing each other/);
     assert.equal((await waitForSsh('echo from-runner')).trim(), 'from-runner');
     const environment = sshThroughLink(layout, runnerId, 'echo "[$FLOW_SECRET][$HOME]"');
     assert.equal(environment.stdout.trim(), `[][${layout.runnerHome}]`);

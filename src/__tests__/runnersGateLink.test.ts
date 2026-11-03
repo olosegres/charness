@@ -129,10 +129,11 @@ interface RunningGate {
   transport: net.Socket;
 }
 
-async function startGate(runnerId: string, standIn: StandInRunner): Promise<RunningGate> {
+/** `source`: the address sshd would have told the gate the link connects from (`SSH_CLIENT`); absent = sshd said nothing. */
+async function startGate(runnerId: string, standIn: StandInRunner, source?: string): Promise<RunningGate> {
   const transport = await standIn.connect();
   const logs: string[] = [];
-  const done = runGateLink({ ctx: fixture.ctx, runnerId, input: transport, output: transport, packageId: '0123456789abcdef', log: (line) => logs.push(line), timings: fastTimings });
+  const done = runGateLink({ ctx: fixture.ctx, runnerId, input: transport, output: transport, packageId: '0123456789abcdef', source, log: (line) => logs.push(line), timings: fastTimings });
   return { done, logs, transport };
 }
 
@@ -249,6 +250,100 @@ describe('the gate\'s link', () => {
     second.transport.destroy();
     await settleWithin(second.done, 'the second gate to end');
     assert.equal(await probeSocket(paths.socket), false);
+  });
+
+  describe('where the link comes from', () => {
+    const homeAddress = '198.51.100.7';
+    const otherAddress = '203.0.113.9';
+
+    /** Start a gate from `source` and wait until it holds the link (its status file names its pid and the socket is there). */
+    async function holdLink(runner: PairedRunnerFixture, standIn: StandInRunner, source?: string): Promise<RunningGate> {
+      const gate = await startGate(runner.runnerId, standIn, source);
+      await waitUntil(() => readLinkState(fixture.ctx.dir, runner.runnerId)?.endedAtMs === null && fs.existsSync(getRunnerLinkPaths(fixture.ctx.dir, runner.runnerId).socket), 'the link to be held');
+      return gate;
+    }
+
+    it('is recorded in the link\'s status — and tells nothing while it stays the same', async () => {
+      const runner = await pairRunner();
+      const standIn = await startStandInRunner(runner);
+      const gate = await holdLink(runner, standIn, homeAddress);
+      const state = readLinkState(fixture.ctx.dir, runner.runnerId);
+      assert.equal(state?.source, homeAddress);
+      assert.deepEqual(state?.sourceChanges, []);
+      const status = await getRunnerLinkStatus(fixture.ctx.dir, runner.runnerId);
+      assert.equal(status.source, homeAddress);
+      assert.equal(status.concern, null);
+      gate.transport.destroy();
+      await settleWithin(gate.done, 'the gate to end');
+    });
+
+    it('is nothing when sshd did not say — and a link from an unknown place never counts as a change', async () => {
+      const runner = await pairRunner();
+      const standIn = await startStandInRunner(runner);
+      const first = await holdLink(runner, standIn, homeAddress);
+      const second = await startGate(runner.runnerId, standIn);
+      await settleWithin(first.done, 'the replaced gate to leave');
+      await waitUntil(() => readLinkState(fixture.ctx.dir, runner.runnerId)?.source === null, 'the second link\'s status');
+      assert.deepEqual(readLinkState(fixture.ctx.dir, runner.runnerId)?.sourceChanges, []);
+      second.transport.destroy();
+      await settleWithin(second.done, 'the second gate to end');
+    });
+
+    it('a link from ANOTHER address that takes the place of one still up is a change that says so — and the status says how to read it', async () => {
+      const runner = await pairRunner();
+      const standIn = await startStandInRunner(runner);
+      const first = await holdLink(runner, standIn, homeAddress);
+      const second = await startGate(runner.runnerId, standIn, otherAddress);
+      await settleWithin(first.done, 'the replaced gate to leave');
+      await waitUntil(() => readLinkState(fixture.ctx.dir, runner.runnerId)?.source === otherAddress, 'the second link\'s status');
+      const state = readLinkState(fixture.ctx.dir, runner.runnerId);
+      assert.deepEqual(state?.sourceChanges?.map((entry) => [entry.fromSource, entry.toSource, entry.isLiveReplacement]), [[homeAddress, otherAddress, true]]);
+      const status = await getRunnerLinkStatus(fixture.ctx.dir, runner.runnerId);
+      assert.deepEqual(status.concern && { ...status.concern, atMs: 0 }, { kind: 'sourceChanged', fromSource: homeAddress, toSource: otherAddress, atMs: 0, isLiveReplacement: true });
+      second.transport.destroy();
+      await settleWithin(second.done, 'the second gate to end');
+    });
+
+    it('a link from the SAME address that takes the place of the first is no change: the machine reconnected', async () => {
+      const runner = await pairRunner();
+      const standIn = await startStandInRunner(runner);
+      const first = await holdLink(runner, standIn, homeAddress);
+      const second = await startGate(runner.runnerId, standIn, homeAddress);
+      await settleWithin(first.done, 'the replaced gate to leave');
+      await waitUntil(() => readLinkState(fixture.ctx.dir, runner.runnerId)?.pid === process.pid && readLinkState(fixture.ctx.dir, runner.runnerId)?.endedAtMs === null, 'the second link\'s status');
+      assert.deepEqual(readLinkState(fixture.ctx.dir, runner.runnerId)?.sourceChanges, []);
+      second.transport.destroy();
+      await settleWithin(second.done, 'the second gate to end');
+    });
+
+    it('a link from another address AFTER the first ended is a change that took no live link\'s place, and the record outlives the gate that wrote it', async () => {
+      const runner = await pairRunner();
+      const standIn = await startStandInRunner(runner);
+      const first = await holdLink(runner, standIn, homeAddress);
+      first.transport.destroy();
+      await settleWithin(first.done, 'the first gate to end');
+      const second = await holdLink(runner, standIn, otherAddress);
+      assert.deepEqual(readLinkState(fixture.ctx.dir, runner.runnerId)?.sourceChanges?.map((entry) => entry.isLiveReplacement), [false]);
+      second.transport.destroy();
+      await settleWithin(second.done, 'the second gate to end');
+      assert.equal((await getRunnerLinkStatus(fixture.ctx.dir, runner.runnerId)).concern?.kind, 'sourceChanged', 'still told once the runner is offline');
+    });
+
+    it('links that keep replacing each other from two addresses are a fight', async () => {
+      const runner = await pairRunner();
+      const standIn = await startStandInRunner(runner);
+      let gate = await holdLink(runner, standIn, homeAddress);
+      for (const source of [otherAddress, homeAddress, otherAddress]) {
+        const next = await startGate(runner.runnerId, standIn, source);
+        await settleWithin(gate.done, 'the replaced gate to leave');
+        await waitUntil(() => readLinkState(fixture.ctx.dir, runner.runnerId)?.source === source, `the link from ${source}`);
+        gate = next;
+      }
+      const concern = (await getRunnerLinkStatus(fixture.ctx.dir, runner.runnerId)).concern;
+      assert.deepEqual(concern, { kind: 'fighting', sources: [homeAddress, otherAddress], changeCount: 3 });
+      gate.transport.destroy();
+      await settleWithin(gate.done, 'the last gate to end');
+    });
   });
 
   it('an ending gate never deletes the file at the link path: a socket another gate published meanwhile survives', async () => {
@@ -387,7 +482,7 @@ describe('link status and cutting', () => {
   });
 
   it('a runner that never connected is offline with no last seen', async () => {
-    assert.deepEqual(await getRunnerLinkStatus(fixture.ctx.dir, 'aaaaaaaaaaaa'), { isOnline: false, sinceMs: null, lastSeenMs: null });
+    assert.deepEqual(await getRunnerLinkStatus(fixture.ctx.dir, 'aaaaaaaaaaaa'), { isOnline: false, sinceMs: null, lastSeenMs: null, source: null, concern: null });
   });
 
   it('probeSocket tells a listening socket from a missing or dead one', async () => {

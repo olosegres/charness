@@ -18,6 +18,7 @@ import { formatGigabytes, runnerCapabilities, type RunnerProbe } from '../remote
 import type { PairedRunner, RunnerServiceKind } from '../runners/hubRegistry';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { getCurrentServiceKind } from '../runners/runnerServiceKind';
+import type { LinkConcern } from '../runners/linkConcern';
 import type { RunnerJobsStop } from '../runners/runnerRemoval';
 
 /** Telegram refuses callback data over 64 BYTES. */
@@ -101,6 +102,8 @@ export interface RunnerScreenEntry {
   lastSeenMs: number | null;
   /** The live probe while online, else the last snapshot taken when the machine was seen; `null` = never probed. */
   probe: RunnerProbe | null;
+  /** What is worth telling about where its link comes from (the address changed, or two links fight: `runners/linkConcern.ts`); absent / `null` = nothing. */
+  linkConcern?: LinkConcern | null;
 }
 
 export interface RunnersScreenModel {
@@ -159,7 +162,20 @@ function describeCapabilities(probe: RunnerProbe, t: Translate): string {
   return t('runners.capabilitiesLine', { list: [...available, ...unavailable].join(' · ') });
 }
 
+/** The warning line under a machine whose link comes from another place than it did, or whose links fight. */
+function describeLinkConcern(concern: LinkConcern, t: Translate, formatTime: FormatTime): string {
+  if (concern.kind === 'fighting') return t('runners.linkFightNote', { sources: concern.sources.join(', '), count: concern.changeCount });
+  const vars = { from: concern.fromSource, to: concern.toSource, time: formatTime(concern.atMs) };
+  return t(concern.isLiveReplacement ? 'runners.linkSourceReplacedNote' : 'runners.linkSourceChangedNote', vars);
+}
+
 function buildEntryBlock(entry: RunnerScreenEntry, t: Translate, formatTime: FormatTime): string {
+  const lines = buildEntryLines(entry, t, formatTime);
+  if (entry.linkConcern != null) lines.push(`  ${describeLinkConcern(entry.linkConcern, t, formatTime)}`);
+  return lines.join('\n');
+}
+
+function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: FormatTime): string[] {
   const { runner, probe } = entry;
   const status = entry.isOnline
     ? t('runners.statusOnline')
@@ -169,7 +185,7 @@ function buildEntryBlock(entry: RunnerScreenEntry, t: Translate, formatTime: For
   const serviceKind = getCurrentServiceKind(runner, probe);
   const heading = [status, ...(runner.isPaused ? [t('runners.pausedMark')] : []), describeSystem(entry), t(serviceKindKeys[serviceKind])].join(' · ');
   const lines = [`${runner.name} — ${heading}`];
-  if (probe === null) return lines.join('\n');
+  if (probe === null) return lines;
   if (entry.isOnline) {
     lines.push(
       `  ${t('runners.hardwareLine', { cpu: describeCpu(probe, t, true), ramTotal: formatGigabytes(probe.ramTotalMb), ramFree: formatGigabytes(probe.ramFreeMb), disk: formatGigabytes(probe.diskFreeMb) })}`,
@@ -179,7 +195,7 @@ function buildEntryBlock(entry: RunnerScreenEntry, t: Translate, formatTime: For
   } else {
     lines.push(`  ${t('runners.hardwareOldLine', { cpu: describeCpu(probe, t, false), ramTotal: formatGigabytes(probe.ramTotalMb), disk: formatGigabytes(probe.diskFreeMb) })}`);
   }
-  return lines.join('\n');
+  return lines;
 }
 
 /**

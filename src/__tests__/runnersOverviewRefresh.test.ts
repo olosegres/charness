@@ -78,6 +78,31 @@ describe('which machines are stale', () => {
   });
 });
 
+describe('where a machine\'s link comes from', () => {
+  it('the overview carries what is worth telling about it — read from the link\'s own status — and nothing for a link that never changed address', async () => {
+    pairBoth();
+    await putLinkUp('a1b2c3d4e5f6', linkStartMs);
+    await putLinkUp(secondRunnerId, linkStartMs);
+    writeLinkState(hub.ctx.dir, 'a1b2c3d4e5f6', {
+      pid: process.pid,
+      sinceMs: linkStartMs,
+      lastBeatMs: nowMs,
+      endedAtMs: null,
+      source: '203.0.113.9',
+      sourceChanges: [{ fromSource: '198.51.100.7', toSource: '203.0.113.9', atMs: nowMs - 60 * 1000, isLiveReplacement: true }],
+    });
+    writeLinkState(hub.ctx.dir, secondRunnerId, { pid: process.pid, sinceMs: linkStartMs, lastBeatMs: nowMs, endedAtMs: null, source: '198.51.100.7', sourceChanges: [] });
+    const overview = await readRunnersOverview(hub.ctx, cacheDir, nowMs);
+    assert.deepEqual(overview.entries.map((entry) => entry.linkConcern), [
+      { kind: 'sourceChanged', fromSource: '198.51.100.7', toSource: '203.0.113.9', atMs: nowMs - 60 * 1000, isLiveReplacement: true },
+      null,
+    ]);
+    const text = formatRunnerList(overview.entries, [], nowMs);
+    assert.match(text.split('\n')[0], /\(its link now comes from 203\.0\.113\.9, before from 198\.51\.100\.7, [\d-]+ [\d:]+, taking the place of a link that was still up/);
+    assert.doesNotMatch(text.split('\n')[1], /its link now comes from/);
+  });
+});
+
 describe('refreshing the stale ones for a listing', () => {
   /** A probe that records who it was asked about and answers for each as `answer` says. */
   function createProbe(answer: (name: string) => { isOnline: boolean; text: string }): { asked: string[]; probe: Parameters<typeof refreshStaleSnapshots>[4] } {

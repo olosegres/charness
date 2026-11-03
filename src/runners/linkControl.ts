@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { getCaughtErrnoCode, writeJsonFileAtomically } from '../configDirFile';
 import { getHubFilePaths, getRunnerLinkPaths } from './hubPaths';
 import { hubIdPattern } from './hubIds';
+import { getLinkConcern, linkSourceChangeSchema, maxRecordedSourceChanges, maxSourceLength, type LinkConcern } from './linkConcern';
 
 /**
  * @description The hub's view of a runner's link: the gate that holds it writes `link/<id>.json` (its pid, since when, a heartbeat) and
@@ -24,6 +25,10 @@ const linkStateSchema = z.strictObject({
   lastBeatMs: z.number().int().nonnegative(),
   /** Set by the gate when it leaves; `null` while it holds the link. */
   endedAtMs: z.number().int().nonnegative().nullable(),
+  /** Where the link connects from (sshd's `SSH_CLIENT`); `null` when sshd did not say. Absent in a file an older gate wrote. */
+  source: z.string().max(maxSourceLength).nullable().optional(),
+  /** The last times a link came from another address than the one before it (`linkConcern.ts`). */
+  sourceChanges: z.array(linkSourceChangeSchema).max(maxRecordedSourceChanges).optional(),
 });
 
 /** @name LinkState @description `link/<id>.json`. */
@@ -35,6 +40,10 @@ export interface RunnerLinkStatus {
   sinceMs: number | null;
   /** The last time the hub knew the link alive; `null` if it never was. */
   lastSeenMs: number | null;
+  /** Where the link in force (or the last one) connects from; `null` when not known. */
+  source: string | null;
+  /** What is worth telling about where the link comes from (`linkConcern.ts`); `null` when nothing is. */
+  concern: LinkConcern | null;
 }
 
 export function readLinkState(dir: string, runnerId: string): LinkState | null {
@@ -66,13 +75,15 @@ export function probeSocket(socketPath: string, timeoutMs: number = probeTimeout
   });
 }
 
-export async function getRunnerLinkStatus(dir: string, runnerId: string): Promise<RunnerLinkStatus> {
+export async function getRunnerLinkStatus(dir: string, runnerId: string, nowMs: number = Date.now()): Promise<RunnerLinkStatus> {
   const state = readLinkState(dir, runnerId);
   const isOnline = await probeSocket(getRunnerLinkPaths(dir, runnerId).socket);
   return {
     isOnline,
     sinceMs: isOnline ? (state?.sinceMs ?? null) : null,
     lastSeenMs: state === null ? null : (state.endedAtMs ?? state.lastBeatMs),
+    source: state?.source ?? null,
+    concern: getLinkConcern(state?.sourceChanges, nowMs),
   };
 }
 
