@@ -226,6 +226,10 @@ export interface GuiAgent {
   getStartedAtMs: () => number;
 }
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : 'unknown error';
+}
+
 function describeExit(code: number | null, signal: NodeJS.Signals | null): number {
   if (code !== null) return code;
   const signalNumber = signal === null ? undefined : os.constants.signals[signal];
@@ -238,6 +242,13 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
   const running = new Map<string, RunningStep>();
   /** Process groups of steps nobody runs any more (an earlier agent's, a vanished script's), asked to end and not yet gone: killed after the grace. */
   const groupsEnding: Array<{ pgid: number; recordedStart: string; terminatedAtMs: number }> = [];
+  /**
+   * Requests whose handling failed. The failure is told ONCE, however many looks it takes to answer: the script that waits for the step keeps seeing the agent beat,
+   * so it never cuts the step itself — the only way it stops waiting is an answer, and a request left without one would hang its job (and hold its project's lock).
+   */
+  const failedRequests = new Map<string, { isAnswerPending: boolean; isAnswerFailureTold: boolean }>();
+  /** Per request, the pid of its job script whose start time was checked: a pid is not handed out while its process lives, so one check is all there is to do. */
+  const verifiedOwners = new Map<string, number>();
   let lastBeatAtMs = 0;
 
   /**
@@ -264,12 +275,42 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
     writeIntoRequest(requestDir, requestFileNames.exit, `${code}\n`);
   };
 
-  /** Answer «the step could not be started» — and if even that cannot be written, say it: the script cuts the step by itself when it sees the heartbeat go. */
-  const answerCannotStart = (requestDir: string): void => {
+  /**
+   * Answer a failed request «the step could not be started» (126). Where even that cannot be written (a full disk) the answer stays pending and is tried again on every
+   * look — told once — until it goes through. Nothing is answered for a request whose step runs.
+   */
+  const answerFailedRequest = (id: string, requestDir: string): void => {
+    const failed = failedRequests.get(id);
+    if (failed === undefined || running.has(id)) return;
+    if (fs.existsSync(path.join(requestDir, requestFileNames.exit))) {
+      failed.isAnswerPending = false;
+      return;
+    }
     try {
       writeExit(requestDir, cannotStartExitCode);
+      failed.isAnswerPending = false;
     } catch (error) {
-      deps.reportError(`the answer of a step that could not be started could not be written (${error instanceof Error ? error.message : 'unknown error'})`);
+      if (failed.isAnswerFailureTold) return;
+      failed.isAnswerFailureTold = true;
+      deps.reportError(`the answer of request ${id} could not be written (${describeError(error)}): it is tried again on every look`);
+    }
+  };
+
+  /** A request whose handling threw: told once (`what` names the failure), answered 126. */
+  const failRequest = (id: string, requestDir: string, what: string, error: unknown): void => {
+    if (!failedRequests.has(id)) {
+      failedRequests.set(id, { isAnswerPending: true, isAnswerFailureTold: false });
+      deps.reportError(`${what} (${id}: ${describeError(error)})`);
+    }
+    answerFailedRequest(id, requestDir);
+  };
+
+  /** The step's own end, written from an event handler: a throw there would take the whole agent down, so a write that fails is a failed request instead. */
+  const answerStepEnd = (id: string, requestDir: string, code: number): void => {
+    try {
+      writeExit(requestDir, code);
+    } catch (error) {
+      failRequest(id, requestDir, 'the end of a step could not be written down', error);
     }
   };
 
@@ -299,13 +340,20 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
     return deps.isGroupAlive(pgid);
   };
 
-  /** Is the job script of a request still there? Its pid alive AND, where the script recorded its start, still that process. */
-  const checkIsOwnerAlive = (request: StepRequest): boolean => {
+  /**
+   * Is the job script of a request still there? Its pid alive AND, where the script recorded its start, that process: the start is compared on the first look at the
+   * request (a pid of an earlier boot or an earlier script may name someone else by then), and no more after it matched — `ps` is a fork the agent waits for, and it has a
+   * heartbeat to write.
+   */
+  const checkIsOwnerAlive = (id: string, request: StepRequest): boolean => {
     if (request.ownerPid === null) return true;
     if (!deps.isProcessAlive(request.ownerPid)) return false;
-    if (request.ownerStart === null) return true;
+    if (request.ownerStart === null || verifiedOwners.get(id) === request.ownerPid) return true;
     const current = deps.readProcessStart(request.ownerPid);
-    return current.kind === 'unknown' || (current.kind === 'known' && current.text === request.ownerStart);
+    if (current.kind === 'unknown') return true;
+    if (current.kind !== 'known' || current.text !== request.ownerStart) return false;
+    verifiedOwners.set(id, request.ownerPid);
+    return true;
   };
 
   const getFileTimeMs = (filePath: string): number | null => {
@@ -365,7 +413,7 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
       if (fs.existsSync(path.join(requestDir, requestFileNames.exit)) || !fs.existsSync(path.join(requestDir, requestFileNames.started))) continue;
       endGroupOfOrphan(requestDir);
       const request = readStepRequest(requestDir);
-      if (request !== null && checkIsOwnerAlive(request)) {
+      if (request !== null && checkIsOwnerAlive(id, request)) {
         writeIntoRequest(requestDir, requestFileNames.cut, '');
         writeExit(requestDir, cutStepExitCode);
       } else {
@@ -377,39 +425,41 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
   /** Record the group of a step just started — its leader's start time first, then the id, so that an id is never there without the start that vouches for it. */
   const recordGroup = (requestDir: string, pgid: number): 'recorded' | 'skipped' | 'gone' => {
     const start = deps.readProcessStart(pgid);
-    if (start.kind !== 'known') return 'skipped';
+    // The leader has exited already: nothing to record, its own end is the answer. A start that cannot be READ is another matter — a group nobody can verify is a group no cut may ever
+    // signal, so it is a group that cannot be recorded.
+    if (start.kind === 'none') return 'skipped';
+    if (start.kind === 'unknown') throw new Error('the start of the step\'s leader could not be read (`ps` did not answer)');
     if (!writeIntoRequest(requestDir, requestFileNames.pgidStart, `${start.text}\n`)) return 'gone';
     return writeIntoRequest(requestDir, requestFileNames.pgid, `${pgid}\n`) ? 'recorded' : 'gone';
   };
 
   const startRequest = (id: string, requestDir: string, request: StepRequest): void => {
-    // The script cut its step and removed the folder in the meantime: nothing is left to run for.
+    // The script cut its step and removed the folder in the meantime: nothing is left to run for. A write that fails any other way throws to the look, which answers 126.
     if (!writeIntoRequest(requestDir, requestFileNames.started, `${deps.now()}\n`)) return;
-    const env: NodeJS.ProcessEnv = { ...deps.readEnv(), ...(request.locale === '' ? {} : { LC_ALL: request.locale }), ...parseJobEnvLines(request.jobEnvText) };
     let logFd: number | null = null;
     try {
+      const env: NodeJS.ProcessEnv = { ...deps.readEnv(), ...(request.locale === '' ? {} : { LC_ALL: request.locale }), ...parseJobEnvLines(request.jobEnvText) };
       logFd = fs.openSync(request.logFile, 'a');
       const child = deps.startStep({ directory: request.directory, command: request.command, env, logFd });
       const step: RunningStep = { child, terminatedAtMs: null, isKilled: false };
       running.set(id, step);
       child.once('error', () => {
         if (running.get(id) === step) running.delete(id);
-        writeExit(requestDir, cannotStartExitCode);
+        answerStepEnd(id, requestDir, cannotStartExitCode);
       });
       child.once('close', (code, signal) => {
         if (running.get(id) !== step) return;
         running.delete(id);
-        writeExit(requestDir, describeExit(code, signal));
+        answerStepEnd(id, requestDir, describeExit(code, signal));
       });
       let recording: 'recorded' | 'skipped' | 'gone' = 'skipped';
       try {
         if (child.pid !== undefined) recording = recordGroup(requestDir, child.pid);
       } catch (error) {
-        // The group cannot be recorded (a full disk, no permission): it must not run where no cut could find it. It ends here, and the answer is «could not start».
+        // The group cannot be recorded (a full disk, no permission, a start nobody could read): it must not run where no cut could find it. It ends here, and the answer is «could not start».
         running.delete(id);
         if (child.pid !== undefined) deps.signalGroup(child.pid, 'SIGKILL');
-        deps.reportError(`the process group of a step could not be recorded (${error instanceof Error ? error.message : 'unknown error'}): the step was ended`);
-        answerCannotStart(requestDir);
+        failRequest(id, requestDir, 'the process group of a step could not be recorded, so the step was ended', error);
         return;
       }
       if (recording === 'gone') {
@@ -417,8 +467,8 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
         running.delete(id);
         if (child.pid !== undefined) deps.signalGroup(child.pid, 'SIGKILL');
       }
-    } catch {
-      answerCannotStart(requestDir);
+    } catch (error) {
+      failRequest(id, requestDir, 'a step could not be started', error);
     } finally {
       if (logFd !== null) fs.closeSync(logFd);
     }
@@ -446,7 +496,7 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
     }
     const request = readStepRequest(requestDir);
     if (request === null) return;
-    const isOwnerGone = !checkIsOwnerAlive(request);
+    const isOwnerGone = !checkIsOwnerAlive(id, request);
     if (step !== undefined) {
       if (isOwnerGone || fs.existsSync(path.join(requestDir, requestFileNames.kill)) || step.terminatedAtMs !== null) endStep(step);
       return;
@@ -456,6 +506,11 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
     if (isOwnerGone) {
       if (!fs.existsSync(path.join(requestDir, requestFileNames.exit))) endGroupOfOrphan(requestDir);
       fs.rmSync(requestDir, { recursive: true, force: true });
+      return;
+    }
+    const failed = failedRequests.get(id);
+    if (failed !== undefined) {
+      if (failed.isAnswerPending) answerFailedRequest(id, requestDir);
       return;
     }
     if (!fs.existsSync(path.join(requestDir, requestFileNames.started)) && !fs.existsSync(path.join(requestDir, requestFileNames.exit))) startRequest(id, requestDir, request);
@@ -477,8 +532,12 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
         try {
           lookAtRequest(id);
         } catch (error) {
-          deps.reportError(`a request of the login session's agent could not be handled (${id}: ${error instanceof Error ? error.message : 'unknown error'})`);
+          failRequest(id, path.join(paths.guiRequestsDir, id), 'a request of the login session\'s agent could not be handled', error);
         }
+      }
+      // What is remembered of a request goes with its folder.
+      for (const remembered of [failedRequests, verifiedOwners]) {
+        for (const id of remembered.keys()) if (!ids.includes(id)) remembered.delete(id);
       }
     },
     getRunningCount: () => running.size,

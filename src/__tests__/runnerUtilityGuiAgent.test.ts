@@ -461,7 +461,7 @@ describe('a folder on disk is not trusted: an earlier boot, a reused pid', () =>
     assert.equal(agent.getRunningCount(), 0);
   });
 
-  it('a request that cannot be handled at all is told and the agent goes on with the others: one bad folder never takes the agent down', async () => {
+  it('a step whose environment cannot be read is answered 126 and told ONCE — a script whose agent keeps beating would wait for ever — and the agent goes on with the others', async () => {
     const reported: string[] = [];
     let isFirstRead = true;
     const agent = createGuiAgent(paths, createDeps({
@@ -475,12 +475,97 @@ describe('a folder on disk is not trusted: an earlier boot, a reused pid', () =>
       },
     }));
     const first = writeRequest('job38.1', { command: 'exit 0' });
-    agent.tick();
-    assert.match(reported.join('\n'), /could not be handled \(job38\.1: the environment cannot be read\)/);
-    fs.rmSync(first.dir, { recursive: true, force: true });
+    for (let look = 0; look < 6; look += 1) agent.tick();
+    assert.equal(readExit(first.dir), '126', 'the script that waits for this step is told it could not start');
+    assert.equal(reported.length, 1, reported.join(' | '));
+    assert.match(reported[0], /could not be started \(job38\.1: the environment cannot be read\)/);
     const second = writeRequest('job38.2', { command: 'exit 6' });
     await tickUntil(agent, 'the other request to be answered', () => readExit(second.dir) !== null);
     assert.equal(readExit(second.dir), '6');
+  });
+
+  it('a write that fails with anything but «the folder is gone» (a full disk) is told once, nothing runs, and the script is answered 126 the moment the answer can be written', async () => {
+    const marker = path.join(root, 'blocked-ran');
+    const reported: string[] = [];
+    const agent = createGuiAgent(paths, createDeps({ reportError: (line) => reported.push(line) }));
+    const { dir } = writeRequest('job39.1', { command: `touch "${marker}"` });
+    // A folder where each temp file of a write goes: the write fails with something that is not ENOENT, for `started` and for the answer alike.
+    const blockedStarted = path.join(dir, `started.${process.pid}.tmp`);
+    const blockedExit = path.join(dir, `exit.${process.pid}.tmp`);
+    fs.mkdirSync(blockedStarted);
+    fs.mkdirSync(blockedExit);
+    for (let look = 0; look < 8; look += 1) agent.tick();
+    assert.equal(readExit(dir), null, 'the answer cannot be written yet');
+    const toldBefore = reported.length;
+    assert.ok(toldBefore >= 1 && toldBefore <= 2, `the failure and the unwritten answer are told once each: ${reported.join(' | ')}`);
+    for (let look = 0; look < 8; look += 1) agent.tick();
+    assert.equal(reported.length, toldBefore, 'and not again on every look');
+    fs.rmSync(blockedExit, { recursive: true });
+    await tickUntil(agent, 'the answer once it can be written', () => readExit(dir) !== null);
+    assert.equal(readExit(dir), '126');
+    assert.equal(fs.existsSync(marker), false, 'the step never ran');
+  });
+
+  it('an end of a step that cannot be written down (a full disk) is no crash of the agent: it is told and the script is answered 126 as soon as that can be written', async () => {
+    const failures: Error[] = [];
+    const onUncaught = (error: Error): void => { failures.push(error); };
+    process.on('uncaughtException', onUncaught);
+    try {
+      const reported: string[] = [];
+      const agent = createGuiAgent(paths, createDeps({ reportError: (line) => reported.push(line) }));
+      const { dir } = writeRequest('job40.1', { command: 'exit 5' });
+      const blockedExit = path.join(dir, `exit.${process.pid}.tmp`);
+      fs.mkdirSync(blockedExit);
+      await tickUntil(agent, 'the failed answer to be told', () => reported.length > 0);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.deepEqual(failures, [], 'no uncaught exception from the step\'s close event');
+      fs.rmSync(blockedExit, { recursive: true });
+      await tickUntil(agent, 'the answer once it can be written', () => readExit(dir) !== null);
+      assert.equal(readExit(dir), '126');
+    } finally {
+      process.off('uncaughtException', onUncaught);
+    }
+  });
+
+  it('a step whose leader\'s start time cannot be read at start-up (`ps` timed out) is ended like one that cannot be recorded — no group id, no cut could ever find it — and answered 126; a leader that is already gone is simply not recorded', async () => {
+    const marker = path.join(root, 'unknown-start-survived');
+    const reported: string[] = [];
+    const agent = createGuiAgent(paths, createDeps({ reportError: (line) => reported.push(line), readProcessStart: () => ({ kind: 'unknown' }) }));
+    const { dir } = writeRequest('job41.1', { command: `sleep 1; touch "${marker}"` });
+    await tickUntil(agent, 'the answer', () => readExit(dir) !== null);
+    assert.equal(readExit(dir), '126');
+    assert.match(reported.join('\n'), /the process group of a step could not be recorded/);
+    assert.match(reported.join('\n'), /the start of the step's leader could not be read/);
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    assert.equal(fs.existsSync(marker), false, 'the step was ended — what it would have done a second later did not happen');
+
+    const goneAgent = createGuiAgent(paths, createDeps({ reportError: (line) => reported.push(line), readProcessStart: () => ({ kind: 'none' }) }));
+    const quick = writeRequest('job41.2', { command: 'exit 3' });
+    await tickUntil(goneAgent, 'the exit code', () => readExit(quick.dir) !== null);
+    assert.equal(readExit(quick.dir), '3', 'a leader that has exited already is no failure: its own end is the answer');
+  });
+
+  it('the start time of the job script\'s pid is checked once per request, not on every look: while the process is alive the pid cannot belong to anyone else', async () => {
+    const own = readProcessStart(process.pid);
+    assert.equal(own.kind, 'known');
+    const ownStart = own.kind === 'known' ? own.text : '';
+    const ownerLooks: number[] = [];
+    const agent = createGuiAgent(paths, createDeps({
+      readProcessStart: (pid) => {
+        if (pid === process.pid) ownerLooks.push(pid);
+        return readProcessStart(pid);
+      },
+    }));
+    const waiting = writeRequest('job42.1', { command: 'exec sleep 300' });
+    fs.writeFileSync(path.join(waiting.dir, 'owner-start'), `${ownStart}\n`);
+    for (let look = 0; look < 10; look += 1) {
+      agent.tick();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(agent.getRunningCount(), 1);
+    assert.equal(ownerLooks.length, 1, 'one look at the start time for ten looks at the request');
+    fs.writeFileSync(path.join(waiting.dir, 'kill'), '');
+    await tickUntil(agent, 'the step to be ended', () => readExit(waiting.dir) !== null);
   });
 });
 

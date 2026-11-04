@@ -219,9 +219,11 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   signalled and no step run. Otherwise a group is signalled only while the process with that pid still has the start recorded beside the id (`pgid-start`, written
   FIRST, from `ps -o lstart=` in the C locale, whitespace squeezed — the agent and `runner.sh` read it the same way), or while no process has it but the group still
   has members (a pid is not handed out while a group carries it); no recorded start, a `ps` that cannot be asked, a damaged id (empty, text, 0, 1): not signalled.
-  The job script's pid is the same (`owner`, `owner-start`): a live pid with another start is a script that is gone. A group that cannot be recorded is ended at
-  once and answered 126; a request folder that is gone is no error anywhere (files are written without making folders), and one request that cannot be handled
-  is told and never takes the agent down. A `needs-ios` step with no agent beating is refused at the step (no request is written).
+  The job script's pid is the same (`owner`, `owner-start`): a live pid with another start is a script that is gone — compared on the first look at a request, not
+  on every one (a live pid is not handed out again). A group that cannot be recorded — its leader's start cannot be read included — is ended at once and answered
+  126; a request folder that is gone is no error anywhere (files are written without making folders). A request that cannot be handled at all (an environment that
+  cannot be read, a write that fails for want of space) is told ONCE and answered 126, again on every look until the answer is written — the script keeps seeing the
+  agent beat, so an unanswered request would hang its job — and never takes the agent down. A `needs-ios` step with no agent beating is refused at the step (no request is written).
 - **No session** → a job that does not need iOS runs in the daemon as before; `submit` / `lease` refuse a `needs-ios` job with `ios build: needs a login of <account>`, a queued one refuses at its start, `probe` says
   `cap_ios=no` with the same words (ahead of the boot check's own answer). A runner kept running as a user service, or by hand, is in a session already: none of this applies.
 - **The link of an always-on Mac runs no Simulator check** (`checkIsLoginSessionAgentRunner`): the agent does, from the session where the Simulator can boot.
