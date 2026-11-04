@@ -19,6 +19,7 @@ import { createRunnerClient, type RunnerClient } from '../remoteRun/runnerClient
 import { probeRunners, readLastProbe } from '../remoteRun/runners';
 import { runSshCommand } from '../remoteRun/ssh';
 import { checkIsProcessAlive, killRecordedProcess, readRecordedPid } from './recordedProcess';
+import { trackLongTimers } from './timerTracking';
 
 const probeText = 'os=Linux\nos_name=Ubuntu\nos_version=24.04\narch=x86_64\nkernel=6.8.0\ncpu_cores=4\ncpu_threads=8\npueue=4.0.4\ncap_android=no\ncap_ios=no\ncap_docker=no\ncap_playwright=no\n';
 const lastSeenAtMs = Date.UTC(2026, 9, 30, 14, 2);
@@ -141,10 +142,9 @@ describe('probeRunners under one deadline', () => {
   });
 
   it('the deadline timer is cleared when everyone answered first: nothing keeps the process alive after the view', async () => {
-    const timeoutsBefore = process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
-    const reports = await probeRunners([createFakeClient({ name: 'a' }), createFakeClient({ name: 'b' })], Date.now(), 60_000);
+    const { result: reports, leftCount } = await trackLongTimers(50_000, () => probeRunners([createFakeClient({ name: 'a' }), createFakeClient({ name: 'b' })], Date.now(), 60_000));
     assert.deepEqual(reports.map((report) => report.status), ['online', 'online']);
-    assert.equal(process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length, timeoutsBefore);
+    assert.equal(leftCount, 0, 'the 60 s deadline timer is cleared, not left to keep the process alive');
   });
 });
 
@@ -303,16 +303,17 @@ describe('runSshCommand with an outside deadline', () => {
 
   it('the signal kills the ssh process at once and the result says it was cut off; its own long timer does not outlive it', { skip: sshSkip }, async () => {
     const controller = new AbortController();
-    const timeoutsBefore = process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
     const startedAt = Date.now();
-    const pending = runSshCommand({ runner: createHungRunner(), cacheDir, remoteCommand: 'true', timeoutMs: 120_000, signal: controller.signal });
-    setTimeout(() => controller.abort(), 500);
-    const result = await withinBound(pending);
+    const { result, leftCount } = await trackLongTimers(100_000, () => {
+      const pending = runSshCommand({ runner: createHungRunner(), cacheDir, remoteCommand: 'true', timeoutMs: 120_000, signal: controller.signal });
+      setTimeout(() => controller.abort(), 500);
+      return withinBound(pending);
+    });
     await releaseProxyAndExpectNothingLeft();
     assert.equal(result.isTimedOut, true);
     assert.equal(result.exitCode, null, 'killed, not exited');
     assert.ok(Date.now() - startedAt < 10_000, `${Date.now() - startedAt} ms`);
-    assert.equal(process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length, timeoutsBefore, 'the 120 s timer is gone with the process');
+    assert.equal(leftCount, 0, 'the 120 s timer is gone with the process');
   });
 
   it('a signal that has already fired kills the process before it can do anything', { skip: sshSkip }, async () => {
