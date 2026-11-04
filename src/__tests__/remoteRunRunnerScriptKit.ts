@@ -1,5 +1,5 @@
 /**
- * @description What the unit tests of `remoteRun/runner.sh` share (`remoteRunRunnerScript.test.ts`, `remoteRunRunnerLock.test.ts`): where the
+ * @description What the unit tests of `remoteRun/runner.sh` share (`remoteRunRunnerScript.test.ts`, `remoteRunRunnerScriptProbe.test.ts`, `remoteRunRunnerLock.test.ts`, `remoteRunGuiSession.test.ts`): where the
  * script is, the project and job names the tests use, and a file writer.
  */
 
