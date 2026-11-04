@@ -280,11 +280,38 @@ describe('what the runner type promises', () => {
 });
 
 describe('the order of the runner\'s start', () => {
-  it('the signal handlers are installed BEFORE the child is spawned — a signal between the fork and a later handler takes the default action and leaves the child\'s own session working (a race that a starved machine shows and a test cannot drive on demand, so the order is pinned)', () => {
-    const source = fs.readFileSync(path.resolve(__dirname, '..', 'runnerUtility', 'isolatedCommand.ts'), 'utf8');
-    const handlersInstalled = source.indexOf('for (const { signal, handler } of handlers) process.on(signal, handler);');
-    const childSpawned = source.indexOf('child = spawn(file');
-    assert.ok(handlersInstalled > 0 && childSpawned > 0, 'both statements are there');
-    assert.ok(handlersInstalled < childSpawned, 'the handlers come first');
+  it('a stop signal that arrives the instant the child exists is passed on to its group — the handlers are in place BEFORE the spawn, so the signal never takes the default action and leaves the child\'s own session working (a race that a starved machine shows)', async () => {
+    const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'iso-'));
+    try {
+      const pidFile = path.join(folder, 'sleeper.pid');
+      const programPath = path.resolve(__dirname, '..', 'runnerUtility', 'isolatedCommand.ts');
+      // `spawn` is wrapped so that the signal comes between the fork and whatever the runner does next — the window a starved machine opens by itself.
+      const script = [
+        'const childProcess = require("child_process"); const fs = require("fs");',
+        'const realSpawn = childProcess.spawn;',
+        `childProcess.spawn = (...spawnArguments) => { const child = realSpawn(...spawnArguments); fs.writeFileSync(${JSON.stringify(pidFile)}, String(child.pid)); process.kill(process.pid, "SIGTERM"); return child; };`,
+        `const { runCommandIsolated } = require(${JSON.stringify(programPath)});`,
+        'runCommandIsolated("sleep", ["300"], { timeoutMs: 120000 }).then(() => { process.stdout.write("survived\\n"); });',
+      ].join('\n');
+      const driver = spawn(process.execPath, ['--import', 'tsx', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = '';
+      driver.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+      const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => { driver.once('exit', (code, signal) => resolve({ code, signal })); });
+      await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '', 'the sleeper\'s pid to be written');
+      const sleeper = Number(fs.readFileSync(pidFile, 'utf8'));
+      try {
+        assert.equal(outcome.signal, 'SIGTERM', `the program ends of the signal, once the step is over (${JSON.stringify(outcome)})`);
+        assert.equal(output, '', 'and does not carry on');
+        await waitFor(() => !checkIsProcessAlive(sleeper), () => `the child to be ended by the passed-on signal (${describeProcess(sleeper)})`, processExitDeadlineMs);
+      } finally {
+        try {
+          process.kill(-sleeper, 'SIGKILL');
+        } catch {
+          // Already gone — the result this test wants.
+        }
+      }
+    } finally {
+      fs.rmSync(folder, { recursive: true, force: true });
+    }
   });
 });
