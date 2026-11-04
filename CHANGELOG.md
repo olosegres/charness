@@ -66,6 +66,10 @@ Now a request folder written before the system booted is removed without a signa
 Before, the app handled the first SIGINT/SIGTERM with a `once` handler, and a stop usually brings two (the launcher passes its TERM on while a terminal or a group kill hands the app another a few milliseconds later): the second took the default action and ended the process in the middle of the shutdown, so the sleep assertion's state file stayed behind and the stop did not run its clean-up (seen as a flake of the link flow under load).
 Now the stop handlers stay installed, the first signal stops the runner and the later ones are ignored; the same goes for the login-session agent.
 
+**A job whose command ignores SIGTERM is now always killed after the grace time, also when the runner is busy.**
+Before, a stop that came from the lease's own watcher (the caller's connection lost, or an interrupt racing it) recorded the job as killed and only then looked for its process group to send the SIGKILL; the lease ended that watcher as soon as the record appeared, so on a loaded machine it could die in between and the command went on running in a job that already read as killed, with nothing left to stop it.
+Now the kill ignores TERM and HUP once it has begun, so the SIGKILL always follows its record.
+
 ## 3.9.1 — 2026-11-04
 
 **An @-mention of the AI account in a Jira issue it is already working on no longer makes it believe the issue is not handed to it, and no longer stops its build.**

@@ -815,7 +815,13 @@ kill_job() {
 # SIGKILL of the whole group; Pueue's own kill follows only so that its task list agrees. Without a verifiable group, Pueue's kill
 # is all there is. A job that is SIGKILLed cannot write its own result, so the result is recorded FIRST: when the caller is the job's own
 # watchdog the group-wide SIGKILL takes the watchdog down with the job.
+#
+# TERM and HUP are ignored from here on: the record is what the lease's main flow (and a `kill` call) waits for, and the main flow ends the lease's
+# watcher — this very process, when the watcher's kill is the one that got here first — the moment the record appears. A kill that still had its forks to do
+# (`ps` and `tr` in `signal_job_group`: a second or more on a loaded machine) died between the record and its SIGKILL, and a command that ignores SIGTERM lived
+# on in a job that was already "ended", with nobody left to stop it. HUP too: a caller's ssh session that closes must not take a kill half-way either.
 hard_kill_job() {
+  trap '' TERM HUP
   finish_killed_job
   signal_job_group KILL || pq kill "$1" > /dev/null 2>&1
   pq kill "$1" > /dev/null 2>&1

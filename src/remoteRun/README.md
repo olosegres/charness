@@ -114,6 +114,8 @@ simctl keeps the Xcode version without inventing a simulator count.
 **A job that had to be SIGKILLed** (it ignored SIGTERM through `kill`, a lost lease or the time limit) cannot write its own result, so whoever kills
 it records it first (`finish_killed_job`: exit 137, or 124 when the limit did it, `phase=done`, a finish time) — it is then an ended job like any
 other, and the next job of its project takes the lock over at once.
+That record is what ends the lease's wait, and the lease then ends its watcher: so the kill ignores TERM and HUP from the moment it begins (`hard_kill_job`), or a watcher
+ended between the record and its SIGKILL left a command that ignores SIGTERM running in a job that already read as killed.
 
 **A job's Pueue task number is not its identity.** Pueue gives a number it has freed to the next task added, and `pueue wait` / `pueue remove`
 act on whoever holds a number (a number nobody holds: `wait` returns 0 at once). A job killed while queued loses its task that way, so

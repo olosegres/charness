@@ -554,6 +554,25 @@ describe('a job that had to be SIGKILLed is an ended job', () => {
     assert.match(missing.stderr, /no such job: box1-neverx/);
   });
 
+  for (const signal of ['TERM', 'HUP']) {
+    it(`the lease watcher's SIGKILL is not lost when it gets a ${signal} after the record it writes — a command that ignores SIGTERM is gone even where finding its group takes a while`, () => {
+      const { pid } = startStubbornJob();
+      // `cmd_lease`: the main flow waits for the job's exit record and ends the watcher — a subshell with the exit-on-TERM trap `watch_lease` sets — the moment it
+      // appears (a closing ssh session sends it a HUP). The slow `ps` is a loaded machine: on one, the forks between the record and the SIGKILL took longer than the poll.
+      const result = runFunctions(`
+        ps() { sleep 0.7; command ps "$@"; }
+        ( trap 'exit 143' TERM; kill_job ) &
+        watcher_pid=$!
+        while [ ! -f "$jd/exit" ]; do sleep 0.05; done
+        kill -${signal} "$watcher_pid"
+        wait "$watcher_pid"
+        sleep 1
+      `);
+      assert.notEqual(result.status, null);
+      assert.equal(checkIsProcessRunning(pid), false, 'the command that ignores SIGTERM was SIGKILLed');
+    });
+  }
+
   it('an exit a job wrote itself is never overwritten by the kill record', () => {
     const { jobDir } = startStubbornJob();
     writeFile(jobDir, 'exit', '0\n');
