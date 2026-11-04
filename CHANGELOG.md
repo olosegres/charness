@@ -44,7 +44,7 @@ Now the admin line also loads a small LaunchAgent into the account's own login s
 
 **A crash or restart of the login session's agent no longer leaves an iOS build running beside the next job.**
 Before, a step the agent ran (an `xcodebuild`, say) was its own process group that a dying agent did not take along, so the job was cut with 125, its project lock went to the next job, and the orphaned build kept writing into the same tree and the job's log.
-Now the agent records each step's process group and the job script ends that group (TERM, KILL after 10 s) before it goes on; an agent that starts ends the groups of the instance before it. And the agent no longer crashes when the job script has already removed a cut step's folder by the time the step's end is noticed.
+Now the agent records each step's process group and the job script ends that group (TERM, KILL after 10 s) before it goes on; an agent that starts ends the groups of the instance before it. And the agent no longer crashes when the job script has already removed a cut step's folder by the time the step's end is noticed, and a cut with no group recorded (or a job whose log is not there yet) no longer puts a stray `No such file or directory` line, with the runner's path in it, into the job's output.
 
 **The Simulator silencer no longer boots a Simulator that a job has just shut down, and it also runs on a Mac whose link runs in a login session.**
 Before, it waited for a device's boot with `simctl bootstatus -b`, which boots a device that is not booted — a device shut down between the list and the call stayed up with nobody to stop it — and it ran only inside the always-on Mac's login-session agent, so a Mac kept running by a user service or by `charness-runner run` was not silenced at all.

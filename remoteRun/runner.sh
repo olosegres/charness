@@ -240,7 +240,8 @@ gui_group_is_recorded() {
 gui_end_step_group() {
   local pgid recorded waited=0
   pgid=$(cat "$1/pgid" 2> /dev/null)
-  recorded=$(tr -s ' \t' ' ' < "$1/pgid-start" 2> /dev/null | sed 's/^ //; s/ $//')
+  # `cat`'s own stderr goes to /dev/null: a redirect of `tr`'s input from a file that is not there fails in the shell, before any `2>` of the command applies.
+  recorded=$(cat "$1/pgid-start" 2> /dev/null | tr -s ' \t' ' ' | sed 's/^ //; s/ $//')
   case $pgid in '' | *[!0-9]*) return 0 ;; esac
   [ "$pgid" -gt 1 ] || return 0
   gui_group_is_recorded "$pgid" "$recorded" || return 0
@@ -867,7 +868,7 @@ cmd_kill() {
 # Print what the log gained since $log_offset, and move the offset.
 drain_log() {
   local size
-  size=$(wc -c < "$jd/log" 2> /dev/null | tr -d ' ')
+  size=$(wc -c 2> /dev/null < "$jd/log" | tr -d ' ')
   [ -n "$size" ] || return 0
   if [ "$size" -gt "$log_offset" ]; then
     tail -c +"$((log_offset + 1))" "$jd/log" | head -c "$((size - log_offset))"
@@ -928,7 +929,7 @@ follow_until_done() {
 # Where `follow` starts in the log: the beginning, the end, or the last N lines.
 resolve_follow_offset() {
   local size
-  size=$(wc -c < "$jd/log" 2> /dev/null | tr -d ' ')
+  size=$(wc -c 2> /dev/null < "$jd/log" | tr -d ' ')
   size=${size:-0}
   case ${1:-start} in
     end) echo "$size" ;;

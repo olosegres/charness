@@ -341,8 +341,13 @@ describe('a step of a job that needs iOS, run through the agent', () => {
       const folder = path.join(root, 'request-folder');
       fs.mkdirSync(folder);
       fs.writeFileSync(path.join(folder, 'pgid'), `${decoy.pgid}\n`);
-      await runSourced(`kill_grace_sec=1; gui_end_step_group ${folder}`);
+      const withoutStart = await runSourced(`kill_grace_sec=1; gui_end_step_group ${folder}`);
       assert.equal(checkIsProcessAlive(decoy.sleepPid), true, 'no start recorded: nothing is signalled');
+      assert.equal(withoutStart.stderr, '', 'and nothing is said into the job\'s output about the file that is not there');
+      const emptyFolder = path.join(root, 'empty-request-folder');
+      fs.mkdirSync(emptyFolder);
+      const nothingRecorded = await runSourced(`kill_grace_sec=1; gui_end_step_group ${emptyFolder}`);
+      assert.equal(nothingRecorded.stderr, '', 'a step the agent never picked up has neither file');
       fs.writeFileSync(path.join(folder, 'pgid-start'), 'Mon Jan  1 00:00:00 2001\n');
       await runSourced(`kill_grace_sec=1; gui_end_step_group ${folder}`);
       assert.equal(checkIsProcessAlive(decoy.sleepPid), true, 'another start: the pid is somebody else\'s now');

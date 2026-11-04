@@ -462,6 +462,17 @@ describe('prune keeps what a queued job still needs', () => {
   });
 });
 
+describe('a log that is not there yet is nothing to say on the caller\'s stderr', () => {
+  it('reading its size (`drain_log`, where `follow` starts) prints nothing: a redirect of the input from a missing file fails before the `2>` of the same command applies', () => {
+    const { jobDir } = getPaths();
+    fs.mkdirSync(jobDir, { recursive: true });
+    const result = spawnSync('bash', ['-c', `source ${scriptPath}; set_paths ${workDir} ${slug} ${jobId}; log_offset=0; drain_log; resolve_follow_offset start; resolve_follow_offset end`], { encoding: 'utf8', timeout: 60_000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout.trim().split('\n').at(-1), '0', 'a missing log is an empty one');
+  });
+});
+
 describe('a job that had to be SIGKILLed is an ended job', () => {
   const dayMs = 24 * 60 * 60 * 1000;
   let decoy: ChildProcess | null = null;
