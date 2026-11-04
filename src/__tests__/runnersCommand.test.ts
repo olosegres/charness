@@ -286,15 +286,23 @@ describe('/runners over its ports', () => {
       probeGates.push(new Promise<void>((resolve) => { openProbe = resolve; }));
       let openQuestionEdit: () => void = () => {};
       const questionEditGate = new Promise<void>((resolve) => { openQuestionEdit = resolve; });
+      let markQuestionEditQueued: () => void = () => {};
+      const questionEditQueued = new Promise<void>((resolve) => { markQuestionEditQueued = resolve; });
       await harness.runCommand('runners');
       const screen = harness.replies.at(-1);
       // The paced send queue holds the question's edit; meanwhile the probe — started from the list — finishes.
-      editHook = (_messageId, text) => (text.startsWith('Remove ') ? questionEditGate.then(() => true) : null);
+      editHook = (_messageId, text) => {
+        if (!text.startsWith('Remove ')) return null;
+        markQuestionEditQueued();
+        return questionEditGate.then(() => true);
+      };
       const tap = harness.tapButton(screen?.messageId ?? 0, `rnr_${readPairedFile(hubFixture.ctx.dir).rev}_0_x`);
-      await new Promise((resolve) => { setTimeout(resolve, 50); });
+      // The probe is let go only once the question's edit IS queued — not «after 50 ms»: on a starved machine the tap had not been handled by then, the question was not
+      // there yet, and a probe that finished first rightly drew the list (this test then failed 7 times in 7 on a core shared with eight busy loops).
+      await questionEditQueued;
       openProbe();
       await new Promise((resolve) => { setTimeout(resolve, 50); });
-      assert.equal(harness.edits.length, 0, 'the probe drew nothing while the question\'s edit was pending');
+      assert.equal(harness.edits.length, 0, `the probe drew nothing while the question's edit was pending; edits so far: ${JSON.stringify(harness.edits.map((edit) => edit.text.slice(0, 70)))}`);
       openQuestionEdit();
       await tap;
       assert.deepEqual(harness.edits.map((edit) => edit.text.slice(0, 12)), ['Remove mac? ']);
