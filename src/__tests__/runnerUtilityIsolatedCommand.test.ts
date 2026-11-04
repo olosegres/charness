@@ -17,8 +17,15 @@ import { runCommand } from '../selfUpdate/commandRunner';
 import { runCommandIsolated, stripControlCharacters, type IsolatedCommandRunner } from '../runnerUtility/isolatedCommand';
 
 const generousTimeoutMs = 20_000;
+/**
+ * The deadline of a test whose child is a NODE program that must have started the sleeper — and written its pid — before the deadline passes: the child's own start-up is
+ * seconds on a loaded machine, and a deadline of half a second fired before the sleeper existed (the pid file was not there to read). Long enough for any start-up, short
+ * enough to wait for in a test.
+ */
+const deadlineAfterNodeStartsMs = 6_000;
 const pollIntervalMs = 25;
-const pollDeadlineMs = 5_000;
+/** How long a test waits for something to HAPPEN (a node child to start, a file to appear): a wait for an event, not an assertion about speed, so as generous as a signalled process's exit below — a node program starts in seconds on a loaded machine. */
+const pollDeadlineMs = 30_000;
 /** How long a killed process may take to be gone: on a box with a load average of 40 a signalled process waits seconds for its turn to die. */
 const processExitDeadlineMs = 30_000;
 
@@ -120,7 +127,7 @@ describe('a command run isolated', () => {
     const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'iso-'));
     try {
       const pidFile = path.join(folder, 'grandchild.pid');
-      const result = await runCommandIsolated('sh', ['-c', `sleep 60 & echo $! > "${pidFile}"; wait`], { timeoutMs: 400 });
+      const result = await runCommandIsolated('sh', ['-c', `sleep 60 & echo $! > "${pidFile}"; wait`], { timeoutMs: 1_500 });
       assert.equal(result.isTimedOut, true);
       assert.equal(result.ok, false);
       const grandchild = Number(fs.readFileSync(pidFile, 'utf8'));
@@ -196,7 +203,7 @@ describe('a descendant that leaves the group and keeps the output open', () => {
     await withFolder(async (folder) => {
       const pidFile = path.join(folder, 'sleeper.pid');
       const startedAtMs = Date.now();
-      const result = await runCommandIsolated(process.execPath, createLaunchedChild(pidFile, 'setInterval(() => {}, 1000);'), { timeoutMs: 500 });
+      const result = await runCommandIsolated(process.execPath, createLaunchedChild(pidFile, 'setInterval(() => {}, 1000);'), { timeoutMs: deadlineAfterNodeStartsMs });
       assert.equal(result.isTimedOut, true);
       assert.equal(result.ok, false);
       assert.ok(Date.now() - startedAtMs < 15_000, `ended in ${Date.now() - startedAtMs} ms`);
@@ -269,5 +276,15 @@ describe('what the runner type promises', () => {
     const result = await runner('sh', ['-c', 'echo fine'], { timeoutMs: generousTimeoutMs });
     assert.equal(result.stdout, 'fine\n');
     assert.equal(spawnSync('ps', ['-o', 'pid=', '-p', String(process.pid)]).status, 0, 'the `ps` the group checks rely on exists here');
+  });
+});
+
+describe('the order of the runner\'s start', () => {
+  it('the signal handlers are installed BEFORE the child is spawned — a signal between the fork and a later handler takes the default action and leaves the child\'s own session working (a race that a starved machine shows and a test cannot drive on demand, so the order is pinned)', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '..', 'runnerUtility', 'isolatedCommand.ts'), 'utf8');
+    const handlersInstalled = source.indexOf('for (const { signal, handler } of handlers) process.on(signal, handler);');
+    const childSpawned = source.indexOf('child = spawn(file');
+    assert.ok(handlersInstalled > 0 && childSpawned > 0, 'both statements are there');
+    assert.ok(handlersInstalled < childSpawned, 'the handlers come first');
   });
 });

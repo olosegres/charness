@@ -69,7 +69,10 @@ const signalEscalationMs = 5000;
  */
 export const runCommandIsolated: IsolatedCommandRunner = (file, args, options) =>
   new Promise((resolve) => {
-    const child = spawn(file, [...args], { cwd: options.cwd, env: options.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    // The signal handlers go in BEFORE the child exists: a signal that comes between the fork and a later `process.on` (milliseconds on a starved machine) takes the
+    // default action and kills this program with the child's group — its own session — left working. Node delivers a signal between ticks, so none can run `forward`
+    // before `child` is assigned below.
+    let child: ChildProcess;
     let stdout = '';
     let stderr = '';
     let isTimedOut = false;
@@ -81,6 +84,13 @@ export const runCommandIsolated: IsolatedCommandRunner = (file, args, options) =
     let escalationTimer: NodeJS.Timeout | null = null;
 
     const handlers = forwardedSignals.map((signal) => ({ signal, handler: (): void => forward(signal) }));
+    for (const { signal, handler } of handlers) process.on(signal, handler);
+    try {
+      child = spawn(file, [...args], { cwd: options.cwd, env: options.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+      for (const { signal, handler } of handlers) process.removeListener(signal, handler);
+      throw error;
+    }
     const deadlineTimer = setTimeout(() => {
       isTimedOut = true;
       killGroup(child, 'SIGKILL');
@@ -120,7 +130,6 @@ export const runCommandIsolated: IsolatedCommandRunner = (file, args, options) =
       }, signalEscalationMs);
       if (hasExited) armGrace(killedPipeGraceMs);
     }
-    for (const { signal, handler } of handlers) process.on(signal, handler);
 
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
