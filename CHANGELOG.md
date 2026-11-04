@@ -66,6 +66,14 @@ Now a request folder written before the system booted is removed without a signa
 Before, the app handled the first SIGINT/SIGTERM with a `once` handler, and a stop usually brings two (the launcher passes its TERM on while a terminal or a group kill hands the app another a few milliseconds later): the second took the default action and ended the process in the middle of the shutdown, so the sleep assertion's state file stayed behind and the stop did not run its clean-up (seen as a flake of the link flow under load).
 Now the stop handlers stay installed, the first signal stops the runner and the later ones are ignored; the same goes for the login-session agent.
 
+**A stop signal that arrives just as the admin pairing line starts a step no longer ends the line with that step still running.**
+Before, the root step of the `sudo` pairing line took over the stop signals (SIGINT, SIGTERM, SIGHUP) only after it had started the runner account's command; a signal in between — milliseconds, on a busy machine — took the default action and killed the line while the command, in a session of its own, went on working.
+Now the handlers are in place before the command starts, so such a signal is passed on to the command's group like any other.
+
+**`charness remote-run … exec` no longer prints a stray `mv: cannot stat …` line after the command's exit code.**
+Before, when a quick command ended, the runner's lease could still be writing its heartbeat into a folder that had just been removed, and the `mv` error reached the caller's stderr after the exit marker — the line the CLI takes as the last one.
+Now that heartbeat write is silent, so the marker is the last thing on stderr.
+
 **A job whose command ignores SIGTERM is now always killed after the grace time, also when the runner is busy.**
 Before, a stop that came from the lease's own watcher (the caller's connection lost, or an interrupt racing it) recorded the job as killed and only then looked for its process group to send the SIGKILL; the lease ended that watcher as soon as the record appeared, so on a loaded machine it could die in between and the command went on running in a job that already read as killed, with nothing left to stop it.
 Now the kill ignores TERM and HUP once it has begun, so the SIGKILL always follows its record.
