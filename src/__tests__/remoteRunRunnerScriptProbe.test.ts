@@ -176,6 +176,17 @@ describe('what the probe says of a paired runner (its state folder is the parent
     return { text: result.stdout, parsed: parseProbeOutput(result.stdout) };
   }
 
+  /**
+   * What the probe says OF A PAIRED RUNNER — `read_runner_state; probe_runner_state` alone, as the sourced script's functions, parsed as the main box parses a probe.
+   * A whole probe asks the machine its questions (twenty processes, seconds on a loaded box) and most of these tests want one line of it; the whole probe is run
+   * where it is the point (`probe()`).
+   */
+  function probeState(): { text: string; parsed: ReturnType<typeof parseProbeOutput> } {
+    const result = spawnSync('bash', ['-c', `source ${scriptPath}; work=${workDir}; read_runner_state; probe_runner_state`], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return { text: result.stdout, parsed: parseProbeOutput(result.stdout) };
+  }
+
   it('a hand-made runner (no state folder around its work dir) prints none of it', () => {
     const { text } = probe();
     assert.ok(!/^(paused|service|runner_version|ios_boot|awake)/m.test(text), text);
@@ -227,51 +238,51 @@ describe('what the probe says of a paired runner (its state folder is the parent
 
   it('a work dir that is merely called work, beside a config.json but no keys/, is not a runner state folder', () => {
     writeFile(workRoot, 'config.json', '{}');
-    assert.ok(!/^paused=/m.test(probe().text));
+    assert.ok(!/^paused=/m.test(probeState().text));
     fs.rmSync(path.join(workRoot, 'config.json'));
     fs.mkdirSync(path.join(workRoot, 'keys'));
-    assert.ok(!/^paused=/m.test(probe().text));
+    assert.ok(!/^paused=/m.test(probeState().text));
   });
 
   it('a runner nobody paused and nobody installed as a service is running by hand', () => {
     makeStateFolder();
-    const { parsed } = probe();
+    const { parsed } = probeState();
     assert.deepEqual([parsed.isPaused, parsed.serviceKind, parsed.iosBoot, parsed.runnerVersion], [false, 'foreground', null, null]);
   });
 
   it('the paused flag is a file: present = paused', () => {
     makeStateFolder();
     writeFile(workRoot, 'paused', '');
-    assert.equal(probe().parsed.isPaused, true);
+    assert.equal(probeState().parsed.isPaused, true);
     fs.rmSync(path.join(workRoot, 'paused'));
-    assert.equal(probe().parsed.isPaused, false);
+    assert.equal(probeState().parsed.isPaused, false);
   });
 
   it('the service file names how it is kept running: user or system service; a word nobody knows is "unknown", not "run by hand"', () => {
     makeStateFolder();
     for (const [word, expected] of [['user-service', 'user-service'], ['system-service\n', 'system-service'], ['launchd-magic', 'unknown']] as const) {
       writeFile(workRoot, 'service', word);
-      assert.equal(probe().text.match(/^service=(.*)$/m)?.[1], expected, word);
+      assert.equal(probeState().text.match(/^service=(.*)$/m)?.[1], expected, word);
     }
   });
 
   it('the charness version is the one in the installed package (`current/package.json`)', () => {
     makeStateFolder();
     writeFile(path.join(workRoot, 'current'), 'package.json', '{\n  "name": "charness",\n  "version": "3.8.0",\n  "scripts": {}\n}\n');
-    assert.equal(probe().parsed.runnerVersion, '3.8.0');
+    assert.equal(probeState().parsed.runnerVersion, '3.8.0');
   });
 
   it('the iOS boot check file: bootable, not bootable (with its detail), or unreadable', () => {
     makeStateFolder();
     // The exact line `writeIosCheck` writes (iosCheck.ts), so the two sides of the file cannot drift apart again.
     writeFile(workRoot, 'ios-check.json', '{"status":"pass","checkedAtMs":1,"xcode":"16.2 (16C5032a)","reason":null}\n');
-    assert.deepEqual(probe().parsed.iosBoot, { status: 'ok', detail: '' });
+    assert.deepEqual(probeState().parsed.iosBoot, { status: 'ok', detail: '' });
     writeFile(workRoot, 'ios-check.json', '{"status":"fail","checkedAtMs":1,"xcode":"16.2 (16C5032a)","reason":"the Simulator did not boot: no login session"}\n');
-    assert.deepEqual(probe().parsed.iosBoot, { status: 'failed', detail: 'the Simulator did not boot: no login session' });
+    assert.deepEqual(probeState().parsed.iosBoot, { status: 'failed', detail: 'the Simulator did not boot: no login session' });
     writeFile(workRoot, 'ios-check.json', '{"status":"skipped","checkedAtMs":1,"xcode":null,"reason":null}\n');
-    assert.deepEqual(probe().parsed.iosBoot, { status: 'unchecked', detail: '' });
+    assert.deepEqual(probeState().parsed.iosBoot, { status: 'unchecked', detail: '' });
     writeFile(workRoot, 'ios-check.json', 'garbage');
-    assert.deepEqual(probe().parsed.iosBoot, { status: 'unchecked', detail: '' });
+    assert.deepEqual(probeState().parsed.iosBoot, { status: 'unchecked', detail: '' });
   });
 });
 
