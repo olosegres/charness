@@ -246,7 +246,7 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
    * Requests whose handling failed. The failure is told ONCE, however many looks it takes to answer: the script that waits for the step keeps seeing the agent beat,
    * so it never cuts the step itself — the only way it stops waiting is an answer, and a request left without one would hang its job (and hold its project's lock).
    */
-  const failedRequests = new Map<string, { isAnswerPending: boolean; isAnswerFailureTold: boolean }>();
+  const failedRequests = new Map<string, { answerCode: number; isAnswerPending: boolean; isAnswerFailureTold: boolean }>();
   /** Per request, the pid of its job script whose start time was checked: a pid is not handed out while its process lives, so one check is all there is to do. */
   const verifiedOwners = new Map<string, number>();
   let lastBeatAtMs = 0;
@@ -276,8 +276,9 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
   };
 
   /**
-   * Answer a failed request «the step could not be started» (126). Where even that cannot be written (a full disk) the answer stays pending and is tried again on every
-   * look — told once — until it goes through. Nothing is answered for a request whose step runs.
+   * Answer a failed request with the code kept for it: 126 («the step could not be started») — or, where the step ran and only its end could not be written down, its own
+   * code. Where even that cannot be written (a full disk) the answer stays pending and is tried again on every look — told once — until it goes through. Nothing is
+   * answered for a request whose step runs.
    */
   const answerFailedRequest = (id: string, requestDir: string): void => {
     const failed = failedRequests.get(id);
@@ -287,7 +288,7 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
       return;
     }
     try {
-      writeExit(requestDir, cannotStartExitCode);
+      writeExit(requestDir, failed.answerCode);
       failed.isAnswerPending = false;
     } catch (error) {
       if (failed.isAnswerFailureTold) return;
@@ -296,21 +297,21 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
     }
   };
 
-  /** A request whose handling threw: told once (`what` names the failure), answered 126. */
-  const failRequest = (id: string, requestDir: string, what: string, error: unknown): void => {
+  /** A request whose handling threw: told once (`what` names the failure), answered `answerCode` — 126, unless the step ran and ended with a code of its own. The first code kept wins. */
+  const failRequest = (id: string, requestDir: string, what: string, error: unknown, answerCode: number = cannotStartExitCode): void => {
     if (!failedRequests.has(id)) {
-      failedRequests.set(id, { isAnswerPending: true, isAnswerFailureTold: false });
+      failedRequests.set(id, { answerCode, isAnswerPending: true, isAnswerFailureTold: false });
       deps.reportError(`${what} (${id}: ${describeError(error)})`);
     }
     answerFailedRequest(id, requestDir);
   };
 
-  /** The step's own end, written from an event handler: a throw there would take the whole agent down, so a write that fails is a failed request instead. */
+  /** The step's own end, written from an event handler: a throw there would take the whole agent down, so a write that fails is a failed request instead — answered with the step's real code once it can be written. */
   const answerStepEnd = (id: string, requestDir: string, code: number): void => {
     try {
       writeExit(requestDir, code);
     } catch (error) {
-      failRequest(id, requestDir, 'the end of a step could not be written down', error);
+      failRequest(id, requestDir, 'the end of a step could not be written down', error, code);
     }
   };
 
@@ -522,11 +523,12 @@ export function createGuiAgent(paths: RunnerHomePaths, deps: GuiAgentDeps): GuiA
     tick: () => {
       if (deps.now() - lastBeatAtMs >= guiAgentBeatIntervalMs) beat();
       finishEndingGroups();
-      let ids: string[] = [];
+      let ids: string[];
       try {
         ids = fs.readdirSync(paths.guiRequestsDir);
       } catch {
-        ids = [];
+        // A folder that cannot be listed this time (too many open files, an I/O error) says nothing about its requests: what is remembered of them stays.
+        return;
       }
       for (const id of ids) {
         try {

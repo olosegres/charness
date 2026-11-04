@@ -223,7 +223,9 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   on every one (a live pid is not handed out again). A group that cannot be recorded — its leader's start cannot be read included — is ended at once and answered
   126; a request folder that is gone is no error anywhere (files are written without making folders). A request that cannot be handled at all (an environment that
   cannot be read, a write that fails for want of space) is told ONCE and answered 126, again on every look until the answer is written — the script keeps seeing the
-  agent beat, so an unanswered request would hang its job — and never takes the agent down. A `needs-ios` step with no agent beating is refused at the step (no request is written).
+  agent beat, so an unanswered request would hang its job — and never takes the agent down. A step that RAN and only its end could not be written down is answered
+  with its own code, never 126. What is remembered of the requests (the failed ones, the job scripts whose start was checked) goes only with their folders: a look at a
+  folder that cannot be listed forgets nothing. A `needs-ios` step with no agent beating is refused at the step (no request is written).
 - **No session** → a job that does not need iOS runs in the daemon as before; `submit` / `lease` refuse a `needs-ios` job with `ios build: needs a login of <account>`, a queued one refuses at its start, `probe` says
   `cap_ios=no` with the same words (ahead of the boot check's own answer). A runner kept running as a user service, or by hand, is in a session already: none of this applies.
 - **The link of an always-on Mac runs no Simulator check** (`checkIsLoginSessionAgentRunner`): the agent does, from the session where the Simulator can boot.

@@ -496,17 +496,18 @@ describe('a folder on disk is not trusted: an earlier boot, a reused pid', () =>
     fs.mkdirSync(blockedExit);
     for (let look = 0; look < 8; look += 1) agent.tick();
     assert.equal(readExit(dir), null, 'the answer cannot be written yet');
-    const toldBefore = reported.length;
-    assert.ok(toldBefore >= 1 && toldBefore <= 2, `the failure and the unwritten answer are told once each: ${reported.join(' | ')}`);
+    assert.equal(reported.length, 2, `the failure and the unwritten answer are told once each: ${reported.join(' | ')}`);
+    assert.match(reported[0], /could not be handled \(job39\.1: /);
+    assert.match(reported[1], /the answer of request job39\.1 could not be written/);
     for (let look = 0; look < 8; look += 1) agent.tick();
-    assert.equal(reported.length, toldBefore, 'and not again on every look');
+    assert.equal(reported.length, 2, 'and not again on every look');
     fs.rmSync(blockedExit, { recursive: true });
     await tickUntil(agent, 'the answer once it can be written', () => readExit(dir) !== null);
     assert.equal(readExit(dir), '126');
     assert.equal(fs.existsSync(marker), false, 'the step never ran');
   });
 
-  it('an end of a step that cannot be written down (a full disk) is no crash of the agent: it is told and the script is answered 126 as soon as that can be written', async () => {
+  it('an end of a step that cannot be written down (a full disk) is no crash of the agent: it is told, and the script gets the step\'s REAL code as soon as that can be written — a step that ran is never reported as one that could not start', async () => {
     const failures: Error[] = [];
     const onUncaught = (error: Error): void => { failures.push(error); };
     process.on('uncaughtException', onUncaught);
@@ -521,10 +522,48 @@ describe('a folder on disk is not trusted: an earlier boot, a reused pid', () =>
       assert.deepEqual(failures, [], 'no uncaught exception from the step\'s close event');
       fs.rmSync(blockedExit, { recursive: true });
       await tickUntil(agent, 'the answer once it can be written', () => readExit(dir) !== null);
-      assert.equal(readExit(dir), '126');
+      assert.equal(readExit(dir), '5', 'the code the step ended with, not «could not start»');
     } finally {
       process.off('uncaughtException', onUncaught);
     }
+  });
+
+  it('a requests folder that cannot be listed for one look makes the agent forget nothing: the answer still pending is written afterwards, and a job script whose start was verified is not looked at again', async () => {
+    const own = readProcessStart(process.pid);
+    assert.equal(own.kind, 'known');
+    const ownerLooks: number[] = [];
+    let isFirstRead = true;
+    const agent = createGuiAgent(paths, createDeps({
+      readEnv: () => {
+        if (isFirstRead) {
+          isFirstRead = false;
+          throw new Error('the environment cannot be read');
+        }
+        return { PATH: process.env.PATH, HOME: paths.homeDir };
+      },
+      readProcessStart: (pid) => {
+        if (pid === process.pid) ownerLooks.push(pid);
+        return readProcessStart(pid);
+      },
+      reportError: () => undefined,
+    }));
+    const { dir } = writeRequest('job43.1', { command: 'exit 0' });
+    fs.writeFileSync(path.join(dir, 'owner-start'), `${own.kind === 'known' ? own.text : ''}\n`);
+    // The step fails after `started` is written, and the answer cannot be written yet (a full disk): it is pending.
+    const blockedExit = path.join(dir, `exit.${process.pid}.tmp`);
+    fs.mkdirSync(blockedExit);
+    for (let look = 0; look < 4; look += 1) agent.tick();
+    assert.equal(readExit(dir), null);
+    assert.equal(ownerLooks.length, 1);
+    // One look at a folder that cannot be listed (EMFILE, EIO — here: it is moved away for a moment).
+    const asideDir = `${paths.guiRequestsDir}.aside`;
+    fs.renameSync(paths.guiRequestsDir, asideDir);
+    agent.tick();
+    fs.renameSync(asideDir, paths.guiRequestsDir);
+    fs.rmSync(blockedExit, { recursive: true });
+    await tickUntil(agent, 'the pending answer', () => readExit(dir) !== null);
+    assert.equal(readExit(dir), '126', 'the request that failed before the listing failed is still answered — the script would wait for ever otherwise');
+    assert.equal(ownerLooks.length, 1, 'and the verified start of the job script is not read again');
   });
 
   it('a step whose leader\'s start time cannot be read at start-up (`ps` timed out) is ended like one that cannot be recorded — no group id, no cut could ever find it — and answered 126; a leader that is already gone is simply not recorded', async () => {
