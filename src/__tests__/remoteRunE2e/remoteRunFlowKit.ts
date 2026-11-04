@@ -334,8 +334,16 @@ export async function runCli(layout: CliFlowLayout, args: readonly string[], opt
   return { exitCode, stdout: run.stdout(), stderr: run.stderr(), chunks: run.chunks };
 }
 
+/**
+ * How long a test waits for a job to START: the CLI chooses a runner and uploads the script, `prepare`, the rsync of the files, `pueue add`, the job's lock, the apply of
+ * the tree and the dependencies step, and only then the command runs and writes its pid — a dozen ssh, rsync and process starts. That is 5–9 s on a machine with a load
+ * average of 18 (measured, phase by phase: ~3–6 s before «sending N files», ~2.5 s after) and more than 30 s with sixteen flows on top of other people's work, which is where
+ * «timed out waiting for decoy-X.pid to write its pid» came from in a full run. A wait for something to HAPPEN, not an assertion about speed.
+ */
+export const jobStartTimeoutMs = 120_000;
+
 /** @description The pid a decoy command wrote into the project's runner folder (`../<name>.pid` from the project root), once it exists. */
-export function waitForPidFile(project: FlowProject, name: string, timeoutMs = 30_000): Promise<number> {
+export function waitForPidFile(project: FlowProject, name: string, timeoutMs = jobStartTimeoutMs): Promise<number> {
   return waitUntil(`${name} to write its pid`, timeoutMs, () => {
     try {
       const pid = Number(fs.readFileSync(path.join(project.runnerDirectory, name), 'utf8').trim());
@@ -379,7 +387,7 @@ export function openGate(project: FlowProject, name: string): number {
 }
 
 /** @description Wait until a process of the layout whose command line `matches` runs (e.g. the runner script's `wait` for a job). */
-export function waitForLayoutProcess(layout: FlowLayout, description: string, matches: (commandLine: string) => boolean, timeoutMs = 30_000): Promise<true> {
+export function waitForLayoutProcess(layout: FlowLayout, description: string, matches: (commandLine: string) => boolean, timeoutMs = jobStartTimeoutMs): Promise<true> {
   return waitUntil(description, timeoutMs, () => listLayoutProcesses(layout.root).some((candidate) => matches(candidate.args)));
 }
 

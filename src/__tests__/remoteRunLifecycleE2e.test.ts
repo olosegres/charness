@@ -26,6 +26,7 @@ import {
   createChattyDecoyCommand,
   createDecoyCommand,
   createGatedCommand,
+  jobStartTimeoutMs,
   startCli,
   waitForPidFile,
   waitUntil,
@@ -86,7 +87,7 @@ describe('charness remote-run against a loopback runner — what ends a job', { 
       const cli = startCli(layout, [createChattyDecoyCommand(name)], { cwd: project.root, env: flowEnv });
       const decoyPid = await waitForPidFile(project, `${name}.pid`);
       const childPid = await waitForPidFile(project, `${name}.child`);
-      await waitUntil('the first line of the job to arrive', 30_000, () => cli.stdout().includes('line\n'));
+      await waitUntil('the first line of the job to arrive', jobStartTimeoutMs, () => cli.stdout().includes('line\n'));
       cli.child.stdout?.destroy();
       assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 141, cli.stderr());
       assert.match(cli.stderr(), /remote-run: stdout was closed \(what reads it, a pipe into `head` for one, is gone\) — job box1-[a-z2-7]{6} was stopped on box1; to read only a part of a long output, start it with --bg and use `charness remote-run logs box1-[a-z2-7]{6} --tail <lines>`/);
@@ -100,7 +101,7 @@ describe('charness remote-run against a loopback runner — what ends a job', { 
       const cli = startCli(layout, ['exec', createChattyDecoyCommand(name)], { cwd: project.root, env: flowEnv });
       const decoyPid = await waitForPidFile(project, `${name}.pid`);
       const childPid = await waitForPidFile(project, `${name}.child`);
-      await waitUntil('the first line of the command to arrive', 30_000, () => cli.stdout().includes('line\n'));
+      await waitUntil('the first line of the command to arrive', jobStartTimeoutMs, () => cli.stdout().includes('line\n'));
       cli.child.stdout?.destroy();
       assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 141, cli.stderr());
       assert.match(cli.stderr(), /remote-run: stdout was closed \(what reads it, a pipe into `head` for one, is gone\) — the command was stopped on box1; /);
