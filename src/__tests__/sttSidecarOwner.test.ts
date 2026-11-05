@@ -19,7 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { checkIsProcessIdentityCurrent, getProcessIdentity, signalExternallyHostedProcess, type ExternalProcessIdentity } from '../installManager';
 import { getSttPaths } from '../stt/sttInstall';
-import { createEmptySttConfig, defaultSttTimeout, type ResolvedSttEngine, type SttConfigFile } from '../stt/sttSettings';
+import { createEmptySttConfig, defaultSttTimeout, type ResolvedSttEngine, type SttConfigFile, type SttEndpointRequest } from '../stt/sttSettings';
 import {
   checkIsSidecarRestartNeeded,
   createDefaultSttSidecarOwnerDeps,
@@ -930,14 +930,14 @@ function createFakeWorld(overrides: Partial<SttSidecarOwnerDeps> = {}) {
   };
 }
 
-function createLocalEngine(owner: ReturnType<typeof createSttSidecarOwner>, onAsk: () => void = () => {}): ResolvedSttEngine {
+function createLocalEngine(owner: ReturnType<typeof createSttSidecarOwner>, onAsk: (request?: SttEndpointRequest) => void = () => {}): ResolvedSttEngine {
   return {
     id: 'g',
     kind: 'gigaam',
     name: 'gigaam',
     timeout: defaultSttTimeout,
     getEndpoint: async (request) => {
-      onAsk();
+      onAsk(request);
       return getSttSidecarTranscriptionEndpoint(await owner.ensure(defaultSettings, request));
     },
   };
@@ -978,22 +978,21 @@ test('a voice that arrives while the sidecar still loads shares that start — n
   assert.deepEqual(world.signals, []);
 });
 
-test('a warm-up and the voice\'s own request are ONE ask: the model is loaded once, and the voice gets what the warm-up got', async () => {
+test('a warm-up and the voice\'s own ask are ONE start: the model is loaded once, and the voice still asks the engine itself', async () => {
   const world = createFakeWorld();
   world.state.loadMsOfNextStart = 30_000;
   const owner = createSttSidecarOwner(world.deps);
-  const asked: string[] = [];
-  const engine = createLocalEngine(owner, () => asked.push('ask'));
+  const asks: Array<SttEndpointRequest | undefined> = [];
+  const engine = createLocalEngine(owner, (request) => asks.push(request));
 
   const warmed = warmUpFirstEngine([engine], () => {});
   assert.ok(warmed);
-  // The voice's job gets there while the model still loads; nothing listens on the fake port, so what it does with the
-  // endpoint is not the point — how often the engine was asked is.
+  // The voice\'s job gets there while the model still loads; nothing listens on the fake port, so what it does with the
+  // endpoint is not the point — what the engine was asked, and how often the process was started, is.
   await transcribeWithEngines(writeAudioFile(), [engine], { language: null, warmedEndpoint: warmed, retryDelaysMs: [] });
 
-  assert.deepEqual(asked, ['ask'], 'the engine was asked once for this voice');
-  assert.equal(world.getSpawnCount(), 1);
-  assert.equal((await warmed.endpoint).url, `http://127.0.0.1:${readRecord().port}/v1/audio/transcriptions`, 'and the voice used the warm-up\'s endpoint');
+  assert.deepEqual(asks, [{ isWarmUp: true }, undefined], 'the warm-up, then the voice\'s own plain ask');
+  assert.equal(world.getSpawnCount(), 1, 'one start for both');
 });
 
 test('a warm-up never judges a silent sidecar: no /health, nothing counted toward the silence limit, no replacement — only the voices\' own asks do', async () => {
@@ -1019,6 +1018,26 @@ test('a warm-up never judges a silent sidecar: no /health, nothing counted towar
   await owner.ensure(defaultSettings);
   assert.ok(world.signals.some((entry) => entry.pid === busy.pid), 'the third silent ask of a voice replaces it');
   assert.equal(world.getSpawnCount(), 1);
+});
+
+test('through the chain: a voice that was warmed up still meets the silence rule — against a silent sidecar, the third voice gets it replaced', async () => {
+  const world = createFakeWorld({ fetchHealth: async () => null });
+  const busy = world.addEarlierSidecar(0); // listening, but it never answers /health: wedged, or busy past every window
+  await world.deps.sleep(0);
+  const owner = createSttSidecarOwner(world.deps);
+  const stub = await startStubEngine('from the hosted engine');
+  try {
+    for (const voice of [1, 2, 3]) {
+      const engine = createLocalEngine(owner);
+      const warmed = warmUpFirstEngine([engine, stub.engine], () => {}); // the voice note arrives: the warm-up
+      const result = await transcribeWithEngines(writeAudioFile(), [engine, stub.engine], { language: null, warmedEndpoint: warmed });
+      assert.equal(result.ok, true, `voice ${voice}: the hosted engine behind takes it`);
+      assert.equal(world.signals.some((entry) => entry.pid === busy.pid), voice === 3, `voice ${voice}: only the third silent ask of a voice replaces the process`);
+    }
+    assert.equal(world.getSpawnCount(), 1, 'and a fresh process was started');
+  } finally {
+    await stub.close();
+  }
 });
 
 test('a warm-up still does its work on a cold or loading engine: it starts one, or waits for the one that is loading', async () => {

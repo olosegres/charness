@@ -35,7 +35,7 @@ export interface TranscribeWithEnginesOptions {
   retryDelaysMs?: readonly number[];
   onRetry?: (info: TranscribeRetryInfo) => void;
   onFallback?: (info: TranscribeFallbackInfo) => void;
-  /** The first engine's endpoint asked for when the voice arrived; used once, and only for that engine. */
+  /** The first engine's endpoint asked for when the voice arrived; counted once, and only for that engine. */
   warmedEndpoint?: WarmedEndpoint | null;
   /** How long a non-last engine may take to produce its endpoint; defaults to {@link nonLastEngineStartBudgetMs}. */
   nonLastEngineStartBudgetMs?: number;
@@ -46,7 +46,8 @@ export type TranscribeChainResult = TranscribeResult & { engine?: string };
 
 /**
  * @description The endpoint of the first engine, asked for when the voice note ARRIVED: that voice's job hands it to
- * {@link transcribeWithEngines}, which uses it instead of asking the engine again.
+ * {@link transcribeWithEngines}, which waits for it and, when it failed, uses that failure instead of asking the engine
+ * again; when it succeeded the job asks the engine itself.
  */
 export interface WarmedEndpoint {
   engineId: string;
@@ -56,8 +57,8 @@ export interface WarmedEndpoint {
 /**
  * @description Start the local engine now when a voice would reach it FIRST: its load (seconds on an idle box, tens of
  * seconds on a busy one) then overlaps the download and the other work of the voice job instead of following them. The
- * outcome belongs to THAT voice ({@link WarmedEndpoint}): its job reuses it — also a failure, so one voice never starts
- * the engine twice and never counts as two failed starts. A failure is logged here as one line, because the voice job
+ * outcome belongs to THAT voice ({@link WarmedEndpoint}): a FAILURE is reused by its job, so one voice never starts
+ * the engine twice and never counts as two failed starts; a success only tells the job the engine is up. A failure is logged here as one line, because the voice job
  * may end (a failed download) without ever asking. Any other first engine (a hosted one answers at once) starts nothing:
  * an engine a voice may never reach is not worth its memory.
  */
@@ -121,12 +122,18 @@ async function transcribeWithEngine(
   options: TranscribeWithEnginesOptions,
   warmedEndpoint: Promise<TranscriptionEndpoint> | null,
 ): Promise<TranscribeResult> {
-  /** The warm-up answers the FIRST ask only: a retry asks the engine again (it may have come back on another port). */
+  /**
+   * The warm-up counts for the FIRST ask only. A warm-up that FAILED is the voice's outcome too (asking again would start the
+   * engine a second time and count a second failed start). One that succeeded only says the engine is up: the voice then asks
+   * the engine ITSELF — a plain ask, which runs the engine's full rules (the health check, the silence limit that replaces a
+   * wedged process); the warm-up is lenient on purpose and must not stand in for it. A retry asks the engine again too (it may
+   * have come back on another port).
+   */
   let unusedWarmedEndpoint = warmedEndpoint;
   const askEngine = (): Promise<TranscriptionEndpoint> => {
-    const pending = unusedWarmedEndpoint ?? engine.getEndpoint();
+    const warmed = unusedWarmedEndpoint;
     unusedWarmedEndpoint = null;
-    return pending;
+    return warmed ? warmed.then(() => engine.getEndpoint()) : engine.getEndpoint();
   };
   const getEndpoint = async (): Promise<TranscriptionEndpoint> => {
     const endpoint = await askEngine();

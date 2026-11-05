@@ -284,20 +284,24 @@ function writeMigratedMarker(filePath: string): void {
   fs.writeFileSync(markerPath, sttDefaultsMigratedMarkerText, { mode: configFileMode });
 }
 
-/**
- * @description Write `config` to `filePath`: validated first (a caller that builds
- * an invalid file has a bug), then written mode 0600 through a temp file and a
- * rename, so a reader never sees half a file. Only the values that differ from the
- * defaults are stored ({@link createStoredConfig}). The marker beside the file is written
- * first: a file saved by this layout is never one that {@link migrateSttStoredDefaults}
- * should take for an earlier build's.
- */
-export function saveSttConfig(filePath: string, config: SttConfigFile): void {
+/** `config` normalised, validated (a caller that builds an invalid file has a bug) and laid out for the file. */
+function createValidatedStoredConfig(config: SttConfigFile): RawSttConfig {
   const normalised = normaliseSttConfig(config);
   const validation = validateSttConfig(normalised);
   if (!validation.ok) throw new Error(`refusing to write an invalid stt.json: ${validation.errors.join('; ')}`);
+  return createStoredConfig(normalised);
+}
+
+/**
+ * @description Write `config` to `filePath`: validated first, then written mode 0600 through a temp file and a rename, so a
+ * reader never sees half a file. Only the values that differ from the defaults are stored ({@link createStoredConfig}). The
+ * marker beside the file is written FIRST: a file saved by this layout, a 15 the user just picked included, must never be
+ * one that {@link migrateSttStoredDefaults} takes for an earlier build's.
+ */
+export function saveSttConfig(filePath: string, config: SttConfigFile): void {
+  const storedConfig = createValidatedStoredConfig(config);
   writeMigratedMarker(filePath);
-  writeJsonFileAtomically(filePath, createStoredConfig(normalised), configFileMode);
+  writeJsonFileAtomically(filePath, storedConfig, configFileMode);
 }
 
 /** @name SttStoredDefaultsMigrationResult @description What {@link migrateSttStoredDefaults} did. */
@@ -337,17 +341,34 @@ export function migrateSttStoredDefaults(filePath: string): SttStoredDefaultsMig
   if (isMarked && !isEarlierBuildFile) return { status: 'notNeeded' };
 
   const isIdleMinutesDropped = validation.config.gigaam.idleMinutes === previousGigaamIdleMinutes;
-  if (!isIdleMinutesDropped && isMarked) return { status: 'notNeeded' };
-  try {
-    if (isIdleMinutesDropped) {
-      saveSttConfig(filePath, { ...validation.config, gigaam: { ...validation.config.gigaam, idleMinutes: defaultGigaamIdleMinutes } });
-    } else {
+  if (!isIdleMinutesDropped) {
+    // Nothing to drop: only the marker is missing. A directory that cannot take it is not a failed migration — there was
+    // none to do, and the unwritable directory is already reported once at boot.
+    if (isMarked) return { status: 'notNeeded' };
+    try {
       writeMigratedMarker(filePath);
+    } catch {
+      return { status: 'notNeeded' };
     }
+    return { status: 'migrated', isIdleMinutesDropped: false };
+  }
+  // The file FIRST, the marker after: a rewrite that fails or is cut short must not leave a marker that claims the directory
+  // migrated while an earlier build's 15 is still in the file (beside a workers count changed on purpose, nothing else would
+  // ever drop it).
+  try {
+    const migratedConfig = { ...validation.config, gigaam: { ...validation.config.gigaam, idleMinutes: defaultGigaamIdleMinutes } };
+    writeJsonFileAtomically(filePath, createValidatedStoredConfig(migratedConfig), configFileMode);
   } catch (e) {
     return { status: 'writeFailed', error: getCaughtErrnoCode(e) };
   }
-  return { status: 'migrated', isIdleMinutesDropped };
+  // The 15 is gone whatever happens to the marker; a directory that took the rewrite takes the marker, and every later save
+  // writes it first.
+  try {
+    writeMigratedMarker(filePath);
+  } catch {
+    // an absent marker only makes the next boot look again, and there is no 15 left to drop
+  }
+  return { status: 'migrated', isIdleMinutesDropped: true };
 }
 
 /** The env variables the one-time migration reads: the only place that does. */

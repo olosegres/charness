@@ -296,6 +296,48 @@ test('stored defaults migration: any other stored value is kept when the 15 is d
   assert.deepEqual(readStored(), { engines: [{ id: 'g', kind: 'gigaam' }], language: 'ru', gigaam: { threads: 3 } });
 });
 
+test('stored defaults migration: the file is rewritten FIRST — a rewrite that fails leaves no marker claiming the directory migrated, so the next boot still drops the 15', () => {
+  const kept = JSON.stringify({ engines: [{ id: 'g', kind: 'gigaam' }], gigaam: { idleMinutes: 15, workers: 2 } }); // no stored default: only the missing marker says it is an earlier build's
+  writeRaw(kept);
+  const blockedTempPath = `${configPath}.${process.pid}.tmp`;
+  fs.mkdirSync(blockedTempPath); // the rewrite goes through exactly this temp file: it cannot be created
+
+  const failed = migrateSttStoredDefaults(configPath);
+  assert.equal(failed.status, 'writeFailed');
+  assert.ok(!fs.existsSync(markerPath()), 'no marker without the rewrite');
+  assert.equal(fs.readFileSync(configPath, 'utf8'), kept, 'and the file is as it was');
+
+  fs.rmSync(blockedTempPath, { recursive: true });
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: true }, 'the next boot drops it');
+  assert.deepEqual(readStored().gigaam, { workers: 2 });
+  assert.ok(fs.existsSync(markerPath()), 'and records it after the file');
+});
+
+test('stored defaults migration: nothing to drop and a marker that cannot be written is NOT a failed migration — no failure to report, the unwritable directory is reported elsewhere', () => {
+  const groqOnly = JSON.stringify({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  writeRaw(groqOnly);
+  fs.chmodSync(configDir, 0o500);
+  try {
+    // The permission checks do not apply to root, where the directory is still writable.
+    if (process.getuid?.() === 0) return;
+    assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
+    assert.ok(!fs.existsSync(markerPath()));
+    assert.equal(fs.readFileSync(configPath, 'utf8'), groqOnly);
+  } finally {
+    fs.chmodSync(configDir, 0o700);
+  }
+});
+
+test('stored defaults migration: a 15 written by hand beside an explicit workers 4 is taken for an earlier build\'s and dropped — the documented limit of the rule', () => {
+  saveSttConfig(configPath, createConfig({ engines: [{ id: 'g', kind: 'gigaam' }] })); // marked
+  writeRaw(JSON.stringify({ engines: [{ id: 'g', kind: 'gigaam' }], gigaam: { idleMinutes: 15, workers: 4 } }));
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: true });
+
+  writeRaw(JSON.stringify({ engines: [{ id: 'g', kind: 'gigaam' }], gigaam: { idleMinutes: 15 } })); // the way to keep a hand-written 15
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
+  assert.deepEqual(readStored().gigaam, { idleMinutes: 15 });
+});
+
 test('stored defaults migration: a missing, garbage or invalid file is left exactly as it is, with no marker; a directory that cannot be written is reported', () => {
   assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
   assert.ok(!fs.existsSync(configPath), 'no file is created');

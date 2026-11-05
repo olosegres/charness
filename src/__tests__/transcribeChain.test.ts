@@ -549,16 +549,22 @@ test('warm-up: a local engine that a voice would reach FIRST is asked for its en
   assert.equal(warmUpFirstEngine([], logWarningNowhere), null);
 });
 
-test('warm-up: the voice REUSES the warm-up\'s ask — the engine is asked once for the voice, and the answer is the one the warm-up got', async () => {
-  reset([transcribed('from the warmed endpoint')]);
+test('warm-up: a GOOD warm-up only says the engine is up — the voice then asks the engine itself, a plain ask that runs the engine\'s full rules', async () => {
+  reset([transcribed('from the voice\'s own endpoint')]);
   const local = createControlledEngine('gigaam');
   const warmed = warmUpFirstEngine([local.engine], logWarningNowhere);
+  const running = runChain([local.engine], { warmedEndpoint: warmed });
+
+  await settleCallbacks();
+  assert.equal(local.getAsked(), 1, 'while the warm-up is still loading, the voice waits for it and asks nothing');
+  local.answer({ url: second.url, model: 'm' }); // the warm-up\'s own endpoint: a server the voice must never reach
+  await waitUntil(() => local.getAsked() === 2, 'the voice to ask the engine itself');
   local.answer({ url: first.url, apiKey: 'local-key', model: 'm' });
 
-  const { result } = await runChain([local.engine], { warmedEndpoint: warmed });
-  assert.deepEqual(result, { ok: true, text: 'from the warmed endpoint', engine: 'gigaam' });
-  assert.equal(local.getAsked(), 1, 'one ask in all: the warm-up\'s');
-  assert.deepEqual(local.getRequests(), [{ isWarmUp: true }]);
+  const { result } = await running;
+  assert.deepEqual(result, { ok: true, text: 'from the voice\'s own endpoint', engine: 'gigaam' });
+  assert.deepEqual(second.bodies, [], 'nothing was sent to the warm-up\'s endpoint: the voice used the endpoint of its own ask');
+  assert.deepEqual(local.getRequests(), [{ isWarmUp: true }, undefined], 'the warm-up said so; the voice\'s ask is a plain one');
 });
 
 test('warm-up: a start that FAILED fast is the voice\'s outcome too — no second ask (no second spawn, no second failed start); a hosted engine behind takes the voice', async () => {
@@ -582,15 +588,18 @@ test('warm-up: a start that FAILED fast is the voice\'s outcome too — no secon
   assert.equal(lonely.getAsked(), 1);
 });
 
-test('warm-up: only the first ask is the warm-up\'s — a retry of the last engine asks it again; a warm-up of another engine is ignored', async () => {
+test('warm-up: only the first ask is the warm-up\'s — the voice and a retry of the last engine ask the engine themselves; a warm-up of another engine is ignored', async () => {
   reset([respondWith(503, 'down'), transcribed('after the retry')]);
   const local = createControlledEngine('gigaam');
   const warmed = warmUpFirstEngine([local.engine], logWarningNowhere);
   local.answer({ url: first.url, model: 'm' });
   const retryEndpoint = runChain([local.engine], { warmedEndpoint: warmed });
-  await waitUntil(() => local.getAsked() === 2, 'the retry to ask the engine itself');
+  await waitUntil(() => local.getAsked() === 2, 'the voice to ask the engine itself');
+  local.answer({ url: first.url, model: 'm' }); // the voice\'s own ask; the engine answers 503
+  await waitUntil(() => local.getAsked() === 3, 'the retry to ask the engine again');
   local.answer({ url: first.url, model: 'm' });
   assert.equal((await retryEndpoint).result.ok, true);
+  assert.deepEqual(local.getRequests(), [{ isWarmUp: true }, undefined, undefined], 'only the first ask was the warm-up\'s');
 
   reset([transcribed('asked normally')]);
   const other = createEngine('other', first);

@@ -307,3 +307,21 @@ test('the warm-up\'s request reaches the owner: a voice asks plainly, a warm-up 
   await resolved.engines[1].getEndpoint({ isWarmUp: true }); // a hosted engine ignores it and asks no owner
   assert.equal(harness.ensureRequests.length, 2);
 });
+
+test('boot: a config directory that cannot take the marker, with no 15 to drop, logs no failure of its own — the unwritable directory is reported once, by the storage check', () => {
+  // The permission checks do not apply to root, where the directory is still writable.
+  if (process.getuid?.() === 0) return;
+  const harness = createHarness();
+  fs.writeFileSync(configPath, JSON.stringify({ engines: [localEngine] }));
+  harness.deps.checkIsConfigOnContainerDisk = () => false;
+  fs.chmodSync(dataDir, 0o500);
+  try {
+    createSttRuntime(harness.deps).init();
+    createSttRuntime(harness.deps).init(); // and again: every boot
+  } finally {
+    fs.chmodSync(dataDir, 0o700);
+  }
+  assert.ok(!harness.problems.some((line) => line.includes('could not rewrite')), harness.problems.join('\n'));
+  assert.ok(harness.problems.some((line) => line.includes('cannot be written')), 'the directory itself is reported');
+  assert.deepEqual(harness.info, []);
+});

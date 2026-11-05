@@ -53,9 +53,13 @@ keys again.
   first, so a fresh install's 15 is a choice) **or the file stores a default** (`workers: 4` or `idleMinutes: 60`: this
   layout never does, so an earlier build wrote it — the sequence rollback → an older build's `/stt` save → update is
   migrated again). A 15 picked on this layout is stored without a default next to it and stays. The one case no content can
-  tell apart is an earlier build's 15 beside a workers count changed on purpose: once the marker is there it stays. A file
-  that needs nothing is not touched (no marker yet → only the marker is written); a missing, unreadable or invalid file is
-  left alone, with no marker. The marker is a file older builds never read.
+  tell apart is an earlier build's 15 beside a workers count changed on purpose: once the marker is there it stays — and
+  the same rule drops a 15 written BY HAND next to an explicit `workers: 4` (or `idleMinutes: 60`), which `SETUP.md` tells
+  the editor to avoid. Order: the migration writes the FILE first and the marker after (a rewrite that fails or is cut short
+  leaves no marker that claims otherwise); a `/stt` save writes the marker first. A file that needs nothing is not touched
+  (no marker yet → only the marker is written, and a directory that cannot take it is no failure: it is reported once at
+  boot by the storage check); a missing, unreadable or invalid file is left alone, with no marker. The marker is a file
+  older builds never read.
 - **Migration** (`migrateLegacySttKeys`, boot only): no `stt.json` + `GROQ_API_KEY` / `OPENAI_API_KEY` in the
   environment → write the file with those engines (Groq `q1` first, then OpenAI `o1`). It is the ONLY reader of
   those variables; an existing file is never overwritten; the `[deprecated]` line is printed once per process.
@@ -83,10 +87,13 @@ depends on the engine's place in the chain:
 
 **Warm-up.** The moment a voice note ARRIVES (the voice handler, after the gate, before the download and the topic's voice
 queue) `warmUpFirstEngine` asks the local engine for its endpoint when it is the FIRST engine of the chain, and returns that
-ask (`WarmedEndpoint`, the engine's id + the promise). The voice's job hands it to `transcribeWithEngines`, which uses it
-INSTEAD of asking the engine again — also when it failed fast: a voice starts the engine once, so it can never count as two
-failed starts for the spawn-storm guard (a retry of the last engine asks afresh; an ask of another engine than the warmed one
-is ignored). The warm-up is for a COLD or LOADING engine only (`ensure(settings, { isWarmUp: true })`): a voice note that
+ask (`WarmedEndpoint`, the engine's id + the promise). The voice's job hands it to `transcribeWithEngines`, which waits for
+it. A warm-up that FAILED is the voice's outcome too, used INSTEAD of asking the engine again: a voice starts the engine
+once, so it can never count as two failed starts for the spawn-storm guard. One that SUCCEEDED only says the engine is up:
+the job then asks the engine ITSELF — a plain ask that runs the engine's full rules, the health check and the silence
+limit that replaces a wedged process (the warm-up is lenient on purpose and must not stand in for it; with another engine
+behind the local one nothing else would ever reach that limit). A retry of the last engine asks afresh; an ask of another
+engine than the warmed one is ignored. The warm-up is for a COLD or LOADING engine only (`ensure(settings, { isWarmUp: true })`): a voice note that
 arrives behind a long recognition in the same topic finds a sidecar that is busy and late with `/health`, and a warm-up
 that judged that silence would count toward `unansweredAdoptionLimit` and could get the live sidecar replaced in the middle
 of the earlier voice. So a warm-up takes a listening, matching process as it is — no `/health`, no count, no replacement —
