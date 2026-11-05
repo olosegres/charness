@@ -137,10 +137,12 @@ describe('ensurePackageManagerShims', () => {
     assert.match(formatShimLine(outcomes), /`corepack enable` made no shim for it/);
   });
 
-  const realCorepack = spawnSync('corepack', ['--version'], { encoding: 'utf8' });
-  it('the REAL Corepack\'s `enable --install-directory` makes the shims this module counts on (symlinks into its own `corepack` folder) — and they are then recognised and removed', { skip: realCorepack.status === 0 ? false : 'no Corepack on this machine' }, async () => {
-    const corepackPath = fs.realpathSync(spawnSync('which', ['corepack'], { encoding: 'utf8' }).stdout.trim());
-    const realNodeDir = path.dirname(spawnSync('which', ['node'], { encoding: 'utf8' }).stdout.trim());
+  // The folder of the Node that RUNS this test, as the module itself takes it (`path.dirname(process.execPath)`). Not `which node`: under
+  // `yarn test` that is yarn's own temporary shim folder, which holds a `node` wrapper and no Corepack.
+  const realNodeDir = path.dirname(process.execPath);
+  const realCorepack = spawnSync(path.join(realNodeDir, 'corepack'), ['--version'], { encoding: 'utf8' });
+  it('the REAL Corepack\'s `enable --install-directory` makes the shims this module counts on (symlinks into its own `corepack` folder) — and they are then recognised and removed', { skip: realCorepack.status === 0 ? false : 'no Corepack in the folder of the Node that runs the tests' }, async () => {
+    const corepackPath = fs.realpathSync(path.join(realNodeDir, 'corepack'));
     // The machine's own yarn or pnpm (in the Node's folder or the system's) must not hide the case: only `<bin>`'s shims count here.
     const isOwnManager = (candidate: string): boolean => ['yarn', 'pnpm'].some((manager) => path.basename(candidate) === manager && !candidate.startsWith(getPaths().binDir));
     const deps = createDeps({ nodeDir: realNodeDir, environment: { PATH: `${realNodeDir}:${process.env.PATH ?? ''}` }, checkIsExecutable: (candidate) => createShimDeps().checkIsExecutable(candidate) && !isOwnManager(candidate) });
