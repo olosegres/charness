@@ -12,6 +12,8 @@
  *     is deleted (one line at a time), and a check run passed in between WITHOUT a line (the interval holds)
  *   → `/verbosity answers`: the line is deleted and two whole check runs (read from the run ledger) post nothing
  *   → `/verbosity stream`: a line returns
+ *   → «Leave current dir» on the `/bind` picker: the line is deleted, the watch is parked (paused for «unbound»), and no check
+ *     run and no line follows; the folder bound again: the watch resumes and a line returns, timed from the last one
  *   → the worker is killed: the line is deleted, the alert is pinned silently, the agent is woken (`cancel-watch`)
  *   → `schedule_cancel`: the alert is unpinned, the watch is gone, and no status line of the whole flow is left in the topic.
  *
@@ -52,6 +54,8 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import { bindLeaveCurrentCallback } from '../connectors/telegram/bindPicker';
+import { enDict } from '../i18n/en';
 import { defaultCheckStatusEveryMinutes } from '../scheduler/checkStatus';
 import type { ScheduleRunRecord } from '../scheduler/runLedger';
 import type { ScheduleRecord } from '../scheduler/types';
@@ -83,6 +87,8 @@ const checkRunTimeoutMs = 2 * 60 * 1000;
  */
 const statusIntervalMs = 2 * 60 * 1000;
 const statusLineTimeoutMs = statusIntervalMs + checkRunTimeoutMs;
+/** How long the parked watch is watched for a check run: the cron's next tick, whenever it would come, plus a loaded machine's margin. */
+const parkedWatchObservationMs = watchCronIntervalMs + 15 * 1000;
 /** Check runs that must pass, finished, while the answers-only view is on: more than the one a line due at once could hide in. */
 const answersOnlyRunCount = 2;
 const workerLogLines = {
@@ -335,6 +341,48 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
     assertSilentAndUnpinned(thirdLine);
   });
 
+  it('leaving the folder («Leave current dir» on the /bind picker): the status line is deleted, the watch is parked, and no run and no line follows', async () => {
+    const [lineBeforeLeaving] = listVisibleStatusLines();
+    assert.equal(listVisibleStatusLines().length, 1, 'one line is in the topic when the operator leaves');
+    const postsBeforeLeaving = countStatusPosts();
+
+    const picker = await topic.sendAndAwaitReply('/bind', enDict['bind.current'].replace('{subdir}', topicFolder));
+    await topic.tapAndAwaitAnswer(picker, bindLeaveCurrentCallback);
+    await topic.waitForMessage('the unbound notice', (message) => message.message_id > picker.message_id && message.text === enDict['thread.unbound']);
+    const leftAtMs = Date.now();
+
+    // The line goes with the pause, before the binding: a parked watch never runs again to take it away.
+    assert.ok(
+      fakeTelegram.listCalls('deleteMessage').some((call) => Number(call.payload.message_id) === lineBeforeLeaving.message_id),
+      'the bot asked the Bot API to delete the line',
+    );
+    assert.equal(fakeTelegram.getMessage(lineBeforeLeaving.message_id)?.isDeleted, true);
+    assert.deepEqual(listVisibleStatusLines(), [], 'no status line is left under a watch that no longer watches');
+    await getCharness().waitFor('the watch to be persisted as parked', replyTimeoutMs, () => {
+      const watch = readPersistedSchedules().find((record) => record.id === watchId);
+      return watch?.isPaused === true && watch.pauseReason === 'unbound' && watch.statusMessageId === undefined;
+    });
+
+    // A parked watch has no timer: the cron's next tick passes without a run and without a line.
+    await getCharness().waitFor('the next check tick to have passed', parkedWatchObservationMs + replyTimeoutMs, () => Date.now() > leftAtMs + parkedWatchObservationMs);
+    assert.equal(countRunsStartedBetween(leftAtMs, Date.now()), 0, 'the parked watch did not run');
+    assert.equal(countStatusPosts(), postsBeforeLeaving, 'and no line was posted');
+    assert.deepEqual(listVisibleStatusLines(), []);
+    assert.equal(countAgentPrompts(), promptsAfterArming, 'still no agent turn');
+  });
+
+  let resumedLine: FakeTelegramMessage;
+
+  it('the folder bound again: the watch resumes and a line returns at the next due run, timed from the last one', async () => {
+    await topic.sendAndAwaitReply(`/bind ${topicFolder}`, `Bound to \`${topicFolder}\``);
+    resumedLine = await waitForNewStatusLine('a status line after the topic is bound again');
+    assert.match(resumedLine.text, new RegExp(`^${statusLinePrefix}\\d+ min · now: bash: Lint the sources$`), resumedLine.text);
+    assert.ok(getReportedMinutes(resumedLine) > getReportedMinutes(thirdLine), 'the elapsed time still counts from the watch\'s creation');
+    assertSilentAndUnpinned(resumedLine);
+    const watch = readPersistedSchedules().find((record) => record.id === watchId);
+    assert.equal(watch?.isPaused, undefined, 'the watch is running again');
+  });
+
   it('the worker finishes: the status line is deleted, the alert is pinned silently, the agent is woken', async () => {
     getWorker().kill('SIGKILL');
     await getCharness().waitFor('the check alert to be pinned', checkRunTimeoutMs, () => fakeTelegram.pinEvents.some((event) => event.kind === 'pin' && (fakeTelegram.getMessage(event.messageId)?.text ?? '').includes(alertMark)));
@@ -343,7 +391,7 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
     alertMessageId = alertPin.messageId;
     assert.equal(alertPin.isSilent, true, 'a finished worker must not ring the muted operator');
     assert.match(fakeTelegram.getMessage(alertMessageId)?.text ?? '', new RegExp(`worker ${getWorkerPid()} exited`), 'the recipe said why');
-    assert.equal(fakeTelegram.getMessage(thirdLine.message_id)?.isDeleted, true, 'a «works …» line under a finished worker would be wrong');
+    assert.equal(fakeTelegram.getMessage(resumedLine.message_id)?.isDeleted, true, 'a «works …» line under a finished worker would be wrong');
     assert.deepEqual(listVisibleStatusLines(), [], 'no status line under the alert');
     await getCharness().waitFor('the agent woken by the check to list its schedules', agentTimeoutMs, () => getToolCalls('schedule_list').length === 1);
     assert.equal(countAgentPrompts(), promptsAfterArming + 1, 'the failure woke the agent once — the only prompt since it armed the watch');
@@ -358,7 +406,7 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
     await getCharness().waitFor('the watch to be gone from the persisted state', replyTimeoutMs, () => readPersistedSchedules().every((record) => record.name !== fakeStatusWatchJobName));
 
     assert.deepEqual(listVisibleStatusLines(), []);
-    assert.ok(seenStatusMessageIds.length >= 3, 'the three lines the steps waited for were posted');
+    assert.ok(seenStatusMessageIds.length >= 4, 'the four lines the steps waited for were posted');
     for (const messageId of seenStatusMessageIds) assert.equal(fakeTelegram.getMessage(messageId)?.isDeleted, true, `status line ${messageId} was deleted`);
     assert.ok(
       fakeTelegram.listCalls('editMessageText').every((call) => !String(call.payload.text).startsWith(statusLinePrefix)),
