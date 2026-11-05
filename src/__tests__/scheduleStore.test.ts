@@ -142,6 +142,42 @@ describe('StateStore schedule collection', () => {
     assert.equal(store.getThreadSchedules(threadA).length, 0);
   });
 
+  it('updateScheduleIfPresent rewrites a present schedule and says so; an absent one is left absent', async () => {
+    const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
+    await store.init();
+    const created = await createScheduleForThread(store, { threadKey: threadA, name: 'Watch', spec: dailySpec, prompt: 'go', createdBy: 'agent', nowMs });
+    assert.ok(created.ok);
+    const id = created.record.id;
+
+    assert.equal(await store.updateScheduleIfPresent(id, (current) => ({ ...current, statusMessageId: 77 })), true);
+    assert.equal(store.getSchedules()[id].statusMessageId, 77);
+
+    assert.equal(await store.updateScheduleIfPresent('no-such-job', (current) => ({ ...current, statusMessageId: 1 })), false);
+    assert.equal(store.getSchedules()['no-such-job'], undefined, 'nothing was created');
+  });
+
+  it('updateScheduleIfPresent does not undo a removal that was queued before it: the check and the write are one locked step', async () => {
+    const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
+    await store.init();
+    const created = await createScheduleForThread(store, { threadKey: threadA, name: 'Watch', spec: dailySpec, prompt: 'go', createdBy: 'agent', nowMs });
+    assert.ok(created.ok);
+    const id = created.record.id;
+
+    // The thread's lock is held while both are asked for: a cancel (remove) first, then a status line's record. The record
+    // existed when the update was asked for, so a check made BEFORE the lock would write it back after the removal.
+    let openLock: () => void = () => {};
+    const lockHeld = new Promise<void>((resolve) => { openLock = resolve; });
+    const holder = store.withLock(threadA, () => lockHeld);
+    const removal = store.removeSchedule(id);
+    const update = store.updateScheduleIfPresent(id, (current) => ({ ...current, statusMessageId: 77 }));
+    openLock();
+    await holder;
+    await removal;
+
+    assert.equal(await update, false, 'the job was cancelled: there is nothing to record on');
+    assert.equal(store.getSchedules()[id], undefined, 'the cancelled job stayed cancelled');
+  });
+
   it('filters schedules per thread', async () => {
     const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
     await store.init();

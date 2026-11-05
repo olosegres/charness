@@ -13880,19 +13880,20 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       return decision.kind === 'proceed' ? readWorkerActivity(path.resolve(decision.workDir, runDir)) : null;
     },
     recordStatusLine: async (jobId, line) => {
-      const record = state.getSchedules()[jobId];
-      if (!record) return false;
-      const updated: ScheduleRecord = { ...record, updatedAt: new Date().toISOString() };
-      if (line === null) {
-        delete updated.statusMessageId;
-      } else {
-        updated.statusMessageId = line.messageId;
-        updated.lastStatusAt = line.postedAtMs;
-      }
-      await state.upsertSchedule(updated);
+      // Checked and written in ONE locked step: a `schedule_cancel` that removes the job meanwhile is never undone.
+      const isRecorded = await state.updateScheduleIfPresent(jobId, (record) => {
+        const updated: ScheduleRecord = { ...record, updatedAt: new Date().toISOString() };
+        if (line === null) {
+          delete updated.statusMessageId;
+        } else {
+          updated.statusMessageId = line.messageId;
+          updated.lastStatusAt = line.postedAtMs;
+        }
+        return updated;
+      });
       // Saved at once, like the alert pin: a line id lost in a crash would leave that line in the topic for good.
-      await state.flush();
-      return true;
+      if (isRecorded) await state.flush();
+      return isRecorded;
     },
     statusIntervalOverrideMs: ENV.testTimings.checkStatusIntervalMs,
   });

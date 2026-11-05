@@ -2581,6 +2581,29 @@ export class StateStore {
     });
   }
 
+  /**
+   * @description Rewrite a schedule that is still there: `update` gets the record as it stands INSIDE the owner's lock and
+   * returns its replacement, so the existence check and the write are one step and a concurrent {@link removeSchedule} (a
+   * cancel) can never be undone by a stale read of the record. Resolves `false`, writing nothing, when the schedule is
+   * gone — the caller then knows its work has nothing to belong to.
+   */
+  async updateScheduleIfPresent(id: string, update: (current: ScheduleRecord) => ScheduleRecord): Promise<boolean> {
+    const existing = this.state.schedules?.[id];
+    if (!existing) return false;
+    const owner = tryKeyFromString(existing.threadKey);
+    let isUpdated = false;
+    const run = async () => {
+      const current = this.state.schedules?.[id];
+      if (!current) return;
+      (this.state.schedules ??= {})[id] = update(current);
+      this.scheduleSave();
+      isUpdated = true;
+    };
+    if (owner) await this.withLock(owner, run);
+    else await run();
+    return isUpdated;
+  }
+
   /** Remove a schedule by id. No-op (no save) when absent. */
   async removeSchedule(id: string): Promise<void> {
     const existing = this.state.schedules?.[id];
