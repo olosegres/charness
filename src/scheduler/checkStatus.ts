@@ -1,4 +1,5 @@
 import { t } from '../i18n';
+import { cutTextSurrogateSafe } from '../utils/surrogateSafeCut';
 import { checkIsStreamShown } from '../utils/topicView';
 import type { TopicView } from '../types';
 import type { ScheduleRecord } from './types';
@@ -92,7 +93,8 @@ export function checkIsCheckStatusShown(input: { isTelegram: boolean; view: Topi
 export function formatCheckStatusActivity(text: string): string | null {
   const collapsed = text.replace(/\s+/g, ' ').trim();
   if (collapsed === '') return null;
-  return collapsed.length <= checkStatusActivityMaxChars ? collapsed : `${collapsed.slice(0, checkStatusActivityMaxChars - 1)}…`;
+  // The cut keeps room for the ellipsis and never splits an emoji's two halves: Telegram refuses a text that ends in half of one.
+  return collapsed.length <= checkStatusActivityMaxChars ? collapsed : `${cutTextSurrogateSafe(collapsed, checkStatusActivityMaxChars - 1)}…`;
 }
 
 /**

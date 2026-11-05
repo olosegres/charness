@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { markdownToAdf } from 'marklassian';
 import { getSingleLineText } from './promptText';
+import { getSurrogateSafeCutIndex } from '../../utils/surrogateSafeCut';
 
 /**
  * @description Atlassian Document Format for the Jira connector (plan J4, D3):
@@ -319,9 +320,6 @@ function getMarkdownBlocks(markdown: string): string[] {
   return blocks;
 }
 
-/** The first half of a character outside the BMP: a cut right after it leaves a lone surrogate on each side. */
-const highSurrogateRe = /^[\uD800-\uDBFF]$/;
-
 /**
  * A line cut into parts of at most `maxChars`, each cut after the last space
  * that fits (the space stays, so the text is unchanged) — a cut inside a word
@@ -333,7 +331,7 @@ function getLineParts(line: string, maxChars: number): string[] {
   let rest = line;
   while (rest.length > maxChars) {
     const lastSpace = rest.lastIndexOf(' ', maxChars - 1);
-    const hardCutAt = maxChars > 1 && highSurrogateRe.test(rest[maxChars - 1] ?? '') ? maxChars - 1 : maxChars;
+    const hardCutAt = getSurrogateSafeCutIndex(rest, maxChars);
     const cutAt = lastSpace > 0 ? lastSpace + 1 : hardCutAt;
     parts.push(rest.slice(0, cutAt));
     rest = rest.slice(cutAt);

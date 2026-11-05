@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'nod
 import path from 'node:path';
 import { resolveDataDir } from './state';
 import { getHourBucketPath, pruneExpiredBuckets, retentionMs } from './utils/rotatingLogFile';
+import { cutTextSurrogateSafe } from './utils/surrogateSafeCut';
 import { GENERAL_THREAD_ID } from './threadRouting';
 import type { SessionKey } from './sessionKey';
 import { keyToString } from './sessionKey';
@@ -55,9 +56,6 @@ const traceFileExt = 'jsonl';
 const traceFlushIntervalMs = 500;
 /** Flush early once the buffer reaches this many lines (bounds memory + lag). */
 const traceFlushMaxEntries = 200;
-/** Unicode high-surrogate range — a lone leading half breaks JSON consumers. */
-const highSurrogateMin = 0xd800;
-const highSurrogateMax = 0xdbff;
 
 // ─── runtime toggle state (seeded from state.json at boot via setTraceConfig) ───
 
@@ -141,12 +139,7 @@ export function pruneTraceBuckets(nowMs: number): Promise<void> {
  */
 export function createTracePreview(text: string): string {
   if (text.length <= previewLength) return text;
-  let cut = previewLength;
-  const lastCharCode = text.charCodeAt(cut - 1);
-  if (lastCharCode >= highSurrogateMin && lastCharCode <= highSurrogateMax) {
-    cut -= 1;
-  }
-  return `${text.slice(0, cut)}…`;
+  return `${cutTextSurrogateSafe(text, previewLength)}…`;
 }
 
 type TraceFieldValue = string | number | boolean | null | undefined;

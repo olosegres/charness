@@ -101,6 +101,18 @@ test('activity text: whitespace collapsed, cut at the limit with an ellipsis, bl
   assert.ok(cut?.endsWith('…'));
 });
 
+test('activity text: the cut never ends on half of an emoji — Telegram refuses such a text and the line would never be posted', () => {
+  const loneSurrogatePattern = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  // The emoji straddles the cut: its first half is the 119th character, the last one the ellipsis leaves room for.
+  const straddling = formatCheckStatusActivity(`${'a'.repeat(checkStatusActivityMaxChars - 2)}🚀${'b'.repeat(30)}`);
+  assert.doesNotMatch(straddling ?? '', loneSurrogatePattern);
+  assert.equal(straddling, `${'a'.repeat(checkStatusActivityMaxChars - 2)}…`, 'the emoji goes whole, not in half');
+  // One earlier it fits whole.
+  const fitting = formatCheckStatusActivity(`${'a'.repeat(checkStatusActivityMaxChars - 3)}🚀${'b'.repeat(30)}`);
+  assert.equal(fitting, `${'a'.repeat(checkStatusActivityMaxChars - 3)}🚀…`);
+  assert.equal(fitting?.length, checkStatusActivityMaxChars);
+});
+
 test('statusCommand output: the first non-empty line is «now»', () => {
   assert.equal(getCheckStatusActivityFromOutput('\n\n  step 4 of 9: linking  \nsecond line\n'), 'step 4 of 9: linking');
   assert.equal(getCheckStatusActivityFromOutput(''), null);
