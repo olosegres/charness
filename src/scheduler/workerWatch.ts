@@ -25,8 +25,6 @@ export const workerWatchCheckCron = '*/5 * * * *';
  * finished worker would alarm the operator for nothing (what they must notice, the agent asks as a question).
  */
 export const workerWatchPinArgument = 'isPinSilent: true';
-/** The `schedule_create` argument that names the worker's run directory as the check's status source. */
-export const workerWatchStatusRunDirArgumentName = 'statusWorkerRunDir';
 /** Minutes between the bot's status lines of a worker watch (the recipe passes it, whatever the default is). */
 export const workerWatchStatusEveryMinutes = 15;
 /**
@@ -35,4 +33,4 @@ export const workerWatchStatusEveryMinutes = 15;
  * frozen. `<run-dir>` is the worker's run directory, where its `events*.jsonl` log is. An agent never arms a status
  * schedule of its own.
  */
-export const workerWatchStatusArguments = `${workerWatchStatusRunDirArgumentName}: "<run-dir>", statusEveryMinutes: ${workerWatchStatusEveryMinutes}`;
+export const workerWatchStatusArguments = `statusWorkerRunDir: "<run-dir>", statusEveryMinutes: ${workerWatchStatusEveryMinutes}`;

@@ -41,7 +41,6 @@ import {
   workerWatchPinArgument,
   workerWatchStatusArguments,
   workerWatchStatusEveryMinutes,
-  workerWatchStatusRunDirArgumentName,
 } from './workerWatch';
 import { describeSchedule, validateScheduleSpec } from './recurrence';
 import { createStrictToolInput, getUnknownKeysMessageOfUnion, runWithRefusalLogging, type StrictToolInput } from './strictToolInput';
@@ -182,7 +181,7 @@ function buildRemoteRunInstruction(runnerLines: readonly string[], shownCount: n
 const orchestrationInstructionHead = '• You orchestrate detached workers (a `claude -p` / `opencode run` builder, reviewer, researcher) →';
 /** What the worker-watch recipe says once a tool is named: shared by both wordings of the Telegram bullet. */
 const workerWatchRecipeText =
-  `its description has the recipe (checkCommand, cron, \`${workerWatchPinArgument}\`, \`${workerWatchStatusRunDirArgumentName}\`); never \`kill -0\` alone: it never fires on a hung worker.`;
+  `its description has the recipe (checkCommand, cron, \`${workerWatchPinArgument}\`); never \`kill -0\` alone: it never fires on a hung worker.`;
 
 /**
  * The orchestration bullet of a conversation on a tracker, which has no scheduling tools: only the manager-skill hint, so
