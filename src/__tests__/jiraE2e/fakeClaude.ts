@@ -58,8 +58,17 @@ import {
   getFakeBackgroundTaskDescription,
   getFakeBackgroundTaskFinishedText,
 } from './fakeClaudeContract';
-import { fakeCancelWatchToken, fakeGoneWorkerPid, fakeWatchJobName, getBotMcpServer, type McpServerConfig } from './fakeClaudeContract';
-import { workerWatchCheckCommand } from '../../scheduler/workerWatch';
+import {
+  fakeCancelWatchToken,
+  fakeGoneWorkerPid,
+  fakeStatusWatchJobName,
+  fakeStatusWatchTargetFileName,
+  fakeWatchJobName,
+  getBotMcpServer,
+  type FakeStatusWatchTarget,
+  type McpServerConfig,
+} from './fakeClaudeContract';
+import { workerWatchCheckCommand, workerWatchStatusArguments } from '../../scheduler/workerWatch';
 import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent';
 import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost';
 
@@ -167,6 +176,9 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    true`, a prompt carrying `cancel-watch`; then ends the turn. `cancel-watch` — the check's wake: `schedule_list`,
  *    then `schedule_cancel` of that watch, as the skill's "cancel the check once the wake is handled". Both log every
  *    call to `tool-calls.jsonl` and are honoured by a turn with or without a request, by the token in its text;
+ *  - `arm-status-watch` — the same orchestrator on a worker the TEST started (the pid and run directory in
+ *    `fakeStatusWatchTargetFileName`): the real recipe plus its status arguments, so the bot's status line rides the watch;
+ *    the wake of the watch's failure is `cancel-watch`, which finds this watch too;
  *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
  *    session limit is hit and when it resets (the text of a `[limit-resets:<ISO instant or clock>]` token in the
  *    request's text); the next turn — the one the bot sends after it moved the topic to another account —
@@ -600,9 +612,22 @@ async function callBotTool(server: McpServerConfig, toolName: string, args: Reco
   }
 }
 
-/** @description `arm-watch` / `cancel-watch`: what an orchestrator does about one worker's watch (see the module). */
-async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'cancel-watch', issueKey: string): Promise<void> {
-  const logToolCall = (tool: string, args: Record<string, string | boolean>, outcome: string): void => {
+/**
+ * @description The arguments of a recipe string like `workerWatchStatusArguments` (`name: "text", other: 15`) as the tool call
+ * the agent would make from it: a quoted value is a string, a bare one a number.
+ */
+function parseRecipeArguments(recipeArguments: string): Record<string, string | number> {
+  return Object.fromEntries(
+    recipeArguments.split(', ').map((pair) => {
+      const [name, value] = pair.split(': ');
+      return [name, value.startsWith('"') ? JSON.parse(value) : Number(value)];
+    }),
+  );
+}
+
+/** @description `arm-watch` / `arm-status-watch` / `cancel-watch`: what an orchestrator does about one worker's watch (see the module). */
+async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-status-watch' | 'cancel-watch', issueKey: string): Promise<void> {
+  const logToolCall = (tool: string, args: Record<string, string | number | boolean>, outcome: string): void => {
     appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey, tool, args, outcome });
   };
   if (mode === 'arm-watch') {
@@ -616,9 +641,22 @@ async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'cancel
     logToolCall('schedule_create', args, await callBotTool(server, 'schedule_create', args));
     return;
   }
+  if (mode === 'arm-status-watch') {
+    const target: FakeStatusWatchTarget = JSON.parse(fs.readFileSync(path.join(getStateDir(), fakeStatusWatchTargetFileName), 'utf8'));
+    const args = {
+      name: fakeStatusWatchJobName,
+      cron: '* * * * *',
+      checkCommand: workerWatchCheckCommand.replaceAll('<pid>', target.pid.toString()).replaceAll('<run-dir>', target.runDir),
+      isPinSilent: true,
+      ...parseRecipeArguments(workerWatchStatusArguments.replaceAll('<run-dir>', target.runDir)),
+      prompt: `${fakeCancelWatchToken} The worker S2 finished or stalled: read its result, then cancel this watch.`,
+    };
+    logToolCall('schedule_create', args, await callBotTool(server, 'schedule_create', args));
+    return;
+  }
   const listed = await callBotTool(server, 'schedule_list', {});
   logToolCall('schedule_list', {}, listed);
-  const jobId = new RegExp(`${fakeWatchJobName} \\(id: ([^)]+)\\)`).exec(listed)?.[1];
+  const jobId = new RegExp(`(?:${fakeWatchJobName}|${fakeStatusWatchJobName}) \\(id: ([^)]+)\\)`).exec(listed)?.[1];
   if (jobId) logToolCall('schedule_cancel', { id: jobId }, await callBotTool(server, 'schedule_cancel', { id: jobId }));
 }
 
@@ -885,7 +923,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   }
   const requestId = requestIdRe.exec(content)?.[0];
   const watchMode = modeRe.exec(content)?.[1];
-  if (watchMode === 'arm-watch' || watchMode === 'cancel-watch') {
+  if (watchMode === 'arm-watch' || watchMode === 'arm-status-watch' || watchMode === 'cancel-watch') {
     const watchIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: requestId ?? null, issueKey: watchIssueKey, isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     emitTurnActivity(sessionId, watchIssueKey);

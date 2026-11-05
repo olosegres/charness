@@ -147,6 +147,21 @@ export const fakeGoneWorkerPid = 4_194_305;
 export const fakeCancelWatchToken = '[fake:cancel-watch]';
 
 /**
+ * `arm-status-watch` (the worker-status flow): the watch of a worker the TEST started (a real process) with the real recipe
+ * AND its status arguments (`scheduler/workerWatch.ts`). The worker and its run directory come from
+ * {@link fakeStatusWatchTargetFileName} in the fake's state dir; the wake of its failure runs `cancel-watch` as for
+ * {@link fakeWatchJobName}.
+ */
+export const fakeStatusWatchJobName = 'watch builder S2';
+/** The file in the fake's state dir (JSON, {@link FakeStatusWatchTarget}) `arm-status-watch` reads: the worker to watch. */
+export const fakeStatusWatchTargetFileName = 'status-watch-target.json';
+/** The worker a status watch is armed on: its process id and the run directory its event log is written in. */
+export interface FakeStatusWatchTarget {
+  pid: number;
+  runDir: string;
+}
+
+/**
  * While this file exists, `ask` mode streams its content as one assistant text right after it puts the question, while the
  * turn is still blocked on the answer — as a sub-agent or a parallel branch of the real CLI does. The text lands BELOW
  * the question in the topic, which is what makes the bot bring the question back to the bottom.
