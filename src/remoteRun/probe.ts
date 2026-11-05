@@ -217,9 +217,19 @@ export function formatRunnerDetails(probe: RunnerProbe, groupLimits: Readonly<Re
   ];
 }
 
-/** @name RunnerReport @description What `runners` knows of one runner after probing: live, or the last snapshot with why it is offline. */
+/**
+ * Why a runner whose link is up takes no new job: its Mac has the lid closed with nothing keeping it awake (no external display), so it is about to sleep —
+ * and wakes for a minute or two every so often on power, in which a job would start and be cut (`runnerUtility/lidState.ts`).
+ */
+export const lidClosedNote = 'takes no new jobs until its lid is opened (a job already running there goes on)';
+
+/**
+ * @name RunnerReport @description What `runners` knows of one runner after probing: live; or — its link is up, but the Mac's lid is closed (`lid-closed`: the runner
+ * is asked nothing, it may be falling asleep) — or offline: the last snapshot, with why. A `lid-closed` or `offline` runner takes no new job.
+ */
 export type RunnerReport =
   | { name: string; status: 'online'; probe: RunnerProbe; groupLimits: Record<string, number>; isPausedByHub: boolean }
+  | { name: string; status: 'lid-closed'; lastSeenAtMs: number | null; lastProbe: RunnerProbe | null; groupLimits: Record<string, number>; isPausedByHub: boolean }
   | { name: string; status: 'offline'; reason: string; lastSeenAtMs: number | null; lastProbe: RunnerProbe | null; groupLimits: Record<string, number>; isPausedByHub: boolean };
 
 /** @description Is the runner held back from new jobs — paused from the hub, or on the runner itself (what it said when it was last seen counts too)? */
@@ -240,11 +250,16 @@ export function formatLastSeen(timestampMs: number): string {
   return `${new Date(timestampMs).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
-/** @description The block `remote-run runners` prints for one runner. An offline one shows its last snapshot, marked as old. */
+/** @description The block `remote-run runners` prints for one runner. An offline one, and one whose lid is closed, show their last snapshot, marked as old. */
 export function formatRunnerBlock(report: RunnerReport): string {
   const pauseTags = formatPauseTags(report).map((tag) => ` · ${tag}`).join('');
   if (report.status === 'online') {
     return [`${report.name} — online${pauseTags} · ${formatSystem(report.probe)}`, ...formatRunnerDetails(report.probe, report.groupLimits)].join('\n');
+  }
+  if (report.status === 'lid-closed') {
+    const heading = `${report.name} — lid closed${pauseTags} · ${lidClosedNote}`;
+    if (report.lastProbe === null) return heading;
+    return [`${heading} — as last probed: ${formatSystem(report.lastProbe)}`, ...formatRunnerDetails(report.lastProbe, report.groupLimits)].join('\n');
   }
   const lastSeen = report.lastSeenAtMs === null ? 'never seen' : `last seen ${formatLastSeen(report.lastSeenAtMs)}`;
   if (report.lastProbe === null) return `${report.name} — offline (${report.reason})${pauseTags} · ${lastSeen}`;

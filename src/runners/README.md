@@ -44,6 +44,7 @@ runner name no hub path.
 | `gate` | the `sh` wrapper `exec '<node>' '<cli.js>' runner-gate "$@"`, rewritten at every start (`gateWrapper.ts`) |
 | `lock.<n>` | the registry lock (`hubLock.ts`): the holder is whoever made the highest number; no file is ever deleted on someone else's word, so two contenders that found one dead holder cannot both take over; a holder that is ALIVE (its pid and start time) is never overtaken — a hung one blocks the registry for the waiter, who fails after 15 s, instead of risking two writers |
 | `link/<id>.sock`, `link/<id>.json` | the socket of the gate that holds the link, and its pid / since / heartbeat / ended; deleted when the runner is removed (`cutRunnerLink`), and any left for a runner the registry does not know are swept (`sweepOrphanLinkRecords`) |
+| `link/<id>.lid` | the runner's last report about its LID: `{isClosed, reportedAtMs}` (see «The lid» below). A file of its own: the gate rewrites `<id>.json` every ten seconds and the report comes from another process. Deleted and swept with the other two |
 | `package/` | the packed hub package (`<id>.tgz`) and `current.json` (its source stamp) |
 
 Everything derived (`known_hosts`, the managed `authorized_keys` block) is rendered from the two registry files (`syncDerivedHubFiles`),
@@ -127,6 +128,7 @@ this machine's own loopback port — otherwise the runner would be told to pin a
 | runner | `version` | marker line with the hub's current `package=<id>`, nothing else — a linked runner asks every few minutes over its open connection |
 | runner | `identity` | marker line, then what `redeem` answered for this key's runner — the way back for a runner whose answer was lost (see below) |
 | runner | `unpair` | marker line, then `{ok}`; the hub removes the runner and cuts its link |
+| runner | `lid` | stdin `closed` or `open` (nothing else is taken); marker line, then `{ok}` — `ok:false` and exit 1 for any other body, the record unchanged |
 
 A **marker line** (`--charness-gate-1-- <request> key=value…`) opens every answer, after a line break that ends any unfinished line a shell
 rc printed; the reader discards what comes before it, so a chatty shell rc on the hub cannot corrupt the stream. The runner utility reads
@@ -143,6 +145,16 @@ refuses connections, the next gate renames over it, and `remove` deletes it. The
 whose runner left the registry. An ssh keepalive (15 s × 3) ends a gate whose peer is gone — a stock sshd with `ClientAliveInterval 0`
 never would. A runner is **online** when its socket accepts a connection (`linkControl.ts`); `link/<id>.json` says who holds it and
 when it was last seen. `remove` deletes the socket and stops the gate if the recorded pid still is that runner's gate (checked with `ps`).
+
+**The lid** (`linkControl.ts`: `readLidState` / `writeLidState`; `runnerUtility/lidState.ts` is the other end). A MacBook whose lid is closed with nothing keeping it
+awake is about to sleep, and wakes in the dark for a minute or two every so often on power: a job that lands then is cut. The runner's link looks at the lid every
+10 seconds and sends `lid closed|open` on the connection it already holds when what the hub was last told differs — and at the first look of every link, so the record is
+the last link's but a Mac that wakes says where its lid is. The gate stamps the report with its own clock and writes `link/<id>.lid`. The record OUTLIVES the link on
+purpose (a Mac that reconnects for its minute with the lid still shut must not look available before it says otherwise) and is read only beside an online link:
+`getRunnerLinkStatus` returns `isLidClosed` for the runner's socket that accepts; an offline runner is offline whatever it said. A record that does not read (damaged, a
+foreign shape) means an open lid — a runner is never taken out of use by a file nobody can read. `remoteRun/runners.ts` turns an online runner with a closed lid into the
+report `lid-closed` WITHOUT asking it (the ssh call may hang as the Mac falls asleep): not picked, a named one refused, `--needs` waits like for an offline one, `exec` refused;
+a job that already runs there, and `status` / `wait` / `logs` / `kill` of it, never go through a pick. `runners ls` and `/runners` say «lid closed» for «online».
 
 **Where a link comes from** (`linkConcern.ts`). A job on the runner's machine can read the runner's key, and «newest link wins» means a second
 connection with it silently replaces the first — whoever holds the key could be that machine, receive the project code the agents send to it and

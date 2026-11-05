@@ -13,10 +13,11 @@ import { Readable } from 'stream';
 import { gunzipSync } from 'zlib';
 import { parseGateArgs, routeGateRequest, runRunnerGate, type GateInvocation } from '../runners/gate';
 import { ensureGateWrapper, renderGateWrapper } from '../runners/gateWrapper';
-import { cancelReplySchema, gateMarker, maxGateRequestBytes, parseGateMarkerLine, redeemReplySchema, type GateMarker } from '../runners/gateProtocol';
+import { cancelReplySchema, gateMarker, lidReplySchema, maxGateRequestBytes, parseGateMarkerLine, redeemReplySchema, type GateMarker } from '../runners/gateProtocol';
 import { getHubFilePaths } from '../runners/hubPaths';
 import { createPairing, redeemPairing, removePairedRunner } from '../runners/hubPairing';
 import { readPairedFile, readPendingFile } from '../runners/hubRegistry';
+import { getRunnerLinkStatus, readLidState } from '../runners/linkControl';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { createCollector, createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 
@@ -84,18 +85,19 @@ describe('gate routing', () => {
     assert.equal(routeGateRequest('temporary', 'bootstrap'), 'bootstrap');
     assert.equal(routeGateRequest('temporary', 'redeem'), 'redeem');
     assert.equal(routeGateRequest('temporary', 'cancel'), 'cancel');
-    for (const command of ['link', 'package', 'version', 'identity', 'unpair', 'bootstrap now', 'redeem; id', ' redeem', '', 'sh', '$(id)', undefined]) {
+    for (const command of ['link', 'package', 'version', 'identity', 'unpair', 'lid', 'bootstrap now', 'redeem; id', ' redeem', '', 'sh', '$(id)', undefined]) {
       assert.equal(routeGateRequest('temporary', command), null, String(command));
     }
   });
 
-  it('a runner\'s key may link, fetch the package, ask the version and unpair — nothing else', () => {
+  it('a runner\'s key may link, fetch the package, ask the version, tell its lid and unpair — nothing else', () => {
+    assert.equal(routeGateRequest('runner', 'lid'), 'lid');
     assert.equal(routeGateRequest('runner', 'link'), 'link');
     assert.equal(routeGateRequest('runner', 'package'), 'package');
     assert.equal(routeGateRequest('runner', 'version'), 'version');
     assert.equal(routeGateRequest('runner', 'identity'), 'identity');
     assert.equal(routeGateRequest('runner', 'unpair'), 'unpair');
-    for (const command of ['bootstrap', 'redeem', 'cancel', 'link extra', 'scp -t /tmp', 'cat /etc/passwd', 'sftp', '', undefined]) {
+    for (const command of ['bootstrap', 'redeem', 'cancel', 'link extra', 'lid closed', 'scp -t /tmp', 'cat /etc/passwd', 'sftp', '', undefined]) {
       assert.equal(routeGateRequest('runner', command), null, String(command));
     }
   });
@@ -278,10 +280,51 @@ describe('gate requests', () => {
     assert.deepEqual(JSON.parse(splitMarker((await runGate(gateArgs('runner', runnerId), 'unpair')).stdout).body.toString('utf8')), { ok: false });
   });
 
-  it('a runner that left the registry is refused by `package`, `link` and `version` whatever its key line still allows', async () => {
+  describe('lid', () => {
+    async function tellLid(runnerId: string, body: string | Buffer): Promise<{ run: GateRun; reply: unknown }> {
+      const run = await runGate(gateArgs('runner', runnerId), 'lid', body);
+      const answer = splitMarker(run.stdout);
+      return { run, reply: answer.request === 'lid' ? lidReplySchema.parse(JSON.parse(answer.body.toString('utf8'))) : null };
+    }
+
+    it('records the report with the hub\'s own clock, and the link status says so — closed, then open again', async () => {
+      const runnerId = await pairRunner();
+      assert.equal((await getRunnerLinkStatus(fixture.ctx.dir, runnerId)).isLidClosed, false, 'a runner that never said anything has an open lid');
+      const closed = await tellLid(runnerId, 'closed\n');
+      assert.equal(closed.run.code, 0);
+      assert.deepEqual(closed.reply, { ok: true });
+      assert.deepEqual(readLidState(fixture.ctx.dir, runnerId), { isClosed: true, reportedAtMs: startMs + 1000 });
+      assert.equal((await getRunnerLinkStatus(fixture.ctx.dir, runnerId)).isLidClosed, true);
+      assert.deepEqual((await tellLid(runnerId, 'open')).reply, { ok: true });
+      assert.deepEqual(readLidState(fixture.ctx.dir, runnerId), { isClosed: false, reportedAtMs: startMs + 1000 });
+      assert.equal((await getRunnerLinkStatus(fixture.ctx.dir, runnerId)).isLidClosed, false);
+    });
+
+    it('takes nothing but «closed» and «open»: anything else is refused with ok:false and a failing exit, and the record stays as it was', async () => {
+      const runnerId = await pairRunner();
+      await tellLid(runnerId, 'closed');
+      for (const body of ['', 'maybe', 'Closed', 'closed open', '{"isClosed":false}', 'open; id', 'x'.repeat(maxGateRequestBytes + 1)]) {
+        const refused = await tellLid(runnerId, body);
+        assert.equal(refused.run.code, 1, body.slice(0, 20));
+        assert.deepEqual(refused.reply, { ok: false }, body.slice(0, 20));
+      }
+      assert.equal(readLidState(fixture.ctx.dir, runnerId)?.isClosed, true);
+    });
+
+    it('is one runner\'s record: another runner\'s lid is not touched', async () => {
+      const first = await pairRunner();
+      await tellLid(first, 'closed');
+      const second = await redeemPairing(fixture.ctx, await createOpenPairing(), createRedeemFixture({ suggestedName: 'other', publicKey: generateEd25519KeyPair('other').publicKey, hostKey: generateEd25519KeyPair('other-host').publicKey }).request, startMs);
+      if (!second.ok) throw new Error(second.reason);
+      assert.equal(readLidState(fixture.ctx.dir, second.runnerId), null);
+      assert.equal((await getRunnerLinkStatus(fixture.ctx.dir, second.runnerId)).isLidClosed, false);
+    });
+  });
+
+  it('a runner that left the registry is refused by `package`, `link`, `version` and `lid` whatever its key line still allows', async () => {
     const runnerId = await pairRunner();
     await removePairedRunner(fixture.ctx, runnerId, startMs);
-    for (const command of ['package', 'link', 'version']) {
+    for (const command of ['package', 'link', 'version', 'lid']) {
       const run = await runGate(gateArgs('runner', runnerId), command);
       assert.equal(run.code, 2, command);
       assert.equal(run.stdout.length, 0, command);

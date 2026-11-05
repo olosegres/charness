@@ -1,6 +1,6 @@
 import { Client, type ClientChannel, type ServerHostKeyAlgorithm } from 'ssh2';
 import type { z } from 'zod';
-import { readUntilGateMarker, type GateMarker, type GateRequest } from '../runners/gateProtocol';
+import { lidReplySchema, lidReportBodies, readUntilGateMarker, type GateMarker, type GateRequest } from '../runners/gateProtocol';
 import { parsePublicKey } from '../runners/sshKeys';
 
 /**
@@ -119,8 +119,8 @@ export async function readChannelText(channel: ClientChannel): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/** @description A gate request whose answer is one JSON line (`redeem`, `cancel`, `identity`, `unpair`), parsed with `schema`. */
-export async function requestGateJson<TReply>(client: Client, request: 'redeem' | 'cancel' | 'unpair' | 'identity', body: string | null, schema: z.ZodType<TReply>): Promise<TReply> {
+/** @description A gate request whose answer is one JSON line (`redeem`, `cancel`, `identity`, `unpair`, `lid`), parsed with `schema`. */
+export async function requestGateJson<TReply>(client: Client, request: 'redeem' | 'cancel' | 'unpair' | 'identity' | 'lid', body: string | null, schema: z.ZodType<TReply>): Promise<TReply> {
   const answer = await callGate(client, request, body ?? '');
   if (answer === null) throw new HubConnectionError('network', 'the hub did not answer the request');
   const text = await readChannelText(answer.channel);
@@ -133,4 +133,10 @@ export async function requestGateJson<TReply>(client: Client, request: 'redeem' 
   const parsed = schema.safeParse(parsedJson);
   if (!parsed.success) throw new HubConnectionError('network', 'the hub\'s answer is not what this version expects');
   return parsed.data;
+}
+
+/** @description Tell the hub whether this Mac's lid is closed with nothing keeping it awake (the `lid` request); `true` when the hub took the report. Throws like any gate request when the hub cannot be reached. */
+export async function sendLidReport(client: Client, isClosed: boolean): Promise<boolean> {
+  const reply = await requestGateJson(client, 'lid', isClosed ? lidReportBodies.closed : lidReportBodies.open, lidReplySchema);
+  return reply.ok;
 }

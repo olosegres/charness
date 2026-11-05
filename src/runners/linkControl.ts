@@ -14,10 +14,16 @@ import { getLinkConcern, linkSourceChangeSchema, maxRecordedSourceChanges, maxSo
  * when it was last seen. A removed runner's link is cut by deleting the socket (the gate notices within one check interval and
  * leaves) and, when the recorded pid still is that runner's gate, by stopping it at once; its two link files go with it, and any left behind
  * for a runner the registry does not know are swept by {@link sweepOrphanLinkRecords}.
+ *
+ * A Mac runner also tells the hub when its LID is closed with nothing keeping the machine awake (`lid` request of the gate; `lidState` below): it is
+ * going to sleep, and a job that lands in the minute before it does — or in the dark wake macOS gives a sleeping Mac on power every so often — is cut. The
+ * record outlives the link on purpose: a Mac that wakes for those seconds reconnects with the lid still shut, and must not look available until it
+ * says it is not.
  */
 
 const stateFileMode = 0o600;
 const probeTimeoutMs = 1000;
+const lidFileMode = 0o600;
 
 const linkStateSchema = z.strictObject({
   pid: z.number().int().positive(),
@@ -34,6 +40,15 @@ const linkStateSchema = z.strictObject({
 /** @name LinkState @description `link/<id>.json`. */
 export type LinkState = z.infer<typeof linkStateSchema>;
 
+const lidStateSchema = z.strictObject({
+  /** The lid is closed and nothing keeps the Mac awake (no external display): it takes no new job. */
+  isClosed: z.boolean(),
+  reportedAtMs: z.number().int().nonnegative(),
+});
+
+/** @name LidState @description `link/<id>.lid`: the runner's last report about its lid. */
+export type LidState = z.infer<typeof lidStateSchema>;
+
 export interface RunnerLinkStatus {
   isOnline: boolean;
   /** When the link in force started (only while online). */
@@ -44,6 +59,8 @@ export interface RunnerLinkStatus {
   source: string | null;
   /** What is worth telling about where the link comes from (`linkConcern.ts`) — it stays until the runner is removed or paired again; `null` when the link never changed address. */
   concern: LinkConcern | null;
+  /** The runner's last report says its lid is closed with nothing keeping it awake. Only meaningful beside `isOnline`: a runner that is not linked is offline, whatever it said last. */
+  isLidClosed: boolean;
 }
 
 export function readLinkState(dir: string, runnerId: string): LinkState | null {
@@ -58,6 +75,21 @@ export function readLinkState(dir: string, runnerId: string): LinkState | null {
 export function writeLinkState(dir: string, runnerId: string, state: LinkState): void {
   fs.mkdirSync(getHubFilePaths(dir).linkDir, { recursive: true, mode: 0o700 });
   writeJsonFileAtomically(getRunnerLinkPaths(dir, runnerId).state, linkStateSchema.parse(state), stateFileMode);
+}
+
+/** @description What the runner last said about its lid, `null` when it never said (a runner that is not a Mac, or an older one). */
+export function readLidState(dir: string, runnerId: string): LidState | null {
+  try {
+    const parsed = lidStateSchema.safeParse(JSON.parse(fs.readFileSync(getRunnerLinkPaths(dir, runnerId).lid, 'utf8')));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLidState(dir: string, runnerId: string, state: LidState): void {
+  fs.mkdirSync(getHubFilePaths(dir).linkDir, { recursive: true, mode: 0o700 });
+  writeJsonFileAtomically(getRunnerLinkPaths(dir, runnerId).lid, lidStateSchema.parse(state), lidFileMode);
 }
 
 /** @description Does anything accept a connection on the unix socket `socketPath` right now? */
@@ -84,6 +116,7 @@ export async function getRunnerLinkStatus(dir: string, runnerId: string): Promis
     lastSeenMs: state === null ? null : (state.endedAtMs ?? state.lastBeatMs),
     source: state?.source ?? null,
     concern: getLinkConcern(state?.sourceChanges),
+    isLidClosed: readLidState(dir, runnerId)?.isClosed === true,
   };
 }
 
@@ -105,20 +138,22 @@ export function cutRunnerLink(dir: string, runnerId: string): void {
       if (getCaughtErrnoCode(error) !== 'ESRCH') throw error;
     }
   }
-  // Nobody reads the status of a runner that is gone, and a gate that leaves because of the removal writes none (`gateLink.ts`).
+  // Nobody reads the status of a runner that is gone, and a gate that leaves because of the removal writes none (`gateLink.ts`). Its lid report goes with it:
+  // the name or the id may belong to another machine tomorrow.
   fs.rmSync(paths.state, { force: true });
+  fs.rmSync(paths.lid, { force: true });
 }
 
-const linkRecordExtensions = ['json', 'sock'];
+const linkRecordExtensions = ['json', 'sock', 'lid'];
 
-/** @description The runner id a link file belongs to (`<id>.json`, `<id>.sock`); `null` for anything else in the folder (a temp file of an atomic write, a gate's pending socket). */
+/** @description The runner id a link file belongs to (`<id>.json`, `<id>.sock`, `<id>.lid`); `null` for anything else in the folder (a temp file of an atomic write, a gate's pending socket). */
 function getLinkRecordRunnerId(fileName: string): string | null {
   const [runnerId, extension, ...rest] = fileName.split('.');
   return hubIdPattern.test(runnerId) && linkRecordExtensions.includes(extension) && rest.length === 0 ? runnerId : null;
 }
 
 /**
- * @description Delete the link files (`<id>.json`, `<id>.sock`) of every runner that is not in `registeredRunnerIds`: a removal that was cut
+ * @description Delete the link files (`<id>.json`, `<id>.sock`, `<id>.lid`) of every runner that is not in `registeredRunnerIds`: a removal that was cut
  * short, a gate that wrote its status after the removal, a runner dropped from the registry by hand. Records of a runner whose gate is still
  * running are kept — it is on its way out, and {@link cutRunnerLink} still needs the pid to stop it.
  *

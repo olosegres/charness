@@ -54,6 +54,7 @@ async function readEntry(ctx: HubContext, runner: PairedRunner, cacheDir: string
     isReportDoubtful: isReportOutOfDate,
     linkSinceMs: status.sinceMs,
     linkConcern: status.concern,
+    isLidClosed: status.isOnline && status.isLidClosed,
   };
 }
 
@@ -70,6 +71,8 @@ export async function readRunnersOverview(ctx: HubContext, cacheDir: string, now
 function applyReport(entry: RunnerScreenEntry, report: RunnerReport | undefined): RunnerScreenEntry {
   if (report === undefined) return entry;
   if (report.status === 'online') return { ...entry, probe: report.probe };
+  // Linked, but its Mac's lid is shut: it was not asked, so what is shown is the snapshot the entry already holds (a fresh one would pass for an answer).
+  if (report.status === 'lid-closed') return { ...entry, isLidClosed: true, probe: entry.probe ?? report.lastProbe };
   // It answered the socket probe but not the ssh one: it is shown as it was, offline.
   return { ...entry, isOnline: false, lastSeenMs: report.lastSeenAtMs ?? entry.lastSeenMs, probe: report.lastProbe ?? entry.probe };
 }

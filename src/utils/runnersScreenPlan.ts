@@ -104,6 +104,8 @@ export interface RunnerScreenEntry {
   probe: RunnerProbe | null;
   /** What is worth telling about where its link comes from (the address changed, or two links fight: `runners/linkConcern.ts`); absent / `null` = nothing. */
   linkConcern?: LinkConcern | null;
+  /** Online, but the Mac's lid is shut with nothing keeping it awake: it takes no new job (`runners/linkControl.ts`); `probe` is then the last snapshot, not a live answer. Absent = no. */
+  isLidClosed?: boolean;
 }
 
 export interface RunnersScreenModel {
@@ -194,7 +196,7 @@ function buildEntryBlock(entry: RunnerScreenEntry, t: Translate, formatTime: For
 function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: FormatTime): string[] {
   const { runner, probe } = entry;
   const status = entry.isOnline
-    ? t('runners.statusOnline')
+    ? t(entry.isLidClosed === true ? 'runners.statusLidClosed' : 'runners.statusOnline')
     : entry.lastSeenMs === null
       ? t('runners.statusNeverSeen')
       : t('runners.statusOffline', { time: formatTime(entry.lastSeenMs) });
@@ -202,7 +204,8 @@ function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: For
   const heading = [status, ...(runner.isPaused ? [t('runners.pausedMark')] : []), describeSystem(entry), t(serviceKindKeys[serviceKind])].join(' · ');
   const lines = [`${runner.name} — ${heading}`];
   if (probe === null) return lines;
-  if (entry.isOnline) {
+  // A Mac with its lid shut is not asked: what is shown is the last snapshot, as for a machine that is offline.
+  if (entry.isOnline && entry.isLidClosed !== true) {
     lines.push(
       `  ${t('runners.hardwareLine', { cpu: describeCpu(probe, t, true), ramTotal: formatGigabytes(probe.ramTotalMb), ramFree: formatGigabytes(probe.ramFreeMb), disk: formatGigabytes(probe.diskFreeMb) })}`,
       `  ${t('runners.jobsLine', { running: probe.jobsRunning, queued: probe.jobsQueued, projects: probe.jobsProjects })}${probe.pueueVersion === null ? ` · ${t('runners.pueueMissing')}` : ''}`,

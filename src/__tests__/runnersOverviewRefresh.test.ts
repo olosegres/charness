@@ -16,9 +16,10 @@ import path from 'node:path';
 import { parseProbeOutput } from '../remoteRun/probe';
 import { getRunnerLinkPaths } from '../runners/hubPaths';
 import { writePairedFile } from '../runners/hubRegistry';
-import { writeLinkState } from '../runners/linkControl';
+import { writeLidState, writeLinkState } from '../runners/linkControl';
 import { readProbeFailure, removeLastProbe, writeProbeFailure } from '../remoteRun/runners';
 import { formatRunnerList } from '../runners/runnersList';
+import { probeRunnersOverview } from '../runners/runnersOverview';
 import { probeRetryAfterMs, readRunnersOverview, refreshStaleSnapshots, staleRefreshDeadlineMs, type RunnersOverview } from '../runners/runnersOverview';
 import { createPairedRunnerFixture } from './remoteRunPairedKit';
 import { createHubFixture, type HubFixture } from './runnersTestKit';
@@ -100,6 +101,60 @@ describe('where a machine\'s link comes from', () => {
     const text = formatRunnerList(overview.entries, [], nowMs);
     assert.match(text.split('\n')[0], /\(its link now comes from 203\.0\.113\.9, before from 198\.51\.100\.7, [\d-]+ [\d:]+, taking the place of a link that was still up/);
     assert.doesNotMatch(text.split('\n')[1], /its link now comes from/);
+  });
+});
+
+describe('a machine whose Mac has its lid closed', () => {
+  const closed = { isClosed: true, reportedAtMs: nowMs - 1000 };
+
+  it('the overview says so from the link\'s own record — with no ssh call — for a machine that is online, and for no other: an offline machine is offline, whatever it said last', async () => {
+    pairBoth();
+    await putLinkUp('a1b2c3d4e5f6', linkStartMs);
+    writeLidState(hub.ctx.dir, 'a1b2c3d4e5f6', closed);
+    writeLidState(hub.ctx.dir, secondRunnerId, closed);
+    const overview = await readRunnersOverview(hub.ctx, cacheDir, nowMs);
+    assert.deepEqual(overview.entries.map((entry) => [entry.runner.name, entry.isOnline, entry.isLidClosed]), [['mac', true, true], ['box', false, false]]);
+  });
+
+  it('a machine that said its lid is open again is just online', async () => {
+    pairBoth();
+    await putLinkUp('a1b2c3d4e5f6', linkStartMs);
+    writeLidState(hub.ctx.dir, 'a1b2c3d4e5f6', closed);
+    writeLidState(hub.ctx.dir, 'a1b2c3d4e5f6', { isClosed: false, reportedAtMs: nowMs });
+    assert.equal((await readRunnersOverview(hub.ctx, cacheDir, nowMs)).entries[0].isLidClosed, false);
+  });
+
+  it('the `ls` line says «lid closed» where it would say «online», with what that means', async () => {
+    pairBoth();
+    await putLinkUp('a1b2c3d4e5f6', linkStartMs);
+    writeLidState(hub.ctx.dir, 'a1b2c3d4e5f6', closed);
+    const text = formatRunnerList((await readRunnersOverview(hub.ctx, cacheDir, nowMs)).entries, [], nowMs);
+    assert.match(text.split('\n')[0], /^mac — lid closed \(takes no new jobs until its lid is opened \(a job already running there goes on\)\) · /);
+    assert.doesNotMatch(text.split('\n')[0], /— online/);
+  });
+
+  it('the screen\'s probe does not ask it (the report is «lid closed», no ssh call) and keeps the snapshot the entry holds — a fresh read of the same file would pass for an answer', async () => {
+    pairBoth();
+    await putLinkUp('a1b2c3d4e5f6', linkStartMs);
+    saveReport('mac', linkStartMs + 1, byHandReport);
+    writeLidState(hub.ctx.dir, 'a1b2c3d4e5f6', closed);
+    const overview = await readRunnersOverview(hub.ctx, cacheDir, nowMs);
+    const probed = await probeRunnersOverview(hub.ctx, overview, cacheDir, nowMs, 5000);
+    assert.equal(probed.entries[0].isOnline, true);
+    assert.equal(probed.entries[0].isLidClosed, true);
+    assert.equal(probed.entries[0].probe, overview.entries[0].probe, 'the snapshot the entry held, not a new reading of it');
+    assert.equal(probed.entries[0].probe?.serviceKind, 'foreground');
+  });
+
+  it('a listing\'s refresh of a stale machine whose lid is closed leaves its report doubtful: nothing was asked, so nothing was answered', async () => {
+    pairBoth();
+    await putLinkUp('a1b2c3d4e5f6', linkStartMs);
+    saveReport('mac', linkStartMs - 1000, byHandReport);
+    writeLidState(hub.ctx.dir, 'a1b2c3d4e5f6', closed);
+    const refreshed = await refreshStaleSnapshots(hub.ctx, await readRunnersOverview(hub.ctx, cacheDir, nowMs), cacheDir, nowMs);
+    assert.equal(refreshed.entries[0].isLidClosed, true);
+    assert.equal(refreshed.entries[0].isReportDoubtful, true);
+    assert.equal(refreshed.entries[0].probe?.serviceKind, 'foreground');
   });
 });
 

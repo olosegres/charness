@@ -225,6 +225,33 @@ describe('runnersScreenPlan: the list', () => {
     }
   });
 
+  it('a machine online with its Mac\'s lid closed says so where it says «online» and shows its last snapshot as an old one — no jobs, no capabilities, no load: it was not asked', () => {
+    const entry = createEntry({ isLidClosed: true });
+    const { text } = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime);
+    assert.ok(text.includes('mac — lid closed — takes no new jobs · macOS 15.1 (arm64) · always on (system service)\n'), text);
+    assert.ok(text.includes('  as it was then: Apple M2 Pro, 12 cores · RAM 32 GB · disk 210 GB free'), text);
+    assert.ok(!text.includes('jobs:') && !text.includes('can:') && !text.includes('load') && !text.includes('— online'), text);
+  });
+
+  it('a lid-closed machine keeps its Pause and Remove buttons: the lid is not a state the operator sets', () => {
+    const screen = buildRunnersScreen({ revision, entries: [createEntry({ isLidClosed: true })], openPairingExpiries: [], isChecking: false }, t, formatTime);
+    assert.deepEqual(screen.rows[1].map((button) => button.text), ['mac: Pause', 'mac: Remove']);
+  });
+
+  it('in every language the lid-closed status is its own words, not the English ones and not the online word', () => {
+    const english = t('runners.statusLidClosed');
+    for (const code of localeCodes) {
+      runWithLocale(code, () => {
+        const text = t('runners.statusLidClosed');
+        assert.notEqual(text, '', code);
+        assert.notEqual(text, t('runners.statusOnline'), code);
+        if (code !== 'en') assert.notEqual(text, english, code);
+        const { text: screen } = buildRunnersScreen({ revision, entries: [createEntry({ isLidClosed: true })], openPairingExpiries: [], isChecking: false }, t, formatTime);
+        assert.ok(screen.includes(`mac — ${text} · `), `${code}: ${screen}`);
+      });
+    }
+  });
+
   it('an offline machine shows when it was last seen and its last snapshot, marked as old — no jobs, no capabilities, no load', () => {
     const entry = createEntry({ isOnline: false, lastSeenMs: 5_000, runner: createRunner({ name: 'box1', isPaused: true, serviceKind: 'user-service' }) });
     const { text } = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime);

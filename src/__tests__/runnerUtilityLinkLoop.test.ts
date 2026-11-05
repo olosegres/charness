@@ -18,6 +18,7 @@ import { decideUpdate, updateRetryDelayMs } from '../runnerUtility/appUpdate';
 import { checkArchiveHasId, checkIsPackageId, getPackageIdOfArchive } from '../runnerUtility/packageId';
 import { HubConnectionError } from '../runnerUtility/hubClient';
 import { computeBackoffMs, createLinkLoop, removalConfirmMs, removedRetryMs } from '../runnerUtility/linkLoop';
+import { createLidWatcher, type LidWatcher } from '../runnerUtility/lidState';
 import { readRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { createHubAuthenticator, createRunnerServers, type RunnerServers } from '../runnerUtility/runnerServers';
@@ -259,6 +260,8 @@ interface HubStandIn {
   holdLinkAnswer: { until: Promise<void> | null; requestCount: number };
   /** While `until` is set the hub takes an `identity` request and answers it only when that promise settles — a runner caught asking «who am I» after a refused link. */
   holdIdentityAnswer: { until: Promise<void> | null; requestCount: number };
+  /** The body of every `lid` request the hub took, in order; with `isRefused` set it takes none and answers like a gate that does not know the word. */
+  lidRequests: { bodies: string[]; count: number; isRefused: boolean };
   close: () => void;
 }
 
@@ -272,6 +275,7 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
   const refuseLinkWith: { reply: string | null } = { reply: null };
   const holdLinkAnswer: { until: Promise<void> | null; requestCount: number } = { until: null, requestCount: 0 };
   const holdIdentityAnswer: { until: Promise<void> | null; requestCount: number } = { until: null, requestCount: 0 };
+  const lidRequests: HubStandIn['lidRequests'] = { bodies: [], count: 0, isRefused: false };
   const server = new Server({ hostKeys: [hostKey.privateKey] }, (connection) => {
     connections.opened += 1;
     connection.on('error', () => undefined);
@@ -311,6 +315,24 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
             };
             if (holdLinkAnswer.until === null) answerLink();
             else void holdLinkAnswer.until.then(answerLink);
+          } else if (info.command === 'lid') {
+            lidRequests.count += 1;
+            const channel = accept();
+            if (lidRequests.isRefused) {
+              channel.stderr.write('charness-gate: refused: this key may only be used by charness-runner\n');
+              channel.exit(2);
+              channel.end();
+              return;
+            }
+            let body = '';
+            channel.on('data', (chunk: Buffer) => { body += chunk.toString('utf8'); });
+            channel.once('end', () => {
+              lidRequests.bodies.push(body.trim());
+              channel.write(formatGateAnswerHead('lid'));
+              channel.write(`${JSON.stringify({ ok: true })}\n`);
+              channel.exit(0);
+              channel.end();
+            });
           } else if (info.command === 'version') {
             versionRequests.count += 1;
             const channel = accept();
@@ -327,7 +349,7 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
   await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('the stand-in has no port');
-  return { port: address.port, hostKey, currentPackageId, linkChannels, connections, versionRequests, refuseLinkWith, holdLinkAnswer, holdIdentityAnswer, close: () => { server.close(); } };
+  return { port: address.port, hostKey, currentPackageId, linkChannels, connections, versionRequests, refuseLinkWith, holdLinkAnswer, holdIdentityAnswer, lidRequests, close: () => { server.close(); } };
 }
 
 const installedPackageId = '0123456789abcdef';
@@ -343,7 +365,7 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
     return { acceptLinkStream: () => undefined, getActiveExecCount: () => state.busy };
   }
 
-  function startLoop(options: { servers: RunnerServers; update?: Parameters<typeof createLinkLoop>[0]['update']; versionPollMs?: number; now?: () => number; stopJobs?: () => Promise<void> }) {
+  function startLoop(options: { servers: RunnerServers; update?: Parameters<typeof createLinkLoop>[0]['update']; versionPollMs?: number; now?: () => number; stopJobs?: () => Promise<void>; lid?: LidWatcher; lidPollMs?: number }) {
     const config = createConfig();
     const abort = new AbortController();
     aborts.push(abort);
@@ -354,6 +376,8 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
       servers: options.servers,
       update: options.update,
       stopJobs: options.stopJobs,
+      lid: options.lid,
+      lidPollMs: options.lidPollMs,
       versionPollMs: options.versionPollMs ?? 60_000,
       now: options.now,
       sleep: () => new Promise((resolve) => { setTimeout(resolve, 20); }),
@@ -513,6 +537,131 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
     nowMs += updateRetryDelayMs;
     assert.equal(await finished, 75);
     assert.equal(updateCalls, 2);
+  });
+});
+
+describe('a Mac\'s link and its lid (against the same hub stand-in)', () => {
+  const clientKey = generateEd25519KeyPair('runner-client');
+  let hub: HubStandIn;
+  const aborts: AbortController[] = [];
+  const running: Array<Promise<number>> = [];
+  const lidLookMs = 40;
+  /** What the I/O Registry says, by test: the lid is open, closed with nothing keeping the Mac awake, or closed in clamshell mode. */
+  const registry = { text: '' as string | null, reads: 0 };
+  const registryTexts = {
+    open: '"AppleClamshellCausesSleep" = Yes\n"AppleClamshellState" = No\n',
+    closed: '"AppleClamshellCausesSleep" = Yes\n"AppleClamshellState" = Yes\n',
+    clamshellMode: '"AppleClamshellCausesSleep" = No\n"AppleClamshellState" = Yes\n',
+  };
+  let logLines: string[] = [];
+
+  function startMacLink(options: { lid?: LidWatcher } = {}): { finished: Promise<number> } {
+    const config = createConfig();
+    const abort = new AbortController();
+    aborts.push(abort);
+    const lid = options.lid ?? createLidWatcher({ readRegistry: async () => { registry.reads += 1; return registry.text; }, log: (line) => logLines.push(line) });
+    const loop = createLinkLoop({
+      paths,
+      config: { ...config, packageId: installedPackageId, hub: { ...config.hub, host: '127.0.0.1', port: hub.port, hostKey: hub.hostKey.publicKey } },
+      keys: { client: clientKey, server: generateEd25519KeyPair('s') },
+      servers: { acceptLinkStream: () => undefined, getActiveExecCount: () => 0 },
+      lid,
+      lidPollMs: lidLookMs,
+      versionPollMs: 60_000,
+      sleep: () => new Promise((resolve) => { setTimeout(resolve, 20); }),
+    });
+    const finished = loop.run(abort.signal);
+    running.push(finished);
+    return { finished };
+  }
+
+  async function waitForLidReports(count: number): Promise<void> {
+    await waitUntil(() => hub.lidRequests.bodies.length >= count, `${count} lid report(s) at the hub`, 15_000);
+  }
+
+  beforeEach(async () => {
+    hub = await startHubStandIn(clientKey.publicKey, installedPackageId);
+    registry.text = registryTexts.open;
+    registry.reads = 0;
+    logLines = [];
+  });
+  afterEach(async () => {
+    for (const abort of aborts.splice(0)) abort.abort();
+    await Promise.race([Promise.all(running.splice(0)), new Promise((resolve) => { setTimeout(resolve, 3000); })]);
+    hub.close();
+  });
+
+  it('tells the hub the state of the lid the moment the link is up, and again only when it changes: closed, then open', async () => {
+    startMacLink();
+    await waitForLidReports(1);
+    assert.deepEqual(hub.lidRequests.bodies, ['open'], 'a new link says how things are, even when the lid is open');
+    registry.text = registryTexts.closed;
+    await waitForLidReports(2);
+    const readsWhenClosed = registry.reads;
+    await waitUntil(() => registry.reads >= readsWhenClosed + 3, 'the lid to be looked at again a few times while it stays shut');
+    assert.deepEqual(hub.lidRequests.bodies, ['open', 'closed'], 'a lid that stays shut is not told again');
+    registry.text = registryTexts.open;
+    await waitForLidReports(3);
+    assert.deepEqual(hub.lidRequests.bodies, ['open', 'closed', 'open']);
+  });
+
+  it('a lid shut with an external display keeping the Mac awake (clamshell mode) is told as open: such a Mac takes jobs', async () => {
+    registry.text = registryTexts.clamshellMode;
+    startMacLink();
+    await waitForLidReports(1);
+    await waitUntil(() => registry.reads >= 4, 'a few looks');
+    assert.deepEqual(hub.lidRequests.bodies, ['open']);
+  });
+
+  it('a link that begins anew tells the hub again at once — even the same state: the hub\'s record is the last link\'s, and a Mac that woke for a minute says where its lid is', async () => {
+    registry.text = registryTexts.closed;
+    startMacLink();
+    await waitForLidReports(1);
+    await waitUntil(() => hub.linkChannels.length === 1, 'the first link');
+    hub.linkChannels[0].close();
+    await waitUntil(() => hub.linkChannels.length === 2, 'a second link after the first one was cut', 15_000);
+    await waitForLidReports(2);
+    assert.deepEqual(hub.lidRequests.bodies, ['closed', 'closed']);
+  });
+
+  it('a runner without a lid watcher (not a Mac) never sends the hub a lid request', async () => {
+    const config = createConfig();
+    const abort = new AbortController();
+    aborts.push(abort);
+    const loop = createLinkLoop({
+      paths,
+      config: { ...config, packageId: installedPackageId, hub: { ...config.hub, host: '127.0.0.1', port: hub.port, hostKey: hub.hostKey.publicKey } },
+      keys: { client: clientKey, server: generateEd25519KeyPair('s') },
+      servers: { acceptLinkStream: () => undefined, getActiveExecCount: () => 0 },
+      lidPollMs: lidLookMs,
+      versionPollMs: 60_000,
+      sleep: () => new Promise((resolve) => { setTimeout(resolve, 20); }),
+    });
+    running.push(loop.run(abort.signal));
+    await waitUntil(() => hub.linkChannels.length === 1, 'the link', 15_000);
+    await new Promise((resolve) => { setTimeout(resolve, lidLookMs * 8); });
+    assert.equal(hub.lidRequests.count, 0);
+  });
+
+  it('a hub that refuses the word does not disturb the link: it stays up, the runner tries again at every look and says so ONCE', async () => {
+    hub.lidRequests.isRefused = true;
+    startMacLink();
+    await waitUntil(() => hub.lidRequests.count >= 4, 'several tries', 15_000);
+    assert.equal(readRunnerStatus(paths)?.state, 'linked');
+    assert.equal(logLines.filter((line) => /did not take the report of the lid/.test(line)).length, 1);
+    hub.lidRequests.isRefused = false;
+    await waitForLidReports(1);
+    assert.deepEqual(hub.lidRequests.bodies, ['open']);
+  });
+
+  it('an ioreg that cannot be read is an open lid and one line in the log, however many looks fail; the link is never held back', async () => {
+    registry.text = null;
+    startMacLink();
+    await waitForLidReports(1);
+    await waitUntil(() => registry.reads >= 5, 'several failing looks');
+    assert.equal(logLines.filter((line) => /the lid state cannot be read/.test(line)).length, 1);
+    assert.deepEqual(hub.lidRequests.bodies, ['open']);
+    assert.equal(readRunnerStatus(paths)?.state, 'linked');
   });
 });
 

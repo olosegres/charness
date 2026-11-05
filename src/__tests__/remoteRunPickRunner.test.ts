@@ -135,6 +135,49 @@ describe('pickRunner — paused runners are never picked', () => {
   });
 });
 
+describe('pickRunner — a runner whose Mac has its lid closed is never picked (it is about to sleep)', () => {
+  /** Linked, but the Mac reports a closed lid with nothing keeping it awake: the hub asked it nothing, so the report holds only the last snapshot. */
+  function lidClosed(name: string, probeText: string | null, extra: Partial<Extract<RunnerReport, { status: 'lid-closed' }>> = {}): RunnerReport {
+    return { name, status: 'lid-closed', lastSeenAtMs: null, lastProbe: probeText === null ? null : parseProbeOutput(probeText), groupLimits: {}, isPausedByHub: false, ...extra };
+  }
+
+  it('is skipped for the next runner in the file, like an offline one — also when it is the first and the only one with the capability a later one lacks', () => {
+    assert.deepEqual(pickRunner(config, [lidClosed('mac', macWithIos), online('box1', linuxWithAndroid)], { runner: null, needs: null }), { ok: true, runnerName: 'box1' });
+    const pick = pickRunner(config, [lidClosed('mac', macWithIos), online('box1', linuxWithAndroid)], { runner: null, needs: 'ios' });
+    assert.ok(!pick.ok && pick.exitCode === 125 && pick.message.startsWith('no online runner can do "ios" (lid closed, so not used: mac)\n'));
+  });
+
+  it('nothing else is online: 125 naming the Mac whose lid is shut — and only those that could have done the job', () => {
+    const reports = [lidClosed('mac', macWithIos), lidClosed('box1', linuxWithAndroid), offline('box2')];
+    const any = pickRunner(config, reports, { runner: null, needs: null });
+    assert.ok(!any.ok && any.exitCode === 125 && any.message.startsWith('no runner is online (lid closed, so not used: mac, box1)\n'));
+    const ios = pickRunner(config, reports, { runner: null, needs: 'ios' });
+    assert.ok(!ios.ok && ios.message.startsWith('no online runner can do "ios" (lid closed, so not used: mac)\n'));
+  });
+
+  it('a snapshot that never saw the capability is not blamed for the job it could not have done', () => {
+    const pick = pickRunner(config, [lidClosed('mac', null), lidClosed('box1', linuxWithAndroid)], { runner: null, needs: 'ios' });
+    assert.ok(!pick.ok && pick.message.startsWith('no online runner can do "ios"\n'), pick.ok ? '' : pick.message);
+  });
+
+  it('a runner named while its lid is closed is refused (125) with why, and the view says «lid closed»', () => {
+    const pick = pickRunner(config, [lidClosed('mac', macWithIos)], { runner: 'mac', needs: null });
+    assert.ok(!pick.ok && pick.exitCode === 125 && pick.message.startsWith('runner "mac" has its lid closed (takes no new jobs until its lid is opened (a job already running there goes on))\n'));
+    assert.ok(!pick.ok && pick.message.includes('mac — lid closed · takes no new jobs until its lid is opened'));
+  });
+
+  it('a paused Mac with the lid closed is not named as a lid-closed one: the pause is the reason the operator can lift', () => {
+    const reports = [lidClosed('mac', `${macWithIos}paused=yes\n`)];
+    const pick = pickRunner(config, reports, { runner: null, needs: null });
+    assert.ok(!pick.ok && pick.message.startsWith('no runner is online\n'), pick.ok ? '' : pick.message);
+  });
+
+  it('the view shows what the snapshot knew, marked as old, under the lid-closed heading', () => {
+    const pick = pickRunner(config, [lidClosed('mac', macWithIos)], { runner: null, needs: null });
+    assert.ok(!pick.ok && pick.message.includes('mac — lid closed · takes no new jobs until its lid is opened (a job already running there goes on) — as last probed: macOS'));
+  });
+});
+
 describe('chooseExecRunnerName', () => {
   it('without --runner, exec goes where this project\'s last job ran — not to the first runner of the file, which may hold no copy', () => {
     assert.deepEqual(chooseExecRunnerName(config, null, 'box2'), { runnerName: 'box2', note: null });

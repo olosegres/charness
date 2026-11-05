@@ -138,6 +138,27 @@ describe('what a paired runner adds to the probe', () => {
   });
 });
 
+describe('formatRunnerBlock: a runner whose Mac has its lid closed', () => {
+  const lidClosedReport = (lastProbe: string | null, isPausedByHub = false): RunnerReport => ({ name: 'mac', status: 'lid-closed', lastSeenAtMs: Date.UTC(2026, 10, 1, 14, 2), lastProbe: lastProbe === null ? null : parseProbeOutput(lastProbe), groupLimits: {}, isPausedByHub });
+
+  it('says «lid closed» where an online runner says «online», what that means for new jobs and for running ones — and shows the snapshot it holds, marked as the last one', () => {
+    const block = formatRunnerBlock(lidClosedReport(linuxProbeText));
+    assert.match(block, /^mac — lid closed · takes no new jobs until its lid is opened \(a job already running there goes on\) — as last probed: Ubuntu 24\.04/);
+    assert.ok(!/^mac — online/m.test(block));
+    assert.ok(block.split('\n').length > 1, 'the snapshot\'s details follow');
+  });
+
+  it('with no snapshot there is only the heading; a pause is still shown beside it', () => {
+    assert.equal(formatRunnerBlock(lidClosedReport(null)), 'mac — lid closed · takes no new jobs until its lid is opened (a job already running there goes on)');
+    assert.match(formatRunnerBlock(lidClosedReport(linuxProbeText, true)), /^mac — lid closed · paused from the hub · takes no new jobs/);
+  });
+
+  it('a pause the runner itself reported in its snapshot counts, as for an offline runner', () => {
+    assert.equal(checkIsRunnerPaused(lidClosedReport(`${linuxProbeText}\npaused=yes`)), true);
+    assert.equal(checkIsRunnerPaused(lidClosedReport(linuxProbeText)), false);
+  });
+});
+
 describe('formatRunnerBlock', () => {
   const groupLimits = { default: 2, emulator: 1 };
 

@@ -1168,6 +1168,7 @@ export const ptDict: Record<string, string> = {
   'runners.resumeButton': '{name}: Retomar',
   'runners.removeButton': '{name}: Remover',
   'runners.statusOnline': 'online',
+  'runners.statusLidClosed': 'tampa fechada — não aceita novos jobs',
   'runners.statusOffline': 'offline desde {time}',
   'runners.statusNeverSeen': 'offline, nunca conectou',
   'runners.pausedMark': 'em pausa',

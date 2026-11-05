@@ -1,3 +1,4 @@
+import { lidClosedNote } from '../remoteRun/probe';
 import type { PendingPairing, RunnerServiceKind } from './hubRegistry';
 import { formatLinkConcernNote } from './linkConcern';
 import { getCurrentServiceKind } from './runnerServiceKind';
@@ -24,7 +25,7 @@ export function formatListTimestamp(epochMs: number): string {
 }
 
 function describeConnection(entry: OverviewEntry): string {
-  if (entry.isOnline) return 'online';
+  if (entry.isOnline) return entry.isLidClosed === true ? `lid closed (${lidClosedNote})` : 'online';
   return entry.lastSeenMs === null ? 'offline, never connected' : `offline since ${formatListTimestamp(entry.lastSeenMs)}`;
 }
 

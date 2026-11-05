@@ -49,6 +49,8 @@ export function getHandMadeRunnersPath(dir: string): string {
 export interface RunnerLinkPaths {
   socket: string;
   state: string;
+  /** What the runner last said of its lid (`linkControl.ts`); a file of its own because the gate rewrites `state` every few seconds and a report comes from another process. */
+  lid: string;
 }
 
 /** @description `dist/cli.js` of the running charness: this file is `dist/runners/hubPaths.js`. */
@@ -87,7 +89,7 @@ export function getHubFilePaths(dir: string): HubFilePaths {
 /** @description The socket the gate of runner `runnerId` listens on, and the file that says who holds it. */
 export function getRunnerLinkPaths(dir: string, runnerId: string): RunnerLinkPaths {
   const linkDir = getHubFilePaths(dir).linkDir;
-  return { socket: path.join(linkDir, `${runnerId}.sock`), state: path.join(linkDir, `${runnerId}.json`) };
+  return { socket: path.join(linkDir, `${runnerId}.sock`), state: path.join(linkDir, `${runnerId}.json`), lid: path.join(linkDir, `${runnerId}.lid`) };
 }
 
 /** @description The host alias of a runner in the hub's `known_hosts` (and the `HostKeyAlias` of the ssh calls to it). */

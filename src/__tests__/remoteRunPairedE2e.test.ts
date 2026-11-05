@@ -11,6 +11,9 @@
  *   interrupt → the remote job and its child are gone
  *   exec → the command runs in the runner's copy as the last job left it
  *   paused → from the hub, and on the runner itself: never picked, said so; resumed: used again
+ *   lid closed → the runner's Mac tells the hub (the runner utility's own report, with the runner's own key, through the real gate) that its lid is shut:
+ *               it takes no new job (any pick, a named one, `--needs`, `exec`) and every view says «lid closed», while a job it already runs goes on; a
+ *               `--needs` job waits and starts when the lid opens; the report outlives the link
  *   --needs → a runner offline: `--runner-wait 0` and a capability nobody has fail at once (125); the wait gives up on time; an
  *             interrupt ends it with 130; a runner paused from the hub meanwhile is given up on and runs nothing when it comes back;
  *             the runner coming back lets the waiting job run
@@ -26,12 +29,15 @@
  * Test case: N/A — Charness has no Jira tracker.
  */
 
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
+import { connectToHub, sendLidReport } from '../runnerUtility/hubClient';
+import { readRunnerConfig } from '../runnerUtility/runnerConfig';
+import { readRunnerKeys } from '../runnerUtility/runnerKeys';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import {
   createDecoyCommand,
@@ -133,9 +139,25 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
     return startCli(cliLayout, args, { cwd: project.root, env: flowEnv });
   }
 
-  /** What `charness runners ls` of the hub says about the runner: `online`, or `offline`. */
-  async function waitForListedState(state: 'online' | 'offline'): Promise<void> {
+  /** What `charness runners ls` of the hub says about the runner: `online`, `offline`, or `lid closed`. */
+  async function waitForListedState(state: 'online' | 'offline' | 'lid closed'): Promise<void> {
     await waitUntil(() => new RegExp(`^${runnerName} — ${state}`, 'm').test(runHubCli(layout, ['runners', 'ls']).stdout), `the hub to list ${runnerName} as ${state}`, linkTimeoutMs);
+  }
+
+  /**
+   * What a Mac's link does when its lid changes (`runnerUtility/lidState.ts`): the runner utility's own report, sent with the runner's own key to the real gate. This
+   * box has no lid and the utility reports one only on a Mac, so the flow plays the Mac's part of the conversation — the hub's side is the real one.
+   */
+  async function tellHubLid(isClosed: boolean): Promise<void> {
+    const config = readRunnerConfig(runnerPaths);
+    const keys = readRunnerKeys(runnerPaths);
+    assert.ok(config !== null && keys !== null, 'the runner is paired');
+    const client = await connectToHub({ host: config.hub.host, port: config.hub.port, user: config.hub.user, hostKey: config.hub.hostKey }, keys.client.privateKey);
+    try {
+      assert.equal(await sendLidReport(client, isClosed), true, 'the hub took the report');
+    } finally {
+      client.end();
+    }
   }
 
   async function stopTheRunner(): Promise<void> {
@@ -254,6 +276,89 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
       fs.rmSync(flag);
     }
     assert.equal((await run(['echo free'])).exitCode, 0);
+  });
+
+  describe('a runner whose Mac tells the hub its lid is closed', () => {
+    afterEach(async () => {
+      // Whatever a case did, the next one starts with the lid open.
+      await tellHubLid(false);
+    });
+
+    it('takes no new job — every pick, a named runner, `--needs`, `exec` and every view say so — while a job it already runs goes on; it takes jobs again when the lid opens', async () => {
+      const markerName = 'lid-closed.marker';
+      const running = start([createGatedCommand('lid.gate', { before: 'echo before the lid', after: 'echo after the lid' })]);
+      await waitUntil(() => running.stdout().includes('before the lid\n'), 'the job to be running', ordinaryRunTimeoutMs);
+      await tellHubLid(true);
+      await waitForListedState('lid closed');
+      assert.match((await run(['runners'])).stdout, new RegExp(`^${runnerName} — lid closed · takes no new jobs until its lid is opened \\(a job already running there goes on\\) — as last probed: `, 'm'));
+      const any = await run([`touch ../${markerName}`]);
+      assert.equal(any.exitCode, 125, any.stderr);
+      assert.match(any.stderr, new RegExp(`no runner is online \\(lid closed, so not used: ${runnerName}\\)`));
+      const needing = await run(['--needs', 'playwright', '--runner-wait', '0', `touch ../${markerName}`]);
+      assert.equal(needing.exitCode, 125, needing.stderr);
+      assert.match(needing.stderr, new RegExp(`no online runner can do "playwright" \\(lid closed, so not used: ${runnerName}\\)`));
+      const named = await run(['--runner', runnerName, `touch ../${markerName}`]);
+      assert.equal(named.exitCode, 125, named.stderr);
+      assert.match(named.stderr, new RegExp(`runner "${runnerName}" has its lid closed`));
+      assert.equal((await run(['exec', 'cat src/a.txt'])).exitCode, 125, 'exec is a new command too');
+      assert.equal(fs.existsSync(path.join(project.runnerDirectory, markerName)), false, 'none of them ran anything');
+      // The job that was already there is not touched: its lease holds, the gate opens, it finishes.
+      assert.equal(running.child.exitCode, null);
+      openGate(project, 'lid.gate');
+      assert.equal(await waitForExit(running, ordinaryRunTimeoutMs), 0, running.stderr());
+      assert.match(running.stdout(), /^before the lid\nafter the lid\n$/);
+      // The lid opens: the next report makes it available.
+      await tellHubLid(false);
+      await waitForListedState('online');
+      const again = await run(['echo available again']);
+      assert.equal(again.exitCode, 0, again.stderr);
+      assert.match(again.stdout, /^available again$/m);
+    });
+
+    it('a job that is already queued or running there can be asked about and waited for while the lid is shut: those commands do not pick a runner', async () => {
+      const submitted = await run(['--bg', createGatedCommand('lid-wait.gate', { before: 'echo started', after: 'echo done' })]);
+      assert.equal(submitted.exitCode, 0, submitted.stderr);
+      const jobId = submitted.stdout.trim();
+      await tellHubLid(true);
+      await waitForListedState('lid closed');
+      const status = await run(['status', jobId]);
+      assert.equal(status.exitCode, 0, status.stderr);
+      openGate(project, 'lid-wait.gate');
+      const waited = await run(['wait', jobId]);
+      assert.equal(waited.exitCode, 0, waited.stderr);
+      assert.match(waited.stdout, /done/);
+    });
+
+    it('a `--needs` job waits for the lid — announced once, with why — and starts when the Mac says it is open', async () => {
+      const markerName = 'lid-wait.marker';
+      await tellHubLid(true);
+      await waitForListedState('lid closed');
+      const cli = start(['--needs', 'playwright', '--runner-wait', '5m', `touch ../${markerName}; echo the lid opened`]);
+      await waitUntil(() => cli.stderr().includes('waiting for a runner with playwright'), 'the wait to begin', ordinaryRunTimeoutMs);
+      assert.match(cli.stderr(), new RegExp(`waiting for a runner with playwright \\(${runnerName} has its lid closed\\) — looking again every 1 s, up to 5 min`));
+      await new Promise((resolve) => { setTimeout(resolve, 3 * pollMs); });
+      assert.equal(cli.child.exitCode, null, 'still waiting');
+      assert.equal(fs.existsSync(path.join(project.runnerDirectory, markerName)), false, 'nothing ran while the lid was shut');
+      await tellHubLid(false);
+      assert.equal(await waitForExit(cli, ordinaryRunTimeoutMs), 0, cli.stderr());
+      assert.match(cli.stdout(), /^the lid opened$/m);
+      assert.equal(fs.existsSync(path.join(project.runnerDirectory, markerName)), true);
+      assert.equal(cli.stderr().split('waiting for a runner with playwright').length - 1, 1, 'announced once, not on every look');
+    });
+
+    it('the report outlives the link: a Mac that is back for a minute with its lid still shut is not available until it says it is', async () => {
+      await tellHubLid(true);
+      await stopTheRunner();
+      // `startTheRunner` waits for «online», which a Mac with a shut lid is not: the hub still holds the report of the link before.
+      runner = startRunner(layout);
+      await waitForListedState('lid closed');
+      const blocked = await run(['echo x']);
+      assert.equal(blocked.exitCode, 125, blocked.stderr);
+      assert.match(blocked.stderr, /lid closed, so not used/);
+      await tellHubLid(false);
+      await waitForListedState('online');
+      assert.equal((await run(['echo free'])).exitCode, 0);
+    });
   });
 
   describe('--needs with the runner offline', () => {

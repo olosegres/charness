@@ -23,7 +23,7 @@ import { getRunnerLinkPaths } from '../runners/hubPaths';
 import { createPairing, redeemPairing, removePairedRunner, sweepExpiredPairings } from '../runners/hubPairing';
 import { readPairedFile, writePairedFile } from '../runners/hubRegistry';
 import { readHubKey } from '../runners/hubKey';
-import { checkIsGateProcessOf, cutRunnerLink, getRunnerLinkStatus, probeSocket, readLinkState, sweepOrphanLinkRecords, writeLinkState } from '../runners/linkControl';
+import { checkIsGateProcessOf, cutRunnerLink, getRunnerLinkStatus, probeSocket, readLidState, readLinkState, sweepOrphanLinkRecords, writeLidState, writeLinkState } from '../runners/linkControl';
 import { runRunnerProxy } from '../runners/runnerProxy';
 import { generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
 import { createCollector, createHubFixture, createRedeemFixture, injectStreamIntoSshServer, settleWithin as settleWithinKit, waitUntil, type HubFixture } from './runnersTestKit';
@@ -482,7 +482,7 @@ describe('link status and cutting', () => {
   });
 
   it('a runner that never connected is offline with no last seen', async () => {
-    assert.deepEqual(await getRunnerLinkStatus(fixture.ctx.dir, 'aaaaaaaaaaaa'), { isOnline: false, sinceMs: null, lastSeenMs: null, source: null, concern: null });
+    assert.deepEqual(await getRunnerLinkStatus(fixture.ctx.dir, 'aaaaaaaaaaaa'), { isOnline: false, sinceMs: null, lastSeenMs: null, source: null, concern: null, isLidClosed: false });
   });
 
   it('probeSocket tells a listening socket from a missing or dead one', async () => {
@@ -530,6 +530,46 @@ describe('link status and cutting', () => {
     writeSocketFile('bbbbbbbbbbbb');
     cutRunnerLink(fixture.ctx.dir, 'aaaaaaaaaaaa');
     assert.deepEqual(listLinkFolder(), ['bbbbbbbbbbbb.json', 'bbbbbbbbbbbb.sock']);
+  });
+
+  describe('the lid report', () => {
+    const closed = { isClosed: true, reportedAtMs: startMs };
+
+    it('is kept in a file of its own, so the gate rewriting the status every few seconds cannot lose it', () => {
+      writeLidState(fixture.ctx.dir, 'aaaaaaaaaaaa', closed);
+      writeLinkState(fixture.ctx.dir, 'aaaaaaaaaaaa', linkState);
+      writeLinkState(fixture.ctx.dir, 'aaaaaaaaaaaa', { ...linkState, lastBeatMs: startMs + 10_000 });
+      assert.deepEqual(readLidState(fixture.ctx.dir, 'aaaaaaaaaaaa'), closed);
+      assert.equal(getRunnerLinkPaths(fixture.ctx.dir, 'aaaaaaaaaaaa').lid, path.join(fixture.ctx.dir, 'link', 'aaaaaaaaaaaa.lid'));
+    });
+
+    it('outlives the link: a runner whose gate has ended reads closed when it comes back, until it says otherwise — and an offline runner is offline whatever its lid', async () => {
+      writeLinkState(fixture.ctx.dir, 'aaaaaaaaaaaa', { ...linkState, endedAtMs: startMs + 5000 });
+      writeLidState(fixture.ctx.dir, 'aaaaaaaaaaaa', closed);
+      const status = await getRunnerLinkStatus(fixture.ctx.dir, 'aaaaaaaaaaaa');
+      assert.equal(status.isLidClosed, true);
+      assert.equal(status.isOnline, false);
+    });
+
+    it('a damaged or foreign record reads as an open lid: a runner is never taken out of use by a file nobody can read', () => {
+      fs.mkdirSync(path.join(fixture.ctx.dir, 'link'), { recursive: true });
+      const file = getRunnerLinkPaths(fixture.ctx.dir, 'aaaaaaaaaaaa').lid;
+      for (const text of ['{broken', '[]', '{"isClosed":"yes","reportedAtMs":1}', '{"isClosed":true,"reportedAtMs":1,"extra":1}', '']) {
+        fs.writeFileSync(file, text);
+        assert.equal(readLidState(fixture.ctx.dir, 'aaaaaaaaaaaa'), null, text);
+      }
+    });
+
+    it('goes when the link is cut (a removal) — only that runner\'s — and is swept for a runner the registry does not know', () => {
+      for (const runnerId of ['aaaaaaaaaaaa', 'bbbbbbbbbbbb']) {
+        writeLinkState(fixture.ctx.dir, runnerId, { ...linkState, endedAtMs: startMs });
+        writeLidState(fixture.ctx.dir, runnerId, closed);
+      }
+      cutRunnerLink(fixture.ctx.dir, 'aaaaaaaaaaaa');
+      assert.deepEqual(listLinkFolder(), ['bbbbbbbbbbbb.json', 'bbbbbbbbbbbb.lid']);
+      assert.deepEqual(sweepOrphanLinkRecords(fixture.ctx.dir, [], expectNoProblem).sort(), ['bbbbbbbbbbbb.json', 'bbbbbbbbbbbb.lid']);
+      assert.deepEqual(listLinkFolder(), []);
+    });
   });
 
   it('sweeps the link files of runners the registry does not know, and nothing else: registered runners, other files, a gate\'s pending socket stay', () => {

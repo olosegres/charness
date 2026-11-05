@@ -76,6 +76,42 @@ describe('what is worth waiting for', () => {
   });
 });
 
+function lidClosed(name: string, snapshot: string | null, extra: Partial<Extract<RunnerReport, { status: 'lid-closed' }>> = {}): RunnerReport {
+  return { name, status: 'lid-closed', lastSeenAtMs: seenAtMs, lastProbe: snapshot === null ? null : parseProbeOutput(snapshot), groupLimits: {}, isPausedByHub: false, ...extra };
+}
+
+describe('a paired runner whose Mac has its lid closed is waited for like an offline one', () => {
+  it('it is worth waiting for when its last snapshot had the capability — named, with why it is not used', () => {
+    const plan = planRunnerWait(config, [lidClosed('mac', withAndroid)], { runner: null, needs: 'android' });
+    assert.deepEqual(plan?.runnerNames, ['mac']);
+    assert.equal(plan?.description, 'mac has its lid closed');
+  });
+
+  it('together with an offline one, both are named', () => {
+    const plan = planRunnerWait(config, [lidClosed('mac', withAndroid), offline('box1', withAndroid)], { runner: null, needs: 'android' });
+    assert.deepEqual(plan?.runnerNames, ['mac', 'box1']);
+    assert.equal(plan?.description, 'mac has its lid closed, box1 offline since 2026-11-01 14:02 UTC');
+  });
+
+  it('under the same rules as an offline runner: a capability it never had, no snapshot, a pause, a name given, or a hand-made runner are not waited for', () => {
+    assert.equal(planRunnerWait(config, [lidClosed('mac', withoutAndroid)], { runner: null, needs: 'android' }), null);
+    assert.equal(planRunnerWait(config, [lidClosed('mac', null)], { runner: null, needs: 'android' }), null);
+    assert.equal(planRunnerWait(config, [lidClosed('mac', withAndroid, { isPausedByHub: true })], { runner: null, needs: 'android' }), null);
+    assert.equal(planRunnerWait(config, [lidClosed('mac', `${withAndroid}paused=yes\n`)], { runner: null, needs: 'android' }), null);
+    assert.equal(planRunnerWait(config, [lidClosed('mac', withAndroid)], { runner: 'mac', needs: 'android' }), null);
+    assert.equal(planRunnerWait(config, [lidClosed('plain', withAndroid)], { runner: null, needs: 'android' }), null);
+    assert.equal(planRunnerWait(config, [lidClosed('mac', withAndroid)], { runner: null, needs: null }), null);
+  });
+
+  it('the pick fails (125) and the plan says to wait — and opening the lid is the way out: the same call with the runner online picks it', () => {
+    const closed = [lidClosed('mac', withAndroid)];
+    const pick = pickRunner(config, closed, { runner: null, needs: 'android' });
+    assert.ok(!pick.ok && pick.exitCode === 125 && pick.message.startsWith('no online runner can do "android" (lid closed, so not used: mac)\n'));
+    assert.notEqual(planRunnerWait(config, closed, { runner: null, needs: 'android' }), null);
+    assert.deepEqual(pickRunner(config, [online('mac', withAndroid)], { runner: null, needs: 'android' }), { ok: true, runnerName: 'mac' });
+  });
+});
+
 describe('the pick the plan follows', () => {
   it('an offline paired runner with the capability: the pick fails (125) and the plan says to wait', () => {
     const reports = [offline('mac', withAndroid)];

@@ -6,6 +6,7 @@ import { getCaughtErrnoCode } from '../configDirFile';
 import { runGateLink, type GateLinkTimings } from './gateLink';
 import {
   formatGateAnswerHead,
+  lidReportBodies,
   maxGateRequestBytes,
   noPackageMarker,
   redeemRequestSchema,
@@ -13,6 +14,7 @@ import {
   temporaryKeyRequests,
   type CancelReply,
   type GateRequest,
+  type LidReply,
   type RedeemReply,
   type UnpairReply,
 } from './gateProtocol';
@@ -22,7 +24,7 @@ import { HubRegistryError } from './hubRegistry';
 import { getHubPackage, openHubPackage } from './hubPackage';
 import { cancelPairing, checkIsPairingOpen, checkIsRunnerPaired, describeRunnerIdentity, redeemPairing, removePairedRunner } from './hubPairing';
 import { parseSshClientSource } from './linkConcern';
-import { cutRunnerLink } from './linkControl';
+import { cutRunnerLink, writeLidState } from './linkControl';
 
 /**
  * @description `charness runner-gate` — what sshd starts for a runner's key (the forced command of its `authorized_keys` line, via
@@ -157,6 +159,17 @@ async function handleVersion(ctx: HubContext, io: GateIo): Promise<number> {
   return 0;
 }
 
+/** `lid`: the runner says whether its lid is closed with nothing keeping the Mac awake. The report is recorded as it came, with the hub's own clock; anything else in the body is refused. */
+async function handleLid(ctx: HubContext, runnerId: string, io: GateIo, now: () => number): Promise<number> {
+  const body = (await readLimitedText(io.stdin, maxGateRequestBytes))?.trim();
+  const isReport = body === lidReportBodies.closed || body === lidReportBodies.open;
+  if (isReport) writeLidState(ctx.dir, runnerId, { isClosed: body === lidReportBodies.closed, reportedAtMs: now() });
+  const reply: LidReply = { ok: isReport };
+  io.stdout.write(formatGateAnswerHead('lid'));
+  io.stdout.write(`${JSON.stringify(reply)}\n`);
+  return isReport ? 0 : failedExitCode;
+}
+
 function getPackageIdOrNull(ctx: HubContext, log: (line: string) => void): string | null {
   try {
     return getHubPackage(ctx).id;
@@ -212,6 +225,8 @@ export async function runRunnerGate(argv: readonly string[], env: NodeJS.Process
         return await handleIdentity(ctx, invocation.runnerId, io);
       case 'unpair':
         return await handleUnpair(ctx, invocation.runnerId, io, now);
+      case 'lid':
+        return await handleLid(ctx, invocation.runnerId, io, now);
       default:
         return refusedExitCode;
     }

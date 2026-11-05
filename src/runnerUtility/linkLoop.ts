@@ -3,7 +3,8 @@ import { restartExitCode } from './appInstall';
 import { decideUpdate, updateFromHub, type UpdateOutcome } from './appUpdate';
 import { redeemReplySchema } from '../runners/gateProtocol';
 import { unconfirmedRemovalStopAfterMs } from '../runners/removalTiming';
-import { callGate, connectToHub, HubConnectionError, requestGateJson, type HubEndpoint } from './hubClient';
+import { callGate, connectToHub, HubConnectionError, requestGateJson, sendLidReport, type HubEndpoint } from './hubClient';
+import { lidPollMs, type LidWatcher } from './lidState';
 import { readRunnerVersionPollMs } from './versionPollTiming';
 import { writeRunnerStatus, type LinkState, type RunnerConfig } from './runnerConfig';
 import type { RunnerHomePaths } from './runnerHome';
@@ -22,6 +23,8 @@ import type { RunnerServers } from './runnerServers';
  *             left running here), and ask again once an hour — never a flood that trips fail2ban
  *   update    the `link` answer names the hub's package id, and a linked runner asks again every few minutes (`version`, over the
  *             connection it holds); an idle runner whose id differs updates and asks the launcher for a restart
+ *   lid       a Mac's link looks at its lid every few seconds and tells the hub when it changed (`lidState.ts`), over the connection it already holds; a new
+ *             link tells it again at once — the hub keeps the last report, but a Mac that woke for a minute must say the lid is still shut (or is not)
  *   closing   the attempt ends when the `link` CHANNEL ends or the connection does — the hub's gate dying, or the link being cut, closes
  *             the channel while the connection to sshd stays up and keeps answering keepalives, so the connection alone proves nothing
  */
@@ -54,6 +57,10 @@ export interface LinkLoopDeps {
   removalConfirmMs?: number;
   /** How long a bare refusal of the key must last before it stops the jobs (default {@link unconfirmedRemovalStopAfterMs}). */
   unconfirmedRemovalStopAfterMs?: number;
+  /** A Mac's lid watcher (`lidState.ts`); absent off a Mac: such a runner never reports a lid. */
+  lid?: LidWatcher;
+  /** How often the lid is looked at (default {@link lidPollMs}). */
+  lidPollMs?: number;
   random?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   connect?: typeof connectToHub;
@@ -94,6 +101,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
   const update = deps.update ?? updateFromHub;
   const log = deps.log ?? (() => undefined);
   const versionPollMs = deps.versionPollMs ?? readRunnerVersionPollMs(process.env);
+  const lidLookMs = deps.lidPollMs ?? lidPollMs;
   const confirmMs = deps.removalConfirmMs ?? removalConfirmMs;
   const stopAfterMs = deps.unconfirmedRemovalStopAfterMs ?? unconfirmedRemovalStopAfterMs;
   const endpoint: HubEndpoint = { host: deps.config.hub.host, port: deps.config.hub.port, user: deps.config.hub.user, hostKey: deps.config.hub.hostKey };
@@ -183,11 +191,13 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
       // ends only with the update's outcome — otherwise the loop would reconnect and run the next attempt beside the install.
       let isUpdating = false;
       let pollTimer: NodeJS.Timeout | null = null;
+      let lidTimer: NodeJS.Timeout | null = null;
       const closedResult = (): AttemptResult => ({ kind: 'closed', lastedMs: now() - linkedAtMs });
       const finish = (result: AttemptResult): void => {
         if (isDone) return;
         isDone = true;
         if (pollTimer !== null) clearInterval(pollTimer);
+        if (lidTimer !== null) clearInterval(lidTimer);
         onIdleUpdate = null;
         signal.removeEventListener('abort', onAbort);
         client.end();
@@ -202,6 +212,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
         pendingUpdateId = null;
         onIdleUpdate = null;
         if (pollTimer !== null) clearInterval(pollTimer);
+        if (lidTimer !== null) clearInterval(lidTimer);
         client.end();
         void tryUpdate(targetId, signal).then((outcome) => finish(outcome?.ok === true ? { kind: 'restart' } : closedResult()));
       };
@@ -229,6 +240,9 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
           log(`could not ask the hub for its package (${error instanceof Error ? error.message : 'unknown'})`);
         }
       };
+      const lookAtLid = (): void => {
+        if (!isUpdating && !isDone) void deps.lid?.beat((isClosed) => sendLidReport(client, isClosed));
+      };
       signal.addEventListener('abort', onAbort, { once: true });
       client.once('close', onLost);
       client.once('error', onLost);
@@ -236,6 +250,11 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
       answer.channel.once('error', onLost);
       considerUpdate();
       if (!isUpdating) pollTimer = setInterval(() => { void askHubForPackage(); }, versionPollMs);
+      if (!isUpdating && deps.lid !== undefined) {
+        deps.lid.reset();
+        lookAtLid();
+        lidTimer = setInterval(lookAtLid, lidLookMs);
+      }
     });
   };
 

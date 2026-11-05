@@ -50,6 +50,11 @@ config are found from the reported work dir with the layout `runnerUtility/runne
 
 - **Online** = the link's unix socket accepts a connection (`runners/linkControl.ts`), asked before any ssh call; offline says «the runner is not
   connected» and its last seen is the link's own heartbeat (the last probe's time only when there is none).
+- **A Mac whose lid is closed is never picked either** (`lid-closed` report, `probe.ts`): the runner told the hub (the `lid` request, `runners/linkControl.ts`) that its lid is
+  shut with nothing keeping it awake, so `probeRunner` returns it without a probe — snapshot only — and `pickRunner` skips it like an offline one (a named one is refused with «has its
+  lid closed», the message of a pick that finds nobody names it: «(lid closed, so not used: mac)»), `planRunnerWait` waits for it like for an offline paired runner
+  («waiting for a runner with ios (mac has its lid closed)»), `exec` is refused. A job that already runs there is reached by its id (`openJobClient`) and never picked, so
+  `status` / `wait` / `logs` / `kill` and a running foreground run are untouched.
 - **Paused runners are never picked**: from the hub (`paired.json` `isPaused`) or on the runner itself (the probe's `paused=yes`). A named runner that is
   paused is refused with who paused it and how to resume; the skipped ones are named in the «no runner is online» message.
 - **`--needs <cap>` waits** for a paired runner that is offline and, when last seen, had the capability and Pueue and was not paused

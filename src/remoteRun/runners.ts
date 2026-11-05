@@ -5,6 +5,7 @@ import {
   checkHasCapability,
   checkIsRunnerPaused,
   formatRunnerBlock,
+  lidClosedNote,
   parseProbeOutput,
   type RunnerCapability,
   type RunnerProbe,
@@ -95,8 +96,8 @@ function writeLastProbe(cacheDir: string, runnerName: string, text: string, seen
 }
 
 /**
- * @description Probe one runner: its report is `online` with what it said, or `offline` with why and the last snapshot taken when it
- * was seen. `signal` is the deadline of the whole view (see {@link probeRunners}): when it fires the ssh calls in flight are killed and the
+ * @description Probe one runner: its report is `online` with what it said, `lid-closed` (its link is up, its Mac's lid is shut: no probe is made), or
+ * `offline` with why and the last snapshot taken when it was seen. `signal` is the deadline of the whole view (see {@link probeRunners}): when it fires the ssh calls in flight are killed and the
  * runner is reported offline — with the snapshot, like any other way of not answering.
  */
 export async function probeRunner(client: RunnerClient, nowMs: number = Date.now(), signal?: AbortSignal, deadlineMs: number = probeAllTimeoutMs): Promise<RunnerReport> {
@@ -120,6 +121,12 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
     // A paired runner is online when its link accepts a connection; asking is cheaper than an ssh call that fails through the proxy.
     const link = await getRunnerLinkStatus(runner.paired.hubDir, runner.paired.runnerId);
     if (!link.isOnline) return offline(notConnectedReason, link.lastSeenMs);
+    // A Mac with its lid shut is about to sleep, or has woken for a minute to do its housekeeping: it takes no new job, and is not even asked (the call may hang
+    // as the machine falls asleep). Jobs it already runs are not looked at here at all — they are reached by their own id.
+    if (link.isLidClosed) {
+      const last = readLastProbe(client.cacheDir, runner.name, runner.paired.pairedAtMs);
+      return { name: runner.name, status: 'lid-closed', lastSeenAtMs: link.lastSeenMs ?? last?.seenAtMs ?? null, lastProbe: last?.probe ?? null, groupLimits, isPausedByHub };
+    }
   }
   try {
     await client.ensureScript(signal);
@@ -177,6 +184,14 @@ function describeSkippedPaused(reports: readonly RunnerReport[], needs: RunnerCa
   return names.length === 0 ? '' : ` (paused, so not used: ${names.join(', ')})`;
 }
 
+/** « (lid closed, so not used: mac)» for the runners whose link is up and whose Mac has the lid shut, when they are all that kept the job from running (only those that could have done it), else nothing. */
+function describeSkippedLidClosed(reports: readonly RunnerReport[], needs: RunnerCapability | null): string {
+  const names = reports
+    .filter((report) => report.status === 'lid-closed' && !checkIsRunnerPaused(report) && (needs === null || (report.lastProbe !== null && checkHasCapability(report.lastProbe, needs))))
+    .map((report) => report.name);
+  return names.length === 0 ? '' : ` (lid closed, so not used: ${names.join(', ')})`;
+}
+
 /**
  * @description The runner a command should use. `wanted.runner` names one (it must exist, answer, have Pueue and not be paused);
  * otherwise the first runner in `config` order that answers, has Pueue, is not paused and — with `wanted.needs` — the capability. None:
@@ -189,6 +204,7 @@ export function pickRunner(config: RunnersConfig, reports: readonly RunnerReport
       return { ok: false, exitCode: remoteRunExitCodes.usage, message: `no runner named "${wanted.runner}" (configured: ${config.runners.map((runner) => runner.name).join(', ')})` };
     }
     if (report.status === 'offline') return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" is offline (${report.reason})\n${formatRunnersView([report])}` };
+    if (report.status === 'lid-closed') return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" has its lid closed (${lidClosedNote})\n${formatRunnersView([report])}` };
     if (report.probe.pueueVersion === null) return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" has no Pueue (install it there, see docs/remote-run.md)\n${formatRunnersView([report])}` };
     if (checkIsRunnerPaused(report)) return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" is paused ${describePause(report)}\n${formatRunnersView([report])}` };
     if (wanted.needs !== null && !checkHasCapability(report.probe, wanted.needs)) {
@@ -202,7 +218,7 @@ export function pickRunner(config: RunnersConfig, reports: readonly RunnerReport
     if (wanted.needs === null || checkHasCapability(report.probe, wanted.needs)) return { ok: true, runnerName: runner.name };
   }
   const reason = wanted.needs === null ? 'no runner is online' : `no online runner can do "${wanted.needs}"`;
-  return { ok: false, exitCode: remoteRunExitCodes.failed, message: `${reason}${describeSkippedPaused(reports, wanted.needs)}\n${formatRunnersView(reports)}` };
+  return { ok: false, exitCode: remoteRunExitCodes.failed, message: `${reason}${describeSkippedPaused(reports, wanted.needs)}${describeSkippedLidClosed(reports, wanted.needs)}\n${formatRunnersView(reports)}` };
 }
 
 /**

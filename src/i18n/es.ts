@@ -1167,6 +1167,7 @@ export const esDict: Record<string, string> = {
   'runners.resumeButton': '{name}: Reanudar',
   'runners.removeButton': '{name}: Quitar',
   'runners.statusOnline': 'en línea',
+  'runners.statusLidClosed': 'tapa cerrada — no acepta trabajos nuevos',
   'runners.statusOffline': 'sin conexión desde {time}',
   'runners.statusNeverSeen': 'sin conexión, nunca se ha conectado',
   'runners.pausedMark': 'en pausa',

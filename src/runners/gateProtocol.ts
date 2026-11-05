@@ -19,6 +19,9 @@ import { runnerServiceKinds } from './hubRegistry';
  *                                                 way back for a runner whose redeem answer was lost: the hub committed the pairing and
  *                                                 removed the temporary key, so only the permanent key can still ask
  *                                    `unpair`     marker line, then {@link UnpairReply}
+ *                                    `lid`        stdin: `closed` | `open` ({@link lidReportBodies}); marker line, then a {@link LidReply}. A Mac runner
+ *                                                 tells the hub when its lid is closed with nothing keeping it awake: it will sleep, and takes no new job
+ *                                                 meanwhile (`linkControl.ts`)
  *
  * Every answer starts with a MARKER line (after a line break, see {@link formatGateAnswerHead}): a shell that prints something before the
  * forced command (a chatty `.bashrc`) would otherwise corrupt the stream; the reader discards everything up to the marker — the runner
@@ -27,12 +30,12 @@ import { runnerServiceKinds } from './hubRegistry';
 
 /** The text every marker line starts with; the `1` is the protocol version. */
 export const gateMarker = '--charness-gate-1--';
-export const gateRequests = ['bootstrap', 'redeem', 'cancel', 'link', 'package', 'version', 'identity', 'unpair'] as const;
+export const gateRequests = ['bootstrap', 'redeem', 'cancel', 'link', 'package', 'version', 'identity', 'unpair', 'lid'] as const;
 /** @name GateRequest @description One of the words a runner may send. */
 export type GateRequest = (typeof gateRequests)[number];
 
 export const temporaryKeyRequests: readonly GateRequest[] = ['bootstrap', 'redeem', 'cancel'];
-export const runnerKeyRequests: readonly GateRequest[] = ['link', 'package', 'version', 'identity', 'unpair'];
+export const runnerKeyRequests: readonly GateRequest[] = ['link', 'package', 'version', 'identity', 'unpair', 'lid'];
 
 /** What a `link` / `version` answer names as the package when the hub cannot pack one. */
 export const noPackageMarker = 'none';
@@ -164,6 +167,13 @@ export const redeemReplySchema = z.discriminatedUnion('ok', [
 export type RedeemReply = z.infer<typeof redeemReplySchema>;
 
 export const unpairReplySchema = z.strictObject({ ok: z.boolean() });
+
+/** What the body of a `lid` request says: the lid is closed with nothing keeping the Mac awake, or it is not. */
+export const lidReportBodies = { closed: 'closed', open: 'open' } as const;
+/** `ok`: the hub took the report; `false`: the body was neither of {@link lidReportBodies}. */
+export const lidReplySchema = z.strictObject({ ok: z.boolean() });
+/** @name LidReply @description What `lid` answers. */
+export type LidReply = z.infer<typeof lidReplySchema>;
 
 /** `ok`: the code was open and is closed now; `false`: there was nothing to close (spent, expired, or cancelled already). */
 export const cancelReplySchema = z.strictObject({ ok: z.boolean() });

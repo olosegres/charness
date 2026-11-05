@@ -193,6 +193,18 @@ A stop reaches the app twice (the launcher forwards the TERM it got, a terminal'
 (`stopSignals.ts`) keeps its handlers installed and stops at the first signal only — a `once` handler let the second take the default action and kill the process
 under its own clean-up (no `finally`, no `exit` handlers: the state file stayed). The login-session agent stops the same way.
 
+## The lid (`lidState.ts`)
+
+A Mac runner's link looks at its lid on a timer (`lidPollMs`, 10 s — as often as the hub's gate takes its heartbeat) and tells the hub when it changes, so that the hub gives
+a MacBook with a closed lid no NEW job (it sleeps within about a minute and a half, and wakes in the dark for a minute or two every so often on power — a job landing then
+is cut): `ioreg -r -k AppleClamshellState -d 4` → `"AppleClamshellState" = Yes` AND `"AppleClamshellCausesSleep" = Yes` is **closed**; anything else — open, a lid shut with an
+external display keeping the Mac awake, a Mac without the key, a reading that cannot be made — is **open** (never out of use on a guess; the key names are the I/O Registry's own,
+not documented API). `createLidWatcher` (`runLink` makes one on macOS only; a runner on any other system never reports a lid) reads, compares with what the hub was last told, and
+reports through `sendLidReport` — the `lid` request of the gate, over the connection the link already holds — only on a change, retrying every look until the hub takes the
+report; a new link (`reset`) reports at the first look whatever the last link said. A read that fails (ioreg gone, no answer in 5 s) is one line in the log per run of failures
+and an open lid; a report the hub did not take is one line per run too — neither ever holds the link back. A link that is updating reports nothing. The hub's side is in
+`src/runners/README.md` («The lid»).
+
 ## The login session's agent (`guiAgent.ts`)
 
 An always-on Mac's link and queue are LaunchDaemons in the System session, where Xcode's nested builds crash and the Simulator will not boot. The admin

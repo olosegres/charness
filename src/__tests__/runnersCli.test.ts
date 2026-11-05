@@ -387,6 +387,11 @@ describe('runner list text', () => {
     assert.match(formatRunnerListLine({ runner: { ...runner, isPaused: false }, isOnline: false, lastSeenMs: null, probe: null }), /^box1 — offline, never connected · Ubuntu/);
   });
 
+  it('says «lid closed» instead of «online» for a linked machine whose Mac has its lid shut — and never for an offline one', () => {
+    assert.match(formatRunnerListLine({ runner, isOnline: true, lastSeenMs: startMs, probe: null, isLidClosed: true }), /^box1 — lid closed \(takes no new jobs until its lid is opened \(a job already running there goes on\)\) · paused · Ubuntu/);
+    assert.match(formatRunnerListLine({ runner: { ...runner, isPaused: false }, isOnline: false, lastSeenMs: startMs, probe: null, isLidClosed: true }), /^box1 — offline since /);
+  });
+
   it('a row carries the note of a link that came from another address, or whose links fight — and nothing when the link is as it was', () => {
     const base = { runner: { ...runner, isPaused: false }, isOnline: true, lastSeenMs: startMs, probe: null };
     const changed = formatRunnerListLine({ ...base, linkConcern: { kind: 'sourceChanged', fromSource: '198.51.100.7', toSource: '203.0.113.9', atMs: startMs, isLiveReplacement: false } });

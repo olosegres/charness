@@ -6,7 +6,7 @@ import type { RunnersConfig } from './runnersConfig';
 
 /**
  * @description The wait of `charness remote-run --needs <capability>`: when the only runners that could take the job are PAIRED ones
- * that are offline right now (a laptop that slept, a link that restarts), the command waits for one of them instead of failing — it says
+ * that are offline right now (a laptop that slept, a link that restarts) or have their Mac's lid shut, the command waits for one of them instead of failing — it says
  * so once, looks again every few seconds and gives up after `--runner-wait` (default 15 min, `0` = fail at once). A runner nothing is known
  * to be able to do the job (no runner with the capability at all, or one never seen) is not waited for: that is exit 125 at once, as in
  * phase 1. Hand-made runners (plain ssh) are never waited for either — their offline state is not part of a design.
@@ -25,23 +25,29 @@ export interface RunnerWaitPlan {
 }
 
 /**
- * @description Is there an offline PAIRED runner worth waiting for? Only when a capability is needed and no runner is named: a runner is
- * worth it when its last snapshot had the capability and Pueue and nobody paused it (a paused one would be skipped when it came back).
- * `null` = fail now.
+ * @description Is there a PAIRED runner worth waiting for — offline right now, or linked with its Mac's lid shut (it takes no new job either, and opening it
+ * brings it back)? Only when a capability is needed and no runner is named: a runner is worth it when its last snapshot had the capability and Pueue and nobody
+ * paused it (a paused one would be skipped when it came back). `null` = fail now.
  */
 export function planRunnerWait(config: RunnersConfig, reports: readonly RunnerReport[], wanted: { runner: string | null; needs: RunnerCapability | null }): RunnerWaitPlan | null {
   const needs = wanted.needs;
   if (needs === null || wanted.runner !== null) return null;
-  const candidates = reports.filter((report): report is Extract<RunnerReport, { status: 'offline' }> => {
-    if (report.status !== 'offline' || report.lastProbe === null) return false;
+  const candidates = reports.filter((report): report is Extract<RunnerReport, { status: 'offline' | 'lid-closed' }> => {
+    if (report.status === 'online' || report.lastProbe === null) return false;
     const isPaired = config.runners.some((runner) => runner.name === report.name && runner.paired !== undefined);
     return isPaired && !checkIsRunnerPaused(report) && report.lastProbe.pueueVersion !== null && checkHasCapability(report.lastProbe, needs);
   });
   if (candidates.length === 0) return null;
   return {
     runnerNames: candidates.map((report) => report.name),
-    description: candidates.map((report) => `${report.name} offline${report.lastSeenAtMs === null ? '' : ` since ${formatLastSeen(report.lastSeenAtMs)}`}`).join(', '),
+    description: candidates.map(describeWaitedRunner).join(', '),
   };
+}
+
+/** «mac offline since 2026-11-01 14:02 UTC», or «mac has its lid closed». */
+function describeWaitedRunner(report: Extract<RunnerReport, { status: 'offline' | 'lid-closed' }>): string {
+  if (report.status === 'lid-closed') return `${report.name} has its lid closed`;
+  return `${report.name} offline${report.lastSeenAtMs === null ? '' : ` since ${formatLastSeen(report.lastSeenAtMs)}`}`;
 }
 
 /** @description `15 min`, `90 s`, `2 h`, `1 h 30 min`: a wait in the words a person would use. */
