@@ -13,11 +13,11 @@ import { Readable } from 'stream';
 import { gunzipSync } from 'zlib';
 import { parseGateArgs, routeGateRequest, runRunnerGate, type GateInvocation } from '../runners/gate';
 import { ensureGateWrapper, renderGateWrapper } from '../runners/gateWrapper';
-import { cancelReplySchema, gateMarker, lidReplySchema, maxGateRequestBytes, parseGateMarkerLine, redeemReplySchema, type GateMarker } from '../runners/gateProtocol';
+import { cancelReplySchema, formatLinkCommand, gateMarker, lidReplySchema, maxGateRequestBytes, parseGateMarkerLine, parseLidReportBody, parseLinkLidArgument, redeemReplySchema, type GateMarker } from '../runners/gateProtocol';
 import { getHubFilePaths } from '../runners/hubPaths';
 import { createPairing, redeemPairing, removePairedRunner } from '../runners/hubPairing';
 import { readPairedFile, readPendingFile } from '../runners/hubRegistry';
-import { getRunnerLinkStatus, readLidState } from '../runners/linkControl';
+import { getRunnerLinkStatus, readLidState, writeLidState } from '../runners/linkControl';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { createCollector, createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 
@@ -93,13 +93,32 @@ describe('gate routing', () => {
   it('a runner\'s key may link, fetch the package, ask the version, tell its lid and unpair — nothing else', () => {
     assert.equal(routeGateRequest('runner', 'lid'), 'lid');
     assert.equal(routeGateRequest('runner', 'link'), 'link');
+    assert.equal(routeGateRequest('runner', 'link lid=closed'), 'link', 'a link may carry the lid it was made with');
+    assert.equal(routeGateRequest('runner', 'link lid=open'), 'link');
     assert.equal(routeGateRequest('runner', 'package'), 'package');
     assert.equal(routeGateRequest('runner', 'version'), 'version');
     assert.equal(routeGateRequest('runner', 'identity'), 'identity');
     assert.equal(routeGateRequest('runner', 'unpair'), 'unpair');
-    for (const command of ['bootstrap', 'redeem', 'cancel', 'link extra', 'lid closed', 'scp -t /tmp', 'cat /etc/passwd', 'sftp', '', undefined]) {
+    for (const command of ['link lid=maybe', 'link lid=closed extra', 'link  lid=closed', 'link lid=CLOSED', 'link lid=closed; id', 'link lid=', 'link lid=open lid=closed', 'lid=closed', 'package lid=open', 'bootstrap', 'redeem', 'cancel', 'link extra', 'lid closed', 'scp -t /tmp', 'cat /etc/passwd', 'sftp', '', undefined]) {
       assert.equal(routeGateRequest('runner', command), null, String(command));
     }
+  });
+});
+
+describe('the lid in a link request, and in a report', () => {
+  it('a link command carries the lid as exactly `lid=closed` or `lid=open`, and a plain link carries none; the gate reads back what the runner wrote', () => {
+    assert.equal(formatLinkCommand(null), 'link');
+    assert.equal(formatLinkCommand(true), 'link lid=closed');
+    assert.equal(formatLinkCommand(false), 'link lid=open');
+    for (const isClosed of [true, false, null]) assert.equal(parseLinkLidArgument(formatLinkCommand(isClosed)), isClosed);
+    for (const text of [undefined, '', 'link', 'link lid=', 'link lid=1', 'lid closed', 'LINK lid=closed', ' link lid=closed']) assert.equal(parseLinkLidArgument(text), null, String(text));
+  });
+
+  it('a report is `closed` or `open`, optionally followed by the link\'s epoch (digits, up to 16); anything else does not parse', () => {
+    assert.deepEqual(parseLidReportBody('closed'), { isClosed: true, linkEpochMs: null });
+    assert.deepEqual(parseLidReportBody('open\n'), { isClosed: false, linkEpochMs: null });
+    assert.deepEqual(parseLidReportBody('closed 1793900000000'), { isClosed: true, linkEpochMs: 1793900000000 });
+    for (const text of ['', 'maybe', 'Closed', 'closed open', 'closed 12x', 'closed -1', 'closed 1.5', 'closed  12', `closed ${'9'.repeat(17)}`, 'closed 1 2', '{"isClosed":true}']) assert.equal(parseLidReportBody(text), null, text);
   });
 });
 
@@ -303,12 +322,51 @@ describe('gate requests', () => {
     it('takes nothing but «closed» and «open»: anything else is refused with ok:false and a failing exit, and the record stays as it was', async () => {
       const runnerId = await pairRunner();
       await tellLid(runnerId, 'closed');
-      for (const body of ['', 'maybe', 'Closed', 'closed open', '{"isClosed":false}', 'open; id', 'x'.repeat(maxGateRequestBytes + 1)]) {
+      for (const body of ['', 'maybe', 'Closed', 'closed open', 'closed 12x', '{"isClosed":false}', 'open; id', 'x'.repeat(maxGateRequestBytes + 1)]) {
         const refused = await tellLid(runnerId, body);
         assert.equal(refused.run.code, 1, body.slice(0, 20));
         assert.deepEqual(refused.reply, { ok: false }, body.slice(0, 20));
       }
       assert.equal(readLidState(fixture.ctx.dir, runnerId)?.isClosed, true);
+    });
+
+    it('a `link lid=closed` through the gate\'s own entry records the lid at once — before anything else of the link — and the marker names the link\'s epoch', async () => {
+      const runnerId = await pairRunner();
+      writeLidState(fixture.ctx.dir, runnerId, { isClosed: false, reportedAtMs: startMs - 9000, linkEpochMs: startMs - 9000 });
+      // The channel from the runner ends at once, so the link ends as soon as it begins; what it recorded before that is what is asserted.
+      const run = await runGate(gateArgs('runner', runnerId), 'link lid=closed');
+      assert.deepEqual(readLidState(fixture.ctx.dir, runnerId), { isClosed: true, reportedAtMs: startMs + 1000, linkEpochMs: startMs + 1000 });
+      assert.deepEqual(splitMarker(run.stdout).marker?.fields.epoch, (startMs + 1000).toString());
+    });
+
+    it('a plain `link` through the gate leaves the record of the link before', async () => {
+      const runnerId = await pairRunner();
+      writeLidState(fixture.ctx.dir, runnerId, { isClosed: true, reportedAtMs: startMs - 9000, linkEpochMs: startMs - 9000 });
+      await runGate(gateArgs('runner', runnerId), 'link');
+      assert.deepEqual(readLidState(fixture.ctx.dir, runnerId), { isClosed: true, reportedAtMs: startMs - 9000, linkEpochMs: startMs - 9000 });
+    });
+
+    it('names the link it is made on: the record keeps that epoch, and a report with none (a hub that named none) keeps the one on record', async () => {
+      const runnerId = await pairRunner();
+      await tellLid(runnerId, 'closed 5000');
+      assert.deepEqual(readLidState(fixture.ctx.dir, runnerId), { isClosed: true, reportedAtMs: startMs + 1000, linkEpochMs: 5000 });
+      await tellLid(runnerId, 'open 5000');
+      assert.deepEqual(readLidState(fixture.ctx.dir, runnerId), { isClosed: false, reportedAtMs: startMs + 1000, linkEpochMs: 5000 });
+      await tellLid(runnerId, 'closed');
+      assert.deepEqual(readLidState(fixture.ctx.dir, runnerId), { isClosed: true, reportedAtMs: startMs + 1000, linkEpochMs: 5000 });
+    });
+
+    it('a report from an EARLIER link than the one on record is dropped — and answered like a taken one: a Mac that fell asleep with a report in flight must not overwrite what its next link said', async () => {
+      const runnerId = await pairRunner();
+      writeLidState(fixture.ctx.dir, runnerId, { isClosed: true, reportedAtMs: startMs - 5, linkEpochMs: 9000 });
+      const late = await tellLid(runnerId, 'open 8999');
+      assert.equal(late.run.code, 0);
+      assert.deepEqual(late.reply, { ok: true });
+      assert.deepEqual(readLidState(fixture.ctx.dir, runnerId), { isClosed: true, reportedAtMs: startMs - 5, linkEpochMs: 9000 }, 'the later link\'s word stands');
+      await tellLid(runnerId, 'open 9000');
+      assert.equal(readLidState(fixture.ctx.dir, runnerId)?.isClosed, false, 'the link in force may change it');
+      await tellLid(runnerId, 'closed 9500');
+      assert.deepEqual(readLidState(fixture.ctx.dir, runnerId), { isClosed: true, reportedAtMs: startMs + 1000, linkEpochMs: 9500 }, 'a still later link too');
     });
 
     it('is one runner\'s record: another runner\'s lid is not touched', async () => {

@@ -130,10 +130,10 @@ interface RunningGate {
 }
 
 /** `source`: the address sshd would have told the gate the link connects from (`SSH_CLIENT`); absent = sshd said nothing. */
-async function startGate(runnerId: string, standIn: StandInRunner, source?: string): Promise<RunningGate> {
+async function startGate(runnerId: string, standIn: StandInRunner, source?: string, extra: Partial<Parameters<typeof runGateLink>[0]> = {}): Promise<RunningGate> {
   const transport = await standIn.connect();
   const logs: string[] = [];
-  const done = runGateLink({ ctx: fixture.ctx, runnerId, input: transport, output: transport, packageId: '0123456789abcdef', source, log: (line) => logs.push(line), timings: fastTimings });
+  const done = runGateLink({ ctx: fixture.ctx, runnerId, input: transport, output: transport, packageId: '0123456789abcdef', source, log: (line) => logs.push(line), timings: fastTimings, ...extra });
   return { done, logs, transport };
 }
 
@@ -186,17 +186,84 @@ describe('the gate\'s link', () => {
     const gate = await startGate(runner.runnerId, standIn);
     const paths = getRunnerLinkPaths(fixture.ctx.dir, runner.runnerId);
     await waitUntil(() => fs.existsSync(paths.socket), 'the link socket');
-    assert.deepEqual(standIn.markers.map((marker) => ({ request: marker.request, fields: marker.fields })), [{ request: 'link', fields: { package: '0123456789abcdef' } }]);
+    const state = readLinkState(fixture.ctx.dir, runner.runnerId);
+    assert.deepEqual(standIn.markers.map((marker) => ({ request: marker.request, fields: marker.fields })), [{ request: 'link', fields: { package: '0123456789abcdef', epoch: state?.sinceMs.toString() ?? '' } }], 'the marker names the package and the link\'s epoch: when this gate began');
     assert.equal(fs.statSync(paths.socket).mode & 0o777, 0o600);
     assert.equal(await execOverLink(runner.runnerId, 'hello'), 'ran:hello\n');
     assert.equal(await execOverLink(runner.runnerId, 'again'), 'ran:again\n', 'a second connection rides the same link');
-    const state = readLinkState(fixture.ctx.dir, runner.runnerId);
     assert.equal(state?.pid, process.pid);
     assert.equal(state?.endedAtMs, null);
     const status = await getRunnerLinkStatus(fixture.ctx.dir, runner.runnerId);
     assert.equal(status.isOnline, true);
     gate.transport.destroy();
     await settleWithin(gate.done, 'the gate to end with its transport');
+  });
+
+  describe('the lid a runner connects with', () => {
+    const olderRecord = { isClosed: false, reportedAtMs: startMs, linkEpochMs: startMs };
+
+    it('is recorded BEFORE the link\'s socket exists — a runner is never online with the lid of the last time: closed over an \'open\' record, at the first moment of the gate', async () => {
+      const runner = await pairRunner();
+      writeLidState(fixture.ctx.dir, runner.runnerId, olderRecord);
+      const standIn = await startStandInRunner(runner);
+      const gate = await startGate(runner.runnerId, standIn, undefined, { lidIsClosed: true, now: () => startMs + 5000 });
+      const paths = getRunnerLinkPaths(fixture.ctx.dir, runner.runnerId);
+      assert.equal(fs.existsSync(paths.socket), false, 'no link yet — the socket is bound when the ssh handshake with the runner is done');
+      assert.deepEqual(readLidState(fixture.ctx.dir, runner.runnerId), { isClosed: true, reportedAtMs: startMs + 5000, linkEpochMs: startMs + 5000 });
+      const early = await getRunnerLinkStatus(fixture.ctx.dir, runner.runnerId);
+      assert.equal(early.isOnline, false);
+      assert.equal(early.isLidClosed, true);
+      await waitUntil(() => fs.existsSync(paths.socket), 'the link socket');
+      const online = await getRunnerLinkStatus(fixture.ctx.dir, runner.runnerId);
+      assert.equal(online.isOnline && online.isLidClosed, true, 'online with the lid it connected with');
+      assert.equal(standIn.markers[0].fields.epoch, (startMs + 5000).toString());
+      gate.transport.destroy();
+      await settleWithin(gate.done, 'the gate to end with its transport');
+    });
+
+    it('an open lid in the request overrides a closed record: the Mac that closed its lid and has it open again is available the moment it is online', async () => {
+      const runner = await pairRunner();
+      writeLidState(fixture.ctx.dir, runner.runnerId, { isClosed: true, reportedAtMs: startMs, linkEpochMs: startMs });
+      const standIn = await startStandInRunner(runner);
+      const gate = await startGate(runner.runnerId, standIn, undefined, { lidIsClosed: false, now: () => startMs + 1000 });
+      assert.equal(readLidState(fixture.ctx.dir, runner.runnerId)?.isClosed, false);
+      gate.transport.destroy();
+      await settleWithin(gate.done, 'the gate to end with its transport');
+    });
+
+    it('a link that says nothing about the lid (a runner that is not a Mac, or an older one) leaves the record as it was', async () => {
+      const runner = await pairRunner();
+      writeLidState(fixture.ctx.dir, runner.runnerId, { isClosed: true, reportedAtMs: startMs });
+      const standIn = await startStandInRunner(runner);
+      for (const lidIsClosed of [undefined, null]) {
+        const gate = await startGate(runner.runnerId, standIn, undefined, { lidIsClosed });
+        assert.deepEqual(readLidState(fixture.ctx.dir, runner.runnerId), { isClosed: true, reportedAtMs: startMs });
+        gate.transport.destroy();
+        await settleWithin(gate.done, 'the gate to end with its transport');
+      }
+    });
+
+    it('a gate that began EARLIER than the one whose word is on record does not overwrite it (two links racing for one runner): the later link has the last word', async () => {
+      const runner = await pairRunner();
+      writeLidState(fixture.ctx.dir, runner.runnerId, { isClosed: true, reportedAtMs: startMs + 9000, linkEpochMs: startMs + 9000 });
+      const standIn = await startStandInRunner(runner);
+      const gate = await startGate(runner.runnerId, standIn, undefined, { lidIsClosed: false, now: () => startMs + 1000 });
+      assert.deepEqual(readLidState(fixture.ctx.dir, runner.runnerId), { isClosed: true, reportedAtMs: startMs + 9000, linkEpochMs: startMs + 9000 });
+      gate.transport.destroy();
+      await settleWithin(gate.done, 'the gate to end with its transport');
+    });
+
+    it('a record that cannot be written is a line in the log and the link comes up all the same, with the record of the link before', async () => {
+      const runner = await pairRunner();
+      fs.mkdirSync(path.join(fixture.ctx.dir, 'link'), { recursive: true });
+      fs.mkdirSync(getRunnerLinkPaths(fixture.ctx.dir, runner.runnerId).lid);
+      const standIn = await startStandInRunner(runner);
+      const gate = await startGate(runner.runnerId, standIn, undefined, { lidIsClosed: true });
+      assert.ok(gate.logs.some((line) => line.includes('cannot record the lid the runner reported')), gate.logs.join('\n'));
+      await waitUntil(() => fs.existsSync(getRunnerLinkPaths(fixture.ctx.dir, runner.runnerId).socket), 'the link socket');
+      gate.transport.destroy();
+      await settleWithin(gate.done, 'the gate to end with its transport');
+    });
   });
 
   it('a clean end of the channel from the runner — EOF on the gate\'s stdin, as when the ssh session that carried it is gone — ends the gate at once, with no failed write or keepalive to tell it', async () => {

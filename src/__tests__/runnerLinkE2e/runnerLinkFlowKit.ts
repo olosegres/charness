@@ -247,8 +247,8 @@ export function startRunner(layout: RunnerLinkLayout, home: string = layout.runn
     env: createEnv(home, layout, {
       FLOW_SECRET: 'leak',
       [testNodeModulesEnvName]: path.join(repoRoot, 'node_modules'),
-      // The linked runner asks the hub for its package every 2 s instead of every 5 minutes (the seam may only shorten the window).
-      CHARNESS_TEST_TIMINGS: JSON.stringify({ runnerVersionPollMs: 2000 }),
+      // The linked runner asks the hub for its package every 2 s instead of every 5 minutes, and a Mac's looks at its lid every second instead of every ten (the seam may only shorten the windows).
+      CHARNESS_TEST_TIMINGS: JSON.stringify({ runnerVersionPollMs: 2000, runnerLidPollMs: 1000 }),
       ...extraEnv,
     }),
   });

@@ -1167,7 +1167,7 @@ export const uzDict: Record<string, string> = {
   'runners.resumeButton': '{name}: Davom ettirish',
   'runners.removeButton': '{name}: O‘chirish',
   'runners.statusOnline': 'onlayn',
-  'runners.statusLidClosed': 'qopqoq yopiq — yangi ishlarni qabul qilmaydi',
+  'runners.statusLidClosed': 'noutbuk qopqog‘i yopiq — yangi ishlarni qabul qilmaydi',
   'runners.statusOffline': '{time} dan beri oflayn',
   'runners.statusNeverSeen': 'oflayn, hech qachon ulanmagan',
   'runners.pausedMark': 'to‘xtatilgan',

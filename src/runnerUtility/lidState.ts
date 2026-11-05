@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 
 /**
@@ -12,14 +14,39 @@ import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
  * (source: Apple's darwin-dev mailing list on the key, and the Keyboard Maestro forum's use of that exact command; not part of Apple's documented API).
  * Closed means BOTH are Yes. Anything else — a lid that is open, a Mac without one, an external display, a reading that cannot be made — is «open»: this
  * must never take a runner out of use on a guess, and a failed read is told once and never blocks the link.
+ *
+ * The lid the runner has when it CONNECTS goes in the request that makes the link (`link lid=closed`), so the hub knows it before the link's socket exists: a Mac that wakes
+ * in the dark for a minute with its lid shut is never, for even a second, online with the lid of the last time. The looks after that report only a change.
  */
 
-/** How often the link looks at the lid: as often as the hub's gate takes its own heartbeat. */
-export const lidPollMs = 10 * 1000;
+export { lidPollMs } from './lidPollTiming';
 const ioregTimeoutMs = 5 * 1000;
 const ioregArguments = ['-r', '-k', 'AppleClamshellState', '-d', '4'] as const;
 const clamshellStateKey = 'AppleClamshellState';
 const clamshellCausesSleepKey = 'AppleClamshellCausesSleep';
+
+const ioregProgramName = 'ioreg';
+
+function checkIsExecutableOnPath(programName: string, pathVariable: string | undefined): boolean {
+  return (pathVariable ?? '').split(path.delimiter).some((folder) => {
+    // An empty entry of PATH means the current folder, which is nobody's choice of where a runner finds its tools.
+    if (folder === '') return false;
+    try {
+      fs.accessSync(path.join(folder, programName), fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * @description Does this runner report a lid? A Mac does — whatever its `PATH` — and so does a runner that has an `ioreg` on its `PATH` (a Mac's own tool, which no other system
+ * ships): that is how a flow on another system plays a Mac with a stand-in `ioreg`. Any other runner never reports one.
+ */
+export function checkCanReadLid(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): boolean {
+  return platform === 'darwin' || checkIsExecutableOnPath(ioregProgramName, env.PATH);
+}
 
 /** What `ioreg` says of the lid: shut and sleeping the Mac, or anything else (`no-lid`: the key is not there at all). */
 export type LidReading = 'closed' | 'open' | 'no-lid';
@@ -40,64 +67,107 @@ export function parseLidReading(output: string): LidReading {
 /** @description The reader of the real machine: `ioreg`'s output, or `null` when it could not be run or did not end in time. */
 export function createIoregReader(runner: CommandRunner = runCommand): () => Promise<string | null> {
   return async () => {
-    const result = await runner('ioreg', ioregArguments, { timeoutMs: ioregTimeoutMs });
+    const result = await runner(ioregProgramName, ioregArguments, { timeoutMs: ioregTimeoutMs });
     return result.ok ? result.stdout : null;
   };
 }
+
+/** What the hub did with a report: took it; answered and refused it (an older gate that does not know the word, a body it will not take) — a retry now would be refused the same; or could not be reached. */
+export type LidReportResult = 'taken' | 'refused' | 'failed';
+
+/** After a refusal the same report is not sent again for this long, doubling with every further refusal up to {@link lidRefusalMaxBackoffMs}. */
+export const lidRefusalFirstBackoffMs = 30 * 1000;
+/** As long as the hub's own question about its package: five minutes. */
+export const lidRefusalMaxBackoffMs = 5 * 60 * 1000;
 
 export interface LidWatcherDeps {
   /** The registry's output (`null`: it could not be read). */
   readRegistry: () => Promise<string | null>;
   log: (line: string) => void;
+  now?: () => number;
 }
 
 export interface LidWatcher {
-  /** One look at the lid; `report` tells the hub (`true`: it took the report) and is called only when the hub was last told something else. Never throws. */
-  beat: (report: (isClosed: boolean) => Promise<boolean>) => Promise<void>;
-  /** A new link starts from «the hub was told nothing»: the first look of it reports, whatever the last link said. */
-  reset: () => void;
+  /** The lid right now — the one look; a failure to read it is an open lid, said once per run of failures. Never throws. */
+  look: () => Promise<boolean>;
+  /** A link began and told the hub `toldIsClosed` in its own request (`null`: the request could not carry it): the looks of THIS link report only a change from it. Whatever an earlier link had under way no longer counts. */
+  startLink: (toldIsClosed: boolean | null) => void;
+  /** One look at the lid for the link in force; `report` tells the hub and is called only when the hub was last told something else (and is not being given time after a refusal). Never throws. */
+  beat: (report: (isClosed: boolean) => Promise<LidReportResult>) => Promise<void>;
 }
 
-/** @description The watcher: reads the lid, tells the hub on a change, keeps trying while the hub has not taken it, and says a failure once per run of failures. */
+/**
+ * @description The watcher: reads the lid, compares it with what the hub was last told, tells the hub on a change. A report the hub could not be reached with is made again at the
+ * next look; one it REFUSED is made again after a growing wait (30 s, doubling to 5 min) — a hub that does not know the word must not get an ssh exec and a process at every look —
+ * until the hub takes one or a new link begins. A failure is said once per run of failures. A look or a report that belongs to a link that has ended since it began (`startLink`
+ * came in between) changes nothing: the new link's own first look is never held back by the old one's report still on its way.
+ */
 export function createLidWatcher(deps: LidWatcherDeps): LidWatcher {
+  const now = deps.now ?? Date.now;
+  let generation = 0;
   let lastTold: boolean | null = null;
-  let isBeating = false;
+  let beatingGeneration: number | null = null;
   let isReadFailing = false;
   let isReportFailing = false;
+  let refusals = 0;
+  let retryAfterMs = 0;
+
+  const look = async (): Promise<boolean> => {
+    let output: string | null;
+    try {
+      output = await deps.readRegistry();
+    } catch {
+      output = null;
+    }
+    if (output === null && !isReadFailing) deps.log('the lid state cannot be read (ioreg did not answer): the lid is taken as open, and the runner takes jobs as usual');
+    isReadFailing = output === null;
+    return output !== null && parseLidReading(output) === 'closed';
+  };
+
+  const noteRefusal = (): void => {
+    refusals += 1;
+    const waitMs = Math.min(lidRefusalMaxBackoffMs, lidRefusalFirstBackoffMs * 2 ** (refusals - 1));
+    retryAfterMs = now() + waitMs;
+    if (!isReportFailing) deps.log(`the hub did not take the report of the lid (it refused it): trying again in ${Math.round(waitMs / 1000)} s, and at longer waits while it does`);
+    isReportFailing = true;
+  };
+
   return {
-    reset: () => {
-      lastTold = null;
+    look,
+    startLink: (toldIsClosed) => {
+      generation += 1;
+      lastTold = toldIsClosed;
       isReportFailing = false;
+      refusals = 0;
+      retryAfterMs = 0;
     },
     beat: async (report) => {
-      if (isBeating) return;
-      isBeating = true;
+      const own = generation;
+      if (beatingGeneration === own) return;
+      beatingGeneration = own;
       try {
-        let output: string | null = null;
+        const isClosed = await look();
+        if (own !== generation || isClosed === lastTold || now() < retryAfterMs) return;
+        let result: LidReportResult;
         try {
-          output = await deps.readRegistry();
+          result = await report(isClosed);
         } catch {
-          output = null;
+          result = 'failed';
         }
-        if (output === null && !isReadFailing) deps.log('the lid state cannot be read (ioreg did not answer): the lid is taken as open, and the runner takes jobs as usual');
-        isReadFailing = output === null;
-        const isClosed = output !== null && parseLidReading(output) === 'closed';
-        if (isClosed === lastTold) return;
-        let isTold = false;
-        try {
-          isTold = await report(isClosed);
-        } catch {
-          isTold = false;
-        }
-        if (isTold) {
+        if (own !== generation) return;
+        if (result === 'taken') {
           lastTold = isClosed;
           isReportFailing = false;
+          refusals = 0;
+          retryAfterMs = 0;
+        } else if (result === 'refused') {
+          noteRefusal();
         } else if (!isReportFailing) {
           isReportFailing = true;
-          deps.log('the hub did not take the report of the lid; trying again at the next look');
+          deps.log('the hub could not be reached with the report of the lid; trying again at the next look');
         }
       } finally {
-        isBeating = false;
+        if (beatingGeneration === own) beatingGeneration = null;
       }
     },
   };

@@ -11,7 +11,7 @@ import { runnerServiceKinds } from './hubRegistry';
  *
  *   temporary key (a pairing code):  `bootstrap`  marker line, then the packed charness package (raw gzip)
  *                                    `redeem`     stdin: a {@link RedeemRequest} as JSON; stdout: marker line, then a {@link RedeemReply}
- *   permanent key (a paired runner): `link`       marker line, then an ssh session in which the GATE is the client (see gateLink.ts)
+ *   permanent key (a paired runner): `link`       marker line (`package=<id> epoch=<the link's start in ms>`), then an ssh session in which the GATE is the client (see gateLink.ts)
  *                                    `package`    marker line, then the packed package (raw gzip)
  *                                    `version`    marker line with the hub's current `package=<id>`, nothing else — asked every few minutes over
  *                                                 the connection that is already open, so a linked runner learns of an update
@@ -19,14 +19,19 @@ import { runnerServiceKinds } from './hubRegistry';
  *                                                 way back for a runner whose redeem answer was lost: the hub committed the pairing and
  *                                                 removed the temporary key, so only the permanent key can still ask
  *                                    `unpair`     marker line, then {@link UnpairReply}
- *                                    `lid`        stdin: `closed` | `open` ({@link lidReportBodies}); marker line, then a {@link LidReply}. A Mac runner
- *                                                 tells the hub when its lid is closed with nothing keeping it awake: it will sleep, and takes no new job
- *                                                 meanwhile (`linkControl.ts`)
+ *                                    `lid`        stdin: `closed` or `open`, then (when the `link` marker named one) the link's epoch; marker line, then a
+ *                                                 {@link LidReply}. A Mac runner tells the hub when its lid is closed with nothing keeping it awake: it
+ *                                                 will sleep, and takes no new job meanwhile (`linkControl.ts`). The `link` request itself may carry
+ *                                                 the lid at the moment of connecting (`link lid=closed|open`, {@link formatLinkCommand}): the hub records it
+ *                                                 BEFORE the link's socket exists, so a runner is never online with a lid the hub has not heard about
  *
  * Every answer starts with a MARKER line (after a line break, see {@link formatGateAnswerHead}): a shell that prints something before the
  * forced command (a chatty `.bashrc`) would otherwise corrupt the stream; the reader discards everything up to the marker — the runner
  * utility with {@link readUntilGateMarker}, the pasted `sh` line with `grep -b` over the first {@link maxGateNoiseBytes} bytes.
  */
+
+/** What a `lid` report (and the lid argument of a `link`) says: the lid is closed with nothing keeping the Mac awake, or it is not. */
+export const lidReportBodies = { closed: 'closed', open: 'open' } as const;
 
 /** The text every marker line starts with; the `1` is the protocol version. */
 export const gateMarker = '--charness-gate-1--';
@@ -36,6 +41,22 @@ export type GateRequest = (typeof gateRequests)[number];
 
 export const temporaryKeyRequests: readonly GateRequest[] = ['bootstrap', 'redeem', 'cancel'];
 export const runnerKeyRequests: readonly GateRequest[] = ['link', 'package', 'version', 'identity', 'unpair', 'lid'];
+
+/**
+ * @description The command a runner runs for a link: `link`, or — a Mac that knows its lid — `link lid=closed` / `link lid=open`. The forced command of its key matches the whole
+ * text against exactly these (`parseLinkLidArgument`), so no other argument is ever passed on.
+ */
+export function formatLinkCommand(isLidClosed: boolean | null): string {
+  return isLidClosed === null ? 'link' : `link lid=${isLidClosed ? lidReportBodies.closed : lidReportBodies.open}`;
+}
+
+const linkLidArgumentPattern = new RegExp(`^link lid=(${lidReportBodies.closed}|${lidReportBodies.open})$`);
+
+/** @description The lid a `link` command carries: `true` closed, `false` open, `null` for a plain `link` (or any other text). */
+export function parseLinkLidArgument(command: string | undefined): boolean | null {
+  const match = command === undefined ? null : linkLidArgumentPattern.exec(command);
+  return match === null ? null : match[1] === lidReportBodies.closed;
+}
 
 /** What a `link` / `version` answer names as the package when the hub cannot pack one. */
 export const noPackageMarker = 'none';
@@ -168,12 +189,26 @@ export type RedeemReply = z.infer<typeof redeemReplySchema>;
 
 export const unpairReplySchema = z.strictObject({ ok: z.boolean() });
 
-/** What the body of a `lid` request says: the lid is closed with nothing keeping the Mac awake, or it is not. */
-export const lidReportBodies = { closed: 'closed', open: 'open' } as const;
-/** `ok`: the hub took the report; `false`: the body was neither of {@link lidReportBodies}. */
+/**
+ * `ok`: the hub took the report (or knew better: a report from an older link than the one now in force is dropped, and answered the same way, because the sender can do
+ * nothing about it); `false`: the body was neither of {@link lidReportBodies} nor followed by a number.
+ */
 export const lidReplySchema = z.strictObject({ ok: z.boolean() });
 /** @name LidReply @description What `lid` answers. */
 export type LidReply = z.infer<typeof lidReplySchema>;
+
+const lidReportBodyPattern = new RegExp(`^(${lidReportBodies.closed}|${lidReportBodies.open})(?: (\\d{1,16}))?$`);
+
+/** @description What the body of a `lid` request says: closed or open, and the epoch of the link it was made on (`null` when none was named); `null` for anything else. */
+export function parseLidReportBody(body: string): { isClosed: boolean; linkEpochMs: number | null } | null {
+  const match = lidReportBodyPattern.exec(body.trim());
+  return match === null ? null : { isClosed: match[1] === lidReportBodies.closed, linkEpochMs: match[2] === undefined ? null : Number(match[2]) };
+}
+
+/** @description The body of a `lid` request. */
+export function formatLidReportBody(isClosed: boolean, linkEpochMs: number | null): string {
+  return `${isClosed ? lidReportBodies.closed : lidReportBodies.open}${linkEpochMs === null ? '' : ` ${linkEpochMs}`}`;
+}
 
 /** `ok`: the code was open and is closed now; `false`: there was nothing to close (spent, expired, or cancelled already). */
 export const cancelReplySchema = z.strictObject({ ok: z.boolean() });

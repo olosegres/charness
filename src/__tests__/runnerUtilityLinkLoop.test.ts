@@ -22,7 +22,7 @@ import { createLidWatcher, type LidWatcher } from '../runnerUtility/lidState';
 import { readRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { createHubAuthenticator, createRunnerServers, type RunnerServers } from '../runnerUtility/runnerServers';
-import { formatGateAnswerHead } from '../runners/gateProtocol';
+import { formatGateAnswerHead, parseLidReportBody, parseLinkLidArgument } from '../runners/gateProtocol';
 import { readRunnerVersionPollMs, runnerVersionPollMinMs, runnerVersionPollMs } from '../runnerUtility/versionPollTiming';
 import { waitUntil } from './runnersTestKit';
 import { createTarArchive } from '../runners/tarArchive';
@@ -262,6 +262,10 @@ interface HubStandIn {
   holdIdentityAnswer: { until: Promise<void> | null; requestCount: number };
   /** The body of every `lid` request the hub took, in order; with `isRefused` set it takes none and answers like a gate that does not know the word. */
   lidRequests: { bodies: string[]; count: number; isRefused: boolean };
+  /** Every command the hub was asked to run for a link (`link`, `link lid=closed`), in order; with `isOlderHub` set the hub refuses the one with a lid in it, as a gate from before the lid does. */
+  linkCommands: { commands: string[]; isOlderHub: boolean };
+  /** The epoch the hub names in its `link` marker: one more with every link. */
+  linkEpochs: { next: number };
   close: () => void;
 }
 
@@ -276,6 +280,8 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
   const holdLinkAnswer: { until: Promise<void> | null; requestCount: number } = { until: null, requestCount: 0 };
   const holdIdentityAnswer: { until: Promise<void> | null; requestCount: number } = { until: null, requestCount: 0 };
   const lidRequests: HubStandIn['lidRequests'] = { bodies: [], count: 0, isRefused: false };
+  const linkCommands: HubStandIn['linkCommands'] = { commands: [], isOlderHub: false };
+  const linkEpochs: HubStandIn['linkEpochs'] = { next: 1_000_000 };
   const server = new Server({ hostKeys: [hostKey.privateKey] }, (connection) => {
     connections.opened += 1;
     connection.on('error', () => undefined);
@@ -285,7 +291,14 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
       connection.on('session', (acceptSession) => {
         const session = acceptSession();
         session.on('exec', (accept, reject, info) => {
-          if (info.command === 'link' && refuseLinkWith.reply !== null) {
+          const isLinkRequest = info.command === 'link' || parseLinkLidArgument(info.command) !== null;
+          if (isLinkRequest) linkCommands.commands.push(info.command);
+          if (isLinkRequest && info.command !== 'link' && linkCommands.isOlderHub) {
+            const channel = accept();
+            channel.stderr.write('charness-gate: refused: this key may only be used by charness-runner\n');
+            channel.exit(2);
+            channel.end();
+          } else if (isLinkRequest && refuseLinkWith.reply !== null) {
             holdLinkAnswer.requestCount += 1;
             const channel = accept();
             const refuseLink = (): void => {
@@ -306,11 +319,11 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
             };
             if (holdIdentityAnswer.until === null) answerIdentity();
             else void holdIdentityAnswer.until.then(answerIdentity);
-          } else if (info.command === 'link') {
+          } else if (isLinkRequest) {
             holdLinkAnswer.requestCount += 1;
             const channel = accept();
             const answerLink = (): void => {
-              channel.write(formatGateAnswerHead('link', { package: currentPackageId.value }));
+              channel.write(formatGateAnswerHead('link', { package: currentPackageId.value, epoch: (linkEpochs.next++).toString() }));
               linkChannels.push(channel);
             };
             if (holdLinkAnswer.until === null) answerLink();
@@ -327,6 +340,13 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
             let body = '';
             channel.on('data', (chunk: Buffer) => { body += chunk.toString('utf8'); });
             channel.once('end', () => {
+              if (parseLidReportBody(body) === null) {
+                channel.write(formatGateAnswerHead('lid'));
+                channel.write(`${JSON.stringify({ ok: false })}\n`);
+                channel.exit(1);
+                channel.end();
+                return;
+              }
               lidRequests.bodies.push(body.trim());
               channel.write(formatGateAnswerHead('lid'));
               channel.write(`${JSON.stringify({ ok: true })}\n`);
@@ -349,7 +369,7 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
   await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve); });
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('the stand-in has no port');
-  return { port: address.port, hostKey, currentPackageId, linkChannels, connections, versionRequests, refuseLinkWith, holdLinkAnswer, holdIdentityAnswer, lidRequests, close: () => { server.close(); } };
+  return { port: address.port, hostKey, currentPackageId, linkChannels, connections, versionRequests, refuseLinkWith, holdLinkAnswer, holdIdentityAnswer, lidRequests, linkCommands, linkEpochs, close: () => { server.close(); } };
 }
 
 const installedPackageId = '0123456789abcdef';
@@ -591,40 +611,44 @@ describe('a Mac\'s link and its lid (against the same hub stand-in)', () => {
     hub.close();
   });
 
-  it('tells the hub the state of the lid the moment the link is up, and again only when it changes: closed, then open', async () => {
+  it('puts the lid in the request that makes the link — before the link exists at the hub — and then tells only a change: closed, then open', async () => {
+    registry.text = registryTexts.closed;
     startMacLink();
+    await waitUntil(() => hub.linkChannels.length === 1, 'the link', 15_000);
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=closed'], 'the lid is part of the request that makes the link');
+    await waitUntil(() => registry.reads >= 5, 'the lid to be looked at a few times while it stays shut');
+    assert.equal(hub.lidRequests.bodies.length, 0, 'nothing to add: the link said closed, and it still is');
+    registry.text = registryTexts.open;
     await waitForLidReports(1);
-    assert.deepEqual(hub.lidRequests.bodies, ['open'], 'a new link says how things are, even when the lid is open');
+    assert.deepEqual(hub.lidRequests.bodies, [`open ${hub.linkEpochs.next - 1}`], 'a change is told, naming the link it is told on (the epoch the hub put in its marker)');
     registry.text = registryTexts.closed;
     await waitForLidReports(2);
-    const readsWhenClosed = registry.reads;
-    await waitUntil(() => registry.reads >= readsWhenClosed + 3, 'the lid to be looked at again a few times while it stays shut');
-    assert.deepEqual(hub.lidRequests.bodies, ['open', 'closed'], 'a lid that stays shut is not told again');
-    registry.text = registryTexts.open;
-    await waitForLidReports(3);
-    assert.deepEqual(hub.lidRequests.bodies, ['open', 'closed', 'open']);
+    assert.deepEqual(hub.lidRequests.bodies.map((body) => body.split(' ')[0]), ['open', 'closed']);
   });
 
-  it('a lid shut with an external display keeping the Mac awake (clamshell mode) is told as open: such a Mac takes jobs', async () => {
+  it('an open lid is in the request too, and a lid shut with an external display keeping the Mac awake (clamshell mode) counts as open: such a Mac takes jobs', async () => {
     registry.text = registryTexts.clamshellMode;
     startMacLink();
-    await waitForLidReports(1);
-    await waitUntil(() => registry.reads >= 4, 'a few looks');
-    assert.deepEqual(hub.lidRequests.bodies, ['open']);
+    await waitUntil(() => hub.linkChannels.length === 1, 'the link', 15_000);
+    await waitUntil(() => registry.reads >= 5, 'a few looks');
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=open']);
+    assert.equal(hub.lidRequests.bodies.length, 0);
   });
 
-  it('a link that begins anew tells the hub again at once — even the same state: the hub\'s record is the last link\'s, and a Mac that woke for a minute says where its lid is', async () => {
-    registry.text = registryTexts.closed;
+  it('a link that begins anew carries the lid it has THEN — a Mac that wakes for a minute with its lid shut says so in the request, whatever the hub knew of the link before', async () => {
+    registry.text = registryTexts.open;
     startMacLink();
-    await waitForLidReports(1);
     await waitUntil(() => hub.linkChannels.length === 1, 'the first link');
+    registry.text = registryTexts.closed;
+    await waitForLidReports(1);
     hub.linkChannels[0].close();
     await waitUntil(() => hub.linkChannels.length === 2, 'a second link after the first one was cut', 15_000);
-    await waitForLidReports(2);
-    assert.deepEqual(hub.lidRequests.bodies, ['closed', 'closed']);
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=open', 'link lid=closed'], 'the second link\'s own request says closed');
+    await waitUntil(() => registry.reads >= 12, 'a few looks of the second link');
+    assert.equal(hub.lidRequests.bodies.length, 1, 'and it tells nothing more: the request said it');
   });
 
-  it('a runner without a lid watcher (not a Mac) never sends the hub a lid request', async () => {
+  it('a runner without a lid watcher (not a Mac) asks for a plain `link` and never sends the hub a lid request', async () => {
     const config = createConfig();
     const abort = new AbortController();
     aborts.push(abort);
@@ -640,27 +664,64 @@ describe('a Mac\'s link and its lid (against the same hub stand-in)', () => {
     running.push(loop.run(abort.signal));
     await waitUntil(() => hub.linkChannels.length === 1, 'the link', 15_000);
     await new Promise((resolve) => { setTimeout(resolve, lidLookMs * 8); });
+    assert.deepEqual(hub.linkCommands.commands, ['link']);
     assert.equal(hub.lidRequests.count, 0);
   });
 
-  it('a hub that refuses the word does not disturb the link: it stays up, the runner tries again at every look and says so ONCE', async () => {
+  it('a hub from before the lid refuses `link lid=…`: the runner links with the plain `link` and remembers, and tells the lid in a report instead — which that hub refuses, so the tries back off', async () => {
+    hub.linkCommands.isOlderHub = true;
+    registry.text = registryTexts.closed;
     hub.lidRequests.isRefused = true;
     startMacLink();
-    await waitUntil(() => hub.lidRequests.count >= 4, 'several tries', 15_000);
+    await waitUntil(() => hub.linkChannels.length === 1, 'the link, through the plain request', 15_000);
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=closed', 'link']);
+    await waitUntil(() => hub.lidRequests.count >= 1, 'the first report', 15_000);
+    await new Promise((resolve) => { setTimeout(resolve, lidLookMs * 10); });
+    assert.equal(hub.lidRequests.count, 1, 'refused once: not again at every look');
+    hub.linkChannels[0].close();
+    await waitUntil(() => hub.linkChannels.length === 2, 'the second link', 15_000);
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=closed', 'link', 'link'], 'the second link does not ask the hub for what it refused');
+  });
+
+  it('a hub that refuses the REPORT does not disturb the link: it stays up, the runner does not ask again at every look — it waits, 30 s and more — and says so ONCE', async () => {
+    registry.text = registryTexts.open;
+    hub.lidRequests.isRefused = true;
+    startMacLink();
+    await waitUntil(() => hub.linkChannels.length === 1, 'the link', 15_000);
+    registry.text = registryTexts.closed;
+    await waitUntil(() => hub.lidRequests.count >= 1, 'the refused report', 15_000);
+    const readsAtRefusal = registry.reads;
+    await waitUntil(() => registry.reads >= readsAtRefusal + 10, 'ten more looks');
+    assert.equal(hub.lidRequests.count, 1, 'ten looks later the hub has been asked once');
     assert.equal(readRunnerStatus(paths)?.state, 'linked');
-    assert.equal(logLines.filter((line) => /did not take the report of the lid/.test(line)).length, 1);
-    hub.lidRequests.isRefused = false;
+    assert.equal(logLines.filter((line) => /the hub did not take the report of the lid/.test(line)).length, 1);
+  });
+
+  it('a report a hub took names the link it was made on, and the runner sends a report only for the link in force', async () => {
+    registry.text = registryTexts.open;
+    startMacLink();
+    await waitUntil(() => hub.linkChannels.length === 1, 'the first link');
+    const firstEpoch = hub.linkEpochs.next - 1;
+    registry.text = registryTexts.closed;
     await waitForLidReports(1);
-    assert.deepEqual(hub.lidRequests.bodies, ['open']);
+    assert.equal(parseLidReportBody(hub.lidRequests.bodies[0])?.linkEpochMs, firstEpoch);
+    hub.linkChannels[0].close();
+    await waitUntil(() => hub.linkChannels.length === 2, 'the second link', 15_000);
+    const secondEpoch = hub.linkEpochs.next - 1;
+    registry.text = registryTexts.open;
+    await waitForLidReports(2);
+    assert.equal(parseLidReportBody(hub.lidRequests.bodies[1])?.linkEpochMs, secondEpoch);
+    assert.notEqual(firstEpoch, secondEpoch);
   });
 
   it('an ioreg that cannot be read is an open lid and one line in the log, however many looks fail; the link is never held back', async () => {
     registry.text = null;
     startMacLink();
-    await waitForLidReports(1);
+    await waitUntil(() => hub.linkChannels.length === 1, 'the link', 15_000);
     await waitUntil(() => registry.reads >= 5, 'several failing looks');
     assert.equal(logLines.filter((line) => /the lid state cannot be read/.test(line)).length, 1);
-    assert.deepEqual(hub.lidRequests.bodies, ['open']);
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=open']);
+    assert.equal(hub.lidRequests.bodies.length, 0);
     assert.equal(readRunnerStatus(paths)?.state, 'linked');
   });
 });

@@ -1171,7 +1171,7 @@ export const ruDict: Record<string, string> = {
   'runners.resumeButton': '{name}: Продолжить',
   'runners.removeButton': '{name}: Удалить',
   'runners.statusOnline': 'на связи',
-  'runners.statusLidClosed': 'крышка закрыта — новые задачи не берёт',
+  'runners.statusLidClosed': 'крышка ноутбука закрыта — новые задачи не берёт',
   'runners.statusOffline': 'не на связи с {time}',
   'runners.statusNeverSeen': 'не на связи, ни разу не подключался',
   'runners.pausedMark': 'на паузе',

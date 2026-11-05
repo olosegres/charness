@@ -1,10 +1,11 @@
 import type { Client } from 'ssh2';
 import { restartExitCode } from './appInstall';
 import { decideUpdate, updateFromHub, type UpdateOutcome } from './appUpdate';
-import { redeemReplySchema } from '../runners/gateProtocol';
+import { formatLinkCommand, redeemReplySchema } from '../runners/gateProtocol';
 import { unconfirmedRemovalStopAfterMs } from '../runners/removalTiming';
 import { callGate, connectToHub, HubConnectionError, requestGateJson, sendLidReport, type HubEndpoint } from './hubClient';
-import { lidPollMs, type LidWatcher } from './lidState';
+import { readLidPollMs } from './lidPollTiming';
+import type { LidWatcher } from './lidState';
 import { readRunnerVersionPollMs } from './versionPollTiming';
 import { writeRunnerStatus, type LinkState, type RunnerConfig } from './runnerConfig';
 import type { RunnerHomePaths } from './runnerHome';
@@ -23,8 +24,9 @@ import type { RunnerServers } from './runnerServers';
  *             left running here), and ask again once an hour — never a flood that trips fail2ban
  *   update    the `link` answer names the hub's package id, and a linked runner asks again every few minutes (`version`, over the
  *             connection it holds); an idle runner whose id differs updates and asks the launcher for a restart
- *   lid       a Mac's link looks at its lid every few seconds and tells the hub when it changed (`lidState.ts`), over the connection it already holds; a new
- *             link tells it again at once — the hub keeps the last report, but a Mac that woke for a minute must say the lid is still shut (or is not)
+ *   lid       a Mac's link carries its lid IN the request that makes the link (`link lid=closed`): the hub records it before the link's socket exists, so a Mac that
+ *             woke in the dark for a minute is never online with the lid of the last time. Then it looks at the lid every few seconds and tells the hub when it
+ *             changed (`lidState.ts`), over the connection it already holds. A hub that does not know the argument (an older one) gets the plain `link`
  *   closing   the attempt ends when the `link` CHANNEL ends or the connection does — the hub's gate dying, or the link being cut, closes
  *             the channel while the connection to sshd stays up and keeps answering keepalives, so the connection alone proves nothing
  */
@@ -59,7 +61,7 @@ export interface LinkLoopDeps {
   unconfirmedRemovalStopAfterMs?: number;
   /** A Mac's lid watcher (`lidState.ts`); absent off a Mac: such a runner never reports a lid. */
   lid?: LidWatcher;
-  /** How often the lid is looked at (default {@link lidPollMs}). */
+  /** How often the lid is looked at (default {@link readLidPollMs}). */
   lidPollMs?: number;
   random?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -101,11 +103,13 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
   const update = deps.update ?? updateFromHub;
   const log = deps.log ?? (() => undefined);
   const versionPollMs = deps.versionPollMs ?? readRunnerVersionPollMs(process.env);
-  const lidLookMs = deps.lidPollMs ?? lidPollMs;
+  const lidLookMs = deps.lidPollMs ?? readLidPollMs(process.env);
   const confirmMs = deps.removalConfirmMs ?? removalConfirmMs;
   const stopAfterMs = deps.unconfirmedRemovalStopAfterMs ?? unconfirmedRemovalStopAfterMs;
   const endpoint: HubEndpoint = { host: deps.config.hub.host, port: deps.config.hub.port, user: deps.config.hub.user, hostKey: deps.config.hub.hostKey };
   let installedPackageId = deps.config.packageId;
+  /** Cleared when a hub took the plain `link` after refusing the one with the lid in it: it is an older hub, and asking again would only be refused again. */
+  let isLinkLidAccepted = true;
   let state: LinkState = 'connecting';
   let stateSinceMs = now();
   let lastError: string | null = null;
@@ -144,8 +148,16 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
       return { kind: 'failed', reason: error instanceof Error ? error.message : 'could not connect' };
     }
     let answer: Awaited<ReturnType<typeof callGate>>;
+    // A Mac says where its lid is in the request that makes the link; the hub records it before it binds the link's socket.
+    const lidAtConnect = deps.lid === undefined ? null : await deps.lid.look();
     try {
-      answer = await callGate(client, 'link', null);
+      answer = await callGate(client, 'link', null, formatLinkCommand(deps.lid === undefined || !isLinkLidAccepted ? null : lidAtConnect));
+      if (answer === null && deps.lid !== undefined && isLinkLidAccepted) {
+        // Refused: a hub that does not know the argument (an older one) refuses it like any other word — and one that refuses the runner refuses the plain `link` too.
+        // Only a plain `link` that WORKS shows the argument was the reason; until then the next attempt asks the same way.
+        answer = await callGate(client, 'link', null);
+        if (answer !== null) isLinkLidAccepted = false;
+      }
     } catch (error) {
       client.end();
       return { kind: 'failed', reason: error instanceof Error ? error.message : 'the link request failed' };
@@ -184,6 +196,10 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
     deps.servers.acceptLinkStream(answer.channel);
     answer.channel.resume();
     writeStatus('linked', null);
+    // What the hub says of this link's start; a report names it, so one that is delivered after a newer link has begun is known for what it is.
+    const linkEpoch = answer.marker.fields.epoch ?? null;
+    // The lid the hub was told in the request that made this link; nothing, when that request could not carry it (an older hub).
+    const lidTold = deps.lid === undefined || !isLinkLidAccepted ? null : lidAtConnect;
     const linkedAtMs = now();
     return new Promise<AttemptResult>((resolve) => {
       let isDone = false;
@@ -241,7 +257,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
         }
       };
       const lookAtLid = (): void => {
-        if (!isUpdating && !isDone) void deps.lid?.beat((isClosed) => sendLidReport(client, isClosed));
+        if (!isUpdating && !isDone) void deps.lid?.beat((isClosed) => sendLidReport(client, isClosed, linkEpoch));
       };
       signal.addEventListener('abort', onAbort, { once: true });
       client.once('close', onLost);
@@ -251,7 +267,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
       considerUpdate();
       if (!isUpdating) pollTimer = setInterval(() => { void askHubForPackage(); }, versionPollMs);
       if (!isUpdating && deps.lid !== undefined) {
-        deps.lid.reset();
+        deps.lid.startLink(lidTold);
         lookAtLid();
         lidTimer = setInterval(lookAtLid, lidLookMs);
       }

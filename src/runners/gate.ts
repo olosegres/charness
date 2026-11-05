@@ -6,9 +6,10 @@ import { getCaughtErrnoCode } from '../configDirFile';
 import { runGateLink, type GateLinkTimings } from './gateLink';
 import {
   formatGateAnswerHead,
-  lidReportBodies,
   maxGateRequestBytes,
   noPackageMarker,
+  parseLidReportBody,
+  parseLinkLidArgument,
   redeemRequestSchema,
   runnerKeyRequests,
   temporaryKeyRequests,
@@ -24,7 +25,7 @@ import { HubRegistryError } from './hubRegistry';
 import { getHubPackage, openHubPackage } from './hubPackage';
 import { cancelPairing, checkIsPairingOpen, checkIsRunnerPaired, describeRunnerIdentity, redeemPairing, removePairedRunner } from './hubPairing';
 import { parseSshClientSource } from './linkConcern';
-import { cutRunnerLink, writeLidState } from './linkControl';
+import { cutRunnerLink, readLidState, writeLidState } from './linkControl';
 
 /**
  * @description `charness runner-gate` — what sshd starts for a runner's key (the forced command of its `authorized_keys` line, via
@@ -61,6 +62,8 @@ export function parseGateArgs(argv: readonly string[]): GateArgsParsing {
 /** @description The request the runner may make with a key of `role`: `originalCommand` as a whole must be one of the role's words. */
 export function routeGateRequest(role: GateInvocation['role'], originalCommand: string | undefined): GateRequest | null {
   const allowed = role === 'temporary' ? temporaryKeyRequests : runnerKeyRequests;
+  // A runner's `link` may carry the lid (`link lid=closed|open`): exactly that text and no other argument.
+  if (role === 'runner' && parseLinkLidArgument(originalCommand) !== null) return 'link';
   return allowed.find((request) => request === originalCommand) ?? null;
 }
 
@@ -159,15 +162,26 @@ async function handleVersion(ctx: HubContext, io: GateIo): Promise<number> {
   return 0;
 }
 
-/** `lid`: the runner says whether its lid is closed with nothing keeping the Mac awake. The report is recorded as it came, with the hub's own clock; anything else in the body is refused. */
+/**
+ * `lid`: the runner says whether its lid is closed with nothing keeping the Mac awake, and — when its link named one — the epoch of the link it says so on. The report
+ * is recorded as it came, with the hub's own clock; anything else in the body is refused. A report from a link that began EARLIER than the one on record is dropped (and
+ * answered like a taken one — the sender can do nothing about it): a Mac that fell asleep with a report in flight can have it delivered after its next link has already said
+ * where its lid is, and the old word must not overwrite the new.
+ */
 async function handleLid(ctx: HubContext, runnerId: string, io: GateIo, now: () => number): Promise<number> {
-  const body = (await readLimitedText(io.stdin, maxGateRequestBytes))?.trim();
-  const isReport = body === lidReportBodies.closed || body === lidReportBodies.open;
-  if (isReport) writeLidState(ctx.dir, runnerId, { isClosed: body === lidReportBodies.closed, reportedAtMs: now() });
-  const reply: LidReply = { ok: isReport };
+  const body = await readLimitedText(io.stdin, maxGateRequestBytes);
+  const report = body === null ? null : parseLidReportBody(body);
+  if (report !== null) {
+    const onRecord = readLidState(ctx.dir, runnerId);
+    const isFromEarlierLink = report.linkEpochMs !== null && onRecord?.linkEpochMs !== undefined && report.linkEpochMs < onRecord.linkEpochMs;
+    if (!isFromEarlierLink) {
+      writeLidState(ctx.dir, runnerId, { isClosed: report.isClosed, reportedAtMs: now(), linkEpochMs: report.linkEpochMs ?? onRecord?.linkEpochMs });
+    }
+  }
+  const reply: LidReply = { ok: report !== null };
   io.stdout.write(formatGateAnswerHead('lid'));
   io.stdout.write(`${JSON.stringify(reply)}\n`);
-  return isReport ? 0 : failedExitCode;
+  return report !== null ? 0 : failedExitCode;
 }
 
 function getPackageIdOrNull(ctx: HubContext, log: (line: string) => void): string | null {
@@ -216,7 +230,7 @@ export async function runRunnerGate(argv: readonly string[], env: NodeJS.Process
     }
     switch (request) {
       case 'link':
-        return await runGateLink({ ctx, runnerId: invocation.runnerId, input: io.stdin, output: io.stdout, packageId: getPackageIdOrNull(ctx, io.log), source: parseSshClientSource(env.SSH_CLIENT), log: io.log, timings: options.linkTimings, now });
+        return await runGateLink({ ctx, runnerId: invocation.runnerId, input: io.stdin, output: io.stdout, packageId: getPackageIdOrNull(ctx, io.log), source: parseSshClientSource(env.SSH_CLIENT), lidIsClosed: parseLinkLidArgument(env.SSH_ORIGINAL_COMMAND), log: io.log, timings: options.linkTimings, now });
       case 'package':
         return await writePackage(ctx, io, 'package');
       case 'version':

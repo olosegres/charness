@@ -29,6 +29,7 @@ import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
 import { todoReminderDefaultMinutes } from '../todos/nag';
 import { todoReminderPollMs } from '../todos/reminderEngine';
 import { remoteRunLeaseMinMs, remoteRunLeaseMs } from '../remoteRun/leaseTiming';
+import { lidPollMs } from '../runnerUtility/lidPollTiming';
 import { runnerVersionPollMs } from '../runnerUtility/versionPollTiming';
 import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { runnerWaitPollMinMs, runnerWaitPollMs } from '../remoteRun/runnerWaitTiming';
@@ -50,6 +51,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['checkStatusIntervalMs', defaultCheckStatusEveryMinutes * 60 * 1000],
   ['remoteRunLeaseMs', remoteRunLeaseMs],
   ['runnerVersionPollMs', runnerVersionPollMs],
+  ['runnerLidPollMs', lidPollMs],
   ['pairingLifetimeMs', pairingLifetimeMs],
   ['remoteRunRunnerPollMs', runnerWaitPollMs],
   ['bindPickerClaimLimit', bindPickerClaimLimit],
@@ -66,7 +68,7 @@ const supervisorTimingKeys = ['tscWatchCheckIntervalMs', 'tscWatchStaleGraceMs']
  * cannot import this module's graph). That they read them is proven by `remoteRunLease.test.ts` and `remoteRunRunnerWait.test.ts`, and by the
  * flows, whose lease expiry and wait poll are their test windows.
  */
-const cliTimingKeys = ['remoteRunLeaseMs', 'runnerVersionPollMs', 'pairingLifetimeMs', 'remoteRunRunnerPollMs'];
+const cliTimingKeys = ['remoteRunLeaseMs', 'runnerVersionPollMs', 'runnerLidPollMs', 'pairingLifetimeMs', 'remoteRunRunnerPollMs'];
 /** One past the longest delay Node's timers keep: a longer one fires after 1 ms. */
 const beyondTimerMaxMs = 2_147_483_648;
 

@@ -10,7 +10,7 @@ import { getRunnerLinkPaths, type HubContext } from './hubPaths';
 import { readHubKey } from './hubKey';
 import { readPairedFile } from './hubRegistry';
 import { recordLinkSource, type LinkSourceChange } from './linkConcern';
-import { readLinkState, writeLinkState, type LinkState } from './linkControl';
+import { readLidState, readLinkState, writeLidState, writeLinkState, type LinkState } from './linkControl';
 import { parsePublicKey } from './sshKeys';
 
 /**
@@ -65,6 +65,11 @@ export interface GateLinkParams {
   packageId: string | null;
   /** The address the link connects from, as sshd told the gate (`parseSshClientSource`); `null`/absent when it did not. Recorded in the status file. */
   source?: string | null;
+  /**
+   * The lid at the moment the runner connected (`link lid=closed|open`): `true` closed, `false` open, `null`/absent when the runner did not say. Recorded BEFORE the link's
+   * marker is sent and its socket is bound, so the hub never counts the runner online with a lid it has not heard about.
+   */
+  lidIsClosed?: boolean | null;
   log: (line: string) => void;
   timings?: Partial<GateLinkTimings>;
   now?: () => number;
@@ -98,10 +103,23 @@ export function runGateLink(params: GateLinkParams): Promise<number> {
   }
   const pinnedBlob = pinnedHostKey.blob;
 
+  // The link's epoch: when this gate began, by the hub's clock. The lid it was told is recorded under it first of all — before the socket exists.
+  const linkEpochMs = now();
+  if (params.lidIsClosed !== undefined && params.lidIsClosed !== null) {
+    try {
+      // A link that began after this one has said where the lid is already (two links racing for the same runner): its word is the later one.
+      const onRecord = readLidState(ctx.dir, runnerId)?.linkEpochMs;
+      if (onRecord === undefined || onRecord <= linkEpochMs) writeLidState(ctx.dir, runnerId, { isClosed: params.lidIsClosed, reportedAtMs: linkEpochMs, linkEpochMs });
+    } catch (error) {
+      // The link works without it: the record of the link before stands, as it did before the lid was part of the request.
+      log(`cannot record the lid the runner reported (${getCaughtErrnoCode(error)})`);
+    }
+  }
+
   return new Promise<number>((resolve) => {
     const client = new Client();
     const openConnections = new Set<net.Socket>();
-    const sinceMs = now();
+    const sinceMs = linkEpochMs;
     let server: net.Server | null = null;
     let boundInode: number | null = null;
     let checkTimer: NodeJS.Timeout | null = null;
@@ -225,7 +243,7 @@ export function runGateLink(params: GateLinkParams): Promise<number> {
       });
     };
 
-    params.output.write(formatGateAnswerHead('link', { package: params.packageId ?? noPackageMarker }));
+    params.output.write(formatGateAnswerHead('link', { package: params.packageId ?? noPackageMarker, epoch: linkEpochMs.toString() }));
     duplex.on('error', () => finish('the connection to the runner failed'));
     // The channel from the runner ended cleanly (EOF: the ssh session that carried it is gone). A duplex whose readable side ended stays half
     // open, so the ssh client never sees a close — only a failed write or the keepalive's silence would tell, and until then the hub shows a

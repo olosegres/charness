@@ -13,7 +13,7 @@ import { createLinkLoop } from './linkLoop';
 import { collectMachineReport, createMachineProbe, formatMachineReport, type MachineReport } from './machineReport';
 import { ensurePueueDaemon, inspectPueue, pueueUnfinishedStatuses, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
 import { createGuiAgentDeps, runGuiAgent } from './guiAgent';
-import { createIoregReader, createLidWatcher } from './lidState';
+import { checkCanReadLid, createIoregReader, createLidWatcher } from './lidState';
 import { createGuiAgentHealer, guiAgentHealIntervalMs, writeGuiAgentInstallFailure } from './guiAgentHeal';
 import { describeKeepAwakeMethod } from '../remoteRun/probe';
 import { createKeepAwakeDeps, startKeepAwake, type KeepAwakeState } from './keepAwake';
@@ -461,7 +461,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     keys,
     servers,
     // A MacBook's lid decides whether the hub may hand it a new job (`lidState.ts`); no other runner reports one.
-    lid: process.platform === 'darwin' ? createLidWatcher({ readRegistry: createIoregReader(), log: (line) => io.stderr(`charness-runner: ${line}\n`) }) : undefined,
+    lid: checkCanReadLid(process.platform, process.env) ? createLidWatcher({ readRegistry: createIoregReader(), log: (line) => io.stderr(`charness-runner: ${line}\n`) }) : undefined,
     log: (line) => io.stderr(`charness-runner: ${line}\n`),
     stopJobs: async () => { await stopAllPueueJobs(paths); },
   });

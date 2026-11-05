@@ -1161,7 +1161,7 @@ export const zhDict: Record<string, string> = {
   'runners.resumeButton': '{name}：恢复',
   'runners.removeButton': '{name}：移除',
   'runners.statusOnline': '在线',
-  'runners.statusLidClosed': '盒盖已合上 — 不接收新任务',
+  'runners.statusLidClosed': '已合盖 — 不接收新任务',
   'runners.statusOffline': '自 {time} 起离线',
   'runners.statusNeverSeen': '离线，从未连接',
   'runners.pausedMark': '已暂停',

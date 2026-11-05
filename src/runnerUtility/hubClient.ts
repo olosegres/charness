@@ -1,6 +1,7 @@
 import { Client, type ClientChannel, type ServerHostKeyAlgorithm } from 'ssh2';
 import type { z } from 'zod';
-import { lidReplySchema, lidReportBodies, readUntilGateMarker, type GateMarker, type GateRequest } from '../runners/gateProtocol';
+import { formatLidReportBody, lidReplySchema, readUntilGateMarker, type GateMarker, type GateRequest } from '../runners/gateProtocol';
+import type { LidReportResult } from './lidState';
 import { parsePublicKey } from '../runners/sshKeys';
 
 /**
@@ -91,10 +92,13 @@ export interface GateAnswer {
   channel: ClientChannel;
 }
 
-/** @description Run the gate request `request` and read its marker line; `null` when the answer has none (the hub refused, or the key line is gone). `body` is sent as stdin and ends it; without one stdin stays open (`link`). */
-export function callGate(client: Client, request: GateRequest, body: string | null): Promise<GateAnswer | null> {
+/**
+ * @description Run the gate request `request` and read its marker line; `null` when the answer has none (the hub refused, or the key line is gone). `body` is sent as stdin and
+ * ends it; without one stdin stays open (`link`). `command` is the text actually run when it is more than the word (`link lid=closed`, `formatLinkCommand`).
+ */
+export function callGate(client: Client, request: GateRequest, body: string | null, command: string = request): Promise<GateAnswer | null> {
   return new Promise((resolve, reject) => {
-    client.exec(request, async (error, channel) => {
+    client.exec(command, async (error, channel) => {
       if (error !== undefined) {
         reject(new HubConnectionError('network', error.message));
         return;
@@ -119,8 +123,8 @@ export async function readChannelText(channel: ClientChannel): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/** @description A gate request whose answer is one JSON line (`redeem`, `cancel`, `identity`, `unpair`, `lid`), parsed with `schema`. */
-export async function requestGateJson<TReply>(client: Client, request: 'redeem' | 'cancel' | 'unpair' | 'identity' | 'lid', body: string | null, schema: z.ZodType<TReply>): Promise<TReply> {
+/** @description A gate request whose answer is one JSON line (`redeem`, `cancel`, `identity`, `unpair`), parsed with `schema`. */
+export async function requestGateJson<TReply>(client: Client, request: 'redeem' | 'cancel' | 'unpair' | 'identity', body: string | null, schema: z.ZodType<TReply>): Promise<TReply> {
   const answer = await callGate(client, request, body ?? '');
   if (answer === null) throw new HubConnectionError('network', 'the hub did not answer the request');
   const text = await readChannelText(answer.channel);
@@ -135,8 +139,18 @@ export async function requestGateJson<TReply>(client: Client, request: 'redeem' 
   return parsed.data;
 }
 
-/** @description Tell the hub whether this Mac's lid is closed with nothing keeping it awake (the `lid` request); `true` when the hub took the report. Throws like any gate request when the hub cannot be reached. */
-export async function sendLidReport(client: Client, isClosed: boolean): Promise<boolean> {
-  const reply = await requestGateJson(client, 'lid', isClosed ? lidReportBodies.closed : lidReportBodies.open, lidReplySchema);
-  return reply.ok;
+/**
+ * @description Tell the hub whether this Mac's lid is closed with nothing keeping it awake (the `lid` request), naming the link it is said on (`linkEpoch`, from the `link` marker;
+ * `null` for a hub that named none). `taken`: the hub took it; `refused`: it answered and would not (a gate that does not know the word has no marker; a body it rejects says
+ * `ok:false`) — a retry now is refused the same; a connection that cannot be used THROWS like any gate request, and the caller calls that `failed`.
+ */
+export async function sendLidReport(client: Client, isClosed: boolean, linkEpoch: string | null): Promise<LidReportResult> {
+  const epochMs = linkEpoch === null || !/^\d{1,16}$/.test(linkEpoch) ? null : Number(linkEpoch);
+  const answer = await callGate(client, 'lid', formatLidReportBody(isClosed, epochMs));
+  if (answer === null) return 'refused';
+  try {
+    return lidReplySchema.parse(JSON.parse(await readChannelText(answer.channel))).ok ? 'taken' : 'refused';
+  } catch {
+    return 'refused';
+  }
 }

@@ -44,6 +44,11 @@ const lidStateSchema = z.strictObject({
   /** The lid is closed and nothing keeps the Mac awake (no external display): it takes no new job. */
   isClosed: z.boolean(),
   reportedAtMs: z.number().int().nonnegative(),
+  /**
+   * The epoch (the start in ms, by the hub's clock) of the link the report was made on. A report from a link that began EARLIER than the one on record is dropped: a
+   * Mac that fell asleep with a report in flight may have it delivered after its next link has already said where its lid is. Absent in a record without a link behind it.
+   */
+  linkEpochMs: z.number().int().nonnegative().optional(),
 });
 
 /** @name LidState @description `link/<id>.lid`: the runner's last report about its lid. */

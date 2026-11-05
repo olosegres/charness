@@ -132,16 +132,18 @@ up all the same. It never touches `pmset` or any admin power setting, so nothing
   Mac with an external display and power in clamshell mode stays awake is Apple's rule, not the runner's.
 - **A MacBook with its lid closed takes no new job.** Measured on a Mac on power: the lid closed with no external display, it sleeps about a minute and a half
   later — and macOS wakes it in the dark for a minute or two every quarter of an hour, in which the runner reconnects and a job that lands there is cut when
-  the Mac sleeps again. So a Mac runner looks at its lid every 10 seconds (`ioreg -r -k AppleClamshellState -d 4`) and tells the charness host when it changes:
+  the Mac sleeps again. So a Mac runner looks at its lid every 10 seconds (`ioreg -r -k AppleClamshellState -d 4`) and tells the charness host:
   **closed** means the lid is shut AND closing it sleeps the Mac (`AppleClamshellState` and `AppleClamshellCausesSleep` both Yes) — a lid shut with an external
   display keeping the Mac awake (clamshell mode), a lid that is open, a Mac without a lid and a reading that cannot be made all count as **open**, and the runner
-  takes jobs as usual (an unreadable `ioreg` is one line in the runner's log, never a stop). The host treats a lid-closed runner like an offline one for NEW jobs:
+  takes jobs as usual (an unreadable `ioreg` is one line in the runner's log, never a stop). The lid is part of the request that makes the link, so the host knows it
+  BEFORE the runner is online: a Mac that wakes for its minute with the lid shut is never, not even for a second, available with the lid of the last time. After that
+  the runner reports only a change (a hub that refuses a report is not asked again at every look: 30 s, doubling to 5 minutes). The host treats a lid-closed runner like an
+  offline one for NEW jobs:
   `remote-run` and `exec` skip it (a named runner is refused: «has its lid closed»), `--needs` waits for it (`--runner-wait`, as for an offline runner: «waiting for a
   runner with ios (mac has its lid closed)»), and `runners`, `charness runners ls` and `/runners` show «lid closed» in place of «online». A job that already runs
   there, and every command about it (`status`, `wait`, `logs`, `kill`), is not touched. Opening the lid makes the Mac available within about 10 seconds (the
-  next look), and a waiting job starts. The host keeps the last report across links, so a Mac that wakes for its minute with the lid still shut stays unavailable
-  until it says the lid is open (it says so at the start of every link). Non-Mac runners never report a lid, and neither does a hand-made one over plain ssh (it has no runner program to tell). Unverified on a real Mac in this form: the
-  `ioreg` output of every macOS version (the key names are the registry's own, not documented by Apple).
+  next look), and a waiting job starts. Non-Mac runners never report a lid, and neither does a hand-made one over plain ssh (it has no runner program to tell). Unverified on a
+  real Mac in this form: the `ioreg` output of every macOS version (the key names are the registry's own, not documented by Apple).
 - **Only verifiable on the real Mac:** that `caffeinate -i -w` lets a closed lid sleep the machine, and that a SIGKILLed link frees the Mac to sleep again
   (the holder ends with `-w`). On Linux both are tested with the real `systemd-inhibit` (the lock shows in `systemd-inhibit --list` and is gone, holder
   and all, within seconds of the link being SIGKILLed).

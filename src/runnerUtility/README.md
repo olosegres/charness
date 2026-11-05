@@ -195,15 +195,27 @@ under its own clean-up (no `finally`, no `exit` handlers: the state file stayed)
 
 ## The lid (`lidState.ts`)
 
-A Mac runner's link looks at its lid on a timer (`lidPollMs`, 10 s — as often as the hub's gate takes its heartbeat) and tells the hub when it changes, so that the hub gives
-a MacBook with a closed lid no NEW job (it sleeps within about a minute and a half, and wakes in the dark for a minute or two every so often on power — a job landing then
-is cut): `ioreg -r -k AppleClamshellState -d 4` → `"AppleClamshellState" = Yes` AND `"AppleClamshellCausesSleep" = Yes` is **closed**; anything else — open, a lid shut with an
-external display keeping the Mac awake, a Mac without the key, a reading that cannot be made — is **open** (never out of use on a guess; the key names are the I/O Registry's own,
-not documented API). `createLidWatcher` (`runLink` makes one on macOS only; a runner on any other system never reports a lid) reads, compares with what the hub was last told, and
-reports through `sendLidReport` — the `lid` request of the gate, over the connection the link already holds — only on a change, retrying every look until the hub takes the
-report; a new link (`reset`) reports at the first look whatever the last link said. A read that fails (ioreg gone, no answer in 5 s) is one line in the log per run of failures
-and an open lid; a report the hub did not take is one line per run too — neither ever holds the link back. A link that is updating reports nothing. The hub's side is in
-`src/runners/README.md` («The lid»).
+A Mac runner's link looks at its lid and tells the hub, so that the hub gives a MacBook with a closed lid no NEW job (it sleeps within about a minute and a half, and wakes in
+the dark for a minute or two every so often on power — a job landing then is cut): `ioreg -r -k AppleClamshellState -d 4` → `"AppleClamshellState" = Yes` AND
+`"AppleClamshellCausesSleep" = Yes` is **closed**; anything else — open, a lid shut with an external display keeping the Mac awake, a Mac without the key, a reading that cannot be
+made — is **open** (never out of use on a guess; the key names are the I/O Registry's own, not documented API). `checkCanReadLid`: a Mac reports, and so does a runner that has an
+executable `ioreg` on its PATH (a Mac's own tool, which no other system ships — how a flow on another system plays a Mac); any other runner never does.
+
+- **The lid goes IN the request that makes the link.** The link reads the lid (`look()`) before it asks for the link and runs `link lid=closed|open` (`formatLinkCommand`; the
+  forced command of the runner's key matches exactly that text and nothing else — `parseLinkLidArgument`). The hub's gate records it BEFORE it prints the marker and binds the
+  link's socket, so the hub never counts the runner online with a lid it has not heard about: a Mac that wakes in the dark for a minute with its lid shut says «closed» in the
+  request that brings it online. A hub that refuses that text (an older one) is asked again with the plain `link`; once that works the process asks the plain one from then on and
+  reports the lid with `lid` requests instead.
+- **Then only a change.** `createLidWatcher`, every `lidPollMs` (10 s — as often as the hub's gate takes its heartbeat; the test seam `CHARNESS_TEST_TIMINGS` key `runnerLidPollMs`
+  may only shorten it, `lidPollTiming.ts`): reads, compares with what the hub was told, and reports through `sendLidReport` — the `lid` request over the connection the link already
+  holds, naming the link it is made on (`epoch`, from the `link` marker). The answer is `taken`, `refused` (the hub answered and would not: a gate that does not know the word has no
+  marker) or `failed` (the connection). `failed` is tried again at the next look; `refused` after 30 s, 60 s, doubling to 5 min — a hub that does not know the word gets no ssh exec and
+  no process at every look — until the hub takes one or a new link begins.
+- **A report on its way when a link ends touches nothing of the next link**: `startLink` opens a new generation, so the guard against two looks at once is per link, an old report's
+  answer neither marks the hub as told nor starts a run of refusals, and the new link's own first look is never held back. On the hub a report from an EARLIER link than the one on
+  record is dropped (its epoch is smaller), which covers one that is delivered late.
+- A read that fails (ioreg gone, no answer in 5 s) is one line in the log per run of failures and an open lid; a report the hub did not take is one line per run too — neither ever holds
+  the link back. A link that is updating reports nothing. The hub's side is in `src/runners/README.md` («The lid»).
 
 ## The login session's agent (`guiAgent.ts`)
 

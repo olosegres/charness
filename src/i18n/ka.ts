@@ -1167,7 +1167,7 @@ export const kaDict: Record<string, string> = {
   'runners.resumeButton': '{name}: გაგრძელება',
   'runners.removeButton': '{name}: წაშლა',
   'runners.statusOnline': 'ონლაინ',
-  'runners.statusLidClosed': 'თავსახური დახურულია — ახალ დავალებებს არ იღებს',
+  'runners.statusLidClosed': 'ლეპტოპის თავსახური დახურულია — ახალ დავალებებს არ იღებს',
   'runners.statusOffline': 'ოფლაინ {time}-დან',
   'runners.statusNeverSeen': 'ოფლაინ, არასოდეს დაკავშირებულა',
   'runners.pausedMark': 'პაუზაზეა',

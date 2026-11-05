@@ -1167,7 +1167,7 @@ export const frDict: Record<string, string> = {
   'runners.resumeButton': '{name} : Reprendre',
   'runners.removeButton': '{name} : Retirer',
   'runners.statusOnline': 'en ligne',
-  'runners.statusLidClosed': 'capot fermé — n’accepte pas de nouveaux jobs',
+  'runners.statusLidClosed': 'écran rabattu — n’accepte pas de nouveaux jobs',
   'runners.statusOffline': 'hors ligne depuis {time}',
   'runners.statusNeverSeen': 'hors ligne, jamais connecté',
   'runners.pausedMark': 'en pause',
