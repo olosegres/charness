@@ -111,6 +111,7 @@ const launchctl: CommandRunner = async (file, args) => {
     if (!world.bootoutLeavesLoaded) world.isLoaded = false;
     return result({});
   }
+  // MEASURED on a real always-on Mac from the service's own context: `bootstrap gui/<uid> <plist>` → exit 0 with no output; the failure below is launchd's usual error 5, not measured there.
   if (verb === 'bootstrap' && target === domain && plist === getGuiAgentFile(paths.homeDir, names)) {
     if (world.bootstrapFails) return result({ ok: false, exitCode: 5, stderr: 'Bootstrap failed: 5: Input/output error\n' });
     world.isLoaded = true;
@@ -354,14 +355,47 @@ describe('healGuiAgent: failures say why — and which way out', () => {
     assert.ok(!calls.some((call) => call.startsWith('launchctl bootstrap')));
   });
 
-  it('an old agent that stays loaded after bootout is a failure: the new one is not bootstrapped over it, and the new file waits for the login', async () => {
+  it('an old agent that stays loaded after bootout is a failure that puts the OLD definition back — the next look must still see a difference and replace again — and only the admin line stops it for good', async () => {
     writeOldDefinition();
+    const oldText = readDefinition();
     world.isLoaded = true;
     world.bootoutLeavesLoaded = true;
     const { reason, cure } = failure(await healGuiAgent(paths, createDeps()));
     assert.match(reason, /still loaded in gui\/501/);
-    assert.equal(cure, 'login');
-    assert.ok(!calls.some((call) => call.startsWith('launchctl bootstrap')));
+    assert.equal(cure, 'admin', 'the definition in place is the old one: logging in again would load that');
+    assert.equal(readDefinition(), oldText, 'put back, so a current file beside a loaded agent does not read as «in place» next time');
+    assert.ok(!calls.some((call) => call.startsWith('launchctl bootstrap')), 'the new one is not bootstrapped over the old');
+  });
+
+  it('a bootout that failed once is tried again at the next look, and the record is not cleared by a look that has nothing to do: it stays until the agent really is replaced', async () => {
+    writeOldDefinition();
+    world.isLoaded = true;
+    world.bootoutLeavesLoaded = true;
+    const healer = createGuiAgentHealer(paths, createDeps(), (line) => logLines.push(line));
+    assert.equal((await healer.look()).kind, 'failed');
+    assert.equal(readGuiAgentInstallFailure(paths)?.cure, 'admin');
+    assert.equal((await healer.look()).kind, 'failed', 'the old agent is still there, so the look is a replace again — not «in place»');
+    assert.notEqual(readGuiAgentInstallFailure(paths), null);
+    world.bootoutLeavesLoaded = false;
+    assert.deepEqual(await healer.look(), { kind: 'loaded', wasReplaced: true });
+    assert.equal(readGuiAgentInstallFailure(paths), null);
+    assert.equal(readDefinition(), expectedDefinition());
+  });
+
+  it('a bootstrap refused AFTER a successful bootout leaves the new file (logging out and in loads it) and the next look loads it: the old agent is gone, so nothing is replaced again', async () => {
+    writeOldDefinition();
+    world.isLoaded = true;
+    world.bootstrapFails = true;
+    const healer = createGuiAgentHealer(paths, createDeps(), (line) => logLines.push(line));
+    const first = await healer.look();
+    assert.equal(first.kind === 'failed' ? first.cure : '', 'login');
+    assert.equal(readDefinition(), expectedDefinition(), 'the new definition stays');
+    assert.equal(world.isLoaded, false, 'the old agent is out');
+    world.bootstrapFails = false;
+    calls = [];
+    assert.deepEqual(await healer.look(), { kind: 'loaded', wasReplaced: false });
+    assert.ok(!calls.some((call) => call.startsWith('launchctl bootout')), 'a plain load, no second stop');
+    assert.equal(readGuiAgentInstallFailure(paths), null);
   });
 });
 

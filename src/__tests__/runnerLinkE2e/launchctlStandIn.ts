@@ -1,6 +1,8 @@
 /**
  * @description A `launchctl` for a flow that runs on Linux: it keeps the state of ONE account's GUI domain (`gui/<uid>`: a session, the login session's agent loaded or
- * not) in files, records every call, and can be told to fail `bootstrap` the way launchd does (error 5). Put its folder first on a runner's `PATH`; not a test itself.
+ * not) in files, records every call, and can be told to fail `bootstrap` the way launchd does (error 5). Its answers for a logged-in account are the ones MEASURED on a real
+ * always-on Mac from its service's own context (`runnerUtility/guiAgentHeal.ts`): `print gui/<uid>` and a loaded label exit 0, an unknown label exits 113, `bootstrap` exits 0 and
+ * prints nothing. Put its folder first on a runner's `PATH`; not a test itself.
  */
 
 import * as fs from 'node:fs';

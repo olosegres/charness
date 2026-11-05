@@ -36,11 +36,15 @@ import { getServiceNames, planGuiAgentJob, renderLaunchdPlist } from './serviceU
  *   `launchctl print gui/<another account's uid>`     exit 1 — «Could not print domain: 1: Operation not permitted»
  *   `launchctl print user/<uid>`                      exit 0 — `session = Background`, `gui asid = <asid of the GUI domain>`
  *   `pgrep -u <uid> -lx 'loginwindow|Dock|Finder'`    exit 0 with one line per process (nothing: exit 1)
- * NOT measured, because it can only be measured by doing it (nothing was loaded or removed on that Mac): `launchctl bootstrap gui/<uid>` from that context, and the
- * answer for an account that is LOGGED OUT. So «no session» is never read off launchd's answer alone: launchd must say «Could not find domain for user gui: <uid>» AND
+ *   `launchctl bootstrap gui/<uid> <plist>`           exit 0, no output — a THROWAWAY agent (another label, `LimitLoadToSessionType` Aqua, `RunAtLoad` false, `/usr/bin/true`) whose plist
+ *                                                     was in a temporary folder outside `~/Library/LaunchAgents`, loaded from this very context (`managername` `System`, the account's uid)
+ *   `launchctl print gui/<uid>/<throwaway label>`     exit 0 — `type = LaunchAgent`, `state = not running`, `path = <that plist>`, `program = /usr/bin/true`
+ *   `launchctl bootout gui/<uid>/<throwaway label>`   exit 0, no output; `print` of it right after → exit 113 («Could not find service … in domain for user gui: <uid>»)
+ * So the service CAN load an agent into the account's own login session, and take it out again. NOT measured: any answer for an account that is LOGGED OUT (the logged-out run is
+ * a live check with the owner). So «no session» is never read off launchd's answer alone: launchd must say «Could not find domain for user gui: <uid>» AND
  * the account must run none of the processes a login session consists of (`loginwindow`, `Dock`, `Finder`). Anything else — another text, a refusal, a domain that is
  * gone while those processes run, an answer that cannot be got — is a FAILURE with the text, never «no session». A `bootstrap` that is refused is a failure whose
- * definition is in place, so logging out and in loads it.
+ * definition is in place, so logging out and in loads it; a `bootout` that does not stop the old agent puts the old definition back and leaves the admin line as the way out.
  */
 
 /** The agent looks for its own definition again this often after the first look at the link's start. */
@@ -190,12 +194,18 @@ function checkIsQueueBusy(queue: PueueState): boolean {
   return queue.kind === 'busy' || queue.kind === 'unreadable';
 }
 
+/** Why the agent is not loaded, and at which step: `bootout` — the old agent is still there — or `bootstrap` — the stop worked and the new definition was refused. */
+interface LoadFailure {
+  step: 'bootout' | 'bootstrap';
+  reason: string;
+}
+
 /** The agent is booted out (when it is replaced) and bootstrapped; `null` when it is loaded, else why not. */
-async function loadAgent(deps: GuiAgentHealDeps, label: string, file: string, isReplacing: boolean): Promise<string | null> {
+async function loadAgent(deps: GuiAgentHealDeps, label: string, file: string, isReplacing: boolean): Promise<LoadFailure | null> {
   const domain = `gui/${deps.uid}`;
-  if (isReplacing && !(await bootOutAndWaitUntilGone(label, domain, deps.runner))) return `the old agent (${label}) is still loaded in ${domain} after being asked to stop`;
+  if (isReplacing && !(await bootOutAndWaitUntilGone(label, domain, deps.runner))) return { step: 'bootout', reason: `the old agent (${label}) is still loaded in ${domain} after being asked to stop` };
   const loaded = await askLaunchctl(deps, ['bootstrap', domain, file]);
-  return loaded.ok ? null : `launchctl bootstrap ${domain} failed (${describeCommandFailure(loaded)})`;
+  return loaded.ok ? null : { step: 'bootstrap', reason: `launchctl bootstrap ${domain} failed (${describeCommandFailure(loaded)})` };
 }
 
 /**
@@ -234,8 +244,15 @@ export async function healGuiAgent(paths: RunnerHomePaths, deps: GuiAgentHealDep
     return { kind: 'waiting-for-idle' };
   }
   const failure = await loadAgent(deps, names.launchdGui, file, plan === 'replace');
-  // The definition is in place by now, so logging out and in loads it even where this look could not.
-  return failure === null ? { kind: 'loaded', wasReplaced: plan === 'replace' } : { kind: 'failed', reason: failure, cure: 'login' };
+  if (failure === null) return { kind: 'loaded', wasReplaced: plan === 'replace' };
+  if (failure.step === 'bootout') {
+    // The old agent is still running, and a current file beside a loaded agent would read as «in place» at the next look: the record would be cleared and nothing would ever say that
+    // the old version's agent runs on. So the old definition goes back (the next look sees the difference and replaces again), and the way out is the admin line, which stops it as root.
+    restorePreviousDefinitions([{ file, content: previousDefinition }]);
+    return { kind: 'failed', reason: failure.reason, cure: 'admin' };
+  }
+  // The old agent is gone and the new definition is in place, so logging out and in loads it, and the next look (current file, nothing loaded) tries `bootstrap` again.
+  return { kind: 'failed', reason: failure.reason, cure: 'login' };
 }
 
 /** @description The line the link logs for an outcome; `null` for one that says nothing new ({@link GuiAgentHealOutcome} `not-applicable` / `in-place`). */

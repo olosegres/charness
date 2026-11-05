@@ -267,14 +267,17 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   loginwindow[…]`), `print gui/<uid>/<agent label>` → exit 0 (`type = LaunchAgent`, `state = running`, `path = ~/Library/LaunchAgents/…`), `print gui/<uid>/no.such.label` → exit 113
   («Could not find service … in domain for user gui: <uid>»), `print gui/99999` → exit 112 («Bad request. / Could not find domain for user gui: 99999»), `print gui/<another
   account>` → exit 1 («Could not print domain: 1: Operation not permitted»), `print user/<uid>` → exit 0 with `gui asid = …`, and `pgrep -u <uid> -lx 'loginwindow|Dock|Finder'` finds the
-  three of the session. So a System-session process of the account CAN ask about its own GUI domain. Not measured, because only doing it measures it: `launchctl bootstrap
-  gui/<uid>` from that context, and any answer for an account that is LOGGED OUT. Hence the rule: **«no login session» is never read off launchd's word alone** — it needs
+  three of the session. So a System-session process of the account CAN ask about its own GUI domain. It CAN also load into it: a throwaway agent (another label, `LimitLoadToSessionType`
+  Aqua, `RunAtLoad` false, `/usr/bin/true`, its plist in a temporary folder) was bootstrapped from that context — `launchctl bootstrap gui/<uid> <plist>` → exit 0, no output; `print` → `type =
+  LaunchAgent`, `state = not running`; `bootout gui/<uid>/<label>` → exit 0, and `print` then → exit 113 — and nothing was left behind. Not measured: any answer for an account that is LOGGED OUT
+  (a live check with the owner). Hence the rule: **«no login session» is never read off launchd's word alone** — it needs
   «Could not find domain for user gui: <uid>» AND none of `loginwindow` / `Dock` / `Finder` running as the account; every other text, a refusal, a domain launchd calls unknown
   while those processes run, or a `pgrep` that cannot be asked is a FAILURE with the text. A failure — that, the file cannot be written, a `bootstrap` that is refused — is kept as ONE line
   `<cure> <reason>` in `<state>/gui/install-failure` (control characters stripped, 160 characters). The cure is `login` when the definition is in place (a refused `bootstrap`, an old agent
   that stays loaded, a session that cannot be asked about while a current file waits): logging out and in as the account loads it, so `runner.sh` says «ios build: the login session's agent
   could not be loaded (<reason>) - log out and back in as <account>, or paste a fresh admin line from /runners in an admin account's terminal»; and `admin` when it is not (a file that
-  cannot be written): «… could not be installed (<reason>) - paste a fresh admin line …» (the admin line loads it as root). Any other look forgets the record, and so does an agent that
+  cannot be written, or an old agent that does not stop when it is replaced — its OLD definition is put back then, so the next look replaces again instead of finding a current file beside a
+  loaded agent): «… could not be installed (<reason>) - paste a fresh admin line …» (the admin line loads it as root). Any other look forgets the record, and so does an agent that
   starts and `service system-step prepare`.
 - **The link of an always-on Mac runs no Simulator check** (`checkIsLoginSessionAgentRunner`): the agent does, from the session where the Simulator can boot.
 - **It leaves** with the restart code when an update replaced the package and no step runs (launchd starts it again on the new program), and for good —

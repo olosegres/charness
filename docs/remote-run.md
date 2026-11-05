@@ -219,9 +219,11 @@ Simulator when it starts and when Xcode changes) and keeps every Simulator silen
   it), and «… could not be installed (<reason>) - paste a fresh admin line …» when it is not (the admin line finds the account paired and only installs the service).
   *Measured on a real always-on Mac (macOS 26.7.1, 2026-11-05, from inside the service, with the account logged in through Fast User Switching):* the service CAN ask launchd about
   the account's own login domain (`launchctl print gui/<uid>` → exit 0, `session = Aqua`); a domain that does not exist answers «Could not find domain for user gui: <uid>» (exit 112);
-  another account's domain answers «Operation not permitted». *Not measured:* whether the service may `launchctl bootstrap` into that domain, and what the logged-out account answers —
-  so the runner never takes launchd's «could not find the domain» for «nobody is logged in» without also finding none of the session's own processes (`loginwindow`, `Dock`,
-  `Finder`) running as the account; anything else is reported as a failure with launchd's words.
+  another account's domain answers «Operation not permitted». The service CAN also load an agent into that domain and take it out again: a throwaway agent (another label,
+  `RunAtLoad` off, `/usr/bin/true`) was bootstrapped from the service's own context (`launchctl bootstrap gui/<uid> <plist>` → exit 0, no output; `print` → `type = LaunchAgent`;
+  `bootout` → exit 0, and it was gone). *Not measured:* what the logged-out account answers — so the runner never takes launchd's «could not find the domain» for «nobody is logged
+  in» without also finding none of the session's own processes (`loginwindow`, `Dock`, `Finder`) running as the account; anything else is reported as a failure with launchd's words.
+  If the old agent cannot be stopped when it is replaced, the old definition is put back (the next look replaces again) and the way out is the admin line.
 - **No session, no iOS — honestly.** With nobody logged in as the account, `runners` says «ios: no — ios build: needs a login of runner», `--needs ios`
   finds no runner for it, and a job that was queued before the session ended is refused with the same words. Nothing logs in by itself: after a reboot,
   log in as the account once at the Mac and switch back to your own account (Fast User Switching keeps its session); the agent starts at that login.
