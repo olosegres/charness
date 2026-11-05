@@ -808,6 +808,19 @@ test('status: the first FAILURE deletes the line before the alert, and the alert
   assert.ok(getStepNames(hostile.callLog).includes('announce') && getStepNames(hostile.callLog).includes('forward'), 'a status line cannot stop the alert');
 });
 
+test('status: an unbound topic deletes the line before the job is paused — it would never run again to take it away', async () => {
+  const { deps, callLog } = createHarness({ checkResult: null, startMs: jobCreatedAtMs + 60 * minuteMs });
+  const outcome = await createScheduleDelivery(deps)(makeWorkerWatch({ statusMessageId: 88, lastStatusAt: jobCreatedAtMs + 45 * minuteMs }), onTime);
+
+  assert.deepEqual(outcome, { status: 'failed', error: unboundDeliveryError });
+  assert.deepEqual(getStepNames(callLog), ['runCheck', 'recordStatusLine', 'deleteMessage']);
+  assert.deepEqual(callLog[2].detail, { key: threadKey, messageId: 88 });
+
+  const withoutLine = createHarness({ checkResult: null });
+  await createScheduleDelivery(withoutLine.deps)(makeWorkerWatch(), onTime);
+  assert.deepEqual(getStepNames(withoutLine.callLog), ['runCheck'], 'no line, nothing to take away');
+});
+
 test('status: a failed run with no line in the topic touches no status dep at all', async () => {
   const { deps, callLog } = createHarness({ checkResult: failedRun });
   await createScheduleDelivery(deps)(makeWorkerWatch(), onTime);

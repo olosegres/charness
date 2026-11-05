@@ -311,7 +311,11 @@ async function deliverCheck(
   const timeoutSec = job.checkTimeoutSec ?? defaultCheckTimeoutSec;
   const command = job.checkCommand ?? '';
   const result = await deps.runCheck(job.threadKey, command, timeoutSec * 1000);
-  if (!result) return { status: 'failed', error: unboundDeliveryError };
+  if (!result) {
+    // An unbound topic parks the job, which then never runs again: its last «works …» line would stay frozen under it.
+    await clearCheckStatusLine(deps, job);
+    return { status: 'failed', error: unboundDeliveryError };
+  }
 
   const isPassing = checkIsCheckPassing(result);
   const decision = getCheckAlertDecision({ isPassing, wasFailing: job.isCheckFailing === true });
