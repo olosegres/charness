@@ -4689,7 +4689,7 @@ async function sweepTransientFramesOnShutdown(): Promise<void> {
   const sweeping = sweepTransientMessages(threads, {
     deleteMessage: async (key, messageId) => { await bot.telegram.deleteMessage(getTelegramChatId(key), messageId); },
     checkIsRetryable: checkIsRetryableTelegramError,
-    saveKeptIds: async (key, keptIds) => { setUndeletedMessageIds(key, keptIds); },
+    saveKeptIds: setUndeletedMessageIds,
     logProblem: (line) => console.warn(line),
   });
   let boundTimer: NodeJS.Timeout | undefined;

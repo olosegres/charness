@@ -116,11 +116,12 @@ export interface TransientSweepPorts<Key> {
   /**
    * Replace the thread's pending-delete list (`undeletedMessageIds`, in memory) with `keptIds` — the ones whose delete must be
    * tried again at the next start (none: the list empties) — and save it with the thread's other transient ids through the one
-   * save every writer of the set uses. Called once the deletes have settled; until then the list holds every collected id (see
-   * {@link clearTransientFramesForShutdown}), so a save that interleaves, or a sweep cut short by its time bound, leaves a
-   * complete record for the boot reconciliation.
+   * save every writer of the set uses. Synchronous: it replaces the list in memory and schedules the disk write, which the
+   * shutdown's `state.flush()` lands — the sweep does not wait for the disk. Must not throw. Called once the deletes have
+   * settled; until then the list holds every collected id (see {@link clearTransientFramesForShutdown}), so a save that
+   * interleaves, or a sweep cut short by its time bound, leaves a complete record for the boot reconciliation.
    */
-  saveKeptIds: (key: Key, keptIds: number[]) => Promise<void>;
+  saveKeptIds: (key: Key, keptIds: number[]) => void;
   logProblem: (line: string) => void;
 }
 
@@ -128,7 +129,7 @@ export interface TransientSweepPorts<Key> {
  * @description The graceful-shutdown sweep over every tracked thread: {@link clearTransientFramesForShutdown} for EACH (the
  * generation bump must reach a thread whose ids are all null too), then the messages that were on screen are deleted in
  * parallel and the ones that could not be deleted yet stay in the thread's pending list, which is saved with its other ids.
- * Resolves when every thread has settled; never rejects. The caller bounds the wait.
+ * Resolves when every thread's deletes have settled (the ports must not throw, so it never rejects). The caller bounds the wait.
  */
 export async function sweepTransientMessages<Key>(
   threads: readonly TransientSweepThread<Key>[],
@@ -141,11 +142,7 @@ export async function sweepTransientMessages<Key>(
     settlements.push((async () => {
       const keptIds = await deleteTransientMessages(messageIds, (messageId) => ports.deleteMessage(key, messageId), ports.checkIsRetryable);
       if (keptIds.length > 0) ports.logProblem(`[shutdown] ${keptIds.length} transient message(s) could not be deleted now; they stay recorded for the next start`);
-      try {
-        await ports.saveKeptIds(key, keptIds);
-      } catch (error) {
-        ports.logProblem(`[shutdown] transient message ids could not be saved: ${error instanceof Error ? error.message : 'unknown error'}`);
-      }
+      ports.saveKeptIds(key, keptIds);
     })());
   }
   await Promise.all(settlements);

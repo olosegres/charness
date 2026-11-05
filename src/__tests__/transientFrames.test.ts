@@ -237,7 +237,7 @@ function createSweepWorld(): SweepWorld {
       },
       checkIsRetryable: checkIsRetryableTelegramError,
       // As `bot.ts` wires it: the kept ids replace the thread's in-memory pending list, which is saved with its other ids.
-      saveKeptIds: async (threadKey, keptIds) => {
+      saveKeptIds: (threadKey, keptIds) => {
         const state = world.states.get(threadKey);
         if (state) state.undeletedMessageIds = keptIds;
         world.persist(threadKey);
@@ -355,20 +355,20 @@ test('the sweep bumps the generations of every thread, also one with nothing on 
   assert.deepEqual(world.saved.get('topic-idle'), [999], 'nothing was swept, so the record is not rewritten');
 });
 
-test('a thread that cannot be saved is reported and does not stop the sweep of the others', async () => {
+test('one thread whose delete hits a bad moment does not stop the sweep of the others', async () => {
   const world = createSweepWorld();
   world.onScreen.set('topic-a', new Set([1]));
   world.onScreen.set('topic-b', new Set([2]));
-  world.ports.saveKeptIds = async (threadKey) => {
-    if (threadKey === 'topic-a') throw new Error('disk full');
-  };
+  world.failuresByMessageId.set(1, [serverError]);
+  const stateA = makeShutdownState({ statusMessageId: 1 });
+  const stateB = makeShutdownState({ statusMessageId: 2 });
+  world.states.set('topic-a', stateA);
+  world.states.set('topic-b', stateB);
 
-  await sweepTransientMessages([
-    { key: 'topic-a', state: makeShutdownState({ statusMessageId: 1 }) },
-    { key: 'topic-b', state: makeShutdownState({ statusMessageId: 2 }) },
-  ], world.ports);
+  await sweepTransientMessages([{ key: 'topic-a', state: stateA }, { key: 'topic-b', state: stateB }], world.ports);
 
   assert.deepEqual([...world.onScreen.get('topic-b') ?? []], [], 'the other thread was swept');
-  assert.equal(world.problems.length, 1);
-  assert.match(world.problems[0], /could not be saved: disk full/);
+  assert.deepEqual(world.saved.get('topic-a'), [1], 'and the thread that met the 5xx kept its id');
+  assert.equal(world.saved.has('topic-b'), false);
+  assert.equal(world.problems.length, 1, 'one line says that something stays recorded');
 });
