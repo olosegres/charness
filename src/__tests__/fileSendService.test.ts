@@ -35,6 +35,7 @@ import {
   type FileSendKind,
   type TelegramSingleFileSendMethod,
 } from '../utils/fileSendPlan';
+import { assertDescriptorReleased, captureDescriptor, type CapturedDescriptor } from './fileDescriptorProbe';
 import {
   createFileSendTestRecorderGateway,
   type RecordedFileSendGatewayCall,
@@ -48,7 +49,7 @@ interface RecordedMessageIds {
 
 interface ServiceRecorder {
   gatewayCalls: Array<RecordedFileSendGatewayCall<string>>;
-  capturedFileDescriptors: number[];
+  capturedFileDescriptors: CapturedDescriptor[];
   messageIdCalls: RecordedMessageIds[];
 }
 
@@ -195,10 +196,6 @@ function createService(
   });
 }
 
-function assertFileDescriptorClosed(fileDescriptor: number): void {
-  assert.throws(() => fs.fstatSync(fileDescriptor), { code: 'EBADF' });
-}
-
 const singleGatewayCases: SingleGatewayCase[] = [
   {
     fileName: 'chart.png',
@@ -258,7 +255,7 @@ for (const gatewayCase of singleGatewayCases) {
       assert.deepEqual(recorder.messageIdCalls, [
         { target: 'telegram-target', messageIds: [gatewayCase.expectedMessageId] },
       ]);
-      assertFileDescriptorClosed(recorder.capturedFileDescriptors[0]);
+      assertDescriptorReleased(recorder.capturedFileDescriptors[0]);
     } finally {
       fixture.cleanup();
     }
@@ -311,7 +308,7 @@ sharedTest('createSendFilesToThread routes a photo/video album, records every id
       { target: 'telegram-target', messageIds: albumMessageIds },
     ]);
     for (const fileDescriptor of recorder.capturedFileDescriptors) {
-      assertFileDescriptorClosed(fileDescriptor);
+      assertDescriptorReleased(fileDescriptor);
     }
   } finally {
     fixture.cleanup();
@@ -402,7 +399,7 @@ sharedTest('createSendFilesToThread converts a gateway rejection into a typed fa
     assert.equal(recorder.gatewayCalls.length, 1);
     assert.equal(recorder.gatewayCalls[0].method, 'sendVideo');
     assert.deepEqual(recorder.messageIdCalls, []);
-    assertFileDescriptorClosed(recorder.capturedFileDescriptors[0]);
+    assertDescriptorReleased(recorder.capturedFileDescriptors[0]);
   } finally {
     fixture.cleanup();
   }
@@ -443,7 +440,7 @@ sharedTest('createSendFilesToThread waits for message-id recording before report
     assert.deepEqual(recorder.messageIdCalls, [
       { target: 'telegram-target', messageIds: [singleGatewayMessageIds.sendVideo] },
     ]);
-    assertFileDescriptorClosed(recorder.capturedFileDescriptors[0]);
+    assertDescriptorReleased(recorder.capturedFileDescriptors[0]);
   } finally {
     releaseMessageIdRecording();
     fixture.cleanup();
@@ -568,7 +565,7 @@ sharedTest('createSendFilesToThread keeps delivery successful when message-id re
       assert.match(result.summary, /^Sent 1 file: 1 video\./);
       assert.match(result.summary, /delivery succeeded.*message IDs could not be recorded.*state write failed/i);
     }
-    assertFileDescriptorClosed(recorder.capturedFileDescriptors[0]);
+    assertDescriptorReleased(recorder.capturedFileDescriptors[0]);
   } finally {
     fixture.cleanup();
   }
@@ -604,7 +601,7 @@ linuxTest('createSendFilesToThread keeps delivery successful when root-descripto
       assert.match(result.summary, /^Sent 1 file: 1 video\./);
       assert.match(result.summary, /delivery succeeded.*descriptor cleanup failed.*forced root close failure/i);
     }
-    assertFileDescriptorClosed(recorder.capturedFileDescriptors[0]);
+    assertDescriptorReleased(recorder.capturedFileDescriptors[0]);
     assert.notEqual(rootDescriptor, null);
     if (rootDescriptor !== null) {
       assert.equal(fs.fstatSync(rootDescriptor).isDirectory(), true, 'the forced failure must leave the root descriptor open');
@@ -619,7 +616,7 @@ linuxTest('createSendFilesToThread keeps delivery successful when root-descripto
 sharedTest('createSendFilesToThread closes an earlier descriptor when a later snapshot fails', async () => {
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
-  const openedFileDescriptors: number[] = [];
+  const openedFileDescriptors: CapturedDescriptor[] = [];
   try {
     fs.writeFileSync(path.join(fixture.workDir, 'first.txt'), 'first-bytes');
     fs.writeFileSync(path.join(fixture.workDir, 'second.txt'), 'second-bytes');
@@ -629,7 +626,7 @@ sharedTest('createSendFilesToThread closes an earlier descriptor when a later sn
           return { ok: false, kind: 'read', error: 'second snapshot failed' };
         }
         const snapshot = readTelegramFileSnapshot(canonicalPath, expectedIdentity, pinnedRoot);
-        if (snapshot.ok) openedFileDescriptors.push(snapshot.source.fd);
+        if (snapshot.ok) openedFileDescriptors.push(captureDescriptor(snapshot.source.fd));
         return snapshot;
       },
     });
@@ -639,7 +636,7 @@ sharedTest('createSendFilesToThread closes an earlier descriptor when a later sn
       { ok: false, error: 'cannot read second.txt: second snapshot failed' },
     );
     assert.equal(openedFileDescriptors.length, 1);
-    assertFileDescriptorClosed(openedFileDescriptors[0]);
+    assertDescriptorReleased(openedFileDescriptors[0]);
     assert.deepEqual(recorder.gatewayCalls, []);
     assert.deepEqual(recorder.messageIdCalls, []);
   } finally {
@@ -725,7 +722,7 @@ sharedTest('createSendFilesToThread bounds descriptor ownership while later send
     assert.equal(snapshotCallCount, fileSendSnapshotConcurrency + 1);
     assert.equal(results.every((result) => result.ok), true);
     for (const fileDescriptor of recorder.capturedFileDescriptors) {
-      assertFileDescriptorClosed(fileDescriptor);
+      assertDescriptorReleased(fileDescriptor);
     }
   } finally {
     releaseGatewayCalls();
@@ -1064,7 +1061,7 @@ sharedTest('createSendFilesToThread admits queued sends in FIFO order and releas
     const results = await Promise.all(sendPromises);
     assert.equal(results.filter((result) => result.ok).length, allTargets.length - 1);
     for (const fileDescriptor of recorder.capturedFileDescriptors) {
-      assertFileDescriptorClosed(fileDescriptor);
+      assertDescriptorReleased(fileDescriptor);
     }
   } finally {
     for (const releaseCompletion of releaseGatewayCompletion.values()) releaseCompletion();
@@ -1106,9 +1103,9 @@ linuxTest('createSendFilesToThread reuses one pinned root descriptor across ever
   const fixture = createTempFileSendFixture();
   const recorder = createServiceRecorder();
   const originalBoundDir = path.join(fixture.tempRoot, 'validated-bound');
-  const openedFileDescriptors: number[] = [];
+  const openedFileDescriptors: CapturedDescriptor[] = [];
   const capturedPinnedRoots: PinnedFileSendRoot[] = [];
-  const capturedRootDescriptors: number[] = [];
+  const capturedRootDescriptors: CapturedDescriptor[] = [];
   fs.writeFileSync(path.join(fixture.workDir, 'first.txt'), 'inside-first');
   fs.writeFileSync(path.join(fixture.workDir, 'second.txt'), 'inside-second');
   let snapshotCallCount = 0;
@@ -1116,9 +1113,9 @@ linuxTest('createSendFilesToThread reuses one pinned root descriptor across ever
     const sendFilesToThread = createService(fixture.workDir, recorder, {
       readFileSnapshot: (canonicalPath, expectedIdentity, pinnedRoot) => {
         capturedPinnedRoots.push(pinnedRoot);
-        capturedRootDescriptors.push(getRootDescriptor(pinnedRoot));
+        capturedRootDescriptors.push(captureDescriptor(getRootDescriptor(pinnedRoot)));
         const snapshot = readTelegramFileSnapshot(canonicalPath, expectedIdentity, pinnedRoot);
-        if (snapshot.ok) openedFileDescriptors.push(snapshot.source.fd);
+        if (snapshot.ok) openedFileDescriptors.push(captureDescriptor(snapshot.source.fd));
         snapshotCallCount += 1;
         if (snapshotCallCount === 1) {
           fs.renameSync(fixture.workDir, originalBoundDir);
@@ -1137,13 +1134,13 @@ linuxTest('createSendFilesToThread reuses one pinned root descriptor across ever
     if (!result.ok) assert.match(result.error, /changed after validation/i);
     assert.equal(capturedRootDescriptors.length, 2, 'both snapshots must receive the pinned root');
     assert.equal(capturedPinnedRoots[1], capturedPinnedRoots[0], 'both snapshots must receive the same root object');
-    assert.equal(new Set(capturedRootDescriptors).size, 1, 'every snapshot must reuse one root descriptor');
+    assert.equal(new Set(capturedRootDescriptors.map((rootDescriptor) => rootDescriptor.fd)).size, 1, 'every snapshot must reuse one root descriptor');
     assert.deepEqual(recorder.gatewayCalls, [], 'the replacement root must never supply an album item');
     assert.deepEqual(recorder.messageIdCalls, []);
     for (const fileDescriptor of openedFileDescriptors) {
-      assertFileDescriptorClosed(fileDescriptor);
+      assertDescriptorReleased(fileDescriptor);
     }
-    assertFileDescriptorClosed(capturedRootDescriptors[0]);
+    assertDescriptorReleased(capturedRootDescriptors[0]);
   } finally {
     fixture.cleanup();
   }

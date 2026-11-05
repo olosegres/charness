@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import type { FileSendGateway } from '../utils/fileSendService';
+import { captureDescriptor, type CapturedDescriptor } from './fileDescriptorProbe';
 import type {
   FileDescriptorSnapshot,
   FileSendMediaGroup,
@@ -42,14 +43,15 @@ export interface FileSendTestRecorderOptions {
   singleMessageIds: Readonly<Record<TelegramSingleFileSendMethod, number>>;
   albumMessageIds: readonly number[];
   rejectedMethod?: RecordedFileSendMethod;
-  capturedFileDescriptors?: number[];
+  /** Every descriptor the gateway was handed, captured while it was open (what a test later proves released). */
+  capturedFileDescriptors?: CapturedDescriptor[];
 }
 
 function getRecordedFileSource(
   source: FileDescriptorSnapshot,
-  capturedFileDescriptors: number[] | undefined,
+  capturedFileDescriptors: CapturedDescriptor[] | undefined,
 ): RecordedFileSource {
-  capturedFileDescriptors?.push(source.fd);
+  capturedFileDescriptors?.push(captureDescriptor(source.fd));
   const contentsBuffer = Buffer.alloc(source.sizeBytes);
   const bytesRead = fs.readSync(source.fd, contentsBuffer, 0, source.sizeBytes, 0);
   return {
@@ -61,7 +63,7 @@ function getRecordedFileSource(
 
 function getRecordedFileSendMediaGroup(
   mediaGroup: FileSendMediaGroup,
-  capturedFileDescriptors: number[] | undefined,
+  capturedFileDescriptors: CapturedDescriptor[] | undefined,
 ): RecordedFileSendMediaGroup {
   if (mediaGroup.kind === 'document') {
     return {

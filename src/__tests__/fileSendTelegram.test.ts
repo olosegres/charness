@@ -31,6 +31,7 @@ import {
   type FileSendOpenStrategy,
   type SendFilesToThreadDeps,
 } from '../utils/fileSendService';
+import { assertDescriptorOpen, assertDescriptorReleased, captureDescriptor, type CapturedDescriptor } from './fileDescriptorProbe';
 import {
   enqueueSend,
   GlobalSendPacer,
@@ -453,7 +454,7 @@ linuxTest('real service records a Telegram acceptance that resolves after reques
   const recordedMessageIds: number[] = [];
   const controller = new AbortController();
   let attemptedStream: fs.ReadStream | null = null;
-  const attemptDescriptors: number[] = [];
+  const attemptDescriptors: CapturedDescriptor[] = [];
   let senderSignal: TelegrafAbortSignal | undefined;
   let markSenderStarted = () => {};
   const senderStarted = new Promise<void>((resolve) => { markSenderStarted = resolve; });
@@ -471,7 +472,7 @@ linuxTest('real service records a Telegram acceptance that resolves after reques
           assert.fail('non-empty descriptor input must use fs.ReadStream');
         }
         attemptedStream = input.source;
-        attemptDescriptors.push(getStreamDescriptor(input.source));
+        attemptDescriptors.push(captureDescriptor(getStreamDescriptor(input.source)));
         senderSignal = signal;
         assert.equal(
           (await consumeBuffer(input.source)).toString('utf8'),
@@ -513,10 +514,7 @@ linuxTest('real service records a Telegram acceptance that resolves after reques
     assert.equal(operationSettled, false, 'the service must await Telegram\'s sender result');
     assert.equal(attemptDescriptors.length, 1, 'the sender must have received one descriptor stream');
     for (const attemptDescriptor of attemptDescriptors) {
-      assert.doesNotThrow(
-        () => fs.fstatSync(attemptDescriptor),
-        'the service-owned descriptor must remain open until the sender settles',
-      );
+      assertDescriptorOpen(attemptDescriptor, 'the service-owned descriptor must remain open until the sender settles');
     }
 
     resolveSender({ message_id: acceptedMessageId });
@@ -525,11 +523,7 @@ linuxTest('real service records a Telegram acceptance that resolves after reques
     assert.deepEqual(result, { ok: true, summary: 'Sent 1 file: 1 video.', sentKinds: ['video'] });
     assert.deepEqual(recordedMessageIds, [acceptedMessageId]);
     for (const attemptDescriptor of attemptDescriptors) {
-      assert.throws(
-        () => fs.fstatSync(attemptDescriptor),
-        { code: 'EBADF' },
-        'the descriptor must close after the accepted delivery is recorded',
-      );
+      assertDescriptorReleased(attemptDescriptor, 'the descriptor must close after the accepted delivery is recorded');
     }
   } finally {
     resolveSender({ message_id: acceptedMessageId });
@@ -547,7 +541,7 @@ linuxTest('real service records a Telegram media-group acceptance that resolves 
   const recordedMessageIds: number[] = [];
   const controller = new AbortController();
   const attemptedStreams: fs.ReadStream[] = [];
-  const attemptDescriptors: number[] = [];
+  const attemptDescriptors: CapturedDescriptor[] = [];
   let senderSignal: TelegrafAbortSignal | undefined;
   let markSenderStarted = () => {};
   const senderStarted = new Promise<void>((resolve) => { markSenderStarted = resolve; });
@@ -568,7 +562,7 @@ linuxTest('real service records a Telegram media-group acceptance that resolves 
             assert.fail('non-empty descriptor input must use fs.ReadStream');
           }
           attemptedStreams.push(media.media.source);
-          attemptDescriptors.push(getStreamDescriptor(media.media.source));
+          attemptDescriptors.push(captureDescriptor(getStreamDescriptor(media.media.source)));
         }
         senderSignal = signal;
         assert.deepEqual(
@@ -607,10 +601,7 @@ linuxTest('real service records a Telegram media-group acceptance that resolves 
     assertStreamsTerminal(attemptedStreams);
     assert.equal(operationSettled, false, 'the service must await Telegram\'s media-group sender result');
     for (const fileDescriptor of attemptDescriptors) {
-      assert.doesNotThrow(
-        () => fs.fstatSync(fileDescriptor),
-        'every service-owned descriptor must remain open until the sender settles',
-      );
+      assertDescriptorOpen(fileDescriptor, 'every service-owned descriptor must remain open until the sender settles');
     }
 
     resolveSender(acceptedMessageIds.map((messageId) => ({ message_id: messageId })));
@@ -619,11 +610,7 @@ linuxTest('real service records a Telegram media-group acceptance that resolves 
     assert.deepEqual(result, { ok: true, summary: 'Sent 2 files: 1 photo, 1 video.', sentKinds: ['photo', 'video'] });
     assert.deepEqual(recordedMessageIds, acceptedMessageIds);
     for (const fileDescriptor of attemptDescriptors) {
-      assert.throws(
-        () => fs.fstatSync(fileDescriptor),
-        { code: 'EBADF' },
-        'every descriptor must close after the accepted media group is recorded',
-      );
+      assertDescriptorReleased(fileDescriptor, 'every descriptor must close after the accepted media group is recorded');
     }
   } finally {
     resolveSender(acceptedMessageIds.map((messageId) => ({ message_id: messageId })));
@@ -950,7 +937,7 @@ linuxTest('real service preserves delivery-unknown after request-body consumptio
   const controller = new AbortController();
   const recordedMessageIds: number[] = [];
   let attemptedStream: fs.ReadStream | null = null;
-  const attemptDescriptors: number[] = [];
+  const attemptDescriptors: CapturedDescriptor[] = [];
   let senderSignal: TelegrafAbortSignal | undefined;
   let markUploadConsumed = () => {};
   const uploadConsumed = new Promise<void>((resolve) => { markUploadConsumed = resolve; });
@@ -967,7 +954,7 @@ linuxTest('real service preserves delivery-unknown after request-body consumptio
           assert.fail('non-empty descriptor input must use fs.ReadStream');
         }
         attemptedStream = input.source;
-        attemptDescriptors.push(getStreamDescriptor(input.source));
+        attemptDescriptors.push(captureDescriptor(getStreamDescriptor(input.source)));
         senderSignal = signal;
         await consumeBuffer(input.source);
         markUploadConsumed();
@@ -1007,7 +994,7 @@ linuxTest('real service preserves delivery-unknown after request-body consumptio
     assert.deepEqual(recordedMessageIds, []);
     assert.equal(attemptDescriptors.length, 1, 'the sender must have received one descriptor stream');
     for (const attemptDescriptor of attemptDescriptors) {
-      assert.throws(() => fs.fstatSync(attemptDescriptor), { code: 'EBADF' });
+      assertDescriptorReleased(attemptDescriptor);
     }
   } finally {
     rejectSender(new Error('test cleanup'));
