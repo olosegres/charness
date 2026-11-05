@@ -22,13 +22,16 @@ const eventLogNamePattern = /^events(?:-(\d+))?\.jsonl$/;
 /** The number of the first run's `events.jsonl`, which carries no suffix. */
 const firstRunNumber = 1;
 
+/** A text field that reads as absent when it is not a string: one oddly typed field must not hide the whole call. */
+const optionalTextSchema = z.string().optional().catch(undefined);
+
 /** Claude's tool input keys that say what a call does, most descriptive first. */
 const claudeToolInputSchema = z.looseObject({
-  description: z.string().optional(),
-  command: z.string().optional(),
-  file_path: z.string().optional(),
-  pattern: z.string().optional(),
-  prompt: z.string().optional(),
+  description: optionalTextSchema,
+  command: optionalTextSchema,
+  file_path: optionalTextSchema,
+  pattern: optionalTextSchema,
+  prompt: optionalTextSchema,
 });
 
 /** One content block of a Claude `assistant` event; a block of any other type (thinking, …) fails the parse and is skipped. */
@@ -48,8 +51,8 @@ const openCodeToolEventSchema = z.looseObject({
     tool: z.string(),
     state: z
       .looseObject({
-        title: z.string().optional(),
-        input: z.looseObject({ description: z.string().optional() }).optional(),
+        title: optionalTextSchema,
+        input: z.looseObject({ description: optionalTextSchema }).optional().catch(undefined),
       })
       .optional(),
   }),

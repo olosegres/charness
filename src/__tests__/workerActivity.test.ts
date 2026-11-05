@@ -67,6 +67,7 @@ test('claude: the detail of a tool call is its description, else command, file_p
   assert.equal(detailOf({ pattern: 'P', prompt: 'Q' }), 'Tool: P');
   assert.equal(detailOf({ prompt: 'Q' }), 'Tool: Q');
   assert.equal(detailOf({ description: '   ', command: 'C' }), 'Tool: C', 'a blank description does not hide the command');
+  assert.equal(detailOf({ description: null, command: 'C' }), 'Tool: C', 'a field of the wrong type reads as absent, the call is not lost');
   assert.equal(detailOf({ unrelated: 'x' }), 'Tool');
   assert.equal(detailOf(), 'Tool');
 });
@@ -110,6 +111,7 @@ test('opencode: a tool call reads «<tool>: <description of its input>», else i
   const withTitle = openCodeTool('read', { status: 'completed', title: 'src/a.ts', input: { filePath: '/x/src/a.ts' } });
   assert.equal(getWorkerActivityFromLines([withTitle]), 'read: src/a.ts');
   assert.equal(getWorkerActivityFromLines([openCodeTool('glob', { status: 'running' })]), 'glob');
+  assert.equal(getWorkerActivityFromLines([openCodeTool('bash', { title: 'make', input: 'not an object' })]), 'bash: make', 'an input of the wrong type is ignored, the title still reads');
   assert.equal(getWorkerActivityFromLines([openCodeTool('glob')]), 'glob');
 });
 
