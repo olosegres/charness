@@ -888,6 +888,8 @@ function createFakeWorld(overrides: Partial<SttSidecarOwnerDeps> = {}) {
     sleep: async (ms) => {
       nowMs += ms;
       runDue();
+      // Yield to the event loop: a wait that never ends (a regression) must be cut by the runner's timeout, not spin forever.
+      await new Promise<void>((resolve) => setImmediate(resolve));
       // A start HELD at a moment of its load: the owner's wait stops there until the test lets it go (wall time passes).
       if (holdAtMs !== null && nowMs >= holdAtMs) await holdUntilReleased;
     },

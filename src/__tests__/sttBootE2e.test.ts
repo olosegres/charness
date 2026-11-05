@@ -241,7 +241,7 @@ describe('Voice settings at boot, end to end: built charness, fake Bot API', () 
     await getCharness().stop();
     await bootCharness(instance);
     assert.deepEqual((JSON.parse(fs.readFileSync(sttConfigPath, 'utf8')) as { gigaam?: unknown }).gigaam, { idleMinutes: 15 }, 'the chosen 15 survived the boot');
-    assert.equal(getCharness().output.split(migrationLine).length - 1, 1, 'and the migration did not run again');
+    assert.equal(getCharness().output.split(migrationLine).length - 1, 0, 'and this second boot did not run the migration again');
 
     // Back to the empty list and no install, the state the next steps start from.
     fs.writeFileSync(sttConfigPath, `${JSON.stringify({ engines: [] }, null, 2)}\n`);

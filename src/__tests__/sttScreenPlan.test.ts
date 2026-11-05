@@ -370,7 +370,7 @@ test('install confirmation: Cancel returns to where it was reached from — the 
   const cancelOf = (screen: SttScreenId): string => {
     const confirm = buildSttScreen(screen, input, echo);
     assert.ok(confirm);
-    assert.match(confirm.text, /stt\.enable\.confirm\(idle=stt\.idle\.minutes\(count=15\)\)/);
+    assert.match(confirm.text, /stt\.enable\.confirm\(idle=stt\.idle\.minutes\(count=60\)\)/);
     const cancel = allButtons(confirm).find((button) => button.text === 'stt.btn.cancel');
     assert.ok(cancel);
     assert.ok(allButtons(confirm).some((button) => /^stt_ei_[0-9a-f]{6}$/.test(button.data)), 'Install is the same either way');
