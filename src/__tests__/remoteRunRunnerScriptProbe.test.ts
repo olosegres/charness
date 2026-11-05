@@ -17,12 +17,31 @@ import { parseProbeOutput } from '../remoteRun/probe';
 import { iosBootFailureReasonPrefix } from '../runnerUtility/iosCheck';
 import { scriptPath, slug, writeFile } from './remoteRunRunnerScriptKit';
 
+const systemToolFolders = ['/usr/bin', '/bin'];
+
 let workRoot = '';
 let workDir = '';
 
 function runScript(args: string[], env: NodeJS.ProcessEnv = {}): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync('bash', [scriptPath, ...args], { encoding: 'utf8', env: { ...process.env, PUEUE_BIN: '/nonexistent/pueue', ...env }, timeout: 60_000 });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+/**
+ * A folder holding a link to every program of the system folders except `hidden`: the probe still finds the system's tools (`df`, `awk`, `sed`…), but not
+ * the machine's own `node` or `yarn` — a distro package in `/usr/bin` would otherwise answer «present» for a tool the case expects to be absent.
+ */
+function linkSystemToolsExcept(folder: string, hidden: readonly string[]): string {
+  fs.mkdirSync(folder);
+  const linkedNames = new Set<string>(hidden);
+  for (const systemFolder of systemToolFolders) {
+    for (const name of fs.readdirSync(systemFolder)) {
+      if (linkedNames.has(name)) continue;
+      linkedNames.add(name);
+      fs.symlinkSync(path.join(systemFolder, name), path.join(folder, name));
+    }
+  }
+  return folder;
 }
 
 beforeEach(() => {
@@ -139,12 +158,14 @@ describe('the probe fits its 20 s however many of its questions hang', () => {
     ({ lines, elapsedSec } = probeSlowOfAMac());
     assert.equal(lines.job_yarn, 'unknown');
     assert.ok(elapsedSec <= stepLimitSec + 3, `${elapsedSec} s: a yarn that hangs costs one step limit`);
-    // This machine's own yarn (a Corepack shim that would run the fake node) must not answer for the absent one: the system folders only.
+    // This machine's own yarn (a Corepack shim that would run the fake node) must not answer for the absent one, nor its own node: the system's tools only,
+    // without any `node` or `yarn` the machine keeps in its system folders.
+    const systemTools = linkSystemToolsExcept(path.join(workRoot, 'system-tools'), ['node', 'yarn']);
     fs.rmSync(path.join(fakeBin, 'yarn'));
-    ({ lines } = probeSlowOfAMac('/usr/bin:/bin'));
+    ({ lines } = probeSlowOfAMac(systemTools));
     assert.equal(lines.job_yarn, 'none');
     fs.rmSync(path.join(fakeBin, 'node'));
-    ({ lines } = probeSlowOfAMac('/usr/bin:/bin'));
+    ({ lines } = probeSlowOfAMac(systemTools));
     assert.equal(lines.job_node, 'none');
   });
 
