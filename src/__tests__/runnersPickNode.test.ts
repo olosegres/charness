@@ -20,6 +20,11 @@ import { findHomeContaining } from '../runnerUtility/homeFolders';
 const scriptPath = path.resolve(__dirname, '..', '..', 'remoteRun', 'pickNode.sh');
 const refusal = /^charness-runner: no Node\.js 22\.12\+ outside home folders that runner cannot write: install one system-wide \(macOS: brew install node\), paste again$/;
 
+/** The programs the script and the stand-in `sudo` run; `command -v`, `echo`, `[` and `case` are the shell's own. */
+const scriptTools = ['dirname', 'grep', 'readlink', 'test'];
+const systemToolFolders = ['/usr/bin', '/bin'];
+const shellPath = '/bin/sh';
+
 let workDir = '';
 
 /** A `node` of `version`: it answers the version check (`node -e …`) by its exit status, as the real one would. */
@@ -51,6 +56,19 @@ function installReadlinkWithoutF(binDir: string): void {
   fs.writeFileSync(path.join(binDir, 'readlink'), `#!/bin/sh\n[ "$1" = -f ] && { echo "readlink: illegal option -- f" >&2; exit 1; }\nexec "${real}" "$@"\n`, { mode: 0o755 });
 }
 
+/**
+ * The script's tools, linked into a folder of their own. The PATH the script runs with then names no system folder, so a `node` the machine
+ * keeps in `/usr/bin` can never answer `command -v node` for a case that expects «no Node».
+ */
+function installScriptTools(toolsDir: string): void {
+  fs.mkdirSync(toolsDir, { recursive: true });
+  for (const tool of scriptTools) {
+    const systemTool = systemToolFolders.map((folder) => path.join(folder, tool)).find((candidate) => fs.existsSync(candidate));
+    assert.notEqual(systemTool, undefined, `this machine has no ${tool} in ${systemToolFolders.join(' or ')}`);
+    if (systemTool !== undefined) fs.symlinkSync(systemTool, path.join(toolsDir, tool));
+  }
+}
+
 function readSudoCalls(): string[] {
   try {
     return fs.readFileSync(path.join(workDir, 'sudo.log'), 'utf8').split('\n').filter((line) => line !== '');
@@ -65,15 +83,19 @@ interface Pick {
   error: string;
 }
 
-/** The script for account `runner`, `onPath` ahead of the system's folders; `homes` and `candidates` are the test seam (the line passes neither). */
+/**
+ * The script for account `runner`, `onPath` ahead of its tools; `homes` and `candidates` are the test seam (the line passes neither). The seam's
+ * default is NO system candidate: an empty `$3` would not mean that — the script's `${3:-…}` takes it for «not given» and falls back to
+ * `/usr/local/bin/node`, which is a real Node on a machine that has one (the CI image does).
+ */
 function pick(options: { onPath?: string; homes?: string; candidates?: string; withoutReadlinkF?: boolean } = {}): Pick {
   const binDir = path.join(workDir, 'bin');
   if (options.withoutReadlinkF === true) installReadlinkWithoutF(binDir);
-  const args = [scriptPath, 'runner', ...(options.homes === undefined ? [] : [options.homes, options.candidates ?? ''])];
-  const result = spawnSync('sh', args, {
+  const args = [scriptPath, 'runner', ...(options.homes === undefined ? [] : [options.homes, options.candidates ?? path.join(workDir, 'no-system-node')])];
+  const result = spawnSync(shellPath, args, {
     encoding: 'utf8',
     cwd: workDir,
-    env: { PATH: [binDir, ...(options.onPath === undefined ? [] : [options.onPath]), '/usr/bin', '/bin'].join(':'), HOME: workDir },
+    env: { PATH: [binDir, ...(options.onPath === undefined ? [] : [options.onPath]), path.join(workDir, 'tools')].join(':'), HOME: workDir },
   });
   return { status: result.status, picked: result.stdout.trim(), error: result.stderr.trim() };
 }
@@ -83,6 +105,7 @@ const homesSeam = (): string => path.join(fs.realpathSync(workDir), 'home', '*')
 beforeEach(() => {
   workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pick-'));
   installSudo(path.join(workDir, 'bin'));
+  installScriptTools(path.join(workDir, 'tools'));
 });
 afterEach(() => {
   fs.rmSync(workDir, { recursive: true, force: true });

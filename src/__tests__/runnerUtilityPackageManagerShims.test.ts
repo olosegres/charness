@@ -17,6 +17,7 @@ import { getJobPathDirectories } from '../runnerUtility/execEnv';
 import { createShimDeps, ensurePackageManagerShims, formatShimLine, type ShimDeps } from '../runnerUtility/packageManagerShims';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 
+const checkIsExecutableOnDisk = createShimDeps().checkIsExecutable;
 let root = '';
 let nodeDir = '';
 let corepackDist = '';
@@ -69,8 +70,17 @@ function installFakeCorepack(options: { exitCode?: number; stderr?: string } = {
   ].join('\n'));
 }
 
+/**
+ * Only a file the test itself put under its temp root is executable. The module also looks in the system folders of a job's PATH
+ * (`/usr/local/bin`, Homebrew's): a machine that has its own `yarn` / `pnpm` there — the CI image carries Corepack's shims in `/usr/local/bin` —
+ * would answer for the Node of the test that has none, and every case that expects a shim or a missing manager would see `offered`.
+ */
+function checkIsExecutableUnderRoot(candidate: string): boolean {
+  return candidate.startsWith(`${root}${path.sep}`) && checkIsExecutableOnDisk(candidate);
+}
+
 function createDeps(overrides: Partial<ShimDeps> = {}): ShimDeps {
-  return { ...createShimDeps(), nodeDir, environment: { PATH: '/usr/bin:/bin' }, ...overrides };
+  return { ...createShimDeps(), nodeDir, environment: { PATH: '/usr/bin:/bin' }, checkIsExecutable: checkIsExecutableUnderRoot, ...overrides };
 }
 
 describe('the job PATH folders', () => {
@@ -113,6 +123,17 @@ describe('ensurePackageManagerShims', () => {
     assert.deepEqual(outcomes.map((outcome) => outcome.kind), ['offered', 'offered']);
     assert.equal(fs.existsSync(path.join(getPaths().binDir, 'yarn')), false, 'the stale Corepack shim is gone');
     assert.match(fs.readFileSync(path.join(getPaths().binDir, 'pnpm'), 'utf8'), /the operator's own/);
+  });
+
+  it('a manager the system folders offer (/usr/local/bin, Homebrew\'s) is used as it is — Corepack is not asked again, and the shim made before it appeared goes', async () => {
+    installFakeCorepack();
+    await ensurePackageManagerShims(getPaths(), createDeps());
+    assert.equal(fs.readlinkSync(path.join(getPaths().binDir, 'yarn')), path.join(corepackDist, 'yarn.js'), 'precondition: the Node alone offers nothing, so both have a shim');
+    const systemManagers = new Set(['/usr/local/bin/yarn', '/opt/homebrew/bin/pnpm']);
+    const outcomes = await ensurePackageManagerShims(getPaths(), createDeps({ checkIsExecutable: (candidate) => systemManagers.has(candidate) || checkIsExecutableUnderRoot(candidate) }));
+    assert.equal(formatShimLine(outcomes), '  package managers for jobs: yarn (/usr/local/bin) · pnpm (/opt/homebrew/bin)');
+    for (const manager of ['yarn', 'pnpm']) assert.equal(fs.existsSync(path.join(getPaths().binDir, manager)), false, `the stale shim of ${manager} is gone`);
+    assert.equal(fs.readFileSync(argumentsLog, 'utf8').split('\n').filter((line) => line.startsWith('enable ')).length, 1, 'Corepack was asked once, for the first run only');
   });
 
   it('a Node without Corepack: both are missing, with the reason and the way out; nothing is created', async () => {
