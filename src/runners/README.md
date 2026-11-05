@@ -123,7 +123,7 @@ this machine's own loopback port — otherwise the runner would be told to pin a
 | temporary | `bootstrap` | marker line (`id=<package id>`), then the packed package as gzip (only while the code is open) |
 | temporary | `redeem` | marker line, then `{ok, runnerId, name, hubPublicKey, label, host, port}` or `{ok:false, reason}` |
 | temporary | `cancel` | marker line, then `{ok}` (`true`: the code was open and is closed now — its entry and key line are gone and `closed.json` notes it; `false`: unknown, spent or expired). Idempotent. Sent by an admin line pasted for an account that is already paired (`runPair`): the code will never be redeemed |
-| runner | `link` | marker line (`package=<id> epoch=<the link's start in ms>`), then the ssh session of `gateLink.ts`. The command may be `link lid=closed` / `link lid=open` (exactly that): the lid is recorded before the marker is sent and the socket bound |
+| runner | `link` | marker line (`package=<id> epoch=<the link's start in ms>`, and `lid=recorded` when the lid the request carried was written to the record), then the ssh session of `gateLink.ts`. The command may be `link lid=closed` / `link lid=open` (exactly that): the lid is recorded before the marker is sent and the socket bound |
 | runner | `package` | marker line, then the packed package |
 | runner | `version` | marker line with the hub's current `package=<id>`, nothing else — a linked runner asks every few minutes over its open connection |
 | runner | `identity` | marker line, then what `redeem` answered for this key's runner — the way back for a runner whose answer was lost (see below) |
@@ -150,13 +150,12 @@ when it was last seen. `remove` deletes the socket and stops the gate if the rec
 awake is about to sleep, and wakes in the dark for a minute or two every so often on power: a job that lands then is cut. The runner says where its lid is in the request that
 makes the link (`link lid=closed|open`, `gateProtocol.ts` `formatLinkCommand` / `parseLinkLidArgument`; the key's forced command matches that exact text): `runGateLink` writes
 `link/<id>.lid` — `{isClosed, reportedAtMs, linkEpochMs}`, the hub's own clock, the link's epoch being when this gate began — FIRST, before it prints the marker (which names the
-epoch) and before it binds the socket, so the runner is never online with a lid the hub has not heard about. Afterwards the runner sends `lid closed|open <epoch>` on the connection it
+epoch, and `lid=recorded` when the write worked — a runner whose marker lacks it reports the lid itself) and before it binds the socket, so the runner is never online with a lid the hub has not heard about. Afterwards the runner sends `lid closed|open <epoch>` on the connection it
 holds when the lid CHANGES; a report from a link with a smaller epoch than the record's is dropped (answered like a taken one), so a report that is delivered late — a Mac fell
 asleep with it in flight — cannot overwrite what its next link said, and a gate that began earlier than the record's does not overwrite it either (two links racing). A link that says
 nothing (a runner that is not a Mac, an older one) leaves the record as it was. The record OUTLIVES the link (the next link's request replaces it at once) and is read only beside an
 online link: `getRunnerLinkStatus` returns `isLidClosed` for the runner whose socket accepts; an offline runner is offline whatever it said. A record that does not read (damaged, a
-foreign shape) means an open lid — a runner is never taken out of use by a file nobody can read; and none is ever kept on a guess, because every link of a runner that reports a lid
-carries one. `remoteRun/runners.ts` turns an online runner with a closed lid into the report `lid-closed` WITHOUT asking it (the ssh call may hang as the Mac falls asleep): not picked,
+foreign shape) means an open lid — a runner is never taken out of use by a file nobody can read; and a link that could not carry the lid (an older hub, a record that could not be written) is followed by the runner's own report at its first look. `remoteRun/runners.ts` turns an online runner with a closed lid into the report `lid-closed` WITHOUT asking it (the ssh call may hang as the Mac falls asleep): not picked,
 a named one refused, `--needs` waits like for an offline one, `exec` refused; a job that already runs there, and `status` / `wait` / `logs` / `kill` of it, never go through a pick.
 `runners ls` and `/runners` say «lid closed» for «online».
 

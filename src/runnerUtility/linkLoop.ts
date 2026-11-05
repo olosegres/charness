@@ -1,7 +1,7 @@
 import type { Client } from 'ssh2';
 import { restartExitCode } from './appInstall';
 import { decideUpdate, updateFromHub, type UpdateOutcome } from './appUpdate';
-import { formatLinkCommand, redeemReplySchema } from '../runners/gateProtocol';
+import { formatLinkCommand, lidRecordedMarkerValue, redeemReplySchema } from '../runners/gateProtocol';
 import { unconfirmedRemovalStopAfterMs } from '../runners/removalTiming';
 import { callGate, connectToHub, HubConnectionError, requestGateJson, sendLidReport, type HubEndpoint } from './hubClient';
 import { readLidPollMs } from './lidPollTiming';
@@ -108,7 +108,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
   const stopAfterMs = deps.unconfirmedRemovalStopAfterMs ?? unconfirmedRemovalStopAfterMs;
   const endpoint: HubEndpoint = { host: deps.config.hub.host, port: deps.config.hub.port, user: deps.config.hub.user, hostKey: deps.config.hub.hostKey };
   let installedPackageId = deps.config.packageId;
-  /** Cleared when a hub took the plain `link` after refusing the one with the lid in it: it is an older hub, and asking again would only be refused again. */
+  /** Cleared when a hub that does not know the lid argument (its marker names no epoch) took the plain `link` after refusing the one with the lid in it: asking again would only be refused again. */
   let isLinkLidAccepted = true;
   let state: LinkState = 'connecting';
   let stateSinceMs = now();
@@ -153,10 +153,11 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
     try {
       answer = await callGate(client, 'link', null, formatLinkCommand(deps.lid === undefined || !isLinkLidAccepted ? null : lidAtConnect));
       if (answer === null && deps.lid !== undefined && isLinkLidAccepted) {
-        // Refused: a hub that does not know the argument (an older one) refuses it like any other word — and one that refuses the runner refuses the plain `link` too.
-        // Only a plain `link` that WORKS shows the argument was the reason; until then the next attempt asks the same way.
+        // Refused. A hub that does not know the argument (an older one) refuses it like any other word — but so does a hub that knows it and had a hiccup, or one that refuses the
+        // runner altogether (it refuses the plain `link` too). So the plain `link` is asked once, and the argument is given up for this process only when the hub that answers it
+        // is shown to be an older one: a marker with an epoch comes from a hub that knows the argument, whatever it did with this one request.
         answer = await callGate(client, 'link', null);
-        if (answer !== null) isLinkLidAccepted = false;
+        if (answer !== null && answer.marker.fields.epoch === undefined) isLinkLidAccepted = false;
       }
     } catch (error) {
       client.end();
@@ -198,8 +199,8 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
     writeStatus('linked', null);
     // What the hub says of this link's start; a report names it, so one that is delivered after a newer link has begun is known for what it is.
     const linkEpoch = answer.marker.fields.epoch ?? null;
-    // The lid the hub was told in the request that made this link; nothing, when that request could not carry it (an older hub).
-    const lidTold = deps.lid === undefined || !isLinkLidAccepted ? null : lidAtConnect;
+    // The lid the hub says it recorded from the request that made this link; nothing, when the request could not carry it or the hub could not record it — the first look then tells it.
+    const lidTold = answer.marker.fields.lid === lidRecordedMarkerValue ? lidAtConnect : null;
     const linkedAtMs = now();
     return new Promise<AttemptResult>((resolve) => {
       let isDone = false;

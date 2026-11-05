@@ -217,6 +217,7 @@ describe('the gate\'s link', () => {
       const online = await getRunnerLinkStatus(fixture.ctx.dir, runner.runnerId);
       assert.equal(online.isOnline && online.isLidClosed, true, 'online with the lid it connected with');
       assert.equal(standIn.markers[0].fields.epoch, (startMs + 5000).toString());
+      assert.equal(standIn.markers[0].fields.lid, 'recorded', 'the marker says the lid is on record, so the runner does not tell it again');
       gate.transport.destroy();
       await settleWithin(gate.done, 'the gate to end with its transport');
     });
@@ -238,9 +239,11 @@ describe('the gate\'s link', () => {
       for (const lidIsClosed of [undefined, null]) {
         const gate = await startGate(runner.runnerId, standIn, undefined, { lidIsClosed });
         assert.deepEqual(readLidState(fixture.ctx.dir, runner.runnerId), { isClosed: true, reportedAtMs: startMs });
+        await waitUntil(() => standIn.markers.length > (lidIsClosed === undefined ? 0 : 1), 'the marker');
         gate.transport.destroy();
         await settleWithin(gate.done, 'the gate to end with its transport');
       }
+      assert.deepEqual(standIn.markers.map((marker) => marker.fields.lid), [undefined, undefined], 'a link that carried no lid claims none recorded');
     });
 
     it('a gate that began EARLIER than the one whose word is on record does not overwrite it (two links racing for one runner): the later link has the last word', async () => {
@@ -249,6 +252,8 @@ describe('the gate\'s link', () => {
       const standIn = await startStandInRunner(runner);
       const gate = await startGate(runner.runnerId, standIn, undefined, { lidIsClosed: false, now: () => startMs + 1000 });
       assert.deepEqual(readLidState(fixture.ctx.dir, runner.runnerId), { isClosed: true, reportedAtMs: startMs + 9000, linkEpochMs: startMs + 9000 });
+      await waitUntil(() => standIn.markers.length > 0, 'the marker');
+      assert.equal(standIn.markers[0].fields.lid, undefined, 'this link\'s lid was not recorded (a later link\'s word stands), and the marker does not say it was');
       gate.transport.destroy();
       await settleWithin(gate.done, 'the gate to end with its transport');
     });
@@ -261,6 +266,7 @@ describe('the gate\'s link', () => {
       const gate = await startGate(runner.runnerId, standIn, undefined, { lidIsClosed: true });
       assert.ok(gate.logs.some((line) => line.includes('cannot record the lid the runner reported')), gate.logs.join('\n'));
       await waitUntil(() => fs.existsSync(getRunnerLinkPaths(fixture.ctx.dir, runner.runnerId).socket), 'the link socket');
+      assert.equal(standIn.markers[0].fields.lid, undefined, 'a record that could not be written is not claimed: the runner tells the lid itself at its first look');
       gate.transport.destroy();
       await settleWithin(gate.done, 'the gate to end with its transport');
     });

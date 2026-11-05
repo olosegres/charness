@@ -11,7 +11,7 @@ import { runnerServiceKinds } from './hubRegistry';
  *
  *   temporary key (a pairing code):  `bootstrap`  marker line, then the packed charness package (raw gzip)
  *                                    `redeem`     stdin: a {@link RedeemRequest} as JSON; stdout: marker line, then a {@link RedeemReply}
- *   permanent key (a paired runner): `link`       marker line (`package=<id> epoch=<the link's start in ms>`), then an ssh session in which the GATE is the client (see gateLink.ts)
+ *   permanent key (a paired runner): `link`       marker line (`package=<id> epoch=<the link's start in ms>`, and `lid=recorded` when the lid the request carried was recorded), then an ssh session in which the GATE is the client (see gateLink.ts)
  *                                    `package`    marker line, then the packed package (raw gzip)
  *                                    `version`    marker line with the hub's current `package=<id>`, nothing else — asked every few minutes over
  *                                                 the connection that is already open, so a linked runner learns of an update
@@ -32,6 +32,9 @@ import { runnerServiceKinds } from './hubRegistry';
 
 /** What a `lid` report (and the lid argument of a `link`) says: the lid is closed with nothing keeping the Mac awake, or it is not. */
 export const lidReportBodies = { closed: 'closed', open: 'open' } as const;
+
+/** The value of the `lid` field of a `link` marker: the hub recorded the lid the request carried. A marker without it says the lid was not recorded — an older hub, or a record that could not be written. */
+export const lidRecordedMarkerValue = 'recorded';
 
 /** The text every marker line starts with; the `1` is the protocol version. */
 export const gateMarker = '--charness-gate-1--';

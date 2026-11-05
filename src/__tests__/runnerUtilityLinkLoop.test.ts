@@ -22,7 +22,7 @@ import { createLidWatcher, type LidWatcher } from '../runnerUtility/lidState';
 import { readRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { createHubAuthenticator, createRunnerServers, type RunnerServers } from '../runnerUtility/runnerServers';
-import { formatGateAnswerHead, parseLidReportBody, parseLinkLidArgument } from '../runners/gateProtocol';
+import { formatGateAnswerHead, lidRecordedMarkerValue, parseLidReportBody, parseLinkLidArgument } from '../runners/gateProtocol';
 import { readRunnerVersionPollMs, runnerVersionPollMinMs, runnerVersionPollMs } from '../runnerUtility/versionPollTiming';
 import { waitUntil } from './runnersTestKit';
 import { createTarArchive } from '../runners/tarArchive';
@@ -262,8 +262,12 @@ interface HubStandIn {
   holdIdentityAnswer: { until: Promise<void> | null; requestCount: number };
   /** The body of every `lid` request the hub took, in order; with `isRefused` set it takes none and answers like a gate that does not know the word. */
   lidRequests: { bodies: string[]; count: number; isRefused: boolean };
-  /** Every command the hub was asked to run for a link (`link`, `link lid=closed`), in order; with `isOlderHub` set the hub refuses the one with a lid in it, as a gate from before the lid does. */
-  linkCommands: { commands: string[]; isOlderHub: boolean };
+  /**
+   * Every command the hub was asked to run for a link (`link`, `link lid=closed`), in order. `isOlderHub`: the hub refuses the one with a lid in it and names no epoch in its marker,
+   * as a gate from before the lid does. `refuseNextLidLinks`: a hub that knows the argument refuses that many such requests (a hiccup) and answers the plain `link` as usual.
+   * `isLidRecorded`: whether the marker says `lid=recorded` for a request that carried a lid.
+   */
+  linkCommands: { commands: string[]; isOlderHub: boolean; refuseNextLidLinks: number; isLidRecorded: boolean };
   /** The epoch the hub names in its `link` marker: one more with every link. */
   linkEpochs: { next: number };
   close: () => void;
@@ -280,7 +284,7 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
   const holdLinkAnswer: { until: Promise<void> | null; requestCount: number } = { until: null, requestCount: 0 };
   const holdIdentityAnswer: { until: Promise<void> | null; requestCount: number } = { until: null, requestCount: 0 };
   const lidRequests: HubStandIn['lidRequests'] = { bodies: [], count: 0, isRefused: false };
-  const linkCommands: HubStandIn['linkCommands'] = { commands: [], isOlderHub: false };
+  const linkCommands: HubStandIn['linkCommands'] = { commands: [], isOlderHub: false, refuseNextLidLinks: 0, isLidRecorded: true };
   const linkEpochs: HubStandIn['linkEpochs'] = { next: 1_000_000 };
   const server = new Server({ hostKeys: [hostKey.privateKey] }, (connection) => {
     connections.opened += 1;
@@ -293,7 +297,9 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
         session.on('exec', (accept, reject, info) => {
           const isLinkRequest = info.command === 'link' || parseLinkLidArgument(info.command) !== null;
           if (isLinkRequest) linkCommands.commands.push(info.command);
-          if (isLinkRequest && info.command !== 'link' && linkCommands.isOlderHub) {
+          const isRefusedLidLink = isLinkRequest && info.command !== 'link' && (linkCommands.isOlderHub || linkCommands.refuseNextLidLinks > 0);
+          if (isRefusedLidLink) {
+            if (!linkCommands.isOlderHub) linkCommands.refuseNextLidLinks -= 1;
             const channel = accept();
             channel.stderr.write('charness-gate: refused: this key may only be used by charness-runner\n');
             channel.exit(2);
@@ -323,7 +329,11 @@ async function startHubStandIn(runnerClientPublicKey: string, initialPackageId: 
             holdLinkAnswer.requestCount += 1;
             const channel = accept();
             const answerLink = (): void => {
-              channel.write(formatGateAnswerHead('link', { package: currentPackageId.value, epoch: (linkEpochs.next++).toString() }));
+              channel.write(formatGateAnswerHead('link', {
+                package: currentPackageId.value,
+                ...(linkCommands.isOlderHub ? {} : { epoch: (linkEpochs.next++).toString() }),
+                ...(info.command !== 'link' && linkCommands.isLidRecorded && !linkCommands.isOlderHub ? { lid: lidRecordedMarkerValue } : {}),
+              }));
               linkChannels.push(channel);
             };
             if (holdLinkAnswer.until === null) answerLink();
@@ -681,6 +691,40 @@ describe('a Mac\'s link and its lid (against the same hub stand-in)', () => {
     hub.linkChannels[0].close();
     await waitUntil(() => hub.linkChannels.length === 2, 'the second link', 15_000);
     assert.deepEqual(hub.linkCommands.commands, ['link lid=closed', 'link', 'link'], 'the second link does not ask the hub for what it refused');
+  });
+
+  it('a ONE-OFF refusal of `link lid=…` by a hub that knows the argument (its plain `link` answer names an epoch) does not turn the lid out of the request for the rest of the process: the next link asks with it again', async () => {
+    hub.linkCommands.refuseNextLidLinks = 1;
+    registry.text = registryTexts.closed;
+    startMacLink();
+    await waitUntil(() => hub.linkChannels.length === 1, 'the first link, through the plain request', 15_000);
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=closed', 'link']);
+    // The plain link gave the hub no lid: the first look tells it, naming the link.
+    await waitForLidReports(1);
+    assert.equal(parseLidReportBody(hub.lidRequests.bodies[0])?.isClosed, true);
+    hub.linkChannels[0].close();
+    await waitUntil(() => hub.linkChannels.length === 2, 'the second link', 15_000);
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=closed', 'link', 'link lid=closed'], 'the lid is in the request again: that hub knows the argument');
+    await waitUntil(() => registry.reads >= 12, 'a few looks of the second link');
+    assert.equal(hub.lidRequests.bodies.length, 1, 'and the second link, whose request the hub recorded, tells nothing more');
+  });
+
+  it('a hub that answers a link carrying a lid WITHOUT saying it recorded it (it could not write the record) is told at the first look: the runner does not believe the hub has what it never took', async () => {
+    hub.linkCommands.isLidRecorded = false;
+    registry.text = registryTexts.closed;
+    startMacLink();
+    await waitUntil(() => hub.linkChannels.length === 1, 'the link', 15_000);
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=closed']);
+    await waitForLidReports(1);
+    assert.equal(parseLidReportBody(hub.lidRequests.bodies[0])?.isClosed, true, 'the lid goes in a report at the first look, naming the link');
+  });
+
+  it('a hub that DID say it recorded the lid is not told it again at the first look', async () => {
+    registry.text = registryTexts.closed;
+    startMacLink();
+    await waitUntil(() => hub.linkChannels.length === 1, 'the link', 15_000);
+    await waitUntil(() => registry.reads >= 6, 'a few looks');
+    assert.equal(hub.lidRequests.count, 0);
   });
 
   it('a hub that refuses the REPORT does not disturb the link: it stays up, the runner does not ask again at every look — it waits, 30 s and more — and says so ONCE', async () => {

@@ -204,8 +204,9 @@ executable `ioreg` on its PATH (a Mac's own tool, which no other system ships �
 - **The lid goes IN the request that makes the link.** The link reads the lid (`look()`) before it asks for the link and runs `link lid=closed|open` (`formatLinkCommand`; the
   forced command of the runner's key matches exactly that text and nothing else — `parseLinkLidArgument`). The hub's gate records it BEFORE it prints the marker and binds the
   link's socket, so the hub never counts the runner online with a lid it has not heard about: a Mac that wakes in the dark for a minute with its lid shut says «closed» in the
-  request that brings it online. A hub that refuses that text (an older one) is asked again with the plain `link`; once that works the process asks the plain one from then on and
-  reports the lid with `lid` requests instead.
+  request that brings it online. The marker of the answer says whether the hub recorded it (`lid=recorded`); without that the first look reports the lid itself, so the runner never believes the hub has what
+  it did not take. A hub that refuses that text is asked again with the plain `link`; the argument is given up for the process only when THAT answer's marker names no epoch (a hub that
+  does not know the argument) — a one-off refusal by a hub that does, or one that refuses the runner altogether, changes nothing, and the next link carries the lid again.
 - **Then only a change.** `createLidWatcher`, every `lidPollMs` (10 s — as often as the hub's gate takes its heartbeat; the test seam `CHARNESS_TEST_TIMINGS` key `runnerLidPollMs`
   may only shorten it, `lidPollTiming.ts`): reads, compares with what the hub was told, and reports through `sendLidReport` — the `lid` request over the connection the link already
   holds, naming the link it is made on (`epoch`, from the `link` marker). The answer is `taken`, `refused` (the hub answered and would not: a gate that does not know the word has no

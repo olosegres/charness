@@ -5,7 +5,7 @@ import * as path from 'path';
 import { Duplex, Writable, type Readable } from 'stream';
 import { Client } from 'ssh2';
 import { getCaughtErrnoCode } from '../configDirFile';
-import { formatGateAnswerHead, linkUserName, noPackageMarker } from './gateProtocol';
+import { formatGateAnswerHead, lidRecordedMarkerValue, linkUserName, noPackageMarker } from './gateProtocol';
 import { getRunnerLinkPaths, type HubContext } from './hubPaths';
 import { readHubKey } from './hubKey';
 import { readPairedFile } from './hubRegistry';
@@ -105,13 +105,18 @@ export function runGateLink(params: GateLinkParams): Promise<number> {
 
   // The link's epoch: when this gate began, by the hub's clock. The lid it was told is recorded under it first of all — before the socket exists.
   const linkEpochMs = now();
+  // Whether the lid the runner carried is on record now: the marker says so, and a runner that is not told reports it itself.
+  let isLidRecorded = false;
   if (params.lidIsClosed !== undefined && params.lidIsClosed !== null) {
     try {
       // A link that began after this one has said where the lid is already (two links racing for the same runner): its word is the later one.
       const onRecord = readLidState(ctx.dir, runnerId)?.linkEpochMs;
-      if (onRecord === undefined || onRecord <= linkEpochMs) writeLidState(ctx.dir, runnerId, { isClosed: params.lidIsClosed, reportedAtMs: linkEpochMs, linkEpochMs });
+      if (onRecord === undefined || onRecord <= linkEpochMs) {
+        writeLidState(ctx.dir, runnerId, { isClosed: params.lidIsClosed, reportedAtMs: linkEpochMs, linkEpochMs });
+        isLidRecorded = true;
+      }
     } catch (error) {
-      // The link works without it: the record of the link before stands, as it did before the lid was part of the request.
+      // The link works without it: the record of the link before stands, as it did before the lid was part of the request — and the marker does not claim it was recorded.
       log(`cannot record the lid the runner reported (${getCaughtErrnoCode(error)})`);
     }
   }
@@ -243,7 +248,7 @@ export function runGateLink(params: GateLinkParams): Promise<number> {
       });
     };
 
-    params.output.write(formatGateAnswerHead('link', { package: params.packageId ?? noPackageMarker, epoch: linkEpochMs.toString() }));
+    params.output.write(formatGateAnswerHead('link', { package: params.packageId ?? noPackageMarker, epoch: linkEpochMs.toString(), ...(isLidRecorded ? { lid: lidRecordedMarkerValue } : {}) }));
     duplex.on('error', () => finish('the connection to the runner failed'));
     // The channel from the runner ended cleanly (EOF: the ssh session that carried it is gone). A duplex whose readable side ended stays half
     // open, so the ssh client never sees a close — only a failed write or the keepalive's silence would tell, and until then the hub shows a
