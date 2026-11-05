@@ -84,6 +84,13 @@ describe('agent-plugin', () => {
     assert.match(text, /Never arm a schedule of your own for status lines/);
   });
 
+  test('both delegate skills name the resume log files events-2.jsonl, … — the bot reads the newest events*.jsonl for its status line, and no other name', () => {
+    for (const folder of ['charness-delegate-claude', 'charness-delegate-opencode']) {
+      const text = fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');
+      assert.match(text, /new\s+log\s+files\s+\(`events-2\.jsonl`, …\)/, folder);
+    }
+  });
+
   test('both delegate skills check the recorded PID is the worker before the watch is armed on it', () => {
     // A launcher that hands over to another process leaves `$!` on a process that exits at once: the watch would fire
     // "worker exited" right after the launch.

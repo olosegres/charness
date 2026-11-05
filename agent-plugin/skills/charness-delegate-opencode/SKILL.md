@@ -61,7 +61,7 @@ jq -r 'select(.type=="tool_use" or .type=="text") |
 ## Resume
 
 - Confirm the old PID is gone, then repeat the launch with `--session "<session-id>"`, a new brief and new log
-  files, and arm a new check. Keep the checkout, model and variant. Never `--continue` or `--fork`.
+  files (`events-2.jsonl`, …), and arm a new check. Keep the checkout, model and variant. Never `--continue` or `--fork`.
 - A turn stopped by a provider's usage limit: resume the same session with another provider's model whose
   context window holds the session.
 - To stop a worker: confirm the PID is that worker (`ps -o args= -p <pid>`), `kill -TERM <pid>`, confirm it is
