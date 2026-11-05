@@ -191,9 +191,16 @@ gui_agent_alive() {
   [ $((now - beat)) -le $((gui_agent_stale_sec * 1000)) ]
 }
 
-# What a job that needs iOS is told when there is no login session to run it in (also what `probe` says of `ios`).
+# What a job that needs iOS is told when there is no login session to run it in (also what `probe` says of `ios`). A link that tried to put the agent in place
+# itself (runnerUtility/guiAgentHeal.ts) and could not leaves the reason in <state>/gui/install-failure: then the cure is the admin line, not a login.
 gui_refusal_text() {
-  printf 'ios build: needs a login of %s' "$(id -un)"
+  local failure
+  failure=$(head -n 1 "${runner_state:-}/gui/install-failure" 2> /dev/null | tr -d '[:cntrl:]')
+  if [ -n "$failure" ]; then
+    printf "ios build: the login session's agent could not be installed (%s) - paste a fresh admin line from /runners in an admin account's terminal" "$failure"
+  else
+    printf 'ios build: needs a login of %s' "$(id -un)"
+  fi
 }
 
 # Does THIS job need the login session — it needs iOS (`needs-ios`), and the runner is an always-on service? Such a job is refused without one.

@@ -10,6 +10,8 @@
  *   gate killed on the hub (a dropped connection) → the link comes back
  *   the runner's own key on the hub → no shell, no pty, no remote or local forwarding, no unix-socket forwarding
  *   the hub's package changes → the idle runner updates itself and relinks
+ *   an always-on Mac (a recorded `system-service`, a stand-in `launchctl`) without the login session's agent → the restarted link writes its
+ *   definition into the account's own folder and loads it; when it cannot, it keeps the reason for `runners` until the agent is up
  *   remove → the link is cut, the machine says it was removed
  *
  * Needs sshd, ssh, ssh-keyscan, rsync, Pueue, tar and the built CLI (`yarn build`): a local run without them is SKIPPED with the reason, CI
@@ -29,11 +31,15 @@ import { readPairedFile, writePairedFile } from '../runners/hubRegistry';
 import { getRunnerLinkStatus } from '../runners/linkControl';
 import { checkIsProcessAlive } from './recordedProcess';
 import { connectToHub, HubConnectionError, requestGateJson } from '../runnerUtility/hubClient';
+import { readGuiAgentInstallFailure } from '../runnerUtility/guiAgentHeal';
 import { readRunnerConfig, writePairingInProgress } from '../runnerUtility/runnerConfig';
 import { ensureRunnerKeys } from '../runnerUtility/runnerKeys';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
+import { getGuiAgentFile } from '../runnerUtility/serviceCommon';
+import { getServiceNames, planGuiAgentJob, renderLaunchdPlist } from '../runnerUtility/serviceUnits';
 import type { RunnerConfig, RunnerStatus } from '../runnerUtility/runnerConfig';
 import { getFreePort } from './e2e/isolatedCharness';
+import { createLaunchctlStandIn } from './runnerLinkE2e/launchctlStandIn';
 import {
   createExtraMachine,
   createRunnerLinkLayout,
@@ -353,6 +359,73 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal((await waitForSsh('echo updated')).trim(), 'updated');
     assert.notEqual(readGatePid(), gateBefore, 'the update restarted the link — nothing killed the old gate to make it happen');
     assert.equal(readHubPaired().rev, 1, 'an update is not a new pairing');
+  });
+
+  describe('an always-on Mac (a recorded `system-service`) whose login session\'s agent is not in place', () => {
+    const accountUid = os.userInfo().uid;
+
+    function getAgentFile(): string {
+      return getGuiAgentFile(runnerPaths.homeDir, getServiceNames(runnerPaths.root));
+    }
+
+    /** What this version writes for the agent: the account's own LaunchAgent, with the Node folder of the runner that wrote it. */
+    function getExpectedAgentDefinition(): string {
+      return renderLaunchdPlist(planGuiAgentJob(runnerPaths, getServiceNames(runnerPaths.root), os.userInfo().username, path.dirname(process.execPath)));
+    }
+
+    /**
+     * Restart the runner with the stand-in `launchctl` first on its PATH, the agent's file gone, and the recorded kind as given (`null`: run by hand — an
+     * always-on service is a record an admin's line writes, and a runner reads it at every look).
+     */
+    async function restartWithLaunchctl(launchctlDir: string, serviceKind: 'system-service' | null): Promise<void> {
+      assert.ok(runner !== null);
+      const linkedBefore = await waitForLink();
+      await stopRunner(layout, runner);
+      fs.rmSync(getAgentFile(), { force: true });
+      if (serviceKind === null) fs.rmSync(runnerPaths.serviceMarker, { force: true });
+      else fs.writeFileSync(runnerPaths.serviceMarker, `${serviceKind}\n`);
+      runner = startRunner(layout, layout.runnerHome, { PATH: `${launchctlDir}:${path.dirname(process.execPath)}:${process.env.PATH ?? ''}` });
+      await waitForLink(linkedBefore.pid);
+    }
+
+    after(() => {
+      // The kind is recorded by an admin's line; the cases below must not leave it to the ones after them (`unpair` refuses an always-on service).
+      fs.rmSync(runnerPaths.serviceMarker, { force: true });
+      fs.rmSync(getAgentFile(), { force: true });
+    });
+
+    it('gets the agent when it updates: the restarted link writes the definition into the account\'s own LaunchAgents folder and loads it into the login session', async () => {
+      const launchctl = createLaunchctlStandIn(layout.root);
+      await restartWithLaunchctl(launchctl.binDir, null);
+      // A Mac paired before the agent existed: an admin's earlier line made it an always-on service, and the agent's definition is not there.
+      fs.writeFileSync(runnerPaths.serviceMarker, 'system-service\n');
+      assert.equal(fs.existsSync(getAgentFile()), false);
+      assert.deepEqual(launchctl.readCalls(), [], 'a runner that was not an always-on service did not ask launchd anything');
+      const statusBefore = await waitForLink();
+      const appBefore = fs.realpathSync(runnerPaths.currentApp);
+      fs.appendFileSync(path.join(layout.hubInstall, 'dist', 'runners', 'pairCode.js'), '\n// changed once more by the flow\n');
+      await waitUntil(() => fs.realpathSync(runnerPaths.currentApp) !== appBefore, 'the runner to install the new package', updateTimeoutMs);
+      await waitForLink(statusBefore.pid);
+      await waitUntil(() => launchctl.checkIsLoaded(), 'the restarted link to load the agent into the account\'s login session', linkTimeoutMs);
+      assert.equal(fs.readFileSync(getAgentFile(), 'utf8'), getExpectedAgentDefinition());
+      assert.equal(getAgentFile(), path.join(layout.runnerHome, 'Library', 'LaunchAgents', `${getServiceNames(runnerPaths.root).launchdGui}.plist`), 'in the account\'s own folder');
+      assert.ok(launchctl.readCalls().includes(`bootstrap gui/${accountUid} ${getAgentFile()}`), launchctl.readCalls().join('\n'));
+      assert.equal(readGuiAgentInstallFailure(runnerPaths), null, 'nothing is wrong');
+    });
+
+    it('keeps the reason for `runners` when launchd refuses it — and forgets it once a restarted link has the agent loaded', async () => {
+      const launchctl = createLaunchctlStandIn(layout.root);
+      launchctl.setBootstrapFailing(true);
+      await restartWithLaunchctl(launchctl.binDir, 'system-service');
+      await waitUntil(() => readGuiAgentInstallFailure(runnerPaths) !== null, 'the link to keep why the agent could not be loaded', linkTimeoutMs);
+      assert.match(readGuiAgentInstallFailure(runnerPaths) ?? '', new RegExp(`launchctl bootstrap gui/${accountUid} failed \\(Bootstrap failed: 5: Input/output error\\)`));
+      assert.equal(launchctl.checkIsLoaded(), false);
+      assert.equal(fs.readFileSync(getAgentFile(), 'utf8'), getExpectedAgentDefinition(), 'the definition is in place: the next login loads it even if this look could not');
+      launchctl.setBootstrapFailing(false);
+      await restartWithLaunchctl(launchctl.binDir, 'system-service');
+      await waitUntil(() => launchctl.checkIsLoaded(), 'the restarted link to load the agent', linkTimeoutMs);
+      await waitUntil(() => readGuiAgentInstallFailure(runnerPaths) === null, 'the reason to be forgotten', linkTimeoutMs);
+    });
   });
 
   /**

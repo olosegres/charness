@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
+import { writeGuiAgentInstallFailure } from './guiAgentHeal';
 import { describeForeignNode, findForeignHome } from './homeFolders';
 import { checkIsRunnerLinkProcess } from './localLinkStop';
 import { ensurePueueConfig, inspectPueue, shutDownPueue } from './pueueDaemon';
@@ -355,5 +356,7 @@ export async function runSystemStep(step: string, deps: ServiceDeps): Promise<Sy
   const guiJob = planGuiAgentJob(paths, names, deps.accountName, path.dirname(deps.nodePath));
   fs.mkdirSync(paths.logsDir, { recursive: true, mode: 0o700 });
   writeDefinition(getGuiAgentFile(paths.homeDir, names), renderLaunchdPlist(guiJob));
+  // The admin step loads it next: what the link could not do on its own (`guiAgentHeal.ts`) is now the admin line's to do, and it says so itself if it fails.
+  writeGuiAgentInstallFailure(paths, null);
   return { ok: true, hadService };
 }

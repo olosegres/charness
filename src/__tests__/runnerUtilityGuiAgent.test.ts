@@ -28,6 +28,7 @@ import {
   type GuiAgent,
   type GuiAgentDeps,
 } from '../runnerUtility/guiAgent';
+import { readGuiAgentInstallFailure, writeGuiAgentInstallFailure } from '../runnerUtility/guiAgentHeal';
 import { restartExitCode } from '../runnerUtility/appInstall';
 import { planSimulatorWork, runGuiAgentCommand } from '../runnerUtility/runnerCommands';
 import { writeRunnerConfig } from '../runnerUtility/runnerConfig';
@@ -715,6 +716,16 @@ describe('`charness-runner gui-agent`, the command a LaunchAgent runs', () => {
     assert.equal(await running, 0);
     assert.equal(fs.existsSync(agentPlist), true);
     assert.equal(fs.existsSync(paths.guiAgentStatus), false);
+  });
+
+  it('an agent that is up forgets why the link could not put it in place: the failure was about its absence', async () => {
+    writeGuiAgentInstallFailure(paths, 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)');
+    const controller = new AbortController();
+    const running = runGuiAgentCommand(io, paths.homeDir, { launchDaemonsDir: daemonsDir, serviceCheckIntervalMs: 100, signal: controller.signal });
+    await waitForHeartbeat();
+    assert.equal(readGuiAgentInstallFailure(paths), null);
+    controller.abort();
+    assert.equal(await running, 0);
   });
 
   it('the daemons removed by an admin: the agent removes ITS OWN definition and leaves for good — no command of the admin\'s had to name the account\'s folders', async () => {

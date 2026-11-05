@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**An always-on Mac runner that updated itself now gets the missing iOS login-session agent by itself — no second paste of the admin line, and `runners` no longer says «needs a login» when the real problem is something else.**
+Before, a Mac paired before the login session's agent existed updated to the new version but never received the agent: `runners` kept saying «ios: needs a login of runner» although the account was logged in, and only pasting the `sudo` pairing line again helped.
+Now:
+  - When the runner starts (an update restarts it) and once an hour, a runner kept running by an admin's line looks for the agent in the account's own `~/Library/LaunchAgents`. A missing or older definition is written and loaded into the account's login session — no admin rights, they are the account's own files — and an agent that is already running is replaced only while the Mac runs no job.
+  - With nobody logged in as the account the file is written and launchd loads it at the next login, and `runners` keeps saying a login is needed.
+  - When it cannot be done (the folder cannot be written, `launchctl` refuses), `runners` and a refused `--needs ios` job say so with the reason — «the login session's agent could not be installed (…) - paste a fresh admin line from /runners in an admin account's terminal» — instead of «needs a login».
+
 **A voice note that waits for its text now shows «🎙 Transcribing the voice message…» in the topic, so it no longer looks lost.**
 Before, while the bot waited for a local speech engine that was still loading its model (up to 2 minutes), the topic showed nothing until the 🎤 transcript — a voice note that took a while looked as if it had been dropped.
 Now:

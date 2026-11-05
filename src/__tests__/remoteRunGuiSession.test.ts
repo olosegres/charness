@@ -1,8 +1,9 @@
 /**
  * @description The job script's side of the login session's agent (`remoteRun/runner.sh`, «the login session»): on an always-on Mac a job that needs
  * iOS (`needs-ios`) is refused with «ios build: needs a login of <account>» when no agent beats, `probe` says the same of `ios`, and with an agent its
- * steps go through the request folders — exit code, output in the job's log, a kill, an agent that stops or restarts under a running step. The agent
- * is the REAL one (`guiAgent.ts`, real bash steps) ticked in this process; the script's functions are the real ones, run by `bash` in their own process.
+ * steps go through the request folders — exit code, output in the job's log, a kill, an agent that stops or restarts under a running step. When the
+ * link tried to put the agent in place itself and could not (`gui/install-failure`), the refusal and `probe` say to paste a fresh admin line instead of
+ * «needs a login». The agent is the REAL one (`guiAgent.ts`, real bash steps) ticked in this process; the script's functions are the real ones, run by `bash` in their own process.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -14,6 +15,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { checkIsProcessAlive, createGuiAgent, createGuiAgentDeps, readProcessStart, writeGuiAgentStatus, type GuiAgent } from '../runnerUtility/guiAgent';
+import { writeGuiAgentInstallFailure } from '../runnerUtility/guiAgentHeal';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { jobId, scriptPath, slug } from './remoteRunRunnerScriptKit';
 
@@ -123,6 +125,38 @@ describe('a job that needs iOS on an always-on Mac, without a login session', ()
     assert.match(String(runScriptCommand(['submit', workDir, slug, jobId, 'default']).stderr), /needs a login of/, 'its beat is stale');
   });
 
+  describe('when the link could not install the agent itself (gui/install-failure)', () => {
+    const reason = 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5: Input/output error)';
+    const adminText = `ios build: the login session's agent could not be installed (${reason}) - paste a fresh admin line from /runners in an admin account's terminal`;
+
+    it('the refusal of `submit` and `lease` says to paste a fresh admin line, with the reason, instead of «needs a login»', () => {
+      markNeedsIos();
+      writeGuiAgentInstallFailure(paths, reason);
+      for (const args of [['submit', workDir, slug, jobId, 'default'], ['lease', workDir, slug, jobId, 'default', '3000']]) {
+        const result = runScriptCommand(args);
+        assert.equal(result.status, 125, args[0]);
+        assert.equal(String(result.stderr).trim(), `remote-run-runner: ${adminText}`, args[0]);
+      }
+    });
+
+    it('the words go with the record: once it is removed (the agent is up, or the account has no session to blame) the refusal is «needs a login» again', () => {
+      markNeedsIos();
+      writeGuiAgentInstallFailure(paths, reason);
+      writeGuiAgentInstallFailure(paths, null);
+      assert.equal(String(runScriptCommand(['submit', workDir, slug, jobId, 'default']).stderr).trim(), `remote-run-runner: ios build: needs a login of ${accountName}`);
+    });
+
+    it('a record with control characters (the account writes it) is printed without them, on one line', () => {
+      markNeedsIos();
+      fs.mkdirSync(path.dirname(paths.guiInstallFailure), { recursive: true });
+      fs.writeFileSync(paths.guiInstallFailure, `bad \u001b[31mred\u001b[0m\u0007 reason\nsecond line\n`);
+      const stderr = String(runScriptCommand(['submit', workDir, slug, jobId, 'default']).stderr).trim();
+      assert.ok(!/[\u0000-\u0008\u000b-\u001f]/.test(stderr), JSON.stringify(stderr));
+      assert.ok(stderr.includes('(bad [31mred[0m reason)'), stderr);
+      assert.ok(!stderr.includes('second line'));
+    });
+  });
+
   it('a job that does not need iOS, and a runner that is not an always-on service, never ask for a session', () => {
     const plain = runScriptCommand(['submit', workDir, slug, jobId, 'default']);
     assert.match(String(plain.stderr), /pueue add failed/);
@@ -164,6 +198,16 @@ describe('the probe of an always-on Mac', () => {
     const withAgent = probeIos();
     assert.equal(withAgent.cap_ios, 'yes');
     assert.match(withAgent.cap_ios_detail, /^Xcode 16\.2/);
+  });
+
+  it('says to paste a fresh admin line, with the reason, when the link could not install the agent — and not once the agent beats', () => {
+    fs.writeFileSync(paths.iosCheck, '{"status":"pass","checkedAtMs":1,"xcode":"16.2","reason":null}\n');
+    writeGuiAgentInstallFailure(paths, 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)');
+    const without = probeIos();
+    assert.equal(without.cap_ios, 'no');
+    assert.equal(without.cap_ios_detail, "ios build: the login session's agent could not be installed (launchctl bootstrap gui/501 failed (Bootstrap failed: 5)) - paste a fresh admin line from /runners in an admin account's terminal");
+    writeGuiAgentStatus(paths, { pid: process.pid, uid: 0, account: accountName, startedAtMs: 1, beatAtMs: Date.now() });
+    assert.equal(probeIos().cap_ios, 'yes', 'an agent that beats is the answer, whatever an old record says');
   });
 
   it('a runner kept running as a user service (or by hand) gets the old answer: it is in the session already', () => {

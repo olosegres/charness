@@ -238,8 +238,8 @@ export function runPairingLine(layout: RunnerLinkLayout, line: string, home: str
   });
 }
 
-/** @description Start `charness-runner run` through the launcher, in a process group of its own, with `FLOW_SECRET` in ITS environment (a job must never see it). */
-export function startRunner(layout: RunnerLinkLayout, home: string = layout.runnerHome): ChildProcess {
+/** @description Start `charness-runner run` through the launcher, in a process group of its own, with `FLOW_SECRET` in ITS environment (a job must never see it); `extraEnv` is added to (and wins over) the flow's own variables. */
+export function startRunner(layout: RunnerLinkLayout, home: string = layout.runnerHome, extraEnv: NodeJS.ProcessEnv = {}): ChildProcess {
   const paths = getRunnerHomePaths(home);
   const child = spawn(paths.launcher, ['run'], {
     detached: true,
@@ -249,6 +249,7 @@ export function startRunner(layout: RunnerLinkLayout, home: string = layout.runn
       [testNodeModulesEnvName]: path.join(repoRoot, 'node_modules'),
       // The linked runner asks the hub for its package every 2 s instead of every 5 minutes (the seam may only shorten the window).
       CHARNESS_TEST_TIMINGS: JSON.stringify({ runnerVersionPollMs: 2000 }),
+      ...extraEnv,
     }),
   });
   layout.groups.add(child);

@@ -195,6 +195,13 @@ marked would otherwise crash in the System session without a hint); a runner kep
 everything where it always did. Without the session, jobs that do not need iOS run in the daemon as before and only `--needs ios` is refused — so an iOS
 build or a Simulator test always passes `--needs ios` (the agents' instructions and `remote-run --help` say so). `remote-run exec` runs where the link does. The agent also owns the Mac's Simulator check (it boots and deletes a
 Simulator when it starts and when Xcode changes) and keeps every Simulator silent (below).
+- **An update installs the agent for you.** A Mac paired before the agent existed — or one whose agent definition a newer charness changed — gets it by itself
+  when its runner updates: the runner (which runs as the account) writes the definition into the account's own `~/Library/LaunchAgents` and loads it into the
+  account's login session, with no admin and no new paste. It looks again when the runner starts and once an hour; an agent that is already loaded is replaced
+  only while the Mac runs no job (replacing it would cut a running build), otherwise at the next look. Where the account has nobody logged in, the file is
+  written and loads at the account's next login. If that cannot be done (the folder cannot be written, `launchctl` refuses), `runners` says so —
+  «ios: no — ios build: the login session's agent could not be installed (<reason>) - paste a fresh admin line from /runners in an admin account's
+  terminal» — instead of «needs a login»: the admin line (it finds the account paired and only installs the service) loads the agent as root.
 - **No session, no iOS — honestly.** With nobody logged in as the account, `runners` says «ios: no — ios build: needs a login of runner», `--needs ios`
   finds no runner for it, and a job that was queued before the session ended is refused with the same words. Nothing logs in by itself: after a reboot,
   log in as the account once at the Mac and switch back to your own account (Fast User Switching keeps its session); the agent starts at that login.

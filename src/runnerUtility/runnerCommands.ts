@@ -11,8 +11,9 @@ import { connectToHub, HubConnectionError, requestGateJson, type HubEndpoint } f
 import { recoverPairing } from './pairingRecovery';
 import { createLinkLoop } from './linkLoop';
 import { collectMachineReport, createMachineProbe, formatMachineReport, type MachineReport } from './machineReport';
-import { ensurePueueDaemon, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
+import { ensurePueueDaemon, inspectPueue, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
 import { createGuiAgentDeps, runGuiAgent } from './guiAgent';
+import { createGuiAgentHealer, guiAgentHealIntervalMs, writeGuiAgentInstallFailure } from './guiAgentHeal';
 import { describeKeepAwakeMethod } from '../remoteRun/probe';
 import { createKeepAwakeDeps, startKeepAwake, type KeepAwakeState } from './keepAwake';
 import { createIosCheckDeps, readIosCheck, refreshIosCheck } from './iosCheck';
@@ -337,6 +338,24 @@ function startIosCheck(paths: RunnerHomePaths, io: CommandIo): void {
   iosTimer.unref();
 }
 
+/**
+ * An always-on Mac's link puts the login session's agent in place itself (`guiAgentHeal.ts`) — a Mac paired before the agent existed, or a newer version's
+ * definition — now and then once an hour. In the background: the link goes up without waiting for `launchctl`.
+ */
+function startGuiAgentHealing(paths: RunnerHomePaths, io: CommandIo): void {
+  const account = os.userInfo();
+  const healer = createGuiAgentHealer(paths, {
+    runner: runCommand,
+    uid: account.uid,
+    accountName: account.username,
+    nodeDir: path.dirname(process.execPath),
+    getServiceKind: () => readServiceKind(paths),
+    readQueue: () => inspectPueue(paths),
+  }, (line) => { io.stderr(`charness-runner: ${line}\n`); });
+  void healer.look();
+  setInterval(() => { void healer.look(); }, guiAgentHealIntervalMs).unref();
+}
+
 /** The id of the package copy that `current` points at (`app.<id>`); `null` when it cannot be read. */
 function readCurrentAppName(paths: RunnerHomePaths): string | null {
   try {
@@ -367,6 +386,8 @@ export async function runGuiAgentCommand(io: CommandIo, homeDir: string = os.hom
     return 0;
   }
   const log = (line: string): void => { io.stderr(`charness-runner: ${line}\n`); };
+  // The agent is up: whatever the link could not do about it earlier is not a problem any more.
+  writeGuiAgentInstallFailure(paths, null);
   startIosCheck(paths, io);
   const silencerDeps = createSilencerDeps(log);
   const lookAtSimulators = createSilencerLook(createSimulatorSilencer(silencerDeps), silencerDeps);
@@ -413,6 +434,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     return 1;
   }
   ensureLauncher(paths, process.execPath);
+  startGuiAgentHealing(paths, io);
   const toolDeps = createToolDeps();
   if (!(await findPueue(paths, toolDeps))) await ensurePueue(paths, toolDeps);
   await prepareJobPackageManagers(paths, io);

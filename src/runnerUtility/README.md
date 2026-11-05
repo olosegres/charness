@@ -228,6 +228,18 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   folder that cannot be listed forgets nothing. A `needs-ios` step with no agent beating is refused at the step (no request is written).
 - **No session** → a job that does not need iOS runs in the daemon as before; `submit` / `lease` refuse a `needs-ios` job with `ios build: needs a login of <account>`, a queued one refuses at its start, `probe` says
   `cap_ios=no` with the same words (ahead of the boot check's own answer). A runner kept running as a user service, or by hand, is in a session already: none of this applies.
+- **The link puts the agent in place itself** (`guiAgentHeal.ts`): a Mac paired before the agent existed, or one whose definition a newer version changed, needs no admin line just for
+  that — the agent's definition is the ACCOUNT's own file and its domain is the account's own `gui/<uid>`, so neither writing nor loading it needs root. For a runner whose record
+  says `system-service` (a kind written on macOS only), the link looks when it starts — an update restarts it too — and once an hour (`guiAgentHealIntervalMs`), in the background:
+  a missing or different definition is written (the same text `service system-step prepare` renders) and, when the account has a login session, loaded into it; a current one the
+  session does not have loaded is loaded; no session → the file stays, launchd loads it at the next login, and `runners` keeps saying a login is needed. A LOADED older agent is
+  replaced (`bootout`, wait, `bootstrap`) only while Pueue runs no job (or its state cannot be read): its steps are the jobs', so a busy queue leaves the file AND the agent alone and
+  the next look tries again. A failure — the file cannot be written, `launchctl` cannot be asked about the session (anything but «could not find …» for `print gui/<uid>`), `bootstrap`
+  refuses — is kept as ONE line in `<state>/gui/install-failure` (control characters stripped, 160 characters) and `runner.sh` then says
+  «ios build: the login session's agent could not be installed (<reason>) - paste a fresh admin line from /runners in an admin account's terminal» instead of «needs a login of
+  <account>» (the admin line loads it as root). Any other look forgets the record, and so does an agent that starts and `service system-step prepare`. Unverifiable on Linux: what
+  launchd answers a process of the System session that asks for `gui/<uid>` as the account — the decision, every command line and the records are tested against a recording
+  `launchctl` (`runnerUtilityGuiAgentHeal.test.ts`) and a stand-in in the link flow.
 - **The link of an always-on Mac runs no Simulator check** (`checkIsLoginSessionAgentRunner`): the agent does, from the session where the Simulator can boot.
 - **It leaves** with the restart code when an update replaced the package and no step runs (launchd starts it again on the new program), and for good —
   removing its own definition — when its daemons' definitions are gone from `/Library/LaunchDaemons`, which is how it goes away with them.

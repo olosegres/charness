@@ -13,7 +13,8 @@ import * as path from 'path';
  *   env           the operator's KEY=VALUE lines, added to every job's environment
  *   work/         the work dir of remote-run (phase 1); pueue/ the private Pueue; logs/; build/ scratch for the rsync build
  *   awake         how the link keeps the machine awake (`keepAwake.ts`): `caffeinate 123`, `systemd-inhibit 123` or `none <reason>`; read by `runner.sh probe`
- *   gui/          the login session's agent of an always-on Mac (`guiAgent.ts`): `agent.json` its heartbeat, `requests/<id>/` the steps it runs
+ *   gui/          the login session's agent of an always-on Mac (`guiAgent.ts`): `agent.json` its heartbeat, `requests/<id>/` the steps it runs,
+ *                 `install-failure` why the link could not put the agent in place (`guiAgentHeal.ts`; read by `runner.sh`)
  */
 
 const stateDirName = '.charness-runner';
@@ -35,6 +36,8 @@ export interface RunnerHomePaths {
   guiAgentStatus: string;
   /** The steps the login session's agent is asked to run: one folder each (`runner.sh` writes them, the agent answers in them). */
   guiRequestsDir: string;
+  /** One line: why the link could not install the login session's agent itself (`guiAgentHeal.ts`); absent = nothing is wrong. Read by `runner.sh` for what it says of `ios`. */
+  guiInstallFailure: string;
   /** The iOS Simulator boot check's last result (`iosCheck.ts`). Read by `runner.sh probe` as `ios_boot=`. */
   iosCheck: string;
   keysDir: string;
@@ -64,6 +67,7 @@ export function getRunnerHomePaths(homeDir: string = os.homedir()): RunnerHomePa
     awakeFile: path.join(root, 'awake'),
     guiAgentStatus: path.join(root, 'gui', 'agent.json'),
     guiRequestsDir: path.join(root, 'gui', 'requests'),
+    guiInstallFailure: path.join(root, 'gui', 'install-failure'),
     iosCheck: path.join(root, 'ios-check.json'),
     keysDir: path.join(root, 'keys'),
     clientKey: path.join(root, 'keys', 'client_ed25519'),

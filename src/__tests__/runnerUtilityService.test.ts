@@ -15,6 +15,7 @@ import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
 import { writeRunnerConfig, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
+import { readGuiAgentInstallFailure, writeGuiAgentInstallFailure } from '../runnerUtility/guiAgentHeal';
 import { createServiceDeps, installService, parseServiceCommand, readServiceKind, runSystemStep, systemServiceRemovalPointer, uninstallService, type ServiceDeps } from '../runnerUtility/serviceManager';
 import {
   describeLingerRemedy,
@@ -720,6 +721,13 @@ describe('installing and removing the services', () => {
         assert.ok(!parsed.keys.includes('UserName'), 'a LaunchAgent: it runs as whoever is logged in, in that session');
         assert.equal(parsed.strings.get('StandardOutPath'), path.join(runnerPaths.logsDir, 'gui-agent.log'));
         assert.equal(fs.statSync(agentFile).mode & 0o777, 0o644);
+      });
+
+      it('prepare forgets why the link could not put the agent in place itself: the admin step loads it next, and says so itself when it cannot', async () => {
+        pair();
+        writeGuiAgentInstallFailure(runnerPaths, 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)');
+        await runSystemStep('prepare', createDeps(asAccount));
+        assert.equal(readGuiAgentInstallFailure(runnerPaths), null);
       });
 
       it('a re-install is refused while the queue is running jobs — nothing is rewritten, the record and the agent\'s definition stay as they were', async () => {
