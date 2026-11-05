@@ -93,6 +93,12 @@ export interface CreateScheduleArgs {
   checkCommand?: string;
   /** The run timeout of a `'check'` job, in seconds. */
   checkTimeoutSec?: number;
+  /** A `'check'` job's status source: a worker's run directory (exclusive with `statusCommand`). */
+  statusWorkerRunDir?: string;
+  /** A `'check'` job's status source: a command whose first output line is «now» (exclusive with `statusWorkerRunDir`). */
+  statusCommand?: string;
+  /** Minutes between a `'check'` job's status lines. */
+  statusEveryMinutes?: number;
 }
 
 /**
@@ -122,6 +128,9 @@ export function createScheduleRecord(args: CreateScheduleArgs): ScheduleRecord {
   if (args.deliveryKind !== undefined) record.deliveryKind = args.deliveryKind;
   if (args.checkCommand !== undefined) record.checkCommand = args.checkCommand;
   if (args.checkTimeoutSec !== undefined) record.checkTimeoutSec = args.checkTimeoutSec;
+  if (args.statusWorkerRunDir !== undefined) record.statusWorkerRunDir = args.statusWorkerRunDir;
+  if (args.statusCommand !== undefined) record.statusCommand = args.statusCommand;
+  if (args.statusEveryMinutes !== undefined) record.statusEveryMinutes = args.statusEveryMinutes;
   return record;
 }
 

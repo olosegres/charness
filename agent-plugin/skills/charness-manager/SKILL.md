@@ -53,8 +53,9 @@ informed. You never write product code and never review a diff yourself.
 
 ## Watch every worker with a bot check
 
-Right after each launch, create ONE check for that worker run with `schedule_create`: cron `*/10 * * * *`,
-`isPinSilent: true`, a name like `watch <role> <scope>`, and this `checkCommand` with the real PID and run directory:
+Right after each launch, create ONE check for that worker run with `schedule_create`: cron `*/5 * * * *`,
+`isPinSilent: true`, `statusWorkerRunDir: "<run-dir>", statusEveryMinutes: 15`, a name like `watch <role> <scope>`, and this
+`checkCommand` with the real PID and run directory:
 
 ```
 kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(find "<run-dir>" -mmin -45 -print -quit)" ] || { echo "<run-dir>: no change for 45 min"; exit 2; }
@@ -64,6 +65,9 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
   minutes. A check that only runs `kill -0 <pid>` never fires on a hung worker — never arm one.
 - `isPinSilent: true`: the check's alert is pinned, and a worker that simply finished fires it too — a loud pin
   per finished worker would notify the user for nothing. What the user must notice you ask as a question.
+- The status arguments make the BOT post a silent status line into the topic every 15 minutes while the check
+  passes (`⏳ <name> · works 30 min · now: <the worker's last action>`), replacing the previous one — no wake, no
+  tokens, so the topic never looks frozen while you are away. Never arm a schedule of your own for status lines.
 - The run directory is where the worker writes all the time (its event log). A worker that runs one long command
   may write nothing for a while: add the folder that command writes to (`find "<run-dir>" "<test-output-dir>" …`).
 - The check's `prompt` must stand on its own — the wake may reach a resumed or compacted you: the role, the scope
@@ -72,8 +76,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
   event, its exit, the end of its log), then decide: finished → the next step of the loop; stalled → look at its
   last tool call, stop it, resume the same session; stopped by a usage limit → resume it at once on another account
   (Accounts and usage limits).
-- Then cancel the check (`schedule_list` → `schedule_cancel`) — that also unpins its alert, so a finished worker
-  leaves nothing pinned. A new run gets a new check.
+- Then cancel the check (`schedule_list` → `schedule_cancel`) — that also unpins its alert and deletes its status
+  line, so a finished worker leaves nothing behind. A new run gets a new check.
 - Never build your own watcher: no sleep loop, `CronCreate`, `ScheduleWakeup`, background job or tmux pane. They
   live in your process, which the bot stops after an idle stretch.
 

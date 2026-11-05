@@ -4,6 +4,8 @@
  * newest `events*.jsonl` of the run directory, the 1 MiB tail, and every unreadable case answering `null` rather than throwing.
  */
 
+/** Test case: N/A — Charness has no Jira tracker. */
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';

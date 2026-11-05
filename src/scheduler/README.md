@@ -102,3 +102,23 @@ constants in the code; this README keeps what the code cannot say.
   with it. A `dir:` scope — the OpenCode registration of a folder, made once per folder and server run — counts the folder's
   OpenCode topics alone (a Claude topic bound to the same folder has its own `thread:` scope) and keeps the pointer while any
   of them has the skills on; a folder with no OpenCode topic follows the instance value. The tool digest takes the switch too (`getToolDigest(platform, isBotSkillsEnabled)`).
+- **The status line of a passing check** (`checkStatus.ts`, `workerActivity.ts`, `updateCheckStatus` in `delivery.ts`). A
+  check with a status source — `statusWorkerRunDir` (a worker's run directory) XOR `statusCommand` — makes the BOT post one
+  short silent line into the topic («⏳ builder S2 · works 30 min · now: Bash: Run the unit tests») every
+  `statusEveryMinutes` (5–240, default 15; the worker-watch recipe passes 15 and ticks every 5 min, so the line comes every
+  third tick: a line is due an interval LESS A SLACK after the last one — `createdAt` before the first — because a tick
+  lands a few seconds after the minute). It never touches `postToSession`: no agent wake, no tokens, so it keeps coming
+  while the agent is idle, compacting or stopped.
+  - **Source.** «now» is the worker's last text or tool call (whichever came last), read from the newest top-level
+    `events*.jsonl` of the run directory (`events-2.jsonl` of a resume beats `events.jsonl`; mtime decides) — the last
+    1 MiB of it, Claude `stream-json` and OpenCode `--format json` both; or the first output line of an exit-0
+    `statusCommand`. Nothing readable → the line is still posted, without its «now». A relative run directory is read from
+    the bound folder, like a check's cwd.
+  - **One line at a time.** A new line is POSTED silently and recorded (`statusMessageId`, `lastStatusAt`, flushed), then
+    the previous one is deleted (an edit in place would not bump the topic); a failed post changes nothing and the next
+    run tries again; a failure of the whole status path is logged and never fails the check.
+  - **Gate.** `checkIsCheckStatusShown`: a Telegram conversation whose view shows the stream (`stream`, `streamAnswers`).
+    The answers-only view and a tracker conversation (Jira) get nothing — a line present when the topic turns
+    answers-only is deleted at the next run, and the lines resume when it turns back.
+  - **Stop.** The first failure (the worker finished or hung — the alert and the agent wake take over), the job's final run
+    and `schedule_cancel` delete the last line.

@@ -99,6 +99,9 @@ per-backend controls are optional methods the bot checks before calling.
   a WATCHDOG (`deliveryKind: 'check'`, `scheduler/checkRun.ts`): the bot runs the command in the bound
   folder, stays silent while it exits 0, and only the FIRST failure after a pass pins an alert and wakes the
   agent (`isCheckFailing` is stored before the wake, so a restart never repeats it); recovery posts one line.
+  A check with a status source (`statusWorkerRunDir` / `statusCommand`) also posts ONE silent status line per
+  `statusEveryMinutes` (15) while it passes, replacing the previous one — the bot's own message, no agent wake,
+  only in a Telegram topic whose view shows the stream (`scheduler/checkStatus.ts`).
 - **One instance-wide timezone** (`/timezone`) applied through `process.env.TZ`. After a zone change never
   re-arm schedules with the engine's `rearmAll()` (the boot replay would fire bogus catch-ups).
 - **Prompt decoration** happens at ONE choke point, `forwardPromptToAgent`: the `[Telegram thread context]`

@@ -24,6 +24,9 @@ export const maxCheckStatusEveryMinutes = 240;
 /** Longest `statusCommand` accepted (the same bound as `checkCommand`). */
 export const maxCheckStatusCommandLength = 1000;
 
+/** Longest `statusWorkerRunDir` accepted. */
+export const maxCheckStatusRunDirLength = 1000;
+
 /** Seconds a `statusCommand` run may take; a slow probe only costs the «now» part of its line. */
 export const checkStatusCommandTimeoutSec = 15;
 

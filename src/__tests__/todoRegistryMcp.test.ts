@@ -62,6 +62,7 @@ function buildDeps(store: StateStore, answerSinks: AnswerSinks): SchedulerMcpDep
     sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
     compactConversation: () => ({ ok: true, message: 'unused' }),
     unpinMessages: async () => {},
+    deleteMessage: async () => {},
     get todos() {
       return isTodoOffered
         ? {

@@ -81,7 +81,12 @@ import {
 } from './fileSendTestRecorder';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { holdPort } from './e2e/isolatedCharness';
-import { workerWatchCheckCommand, workerWatchCheckCron, workerWatchPinArgument } from '../scheduler/workerWatch';
+import {
+  workerWatchCheckCommand,
+  workerWatchCheckCron,
+  workerWatchPinArgument,
+  workerWatchStatusArguments,
+} from '../scheduler/workerWatch';
 
 /** The plan's budget for the always-loaded orchestration bullet of the Telegram instructions. */
 const maxOrchestrationBulletLength = 450;
@@ -165,6 +170,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
       getThreadsForDirectory: () => [],
       getThreadAdapterName: () => 'claude',
       unpinMessages: async () => {},
+      deleteMessage: async () => {},
       sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
       sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
       compactConversation: () => ({ ok: true, message: 'unused' }),
@@ -208,6 +214,8 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     assert.ok(description.includes(`checkCommand \`${workerWatchCheckCommand}\``), description);
     assert.ok(description.includes(`cron \`${workerWatchCheckCron}\``));
     assert.ok(description.includes(`\`${workerWatchPinArgument}\``), 'a normal worker finish fires the check: its pin must not notify');
+    assert.ok(description.includes(`\`${workerWatchStatusArguments}\``), 'the status arguments: the bot posts the topic\'s status lines');
+    assert.match(description, /never arm a schedule of your own for status lines/);
     assert.match(description, /Never `kill -0` alone/);
   });
 
@@ -314,6 +322,7 @@ describe('createSchedulerMcpServer port binding', () => {
       getThreadsForDirectory: () => [],
       getThreadAdapterName: () => 'claude',
       unpinMessages: async () => {},
+      deleteMessage: async () => {},
       sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
       sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
       compactConversation: () => ({ ok: true, message: 'unused' }),
@@ -790,6 +799,8 @@ interface ServerFixture {
   claudeProfilesCalls: ClaudeProfilesQuery[];
   /** Every `unpinMessages` call the surface made (schedule_cancel of a check that pinned alerts). */
   unpinCalls: Array<{ threadKey: string; messageIds: number[] }>;
+  /** Every `deleteMessage` call the surface made (schedule_cancel of a check that had a status line). */
+  deleteCalls: Array<{ threadKey: string; messageId: number }>;
 }
 
 const mcpSingleMessageId = 301;
@@ -994,6 +1005,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     const messageSendCalls: Array<{ threadKey: string; options: SendMessagesToThreadOptions }> = [];
     const claudeProfilesCalls: ClaudeProfilesQuery[] = [];
     const unpinCalls: Array<{ threadKey: string; messageIds: number[] }> = [];
+    const deleteCalls: Array<{ threadKey: string; messageId: number }> = [];
     const defaultSendMessagesToThread: SendMessagesToThread = async (threadKey, options) => {
       if (threadKey !== threadAKey) return { ok: false, error: `invalid threadKey "${threadKey}"` };
       return { ok: true, summary: `Delivered ${options.messages.length} messages to the topic.`, undeliveredCount: 0, sentMessageIds: [] };
@@ -1012,6 +1024,9 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       getThreadAdapterName: () => 'claude',
       unpinMessages: async (threadKey, messageIds) => {
         unpinCalls.push({ threadKey, messageIds: [...messageIds] });
+      },
+      deleteMessage: async (threadKey, messageId) => {
+        deleteCalls.push({ threadKey, messageId });
       },
       sendFilesToThread,
       sendMessagesToThread,
@@ -1054,6 +1069,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       armed,
       claudeProfilesCalls,
       unpinCalls,
+      deleteCalls,
       disarmed,
       boundThreads,
       fileWorkDir,
@@ -2053,6 +2069,109 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     await client.close();
   });
 
+  it('thread-scope: a worker watch with statusWorkerRunDir keeps its status source and its interval, and list shows it', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const result = await client.callTool({
+      name: 'schedule_create',
+      arguments: {
+        name: 'watch builder S2',
+        cron: '*/5 * * * *',
+        prompt: 'Read the worker result.',
+        checkCommand: 'kill -0 4242',
+        statusWorkerRunDir: '  /runs/builder-s2  ',
+        statusEveryMinutes: 30,
+      },
+    });
+    assert.notEqual(result.isError, true, firstText(result));
+    const record = fixture.armed.find((r) => r.name === 'watch builder S2');
+    assert.ok(record);
+    assert.equal(record.deliveryKind, 'check');
+    assert.equal(record.statusWorkerRunDir, '/runs/builder-s2');
+    assert.equal(record.statusEveryMinutes, 30);
+    assert.equal(record.statusCommand, undefined);
+    assert.match(firstText(result), /status every 30 min/);
+    assert.match(firstText(await client.callTool({ name: 'schedule_list', arguments: {} })), /status every 30 min/);
+    await client.close();
+  });
+
+  it('thread-scope: a status source without statusEveryMinutes defaults to 15 minutes (the record leaves it unset)', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const result = await client.callTool({
+      name: 'schedule_create',
+      arguments: { name: 'Build progress', cron: '*/5 * * * *', prompt: 'p', checkCommand: 'true', statusCommand: 'tail -n 1 build.log' },
+    });
+    assert.notEqual(result.isError, true, firstText(result));
+    const record = fixture.armed.find((r) => r.name === 'Build progress');
+    assert.ok(record);
+    assert.equal(record.statusCommand, 'tail -n 1 build.log');
+    assert.equal(record.statusEveryMinutes, undefined);
+    assert.match(firstText(result), /status every 15 min/);
+    await client.close();
+  });
+
+  it('thread-scope: both status sources is a tool error and nothing is scheduled', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const armedBefore = fixture.armed.length;
+    const result = await client.callTool({
+      name: 'schedule_create',
+      arguments: { name: 'Both', cron: '*/5 * * * *', prompt: 'p', checkCommand: 'true', statusWorkerRunDir: '/runs/a', statusCommand: 'echo x' },
+    });
+    assert.equal(result.isError, true);
+    assert.match(firstText(result), /ONE status source/);
+    assert.equal(fixture.armed.length, armedBefore, 'nothing was armed');
+    await client.close();
+  });
+
+  it('thread-scope: status fields without checkCommand, or an interval without a source, are ignored with a note', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+
+    const withoutCheck = await client.callTool({
+      name: 'schedule_create',
+      arguments: { name: 'Plain status', cron: '0 9 * * *', prompt: 'p', statusWorkerRunDir: '/runs/a', statusEveryMinutes: 20 },
+    });
+    assert.notEqual(withoutCheck.isError, true, firstText(withoutCheck));
+    assert.match(firstText(withoutCheck), /statusWorkerRunDir \/ statusCommand was ignored/);
+    assert.match(firstText(withoutCheck), /statusEveryMinutes was ignored/);
+    const plain = fixture.armed.find((r) => r.name === 'Plain status');
+    assert.ok(plain);
+    assert.equal(plain.statusWorkerRunDir, undefined);
+    assert.equal(plain.statusEveryMinutes, undefined);
+    assert.doesNotMatch(firstText(withoutCheck), /status every/);
+
+    const withoutSource = await client.callTool({
+      name: 'schedule_create',
+      arguments: { name: 'Plain check', cron: '*/5 * * * *', prompt: 'p', checkCommand: 'true', statusEveryMinutes: 20 },
+    });
+    assert.notEqual(withoutSource.isError, true, firstText(withoutSource));
+    assert.match(firstText(withoutSource), /statusEveryMinutes was ignored/);
+    assert.equal(fixture.armed.find((r) => r.name === 'Plain check')?.statusEveryMinutes, undefined);
+    await client.close();
+  });
+
+  it('thread-scope: statusEveryMinutes is a whole number of 5 to 240 minutes', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    for (const statusEveryMinutes of [4, 241, 7.5]) {
+      const result = await client.callTool({
+        name: 'schedule_create',
+        arguments: { name: `Interval ${statusEveryMinutes}`, cron: '*/5 * * * *', prompt: 'p', checkCommand: 'true', statusWorkerRunDir: '/runs/a', statusEveryMinutes },
+      });
+      assert.equal(result.isError, true, `${statusEveryMinutes} is refused`);
+    }
+    for (const statusEveryMinutes of [5, 240]) {
+      const result = await client.callTool({
+        name: 'schedule_create',
+        arguments: { name: `Interval ${statusEveryMinutes}`, cron: '*/5 * * * *', prompt: 'p', checkCommand: 'true', statusWorkerRunDir: '/runs/a', statusEveryMinutes },
+      });
+      assert.notEqual(result.isError, true, `${statusEveryMinutes} is accepted: ${firstText(result)}`);
+    }
+    await client.close();
+  });
+
   it('thread-scope: create with a mismatching threadKey arg errors', async () => {
     const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
     const client = await buildClient(fixture.handle.port, token);
@@ -2247,6 +2366,46 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
 
     await client.callTool({ name: 'schedule_cancel', arguments: { id: plain.id } });
     assert.equal(fixture.unpinCalls.length, 1, 'nothing to unpin');
+    await client.close();
+  });
+
+  it('schedule_cancel of a check deletes its status line; with alert pins too, it says both; a job without a line deletes nothing', async () => {
+    const watch = await seedThreadSchedule('watch builder S3');
+    await fixture.store.upsertSchedule({
+      ...watch,
+      deliveryKind: 'check',
+      checkCommand: 'kill -0 1',
+      statusWorkerRunDir: '/runs/a',
+      statusMessageId: 733,
+    });
+    const alerted = await seedThreadSchedule('watch builder S4');
+    await fixture.store.upsertSchedule({
+      ...alerted,
+      deliveryKind: 'check',
+      checkCommand: 'kill -0 2',
+      statusWorkerRunDir: '/runs/b',
+      statusMessageId: 734,
+      alertPinMessageIds: [601],
+    });
+    const plain = await seedThreadSchedule('Check the deploy');
+
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+
+    const first = await client.callTool({ name: 'schedule_cancel', arguments: { id: watch.id } });
+    assert.notEqual(first.isError, true, firstText(first));
+    assert.equal(firstText(first), `Cancelled "watch builder S3" (id: ${watch.id}); its status line deleted.`);
+    assert.deepEqual(fixture.deleteCalls, [{ threadKey: watch.threadKey, messageId: 733 }]);
+    assert.deepEqual(fixture.unpinCalls, []);
+
+    const second = await client.callTool({ name: 'schedule_cancel', arguments: { id: alerted.id } });
+    assert.equal(firstText(second), `Cancelled "watch builder S4" (id: ${alerted.id}); its 1 pinned alert(s) unpinned; its status line deleted.`);
+    assert.deepEqual(fixture.unpinCalls, [{ threadKey: alerted.threadKey, messageIds: [601] }]);
+    assert.deepEqual(fixture.deleteCalls.map((call) => call.messageId), [733, 734]);
+
+    const third = await client.callTool({ name: 'schedule_cancel', arguments: { id: plain.id } });
+    assert.equal(firstText(third), `Cancelled "Check the deploy" (id: ${plain.id}).`);
+    assert.equal(fixture.deleteCalls.length, 2, 'a job without a status line deletes nothing');
     await client.close();
   });
 

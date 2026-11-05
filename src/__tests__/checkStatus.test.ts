@@ -4,6 +4,8 @@
  * final-run rule, the ONE gate that decides whether a topic shows lines, and the line's text.
  */
 
+/** Test case: N/A — Charness has no Jira tracker. */
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 

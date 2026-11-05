@@ -13,7 +13,12 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { workerWatchCheckCommand, workerWatchCheckCron, workerWatchPinArgument } from '../scheduler/workerWatch';
+import {
+  workerWatchCheckCommand,
+  workerWatchCheckCron,
+  workerWatchPinArgument,
+  workerWatchStatusArguments,
+} from '../scheduler/workerWatch';
 
 const pluginDir = path.resolve(__dirname, '..', '..', 'agent-plugin');
 const skillsDir = path.join(pluginDir, 'skills');
@@ -75,6 +80,8 @@ describe('agent-plugin', () => {
     assert.ok(text.includes(workerWatchCheckCommand), 'the checkCommand');
     assert.ok(text.includes(`cron \`${workerWatchCheckCron}\``), 'the cron');
     assert.ok(text.includes(`\`${workerWatchPinArgument}\``), 'the silent pin: a normal finish fires the check');
+    assert.ok(text.includes(`\`${workerWatchStatusArguments}\``), 'the status arguments: the bot posts the topic\'s status line itself');
+    assert.match(text, /Never arm a schedule of your own for status lines/);
   });
 
   test('both delegate skills check the recorded PID is the worker before the watch is armed on it', () => {

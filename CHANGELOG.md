@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**A watch on a worker now keeps its topic alive: while the worker runs, the bot posts a short silent status line every 15 minutes, so the topic never looks frozen while the agent is away.**
+Before, a watch on a detached worker said nothing for as long as the worker ran — a builder that worked 7 hours overnight left its topic without a message for 7 hours, and the only remedy was a schedule that woke the manager agent every 50 minutes (tokens and context spent per heartbeat, and nothing posted while the agent compacts).
+Now:
+  - The bot itself posts the line — «⏳ builder S2 · works 30 min · now: Bash: Run the unit tests» — every 15 minutes while the watch passes, with no agent wake and no tokens, so it keeps coming while the agent is idle, compacting or stopped. It is sent silently and never pinned, and each new line replaces the previous one (posted first, the old one deleted), so the topic holds one line at the bottom of the activity.
+  - «now» is the worker's last text or tool call, read from the newest `events*.jsonl` in its run directory, for Claude Code (`stream-json`) and OpenCode (`--format json`) workers; a worker that hangs shows as a «now» that does not change, and the 45-minute stall alert still fires.
+  - The line stops when the check fails (the worker finished or hung — the existing alert and agent wake take over) or is cancelled, and its last line is deleted with it. A topic on the answers-only view, and a Jira issue, get no line.
+  - Any check can opt in: `schedule_create` takes `statusWorkerRunDir` (a worker's run directory) or `statusCommand` (its first output line is «now»), and `statusEveryMinutes` (5–240, default 15), together with `checkCommand`. The worker-watch recipe in the bot's tool texts and in the `charness-manager` skill passes them and now ticks every 5 minutes instead of 10, so an exited worker is noticed within 5 minutes.
+
 **A voice note sent while the machine is busy is no longer lost to «the local engine was not ready in 15 s» — the voice now waits for the local engine to finish loading.**
 Before, the bot gave up on the local speech engine 15 seconds after starting it; the model load takes 2–3 seconds on an idle machine but longer than that on a busy one, so the engine was killed unfinished, the voice failed, and the next voice began the load from zero — it failed the same way, again and again.
 Now:

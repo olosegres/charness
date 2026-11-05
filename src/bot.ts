@@ -13831,6 +13831,10 @@ function createSessionPostDeps(): PostToSessionDeps {
 function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
   const { jiraConnector } = wiring;
   const ledger = new RunLedger();
+  // The status line of a check and its cancel go through the same best-effort delete.
+  const deleteScheduleMessage = async (threadKeyStr: string, messageId: number): Promise<void> => {
+    await deleteThreadMessage(keyFromString(threadKeyStr), messageId);
+  };
   const delivery = createScheduleDelivery({
     ...createSessionPostDeps(),
     announce: (threadKeyStr, text) => replyToThread(keyFromString(threadKeyStr), text),
@@ -13869,9 +13873,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     },
     // The status line is the bot's own message: silent (a heartbeat must never notify) and never pinned. Nothing here reaches an agent.
     postStatus: (threadKeyStr, text) => replyToThread(keyFromString(threadKeyStr), text, { disable_notification: true }),
-    deleteMessage: async (threadKeyStr, messageId) => {
-      await deleteThreadMessage(keyFromString(threadKeyStr), messageId);
-    },
+    deleteMessage: deleteScheduleMessage,
     readWorkerActivity: async (threadKeyStr, runDir) => {
       const decision = resolveBoundWorkDir(ENV.workRoot, state.getBinding(keyFromString(threadKeyStr)));
       // A relative run directory is read from the bound folder, like a check command's working directory.
@@ -13935,6 +13937,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       const key = keyFromString(threadKeyStr);
       for (const messageId of messageIds) await unpinMessageQuiet(key, messageId);
     },
+    deleteMessage: deleteScheduleMessage,
     // Routed through the outbound seam: the agent-facing file tool is a
     // connector delivery, not a direct call into the Telegram send pipeline.
     // The MCP surface is string-keyed (its `threadKey` arrives as text), so the

@@ -26,8 +26,23 @@ import {
 } from '../utils/messageSendService';
 import { getAbortError } from '../utils';
 import { defaultCheckTimeoutSec, maxCheckCommandLength, maxCheckTimeoutSec } from './checkRun';
+import {
+  checkStatusCommandTimeoutSec,
+  defaultCheckStatusEveryMinutes,
+  maxCheckStatusCommandLength,
+  maxCheckStatusEveryMinutes,
+  maxCheckStatusRunDirLength,
+  minCheckStatusEveryMinutes,
+} from './checkStatus';
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
-import { workerWatchCheckCommand, workerWatchCheckCron, workerWatchPinArgument } from './workerWatch';
+import {
+  workerWatchCheckCommand,
+  workerWatchCheckCron,
+  workerWatchPinArgument,
+  workerWatchStatusArguments,
+  workerWatchStatusEveryMinutes,
+  workerWatchStatusRunDirArgumentName,
+} from './workerWatch';
 import { describeSchedule, validateScheduleSpec } from './recurrence';
 import { createStrictToolInput, getUnknownKeysMessageOfUnion, runWithRefusalLogging, type StrictToolInput } from './strictToolInput';
 import { createScheduleForThread } from './store';
@@ -167,7 +182,7 @@ function buildRemoteRunInstruction(runnerLines: readonly string[], shownCount: n
 const orchestrationInstructionHead = '• You orchestrate detached workers (a `claude -p` / `opencode run` builder, reviewer, researcher) →';
 /** What the worker-watch recipe says once a tool is named: shared by both wordings of the Telegram bullet. */
 const workerWatchRecipeText =
-  `its description has the recipe (checkCommand, cron, \`${workerWatchPinArgument}\`); never \`kill -0\` alone: it never fires on a hung worker.`;
+  `its description has the recipe (checkCommand, cron, \`${workerWatchPinArgument}\`, \`${workerWatchStatusRunDirArgumentName}\`); never \`kill -0\` alone: it never fires on a hung worker.`;
 
 /**
  * The orchestration bullet of a conversation on a tracker, which has no scheduling tools: only the manager-skill hint, so
@@ -441,6 +456,8 @@ export interface SchedulerMcpDeps {
   getThreadAdapterName: (threadKey: string) => string | undefined;
   /** Unpin these messages of the thread (best-effort: an already unpinned or deleted one is skipped). */
   unpinMessages: (threadKey: string, messageIds: readonly number[]) => Promise<void>;
+  /** Delete a message of the thread (best-effort: one that is gone or too old to delete is skipped) — a cancelled check's status line. */
+  deleteMessage: (threadKey: string, messageId: number) => Promise<void>;
   /**
    * Send 1..10 files/images from the thread's bound folder back into the topic.
    * Path-safety, type classification, and the album/size decision live in the
@@ -736,6 +753,36 @@ const scheduleCreateShape = {
       `Seconds a check run may take before it is stopped and counted as a failure (default ${defaultCheckTimeoutSec}). ` +
         'Only with checkCommand.',
     ),
+  statusWorkerRunDir: z
+    .string()
+    .max(maxCheckStatusRunDirLength)
+    .optional()
+    .describe(
+      'A check\'s STATUS SOURCE for a detached worker: its run directory (absolute, or relative to the bound folder). While the ' +
+        'check passes, the BOT itself posts a short silent status line into the topic every statusEveryMinutes — how long the ' +
+        'worker has run and what it did last (its last text or tool call, read from the newest events*.jsonl there) — and ' +
+        'deletes the previous one. No agent wake, no tokens. Only with checkCommand; not together with statusCommand. ' +
+        'A topic on the answers-only view, and a tracker issue, get no line.',
+    ),
+  statusCommand: z
+    .string()
+    .max(maxCheckStatusCommandLength)
+    .optional()
+    .describe(
+      'A check\'s STATUS SOURCE for anything else: a shell command (run in the bound folder, at most ' +
+        `${checkStatusCommandTimeoutSec} s) whose first output line is the «now» of the same bot-posted status line ` +
+        '(e.g. `tail -n 1 build.log`). Only with checkCommand; not together with statusWorkerRunDir.',
+    ),
+  statusEveryMinutes: z
+    .number()
+    .int()
+    .min(minCheckStatusEveryMinutes)
+    .max(maxCheckStatusEveryMinutes)
+    .optional()
+    .describe(
+      `Minutes between two status lines (${minCheckStatusEveryMinutes}-${maxCheckStatusEveryMinutes}, default ${defaultCheckStatusEveryMinutes}). ` +
+        'Only with a status source.',
+    ),
   isPinSilent: z
     .boolean()
     .optional()
@@ -966,7 +1013,9 @@ function summarizeRecord(record: ScheduleRecord): string {
   const checkNote = checkIsCheckSchedule(record)
     ? `; check: \`${record.checkCommand ?? ''}\` (${record.isCheckFailing ? 'FAILING' : 'passing'})`
     : '';
-  return `${record.name} (id: ${record.id}) — ${describeSchedule(record.spec)}${checkNote}; next run: ${next}${pausedNote}`;
+  const hasStatusSource = record.statusWorkerRunDir !== undefined || record.statusCommand !== undefined;
+  const statusNote = hasStatusSource ? `; status every ${record.statusEveryMinutes ?? defaultCheckStatusEveryMinutes} min` : '';
+  return `${record.name} (id: ${record.id}) — ${describeSchedule(record.spec)}${checkNote}${statusNote}; next run: ${next}${pausedNote}`;
 }
 
 // ─── tool handlers (scope-bound) ─────────────────────────────────────
@@ -1003,10 +1052,13 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
         'background loop, nohup, a sleep loop, a tmux pane, a shell crontab) — it dies with your session ' +
         'or a restart and then fails silently.\n\n' +
         `A DETACHED WORKER you launched (a \`claude -p\` / \`opencode run\` process): cron \`${workerWatchCheckCron}\`, ` +
-        `\`${workerWatchPinArgument}\`, checkCommand \`${workerWatchCheckCommand}\` with its PID and run dir — it fails when ` +
+        `\`${workerWatchPinArgument}\`, \`${workerWatchStatusArguments}\`, checkCommand \`${workerWatchCheckCommand}\` with its PID and run dir — it fails when ` +
         'the worker exits OR nothing in its run dir changed for 45 min, so the first failure is also the "worker finished" ' +
         'signal (hence the silent pin: a normal finish must not notify the user). Never `kill -0` alone: it stays green ' +
-        'while a worker hangs. One check per worker run; schedule_cancel it once its wake is handled.',
+        'while a worker hangs. The status arguments make the BOT post a silent status line into the topic every ' +
+        `${workerWatchStatusEveryMinutes} min while the worker lives (works N min, its last action), so the topic never looks frozen — ` +
+        'without waking you or spending tokens: never arm a schedule of your own for status lines. One check per worker run; ' +
+        'schedule_cancel it once its wake is handled (that also deletes its status line).',
       inputSchema: scheduleCreateInput,
     },
     async (args) => {
@@ -1025,9 +1077,22 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
       }
 
       const checkCommand = normalizeOptionalArg(args.checkCommand);
+      const statusWorkerRunDir = normalizeOptionalArg(args.statusWorkerRunDir);
+      const statusCommand = normalizeOptionalArg(args.statusCommand);
+      if (statusWorkerRunDir !== undefined && statusCommand !== undefined) {
+        return errorResult('statusWorkerRunDir and statusCommand are alternatives — pass ONE status source.');
+      }
       const notes = built.note ? [built.note] : [];
       if (!checkCommand && args.checkTimeoutSeconds !== undefined) {
         notes.push('checkTimeoutSeconds was ignored — it only applies with checkCommand.');
+      }
+      const hasStatusSource = statusWorkerRunDir !== undefined || statusCommand !== undefined;
+      if (!checkCommand && hasStatusSource) {
+        notes.push('statusWorkerRunDir / statusCommand was ignored — a status line only comes with checkCommand.');
+      }
+      const isStatusKept = checkCommand !== undefined && hasStatusSource;
+      if (args.statusEveryMinutes !== undefined && !isStatusKept) {
+        notes.push('statusEveryMinutes was ignored — it only applies with checkCommand and a status source (statusWorkerRunDir or statusCommand).');
       }
 
       const created = await createScheduleForThread(deps.store, {
@@ -1042,6 +1107,7 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
         ...(checkCommand
           ? { deliveryKind: 'check' as const, checkCommand, checkTimeoutSec: args.checkTimeoutSeconds }
           : {}),
+        ...(isStatusKept ? { statusWorkerRunDir, statusCommand, statusEveryMinutes: args.statusEveryMinutes } : {}),
       });
       if (!created.ok) {
         // The cap counts only the agent-prompt jobs `schedule_list` shows, so the
@@ -1099,8 +1165,8 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
       title: 'Cancel a scheduled prompt',
       description:
         'Cancel (delete) a scheduled prompt by its id. Only schedules owned by this topic can be cancelled. Cancelling a ' +
-        'watchdog check also unpins the alerts it pinned — cancel a worker watch once its wake is handled, so a finished ' +
-        'worker leaves no pinned alert behind.',
+        'watchdog check also unpins the alerts it pinned and deletes its status line — cancel a worker watch once its wake ' +
+        'is handled, so a finished worker leaves no pinned alert and no status line behind.',
       inputSchema: scheduleCancelInput,
     },
     async (args) => {
@@ -1119,10 +1185,19 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
 
       await deps.store.removeSchedule(args.id);
       deps.disarmJob(args.id);
+      const cleanedUp: string[] = [];
       const alertPins = record.alertPinMessageIds ?? [];
-      if (alertPins.length === 0) return textResult(`Cancelled "${record.name}" (id: ${record.id}).`);
-      await deps.unpinMessages(record.threadKey, alertPins);
-      return textResult(`Cancelled "${record.name}" (id: ${record.id}); its ${alertPins.length} pinned alert(s) unpinned.`);
+      if (alertPins.length > 0) {
+        await deps.unpinMessages(record.threadKey, alertPins);
+        cleanedUp.push(`its ${alertPins.length} pinned alert(s) unpinned`);
+      }
+      // A "⏳ works …" line left under a cancelled watch would be wrong: the watch no longer says anything.
+      if (record.statusMessageId !== undefined) {
+        await deps.deleteMessage(record.threadKey, record.statusMessageId);
+        cleanedUp.push('its status line deleted');
+      }
+      const cleanupNote = cleanedUp.length > 0 ? `; ${cleanedUp.join('; ')}` : '';
+      return textResult(`Cancelled "${record.name}" (id: ${record.id})${cleanupNote}.`);
     },
   );
 }

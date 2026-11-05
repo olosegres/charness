@@ -105,6 +105,7 @@ async function startFixture(): Promise<Fixture> {
     getThreadsForDirectory: () => [],
     getThreadAdapterName: () => 'claude',
     unpinMessages: async () => {},
+    deleteMessage: async () => {},
     sendFilesToThread: (threadKey, options) => {
       toolBodyCalls.push('sendFilesToThread');
       return sendFilesToThread(threadKey, options);
