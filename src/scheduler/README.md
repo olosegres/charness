@@ -23,7 +23,8 @@ constants in the code; this README keeps what the code cannot say.
   with buttons.
 - Leaving a folder pauses the thread's AGENT-PROMPT jobs only (`getUnboundPausableSchedules`; a reminder needs
   neither folder nor agent); `/bind` resumes them from now, and an expired one-shot is dropped
-  (`rebindResume.ts`).
+  (`rebindResume.ts`). The pause (`unbindPause.ts`, wired by `bot.ts`) also deletes a parked check's status line: a paused
+  job never runs again, so no run would ever take it away.
 - `schedule_create` is agent-robust (`buildSpecFromCreateArgs`): a one-shot IGNORES a redundant `repeatCount`
   (the model sends `repeatCount:1` to mean "once"; rejecting it made it spiral into absurd counts), blank
   `cron` / `onceAt` count as absent, and a structural error echoes the whole 3-mode recipe. A single future run
@@ -120,5 +121,7 @@ constants in the code; this README keeps what the code cannot say.
   - **Gate.** `checkIsCheckStatusShown`: a Telegram conversation whose view shows the stream (`stream`, `streamAnswers`).
     The answers-only view and a tracker conversation (Jira) get nothing — a line present when the topic turns
     answers-only is deleted at the next run, and the lines resume when it turns back.
-  - **Stop.** The first failure (the worker finished or hung — the alert and the agent wake take over), the job's final run
-    and `schedule_cancel` delete the last line.
+  - **Stop.** The first failure (the worker finished or hung — the alert and the agent wake take over), the job's final run,
+    `schedule_cancel` and the topic leaving its folder (`/unbind`: `pauseSchedulesOnUnbind` parks the job BEFORE any run, so
+    the pause itself deletes the line) delete the last line; a run that finds the topic unbound without an `/unbind` does
+    too. All of them go through the one `clearCheckStatusLine`.

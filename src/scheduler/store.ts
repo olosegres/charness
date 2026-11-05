@@ -4,6 +4,7 @@ import { keyToString, type SessionKey } from '../sessionKey';
 import { checkIsReminderSchedule } from './deliveryKind';
 import { getNextRunAt } from './recurrence';
 import type {
+  CheckStatusLine,
   ScheduleCreatedBy,
   ScheduleDeliveryKind,
   ScheduleRecord,
@@ -170,4 +171,30 @@ export async function createScheduleForThread(
   const record = createScheduleRecord(args);
   await store.upsertSchedule(record);
   return { ok: true, record };
+}
+
+/**
+ * @description Persist the status line a check job now has in its topic (`null`: it has none — only `statusMessageId` goes; the
+ * `lastStatusAt` of the last line stays, it times the next one). Checked and written in ONE locked step
+ * ({@link StateStore.updateScheduleIfPresent}), so a cancel that removes the job meanwhile is never undone, and flushed at once
+ * like the alert pin: a line id lost in a crash would leave that line in the topic for good. Resolves `false` when the job is
+ * gone.
+ */
+export async function recordCheckStatusLine(
+  store: Pick<StateStore, 'updateScheduleIfPresent' | 'flush'>,
+  jobId: string,
+  line: CheckStatusLine | null,
+): Promise<boolean> {
+  const isRecorded = await store.updateScheduleIfPresent(jobId, (record) => {
+    const updated: ScheduleRecord = { ...record, updatedAt: new Date().toISOString() };
+    if (line === null) {
+      delete updated.statusMessageId;
+    } else {
+      updated.statusMessageId = line.messageId;
+      updated.lastStatusAt = line.postedAtMs;
+    }
+    return updated;
+  });
+  if (isRecorded) await store.flush();
+  return isRecorded;
 }

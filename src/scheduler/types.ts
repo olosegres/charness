@@ -161,3 +161,9 @@ export interface DeliveryOutcome {
   status: 'delivered' | 'failed';
   error?: string;
 }
+
+/** @name CheckStatusLine @description A status line as the topic holds it: its message and when it was posted. */
+export interface CheckStatusLine {
+  messageId: number;
+  postedAtMs: number;
+}

@@ -23,7 +23,7 @@ import {
 } from './checkStatus';
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import { describeSchedule } from './recurrence';
-import type { DeliveryOutcome, FireContext, ScheduleRecord } from './types';
+import type { CheckStatusLine, DeliveryOutcome, FireContext, ScheduleRecord } from './types';
 import { postToSession, type PostToSessionDeps } from '../postToSession';
 
 /**
@@ -106,12 +106,6 @@ export interface ScheduleDeliveryDeps extends PostToSessionDeps {
   recordStatusLine: (jobId: string, line: CheckStatusLine | null) => Promise<boolean>;
   /** Test seam (`CHARNESS_TEST_TIMINGS`): the status interval in place of the job's `statusEveryMinutes`. */
   statusIntervalOverrideMs?: number;
-}
-
-/** @name CheckStatusLine @description A status line as the topic holds it: its message and when it was posted. */
-export interface CheckStatusLine {
-  messageId: number;
-  postedAtMs: number;
 }
 
 /**
@@ -239,11 +233,16 @@ async function deliverToAgent(
 }
 
 /**
- * @description Take a job's status line out of the topic and out of its record. The record is cleared first: a crash between
- * the two leaves an orphan line in the topic, never a record that points at a message that was already deleted. Never
- * rejects — the alert of a failed check runs right after it, and a status line must not be able to stop that.
+ * @description Take a job's status line out of the topic and out of its record — the ONE place that does it, for a failed or
+ * unbound run, a topic that stopped showing the stream, a final run, and the `/unbind` pause (`unbindPause.ts`). The record is
+ * cleared first: a crash between the two leaves an orphan line in the topic, never a record that points at a message that was
+ * already deleted. Never rejects — the alert of a failed check runs right after it, and a status line must not be able to stop
+ * that (nor an unbind be stopped by it).
  */
-async function clearCheckStatusLine(deps: ScheduleDeliveryDeps, job: ScheduleRecord): Promise<void> {
+export async function clearCheckStatusLine(
+  deps: Pick<ScheduleDeliveryDeps, 'recordStatusLine' | 'deleteMessage'>,
+  job: Pick<ScheduleRecord, 'id' | 'threadKey' | 'statusMessageId'>,
+): Promise<void> {
   if (job.statusMessageId === undefined) return;
   try {
     await deps.recordStatusLine(job.id, null);
@@ -312,7 +311,8 @@ async function deliverCheck(
   const command = job.checkCommand ?? '';
   const result = await deps.runCheck(job.threadKey, command, timeoutSec * 1000);
   if (!result) {
-    // An unbound topic parks the job, which then never runs again: its last «works …» line would stay frozen under it.
+    // A binding that went without `/unbind` (the unbind itself clears the line when it parks the job — `unbindPause.ts`): the
+    // job is parked right after this and never runs again, so its last «works …» line would stay frozen under it.
     await clearCheckStatusLine(deps, job);
     return { status: 'failed', error: unboundDeliveryError };
   }

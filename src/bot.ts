@@ -356,7 +356,7 @@ import {
   readFileByteRange,
 } from './utils/jsonStreamHost';
 import { RunLedger } from './scheduler/runLedger';
-import { createScheduleDelivery, unboundDeliveryError } from './scheduler/delivery';
+import { createScheduleDelivery, unboundDeliveryError, type ScheduleDeliveryDeps } from './scheduler/delivery';
 import { buildCheckEnv, runCheckCommand } from './scheduler/checkRun';
 import { checkIsCheckStatusShown } from './scheduler/checkStatus';
 import { readWorkerActivity } from './scheduler/workerActivity';
@@ -400,7 +400,8 @@ import { joinPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHea
 import type { OpenRequestState, RequestAlertReason, RequestPromptOutcome } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
-import { getUnboundPausableSchedules } from './scheduler/deliveryKind';
+import { recordCheckStatusLine } from './scheduler/store';
+import { pauseSchedulesOnUnbind } from './scheduler/unbindPause';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './scheduler/types';
 import { decideRetryAction, type RetryAttemptsByKind, classifyAgentApiError, checkIsUsageLimitWindowOver, getUnconfirmedLimitAction, retryRecurrenceGraceMs, unconfirmedLimitProbeDelayMs, usageLimitDefaultMs, resetBufferMs } from './apiErrorRetry';
 import { checkIsReplayablePrompt, decideWedgeRecovery } from './utils/wedgeRecovery';
@@ -6609,27 +6610,41 @@ async function stripWelcomeKeyboards(key: SessionKey, messageIds: readonly numbe
 }
 
 /**
+ * @description The ports the status line's CLEARING runs over — shared by the scheduler's delivery (a failed run, a topic that
+ * stopped showing the stream, the final run) and by the unbind pause, so the one `clearCheckStatusLine` works the same from both.
+ * The delete is best effort (`deleteThreadMessage` never rejects: a message that is gone or too old to delete stays).
+ */
+const checkStatusLinePorts: Pick<ScheduleDeliveryDeps, 'recordStatusLine' | 'deleteMessage'> = {
+  recordStatusLine: (jobId, line) => recordCheckStatusLine(state, jobId, line),
+  deleteMessage: async (threadKeyStr, messageId) => {
+    await deleteThreadMessage(keyFromString(threadKeyStr), messageId);
+  },
+};
+
+/**
  * @description Pause the AGENT-PROMPT schedules owned by `key` because its topic
  * was just unbound (S8): flag each `isPaused` with reason `'unbound'`, disarm its
  * timer, and post ONE notice naming the count (only when > 0). Scheduler pins are
  * NOT touched (user decision: pins accumulate). Returns the number paused so the
  * caller can decide whether anything happened. The engine stays generic — this
- * unbound-specific policy lives here in bot.ts.
+ * unbound-specific policy lives in `scheduler/unbindPause.ts`, wired here.
  *
  * Reminders are EXEMPT ({@link getUnboundPausableSchedules}): they post + pin with
  * no agent and no folder, so pausing them on unbind would break the one kind that
  * could still have fired. A thread holding only reminders pauses nothing and posts
- * no notice.
+ * no notice. A parked check's status line is deleted with the pause (`scheduler/unbindPause.ts`): it never runs
+ * again to take it away.
  */
 async function pauseThreadSchedulesOnUnbind(key: SessionKey): Promise<number> {
-  const records = getUnboundPausableSchedules(state.getThreadSchedules(key));
-  if (records.length === 0) return 0;
-  for (const record of records) {
-    await state.setSchedulePaused(record.id, true, 'unbound');
-    schedulerEngine?.disarmJob(record.id);
-  }
-  await replyToThread(key, t('schedule.pausedUnbound', { count: records.length }));
-  return records.length;
+  return pauseSchedulesOnUnbind(
+    {
+      store: state,
+      disarmJob: (jobId) => schedulerEngine?.disarmJob(jobId),
+      statusLinePorts: checkStatusLinePorts,
+      announcePaused: (count) => replyToThread(key, t('schedule.pausedUnbound', { count })),
+    },
+    key,
+  );
 }
 
 /**
@@ -13837,12 +13852,9 @@ function createSessionPostDeps(): PostToSessionDeps {
 function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
   const { jiraConnector } = wiring;
   const ledger = new RunLedger();
-  // The status line of a check and its cancel go through the same best-effort delete.
-  const deleteScheduleMessage = async (threadKeyStr: string, messageId: number): Promise<void> => {
-    await deleteThreadMessage(keyFromString(threadKeyStr), messageId);
-  };
   const delivery = createScheduleDelivery({
     ...createSessionPostDeps(),
+    ...checkStatusLinePorts,
     announce: (threadKeyStr, text) => replyToThread(keyFromString(threadKeyStr), text),
     pin: async (threadKeyStr, messageId, isSilent) => {
       const key = keyFromString(threadKeyStr);
@@ -13879,27 +13891,10 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     },
     // The status line is the bot's own message: silent (a heartbeat must never notify) and never pinned. Nothing here reaches an agent.
     postStatus: (threadKeyStr, text) => replyToThread(keyFromString(threadKeyStr), text, { disable_notification: true }),
-    deleteMessage: deleteScheduleMessage,
     readWorkerActivity: async (threadKeyStr, runDir) => {
       const decision = resolveBoundWorkDir(ENV.workRoot, state.getBinding(keyFromString(threadKeyStr)));
       // A relative run directory is read from the bound folder, like a check command's working directory.
       return decision.kind === 'proceed' ? readWorkerActivity(path.resolve(decision.workDir, runDir)) : null;
-    },
-    recordStatusLine: async (jobId, line) => {
-      // Checked and written in ONE locked step: a `schedule_cancel` that removes the job meanwhile is never undone.
-      const isRecorded = await state.updateScheduleIfPresent(jobId, (record) => {
-        const updated: ScheduleRecord = { ...record, updatedAt: new Date().toISOString() };
-        if (line === null) {
-          delete updated.statusMessageId;
-        } else {
-          updated.statusMessageId = line.messageId;
-          updated.lastStatusAt = line.postedAtMs;
-        }
-        return updated;
-      });
-      // Saved at once, like the alert pin: a line id lost in a crash would leave that line in the topic for good.
-      if (isRecorded) await state.flush();
-      return isRecorded;
     },
     statusIntervalOverrideMs: ENV.testTimings.checkStatusIntervalMs,
   });
@@ -13944,7 +13939,8 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       const key = keyFromString(threadKeyStr);
       for (const messageId of messageIds) await unpinMessageQuiet(key, messageId);
     },
-    deleteMessage: deleteScheduleMessage,
+    // A cancelled check's status line goes through the same best-effort delete the delivery uses.
+    deleteMessage: checkStatusLinePorts.deleteMessage,
     // Routed through the outbound seam: the agent-facing file tool is a
     // connector delivery, not a direct call into the Telegram send pipeline.
     // The MCP surface is string-keyed (its `threadKey` arrives as text), so the
