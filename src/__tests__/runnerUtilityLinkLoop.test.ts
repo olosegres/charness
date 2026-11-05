@@ -693,6 +693,25 @@ describe('a Mac\'s link and its lid (against the same hub stand-in)', () => {
     assert.deepEqual(hub.linkCommands.commands, ['link lid=closed', 'link', 'link'], 'the second link does not ask the hub for what it refused');
   });
 
+  it('an older hub that is UPDATED while the runner lives is found out by the plain `link` it is still asked: the lid goes back into the request from the next link on', async () => {
+    hub.linkCommands.isOlderHub = true;
+    registry.text = registryTexts.closed;
+    startMacLink();
+    await waitUntil(() => hub.linkChannels.length === 1 && readRunnerStatus(paths)?.state === 'linked', 'the first link, through the plain request', 15_000);
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=closed', 'link']);
+    await waitForLidReports(1);
+    hub.linkCommands.isOlderHub = false;
+    hub.linkChannels[0].close();
+    await waitUntil(() => hub.linkChannels.length === 2, 'the second link', 15_000);
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=closed', 'link', 'link'], 'still the plain request: the runner has not met the new hub yet — its answer to this one does the telling');
+    await waitForLidReports(2);
+    hub.linkChannels[1].close();
+    await waitUntil(() => hub.linkChannels.length === 3, 'the third link', 15_000);
+    assert.deepEqual(hub.linkCommands.commands, ['link lid=closed', 'link', 'link', 'link lid=closed'], 'the marker of the plain link named an epoch: the hub knows the argument now');
+    await waitUntil(() => registry.reads >= 12, 'a few looks of the third link');
+    assert.equal(hub.lidRequests.bodies.length, 2, 'each plain link\'s lid went in a report at its first look; the third link\'s request carried it and the hub said it recorded it');
+  });
+
   it('a ONE-OFF refusal of `link lid=…` by a hub that knows the argument (its plain `link` answer names an epoch) does not turn the lid out of the request for the rest of the process: the next link asks with it again', async () => {
     hub.linkCommands.refuseNextLidLinks = 1;
     registry.text = registryTexts.closed;

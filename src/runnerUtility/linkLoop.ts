@@ -108,7 +108,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
   const stopAfterMs = deps.unconfirmedRemovalStopAfterMs ?? unconfirmedRemovalStopAfterMs;
   const endpoint: HubEndpoint = { host: deps.config.hub.host, port: deps.config.hub.port, user: deps.config.hub.user, hostKey: deps.config.hub.hostKey };
   let installedPackageId = deps.config.packageId;
-  /** Cleared when a hub that does not know the lid argument (its marker names no epoch) took the plain `link` after refusing the one with the lid in it: asking again would only be refused again. */
+  /** Cleared while the hub that answers does not know the lid argument (its marker names no epoch): asking again would only be refused. Set again by the first marker that names one (the hub was updated). */
   let isLinkLidAccepted = true;
   let state: LinkState = 'connecting';
   let stateSinceMs = now();
@@ -154,11 +154,12 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
       answer = await callGate(client, 'link', null, formatLinkCommand(deps.lid === undefined || !isLinkLidAccepted ? null : lidAtConnect));
       if (answer === null && deps.lid !== undefined && isLinkLidAccepted) {
         // Refused. A hub that does not know the argument (an older one) refuses it like any other word — but so does a hub that knows it and had a hiccup, or one that refuses the
-        // runner altogether (it refuses the plain `link` too). So the plain `link` is asked once, and the argument is given up for this process only when the hub that answers it
-        // is shown to be an older one: a marker with an epoch comes from a hub that knows the argument, whatever it did with this one request.
+        // runner altogether (it refuses the plain `link` too). So the plain `link` is asked once; whether the argument is given up is decided from the marker of whatever answers.
         answer = await callGate(client, 'link', null);
-        if (answer !== null && answer.marker.fields.epoch === undefined) isLinkLidAccepted = false;
       }
+      // A marker with an epoch comes from a hub that knows the argument, whatever it did with one request; one without comes from an older hub. Decided from EVERY answer, in both
+      // directions: an older hub that is updated while this runner lives is found out by the plain `link` it is still asked, and the next link carries the lid again.
+      if (answer !== null && deps.lid !== undefined) isLinkLidAccepted = answer.marker.fields.epoch !== undefined;
     } catch (error) {
       client.end();
       return { kind: 'failed', reason: error instanceof Error ? error.message : 'the link request failed' };

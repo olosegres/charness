@@ -274,8 +274,8 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   (a live check with the owner). Hence the rule: **«no login session» is never read off launchd's word alone** — it needs
   «Could not find domain for user gui: <uid>» AND none of `loginwindow` / `Dock` / `Finder` running as the account; every other text, a refusal, a domain launchd calls unknown
   while those processes run, or a `pgrep` that cannot be asked is a FAILURE with the text. A failure — that, the file cannot be written, a `bootstrap` that is refused — is kept as ONE line
-  `<cure> <reason>` in `<state>/gui/install-failure` (control characters stripped, 160 characters). The cure is `login` when the definition is in place (a refused `bootstrap`, an old agent
-  that stays loaded, a session that cannot be asked about while a current file waits): logging out and in as the account loads it, so `runner.sh` says «ios build: the login session's agent
+  `<cure> <reason>` in `<state>/gui/install-failure` (control characters stripped, 160 characters). The cure is `login` when the definition is in place (a refused `bootstrap`, a session that
+  cannot be asked about while a current file waits): logging out and in as the account loads it, so `runner.sh` says «ios build: the login session's agent
   could not be loaded (<reason>) - log out and back in as <account>, or paste a fresh admin line from /runners in an admin account's terminal»; and `admin` when it is not (a file that
   cannot be written, or an old agent that does not stop when it is replaced — its OLD definition is put back then, so the next look replaces again instead of finding a current file beside a
   loaded agent): «… could not be installed (<reason>) - paste a fresh admin line …» (the admin line loads it as root). Any other look forgets the record, and so does an agent that
