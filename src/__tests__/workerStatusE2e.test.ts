@@ -175,6 +175,15 @@ function getReportedMinutes(line: FakeTelegramMessage): number {
   return Number.parseInt(match[1], 10);
 }
 
+/**
+ * The check runs of the watch that STARTED between two instants, from the run ledger's begin records (a fire writes one before
+ * its delivery, so the run that posted a line is already counted when the line is seen; its end record is not).
+ */
+function countRunsStartedBetween(afterMs: number, beforeMs: number): number {
+  return readJsonLines<ScheduleRunRecord>(path.join(getLayout().dataDir, 'scheduler-runs.jsonl'))
+    .filter((run) => run.jobId === watchId && run.deliveredAt === undefined && run.firedAt > afterMs && run.firedAt < beforeMs).length;
+}
+
 /** The check runs of the watch that have finished, started after `sinceMs`, from the run ledger. */
 function countFinishedRunsSince(sinceMs: number): number {
   return readJsonLines<ScheduleRunRecord>(path.join(getLayout().dataDir, 'scheduler-runs.jsonl'))
@@ -288,13 +297,19 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
     fs.utimesSync(resumedLogPath, newerAt, newerAt);
 
     secondLine = await waitForNewStatusLine('the second status line');
+    const secondLineSeenAtMs = Date.now();
     assert.match(secondLine.text, new RegExp(`^${statusLinePrefix}\\d+ min · now: bash: Lint the sources$`), secondLine.text);
     assert.ok(getReportedMinutes(secondLine) > getReportedMinutes(firstLine), 'the elapsed time counts from the watch\'s creation and grows');
     assertSilentAndUnpinned(secondLine);
 
     await getCharness().waitFor('the first line to be deleted', replyTimeoutMs, () => fakeTelegram.getMessage(firstLine.message_id)?.isDeleted === true);
     assert.deepEqual(listVisibleStatusLines().map((line) => line.message_id), [secondLine.message_id], 'one line at a time, at the bottom');
-    assert.ok(countFinishedRunsSince(firstLineSeenAtMs) >= 1, 'a check run passed between the two lines without posting one: the interval holds');
+    // Between the sightings: the run that posted line 2 and, when the interval holds, the tick before it that passed and posted
+    // nothing. With every run posting (no interval) line 2 would come from the very next tick and this would count ONE.
+    assert.ok(
+      countRunsStartedBetween(firstLineSeenAtMs, secondLineSeenAtMs) >= 2,
+      'a check run passed between the two lines without posting one: the interval holds',
+    );
     assert.equal(countStatusPosts(), 2, 'two lines were posted in all');
     assert.equal(countAgentPrompts(), promptsAfterArming, 'still no agent turn');
   });
