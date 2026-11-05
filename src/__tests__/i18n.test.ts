@@ -26,6 +26,7 @@ import {
 import type { Locale } from '../i18n';
 import { enDict } from '../i18n/en';
 import { reminderTextMaxLength } from '../utils/reminderWizard';
+import { buildCheckStatusLine } from '../scheduler/checkStatus';
 
 test('default active locale is English', () => {
   assert.equal(defaultLocale, 'en');
@@ -1350,5 +1351,30 @@ test('the /runners keys exist in every locale and keep their placeholders', () =
       const template = getKeyInLang(locale, code) ?? '';
       for (const placeholder of placeholders) assert.ok(template.includes(placeholder), `${code} in ${locale} lost ${placeholder}`);
     }
+  }
+});
+
+test('the status line of a passing check: its keys exist in every locale, keep their placeholders, and the whole line renders', () => {
+  const placeholdersByKey: Record<string, string[]> = {
+    'schedule.statusLineText': ['{name}', '{elapsed}', '{activity}'],
+    'schedule.statusLineActivity': ['{activity}'],
+    'schedule.statusElapsedMinutes': ['{minutes}'],
+    'schedule.statusElapsedHours': ['{hours}', '{minutes}'],
+  };
+  for (const [code, placeholders] of Object.entries(placeholdersByKey)) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+    for (const locale of localeCodes) {
+      const template = getKeyInLang(locale, code) ?? '';
+      for (const placeholder of placeholders) assert.ok(template.includes(placeholder), `${code} in ${locale} lost ${placeholder}`);
+    }
+  }
+  const minutesPerHour = 60;
+  const msPerMinute = 60_000;
+  for (const locale of localeCodes) {
+    const line = runWithLocale(locale, () => buildCheckStatusLine({ name: 'watch builder S2', elapsedMs: (minutesPerHour + 15) * msPerMinute, activity: 'Edit: a.ts' }));
+    assert.ok(line.startsWith('⏳ builder S2'), `${locale}: "${line}"`);
+    assert.ok(line.includes('Edit: a.ts'), `${locale} lost the activity: "${line}"`);
+    assert.ok(line.includes('15'), `${locale} lost the minutes: "${line}"`);
+    assert.ok(!line.includes('{'), `placeholder not substituted in ${locale}: "${line}"`);
   }
 });
