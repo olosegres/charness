@@ -104,15 +104,33 @@ and starts or waits for a start like any ask. A failed warm-up leaves one line, 
 **What the topic shows meanwhile.** A warm engine answers within a couple of seconds and the topic shows nothing before the 🎤 echo.
 When the text is not there `voiceProgressNoteDelayMs` (3 s) after the voice ARRIVED — the wait in the topic's voice queue behind an
 earlier voice counts, so that voice gets its note too — the bot posts a SILENT, unpaced «🎙 Transcribing the voice message…» note
-(`voice.transcribing`; the only «transcribing» state there is: no typing action). The note is deleted, also unpaced, the moment the
-chain returns — text or failure — and that delete is sent BEFORE the echo or the failure notice, so the note never outlives the answer behind queued agent output;
-a voice that is dropped any other way (a download that fails, an unexpected error, a job that never ran) ends it too
-(`VoiceProgressNote.finish`, `src/voiceProgressNote.ts`: pure timing over two ports, wired in `bot.ts`). One note per voice, so several
-voices waiting in a topic show several notes, each deleted by its own text. The warm-up adds none. **A restart:** the note's id sits in
-the thread's transient-message set beside the «working…» status frames (`voiceProgressNoteIds`, persisted in `state.json`), so a graceful
-stop (a hot reload) deletes a note whose voice job dies with the process (the shutdown sweep) and the next boot deletes one a kill left
-behind (`reconcileTransientFrames`); a note whose delete failed stays in the set and is retried the same way. The voice itself is not
-re-run after a restart — that is unchanged.
+(`voice.transcribing`; the only «transcribing» state there is: no typing action). One note per voice, so several voices waiting in a
+topic show several notes, each deleted by its own text. The warm-up adds none. `src/voiceProgressNote.ts` is the pure timing over three
+ports (post, remember, delete), wired in `bot.ts`:
+
+- **The note is gone BEFORE the answer.** When the chain returns — text or failure — the job AWAITS `VoiceProgressNote.finish()` before it
+  posts the 🎤 echo or the failure notice (also on a failed download and on an unexpected error; the queue chain's `finally` is the
+  backstop for a job that never ran). The delete is unpaced, so it never queues behind agent output. The wait is BOUNDED
+  (`voiceProgressNoteCleanupBudgetMs`, 1.5 s): a stalled cosmetic send or delete (a 429 wait, a dead connection) cannot hold the
+  transcript back; what the bound cut short ends in the background. A send that has not started yet (waiting out a 429) is cancelled
+  (`AbortSignal`); one already on the wire cannot be called back, so a note that LANDS after the text is deleted at once and is never
+  registered as live.
+- **A shutdown stops the notes.** `cleanupTimers` calls `shutDown()` on the registry first thing: every armed note stops (timer cleared,
+  unstarted send cancelled), one on screen is deleted, one being sent is waited for (bounded) and its message deleted when it lands; a
+  voice that arrives during the drain of the last updates gets an inert note. The sweep waits for that before it collects ids, so
+  nothing can fire or register an id after the sweep and the last state flush.
+- **A restart.** The note's id sits in the thread's transient-message set beside the «working…» status frames
+  (`voiceProgressNoteIds`, persisted in `state.json`), so a graceful stop (a hot reload) deletes a note whose voice job dies with the
+  process and the next boot deletes one a kill left behind (`reconcileTransientFrames`). The voice itself is not re-run after a restart —
+  that is unchanged.
+- **A delete that hits a bad moment is not forgotten** — for the note AND for the status / thinking / sub-agent frames that share the set.
+  The shutdown sweep and the boot reconciliation delete through one helper (`deleteTransientMessages`): a failure a later try can fix
+  (no answer from Telegram, a 429, a 5xx — `checkIsRetryableTelegramError`) keeps its id in the persisted set, and the next boot parks
+  it in the thread's `undeletedMessageIds` (persisted with the live ids, retried by the next sweep and the next boot); a final answer
+  (already gone, too old to delete, the bot lost its right) settles the id, so nothing that can never work is retried for ever. Before,
+  the sweep cleared the persisted set whatever happened and the reconciliation re-synced it to the live ids at once, so one failed
+  delete left the message in the topic with no record of it. The sweep rewrites the set only after its deletes settled, so a sweep cut
+  short by its time bound leaves the complete record.
 
 - A **non-last** engine is tried **once** (`retryDelaysMs: []`); any failure — refused connection, timeout, 4xx,
   5xx, a rejected endpoint — moves to the next at once, logged only (`[transcribe] <engine> failed (…); falling

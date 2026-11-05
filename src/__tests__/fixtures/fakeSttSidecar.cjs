@@ -12,9 +12,11 @@
  *
  * Test knobs (not part of the contract): --claim-delay-ms N (start slowly: the window before the claim),
  * --claim-after-file PATH (claim only once PATH exists: an order between two starts that load cannot change),
- * --ready-delay-ms N (the "model load": between the claim and the listening port), --die-while-loading-ms N (the load
- * fails: exit 1 N ms after the claim, before the port, record left behind), --never-ready (claims, then
- * hangs without ever listening), --crash-after-ms N (hard exit 1 after it is ready, record left behind),
+ * --ready-delay-ms N (the "model load": between the claim and the listening port), --ready-after-file PATH (the load ends
+ * only once PATH exists — the test decides when, however loaded the box is), --die-after-file PATH (while the load is
+ * going, exit 1 once PATH exists: the load fails, record left behind), --transcribe-after-file PATH (a recognition
+ * request is answered only once PATH exists: a voice that takes as long as the test wants, on a warm engine), --never-ready
+ * (claims, then hangs without ever listening), --crash-after-ms N (hard exit 1 after it is ready, record left behind),
  * --idle-seconds N (overrides --idle-minutes), --ignore-sigterm, --health-delay-ms N (answer /health late, like a
  * sidecar busy with a long voice), --health-hang (never answer /health), --fail-to-record (exit 1 where the record
  * cannot be written, before any ready file), --skip-record (write the ready file WITHOUT recording).
@@ -37,7 +39,10 @@ const ownerStartToken = readArg('--owner-start-token');
 const configHash = readArg('--config-hash');
 const healthDelayMs = Number(readArg('--health-delay-ms', '0'));
 const readyDelayMs = Number(readArg('--ready-delay-ms', '0'));
-const dieWhileLoadingMs = Number(readArg('--die-while-loading-ms', '0'));
+const readyAfterFile = readArg('--ready-after-file');
+const dieAfterFile = readArg('--die-after-file');
+const transcribeAfterFile = readArg('--transcribe-after-file');
+const gatePollMs = 20;
 const claimDelayMs = Number(readArg('--claim-delay-ms', '0'));
 const claimAfterFile = readArg('--claim-after-file');
 const claimGatePollMs = 20;
@@ -130,10 +135,10 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/v1/audio/transcriptions') {
     lastActivityMs = Date.now();
     req.resume();
-    req.on('end', () => {
+    req.on('end', () => answerWhenOpen(() => {
       lastActivityMs = Date.now();
       reply(200, { text: 'fake transcript' });
-    });
+    }));
     return undefined;
   }
   return reply(404, { error: { message: 'not found' } });
@@ -168,8 +173,22 @@ function startUp() {
     setInterval(() => {}, 1000);
     return;
   }
-  if (dieWhileLoadingMs > 0) setTimeout(() => process.exit(1), dieWhileLoadingMs);
-  setTimeout(() => listenAndReport(isRecorded), readyDelayMs);
+  setTimeout(() => listenWhenReady(isRecorded), readyDelayMs);
+}
+
+/** The "model load" ends when --ready-after-file exists (at once without the flag); --die-after-file makes it fail instead. */
+function listenWhenReady(isRecorded) {
+  if (dieAfterFile !== undefined && fs.existsSync(dieAfterFile)) process.exit(1);
+  if (readyAfterFile === undefined || fs.existsSync(readyAfterFile)) return listenAndReport(isRecorded);
+  setTimeout(() => listenWhenReady(isRecorded), gatePollMs);
+  return undefined;
+}
+
+/** Calls `answer` once --transcribe-after-file exists (at once without the flag). */
+function answerWhenOpen(answer) {
+  if (transcribeAfterFile === undefined || fs.existsSync(transcribeAfterFile)) return answer();
+  setTimeout(() => answerWhenOpen(answer), gatePollMs);
+  return undefined;
 }
 
 /** --claim-after-file: claim only once the test creates the file — an order that holds however loaded the box is. */

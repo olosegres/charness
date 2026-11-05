@@ -20,8 +20,9 @@ Now:
 Before, while the bot waited for a local speech engine that was still loading its model (up to 2 minutes), the topic showed nothing until the 🎤 transcript — a voice note that took a while looked as if it had been dropped.
 Now:
   - When the text is not there 3 seconds after the voice note arrives, the bot posts a silent note (no notification, even in an unmuted topic); a warm engine answers sooner and the topic shows nothing. A voice note waiting in line behind an earlier one in the same topic gets its note too.
-  - The note is deleted the moment the 🎤 transcript arrives, or when the voice note fails (the failure notice stays as before).
-  - A bot restart while the note is up removes it as well: a graceful stop (a hot reload) deletes it, and the next start deletes one left by a crash.
+  - The note is deleted the moment the 🎤 transcript arrives, or when the voice note fails (the failure notice stays as before) — the delete goes out before the transcript, and a stalled one never holds the transcript back for more than a moment.
+  - A bot restart while the note is up removes it as well: a graceful stop (a hot reload) deletes it — also one whose send is still on its way —, and the next start deletes one left by a crash.
+  - A temporary-status message (the «working…», thinking or sub-agent line, or this note) whose delete fails for a bad moment at a restart — no answer from Telegram, a rate limit, a server error — is no longer forgotten: it stays recorded and is deleted at the next restart, instead of staying in the topic for good.
 
 **A watch on a worker now keeps its topic alive: while the worker runs, the bot posts a short silent status line every 15 minutes, so the topic never looks frozen while the agent is away.**
 Before, a watch on a detached worker said nothing for as long as the worker ran — a builder that worked 7 hours overnight left its topic without a message for 7 hours, and the only remedy was a schedule that woke the manager agent every 50 minutes (tokens and context spent per heartbeat, and nothing posted while the agent compacts).

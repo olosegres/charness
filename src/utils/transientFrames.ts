@@ -7,6 +7,9 @@
  *   - `subagentStatusMessageId`  — the dedicated "🤖 sub-agent …" delegation frame
  *   - `voiceProgressNoteIds`     — the "🎙 Transcribing the voice message…" notes (one per
  *                                  voice message still waiting for its text, so a list)
+ *   - `undeletedMessageIds`      — leftovers of an earlier process whose delete FAILED in a way a
+ *                                  retry can fix (a network error, a 429, a 5xx): kept so the next
+ *                                  sweep / boot tries again instead of forgetting them
  *
  * Returns only the ones on screen, in that fixed order, so the graceful-shutdown
  * sweep and the boot reconciliation can delete exactly the messages currently on
@@ -23,6 +26,7 @@ export interface TransientFrameState {
   thinkingMessageId: number | null;
   subagentStatusMessageId: number | null;
   voiceProgressNoteIds: readonly number[];
+  undeletedMessageIds: readonly number[];
 }
 
 export function getTransientFrameIds(state: TransientFrameState): number[] {
@@ -30,7 +34,7 @@ export function getTransientFrameIds(state: TransientFrameState): number[] {
   if (state.statusMessageId !== null) ids.push(state.statusMessageId);
   if (state.thinkingMessageId !== null) ids.push(state.thinkingMessageId);
   if (state.subagentStatusMessageId !== null) ids.push(state.subagentStatusMessageId);
-  ids.push(...state.voiceProgressNoteIds);
+  ids.push(...state.voiceProgressNoteIds, ...state.undeletedMessageIds);
   return ids;
 }
 
@@ -69,5 +73,73 @@ export function clearTransientFramesForShutdown(state: ShutdownFrameState): numb
   state.thinkingMessageId = null;
   state.subagentStatusMessageId = null;
   state.voiceProgressNoteIds = [];
+  state.undeletedMessageIds = [];
   return ids;
+}
+
+/**
+ * @description Delete transient messages and say which ones must be KEPT for a later try. A delete that fails in a way a
+ * retry can fix (`checkIsRetryable`: no answer from Telegram, a 429, a 5xx) keeps its id; one that succeeded, found the message
+ * already gone, or was refused for good (a message Telegram will not delete, a chat the bot left) is settled — keeping it would
+ * only retry what can never work. Never rejects. The one place the shutdown sweep and the boot reconciliation share, so neither
+ * can forget a message whose delete merely hit a bad moment (the stranded frame would stay in the topic with no record left).
+ */
+export async function deleteTransientMessages(
+  messageIds: readonly number[],
+  deleteMessage: (messageId: number) => Promise<void>,
+  checkIsRetryable: (error: unknown) => boolean,
+): Promise<number[]> {
+  const keptIds = await Promise.all(messageIds.map(async (messageId): Promise<number | null> => {
+    try {
+      await deleteMessage(messageId);
+      return null;
+    } catch (error) {
+      return checkIsRetryable(error) ? messageId : null;
+    }
+  }));
+  return keptIds.filter((messageId): messageId is number => messageId !== null);
+}
+
+export interface TransientSweepThread<Key> {
+  key: Key;
+  state: ShutdownFrameState;
+}
+
+export interface TransientSweepPorts<Key> {
+  deleteMessage: (key: Key, messageId: number) => Promise<void>;
+  checkIsRetryable: (error: unknown) => boolean;
+  /**
+   * Replace the thread's persisted transient ids with `keptIds`: the ones whose delete must be tried again at the next start
+   * (none: the thread's entry goes). Called only once the deletes have settled — until then the persisted set still names
+   * every message, so a sweep that is cut short by its time bound leaves a complete record for the boot reconciliation.
+   */
+  saveKeptIds: (key: Key, keptIds: number[]) => Promise<void>;
+  logProblem: (line: string) => void;
+}
+
+/**
+ * @description The graceful-shutdown sweep over every tracked thread: {@link clearTransientFramesForShutdown} for EACH (the
+ * generation bump must reach a thread whose ids are all null too), then the messages that were on screen are deleted in
+ * parallel and the ones that could not be deleted yet stay in the persisted set. Resolves when every thread has settled; never
+ * rejects. The caller bounds the wait.
+ */
+export async function sweepTransientMessages<Key>(
+  threads: readonly TransientSweepThread<Key>[],
+  ports: TransientSweepPorts<Key>,
+): Promise<void> {
+  const settlements: Promise<void>[] = [];
+  for (const { key, state } of threads) {
+    const messageIds = clearTransientFramesForShutdown(state);
+    if (messageIds.length === 0) continue;
+    settlements.push((async () => {
+      const keptIds = await deleteTransientMessages(messageIds, (messageId) => ports.deleteMessage(key, messageId), ports.checkIsRetryable);
+      if (keptIds.length > 0) ports.logProblem(`[shutdown] ${keptIds.length} transient message(s) could not be deleted now; they stay recorded for the next start`);
+      try {
+        await ports.saveKeptIds(key, keptIds);
+      } catch (error) {
+        ports.logProblem(`[shutdown] transient message ids could not be saved: ${error instanceof Error ? error.message : 'unknown error'}`);
+      }
+    })());
+  }
+  await Promise.all(settlements);
 }

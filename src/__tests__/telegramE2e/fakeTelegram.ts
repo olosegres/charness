@@ -78,6 +78,13 @@ export interface FakeTelegramMessage {
   /** The `disable_notification` the send carried (bot messages only). */
   isSilent?: boolean;
   isDeleted?: boolean;
+  /**
+   * When the fake stored the message (ms since the epoch, the test process's clock): the time of the event at its source, which a
+   * test's own polling cannot give — a test that reads it later would measure its own delay.
+   */
+  createdAtMs: number;
+  /** When the fake applied the deletion (same clock): set together with `isDeleted`. */
+  deletedAtMs?: number;
 }
 
 /** The `voice` object of a voice-note message. */
@@ -92,6 +99,8 @@ export interface FakeTelegramVoice {
 export interface FakeTelegramCall {
   method: string;
   payload: Record<string, unknown>;
+  /** When the call reached the fake (ms since the epoch, the test process's clock). */
+  receivedAtMs: number;
 }
 
 /** One pin or unpin, in order. `isSilent` is the pin's `disable_notification`. */
@@ -159,8 +168,8 @@ export class FakeTelegram {
   /** The topics the bot created, in order: the id of each (the id of its creation service message) and its name. */
   readonly createdTopics: Array<{ threadId: number; name: string }> = [];
   /** The responses {@link holdNextResponse} still has to hold, in the order they were asked for. */
-  private readonly responseHolds: Array<{ method: string; release: Promise<unknown>; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
-  private readonly callFailures: Array<{ method: string; description: string; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
+  private readonly responseHolds: Array<{ method: string; release: Promise<unknown> | number; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
+  private readonly callFailures: Array<{ method: string; description: string; errorCode: number; isMatch: (payload: Record<string, unknown>) => boolean }> = [];
   /** The `file_path` of every file the bot downloaded from the file endpoint, in order. */
   readonly downloadedFilePaths: string[] = [];
   /** The methods of the requests {@link dropNextReusedConnectionRequest} still has to hang up on, in the order asked for. */
@@ -320,6 +329,7 @@ export class FakeTelegram {
   ): FakeTelegramMessage {
     const message: FakeTelegramMessage = {
       message_id: this.nextMessageId++,
+      createdAtMs: Date.now(),
       date: Math.floor(Date.now() / 1000),
       chat: this.chat,
       message_thread_id: threadId,
@@ -419,19 +429,19 @@ export class FakeTelegram {
       response.end(JSON.stringify({ ok: false, error_code: 400, description: error instanceof Error ? error.message : String(error) }));
       return;
     }
-    this.calls.push({ method, payload });
+    this.calls.push({ method, payload, receivedAtMs: Date.now() });
     const failureIndex = this.callFailures.findIndex((failure) => failure.method === method && failure.isMatch(payload));
     if (failureIndex >= 0) {
       const [failure] = this.callFailures.splice(failureIndex, 1);
-      response.writeHead(400, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ ok: false, error_code: 400, description: failure.description }));
+      response.writeHead(failure.errorCode, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: false, error_code: failure.errorCode, description: failure.description }));
       return;
     }
     const answer = await this.dispatch(method, payload, request.socket);
     const holdIndex = this.responseHolds.findIndex((hold) => hold.method === method && hold.isMatch(payload));
     if (holdIndex >= 0) {
       const [hold] = this.responseHolds.splice(holdIndex, 1);
-      await hold.release;
+      await (typeof hold.release === 'number' ? new Promise<void>((resolve) => setTimeout(resolve, hold.release as number)) : hold.release);
     }
     response.writeHead(answer.ok ? 200 : answer.error_code, { 'content-type': 'application/json' });
     response.end(JSON.stringify(answer));
@@ -448,21 +458,24 @@ export class FakeTelegram {
   }
 
   /**
-   * @description Hold the response to the NEXT `method` call whose payload `isMatch` until `release` settles: the call is
-   * handled at once (a sent message is in the topic, a toast recorded), only the bot's await of it lasts that long — a
-   * slow Bot API round trip, which a test ends at a state it observed, to put the bot's next step at a chosen moment.
+   * @description Hold the response to the NEXT `method` call whose payload `isMatch` until `release` settles — or, given a
+   * number, for that many ms counted from the moment the call reached the fake (no observer in between, so the hold is as
+   * long as asked however loaded the test process is): the call is handled at once (a sent message is in the topic, a toast
+   * recorded), only the bot's await of it lasts that long — a slow Bot API round trip, which a test ends at a state it
+   * observed, to put the bot's next step at a chosen moment.
    */
-  holdNextResponse(method: string, release: Promise<unknown>, isMatch: (payload: Record<string, unknown>) => boolean = () => true): void {
+  holdNextResponse(method: string, release: Promise<unknown> | number, isMatch: (payload: Record<string, unknown>) => boolean = () => true): void {
     this.responseHolds.push({ method, release, isMatch });
   }
 
   /**
    * @description Refuse the NEXT `method` call whose payload `isMatch` with a 400 carrying `description` — the Bot API's
    * wording for it (`Bad Request: message is too long`, `Bad Request: can't parse entities: …`) —, applying nothing: the call
-   * is recorded, the message stays as it was. One call per registration.
+   * is recorded, the message stays as it was. `errorCode` is the answer's status (400 by default; a 5xx or a 429 is a failure a
+   * later try can fix, a 400 one it cannot). One call per registration.
    */
-  failNextCall(method: string, description: string, isMatch: (payload: Record<string, unknown>) => boolean = () => true): void {
-    this.callFailures.push({ method, description, isMatch });
+  failNextCall(method: string, description: string, isMatch: (payload: Record<string, unknown>) => boolean = () => true, errorCode = 400): void {
+    this.callFailures.push({ method, description, errorCode, isMatch });
   }
 
   private async dispatch(method: string, payload: Record<string, unknown>, socket: Socket): Promise<ApiOk | ApiError> {
@@ -521,6 +534,7 @@ export class FakeTelegram {
         // The Bot API's own wording for a message that is not there (any more), which is not the one of an edit.
         if (!message || message.isDeleted) return { ok: false, error_code: 400, description: 'Bad Request: message to delete not found' };
         message.isDeleted = true;
+        message.deletedAtMs = Date.now();
         this.pinnedMessageIds.delete(message.message_id);
         return { ok: true, result: true };
       }
@@ -533,6 +547,7 @@ export class FakeTelegram {
           const message = this.messages.get(messageId);
           if (!message || message.isDeleted) continue;
           message.isDeleted = true;
+          message.deletedAtMs = Date.now();
           this.pinnedMessageIds.delete(messageId);
         }
         return { ok: true, result: true };

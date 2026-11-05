@@ -39,9 +39,9 @@ test('the «transcribing…» note is armed LAST, right before the job is queued
   assert.match(handler, /\.catch\(\(err\) => \{[^}]*\}\)\n\s+\.finally\(\(\) => progressNote\.finish\(\)\);/, 'a job that never ran or rejected still ends the wait');
 });
 
-test('the voice job ends the wait BEFORE it answers: on a failed download, as soon as the transcription returns, and on an unexpected error', () => {
+test('the voice job ends the wait BEFORE it answers — AWAITED, so the note is gone before the echo goes out: on a failed download, as soon as the transcription returns, and on an unexpected error', () => {
   const job = botSource.slice(botSource.indexOf('async function processVoiceJob'), botSource.indexOf('File intake handler'));
-  const finishes = [...job.matchAll(/void progressNote\.finish\(\);/g)].map((match) => match.index);
+  const finishes = [...job.matchAll(/await progressNote\.finish\(\);/g)].map((match) => match.index);
   assert.equal(finishes.length, 3, 'one end of the wait per way out of the job');
   const [afterDownloadFailure, afterTranscription, afterUnexpectedError] = finishes;
   assert.ok(afterDownloadFailure < job.indexOf("`${t('voice.failed')} (${msg})`"), 'the download failure notice replaces the note');
@@ -53,14 +53,35 @@ test('the voice job ends the wait BEFORE it answers: on a failed download, as so
 
 test('the note is SILENT and unpaced, its delete is unpaced, and its id rides the transient-message set a restart cleans up', () => {
   const wiring = botSource.slice(botSource.indexOf('function startVoiceProgressNote'), botSource.indexOf('// ═', botSource.indexOf('function startVoiceProgressNote')));
-  assert.match(wiring, /\{ disable_notification: true \},\n\s+\{ unpaced: true \},/, 'silent, and outside the pacer like the 🎤 echo');
+  assert.match(wiring, /\{ disable_notification: true \},\n\s+\{ unpaced: true, signal \},/, 'silent, outside the pacer like the 🎤 echo, and cancellable while it has not started');
+  assert.match(wiring, /rememberNote: \(messageId\) => addVoiceProgressNoteId\(key, messageId\),/, 'the id is registered by the note itself, and only while the note is still wanted');
   assert.match(wiring, /deleteThreadMessageDetailed\(key, messageId, \{ isUnpaced: true \}\)/, 'the delete must not queue behind agent output, or the note would outlive the echo');
   assert.match(wiring, /if \(deletion !== 'stayed'\) removeVoiceProgressNoteId\(key, messageId\);/, 'a note that stayed keeps its place in the set');
-  assert.match(botSource, /subagentEditInFlight: false, voiceProgressNoteIds: \[\] \};/, 'a thread starts with no note');
+  assert.match(botSource, /subagentEditInFlight: false, voiceProgressNoteIds: \[\], undeletedMessageIds: \[\] \};/, 'a thread starts with no note and no leftover');
   for (const helper of ['addVoiceProgressNoteId', 'removeVoiceProgressNoteId']) {
     const body = botSource.slice(botSource.indexOf(`function ${helper}`));
     assert.ok(body.slice(0, body.indexOf('\n}\n')).includes('persistTransientFrames(key);'), `${helper} mirrors the set to state.json (the ungraceful-exit safety net)`);
   }
+});
+
+test('a shutdown stops the voice notes first thing, and the sweep waits for them before it collects ids', () => {
+  const cleanup = botSource.slice(botSource.indexOf('cleanupTimers: () => {'));
+  assert.ok(cleanup.slice(0, cleanup.indexOf('clearInterval(inMemoryGcInterval);')).includes('void voiceProgressNotes.shutDown();'), 'before any other timer step: no note may fire during the output flush');
+  const sweep = botSource.slice(botSource.indexOf('async function sweepTransientFramesOnShutdown'));
+  const sweepBody = sweep.slice(0, sweep.indexOf('\n}\n'));
+  assert.ok(sweepBody.indexOf('await voiceProgressNotes.shutDown();') !== -1, 'the sweep waits for the notes');
+  assert.ok(sweepBody.indexOf('await voiceProgressNotes.shutDown();') < sweepBody.indexOf('sweepTransientMessages('), 'and only then collects and deletes the ids');
+  assert.match(botSource, /const voiceProgressNotes = createVoiceProgressNoteRegistry\(\);/, 'one registry for the process');
+});
+
+test('the shutdown sweep and the boot reconciliation share the retention rule: a retryable failure keeps the id, nothing is forgotten', () => {
+  const sweep = botSource.slice(botSource.indexOf('async function sweepTransientFramesOnShutdown'));
+  const sweepBody = sweep.slice(0, sweep.indexOf('\n}\n'));
+  assert.match(sweepBody, /checkIsRetryable: checkIsRetryableTelegramError,/);
+  assert.match(sweepBody, /saveKeptIds: \(key, keptIds\) => state\.setTransientFrames\(key, keptIds\),/, 'the persisted set is rewritten to the kept ids, not cleared');
+  assert.ok(!sweepBody.includes('setTransientFrames(key, [])'), 'the old unconditional clear is gone');
+  assert.match(botSource, /checkIsRetryable: checkIsRetryableTelegramError,\n\};/, 'the reconciliation\'s default deps use the same classifier');
+  assert.match(botSource, /void reconcileTransientFrames\(orphanedTransientFrames\)\.catch\(/, 'the boot does not wait for the deletes');
 });
 
 test('the plain bot stops the sidecar in its graceful shutdown; a hot worker leaves it to its supervisor', () => {

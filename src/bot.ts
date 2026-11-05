@@ -217,7 +217,7 @@ import {
 } from './stt/sttSidecarOwner';
 import { createDefaultSttInstallJobDeps, createSttInstallJobManager } from './stt/sttAutoInstall';
 import { transcribeWithEngines, warmUpFirstEngine, type WarmedEndpoint } from './stt/transcribeChain';
-import { stripCommandBotMention } from './utils';
+import { checkIsAbortError, stripCommandBotMention } from './utils';
 import { checkIsConnectCommandText, getRecvTracePreview } from './utils/recvPreviewRedaction';
 import {
   classifySendError,
@@ -236,7 +236,7 @@ import { checkShouldKeepTyping as checkShouldKeepTypingDecision } from './utils/
 import { checkIsTypingStuckByLeak } from './utils/typingLoopBackstop';
 import { getOutputFlushTiming } from './utils/outputFlushTiming';
 import { getOutputDebounceMs as resolveOutputDebounceMs } from './utils/outputDebounce';
-import { checkIsMessageNotFoundError, checkIsStaleAnswerCallbackQueryError } from './utils/telegramError';
+import { checkIsMessageNotFoundError, checkIsRetryableTelegramError, checkIsStaleAnswerCallbackQueryError } from './utils/telegramError';
 import {
   flushTraceBufferSyncOnExit,
   installCallApiTrace,
@@ -266,7 +266,7 @@ import { createTelegramFileSendGateway } from './connectors/telegram/fileSendGat
 import { getStatusFlushAction } from './utils/statusFlushDecision';
 import { getThreadStatusModel, getThreadStatusReport, type ThreadStatusAccount, type ThreadStatusAccountSource } from './utils/threadStatusReport';
 import { createIdenticalOutputGuard } from './utils/identicalOutputGuard';
-import { getTransientFrameIds, clearTransientFramesForShutdown } from './utils/transientFrames';
+import { getTransientFrameIds, deleteTransientMessages, sweepTransientMessages, type TransientSweepThread } from './utils/transientFrames';
 import {
   getThinkingEventAction,
   getThinkingAnswerStartAction,
@@ -295,7 +295,7 @@ import {
 } from './utils/topicRequest';
 import { createSerialQueue, type SerialQueue } from './utils/serialQueue';
 import { getVoiceTranscriptionQueue } from './voiceQueue';
-import { createVoiceProgressNote, type VoiceProgressNote } from './voiceProgressNote';
+import { createVoiceProgressNoteRegistry, type VoiceProgressNote } from './voiceProgressNote';
 import {
   buildClaudeLivenessFrameText,
   checkShouldForceIdleRemoval,
@@ -1566,6 +1566,13 @@ interface ThreadMessageState {
    * Empty = none.
    */
   voiceProgressNoteIds: number[];
+  /**
+   * Leftovers of an earlier process — a status frame or a voice note a graceful stop or a crash left on screen — whose delete
+   * FAILED in a way a retry can fix (a network error, a 429, a 5xx). Kept (and persisted with the other transient ids) so the
+   * next sweep and the next boot try again instead of forgetting a message nothing else records; a final answer (already gone,
+   * too old, refused) settles an id. Empty = none.
+   */
+  undeletedMessageIds: number[];
 }
 
 interface OutputQueueState extends PendingOutputBuffer {
@@ -2969,7 +2976,7 @@ function getThreadMessageState(key: SessionKey): ThreadMessageState {
   const k = keyToString(key);
   let s = threadMessageStates.get(k);
   if (!s) {
-    s = { lastMessageId: null, lastMessageText: null, needsNewMessage: true, typingLoaderTimer: null, statusMessageId: null, thinkingMessageId: null, thinkingFrameGeneration: 0, statusFrameGeneration: 0, livenessTimer: null, lastActivityText: null, livenessGlyphIndex: 0, wasBusy: false, workingSince: null, lastLivenessSentAt: 0, statusIdleSuppressed: false, busyOnsetArmedUntil: 0, subagentStatusMessageId: null, subagentStartedAt: null, subagentTitle: null, subagentTimer: null, lastSubagentText: null, subagentEditInFlight: false, voiceProgressNoteIds: [] };
+    s = { lastMessageId: null, lastMessageText: null, needsNewMessage: true, typingLoaderTimer: null, statusMessageId: null, thinkingMessageId: null, thinkingFrameGeneration: 0, statusFrameGeneration: 0, livenessTimer: null, lastActivityText: null, livenessGlyphIndex: 0, wasBusy: false, workingSince: null, lastLivenessSentAt: 0, statusIdleSuppressed: false, busyOnsetArmedUntil: 0, subagentStatusMessageId: null, subagentStartedAt: null, subagentTitle: null, subagentTimer: null, lastSubagentText: null, subagentEditInFlight: false, voiceProgressNoteIds: [], undeletedMessageIds: [] };
     threadMessageStates.set(k, s);
   }
   return s;
@@ -2978,7 +2985,7 @@ function getThreadMessageState(key: SessionKey): ThreadMessageState {
 /**
  * @description Persist the thread's CURRENT transient message ids (the
  * non-null `statusMessageId` / `thinkingMessageId` / `subagentStatusMessageId`
- * and the `voiceProgressNoteIds`) so an UNGRACEFUL restart (crash / SIGKILL — no graceful sweep ran) can delete
+ * and the `voiceProgressNoteIds` and `undeletedMessageIds`) so an UNGRACEFUL restart (crash / SIGKILL — no graceful sweep ran) can delete
  * whatever frame was on screen on the next boot (S2). The in-memory
  * `ThreadMessageState` is the live source of truth; this just keeps disk in step.
  * Debounced + fire-and-forget. Single collection point shared by the frame-id
@@ -3018,6 +3025,11 @@ function addVoiceProgressNoteId(key: SessionKey, id: number): void {
 function removeVoiceProgressNoteId(key: SessionKey, id: number): void {
   const noteState = getThreadMessageState(key);
   noteState.voiceProgressNoteIds = noteState.voiceProgressNoteIds.filter((noteId) => noteId !== id);
+  persistTransientFrames(key);
+}
+/** The leftovers still to delete (see {@link ThreadMessageState.undeletedMessageIds}): replaced as a whole, then mirrored to disk. */
+function setUndeletedMessageIds(key: SessionKey, ids: number[]): void {
+  getThreadMessageState(key).undeletedMessageIds = ids;
   persistTransientFrames(key);
 }
 
@@ -3871,6 +3883,11 @@ interface ReplyToThreadOptions {
    * `markOutboundTextSecret`. Default `false`.
    */
   isSecret?: boolean;
+  /**
+   * Cancels a send that has NOT started yet (one waiting out a 429 or its place in the pacer); a request already on the wire
+   * is not called back. A send cancelled this way resolves `null` without a word — the caller asked for it.
+   */
+  signal?: AbortSignal;
 }
 
 async function replyToThread(
@@ -3887,7 +3904,7 @@ async function replyToThread(
         text,
         sendExtra as Parameters<typeof bot.telegram.sendMessage>[2],
       );
-    return options.unpaced ? sendUnpaced(key, send) : enqueueSend(key, send);
+    return options.unpaced ? sendUnpaced(key, send, options.signal) : enqueueSend(key, send, options.signal);
   };
 
   // A sent message is tracked for `/clear_messages`, and a `/bind` picker is remembered to be closed by the next bind or leave.
@@ -3902,6 +3919,7 @@ async function replyToThread(
   try {
     return await trackSent(await sendOnce(buildSendExtra(key, extra)));
   } catch (e) {
+    if (options.signal?.aborted && checkIsAbortError(e)) return null;
     // Markdown parse failure fallback. Several `t(...)` templates interpolate
     // user-controlled content (subdir names, branch names, error strings)
     // into Markdown body — a backtick or stray `*` inside the content
@@ -4630,7 +4648,7 @@ const shutdownFrameSweepMs = 1500;
  * them up orphans the messages forever in the topic (the reported incident:
  * ~25 hot reloads left "✽ работаю…" frames stuck; and a 🔧 tool status stranded
  * as a topic's last message when a hot reload landed mid-tool). Iterates every
- * tracked thread, and for each {@link clearTransientFramesForShutdown} BUMPS both
+ * tracked thread, and for each `clearTransientFramesForShutdown` (inside `sweepTransientMessages`) BUMPS both
  * frame generations (so a `sendStatusFrame`/thinking create still mid-`await`
  * discards its just-sent message instead of orphaning it — see that helper) and
  * nulls the in-memory ids so a racing per-thread tick can't re-edit a just-deleted
@@ -4642,40 +4660,47 @@ const shutdownFrameSweepMs = 1500;
  * an orphan after the sweep. Threads that had nothing on screen still skip the
  * (fire-and-forget) persist + delete work.
  *
+ * A delete that fails for a reason a later try can fix (no answer from Telegram, a
+ * 429, a 5xx) no longer forgets the message: its id stays in the persisted set and
+ * the next boot's {@link reconcileTransientFrames} tries again. The set is rewritten
+ * only once the deletes have settled, so a sweep cut short by its bound leaves the
+ * complete record. Final answers (already gone, too old, refused) settle an id.
+ *
  * Wired into {@link gracefulShutdown} as `clearTransientFrames`: runs AFTER
  * `cleanupTimers()` (no interval re-creates a frame mid-sweep) and BEFORE
  * `bot.stop()` (the Telegram client must still send the deletes). Self-bounded by
  * {@link shutdownFrameSweepMs} — a slow API must not starve `state.flush()`.
  */
 async function sweepTransientFramesOnShutdown(): Promise<void> {
-  const deletes: Promise<unknown>[] = [];
+  // The voice notes first: their timers and sends in flight are stopped and cleaned (bounded), so nothing can register an id
+  // behind the sweep. `cleanupTimers` already started this; the sweep waits for it.
+  await voiceProgressNotes.shutDown();
+  const threads: TransientSweepThread<SessionKey>[] = [];
   for (const [keyStr, msgState] of threadMessageStates) {
-    let key: SessionKey;
     try {
-      key = keyFromString(keyStr);
+      threads.push({ key: keyFromString(keyStr), state: msgState });
     } catch {
       continue;
     }
-    // Bump generations + null ids for EVERY tracked thread (fixes the racing
-    // create that resolves after the sweep). Only threads that HAD a frame on
-    // screen need the persist + delete.
-    const ids = clearTransientFramesForShutdown(msgState);
-    if (ids.length === 0) continue;
-    for (const id of ids) {
-      deletes.push(bot.telegram.deleteMessage(getTelegramChatId(key), id).catch(() => {}));
-    }
-    // Clear the S2 persisted set too, so the next boot's reconciliation finds
-    // nothing to redo after a graceful exit.
-    state.setTransientFrames(key, []).catch(() => {});
   }
-  if (deletes.length === 0) return;
-  await Promise.race([
-    Promise.allSettled(deletes),
-    new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, shutdownFrameSweepMs);
-      timer.unref?.();
-    }),
-  ]);
+  const sweeping = sweepTransientMessages(threads, {
+    deleteMessage: async (key, messageId) => { await bot.telegram.deleteMessage(getTelegramChatId(key), messageId); },
+    checkIsRetryable: checkIsRetryableTelegramError,
+    saveKeptIds: (key, keptIds) => state.setTransientFrames(key, keptIds),
+    logProblem: (line) => console.warn(line),
+  });
+  let boundTimer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      sweeping,
+      new Promise<void>((resolve) => {
+        boundTimer = setTimeout(resolve, shutdownFrameSweepMs);
+        boundTimer.unref?.();
+      }),
+    ]);
+  } finally {
+    clearTimeout(boundTimer);
+  }
 }
 
 /**
@@ -4867,25 +4892,29 @@ async function transcribeVoiceFile(
 }
 
 /**
+ * The notes armed right now: a shutdown stops them (`cleanupTimers` and the sweep), so a timer that fires or a send that lands
+ * after the sweep cannot strand a message past the last state flush.
+ */
+const voiceProgressNotes = createVoiceProgressNoteRegistry();
+
+/**
  * @description Arm the «🎙 Transcribing the voice message…» note for a voice message that just arrived in `key`. While the
  * local engine loads (up to 2 minutes, `src/stt/README.md`) the topic would show nothing and the voice would look lost; the note
  * appears only when the text is later than `voiceProgressNoteDelayMs`, is SILENT (a muted topic stays quiet, an unmuted one makes
  * no sound), goes out UNPACED like the 🎤 echo it makes way for, and is deleted unpaced the moment the text arrives or the
- * transcription fails (`VoiceProgressNote.finish`). Its id is kept in the thread's transient-message set, so a restart that
- * kills the voice job still deletes the note: the graceful sweep, or the next boot after a crash.
+ * transcription fails (`VoiceProgressNote.finish`, which the voice job AWAITS before it answers — bounded, so a stalled delete
+ * cannot hold the transcript back). Its id is kept in the thread's transient-message set, so a restart that kills the voice job
+ * still deletes the note: the graceful sweep, or the next boot after a crash.
  */
 function startVoiceProgressNote(key: SessionKey): VoiceProgressNote {
-  return createVoiceProgressNote({
-    postNote: async () => {
-      const messageId = await replyToThread(
-        key,
-        withThreadLocale(key, () => t('voice.transcribing')),
-        { disable_notification: true },
-        { unpaced: true },
-      );
-      if (messageId !== null) addVoiceProgressNoteId(key, messageId);
-      return messageId;
-    },
+  return voiceProgressNotes.start({
+    postNote: (signal) => replyToThread(
+      key,
+      withThreadLocale(key, () => t('voice.transcribing')),
+      { disable_notification: true },
+      { unpaced: true, signal },
+    ),
+    rememberNote: (messageId) => addVoiceProgressNoteId(key, messageId),
     deleteNote: async (messageId) => {
       const deletion = await deleteThreadMessageDetailed(key, messageId, { isUnpaced: true });
       // A note that stayed keeps its place in the set: the next sweep or boot retries it.
@@ -9921,14 +9950,15 @@ async function processVoiceJob(
     } catch (downloadErr) {
       const msg = downloadErr instanceof Error ? downloadErr.message : String(downloadErr);
       console.warn(`[Bot] voice download failed after retries: ${msg}`);
-      void progressNote.finish();
+      await progressNote.finish();
       await replyToThread(key, `${t('voice.failed')} (${msg})`);
       return;
     }
     const result = await transcribeVoiceFile(key, tempFile, durationSeconds, warmedEndpoint);
     fs.unlink(tempFile, () => {});
-    // Text or failure — either way the wait is over; the note goes before the echo / the failure notice replaces it.
-    void progressNote.finish();
+    // Text or failure — either way the wait is over. The note is gone BEFORE the echo or the failure notice goes out (the finish is
+    // bounded, so a stalled delete holds the answer back for a moment at most; what it cut short ends in the background).
+    await progressNote.finish();
 
     if (!result.ok) {
       await replyToThread(key, `${t('voice.failed')} (${result.error})`);
@@ -10010,7 +10040,7 @@ async function processVoiceJob(
     await deliverActivePrompt(key, getThreadAdapter(key), transcript, { source: 'voice', requesterId }, sentAtMs, replyContext);
   } catch (err) {
     console.error('[Bot] Voice handling error:', err);
-    void progressNote.finish();
+    await progressNote.finish();
     await replyToThread(key, 'Error processing voice message');
   }
 }
@@ -13530,38 +13560,48 @@ function healSchedulerMcpForActiveSessions(): void {
  * wire the real bot client + the persist choke point.
  */
 export interface ReconcileTransientFramesDeps {
-  /** Best-effort delete of one Telegram message (Telegraf resolves `true`). */
+  /** Delete one Telegram message; rejects with Telegram's error when it cannot (Telegraf resolves `true` otherwise). */
   deleteMessage: (chatId: number, messageId: number) => Promise<boolean>;
-  /** Re-sync disk to the thread's LIVE in-memory frame ids after the stale deletes. */
-  persistFrames: (key: SessionKey) => void;
+  /**
+   * Replace the thread's `undeletedMessageIds` — the stale ids still to delete — and mirror the live + undeleted ids to disk.
+   * Called with every stale id BEFORE the deletes (so the record survives a reattached session persisting its own frames, and a
+   * second restart in the middle) and with the ones that must be retried AFTER them.
+   */
+  setUndeletedMessageIds: (key: SessionKey, messageIds: number[]) => void;
+  /** Whether a failed delete is worth another try later ({@link checkIsRetryableTelegramError}). */
+  checkIsRetryable: (error: unknown) => boolean;
 }
 
 const defaultReconcileTransientFramesDeps: ReconcileTransientFramesDeps = {
   deleteMessage: (chatId, messageId) => bot.telegram.deleteMessage(chatId, messageId),
-  persistFrames: persistTransientFrames,
+  setUndeletedMessageIds,
+  checkIsRetryable: checkIsRetryableTelegramError,
 };
 
 /**
- * @description Delete transient status frames left on screen by an UNGRACEFUL
- * exit (crash / SIGKILL — the graceful shutdown sweep never ran), so a
- * "✽ working…" / thinking / sub-agent frame doesn't stick forever in a topic
- * (S2, the crash safety net behind S1). Deletes every id in the `orphaned`
- * snapshot best-effort (swallowing "message not found" / too-old). The snapshot
- * MUST be captured BEFORE reattach (see {@link startBot}): a reattached
- * session's frame setters persist the fresh in-memory state and would clobber
- * the live persisted set first. Every snapshot id is stale by definition (the
- * fresh process holds no handle to it; a still-busy reattached session repaints
- * its OWN fresh frame), so deleting is always safe. After deleting, re-persist
- * the CURRENT live frame ids per thread so disk reflects post-reattach truth
- * (the repainted frame's id, or empty) instead of the consumed stale ids. A
- * graceful exit already cleared the set in its sweep, so this is normally a
- * no-op.
+ * @description Delete transient messages left on screen by an exit that did not
+ * finish its own cleanup — a crash / SIGKILL (the graceful shutdown sweep never
+ * ran) or a sweep whose deletes hit a bad moment: the "✽ working…" / thinking /
+ * sub-agent frames and the «transcribing…» voice notes (S2, the crash safety net
+ * behind S1). The snapshot MUST be captured BEFORE reattach (see {@link startBot}):
+ * a reattached session's frame setters persist the fresh in-memory state and would
+ * clobber the live persisted set first. Every snapshot id is stale by definition
+ * (the fresh process holds no handle to it; a still-busy reattached session
+ * repaints its OWN fresh frame), so deleting is always safe.
+ *
+ * The stale ids are first parked in the thread's `undeletedMessageIds` (persisted
+ * with the live ids), then deleted; a delete that fails for a reason a later try can
+ * fix (no answer from Telegram, a 429, a 5xx) KEEPS its id there — the next sweep and
+ * the next boot retry it — while a final answer (already gone, too old to delete,
+ * refused) settles it. Before, the persisted set was re-synced to the live ids at
+ * once and a failed delete was forgotten: the frame stayed in the topic with no
+ * record left. Resolves with how many stale ids were settled; never rejects.
  */
-export function reconcileTransientFrames(
+export async function reconcileTransientFrames(
   orphaned: Record<string, number[]>,
   deps: ReconcileTransientFramesDeps = defaultReconcileTransientFramesDeps,
-): number {
-  let deleted = 0;
+): Promise<number> {
+  const threads: Array<{ key: SessionKey; ids: number[] }> = [];
   for (const [keyStr, ids] of Object.entries(orphaned)) {
     let key: SessionKey;
     try {
@@ -13571,16 +13611,23 @@ export function reconcileTransientFrames(
       // keep booting. Tolerated-and-skipped, like restorePendingQuestions.
       continue;
     }
-    for (const id of ids) {
-      void deps.deleteMessage(getTelegramChatId(key), id).catch(() => {});
-      deleted += 1;
-    }
-    // Sync disk to the LIVE in-memory frames (post-reattach): a still-busy
-    // session that repainted a fresh frame keeps its new id; an idle one clears.
-    deps.persistFrames(key);
+    deps.setUndeletedMessageIds(key, ids);
+    threads.push({ key, ids });
   }
-  if (deleted > 0) console.log(`[reattach] transient frames: deleted ${deleted} stale`);
-  return deleted;
+  const settledCounts = await Promise.all(threads.map(async ({ key, ids }) => {
+    const keptIds = await deleteTransientMessages(
+      ids,
+      async (messageId) => { await deps.deleteMessage(getTelegramChatId(key), messageId); },
+      deps.checkIsRetryable,
+    );
+    deps.setUndeletedMessageIds(key, keptIds);
+    return ids.length - keptIds.length;
+  }));
+  const settled = settledCounts.reduce((total, count) => total + count, 0);
+  const kept = threads.reduce((total, { ids }) => total + ids.length, 0) - settled;
+  if (settled > 0) console.log(`[reattach] transient frames: deleted ${settled} stale`);
+  if (kept > 0) console.warn(`[reattach] transient frames: ${kept} could not be deleted now; they stay recorded and are tried again at the next sweep and boot`);
+  return settled;
 }
 
 /**
@@ -14681,7 +14728,7 @@ export async function startBot(): Promise<void> {
       // repaint). A graceful exit already cleared the set in its sweep, so this
       // is normally a no-op. Uses the pre-reattach snapshot (the setters clobber
       // the live persisted set during reattach).
-      reconcileTransientFrames(orphanedTransientFrames);
+      void reconcileTransientFrames(orphanedTransientFrames).catch((error) => console.error('[reattach] transient frame cleanup failed:', error));
     },
     // The bot MCP tools that read session state (compact_conversation) wait
     // for this: until now a surviving session would read as not running.
@@ -14901,6 +14948,9 @@ export async function startBot(): Promise<void> {
       // A hot worker's reload keeps the sidecar for the next worker to adopt; the supervisor stops it for good.
       stopSidecars: checkIsOpenCodeExternalHost() ? undefined : () => sttOwner.stop(),
       cleanupTimers: () => {
+        // Voice notes that have not posted yet stop NOW (timers cleared, unstarted sends cancelled); the cleanup of the ones on
+        // screen or in flight runs on, and the sweep waits for it.
+        void voiceProgressNotes.shutDown();
         clearInterval(inMemoryGcInterval);
         clearInterval(heartbeatInterval);
         clearInterval(fileSweepInterval);

@@ -518,7 +518,9 @@ function recordAndRetry<T>(
  *  - the typing indicator (`sendChatAction` — not a Telegram message, not
  *    subject to the flood limit, so pacing it just wastes ~60% of the budget);
  *  - the voice-transcript echo (the user's own input being acknowledged, which
- *    should surface ahead of queued agent output).
+ *    should surface ahead of queued agent output);
+ *  - the «transcribing…» note of a voice message and ITS delete: the note must be
+ *    gone before the echo goes out, so its delete cannot queue behind agent output.
  *
  * Do NOT route ordinary agent-output `sendMessage`s through this — that would
  * break the FCFS ordering the pacer guarantees.
