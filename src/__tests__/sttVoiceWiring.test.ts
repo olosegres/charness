@@ -20,6 +20,13 @@ test('readiness and boot use the same chain: the check asks for an engine, boot 
   assert.match(botSource, /\n {2}sttRuntime\.init\(\);\n/);
 });
 
+test('a voice note warms the local engine up as it ARRIVES — after the no-engine gate, before the job is queued behind the topic\'s other voices', () => {
+  const handler = botSource.slice(botSource.indexOf("bot.on(message('voice')"), botSource.indexOf('async function processVoiceJob'));
+  const warmUp = handler.indexOf('warmUpFirstEngine(sttSettings.engines)');
+  assert.ok(warmUp > handler.indexOf('getNoEngineNoticeCode(sttSettings)'), 'after the gate that refuses a voice with no engine');
+  assert.ok(warmUp < handler.indexOf('getVoiceTranscriptionQueue(key)'), 'before the voice job is queued');
+});
+
 test('the plain bot stops the sidecar in its graceful shutdown; a hot worker leaves it to its supervisor', () => {
   assert.match(botSource, /stopSidecars: checkIsOpenCodeExternalHost\(\) \? undefined : \(\) => sttOwner\.stop\(\),/);
 });

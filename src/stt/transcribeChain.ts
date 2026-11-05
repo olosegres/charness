@@ -40,6 +40,19 @@ export interface TranscribeWithEnginesOptions {
 /** @description The outcome, plus the name of the engine that produced it (the last one tried on failure). */
 export type TranscribeChainResult = TranscribeResult & { engine?: string };
 
+/**
+ * @description Start the local engine now when a voice would reach it FIRST: its load (seconds on an idle box, tens of
+ * seconds on a busy one) then overlaps the download and the other work of the voice job instead of following them.
+ * Fire and forget — the voice's own `getEndpoint()` joins the same shared start and reports its outcome; a failure here
+ * is that voice's to report, never an unhandled rejection. Any other first engine (a hosted one answers at once) starts
+ * nothing: an engine a voice may never reach is not worth its memory.
+ */
+export function warmUpFirstEngine(engines: readonly ResolvedSttEngine[]): void {
+  const firstEngine = engines[0];
+  if (firstEngine?.kind !== 'gigaam') return;
+  firstEngine.getEndpoint().catch(() => {});
+}
+
 /** No retries: a non-last engine is tried once. */
 const noRetryDelaysMs: readonly number[] = [];
 

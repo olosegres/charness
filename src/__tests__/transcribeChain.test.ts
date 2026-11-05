@@ -18,7 +18,7 @@ import * as http from 'http';
 import { promises as fsp } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { transcribeWithEngines, type TranscribeFallbackInfo } from '../stt/transcribeChain';
+import { transcribeWithEngines, warmUpFirstEngine, type TranscribeFallbackInfo } from '../stt/transcribeChain';
 import { defaultSttTimeout, type ResolvedSttEngine, type SttTimeout } from '../stt/sttSettings';
 import { queuedAudioSecondsHeader, type TranscribeRetryInfo } from '../utils/transcribeAudio';
 
@@ -486,4 +486,53 @@ test('a non-last engine is asked for its endpoint once — it is not retried', a
   const { result } = await runChain([firstEngine, createEngine('last', second)]);
   assert.equal(result.engine, 'last');
   assert.equal(asked, 1);
+});
+
+/** An engine of the given kind that counts how often its endpoint was asked for and then answers or rejects as told. */
+function createCountingEngine(kind: ResolvedSttEngine['kind'], outcome: 'answers' | 'rejects'): { engine: ResolvedSttEngine; getAsked: () => number } {
+  let asked = 0;
+  const engine: ResolvedSttEngine = {
+    id: kind,
+    kind,
+    name: kind,
+    timeout: defaultSttTimeout,
+    getEndpoint: () => {
+      asked++;
+      return outcome === 'answers' ? Promise.resolve({ url: 'http://127.0.0.1:1/v1/audio/transcriptions', model: 'm' }) : Promise.reject(new Error('the local engine could not be started'));
+    },
+  };
+  return { engine, getAsked: () => asked };
+}
+
+test('warm-up: a local engine that a voice would reach FIRST is asked for its endpoint at once, and only once', () => {
+  const local = createCountingEngine('gigaam', 'answers');
+  const hosted = createCountingEngine('groq', 'answers');
+  warmUpFirstEngine([local.engine, hosted.engine]);
+  assert.equal(local.getAsked(), 1);
+  assert.equal(hosted.getAsked(), 0, 'the later engine is not touched');
+});
+
+test('warm-up: a hosted engine in front starts nothing — the local one behind it may never be reached', () => {
+  const hosted = createCountingEngine('groq', 'answers');
+  const local = createCountingEngine('gigaam', 'answers');
+  warmUpFirstEngine([hosted.engine, local.engine]);
+  assert.equal(hosted.getAsked(), 0);
+  assert.equal(local.getAsked(), 0);
+  warmUpFirstEngine([]);
+});
+
+test('warm-up: a start that fails is the voice\'s to report — it never becomes an unhandled rejection', async () => {
+  const unhandled: Error[] = [];
+  const recordUnhandled = (reason: Error): void => { unhandled.push(reason); };
+  process.on('unhandledRejection', recordUnhandled);
+  try {
+    const local = createCountingEngine('gigaam', 'rejects');
+    warmUpFirstEngine([local.engine]);
+    await new Promise<void>((resolve) => setImmediate(resolve)); // an unhandled rejection is raised after the microtasks
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(local.getAsked(), 1);
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off('unhandledRejection', recordUnhandled);
+  }
 });

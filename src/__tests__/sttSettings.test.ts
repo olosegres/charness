@@ -80,7 +80,7 @@ test('the file order is the chain order, and the defaults fill what the file omi
   assert.ok(result.ok);
   assert.deepEqual(result.config.engines.map((engine) => engine.id), ['g', 'q1', 'u1']);
   assert.equal(result.config.language, null);
-  assert.deepEqual(result.config.gigaam, { idleMinutes: 15, workers: 4 });
+  assert.deepEqual(result.config.gigaam, { idleMinutes: 60, workers: 4 });
 });
 
 test('an empty object is a valid file with no engines', () => {
@@ -137,7 +137,7 @@ test('workers are clamped to the nearest choice, a tie going to the smaller', ()
   assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 8, 40].map(clampSttWorkers), [1, 2, 2, 4, 4, 4, 8, 8, 8]);
   const result = validateSttConfig({ gigaam: { workers: 3, threads: 3 } });
   assert.ok(result.ok);
-  assert.deepEqual(result.config.gigaam, { idleMinutes: 15, workers: 2, threads: 3 });
+  assert.deepEqual(result.config.gigaam, { idleMinutes: 60, workers: 2, threads: 3 });
 });
 
 test('save writes mode 0600 through a rename and leaves no temp file; load reads it back', () => {

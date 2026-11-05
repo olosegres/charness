@@ -6,7 +6,7 @@ gets. User-facing setup is in [`SETUP.md` § Voice input](../../SETUP.md#voice-i
 | File | Role |
 |------|------|
 | `sttSettings.ts` | `stt.json`: types, strict validation, the load and save over the shared [`configDirFile.ts`](../configDirFile.ts), the one-time env-key migration, the resolver (settings → the chain a voice walks), the timeout math, the `[STT]` log lines |
-| `transcribeChain.ts` | `transcribeWithEngines`: walk the chain for one voice file |
+| `transcribeChain.ts` | `transcribeWithEngines`: walk the chain for one voice file; `warmUpFirstEngine`: start the local engine when a voice would reach it first |
 | `sttInstall.ts` | The local engine's install: plan (uv / python3 venv), idempotent run with a lock and progress, `isGigaamInstalled` / `isGigaamInstalling`, remove |
 | `sttInstallEntry.ts` | The detached install job the bot launches (not a user command): `node dist/stt/sttInstallEntry.js <dataDir> [--force]` |
 | `sttSidecarOwner.ts` | The sidecar's lifecycle: `ensure` (adopt or spawn on demand, one shared attempt), the record, the spawn-storm guard, `stop`, the boot cleanup, the owner context |
@@ -54,7 +54,14 @@ Each resolved engine carries `getEndpoint()`: static engines answer at once; the
 there and may reject.
 
 `transcribeWithEngines` per engine: `getEndpoint()` (a rejection is that engine's failure), then
-`transcribeAudio`.
+`transcribeAudio`. `getEndpoint()` of the local engine can take long (it WAITS for a process that is still loading its
+model, § Lifecycle) and is outside the engine's request timeout, which starts after it.
+
+**Warm-up.** The moment a voice note ARRIVES (the voice handler, after the gate, before the download and the topic's voice
+queue) `warmUpFirstEngine` asks the local engine for its endpoint when it is the FIRST engine of the chain — fire and
+forget: the voice's own `getEndpoint()` later joins the same shared start (or adopts the process) and reports the outcome.
+A hosted engine in front starts nothing: the local one may never be reached. Nothing else shows the user a «transcribing…»
+state: there is no such message or typing action in the voice flow (the 🎤 echo is the first sign), and the warm-up adds none.
 
 - A **non-last** engine is tried **once** (`retryDelaysMs: []`); any failure — refused connection, timeout, 4xx,
   5xx, a rejected endpoint — moves to the next at once, logged only (`[transcribe] <engine> failed (…); falling
@@ -186,7 +193,8 @@ env too.
   where a voice now waits for the ones sent before it (and its timeout counts that wait). Each piece goes to `model.recognize` on
   the ONE shared onnxruntime session (one model in memory). A failing piece fails its request only. Texts are joined in
   order with single spaces.
-- **Idle exit:** a timer checks every 5 s. With no transcription in flight for `--idle-minutes` (0 = never) it stops
+- **Idle exit:** the bot always passes `--idle-minutes` from `gigaam.idleMinutes` (default **60**; the script's own default of
+  15 only matters when it is run by hand). A timer checks every 5 s. With no transcription in flight for `--idle-minutes` (0 = never) it stops
   accepting, re-checks that nothing slipped in (if one did, it keeps serving), then deletes `R` **only if R names its own
   pid** (never another generation's), and exits 0. A request that arrives after the exit is decided gets 503 and the bot
   falls back; the next voice starts a fresh process.
@@ -197,7 +205,8 @@ env too.
 
 ### Measured on a dev box (4 cores / 8 threads, no GPU, under load)
 
-Cold start (spawn → ready file) ≈ 2–2.4 s; an 18 s voice ≈ 1.5 s; a 300 s voice ≈ 18.6 s with 4 workers × 2 threads.
+Cold start (spawn → ready file) ≈ 2–2.4 s on an idle box — and well past 15 s at a load average of 22–50, where the model
+load starves for CPU (a fixed 15 s wait once abandoned it twice in a row, so each retry began the load from zero); an 18 s voice ≈ 1.5 s; a 300 s voice ≈ 18.6 s with 4 workers × 2 threads.
 With the pause cuts, at a load average of 3–5: a 300 s voice takes 14.1–15.8 s against 12.4–12.7 s for the 25 s cuts
 alone (three runs each, alternating) — the cutting runs before the first piece reaches a worker, and the voice has 37
 pieces instead of 14.
@@ -210,9 +219,10 @@ onnxruntime keeps, so it is resampled in 30 s windows (≈ 66 MB). Silero VAD it
 **On demand.** A voice whose chain reaches the local engine calls `ensure` (through the engine's `getEndpoint()`):
 
 1. **Adopt** the recorded process when its pid + start token are current, the record's owner fields match the current
-   owner, and the config hash matches. A record with `port: 0` is a start still loading its model: wait (up to the ready
-   timeout) for the port instead of starting a second sidecar; a start that dies meanwhile is replaced at once, one that
-   never listens is stopped and replaced. `GET /health` is asked with the recorded token (1 s, then once more patiently,
+   owner, and the config hash matches. A record with `port: 0` is a start still loading its model: wait for the port
+   instead of starting a second sidecar — for as long as the process LIVES, up to the **start ceiling** (120 s, counted from
+   the process's own `startedAt`, so a worker that arrives late does not give a wedged load a second ceiling); a start that
+   dies meanwhile is replaced at once, one still not listening at the ceiling is stopped and replaced. `GET /health` is asked with the recorded token (1 s, then once more patiently,
    5 s): a sidecar recognising a long voice with every core busy answers late, and killing it would drop another topic's
    in-flight recognition — so a SILENT live matching process is used anyway, and replaced only when it stays silent three
    `ensure`s in a row (it is wedged). `/stt` shows such a process as «running, busy», not «not running».
@@ -220,8 +230,15 @@ onnxruntime keeps, so it is resampled in 30 s windows (≈ 66 MB). Silero VAD it
    SIGKILL, and its record is dropped.
 3. **Spawn.** A fresh token (`crypto.randomBytes`) goes to the process through the env; the process is hosted by
    `startExternallyParentedProcess` (outside nodemon's tree, so a reload never kills it); the bot polls the ready file
-   every 100 ms for up to 15 s, checks the record the sidecar wrote for itself (pid and token) and logs
-   `[STT] sidecar started pid N port P in Xms (workers W)`. A spawn that leaves before it is ready because its claim
+   every 100 ms — as long as the process lives, up to the **start ceiling** (120 s) — checks the record the sidecar wrote for
+   itself (pid and token) and logs `[STT] sidecar started pid N port P in Xms (workers W)`. A load that passes 15 s logs
+   `[STT] sidecar pid N is still loading its model after 15 s; waiting for it (up to 120 s)` once. **A start that lives is
+   never abandoned early** (it was, at a fixed 15 s: each voice then killed the loading process and began the load from
+   zero): a process that DIES ends the wait at once (`the local engine exited before it was ready`), one still loading at the
+   ceiling is stopped and fails the voice with `the local engine was still loading its model after 120 s (see sidecar.log)`
+   — what the user reads after "Failed to transcribe voice message". There is no CPU-progress probe: a live process is
+   waited for, and the ceiling bounds a wedged one. The sidecar runs at the bot's own priority (nice 0), not niced down —
+   a voice is interactive and a niced load starves exactly when the box is busy; this is unchanged. A spawn that leaves before it is ready because its claim
    lost to an earlier start (exit `4`, another live record) is NOT a failed start: the earlier sidecar is adopted
    (`[STT] … found another start already running and left; using that one`). A failed start removes the record it
    claimed.
@@ -230,7 +247,10 @@ onnxruntime keeps, so it is resampled in 30 s windows (≈ 66 MB). Silero VAD it
 (`sttChildEnv.ts`: `PATH`, `HOME`, `TMPDIR`, the locale, proxy / CA settings, `HF_*` / `UV_*` / `PIP_*`) — never the bot's
 Telegram token or the operator's other secrets. The sidecar's own token and the offline model cache are added explicitly.
 
-Concurrent voices share ONE attempt (a module-level promise). Nothing starts at boot.
+Concurrent voices share ONE attempt (a module-level promise): a voice that arrives while the process is loading — and the
+warm-up of the voice before it — waits for the SAME start, however late it comes within the ceiling. Nothing starts at boot:
+a sidecar is held in memory only after someone used voice (60 minutes by default after the last voice, `gigaam.idleMinutes`)
+or when a voice note arrives.
 
 **The owner** is the long-lived process the sidecar dies with: in hot mode the `charness hot` supervisor, which exports
 `CHARNESS_STT_OWNER_PID` + `CHARNESS_STT_OWNER_START_TOKEN` to its worker; in plain mode the bot process. A worker

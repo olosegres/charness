@@ -216,7 +216,7 @@ import {
   resolveSttOwnerContext,
 } from './stt/sttSidecarOwner';
 import { createDefaultSttInstallJobDeps, createSttInstallJobManager } from './stt/sttAutoInstall';
-import { transcribeWithEngines } from './stt/transcribeChain';
+import { transcribeWithEngines, warmUpFirstEngine } from './stt/transcribeChain';
 import { stripCommandBotMention } from './utils';
 import { checkIsConnectCommandText, getRecvTracePreview } from './utils/recvPreviewRedaction';
 import {
@@ -9778,6 +9778,8 @@ bot.on(message('voice'), async (ctx) => {
     await replyToThread(key, t(getNoEngineNoticeCode(sttSettings)));
     return;
   }
+  // The local engine may be cold: start its load now, so it overlaps the download and the topic's voice queue.
+  warmUpFirstEngine(sttSettings.engines);
 
   // Offload the slow download+transcribe+forward off the telegraf update loop:
   // awaiting it here would stall intake of EVERY update until Groq replies

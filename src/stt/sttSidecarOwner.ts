@@ -31,6 +31,9 @@ import type { TranscriptionEndpoint } from '../utils/transcribeAudio';
  *   or supervisor leaves none behind within ~2 s. The owner is the `charness hot` supervisor in hot mode (it
  *   exports {@link sttOwnerPidEnvName} + {@link sttOwnerStartTokenEnvName} before it starts nodemon) or the bot
  *   process itself in plain mode. Without a context the engine is unavailable.
+ * - **A start that lives is waited for** ({@link startCeilingMs} from its start, however busy the box): the
+ *   voice neither abandons a loading process nor starts a second one, and the voices that ask meanwhile share
+ *   that one wait. Only a process that dies, or one still loading at the ceiling, fails the voice.
  * - **No watchdog, no restart backoff.** A crash, a refusal or a timeout makes the CURRENT voice fall back to
  *   the next engine; the NEXT voice's ensure finds the dead process and spawns a new one. Only a spawn-storm
  *   guard exists: three spawn failures within ten minutes mark the engine unhealthy for five.
@@ -47,7 +50,14 @@ const recordFileName = 'sidecar.json';
 const logFileName = 'sidecar.log';
 const readyFilePrefix = 'ready-';
 const readyFileSuffix = '.json';
-const readyTimeoutMs = 15_000;
+/**
+ * How long a sidecar that LIVES and still loads its model is waited for, counted from its start. The load takes ~2-3 s on an
+ * idle box and tens of seconds on a loaded one (it passed 15 s at a load of 22-50), and a start given up on early only makes
+ * the next voice begin the load from zero. A process that dies ends the wait at once; the ceiling bounds only a wedged one.
+ */
+const startCeilingMs = 120_000;
+/** A start still loading after this long is logged once, so a slow load leaves evidence in the bot log. */
+const slowStartNoticeMs = 15_000;
 const readyPollMs = 100;
 /** The record's port while the sidecar still loads its model: the process is there, nothing listens yet. */
 const startingRecordPort = 0;
@@ -148,8 +158,8 @@ export interface SttSidecarOwnerDeps {
   fetchHealth: (port: number, token: string, timeoutMs: number) => Promise<SttSidecarHealth | null>;
   nowMs: () => number;
   sleep: (ms: number) => Promise<void>;
-  /** How long a spawn may take to become ready; tests shorten it. */
-  readyTimeoutMs: number;
+  /** How long a sidecar that lives and still loads its model is waited for, from its start; tests shorten it. */
+  startCeilingMs: number;
   /** The two /health waits when adopting a live process (first, then the patient retry); tests shorten them. */
   adoptHealthTimeoutsMs: readonly [number, number];
   log: (line: string) => void;
@@ -168,7 +178,7 @@ export function createDefaultSttSidecarOwnerDeps(getDataDir: () => string): SttS
     fetchHealth: fetchSttSidecarHealth,
     nowMs: Date.now,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    readyTimeoutMs,
+    startCeilingMs,
     adoptHealthTimeoutsMs: [adoptHealthTimeoutMs, adoptHealthRetryTimeoutMs],
     log: (line) => console.log(line),
   };
@@ -322,11 +332,24 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
   }
 
   /**
-   * Wait for a sidecar that is still loading its model (its record has no port yet) to publish the port. `gone`: the
-   * process ended or the record now belongs to another start; `timeout`: alive but not listening in time (wedged).
+   * The moment a start that is still loading runs out of its ceiling. It counts from the process's OWN start (the record's
+   * `startedAt`), not from this wait: a worker that arrives late must not give a wedged load a second ceiling. A start
+   * stamp from the future or one that cannot be read counts as "now".
+   */
+  function getLoadingDeadlineMs(startedAt: string): number {
+    const nowMs = deps.nowMs();
+    const startedAtMs = Date.parse(startedAt);
+    const loadingSinceMs = Number.isNaN(startedAtMs) ? nowMs : Math.min(nowMs, startedAtMs);
+    return loadingSinceMs + deps.startCeilingMs;
+  }
+
+  /**
+   * Wait for a sidecar that is still loading its model (its record has no port yet) to publish the port, for as long as
+   * the process lives and its ceiling allows. `gone`: the process ended or the record now belongs to another start;
+   * `timeout`: alive but still not listening at the ceiling (wedged).
    */
   async function waitForRecordedPort(starting: SttSidecarRecord): Promise<{ kind: 'listening'; record: SttSidecarRecord } | { kind: 'gone' } | { kind: 'timeout' }> {
-    const deadlineMs = deps.nowMs() + deps.readyTimeoutMs;
+    const deadlineMs = getLoadingDeadlineMs(starting.startedAt);
     for (;;) {
       const current = readRecord();
       if (!current || current.pid !== starting.pid || !deps.checkIsIdentityCurrent(current)) return { kind: 'gone' };
@@ -372,7 +395,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
         deps.log(`[STT] sidecar pid ${record.pid} stayed silent ${unansweredAdoptionLimit} times in a row; replacing it`);
         unansweredAdoptions = 0;
       } else {
-        deps.log(`[STT] sidecar pid ${record.pid} did not start listening in ${Math.round(deps.readyTimeoutMs / 1000)} s; replacing it`);
+        deps.log(`[STT] sidecar pid ${record.pid} has been loading the model for more than ${Math.round(deps.startCeilingMs / 1000)} s; replacing it`);
       }
     }
     // Dead, another owner's or another config's — or wedged: it must go before a new one starts.
@@ -427,6 +450,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
       noteSpawnFailure();
       throw new Error(reason);
     };
+    let isSlowStartLogged = false;
     for (;;) {
       const ready = readReadyFile(readyFile);
       if (ready && ready.pid === identity.pid) {
@@ -451,8 +475,13 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
         }
         return fail('the local engine exited before it was ready (see sidecar.log)');
       }
-      if (deps.nowMs() - startedAtMs >= deps.readyTimeoutMs) {
-        return fail(`the local engine was not ready in ${Math.round(deps.readyTimeoutMs / 1000)} s`);
+      const waitedMs = deps.nowMs() - startedAtMs;
+      if (waitedMs >= deps.startCeilingMs) {
+        return fail(`the local engine was still loading its model after ${Math.round(deps.startCeilingMs / 1000)} s (see sidecar.log)`);
+      }
+      if (!isSlowStartLogged && waitedMs >= slowStartNoticeMs) {
+        isSlowStartLogged = true;
+        deps.log(`[STT] sidecar pid ${identity.pid} is still loading its model after ${Math.round(waitedMs / 1000)} s; waiting for it (up to ${Math.round(deps.startCeilingMs / 1000)} s)`);
       }
       await deps.sleep(readyPollMs);
     }

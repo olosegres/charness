@@ -4,6 +4,10 @@
  * test's process tree exactly as in production. Covers spawn on demand, one shared spawn for concurrent voices,
  * adoption, idle exit and crash then respawn, config changes, a foreign owner, the spawn-storm guard, stop,
  * the owner dying (a decoy the test creates and SIGKILLs) and a reload handing the process to a new worker.
+ *
+ * The last block runs the same owner over a FAKE world — no processes, a clock that only the owner's own sleeps advance — to
+ * pin how long a start is waited for: a model that loads for tens of seconds on a busy box is waited for, a dead process
+ * fails at once, a wedged one at the ceiling counted from its own start.
  */
 
 import { test, beforeEach, afterEach } from 'node:test';
@@ -31,7 +35,7 @@ import {
   type SttSidecarEndpoint,
   type SttSidecarOwnerDeps,
 } from '../stt/sttSidecarOwner';
-import { transcribeWithEngines } from '../stt/transcribeChain';
+import { transcribeWithEngines, warmUpFirstEngine } from '../stt/transcribeChain';
 
 const fixturesDir = path.join(__dirname, 'fixtures');
 const fakeSidecarPath = path.join(fixturesDir, 'fakeSttSidecar.cjs');
@@ -77,8 +81,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** A start that never gets ready fails fast; a start that must succeed gets the time a loaded box needs to spawn a process. */
-const neverReadyTimeoutMs = 300;
-const startedReadyTimeoutMs = 10_000;
+const neverReadyCeilingMs = 300;
+const startedCeilingMs = 10_000;
 
 function createDeps(overrides: Partial<SttSidecarOwnerDeps> = {}): SttSidecarOwnerDeps {
   const base = createDefaultSttSidecarOwnerDeps(() => dataDir);
@@ -93,7 +97,7 @@ function createDeps(overrides: Partial<SttSidecarOwnerDeps> = {}): SttSidecarOwn
       return identity;
     },
     nowMs: () => Date.now() + clockOffsetMs,
-    readyTimeoutMs: startedReadyTimeoutMs,
+    startCeilingMs: startedCeilingMs,
     log: (line) => logLines.push(line),
     ...overrides,
   };
@@ -279,9 +283,9 @@ test('a start that exits before it is ready, and one that is never ready, both r
   assert.equal(fs.existsSync(getRecordPath()), false);
 
   fakeArgs = ['--never-ready'];
-  const slowOwner = createSttSidecarOwner(createDeps({ readyTimeoutMs: 400 }));
+  const slowOwner = createSttSidecarOwner(createDeps({ startCeilingMs: 400 }));
   const startedAt = Date.now();
-  await assert.rejects(() => slowOwner.ensure(defaultSettings), /was not ready in/);
+  await assert.rejects(() => slowOwner.ensure(defaultSettings), /still loading its model after/);
   assert.ok(Date.now() - startedAt < 5_000);
   assert.ok(await waitUntilGone(startedIdentities[1]), 'the stuck process is killed');
   assert.equal(fs.existsSync(getRecordPath()), false);
@@ -489,11 +493,11 @@ test('boot cleanup with no owner context stops a live record too, and a garbage 
 
 test('spawn-storm guard: three failed starts mark the engine unhealthy for five minutes; a fourth ensure is refused without a spawn', async () => {
   fakeArgs = ['--never-ready'];
-  const deps = createDeps({ readyTimeoutMs: neverReadyTimeoutMs });
+  const deps = createDeps({ startCeilingMs: neverReadyCeilingMs });
   const owner = createSttSidecarOwner(deps);
   for (let attempt = 1; attempt <= 3; attempt++) {
     assert.equal(owner.checkIsUnhealthy(), false, `before failure ${attempt}`);
-    await assert.rejects(() => owner.ensure(defaultSettings), /was not ready in/);
+    await assert.rejects(() => owner.ensure(defaultSettings), /still loading its model after/);
   }
   assert.equal(owner.checkIsUnhealthy(), true);
   assert.equal(startCalls.length, 3);
@@ -509,7 +513,7 @@ test('spawn-storm guard: three failed starts mark the engine unhealthy for five 
   clockOffsetMs += fiveMinutesMs + 1_000;
   assert.equal(owner.checkIsUnhealthy(), false, 'five minutes later a spawn is allowed again');
   fakeArgs = [];
-  deps.readyTimeoutMs = startedReadyTimeoutMs;
+  deps.startCeilingMs = startedCeilingMs;
   await owner.ensure(defaultSettings);
   assert.equal(startCalls.length, 4);
   await owner.stop();
@@ -517,7 +521,7 @@ test('spawn-storm guard: three failed starts mark the engine unhealthy for five 
 
 test('spawn-storm guard: "Try again now" lifts it, and a successful start resets the count of consecutive failures', async () => {
   fakeArgs = ['--never-ready'];
-  const deps = createDeps({ readyTimeoutMs: neverReadyTimeoutMs });
+  const deps = createDeps({ startCeilingMs: neverReadyCeilingMs });
   const owner = createSttSidecarOwner(deps);
   for (let attempt = 0; attempt < 3; attempt++) await assert.rejects(() => owner.ensure(defaultSettings));
   assert.equal(owner.checkIsUnhealthy(), true);
@@ -528,11 +532,11 @@ test('spawn-storm guard: "Try again now" lifts it, and a successful start resets
   // two failures, a success, two more failures: never three IN A ROW
   for (let attempt = 0; attempt < 2; attempt++) await assert.rejects(() => owner.ensure(defaultSettings));
   fakeArgs = [];
-  deps.readyTimeoutMs = startedReadyTimeoutMs;
+  deps.startCeilingMs = startedCeilingMs;
   await owner.ensure(defaultSettings);
   await owner.stop();
   fakeArgs = ['--never-ready'];
-  deps.readyTimeoutMs = neverReadyTimeoutMs;
+  deps.startCeilingMs = neverReadyCeilingMs;
   for (let attempt = 0; attempt < 2; attempt++) await assert.rejects(() => owner.ensure(defaultSettings));
   assert.equal(owner.checkIsUnhealthy(), false);
   await assert.rejects(() => owner.ensure(defaultSettings));
@@ -541,7 +545,7 @@ test('spawn-storm guard: "Try again now" lifts it, and a successful start resets
 
 test('failures older than ten minutes do not count toward the storm', async () => {
   fakeArgs = ['--never-ready'];
-  const owner = createSttSidecarOwner(createDeps({ readyTimeoutMs: neverReadyTimeoutMs }));
+  const owner = createSttSidecarOwner(createDeps({ startCeilingMs: neverReadyCeilingMs }));
   await assert.rejects(() => owner.ensure(defaultSettings));
   await assert.rejects(() => owner.ensure(defaultSettings));
   clockOffsetMs += 11 * 60 * 1000;
@@ -757,12 +761,12 @@ test('a start that claimed the record and never listens is replaced after the wa
   await getCharnessWait(() => fs.existsSync(getRecordPath()), 10_000, 'the wedged sidecar to claim its record');
   // The one ready wait covers both the wedged start (waited out, then replaced) and the replacement, which must come
   // up: it gets the time a loaded box needs to spawn a process (600 ms here failed under the parallel suite).
-  const owner = createSttSidecarOwner(createDeps({ readyTimeoutMs: startedReadyTimeoutMs }));
+  const owner = createSttSidecarOwner(createDeps({ startCeilingMs: startedCeilingMs }));
   const endpoint = await owner.ensure(defaultSettings);
   assert.equal(startCalls.length, 1, 'a replacement was started');
   assert.ok(await waitUntilGone(wedged, 3_000), 'the wedged one was stopped');
   assert.equal(readRecord().port, endpoint.port);
-  assert.ok(logLines.some((line) => line.includes('did not start listening')), logLines.join('\n'));
+  assert.ok(logLines.some((line) => line.includes('has been loading the model for more than')), logLines.join('\n'));
   await owner.stop();
 
   const dying = await startEarlierSidecar(['--never-ready']);
@@ -775,6 +779,255 @@ test('a start that claimed the record and never listens is replaced after the wa
   assert.equal(startCalls.length, 2, 'a start that died while we waited is replaced, not waited for');
   assert.equal(readRecord().port, replacement.port);
   await patientOwner.stop();
+});
+
+// ── how long a start is waited for (a fake world: no processes, a clock the owner's own sleeps advance) ─────────────────
+
+const fakeLoadNeverMs = Number.POSITIVE_INFINITY;
+const fakeDefaultLoadMs = 2_000;
+const fakeFirstPid = 4_000;
+const fakePortBase = 40_000;
+const fakeCeilingMs = 120_000;
+const fakeEpochMs = Date.UTC(2026, 10, 5, 9, 48, 0);
+
+interface FakeLoadingSidecar {
+  pid: number;
+  startToken: string;
+  token: string;
+  recordFile: string;
+  readyFile: string | null;
+  configHash: string;
+  startedAt: string;
+  readyAtMs: number;
+}
+
+/**
+ * The owner over a world of its own: a sidecar "lives" as long as the test says (`killAll`), claims the record when it is
+ * started and completes it (and writes its ready file) `loadMs` of fake time later. Time passes only inside the owner's
+ * `sleep`, so a two-minute wait takes no wall time and every deadline is exact.
+ */
+function createFakeWorld(overrides: Partial<SttSidecarOwnerDeps> = {}) {
+  let nowMs = fakeEpochMs;
+  let nextPid = fakeFirstPid;
+  let spawnCount = 0;
+  const alive = new Set<number>();
+  const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+  const loading: FakeLoadingSidecar[] = [];
+  const scheduled: Array<{ atMs: number; action: () => void }> = [];
+  const worldLogLines: string[] = [];
+  const state = { loadMsOfNextStart: fakeDefaultLoadMs };
+
+  function writeRecord(sidecar: FakeLoadingSidecar, port: number): void {
+    fs.writeFileSync(sidecar.recordFile, JSON.stringify({
+      pid: sidecar.pid,
+      startToken: sidecar.startToken,
+      port,
+      token: sidecar.token,
+      configHash: sidecar.configHash,
+      ownerPid: testOwner.pid,
+      ownerStartToken: testOwner.startToken,
+      startedAt: sidecar.startedAt,
+    }));
+  }
+
+  function startSidecar(sidecar: Omit<FakeLoadingSidecar, 'pid' | 'startToken' | 'startedAt'>, startedAgoMs: number): FakeLoadingSidecar {
+    const pid = nextPid++;
+    const started: FakeLoadingSidecar = { ...sidecar, pid, startToken: `fake-start-${pid}`, startedAt: new Date(nowMs - startedAgoMs).toISOString() };
+    alive.add(pid);
+    fs.mkdirSync(path.dirname(started.recordFile), { recursive: true });
+    writeRecord(started, 0); // claimed before the model loads, like the real one
+    loading.push(started);
+    return started;
+  }
+
+  function runDue(): void {
+    for (const entry of scheduled.filter((candidate) => candidate.atMs <= nowMs)) {
+      scheduled.splice(scheduled.indexOf(entry), 1);
+      entry.action();
+    }
+    for (const sidecar of loading.filter((candidate) => candidate.readyAtMs <= nowMs)) {
+      loading.splice(loading.indexOf(sidecar), 1);
+      if (!alive.has(sidecar.pid)) continue;
+      const port = fakePortBase + sidecar.pid;
+      writeRecord(sidecar, port);
+      if (sidecar.readyFile) fs.writeFileSync(sidecar.readyFile, JSON.stringify({ pid: sidecar.pid, port, version: 'fake' }));
+    }
+  }
+
+  const base = createDefaultSttSidecarOwnerDeps(() => dataDir);
+  const deps: SttSidecarOwnerDeps = {
+    ...base,
+    getOwnerContext: () => testOwner,
+    getLaunch: () => ({ command: 'fake-sidecar', args: [] }),
+    getBaseEnv: () => ({}),
+    startProcess: async (_command, args, env) => {
+      spawnCount++;
+      const flag = (name: string): string => args[args.indexOf(name) + 1];
+      const started = startSidecar({
+        token: env[sttSidecarTokenEnvName] ?? '',
+        recordFile: flag('--record-file'),
+        readyFile: flag('--ready-file'),
+        configHash: flag('--config-hash'),
+        readyAtMs: nowMs + state.loadMsOfNextStart,
+      }, 0);
+      return { pid: started.pid, startToken: started.startToken };
+    },
+    checkIsIdentityCurrent: (identity) => alive.has(identity.pid),
+    signalProcess: (identity, signal) => {
+      signals.push({ pid: identity.pid, signal });
+      alive.delete(identity.pid);
+      return true;
+    },
+    fetchHealth: async () => ({ status: 'ok', busyRequests: 0 }),
+    nowMs: () => nowMs,
+    sleep: async (ms) => {
+      nowMs += ms;
+      runDue();
+    },
+    startCeilingMs: fakeCeilingMs,
+    log: (line) => worldLogLines.push(line),
+    ...overrides,
+  };
+
+  return {
+    deps,
+    state,
+    signals,
+    logLines: worldLogLines,
+    getSpawnCount: () => spawnCount,
+    getElapsedMs: () => nowMs - fakeEpochMs,
+    getAliveCount: () => alive.size,
+    /** Run `action` when `afterMs` of fake time have passed (inside the owner's next sleep). */
+    schedule: (afterMs: number, action: () => void) => { scheduled.push({ atMs: nowMs + afterMs, action }); },
+    killAll: () => alive.clear(),
+    /** A sidecar an EARLIER worker started: recorded as loading, `startedAgoMs` ago, ready `loadMs` from now. */
+    addEarlierSidecar: (loadMs: number, startedAgoMs = 0): FakeLoadingSidecar => startSidecar({
+      token: 'earlier-token',
+      recordFile: getRecordPath(),
+      readyFile: null,
+      configHash: getSttSidecarConfigHash(defaultSettings),
+      readyAtMs: nowMs + loadMs,
+    }, startedAgoMs),
+  };
+}
+
+function createLocalEngine(owner: ReturnType<typeof createSttSidecarOwner>, onAsk: () => void = () => {}): ResolvedSttEngine {
+  return {
+    id: 'g',
+    kind: 'gigaam',
+    name: 'gigaam',
+    timeout: defaultSttTimeout,
+    getEndpoint: async () => {
+      onAsk();
+      return getSttSidecarTranscriptionEndpoint(await owner.ensure(defaultSettings));
+    },
+  };
+}
+
+test('a model that loads for 45 s on a busy box is waited for: one process, nothing killed, no failure, and the slow load is logged once', async () => {
+  const world = createFakeWorld();
+  world.state.loadMsOfNextStart = 45_000;
+  const owner = createSttSidecarOwner(world.deps);
+
+  const endpoint = await owner.ensure(defaultSettings);
+
+  assert.equal(world.getSpawnCount(), 1);
+  assert.deepEqual(world.signals, [], 'a process that is still loading is never stopped');
+  assert.equal(owner.checkIsUnhealthy(), false);
+  assert.ok(endpoint.port > 0 && endpoint.token.length >= 32);
+  assert.deepEqual(endpoint, { port: readRecord().port, token: readRecord().token });
+  assert.ok(world.getElapsedMs() >= 45_000 && world.getElapsedMs() < 46_000, `waited ${world.getElapsedMs()} ms`);
+  const slowLines = world.logLines.filter((line) => line.includes('is still loading its model after'));
+  assert.equal(slowLines.length, 1, world.logLines.join('\n'));
+  assert.match(slowLines[0], /after 15 s; waiting for it \(up to 120 s\)/);
+  assert.ok(world.logLines.some((line) => /^\[STT\] sidecar started pid \d+ port \d+ in 45\d{3}ms/.test(line)), world.logLines.join('\n'));
+});
+
+test('a voice that arrives while the sidecar still loads shares that start — no second process, the same endpoint, however late it comes', async () => {
+  const world = createFakeWorld();
+  world.state.loadMsOfNextStart = 70_000;
+  const owner = createSttSidecarOwner(world.deps);
+  const latecomers: Array<Promise<SttSidecarEndpoint>> = [];
+  world.schedule(25_000, () => { latecomers.push(owner.ensure(defaultSettings)); });
+  world.schedule(60_000, () => { latecomers.push(owner.ensure(defaultSettings)); });
+
+  const first = await owner.ensure(defaultSettings);
+
+  assert.equal(latecomers.length, 2);
+  for (const latecomer of latecomers) assert.deepEqual(await latecomer, first);
+  assert.equal(world.getSpawnCount(), 1);
+  assert.deepEqual(world.signals, []);
+});
+
+test('a warm-up asks for the endpoint first and the voice\'s own request joins it: the model is loaded once', async () => {
+  const world = createFakeWorld();
+  world.state.loadMsOfNextStart = 30_000;
+  const owner = createSttSidecarOwner(world.deps);
+  const asked: string[] = [];
+  const engine = createLocalEngine(owner, () => asked.push('ask'));
+
+  warmUpFirstEngine([engine]);
+  const voiceEndpoint = await engine.getEndpoint();
+
+  assert.equal(asked.length, 2, 'the warm-up and the voice each asked');
+  assert.equal(world.getSpawnCount(), 1, 'but there is one start');
+  assert.equal(voiceEndpoint.url, `http://127.0.0.1:${readRecord().port}/v1/audio/transcriptions`);
+});
+
+test('a reloaded worker finds the loading sidecar in its record and waits for it — no second process', async () => {
+  const world = createFakeWorld();
+  world.addEarlierSidecar(50_000, 30_000);
+  const owner = createSttSidecarOwner(world.deps);
+
+  const endpoint = await owner.ensure(defaultSettings);
+
+  assert.equal(world.getSpawnCount(), 0, 'the new worker started nothing');
+  assert.deepEqual(world.signals, []);
+  assert.deepEqual(endpoint, { port: readRecord().port, token: 'earlier-token' });
+  assert.ok(world.logLines.some((line) => line.includes('is still loading the model; waiting for it')), world.logLines.join('\n'));
+  assert.ok(world.getElapsedMs() >= 50_000 && world.getElapsedMs() < 51_000, `waited ${world.getElapsedMs()} ms`);
+});
+
+test('the ceiling counts from the process\'s OWN start: one that has loaded for 100 s gets 20 s more, not a fresh 120', async () => {
+  const world = createFakeWorld();
+  const wedged = world.addEarlierSidecar(fakeLoadNeverMs, 100_000);
+  const owner = createSttSidecarOwner(world.deps);
+
+  const endpoint = await owner.ensure(defaultSettings);
+
+  assert.ok(world.getElapsedMs() >= 20_000 && world.getElapsedMs() < 25_000, `waited ${world.getElapsedMs()} ms (20 s of the ceiling + the replacement's own load)`);
+  assert.ok(world.signals.some((entry) => entry.pid === wedged.pid), 'the wedged one was stopped');
+  assert.equal(world.getSpawnCount(), 1, 'and replaced');
+  assert.equal(readRecord().port, endpoint.port);
+  assert.ok(world.logLines.some((line) => line.includes('has been loading the model for more than 120 s; replacing it')), world.logLines.join('\n'));
+});
+
+test('a process that dies while it loads fails the voice at once — not at the ceiling — and cleans up', async () => {
+  const world = createFakeWorld();
+  world.state.loadMsOfNextStart = fakeLoadNeverMs;
+  world.schedule(3_000, world.killAll);
+  const owner = createSttSidecarOwner(world.deps);
+
+  await assert.rejects(() => owner.ensure(defaultSettings), /exited before it was ready/);
+
+  assert.ok(world.getElapsedMs() < 4_000, `failed after ${world.getElapsedMs()} ms`);
+  assert.equal(fs.existsSync(getRecordPath()), false, 'the claimed record is dropped');
+  assert.equal(world.getSpawnCount(), 1);
+});
+
+test('a start still loading at the ceiling is stopped and the voice is told so: the failure names the 120 s and the cause', async () => {
+  const world = createFakeWorld();
+  world.state.loadMsOfNextStart = fakeLoadNeverMs;
+  const owner = createSttSidecarOwner(world.deps);
+
+  const result = await transcribeWithEngines(writeAudioFile(), [createLocalEngine(owner)], { language: null });
+
+  assert.deepEqual(result, { ok: false, error: 'the local engine was still loading its model after 120 s (see sidecar.log)', engine: 'gigaam' });
+  assert.ok(world.getElapsedMs() >= fakeCeilingMs && world.getElapsedMs() < fakeCeilingMs + 1_000, `gave up after ${world.getElapsedMs()} ms`);
+  assert.equal(world.getAliveCount(), 0, 'the wedged process is stopped');
+  assert.equal(fs.existsSync(getRecordPath()), false);
+  assert.deepEqual(fs.readdirSync(getSttPaths(dataDir).root).filter((name) => name.startsWith('ready-')), []);
+  assert.equal(owner.checkIsUnhealthy(), false, 'one failed start is not a storm');
 });
 
 async function getCharnessWait(check: () => boolean, timeoutMs: number, description: string): Promise<void> {

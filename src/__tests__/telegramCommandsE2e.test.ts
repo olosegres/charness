@@ -709,7 +709,7 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     assert.match(screen.text, /Status: ready · stopped/);
     assert.match(screen.text, /up to ~0\.9 GB on a long voice note/);
     const cardLabels = topic.getKeyboardLabels(screen).flat();
-    for (const label of ['⏱ Timeout: 10s+25%', '⏱ Exit after idle: 15 min', '⚙️ Workers: 4', 'Remove from list', '🗑 Remove model files', '⬅️ Back']) {
+    for (const label of ['⏱ Timeout: 10s+25%', '⏱ Exit after idle: 60 min', '⚙️ Workers: 4', 'Remove from list', '🗑 Remove model files', '⬅️ Back']) {
       assert.ok(cardLabels.includes(label), `${label} in ${cardLabels.join(' | ')}`);
     }
     assert.deepEqual(readSttFile().engines.map((engine) => engine.kind), ['gigaam']);

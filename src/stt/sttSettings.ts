@@ -47,7 +47,12 @@ export interface SttTimeout {
 }
 
 export const defaultSttTimeout: SttTimeout = { baseSeconds: 10, percentOfDuration: 25 };
-export const defaultGigaamIdleMinutes = 15;
+/**
+ * How long the local engine stays loaded after its last voice. An hour holds a working session's gaps between voice notes
+ * (a cold start under load is the slowest thing a voice can meet); the cost is its memory (~0.5 GB, up to ~0.9 GB after a
+ * long voice) for that hour, and `/stt` lets a small box pick less.
+ */
+export const defaultGigaamIdleMinutes = 60;
 export const defaultGigaamWorkers = 4;
 /** Intra-op threads per worker; `workers × threads` should not exceed the CPU count. */
 export const defaultGigaamThreads = 2;

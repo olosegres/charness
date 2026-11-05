@@ -397,7 +397,7 @@ function assertLocalCardOpened(edit: { text: string; buttons: string[] }, notice
   assert.ok(edit.text.includes(notice), edit.text);
   assert.match(edit.text, /GigaAM v3 — local, Russian only\nStatus: ready · stopped/);
   assert.match(edit.text, /up to ~0\.9 GB on a long voice note/);
-  for (const prefix of ['⏱ Timeout: 10s+25%|stt_tm_g_', '⏱ Exit after idle: 15 min|stt_im_g_', '⚙️ Workers: 4|stt_wm_g_', 'Remove from list|stt_ra_g_', '🗑 Remove model files|stt_fa_g_', '⬅️ Back|stt_bk_']) {
+  for (const prefix of ['⏱ Timeout: 10s+25%|stt_tm_g_', '⏱ Exit after idle: 60 min|stt_im_g_', '⚙️ Workers: 4|stt_wm_g_', 'Remove from list|stt_ra_g_', '🗑 Remove model files|stt_fa_g_', '⬅️ Back|stt_bk_']) {
     assert.ok(edit.buttons.some((button) => button.startsWith(prefix)), `${prefix} in ${edit.buttons.join(' / ')}`);
   }
 }
