@@ -74,25 +74,30 @@ export type PueueState =
   | { kind: 'busy'; activeJobs: number }
   | { kind: 'unreadable' };
 
-/** @description The tasks of `pueue status --json` that hold a process — `Running` and `Paused` — or `null` when the text is not that. */
-export function countActivePueueTasks(statusJson: string): number | null {
+/** The statuses of a task that holds a process: it runs, or it is paused with its process kept. */
+export const pueueProcessStatuses: readonly string[] = ['Running', 'Paused'];
+/** Every status of a task that is not over and will not wait for a person: also one that is queued (it starts the moment a slot frees) or locked. */
+export const pueueUnfinishedStatuses: readonly string[] = ['Running', 'Paused', 'Queued', 'Locked'];
+
+/** @description The tasks of `pueue status --json` whose status is one of `statuses` (default: those that hold a process, `Running` and `Paused`), or `null` when the text is not that. */
+export function countActivePueueTasks(statusJson: string, statuses: readonly string[] = pueueProcessStatuses): number | null {
   try {
     const parsed: { tasks?: Record<string, { status?: object | string }> } = JSON.parse(statusJson);
     if (parsed.tasks === undefined) return null;
     return Object.values(parsed.tasks).filter((task) => {
-      const status = typeof task.status === 'string' ? [task.status] : Object.keys(task.status ?? {});
-      return status.includes('Running') || status.includes('Paused');
+      const taskStatuses = typeof task.status === 'string' ? [task.status] : Object.keys(task.status ?? {});
+      return taskStatuses.some((status) => statuses.includes(status));
     }).length;
   } catch {
     return null;
   }
 }
 
-/** @description Is a daemon answering on the runner's socket, and does it hold running jobs? */
-export async function inspectPueue(paths: RunnerHomePaths, runner: CommandRunner = runCommand): Promise<PueueState> {
+/** @description Is a daemon answering on the runner's socket, and does it hold running jobs? `statuses` says what counts as a job ({@link pueueProcessStatuses} unless the caller also waits for the queued ones). */
+export async function inspectPueue(paths: RunnerHomePaths, runner: CommandRunner = runCommand, statuses: readonly string[] = pueueProcessStatuses): Promise<PueueState> {
   const result = await runner(path.join(paths.binDir, 'pueue'), ['--config', paths.pueueConfig, 'status', '--json'], { timeoutMs: probeTimeoutMs });
   if (!result.ok) return { kind: 'absent' };
-  const activeJobs = countActivePueueTasks(result.stdout);
+  const activeJobs = countActivePueueTasks(result.stdout, statuses);
   if (activeJobs === null) return { kind: 'unreadable' };
   return activeJobs === 0 ? { kind: 'idle' } : { kind: 'busy', activeJobs };
 }

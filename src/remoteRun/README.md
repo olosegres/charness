@@ -76,8 +76,9 @@ config are found from the reported work dir with the layout `runnerUtility/runne
   give one to a LaunchDaemon), and into `no — the iOS Simulator check failed: <reason>` for any other failure (no runtime installed, the device could not be created). On a Mac kept
   running as an always-on service (`service=system-service`) the answer comes first from the login session's agent (`gui/agent.json`, see «the login session» in
   `runner.sh`): no agent beating means `cap_ios=no` with `ios build: needs a login of <account>` — or, when the link tried to install the agent itself and could not
-  (`gui/install-failure`, one line, `runnerUtility/guiAgentHeal.ts`), with `ios build: the login session's agent could not be installed (<reason>) - paste a fresh admin line
-  from /runners in an admin account's terminal`; a job staged with `--needs ios` (`needs-ios` in its folder) is refused with those
+  (`gui/install-failure`, one line `<cure> <reason>`, `runnerUtility/guiAgentHeal.ts`), with `ios build: the login session's agent could not be loaded (<reason>) - log out and back in as
+  <account>, or paste a fresh admin line from /runners in an admin account's terminal` (cure `login`: its definition is in place) or `… could not be installed (<reason>) - paste a fresh
+  admin line from /runners in an admin account's terminal` (cure `admin`); a job staged with `--needs ios` (`needs-ios` in its folder) is refused with those
   words by `submit` / `lease` / its own start; with an agent EVERY job's steps (marked or not) run in the account's login session through `gui/requests/`, and without one the
   jobs that do not need iOS run in the daemon as before. `exec` is not routed. The files are written by `charness-runner` (`pause`, `service install`, the iOS check of the service).
 - **How the link keeps the machine awake** (`awake=` caffeinate | systemd-inhibit | no, `awake_detail=`; `probe_awake` reads `<state>/awake`, `keepAwake.ts` writes it): a holder

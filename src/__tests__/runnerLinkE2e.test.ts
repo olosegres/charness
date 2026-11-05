@@ -32,6 +32,7 @@ import { getRunnerLinkStatus } from '../runners/linkControl';
 import { checkIsProcessAlive } from './recordedProcess';
 import { connectToHub, HubConnectionError, requestGateJson } from '../runnerUtility/hubClient';
 import { readGuiAgentInstallFailure } from '../runnerUtility/guiAgentHeal';
+import { ensurePueueDaemon } from '../runnerUtility/pueueDaemon';
 import { readRunnerConfig, writePairingInProgress } from '../runnerUtility/runnerConfig';
 import { ensureRunnerKeys } from '../runnerUtility/runnerKeys';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
@@ -383,9 +384,16 @@ describe('runner link (process level)', { skip: skipReason }, () => {
       await stopRunner(layout, runner);
       fs.rmSync(getAgentFile(), { force: true });
       if (serviceKind === null) fs.rmSync(runnerPaths.serviceMarker, { force: true });
-      else fs.writeFileSync(runnerPaths.serviceMarker, `${serviceKind}\n`);
+      else {
+        // A runner kept running by a service finds its queue run by the service and waits for it (20 s) instead of starting one: the stop took the daemon the previous start had made
+        // along with the runner's process group, so the queue is started here, apart from it — what the service would have kept up.
+        assert.equal(await ensurePueueDaemon(runnerPaths), true, 'the queue the service would keep');
+        fs.writeFileSync(runnerPaths.serviceMarker, `${serviceKind}\n`);
+      }
       runner = startRunner(layout, layout.runnerHome, { PATH: `${launchctlDir}:${path.dirname(process.execPath)}:${process.env.PATH ?? ''}` });
       await waitForLink(linkedBefore.pid);
+      // «Linked» is the runner's word; the case after this one talks to it through the hub's socket, which exists a moment later.
+      await waitForHubToSeeLink(runnerId);
     }
 
     after(() => {
@@ -406,6 +414,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
       fs.appendFileSync(path.join(layout.hubInstall, 'dist', 'runners', 'pairCode.js'), '\n// changed once more by the flow\n');
       await waitUntil(() => fs.realpathSync(runnerPaths.currentApp) !== appBefore, 'the runner to install the new package', updateTimeoutMs);
       await waitForLink(statusBefore.pid);
+      await waitForHubToSeeLink(runnerId);
       await waitUntil(() => launchctl.checkIsLoaded(), 'the restarted link to load the agent into the account\'s login session', linkTimeoutMs);
       assert.equal(fs.readFileSync(getAgentFile(), 'utf8'), getExpectedAgentDefinition());
       assert.equal(getAgentFile(), path.join(layout.runnerHome, 'Library', 'LaunchAgents', `${getServiceNames(runnerPaths.root).launchdGui}.plist`), 'in the account\'s own folder');
@@ -418,7 +427,8 @@ describe('runner link (process level)', { skip: skipReason }, () => {
       launchctl.setBootstrapFailing(true);
       await restartWithLaunchctl(launchctl.binDir, 'system-service');
       await waitUntil(() => readGuiAgentInstallFailure(runnerPaths) !== null, 'the link to keep why the agent could not be loaded', linkTimeoutMs);
-      assert.match(readGuiAgentInstallFailure(runnerPaths) ?? '', new RegExp(`launchctl bootstrap gui/${accountUid} failed \\(Bootstrap failed: 5: Input/output error\\)`));
+      assert.match(readGuiAgentInstallFailure(runnerPaths)?.reason ?? '', new RegExp(`launchctl bootstrap gui/${accountUid} failed \\(Bootstrap failed: 5: Input/output error\\)`));
+      assert.equal(readGuiAgentInstallFailure(runnerPaths)?.cure, 'login', 'the definition is in place: logging out and in loads it');
       assert.equal(launchctl.checkIsLoaded(), false);
       assert.equal(fs.readFileSync(getAgentFile(), 'utf8'), getExpectedAgentDefinition(), 'the definition is in place: the next login loads it even if this look could not');
       launchctl.setBootstrapFailing(false);

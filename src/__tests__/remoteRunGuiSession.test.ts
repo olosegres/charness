@@ -125,13 +125,14 @@ describe('a job that needs iOS on an always-on Mac, without a login session', ()
     assert.match(String(runScriptCommand(['submit', workDir, slug, jobId, 'default']).stderr), /needs a login of/, 'its beat is stale');
   });
 
-  describe('when the link could not install the agent itself (gui/install-failure)', () => {
+  describe('when the link could not put the agent in place itself (gui/install-failure)', () => {
     const reason = 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5: Input/output error)';
     const adminText = `ios build: the login session's agent could not be installed (${reason}) - paste a fresh admin line from /runners in an admin account's terminal`;
+    const loginText = `ios build: the login session's agent could not be loaded (${reason}) - log out and back in as ${accountName}, or paste a fresh admin line from /runners in an admin account's terminal`;
 
-    it('the refusal of `submit` and `lease` says to paste a fresh admin line, with the reason, instead of «needs a login»', () => {
+    it('a definition that could not be written: the refusal of `submit` and `lease` says to paste a fresh admin line, with the reason, instead of «needs a login»', () => {
       markNeedsIos();
-      writeGuiAgentInstallFailure(paths, reason);
+      writeGuiAgentInstallFailure(paths, { cure: 'admin', reason });
       for (const args of [['submit', workDir, slug, jobId, 'default'], ['lease', workDir, slug, jobId, 'default', '3000']]) {
         const result = runScriptCommand(args);
         assert.equal(result.status, 125, args[0]);
@@ -139,21 +140,29 @@ describe('a job that needs iOS on an always-on Mac, without a login session', ()
       }
     });
 
+    it('a definition in place that could not be loaded: logging out and in as the account is the first way out, the admin line the second', () => {
+      markNeedsIos();
+      writeGuiAgentInstallFailure(paths, { cure: 'login', reason });
+      assert.equal(String(runScriptCommand(['submit', workDir, slug, jobId, 'default']).stderr).trim(), `remote-run-runner: ${loginText}`);
+    });
+
     it('the words go with the record: once it is removed (the agent is up, or the account has no session to blame) the refusal is «needs a login» again', () => {
       markNeedsIos();
-      writeGuiAgentInstallFailure(paths, reason);
+      writeGuiAgentInstallFailure(paths, { cure: 'login', reason });
       writeGuiAgentInstallFailure(paths, null);
       assert.equal(String(runScriptCommand(['submit', workDir, slug, jobId, 'default']).stderr).trim(), `remote-run-runner: ios build: needs a login of ${accountName}`);
     });
 
-    it('a record with control characters (the account writes it) is printed without them, on one line', () => {
+    it('a record with control characters (the account writes it) is printed without them, on one line; a record without a cure word is the admin line\'s', () => {
       markNeedsIos();
       fs.mkdirSync(path.dirname(paths.guiInstallFailure), { recursive: true });
-      fs.writeFileSync(paths.guiInstallFailure, `bad \u001b[31mred\u001b[0m\u0007 reason\nsecond line\n`);
+      fs.writeFileSync(paths.guiInstallFailure, `admin bad \u001b[31mred\u001b[0m\u0007 reason\nsecond line\n`);
       const stderr = String(runScriptCommand(['submit', workDir, slug, jobId, 'default']).stderr).trim();
       assert.ok(!/[\u0000-\u0008\u000b-\u001f]/.test(stderr), JSON.stringify(stderr));
       assert.ok(stderr.includes('(bad [31mred[0m reason)'), stderr);
       assert.ok(!stderr.includes('second line'));
+      fs.writeFileSync(paths.guiInstallFailure, 'a text with no cure word\n');
+      assert.ok(String(runScriptCommand(['submit', workDir, slug, jobId, 'default']).stderr).includes('could not be installed (a text with no cure word) - paste a fresh admin line'));
     });
   });
 
@@ -200,12 +209,14 @@ describe('the probe of an always-on Mac', () => {
     assert.match(withAgent.cap_ios_detail, /^Xcode 16\.2/);
   });
 
-  it('says to paste a fresh admin line, with the reason, when the link could not install the agent — and not once the agent beats', () => {
+  it('says what to do, with the reason, when the link could not put the agent in place — log out and in as the account when its definition is there, the admin line when it is not — and not once the agent beats', () => {
     fs.writeFileSync(paths.iosCheck, '{"status":"pass","checkedAtMs":1,"xcode":"16.2","reason":null}\n');
-    writeGuiAgentInstallFailure(paths, 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)');
-    const without = probeIos();
-    assert.equal(without.cap_ios, 'no');
-    assert.equal(without.cap_ios_detail, "ios build: the login session's agent could not be installed (launchctl bootstrap gui/501 failed (Bootstrap failed: 5)) - paste a fresh admin line from /runners in an admin account's terminal");
+    writeGuiAgentInstallFailure(paths, { cure: 'admin', reason: 'the file could not be written (ENOTDIR)' });
+    const withoutDefinition = probeIos();
+    assert.equal(withoutDefinition.cap_ios, 'no');
+    assert.equal(withoutDefinition.cap_ios_detail, "ios build: the login session's agent could not be installed (the file could not be written (ENOTDIR)) - paste a fresh admin line from /runners in an admin account's terminal");
+    writeGuiAgentInstallFailure(paths, { cure: 'login', reason: 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)' });
+    assert.equal(probeIos().cap_ios_detail, `ios build: the login session's agent could not be loaded (launchctl bootstrap gui/501 failed (Bootstrap failed: 5)) - log out and back in as ${accountName}, or paste a fresh admin line from /runners in an admin account's terminal`);
     writeGuiAgentStatus(paths, { pid: process.pid, uid: 0, account: accountName, startedAtMs: 1, beatAtMs: Date.now() });
     assert.equal(probeIos().cap_ios, 'yes', 'an agent that beats is the answer, whatever an old record says');
   });

@@ -11,7 +11,7 @@ import { connectToHub, HubConnectionError, requestGateJson, type HubEndpoint } f
 import { recoverPairing } from './pairingRecovery';
 import { createLinkLoop } from './linkLoop';
 import { collectMachineReport, createMachineProbe, formatMachineReport, type MachineReport } from './machineReport';
-import { ensurePueueDaemon, inspectPueue, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
+import { ensurePueueDaemon, inspectPueue, pueueUnfinishedStatuses, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
 import { createGuiAgentDeps, runGuiAgent } from './guiAgent';
 import { createIoregReader, createLidWatcher } from './lidState';
 import { createGuiAgentHealer, guiAgentHealIntervalMs, writeGuiAgentInstallFailure } from './guiAgentHeal';
@@ -351,7 +351,8 @@ function startGuiAgentHealing(paths: RunnerHomePaths, io: CommandIo): void {
     accountName: account.username,
     nodeDir: path.dirname(process.execPath),
     getServiceKind: () => readServiceKind(paths),
-    readQueue: () => inspectPueue(paths),
+    // Queued jobs count as work here: they start the moment the old agent is gone.
+    readQueue: () => inspectPueue(paths, undefined, pueueUnfinishedStatuses),
   }, (line) => { io.stderr(`charness-runner: ${line}\n`); });
   void healer.look();
   setInterval(() => { void healer.look(); }, guiAgentHealIntervalMs).unref();

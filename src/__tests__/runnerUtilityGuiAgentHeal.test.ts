@@ -1,8 +1,9 @@
 /**
  * @description `runnerUtility/guiAgentHeal.ts`: the link puts the login session's agent of an always-on Mac in place itself. The decision table; one look against a
- * recording `launchctl` and a temp home (a Mac paired before the agent existed, an older definition, a loaded agent while a job runs, no login session, a
- * session `launchctl` cannot be asked about, a failing bootstrap / write); and the healer's record for `runners` (kept on a failure, forgotten on anything else)
- * and its once-per-kind log.
+ * recording `launchctl` / `pgrep` that answer in the words MEASURED on the owner's always-on Mac (2026-11-05, from the link's own System-session context) and a temp
+ * home: a Mac paired before the agent existed, an older definition, a loaded agent while a job runs or is queued (and one that appears during the swap), no login
+ * session — believed only when launchd's measured «Could not find domain» comes with no sign of a login —, a session `launchctl` cannot be asked about, a failing
+ * bootstrap / write with the way out each leaves; and the healer's record for `runners` (kept on a failure, forgotten on anything else) and its once-per-kind log.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -63,7 +64,10 @@ describe('planGuiAgentHeal: what to do for what is found', () => {
 });
 
 interface LaunchctlWorld {
-  session: 'present' | 'absent' | 'denied';
+  /** `absent`: launchd's measured answer for a domain that does not exist; `denied`: its answer for a domain the caller may not look at; `elsewhere`: a text nobody measured. */
+  session: 'present' | 'absent' | 'denied' | 'elsewhere';
+  /** What `pgrep -u <uid> -lx 'loginwindow|Dock|Finder'` finds: the processes of a login session, none, or a failure. */
+  loginProcesses: 'none' | 'present' | 'fails';
   isLoaded: boolean;
   bootstrapFails: boolean;
   /** `bootout` does not unload (launchd still tearing the job down). */
@@ -74,8 +78,10 @@ let home = '';
 let paths: RunnerHomePaths = getRunnerHomePaths('/nonexistent');
 let names = getServiceNames(paths.root);
 let calls: string[] = [];
-let world: LaunchctlWorld = { session: 'present', isLoaded: false, bootstrapFails: false, bootoutLeavesLoaded: false };
+let world: LaunchctlWorld = { session: 'present', loginProcesses: 'none', isLoaded: false, bootstrapFails: false, bootoutLeavesLoaded: false };
 let queue: PueueState = { kind: 'idle' };
+/** Answers of the queue, one per look, before `queue` takes over: a job that turns up between the looks of one swap. */
+let queueAnswers: PueueState[] = [];
 let serviceKind: string | null = 'system-service';
 let logLines: string[] = [];
 
@@ -83,16 +89,24 @@ function result(overrides: Partial<CommandResult>): CommandResult {
   return { ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false, ...overrides };
 }
 
-/** A `launchctl` that keeps the state of one account's domain and records every call. */
+/** A `launchctl` (and the `pgrep` that confirms a login) that keeps the state of one account's domain, answers in launchd's measured words, and records every call. */
 const launchctl: CommandRunner = async (file, args) => {
   calls.push([file, ...args].join(' '));
-  assert.equal(file, 'launchctl', 'only launchctl is run by a look');
+  if (file === 'pgrep') {
+    assert.deepEqual(args, ['-u', `${uid}`, '-lx', 'loginwindow|Dock|Finder'], 'the processes a login session consists of, the account\'s own');
+    if (world.loginProcesses === 'present') return result({ stdout: '412 loginwindow\n519 Dock\n523 Finder\n' });
+    if (world.loginProcesses === 'fails') return result({ ok: false, exitCode: 2, stderr: 'pgrep: illegal option\n' });
+    return result({ ok: false, exitCode: 1 });
+  }
+  assert.equal(file, 'launchctl', 'only launchctl and pgrep are run by a look');
   const [verb, target, plist] = args;
   if (verb === 'print' && target === domain) {
     if (world.session === 'present') return result({});
-    return result({ ok: false, exitCode: 113, stderr: world.session === 'absent' ? `Could not find domain for user gui: ${uid}\n` : 'Operation not permitted\n' });
+    if (world.session === 'absent') return result({ ok: false, exitCode: 112, stderr: `Bad request.\nCould not find domain for user gui: ${uid}\n` });
+    if (world.session === 'denied') return result({ ok: false, exitCode: 1, stderr: 'Could not print domain: 1: Operation not permitted\n' });
+    return result({ ok: false, exitCode: 64, stderr: 'launchctl: something nobody measured\n' });
   }
-  if (verb === 'print' && target === `${domain}/${names.launchdGui}`) return world.isLoaded ? result({}) : result({ ok: false, exitCode: 113, stderr: 'Could not find service in domain\n' });
+  if (verb === 'print' && target === `${domain}/${names.launchdGui}`) return world.isLoaded ? result({}) : result({ ok: false, exitCode: 113, stderr: `Bad request.\nCould not find service "${names.launchdGui}" in domain for user gui: ${uid}\n` });
   if (verb === 'bootout') {
     if (!world.bootoutLeavesLoaded) world.isLoaded = false;
     return result({});
@@ -102,11 +116,11 @@ const launchctl: CommandRunner = async (file, args) => {
     world.isLoaded = true;
     return result({});
   }
-  throw new Error(`unexpected launchctl call: ${args.join(' ')}`);
+  throw new Error(`unexpected call: ${file} ${args.join(' ')}`);
 };
 
 function createDeps(): GuiAgentHealDeps {
-  return { runner: launchctl, uid, accountName, nodeDir, getServiceKind: () => serviceKind, readQueue: async () => queue };
+  return { runner: launchctl, uid, accountName, nodeDir, getServiceKind: () => serviceKind, readQueue: async () => queueAnswers.shift() ?? queue };
 }
 
 function expectedDefinition(): string {
@@ -132,8 +146,9 @@ beforeEach(() => {
   paths = getRunnerHomePaths(home);
   names = getServiceNames(paths.root);
   calls = [];
-  world = { session: 'present', isLoaded: false, bootstrapFails: false, bootoutLeavesLoaded: false };
+  world = { session: 'present', loginProcesses: 'none', isLoaded: false, bootstrapFails: false, bootoutLeavesLoaded: false };
   queue = { kind: 'idle' };
+  queueAnswers = [];
   serviceKind = 'system-service';
   logLines = [];
 });
@@ -166,7 +181,7 @@ describe('healGuiAgent: a Mac paired before the agent existed gets it', () => {
     const outcome = await healGuiAgent(paths, createDeps());
     assert.deepEqual(outcome, { kind: 'written-without-session' });
     assert.equal(readDefinition(), expectedDefinition());
-    assert.deepEqual(calls, [`launchctl print ${domain}`]);
+    assert.deepEqual(calls, [`launchctl print ${domain}`, `pgrep -u ${uid} -lx loginwindow|Dock|Finder`], 'launchd\'s word is checked against the account\'s own processes, and nothing is bootstrapped');
   });
 
   it('a current definition in a session that does not have the agent loaded is loaded, and the file is not rewritten', async () => {
@@ -212,6 +227,26 @@ describe('healGuiAgent: an older definition', () => {
     assert.ok(!calls.some((call) => /bootstrap|bootout/.test(call)));
   });
 
+  it('a job that turns up AFTER the first look but before the old agent is stopped stops the swap: the old definition is put back and nothing is booted out', async () => {
+    const oldText = readDefinition();
+    queueAnswers = [{ kind: 'idle' }, { kind: 'busy', activeJobs: 1 }];
+    assert.deepEqual(await healGuiAgent(paths, createDeps()), { kind: 'waiting-for-idle' });
+    assert.equal(readDefinition(), oldText, 'the next look sees the difference again and tries again');
+    assert.ok(!calls.some((call) => /bootstrap|bootout/.test(call)), calls.join('\n'));
+    // The next look finds the queue idle and finishes the swap.
+    assert.deepEqual(await healGuiAgent(paths, createDeps()), { kind: 'loaded', wasReplaced: true });
+    assert.equal(readDefinition(), expectedDefinition());
+  });
+
+  it('the queue is looked at twice for a swap — to decide, and right before the old agent is stopped — and the second look comes after the new file is written and before the bootout', async () => {
+    const order: string[] = [];
+    const deps = { ...createDeps(), runner: async (file: string, args: readonly string[], options: Parameters<CommandRunner>[2]) => { order.push(`${file} ${args[0]}`); return launchctl(file, args, options); }, readQueue: async () => { order.push('queue'); return queue; } };
+    await healGuiAgent(paths, deps);
+    const queueLooks = order.flatMap((entry, index) => (entry === 'queue' ? [index] : []));
+    assert.equal(queueLooks.length, 2);
+    assert.ok(queueLooks[1] < order.indexOf('launchctl bootout') && queueLooks[0] < queueLooks[1], order.join(' > '));
+  });
+
   it('a queue whose state cannot be read counts as busy: it cannot be told apart from one with a running job', async () => {
     queue = { kind: 'unreadable' };
     assert.deepEqual(await healGuiAgent(paths, createDeps()), { kind: 'waiting-for-idle' });
@@ -254,38 +289,78 @@ describe('healGuiAgent: what it does not do', () => {
   });
 });
 
-describe('healGuiAgent: failures say why', () => {
-  it('a bootstrap that fails is a failure with launchctl\'s own words — and the written file stays, so the next login loads it', async () => {
-    world.bootstrapFails = true;
-    const outcome = await healGuiAgent(paths, createDeps());
+describe('healGuiAgent: failures say why — and which way out', () => {
+  function failure(outcome: Awaited<ReturnType<typeof healGuiAgent>>): { reason: string; cure: string } {
     assert.equal(outcome.kind, 'failed');
-    assert.match(outcome.kind === 'failed' ? outcome.reason : '', new RegExp(`launchctl bootstrap ${domain} failed \\(Bootstrap failed: 5: Input/output error\\)`));
+    return outcome.kind === 'failed' ? { reason: outcome.reason, cure: outcome.cure } : { reason: '', cure: '' };
+  }
+
+  it('a bootstrap that fails is a failure with launchctl\'s own words; the written file stays, so LOGGING OUT AND IN loads it — the cure is the login, not only the admin line', async () => {
+    world.bootstrapFails = true;
+    const { reason, cure } = failure(await healGuiAgent(paths, createDeps()));
+    assert.match(reason, new RegExp(`launchctl bootstrap ${domain} failed \\(Bootstrap failed: 5: Input/output error\\)`));
+    assert.equal(cure, 'login');
     assert.equal(readDefinition(), expectedDefinition());
   });
 
-  it('a session that launchctl cannot be asked about (not «no such domain») is a failure, never read as «no login session»', async () => {
+  it('a session that launchctl cannot be asked about (a refusal, or a text nobody measured) is a failure, never read as «no login session»; nothing is written on a guess', async () => {
     world.session = 'denied';
-    const outcome = await healGuiAgent(paths, createDeps());
-    assert.equal(outcome.kind, 'failed');
-    assert.match(outcome.kind === 'failed' ? outcome.reason : '', /launchctl cannot be asked about gui\/501 \(Operation not permitted\)/);
-    assert.equal(readDefinition(), null, 'and nothing was written on a guess');
+    const refused = failure(await healGuiAgent(paths, createDeps()));
+    assert.match(refused.reason, /launchctl cannot be asked about gui\/501 \(Could not print domain: 1: Operation not permitted\)/);
+    world.session = 'elsewhere';
+    assert.match(failure(await healGuiAgent(paths, createDeps())).reason, /launchctl cannot be asked about gui\/501 \(launchctl: something nobody measured\)/);
+    assert.equal(readDefinition(), null);
+    assert.ok(!calls.some((call) => call.startsWith('pgrep')), 'only launchd\'s measured «no such domain» is checked against the processes');
   });
 
-  it('a definition that cannot be written is a failure naming the file and the error code, and nothing is loaded', async () => {
+  it('with nothing in place, an unreadable session leaves only the admin line; with the current definition in place, the login loads it', async () => {
+    world.session = 'denied';
+    assert.equal(failure(await healGuiAgent(paths, createDeps())).cure, 'admin');
+    fs.mkdirSync(path.dirname(getGuiAgentFile(paths.homeDir, names)), { recursive: true });
+    fs.writeFileSync(getGuiAgentFile(paths.homeDir, names), expectedDefinition());
+    assert.equal(failure(await healGuiAgent(paths, createDeps())).cure, 'login');
+  });
+
+  it('a domain launchd calls unknown for an account that RUNS a login session (loginwindow, Dock, Finder) is a failure naming them — not «no login session»', async () => {
+    world.session = 'absent';
+    world.loginProcesses = 'present';
+    const { reason } = failure(await healGuiAgent(paths, createDeps()));
+    assert.match(reason, /launchd says gui\/501 does not exist \(Could not find domain for user gui: 501\), yet the account runs loginwindow, Dock, Finder: its login session cannot be reached from here/);
+    assert.equal(readDefinition(), null);
+  });
+
+  it('a domain launchd calls unknown, with no way to confirm the account is logged out (pgrep fails), is a failure too', async () => {
+    world.session = 'absent';
+    world.loginProcesses = 'fails';
+    const { reason } = failure(await healGuiAgent(paths, createDeps()));
+    assert.match(reason, /whether the account is logged in could not be confirmed \(pgrep: pgrep: illegal option\)/);
+  });
+
+  it('the measured answer for a domain that does not exist, with no sign of a login, IS «no login session»; launchd\'s word for ANOTHER uid\'s domain is not that answer', async () => {
+    world.session = 'absent';
+    assert.deepEqual(await healGuiAgent(paths, createDeps()), { kind: 'written-without-session' });
+    const otherUid = { ...createDeps(), uid: uid + 1 };
+    const wrongDomain: CommandRunner = async (file, args, options) => (file === 'launchctl' && args[0] === 'print' && args[1] === `gui/${uid + 1}`
+      ? result({ ok: false, exitCode: 112, stderr: `Bad request.\nCould not find domain for user gui: ${uid}\n` })
+      : launchctl(file, args, options));
+    assert.equal((await healGuiAgent(paths, { ...otherUid, runner: wrongDomain })).kind, 'failed', 'a text about a different domain proves nothing about this one');
+  });
+
+  it('a definition that cannot be written is a failure naming the file and the error code, and nothing is loaded — only the admin line puts it there', async () => {
     fs.writeFileSync(path.join(home, 'Library'), 'a file where the folder should be');
-    const outcome = await healGuiAgent(paths, createDeps());
-    assert.equal(outcome.kind, 'failed');
-    assert.match(outcome.kind === 'failed' ? outcome.reason : '', /could not be written \(ENOTDIR\)/);
+    const { reason, cure } = failure(await healGuiAgent(paths, createDeps()));
+    assert.match(reason, /could not be written \(ENOTDIR\)/);
+    assert.equal(cure, 'admin');
     assert.ok(!calls.some((call) => call.startsWith('launchctl bootstrap')));
   });
 
-  it('an old agent that stays loaded after bootout is a failure: the new one is not bootstrapped over it', async () => {
+  it('an old agent that stays loaded after bootout is a failure: the new one is not bootstrapped over it, and the new file waits for the login', async () => {
     writeOldDefinition();
     world.isLoaded = true;
     world.bootoutLeavesLoaded = true;
-    const outcome = await healGuiAgent(paths, createDeps());
-    assert.equal(outcome.kind, 'failed');
-    assert.match(outcome.kind === 'failed' ? outcome.reason : '', /still loaded in gui\/501/);
+    const { reason, cure } = failure(await healGuiAgent(paths, createDeps()));
+    assert.match(reason, /still loaded in gui\/501/);
+    assert.equal(cure, 'login');
     assert.ok(!calls.some((call) => call.startsWith('launchctl bootstrap')));
   });
 });
@@ -299,14 +374,20 @@ describe('the record for `runners` (gui/install-failure)', () => {
     assert.ok(reason.length <= 160 && reason.endsWith('…'));
   });
 
-  it('is written for a reason and removed for null; a missing one reads as nothing wrong', () => {
+  it('is written as «<cure> <reason>» and removed for null; a missing one reads as nothing wrong', () => {
     assert.equal(readGuiAgentInstallFailure(paths), null);
-    writeGuiAgentInstallFailure(paths, 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)');
-    assert.equal(readGuiAgentInstallFailure(paths), 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)');
-    assert.equal(fs.readFileSync(paths.guiInstallFailure, 'utf8').split('\n').length, 2, 'one line and its newline');
+    writeGuiAgentInstallFailure(paths, { cure: 'login', reason: 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)' });
+    assert.deepEqual(readGuiAgentInstallFailure(paths), { cure: 'login', reason: 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)' });
+    assert.equal(fs.readFileSync(paths.guiInstallFailure, 'utf8'), 'login launchctl bootstrap gui/501 failed (Bootstrap failed: 5)\n', 'one line');
     writeGuiAgentInstallFailure(paths, null);
     assert.equal(readGuiAgentInstallFailure(paths), null);
     assert.doesNotThrow(() => writeGuiAgentInstallFailure(paths, null), 'forgetting what is not there is no error');
+  });
+
+  it('a record without a cure word (any other text) reads as one that needs the admin line', () => {
+    fs.mkdirSync(path.dirname(paths.guiInstallFailure), { recursive: true });
+    fs.writeFileSync(paths.guiInstallFailure, 'something an older link wrote\n');
+    assert.deepEqual(readGuiAgentInstallFailure(paths), { cure: 'admin', reason: 'something an older link wrote' });
   });
 });
 
@@ -315,7 +396,8 @@ describe('the healer: record and log of each look', () => {
     const healer = createGuiAgentHealer(paths, createDeps(), (line) => logLines.push(line));
     world.bootstrapFails = true;
     assert.equal((await healer.look()).kind, 'failed');
-    assert.match(readGuiAgentInstallFailure(paths) ?? '', /launchctl bootstrap gui\/501 failed/);
+    assert.match(readGuiAgentInstallFailure(paths)?.reason ?? '', /launchctl bootstrap gui\/501 failed/);
+    assert.equal(readGuiAgentInstallFailure(paths)?.cure, 'login');
     world.bootstrapFails = false;
     assert.equal((await healer.look()).kind, 'loaded');
     assert.equal(readGuiAgentInstallFailure(paths), null);
@@ -327,16 +409,24 @@ describe('the healer: record and log of each look', () => {
     await healer.look();
     assert.notEqual(readGuiAgentInstallFailure(paths), null);
     world.session = 'absent';
+    // The first look wrote the definition (the bootstrap was what failed), so a look with nobody logged in has nothing left to do.
+    assert.equal((await healer.look()).kind, 'in-place');
+    assert.equal(readGuiAgentInstallFailure(paths), null);
+  });
+
+  it('with nothing written yet, a look with nobody logged in writes the file for the next login and leaves no failure', async () => {
+    const healer = createGuiAgentHealer(paths, createDeps(), (line) => logLines.push(line));
+    world.session = 'absent';
     assert.equal((await healer.look()).kind, 'written-without-session');
     assert.equal(readGuiAgentInstallFailure(paths), null);
   });
 
   it('a runner that is not an always-on service never gets a record, and an existing one is not its business', async () => {
     serviceKind = 'user-service';
-    writeGuiAgentInstallFailure(paths, 'left by an earlier kind');
+    writeGuiAgentInstallFailure(paths, { cure: 'admin', reason: 'left by an earlier kind' });
     const healer = createGuiAgentHealer(paths, createDeps(), (line) => logLines.push(line));
     assert.equal((await healer.look()).kind, 'not-applicable');
-    assert.equal(readGuiAgentInstallFailure(paths), 'left by an earlier kind');
+    assert.deepEqual(readGuiAgentInstallFailure(paths), { cure: 'admin', reason: 'left by an earlier kind' });
     assert.deepEqual(logLines, []);
   });
 
@@ -358,7 +448,7 @@ describe('the healer: record and log of each look', () => {
   it('a look that throws is a failure with its message, never an exception into the link', async () => {
     const healer = createGuiAgentHealer(paths, { ...createDeps(), runner: async () => { throw new Error('spawn exploded'); } }, (line) => logLines.push(line));
     const outcome = await healer.look();
-    assert.deepEqual(outcome, { kind: 'failed', reason: 'spawn exploded' });
-    assert.match(readGuiAgentInstallFailure(paths) ?? '', /spawn exploded/);
+    assert.deepEqual(outcome, { kind: 'failed', reason: 'spawn exploded', cure: 'admin' });
+    assert.match(readGuiAgentInstallFailure(paths)?.reason ?? '', /spawn exploded/);
   });
 });

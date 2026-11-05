@@ -725,7 +725,7 @@ describe('installing and removing the services', () => {
 
       it('prepare forgets why the link could not put the agent in place itself: the admin step loads it next, and says so itself when it cannot', async () => {
         pair();
-        writeGuiAgentInstallFailure(runnerPaths, 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)');
+        writeGuiAgentInstallFailure(runnerPaths, { cure: 'login', reason: 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)' });
         await runSystemStep('prepare', createDeps(asAccount));
         assert.equal(readGuiAgentInstallFailure(runnerPaths), null);
       });

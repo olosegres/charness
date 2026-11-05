@@ -192,15 +192,22 @@ gui_agent_alive() {
 }
 
 # What a job that needs iOS is told when there is no login session to run it in (also what `probe` says of `ios`). A link that tried to put the agent in place
-# itself (runnerUtility/guiAgentHeal.ts) and could not leaves the reason in <state>/gui/install-failure: then the cure is the admin line, not a login.
+# itself (runnerUtility/guiAgentHeal.ts) and could not leaves `<cure> <reason>` in <state>/gui/install-failure: `login` — the definition is in place, so the account
+# logging out and in loads it — or `admin` — it is not, and only a fresh admin line writes and loads it. A record without a cure word reads as `admin`.
 gui_refusal_text() {
-  local failure
-  failure=$(head -n 1 "${runner_state:-}/gui/install-failure" 2> /dev/null | tr -d '[:cntrl:]')
-  if [ -n "$failure" ]; then
-    printf "ios build: the login session's agent could not be installed (%s) - paste a fresh admin line from /runners in an admin account's terminal" "$failure"
-  else
-    printf 'ios build: needs a login of %s' "$(id -un)"
-  fi
+  local line cure reason
+  line=$(head -n 1 "${runner_state:-}/gui/install-failure" 2> /dev/null | tr -d '[:cntrl:]')
+  cure=${line%% *}
+  case $line in
+    *' '*) reason=${line#* } ;;
+    *) reason= ;;
+  esac
+  case $cure in
+    login) printf "ios build: the login session's agent could not be loaded (%s) - log out and back in as %s, or paste a fresh admin line from /runners in an admin account's terminal" "$reason" "$(id -un)" ;;
+    admin) printf "ios build: the login session's agent could not be installed (%s) - paste a fresh admin line from /runners in an admin account's terminal" "$reason" ;;
+    '') printf 'ios build: needs a login of %s' "$(id -un)" ;;
+    *) printf "ios build: the login session's agent could not be installed (%s) - paste a fresh admin line from /runners in an admin account's terminal" "$line" ;;
+  esac
 }
 
 # Does THIS job need the login session — it needs iOS (`needs-ios`), and the runner is an always-on service? Such a job is refused without one.

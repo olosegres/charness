@@ -12,7 +12,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
-import { countActivePueueTasks, inspectPueue, shutDownPueue, stopAllPueueJobs } from '../runnerUtility/pueueDaemon';
+import { countActivePueueTasks, inspectPueue, pueueUnfinishedStatuses, shutDownPueue, stopAllPueueJobs } from '../runnerUtility/pueueDaemon';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 
 let paths: RunnerHomePaths;
@@ -28,6 +28,12 @@ describe('counting the jobs that hold a process', () => {
     assert.equal(countActivePueueTasks(tasks({ Queued: {} }, 'Stashed')), 0);
     assert.equal(countActivePueueTasks(tasks('Running')), 1);
     assert.equal(countActivePueueTasks(JSON.stringify({ tasks: {} })), 0);
+  });
+
+  it('with the unfinished statuses it also counts the QUEUED and the locked — they start the moment a slot frees — and still not the finished or the stashed', () => {
+    assert.equal(countActivePueueTasks(tasks({ Running: {} }, { Queued: {} }, { Done: {} }, { Paused: {} }), pueueUnfinishedStatuses), 3);
+    assert.equal(countActivePueueTasks(tasks({ Queued: {} }, 'Stashed', { Locked: {} }, { Done: {} }), pueueUnfinishedStatuses), 2);
+    assert.equal(countActivePueueTasks(tasks({ Done: {} }, 'Stashed'), pueueUnfinishedStatuses), 0);
   });
 
   it('is null for text that is not Pueue\'s status', () => {
@@ -87,6 +93,12 @@ describe('asking the daemon', () => {
     assert.deepEqual(await inspectPueue(paths, runner), { kind: 'busy', activeJobs: 2 });
     statusJson = '<html>';
     assert.deepEqual(await inspectPueue(paths, runner), { kind: 'unreadable' });
+  });
+
+  it('a queue that holds only queued jobs is idle for most callers and busy for one that counts the queued ones', async () => {
+    statusJson = tasks({ Queued: {} }, { Done: {} });
+    assert.deepEqual(await inspectPueue(paths, runner), { kind: 'idle' });
+    assert.deepEqual(await inspectPueue(paths, runner, pueueUnfinishedStatuses), { kind: 'busy', activeJobs: 1 });
   });
 
   it('shutting down waits until the daemon no longer answers', async () => {

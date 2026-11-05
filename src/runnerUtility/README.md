@@ -245,13 +245,25 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   says `system-service` (a kind written on macOS only), the link looks when it starts — an update restarts it too — and once an hour (`guiAgentHealIntervalMs`), in the background:
   a missing or different definition is written (the same text `service system-step prepare` renders) and, when the account has a login session, loaded into it; a current one the
   session does not have loaded is loaded; no session → the file stays, launchd loads it at the next login, and `runners` keeps saying a login is needed. A LOADED older agent is
-  replaced (`bootout`, wait, `bootstrap`) only while Pueue runs no job (or its state cannot be read): its steps are the jobs', so a busy queue leaves the file AND the agent alone and
-  the next look tries again. A failure — the file cannot be written, `launchctl` cannot be asked about the session (anything but «could not find …» for `print gui/<uid>`), `bootstrap`
-  refuses — is kept as ONE line in `<state>/gui/install-failure` (control characters stripped, 160 characters) and `runner.sh` then says
-  «ios build: the login session's agent could not be installed (<reason>) - paste a fresh admin line from /runners in an admin account's terminal» instead of «needs a login of
-  <account>» (the admin line loads it as root). Any other look forgets the record, and so does an agent that starts and `service system-step prepare`. Unverifiable on Linux: what
-  launchd answers a process of the System session that asks for `gui/<uid>` as the account — the decision, every command line and the records are tested against a recording
-  `launchctl` (`runnerUtilityGuiAgentHeal.test.ts`) and a stand-in in the link flow.
+  replaced (`bootout`, wait, `bootstrap`) only while Pueue holds no job that runs, is paused OR WAITS in its queue (a queued job starts the moment the old agent is gone), or whose
+  state cannot be read: its steps are the jobs', so a busy queue leaves the file AND the agent alone and the next look tries again. The queue is looked at twice — to decide, and
+  right before the old agent is stopped, after the new file is written: a job that turned up between puts the old definition back (the next look sees the difference again) and
+  stops nothing. What is left is the second or so between the stop and the new agent's first heartbeat: a job that STARTS then is refused («needs a login») or runs in the
+  daemon, as without a session — never cut in the middle of a step, because no step runs through the old agent.
+  **What launchd answers was MEASURED** on the owner's always-on Mac (2026-11-05, macOS 26.7.1, through `remote-run exec`, which runs where the link does: `launchctl managername` →
+  `System`, the account's uid, not root; the account logged in through Fast User Switching): `print gui/<uid>` → exit 0 (`type = login`, `session = Aqua`, `creator =
+  loginwindow[…]`), `print gui/<uid>/<agent label>` → exit 0 (`type = LaunchAgent`, `state = running`, `path = ~/Library/LaunchAgents/…`), `print gui/<uid>/no.such.label` → exit 113
+  («Could not find service … in domain for user gui: <uid>»), `print gui/99999` → exit 112 («Bad request. / Could not find domain for user gui: 99999»), `print gui/<another
+  account>` → exit 1 («Could not print domain: 1: Operation not permitted»), `print user/<uid>` → exit 0 with `gui asid = …`, and `pgrep -u <uid> -lx 'loginwindow|Dock|Finder'` finds the
+  three of the session. So a System-session process of the account CAN ask about its own GUI domain. Not measured, because only doing it measures it: `launchctl bootstrap
+  gui/<uid>` from that context, and any answer for an account that is LOGGED OUT. Hence the rule: **«no login session» is never read off launchd's word alone** — it needs
+  «Could not find domain for user gui: <uid>» AND none of `loginwindow` / `Dock` / `Finder` running as the account; every other text, a refusal, a domain launchd calls unknown
+  while those processes run, or a `pgrep` that cannot be asked is a FAILURE with the text. A failure — that, the file cannot be written, a `bootstrap` that is refused — is kept as ONE line
+  `<cure> <reason>` in `<state>/gui/install-failure` (control characters stripped, 160 characters). The cure is `login` when the definition is in place (a refused `bootstrap`, an old agent
+  that stays loaded, a session that cannot be asked about while a current file waits): logging out and in as the account loads it, so `runner.sh` says «ios build: the login session's agent
+  could not be loaded (<reason>) - log out and back in as <account>, or paste a fresh admin line from /runners in an admin account's terminal»; and `admin` when it is not (a file that
+  cannot be written): «… could not be installed (<reason>) - paste a fresh admin line …» (the admin line loads it as root). Any other look forgets the record, and so does an agent that
+  starts and `service system-step prepare`.
 - **The link of an always-on Mac runs no Simulator check** (`checkIsLoginSessionAgentRunner`): the agent does, from the session where the Simulator can boot.
 - **It leaves** with the restart code when an update replaced the package and no step runs (launchd starts it again on the new program), and for good —
   removing its own definition — when its daemons' definitions are gone from `/Library/LaunchDaemons`, which is how it goes away with them.

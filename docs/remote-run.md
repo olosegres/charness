@@ -209,11 +209,17 @@ build or a Simulator test always passes `--needs ios` (the agents' instructions 
 Simulator when it starts and when Xcode changes) and keeps every Simulator silent (below).
 - **An update installs the agent for you.** A Mac paired before the agent existed — or one whose agent definition a newer charness changed — gets it by itself
   when its runner updates: the runner (which runs as the account) writes the definition into the account's own `~/Library/LaunchAgents` and loads it into the
-  account's login session, with no admin and no new paste. It looks again when the runner starts and once an hour; an agent that is already loaded is replaced
-  only while the Mac runs no job (replacing it would cut a running build), otherwise at the next look. Where the account has nobody logged in, the file is
-  written and loads at the account's next login. If that cannot be done (the folder cannot be written, `launchctl` refuses), `runners` says so —
-  «ios: no — ios build: the login session's agent could not be installed (<reason>) - paste a fresh admin line from /runners in an admin account's
-  terminal» — instead of «needs a login»: the admin line (it finds the account paired and only installs the service) loads the agent as root.
+  account's login session, with no admin and no new paste. It looks again when the runner starts and once an hour. An agent that is already loaded is replaced
+  only while the Mac has no job running, paused OR WAITING in its queue (replacing it would cut a build), and the queue is looked at again right before the old agent is
+  stopped; otherwise it waits for the next look. Where the account has nobody logged in, the file is written and loads at the account's next login. If that cannot be done
+  (the folder cannot be written, `launchctl` refuses), `runners` says so instead of «needs a login»: «ios: no — ios build: the login session's agent could not be loaded
+  (<reason>) - log out and back in as runner, or paste a fresh admin line from /runners in an admin account's terminal» when its definition is in place (logging out and in loads
+  it), and «… could not be installed (<reason>) - paste a fresh admin line …» when it is not (the admin line finds the account paired and only installs the service).
+  *Measured on a real always-on Mac (macOS 26.7.1, 2026-11-05, from inside the service, with the account logged in through Fast User Switching):* the service CAN ask launchd about
+  the account's own login domain (`launchctl print gui/<uid>` → exit 0, `session = Aqua`); a domain that does not exist answers «Could not find domain for user gui: <uid>» (exit 112);
+  another account's domain answers «Operation not permitted». *Not measured:* whether the service may `launchctl bootstrap` into that domain, and what the logged-out account answers —
+  so the runner never takes launchd's «could not find the domain» for «nobody is logged in» without also finding none of the session's own processes (`loginwindow`, `Dock`,
+  `Finder`) running as the account; anything else is reported as a failure with launchd's words.
 - **No session, no iOS — honestly.** With nobody logged in as the account, `runners` says «ios: no — ios build: needs a login of runner», `--needs ios`
   finds no runner for it, and a job that was queued before the session ended is refused with the same words. Nothing logs in by itself: after a reboot,
   log in as the account once at the Mac and switch back to your own account (Fast User Switching keeps its session); the agent starts at that login.

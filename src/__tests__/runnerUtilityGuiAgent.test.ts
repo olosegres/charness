@@ -719,7 +719,7 @@ describe('`charness-runner gui-agent`, the command a LaunchAgent runs', () => {
   });
 
   it('an agent that is up forgets why the link could not put it in place: the failure was about its absence', async () => {
-    writeGuiAgentInstallFailure(paths, 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)');
+    writeGuiAgentInstallFailure(paths, { cure: 'login', reason: 'launchctl bootstrap gui/501 failed (Bootstrap failed: 5)' });
     const controller = new AbortController();
     const running = runGuiAgentCommand(io, paths.homeDir, { launchDaemonsDir: daemonsDir, serviceCheckIntervalMs: 100, signal: controller.signal });
     await waitForHeartbeat();
