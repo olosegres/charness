@@ -235,7 +235,7 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   `LC_ALL`, then the job's lines — with the job's log opened for append, and writes `exit` (a signal is 128 + its number; a folder that is gone is 126).
   `kill` ends the group (TERM, KILL after 10 s); a dead `owner` ends it too and removes the folder; a started request is never started twice (`started`).
   The script cuts a step with 125 when the heartbeat is gone or another `startedAtMs` answers — and ENDS its process group first (`pgid` in the request folder,
-  written by the agent: TERM, KILL after the runner's grace), because a step is a `setsid` group that a dying agent does not take along: without it an `xcodebuild`
+  written by the agent: TERM, KILL after the runner's grace, then a bounded wait of 2 s until no member is left: SIGKILL lands when a process is next scheduled, and a busy machine still has the group when `kill` returns), because a step is a `setsid` group that a dying agent does not take along: without it an `xcodebuild`
   would run on in the tree while the job's lock went to the next job. An agent that starts ends the groups of the instance before it the same way
   (`reapStepsOfEarlierInstances`) and answers a waiting script 125 with a `cut` marker — which makes the script end the group before it goes on, as on its own cut
   path; a vanished script's folder is removed with its group ended.

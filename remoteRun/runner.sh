@@ -44,6 +44,8 @@ set -u
 # ─────────────────────────── constants ───────────────────────────
 
 kill_grace_sec=10
+# After a SIGKILL of a step's group the script looks this many times (0.2 s apart) for a member that is still there before it goes on.
+kill_settle_polls=10
 pueue_start_wait_sec=8
 default_timeout_sec=10800
 job_keep_days=3
@@ -264,7 +266,15 @@ gui_end_step_group() {
     nap 0.2
     waited=$((waited + 1))
   done
-  gui_group_is_recorded "$pgid" "$recorded" && kill -KILL -- "-$pgid" 2> /dev/null
+  if gui_group_is_recorded "$pgid" "$recorded" && kill -KILL -- "-$pgid" 2> /dev/null; then
+    # SIGKILL lands when each process is next scheduled: on a busy machine the group is still there when `kill` returns. The script goes on to release the job's lock, so it
+    # waits (bounded) until no member is left — never beside one that is still dying.
+    waited=0
+    while kill -0 -- "-$pgid" 2> /dev/null && [ "$waited" -lt "$kill_settle_polls" ]; do
+      nap 0.2
+      waited=$((waited + 1))
+    done
+  fi
   return 0
 }
 

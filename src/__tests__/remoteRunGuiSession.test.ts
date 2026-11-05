@@ -327,6 +327,18 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     for (const pid of await readGroupPids(pidFile)) assert.equal(checkIsProcessAlive(pid), false, `pid ${pid}`);
   });
 
+  it('a SIGKILL that takes its time to land (a loaded machine delivers it when the process is next scheduled) is waited for: the script goes on only when the whole group is gone, never beside a member that is still dying', async () => {
+    markNeedsIos();
+    startAgent();
+    const pidFile = path.join(root, 'slow-kill.pids');
+    setTimeout(() => { if (ticker !== null) clearInterval(ticker); fs.rmSync(paths.guiAgentStatus, { force: true }); }, 1500);
+    // `kill -KILL` returns at once and the signal lands 0.8 s later, as a machine that is busy elsewhere delivers it; every other signal is the shell's own.
+    const slowKill = 'kill() { case "$1" in -KILL) ( sleep 0.8; builtin kill "$@" ) > /dev/null 2>&1 & ;; *) builtin kill "$@" ;; esac; }';
+    const run = await runSourced(`${slowKill}; kill_grace_sec=1; run_step ${workDir} '${createGroupRecordingStep(pidFile, { isStubborn: true })}'; echo "code=$step_code"`);
+    assert.equal(run.stdout.trim().split('\n').at(-1), 'code=125', run.stderr);
+    for (const pid of await readGroupPids(pidFile)) assert.equal(checkIsProcessAlive(pid), false, `pid ${pid} is gone by the time the script goes on (the lock is released next)`);
+  });
+
   it('an agent that came back as ANOTHER instance (a restart) has lost the step: it is cut with 125, never waited for — and its group is ended', async () => {
     markNeedsIos();
     const first = startAgent();
