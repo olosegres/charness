@@ -78,8 +78,8 @@ test('the shutdown sweep and the boot reconciliation share the retention rule: a
   const sweep = botSource.slice(botSource.indexOf('async function sweepTransientFramesOnShutdown'));
   const sweepBody = sweep.slice(0, sweep.indexOf('\n}\n'));
   assert.match(sweepBody, /checkIsRetryable: checkIsRetryableTelegramError,/);
-  assert.match(sweepBody, /saveKeptIds: \(key, keptIds\) => state\.setTransientFrames\(key, keptIds\),/, 'the persisted set is rewritten to the kept ids, not cleared');
-  assert.ok(!sweepBody.includes('setTransientFrames(key, [])'), 'the old unconditional clear is gone');
+  assert.match(sweepBody, /saveKeptIds: async \(key, keptIds\) => \{ setUndeletedMessageIds\(key, keptIds\); \},/, 'the kept ids go through the one save of the set (memory first, then disk), not straight to the store');
+  assert.ok(!sweepBody.includes('state.setTransientFrames('), 'the sweep never writes the persisted set behind the in-memory state: a later save of the thread would drop what it kept');
   assert.match(botSource, /checkIsRetryable: checkIsRetryableTelegramError,\n\};/, 'the reconciliation\'s default deps use the same classifier');
   assert.match(botSource, /void reconcileTransientFrames\(orphanedTransientFrames\)\.catch\(/, 'the boot does not wait for the deletes');
 });

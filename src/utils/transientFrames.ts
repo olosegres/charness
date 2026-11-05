@@ -50,8 +50,13 @@ export interface ShutdownFrameState extends TransientFrameState {
 
 /**
  * @description Graceful-shutdown clear of a thread's transient frames: returns the
- * ids currently on screen (for the caller to delete), then bumps BOTH frame
- * generations and clears every id (the voice notes' list included).
+ * ids currently on screen (for the caller to delete), bumps BOTH frame
+ * generations, nulls the frame fields and empties the voice notes' list — and PARKS
+ * every collected id in `undeletedMessageIds`, the thread's list of messages still
+ * to delete. The caller deletes them and replaces that list with the ones to try
+ * again; until then ANY save of the thread's transient ids — a late frame setter, a
+ * late note removal, which rewrite the persisted set from memory — still carries
+ * every pending id. (Keeping the retained ids only on disk let such a save drop them.)
  *
  * The generation bump is the load-bearing part, and the reason this must run for
  * EVERY tracked thread — including one whose ids are all null right now. A
@@ -73,7 +78,7 @@ export function clearTransientFramesForShutdown(state: ShutdownFrameState): numb
   state.thinkingMessageId = null;
   state.subagentStatusMessageId = null;
   state.voiceProgressNoteIds = [];
-  state.undeletedMessageIds = [];
+  state.undeletedMessageIds = ids;
   return ids;
 }
 
@@ -109,9 +114,11 @@ export interface TransientSweepPorts<Key> {
   deleteMessage: (key: Key, messageId: number) => Promise<void>;
   checkIsRetryable: (error: unknown) => boolean;
   /**
-   * Replace the thread's persisted transient ids with `keptIds`: the ones whose delete must be tried again at the next start
-   * (none: the thread's entry goes). Called only once the deletes have settled — until then the persisted set still names
-   * every message, so a sweep that is cut short by its time bound leaves a complete record for the boot reconciliation.
+   * Replace the thread's pending-delete list (`undeletedMessageIds`, in memory) with `keptIds` — the ones whose delete must be
+   * tried again at the next start (none: the list empties) — and save it with the thread's other transient ids through the one
+   * save every writer of the set uses. Called once the deletes have settled; until then the list holds every collected id (see
+   * {@link clearTransientFramesForShutdown}), so a save that interleaves, or a sweep cut short by its time bound, leaves a
+   * complete record for the boot reconciliation.
    */
   saveKeptIds: (key: Key, keptIds: number[]) => Promise<void>;
   logProblem: (line: string) => void;
@@ -120,8 +127,8 @@ export interface TransientSweepPorts<Key> {
 /**
  * @description The graceful-shutdown sweep over every tracked thread: {@link clearTransientFramesForShutdown} for EACH (the
  * generation bump must reach a thread whose ids are all null too), then the messages that were on screen are deleted in
- * parallel and the ones that could not be deleted yet stay in the persisted set. Resolves when every thread has settled; never
- * rejects. The caller bounds the wait.
+ * parallel and the ones that could not be deleted yet stay in the thread's pending list, which is saved with its other ids.
+ * Resolves when every thread has settled; never rejects. The caller bounds the wait.
  */
 export async function sweepTransientMessages<Key>(
   threads: readonly TransientSweepThread<Key>[],

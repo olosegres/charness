@@ -440,8 +440,8 @@ export class FakeTelegram {
     const answer = await this.dispatch(method, payload, request.socket);
     const holdIndex = this.responseHolds.findIndex((hold) => hold.method === method && hold.isMatch(payload));
     if (holdIndex >= 0) {
-      const [hold] = this.responseHolds.splice(holdIndex, 1);
-      await (typeof hold.release === 'number' ? new Promise<void>((resolve) => setTimeout(resolve, hold.release as number)) : hold.release);
+      const [{ release }] = this.responseHolds.splice(holdIndex, 1);
+      await (typeof release === 'number' ? new Promise<void>((resolve) => setTimeout(resolve, release)) : release);
     }
     response.writeHead(answer.ok ? 200 : answer.error_code, { 'content-type': 'application/json' });
     response.end(JSON.stringify(answer));

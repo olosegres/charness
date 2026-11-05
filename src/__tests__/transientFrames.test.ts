@@ -106,10 +106,11 @@ test('the «transcribing…» voice notes are collected after the frames — one
   );
 });
 
-test('clearTransientFramesForShutdown returns the voice notes too, then empties the list', () => {
+test('clearTransientFramesForShutdown returns the voice notes too, empties their list and parks the ids as pending deletes', () => {
   const state = makeShutdownState({ voiceProgressNoteIds: [41, 42] });
   assert.deepEqual(clearTransientFramesForShutdown(state), [41, 42]);
   assert.deepEqual(state.voiceProgressNoteIds, []);
+  assert.deepEqual(state.undeletedMessageIds, [41, 42], 'parked: any save of the thread before the deletes settle still carries them');
 });
 
 test('clearTransientFramesForShutdown returns on-screen ids, then nulls them and bumps both generations', () => {
@@ -127,6 +128,7 @@ test('clearTransientFramesForShutdown returns on-screen ids, then nulls them and
   assert.equal(state.subagentStatusMessageId, null);
   assert.equal(state.statusFrameGeneration, 5);
   assert.equal(state.thinkingFrameGeneration, 8);
+  assert.deepEqual(state.undeletedMessageIds, [10, 20, 30], 'the frames that were on screen are pending deletes now');
 });
 
 test('bumps generations EVEN when every id is null (the racing-create case)', () => {
@@ -165,7 +167,7 @@ test('leftovers whose delete failed earlier are collected last, so the next swee
   );
   const state = makeShutdownState({ undeletedMessageIds: [7, 8] });
   assert.deepEqual(clearTransientFramesForShutdown(state), [7, 8]);
-  assert.deepEqual(state.undeletedMessageIds, []);
+  assert.deepEqual(state.undeletedMessageIds, [7, 8], 'still pending: the sweep deletes them and replaces the list with the ones to retry');
 });
 
 const networkError = new Error('socket hang up');
@@ -199,8 +201,15 @@ test('deleteTransientMessages with nothing to delete, or with every delete done,
 interface SweepWorld {
   /** Which ids Telegram still holds, by thread. */
   onScreen: Map<string, Set<number>>;
+  /** The threads' in-memory transient state, as `bot.ts` keeps it. */
+  states: Map<string, ShutdownFrameState>;
   /** What `state.json` holds per thread. */
   saved: Map<string, number[]>;
+  /**
+   * The ONE save every writer of the set uses (`persistTransientFrames` in `bot.ts`): it rewrites the thread's persisted ids FROM
+   * MEMORY. A late frame setter and a late note removal call it; so does the sweep's `saveKeptIds`.
+   */
+  persist: (threadKey: string) => void;
   /** Failures to hand out, in order, to the next delete attempts of an id. */
   failuresByMessageId: Map<number, unknown[]>;
   problems: string[];
@@ -210,7 +219,14 @@ interface SweepWorld {
 function createSweepWorld(): SweepWorld {
   const world: SweepWorld = {
     onScreen: new Map(),
+    states: new Map(),
     saved: new Map(),
+    persist: (threadKey) => {
+      const state = world.states.get(threadKey);
+      const messageIds = state ? getTransientFrameIds(state) : [];
+      if (messageIds.length === 0) world.saved.delete(threadKey);
+      else world.saved.set(threadKey, messageIds);
+    },
     failuresByMessageId: new Map(),
     problems: [],
     ports: {
@@ -220,9 +236,11 @@ function createSweepWorld(): SweepWorld {
         world.onScreen.get(threadKey)?.delete(messageId);
       },
       checkIsRetryable: checkIsRetryableTelegramError,
+      // As `bot.ts` wires it: the kept ids replace the thread's in-memory pending list, which is saved with its other ids.
       saveKeptIds: async (threadKey, keptIds) => {
-        if (keptIds.length === 0) world.saved.delete(threadKey);
-        else world.saved.set(threadKey, keptIds);
+        const state = world.states.get(threadKey);
+        if (state) state.undeletedMessageIds = keptIds;
+        world.persist(threadKey);
       },
       logProblem: (line) => { world.problems.push(line); },
     },
@@ -235,6 +253,7 @@ test('the shutdown sweep deletes what is on screen and empties the saved set', a
   world.onScreen.set('topic-a', new Set([10, 41]));
   world.saved.set('topic-a', [10, 41]);
   const state = makeShutdownState({ statusMessageId: 10, voiceProgressNoteIds: [41] });
+  world.states.set('topic-a', state);
 
   await sweepTransientMessages([{ key: 'topic-a', state }], world.ports);
 
@@ -251,6 +270,7 @@ test('a sweep whose delete hits a bad moment keeps that id in the saved set; the
 
   // 1. the shutdown sweep: the «working…» frame goes, the thinking frame and the voice note hit a 5xx and a 429
   const firstState = makeShutdownState({ statusMessageId: 10, thinkingMessageId: 11, voiceProgressNoteIds: [41] });
+  world.states.set('topic-a', firstState);
   await sweepTransientMessages([{ key: 'topic-a', state: firstState }], world.ports);
   assert.deepEqual([...world.onScreen.get('topic-a') ?? []].sort(), [11, 41], 'precondition: the two failed deletes are still on screen');
   assert.deepEqual(world.saved.get('topic-a'), [11, 41], 'and they stay recorded — the status frame\'s record is gone, its message is');
@@ -258,6 +278,7 @@ test('a sweep whose delete hits a bad moment keeps that id in the saved set; the
 
   // 2. the next process holds them as leftovers; its own shutdown sweep tries again, and this time Telegram answers
   const secondState = makeShutdownState({ undeletedMessageIds: world.saved.get('topic-a') });
+  world.states.set('topic-a', secondState);
   await sweepTransientMessages([{ key: 'topic-a', state: secondState }], world.ports);
   assert.deepEqual([...world.onScreen.get('topic-a') ?? []], [], 'the retry deleted both');
   assert.equal(world.saved.has('topic-a'), false, 'and the record is gone with them');
@@ -270,15 +291,62 @@ test('a sweep keeps a retryable failure but drops a final one, so a message that
   world.failuresByMessageId.set(21, [refusedForGood]);
   world.failuresByMessageId.set(22, [alreadyGone]);
 
-  await sweepTransientMessages([{ key: 'topic-a', state: makeShutdownState({ undeletedMessageIds: [20, 21, 22] }) }], world.ports);
+  const state = makeShutdownState({ undeletedMessageIds: [20, 21, 22] });
+  world.states.set('topic-a', state);
+  await sweepTransientMessages([{ key: 'topic-a', state }], world.ports);
 
   assert.deepEqual(world.saved.get('topic-a'), [20]);
+});
+
+test('the ids a sweep keeps survive ANOTHER save of the thread before the final flush — a late note removal, a status frame during the drain', async () => {
+  const world = createSweepWorld();
+  world.onScreen.set('topic-a', new Set([41, 50]));
+  world.failuresByMessageId.set(41, [tooManyRequests]);
+  const state = makeShutdownState({ voiceProgressNoteIds: [41] });
+  world.states.set('topic-a', state);
+
+  await sweepTransientMessages([{ key: 'topic-a', state }], world.ports);
+  assert.deepEqual(world.saved.get('topic-a'), [41], 'precondition: the sweep kept the id whose delete met a 429');
+
+  // A note send that landed after the registry's bound has its message deleted and leaves the note list: a save from memory.
+  state.voiceProgressNoteIds = [];
+  world.persist('topic-a');
+  assert.deepEqual(world.saved.get('topic-a'), [41], 'a note removal that saves the thread does not drop the kept id');
+
+  // A status frame created and deleted while the last updates drain (a hot reload during agent work): two more saves from memory.
+  state.statusMessageId = 50;
+  world.persist('topic-a');
+  assert.deepEqual(world.saved.get('topic-a'), [50, 41], 'the live frame is recorded beside the kept id');
+  state.statusMessageId = null;
+  world.persist('topic-a');
+  assert.deepEqual(world.saved.get('topic-a'), [41], 'and when it goes, the kept id is still there for the boot to retry');
+});
+
+test('while a sweep\'s deletes are still going, a save of the thread already carries every pending id', async () => {
+  const world = createSweepWorld();
+  world.onScreen.set('topic-a', new Set([10, 11]));
+  const state = makeShutdownState({ statusMessageId: 10, thinkingMessageId: 11 });
+  world.states.set('topic-a', state);
+  let releaseDeletes!: () => void;
+  const deletesHeld = new Promise<void>((resolve) => { releaseDeletes = resolve; });
+  const deleteMessage = world.ports.deleteMessage;
+  world.ports.deleteMessage = async (threadKey, messageId) => { await deletesHeld; await deleteMessage(threadKey, messageId); };
+
+  const sweeping = sweepTransientMessages([{ key: 'topic-a', state }], world.ports);
+  // The clear ran synchronously: the frames are no longer in the frame fields, yet a save from memory still names them.
+  world.persist('topic-a');
+  assert.deepEqual(world.saved.get('topic-a'), [10, 11], 'a sweep cut short by its time bound leaves the complete record');
+  releaseDeletes();
+  await sweeping;
+
+  assert.equal(world.saved.has('topic-a'), false, 'once the deletes settled, nothing is left to retry');
 });
 
 test('the sweep bumps the generations of every thread, also one with nothing on screen, and leaves its saved set alone', async () => {
   const world = createSweepWorld();
   world.saved.set('topic-idle', [999]);
   const idleState = makeShutdownState({ statusFrameGeneration: 4, thinkingFrameGeneration: 6 });
+  world.states.set('topic-idle', idleState);
 
   await sweepTransientMessages([{ key: 'topic-idle', state: idleState }], world.ports);
 

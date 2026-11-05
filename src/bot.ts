@@ -1570,7 +1570,7 @@ interface ThreadMessageState {
    * Leftovers of an earlier process — a status frame or a voice note a graceful stop or a crash left on screen — whose delete
    * FAILED in a way a retry can fix (a network error, a 429, a 5xx). Kept (and persisted with the other transient ids) so the
    * next sweep and the next boot try again instead of forgetting a message nothing else records; a final answer (already gone,
-   * too old, refused) settles an id. Empty = none.
+   * too old, refused) settles an id. During a shutdown sweep it also holds every id the sweep is deleting right now. Empty = none.
    */
   undeletedMessageIds: number[];
 }
@@ -4661,10 +4661,13 @@ const shutdownFrameSweepMs = 1500;
  * (fire-and-forget) persist + delete work.
  *
  * A delete that fails for a reason a later try can fix (no answer from Telegram, a
- * 429, a 5xx) no longer forgets the message: its id stays in the persisted set and
- * the next boot's {@link reconcileTransientFrames} tries again. The set is rewritten
- * only once the deletes have settled, so a sweep cut short by its bound leaves the
- * complete record. Final answers (already gone, too old, refused) settle an id.
+ * 429, a 5xx) no longer forgets the message: the collected ids are PARKED in the
+ * thread's in-memory `undeletedMessageIds` (the clear does that), the deletes run, and
+ * the list is replaced by the ones to try again through `setUndeletedMessageIds` — the
+ * same save every other writer of the persisted set uses, so a late frame setter or
+ * note removal that persists the thread meanwhile still carries them, and so does a
+ * sweep cut short by its bound. The next boot's {@link reconcileTransientFrames}
+ * tries again. Final answers (already gone, too old, refused) settle an id.
  *
  * Wired into {@link gracefulShutdown} as `clearTransientFrames`: runs AFTER
  * `cleanupTimers()` (no interval re-creates a frame mid-sweep) and BEFORE
@@ -4686,7 +4689,7 @@ async function sweepTransientFramesOnShutdown(): Promise<void> {
   const sweeping = sweepTransientMessages(threads, {
     deleteMessage: async (key, messageId) => { await bot.telegram.deleteMessage(getTelegramChatId(key), messageId); },
     checkIsRetryable: checkIsRetryableTelegramError,
-    saveKeptIds: (key, keptIds) => state.setTransientFrames(key, keptIds),
+    saveKeptIds: async (key, keptIds) => { setUndeletedMessageIds(key, keptIds); },
     logProblem: (line) => console.warn(line),
   });
   let boundTimer: NodeJS.Timeout | undefined;

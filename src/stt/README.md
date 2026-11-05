@@ -129,8 +129,11 @@ ports (post, remember, delete), wired in `bot.ts`:
   it in the thread's `undeletedMessageIds` (persisted with the live ids, retried by the next sweep and the next boot); a final answer
   (already gone, too old to delete, the bot lost its right) settles the id, so nothing that can never work is retried for ever. Before,
   the sweep cleared the persisted set whatever happened and the reconciliation re-synced it to the live ids at once, so one failed
-  delete left the message in the topic with no record of it. The sweep rewrites the set only after its deletes settled, so a sweep cut
-  short by its time bound leaves the complete record.
+  delete left the message in the topic with no record of it. The sweep PARKS every id it collects in the thread's in-memory
+  `undeletedMessageIds` before it deletes, then replaces that list with the ids to try again — through the same save every other
+  writer of the set uses (`setUndeletedMessageIds` → `persistTransientFrames`, which rewrites the set from memory). So a save that
+  interleaves — a late note removal, a status-frame setter during the drain of the last updates — still carries them, and so does a
+  sweep cut short by its time bound.
 
 - A **non-last** engine is tried **once** (`retryDelaysMs: []`); any failure — refused connection, timeout, 4xx,
   5xx, a rejected endpoint — moves to the next at once, logged only (`[transcribe] <engine> failed (…); falling
