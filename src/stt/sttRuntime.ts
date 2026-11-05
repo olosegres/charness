@@ -74,7 +74,7 @@ export function createSttRuntime(deps: SttRuntimeDeps): SttRuntime {
     // The process settings of THIS resolve: a start (or an adoption) is judged against them.
     const localEngineSettings = (load.config ?? createEmptySttConfig()).gigaam;
     const resolved = resolveSttSettings(load, facts, {
-      getGigaamEndpoint: async () => getSttSidecarTranscriptionEndpoint(await deps.owner.ensure(localEngineSettings)),
+      getGigaamEndpoint: async (request) => getSttSidecarTranscriptionEndpoint(await deps.owner.ensure(localEngineSettings, request)),
     });
     const report = getSttReportLines(resolved).join('\n');
     if (report !== lastReport) {

@@ -20,7 +20,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { transcribeWithEngines, warmUpFirstEngine, type TranscribeFallbackInfo, type WarmedEndpoint } from '../stt/transcribeChain';
 import type { TranscriptionEndpoint } from '../utils/transcribeAudio';
-import { defaultSttTimeout, type ResolvedSttEngine, type SttTimeout } from '../stt/sttSettings';
+import { defaultSttTimeout, type ResolvedSttEngine, type SttEndpointRequest, type SttTimeout } from '../stt/sttSettings';
 import { queuedAudioSecondsHeader, type TranscribeRetryInfo } from '../utils/transcribeAudio';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
@@ -494,10 +494,13 @@ test('a non-last engine is asked for its endpoint once — it is not retried', a
 function createControlledEngine(kind: ResolvedSttEngine['kind'], name: string = kind): {
   engine: ResolvedSttEngine;
   getAsked: () => number;
+  /** What each ask said about itself (`{ isWarmUp: true }` for a warm-up, nothing for a voice). */
+  getRequests: () => Array<SttEndpointRequest | undefined>;
   answer: (endpoint: TranscriptionEndpoint) => void;
   reject: (error: Error) => void;
 } {
   let asked = 0;
+  const requests: Array<SttEndpointRequest | undefined> = [];
   let answer: (endpoint: TranscriptionEndpoint) => void = () => {};
   let reject: (error: Error) => void = () => {};
   const engine: ResolvedSttEngine = {
@@ -505,12 +508,13 @@ function createControlledEngine(kind: ResolvedSttEngine['kind'], name: string = 
     kind,
     name,
     timeout: defaultSttTimeout,
-    getEndpoint: () => {
+    getEndpoint: (request) => {
       asked++;
+      requests.push(request);
       return new Promise<TranscriptionEndpoint>((resolve, rejectPromise) => { answer = resolve; reject = rejectPromise; });
     },
   };
-  return { engine, getAsked: () => asked, answer: (endpoint) => answer(endpoint), reject: (error) => reject(error) };
+  return { engine, getAsked: () => asked, getRequests: () => requests, answer: (endpoint) => answer(endpoint), reject: (error) => reject(error) };
 }
 
 /** Let the promise callbacks (and an unhandled rejection, raised after the microtasks) run. */
@@ -535,6 +539,7 @@ test('warm-up: a local engine that a voice would reach FIRST is asked for its en
   const warmed = warmUpFirstEngine([local.engine, hosted.engine], logWarningNowhere);
   assert.equal(warmed?.engineId, 'gigaam');
   assert.equal(local.getAsked(), 1);
+  assert.deepEqual(local.getRequests(), [{ isWarmUp: true }], 'the ask says it is a warm-up: the engine must never act on silence for it');
   assert.equal(hosted.getAsked(), 0, 'the later engine is not touched');
 
   const hostedFirst = createControlledEngine('groq');
@@ -553,6 +558,7 @@ test('warm-up: the voice REUSES the warm-up\'s ask — the engine is asked once 
   const { result } = await runChain([local.engine], { warmedEndpoint: warmed });
   assert.deepEqual(result, { ok: true, text: 'from the warmed endpoint', engine: 'gigaam' });
   assert.equal(local.getAsked(), 1, 'one ask in all: the warm-up\'s');
+  assert.deepEqual(local.getRequests(), [{ isWarmUp: true }]);
 });
 
 test('warm-up: a start that FAILED fast is the voice\'s outcome too — no second ask (no second spawn, no second failed start); a hosted engine behind takes the voice', async () => {
@@ -658,6 +664,7 @@ test('a NON-last engine that is ready within its budget is used as before; the L
   const quickRun = runChainWithStartBudget([quick.engine, createEngine('hosted', second)]);
   quick.answer({ url: first.url, model: 'm' });
   assert.deepEqual((await quickRun).result, { ok: true, text: 'from the local engine', engine: 'gigaam' });
+  assert.deepEqual(quick.getRequests(), [undefined], 'a voice that asks for itself is a plain ask, not a warm-up');
 
   reset([transcribed('after a long start')]);
   const slow = createControlledEngine('gigaam');

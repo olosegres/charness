@@ -43,14 +43,19 @@ keys again.
 - **Only what differs from the defaults is stored** (`createStoredConfig`): the `gigaam` block carries `idleMinutes` /
   `workers` / `threads` only when they are not the defaults (60 min, 4, absent), and is left out when empty. A default
   written to the file looks like a choice and would keep the setup on an old default for good; absent, it follows the
-  current default. Every save stamps `schemaVersion` (2).
-- **One-time migration of the old default** (`migrateSttStoredDefaults`, boot, `sttRuntime.init`): a file WITHOUT
-  `schemaVersion` was saved by an earlier build, which wrote the whole `gigaam` block — `idleMinutes: 15`, then the default
-  and not anyone's choice. It is rewritten once in the current layout (defaults not stored, version stamped; a stored 15 is
-  dropped so the engine follows the current default, said once in the log; any other stored value is kept). Every later save
-  carries the version, so a 15 picked afterwards is a choice and stays; a missing, unreadable or invalid file is left alone.
-  The cost: an older build cannot read a file that carries `schemaVersion` (unknown keys are refused), so a downgrade needs
-  the key removed by hand.
+  current default. **The file gets no new key:** every released build reads it with a strict schema, so a key it does not
+  know turns voice off on that build — after a rollback (the bot's own boot rollback included) or a downgrade. What this
+  build writes passes the released schema (`sttSettings.test.ts` holds a copy of it).
+- **Migration of the old idle default** (`migrateSttStoredDefaults`, boot, `sttRuntime.init`): an earlier build saved the
+  whole `gigaam` block — `idleMinutes: 15`, then the default and not anyone's choice. A stored 15 is dropped (the engine
+  follows the current default; said once in the log, any other stored value is kept) when **the marker file
+  `stt.defaults-migrated` beside `stt.json` is absent** (this directory has not been migrated; every save writes the marker
+  first, so a fresh install's 15 is a choice) **or the file stores a default** (`workers: 4` or `idleMinutes: 60`: this
+  layout never does, so an earlier build wrote it — the sequence rollback → an older build's `/stt` save → update is
+  migrated again). A 15 picked on this layout is stored without a default next to it and stays. The one case no content can
+  tell apart is an earlier build's 15 beside a workers count changed on purpose: once the marker is there it stays. A file
+  that needs nothing is not touched (no marker yet → only the marker is written); a missing, unreadable or invalid file is
+  left alone, with no marker. The marker is a file older builds never read.
 - **Migration** (`migrateLegacySttKeys`, boot only): no `stt.json` + `GROQ_API_KEY` / `OPENAI_API_KEY` in the
   environment → write the file with those engines (Groq `q1` first, then OpenAI `o1`). It is the ONLY reader of
   those variables; an existing file is never overwritten; the `[deprecated]` line is printed once per process.
@@ -81,7 +86,11 @@ queue) `warmUpFirstEngine` asks the local engine for its endpoint when it is the
 ask (`WarmedEndpoint`, the engine's id + the promise). The voice's job hands it to `transcribeWithEngines`, which uses it
 INSTEAD of asking the engine again — also when it failed fast: a voice starts the engine once, so it can never count as two
 failed starts for the spawn-storm guard (a retry of the last engine asks afresh; an ask of another engine than the warmed one
-is ignored). A failed warm-up leaves one line, `[STT] warm-up start of gigaam failed: <reason>`, because the job may end
+is ignored). The warm-up is for a COLD or LOADING engine only (`ensure(settings, { isWarmUp: true })`): a voice note that
+arrives behind a long recognition in the same topic finds a sidecar that is busy and late with `/health`, and a warm-up
+that judged that silence would count toward `unansweredAdoptionLimit` and could get the live sidecar replaced in the middle
+of the earlier voice. So a warm-up takes a listening, matching process as it is — no `/health`, no count, no replacement —
+and starts or waits for a start like any ask. A failed warm-up leaves one line, `[STT] warm-up start of gigaam failed: <reason>`, because the job may end
 (a failed download) without ever asking. A hosted engine in front starts nothing: the local one may never be reached.
 Nothing else shows the user a «transcribing…» state: there is no such message or typing action in the voice flow (the 🎤 echo
 is the first sign), and the warm-up adds none.
@@ -246,9 +255,10 @@ onnxruntime keeps, so it is resampled in 30 s windows (≈ 66 MB). Silero VAD it
    instead of starting a second sidecar — for as long as the process LIVES, up to the **start ceiling** (120 s, counted from
    the process's own `startedAt`, so a worker that arrives late does not give a wedged load a second ceiling); a start that
    dies meanwhile is replaced at once, one still not listening at its ceiling is stopped and the request FAILS with the
-   ceiling text — **one deadline per request**: no respawn for the same voice (it would get a second ceiling and begin the
-   load from zero), so a voice never waits longer than 2 minutes for a loading process; the stop counts as a failed start for
-   the spawn-storm guard, and the NEXT voice starts a fresh process. `GET /health` is asked with the recorded token (1 s, then once more patiently,
+   ceiling text — no respawn for the same voice after a ceiling stop (it would begin the load from zero again). The 2 minutes
+   are counted from THE PROCESS'S OWN start: a loading process is waited for at most that long, but an engine replaced after
+   it DIED gets its own ceiling (so a request can wait up to about two of them). The stop counts as a failed start for the
+   spawn-storm guard, and the NEXT voice starts a fresh process. `GET /health` is asked with the recorded token (1 s, then once more patiently,
    5 s): a sidecar recognising a long voice with every core busy answers late, and killing it would drop another topic's
    in-flight recognition — so a SILENT live matching process is used anyway, and replaced only when it stays silent three
    `ensure`s in a row (it is wedged). `/stt` shows such a process as «running, busy», not «not running».

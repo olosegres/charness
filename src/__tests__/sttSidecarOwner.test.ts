@@ -936,9 +936,9 @@ function createLocalEngine(owner: ReturnType<typeof createSttSidecarOwner>, onAs
     kind: 'gigaam',
     name: 'gigaam',
     timeout: defaultSttTimeout,
-    getEndpoint: async () => {
+    getEndpoint: async (request) => {
       onAsk();
-      return getSttSidecarTranscriptionEndpoint(await owner.ensure(defaultSettings));
+      return getSttSidecarTranscriptionEndpoint(await owner.ensure(defaultSettings, request));
     },
   };
 }
@@ -994,6 +994,48 @@ test('a warm-up and the voice\'s own request are ONE ask: the model is loaded on
   assert.deepEqual(asked, ['ask'], 'the engine was asked once for this voice');
   assert.equal(world.getSpawnCount(), 1);
   assert.equal((await warmed.endpoint).url, `http://127.0.0.1:${readRecord().port}/v1/audio/transcriptions`, 'and the voice used the warm-up\'s endpoint');
+});
+
+test('a warm-up never judges a silent sidecar: no /health, nothing counted toward the silence limit, no replacement — only the voices\' own asks do', async () => {
+  let healthCalls = 0;
+  const world = createFakeWorld({ fetchHealth: async () => { healthCalls++; return null; } });
+  const busy = world.addEarlierSidecar(0); // alive and listening, but busy with a long recognition: it never answers /health in time
+  await world.deps.sleep(0); // its load completes: the record now names a listening port
+  const owner = createSttSidecarOwner(world.deps);
+
+  // Five voices of one topic arrive behind that recognition: five warm-ups.
+  for (let arrival = 1; arrival <= 5; arrival++) {
+    const endpoint = await owner.ensure(defaultSettings, { isWarmUp: true });
+    assert.deepEqual(endpoint, { port: readRecord().port, token: 'earlier-token' }, `warm-up ${arrival} takes the live sidecar as it is`);
+  }
+  assert.equal(healthCalls, 0, 'a warm-up asks nothing of a listening sidecar');
+  assert.equal(world.signals.length, 0, 'and stops nothing');
+  assert.equal(world.getSpawnCount(), 0);
+
+  // The voices\' own asks keep the rule the silence limit exists for: used anyway twice, replaced when it stays silent a third time.
+  await owner.ensure(defaultSettings);
+  await owner.ensure(defaultSettings);
+  assert.equal(world.signals.length, 0, 'the warm-ups did not count: two silent asks of voices still spare it');
+  await owner.ensure(defaultSettings);
+  assert.ok(world.signals.some((entry) => entry.pid === busy.pid), 'the third silent ask of a voice replaces it');
+  assert.equal(world.getSpawnCount(), 1);
+});
+
+test('a warm-up still does its work on a cold or loading engine: it starts one, or waits for the one that is loading', async () => {
+  const cold = createFakeWorld();
+  const coldOwner = createSttSidecarOwner(cold.deps);
+  const started = await coldOwner.ensure(defaultSettings, { isWarmUp: true });
+  assert.equal(cold.getSpawnCount(), 1);
+  assert.equal(started.port, readRecord().port);
+
+  fs.rmSync(getRecordPath(), { force: true });
+  const loading = createFakeWorld();
+  loading.addEarlierSidecar(20_000);
+  const loadingOwner = createSttSidecarOwner(loading.deps);
+  const waited = await loadingOwner.ensure(defaultSettings, { isWarmUp: true });
+  assert.equal(loading.getSpawnCount(), 0, 'it did not start a second one');
+  assert.deepEqual(waited, { port: readRecord().port, token: 'earlier-token' });
+  assert.ok(loading.getElapsedMs() >= 20_000);
 });
 
 test('a start that FAILS FAST is one failed start per voice, not two: the guard trips on the third voice, not the second', async () => {

@@ -13,7 +13,7 @@ import * as path from 'path';
 import { resetLegacyNameState } from '../legacyNames';
 import { createSttRuntime, type SttRuntimeDeps } from '../stt/sttRuntime';
 import { createEmptySttConfig, resetSttConfigCache, saveSttConfig, type SttConfigFile } from '../stt/sttSettings';
-import type { SttGigaamSettings } from '../stt/sttSettings';
+import type { SttEndpointRequest, SttGigaamSettings } from '../stt/sttSettings';
 import type { SttSidecarEndpoint } from '../stt/sttSidecarOwner';
 
 let dataDir = '';
@@ -42,6 +42,8 @@ interface Harness {
   info: string[];
   problems: string[];
   ensured: SttGigaamSettings[];
+  /** The second argument of each `ensure`: what the caller said about its ask. */
+  ensureRequests: Array<SttEndpointRequest | undefined>;
   autoInstalls: { count: number };
   facts: { isInstalled: boolean; isInstalling: boolean; isUnhealthy: boolean; owner: boolean };
 }
@@ -51,6 +53,7 @@ function createHarness(): Harness {
     info: [],
     problems: [],
     ensured: [],
+    ensureRequests: [],
     autoInstalls: { count: 0 },
     facts: { isInstalled: true, isInstalling: false, isUnhealthy: false, owner: true },
     deps: undefined as never,
@@ -61,8 +64,9 @@ function createHarness(): Harness {
     // Hermetic: whether the test box is itself a container must not change what a test sees.
     checkIsConfigOnContainerDisk: () => false,
     owner: {
-      ensure: async (settings): Promise<SttSidecarEndpoint> => {
+      ensure: async (settings, request): Promise<SttSidecarEndpoint> => {
         harness.ensured.push(settings);
+        harness.ensureRequests.push(request);
         return { port: 40123, token: 'sidecar-token' };
       },
       checkIsUnhealthy: () => harness.facts.isUnhealthy,
@@ -269,7 +273,8 @@ test('boot: a stt.json an earlier build wrote with the idle 15 it chose itself i
   assert.equal(harness.info.length, 1, harness.info.join('\n'));
   assert.match(harness.info[0], /the old default \(15 min\).*now follows the current default \(60 min\).*pick 15 again/);
   assert.equal(runtime.getResolved().settings.gigaam.idleMinutes, 60);
-  assert.equal((JSON.parse(fs.readFileSync(configPath, 'utf8')) as { schemaVersion: number }).schemaVersion, 2);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')), { engines: [localEngine], language: null }, 'no stored default, no new key: an older build still reads the file');
+  assert.ok(fs.existsSync(path.join(dataDir, 'stt.defaults-migrated')), 'the marker beside it records the migration');
 
   createSttRuntime(harness.deps).init(); // the next boot: nothing left to migrate, nothing said
   assert.equal(harness.info.length, 1);
@@ -289,4 +294,16 @@ test('boot: a stt.json that cannot be rewritten is reported and keeps working wi
   if (process.getuid?.() === 0) return;
   assert.ok(harness.problems.some((line) => line.includes('could not rewrite') && line.includes('EACCES')), harness.problems.join('\n'));
   assert.equal(createSttRuntime(harness.deps).getResolved().settings.gigaam.idleMinutes, 15, 'the file is as it was');
+});
+
+test('the warm-up\'s request reaches the owner: a voice asks plainly, a warm-up says so — the owner never judges silence for a warm-up', async () => {
+  const harness = createHarness();
+  writeConfig({ engines: [localEngine, groqEngine] });
+  const resolved = createSttRuntime(harness.deps).getResolved();
+
+  await resolved.engines[0].getEndpoint();
+  await resolved.engines[0].getEndpoint({ isWarmUp: true });
+  assert.deepEqual(harness.ensureRequests, [undefined, { isWarmUp: true }]);
+  await resolved.engines[1].getEndpoint({ isWarmUp: true }); // a hosted engine ignores it and asks no owner
+  assert.equal(harness.ensureRequests.length, 2);
 });

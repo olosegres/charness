@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
 import { z } from 'zod';
 import {
   createConfigFileLoader,
@@ -58,14 +59,16 @@ export const defaultGigaamWorkers = 4;
 export const defaultGigaamThreads = 2;
 /**
  * The old default, which the bot itself wrote into every `stt.json` it saved (it wrote the whole `gigaam` block). A stored
- * value equal to it is not a choice: the one-time migration {@link migrateSttStoredDefaults} drops it.
+ * value equal to it is not a choice: the migration {@link migrateSttStoredDefaults} drops it.
  */
 export const previousGigaamIdleMinutes = 15;
 /**
- * The version of the file's layout, written by every save. 2: the `gigaam` block holds only the values that differ from the
- * defaults, and the old idle default (15 min) was dropped once. A file without it was written by an earlier build.
+ * A file BESIDE `stt.json` that says the migration has been through this directory. It is not in `stt.json`: every released
+ * build reads that file with a strict schema, so a new key would turn voice off on any older build — after a rollback, or a
+ * downgrade. Older builds never read this one.
  */
-const sttConfigSchemaVersion = 2;
+export const sttDefaultsMigratedMarkerName = 'stt.defaults-migrated';
+const sttDefaultsMigratedMarkerText = 'stt.json beside this file stores only the settings that differ from the defaults. Older charness builds ignore this file.\n';
 
 /** Voice length assumed for the timeout when Telegram did not report one. */
 const unknownVoiceDurationSeconds = 60;
@@ -141,7 +144,6 @@ const gigaamSchema = z.strictObject({
 });
 
 const rawConfigSchema = z.strictObject({
-  schemaVersion: z.number().int().min(1).optional(),
   engines: z.array(engineSchema).max(sttEngineLimit).optional(),
   language: z.string().regex(languageRe, 'must be a two-letter ISO-639-1 code like ru').nullable().optional(),
   gigaam: gigaamSchema.optional(),
@@ -253,8 +255,8 @@ export const resetSttConfigCache = sttConfigLoader.resetCache;
 
 /**
  * @description `config` as it is STORED: the `gigaam` block holds only what differs from the defaults (a default written to
- * the file looks like a choice, and a later change of the default would never reach the setups that "chose" it), and the
- * file carries its layout version.
+ * the file looks like a choice, and a later change of the default would never reach the setups that "chose" it) and is left
+ * out when empty. Nothing is added to the file's keys: every released build reads it with a strict schema.
  */
 function createStoredConfig(config: SttConfigFile): RawSttConfig {
   const { idleMinutes, workers, threads } = config.gigaam;
@@ -264,23 +266,37 @@ function createStoredConfig(config: SttConfigFile): RawSttConfig {
     ...(threads !== undefined ? { threads } : {}),
   };
   return {
-    schemaVersion: sttConfigSchemaVersion,
     engines: config.engines,
     language: config.language,
     ...(Object.keys(gigaam).length > 0 ? { gigaam } : {}),
   };
 }
 
+function getMigratedMarkerPath(filePath: string): string {
+  return path.join(path.dirname(filePath), sttDefaultsMigratedMarkerName);
+}
+
+/** The marker is written once and never rewritten: its presence is the whole message. */
+function writeMigratedMarker(filePath: string): void {
+  const markerPath = getMigratedMarkerPath(filePath);
+  if (fs.existsSync(markerPath)) return;
+  fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+  fs.writeFileSync(markerPath, sttDefaultsMigratedMarkerText, { mode: configFileMode });
+}
+
 /**
  * @description Write `config` to `filePath`: validated first (a caller that builds
  * an invalid file has a bug), then written mode 0600 through a temp file and a
  * rename, so a reader never sees half a file. Only the values that differ from the
- * defaults are stored ({@link createStoredConfig}).
+ * defaults are stored ({@link createStoredConfig}). The marker beside the file is written
+ * first: a file saved by this layout is never one that {@link migrateSttStoredDefaults}
+ * should take for an earlier build's.
  */
 export function saveSttConfig(filePath: string, config: SttConfigFile): void {
   const normalised = normaliseSttConfig(config);
   const validation = validateSttConfig(normalised);
   if (!validation.ok) throw new Error(`refusing to write an invalid stt.json: ${validation.errors.join('; ')}`);
+  writeMigratedMarker(filePath);
   writeJsonFileAtomically(filePath, createStoredConfig(normalised), configFileMode);
 }
 
@@ -291,12 +307,17 @@ export type SttStoredDefaultsMigrationResult =
   | { status: 'writeFailed'; error: string };
 
 /**
- * @description The ONE-TIME migration of the values the bot itself used to write: an `stt.json` without a layout version
- * was saved by an earlier build, which stored the whole `gigaam` block — including `idleMinutes: 15`, the default of that
- * time, which is not anyone's choice and would hold the local engine to 15 minutes forever. Rewrites the file once, in the
- * current layout (defaults not stored, version stamped); a stored 15 is dropped, so the engine follows the current
- * default. Every later save carries the version, so a 15 picked afterwards is a choice and stays. A missing, unreadable
- * or invalid file is left alone.
+ * @description The migration of the values the bot itself used to write. An earlier build saved the whole `gigaam` block,
+ * `idleMinutes: 15` included — then the default, so not anyone's choice, and it would hold the local engine to 15 minutes
+ * for good. The stored 15 is dropped (the engine then follows the current default) when
+ *
+ * - the marker beside the file is absent: this directory has not been migrated; or
+ * - the file stores a value equal to a default (`workers: 4`, `idleMinutes: 60`): this layout never does, so an earlier
+ *   build wrote it — the marker is there but a rollback, an old `/stt` save and a new update came after.
+ *
+ * A 15 picked on this layout is stored without such a default next to it and stays. The one case no content can tell apart
+ * is an earlier build's `15` beside a workers count that was changed on purpose; once the marker is there it stays.
+ * A missing, unreadable or invalid file is left alone. Idempotent: a file that needs nothing is not touched.
  */
 export function migrateSttStoredDefaults(filePath: string): SttStoredDefaultsMigrationResult {
   let parsedJson: object;
@@ -306,15 +327,23 @@ export function migrateSttStoredDefaults(filePath: string): SttStoredDefaultsMig
     return { status: 'notNeeded' };
   }
   const parsed = rawConfigSchema.safeParse(parsedJson);
-  if (!parsed.success || (parsed.data.schemaVersion ?? 0) >= sttConfigSchemaVersion) return { status: 'notNeeded' };
+  if (!parsed.success) return { status: 'notNeeded' };
   const validation = validateSttConfig(parsedJson);
   if (!validation.ok) return { status: 'notNeeded' };
+
+  const isMarked = fs.existsSync(getMigratedMarkerPath(filePath));
+  const stored = parsed.data.gigaam;
+  const isEarlierBuildFile = stored?.workers === defaultGigaamWorkers || stored?.idleMinutes === defaultGigaamIdleMinutes;
+  if (isMarked && !isEarlierBuildFile) return { status: 'notNeeded' };
+
   const isIdleMinutesDropped = validation.config.gigaam.idleMinutes === previousGigaamIdleMinutes;
-  const migrated: SttConfigFile = isIdleMinutesDropped
-    ? { ...validation.config, gigaam: { ...validation.config.gigaam, idleMinutes: defaultGigaamIdleMinutes } }
-    : validation.config;
+  if (!isIdleMinutesDropped && isMarked) return { status: 'notNeeded' };
   try {
-    saveSttConfig(filePath, migrated);
+    if (isIdleMinutesDropped) {
+      saveSttConfig(filePath, { ...validation.config, gigaam: { ...validation.config.gigaam, idleMinutes: defaultGigaamIdleMinutes } });
+    } else {
+      writeMigratedMarker(filePath);
+    }
   } catch (e) {
     return { status: 'writeFailed', error: getCaughtErrnoCode(e) };
   }
@@ -385,10 +414,20 @@ export interface SttFacts {
   hasOwnerContext: boolean;
 }
 
+/** @name SttEndpointRequest @description What the caller says when it asks an engine for its endpoint. */
+export interface SttEndpointRequest {
+  /**
+   * The ask is a warm-up made when a voice note ARRIVED — the engine may still be busy with the topic's earlier voice —
+   * not a voice about to be recognised. It is only meant to get a cold or loading engine going, so it never acts on a
+   * silent one (no health verdict, no replacement).
+   */
+  isWarmUp?: boolean;
+}
+
 /** @description Hooks the resolver cannot know: how the local engine's endpoint is produced at call time. */
 export interface SttResolveOptions {
   /** Starts the sidecar if needed and returns its endpoint; absent → the local engine is unavailable. */
-  getGigaamEndpoint?: () => Promise<TranscriptionEndpoint>;
+  getGigaamEndpoint?: (request?: SttEndpointRequest) => Promise<TranscriptionEndpoint>;
 }
 
 export type SttUnavailableReason =
@@ -409,7 +448,7 @@ export interface ResolvedSttEngine {
   name: string;
   timeout: SttTimeout;
   /** Static engines answer at once; the local engine starts its process here and may reject. */
-  getEndpoint: () => Promise<TranscriptionEndpoint>;
+  getEndpoint: (request?: SttEndpointRequest) => Promise<TranscriptionEndpoint>;
 }
 
 export interface UnavailableSttEngine {

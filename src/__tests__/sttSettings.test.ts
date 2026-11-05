@@ -10,6 +10,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { z } from 'zod';
 import { resetLegacyNameState } from '../legacyNames';
 import {
   clampSttWorkers,
@@ -145,7 +146,7 @@ test('save writes mode 0600 through a rename and leaves no temp file; load reads
   const config = createConfig({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }], language: 'ru' });
   saveSttConfig(configPath, config);
   assert.equal(fs.statSync(configPath).mode & 0o777, 0o600);
-  assert.deepEqual(fs.readdirSync(configDir), ['stt.json']);
+  assert.deepEqual(fs.readdirSync(configDir).sort(), ['stt.defaults-migrated', 'stt.json'], 'the file and the marker beside it — no temp file');
   const load = loadSttConfig(configPath);
   assert.equal(load.status, 'ok');
   assert.deepEqual(load.config, config);
@@ -155,9 +156,52 @@ function readStored(): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(configPath, 'utf8'));
 }
 
-test('save stores only what differs from the defaults and stamps the layout version — a default written to the file would look like a choice', () => {
+const markerPath = (): string => path.join(configDir, 'stt.defaults-migrated');
+
+/**
+ * The schema every RELEASED build reads stt.json with (copied from the commit before the stored-defaults change): strict, so a
+ * key it does not know turns voice off on that build. What this build writes must pass it — a rollback, a downgrade and the
+ * bot's own boot rollback all end in an older build reading this file.
+ */
+const releasedTimeoutSchema = z.strictObject({ baseSeconds: z.number().min(1).max(600), percentOfDuration: z.number().min(0).max(400) });
+const releasedEngineSchema = z.strictObject({
+  id: z.string().regex(/^[a-z0-9]{1,8}$/),
+  kind: z.enum(['gigaam', 'groq', 'openai', 'url']),
+  isDisabled: z.boolean().optional(),
+  timeout: releasedTimeoutSchema.optional(),
+  url: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  apiKey: z.string().min(1).optional(),
+});
+const releasedFileSchema = z.strictObject({
+  engines: z.array(releasedEngineSchema).max(6).optional(),
+  language: z.string().regex(/^[a-z]{2}$/).nullable().optional(),
+  gigaam: z.strictObject({
+    idleMinutes: z.number().int().min(0).max(24 * 60).optional(),
+    workers: z.number().int().min(1).max(64).optional(),
+    threads: z.number().int().min(1).max(32).optional(),
+  }).optional(),
+});
+
+test('what this build writes is read by the strict schema of the released builds — a rollback or a downgrade keeps voice', () => {
+  const configs: SttConfigFile[] = [
+    createConfig(),
+    createConfig({ engines: [{ id: 'g', kind: 'gigaam' }] }),
+    createConfig({ engines: [{ id: 'g', kind: 'gigaam' }, { id: 'q1', kind: 'groq', apiKey: sampleKey, timeout: { baseSeconds: 5, percentOfDuration: 50 } }], language: 'ru' }),
+    createConfig({ gigaam: { idleMinutes: 15, workers: 4 } }),
+    createConfig({ gigaam: { idleMinutes: 0, workers: 8, threads: 3 } }),
+  ];
+  for (const config of configs) {
+    saveSttConfig(configPath, config);
+    const verdict = releasedFileSchema.safeParse(readStored());
+    assert.ok(verdict.success, `${JSON.stringify(readStored())}: ${verdict.success ? '' : JSON.stringify(verdict.error.issues)}`);
+    assert.deepEqual(Object.keys(readStored()).filter((key) => !['engines', 'language', 'gigaam'].includes(key)), [], 'no new key in the file');
+  }
+});
+
+test('save stores only what differs from the defaults — a default written to the file would look like a choice', () => {
   saveSttConfig(configPath, createConfig({ engines: [{ id: 'g', kind: 'gigaam' }] }));
-  assert.deepEqual(readStored(), { schemaVersion: 2, engines: [{ id: 'g', kind: 'gigaam' }], language: null }, 'no gigaam block at all');
+  assert.deepEqual(readStored(), { engines: [{ id: 'g', kind: 'gigaam' }], language: null }, 'no gigaam block at all');
 
   saveSttConfig(configPath, createConfig({ gigaam: { idleMinutes: 15, workers: 4 } }));
   assert.deepEqual(readStored().gigaam, { idleMinutes: 15 }, 'a 15 picked on purpose differs from the default and is stored');
@@ -167,16 +211,18 @@ test('save stores only what differs from the defaults and stamps the layout vers
   assert.deepEqual(loadSttConfig(configPath).config?.gigaam, { idleMinutes: 60, workers: 8, threads: 3 }, 'read back, the defaults fill what the file omits');
 });
 
-/** What an earlier build saved: the whole gigaam block, the idle default of that time included, and no layout version. */
+/** What an earlier build saved: the whole gigaam block, the idle default of that time included. */
 const earlierBuildFile = { engines: [{ id: 'g', kind: 'gigaam' }], language: null, gigaam: { idleMinutes: 15, workers: 4 } };
 
-test('stored defaults migration: the idle 15 that an earlier build wrote itself is dropped once, in the new layout and mode 0600', () => {
+test('stored defaults migration: the idle 15 that an earlier build wrote itself is dropped once, mode 0600, and the marker beside the file records it', () => {
   writeRaw(JSON.stringify(earlierBuildFile));
   fs.chmodSync(configPath, 0o644);
+  assert.ok(!fs.existsSync(markerPath()));
 
   assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: true });
-  assert.deepEqual(readStored(), { schemaVersion: 2, engines: [{ id: 'g', kind: 'gigaam' }], language: null });
+  assert.deepEqual(readStored(), { engines: [{ id: 'g', kind: 'gigaam' }], language: null }, 'no new key, no stored default');
   assert.equal(fs.statSync(configPath).mode & 0o777, 0o600);
+  assert.ok(fs.existsSync(markerPath()));
   assert.deepEqual(loadSttConfig(configPath).config?.gigaam, { idleMinutes: 60, workers: 4 }, 'the engine now follows the current default');
 
   const migratedText = fs.readFileSync(configPath, 'utf8');
@@ -184,39 +230,82 @@ test('stored defaults migration: the idle 15 that an earlier build wrote itself 
   assert.equal(fs.readFileSync(configPath, 'utf8'), migratedText, 'and the second run does not touch the file');
 });
 
-test('stored defaults migration: a 15 picked AFTER it is a choice — it is saved with the version, so no later boot drops it', () => {
+test('stored defaults migration: a 15 picked AFTER it is a choice — no later boot drops it', () => {
   writeRaw(JSON.stringify(earlierBuildFile));
   migrateSttStoredDefaults(configPath);
   const config = loadSttConfig(configPath).config;
   assert.ok(config);
   saveSttConfig(configPath, { ...config, gigaam: { ...config.gigaam, idleMinutes: 15 } });
   const chosenText = fs.readFileSync(configPath, 'utf8');
+  assert.deepEqual(readStored().gigaam, { idleMinutes: 15 }, 'stored without a default next to it');
 
   assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
   assert.equal(fs.readFileSync(configPath, 'utf8'), chosenText);
   assert.equal(loadSttConfig(configPath).config?.gigaam.idleMinutes, 15);
 });
 
-test('stored defaults migration: any other stored value is kept; a file without a gigaam block, or with another idle, is only stamped', () => {
-  writeRaw(JSON.stringify({ engines: [], gigaam: { idleMinutes: 30, workers: 2, threads: 3 } }));
-  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: false });
-  assert.deepEqual(readStored().gigaam, { idleMinutes: 30, workers: 2, threads: 3 });
-  assert.equal(readStored().schemaVersion, 2);
-
-  writeRaw(JSON.stringify({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] }));
-  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: false });
-  assert.equal(readStored().schemaVersion, 2, 'stamped, so a 15 added by hand later is never mistaken for the old default');
-  assert.deepEqual(loadSttConfig(configPath).config?.engines, [{ id: 'q1', kind: 'groq', apiKey: sampleKey }]);
+test('stored defaults migration: a 15 saved by a build that has never seen the migration (a fresh install) is a choice too — the save writes the marker', () => {
+  assert.ok(!fs.existsSync(markerPath()));
+  saveSttConfig(configPath, createConfig({ engines: [{ id: 'g', kind: 'gigaam' }], gigaam: { idleMinutes: 15, workers: 8 } }));
+  assert.ok(fs.existsSync(markerPath()));
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
+  assert.deepEqual(readStored().gigaam, { idleMinutes: 15, workers: 8 });
 });
 
-test('stored defaults migration: a missing, garbage or invalid file is left exactly as it is; a directory that cannot be written is reported', () => {
+test('stored defaults migration: rollback → an older build saves in /stt → update again: the stored default next to the 15 shows the older build wrote it, so it is dropped again', () => {
+  writeRaw(JSON.stringify(earlierBuildFile));
+  migrateSttStoredDefaults(configPath); // the first update
+  assert.ok(fs.existsSync(markerPath()));
+  // The older build reads the new file (it passes its strict schema, see above) and saves: the whole gigaam block, 15 again.
+  writeRaw(JSON.stringify({ engines: [{ id: 'g', kind: 'gigaam' }, { id: 'q1', kind: 'groq', apiKey: sampleKey }], language: 'ru', gigaam: { idleMinutes: 15, workers: 4 } }));
+
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: true });
+  assert.deepEqual(readStored(), { engines: [{ id: 'g', kind: 'gigaam' }, { id: 'q1', kind: 'groq', apiKey: sampleKey }], language: 'ru' });
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
+});
+
+test('stored defaults migration: with the marker there, a 15 beside a workers count that was changed on purpose stays — no content tells it from a choice', () => {
+  saveSttConfig(configPath, createConfig({ engines: [{ id: 'g', kind: 'gigaam' }] })); // the marker is there
+  writeRaw(JSON.stringify({ engines: [{ id: 'g', kind: 'gigaam' }], gigaam: { idleMinutes: 15, workers: 2 } }));
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
+  assert.deepEqual(readStored().gigaam, { idleMinutes: 15, workers: 2 });
+
+  // Without the marker it is dropped like any earlier build's file, and the workers count is kept.
+  fs.rmSync(markerPath());
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: true });
+  assert.deepEqual(readStored().gigaam, { workers: 2 });
+});
+
+test('stored defaults migration: nothing to drop → no rewrite; a stored default without a 15 changes nothing and is not rewritten on every boot', () => {
+  const groqOnly = JSON.stringify({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] });
+  writeRaw(groqOnly);
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: false });
+  assert.equal(fs.readFileSync(configPath, 'utf8'), groqOnly, 'the file is not touched, only the marker is written');
+  assert.ok(fs.existsSync(markerPath()));
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
+
+  const storedDefault = JSON.stringify({ engines: [], gigaam: { idleMinutes: 30, workers: 4 } });
+  writeRaw(storedDefault);
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' }, 'marked, a stored workers 4 and no 15: nothing to do');
+  assert.equal(fs.readFileSync(configPath, 'utf8'), storedDefault);
+});
+
+test('stored defaults migration: any other stored value is kept when the 15 is dropped', () => {
+  writeRaw(JSON.stringify({ engines: [{ id: 'g', kind: 'gigaam' }], language: 'ru', gigaam: { idleMinutes: 15, workers: 4, threads: 3 } }));
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: true });
+  assert.deepEqual(readStored(), { engines: [{ id: 'g', kind: 'gigaam' }], language: 'ru', gigaam: { threads: 3 } });
+});
+
+test('stored defaults migration: a missing, garbage or invalid file is left exactly as it is, with no marker; a directory that cannot be written is reported', () => {
   assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
   assert.ok(!fs.existsSync(configPath), 'no file is created');
+  assert.ok(!fs.existsSync(markerPath()), 'and no marker: nothing was handled');
 
   for (const text of ['{not json', JSON.stringify({ engines: [{ id: 'g', kind: 'gigaam' }, { id: 'h', kind: 'gigaam' }] }), JSON.stringify({ unknownKey: 1 })]) {
     writeRaw(text);
     assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
     assert.equal(fs.readFileSync(configPath, 'utf8'), text);
+    assert.ok(!fs.existsSync(markerPath()));
   }
 
   writeRaw(JSON.stringify(earlierBuildFile));

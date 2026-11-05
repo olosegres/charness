@@ -205,19 +205,22 @@ describe('Voice settings at boot, end to end: built charness, fake Bot API', () 
     await topic.sendAndAwaitReply('/stt', 'No engines yet');
   });
 
-  it('an stt.json an earlier build wrote with the idle 15 it chose itself is rewritten once at boot: the engine follows the current 60, said once; a 15 picked on its card afterwards survives the next boot', async () => {
+  it('an stt.json an earlier build wrote with the idle 15 it chose itself is rewritten at boot — in the layout an older build still reads — the engine follows 60; a 15 picked on its card survives the next boot; an older build\'s save of it is migrated again', async () => {
     const instance = getLayout();
     const sttConfigPath = getSttConfigFilePath(instance);
+    const markerPath = path.join(path.dirname(sttConfigPath), 'stt.defaults-migrated');
     const migrationLine = 'the old default (15 min) that the bot had written itself';
+    const earlierBuildFile = `${JSON.stringify({ engines: [{ id: 'g', kind: 'gigaam' }], language: null, gigaam: { idleMinutes: 15, workers: 4 } }, null, 2)}\n`;
+    const readStored = (): { gigaam?: unknown; engines: Array<{ kind: string }> } => JSON.parse(fs.readFileSync(sttConfigPath, 'utf8'));
     await getCharness().stop();
     writeInstalledMarker(instance.dataDir); // installed, so the boot starts no install of its own
-    fs.writeFileSync(sttConfigPath, `${JSON.stringify({ engines: [{ id: 'g', kind: 'gigaam' }], language: null, gigaam: { idleMinutes: 15, workers: 4 } }, null, 2)}\n`);
+    fs.rmSync(markerPath, { force: true }); // the directory of a bot that has not been updated yet
+    fs.writeFileSync(sttConfigPath, earlierBuildFile);
 
     await bootCharness(instance);
-    const migrated = JSON.parse(fs.readFileSync(sttConfigPath, 'utf8')) as { schemaVersion?: number; gigaam?: unknown; engines: Array<{ kind: string }> };
-    assert.equal(migrated.schemaVersion, 2, 'the file is in the current layout');
-    assert.equal(migrated.gigaam, undefined, 'no idle value or workers count is stored: they are the defaults');
-    assert.deepEqual(migrated.engines.map((engine) => engine.kind), ['gigaam'], 'the engine list is untouched');
+    assert.deepEqual(Object.keys(readStored()).sort(), ['engines', 'language'], 'no gigaam block and no new key: the file passes the strict schema of the released builds');
+    assert.deepEqual(readStored().engines.map((engine) => engine.kind), ['gigaam'], 'the engine list is untouched');
+    assert.ok(fs.existsSync(markerPath), 'the marker beside the file records the migration');
     assert.equal(getCharness().output.split(migrationLine).length - 1, 1, 'said once');
 
     const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
@@ -236,12 +239,19 @@ describe('Voice settings at boot, end to end: built charness, fake Bot API', () 
     assert.ok(fifteenData);
     await topic.tapAndAwaitAnswer(screen, fifteenData);
     await topic.waitForMessageText('the card again', screen, (text) => text.includes('Status: ready'));
-    assert.deepEqual((JSON.parse(fs.readFileSync(sttConfigPath, 'utf8')) as { gigaam?: unknown }).gigaam, { idleMinutes: 15 });
+    assert.deepEqual(readStored().gigaam, { idleMinutes: 15 });
 
     await getCharness().stop();
     await bootCharness(instance);
-    assert.deepEqual((JSON.parse(fs.readFileSync(sttConfigPath, 'utf8')) as { gigaam?: unknown }).gigaam, { idleMinutes: 15 }, 'the chosen 15 survived the boot');
-    assert.equal(getCharness().output.split(migrationLine).length - 1, 0, 'and this second boot did not run the migration again');
+    assert.deepEqual(readStored().gigaam, { idleMinutes: 15 }, 'the chosen 15 survived the boot');
+    assert.equal(getCharness().output.split(migrationLine).length - 1, 0, 'and this boot did not run the migration');
+
+    // A rollback to an older build, which saves in /stt (the whole gigaam block, 15 again), and an update: migrated again.
+    await getCharness().stop();
+    fs.writeFileSync(sttConfigPath, earlierBuildFile);
+    await bootCharness(instance);
+    assert.deepEqual(Object.keys(readStored()).sort(), ['engines', 'language'], 'the older build\'s 15 is dropped again');
+    assert.equal(getCharness().output.split(migrationLine).length - 1, 1);
 
     // Back to the empty list and no install, the state the next steps start from.
     fs.writeFileSync(sttConfigPath, `${JSON.stringify({ engines: [] }, null, 2)}\n`);

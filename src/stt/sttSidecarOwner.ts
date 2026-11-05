@@ -16,6 +16,7 @@ import { getSttChildEnv } from './sttChildEnv';
 import {
   defaultGigaamThreads,
   type SttConfigFile,
+  type SttEndpointRequest,
   type SttGigaamSettings,
 } from './sttSettings';
 import type { TranscriptionEndpoint } from '../utils/transcribeAudio';
@@ -258,8 +259,13 @@ function isSttSidecarRecord(value: Partial<SttSidecarRecord>): value is SttSidec
 }
 
 export interface SttSidecarOwner {
-  /** Adopt the recorded live process or start one; resolves when it is ready. Concurrent calls share ONE attempt. */
-  ensure: (settings: SttGigaamSettings) => Promise<SttSidecarEndpoint>;
+  /**
+   * Adopt the recorded live process or start one; resolves when it is ready. Concurrent calls share ONE attempt (a voice's
+   * ask that joins a warm-up's attempt gets the warm-up's rules). A warm-up ask ({@link SttEndpointRequest.isWarmUp}) takes
+   * a listening, matching process as it is — no /health, nothing counted toward the silence limit, never a replacement
+   * for silence — and otherwise starts or waits for a start like any ask.
+   */
+  ensure: (settings: SttGigaamSettings, request?: SttEndpointRequest) => Promise<SttSidecarEndpoint>;
   /** Stop the recorded process (guarded, bounded at ~3 s) and drop the record. Idempotent. */
   stop: () => Promise<void>;
   getStatus: () => Promise<SttSidecarStatus>;
@@ -364,7 +370,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     return `the local engine was still loading its model after ${Math.round(deps.startCeilingMs / 1000)} s (see sidecar.log)`;
   }
 
-  async function adoptRecorded(settings: SttGigaamSettings, owner: SttOwnerContext): Promise<SttSidecarEndpoint | null> {
+  async function adoptRecorded(settings: SttGigaamSettings, owner: SttOwnerContext, isWarmUp: boolean): Promise<SttSidecarEndpoint | null> {
     let record = readRecord();
     if (!record) {
       removeRecord();
@@ -394,6 +400,9 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
       }
       // Here the record names a listening process: a loading one was waited for above (it listens, is gone or timed out).
       const endpoint = { port: record.port, token: record.token };
+      // A warm-up is only for a cold or loading engine. One made at a voice note's arrival can meet a sidecar busy with the
+      // topic's earlier voice, whose /health is late: it must not ask, count the silence, or help replace a live process.
+      if (isWarmUp) return endpoint;
       const [firstTimeoutMs, retryTimeoutMs] = deps.adoptHealthTimeoutsMs;
       if ((await deps.fetchHealth(record.port, record.token, firstTimeoutMs)) ?? (await deps.fetchHealth(record.port, record.token, retryTimeoutMs))) {
         unansweredAdoptions = 0;
@@ -415,7 +424,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     return null;
   }
 
-  async function spawnSidecar(settings: SttGigaamSettings, owner: SttOwnerContext): Promise<SttSidecarEndpoint> {
+  async function spawnSidecar(settings: SttGigaamSettings, owner: SttOwnerContext, isWarmUp: boolean): Promise<SttSidecarEndpoint> {
     if (deps.nowMs() < unhealthyUntilMs) {
       throw new Error(`gigaam is unhealthy until ${formatLocalClock(unhealthyUntilMs)}`);
     }
@@ -478,7 +487,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
       if (!deps.checkIsIdentityCurrent(identity)) {
         // Two starts at once (a reloaded worker asked while the first was still loading): ours found the record
         // claimed and left. That is no failure — use the sidecar that holds the record.
-        const earlierStart = await adoptRecorded(settings, owner);
+        const earlierStart = await adoptRecorded(settings, owner, isWarmUp);
         if (earlierStart) {
           fs.rmSync(readyFile, { force: true });
           deps.log(`[STT] sidecar pid ${identity.pid} found another start already running and left; using that one`);
@@ -498,10 +507,10 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     }
   }
 
-  async function ensureOnce(settings: SttGigaamSettings): Promise<SttSidecarEndpoint> {
+  async function ensureOnce(settings: SttGigaamSettings, isWarmUp: boolean): Promise<SttSidecarEndpoint> {
     const owner = deps.getOwnerContext();
     if (!owner) throw new Error('the local engine has no owner process to start it with (restart the bot supervisor)');
-    return (await adoptRecorded(settings, owner)) ?? (await spawnSidecar(settings, owner));
+    return (await adoptRecorded(settings, owner, isWarmUp)) ?? (await spawnSidecar(settings, owner, isWarmUp));
   }
 
   async function stop(): Promise<void> {
@@ -511,9 +520,9 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
   }
 
   return {
-    ensure: (settings) => {
+    ensure: (settings, request) => {
       if (!inFlightEnsure) {
-        inFlightEnsure = ensureOnce(settings).finally(() => { inFlightEnsure = null; });
+        inFlightEnsure = ensureOnce(settings, request?.isWarmUp === true).finally(() => { inFlightEnsure = null; });
       }
       return inFlightEnsure;
     },

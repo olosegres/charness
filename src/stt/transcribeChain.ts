@@ -67,7 +67,7 @@ export function warmUpFirstEngine(
 ): WarmedEndpoint | null {
   const firstEngine = engines[0];
   if (firstEngine?.kind !== 'gigaam') return null;
-  const endpoint = firstEngine.getEndpoint();
+  const endpoint = firstEngine.getEndpoint({ isWarmUp: true });
   endpoint.catch((error) => logWarning(`[STT] warm-up start of ${firstEngine.name} failed: ${error instanceof Error ? error.message : 'unknown error'}`));
   return { engineId: firstEngine.id, endpoint };
 }
