@@ -785,6 +785,10 @@ export const deDict: Record<string, string> = {
   'schedule.checkFailed':
     '🚨 Prüfung „{name}« fehlgeschlagen: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nDer Agent wird geweckt. Keine weiteren Alarme, bis die Prüfung wieder besteht.',
   'schedule.checkRecovered': '✅ Prüfung „{name}« besteht wieder.',
+  'schedule.statusLineText': '⏳ {name} · läuft seit {elapsed}{activity}',
+  'schedule.statusLineActivity': ' · jetzt: {activity}',
+  'schedule.statusElapsedMinutes': '{minutes} Min.',
+  'schedule.statusElapsedHours': '{hours} Std. {minutes} Min.',
   'schedule.pausedUnbound':
     '⏸ Zeitpläne pausiert: {count} — das Topic wurde vom Ordner getrennt. /bind bringt sie zurück.',
   'schedule.resumedRebind': '▶️ Zeitpläne fortgesetzt: {count} (nächster Lauf ab jetzt neu berechnet).',

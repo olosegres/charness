@@ -12,6 +12,15 @@ import {
   getOutputTail,
   type CheckRunResult,
 } from './checkRun';
+import {
+  buildCheckStatusLine,
+  checkIsCheckStatusDue,
+  checkIsFinalCheckRun,
+  checkStatusCommandTimeoutSec,
+  getCheckStatusActivityFromOutput,
+  getCheckStatusIntervalMs,
+  getCheckStatusSinceMs,
+} from './checkStatus';
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import { describeSchedule } from './recurrence';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './types';
@@ -79,6 +88,30 @@ export interface ScheduleDeliveryDeps extends PostToSessionDeps {
   setCheckFailing: (jobId: string, isFailing: boolean) => Promise<void>;
   /** Remember a check alert's pinned message on its job, so cancelling the job unpins it. */
   recordAlertPin: (jobId: string, messageId: number) => Promise<void>;
+  /** Whether this conversation shows status lines at all (a Telegram topic whose view shows the agent's stream). */
+  checkIsStatusShown: (threadKey: string) => boolean;
+  /**
+   * Post a status line SILENTLY (no notification, never pinned) and resolve with its message id, or `null` when the send
+   * failed. It is the bot's own message: it never reaches an agent.
+   */
+  postStatus: (threadKey: string, text: string) => Promise<number | null>;
+  /** Delete a message of the topic, best effort: one that is gone or too old to delete is not an error. */
+  deleteMessage: (threadKey: string, messageId: number) => Promise<void>;
+  /** What the worker whose run directory is `runDir` (relative to the bound folder, or absolute) did last; `null` when unreadable. */
+  readWorkerActivity: (threadKey: string, runDir: string) => Promise<string | null>;
+  /**
+   * Persist the status line a job now has in the topic (`null`: it has none). Resolves `false` when the job no longer
+   * exists (it was cancelled while the line was being posted), so the caller can delete the line it just posted.
+   */
+  recordStatusLine: (jobId: string, line: CheckStatusLine | null) => Promise<boolean>;
+  /** Test seam (`CHARNESS_TEST_TIMINGS`): the status interval in place of the job's `statusEveryMinutes`. */
+  statusIntervalOverrideMs?: number;
+}
+
+/** @name CheckStatusLine @description A status line as the topic holds it: its message and when it was posted. */
+export interface CheckStatusLine {
+  messageId: number;
+  postedAtMs: number;
 }
 
 /**
@@ -206,6 +239,65 @@ async function deliverToAgent(
 }
 
 /**
+ * @description Take a job's status line out of the topic and out of its record. The record is cleared first: a crash between
+ * the two leaves an orphan line in the topic, never a record that points at a message that was already deleted. Never
+ * rejects — the alert of a failed check runs right after it, and a status line must not be able to stop that.
+ */
+async function clearCheckStatusLine(deps: ScheduleDeliveryDeps, job: ScheduleRecord): Promise<void> {
+  if (job.statusMessageId === undefined) return;
+  try {
+    await deps.recordStatusLine(job.id, null);
+    await deps.deleteMessage(job.threadKey, job.statusMessageId);
+  } catch (error) {
+    console.warn(`[scheduler] clearing the status line of job ${job.id} failed:`, error instanceof Error ? error.message : error);
+  }
+}
+
+/**
+ * @description The «now» of a due status line: the worker's last activity for a run-directory source, the first output line
+ * of an exit-0 run for a command source; `null` (the line is posted without its «now») when nothing readable came back.
+ */
+async function readCheckStatusActivity(deps: ScheduleDeliveryDeps, job: ScheduleRecord): Promise<string | null> {
+  if (job.statusWorkerRunDir !== undefined) return deps.readWorkerActivity(job.threadKey, job.statusWorkerRunDir);
+  if (job.statusCommand === undefined) return null;
+  const result = await deps.runCheck(job.threadKey, job.statusCommand, checkStatusCommandTimeoutSec * 1000);
+  return result !== null && checkIsCheckPassing(result) ? getCheckStatusActivityFromOutput(result.output) : null;
+}
+
+/**
+ * @description The status line of a PASSING check run. No status source → nothing, exactly as a plain check. A topic that does
+ * not show the agent's stream (the answers-only view, a tracker issue) or the job's final run → the existing line is taken
+ * away and no new one is posted. A line not yet due → nothing. A due line is posted SILENTLY, recorded, and only then is the
+ * previous one deleted — the topic always holds one line per check, at the bottom of the activity (an edit in place would
+ * not bump the topic). A failed post changes nothing: the old line stays and the next run tries again. This path never
+ * touches {@link postToSession}: the agent is not woken, so it costs no tokens and works while the agent is idle,
+ * compacting or stopped. A failure here only costs the line — it is logged and never turns a passing check into a failed run.
+ */
+async function updateCheckStatus(deps: ScheduleDeliveryDeps, job: ScheduleRecord): Promise<void> {
+  if (job.statusWorkerRunDir === undefined && job.statusCommand === undefined) return;
+  try {
+    if (!deps.checkIsStatusShown(job.threadKey) || checkIsFinalCheckRun(job)) {
+      await clearCheckStatusLine(deps, job);
+      return;
+    }
+    const nowMs = deps.now();
+    const intervalMs = deps.statusIntervalOverrideMs ?? getCheckStatusIntervalMs(job);
+    if (!checkIsCheckStatusDue({ sinceMs: getCheckStatusSinceMs(job), nowMs, intervalMs })) return;
+
+    const activity = await readCheckStatusActivity(deps, job);
+    const text = buildCheckStatusLine({ name: job.name, elapsedMs: nowMs - Date.parse(job.createdAt), activity });
+    const messageId = await deps.postStatus(job.threadKey, text);
+    if (messageId === null) return;
+    const isRecorded = await deps.recordStatusLine(job.id, { messageId, postedAtMs: deps.now() });
+    // A job cancelled while its line was being posted has nothing to point at it: the line goes at once.
+    const staleMessageId = isRecorded ? job.statusMessageId : messageId;
+    if (staleMessageId !== undefined) await deps.deleteMessage(job.threadKey, staleMessageId);
+  } catch (error) {
+    console.warn(`[scheduler] status line of job ${job.id} failed:`, error instanceof Error ? error.message : error);
+  }
+}
+
+/**
  * @description The check flow: run the command, then stay quiet, post the
  * "passes again" line, or raise the alert and wake the agent. The failing flag is
  * stored BEFORE the agent is woken, so a restart mid-delivery cannot raise the
@@ -221,17 +313,22 @@ async function deliverCheck(
   const result = await deps.runCheck(job.threadKey, command, timeoutSec * 1000);
   if (!result) return { status: 'failed', error: unboundDeliveryError };
 
-  const decision = getCheckAlertDecision({
-    isPassing: checkIsCheckPassing(result),
-    wasFailing: job.isCheckFailing === true,
-  });
-  if (decision === 'quiet') return { status: 'delivered' };
+  const isPassing = checkIsCheckPassing(result);
+  const decision = getCheckAlertDecision({ isPassing, wasFailing: job.isCheckFailing === true });
+  if (decision === 'quiet') {
+    // `quiet` is also a failure that keeps failing: its line went with the alert, and a failing check posts none.
+    if (isPassing) await updateCheckStatus(deps, job);
+    return { status: 'delivered' };
+  }
   if (decision === 'recovered') {
     await deps.setCheckFailing(job.id, false);
     await deps.announce(job.threadKey, t('schedule.checkRecovered', { name: job.name }));
+    await updateCheckStatus(deps, job);
     return { status: 'delivered' };
   }
 
+  // The failure is the worker's end (or hang): its status line would now be a lie under the alert.
+  await clearCheckStatusLine(deps, job);
   await deps.setCheckFailing(job.id, true);
   const failure = describeCheckFailure(result, timeoutSec);
   const alertPinId = await announceAndPin(deps, job, buildCheckFailedAnnouncement(job, fireContext, failure, result.output));

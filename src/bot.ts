@@ -358,6 +358,8 @@ import {
 import { RunLedger } from './scheduler/runLedger';
 import { createScheduleDelivery, unboundDeliveryError } from './scheduler/delivery';
 import { buildCheckEnv, runCheckCommand } from './scheduler/checkRun';
+import { checkIsCheckStatusShown } from './scheduler/checkStatus';
+import { readWorkerActivity } from './scheduler/workerActivity';
 import { createSchedulerEngine, maxTimeoutMs, type SchedulerEngine } from './scheduler/engine';
 import { registerMinFireIntervalMs } from './scheduler/recurrence';
 import {
@@ -13861,6 +13863,36 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       // Saved at once, like the failing flag: an id lost in a crash would leave its alert pinned for good.
       await state.flush();
     },
+    checkIsStatusShown: (threadKeyStr) => {
+      const key = keyFromString(threadKeyStr);
+      return checkIsCheckStatusShown({ isTelegram: checkIsTelegramKey(key), view: state.getDisplayPrefs(key).view });
+    },
+    // The status line is the bot's own message: silent (a heartbeat must never notify) and never pinned. Nothing here reaches an agent.
+    postStatus: (threadKeyStr, text) => replyToThread(keyFromString(threadKeyStr), text, { disable_notification: true }),
+    deleteMessage: async (threadKeyStr, messageId) => {
+      await deleteThreadMessage(keyFromString(threadKeyStr), messageId);
+    },
+    readWorkerActivity: async (threadKeyStr, runDir) => {
+      const decision = resolveBoundWorkDir(ENV.workRoot, state.getBinding(keyFromString(threadKeyStr)));
+      // A relative run directory is read from the bound folder, like a check command's working directory.
+      return decision.kind === 'proceed' ? readWorkerActivity(path.resolve(decision.workDir, runDir)) : null;
+    },
+    recordStatusLine: async (jobId, line) => {
+      const record = state.getSchedules()[jobId];
+      if (!record) return false;
+      const updated: ScheduleRecord = { ...record, updatedAt: new Date().toISOString() };
+      if (line === null) {
+        delete updated.statusMessageId;
+      } else {
+        updated.statusMessageId = line.messageId;
+        updated.lastStatusAt = line.postedAtMs;
+      }
+      await state.upsertSchedule(updated);
+      // Saved at once, like the alert pin: a line id lost in a crash would leave that line in the topic for good.
+      await state.flush();
+      return true;
+    },
+    statusIntervalOverrideMs: ENV.testTimings.checkStatusIntervalMs,
   });
 
   /**

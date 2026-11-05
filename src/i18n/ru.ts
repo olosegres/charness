@@ -789,6 +789,10 @@ export const ruDict: Record<string, string> = {
   'schedule.checkFailed':
     '🚨 Проверка «{name}» не прошла: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nБужу агента. Новых тревог не будет, пока проверка снова не пройдёт.',
   'schedule.checkRecovered': '✅ Проверка «{name}» снова проходит.',
+  'schedule.statusLineText': '⏳ {name} · работает {elapsed}{activity}',
+  'schedule.statusLineActivity': ' · сейчас: {activity}',
+  'schedule.statusElapsedMinutes': '{minutes} мин',
+  'schedule.statusElapsedHours': '{hours} ч {minutes} мин',
   'schedule.pausedUnbound':
     '⏸ Расписаний на паузе: {count} — топик отвязан от папки. /bind вернёт их в строй.',
   'schedule.resumedRebind': '▶️ Расписаний возобновлено: {count} (следующий запуск пересчитан от текущего момента).',

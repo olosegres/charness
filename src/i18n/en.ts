@@ -798,6 +798,10 @@ export const enDict: Record<string, string> = {
   'schedule.checkFailed':
     '🚨 Check "{name}" failed: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nWaking the agent. No more alerts until the check passes again.',
   'schedule.checkRecovered': '✅ Check "{name}" passes again.',
+  'schedule.statusLineText': '⏳ {name} · works {elapsed}{activity}',
+  'schedule.statusLineActivity': ' · now: {activity}',
+  'schedule.statusElapsedMinutes': '{minutes} min',
+  'schedule.statusElapsedHours': '{hours} h {minutes} min',
   'schedule.pausedUnbound':
     '⏸ Schedules paused: {count} — the topic was unbound from its folder. /bind will bring them back.',
   'schedule.resumedRebind': '▶️ Schedules resumed: {count} (next run recomputed from now).',

@@ -785,6 +785,10 @@ export const uzDict: Record<string, string> = {
   'schedule.checkFailed':
     '🚨 «{name}» tekshiruvi o‘tmadi: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nAgentni uyg‘otyapman. Tekshiruv yana o‘tmaguncha boshqa ogohlantirish bo‘lmaydi.',
   'schedule.checkRecovered': '✅ «{name}» tekshiruvi yana o‘tmoqda.',
+  'schedule.statusLineText': '⏳ {name} · ishlayapti: {elapsed}{activity}',
+  'schedule.statusLineActivity': ' · hozir: {activity}',
+  'schedule.statusElapsedMinutes': '{minutes} daq',
+  'schedule.statusElapsedHours': '{hours} soat {minutes} daq',
   'schedule.pausedUnbound':
     '⏸ Pauzadagi rejalalar: {count} — mavzu papkasidan uzildi. /buy ularni qaytaradi.',
   'schedule.resumedRebind': '▶️ Rejalar davom etdi: {count} (keyingi ishga tushirish hozirdan qayta hisoblanadi).',

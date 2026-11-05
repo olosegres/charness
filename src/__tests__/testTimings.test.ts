@@ -16,6 +16,7 @@ import * as path from 'path';
 import { formatTestTimingsBootLine, parseTestTimings, testTimingKeys, testTimingsEnvName, type TestTimings } from '../testTimings';
 import { tscWatchCheckIntervalMs, tscWatchStaleGraceMs } from '../cli/tscWatchGuard';
 import { minFireIntervalMs } from '../scheduler/recurrence';
+import { defaultCheckStatusEveryMinutes } from '../scheduler/checkStatus';
 import { openCodeServerRestartRetryBudgetMs } from '../adapters/openCodeAdapter';
 import { unconfirmedLimitProbeDelayMs } from '../apiErrorRetry';
 import { jiraPollIntervalMinSeconds } from '../connectors/jira/config';
@@ -46,6 +47,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['todoReminderPollMs', todoReminderPollMs],
   ['todoReminderIntervalMs', todoReminderDefaultMinutes * 60 * 1000],
   ['scheduleMinFireIntervalMs', minFireIntervalMs],
+  ['checkStatusIntervalMs', defaultCheckStatusEveryMinutes * 60 * 1000],
   ['remoteRunLeaseMs', remoteRunLeaseMs],
   ['runnerVersionPollMs', runnerVersionPollMs],
   ['pairingLifetimeMs', pairingLifetimeMs],

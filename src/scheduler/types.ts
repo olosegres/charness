@@ -115,6 +115,23 @@ export interface ScheduleRecord {
    * fails as the normal "worker finished" signal, and every finished worker would otherwise leave an alert pinned.
    */
   alertPinMessageIds?: number[];
+  /**
+   * A `'check'` job's STATUS SOURCE, kind 1: a detached worker's run directory. While the check passes, the bot posts a
+   * status line into the topic whose «now» is the worker's last text or tool call, read from the newest `events*.jsonl`
+   * there (`workerActivity.ts`). A path relative to the bound folder is allowed. Exclusive with {@link statusCommand}.
+   */
+  statusWorkerRunDir?: string;
+  /**
+   * A `'check'` job's STATUS SOURCE, kind 2: a shell command run in the bound folder at every due status line; its first
+   * output line is «now». Exclusive with {@link statusWorkerRunDir}.
+   */
+  statusCommand?: string;
+  /** Minutes between two status lines (default `defaultCheckStatusEveryMinutes`); meaningful only with a status source. */
+  statusEveryMinutes?: number;
+  /** The status line currently in the topic. A new line replaces it: posted first, this one deleted after. */
+  statusMessageId?: number;
+  /** Epoch ms of the last status line posted; the next one is due an interval after it (after `createdAt` before the first). */
+  lastStatusAt?: number;
 }
 
 /**

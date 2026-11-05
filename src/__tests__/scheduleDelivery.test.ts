@@ -27,6 +27,7 @@ import {
 } from '../scheduler/deliveryKind';
 import { describeSchedule } from '../scheduler/recurrence';
 import type { CheckRunResult } from '../scheduler/checkRun';
+import { checkStatusCommandTimeoutSec } from '../scheduler/checkStatus';
 import { getReminderScheduleText } from '../utils/reminderScheduleText';
 import { runWithLocale } from '../i18n';
 import type { FireContext, ScheduleRecord } from '../scheduler/types';
@@ -66,7 +67,18 @@ function makeReminder(overrides: Partial<ScheduleRecord> = {}): ScheduleRecord {
 const onTime: FireContext = { kind: 'on-time' };
 
 interface CallLogEntry {
-  step: 'announce' | 'pin' | 'ensureSession' | 'forward' | 'runCheck' | 'setCheckFailing' | 'recordAlertPin';
+  step:
+    | 'announce'
+    | 'pin'
+    | 'ensureSession'
+    | 'forward'
+    | 'runCheck'
+    | 'setCheckFailing'
+    | 'recordAlertPin'
+    | 'readWorkerActivity'
+    | 'postStatus'
+    | 'recordStatusLine'
+    | 'deleteMessage';
   detail?: unknown;
 }
 
@@ -84,10 +96,26 @@ function createHarness(options: {
   checkResult?: CheckRunResult | null;
   /** How long the announce takes on the fake clock (the paced send under load). */
   announceDelayMs?: number;
+  /** The fake clock's start (default: a fixed instant that predates every fixture job). */
+  startMs?: number;
+  /** Whether the topic shows status lines (default yes: a Telegram topic with a stream view). */
+  isStatusShown?: boolean;
+  /** What the worker did last, per the run-directory source (default: nothing readable). */
+  workerActivity?: string | null;
+  /** The status post fails (a null id), or throws. */
+  statusPost?: 'fails' | 'throws';
+  /** `recordStatusLine` says the job is gone. */
+  isJobGoneWhenRecording?: boolean;
+  /** Deleting a message, or reading the worker's log, throws. */
+  failing?: Array<'deleteMessage' | 'readWorkerActivity' | 'recordStatusLine'>;
+  /** The result of a `runCheck` for one particular command (the status command), in place of `checkResult`. */
+  commandResults?: Record<string, CheckRunResult>;
+  statusIntervalOverrideMs?: number;
 } = {}) {
   const callLog: CallLogEntry[] = [];
   const forwardedTexts: string[] = [];
-  let nowMs = 1_000_000;
+  let nowMs = options.startMs ?? 1_000_000;
+  let nextStatusMessageId = 501;
   const busyValues = options.busyValues ?? [false];
   let busyIndex = 0;
 
@@ -117,6 +145,8 @@ function createHarness(options: {
     },
     runCheck: async (key, command, timeoutMs) => {
       callLog.push({ step: 'runCheck', detail: { key, command, timeoutMs } });
+      const commandResult = options.commandResults?.[command];
+      if (commandResult !== undefined) return commandResult;
       return options.checkResult === undefined
         ? { exitCode: 0, signal: null, isTimedOut: false, output: '' }
         : options.checkResult;
@@ -127,6 +157,30 @@ function createHarness(options: {
     recordAlertPin: async (jobId, messageId) => {
       callLog.push({ step: 'recordAlertPin', detail: { jobId, messageId } });
     },
+    checkIsStatusShown: () => options.isStatusShown ?? true,
+    postStatus: async (key, text) => {
+      callLog.push({ step: 'postStatus', detail: { key, text } });
+      if (options.statusPost === 'throws') throw new Error('send boom');
+      if (options.statusPost === 'fails') return null;
+      const messageId = nextStatusMessageId;
+      nextStatusMessageId += 1;
+      return messageId;
+    },
+    deleteMessage: async (key, messageId) => {
+      callLog.push({ step: 'deleteMessage', detail: { key, messageId } });
+      if (options.failing?.includes('deleteMessage')) throw new Error('delete boom');
+    },
+    readWorkerActivity: async (key, runDir) => {
+      callLog.push({ step: 'readWorkerActivity', detail: { key, runDir } });
+      if (options.failing?.includes('readWorkerActivity')) throw new Error('read boom');
+      return options.workerActivity ?? null;
+    },
+    recordStatusLine: async (jobId, line) => {
+      callLog.push({ step: 'recordStatusLine', detail: { jobId, line } });
+      if (options.failing?.includes('recordStatusLine')) throw new Error('record boom');
+      return options.isJobGoneWhenRecording !== true;
+    },
+    statusIntervalOverrideMs: options.statusIntervalOverrideMs,
     now: () => nowMs,
     sleep: async (ms) => {
       nowMs += ms;
@@ -618,4 +672,234 @@ test('check: an unbound topic runs nothing and fails with the unbound error (the
 test('getUnboundPausableSchedules: a check pauses with the prompt jobs', () => {
   const pausable = getUnboundPausableSchedules([makeCheck({ id: 'c' }), makeReminder({ id: 'r' })]);
   assert.deepEqual(pausable.map((record) => record.id), ['c']);
+});
+
+// ─── the status line of a passing check ──────────────────────────────
+
+const minuteMs = 60_000;
+const jobCreatedAtMs = Date.parse('2026-06-06T00:00:00.000Z');
+const workerRunDir = '/runs/builder-s2';
+
+/** A worker watch: a check named like the recipe's, with a run-directory status source, created at `jobCreatedAtMs`. */
+function makeWorkerWatch(overrides: Partial<ScheduleRecord> = {}): ScheduleRecord {
+  return makeCheck({
+    id: 'watch-builder-s2-abc123',
+    name: 'watch builder S2',
+    checkCommand: 'kill -0 4242',
+    statusWorkerRunDir: workerRunDir,
+    ...overrides,
+  });
+}
+
+function getStepNames(callLog: CallLogEntry[]): string[] {
+  return callLog.map((entry) => entry.step);
+}
+
+function getStatusText(callLog: CallLogEntry[]): string {
+  return (callLog.find((entry) => entry.step === 'postStatus')?.detail as { text: string }).text;
+}
+
+test('status: a passing run 15 minutes after the check was created posts the line, silently and without waking the agent', async () => {
+  const { deps, callLog } = createHarness({ startMs: jobCreatedAtMs + 15 * minuteMs, workerActivity: 'Bash: Run the unit tests' });
+  const outcome = await runWithLocale('en', () => createScheduleDelivery(deps)(makeWorkerWatch(), onTime));
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.deepEqual(getStepNames(callLog), ['runCheck', 'readWorkerActivity', 'postStatus', 'recordStatusLine']);
+  assert.deepEqual(callLog[1].detail, { key: threadKey, runDir: workerRunDir });
+  assert.equal(getStatusText(callLog), '⏳ builder S2 · works 15 min · now: Bash: Run the unit tests');
+  assert.deepEqual(callLog[3].detail, { jobId: 'watch-builder-s2-abc123', line: { messageId: 501, postedAtMs: jobCreatedAtMs + 15 * minuteMs } });
+  assert.ok(
+    !callLog.some((entry) => entry.step === 'ensureSession' || entry.step === 'forward' || entry.step === 'announce' || entry.step === 'pin'),
+    'the line is the bot’s own: no session is ensured, no prompt forwarded, nothing announced or pinned',
+  );
+});
+
+test('status: a new line is recorded FIRST and the previous one deleted after, so a crash never loses the id of the live line', async () => {
+  const { deps, callLog } = createHarness({ startMs: jobCreatedAtMs + 30 * minuteMs, workerActivity: 'Edit: src/a.ts' });
+  await runWithLocale('en', () =>
+    createScheduleDelivery(deps)(makeWorkerWatch({ statusMessageId: 88, lastStatusAt: jobCreatedAtMs + 15 * minuteMs }), onTime),
+  );
+
+  assert.deepEqual(getStepNames(callLog), ['runCheck', 'readWorkerActivity', 'postStatus', 'recordStatusLine', 'deleteMessage']);
+  assert.deepEqual(callLog[4].detail, { key: threadKey, messageId: 88 }, 'the OLD line goes, never the new one');
+  assert.equal(getStatusText(callLog), '⏳ builder S2 · works 30 min · now: Edit: src/a.ts', 'elapsed counts from the check’s creation');
+});
+
+test('status: nothing readable from the worker still posts the line, without its «now»', async () => {
+  const { deps, callLog } = createHarness({ startMs: jobCreatedAtMs + 45 * minuteMs, workerActivity: null });
+  await runWithLocale('en', () => createScheduleDelivery(deps)(makeWorkerWatch(), onTime));
+  assert.equal(getStatusText(callLog), '⏳ builder S2 · works 45 min');
+});
+
+test('status: a line that is not due yet posts nothing — before the first, and between two', async () => {
+  const beforeFirst = createHarness({ startMs: jobCreatedAtMs + 10 * minuteMs });
+  await createScheduleDelivery(beforeFirst.deps)(makeWorkerWatch(), onTime);
+  assert.deepEqual(getStepNames(beforeFirst.callLog), ['runCheck']);
+
+  const betweenTwo = createHarness({ startMs: jobCreatedAtMs + 40 * minuteMs });
+  await createScheduleDelivery(betweenTwo.deps)(makeWorkerWatch({ statusMessageId: 88, lastStatusAt: jobCreatedAtMs + 30 * minuteMs }), onTime);
+  assert.deepEqual(getStepNames(betweenTwo.callLog), ['runCheck']);
+});
+
+test('status: the job’s own statusEveryMinutes sets the interval, and the test seam overrides it', async () => {
+  const half = createHarness({ startMs: jobCreatedAtMs + 20 * minuteMs });
+  await createScheduleDelivery(half.deps)(makeWorkerWatch({ statusEveryMinutes: 30 }), onTime);
+  assert.deepEqual(getStepNames(half.callLog), ['runCheck'], '20 minutes is not due for a 30-minute interval');
+
+  const overridden = createHarness({ startMs: jobCreatedAtMs + 20 * minuteMs, statusIntervalOverrideMs: 5 * minuteMs });
+  await createScheduleDelivery(overridden.deps)(makeWorkerWatch({ statusEveryMinutes: 30 }), onTime);
+  assert.ok(getStepNames(overridden.callLog).includes('postStatus'), 'the seam’s 5 minutes wins over the job’s 30');
+});
+
+test('status: a check WITHOUT a status source behaves exactly as before — silent while it passes, however long it runs', async () => {
+  const { deps, callLog } = createHarness({ startMs: jobCreatedAtMs + 600 * minuteMs });
+  const outcome = await createScheduleDelivery(deps)(makeCheck(), onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.deepEqual(getStepNames(callLog), ['runCheck']);
+});
+
+test('status: a statusCommand source runs in the bound folder with its own short timeout; its first output line is «now»', async () => {
+  const { deps, callLog } = createHarness({
+    startMs: jobCreatedAtMs + 15 * minuteMs,
+    commandResults: { 'cat progress.txt': { exitCode: 0, signal: null, isTimedOut: false, output: '\n  step 4 of 9: linking  \nstep detail\n' } },
+  });
+  await runWithLocale('en', () =>
+    createScheduleDelivery(deps)(makeCheck({ name: 'Nightly build', statusCommand: 'cat progress.txt' }), onTime),
+  );
+
+  assert.deepEqual(getStepNames(callLog), ['runCheck', 'runCheck', 'postStatus', 'recordStatusLine']);
+  assert.deepEqual(callLog[1].detail, { key: threadKey, command: 'cat progress.txt', timeoutMs: checkStatusCommandTimeoutSec * 1000 });
+  assert.equal(getStatusText(callLog), '⏳ Nightly build · works 15 min · now: step 4 of 9: linking');
+});
+
+test('status: a statusCommand that fails or times out leaves the «now» out; the line is still posted', async () => {
+  for (const failedRun of [
+    { exitCode: 3, signal: null, isTimedOut: false, output: 'no such file' },
+    { exitCode: null, signal: 'SIGTERM' as const, isTimedOut: true, output: 'partial' },
+  ]) {
+    const { deps, callLog } = createHarness({ startMs: jobCreatedAtMs + 15 * minuteMs, commandResults: { 'cat progress.txt': failedRun } });
+    await runWithLocale('en', () => createScheduleDelivery(deps)(makeCheck({ name: 'Nightly build', statusCommand: 'cat progress.txt' }), onTime));
+    assert.equal(getStatusText(callLog), '⏳ Nightly build · works 15 min');
+  }
+});
+
+test('status: the first FAILURE deletes the line before the alert, and the alert still goes out when the delete throws', async () => {
+  const { deps, callLog } = createHarness({ checkResult: failedRun, startMs: jobCreatedAtMs + 60 * minuteMs });
+  await createScheduleDelivery(deps)(makeWorkerWatch({ statusMessageId: 88, lastStatusAt: jobCreatedAtMs + 45 * minuteMs }), onTime);
+
+  assert.deepEqual(
+    getStepNames(callLog),
+    ['runCheck', 'recordStatusLine', 'deleteMessage', 'setCheckFailing', 'announce', 'pin', 'recordAlertPin', 'ensureSession', 'forward'],
+    'the line goes first; no new line is posted under the alert; the agent is woken as before',
+  );
+  assert.deepEqual(callLog[1].detail, { jobId: 'watch-builder-s2-abc123', line: null });
+  assert.deepEqual(callLog[2].detail, { key: threadKey, messageId: 88 });
+
+  const hostile = createHarness({ checkResult: failedRun, failing: ['recordStatusLine', 'deleteMessage'] });
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const outcome = await createScheduleDelivery(hostile.deps)(makeWorkerWatch({ statusMessageId: 88 }), onTime);
+    assert.deepEqual(outcome, { status: 'delivered' });
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.ok(getStepNames(hostile.callLog).includes('announce') && getStepNames(hostile.callLog).includes('forward'), 'a status line cannot stop the alert');
+});
+
+test('status: a failed run with no line in the topic touches no status dep at all', async () => {
+  const { deps, callLog } = createHarness({ checkResult: failedRun });
+  await createScheduleDelivery(deps)(makeWorkerWatch(), onTime);
+  assert.ok(!callLog.some((entry) => entry.step === 'recordStatusLine' || entry.step === 'deleteMessage' || entry.step === 'postStatus'));
+});
+
+test('status: a failure while already failing stays silent and leaves no new line', async () => {
+  const { deps, callLog } = createHarness({ checkResult: failedRun, startMs: jobCreatedAtMs + 60 * minuteMs });
+  await createScheduleDelivery(deps)(makeWorkerWatch({ isCheckFailing: true }), onTime);
+  assert.deepEqual(getStepNames(callLog), ['runCheck']);
+});
+
+test('status: a pass after a failure announces the recovery, then the line when it is due', async () => {
+  const { deps, callLog } = createHarness({ startMs: jobCreatedAtMs + 60 * minuteMs, workerActivity: 'Bash: Build' });
+  await runWithLocale('en', () => createScheduleDelivery(deps)(makeWorkerWatch({ isCheckFailing: true }), onTime));
+
+  assert.deepEqual(getStepNames(callLog), ['runCheck', 'setCheckFailing', 'announce', 'readWorkerActivity', 'postStatus', 'recordStatusLine']);
+});
+
+test('status: a topic that does not show the stream (answers-only, a tracker) deletes the line and posts none', async () => {
+  const withLine = createHarness({ isStatusShown: false, startMs: jobCreatedAtMs + 60 * minuteMs });
+  await createScheduleDelivery(withLine.deps)(makeWorkerWatch({ statusMessageId: 88 }), onTime);
+  assert.deepEqual(getStepNames(withLine.callLog), ['runCheck', 'recordStatusLine', 'deleteMessage']);
+  assert.deepEqual(withLine.callLog[1].detail, { jobId: 'watch-builder-s2-abc123', line: null });
+
+  const withoutLine = createHarness({ isStatusShown: false, startMs: jobCreatedAtMs + 60 * minuteMs });
+  await createScheduleDelivery(withoutLine.deps)(makeWorkerWatch(), onTime);
+  assert.deepEqual(getStepNames(withoutLine.callLog), ['runCheck'], 'nothing to delete, nothing to read, nothing to post');
+});
+
+test('status: back on a stream view the lines resume at the next due run', async () => {
+  // The line was deleted while the topic was answers-only (the record kept only `lastStatusAt`), so the next due run posts.
+  const { deps, callLog } = createHarness({ startMs: jobCreatedAtMs + 60 * minuteMs, workerActivity: 'Bash: Test' });
+  await runWithLocale('en', () => createScheduleDelivery(deps)(makeWorkerWatch({ lastStatusAt: jobCreatedAtMs + 30 * minuteMs }), onTime));
+  assert.deepEqual(getStepNames(callLog), ['runCheck', 'readWorkerActivity', 'postStatus', 'recordStatusLine']);
+});
+
+test('status: the job’s final run posts no line and removes the existing one', async () => {
+  const onceWatch = createHarness({ startMs: jobCreatedAtMs + 60 * minuteMs });
+  await createScheduleDelivery(onceWatch.deps)(
+    makeWorkerWatch({ spec: { kind: 'once', onceAtIso: '2026-06-06T01:00:00.000Z' }, statusMessageId: 88 }),
+    onTime,
+  );
+  assert.deepEqual(getStepNames(onceWatch.callLog), ['runCheck', 'recordStatusLine', 'deleteMessage']);
+
+  const lastOfN = createHarness({ startMs: jobCreatedAtMs + 60 * minuteMs });
+  await createScheduleDelivery(lastOfN.deps)(
+    makeWorkerWatch({ spec: { kind: 'cron', cronExpr: '*/5 * * * *', remainingRuns: 1 }, statusMessageId: 88 }),
+    onTime,
+  );
+  assert.deepEqual(getStepNames(lastOfN.callLog), ['runCheck', 'recordStatusLine', 'deleteMessage']);
+
+  const notLastOfN = createHarness({ startMs: jobCreatedAtMs + 60 * minuteMs });
+  await createScheduleDelivery(notLastOfN.deps)(
+    makeWorkerWatch({ spec: { kind: 'cron', cronExpr: '*/5 * * * *', remainingRuns: 2 } }),
+    onTime,
+  );
+  assert.ok(getStepNames(notLastOfN.callLog).includes('postStatus'), 'an N-times check with runs left still posts');
+});
+
+test('status: a failed post keeps the previous line and records nothing — the next run tries again', async () => {
+  const { deps, callLog } = createHarness({ statusPost: 'fails', startMs: jobCreatedAtMs + 30 * minuteMs });
+  const outcome = await createScheduleDelivery(deps)(makeWorkerWatch({ statusMessageId: 88, lastStatusAt: jobCreatedAtMs + 15 * minuteMs }), onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.deepEqual(getStepNames(callLog), ['runCheck', 'readWorkerActivity', 'postStatus']);
+});
+
+test('status: a job cancelled while its line was being posted: the new line is deleted, the old one is left to the cancel', async () => {
+  const { deps, callLog } = createHarness({ isJobGoneWhenRecording: true, startMs: jobCreatedAtMs + 30 * minuteMs });
+  await createScheduleDelivery(deps)(makeWorkerWatch({ statusMessageId: 88, lastStatusAt: jobCreatedAtMs + 15 * minuteMs }), onTime);
+
+  assert.deepEqual(getStepNames(callLog), ['runCheck', 'readWorkerActivity', 'postStatus', 'recordStatusLine', 'deleteMessage']);
+  assert.deepEqual(callLog[4].detail, { key: threadKey, messageId: 501 }, 'the line just posted has no record to point at it');
+});
+
+test('status: a throwing send, log read or record never turns a passing check into a failed run', async () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const scenarios: Array<{ label: string; options: Parameters<typeof createHarness>[0] }> = [
+      { label: 'send throws', options: { statusPost: 'throws' } },
+      { label: 'log read throws', options: { failing: ['readWorkerActivity'] } },
+      { label: 'record throws', options: { failing: ['recordStatusLine'] } },
+    ];
+    for (const { label, options } of scenarios) {
+      const { deps, callLog } = createHarness({ startMs: jobCreatedAtMs + 15 * minuteMs, ...options });
+      const outcome = await createScheduleDelivery(deps)(makeWorkerWatch(), onTime);
+      assert.deepEqual(outcome, { status: 'delivered' }, label);
+      assert.ok(!callLog.some((entry) => entry.step === 'forward'), `${label}: the agent is not woken`);
+    }
+  } finally {
+    console.warn = originalWarn;
+  }
 });

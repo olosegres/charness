@@ -791,6 +791,10 @@ export const ukDict: Record<string, string> = {
   'schedule.checkFailed':
     '🚨 Перевірка «{name}» не пройшла: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nБуджу агента. Нових тривог не буде, доки перевірка знову не пройде.',
   'schedule.checkRecovered': '✅ Перевірка «{name}» знову проходить.',
+  'schedule.statusLineText': '⏳ {name} · працює {elapsed}{activity}',
+  'schedule.statusLineActivity': ' · зараз: {activity}',
+  'schedule.statusElapsedMinutes': '{minutes} хв',
+  'schedule.statusElapsedHours': '{hours} год {minutes} хв',
   'schedule.pausedUnbound':
     '⏸ Розкладів на паузі: {count} — топік відв\'язано від папки. /bind поверне їх у роботу.',
   'schedule.resumedRebind': '▶️ Розкладів відновлено: {count} (наступний запуск перераховано від поточного моменту).',
