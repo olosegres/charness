@@ -6621,20 +6621,7 @@ const checkStatusLinePorts: Pick<ScheduleDeliveryDeps, 'recordStatusLine' | 'del
   },
 };
 
-/**
- * @description Pause the AGENT-PROMPT schedules owned by `key` because its topic
- * was just unbound (S8): flag each `isPaused` with reason `'unbound'`, disarm its
- * timer, and post ONE notice naming the count (only when > 0). Scheduler pins are
- * NOT touched (user decision: pins accumulate). Returns the number paused so the
- * caller can decide whether anything happened. The engine stays generic — this
- * unbound-specific policy lives in `scheduler/unbindPause.ts`, wired here.
- *
- * Reminders are EXEMPT ({@link getUnboundPausableSchedules}): they post + pin with
- * no agent and no folder, so pausing them on unbind would break the one kind that
- * could still have fired. A thread holding only reminders pauses nothing and posts
- * no notice. A parked check's status line is deleted with the pause (`scheduler/unbindPause.ts`): it never runs
- * again to take it away.
- */
+/** @description The `/unbind` wiring of `pauseSchedulesOnUnbind` (`scheduler/unbindPause.ts`, which holds the policy) over the shared status-line ports. */
 async function pauseThreadSchedulesOnUnbind(key: SessionKey): Promise<number> {
   return pauseSchedulesOnUnbind(
     {

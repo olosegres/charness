@@ -11,12 +11,13 @@ import { getUnboundPausableSchedules } from './deliveryKind';
  *
  * A parked check never runs again, so nothing would ever take its status line away: the pause deletes it (best effort, through
  * the one {@link clearCheckStatusLine}) — otherwise a «⏳ works 45 min» line would stay frozen under a watch that no longer
- * watches. Lives apart from `bot.ts` (a test cannot import it) over ports; the engine stays generic.
+ * watches — and a run already posting a new line has it refused for the paused job and deletes it itself. Lives apart from
+ * `bot.ts` (a test cannot import it) over ports; the engine stays generic.
  */
 
 /** @name UnbindPauseDeps @description What the pause needs from the bot. */
 export interface UnbindPauseDeps {
-  store: Pick<StateStore, 'getThreadSchedules' | 'setSchedulePaused'>;
+  store: Pick<StateStore, 'getThreadSchedules' | 'getSchedules' | 'setSchedulePaused'>;
   /** Stop the job's timer. */
   disarmJob: (jobId: string) => void;
   /** The ports the one status-line clearing runs over (the same the scheduler's delivery uses). */
@@ -32,7 +33,9 @@ export async function pauseSchedulesOnUnbind(deps: UnbindPauseDeps, key: Session
   for (const record of records) {
     await deps.store.setSchedulePaused(record.id, true, 'unbound');
     deps.disarmJob(record.id);
-    await clearCheckStatusLine(deps.statusLinePorts, record);
+    // The line is read AFTER the pause: a run already posting a new line recorded it before the job was paused, or has it
+    // refused now (`recordCheckStatusLine`), so this is the last line there is — never the one `record` was listed with.
+    await clearCheckStatusLine(deps.statusLinePorts, deps.store.getSchedules()[record.id] ?? record);
   }
   await deps.announcePaused(records.length);
   return records.length;

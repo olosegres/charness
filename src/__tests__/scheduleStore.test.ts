@@ -156,6 +156,19 @@ describe('StateStore schedule collection', () => {
     assert.equal(store.getSchedules()['no-such-job'], undefined, 'nothing was created');
   });
 
+  it('updateScheduleIfPresent leaves the record as it is, and says false, when the update refuses (returns null)', async () => {
+    const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
+    await store.init();
+    const created = await createScheduleForThread(store, { threadKey: threadA, name: 'Watch', spec: dailySpec, prompt: 'go', createdBy: 'agent', nowMs });
+    assert.ok(created.ok);
+    const id = created.record.id;
+    const before = store.getSchedules()[id];
+
+    assert.equal(await store.updateScheduleIfPresent(id, () => null), false);
+    assert.deepEqual(store.getSchedules()[id], before, 'a refused update changed nothing');
+    assert.equal(store.getSchedules()[id].updatedAt, created.record.updatedAt);
+  });
+
   it('updateScheduleIfPresent does not undo a removal that was queued before it: the check and the write are one locked step', async () => {
     const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
     await store.init();

@@ -178,7 +178,8 @@ export async function createScheduleForThread(
  * `lastStatusAt` of the last line stays, it times the next one). Checked and written in ONE locked step
  * ({@link StateStore.updateScheduleIfPresent}), so a cancel that removes the job meanwhile is never undone, and flushed at once
  * like the alert pin: a line id lost in a crash would leave that line in the topic for good. Resolves `false` when the job is
- * gone.
+ * gone — or when a NEW line is offered for a PAUSED job: a paused job never runs again to take a line away (an `/unbind` that
+ * lands while a run is already posting), so the caller deletes the line it just posted. Clearing a line is always allowed.
  */
 export async function recordCheckStatusLine(
   store: Pick<StateStore, 'updateScheduleIfPresent' | 'flush'>,
@@ -186,6 +187,7 @@ export async function recordCheckStatusLine(
   line: CheckStatusLine | null,
 ): Promise<boolean> {
   const isRecorded = await store.updateScheduleIfPresent(jobId, (record) => {
+    if (line !== null && record.isPaused === true) return null;
     const updated: ScheduleRecord = { ...record, updatedAt: new Date().toISOString() };
     if (line === null) {
       delete updated.statusMessageId;

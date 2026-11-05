@@ -17,6 +17,7 @@ import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { createScheduleForThread, recordCheckStatusLine } from '../scheduler/store';
 import { pauseSchedulesOnUnbind, type UnbindPauseDeps } from '../scheduler/unbindPause';
+import { createScheduleDelivery, type ScheduleDeliveryDeps } from '../scheduler/delivery';
 import type { CheckStatusLine, ScheduleRecord } from '../scheduler/types';
 
 const topic: SessionKey = makeTelegramKey(-1001234567890, 11);
@@ -122,6 +123,55 @@ describe('pausing a topic\'s schedules on /unbind', () => {
     assert.ok(events.includes('announce 2'));
   });
 
+  it('the line deleted is the one the record holds AFTER the pause, not the one it was listed with — a run that posted meanwhile leaves none behind', async () => {
+    const watch = await seed('watch builder S2', { deliveryKind: 'check', checkCommand: 'kill -0 1', statusMessageId: statusLine.messageId });
+    const { deps, deletedMessageIds } = createPause();
+    // The listing the pause starts from is stale: a run recorded a newer line (88) after it was read, the listed one is 50.
+    const staleListing = [{ ...store.getSchedules()[watch.id], statusMessageId: 50 }];
+    const pause = { ...deps, store: { getThreadSchedules: () => staleListing, getSchedules: () => store.getSchedules(), setSchedulePaused: store.setSchedulePaused.bind(store) } };
+
+    assert.equal(await pauseSchedulesOnUnbind(pause, topic), 1);
+
+    assert.deepEqual(deletedMessageIds, [statusLine.messageId], 'the last line there is goes, not the stale id');
+    assert.equal(store.getSchedules()[watch.id].statusMessageId, undefined);
+  });
+
+  it('a run already posting when the unbind lands: its new line is refused for the paused job and the run deletes it itself', async () => {
+    const watch = await seed('watch builder S2', { deliveryKind: 'check', checkCommand: 'kill -0 1', statusWorkerRunDir: '/runs/a' });
+    const postedMessageId = 501;
+    const deletedMessageIds: number[] = [];
+    const runDeps: ScheduleDeliveryDeps = {
+      checkBusy: () => false,
+      ensureSession: async () => ({ ok: true, isFresh: false }),
+      forwardPrompt: async () => {},
+      now: () => nowMs + 15 * 60_000,
+      sleep: async () => {},
+      announce: async () => 1,
+      pin: async () => {},
+      runCheck: async () => ({ exitCode: 0, signal: null, isTimedOut: false, output: '' }),
+      setCheckFailing: async () => {},
+      recordAlertPin: async () => {},
+      checkIsStatusShown: () => true,
+      readWorkerActivity: async () => null,
+      // The unbind lands while the line is being sent: the pause parks the job before the run records the line.
+      postStatus: async () => {
+        await pauseSchedulesOnUnbind(createPause().deps, topic);
+        return postedMessageId;
+      },
+      recordStatusLine: (jobId, line) => recordCheckStatusLine(store, jobId, line),
+      deleteMessage: async (_threadKey, messageId) => {
+        deletedMessageIds.push(messageId);
+      },
+    };
+
+    const outcome = await createScheduleDelivery(runDeps)(store.getSchedules()[watch.id], { kind: 'on-time' });
+
+    assert.deepEqual(outcome, { status: 'delivered' });
+    assert.equal(store.getSchedules()[watch.id].isPaused, true);
+    assert.deepEqual(deletedMessageIds, [postedMessageId], 'the line posted under the unbind is deleted by the run that posted it');
+    assert.equal(store.getSchedules()[watch.id].statusMessageId, undefined, 'and no record points at it');
+  });
+
   it('a failing delete never stops the unbind: the job is still parked and the notice still posted', async () => {
     const watch = await seed('watch builder S2', { deliveryKind: 'check', checkCommand: 'kill -0 1', statusMessageId: statusLine.messageId });
     const { deps, events } = createPause({ isDeleteFailing: true });
@@ -187,6 +237,25 @@ describe('recordCheckStatusLine', () => {
 
     await store.removeSchedule(jobId);
     assert.equal(await recordCheckStatusLine(store, jobId, statusLine), false);
+  });
+
+  it('a PAUSED job refuses a new line (it never runs again to take it away) but may always have its line cleared', async () => {
+    const created = await createScheduleForThread(store, { threadKey: topic, name: 'Watch', spec: cronSpec, prompt: 'p', createdBy: 'agent', nowMs });
+    assert.ok(created.ok);
+    const jobId = created.record.id;
+    assert.equal(await recordCheckStatusLine(store, jobId, statusLine), true);
+    await store.setSchedulePaused(jobId, true, 'unbound');
+
+    const newerLine: CheckStatusLine = { messageId: 99, postedAtMs: statusLine.postedAtMs + 120_000 };
+    assert.equal(await recordCheckStatusLine(store, jobId, newerLine), false, 'a new line for a paused job is refused');
+    assert.equal(store.getSchedules()[jobId].statusMessageId, statusLine.messageId, 'the record is untouched');
+    assert.equal(store.getSchedules()[jobId].lastStatusAt, statusLine.postedAtMs);
+
+    assert.equal(await recordCheckStatusLine(store, jobId, null), true, 'clearing is what the unbind pause itself does');
+    assert.equal(store.getSchedules()[jobId].statusMessageId, undefined);
+
+    await store.setSchedulePaused(jobId, false);
+    assert.equal(await recordCheckStatusLine(store, jobId, newerLine), true, 'a resumed job records lines again');
   });
 });
 
