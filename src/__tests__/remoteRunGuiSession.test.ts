@@ -337,6 +337,33 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     const run = await runSourced(`${slowKill}; kill_grace_sec=1; run_step ${workDir} '${createGroupRecordingStep(pidFile, { isStubborn: true })}'; echo "code=$step_code"`);
     assert.equal(run.stdout.trim().split('\n').at(-1), 'code=125', run.stderr);
     for (const pid of await readGroupPids(pidFile)) assert.equal(checkIsProcessAlive(pid), false, `pid ${pid} is gone by the time the script goes on (the lock is released next)`);
+    assert.ok(!run.stdout.includes('still alive after SIGKILL'), 'a group that did die says nothing');
+  });
+
+  it('a group that is STILL there after SIGKILL and the bounded wait does not hold the script for ever — and the job\'s output says so, instead of the lock being released in silence', async () => {
+    markNeedsIos();
+    startAgent();
+    const pidFile = path.join(root, 'survivor.pids');
+    setTimeout(() => { if (ticker !== null) clearInterval(ticker); fs.rmSync(paths.guiAgentStatus, { force: true }); }, 1500);
+    // A SIGKILL that never lands: `kill -KILL` succeeds and does nothing, every other signal is the shell's own. Two looks (0.4 s) of waiting instead of ten.
+    const lostKill = 'kill() { case "$1" in -KILL) return 0 ;; *) builtin kill "$@" ;; esac; }';
+    let pids: number[] = [];
+    try {
+      const run = await runSourced(`${lostKill}; kill_grace_sec=1; kill_settle_polls=2; run_step ${workDir} '${createGroupRecordingStep(pidFile, { isStubborn: true })}'; echo "code=$step_code"`);
+      pids = await readGroupPids(pidFile);
+      const lines = run.stdout.trim().split('\n');
+      assert.equal(lines.at(-1), 'code=125', run.stderr);
+      assert.ok(lines.some((line) => /^remote-run: the step's process group \(\d+\) is still alive after SIGKILL: the job goes on, and its lock is released, beside it$/.test(line)), run.stdout);
+      assert.ok(pids.some((pid) => checkIsProcessAlive(pid)), 'the survivors are really there — this is the branch the line is for');
+    } finally {
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          /* already gone */
+        }
+      }
+    }
   });
 
   it('an agent that came back as ANOTHER instance (a restart) has lost the step: it is cut with 125, never waited for — and its group is ended', async () => {

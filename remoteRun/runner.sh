@@ -274,6 +274,10 @@ gui_end_step_group() {
       nap 0.2
       waited=$((waited + 1))
     done
+    # Past the bound the script cannot wait for ever, but it does not go on silently either: the job's output says a member of the group outlived SIGKILL.
+    if kill -0 -- "-$pgid" 2> /dev/null; then
+      say "the step's process group ($pgid) is still alive after SIGKILL: the job goes on, and its lock is released, beside it"
+    fi
   fi
   return 0
 }
