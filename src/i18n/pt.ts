@@ -677,6 +677,7 @@ export const ptDict: Record<string, string> = {
   'stt.stale': 'As configurações mudaram — tela atualizada.',
   'voice.failed': 'Falha ao transcrever a mensagem de voz.',
   'voice.retrying': '⚠️ Falha ao transcrever a mensagem de voz ({error}). Nova tentativa em {seconds} s…',
+  'voice.transcribing': '🎙 Transcrevendo a mensagem de voz…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

@@ -192,6 +192,20 @@ test('voice.retrying names the error and the pause in every locale', () => {
   }
 });
 
+test('voice.transcribing exists in every locale, is translated and needs no placeholder', () => {
+  // The silent «transcribing…» note of a voice message that waits for its text: a locale that fell back to the English
+  // text would show it in the wrong language, and a stray placeholder would reach the topic as it is.
+  assert.ok(checkKeyInAllLangs('voice.transcribing'), 'voice.transcribing missing in some locale');
+  for (const locale of localeCodes) {
+    const out = runWithLocale(locale, () => t('voice.transcribing'));
+    assert.ok(out.startsWith('🎙'), `expected the microphone mark in ${locale}: "${out}"`);
+    assert.ok(!out.includes('{'), `unexpected placeholder in ${locale}: "${out}"`);
+    if (locale !== defaultLocale) {
+      assert.notEqual(out, enDict['voice.transcribing'], `${locale} still carries the English text`);
+    }
+  }
+});
+
 test('compaction completion keys exist in every locale and keep both token placeholders', () => {
   for (const code of ['compact.done', 'compact.done_tokens', 'compact.summaryHeader']) {
     assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);

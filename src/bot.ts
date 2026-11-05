@@ -295,6 +295,7 @@ import {
 } from './utils/topicRequest';
 import { createSerialQueue, type SerialQueue } from './utils/serialQueue';
 import { getVoiceTranscriptionQueue } from './voiceQueue';
+import { createVoiceProgressNote, type VoiceProgressNote } from './voiceProgressNote';
 import {
   buildClaudeLivenessFrameText,
   checkShouldForceIdleRemoval,
@@ -1558,6 +1559,13 @@ interface ThreadMessageState {
    * idle / no message open.
    */
   subagentEditInFlight: boolean;
+  /**
+   * The «🎙 Transcribing the voice message…» notes on screen — one per voice message that waits for its text longer than
+   * `voiceProgressNoteDelayMs` (voices queue per topic, so there can be several). Kept here so the graceful-shutdown sweep
+   * and, through the persisted transient-frame set, the boot reconciliation delete a note a restart would otherwise strand.
+   * Empty = none.
+   */
+  voiceProgressNoteIds: number[];
 }
 
 interface OutputQueueState extends PendingOutputBuffer {
@@ -2961,20 +2969,20 @@ function getThreadMessageState(key: SessionKey): ThreadMessageState {
   const k = keyToString(key);
   let s = threadMessageStates.get(k);
   if (!s) {
-    s = { lastMessageId: null, lastMessageText: null, needsNewMessage: true, typingLoaderTimer: null, statusMessageId: null, thinkingMessageId: null, thinkingFrameGeneration: 0, statusFrameGeneration: 0, livenessTimer: null, lastActivityText: null, livenessGlyphIndex: 0, wasBusy: false, workingSince: null, lastLivenessSentAt: 0, statusIdleSuppressed: false, busyOnsetArmedUntil: 0, subagentStatusMessageId: null, subagentStartedAt: null, subagentTitle: null, subagentTimer: null, lastSubagentText: null, subagentEditInFlight: false };
+    s = { lastMessageId: null, lastMessageText: null, needsNewMessage: true, typingLoaderTimer: null, statusMessageId: null, thinkingMessageId: null, thinkingFrameGeneration: 0, statusFrameGeneration: 0, livenessTimer: null, lastActivityText: null, livenessGlyphIndex: 0, wasBusy: false, workingSince: null, lastLivenessSentAt: 0, statusIdleSuppressed: false, busyOnsetArmedUntil: 0, subagentStatusMessageId: null, subagentStartedAt: null, subagentTitle: null, subagentTimer: null, lastSubagentText: null, subagentEditInFlight: false, voiceProgressNoteIds: [] };
     threadMessageStates.set(k, s);
   }
   return s;
 }
 
 /**
- * @description Persist the thread's CURRENT transient status-frame ids (the
- * non-null `statusMessageId` / `thinkingMessageId` / `subagentStatusMessageId`)
- * so an UNGRACEFUL restart (crash / SIGKILL — no graceful sweep ran) can delete
+ * @description Persist the thread's CURRENT transient message ids (the
+ * non-null `statusMessageId` / `thinkingMessageId` / `subagentStatusMessageId`
+ * and the `voiceProgressNoteIds`) so an UNGRACEFUL restart (crash / SIGKILL — no graceful sweep ran) can delete
  * whatever frame was on screen on the next boot (S2). The in-memory
  * `ThreadMessageState` is the live source of truth; this just keeps disk in step.
- * Debounced + fire-and-forget. Single collection point shared by the three
- * frame-id setters below so memory and disk never drift.
+ * Debounced + fire-and-forget. Single collection point shared by the frame-id
+ * setters below so memory and disk never drift.
  */
 function persistTransientFrames(key: SessionKey): void {
   const ids = getTransientFrameIds(getThreadMessageState(key));
@@ -3000,6 +3008,16 @@ function setThinkingFrameId(key: SessionKey, id: number | null): void {
 }
 function setSubagentFrameId(key: SessionKey, id: number | null): void {
   getThreadMessageState(key).subagentStatusMessageId = id;
+  persistTransientFrames(key);
+}
+/** The voice notes' list is edited by value: a thread can have several, each owned by its own voice message. */
+function addVoiceProgressNoteId(key: SessionKey, id: number): void {
+  getThreadMessageState(key).voiceProgressNoteIds.push(id);
+  persistTransientFrames(key);
+}
+function removeVoiceProgressNoteId(key: SessionKey, id: number): void {
+  const noteState = getThreadMessageState(key);
+  noteState.voiceProgressNoteIds = noteState.voiceProgressNoteIds.filter((noteId) => noteId !== id);
   persistTransientFrames(key);
 }
 
@@ -4023,14 +4041,20 @@ async function editThreadKeyboard(
   }
 }
 
-/** @description {@link deleteThreadMessage} telling a message that was already gone from one that stayed — see {@link ThreadMessageDeletion}. None of them is logged: all are expected. */
+/**
+ * @description {@link deleteThreadMessage} telling a message that was already gone from one that stayed — see {@link ThreadMessageDeletion}. None of them is logged: all are expected.
+ * `isUnpaced` sends the delete outside the global pacer, for a message whose disappearance is part of an answer that is already
+ * on screen (the «transcribing…» note, which must not outlive the 🎤 echo behind queued agent output).
+ */
 async function deleteThreadMessageDetailed(
   key: SessionKey,
   messageId: number,
+  options: { isUnpaced?: boolean } = {},
 ): Promise<ThreadMessageDeletion> {
   if (!checkIsTelegramPrimitiveKey(key, 'deleteThreadMessage')) return 'stayed';
   try {
-    await enqueueSend(key, () => bot.telegram.deleteMessage(getTelegramChatId(key), messageId));
+    const deleteMessage = () => bot.telegram.deleteMessage(getTelegramChatId(key), messageId);
+    await (options.isUnpaced ? sendUnpaced(key, deleteMessage) : enqueueSend(key, deleteMessage));
     return 'deleted';
   } catch (e) {
     return checkIsMessageNotFoundError(e) ? 'gone' : 'stayed';
@@ -4840,6 +4864,35 @@ async function transcribeVoiceFile(
     console.warn(`[transcribe] failed: ${result.error}`);
   }
   return result;
+}
+
+/**
+ * @description Arm the «🎙 Transcribing the voice message…» note for a voice message that just arrived in `key`. While the
+ * local engine loads (up to 2 minutes, `src/stt/README.md`) the topic would show nothing and the voice would look lost; the note
+ * appears only when the text is later than `voiceProgressNoteDelayMs`, is SILENT (a muted topic stays quiet, an unmuted one makes
+ * no sound), goes out UNPACED like the 🎤 echo it makes way for, and is deleted unpaced the moment the text arrives or the
+ * transcription fails (`VoiceProgressNote.finish`). Its id is kept in the thread's transient-message set, so a restart that
+ * kills the voice job still deletes the note: the graceful sweep, or the next boot after a crash.
+ */
+function startVoiceProgressNote(key: SessionKey): VoiceProgressNote {
+  return createVoiceProgressNote({
+    postNote: async () => {
+      const messageId = await replyToThread(
+        key,
+        withThreadLocale(key, () => t('voice.transcribing')),
+        { disable_notification: true },
+        { unpaced: true },
+      );
+      if (messageId !== null) addVoiceProgressNoteId(key, messageId);
+      return messageId;
+    },
+    deleteNote: async (messageId) => {
+      const deletion = await deleteThreadMessageDetailed(key, messageId, { isUnpaced: true });
+      // A note that stayed keeps its place in the set: the next sweep or boot retries it.
+      if (deletion !== 'stayed') removeVoiceProgressNoteId(key, messageId);
+    },
+    logProblem: (line) => console.warn(line),
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -9802,11 +9855,16 @@ bot.on(message('voice'), async (ctx) => {
   // Compute it HERE (only the handler has `ctx`); the job runs later off the
   // update loop and only sees `key`/`bot`.
   const replyBlock = getReplyQuoteBlock(key, ctx.message);
+  // Armed LAST, right before the job is queued: nothing between here and the queue may throw and strand an armed note. The
+  // clock runs from the voice's arrival, so a voice waiting in line behind an earlier one gets its note too; the job finishes it
+  // the moment its text arrives, and the `finally` is the backstop for a job that never ran or ended some other way.
+  const progressNote = startVoiceProgressNote(key);
   void getVoiceTranscriptionQueue(key)
-    .run(() => processVoiceJob(key, fileId, durationSeconds, getTopicRequesterId(ctx.from), warmedEndpoint, sentAtMs, replyBlock))
+    .run(() => processVoiceJob(key, fileId, durationSeconds, getTopicRequesterId(ctx.from), warmedEndpoint, progressNote, sentAtMs, replyBlock))
     .catch((err) => {
       console.error('[Bot] Voice job error (already handled):', err);
-    });
+    })
+    .finally(() => progressNote.finish());
 });
 
 /**
@@ -9822,7 +9880,10 @@ bot.on(message('voice'), async (ctx) => {
  * the voice note), plumbed here since the job no longer has `ctx`; so is
  * `requesterId`, the sender the transcript's request is filed under, and
  * `warmedEndpoint`, the first engine's endpoint asked for when the note arrived
- * (the job reuses that one ask — see `warmUpFirstEngine`).
+ * (the job reuses that one ask — see `warmUpFirstEngine`), and `progressNote`, the
+ * «transcribing…» note armed on arrival, which the job finishes as soon as the
+ * text is here or the voice failed — BEFORE the echo or the failure notice, never
+ * at the end of the job (delivering the prompt may take long).
  */
 async function processVoiceJob(
   key: SessionKey,
@@ -9830,6 +9891,7 @@ async function processVoiceJob(
   durationSeconds: number,
   requesterId: string,
   warmedEndpoint: WarmedEndpoint | null,
+  progressNote: VoiceProgressNote,
   sentAtMs?: number,
   replyContext?: string,
 ): Promise<void> {
@@ -9859,11 +9921,14 @@ async function processVoiceJob(
     } catch (downloadErr) {
       const msg = downloadErr instanceof Error ? downloadErr.message : String(downloadErr);
       console.warn(`[Bot] voice download failed after retries: ${msg}`);
+      void progressNote.finish();
       await replyToThread(key, `${t('voice.failed')} (${msg})`);
       return;
     }
     const result = await transcribeVoiceFile(key, tempFile, durationSeconds, warmedEndpoint);
     fs.unlink(tempFile, () => {});
+    // Text or failure — either way the wait is over; the note goes before the echo / the failure notice replaces it.
+    void progressNote.finish();
 
     if (!result.ok) {
       await replyToThread(key, `${t('voice.failed')} (${result.error})`);
@@ -9945,6 +10010,7 @@ async function processVoiceJob(
     await deliverActivePrompt(key, getThreadAdapter(key), transcript, { source: 'voice', requesterId }, sentAtMs, replyContext);
   } catch (err) {
     console.error('[Bot] Voice handling error:', err);
+    void progressNote.finish();
     await replyToThread(key, 'Error processing voice message');
   }
 }

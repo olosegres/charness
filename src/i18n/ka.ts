@@ -677,6 +677,7 @@ export const kaDict: Record<string, string> = {
   'stt.stale': 'პარამეტრები შეიცვალა — ეკრანი განახლდა.',
   'voice.failed': 'ხმოვანი შეტყობინების ტრანსკრიფცია ვერ მოხერხდა.',
   'voice.retrying': '⚠️ ხმოვანი შეტყობინების ტრანსკრიფცია ვერ მოხერხდა ({error}). ხელახლა ვცდი {seconds} წამში…',
+  'voice.transcribing': '🎙 ხმოვანი შეტყობინების ტრანსკრიფცია მიმდინარეობს…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

@@ -1,13 +1,15 @@
 /**
- * @description Pure collector for a thread's TRANSIENT status-frame message ids
- * — the three SEPARATE bot messages the turn lifecycle creates-then-deletes:
+ * @description Pure collector for a thread's TRANSIENT message ids — the bot
+ * messages that are created, shown for a moment and deleted again:
  *
  *   - `statusMessageId`          — the "✽ working…" liveness/spinner frame
  *   - `thinkingMessageId`        — the live "☁️ thinking …" chain-of-thought frame
  *   - `subagentStatusMessageId`  — the dedicated "🤖 sub-agent …" delegation frame
+ *   - `voiceProgressNoteIds`     — the "🎙 Transcribing the voice message…" notes (one per
+ *                                  voice message still waiting for its text, so a list)
  *
- * Returns only the non-null ones, in that fixed order, so the graceful-shutdown
- * sweep and the boot reconciliation can delete exactly the frames currently on
+ * Returns only the ones on screen, in that fixed order, so the graceful-shutdown
+ * sweep and the boot reconciliation can delete exactly the messages currently on
  * screen. These ids live ONLY in volatile in-memory `ThreadMessageState`, so a
  * restart that doesn't clean them up orphans the messages forever in the topic.
  *
@@ -20,6 +22,7 @@ export interface TransientFrameState {
   statusMessageId: number | null;
   thinkingMessageId: number | null;
   subagentStatusMessageId: number | null;
+  voiceProgressNoteIds: readonly number[];
 }
 
 export function getTransientFrameIds(state: TransientFrameState): number[] {
@@ -27,6 +30,7 @@ export function getTransientFrameIds(state: TransientFrameState): number[] {
   if (state.statusMessageId !== null) ids.push(state.statusMessageId);
   if (state.thinkingMessageId !== null) ids.push(state.thinkingMessageId);
   if (state.subagentStatusMessageId !== null) ids.push(state.subagentStatusMessageId);
+  ids.push(...state.voiceProgressNoteIds);
   return ids;
 }
 
@@ -43,7 +47,7 @@ export interface ShutdownFrameState extends TransientFrameState {
 /**
  * @description Graceful-shutdown clear of a thread's transient frames: returns the
  * ids currently on screen (for the caller to delete), then bumps BOTH frame
- * generations and nulls all three ids.
+ * generations and clears every id (the voice notes' list included).
  *
  * The generation bump is the load-bearing part, and the reason this must run for
  * EVERY tracked thread — including one whose ids are all null right now. A
@@ -64,5 +68,6 @@ export function clearTransientFramesForShutdown(state: ShutdownFrameState): numb
   state.statusMessageId = null;
   state.thinkingMessageId = null;
   state.subagentStatusMessageId = null;
+  state.voiceProgressNoteIds = [];
   return ids;
 }

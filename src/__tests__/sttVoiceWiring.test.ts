@@ -30,6 +30,39 @@ test('a voice note warms the local engine up as it ARRIVES — after the no-engi
   assert.match(botSource, /language: settings\.language,\n\s+warmedEndpoint,/, 'which uses it instead of asking the engine again');
 });
 
+test('the «transcribing…» note is armed LAST, right before the job is queued, and the queue chain finishes it whatever happened to the job', () => {
+  const handler = botSource.slice(botSource.indexOf("bot.on(message('voice')"), botSource.indexOf('async function processVoiceJob'));
+  const armed = handler.indexOf('const progressNote = startVoiceProgressNote(key);');
+  assert.ok(armed > handler.indexOf('const replyBlock = getReplyQuoteBlock(key, ctx.message);'), 'after the last statement that can still throw, or an armed note would be stranded');
+  assert.ok(armed > handler.indexOf('getNoEngineNoticeCode(sttSettings)'), 'a voice refused for having no engine gets no note');
+  assert.ok(armed < handler.indexOf('getVoiceTranscriptionQueue(key)'), 'before the job is queued: the clock runs from the voice\'s arrival');
+  assert.match(handler, /\.catch\(\(err\) => \{[^}]*\}\)\n\s+\.finally\(\(\) => progressNote\.finish\(\)\);/, 'a job that never ran or rejected still ends the wait');
+});
+
+test('the voice job ends the wait BEFORE it answers: on a failed download, as soon as the transcription returns, and on an unexpected error', () => {
+  const job = botSource.slice(botSource.indexOf('async function processVoiceJob'), botSource.indexOf('File intake handler'));
+  const finishes = [...job.matchAll(/void progressNote\.finish\(\);/g)].map((match) => match.index);
+  assert.equal(finishes.length, 3, 'one end of the wait per way out of the job');
+  const [afterDownloadFailure, afterTranscription, afterUnexpectedError] = finishes;
+  assert.ok(afterDownloadFailure < job.indexOf("`${t('voice.failed')} (${msg})`"), 'the download failure notice replaces the note');
+  assert.ok(afterTranscription > job.indexOf('await transcribeVoiceFile(key, tempFile'), 'after the chain returned, text or failure');
+  assert.ok(afterTranscription < job.indexOf('if (!result.ok)'), 'before the failure notice');
+  assert.ok(afterTranscription < job.indexOf("t('voice.transcribed'"), 'before the 🎤 echo, not at the end of a job that may take long to deliver the prompt');
+  assert.ok(afterUnexpectedError < job.indexOf("'Error processing voice message'"), 'the generic error replaces the note');
+});
+
+test('the note is SILENT and unpaced, its delete is unpaced, and its id rides the transient-message set a restart cleans up', () => {
+  const wiring = botSource.slice(botSource.indexOf('function startVoiceProgressNote'), botSource.indexOf('// ═', botSource.indexOf('function startVoiceProgressNote')));
+  assert.match(wiring, /\{ disable_notification: true \},\n\s+\{ unpaced: true \},/, 'silent, and outside the pacer like the 🎤 echo');
+  assert.match(wiring, /deleteThreadMessageDetailed\(key, messageId, \{ isUnpaced: true \}\)/, 'the delete must not queue behind agent output, or the note would outlive the echo');
+  assert.match(wiring, /if \(deletion !== 'stayed'\) removeVoiceProgressNoteId\(key, messageId\);/, 'a note that stayed keeps its place in the set');
+  assert.match(botSource, /subagentEditInFlight: false, voiceProgressNoteIds: \[\] \};/, 'a thread starts with no note');
+  for (const helper of ['addVoiceProgressNoteId', 'removeVoiceProgressNoteId']) {
+    const body = botSource.slice(botSource.indexOf(`function ${helper}`));
+    assert.ok(body.slice(0, body.indexOf('\n}\n')).includes('persistTransientFrames(key);'), `${helper} mirrors the set to state.json (the ungraceful-exit safety net)`);
+  }
+});
+
 test('the plain bot stops the sidecar in its graceful shutdown; a hot worker leaves it to its supervisor', () => {
   assert.match(botSource, /stopSidecars: checkIsOpenCodeExternalHost\(\) \? undefined : \(\) => sttOwner\.stop\(\),/);
 });

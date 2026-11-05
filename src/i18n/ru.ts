@@ -681,6 +681,7 @@ export const ruDict: Record<string, string> = {
   'stt.stale': 'Настройки изменились — экран обновлён.',
   'voice.failed': 'Не удалось распознать голосовое.',
   'voice.retrying': '⚠️ Не удалось распознать голосовое ({error}). Повторю через {seconds} с…',
+  'voice.transcribing': '🎙 Расшифровываю голосовое…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

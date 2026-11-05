@@ -12,7 +12,8 @@
  *
  * Test knobs (not part of the contract): --claim-delay-ms N (start slowly: the window before the claim),
  * --claim-after-file PATH (claim only once PATH exists: an order between two starts that load cannot change),
- * --ready-delay-ms N (the "model load": between the claim and the listening port), --never-ready (claims, then
+ * --ready-delay-ms N (the "model load": between the claim and the listening port), --die-while-loading-ms N (the load
+ * fails: exit 1 N ms after the claim, before the port, record left behind), --never-ready (claims, then
  * hangs without ever listening), --crash-after-ms N (hard exit 1 after it is ready, record left behind),
  * --idle-seconds N (overrides --idle-minutes), --ignore-sigterm, --health-delay-ms N (answer /health late, like a
  * sidecar busy with a long voice), --health-hang (never answer /health), --fail-to-record (exit 1 where the record
@@ -36,6 +37,7 @@ const ownerStartToken = readArg('--owner-start-token');
 const configHash = readArg('--config-hash');
 const healthDelayMs = Number(readArg('--health-delay-ms', '0'));
 const readyDelayMs = Number(readArg('--ready-delay-ms', '0'));
+const dieWhileLoadingMs = Number(readArg('--die-while-loading-ms', '0'));
 const claimDelayMs = Number(readArg('--claim-delay-ms', '0'));
 const claimAfterFile = readArg('--claim-after-file');
 const claimGatePollMs = 20;
@@ -166,6 +168,7 @@ function startUp() {
     setInterval(() => {}, 1000);
     return;
   }
+  if (dieWhileLoadingMs > 0) setTimeout(() => process.exit(1), dieWhileLoadingMs);
   setTimeout(() => listenAndReport(isRecorded), readyDelayMs);
 }
 

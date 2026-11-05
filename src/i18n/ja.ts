@@ -677,6 +677,7 @@ export const jaDict: Record<string, string> = {
   'stt.stale': '設定が変更されました — 更新しました。',
   'voice.failed': '音声メッセージの文字起こしに失敗しました。',
   'voice.retrying': '⚠️ 音声メッセージの文字起こしに失敗しました（{error}）。{seconds} 秒後に再試行します…',
+  'voice.transcribing': '🎙 音声メッセージを文字起こししています…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

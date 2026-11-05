@@ -677,6 +677,7 @@ export const frDict: Record<string, string> = {
   'stt.stale': 'Les réglages ont changé — écran actualisé.',
   'voice.failed': 'Échec de la transcription du message vocal.',
   'voice.retrying': '⚠️ Échec de la transcription du message vocal ({error}). Nouvel essai dans {seconds} s…',
+  'voice.transcribing': '🎙 Transcription du message vocal…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

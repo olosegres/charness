@@ -683,6 +683,7 @@ export const ukDict: Record<string, string> = {
   'stt.stale': 'Налаштування змінилися — екран оновлено.',
   'voice.failed': 'Не вдалося розпізнати голосове повідомлення.',
   'voice.retrying': '⚠️ Не вдалося розпізнати голосове повідомлення ({error}). Повторю через {seconds} с…',
+  'voice.transcribing': '🎙 Розпізнаю голосове повідомлення…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

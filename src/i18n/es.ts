@@ -677,6 +677,7 @@ export const esDict: Record<string, string> = {
   'stt.stale': 'Los ajustes cambiaron — pantalla actualizada.',
   'voice.failed': 'Error al transcribir el mensaje de voz.',
   'voice.retrying': '⚠️ Error al transcribir el mensaje de voz ({error}). Reintento en {seconds} s…',
+  'voice.transcribing': '🎙 Transcribiendo el mensaje de voz…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

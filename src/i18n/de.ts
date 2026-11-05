@@ -677,6 +677,7 @@ export const deDict: Record<string, string> = {
   'stt.stale': 'Die Einstellungen haben sich geändert — aktualisiert.',
   'voice.failed': 'Sprachnachricht konnte nicht transkribiert werden.',
   'voice.retrying': '⚠️ Sprachnachricht konnte nicht transkribiert werden ({error}). Neuer Versuch in {seconds} s…',
+  'voice.transcribing': '🎙 Sprachnachricht wird transkribiert…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

@@ -677,6 +677,7 @@ export const uzDict: Record<string, string> = {
   'stt.stale': 'Sozlamalar o‘zgardi — ekran yangilandi.',
   'voice.failed': 'Ovoz xabarini transkripsiya qilib bo‘lmadi.',
   'voice.retrying': '⚠️ Ovoz xabarini transkripsiya qilib bo‘lmadi ({error}). {seconds} soniyadan keyin qayta urinaman…',
+  'voice.transcribing': '🎙 Ovoz xabari transkripsiya qilinmoqda…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

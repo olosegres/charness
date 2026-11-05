@@ -677,6 +677,7 @@ export const hiDict: Record<string, string> = {
   'stt.stale': 'सेटिंग्स बदल गईं — स्क्रीन ताज़ा की गई।',
   'voice.failed': 'वॉइस संदेश ट्रांसक्राइब करने में विफल।',
   'voice.retrying': '⚠️ वॉइस संदेश ट्रांसक्राइब करने में विफल ({error})। {seconds} सेकंड में फिर से कोशिश की जाएगी…',
+  'voice.transcribing': '🎙 वॉइस संदेश ट्रांसक्राइब किया जा रहा है…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

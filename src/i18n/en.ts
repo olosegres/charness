@@ -690,6 +690,7 @@ export const enDict: Record<string, string> = {
   'stt.stale': 'The settings changed — refreshed.',
   'voice.failed': 'Failed to transcribe voice message.',
   'voice.retrying': '⚠️ Failed to transcribe voice message ({error}). Retrying in {seconds} s…',
+  'voice.transcribing': '🎙 Transcribing the voice message…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

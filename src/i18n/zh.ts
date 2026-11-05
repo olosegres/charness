@@ -677,6 +677,7 @@ export const zhDict: Record<string, string> = {
   'stt.stale': '设置已更改——已刷新。',
   'voice.failed': '语音转录失败。',
   'voice.retrying': '⚠️ 语音转录失败（{error}）。{seconds} 秒后重试…',
+  'voice.transcribing': '🎙 正在转录语音…',
   'voice.transcribed': '🎤 {text}',
 
   'file.too_big':

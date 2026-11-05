@@ -16,6 +16,7 @@ gets. User-facing setup is in [`SETUP.md` § Voice input](../../SETUP.md#voice-i
 | `sttRuntime.ts` | `stt.json` + the lifecycle facts resolved per call; the boot migration; the once-per-edit auto-install trigger |
 | `../../stt/gigaam_sidecar.py` | The recognition process (Python), shipped in the package's `stt/` dir; `../../stt/test_gigaam_sidecar.py` are its unit tests (numpy, soundfile and av only, no model), run in `yarn test` by `sttSidecarPython.test.ts` through `uv` or a `python3` that has all three |
 | `../utils/transcribeAudio.ts` | The ONE HTTP primitive: a multipart `POST` to an OpenAI-compatible `/audio/transcriptions`, with classified failures and the retry schedule |
+| `../voiceProgressNote.ts` | The silent «transcribing…» note of a voice that waits for its text: pure timing over a post and a delete port (§ Warm-up, «What the topic shows meanwhile») |
 
 ## `stt.json` — the one source of truth
 
@@ -99,8 +100,19 @@ that judged that silence would count toward `unansweredAdoptionLimit` and could 
 of the earlier voice. So a warm-up takes a listening, matching process as it is — no `/health`, no count, no replacement —
 and starts or waits for a start like any ask. A failed warm-up leaves one line, `[STT] warm-up start of gigaam failed: <reason>`, because the job may end
 (a failed download) without ever asking. A hosted engine in front starts nothing: the local one may never be reached.
-Nothing else shows the user a «transcribing…» state: there is no such message or typing action in the voice flow (the 🎤 echo
-is the first sign), and the warm-up adds none.
+
+**What the topic shows meanwhile.** A warm engine answers within a couple of seconds and the topic shows nothing before the 🎤 echo.
+When the text is not there `voiceProgressNoteDelayMs` (3 s) after the voice ARRIVED — the wait in the topic's voice queue behind an
+earlier voice counts, so that voice gets its note too — the bot posts a SILENT, unpaced «🎙 Transcribing the voice message…» note
+(`voice.transcribing`; the only «transcribing» state there is: no typing action). The note is deleted, also unpaced, the moment the
+chain returns — text or failure — and that delete is sent BEFORE the echo or the failure notice, so the note never outlives the answer behind queued agent output;
+a voice that is dropped any other way (a download that fails, an unexpected error, a job that never ran) ends it too
+(`VoiceProgressNote.finish`, `src/voiceProgressNote.ts`: pure timing over two ports, wired in `bot.ts`). One note per voice, so several
+voices waiting in a topic show several notes, each deleted by its own text. The warm-up adds none. **A restart:** the note's id sits in
+the thread's transient-message set beside the «working…» status frames (`voiceProgressNoteIds`, persisted in `state.json`), so a graceful
+stop (a hot reload) deletes a note whose voice job dies with the process (the shutdown sweep) and the next boot deletes one a kill left
+behind (`reconcileTransientFrames`); a note whose delete failed stays in the set and is retried the same way. The voice itself is not
+re-run after a restart — that is unchanged.
 
 - A **non-last** engine is tried **once** (`retryDelaysMs: []`); any failure — refused connection, timeout, 4xx,
   5xx, a rejected endpoint — moves to the next at once, logged only (`[transcribe] <engine> failed (…); falling

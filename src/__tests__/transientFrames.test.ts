@@ -1,9 +1,10 @@
 /**
  * @description Coverage for `utils/transientFrames` — the pure collector behind
  * the graceful-shutdown sweep and the boot reconciliation that delete orphaned
- * status frames. Load-bearing facts: only NON-null ids are returned, in the fixed
- * status → thinking → sub-agent order, and an all-null state yields an empty list
- * (so the sweep / boot loop does nothing).
+ * status frames and «transcribing…» voice notes. Load-bearing facts: only the ids
+ * on screen are returned, in the fixed status → thinking → sub-agent → voice notes
+ * order, and an empty state yields an empty list (so the sweep / boot loop does
+ * nothing).
  */
 
 import { test } from 'node:test';
@@ -20,6 +21,7 @@ function makeShutdownState(overrides: Partial<ShutdownFrameState> = {}): Shutdow
     statusMessageId: null,
     thinkingMessageId: null,
     subagentStatusMessageId: null,
+    voiceProgressNoteIds: [],
     statusFrameGeneration: 0,
     thinkingFrameGeneration: 0,
     ...overrides,
@@ -32,6 +34,7 @@ test('collects all three non-null frame ids in status → thinking → sub-agent
       statusMessageId: 10,
       thinkingMessageId: 20,
       subagentStatusMessageId: 30,
+      voiceProgressNoteIds: [],
     }),
     [10, 20, 30],
   );
@@ -43,6 +46,7 @@ test('skips null frame ids, keeping the rest in order', () => {
       statusMessageId: null,
       thinkingMessageId: 20,
       subagentStatusMessageId: null,
+      voiceProgressNoteIds: [],
     }),
     [20],
   );
@@ -51,6 +55,7 @@ test('skips null frame ids, keeping the rest in order', () => {
       statusMessageId: 5,
       thinkingMessageId: null,
       subagentStatusMessageId: 7,
+      voiceProgressNoteIds: [],
     }),
     [5, 7],
   );
@@ -62,9 +67,38 @@ test('returns an empty list when every frame id is null', () => {
       statusMessageId: null,
       thinkingMessageId: null,
       subagentStatusMessageId: null,
+      voiceProgressNoteIds: [],
     }),
     [],
   );
+});
+
+test('the «transcribing…» voice notes are collected after the frames — one id per voice message still waiting', () => {
+  assert.deepEqual(
+    getTransientFrameIds({
+      statusMessageId: 10,
+      thinkingMessageId: null,
+      subagentStatusMessageId: null,
+      voiceProgressNoteIds: [41, 42],
+    }),
+    [10, 41, 42],
+  );
+  assert.deepEqual(
+    getTransientFrameIds({
+      statusMessageId: null,
+      thinkingMessageId: null,
+      subagentStatusMessageId: null,
+      voiceProgressNoteIds: [41],
+    }),
+    [41],
+    'a voice note alone is a transient message: the sweep and the boot reconciliation must delete it',
+  );
+});
+
+test('clearTransientFramesForShutdown returns the voice notes too, then empties the list', () => {
+  const state = makeShutdownState({ voiceProgressNoteIds: [41, 42] });
+  assert.deepEqual(clearTransientFramesForShutdown(state), [41, 42]);
+  assert.deepEqual(state.voiceProgressNoteIds, []);
 });
 
 test('clearTransientFramesForShutdown returns on-screen ids, then nulls them and bumps both generations', () => {

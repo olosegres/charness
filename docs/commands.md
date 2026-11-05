@@ -809,6 +809,11 @@ the same routing. The engines form an ordered chain: when one fails, the next on
 same voice note. The last one retries a temporary failure automatically (after 5 s, then 15 s) and
 says so in the topic — no need to re-record the voice note.
 
+While the text is not there yet — a local engine that is still loading its model can take up to 2 minutes — the topic
+shows a silent «🎙 Transcribing the voice message…» note, so the voice note does not look lost. It appears only when the
+wait passes 3 seconds (a warm engine shows nothing), and is deleted the moment the 🎤 transcript (or the failure notice)
+arrives. A restart of the bot removes a note it left behind, too.
+
 `/terminal` is never started from a natural-language phrase — only the
 explicit command opens a shell.
 
