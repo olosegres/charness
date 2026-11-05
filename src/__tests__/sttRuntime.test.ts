@@ -259,3 +259,34 @@ test('init warns ONCE when stt.json is on the container\'s own disk — also in 
   createSttRuntime(mountedConfig.deps).init();
   assert.ok(!mountedConfig.problems.some((line) => line.includes("container's own disk")), 'a mounted directory says nothing');
 }));
+
+test('boot: a stt.json an earlier build wrote with the idle 15 it chose itself is rewritten once, said once, and the engine then follows the current default', () => {
+  const harness = createHarness();
+  fs.writeFileSync(configPath, JSON.stringify({ engines: [localEngine], language: null, gigaam: { idleMinutes: 15, workers: 4 } }));
+  const runtime = createSttRuntime(harness.deps);
+
+  runtime.init();
+  assert.equal(harness.info.length, 1, harness.info.join('\n'));
+  assert.match(harness.info[0], /the old default \(15 min\).*now follows the current default \(60 min\).*pick 15 again/);
+  assert.equal(runtime.getResolved().settings.gigaam.idleMinutes, 60);
+  assert.equal((JSON.parse(fs.readFileSync(configPath, 'utf8')) as { schemaVersion: number }).schemaVersion, 2);
+
+  createSttRuntime(harness.deps).init(); // the next boot: nothing left to migrate, nothing said
+  assert.equal(harness.info.length, 1);
+  assert.deepEqual(harness.problems, []);
+});
+
+test('boot: a stt.json that cannot be rewritten is reported and keeps working with what it holds', () => {
+  const harness = createHarness();
+  fs.writeFileSync(configPath, JSON.stringify({ engines: [localEngine], gigaam: { idleMinutes: 15, workers: 4 } }));
+  fs.chmodSync(dataDir, 0o500);
+  try {
+    createSttRuntime(harness.deps).init();
+  } finally {
+    fs.chmodSync(dataDir, 0o700);
+  }
+  // The permission checks do not apply to root, where the directory is still writable.
+  if (process.getuid?.() === 0) return;
+  assert.ok(harness.problems.some((line) => line.includes('could not rewrite') && line.includes('EACCES')), harness.problems.join('\n'));
+  assert.equal(createSttRuntime(harness.deps).getResolved().settings.gigaam.idleMinutes, 15, 'the file is as it was');
+});

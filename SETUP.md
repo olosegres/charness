@@ -581,7 +581,8 @@ usable right now.
 | `engines` | Ordered, at most 6. `kind`: `groq`, `openai`, `url` (any OpenAI-compatible `/audio/transcriptions` endpoint — give the full URL; `apiKey` is optional there) or `gigaam` (the local engine). `id` is 1–8 lowercase letters or digits, unique. `isDisabled: true` keeps an engine listed but unused |
 | `timeout` | Per engine: `baseSeconds` + `percentOfDuration` % of the voice's length (default 10 s + 25 %), so a 30 s voice gets 17.5 s and a 5 min voice 85 s |
 | `language` | Two-letter code (`ru`, `en`, …) sent to the engines as a hint; leave it out to let the engine detect the language |
-| `gigaam` | `idleMinutes` (default 60, `0` = never) and `workers` (1, 2, 4 or 8; default 4) of the local engine |
+| `gigaam` | `idleMinutes` (default 60, `0` = never) and `workers` (1, 2, 4 or 8; default 4) of the local engine. Only values that differ from the defaults are stored — a file without them follows the defaults |
+| `schemaVersion` | Written by the bot (2); leave it alone. A file without it was saved by an earlier build and is rewritten once at the next start (an idle exit of exactly 15 minutes, the old default the bot had written itself, becomes the current default) |
 
 An engine without what it needs (no key, no URL) is skipped and logged once. With no usable engine, a voice
 note is answered with a pointer to this setup.
@@ -603,7 +604,7 @@ next start and shows the progress in General (or in its log).
 - **Disk:** about 500 MB under `<DATA_DIR>/stt` (the model is 216 MB; the rest is the Python packages and their cache — about 100 MB of it is the ffmpeg libraries that read MP3, M4A and joined OGG files).
 - **RAM:** nothing while it is not running. The recogniser process starts with the first voice note that needs it (about
   +2–3 s once; on a busy machine the load takes longer and the voice WAITS for it, up to 2 minutes, instead of failing — the
-  engine is asked for as soon as the voice note arrives), uses about 0.5 GB for short voices and up to about 0.9 GB while a
+  engine is asked for as soon as the voice note arrives; with another engine listed after it, the voice moves on to that one after about 15 s while the local engine keeps loading for the next voice), uses about 0.5 GB for short voices and up to about 0.9 GB while a
   5-minute voice is recognised with the default 4 workers, and exits by itself after 60 idle minutes (`gigaam.idleMinutes`,
   `0` = never; a small machine picks less). Idle time, workers, «Try again now» and removing the model files are on the
   engine's card in `/stt`, not on the main screen.

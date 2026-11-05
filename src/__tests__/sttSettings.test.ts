@@ -22,6 +22,7 @@ import {
   getSttReportLines,
   loadSttConfig,
   migrateLegacySttKeys,
+  migrateSttStoredDefaults,
   resetSttConfigCache,
   resolveSttSettings,
   saveSttConfig,
@@ -148,6 +149,85 @@ test('save writes mode 0600 through a rename and leaves no temp file; load reads
   const load = loadSttConfig(configPath);
   assert.equal(load.status, 'ok');
   assert.deepEqual(load.config, config);
+});
+
+function readStored(): Record<string, unknown> {
+  return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+}
+
+test('save stores only what differs from the defaults and stamps the layout version — a default written to the file would look like a choice', () => {
+  saveSttConfig(configPath, createConfig({ engines: [{ id: 'g', kind: 'gigaam' }] }));
+  assert.deepEqual(readStored(), { schemaVersion: 2, engines: [{ id: 'g', kind: 'gigaam' }], language: null }, 'no gigaam block at all');
+
+  saveSttConfig(configPath, createConfig({ gigaam: { idleMinutes: 15, workers: 4 } }));
+  assert.deepEqual(readStored().gigaam, { idleMinutes: 15 }, 'a 15 picked on purpose differs from the default and is stored');
+
+  saveSttConfig(configPath, createConfig({ gigaam: { idleMinutes: 60, workers: 8, threads: 3 } }));
+  assert.deepEqual(readStored().gigaam, { workers: 8, threads: 3 });
+  assert.deepEqual(loadSttConfig(configPath).config?.gigaam, { idleMinutes: 60, workers: 8, threads: 3 }, 'read back, the defaults fill what the file omits');
+});
+
+/** What an earlier build saved: the whole gigaam block, the idle default of that time included, and no layout version. */
+const earlierBuildFile = { engines: [{ id: 'g', kind: 'gigaam' }], language: null, gigaam: { idleMinutes: 15, workers: 4 } };
+
+test('stored defaults migration: the idle 15 that an earlier build wrote itself is dropped once, in the new layout and mode 0600', () => {
+  writeRaw(JSON.stringify(earlierBuildFile));
+  fs.chmodSync(configPath, 0o644);
+
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: true });
+  assert.deepEqual(readStored(), { schemaVersion: 2, engines: [{ id: 'g', kind: 'gigaam' }], language: null });
+  assert.equal(fs.statSync(configPath).mode & 0o777, 0o600);
+  assert.deepEqual(loadSttConfig(configPath).config?.gigaam, { idleMinutes: 60, workers: 4 }, 'the engine now follows the current default');
+
+  const migratedText = fs.readFileSync(configPath, 'utf8');
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' }, 'one time only');
+  assert.equal(fs.readFileSync(configPath, 'utf8'), migratedText, 'and the second run does not touch the file');
+});
+
+test('stored defaults migration: a 15 picked AFTER it is a choice — it is saved with the version, so no later boot drops it', () => {
+  writeRaw(JSON.stringify(earlierBuildFile));
+  migrateSttStoredDefaults(configPath);
+  const config = loadSttConfig(configPath).config;
+  assert.ok(config);
+  saveSttConfig(configPath, { ...config, gigaam: { ...config.gigaam, idleMinutes: 15 } });
+  const chosenText = fs.readFileSync(configPath, 'utf8');
+
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
+  assert.equal(fs.readFileSync(configPath, 'utf8'), chosenText);
+  assert.equal(loadSttConfig(configPath).config?.gigaam.idleMinutes, 15);
+});
+
+test('stored defaults migration: any other stored value is kept; a file without a gigaam block, or with another idle, is only stamped', () => {
+  writeRaw(JSON.stringify({ engines: [], gigaam: { idleMinutes: 30, workers: 2, threads: 3 } }));
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: false });
+  assert.deepEqual(readStored().gigaam, { idleMinutes: 30, workers: 2, threads: 3 });
+  assert.equal(readStored().schemaVersion, 2);
+
+  writeRaw(JSON.stringify({ engines: [{ id: 'q1', kind: 'groq', apiKey: sampleKey }] }));
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'migrated', isIdleMinutesDropped: false });
+  assert.equal(readStored().schemaVersion, 2, 'stamped, so a 15 added by hand later is never mistaken for the old default');
+  assert.deepEqual(loadSttConfig(configPath).config?.engines, [{ id: 'q1', kind: 'groq', apiKey: sampleKey }]);
+});
+
+test('stored defaults migration: a missing, garbage or invalid file is left exactly as it is; a directory that cannot be written is reported', () => {
+  assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
+  assert.ok(!fs.existsSync(configPath), 'no file is created');
+
+  for (const text of ['{not json', JSON.stringify({ engines: [{ id: 'g', kind: 'gigaam' }, { id: 'h', kind: 'gigaam' }] }), JSON.stringify({ unknownKey: 1 })]) {
+    writeRaw(text);
+    assert.deepEqual(migrateSttStoredDefaults(configPath), { status: 'notNeeded' });
+    assert.equal(fs.readFileSync(configPath, 'utf8'), text);
+  }
+
+  writeRaw(JSON.stringify(earlierBuildFile));
+  fs.chmodSync(configDir, 0o500);
+  try {
+    const result = migrateSttStoredDefaults(configPath);
+    // The permission checks do not apply to root, where the directory is still writable.
+    if (process.getuid?.() !== 0) assert.deepEqual(result, { status: 'writeFailed', error: 'EACCES' });
+  } finally {
+    fs.chmodSync(configDir, 0o700);
+  }
 });
 
 test('save creates the config dir, and refuses to write an invalid file', () => {

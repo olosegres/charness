@@ -216,7 +216,7 @@ import {
   resolveSttOwnerContext,
 } from './stt/sttSidecarOwner';
 import { createDefaultSttInstallJobDeps, createSttInstallJobManager } from './stt/sttAutoInstall';
-import { transcribeWithEngines, warmUpFirstEngine } from './stt/transcribeChain';
+import { transcribeWithEngines, warmUpFirstEngine, type WarmedEndpoint } from './stt/transcribeChain';
 import { stripCommandBotMention } from './utils';
 import { checkIsConnectCommandText, getRecvTracePreview } from './utils/recvPreviewRedaction';
 import {
@@ -4815,6 +4815,7 @@ async function transcribeVoiceFile(
   key: SessionKey,
   filePath: string,
   durationSeconds: number,
+  warmedEndpoint: WarmedEndpoint | null,
 ): Promise<TranscribeResult> {
   const { engines, settings } = getResolvedSttSettings();
   if (engines.length === 0) return { ok: false, error: 'no speech engine available' };
@@ -4822,6 +4823,7 @@ async function transcribeVoiceFile(
   const result = await transcribeWithEngines(filePath, engines, {
     durationSeconds,
     language: settings.language,
+    warmedEndpoint,
     onFallback: ({ from, to, error }) => {
       console.warn(`[transcribe] ${from} failed (${error}); falling back to ${to}`);
     },
@@ -9780,8 +9782,9 @@ bot.on(message('voice'), async (ctx) => {
     await replyToThread(key, t(getNoEngineNoticeCode(sttSettings)));
     return;
   }
-  // The local engine may be cold: start its load now, so it overlaps the download and the topic's voice queue.
-  warmUpFirstEngine(sttSettings.engines);
+  // The local engine may be cold: start its load now, so it overlaps the download and the topic's voice queue. The voice's
+  // job reuses this one ask, so the engine is started once per voice, whatever the outcome.
+  const warmedEndpoint = warmUpFirstEngine(sttSettings.engines, (line) => console.warn(line));
 
   // Offload the slow download+transcribe+forward off the telegraf update loop:
   // awaiting it here would stall intake of EVERY update until Groq replies
@@ -9798,7 +9801,7 @@ bot.on(message('voice'), async (ctx) => {
   // update loop and only sees `key`/`bot`.
   const replyBlock = getReplyQuoteBlock(key, ctx.message);
   void getVoiceTranscriptionQueue(key)
-    .run(() => processVoiceJob(key, fileId, durationSeconds, getTopicRequesterId(ctx.from), sentAtMs, replyBlock))
+    .run(() => processVoiceJob(key, fileId, durationSeconds, getTopicRequesterId(ctx.from), warmedEndpoint, sentAtMs, replyBlock))
     .catch((err) => {
       console.error('[Bot] Voice job error (already handled):', err);
     });
@@ -9815,13 +9818,16 @@ bot.on(message('voice'), async (ctx) => {
  * take ~20s, so "now" at forward time would drift). `replyContext` is the
  * reply-quote block the handler built from `ctx.message` (a Telegram REPLY on
  * the voice note), plumbed here since the job no longer has `ctx`; so is
- * `requesterId`, the sender the transcript's request is filed under.
+ * `requesterId`, the sender the transcript's request is filed under, and
+ * `warmedEndpoint`, the first engine's endpoint asked for when the note arrived
+ * (the job reuses that one ask — see `warmUpFirstEngine`).
  */
 async function processVoiceJob(
   key: SessionKey,
   fileId: string,
   durationSeconds: number,
   requesterId: string,
+  warmedEndpoint: WarmedEndpoint | null,
   sentAtMs?: number,
   replyContext?: string,
 ): Promise<void> {
@@ -9854,7 +9860,7 @@ async function processVoiceJob(
       await replyToThread(key, `${t('voice.failed')} (${msg})`);
       return;
     }
-    const result = await transcribeVoiceFile(key, tempFile, durationSeconds);
+    const result = await transcribeVoiceFile(key, tempFile, durationSeconds, warmedEndpoint);
     fs.unlink(tempFile, () => {});
 
     if (!result.ok) {

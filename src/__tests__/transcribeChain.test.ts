@@ -18,7 +18,8 @@ import * as http from 'http';
 import { promises as fsp } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { transcribeWithEngines, warmUpFirstEngine, type TranscribeFallbackInfo } from '../stt/transcribeChain';
+import { transcribeWithEngines, warmUpFirstEngine, type TranscribeFallbackInfo, type WarmedEndpoint } from '../stt/transcribeChain';
+import type { TranscriptionEndpoint } from '../utils/transcribeAudio';
 import { defaultSttTimeout, type ResolvedSttEngine, type SttTimeout } from '../stt/sttSettings';
 import { queuedAudioSecondsHeader, type TranscribeRetryInfo } from '../utils/transcribeAudio';
 
@@ -174,13 +175,14 @@ function reportQueuedAudio(res: http.ServerResponse, queuedSeconds: string): voi
 
 async function runChain(
   engines: ResolvedSttEngine[],
-  overrides: { durationSeconds?: number; language?: string | null; filePath?: string } = {},
+  overrides: { durationSeconds?: number; language?: string | null; filePath?: string; warmedEndpoint?: WarmedEndpoint | null } = {},
 ) {
   const fallbacks: TranscribeFallbackInfo[] = [];
   const retries: TranscribeRetryInfo[] = [];
   const result = await transcribeWithEngines(overrides.filePath ?? audioPath, engines, {
     durationSeconds: overrides.durationSeconds,
     language: overrides.language ?? null,
+    warmedEndpoint: overrides.warmedEndpoint,
     retryDelaysMs: testRetryDelaysMs,
     onFallback: (info) => { fallbacks.push(info); },
     onRetry: (info) => { retries.push(info); },
@@ -488,51 +490,192 @@ test('a non-last engine is asked for its endpoint once — it is not retried', a
   assert.equal(asked, 1);
 });
 
-/** An engine of the given kind that counts how often its endpoint was asked for and then answers or rejects as told. */
-function createCountingEngine(kind: ResolvedSttEngine['kind'], outcome: 'answers' | 'rejects'): { engine: ResolvedSttEngine; getAsked: () => number } {
+/** An engine of the given kind whose endpoint the test settles by hand; it counts how often it was asked. */
+function createControlledEngine(kind: ResolvedSttEngine['kind'], name: string = kind): {
+  engine: ResolvedSttEngine;
+  getAsked: () => number;
+  answer: (endpoint: TranscriptionEndpoint) => void;
+  reject: (error: Error) => void;
+} {
   let asked = 0;
+  let answer: (endpoint: TranscriptionEndpoint) => void = () => {};
+  let reject: (error: Error) => void = () => {};
   const engine: ResolvedSttEngine = {
-    id: kind,
+    id: name,
     kind,
-    name: kind,
+    name,
     timeout: defaultSttTimeout,
     getEndpoint: () => {
       asked++;
-      return outcome === 'answers' ? Promise.resolve({ url: 'http://127.0.0.1:1/v1/audio/transcriptions', model: 'm' }) : Promise.reject(new Error('the local engine could not be started'));
+      return new Promise<TranscriptionEndpoint>((resolve, rejectPromise) => { answer = resolve; reject = rejectPromise; });
     },
   };
-  return { engine, getAsked: () => asked };
+  return { engine, getAsked: () => asked, answer: (endpoint) => answer(endpoint), reject: (error) => reject(error) };
 }
 
-test('warm-up: a local engine that a voice would reach FIRST is asked for its endpoint at once, and only once', () => {
-  const local = createCountingEngine('gigaam', 'answers');
-  const hosted = createCountingEngine('groq', 'answers');
-  warmUpFirstEngine([local.engine, hosted.engine]);
+/** Let the promise callbacks (and an unhandled rejection, raised after the microtasks) run. */
+async function settleCallbacks(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+const logWarningNowhere = (): void => {};
+
+async function waitUntil(check: () => boolean, description: string): Promise<void> {
+  const deadlineMs = Date.now() + noHangTestTimeoutMs;
+  while (!check()) {
+    if (Date.now() > deadlineMs) throw new Error(`timed out waiting for ${description}`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+test('warm-up: a local engine that a voice would reach FIRST is asked for its endpoint at once, and only once; any other first engine starts nothing', () => {
+  const local = createControlledEngine('gigaam');
+  const hosted = createControlledEngine('groq');
+  const warmed = warmUpFirstEngine([local.engine, hosted.engine], logWarningNowhere);
+  assert.equal(warmed?.engineId, 'gigaam');
   assert.equal(local.getAsked(), 1);
   assert.equal(hosted.getAsked(), 0, 'the later engine is not touched');
+
+  const hostedFirst = createControlledEngine('groq');
+  const localBehind = createControlledEngine('gigaam');
+  assert.equal(warmUpFirstEngine([hostedFirst.engine, localBehind.engine], logWarningNowhere), null);
+  assert.equal(localBehind.getAsked(), 0, 'a local engine behind a hosted one may never be reached');
+  assert.equal(warmUpFirstEngine([], logWarningNowhere), null);
 });
 
-test('warm-up: a hosted engine in front starts nothing — the local one behind it may never be reached', () => {
-  const hosted = createCountingEngine('groq', 'answers');
-  const local = createCountingEngine('gigaam', 'answers');
-  warmUpFirstEngine([hosted.engine, local.engine]);
-  assert.equal(hosted.getAsked(), 0);
-  assert.equal(local.getAsked(), 0);
-  warmUpFirstEngine([]);
+test('warm-up: the voice REUSES the warm-up\'s ask — the engine is asked once for the voice, and the answer is the one the warm-up got', async () => {
+  reset([transcribed('from the warmed endpoint')]);
+  const local = createControlledEngine('gigaam');
+  const warmed = warmUpFirstEngine([local.engine], logWarningNowhere);
+  local.answer({ url: first.url, apiKey: 'local-key', model: 'm' });
+
+  const { result } = await runChain([local.engine], { warmedEndpoint: warmed });
+  assert.deepEqual(result, { ok: true, text: 'from the warmed endpoint', engine: 'gigaam' });
+  assert.equal(local.getAsked(), 1, 'one ask in all: the warm-up\'s');
 });
 
-test('warm-up: a start that fails is the voice\'s to report — it never becomes an unhandled rejection', async () => {
+test('warm-up: a start that FAILED fast is the voice\'s outcome too — no second ask (no second spawn, no second failed start); a hosted engine behind takes the voice', async () => {
+  reset([], [transcribed('from the hosted engine')]);
+  const local = createControlledEngine('gigaam');
+  const warmed = warmUpFirstEngine([local.engine], logWarningNowhere);
+  local.reject(new Error('the local engine exited before it was ready (see sidecar.log)'));
+  await settleCallbacks(); // the failure is over before the voice's job gets to the engine
+
+  const { result, fallbacks } = await runChain([local.engine, createEngine('hosted', second)], { warmedEndpoint: warmed });
+  assert.deepEqual(result, { ok: true, text: 'from the hosted engine', engine: 'hosted' });
+  assert.equal(local.getAsked(), 1, 'the voice did not ask the engine again');
+  assert.deepEqual(fallbacks.map((fallback) => fallback.error), ['the local engine exited before it was ready (see sidecar.log)']);
+
+  const lonely = createControlledEngine('gigaam');
+  const lonelyWarmed = warmUpFirstEngine([lonely.engine], logWarningNowhere);
+  lonely.reject(new Error('the local engine could not be started: spawn failed'));
+  await settleCallbacks();
+  const lonelyOutcome = await runChain([lonely.engine], { warmedEndpoint: lonelyWarmed });
+  assert.deepEqual(lonelyOutcome.result, { ok: false, error: 'the local engine could not be started: spawn failed', engine: 'gigaam' });
+  assert.equal(lonely.getAsked(), 1);
+});
+
+test('warm-up: only the first ask is the warm-up\'s — a retry of the last engine asks it again; a warm-up of another engine is ignored', async () => {
+  reset([respondWith(503, 'down'), transcribed('after the retry')]);
+  const local = createControlledEngine('gigaam');
+  const warmed = warmUpFirstEngine([local.engine], logWarningNowhere);
+  local.answer({ url: first.url, model: 'm' });
+  const retryEndpoint = runChain([local.engine], { warmedEndpoint: warmed });
+  await waitUntil(() => local.getAsked() === 2, 'the retry to ask the engine itself');
+  local.answer({ url: first.url, model: 'm' });
+  assert.equal((await retryEndpoint).result.ok, true);
+
+  reset([transcribed('asked normally')]);
+  const other = createEngine('other', first);
+  let otherAsked = 0;
+  const countingOther: ResolvedSttEngine = { ...other, getEndpoint: () => { otherAsked++; return other.getEndpoint(); } };
+  const unrelated = createControlledEngine('gigaam', 'someone-else');
+  const wrongWarm = warmUpFirstEngine([unrelated.engine], logWarningNowhere);
+  const { result } = await runChain([countingOther], { warmedEndpoint: wrongWarm });
+  assert.equal(result.ok, true);
+  assert.equal(otherAsked, 1, 'the engine the voice meets is asked itself');
+});
+
+test('warm-up: a failed start leaves ONE log line (the voice\'s job may end before it ever asks); a good one leaves none', async () => {
+  const lines: string[] = [];
+  const failing = createControlledEngine('gigaam');
+  warmUpFirstEngine([failing.engine], (line) => lines.push(line));
+  failing.reject(new Error('the local engine was still loading its model after 120 s (see sidecar.log)'));
+  await settleCallbacks();
+  assert.deepEqual(lines, ['[STT] warm-up start of gigaam failed: the local engine was still loading its model after 120 s (see sidecar.log)']);
+
+  const good = createControlledEngine('gigaam');
+  warmUpFirstEngine([good.engine], (line) => lines.push(line));
+  good.answer({ url: first.url, model: 'm' });
+  await settleCallbacks();
+  assert.equal(lines.length, 1);
+});
+
+test('a failed warm-up nobody asks for again never becomes an unhandled rejection', async () => {
   const unhandled: Error[] = [];
   const recordUnhandled = (reason: Error): void => { unhandled.push(reason); };
   process.on('unhandledRejection', recordUnhandled);
   try {
-    const local = createCountingEngine('gigaam', 'rejects');
-    warmUpFirstEngine([local.engine]);
-    await new Promise<void>((resolve) => setImmediate(resolve)); // an unhandled rejection is raised after the microtasks
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(local.getAsked(), 1);
+    const local = createControlledEngine('gigaam');
+    warmUpFirstEngine([local.engine], logWarningNowhere);
+    local.reject(new Error('the local engine could not be started'));
+    await settleCallbacks();
     assert.deepEqual(unhandled, []);
   } finally {
     process.off('unhandledRejection', recordUnhandled);
   }
 });
+
+const shortStartBudgetMs = 30;
+
+test('a NON-last engine still starting after its budget hands the voice to the next engine — and its start is not cancelled: the next voice gets it', async () => {
+  reset([], [transcribed('from the hosted engine')]);
+  const local = createControlledEngine('gigaam');
+  const { result, fallbacks } = await runChainWithStartBudget([local.engine, createEngine('hosted', second)]);
+  assert.deepEqual(result, { ok: true, text: 'from the hosted engine', engine: 'hosted' });
+  assert.equal(fallbacks.length, 1);
+  assert.deepEqual([fallbacks[0].from, fallbacks[0].to], ['gigaam', 'hosted']);
+  assert.match(fallbacks[0].error, /^gigaam was still starting after \d+ s; it keeps starting for the next voice$/);
+  assert.equal(local.getAsked(), 1);
+
+  // The start the first voice gave up on finishes later: nothing breaks, and its failure (or success) belongs to the start.
+  const unhandled: Error[] = [];
+  const recordUnhandled = (reason: Error): void => { unhandled.push(reason); };
+  process.on('unhandledRejection', recordUnhandled);
+  try {
+    local.reject(new Error('the local engine was still loading its model after 120 s (see sidecar.log)'));
+    await settleCallbacks();
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off('unhandledRejection', recordUnhandled);
+  }
+});
+
+test('a NON-last engine that is ready within its budget is used as before; the LAST engine is waited for however long its start takes', async () => {
+  reset([transcribed('from the local engine')]);
+  const quick = createControlledEngine('gigaam');
+  const quickRun = runChainWithStartBudget([quick.engine, createEngine('hosted', second)]);
+  quick.answer({ url: first.url, model: 'm' });
+  assert.deepEqual((await quickRun).result, { ok: true, text: 'from the local engine', engine: 'gigaam' });
+
+  reset([transcribed('after a long start')]);
+  const slow = createControlledEngine('gigaam');
+  const slowRun = runChainWithStartBudget([slow.engine]);
+  await new Promise<void>((resolve) => setTimeout(resolve, shortStartBudgetMs * 4)); // far past the budget the other engines get
+  slow.answer({ url: first.url, model: 'm' });
+  const slowOutcome = await slowRun;
+  assert.deepEqual(slowOutcome.result, { ok: true, text: 'after a long start', engine: 'gigaam' });
+  assert.deepEqual(slowOutcome.fallbacks, []);
+});
+
+async function runChainWithStartBudget(engines: ResolvedSttEngine[]) {
+  const fallbacks: TranscribeFallbackInfo[] = [];
+  const result = await transcribeWithEngines(audioPath, engines, {
+    language: null,
+    retryDelaysMs: testRetryDelaysMs,
+    nonLastEngineStartBudgetMs: shortStartBudgetMs,
+    onFallback: (info) => { fallbacks.push(info); },
+  });
+  return { result, fallbacks };
+}

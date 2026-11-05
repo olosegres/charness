@@ -20,11 +20,14 @@ test('readiness and boot use the same chain: the check asks for an engine, boot 
   assert.match(botSource, /\n {2}sttRuntime\.init\(\);\n/);
 });
 
-test('a voice note warms the local engine up as it ARRIVES — after the no-engine gate, before the job is queued behind the topic\'s other voices', () => {
+test('a voice note warms the local engine up as it ARRIVES — after the no-engine gate, before the job is queued — and the job reuses that one ask', () => {
   const handler = botSource.slice(botSource.indexOf("bot.on(message('voice')"), botSource.indexOf('async function processVoiceJob'));
-  const warmUp = handler.indexOf('warmUpFirstEngine(sttSettings.engines)');
+  const warmUp = handler.indexOf('const warmedEndpoint = warmUpFirstEngine(sttSettings.engines,');
   assert.ok(warmUp > handler.indexOf('getNoEngineNoticeCode(sttSettings)'), 'after the gate that refuses a voice with no engine');
   assert.ok(warmUp < handler.indexOf('getVoiceTranscriptionQueue(key)'), 'before the voice job is queued');
+  assert.match(handler, /processVoiceJob\(key, fileId, durationSeconds, getTopicRequesterId\(ctx\.from\), warmedEndpoint, /, 'the job gets the warm-up\'s ask');
+  assert.match(botSource, /transcribeVoiceFile\(key, tempFile, durationSeconds, warmedEndpoint\)/, 'and hands it to the chain');
+  assert.match(botSource, /language: settings\.language,\n\s+warmedEndpoint,/, 'which uses it instead of asking the engine again');
 });
 
 test('the plain bot stops the sidecar in its graceful shutdown; a hot worker leaves it to its supervisor', () => {

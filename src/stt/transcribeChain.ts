@@ -35,22 +35,62 @@ export interface TranscribeWithEnginesOptions {
   retryDelaysMs?: readonly number[];
   onRetry?: (info: TranscribeRetryInfo) => void;
   onFallback?: (info: TranscribeFallbackInfo) => void;
+  /** The first engine's endpoint asked for when the voice arrived; used once, and only for that engine. */
+  warmedEndpoint?: WarmedEndpoint | null;
+  /** How long a non-last engine may take to produce its endpoint; defaults to {@link nonLastEngineStartBudgetMs}. */
+  nonLastEngineStartBudgetMs?: number;
 }
 
 /** @description The outcome, plus the name of the engine that produced it (the last one tried on failure). */
 export type TranscribeChainResult = TranscribeResult & { engine?: string };
 
 /**
- * @description Start the local engine now when a voice would reach it FIRST: its load (seconds on an idle box, tens of
- * seconds on a busy one) then overlaps the download and the other work of the voice job instead of following them.
- * Fire and forget — the voice's own `getEndpoint()` joins the same shared start and reports its outcome; a failure here
- * is that voice's to report, never an unhandled rejection. Any other first engine (a hosted one answers at once) starts
- * nothing: an engine a voice may never reach is not worth its memory.
+ * @description The endpoint of the first engine, asked for when the voice note ARRIVED: that voice's job hands it to
+ * {@link transcribeWithEngines}, which uses it instead of asking the engine again.
  */
-export function warmUpFirstEngine(engines: readonly ResolvedSttEngine[]): void {
+export interface WarmedEndpoint {
+  engineId: string;
+  endpoint: Promise<TranscriptionEndpoint>;
+}
+
+/**
+ * @description Start the local engine now when a voice would reach it FIRST: its load (seconds on an idle box, tens of
+ * seconds on a busy one) then overlaps the download and the other work of the voice job instead of following them. The
+ * outcome belongs to THAT voice ({@link WarmedEndpoint}): its job reuses it — also a failure, so one voice never starts
+ * the engine twice and never counts as two failed starts. A failure is logged here as one line, because the voice job
+ * may end (a failed download) without ever asking. Any other first engine (a hosted one answers at once) starts nothing:
+ * an engine a voice may never reach is not worth its memory.
+ */
+export function warmUpFirstEngine(
+  engines: readonly ResolvedSttEngine[],
+  logWarning: (line: string) => void,
+): WarmedEndpoint | null {
   const firstEngine = engines[0];
-  if (firstEngine?.kind !== 'gigaam') return;
-  firstEngine.getEndpoint().catch(() => {});
+  if (firstEngine?.kind !== 'gigaam') return null;
+  const endpoint = firstEngine.getEndpoint();
+  endpoint.catch((error) => logWarning(`[STT] warm-up start of ${firstEngine.name} failed: ${error instanceof Error ? error.message : 'unknown error'}`));
+  return { engineId: firstEngine.id, endpoint };
+}
+
+/**
+ * How long a voice waits for a NON-last engine to produce its endpoint before the next engine takes it: the local engine's
+ * start can take tens of seconds on a busy box, and a hosted engine behind it answers in a few. The start is NOT cancelled —
+ * it goes on, shared, so the next voice finds the engine warm. The LAST engine is waited for as long as its start lives.
+ */
+const nonLastEngineStartBudgetMs = 15_000;
+const millisecondsPerSecond = 1000;
+
+const startTooSlow = Symbol('startTooSlow');
+
+/** `pending`'s value, or {@link startTooSlow} once `budgetMs` has passed; `pending` itself runs on either way. */
+async function waitAtMost<Value>(pending: Promise<Value>, budgetMs: number): Promise<Value | typeof startTooSlow> {
+  let timer: NodeJS.Timeout | undefined;
+  const budget = new Promise<typeof startTooSlow>((resolve) => { timer = setTimeout(() => resolve(startTooSlow), budgetMs); });
+  try {
+    return await Promise.race([pending, budget]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** No retries: a non-last engine is tried once. */
@@ -64,7 +104,8 @@ export async function transcribeWithEngines(
   let lastFailure: TranscribeChainResult = { ok: false, error: 'no speech engine available' };
   for (const [index, engine] of engines.entries()) {
     const nextEngine = engines[index + 1];
-    const result = await transcribeWithEngine(filePath, engine, nextEngine === undefined, options);
+    const warmedEndpoint = index === 0 && options.warmedEndpoint?.engineId === engine.id ? options.warmedEndpoint.endpoint : null;
+    const result = await transcribeWithEngine(filePath, engine, nextEngine === undefined, options, warmedEndpoint);
     if (result.ok) return { ...result, engine: engine.name };
     lastFailure = { ...result, engine: engine.name };
     if (result.isDefinitive || nextEngine === undefined) break;
@@ -78,14 +119,27 @@ async function transcribeWithEngine(
   engine: ResolvedSttEngine,
   isLast: boolean,
   options: TranscribeWithEnginesOptions,
+  warmedEndpoint: Promise<TranscriptionEndpoint> | null,
 ): Promise<TranscribeResult> {
+  /** The warm-up answers the FIRST ask only: a retry asks the engine again (it may have come back on another port). */
+  let unusedWarmedEndpoint = warmedEndpoint;
+  const askEngine = (): Promise<TranscriptionEndpoint> => {
+    const pending = unusedWarmedEndpoint ?? engine.getEndpoint();
+    unusedWarmedEndpoint = null;
+    return pending;
+  };
   const getEndpoint = async (): Promise<TranscriptionEndpoint> => {
-    const endpoint = await engine.getEndpoint();
+    const endpoint = await askEngine();
     return options.language ? { ...endpoint, language: options.language } : endpoint;
   };
+  const startBudgetMs = options.nonLastEngineStartBudgetMs ?? nonLastEngineStartBudgetMs;
   let endpoint: TranscriptionEndpoint;
   try {
-    endpoint = await getEndpoint();
+    const asked = isLast ? await getEndpoint() : await waitAtMost(getEndpoint(), startBudgetMs);
+    if (asked === startTooSlow) {
+      return { ok: false, error: `${engine.name} was still starting after ${Math.round(startBudgetMs / millisecondsPerSecond)} s; it keeps starting for the next voice` };
+    }
+    endpoint = asked;
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'speech engine could not be started' };
   }

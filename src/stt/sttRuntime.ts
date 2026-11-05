@@ -1,9 +1,12 @@
 import { checkIsConfigFileOnContainerDisk, getConfigFileWriteBlock } from '../configDirFile';
 import {
   createEmptySttConfig,
+  defaultGigaamIdleMinutes,
   getSttReportLines,
   loadSttConfig,
   migrateLegacySttKeys,
+  migrateSttStoredDefaults,
+  previousGigaamIdleMinutes,
   resolveSttSettings,
   type ResolvedSttSettings,
   type SttConfigLoad,
@@ -109,6 +112,12 @@ export function createSttRuntime(deps: SttRuntimeDeps): SttRuntime {
         deps.logProblem(`[STT] could not write ${configPath} (${migration.error}): voice input stays off until it can be written`);
       }
       if (migration.status !== 'writeFailed') reportStorageProblem(configPath);
+      const defaultsMigration = migrateSttStoredDefaults(configPath);
+      if (defaultsMigration.status === 'migrated' && defaultsMigration.isIdleMinutesDropped) {
+        deps.logInfo(`[STT] ${configPath}: the local engine's idle exit was the old default (${previousGigaamIdleMinutes} min) that the bot had written itself; it now follows the current default (${defaultGigaamIdleMinutes} min) — pick ${previousGigaamIdleMinutes} again on the engine's card if you chose it yourself`);
+      } else if (defaultsMigration.status === 'writeFailed') {
+        deps.logProblem(`[STT] could not rewrite ${configPath} (${defaultsMigration.error}): the old idle default (${previousGigaamIdleMinutes} min) stays until it can be written`);
+      }
       resolveNow(true);
     },
   };

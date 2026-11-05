@@ -359,6 +359,11 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
     }
   }
 
+  /** What a voice reads when a start is still loading at its ceiling: what happened, and where to look. */
+  function createStartCeilingMessage(): string {
+    return `the local engine was still loading its model after ${Math.round(deps.startCeilingMs / 1000)} s (see sidecar.log)`;
+  }
+
   async function adoptRecorded(settings: SttGigaamSettings, owner: SttOwnerContext): Promise<SttSidecarEndpoint | null> {
     let record = readRecord();
     if (!record) {
@@ -377,26 +382,32 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
           return null;
         }
         if (waited.kind === 'listening') record = waited.record;
+        if (waited.kind === 'timeout') {
+          // ONE deadline per request: the start this request waited for ran out of its ceiling, so the request fails with
+          // that — a respawn here would give the same voice a second ceiling and begin the load from zero again.
+          deps.log(`[STT] sidecar pid ${record.pid} has been loading the model for more than ${Math.round(deps.startCeilingMs / 1000)} s; stopping it`);
+          await terminate(record, stopBudgetMs);
+          removeRecord();
+          noteSpawnFailure();
+          throw new Error(createStartCeilingMessage());
+        }
       }
-      if (record.port !== startingRecordPort) {
-        const endpoint = { port: record.port, token: record.token };
-        const [firstTimeoutMs, retryTimeoutMs] = deps.adoptHealthTimeoutsMs;
-        if ((await deps.fetchHealth(record.port, record.token, firstTimeoutMs)) ?? (await deps.fetchHealth(record.port, record.token, retryTimeoutMs))) {
-          unansweredAdoptions = 0;
-          return endpoint;
-        }
-        // Alive, ours, the right config, but silent: a sidecar busy with a long voice answers /health late and
-        // killing it would drop another topic's recognition. Use it; replace it only when it stays silent.
-        unansweredAdoptions++;
-        if (unansweredAdoptions < unansweredAdoptionLimit) {
-          deps.log(`[STT] sidecar pid ${record.pid} did not answer /health (${unansweredAdoptions}/${unansweredAdoptionLimit}); using it anyway`);
-          return endpoint;
-        }
-        deps.log(`[STT] sidecar pid ${record.pid} stayed silent ${unansweredAdoptionLimit} times in a row; replacing it`);
+      // Here the record names a listening process: a loading one was waited for above (it listens, is gone or timed out).
+      const endpoint = { port: record.port, token: record.token };
+      const [firstTimeoutMs, retryTimeoutMs] = deps.adoptHealthTimeoutsMs;
+      if ((await deps.fetchHealth(record.port, record.token, firstTimeoutMs)) ?? (await deps.fetchHealth(record.port, record.token, retryTimeoutMs))) {
         unansweredAdoptions = 0;
-      } else {
-        deps.log(`[STT] sidecar pid ${record.pid} has been loading the model for more than ${Math.round(deps.startCeilingMs / 1000)} s; replacing it`);
+        return endpoint;
       }
+      // Alive, ours, the right config, but silent: a sidecar busy with a long voice answers /health late and
+      // killing it would drop another topic's recognition. Use it; replace it only when it stays silent.
+      unansweredAdoptions++;
+      if (unansweredAdoptions < unansweredAdoptionLimit) {
+        deps.log(`[STT] sidecar pid ${record.pid} did not answer /health (${unansweredAdoptions}/${unansweredAdoptionLimit}); using it anyway`);
+        return endpoint;
+      }
+      deps.log(`[STT] sidecar pid ${record.pid} stayed silent ${unansweredAdoptionLimit} times in a row; replacing it`);
+      unansweredAdoptions = 0;
     }
     // Dead, another owner's or another config's — or wedged: it must go before a new one starts.
     if (isAlive) await terminate(record, stopBudgetMs);
@@ -477,7 +488,7 @@ export function createSttSidecarOwner(deps: SttSidecarOwnerDeps): SttSidecarOwne
       }
       const waitedMs = deps.nowMs() - startedAtMs;
       if (waitedMs >= deps.startCeilingMs) {
-        return fail(`the local engine was still loading its model after ${Math.round(deps.startCeilingMs / 1000)} s (see sidecar.log)`);
+        return fail(createStartCeilingMessage());
       }
       if (!isSlowStartLogged && waitedMs >= slowStartNoticeMs) {
         isSlowStartLogged = true;

@@ -287,7 +287,8 @@ function getSttConfigFilePath(): string {
 interface SttFileSlice {
   language?: string | null;
   engines: Array<{ id: string; kind: string; url?: string; apiKey?: string; isDisabled?: boolean }>;
-  gigaam?: { idleMinutes: number; workers: number };
+  /** Only what differs from the defaults is stored. */
+  gigaam?: { idleMinutes?: number; workers?: number };
 }
 
 function readSttFile(): SttFileSlice {
@@ -737,7 +738,8 @@ describe('Telegram commands end to end: built charness, fake Bot API', () => {
     await topic.waitForMessageText('the workers picker', screen, (text) => text.includes('How many pieces of a long voice note'));
     await tapButton(screen, 'stt_ws_g_4_');
     await topic.waitForMessageText('the card again', screen, (text) => text.includes('Status: ready'));
-    assert.equal(readSttFile().gigaam?.workers, 4);
+    assert.equal(readSttFile().gigaam?.workers, undefined, 'the default is not stored: it is not a choice');
+    assert.equal(readSttFile().gigaam?.idleMinutes, 15, 'while a 15 picked on purpose is, since 15 is no longer the default');
 
     // The main screen: the state rides on the row, no local control anywhere.
     await tapButton(screen, 'stt_bk_');

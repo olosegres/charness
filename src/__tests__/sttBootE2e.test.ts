@@ -205,6 +205,49 @@ describe('Voice settings at boot, end to end: built charness, fake Bot API', () 
     await topic.sendAndAwaitReply('/stt', 'No engines yet');
   });
 
+  it('an stt.json an earlier build wrote with the idle 15 it chose itself is rewritten once at boot: the engine follows the current 60, said once; a 15 picked on its card afterwards survives the next boot', async () => {
+    const instance = getLayout();
+    const sttConfigPath = getSttConfigFilePath(instance);
+    const migrationLine = 'the old default (15 min) that the bot had written itself';
+    await getCharness().stop();
+    writeInstalledMarker(instance.dataDir); // installed, so the boot starts no install of its own
+    fs.writeFileSync(sttConfigPath, `${JSON.stringify({ engines: [{ id: 'g', kind: 'gigaam' }], language: null, gigaam: { idleMinutes: 15, workers: 4 } }, null, 2)}\n`);
+
+    await bootCharness(instance);
+    const migrated = JSON.parse(fs.readFileSync(sttConfigPath, 'utf8')) as { schemaVersion?: number; gigaam?: unknown; engines: Array<{ kind: string }> };
+    assert.equal(migrated.schemaVersion, 2, 'the file is in the current layout');
+    assert.equal(migrated.gigaam, undefined, 'no idle value or workers count is stored: they are the defaults');
+    assert.deepEqual(migrated.engines.map((engine) => engine.kind), ['gigaam'], 'the engine list is untouched');
+    assert.equal(getCharness().output.split(migrationLine).length - 1, 1, 'said once');
+
+    const screen = await topic.sendAndAwaitReply('/stt', '🎙 Voice recognition');
+    const engineData = topic.getKeyboardData(screen).flat().find((data) => data.startsWith('stt_oe_g_'));
+    assert.ok(engineData, 'the local engine is listed');
+    await topic.tapAndAwaitAnswer(screen, engineData);
+    await topic.waitForMessageText('the engine card', screen, (text) => text.includes('GigaAM v3 — local, Russian only'));
+    assert.ok(topic.getKeyboardLabels(screen).flat().includes('⏱ Exit after idle: 60 min'), topic.getKeyboardLabels(screen).flat().join(' | '));
+
+    // A 15 picked now is a choice: it is stored, and the next boot leaves it alone.
+    const idleData = topic.getKeyboardData(screen).flat().find((data) => data.startsWith('stt_im_g_'));
+    assert.ok(idleData);
+    await topic.tapAndAwaitAnswer(screen, idleData);
+    await topic.waitForMessageText('the idle picker', screen, (text) => text.includes('How long may the local engine sit idle'));
+    const fifteenData = topic.getKeyboardData(screen).flat().find((data) => data.startsWith('stt_is_g_15_'));
+    assert.ok(fifteenData);
+    await topic.tapAndAwaitAnswer(screen, fifteenData);
+    await topic.waitForMessageText('the card again', screen, (text) => text.includes('Status: ready'));
+    assert.deepEqual((JSON.parse(fs.readFileSync(sttConfigPath, 'utf8')) as { gigaam?: unknown }).gigaam, { idleMinutes: 15 });
+
+    await getCharness().stop();
+    await bootCharness(instance);
+    assert.deepEqual((JSON.parse(fs.readFileSync(sttConfigPath, 'utf8')) as { gigaam?: unknown }).gigaam, { idleMinutes: 15 }, 'the chosen 15 survived the boot');
+    assert.equal(getCharness().output.split(migrationLine).length - 1, 1, 'and the migration did not run again');
+
+    // Back to the empty list and no install, the state the next steps start from.
+    fs.writeFileSync(sttConfigPath, `${JSON.stringify({ engines: [] }, null, 2)}\n`);
+    fs.rmSync(getSttPaths(instance.dataDir).markerFile, { force: true });
+  });
+
   it('an install that was still running when the bot reloaded: the same message follows it and, when it ends, the engine joins the list FIRST', async () => {
     const instance = getLayout();
     const installMessage = await topic.sendAndAwaitReply('/stt', 'No engines yet');

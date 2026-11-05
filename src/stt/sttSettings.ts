@@ -56,6 +56,16 @@ export const defaultGigaamIdleMinutes = 60;
 export const defaultGigaamWorkers = 4;
 /** Intra-op threads per worker; `workers × threads` should not exceed the CPU count. */
 export const defaultGigaamThreads = 2;
+/**
+ * The old default, which the bot itself wrote into every `stt.json` it saved (it wrote the whole `gigaam` block). A stored
+ * value equal to it is not a choice: the one-time migration {@link migrateSttStoredDefaults} drops it.
+ */
+export const previousGigaamIdleMinutes = 15;
+/**
+ * The version of the file's layout, written by every save. 2: the `gigaam` block holds only the values that differ from the
+ * defaults, and the old idle default (15 min) was dropped once. A file without it was written by an earlier build.
+ */
+const sttConfigSchemaVersion = 2;
 
 /** Voice length assumed for the timeout when Telegram did not report one. */
 const unknownVoiceDurationSeconds = 60;
@@ -131,6 +141,7 @@ const gigaamSchema = z.strictObject({
 });
 
 const rawConfigSchema = z.strictObject({
+  schemaVersion: z.number().int().min(1).optional(),
   engines: z.array(engineSchema).max(sttEngineLimit).optional(),
   language: z.string().regex(languageRe, 'must be a two-letter ISO-639-1 code like ru').nullable().optional(),
   gigaam: gigaamSchema.optional(),
@@ -241,15 +252,73 @@ export const loadSttConfig = sttConfigLoader.load;
 export const resetSttConfigCache = sttConfigLoader.resetCache;
 
 /**
+ * @description `config` as it is STORED: the `gigaam` block holds only what differs from the defaults (a default written to
+ * the file looks like a choice, and a later change of the default would never reach the setups that "chose" it), and the
+ * file carries its layout version.
+ */
+function createStoredConfig(config: SttConfigFile): RawSttConfig {
+  const { idleMinutes, workers, threads } = config.gigaam;
+  const gigaam: Partial<SttGigaamSettings> = {
+    ...(idleMinutes !== defaultGigaamIdleMinutes ? { idleMinutes } : {}),
+    ...(workers !== defaultGigaamWorkers ? { workers } : {}),
+    ...(threads !== undefined ? { threads } : {}),
+  };
+  return {
+    schemaVersion: sttConfigSchemaVersion,
+    engines: config.engines,
+    language: config.language,
+    ...(Object.keys(gigaam).length > 0 ? { gigaam } : {}),
+  };
+}
+
+/**
  * @description Write `config` to `filePath`: validated first (a caller that builds
  * an invalid file has a bug), then written mode 0600 through a temp file and a
- * rename, so a reader never sees half a file.
+ * rename, so a reader never sees half a file. Only the values that differ from the
+ * defaults are stored ({@link createStoredConfig}).
  */
 export function saveSttConfig(filePath: string, config: SttConfigFile): void {
   const normalised = normaliseSttConfig(config);
   const validation = validateSttConfig(normalised);
   if (!validation.ok) throw new Error(`refusing to write an invalid stt.json: ${validation.errors.join('; ')}`);
-  writeJsonFileAtomically(filePath, normalised, configFileMode);
+  writeJsonFileAtomically(filePath, createStoredConfig(normalised), configFileMode);
+}
+
+/** @name SttStoredDefaultsMigrationResult @description What {@link migrateSttStoredDefaults} did. */
+export type SttStoredDefaultsMigrationResult =
+  | { status: 'notNeeded' }
+  | { status: 'migrated'; isIdleMinutesDropped: boolean }
+  | { status: 'writeFailed'; error: string };
+
+/**
+ * @description The ONE-TIME migration of the values the bot itself used to write: an `stt.json` without a layout version
+ * was saved by an earlier build, which stored the whole `gigaam` block — including `idleMinutes: 15`, the default of that
+ * time, which is not anyone's choice and would hold the local engine to 15 minutes forever. Rewrites the file once, in the
+ * current layout (defaults not stored, version stamped); a stored 15 is dropped, so the engine follows the current
+ * default. Every later save carries the version, so a 15 picked afterwards is a choice and stays. A missing, unreadable
+ * or invalid file is left alone.
+ */
+export function migrateSttStoredDefaults(filePath: string): SttStoredDefaultsMigrationResult {
+  let parsedJson: object;
+  try {
+    parsedJson = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return { status: 'notNeeded' };
+  }
+  const parsed = rawConfigSchema.safeParse(parsedJson);
+  if (!parsed.success || (parsed.data.schemaVersion ?? 0) >= sttConfigSchemaVersion) return { status: 'notNeeded' };
+  const validation = validateSttConfig(parsedJson);
+  if (!validation.ok) return { status: 'notNeeded' };
+  const isIdleMinutesDropped = validation.config.gigaam.idleMinutes === previousGigaamIdleMinutes;
+  const migrated: SttConfigFile = isIdleMinutesDropped
+    ? { ...validation.config, gigaam: { ...validation.config.gigaam, idleMinutes: defaultGigaamIdleMinutes } }
+    : validation.config;
+  try {
+    saveSttConfig(filePath, migrated);
+  } catch (e) {
+    return { status: 'writeFailed', error: getCaughtErrnoCode(e) };
+  }
+  return { status: 'migrated', isIdleMinutesDropped };
 }
 
 /** The env variables the one-time migration reads: the only place that does. */

@@ -6,7 +6,7 @@ gets. User-facing setup is in [`SETUP.md` § Voice input](../../SETUP.md#voice-i
 | File | Role |
 |------|------|
 | `sttSettings.ts` | `stt.json`: types, strict validation, the load and save over the shared [`configDirFile.ts`](../configDirFile.ts), the one-time env-key migration, the resolver (settings → the chain a voice walks), the timeout math, the `[STT]` log lines |
-| `transcribeChain.ts` | `transcribeWithEngines`: walk the chain for one voice file; `warmUpFirstEngine`: start the local engine when a voice would reach it first |
+| `transcribeChain.ts` | `transcribeWithEngines`: walk the chain for one voice file (a non-last engine gets a start budget); `warmUpFirstEngine`: start the local engine when a voice would reach it first, and hand that ask to the voice |
 | `sttInstall.ts` | The local engine's install: plan (uv / python3 venv), idempotent run with a lock and progress, `isGigaamInstalled` / `isGigaamInstalling`, remove |
 | `sttInstallEntry.ts` | The detached install job the bot launches (not a user command): `node dist/stt/sttInstallEntry.js <dataDir> [--force]` |
 | `sttSidecarOwner.ts` | The sidecar's lifecycle: `ensure` (adopt or spawn on demand, one shared attempt), the record, the spawn-storm guard, `stop`, the boot cleanup, the owner context |
@@ -40,6 +40,17 @@ keys again.
   good** settings (`source: 'lastGood'`); if the file was never valid in this process there are none
   (`source: 'invalid'`) and the voice gate answers `voice.config_invalid`.
 - **Workers** are clamped to {1, 2, 4, 8} (nearest, a tie goes to the smaller); `threads` is a hand-edit-only knob.
+- **Only what differs from the defaults is stored** (`createStoredConfig`): the `gigaam` block carries `idleMinutes` /
+  `workers` / `threads` only when they are not the defaults (60 min, 4, absent), and is left out when empty. A default
+  written to the file looks like a choice and would keep the setup on an old default for good; absent, it follows the
+  current default. Every save stamps `schemaVersion` (2).
+- **One-time migration of the old default** (`migrateSttStoredDefaults`, boot, `sttRuntime.init`): a file WITHOUT
+  `schemaVersion` was saved by an earlier build, which wrote the whole `gigaam` block — `idleMinutes: 15`, then the default
+  and not anyone's choice. It is rewritten once in the current layout (defaults not stored, version stamped; a stored 15 is
+  dropped so the engine follows the current default, said once in the log; any other stored value is kept). Every later save
+  carries the version, so a 15 picked afterwards is a choice and stays; a missing, unreadable or invalid file is left alone.
+  The cost: an older build cannot read a file that carries `schemaVersion` (unknown keys are refused), so a downgrade needs
+  the key removed by hand.
 - **Migration** (`migrateLegacySttKeys`, boot only): no `stt.json` + `GROQ_API_KEY` / `OPENAI_API_KEY` in the
   environment → write the file with those engines (Groq `q1` first, then OpenAI `o1`). It is the ONLY reader of
   those variables; an existing file is never overwritten; the `[deprecated]` line is printed once per process.
@@ -55,13 +66,25 @@ there and may reject.
 
 `transcribeWithEngines` per engine: `getEndpoint()` (a rejection is that engine's failure), then
 `transcribeAudio`. `getEndpoint()` of the local engine can take long (it WAITS for a process that is still loading its
-model, § Lifecycle) and is outside the engine's request timeout, which starts after it.
+model, § Lifecycle) and is outside the engine's request timeout, which starts after it. How long a voice waits for it
+depends on the engine's place in the chain:
+
+- the **last** engine is waited for as long as its start lives (up to the start ceiling, 120 s) — nothing is left to fall
+  back to;
+- a **non-last** engine gets a **start budget of 15 s** (`nonLastEngineStartBudgetMs`): a start still going after it makes
+  the voice move to the next engine (`[transcribe] gigaam failed (gigaam was still starting after 15 s; it keeps starting
+  for the next voice); falling back to …`). The start is NOT cancelled — it is the shared one, so the next voice (and its
+  warm-up) finds the engine loaded, or still loading, instead of beginning from zero.
 
 **Warm-up.** The moment a voice note ARRIVES (the voice handler, after the gate, before the download and the topic's voice
-queue) `warmUpFirstEngine` asks the local engine for its endpoint when it is the FIRST engine of the chain — fire and
-forget: the voice's own `getEndpoint()` later joins the same shared start (or adopts the process) and reports the outcome.
-A hosted engine in front starts nothing: the local one may never be reached. Nothing else shows the user a «transcribing…»
-state: there is no such message or typing action in the voice flow (the 🎤 echo is the first sign), and the warm-up adds none.
+queue) `warmUpFirstEngine` asks the local engine for its endpoint when it is the FIRST engine of the chain, and returns that
+ask (`WarmedEndpoint`, the engine's id + the promise). The voice's job hands it to `transcribeWithEngines`, which uses it
+INSTEAD of asking the engine again — also when it failed fast: a voice starts the engine once, so it can never count as two
+failed starts for the spawn-storm guard (a retry of the last engine asks afresh; an ask of another engine than the warmed one
+is ignored). A failed warm-up leaves one line, `[STT] warm-up start of gigaam failed: <reason>`, because the job may end
+(a failed download) without ever asking. A hosted engine in front starts nothing: the local one may never be reached.
+Nothing else shows the user a «transcribing…» state: there is no such message or typing action in the voice flow (the 🎤 echo
+is the first sign), and the warm-up adds none.
 
 - A **non-last** engine is tried **once** (`retryDelaysMs: []`); any failure — refused connection, timeout, 4xx,
   5xx, a rejected endpoint — moves to the next at once, logged only (`[transcribe] <engine> failed (…); falling
@@ -222,7 +245,10 @@ onnxruntime keeps, so it is resampled in 30 s windows (≈ 66 MB). Silero VAD it
    owner, and the config hash matches. A record with `port: 0` is a start still loading its model: wait for the port
    instead of starting a second sidecar — for as long as the process LIVES, up to the **start ceiling** (120 s, counted from
    the process's own `startedAt`, so a worker that arrives late does not give a wedged load a second ceiling); a start that
-   dies meanwhile is replaced at once, one still not listening at the ceiling is stopped and replaced. `GET /health` is asked with the recorded token (1 s, then once more patiently,
+   dies meanwhile is replaced at once, one still not listening at its ceiling is stopped and the request FAILS with the
+   ceiling text — **one deadline per request**: no respawn for the same voice (it would get a second ceiling and begin the
+   load from zero), so a voice never waits longer than 2 minutes for a loading process; the stop counts as a failed start for
+   the spawn-storm guard, and the NEXT voice starts a fresh process. `GET /health` is asked with the recorded token (1 s, then once more patiently,
    5 s): a sidecar recognising a long voice with every core busy answers late, and killing it would drop another topic's
    in-flight recognition — so a SILENT live matching process is used anyway, and replaced only when it stays silent three
    `ensure`s in a row (it is wedged). `/stt` shows such a process as «running, busy», not «not running».

@@ -756,18 +756,21 @@ test('two starts at once: the later one finds the record claimed, leaves, and it
   assert.equal(fs.existsSync(getRecordPath()), false);
 });
 
-test('a start that claimed the record and never listens is replaced after the wait; one that dies during the wait is replaced at once', { timeout: 60_000 }, async () => {
+test('a start that claimed the record and never listens fails the voice at its ceiling — stopped, no respawn in the same request; the next voice starts afresh. One that dies during the wait is replaced at once', { timeout: 60_000 }, async () => {
   const wedged = await startEarlierSidecar(['--never-ready']);
   await getCharnessWait(() => fs.existsSync(getRecordPath()), 10_000, 'the wedged sidecar to claim its record');
-  // The one ready wait covers both the wedged start (waited out, then replaced) and the replacement, which must come
-  // up: it gets the time a loaded box needs to spawn a process (600 ms here failed under the parallel suite).
-  const owner = createSttSidecarOwner(createDeps({ startCeilingMs: startedCeilingMs }));
-  const endpoint = await owner.ensure(defaultSettings);
-  assert.equal(startCalls.length, 1, 'a replacement was started');
+  const owner = createSttSidecarOwner(createDeps({ startCeilingMs: neverReadyCeilingMs }));
+  await assert.rejects(() => owner.ensure(defaultSettings), /still loading its model after/);
+  assert.equal(startCalls.length, 0, 'one deadline per request: nothing was started for the same voice');
   assert.ok(await waitUntilGone(wedged, 3_000), 'the wedged one was stopped');
-  assert.equal(readRecord().port, endpoint.port);
+  assert.equal(fs.existsSync(getRecordPath()), false);
   assert.ok(logLines.some((line) => line.includes('has been loading the model for more than')), logLines.join('\n'));
-  await owner.stop();
+
+  const next = createSttSidecarOwner(createDeps({ startCeilingMs: startedCeilingMs }));
+  const endpoint = await next.ensure(defaultSettings);
+  assert.equal(startCalls.length, 1, 'the next voice starts a fresh one');
+  assert.equal(readRecord().port, endpoint.port);
+  await next.stop();
 
   const dying = await startEarlierSidecar(['--never-ready']);
   await getCharnessWait(() => fs.existsSync(getRecordPath()), 10_000, 'the dying sidecar to claim its record');
@@ -816,6 +819,8 @@ function createFakeWorld(overrides: Partial<SttSidecarOwnerDeps> = {}) {
   const scheduled: Array<{ atMs: number; action: () => void }> = [];
   const worldLogLines: string[] = [];
   const state = { loadMsOfNextStart: fakeDefaultLoadMs };
+  let holdAtMs: number | null = null;
+  let holdUntilReleased: Promise<void> = Promise.resolve();
 
   function writeRecord(sidecar: FakeLoadingSidecar, port: number): void {
     fs.writeFileSync(sidecar.recordFile, JSON.stringify({
@@ -830,9 +835,9 @@ function createFakeWorld(overrides: Partial<SttSidecarOwnerDeps> = {}) {
     }));
   }
 
-  function startSidecar(sidecar: Omit<FakeLoadingSidecar, 'pid' | 'startToken' | 'startedAt'>, startedAgoMs: number): FakeLoadingSidecar {
+  function startSidecar(sidecar: Omit<FakeLoadingSidecar, 'pid' | 'startToken' | 'startedAt'>, startedAgoMs: number, startedAt?: string): FakeLoadingSidecar {
     const pid = nextPid++;
-    const started: FakeLoadingSidecar = { ...sidecar, pid, startToken: `fake-start-${pid}`, startedAt: new Date(nowMs - startedAgoMs).toISOString() };
+    const started: FakeLoadingSidecar = { ...sidecar, pid, startToken: `fake-start-${pid}`, startedAt: startedAt ?? new Date(nowMs - startedAgoMs).toISOString() };
     alive.add(pid);
     fs.mkdirSync(path.dirname(started.recordFile), { recursive: true });
     writeRecord(started, 0); // claimed before the model loads, like the real one
@@ -883,6 +888,8 @@ function createFakeWorld(overrides: Partial<SttSidecarOwnerDeps> = {}) {
     sleep: async (ms) => {
       nowMs += ms;
       runDue();
+      // A start HELD at a moment of its load: the owner's wait stops there until the test lets it go (wall time passes).
+      if (holdAtMs !== null && nowMs >= holdAtMs) await holdUntilReleased;
     },
     startCeilingMs: fakeCeilingMs,
     log: (line) => worldLogLines.push(line),
@@ -900,14 +907,24 @@ function createFakeWorld(overrides: Partial<SttSidecarOwnerDeps> = {}) {
     /** Run `action` when `afterMs` of fake time have passed (inside the owner's next sleep). */
     schedule: (afterMs: number, action: () => void) => { scheduled.push({ atMs: nowMs + afterMs, action }); },
     killAll: () => alive.clear(),
-    /** A sidecar an EARLIER worker started: recorded as loading, `startedAgoMs` ago, ready `loadMs` from now. */
-    addEarlierSidecar: (loadMs: number, startedAgoMs = 0): FakeLoadingSidecar => startSidecar({
+    /** The owner's sleeps stop once `afterMs` of fake time have passed, until `release()` — the start is alive and loading meanwhile. */
+    hold: (afterMs: number): { release: () => void } => {
+      holdAtMs = nowMs + afterMs;
+      let release: () => void = () => {};
+      holdUntilReleased = new Promise<void>((resolve) => { release = resolve; });
+      return { release: () => { holdAtMs = null; release(); } };
+    },
+    /**
+     * A sidecar an EARLIER worker started: recorded as loading, `startedAgoMs` ago (or with the given `startedAt` text),
+     * ready `loadMs` from now.
+     */
+    addEarlierSidecar: (loadMs: number, startedAgoMs = 0, startedAt?: string): FakeLoadingSidecar => startSidecar({
       token: 'earlier-token',
       recordFile: getRecordPath(),
       readyFile: null,
       configHash: getSttSidecarConfigHash(defaultSettings),
       readyAtMs: nowMs + loadMs,
-    }, startedAgoMs),
+    }, startedAgoMs, startedAt),
   };
 }
 
@@ -959,19 +976,70 @@ test('a voice that arrives while the sidecar still loads shares that start — n
   assert.deepEqual(world.signals, []);
 });
 
-test('a warm-up asks for the endpoint first and the voice\'s own request joins it: the model is loaded once', async () => {
+test('a warm-up and the voice\'s own request are ONE ask: the model is loaded once, and the voice gets what the warm-up got', async () => {
   const world = createFakeWorld();
   world.state.loadMsOfNextStart = 30_000;
   const owner = createSttSidecarOwner(world.deps);
   const asked: string[] = [];
   const engine = createLocalEngine(owner, () => asked.push('ask'));
 
-  warmUpFirstEngine([engine]);
-  const voiceEndpoint = await engine.getEndpoint();
+  const warmed = warmUpFirstEngine([engine], () => {});
+  assert.ok(warmed);
+  // The voice's job gets there while the model still loads; nothing listens on the fake port, so what it does with the
+  // endpoint is not the point — how often the engine was asked is.
+  await transcribeWithEngines(writeAudioFile(), [engine], { language: null, warmedEndpoint: warmed, retryDelaysMs: [] });
 
-  assert.equal(asked.length, 2, 'the warm-up and the voice each asked');
-  assert.equal(world.getSpawnCount(), 1, 'but there is one start');
-  assert.equal(voiceEndpoint.url, `http://127.0.0.1:${readRecord().port}/v1/audio/transcriptions`);
+  assert.deepEqual(asked, ['ask'], 'the engine was asked once for this voice');
+  assert.equal(world.getSpawnCount(), 1);
+  assert.equal((await warmed.endpoint).url, `http://127.0.0.1:${readRecord().port}/v1/audio/transcriptions`, 'and the voice used the warm-up\'s endpoint');
+});
+
+test('a start that FAILS FAST is one failed start per voice, not two: the guard trips on the third voice, not the second', async () => {
+  let starts = 0;
+  const world = createFakeWorld({ startProcess: async () => { starts++; throw new Error('spawn ENOENT'); } });
+  const owner = createSttSidecarOwner(world.deps);
+  const engine = createLocalEngine(owner);
+
+  for (const voice of [1, 2, 3]) {
+    const warmed = warmUpFirstEngine([engine], () => {});
+    await sleep(0); // the warm-up has already failed when this voice's job gets to the engine
+    const result = await transcribeWithEngines(writeAudioFile(), [engine], { language: null, warmedEndpoint: warmed });
+    assert.deepEqual(result, { ok: false, error: 'the local engine could not be started: spawn ENOENT', engine: 'gigaam' });
+    assert.equal(starts, voice, `voice ${voice}: one start attempt, however fast it failed`);
+    assert.equal(owner.checkIsUnhealthy(), voice === 3, `voice ${voice}`);
+  }
+});
+
+test('a voice whose first engine is still starting after its budget moves on to the next engine — and the start GOES ON: it is alive, and the next voice joins it', async () => {
+  const world = createFakeWorld();
+  world.state.loadMsOfNextStart = 40_000;
+  const hold = world.hold(10_000);
+  const owner = createSttSidecarOwner(world.deps);
+  const stub = await startStubEngine('from the hosted engine');
+  try {
+    const fallbacks: Array<{ from: string; to: string; error: string }> = [];
+    const result = await transcribeWithEngines(writeAudioFile(), [createLocalEngine(owner), stub.engine], {
+      language: null,
+      nonLastEngineStartBudgetMs: 50,
+      onFallback: (info) => fallbacks.push(info),
+    });
+
+    assert.deepEqual(result, { ok: true, text: 'from the hosted engine', engine: 'url:stub' });
+    assert.equal(fallbacks.length, 1);
+    assert.match(fallbacks[0].error, /^gigaam was still starting after \d+ s/);
+    assert.equal(world.getAliveCount(), 1, 'the loading process was not stopped');
+    assert.deepEqual(world.signals, []);
+
+    const nextVoice = createLocalEngine(owner).getEndpoint(); // the next voice, while the load is still going
+    hold.release();
+    const endpoint = await nextVoice;
+    assert.equal(world.getSpawnCount(), 1, 'it joined the same start');
+    assert.equal(endpoint.url, `http://127.0.0.1:${readRecord().port}/v1/audio/transcriptions`);
+    assert.deepEqual(world.signals, []);
+  } finally {
+    hold.release();
+    await stub.close();
+  }
 });
 
 test('a reloaded worker finds the loading sidecar in its record and waits for it — no second process', async () => {
@@ -988,18 +1056,51 @@ test('a reloaded worker finds the loading sidecar in its record and waits for it
   assert.ok(world.getElapsedMs() >= 50_000 && world.getElapsedMs() < 51_000, `waited ${world.getElapsedMs()} ms`);
 });
 
-test('the ceiling counts from the process\'s OWN start: one that has loaded for 100 s gets 20 s more, not a fresh 120', async () => {
+test('ONE deadline per request: a loading process this request adopted hits the ceiling counted from ITS start — the voice fails with the ceiling text and nothing is respawned for it', async () => {
   const world = createFakeWorld();
   const wedged = world.addEarlierSidecar(fakeLoadNeverMs, 100_000);
   const owner = createSttSidecarOwner(world.deps);
 
-  const endpoint = await owner.ensure(defaultSettings);
+  await assert.rejects(() => owner.ensure(defaultSettings), /^Error: the local engine was still loading its model after 120 s \(see sidecar\.log\)$/);
 
-  assert.ok(world.getElapsedMs() >= 20_000 && world.getElapsedMs() < 25_000, `waited ${world.getElapsedMs()} ms (20 s of the ceiling + the replacement's own load)`);
+  assert.ok(world.getElapsedMs() >= 20_000 && world.getElapsedMs() < 21_000, `waited ${world.getElapsedMs()} ms (the 20 s the process had left, not a fresh 120)`);
+  assert.equal(world.getSpawnCount(), 0, 'no respawn within the same request');
   assert.ok(world.signals.some((entry) => entry.pid === wedged.pid), 'the wedged one was stopped');
-  assert.equal(world.getSpawnCount(), 1, 'and replaced');
+  assert.equal(fs.existsSync(getRecordPath()), false);
+  assert.ok(world.logLines.some((line) => line.includes('has been loading the model for more than 120 s; stopping it')), world.logLines.join('\n'));
+
+  const endpoint = await owner.ensure(defaultSettings); // the NEXT voice starts afresh
+  assert.equal(world.getSpawnCount(), 1);
   assert.equal(readRecord().port, endpoint.port);
-  assert.ok(world.logLines.some((line) => line.includes('has been loading the model for more than 120 s; replacing it')), world.logLines.join('\n'));
+});
+
+test('a start killed at its ceiling by an adopting request counts toward the spawn-storm guard, like one killed by the spawning request', async () => {
+  const world = createFakeWorld();
+  const owner = createSttSidecarOwner(world.deps);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    assert.equal(owner.checkIsUnhealthy(), false, `before kill ${attempt}`);
+    world.addEarlierSidecar(fakeLoadNeverMs, fakeCeilingMs + 1_000); // already past its ceiling when found
+    await assert.rejects(() => owner.ensure(defaultSettings), /still loading its model after 120 s/);
+  }
+  assert.equal(owner.checkIsUnhealthy(), true);
+  assert.equal(world.getSpawnCount(), 0);
+  assert.ok(world.logLines.some((line) => /^\[STT\] gigaam marked unhealthy until/.test(line)), world.logLines.join('\n'));
+});
+
+test('a start stamp that lies in the FUTURE or cannot be read counts as "now": the loading process is waited for a full ceiling from now — not forever, not zero', async () => {
+  for (const [description, startedAgoMs, startedAt] of [
+    ['a start stamp an hour in the future', -60 * 60 * 1000, undefined],
+    ['a start stamp that is not a date', 0, 'not-a-date'],
+  ] as const) {
+    const world = createFakeWorld();
+    world.addEarlierSidecar(fakeLoadNeverMs, startedAgoMs, startedAt);
+    const owner = createSttSidecarOwner(world.deps);
+
+    await assert.rejects(() => owner.ensure(defaultSettings), /still loading its model after 120 s/, description);
+
+    assert.ok(world.getElapsedMs() >= fakeCeilingMs && world.getElapsedMs() < fakeCeilingMs + 1_000, `${description}: waited ${world.getElapsedMs()} ms`);
+    assert.equal(world.getSpawnCount(), 0, description);
+  }
 });
 
 test('a process that dies while it loads fails the voice at once — not at the ceiling — and cleans up', async () => {
