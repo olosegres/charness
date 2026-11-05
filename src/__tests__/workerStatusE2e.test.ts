@@ -13,7 +13,7 @@
  *   → `/verbosity answers`: the line is deleted and two whole check runs (read from the run ledger) post nothing
  *   → `/verbosity stream`: a line returns
  *   → «Leave current dir» on the `/bind` picker: the line is deleted, the watch is parked (paused for «unbound»), and no check
- *     run and no line follows; the folder bound again: the watch resumes and a line returns, timed from the last one
+ *     run and no line follows; the folder bound again: the watch resumes and a line returns at the next due run
  *   → the worker is killed: the line is deleted, the alert is pinned silently, the agent is woken (`cancel-watch`)
  *   → `schedule_cancel`: the alert is unpinned, the watch is gone, and no status line of the whole flow is left in the topic.
  *
@@ -373,7 +373,7 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
 
   let resumedLine: FakeTelegramMessage;
 
-  it('the folder bound again: the watch resumes and a line returns at the next due run, timed from the last one', async () => {
+  it('the folder bound again: the watch resumes and a line returns at the next due run', async () => {
     await topic.sendAndAwaitReply(`/bind ${topicFolder}`, `Bound to \`${topicFolder}\``);
     resumedLine = await waitForNewStatusLine('a status line after the topic is bound again');
     assert.match(resumedLine.text, new RegExp(`^${statusLinePrefix}\\d+ min · now: bash: Lint the sources$`), resumedLine.text);
