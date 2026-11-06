@@ -14,6 +14,7 @@ import {
   describeSchedule,
   describePhrasedSchedule,
   getCronInterval,
+  checkIsFinalRun,
   minFireIntervalMs,
   catchUpToleranceMs,
 } from '../scheduler/recurrence';
@@ -240,3 +241,13 @@ describe('describePhrasedSchedule', () => {
     assert.equal(describeSchedule({ kind: 'cron', cronExpr: '0 9,18 * * *', remainingRuns: 2 }), 'cron 0 9,18 * * * (2 runs left)', 'the agent-facing text never gives up');
   });
 });
+
+describe('checkIsFinalRun', () => {
+  it('a one-shot and the last run of an N-times cron are final; a plain cron and one with runs to spare are not', () => {
+    assert.equal(checkIsFinalRun({ kind: 'once', onceAtIso: '2026-11-05T10:00:00.000Z' }), true);
+    assert.equal(checkIsFinalRun({ kind: 'cron', cronExpr: '*/5 * * * *', remainingRuns: 1 }), true);
+    assert.equal(checkIsFinalRun({ kind: 'cron', cronExpr: '*/5 * * * *', remainingRuns: 2 }), false);
+    assert.equal(checkIsFinalRun({ kind: 'cron', cronExpr: '*/5 * * * *' }), false);
+  });
+});
+

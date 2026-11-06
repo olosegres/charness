@@ -44,7 +44,7 @@ export interface BotCore {
    * Send into the topic (paced, tracked for `/clear_messages`); the sent message id, or `null` when the send failed.
    * `isSecret`: the text is a credential, the output trace records its length and nothing else.
    */
-  replyToThread: (key: SessionKey, text: string, extra?: object, options?: { unpaced?: boolean; isSecret?: boolean }) => Promise<number | null>;
+  replyToThread: (key: SessionKey, text: string, extra?: object, options?: { unpaced?: boolean; isSecret?: boolean; plainFallbackText?: string }) => Promise<number | null>;
   /** Edit a message of the topic in place; `false` when the edit failed. */
   editThreadMessage: (key: SessionKey, messageId: number, text: string, extra?: object) => Promise<boolean>;
   /** The same edit, telling a message that is gone from one that failed to change — for a caller that must not retry a message nobody can edit any more. */

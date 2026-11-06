@@ -13,7 +13,6 @@ import {
   buildCheckStatusLine,
   checkIsCheckStatusDue,
   checkIsCheckStatusShown,
-  checkIsFinalCheckRun,
   checkStatusActivityMaxChars,
   checkStatusSlackMs,
   defaultCheckStatusEveryMinutes,
@@ -70,13 +69,6 @@ test('due: the slack is a minute at most, and a share of a short test interval â
   // A short window: one minute after the last line is NOT due (a full minute of slack would make every run due).
   assert.equal(checkIsCheckStatusDue({ sinceMs, nowMs: sinceMs + minuteMs, intervalMs: twoMinutesMs }), false);
   assert.equal(checkIsCheckStatusDue({ sinceMs, nowMs: sinceMs + twoMinutesMs, intervalMs: twoMinutesMs }), true);
-});
-
-test('final run: a once job and the last run of an N-times cron, not a plain or longer cron', () => {
-  assert.equal(checkIsFinalCheckRun({ spec: { kind: 'once', onceAtIso: '2026-11-05T10:00:00.000Z' } }), true);
-  assert.equal(checkIsFinalCheckRun({ spec: { kind: 'cron', cronExpr: '*/5 * * * *', remainingRuns: 1 } }), true);
-  assert.equal(checkIsFinalCheckRun({ spec: { kind: 'cron', cronExpr: '*/5 * * * *', remainingRuns: 2 } }), false);
-  assert.equal(checkIsFinalCheckRun({ spec: { kind: 'cron', cronExpr: '*/5 * * * *' } }), false);
 });
 
 test('gate: the stream views of a Telegram conversation show lines; answers-only and a tracker conversation do not', () => {

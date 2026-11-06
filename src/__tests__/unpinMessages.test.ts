@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { unpinMessagesReportingRetryable } from '../connectors/telegram/unpinMessages';
+import { RateLimitedError } from '../rateLimiter';
 
 /** An error the way Telegraf raises a Bot API answer. */
 function createBotApiError(errorCode: number, description: string): Error & { response: { error_code: number; description: string } } {
@@ -49,6 +50,26 @@ test('a failure that may pass is reported back: no answer at all, a rate limit, 
     4: createBotApiError(400, 'Bad Request: message to unpin not found'),
   });
   assert.deepEqual(await unpinMessagesReportingRetryable([1, 2, 3, 4, 5], unpinOne, () => {}), [1, 2, 3], '4 is final and 5 went through');
+});
+
+test('an error that is neither the network\'s nor a Bot API answer — a bug of ours — is final: it would come back at every run for ever', async () => {
+  const { unpinOne } = createUnpin({
+    1: new TypeError('Cannot read properties of undefined (reading \'chatId\')'),
+    2: new Error('boom'),
+    3: Object.assign(new Error('bad argument'), { code: 'ERR_INVALID_ARG_TYPE' }),
+  });
+  assert.deepEqual(await unpinMessagesReportingRetryable([1, 2, 3], unpinOne, () => {}), [], 'forgotten, not retried');
+});
+
+test('the network\'s errors are retried, whichever form they take: FetchError, a socket or DNS code, a timeout; so is the pacer\'s exhausted rate-limit wait', async () => {
+  const { unpinOne } = createUnpin({
+    1: Object.assign(new Error('request to https://api.telegram.org/bot/unpinChatMessage failed, reason: connect ETIMEDOUT'), { name: 'FetchError', type: 'system', code: 'ETIMEDOUT' }),
+    2: Object.assign(new Error('x'), { code: 'EAI_AGAIN' }),
+    3: new Error('network timeout at: https://api.telegram.org/bot/unpinChatMessage'),
+    4: new RateLimitedError(-1001111111111, 30_000, { response: { error_code: 429 } }),
+    5: new RateLimitedError(-1001111111111, 30_000),
+  });
+  assert.deepEqual(await unpinMessagesReportingRetryable([1, 2, 3, 4, 5], unpinOne, () => {}), [1, 2, 3, 4, 5]);
 });
 
 test('one failing message never stops the others, and every failure is told to the logger', async () => {

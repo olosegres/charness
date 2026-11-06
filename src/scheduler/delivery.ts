@@ -14,7 +14,6 @@ import {
 import {
   buildCheckStatusLine,
   checkIsCheckStatusDue,
-  checkIsFinalCheckRun,
   checkStatusCommandTimeoutSec,
   getCheckShownName,
   getCheckStatusActivityFromOutput,
@@ -23,6 +22,7 @@ import {
   getCheckStatusSinceMs,
 } from './checkStatus';
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
+import { checkIsFinalRun } from './recurrence';
 import { getAnnouncedScheduleText } from './scheduleText';
 import type { CheckStatusLine, DeliveryOutcome, FireContext, ScheduleRecord } from './types';
 import { getWorkerWatchEnd, workerWatchSilenceMinutes } from './workerWatch';
@@ -349,7 +349,8 @@ async function readCheckStatusActivity(deps: ScheduleDeliveryDeps, job: Schedule
 async function updateCheckStatus(deps: ScheduleDeliveryDeps, job: ScheduleRecord): Promise<void> {
   if (job.statusWorkerRunDir === undefined && job.statusCommand === undefined) return;
   try {
-    if (!deps.checkIsStatusShown(job.threadKey) || checkIsFinalCheckRun(job)) {
+    // The job's last run: its line would be deleted at once by the finished check, so none is posted and the existing one goes.
+    if (!deps.checkIsStatusShown(job.threadKey) || checkIsFinalRun(job.spec)) {
       await clearCheckStatusLine(deps, job);
       return;
     }

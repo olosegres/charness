@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkIsMessageNotFoundError, checkIsRetryableTelegramError, checkIsStaleAnswerCallbackQueryError } from '../utils/telegramError';
+import { checkIsMessageNotFoundError, checkIsNetworkError, checkIsRetryableTelegramError, checkIsStaleAnswerCallbackQueryError } from '../utils/telegramError';
 
 describe('checkIsStaleAnswerCallbackQueryError', () => {
   it('matches stale answerCallbackQuery Telegram 400 errors', () => {
@@ -53,3 +53,25 @@ describe('checkIsRetryableTelegramError', () => {
     assert.equal(checkIsRetryableTelegramError({ response: { error_code: 404, description: 'Not Found' } }), false);
   });
 });
+
+describe('checkIsNetworkError', () => {
+  it('is true for what the network does: node-fetch\'s FetchError, a Node socket or DNS code, «socket hang up», «network timeout»', () => {
+    assert.equal(checkIsNetworkError(Object.assign(new Error('request to https://api.telegram.org/bot/x failed, reason: connect ETIMEDOUT'), { name: 'FetchError', type: 'system' })), true);
+    assert.equal(checkIsNetworkError(Object.assign(new Error('x'), { code: 'ECONNRESET' })), true);
+    assert.equal(checkIsNetworkError(Object.assign(new Error('x'), { code: 'EAI_AGAIN' })), true);
+    assert.equal(checkIsNetworkError(Object.assign(new Error('x'), { code: 'UND_ERR_CONNECT_TIMEOUT' })), true);
+    assert.equal(checkIsNetworkError(new Error('request to https://api.telegram.org failed, reason: socket hang up')), true);
+    assert.equal(checkIsNetworkError(new Error('network timeout at: https://api.telegram.org/bot/getMe')), true);
+  });
+
+  it('is false for a bug of ours, a Bot API answer and anything that is no error object', () => {
+    assert.equal(checkIsNetworkError(new TypeError('Cannot read properties of undefined (reading \'chatId\')')), false);
+    assert.equal(checkIsNetworkError(new Error('boom')), false);
+    assert.equal(checkIsNetworkError(Object.assign(new Error('x'), { code: 'ERR_INVALID_ARG_TYPE' })), false, 'a Node code that is not a network one');
+    assert.equal(checkIsNetworkError({ response: { error_code: 400, description: 'Bad Request: chat not found' } }), false);
+    assert.equal(checkIsNetworkError('socket hang up'), false, 'a thrown string');
+    assert.equal(checkIsNetworkError(null), false);
+    assert.equal(checkIsNetworkError(undefined), false);
+  });
+});
+

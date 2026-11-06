@@ -16,7 +16,9 @@ constants in the code; this README keeps what the code cannot say.
   agent instruction, not something to read by default. It is never pinned (`isPinSilent` of `schedule_create` is
   accepted from older callers and does nothing). The `<schedule>` is said by `scheduleText.ts` in the topic's language and never
   as a cron expression: a reminder's wording where one exists (daily, weekdays, weekly, monthly, once), else a fixed step
-  («every 5 min»), else the NEXT RUN as a local date and time («next: 2026-06-07 18:00»); an N-times budget is a localized suffix.
+  («every 5 min»), else the NEXT RUN as a local date and time («next: 2026-06-07 18:00») — but «the last run» when the run that fires is the last one
+  (`checkIsFinalRun`: the engine counts an N-times budget down only AFTER the delivery, so `remainingRuns` is still 1, and a time that
+  never comes would be a false promise); an N-times budget is a localized suffix.
   The agent-facing English text (`describeSchedule`, `schedule_list`) is a different thing and still shows the expression.
 - **Reminder:** announce → pin → `delivered`, and stops — the ONE scheduler message that is pinned, with a notification:
   the pin is how it pierces a muted topic. It never reaches an agent, which is exactly why it fires in an unbound topic
@@ -114,11 +116,13 @@ constants in the code; this README keeps what the code cannot say.
   Any other check says «🔔 Check "<name>" fired — waking the agent.» with the failure and the output tail folded under it;
   the command and the full output go to the AGENT's prompt only. The folded message (`connectors/telegram/foldedMessage.ts`)
   carries its plain-text twin: if Telegram refuses the markup, `replyToThread` resends THOSE words (`plainFallbackText`), never
-  the tags shown literally. Alert pins an earlier version made
+  the tags shown literally — every `parse_mode: 'HTML'` caller of `replyToThread` passes its twin (the rendered agent chunks, the
+  sub-agent frame, the runners' pairing messages too). Alert pins an earlier version made
   (`ScheduleRecord.alertPinMessageIds`, never written now) are unpinned at the job's next run (`releaseLegacyAlertPins`) and
   forgotten — but only the ones that are released: the `unpinMessages` port (`connectors/telegram/unpinMessages.ts`) answers
-  with the ids Telegram did not answer for (no answer, a rate limit, a 5xx), and those stay on the job to be tried again. An
-  answer that is final (message gone, never pinned, no right to unpin) counts as released. `schedule_cancel` unpins whatever is
+  with the ids Telegram did not answer for (the network failed, a rate limit, a 5xx), and those stay on the job to be tried again. An
+  answer that is final (message gone, never pinned, no right to unpin) counts as released — and so does an error that is neither the
+  network's nor a Bot API answer (a bug of ours: `checkIsNetworkError`), which would otherwise repeat at every run for ever. `schedule_cancel` unpins whatever is
   left and says how many could not be. The `schedule_create` description carries the full recipe; the Telegram instructions point at the
   `charness-manager` skill (`agent-plugin/`, which carries it verbatim — `agentPluginSkills.test.ts` holds them equal)
   and at that description; the tracker instructions only at the skill. With the scope's «Bot skills» switch off

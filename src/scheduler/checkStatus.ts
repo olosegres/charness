@@ -70,15 +70,6 @@ export function getCheckStatusSinceMs(job: Pick<ScheduleRecord, 'lastStatusAt' |
 }
 
 /**
- * @description Whether this is the LAST run the job will ever make (a `once` job, or the final run of an N-times cron): its
- * line would be deleted at once by the finished check, so none is posted and the existing one goes.
- */
-export function checkIsFinalCheckRun(job: Pick<ScheduleRecord, 'spec'>): boolean {
-  const { spec } = job;
-  return spec.kind === 'once' || (typeof spec.remainingRuns === 'number' && spec.remainingRuns <= 1);
-}
-
-/**
  * @description The ONE gate that decides whether a topic shows status lines: a Telegram conversation (a tracker issue gets no
  * message, no comment, no edited note) whose view shows the agent's stream — the answers-only view shows nothing but answers.
  */

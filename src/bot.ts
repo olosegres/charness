@@ -3895,8 +3895,9 @@ interface ReplyToThreadOptions {
   signal?: AbortSignal;
   /**
    * The text to send, without `parse_mode`, when Telegram rejects the markup of `text` ("can't parse entities"). Default: `text`
-   * itself, which suits a template whose stray `*` broke legacy Markdown — and shows tags literally for a text that IS HTML,
-   * hence this option for the one caller that sends HTML (`buildFoldedMessage`).
+   * itself, which suits a template whose stray `*` broke legacy Markdown — and shows the tags literally when `text` IS HTML. So
+   * every caller that sends `parse_mode: 'HTML'` passes the plain twin of its text here (the folded scheduler message, a rendered
+   * agent chunk, a sub-agent frame, a pairing message).
    */
   plainFallbackText?: string;
 }
@@ -4571,7 +4572,8 @@ async function replyChunkWithFallback(
 ): Promise<number | null> {
   if (!checkIsTelegramPrimitiveKey(key, 'replyChunkWithFallback')) return null;
   const markupExtra = replyMarkup ? { reply_markup: replyMarkup } : {};
-  const id = await replyToThread(key, renderedHtml, { parse_mode: 'HTML', ...markupExtra });
+  // Telegram refusing the markup is answered INSIDE replyToThread, with the plain twin — without it the retry would show the tags.
+  const id = await replyToThread(key, renderedHtml, { parse_mode: 'HTML', ...markupExtra }, { plainFallbackText: plainFallback });
   if (id) return id;
   return replyToThread(key, plainFallback, markupExtra);
 }
@@ -12272,7 +12274,7 @@ function handleSubagentStatus(key: SessionKey, payload: SubagentStatusEvent): vo
         state.lastSubagentText = null;
         state.subagentEditInFlight = false;
         const text = buildSubagentElapsedText(state.subagentTitle, 0);
-        const id = await replyToThread(key, renderAgentHtml(text), { parse_mode: 'HTML' });
+        const id = await replyToThread(key, renderAgentHtml(text), { parse_mode: 'HTML' }, { plainFallbackText: text });
         if (id === null) return;
         // A close (teardown) may have landed during the create — don't leave the
         // just-created message orphaned and untracked; remove it.

@@ -34,6 +34,35 @@ export function checkIsMessageNotFoundError(err: unknown): boolean {
   return e.response?.error_code === 400 && /message to (delete|edit) not found/i.test(e.response.description ?? '');
 }
 
+/** Node's socket and DNS error codes for a request that could not reach Telegram, or that it never answered. */
+const networkErrorCodes: ReadonlySet<string> = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+/** What node-fetch (Telegraf's HTTP client) and Node say for a connection that closed or a request that timed out. */
+const networkErrorMessagePattern = /socket hang up|network timeout/i;
+
+/**
+ * @description Whether an error is the network's rather than a Bot API answer or a bug of ours: node-fetch's `FetchError`
+ * (any of its types — a system error, a timeout), a Node socket / DNS error code, or the «socket hang up» / «network timeout»
+ * wording. A `TypeError` from our own code, a thrown string and the like are NOT: nothing about the network can fix them.
+ */
+export function checkIsNetworkError(err: unknown): boolean {
+  if (!checkIsRecord(err)) return false;
+  if (err.name === 'FetchError') return true;
+  if (typeof err.code === 'string' && networkErrorCodes.has(err.code)) return true;
+  return err instanceof Error && networkErrorMessagePattern.test(err.message);
+}
+
 /**
  * @description Whether a failed Bot API call is worth trying again later: Telegram never answered (a dropped connection, a
  * timeout — the error carries no Bot API answer), asked the bot to slow down (429) or failed on its side (5xx). Any other answer

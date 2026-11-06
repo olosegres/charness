@@ -2,7 +2,7 @@ import { t } from '../i18n';
 import { formatLocalDateAndClock } from '../utils/localClock';
 import { getReminderScheduleDescriptorText } from '../utils/reminderScheduleText';
 import { getReminderScheduleDescriptor } from '../utils/reminderWizard';
-import { getCronInterval, getNextRunAt } from './recurrence';
+import { checkIsFinalRun, getCronInterval, getNextRunAt } from './recurrence';
 import type { ScheduleSpec } from './types';
 
 /**
@@ -11,8 +11,9 @@ import type { ScheduleSpec } from './types';
  *  1. the wording a reminder shows for the shape (daily, weekdays, weekly, monthly, once) — the same words as its list row;
  *  2. a fixed step («every 5 min», «every 6 h at :00»);
  *  3. anything else (`0 9,18 * * *`): the NEXT RUN as a local date and time, which a person can use where the expression
- *     is a command line — or «the last run» when there is none.
- * An N-times budget rides along as a suffix on any of them. The agent-facing English text lives in `recurrence.ts`
+ *     is a command line — or «the last run» when the run that fires is the last one (a time that will never come would be a
+ *     false promise: the engine counts the budget down only AFTER the delivery, so it is still 1 here).
+ * An N-times budget rides along as a suffix on rungs 1–3, except on the last run, whose text already says it. The agent-facing English text lives in `recurrence.ts`
  * (`describeSchedule`): the agent reads the expression, the topic reads this.
  */
 
@@ -24,8 +25,8 @@ function getSpecWithoutBudget(spec: ScheduleSpec): ScheduleSpec {
   return spec.kind === 'cron' ? { kind: 'cron', cronExpr: spec.cronExpr } : spec;
 }
 
-/** @description What the spec fires on — the ladder above, without the budget. */
-function getScheduleShapeText(spec: ScheduleSpec, nowMs: number): string {
+/** @description What the spec fires on, when a wording exists for it (rungs 1 and 2 of the ladder); `null` for any other shape. */
+function getPhrasedShapeText(spec: ScheduleSpec): string | null {
   const descriptor = getReminderScheduleDescriptor(spec);
   if (descriptor.kind !== 'raw') return getReminderScheduleDescriptorText(descriptor);
 
@@ -34,9 +35,7 @@ function getScheduleShapeText(spec: ScheduleSpec, nowMs: number): string {
   if (interval?.kind === 'hours') {
     return t('schedule.everyHours', { count: interval.step, minute: interval.minute.toString().padStart(minuteDigits, '0') });
   }
-
-  const nextRunAt = getNextRunAt(spec, nowMs);
-  return nextRunAt === null ? t('schedule.lastRunText') : t('schedule.nextRunText', { time: formatLocalDateAndClock(nextRunAt) });
+  return null;
 }
 
 /**
@@ -44,7 +43,13 @@ function getScheduleShapeText(spec: ScheduleSpec, nowMs: number): string {
  * when nothing phrases the shape.
  */
 export function getAnnouncedScheduleText(spec: ScheduleSpec, nowMs: number): string {
-  const shapeText = getScheduleShapeText(getSpecWithoutBudget(spec), nowMs);
+  const specWithoutBudget = getSpecWithoutBudget(spec);
   const budgetText = spec.kind === 'cron' && spec.remainingRuns !== undefined ? t('schedule.runsLeftSuffix', { count: spec.remainingRuns }) : '';
-  return `${shapeText}${budgetText}`;
+  const phrasedText = getPhrasedShapeText(specWithoutBudget);
+  if (phrasedText !== null) return `${phrasedText}${budgetText}`;
+
+  // Nothing phrases the shape: say when the next run is — unless this IS the last one, whose «next» would never come.
+  if (checkIsFinalRun(spec)) return t('schedule.lastRunText');
+  const nextRunAt = getNextRunAt(specWithoutBudget, nowMs);
+  return `${nextRunAt === null ? t('schedule.lastRunText') : t('schedule.nextRunText', { time: formatLocalDateAndClock(nextRunAt) })}${budgetText}`;
 }

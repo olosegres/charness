@@ -123,6 +123,16 @@ export function getNextRunAt(spec: ScheduleSpec, fromMs: number): number | null 
 }
 
 /**
+ * @description Whether the run that is firing NOW is the last the job will ever make: a one-shot, or an N-times cron on its final
+ * run. `remainingRuns` counts the runs still to come INCLUDING the current one — the engine decrements it only after the
+ * delivery — so `1` is the last. One source for everything that must not promise a later run (the status line of a finished
+ * check, the next run in a fire announcement).
+ */
+export function checkIsFinalRun(spec: ScheduleSpec): boolean {
+  return spec.kind === 'once' || (typeof spec.remainingRuns === 'number' && spec.remainingRuns <= 1);
+}
+
+/**
  * @description Whether a fire is on time or a catch-up, used both by timer
  * fires and by boot replay. Returns `null` when there is nothing to fire.
  *

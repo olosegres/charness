@@ -260,14 +260,20 @@ export function createRunners(ports: RunnersPorts) {
     await replyToThread(key, t('runners.addressRejected', { reason }));
   }
 
-  /** `intro`, the line in a `<pre>`, and `outro` when there is one — the HTML of a pairing message. */
-  function renderPairingMessage(intro: string, line: string, outro: string | null): string {
-    return `${escapeHtmlText(intro)}\n\n<pre>${escapeHtmlText(line)}</pre>${outro === null ? '' : `\n\n${escapeHtmlText(outro)}`}`;
+  /** `intro`, the line in a `<pre>`, and `outro` when there is one — the HTML of a pairing message, and the same words as plain text. */
+  function renderPairingMessage(intro: string, line: string, outro: string | null): { html: string; plain: string } {
+    return {
+      html: `${escapeHtmlText(intro)}\n\n<pre>${escapeHtmlText(line)}</pre>${outro === null ? '' : `\n\n${escapeHtmlText(outro)}`}`,
+      plain: `${intro}\n\n${line}${outro === null ? '' : `\n\n${outro}`}`,
+    };
   }
 
-  /** Post a message that carries a pairing line (a secret: the trace keeps only its length) and remember it so it can turn into «paired» / «expired». */
-  async function postPairingLine(key: SessionKey, pairId: string, text: string, role: NonNullable<PairingMessage['role']>): Promise<boolean> {
-    const messageId = await replyToThread(key, text, { parse_mode: 'HTML' }, { isSecret: true });
+  /**
+   * Post a message that carries a pairing line (a secret: the trace keeps only its length) and remember it so it can turn into «paired» / «expired».
+   * If Telegram refuses the markup the message goes out as `message.plain`, never with the tags shown.
+   */
+  async function postPairingLine(key: SessionKey, pairId: string, message: { html: string; plain: string }, role: NonNullable<PairingMessage['role']>): Promise<boolean> {
+    const messageId = await replyToThread(key, message.html, { parse_mode: 'HTML' }, { isSecret: true, plainFallbackText: message.plain });
     if (messageId === null) return false;
     try {
       addPairingMessage(ports.pairingMessagesPath, { pairId, key: keyToString(key), messageId, offeredAtMs: now(), role });

@@ -68,6 +68,21 @@ test('an N-times budget rides along as a localized suffix on any rung — and do
   assert.equal(getAnnouncedScheduleText(irregular, nowMs), `next: ${getExpectedNext({ kind: 'cron', cronExpr: '0 9,18 * * *' })} · runs left: 4`);
 });
 
+test('the LAST run of an N-times schedule never promises a next one: «the last run», with no time and no budget suffix', () => {
+  const irregular: ScheduleSpec = { kind: 'cron', cronExpr: '0 9,18 * * *', remainingRuns: 1 };
+  const text = getAnnouncedScheduleText(irregular, nowMs);
+  assert.equal(text, 'the last run');
+  assert.ok(!text.includes(getExpectedNext({ kind: 'cron', cronExpr: '0 9,18 * * *' })), 'the next 18:00 would never come: the job is removed after this run');
+  assert.equal(runWithLocale('ru', () => getAnnouncedScheduleText(irregular, nowMs)), 'последний запуск');
+  // With a second run still to come the next one IS promised, and the budget is said.
+  assert.equal(
+    getAnnouncedScheduleText({ ...irregular, remainingRuns: 2 }, nowMs),
+    `next: ${getExpectedNext({ kind: 'cron', cronExpr: '0 9,18 * * *' })} · runs left: 2`,
+  );
+  // A phrased shape on its last run keeps its own words: they make no claim about a later time.
+  assert.equal(getAnnouncedScheduleText({ kind: 'cron', cronExpr: '*/5 * * * *', remainingRuns: 1 }, nowMs), 'every 5 min · runs left: 1');
+});
+
 test('a one-shot is its date and time; one that cannot be read, or has no run left, says it is the last', () => {
   const once: ScheduleSpec = { kind: 'once', onceAtIso: new Date(2026, 5, 7, 9, 30, 0).toISOString() };
   assert.equal(getAnnouncedScheduleText(once, nowMs), getReminderScheduleText(once));
