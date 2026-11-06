@@ -53,6 +53,13 @@ import {
   tearDownFlow,
 } from './remoteRunE2e/remoteRunFlowHarness';
 
+/**
+ * The `--timeout` of the decoy jobs that must write their pids before it runs out. The limit counts from the moment the job is
+ * queued (staging included), so a limit of 3 s was enough for an idle machine and not for a loaded one, where the decoy was cut
+ * before it ever wrote its pid file and the test timed out waiting for it.
+ */
+const decoyLimitSeconds = 20;
+
 describe('charness remote-run against a loopback runner — what ends a job', { skip: skipReason }, () => {
   before(setUpFlow);
   after(tearDownFlow);
@@ -146,14 +153,14 @@ describe('charness remote-run against a loopback runner — what ends a job', { 
     registerOpenJobCleanup();
     it('`--timeout` of a foreground run: 124, and nothing is left', async () => {
       const decoy = createDecoyCommand('decoy-timeout');
-      const result = await run(['--timeout', '3s', decoy]);
+      const result = await run(['--timeout', `${decoyLimitSeconds}s`, decoy]);
       assert.equal(result.exitCode, 124, result.stderr);
-      assert.match(result.stderr, /timed out after 3s/);
+      assert.match(result.stderr, new RegExp(`timed out after ${decoyLimitSeconds}s`));
       await expectNothingLeft(await waitForPidFile(project, 'decoy-timeout.pid'), await waitForPidFile(project, 'decoy-timeout.child'), 20_000);
     });
 
     it('`--timeout` of a background job is the runner\'s own watchdog: `wait` gives 124 and nothing is left', async () => {
-      const jobId = readJobId(await run(['--bg', '--timeout', '3s', createDecoyCommand('decoy-bgtimeout')]));
+      const jobId = readJobId(await run(['--bg', '--timeout', `${decoyLimitSeconds}s`, createDecoyCommand('decoy-bgtimeout')]));
       const decoyPid = await waitForPidFile(project, 'decoy-bgtimeout.pid');
       const childPid = await waitForPidFile(project, 'decoy-bgtimeout.child');
       const waited = await run(['wait', jobId]);
@@ -242,7 +249,7 @@ describe('charness remote-run against a loopback runner — what ends a job', { 
       assert.equal(fs.readFileSync(path.join(project.runnerDirectory, 'jobs', killedId, 'exit'), 'utf8').trim(), '137', 'the kill is on record');
       assert.equal((await run(['wait', killedId])).exitCode, 137);
 
-      const limitedId = readJobId(await run(['--bg', '--timeout', '3s', createDecoyCommand('decoy-stubborn-limited', { isIgnoringTerm: true })]));
+      const limitedId = readJobId(await run(['--bg', '--timeout', `${decoyLimitSeconds}s`, createDecoyCommand('decoy-stubborn-limited', { isIgnoringTerm: true })]));
       const limitedPid = await waitForPidFile(project, 'decoy-stubborn-limited.pid');
       const limitedChild = await waitForPidFile(project, 'decoy-stubborn-limited.child');
       const waited = await run(['wait', limitedId]);
