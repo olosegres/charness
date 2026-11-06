@@ -9,8 +9,10 @@
  *     worker that is gone, cron every minute — WITHOUT a status source, so for the bot it is an ordinary check (the
  *     «worker finished» sentence belongs to a watch with a run directory: `workerStatusE2e.test.ts`)
  *   → the check fails: ONE silent sentence is posted — «🔔 Check … fired — waking the agent.» — with the failure and the
- *     output folded under it in an expandable quotation, never the command and NEVER pinned; the agent is woken with the
- *     watch's prompt
+ *     output under it, never the command and NEVER pinned; the agent is woken with the watch's prompt. Telegram is made to
+ *     REFUSE the expandable-quotation markup of that one message (the fake answers «can't parse entities»), so the flow proves
+ *     the fallback: the same words arrive as plain text, with no tag and no entity shown (the quotation itself, and its
+ *     escaping, is proved by `telegramViewsE2e.test.ts`)
  *   → the agent handles the wake as the skill says — `schedule_list`, `schedule_cancel`; nothing was pinned, so nothing
  *     is unpinned, and the watch is gone from the persisted state.
  *
@@ -54,6 +56,8 @@ const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const topicFolder = 'watch-flow';
 const launchLine = 'Launching Telegraf bot (long polling';
 const alertMark = `Check "${fakeWatchJobName}" fired`;
+/** The markup of the folded part: the only thing the fake Bot API is told to refuse. */
+const foldedMarkup = '<blockquote expandable>';
 
 const bootTimeoutMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
@@ -142,6 +146,11 @@ describe('A worker watch end to end: built charness, fake Bot API, a fake orches
   });
 
   it('the agent arms the watch with the real recipe', async () => {
+    fakeTelegram.failNextCall(
+      'sendMessage',
+      'Bad Request: can\'t parse entities: Unsupported start tag "x" at byte offset 0',
+      (payload) => payload.parse_mode === 'HTML' && String(payload.text).includes(foldedMarkup),
+    );
     fakeTelegram.pushOperatorMessage(topicThreadId, 'W-1 [fake:arm-watch] watch the worker you just launched');
     await getCharness().waitFor('the agent to arm the watch', agentTimeoutMs, () => getToolCalls('schedule_create').length === 1);
     const [created] = getToolCalls('schedule_create');
@@ -151,22 +160,35 @@ describe('A worker watch end to end: built charness, fake Bot API, a fake orches
     const [watch] = readPersistedSchedules().filter((record) => record.name === fakeWatchJobName);
     assert.equal(watch.deliveryKind, 'check');
     assert.ok(!('isPinSilent' in watch), 'there is no pin option to persist any more');
-    assert.equal(created.outcome, `Scheduled "${fakeWatchJobName}": checks cron * * * * *\nid: ${watch.id}`, 'the topic shows one line and the id, not the recipe');
+    assert.match(
+      created.outcome,
+      new RegExp(`^Scheduled "${fakeWatchJobName}": checks; next: \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}\\nid: ${watch.id}$`),
+      'one line — what and when, not the raw cron and not the recipe — and the id',
+    );
+    assert.doesNotMatch(created.outcome, /\* \* \*/, 'no cron expression in what the topic shows');
     assert.doesNotMatch(created.outcome, /kill -0/, 'the command is not part of the confirmation the topic shows');
   });
 
-  it('the check fails: one silent sentence, the reason folded under it, no command, NO pin — and the agent is woken with the watch\'s prompt', async () => {
+  it('the check fails and Telegram refuses the markup: the same words arrive as plain text — one silent sentence, the reason under it, no command, no tag, NO pin — and the agent is woken', async () => {
     await getCharness().waitFor('the check alert', checkFireTimeoutMs, () => topic.listMessages().some((message) => message.text.includes(alertMark)));
     const alert = topic.listMessages().find((message) => message.text.includes(alertMark));
     assert.ok(alert);
     alertMessageId = alert.message_id;
-    assert.equal(alert.isSilent, true, 'a check alert is ordinary silent output');
-    assert.equal(alert.parseMode, 'HTML', 'the folded part needs Telegram HTML');
+    assert.equal(alert.isSilent, true, 'the retry is as silent as the refused send');
+    assert.equal(alert.parseMode, undefined, 'the retry went out without a parse mode');
     assert.equal(
       alert.text,
-      `🔔 Check "${fakeWatchJobName}" fired — waking the agent.\n\n<blockquote expandable>exit 1\n\nworker ${fakeGoneWorkerPid} exited</blockquote>`,
-      'the sentence, then the failure and the recipe\'s own output in an expandable quotation',
+      `🔔 Check "${fakeWatchJobName}" fired — waking the agent.\n\nexit 1\n\nworker ${fakeGoneWorkerPid} exited`,
+      'the sentence, then the failure and the recipe\'s own output — the same words the quotation would have held',
     );
+    assert.doesNotMatch(alert.text, /<|>|&(lt|gt|amp);/, 'no tag and no entity shown literally');
+    const alertSends = fakeTelegram.listCalls('sendMessage').filter((call) => String(call.payload.text).includes(alertMark));
+    assert.deepEqual(
+      alertSends.map((call) => call.payload.parse_mode),
+      ['HTML', undefined],
+      'the HTML send was refused once, then the plain one went through',
+    );
+    assert.ok(String(alertSends[0].payload.text).includes(foldedMarkup), 'the refused send carried the quotation');
     assert.doesNotMatch(alert.text, /kill -0|\$ |find /, 'the command stays out of the topic');
     await getCharness().waitFor('the agent woken by the check to list its schedules', agentTimeoutMs, () => getToolCalls('schedule_list').length === 1);
     assert.ok(

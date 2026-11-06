@@ -19,6 +19,7 @@ import { claudeProfileNameMaxLength } from '../utils/claudeProfiles';
 import { describeClaudeLaunchOutcome, type ClaudeProfilesReport } from '../utils/claudeUsage';
 import type { SendFilesToThread } from '../utils/fileSendService';
 import { formatIsoLocalOffset } from '../utils/isoTimestamp';
+import { formatLocalDateAndClock } from '../utils/localClock';
 import {
   maxDiscreteMessages,
   type DiscreteMessageItem,
@@ -42,7 +43,7 @@ import {
   workerWatchStatusArguments,
   workerWatchStatusEveryMinutes,
 } from './workerWatch';
-import { describeSchedule, validateScheduleSpec } from './recurrence';
+import { describePhrasedSchedule, describeSchedule, validateScheduleSpec } from './recurrence';
 import { createStrictToolInput, getUnknownKeysMessageOfUnion, runWithRefusalLogging, type StrictToolInput } from './strictToolInput';
 import { createScheduleForThread } from './store';
 import type { ScheduleRecord, ScheduleSpec } from './types';
@@ -453,8 +454,12 @@ export interface SchedulerMcpDeps {
   getThreadsForDirectory: (directory: string) => string[];
   /** Last-used adapter name for a thread, for the `lastAdapterName` snapshot. */
   getThreadAdapterName: (threadKey: string) => string | undefined;
-  /** Unpin these messages of the thread (best-effort: an already unpinned or deleted one is skipped) — the old alert pins of a cancelled check. */
-  unpinMessages: (threadKey: string, messageIds: readonly number[]) => Promise<void>;
+  /**
+   * Unpin these messages of the thread — the old alert pins of a cancelled check — and resolve with the ids that are STILL
+   * pinned and worth another try (Telegram did not answer, asked to slow down, failed). A message that is gone, was never
+   * pinned or cannot be unpinned any more is final: it is not in the list. Never rejects.
+   */
+  unpinMessages: (threadKey: string, messageIds: readonly number[]) => Promise<number[]>;
   /** Delete a message of the thread (best-effort: one that is gone or too old to delete is skipped) — a cancelled check's status line. */
   deleteMessage: (threadKey: string, messageId: number) => Promise<void>;
   /**
@@ -1018,14 +1023,20 @@ function summarizeRecord(record: ScheduleRecord): string {
 }
 
 /**
- * The `schedule_create` confirmation, which also lands in the topic as a tool result: one line a person reads («Scheduled
- * "Nightly build": daily at 02:00» / «Scheduled "API health": checks every 5m») and, on the next, the id the agent needs to
- * cancel it. The command and the next-run stamp are in `schedule_list`.
+ * The `schedule_create` confirmation, which also lands in the topic as a tool result: one line a person reads, with WHAT and
+ * WHEN («Scheduled "Nightly build": daily at 02:00; next: 2026-06-07 02:00» / «Scheduled "API health": checks every 5m; next:
+ * …») and, on the next, the id the agent needs to cancel it. The «next» stamp is the instance-local time, so a schedule that
+ * was read in the wrong timezone shows at once; a cron nothing phrases shows only that (never the raw expression), and a
+ * one-shot's phrase already is its time. The command and the status rhythm are in `schedule_list`.
  */
 function summarizeCreated(record: ScheduleRecord): string {
-  const schedule = describeSchedule(record.spec);
-  const when = checkIsCheckSchedule(record) ? `checks ${schedule}` : schedule;
-  return `Scheduled "${record.name}": ${when}\nid: ${record.id}`;
+  const isCheck = checkIsCheckSchedule(record);
+  const phrase = describePhrasedSchedule(record.spec);
+  const parts: string[] = [];
+  if (phrase !== null) parts.push(isCheck ? `checks ${phrase}` : phrase);
+  else if (isCheck) parts.push('checks');
+  if (record.spec.kind === 'cron' && record.nextRunAt !== null) parts.push(`next: ${formatLocalDateAndClock(record.nextRunAt)}`);
+  return `Scheduled "${record.name}": ${parts.join('; ')}\nid: ${record.id}`;
 }
 
 // ─── tool handlers (scope-bound) ─────────────────────────────────────
@@ -1198,8 +1209,10 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
       // Nothing pins a check alert any more, but a job made by an earlier version may still carry the ids of the ones it pinned.
       const alertPins = record.alertPinMessageIds ?? [];
       if (alertPins.length > 0) {
-        await deps.unpinMessages(record.threadKey, alertPins);
-        cleanedUp.push(`its ${alertPins.length} pinned alert(s) unpinned`);
+        const stillPinned = await deps.unpinMessages(record.threadKey, alertPins);
+        const unpinnedCount = alertPins.length - stillPinned.length;
+        if (unpinnedCount > 0) cleanedUp.push(`its ${unpinnedCount} pinned alert(s) unpinned`);
+        if (stillPinned.length > 0) cleanedUp.push(`${stillPinned.length} pinned alert(s) could not be unpinned (Telegram did not answer — unpin by hand)`);
       }
       // A "⏳ works …" line left under a cancelled watch would be wrong: the watch no longer says anything.
       if (record.statusMessageId !== undefined) {

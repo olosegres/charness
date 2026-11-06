@@ -742,7 +742,13 @@ test('scheduler fire and check keys exist in every locale, and the retired check
     'schedule.checkFired',
     'schedule.workerFinished',
     'schedule.workerSilent',
+    'schedule.workerResumed',
     'schedule.checkRecovered',
+    'schedule.everyMinutes',
+    'schedule.everyHours',
+    'schedule.runsLeftSuffix',
+    'schedule.nextRunText',
+    'schedule.lastRunText',
   ]) {
     assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
   }
@@ -766,6 +772,7 @@ test('the check and worker sentences substitute every placeholder in every local
         ['schedule.checkFired', { name: 'N1' }],
         ['schedule.workerFinished', { name: 'N1', elapsed: 'E1' }],
         ['schedule.workerSilent', { name: 'N1', minutes: 45 }],
+        ['schedule.workerResumed', { name: 'N1' }],
         ['schedule.checkRecovered', { name: 'N1' }],
         ['schedule.fired', { name: 'N1', schedule: 'S1', missedNote: '' }],
       ] as const) {
@@ -1418,4 +1425,17 @@ test('the status line of a passing check: its keys exist in every locale, keep t
     assert.ok(line.includes('15'), `${locale} lost the minutes: "${line}"`);
     assert.ok(!line.includes('{'), `placeholder not substituted in ${locale}: "${line}"`);
   }
+});
+
+test('the schedule sentences are typographically sound: German quotes are paired, Chinese keeps no Latin «worker», the first person of the approved wording stays', () => {
+  const quotedKeys = ['schedule.checkFired', 'schedule.workerFinished', 'schedule.workerSilent', 'schedule.workerResumed', 'schedule.checkRecovered'];
+  for (const key of quotedKeys) {
+    const german = runWithLocale('de', () => t(key, { name: 'N1', elapsed: 'E1', minutes: 45 }));
+    assert.ok(german.includes('„N1“'), `de ${key} pairs „…“: "${german}"`);
+    const chinese = runWithLocale('zh', () => t(key, { name: 'N1', elapsed: 'E1', minutes: 45 }));
+    assert.ok(!/worker/i.test(chinese), `zh ${key} must not leave a Latin word in the sentence: "${chinese}"`);
+  }
+  // The topic hears one voice — the bot's and the agent's — so the wording that says what happens next is in the first person.
+  assert.equal(runWithLocale('en', () => t('schedule.workerFinished', { name: 'N1', elapsed: 'E1' })), '✅ Worker "N1" finished (E1). Reading the result.');
+  assert.equal(runWithLocale('ru', () => t('schedule.workerFinished', { name: 'N1', elapsed: 'E1' })), '✅ Воркер «N1» завершил работу (E1). Разбираю результат.');
 });

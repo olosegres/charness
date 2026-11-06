@@ -200,15 +200,23 @@ export async function recordCheckStatusLine(
 }
 
 /**
- * @description Forget the alert pins an earlier version recorded on a check job, once they are unpinned
- * (`ScheduleRecord.alertPinMessageIds`). Checked and written in ONE locked step, so a cancel that removes the job meanwhile is
- * never undone, and flushed at once: the next run must not unpin the same messages again after a restart.
+ * @description Forget the alert pins an earlier version recorded on a check job once they are unpinned
+ * (`ScheduleRecord.alertPinMessageIds`): exactly `releasedMessageIds`, so an id that could not be unpinned stays for the next
+ * run. The field goes when nothing is left. Checked and written in ONE locked step, so a cancel that removes the job meanwhile
+ * is never undone, and flushed at once: the next run must not unpin the same messages again after a restart.
  */
-export async function clearCheckAlertPins(store: Pick<StateStore, 'updateScheduleIfPresent' | 'flush'>, jobId: string): Promise<void> {
+export async function clearCheckAlertPins(
+  store: Pick<StateStore, 'updateScheduleIfPresent' | 'flush'>,
+  jobId: string,
+  releasedMessageIds: readonly number[],
+): Promise<void> {
   const isCleared = await store.updateScheduleIfPresent(jobId, (record) => {
-    if (record.alertPinMessageIds === undefined) return null;
+    const recordedIds = record.alertPinMessageIds ?? [];
+    const remainingIds = recordedIds.filter((messageId) => !releasedMessageIds.includes(messageId));
+    if (record.alertPinMessageIds === undefined || remainingIds.length === recordedIds.length) return null;
     const updated: ScheduleRecord = { ...record, updatedAt: new Date().toISOString() };
-    delete updated.alertPinMessageIds;
+    if (remainingIds.length > 0) updated.alertPinMessageIds = remainingIds;
+    else delete updated.alertPinMessageIds;
     return updated;
   });
   if (isCleared) await store.flush();

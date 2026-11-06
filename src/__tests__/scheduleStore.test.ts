@@ -197,33 +197,42 @@ describe('StateStore schedule collection', () => {
     assert.ok(!('isPinSilent' in record));
   });
 
-  it('clearCheckAlertPins forgets the alert pins an earlier version recorded, flushes at once, and leaves the rest of the record', async () => {
+  it('clearCheckAlertPins forgets exactly the released alert pins, flushes at once, and leaves the rest of the record', async () => {
     const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
     await store.init();
     const created = await createScheduleForThread(store, { threadKey: threadA, name: 'Watch', spec: dailySpec, prompt: 'go', createdBy: 'agent', nowMs });
     assert.ok(created.ok);
     const id = created.record.id;
-    await store.upsertSchedule({ ...created.record, deliveryKind: 'check', checkCommand: 'true', isCheckFailing: true, alertPinMessageIds: [501, 502] });
+    await store.upsertSchedule({ ...created.record, deliveryKind: 'check', checkCommand: 'true', isCheckFailing: true, alertPinMessageIds: [501, 502, 503] });
 
-    await clearCheckAlertPins(store, id);
-    const cleared = store.getSchedules()[id];
-    assert.ok(!('alertPinMessageIds' in cleared), 'the ids are gone');
-    assert.equal(cleared.isCheckFailing, true, 'the failing flag is untouched');
-    assert.equal(cleared.checkCommand, 'true');
-    const persisted: { schedules?: Record<string, { alertPinMessageIds?: number[] }> } = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-    assert.equal(persisted.schedules?.[id]?.alertPinMessageIds, undefined, 'written to disk by the call itself, not by the debounced save');
+    await clearCheckAlertPins(store, id, [501, 503]);
+    const partial = store.getSchedules()[id];
+    assert.deepEqual(partial.alertPinMessageIds, [502], 'the id Telegram did not answer for stays, to be tried again');
+    assert.equal(partial.isCheckFailing, true, 'the failing flag is untouched');
+    assert.equal(partial.checkCommand, 'true');
+    const persistedPartial: { schedules?: Record<string, { alertPinMessageIds?: number[] }> } = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+    assert.deepEqual(persistedPartial.schedules?.[id]?.alertPinMessageIds, [502], 'written to disk by the call itself, not by the debounced save');
+
+    await clearCheckAlertPins(store, id, [502, 999]);
+    assert.ok(!('alertPinMessageIds' in store.getSchedules()[id]), 'nothing left: the field goes');
+    const persistedEmpty: { schedules?: Record<string, { alertPinMessageIds?: number[] }> } = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+    assert.equal(persistedEmpty.schedules?.[id]?.alertPinMessageIds, undefined);
   });
 
-  it('clearCheckAlertPins is a no-op for a job without any and for a job that is gone', async () => {
+  it('clearCheckAlertPins is a no-op for a job without any, for ids that are not on the job, and for a job that is gone', async () => {
     const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
     await store.init();
     const created = await createScheduleForThread(store, { threadKey: threadA, name: 'Watch', spec: dailySpec, prompt: 'go', createdBy: 'agent', nowMs });
     assert.ok(created.ok);
     const before = store.getSchedules()[created.record.id];
 
-    await clearCheckAlertPins(store, created.record.id);
+    await clearCheckAlertPins(store, created.record.id, [501]);
     assert.deepEqual(store.getSchedules()[created.record.id], before, 'nothing to forget: not even updatedAt moved');
-    await clearCheckAlertPins(store, 'no-such-job');
+    await store.upsertSchedule({ ...created.record, alertPinMessageIds: [501] });
+    const withPin = store.getSchedules()[created.record.id];
+    await clearCheckAlertPins(store, created.record.id, [777]);
+    assert.deepEqual(store.getSchedules()[created.record.id], withPin, 'an id that is not on the job changes nothing');
+    await clearCheckAlertPins(store, 'no-such-job', [501]);
     assert.equal(store.getSchedules()['no-such-job'], undefined);
   });
 

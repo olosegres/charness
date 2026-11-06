@@ -307,6 +307,16 @@ export class FakeTelegram {
     return [...this.pinnedMessageIds];
   }
 
+  /**
+   * @description A bot message that is ALREADY pinned, as one an earlier version of the bot left behind: stored in the topic and
+   * pinned without a pin event (the pin predates the test). Resolves its id.
+   */
+  seedPinnedBotMessage(threadId: number, text: string): number {
+    const message = this.storeMessage(threadId, text, this.options.botUser);
+    this.pinnedMessageIds.add(message.message_id);
+    return message.message_id;
+  }
+
   /** @description The calls of one method, in order. */
   listCalls(method: string): FakeTelegramCall[] {
     return this.calls.filter((call) => call.method === method);

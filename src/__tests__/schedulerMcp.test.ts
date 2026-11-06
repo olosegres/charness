@@ -81,6 +81,7 @@ import {
 } from './fileSendTestRecorder';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { holdPort } from './e2e/isolatedCharness';
+import { formatLocalDateAndClock } from '../utils/localClock';
 import {
   workerWatchCheckCommand,
   workerWatchCheckCron,
@@ -168,7 +169,7 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
       disarmJob: () => {},
       getThreadsForDirectory: () => [],
       getThreadAdapterName: () => 'claude',
-      unpinMessages: async () => {},
+      unpinMessages: async () => [],
       deleteMessage: async () => {},
       sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
       sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
@@ -321,7 +322,7 @@ describe('createSchedulerMcpServer port binding', () => {
       disarmJob: () => {},
       getThreadsForDirectory: () => [],
       getThreadAdapterName: () => 'claude',
-      unpinMessages: async () => {},
+      unpinMessages: async () => [],
       deleteMessage: async () => {},
       sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
       sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),
@@ -799,6 +800,8 @@ interface ServerFixture {
   claudeProfilesCalls: ClaudeProfilesQuery[];
   /** Every `unpinMessages` call the surface made (schedule_cancel of a check that pinned alerts). */
   unpinCalls: Array<{ threadKey: string; messageIds: number[] }>;
+  /** The message ids the `unpinMessages` port reports as STILL pinned (Telegram did not answer): the test fills it, empty by default. */
+  stillPinnedMessageIds: number[];
   /** Every `deleteMessage` call the surface made (schedule_cancel of a check that had a status line). */
   deleteCalls: Array<{ threadKey: string; messageId: number }>;
 }
@@ -961,6 +964,12 @@ function firstText(result: Awaited<ReturnType<Client['callTool']>>): string {
   return block?.text ?? '';
 }
 
+/** The «next: …» stamp a creation line carries: the job's first run as the instance-local date and time. */
+function getExpectedNextStamp(record: ScheduleRecord): string {
+  assert.notEqual(record.nextRunAt, null, 'a cron has a next run');
+  return formatLocalDateAndClock(record.nextRunAt ?? 0);
+}
+
 describe('scheduler MCP server end-to-end (real HTTP)', () => {
   let fakeHome: string;
   let originalHome: string | undefined;
@@ -1005,6 +1014,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     const messageSendCalls: Array<{ threadKey: string; options: SendMessagesToThreadOptions }> = [];
     const claudeProfilesCalls: ClaudeProfilesQuery[] = [];
     const unpinCalls: Array<{ threadKey: string; messageIds: number[] }> = [];
+    const stillPinnedMessageIds: number[] = [];
     const deleteCalls: Array<{ threadKey: string; messageId: number }> = [];
     const defaultSendMessagesToThread: SendMessagesToThread = async (threadKey, options) => {
       if (threadKey !== threadAKey) return { ok: false, error: `invalid threadKey "${threadKey}"` };
@@ -1024,6 +1034,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       getThreadAdapterName: () => 'claude',
       unpinMessages: async (threadKey, messageIds) => {
         unpinCalls.push({ threadKey, messageIds: [...messageIds] });
+        return messageIds.filter((messageId) => stillPinnedMessageIds.includes(messageId));
       },
       deleteMessage: async (threadKey, messageId) => {
         deleteCalls.push({ threadKey, messageId });
@@ -1069,6 +1080,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       armed,
       claudeProfilesCalls,
       unpinCalls,
+      stillPinnedMessageIds,
       deleteCalls,
       disarmed,
       boundThreads,
@@ -1984,7 +1996,11 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     assert.notEqual(cronResult.isError, true, firstText(cronResult));
     const dailyRecord = fixture.armed.find((r) => r.name === 'Daily');
     assert.ok(dailyRecord);
-    assert.equal(firstText(cronResult), `Scheduled "Daily": daily at 09:00\nid: ${dailyRecord.id}`, 'one human line, then the id the agent cancels by');
+    assert.equal(
+      firstText(cronResult),
+      `Scheduled "Daily": daily at 09:00; next: ${getExpectedNextStamp(dailyRecord)}\nid: ${dailyRecord.id}`,
+      'one human line — what and when — then the id the agent cancels by',
+    );
 
     const onceResult = await client.callTool({
       name: 'schedule_create',
@@ -2048,7 +2064,11 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     assert.equal(record.deliveryKind, 'check');
     assert.equal(record.checkCommand, 'curl -fsS http://127.0.0.1:8080/health');
     assert.equal(record.checkTimeoutSec, 15);
-    assert.equal(firstText(result), `Scheduled "API health": checks every 5m\nid: ${record.id}`, 'no command in the confirmation the topic shows');
+    assert.equal(
+      firstText(result),
+      `Scheduled "API health": checks every 5m; next: ${getExpectedNextStamp(record)}\nid: ${record.id}`,
+      'no command in the confirmation the topic shows',
+    );
     assert.doesNotMatch(firstText(result), /curl/);
 
     // A check counts against the agent's cap and is listed like any agent job — with its command, for the agent.
@@ -2095,7 +2115,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     assert.equal(record.statusWorkerRunDir, '/runs/builder-s2');
     assert.equal(record.statusEveryMinutes, 30);
     assert.equal(record.statusCommand, undefined);
-    assert.equal(firstText(result), `Scheduled "watch builder S2": checks every 5m\nid: ${record.id}`);
+    assert.equal(firstText(result), `Scheduled "watch builder S2": checks every 5m; next: ${getExpectedNextStamp(record)}\nid: ${record.id}`);
     assert.match(firstText(await client.callTool({ name: 'schedule_list', arguments: {} })), /status every 30 min/);
     await client.close();
   });
@@ -2374,6 +2394,30 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     await client.close();
   });
 
+  it('schedule_cancel counts only the alerts that WERE unpinned, and says which could not be (Telegram did not answer)', async () => {
+    const watch = await seedThreadSchedule('watch builder S5');
+    await fixture.store.upsertSchedule({ ...watch, deliveryKind: 'check', checkCommand: 'kill -0 1', alertPinMessageIds: [701, 702, 703] });
+    fixture.stillPinnedMessageIds.push(702);
+
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const cancelled = await client.callTool({ name: 'schedule_cancel', arguments: { id: watch.id } });
+    assert.notEqual(cancelled.isError, true, firstText(cancelled));
+    assert.equal(
+      firstText(cancelled),
+      `Cancelled "watch builder S5" (id: ${watch.id}); its 2 pinned alert(s) unpinned; 1 pinned alert(s) could not be unpinned (Telegram did not answer — unpin by hand).`,
+    );
+    assert.equal(fixture.store.getSchedules()[watch.id], undefined, 'the job is cancelled all the same');
+
+    const allFailed = await seedThreadSchedule('watch builder S6');
+    await fixture.store.upsertSchedule({ ...allFailed, deliveryKind: 'check', checkCommand: 'kill -0 1', alertPinMessageIds: [801] });
+    fixture.stillPinnedMessageIds.push(801);
+    const second = await client.callTool({ name: 'schedule_cancel', arguments: { id: allFailed.id } });
+    assert.doesNotMatch(firstText(second), /unpinned;|its \d+ pinned alert\(s\) unpinned/, 'nothing was unpinned, so nothing is claimed');
+    assert.match(firstText(second), /1 pinned alert\(s\) could not be unpinned/);
+    await client.close();
+  });
+
   it('schedule_cancel of a check deletes its status line; with alert pins too, it says both; a job without a line deletes nothing', async () => {
     const watch = await seedThreadSchedule('watch builder S3');
     await fixture.store.upsertSchedule({
@@ -2425,12 +2469,28 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     const record = fixture.armed.find((r) => r.name === 'Silent');
     assert.ok(record);
     assert.ok(!('isPinSilent' in fixture.store.getSchedules()[record.id]), 'the deprecated flag is not persisted');
-    assert.equal(firstText(result), `Scheduled "Silent": daily at 09:00\nid: ${record.id}`);
+    assert.equal(firstText(result), `Scheduled "Silent": daily at 09:00; next: ${getExpectedNextStamp(record)}\nid: ${record.id}`);
 
     const scheduleCreate = (await client.listTools()).tools.find((tool) => tool.name === 'schedule_create');
     const pinSilentProperty = (scheduleCreate?.inputSchema.properties ?? {}).isPinSilent;
     assert.ok(pinSilentProperty && typeof pinSilentProperty === 'object' && 'description' in pinSilentProperty);
     assert.match(String(pinSilentProperty.description), /DEPRECATED, has no effect/);
+    await client.close();
+  });
+
+  it('a cron nothing phrases is confirmed by its next run, never by the raw expression; a one-shot by its own time', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const twiceADay = await client.callTool({ name: 'schedule_create', arguments: { name: 'Twice', cron: '0 9,18 * * *', prompt: 'p' } });
+    const twiceRecord = fixture.armed.find((r) => r.name === 'Twice');
+    assert.ok(twiceRecord);
+    assert.equal(firstText(twiceADay), `Scheduled "Twice": next: ${getExpectedNextStamp(twiceRecord)}\nid: ${twiceRecord.id}`);
+    assert.doesNotMatch(firstText(twiceADay), /cron|9,18/);
+
+    const irregularCheck = await client.callTool({ name: 'schedule_create', arguments: { name: 'Odd check', cron: '*/7 * * * *', prompt: 'p', checkCommand: 'true' } });
+    const checkRecord = fixture.armed.find((r) => r.name === 'Odd check');
+    assert.ok(checkRecord);
+    assert.equal(firstText(irregularCheck), `Scheduled "Odd check": checks; next: ${getExpectedNextStamp(checkRecord)}\nid: ${checkRecord.id}`, '*/7 does not divide the hour: no «every 7m»');
     await client.close();
   });
 

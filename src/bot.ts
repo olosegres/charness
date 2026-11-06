@@ -230,7 +230,8 @@ import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
 import { StartupPromptBuffer, type BufferedPromptSettled } from './startupPromptBuffer';
 import { renderAgentHtml } from './connectors/telegram/renderAgentHtml';
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
-import { buildFoldedMessageHtml } from './connectors/telegram/foldedMessage';
+import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
+import { unpinMessagesReportingRetryable } from './connectors/telegram/unpinMessages';
 import { addPendingOutput, checkHasPendingOutput, getOutputFlushPlan, getUnsentRemainder, requeueUnsentRemainder, takePendingOutput, type PendingOutputBuffer } from './connectors/telegram/outputFlushPlan';
 import { glueBacklogFrames } from './connectors/telegram/outputBacklogGlue';
 import { checkShouldKeepTyping as checkShouldKeepTypingDecision } from './utils/typingActive';
@@ -3528,6 +3529,11 @@ async function pinMessageQuiet(key: SessionKey, messageId: number, options: { di
   }
 }
 
+/** @description One unpin call through the rate-limit queue; rejects with Telegram's error. */
+async function sendUnpin(key: SessionKey, messageId: number): Promise<void> {
+  await enqueueSend(key, () => bot.telegram.unpinChatMessage(getTelegramChatId(key), messageId));
+}
+
 /**
  * @description Unpin `messageId` for `key` through the rate-limit queue,
  * swallowing + logging failures (already-unpinned / deleted / lost permission).
@@ -3536,9 +3542,7 @@ async function pinMessageQuiet(key: SessionKey, messageId: number, options: { di
 async function unpinMessageQuiet(key: SessionKey, messageId: number): Promise<void> {
   if (!checkIsTelegramPrimitiveKey(key, 'unpinMessage')) return;
   try {
-    await enqueueSend(key, () =>
-      bot.telegram.unpinChatMessage(getTelegramChatId(key), messageId),
-    );
+    await sendUnpin(key, messageId);
   } catch (e) {
     console.warn(`[question-pin] unpin ${keyToString(key)} msg ${messageId} failed: ${describeSendError(e)}`);
   }
@@ -3889,6 +3893,12 @@ interface ReplyToThreadOptions {
    * is not called back. A send cancelled this way resolves `null` without a word — the caller asked for it.
    */
   signal?: AbortSignal;
+  /**
+   * The text to send, without `parse_mode`, when Telegram rejects the markup of `text` ("can't parse entities"). Default: `text`
+   * itself, which suits a template whose stray `*` broke legacy Markdown — and shows tags literally for a text that IS HTML,
+   * hence this option for the one caller that sends HTML (`buildFoldedMessage`).
+   */
+  plainFallbackText?: string;
 }
 
 async function replyToThread(
@@ -3898,11 +3908,11 @@ async function replyToThread(
   options: ReplyToThreadOptions = {},
 ): Promise<number | null> {
   if (!checkIsTelegramPrimitiveKey(key, 'replyToThread')) return null;
-  const sendOnce = (sendExtra: Record<string, unknown>) => {
+  const sendOnce = (sendExtra: Record<string, unknown>, sentText: string = text) => {
     const send = () =>
       bot.telegram.sendMessage(
         getTelegramChatId(key),
-        text,
+        sentText,
         sendExtra as Parameters<typeof bot.telegram.sendMessage>[2],
       );
     return options.unpaced ? sendUnpaced(key, send, options.signal) : enqueueSend(key, send, options.signal);
@@ -3939,7 +3949,7 @@ async function replyToThread(
       const plainExtra = { ...(extra as Record<string, unknown>) };
       delete plainExtra.parse_mode;
       try {
-        return await trackSent(await sendOnce(buildSendExtra(key, plainExtra)));
+        return await trackSent(await sendOnce(buildSendExtra(key, plainExtra), options.plainFallbackText ?? text));
       } catch (e2) {
         await handleSendError(key, e2);
         return null;
@@ -13956,9 +13966,15 @@ function createSessionPostDeps(): PostToSessionDeps {
 function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
   const { jiraConnector } = wiring;
   const ledger = new RunLedger();
-  const unpinThreadMessages = async (threadKeyStr: string, messageIds: readonly number[]): Promise<void> => {
+  // The scheduler's unpin port: the ids that are worth another try come back, so a pin Telegram did not answer for is not forgotten.
+  const unpinThreadMessages = async (threadKeyStr: string, messageIds: readonly number[]): Promise<number[]> => {
     const key = keyFromString(threadKeyStr);
-    for (const messageId of messageIds) await unpinMessageQuiet(key, messageId);
+    if (!checkIsTelegramPrimitiveKey(key, 'unpinMessage')) return [];
+    return unpinMessagesReportingRetryable(
+      messageIds,
+      (messageId) => sendUnpin(key, messageId),
+      (messageId, error) => console.warn(`[scheduler] unpin ${keyToString(key)} msg ${messageId} failed: ${describeSendError(error)}`),
+    );
   };
   const delivery = createScheduleDelivery({
     ...createSessionPostDeps(),
@@ -13968,9 +13984,10 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
     announce: (threadKeyStr, text, options) => {
       const key = keyFromString(threadKeyStr);
       const extra = options?.isSilent ? { disable_notification: true } : {};
-      return options?.foldedDetail === undefined
-        ? replyToThread(key, text, extra)
-        : replyToThread(key, buildFoldedMessageHtml(text, options.foldedDetail), { ...extra, parse_mode: 'HTML' });
+      if (options?.foldedDetail === undefined) return replyToThread(key, text, extra);
+      // If Telegram ever rejects the markup, the retry is the same words as plain text — never the tags shown literally.
+      const foldedMessage = buildFoldedMessage(text, options.foldedDetail);
+      return replyToThread(key, foldedMessage.html, { ...extra, parse_mode: 'HTML' }, { plainFallbackText: foldedMessage.plain });
     },
     // The only scheduler pin left: a reminder, which pierces a muted topic on purpose.
     pin: async (threadKeyStr, messageId) => {
@@ -13992,7 +14009,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       await state.upsertSchedule({ ...record, isCheckFailing: isFailing, updatedAt: new Date().toISOString() });
       await state.flush();
     },
-    clearAlertPins: (jobId) => clearCheckAlertPins(state, jobId),
+    clearAlertPins: (jobId, releasedMessageIds) => clearCheckAlertPins(state, jobId, releasedMessageIds),
     checkIsStatusShown: (threadKeyStr) => {
       const key = keyFromString(threadKeyStr);
       return checkIsCheckStatusShown({ isTelegram: checkIsTelegramKey(key), view: state.getDisplayPrefs(key).view });

@@ -151,6 +151,38 @@ function padTwo(value: number): string {
 }
 
 /**
+ * @name CronInterval
+ * @description A cron that fires on a fixed step: every `step` minutes, or every `step` hours at minute `minute`.
+ */
+export type CronInterval = { kind: 'minutes'; step: number } | { kind: 'hours'; step: number; minute: number };
+
+/**
+ * @description The fixed-step shape of a cron (`*​/N * * * *`, `m *​/N * * *`), or `null` for any other. "Every N" is only
+ * truthful when the step divides the field's period — `*​/40 * * * *` actually fires at :00 and :40 (gaps 40m/20m
+ * alternating, the step resets each hour) — so a non-divisor step is no interval, and callers fall back instead of lying.
+ * The one source of the shape for the English description below and the localized one in the topic (`scheduleText.ts`).
+ */
+export function getCronInterval(cronExpr: string): CronInterval | null {
+  const fields = cronExpr.trim().split(/\s+/);
+  if (fields.length !== 5) return null;
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = fields;
+  if (dayOfMonth !== '*' || month !== '*' || dayOfWeek !== '*') return null;
+
+  const everyMinuteMatch = minute.match(/^\*\/(\d+)$/);
+  if (everyMinuteMatch && hour === '*') {
+    const stepMinutes = Number(everyMinuteMatch[1]);
+    return minutesPerHour % stepMinutes === 0 ? { kind: 'minutes', step: stepMinutes } : null;
+  }
+
+  const everyHourMatch = hour.match(/^\*\/(\d+)$/);
+  if (everyHourMatch && /^\d+$/.test(minute)) {
+    const stepHours = Number(everyHourMatch[1]);
+    return hoursPerDay % stepHours === 0 ? { kind: 'hours', step: stepHours, minute: Number(minute) } : null;
+  }
+  return null;
+}
+
+/**
  * @description Try to render a recognised cron shape as short English text.
  * Returns `null` for shapes we don't special-case, so {@link describeSchedule}
  * can fall back to the raw cron string.
@@ -168,20 +200,9 @@ function describeCron(cronExpr: string): string | null {
   if (fields.length !== 5) return null;
   const [minute, hour, dayOfMonth, month, dayOfWeek] = fields;
 
-  // "every N" wording is only truthful when the step divides the field's
-  // period — `*/40 * * * *` actually fires at :00 and :40 (gaps 40m/20m
-  // alternating, the step resets each hour), so non-divisor steps fall back
-  // to the raw cron string instead of lying in announcements.
-  const everyMinuteMatch = minute.match(/^\*\/(\d+)$/);
-  if (everyMinuteMatch && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
-    const stepMinutes = Number(everyMinuteMatch[1]);
-    return minutesPerHour % stepMinutes === 0 ? `every ${stepMinutes}m` : null;
-  }
-
-  const everyHourMatch = hour.match(/^\*\/(\d+)$/);
-  if (everyHourMatch && /^\d+$/.test(minute) && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
-    const stepHours = Number(everyHourMatch[1]);
-    return hoursPerDay % stepHours === 0 ? `every ${stepHours}h at :${padTwo(Number(minute))}` : null;
+  const interval = getCronInterval(cronExpr);
+  if (interval) {
+    return interval.kind === 'minutes' ? `every ${interval.step}m` : `every ${interval.step}h at :${padTwo(interval.minute)}`;
   }
 
   // The remaining shapes all need fixed minute + hour.
@@ -211,6 +232,22 @@ function describeOnce(onceAtIso: string): string {
   return `once at ${datePart} ${timePart}`;
 }
 
+/** @description `base` with the N-times budget of a cron appended: `daily at 09:00 (3 runs left)`. */
+function withRunsLeft(base: string, spec: ScheduleSpec): string {
+  return spec.kind === 'cron' && typeof spec.remainingRuns === 'number' ? `${base} (${spec.remainingRuns} runs left)` : base;
+}
+
+/**
+ * @description Short human description of a spec in English when a plain wording exists for it, else `null` — a cron shape
+ * nothing phrases (`0 9,18 * * *`). For a text that names the schedule to a person, where a bare cron expression is a
+ * command line and the caller shows the next run instead; {@link describeSchedule} is the one that never gives up.
+ */
+export function describePhrasedSchedule(spec: ScheduleSpec): string | null {
+  if (spec.kind === 'once') return describeOnce(spec.onceAtIso);
+  const base = describeCron(spec.cronExpr);
+  return base === null ? null : withRunsLeft(base, spec);
+}
+
 /**
  * @description Short human description of a spec, English (it lands inside
  * announcements that are i18n'd around it). Unrecognised cron shapes fall back
@@ -218,9 +255,5 @@ function describeOnce(onceAtIso: string): string {
  */
 export function describeSchedule(spec: ScheduleSpec): string {
   if (spec.kind === 'once') return describeOnce(spec.onceAtIso);
-  const base = describeCron(spec.cronExpr) ?? `cron ${spec.cronExpr}`;
-  if (typeof spec.remainingRuns === 'number') {
-    return `${base} (${spec.remainingRuns} runs left)`;
-  }
-  return base;
+  return describePhrasedSchedule(spec) ?? withRunsLeft(`cron ${spec.cronExpr}`, spec);
 }

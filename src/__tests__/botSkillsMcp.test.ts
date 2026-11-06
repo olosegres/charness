@@ -59,7 +59,7 @@ function buildDeps(): SchedulerMcpDeps {
     disarmJob: () => {},
     getThreadsForDirectory: (directory) => (topicsByFolder.get(directory) ?? []).map(keyToString),
     getThreadAdapterName: (threadKey) => adapterNameByTopic.get(threadKey),
-    unpinMessages: async () => {},
+    unpinMessages: async () => [],
     deleteMessage: async () => {},
     sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
     sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),

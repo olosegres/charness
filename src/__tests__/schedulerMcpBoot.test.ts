@@ -80,7 +80,7 @@ function createBotMcpHandle(): SchedulerMcpHandle {
     disarmJob: () => {},
     getThreadsForDirectory: () => [],
     getThreadAdapterName: () => 'claude',
-    unpinMessages: async () => {},
+    unpinMessages: async () => [],
     deleteMessage: async () => {},
     sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
     sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),

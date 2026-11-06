@@ -80,7 +80,7 @@ function buildDeps(): SchedulerMcpDeps {
     disarmJob: () => {},
     getThreadsForDirectory: () => [],
     getThreadAdapterName: () => undefined,
-    unpinMessages: async () => {},
+    unpinMessages: async () => [],
     deleteMessage: async () => {},
     sendFilesToThread: async () => ({ ok: true, summary: 'unused', sentKinds: [] }),
     sendMessagesToThread: async () => ({ ok: true, summary: 'unused', undeliveredCount: 0, sentMessageIds: [] }),

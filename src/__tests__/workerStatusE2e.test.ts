@@ -269,7 +269,11 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
     await getCharness().waitFor('the agent to arm the watch', agentTimeoutMs, () => getToolCalls('schedule_create').length === 1);
     const [created] = getToolCalls('schedule_create');
     assert.doesNotMatch(created.outcome, /^error:/, created.outcome);
-    assert.match(created.outcome, new RegExp(`^Scheduled "${fakeStatusWatchJobName}": checks cron \\* \\* \\* \\* \\*\\nid: `), 'the confirmation is one line and the id');
+    assert.match(
+      created.outcome,
+      new RegExp(`^Scheduled "${fakeStatusWatchJobName}": checks; next: \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}\\nid: `),
+      'the confirmation is one line — what and when — and the id',
+    );
     assert.doesNotMatch(created.outcome, /kill -0/, 'the command is not part of the confirmation the topic shows');
     // `state.json` is written a moment after the change (the save is debounced): wait for the record, do not read it at once.
     await getCharness().waitFor('the watch to be persisted', replyTimeoutMs, () => readPersistedSchedules().some((record) => record.name === fakeStatusWatchJobName));

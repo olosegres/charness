@@ -12,6 +12,8 @@ import {
   getNextRunAt,
   getCatchUpDecision,
   describeSchedule,
+  describePhrasedSchedule,
+  getCronInterval,
   minFireIntervalMs,
   catchUpToleranceMs,
 } from '../scheduler/recurrence';
@@ -204,5 +206,37 @@ describe('describeSchedule', () => {
   it('falls back to the raw cron string for an unrecognised shape', () => {
     const text = describeSchedule({ kind: 'cron', cronExpr: '0 0 1 1 *' });
     assert.equal(text, 'cron 0 0 1 1 *');
+  });
+});
+
+describe('getCronInterval', () => {
+  it('reads a fixed step of minutes or of hours', () => {
+    assert.deepEqual(getCronInterval('*/10 * * * *'), { kind: 'minutes', step: 10 });
+    assert.deepEqual(getCronInterval('15 */2 * * *'), { kind: 'hours', step: 2, minute: 15 });
+    assert.deepEqual(getCronInterval(' 0 */6 * * * '), { kind: 'hours', step: 6, minute: 0 });
+  });
+
+  it('refuses a step that does not divide the period (it would fire unevenly), and every other shape', () => {
+    assert.equal(getCronInterval('*/40 * * * *'), null);
+    assert.equal(getCronInterval('0 */7 * * *'), null);
+    assert.equal(getCronInterval('0 9 * * *'), null);
+    assert.equal(getCronInterval('*/5 9 * * *'), null, 'a step inside an hour window is no plain interval');
+    assert.equal(getCronInterval('*/5 * * * 1'), null);
+    assert.equal(getCronInterval('*/5 * * *'), null, 'not a 5-field cron');
+  });
+});
+
+describe('describePhrasedSchedule', () => {
+  it('says what describeSchedule says wherever a wording exists, N-times budget included', () => {
+    assert.equal(describePhrasedSchedule({ kind: 'cron', cronExpr: '30 21 * * *' }), 'daily at 21:30');
+    assert.equal(describePhrasedSchedule({ kind: 'cron', cronExpr: '*/10 * * * *' }), 'every 10m');
+    assert.equal(describePhrasedSchedule({ kind: 'cron', cronExpr: '0 9 * * 1', remainingRuns: 3 }), 'weekly on Monday at 09:00 (3 runs left)');
+    assert.match(describePhrasedSchedule({ kind: 'once', onceAtIso: '2026-06-07T09:00:00.000Z' }) ?? '', /^once at \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  });
+
+  it('is null for a cron nothing phrases — never the raw expression', () => {
+    assert.equal(describePhrasedSchedule({ kind: 'cron', cronExpr: '0 9,18 * * *' }), null);
+    assert.equal(describePhrasedSchedule({ kind: 'cron', cronExpr: '*/40 * * * *', remainingRuns: 2 }), null);
+    assert.equal(describeSchedule({ kind: 'cron', cronExpr: '0 9,18 * * *', remainingRuns: 2 }), 'cron 0 9,18 * * * (2 runs left)', 'the agent-facing text never gives up');
   });
 });

@@ -18,7 +18,8 @@
  *     the agent answers through the bot MCP; in «Answers only» the header says
  *     the plain text and the thinking are not shown; in the full stream no request is opened; a
  *     silent turn is woken; `/schedule` and a scheduled run are requests too — the run is announced by one SILENT line
- *     with its prompt folded under it, never pinned, while a reminder that fires beside it is still pinned
+ *     with its prompt folded under it, never pinned, while a reminder that fires beside it is still pinned and the
+ *     pinned alert an earlier version left on a check is unpinned by that check's next run
  *   → every answer is pinned with a notification and only the latest stays
  *     pinned, across a restart; a restart that finds the bot MCP port held for a
  *     moment waits it out, so the re-adopted agent still answers; an agent that
@@ -418,7 +419,24 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
       updatedAt: new Date().toISOString(),
       nextRunAt: dueAt,
     };
-    persisted.schedules = { ...(persisted.schedules ?? {}), [seeded.id]: seeded, [seededReminder.id]: seededReminder };
+    // A check an earlier version left with a PINNED alert (the id on the job, the message still pinned): its next run must unpin it.
+    const legacyAlertId = fakeTelegram.seedPinnedBotMessage(topicThreadId, '🚨 Check "Old alert" failed: exit 1 (every 5m)\n$ true\n\nold output');
+    const seededLegacyCheck: ScheduleRecord = {
+      id: 'old-alert-check-seeded',
+      threadKey,
+      name: 'Old alert',
+      spec: { kind: 'once', onceAtIso: new Date(dueAt).toISOString() },
+      prompt: 'unused: the check passes',
+      createdBy: 'agent',
+      deliveryKind: 'check',
+      checkCommand: 'true',
+      alertPinMessageIds: [legacyAlertId],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nextRunAt: dueAt,
+    };
+    assert.equal(fakeTelegram.listPinnedMessageIds().includes(legacyAlertId), true, 'the old alert is pinned before the boot');
+    persisted.schedules = { ...(persisted.schedules ?? {}), [seeded.id]: seeded, [seededReminder.id]: seededReminder, [seededLegacyCheck.id]: seededLegacyCheck };
     fs.writeFileSync(path.join(getLayout().dataDir, 'state.json'), JSON.stringify(persisted));
     await startCharness();
 
@@ -436,6 +454,9 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     await getCharness().waitFor('the reminder pinned', replyTimeoutMs, () => getPinKinds(reminder.message_id).includes('pin'));
     assert.equal(fakeTelegram.pinEvents.find((event) => event.kind === 'pin' && event.messageId === reminder.message_id)?.isSilent, false, 'the reminder pin notifies: that is how it pierces a muted topic');
     assert.deepEqual(getPinKinds(announcement.message_id), [], 'the scheduled run itself is never pinned');
+    await getCharness().waitFor('the old alert pin released by the check\'s run', replyTimeoutMs, () => getPinKinds(legacyAlertId).includes('unpin'));
+    assert.deepEqual(getPinKinds(legacyAlertId), ['unpin'], 'unpinned once — it was pinned before the test, so no pin event of its own');
+    assert.ok(!fakeTelegram.listPinnedMessageIds().includes(legacyAlertId), 'nothing of the old version stays pinned');
     await waitForFakeAnswer('TOPIC-6');
     const [turn] = getTurns('TOPIC-6');
     assert.equal(turn.isRequestPrompt, true);

@@ -27,7 +27,7 @@ import {
   checkIsReminderSchedule,
   getUnboundPausableSchedules,
 } from '../scheduler/deliveryKind';
-import { describeSchedule } from '../scheduler/recurrence';
+import { describeSchedule, getNextRunAt } from '../scheduler/recurrence';
 import { checkAlertOutputMaxChars, type CheckRunResult } from '../scheduler/checkRun';
 import { checkStatusCommandTimeoutSec } from '../scheduler/checkStatus';
 import { workerWatchExitCode, workerWatchSilenceMinutes } from '../scheduler/workerWatch';
@@ -68,6 +68,8 @@ function makeReminder(overrides: Partial<ScheduleRecord> = {}): ScheduleRecord {
 }
 
 const onTime: FireContext = { kind: 'on-time' };
+/** The instant the fixtures' announcements are made at (a next run is counted from it). */
+const announcedAtMs = Date.parse('2026-06-07T08:00:00.000Z');
 
 interface CallLogEntry {
   step:
@@ -110,6 +112,8 @@ function createHarness(options: {
   statusPost?: 'fails' | 'throws';
   /** `recordStatusLine` says the job is gone. */
   isJobGoneWhenRecording?: boolean;
+  /** The old alert pins Telegram did not answer for: the `unpinMessages` port reports them as still pinned. */
+  stillPinnedIds?: number[];
   /** Deleting a message, reading the worker's log, recording the status line, or releasing the old alert pins throws. */
   failing?: Array<'deleteMessage' | 'readWorkerActivity' | 'recordStatusLine' | 'unpinMessages' | 'clearAlertPins'>;
   /** The result of a `runCheck` for one particular command (the status command), in place of `checkResult`. */
@@ -136,6 +140,7 @@ function createHarness(options: {
     unpinMessages: async (key, messageIds) => {
       callLog.push({ step: 'unpinMessages', detail: { key, messageIds } });
       if (options.failing?.includes('unpinMessages')) throw new Error('unpin boom');
+      return messageIds.filter((messageId) => options.stillPinnedIds?.includes(messageId));
     },
     checkBusy: () => {
       const value = busyValues[Math.min(busyIndex, busyValues.length - 1)];
@@ -162,8 +167,8 @@ function createHarness(options: {
     setCheckFailing: async (jobId, isFailing) => {
       callLog.push({ step: 'setCheckFailing', detail: { jobId, isFailing } });
     },
-    clearAlertPins: async (jobId) => {
-      callLog.push({ step: 'clearAlertPins', detail: { jobId } });
+    clearAlertPins: async (jobId, releasedMessageIds) => {
+      callLog.push({ step: 'clearAlertPins', detail: { jobId, releasedMessageIds } });
       if (options.failing?.includes('clearAlertPins')) throw new Error('clear boom');
     },
     checkIsStatusShown: () => options.isStatusShown ?? true,
@@ -323,7 +328,7 @@ test('catch-up fireContext: announcement carries the missed note with HH:MM', as
   const at = new Date(missedAtMs);
   const expectedTime = `${at.getHours().toString().padStart(2, '0')}:${at.getMinutes().toString().padStart(2, '0')}`;
 
-  const { text, foldedDetail } = buildFireAnnouncement(makeJob(), { kind: 'catch-up', missedAtMs });
+  const { text, foldedDetail } = buildFireAnnouncement(makeJob(), { kind: 'catch-up', missedAtMs }, announcedAtMs);
   assert.ok(text.includes(expectedTime), `expected missed-at time ${expectedTime} in "${text}"`);
   assert.ok(text.includes('Daily reminder'), 'announcement names the job');
   assert.equal(foldedDetail, 'Check the deploy status', 'the prompt rides folded under the header');
@@ -331,7 +336,7 @@ test('catch-up fireContext: announcement carries the missed note with HH:MM', as
 });
 
 test('on-time fireContext: announcement has NO missed note', async () => {
-  const { text } = buildFireAnnouncement(makeJob(), onTime);
+  const { text } = buildFireAnnouncement(makeJob(), onTime, announcedAtMs);
   // The ru/en missedNote both contain "missed"/"пропущено"; neither should appear.
   assert.ok(!/missed|пропущено/i.test(text), `on-time run must not annotate a miss: "${text}"`);
 });
@@ -454,7 +459,7 @@ test('reminder: the announced schedule is the LOCALIZED text, not English descri
   // assertion pins that `describeSchedule`'s English-only wording is NOT used
   // here, which is the defect this replaced.
   const reminder = makeReminder();
-  const announcement = buildFireAnnouncement(reminder, onTime).text;
+  const announcement = buildFireAnnouncement(reminder, onTime, announcedAtMs).text;
   const localized = getReminderScheduleText(reminder.spec);
 
   assert.equal(localized, 'every day at 09:00', 'the en wording of this fixture spec');
@@ -472,7 +477,7 @@ test('reminder: a non-English locale announces the schedule through the same ren
   // the announcement follows automatically.
   const reminder = makeReminder();
   runWithLocale('ru', () => {
-    const announcement = buildFireAnnouncement(reminder, onTime).text;
+    const announcement = buildFireAnnouncement(reminder, onTime, announcedAtMs).text;
     assert.ok(
       announcement.includes(getReminderScheduleText(reminder.spec)),
       `the ru announcement must carry the ru schedule text: "${announcement}"`,
@@ -482,22 +487,29 @@ test('reminder: a non-English locale announces the schedule through the same ren
 
 test('agent-prompt fire: a shape with a plain wording is announced in the topic\'s language, in the reminder\'s words', async () => {
   const job = makeJob();
-  const { text } = buildFireAnnouncement(job, onTime);
+  const { text } = buildFireAnnouncement(job, onTime, announcedAtMs);
   assert.ok(text.includes(getReminderScheduleText(job.spec)), `the daily job reads like a reminder: "${text}"`);
   runWithLocale('ru', () => {
-    const { text: russianText } = buildFireAnnouncement(job, onTime);
+    const { text: russianText } = buildFireAnnouncement(job, onTime, announcedAtMs);
     assert.ok(russianText.includes(getReminderScheduleText(job.spec)), `the ru header carries the ru schedule: "${russianText}"`);
     assert.ok(!russianText.includes(describeSchedule(job.spec)), `not the English-only wording: "${russianText}"`);
   });
 });
 
-test('agent-prompt fire: a shape the reminder wording would print as a bare cron keeps the readable English one', async () => {
-  const job = makeJob({ spec: { kind: 'cron', cronExpr: '*/5 * * * *' } });
-  assert.equal(getReminderScheduleText(job.spec), 'cron */5 * * * *', 'the reminder wording gives up on an interval');
-  const { text } = buildFireAnnouncement(job, onTime);
-  assert.ok(text.includes('every 5m'), `an interval reads as an interval: "${text}"`);
-  const budgeted = buildFireAnnouncement(makeJob({ spec: { kind: 'cron', cronExpr: '0 9 * * 1', remainingRuns: 3 } }), onTime).text;
-  assert.ok(budgeted.includes('(3 runs left)'), `an N-times budget stays visible: "${budgeted}"`);
+test('agent-prompt fire: no raw cron and no English in the header — an interval is said in the topic\'s language, an unphrased shape by its next run', async () => {
+  const interval = buildFireAnnouncement(makeJob({ spec: { kind: 'cron', cronExpr: '*/5 * * * *' } }), onTime, announcedAtMs).text;
+  assert.equal(interval, '⏰ Scheduled: Daily reminder · every 5 min');
+  const russianInterval = runWithLocale('ru', () => buildFireAnnouncement(makeJob({ spec: { kind: 'cron', cronExpr: '*/5 * * * *' } }), onTime, announcedAtMs).text);
+  assert.equal(russianInterval, '⏰ По расписанию: Daily reminder · каждые 5 мин');
+
+  const twiceADay = makeJob({ spec: { kind: 'cron', cronExpr: '0 9,18 * * *' } });
+  const nextRunAt = getNextRunAt(twiceADay.spec, announcedAtMs);
+  assert.ok(nextRunAt !== null);
+  assert.equal(
+    buildFireAnnouncement(twiceADay, onTime, announcedAtMs).text,
+    `⏰ Scheduled: Daily reminder · next: ${formatExpectedLocalDateTime(nextRunAt)}`,
+    'the next run, not `cron 0 9,18 * * *`',
+  );
 });
 
 test('reminder: announce send failed (null id) → pin skipped, still delivered', async () => {
@@ -527,13 +539,13 @@ test('reminder: catch-up fire carries the missed-at note', async () => {
   const at = new Date(missedAtMs);
   const expectedTime = `${at.getHours().toString().padStart(2, '0')}:${at.getMinutes().toString().padStart(2, '0')}`;
 
-  const { text } = buildFireAnnouncement(makeReminder(), { kind: 'catch-up', missedAtMs });
+  const { text } = buildFireAnnouncement(makeReminder(), { kind: 'catch-up', missedAtMs }, announcedAtMs);
   assert.ok(text.includes(expectedTime), `expected missed-at time ${expectedTime} in "${text}"`);
   assert.ok(text.includes('Take the evening pills'), 'the reminder text is still the content');
 });
 
 test('reminder: on-time fire has NO missed note', async () => {
-  const { text } = buildFireAnnouncement(makeReminder(), onTime);
+  const { text } = buildFireAnnouncement(makeReminder(), onTime, announcedAtMs);
   assert.ok(!/missed|пропущено/i.test(text), `on-time reminder must not annotate a miss: "${text}"`);
 });
 
@@ -1032,7 +1044,7 @@ test('legacy alert pins: released ONCE at the job\'s next run — unpinned, then
   assert.deepEqual(outcome, { status: 'delivered' });
   assert.deepEqual(getStepNames(callLog), ['unpinMessages', 'clearAlertPins', 'runCheck']);
   assert.deepEqual(callLog[0].detail, { key: threadKey, messageIds: [501, 502] });
-  assert.deepEqual(callLog[1].detail, { jobId: 'api-health-abc123' });
+  assert.deepEqual(callLog[1].detail, { jobId: 'api-health-abc123', releasedMessageIds: [501, 502] });
 });
 
 test('legacy alert pins: a job with none touches neither the unpin nor the record', async () => {
@@ -1042,7 +1054,20 @@ test('legacy alert pins: a job with none touches neither the unpin nor the recor
   assert.deepEqual(getStepNames(callLog), ['runCheck', 'runCheck']);
 });
 
-test('legacy alert pins: a failing unpin keeps the ids for the next run, and never stops the check', async () => {
+test('legacy alert pins: an id Telegram did not answer for is NOT forgotten — only the released ones are; it is tried again at the next run', async () => {
+  const { deps, callLog } = createHarness({ stillPinnedIds: [502] });
+  const outcome = await createScheduleDelivery(deps)(makeCheck({ alertPinMessageIds: [501, 502, 503] }), onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.deepEqual(getStepNames(callLog), ['unpinMessages', 'clearAlertPins', 'runCheck']);
+  assert.deepEqual(callLog[1].detail, { jobId: 'api-health-abc123', releasedMessageIds: [501, 503] }, '502 stays on the job');
+
+  const nothingReleased = createHarness({ stillPinnedIds: [501] });
+  await createScheduleDelivery(nothingReleased.deps)(makeCheck({ alertPinMessageIds: [501] }), onTime);
+  assert.deepEqual(getStepNames(nothingReleased.callLog), ['unpinMessages', 'runCheck'], 'nothing released, nothing forgotten');
+});
+
+test('legacy alert pins: a port that throws keeps every id and never stops the check; a record that cannot be cleared never does either', async () => {
   const originalWarn = console.warn;
   console.warn = () => {};
   try {
@@ -1059,4 +1084,24 @@ test('legacy alert pins: a failing unpin keeps the ids for the next run, and nev
   } finally {
     console.warn = originalWarn;
   }
+});
+
+// ─── the recovery line speaks the language of the alert ─────────────
+
+test('recovery: a worker watch that passes again says the WORKER is working again, by its shown name', async () => {
+  const { deps, callLog } = createHarness();
+  await runWithLocale('en', () => createScheduleDelivery(deps)(makeWorkerWatch({ isCheckFailing: true }), onTime));
+  const recovered = getAnnounced(callLog);
+  assert.equal(recovered.text, '✅ Worker "builder S2" is working again.', 'not «Check "watch builder S2" is back to normal»');
+  assert.deepEqual(recovered.options, { isSilent: true });
+
+  const russian = createHarness();
+  await runWithLocale('ru', () => createScheduleDelivery(russian.deps)(makeWorkerWatch({ isCheckFailing: true }), onTime));
+  assert.equal(getAnnounced(russian.callLog).text, '✅ Воркер «builder S2» снова работает.');
+});
+
+test('recovery: any other check keeps the check wording and its own name', async () => {
+  const { deps, callLog } = createHarness();
+  await runWithLocale('en', () => createScheduleDelivery(deps)(makeCheck({ name: 'watch something', isCheckFailing: true }), onTime));
+  assert.equal(getAnnounced(callLog).text, '✅ Check "watch something" is back to normal.');
 });
