@@ -436,7 +436,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     assert.ok(Date.now() < dueAt - 1_000, 'the first refused turn was handled before the scheduled run fires');
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), creditBalanceError);
 
-    await getCharness().waitFor('the scheduled run\'s fire announcement', dueAt - Date.now() + replyTimeoutMs, () => topic.listMessages().some((message) => message.text.includes('Schedule "Run BAL-5"')));
+    await getCharness().waitFor('the scheduled run\'s fire announcement', dueAt - Date.now() + replyTimeoutMs, () => topic.listMessages().some((message) => message.text.includes('Scheduled: Run BAL-5')));
     await getCharness().waitFor('the scheduled run\'s request answered: the work stopped', replyTimeoutMs, () => findOpenRequest('scheduledRun')?.limitWaitAnsweredFor === 'autoResumeOff');
     assert.equal(findOpenRequest('scheduledRun')?.isLimitStopped, true, 'nothing wakes it into the same refused balance');
     assert.equal(countNotices(), noticesBefore, 'no second notice in the topic');

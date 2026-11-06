@@ -735,22 +735,49 @@ test('trace.statusReply substitutes thisThread/allThreads/count placeholders', (
     `placeholders not substituted: "${out}"`);
 });
 
-test('scheduler fire keys exist in every locale', () => {
-  assert.ok(checkKeyInAllLangs('schedule.fired'), 'schedule.fired missing in some locale');
-  assert.ok(checkKeyInAllLangs('schedule.missedNote'), 'schedule.missedNote missing in some locale');
+test('scheduler fire and check keys exist in every locale, and the retired check alert key is gone', () => {
+  for (const code of [
+    'schedule.fired',
+    'schedule.missedNote',
+    'schedule.checkFired',
+    'schedule.workerFinished',
+    'schedule.workerSilent',
+    'schedule.checkRecovered',
+  ]) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+  }
+  assert.ok(!checkKeyInAllLangs('schedule.checkFailed'), 'the old alert with the command is still present');
 });
 
-test('schedule.fired substitutes name/schedule/prompt and an empty missedNote on-time', () => {
+test('schedule.fired substitutes name/schedule and an empty missedNote on-time; the prompt is not part of it (it is folded under)', () => {
   const out = t('schedule.fired', {
     name: 'Daily reminder',
     schedule: 'daily at 09:00',
-    prompt: 'check the deploy',
     missedNote: '',
   });
-  assert.ok(out.includes('Daily reminder'), `expected the job name in "${out}"`);
-  assert.ok(out.includes('daily at 09:00'), `expected the schedule text in "${out}"`);
-  assert.ok(out.includes('check the deploy'), `expected the prompt in "${out}"`);
+  assert.equal(out, '⏰ Scheduled: Daily reminder · daily at 09:00');
   assert.ok(!out.includes('{'), `placeholders not substituted: "${out}"`);
+});
+
+test('the check and worker sentences substitute every placeholder in every locale', () => {
+  for (const locale of localeCodes) {
+    runWithLocale(locale, () => {
+      for (const [code, vars] of [
+        ['schedule.checkFired', { name: 'N1' }],
+        ['schedule.workerFinished', { name: 'N1', elapsed: 'E1' }],
+        ['schedule.workerSilent', { name: 'N1', minutes: 45 }],
+        ['schedule.checkRecovered', { name: 'N1' }],
+        ['schedule.fired', { name: 'N1', schedule: 'S1', missedNote: '' }],
+      ] as const) {
+        const out = t(code, vars);
+        assert.ok(!/[{}]/.test(out), `${locale} ${code}: placeholders not substituted: "${out}"`);
+        for (const value of Object.values(vars)) {
+          if (value !== '') assert.ok(out.includes(value.toString()), `${locale} ${code} must carry ${value}: "${out}"`);
+        }
+        assert.ok(!out.includes('$ '), `${locale} ${code}: no command line in a topic sentence`);
+      }
+    });
+  }
 });
 
 test('schedule.missedNote substitutes the {time}', () => {

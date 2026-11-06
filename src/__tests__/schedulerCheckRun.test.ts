@@ -20,9 +20,10 @@ import {
   getCheckAlertDecision,
   getOutputTail,
   runCheckCommand,
+  type CheckRunResult,
 } from '../scheduler/checkRun';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
-import { workerWatchCheckCommand } from '../scheduler/workerWatch';
+import { getWorkerWatchEnd, workerWatchCheckCommand, workerWatchExitCode, workerWatchSilenceMinutes } from '../scheduler/workerWatch';
 import { spawn } from 'child_process';
 
 /**
@@ -183,6 +184,7 @@ test('the worker watch recipe: silent while the worker lives and writes; fails w
       const stalled = await watch(recipe);
       assert.equal(stalled.exitCode, 2, 'a live worker whose run dir stopped changing fails');
       assert.match(stalled.output, /no change for 45 min/);
+      assert.equal(getWorkerWatchEnd(stalled), 'silent', 'the bot reads the recipe\'s own exit code back');
       const livenessOnly = await watch(`kill -0 ${workerPid}`);
       assert.equal(livenessOnly.exitCode, 0, 'the liveness-only check stays green on the same hung worker');
     } finally {
@@ -192,5 +194,24 @@ test('the worker watch recipe: silent while the worker lives and writes; fails w
     const exited = await watch(recipe);
     assert.equal(exited.exitCode, 1, 'an exited worker fails — also the "worker finished" signal');
     assert.match(exited.output, new RegExp(`worker ${workerPid} exited`));
+    assert.equal(getWorkerWatchEnd(exited), 'finished');
   });
+});
+
+test('the worker watch recipe names its exit codes and its window from the constants the bot reads them back with', () => {
+  assert.ok(workerWatchCheckCommand.includes(`exit ${workerWatchExitCode.processGone};`));
+  assert.ok(workerWatchCheckCommand.includes(`exit ${workerWatchExitCode.runDirSilent};`));
+  assert.ok(workerWatchCheckCommand.includes(`-mmin -${workerWatchSilenceMinutes} `));
+  assert.ok(workerWatchCheckCommand.includes(`no change for ${workerWatchSilenceMinutes} min`));
+});
+
+test('getWorkerWatchEnd: only a run that exited by itself with one of the recipe\'s two codes is a worker end', () => {
+  const run = (overrides: Partial<CheckRunResult>): CheckRunResult => ({ exitCode: 0, signal: null, isTimedOut: false, output: '', ...overrides });
+  assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.processGone })), 'finished');
+  assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.runDirSilent })), 'silent');
+  assert.equal(getWorkerWatchEnd(run({ exitCode: 3 })), null, 'another code is some other check');
+  assert.equal(getWorkerWatchEnd(run({ exitCode: 0 })), null, 'a pass is not an end');
+  assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.processGone, isTimedOut: true })), null, 'a timed-out run says nothing about the worker');
+  assert.equal(getWorkerWatchEnd(run({ exitCode: null, signal: 'SIGKILL' })), null);
+  assert.equal(getWorkerWatchEnd(run({ exitCode: null, startError: 'spawn /bin/sh ENOENT' })), null);
 });

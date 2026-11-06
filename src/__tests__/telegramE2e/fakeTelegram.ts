@@ -77,6 +77,8 @@ export interface FakeTelegramMessage {
   reply_markup?: { inline_keyboard: Array<Array<FakeTelegramInlineButton>> };
   /** The `disable_notification` the send carried (bot messages only). */
   isSilent?: boolean;
+  /** The `parse_mode` the send carried (bot messages only): the stored `text` is the raw markup, the fake renders none of it. */
+  parseMode?: string;
   isDeleted?: boolean;
   /**
    * When the fake stored the message (ms since the epoch, the test process's clock): the time of the event at its source, which a
@@ -325,7 +327,7 @@ export class FakeTelegram {
     threadId: number,
     text: string,
     from: TelegramUser,
-    extra: Pick<FakeTelegramMessage, 'entities' | 'reply_markup' | 'isSilent' | 'voice'> = {},
+    extra: Pick<FakeTelegramMessage, 'entities' | 'reply_markup' | 'isSilent' | 'parseMode' | 'voice'> = {},
   ): FakeTelegramMessage {
     const message: FakeTelegramMessage = {
       message_id: this.nextMessageId++,
@@ -340,6 +342,7 @@ export class FakeTelegram {
       ...(extra.voice ? { voice: extra.voice } : {}),
       ...(extra.reply_markup ? { reply_markup: extra.reply_markup } : {}),
       ...(extra.isSilent !== undefined ? { isSilent: extra.isSilent } : {}),
+      ...(extra.parseMode !== undefined ? { parseMode: extra.parseMode } : {}),
     };
     this.messages.set(message.message_id, message);
     return message;
@@ -509,6 +512,7 @@ export class FakeTelegram {
         const message = this.storeMessage(Number(payload.message_thread_id ?? generalTopicThreadId), String(payload.text), this.options.botUser, {
           reply_markup: payload.reply_markup as FakeTelegramMessage['reply_markup'],
           isSilent: payload.disable_notification === true,
+          ...(typeof payload.parse_mode === 'string' ? { parseMode: payload.parse_mode } : {}),
         });
         return { ok: true, result: message };
       }

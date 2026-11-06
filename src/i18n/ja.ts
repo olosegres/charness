@@ -781,11 +781,12 @@ export const jaDict: Record<string, string> = {
   'timestamps.usageHint': '使い方: /timestamps on | off |（引数なし — 状態）',
 
   'schedule.fired':
-    '⏰ スケジュール「{name}」({schedule}){missedNote}\n\n{prompt}',
+    '⏰ スケジュール実行: {name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — {time} に見逃し、追従中',
-  'schedule.checkFailed':
-    '🚨 チェック「{name}」が失敗しました: {failure}（{schedule}）{missedNote}\n$ {command}\n\n{output}\n\nエージェントを起こします。チェックが再び通るまで追加の警告は出しません。',
-  'schedule.checkRecovered': '✅ チェック「{name}」が再び通りました。',
+  'schedule.checkFired': '🔔 チェック「{name}」が作動しました — エージェントを起こします。',
+  'schedule.workerFinished': '✅ ワーカー「{name}」が完了しました（{elapsed}）。結果を読んでいます。',
+  'schedule.workerSilent': '⚠️ ワーカー「{name}」は {minutes} 分間応答がありません。止まっていないか確認します。',
+  'schedule.checkRecovered': '✅ チェック「{name}」は正常に戻りました。',
   'schedule.statusLineText': '⏳ {name} · 稼働 {elapsed}{activity}',
   'schedule.statusLineActivity': ' · 現在: {activity}',
   'schedule.statusElapsedMinutes': '{minutes} 分',

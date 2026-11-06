@@ -1,7 +1,8 @@
 /**
  * @description Coverage for `scheduler/delivery.ts` (S4) — the `deliver`
- * callback the engine fires: announce → pin → ensure-session → (wait-for-idle)
- * → forward, and the `DeliveryOutcome` it reports.
+ * callback the engine fires: announce (silent, never pinned) → ensure-session →
+ * (wait-for-idle) → forward, and the `DeliveryOutcome` it reports. A reminder is the
+ * one fire that still pins.
  *
  * Every side effect is injected, so these run with no Telegram, no adapter, and
  * a FAKE clock: `sleep(ms)` advances a mutable `now` cursor and resolves on a
@@ -18,6 +19,7 @@ import {
   buildFireAnnouncement,
   prependScheduledRunMarker,
   unboundDeliveryError,
+  type ScheduleAnnounceOptions,
   type ScheduleDeliveryDeps,
 } from '../scheduler/delivery';
 import { busyPollIntervalMs, waitIdleTimeoutMs, type EnsureSessionResult } from '../postToSession';
@@ -26,8 +28,9 @@ import {
   getUnboundPausableSchedules,
 } from '../scheduler/deliveryKind';
 import { describeSchedule } from '../scheduler/recurrence';
-import type { CheckRunResult } from '../scheduler/checkRun';
+import { checkAlertOutputMaxChars, type CheckRunResult } from '../scheduler/checkRun';
 import { checkStatusCommandTimeoutSec } from '../scheduler/checkStatus';
+import { workerWatchExitCode, workerWatchSilenceMinutes } from '../scheduler/workerWatch';
 import { getReminderScheduleText } from '../utils/reminderScheduleText';
 import { runWithLocale } from '../i18n';
 import type { FireContext, ScheduleRecord } from '../scheduler/types';
@@ -70,11 +73,12 @@ interface CallLogEntry {
   step:
     | 'announce'
     | 'pin'
+    | 'unpinMessages'
     | 'ensureSession'
     | 'forward'
     | 'runCheck'
     | 'setCheckFailing'
-    | 'recordAlertPin'
+    | 'clearAlertPins'
     | 'readWorkerActivity'
     | 'postStatus'
     | 'recordStatusLine'
@@ -106,8 +110,8 @@ function createHarness(options: {
   statusPost?: 'fails' | 'throws';
   /** `recordStatusLine` says the job is gone. */
   isJobGoneWhenRecording?: boolean;
-  /** Deleting a message, or reading the worker's log, throws. */
-  failing?: Array<'deleteMessage' | 'readWorkerActivity' | 'recordStatusLine'>;
+  /** Deleting a message, reading the worker's log, recording the status line, or releasing the old alert pins throws. */
+  failing?: Array<'deleteMessage' | 'readWorkerActivity' | 'recordStatusLine' | 'unpinMessages' | 'clearAlertPins'>;
   /** The result of a `runCheck` for one particular command (the status command), in place of `checkResult`. */
   commandResults?: Record<string, CheckRunResult>;
   statusIntervalOverrideMs?: number;
@@ -120,14 +124,18 @@ function createHarness(options: {
   let busyIndex = 0;
 
   const deps: ScheduleDeliveryDeps = {
-    announce: async (key, text) => {
-      callLog.push({ step: 'announce', detail: { key, text } });
+    announce: async (key, text, announceOptions?: ScheduleAnnounceOptions) => {
+      callLog.push({ step: 'announce', detail: { key, text, options: announceOptions } });
       nowMs += options.announceDelayMs ?? 0;
       return options.announceId === undefined ? 42 : options.announceId;
     },
-    pin: async (key, messageId, isSilent) => {
-      callLog.push({ step: 'pin', detail: { key, messageId, isSilent } });
+    pin: async (key, messageId) => {
+      callLog.push({ step: 'pin', detail: { key, messageId } });
       if (options.pinThrows) throw new Error('not enough rights to pin');
+    },
+    unpinMessages: async (key, messageIds) => {
+      callLog.push({ step: 'unpinMessages', detail: { key, messageIds } });
+      if (options.failing?.includes('unpinMessages')) throw new Error('unpin boom');
     },
     checkBusy: () => {
       const value = busyValues[Math.min(busyIndex, busyValues.length - 1)];
@@ -154,8 +162,9 @@ function createHarness(options: {
     setCheckFailing: async (jobId, isFailing) => {
       callLog.push({ step: 'setCheckFailing', detail: { jobId, isFailing } });
     },
-    recordAlertPin: async (jobId, messageId) => {
-      callLog.push({ step: 'recordAlertPin', detail: { jobId, messageId } });
+    clearAlertPins: async (jobId) => {
+      callLog.push({ step: 'clearAlertPins', detail: { jobId } });
+      if (options.failing?.includes('clearAlertPins')) throw new Error('clear boom');
     },
     checkIsStatusShown: () => options.isStatusShown ?? true,
     postStatus: async (key, text) => {
@@ -190,7 +199,7 @@ function createHarness(options: {
   return { deps, callLog, forwardedTexts, getNow: () => nowMs };
 }
 
-test('happy path: announce → pin → ensureSession → forward, in order; delivered', async () => {
+test('happy path: announce → ensureSession → forward, in order, and NO pin; delivered', async () => {
   const { deps, callLog } = createHarness();
   const deliver = createScheduleDelivery(deps);
   const outcome = await deliver(makeJob(), onTime);
@@ -198,27 +207,28 @@ test('happy path: announce → pin → ensureSession → forward, in order; deli
   assert.deepEqual(outcome, { status: 'delivered' });
   assert.deepEqual(
     callLog.map((entry) => entry.step),
-    ['announce', 'pin', 'ensureSession', 'forward'],
+    ['announce', 'ensureSession', 'forward'],
+    'a scheduled run is ordinary output: it is never pinned',
   );
 });
 
-test('pin: silent flag honored — default notifies (isSilent=false)', async () => {
+test('a prompt job\'s fire is announced SILENTLY, with the prompt folded under a one-line header', async () => {
   const { deps, callLog } = createHarness();
-  const deliver = createScheduleDelivery(deps);
-  await deliver(makeJob(), onTime);
-  const pin = callLog.find((e) => e.step === 'pin');
-  assert.equal((pin?.detail as { isSilent: boolean }).isSilent, false);
+  await runWithLocale('en', () => createScheduleDelivery(deps)(makeJob(), onTime));
+
+  const announce = callLog.find((entry) => entry.step === 'announce')?.detail as { text: string; options?: ScheduleAnnounceOptions };
+  assert.equal(announce.text, '⏰ Scheduled: Daily reminder · every day at 09:00');
+  assert.deepEqual(announce.options, { isSilent: true, foldedDetail: 'Check the deploy status' });
 });
 
-test('pin: silent flag honored — job.isPinSilent makes the pin silent', async () => {
+test('a legacy isPinSilent on a stored job changes nothing: the fire is still not pinned', async () => {
   const { deps, callLog } = createHarness();
-  const deliver = createScheduleDelivery(deps);
-  await deliver(makeJob({ isPinSilent: true }), onTime);
-  const pin = callLog.find((e) => e.step === 'pin');
-  assert.equal((pin?.detail as { isSilent: boolean }).isSilent, true);
+  const legacyJob: ScheduleRecord = { ...makeJob(), ...{ isPinSilent: true } };
+  await createScheduleDelivery(deps)(legacyJob, onTime);
+  assert.ok(!callLog.some((entry) => entry.step === 'pin'));
 });
 
-test('announce send failed (null id) → pin skipped, delivery still proceeds to forward', async () => {
+test('announce send failed (null id) → delivery still proceeds to forward', async () => {
   const { deps, callLog } = createHarness({ announceId: null });
   const deliver = createScheduleDelivery(deps);
   const outcome = await deliver(makeJob(), onTime);
@@ -227,18 +237,8 @@ test('announce send failed (null id) → pin skipped, delivery still proceeds to
   assert.deepEqual(
     callLog.map((e) => e.step),
     ['announce', 'ensureSession', 'forward'],
-    'a failed announce skips pin but never blocks delivery',
+    'a failed announce never blocks delivery',
   );
-});
-
-test('pin failure → console.warn, delivery continues; outcome still delivered', async () => {
-  const { deps, callLog } = createHarness({ pinThrows: true });
-  const deliver = createScheduleDelivery(deps);
-  const outcome = await deliver(makeJob(), onTime);
-
-  assert.deepEqual(outcome, { status: 'delivered' });
-  // forward still ran after the failed pin
-  assert.ok(callLog.some((e) => e.step === 'forward'), 'forward must run despite pin failure');
 });
 
 test('busy session: polls until checkBusy flips false, then forwards', async () => {
@@ -323,14 +323,15 @@ test('catch-up fireContext: announcement carries the missed note with HH:MM', as
   const at = new Date(missedAtMs);
   const expectedTime = `${at.getHours().toString().padStart(2, '0')}:${at.getMinutes().toString().padStart(2, '0')}`;
 
-  const text = buildFireAnnouncement(makeJob(), { kind: 'catch-up', missedAtMs });
+  const { text, foldedDetail } = buildFireAnnouncement(makeJob(), { kind: 'catch-up', missedAtMs });
   assert.ok(text.includes(expectedTime), `expected missed-at time ${expectedTime} in "${text}"`);
   assert.ok(text.includes('Daily reminder'), 'announcement names the job');
-  assert.ok(text.includes('Check the deploy status'), 'announcement carries the prompt');
+  assert.equal(foldedDetail, 'Check the deploy status', 'the prompt rides folded under the header');
+  assert.ok(!text.includes('Check the deploy status'), 'the prompt is not in the visible sentence');
 });
 
 test('on-time fireContext: announcement has NO missed note', async () => {
-  const text = buildFireAnnouncement(makeJob(), onTime);
+  const { text } = buildFireAnnouncement(makeJob(), onTime);
   // The ru/en missedNote both contain "missed"/"пропущено"; neither should appear.
   assert.ok(!/missed|пропущено/i.test(text), `on-time run must not annotate a miss: "${text}"`);
 });
@@ -405,6 +406,15 @@ test('reminder: announces + pins and NEVER touches the agent; delivered', async 
   assert.equal(callLog.filter((entry) => entry.step === 'forward').length, 0);
 });
 
+test('reminder: still PINNED (the pin is what pierces a muted topic) and sent as it was — not silent, nothing folded', async () => {
+  const { deps, callLog } = createHarness({ announceId: 77 });
+  await createScheduleDelivery(deps)(makeReminder(), onTime);
+
+  assert.deepEqual(callLog.find((entry) => entry.step === 'pin')?.detail, { key: threadKey, messageId: 77 }, 'the announcement is the pinned message');
+  const announce = callLog.find((entry) => entry.step === 'announce')?.detail as { options?: ScheduleAnnounceOptions };
+  assert.equal(announce.options, undefined, 'no isSilent, no foldedDetail: the reminder is its own text');
+});
+
 test('reminder: delivers even when ensureSession WOULD fail (unbound topic / General)', async () => {
   // A reminder needs no folder and no agent, so the dep that fails every
   // agent-prompt fire must not be reachable at all.
@@ -431,7 +441,7 @@ test('reminder: announcement leads with the reminder text and names the schedule
   assert.ok(announcement.startsWith('🔔'), `reminder announcement must be belled: "${announcement}"`);
   assert.ok(announcement.includes('Take the evening pills'), 'the reminder text is the content');
   assert.ok(
-    !announcement.includes('Schedule "'),
+    !announcement.includes('Scheduled:'),
     `a reminder must not be framed as an agent prompt: "${announcement}"`,
   );
 });
@@ -444,7 +454,7 @@ test('reminder: the announced schedule is the LOCALIZED text, not English descri
   // assertion pins that `describeSchedule`'s English-only wording is NOT used
   // here, which is the defect this replaced.
   const reminder = makeReminder();
-  const announcement = buildFireAnnouncement(reminder, onTime);
+  const announcement = buildFireAnnouncement(reminder, onTime).text;
   const localized = getReminderScheduleText(reminder.spec);
 
   assert.equal(localized, 'every day at 09:00', 'the en wording of this fixture spec');
@@ -462,7 +472,7 @@ test('reminder: a non-English locale announces the schedule through the same ren
   // the announcement follows automatically.
   const reminder = makeReminder();
   runWithLocale('ru', () => {
-    const announcement = buildFireAnnouncement(reminder, onTime);
+    const announcement = buildFireAnnouncement(reminder, onTime).text;
     assert.ok(
       announcement.includes(getReminderScheduleText(reminder.spec)),
       `the ru announcement must carry the ru schedule text: "${announcement}"`,
@@ -470,13 +480,24 @@ test('reminder: a non-English locale announces the schedule through the same ren
   });
 });
 
-test('agent-prompt fire KEEPS English describeSchedule (only the reminder branch changed)', async () => {
+test('agent-prompt fire: a shape with a plain wording is announced in the topic\'s language, in the reminder\'s words', async () => {
   const job = makeJob();
-  const announcement = buildFireAnnouncement(job, onTime);
-  assert.ok(
-    announcement.includes(describeSchedule(job.spec)),
-    `a prompt job still names its schedule the old way: "${announcement}"`,
-  );
+  const { text } = buildFireAnnouncement(job, onTime);
+  assert.ok(text.includes(getReminderScheduleText(job.spec)), `the daily job reads like a reminder: "${text}"`);
+  runWithLocale('ru', () => {
+    const { text: russianText } = buildFireAnnouncement(job, onTime);
+    assert.ok(russianText.includes(getReminderScheduleText(job.spec)), `the ru header carries the ru schedule: "${russianText}"`);
+    assert.ok(!russianText.includes(describeSchedule(job.spec)), `not the English-only wording: "${russianText}"`);
+  });
+});
+
+test('agent-prompt fire: a shape the reminder wording would print as a bare cron keeps the readable English one', async () => {
+  const job = makeJob({ spec: { kind: 'cron', cronExpr: '*/5 * * * *' } });
+  assert.equal(getReminderScheduleText(job.spec), 'cron */5 * * * *', 'the reminder wording gives up on an interval');
+  const { text } = buildFireAnnouncement(job, onTime);
+  assert.ok(text.includes('every 5m'), `an interval reads as an interval: "${text}"`);
+  const budgeted = buildFireAnnouncement(makeJob({ spec: { kind: 'cron', cronExpr: '0 9 * * 1', remainingRuns: 3 } }), onTime).text;
+  assert.ok(budgeted.includes('(3 runs left)'), `an N-times budget stays visible: "${budgeted}"`);
 });
 
 test('reminder: announce send failed (null id) → pin skipped, still delivered', async () => {
@@ -506,13 +527,13 @@ test('reminder: catch-up fire carries the missed-at note', async () => {
   const at = new Date(missedAtMs);
   const expectedTime = `${at.getHours().toString().padStart(2, '0')}:${at.getMinutes().toString().padStart(2, '0')}`;
 
-  const text = buildFireAnnouncement(makeReminder(), { kind: 'catch-up', missedAtMs });
+  const { text } = buildFireAnnouncement(makeReminder(), { kind: 'catch-up', missedAtMs });
   assert.ok(text.includes(expectedTime), `expected missed-at time ${expectedTime} in "${text}"`);
   assert.ok(text.includes('Take the evening pills'), 'the reminder text is still the content');
 });
 
 test('reminder: on-time fire has NO missed note', async () => {
-  const text = buildFireAnnouncement(makeReminder(), onTime);
+  const { text } = buildFireAnnouncement(makeReminder(), onTime);
   assert.ok(!/missed|пропущено/i.test(text), `on-time reminder must not annotate a miss: "${text}"`);
 });
 
@@ -591,43 +612,60 @@ test('check: a passing run after a pass posts nothing and wakes nobody', async (
   });
 });
 
-test('check: the first failure stores the flag, pins the alert, then wakes the agent', async () => {
+test('check: the first failure stores the flag, tells the topic silently — no pin — then wakes the agent', async () => {
   const { deps, callLog } = createHarness({ checkResult: failedRun });
-  const outcome = await createScheduleDelivery(deps)(makeCheck({ checkTimeoutSec: 20 }), onTime);
+  const outcome = await runWithLocale('en', () => createScheduleDelivery(deps)(makeCheck({ checkTimeoutSec: 20 }), onTime));
 
   assert.deepEqual(outcome, { status: 'delivered' });
   assert.deepEqual(
     callLog.map((entry) => entry.step),
-    ['runCheck', 'setCheckFailing', 'announce', 'pin', 'recordAlertPin', 'ensureSession', 'forward'],
+    ['runCheck', 'setCheckFailing', 'announce', 'ensureSession', 'forward'],
+    'no pin, and nothing to remember about one',
   );
   assert.equal((callLog[0].detail as { timeoutMs: number }).timeoutMs, 20_000);
-  assert.deepEqual(callLog[4].detail, { jobId: 'api-health-abc123', messageId: 42 }, 'the pinned alert is remembered on its job');
   assert.deepEqual(callLog[1].detail, { jobId: 'api-health-abc123', isFailing: true });
 
-  const alert = (callLog[2].detail as { text: string }).text;
-  assert.match(alert, /API health/);
-  assert.match(alert, /exit 7/);
-  assert.match(alert, /\$ curl -fsS/);
-  assert.match(alert, /Failed to connect/);
-  assert.equal((callLog[3].detail as { isSilent: boolean }).isSilent, false, 'the alert pin notifies');
+  const alert = callLog[2].detail as { text: string; options?: ScheduleAnnounceOptions };
+  assert.equal(alert.text, '🔔 Check "API health" fired — waking the agent.');
+  assert.equal(alert.options?.isSilent, true, 'a check alert is ordinary silent output');
+  assert.equal(alert.options?.foldedDetail, 'exit 7\n\ncurl: (7) Failed to connect', 'the failure and the output tail are folded under the sentence');
 
-  const prompt = (callLog[6].detail as { text: string }).text;
+  const prompt = (callLog[4].detail as { text: string }).text;
   assert.ok(prompt.startsWith('[Scheduled check "API health" failed]'));
+  assert.match(prompt, /Command \(run by the bot in this folder\): curl -fsS http:\/\/127\.0\.0\.1:8080\/health/, 'the agent still gets the command');
   assert.match(prompt, /Result: exit 7/);
   assert.match(prompt, /Failed to connect/);
   assert.ok(prompt.endsWith('Find out why the API is down and restart it.'), 'the job prompt comes last');
 });
 
-test('check: an alert whose pin failed is not remembered as pinned', async () => {
-  const { deps, callLog } = createHarness({ checkResult: failedRun, pinThrows: true });
-  const originalWarn = console.warn;
-  console.warn = () => {};
-  try {
-    await createScheduleDelivery(deps)(makeCheck(), onTime);
-  } finally {
-    console.warn = originalWarn;
-  }
-  assert.ok(!callLog.some((entry) => entry.step === 'recordAlertPin'));
+test('check: the topic notice never carries the command — visible sentence or folded detail', async () => {
+  const { deps, callLog } = createHarness({ checkResult: failedRun });
+  await createScheduleDelivery(deps)(makeCheck({ checkCommand: 'sh -c "secret-probe --token=abc123 || exit 7"' }), onTime);
+
+  const alert = callLog.find((entry) => entry.step === 'announce')?.detail as { text: string; options?: ScheduleAnnounceOptions };
+  const everythingTheTopicSees = `${alert.text}\n${alert.options?.foldedDetail ?? ''}`;
+  assert.doesNotMatch(everythingTheTopicSees, /secret-probe|abc123|\$ /, everythingTheTopicSees);
+});
+
+test('check: a failure with no output folds the failure alone; a long output is folded as its tail', async () => {
+  const silentFailure = createHarness({ checkResult: { exitCode: null, signal: 'SIGTERM', isTimedOut: true, output: '  \n' } });
+  await createScheduleDelivery(silentFailure.deps)(makeCheck({ checkTimeoutSec: 30 }), onTime);
+  const bare = silentFailure.callLog.find((entry) => entry.step === 'announce')?.detail as { options?: ScheduleAnnounceOptions };
+  assert.equal(bare.options?.foldedDetail, 'timeout 30s', 'a blank output leaves just the reason');
+
+  const longOutput = `${'old line\n'.repeat(400)}the last line`;
+  const verbose = createHarness({ checkResult: { exitCode: 2, signal: null, isTimedOut: false, output: longOutput } });
+  await createScheduleDelivery(verbose.deps)(makeCheck(), onTime);
+  const folded = (verbose.callLog.find((entry) => entry.step === 'announce')?.detail as { options?: ScheduleAnnounceOptions }).options?.foldedDetail ?? '';
+  assert.ok(folded.startsWith('exit 2\n\n…'), 'a cut tail is marked');
+  assert.ok(folded.endsWith('the last line'), 'the end of the log is where the failure is');
+  assert.ok(folded.length <= 'exit 2\n\n'.length + checkAlertOutputMaxChars, `${folded.length} characters`);
+});
+
+test('check: a failed announce (null id) still wakes the agent', async () => {
+  const { deps, callLog } = createHarness({ checkResult: failedRun, announceId: null });
+  await createScheduleDelivery(deps)(makeCheck(), onTime);
+  assert.deepEqual(callLog.map((entry) => entry.step), ['runCheck', 'setCheckFailing', 'announce', 'ensureSession', 'forward']);
 });
 
 test('check: a failure while already failing stays silent', async () => {
@@ -638,7 +676,7 @@ test('check: a failure while already failing stays silent', async () => {
   assert.deepEqual(callLog.map((entry) => entry.step), ['runCheck']);
 });
 
-test('check: a pass after a failure clears the flag and posts one unpinned line', async () => {
+test('check: a pass after a failure clears the flag and posts one silent "back to normal" line', async () => {
   const { deps, callLog } = createHarness();
   const outcome = await runWithLocale('en', () =>
     createScheduleDelivery(deps)(makeCheck({ isCheckFailing: true }), onTime),
@@ -647,7 +685,9 @@ test('check: a pass after a failure clears the flag and posts one unpinned line'
   assert.deepEqual(outcome, { status: 'delivered' });
   assert.deepEqual(callLog.map((entry) => entry.step), ['runCheck', 'setCheckFailing', 'announce']);
   assert.deepEqual(callLog[1].detail, { jobId: 'api-health-abc123', isFailing: false });
-  assert.equal((callLog[2].detail as { text: string }).text, '✅ Check "API health" passes again.');
+  const recovered = callLog[2].detail as { text: string; options?: ScheduleAnnounceOptions };
+  assert.equal(recovered.text, '✅ Check "API health" is back to normal.');
+  assert.deepEqual(recovered.options, { isSilent: true });
 });
 
 test('check: a timeout is a failure and names its limit', async () => {
@@ -790,7 +830,7 @@ test('status: the first FAILURE deletes the line before the alert, and the alert
 
   assert.deepEqual(
     getStepNames(callLog),
-    ['runCheck', 'recordStatusLine', 'deleteMessage', 'setCheckFailing', 'announce', 'pin', 'recordAlertPin', 'ensureSession', 'forward'],
+    ['runCheck', 'recordStatusLine', 'deleteMessage', 'setCheckFailing', 'announce', 'ensureSession', 'forward'],
     'the line goes first; no new line is posted under the alert; the agent is woken as before',
   );
   assert.deepEqual(callLog[1].detail, { jobId: 'watch-builder-s2-abc123', line: null });
@@ -912,6 +952,110 @@ test('status: a throwing send, log read or record never turns a passing check in
       assert.deepEqual(outcome, { status: 'delivered' }, label);
       assert.ok(!callLog.some((entry) => entry.step === 'forward'), `${label}: the agent is not woken`);
     }
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+// ─── the topic notice of a worker watch ──────────────────────────────
+
+const workerGoneRun: CheckRunResult = { exitCode: workerWatchExitCode.processGone, signal: null, isTimedOut: false, output: 'worker 4242 exited\n' };
+const workerSilentRun: CheckRunResult = {
+  exitCode: workerWatchExitCode.runDirSilent,
+  signal: null,
+  isTimedOut: false,
+  output: `${workerRunDir}: no change for ${workerWatchSilenceMinutes} min\n`,
+};
+
+/** The announce call of a run, the way the topic would get it. */
+function getAnnounced(callLog: CallLogEntry[]): { text: string; options?: ScheduleAnnounceOptions } {
+  return callLog.find((entry) => entry.step === 'announce')?.detail as { text: string; options?: ScheduleAnnounceOptions };
+}
+
+test('worker watch: a worker whose process is gone is announced as finished, with how long it ran — no command, nothing folded', async () => {
+  const { deps, callLog } = createHarness({ checkResult: workerGoneRun, startMs: jobCreatedAtMs + (2 * 60 + 5) * minuteMs });
+  await runWithLocale('en', () => createScheduleDelivery(deps)(makeWorkerWatch(), onTime));
+
+  const alert = getAnnounced(callLog);
+  assert.equal(alert.text, '✅ Worker "builder S2" finished (2 h 5 min). Reading the result.', 'the recipe\'s «watch » is not the worker\'s name');
+  assert.equal(alert.options?.isSilent, true);
+  assert.equal(alert.options?.foldedDetail, undefined, 'one sentence says it all');
+  assert.ok(!callLog.some((entry) => entry.step === 'pin'), 'a finished worker rings nobody and pins nothing');
+  assert.ok(callLog.some((entry) => entry.step === 'forward'), 'the agent is still woken to read the result');
+});
+
+test('worker watch: a worker whose run directory went quiet is announced as silent for 45 min', async () => {
+  const { deps, callLog } = createHarness({ checkResult: workerSilentRun });
+  await runWithLocale('en', () => createScheduleDelivery(deps)(makeWorkerWatch(), onTime));
+
+  assert.equal(getAnnounced(callLog).text, '⚠️ Worker "builder S2" has been silent for 45 min. Checking whether it hung.');
+});
+
+test('worker watch: the agent\'s prompt keeps the command and the output exactly as before', async () => {
+  const { deps, forwardedTexts } = createHarness({ checkResult: workerGoneRun });
+  await createScheduleDelivery(deps)(makeWorkerWatch(), onTime);
+
+  assert.equal(forwardedTexts.length, 1);
+  assert.match(forwardedTexts[0], /Command \(run by the bot in this folder\): kill -0 4242/);
+  assert.match(forwardedTexts[0], /Result: exit 1/);
+  assert.match(forwardedTexts[0], /worker 4242 exited/);
+});
+
+test('worker watch: a failure that is neither of the recipe\'s two signals says «fired» with the reason folded; a watch with no worker source never says «worker»', async () => {
+  const timedOut = createHarness({ checkResult: { exitCode: null, signal: 'SIGTERM', isTimedOut: true, output: '' } });
+  await runWithLocale('en', () => createScheduleDelivery(timedOut.deps)(makeWorkerWatch(), onTime));
+  assert.equal(getAnnounced(timedOut.callLog).text, '🔔 Check "watch builder S2" fired — waking the agent.');
+  assert.equal(getAnnounced(timedOut.callLog).options?.foldedDetail, 'timeout 60s');
+
+  const customCommand = createHarness({ checkResult: { exitCode: 3, signal: null, isTimedOut: false, output: 'disk full\n' } });
+  await runWithLocale('en', () => createScheduleDelivery(customCommand.deps)(makeWorkerWatch(), onTime));
+  assert.equal(getAnnounced(customCommand.callLog).text, '🔔 Check "watch builder S2" fired — waking the agent.', 'exit 3 is not the recipe\'s');
+
+  const noWorkerSource = createHarness({ checkResult: workerGoneRun });
+  await runWithLocale('en', () => createScheduleDelivery(noWorkerSource.deps)(makeCheck({ name: 'watch something' }), onTime));
+  assert.equal(getAnnounced(noWorkerSource.callLog).text, '🔔 Check "watch something" fired — waking the agent.', 'exit 1 of a plain check proves nothing about a worker');
+  assert.equal(getAnnounced(noWorkerSource.callLog).options?.foldedDetail, 'exit 1\n\nworker 4242 exited');
+});
+
+test('worker watch: the sentences exist in a non-English locale too', async () => {
+  const { deps, callLog } = createHarness({ checkResult: workerGoneRun, startMs: jobCreatedAtMs + 30 * minuteMs });
+  await runWithLocale('ru', () => createScheduleDelivery(deps)(makeWorkerWatch(), onTime));
+  assert.equal(getAnnounced(callLog).text, '✅ Воркер «builder S2» завершил работу (30 мин). Читаю результат.');
+});
+
+// ─── alert pins an earlier version left on a check ───────────────────
+
+test('legacy alert pins: released ONCE at the job\'s next run — unpinned, then forgotten — before the check runs', async () => {
+  const { deps, callLog } = createHarness();
+  const outcome = await createScheduleDelivery(deps)(makeCheck({ alertPinMessageIds: [501, 502] }), onTime);
+
+  assert.deepEqual(outcome, { status: 'delivered' });
+  assert.deepEqual(getStepNames(callLog), ['unpinMessages', 'clearAlertPins', 'runCheck']);
+  assert.deepEqual(callLog[0].detail, { key: threadKey, messageIds: [501, 502] });
+  assert.deepEqual(callLog[1].detail, { jobId: 'api-health-abc123' });
+});
+
+test('legacy alert pins: a job with none touches neither the unpin nor the record', async () => {
+  const { deps, callLog } = createHarness();
+  await createScheduleDelivery(deps)(makeCheck(), onTime);
+  await createScheduleDelivery(deps)(makeCheck({ alertPinMessageIds: [] }), onTime);
+  assert.deepEqual(getStepNames(callLog), ['runCheck', 'runCheck']);
+});
+
+test('legacy alert pins: a failing unpin keeps the ids for the next run, and never stops the check', async () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const { deps, callLog } = createHarness({ checkResult: failedRun, failing: ['unpinMessages'] });
+    const outcome = await createScheduleDelivery(deps)(makeCheck({ alertPinMessageIds: [501] }), onTime);
+
+    assert.deepEqual(outcome, { status: 'delivered' });
+    assert.ok(!callLog.some((entry) => entry.step === 'clearAlertPins'), 'not forgotten while still pinned');
+    assert.ok(callLog.some((entry) => entry.step === 'forward'), 'the failure still woke the agent');
+
+    const forgetting = createHarness({ failing: ['clearAlertPins'] });
+    assert.deepEqual(await createScheduleDelivery(forgetting.deps)(makeCheck({ alertPinMessageIds: [501] }), onTime), { status: 'delivered' });
+    assert.ok(forgetting.callLog.some((entry) => entry.step === 'runCheck'));
   } finally {
     console.warn = originalWarn;
   }

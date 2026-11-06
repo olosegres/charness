@@ -781,11 +781,12 @@ export const esDict: Record<string, string> = {
   'timestamps.usageHint': 'Uso: /timestamps on | off | (sin argumento — estado)',
 
   'schedule.fired':
-    '⏰ Programación «{name}» ({schedule}){missedNote}\n\n{prompt}',
+    '⏰ Programado: {name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — perdido a las {time}, recuperando',
-  'schedule.checkFailed':
-    '🚨 La comprobación «{name}» falló: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nDespertando al agente. No habrá más alertas hasta que la comprobación vuelva a pasar.',
-  'schedule.checkRecovered': '✅ La comprobación «{name}» vuelve a pasar.',
+  'schedule.checkFired': '🔔 La comprobación «{name}» se activó — despertando al agente.',
+  'schedule.workerFinished': '✅ El worker «{name}» terminó ({elapsed}). Leyendo el resultado.',
+  'schedule.workerSilent': '⚠️ El worker «{name}» lleva {minutes} min en silencio. Comprobando si se colgó.',
+  'schedule.checkRecovered': '✅ La comprobación «{name}» vuelve a estar bien.',
   'schedule.statusLineText': '⏳ {name} · trabaja desde hace {elapsed}{activity}',
   'schedule.statusLineActivity': ' · ahora: {activity}',
   'schedule.statusElapsedMinutes': '{minutes} min',

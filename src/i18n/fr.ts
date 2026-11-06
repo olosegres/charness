@@ -781,11 +781,12 @@ export const frDict: Record<string, string> = {
   'timestamps.usageHint': 'Utilisation : /timestamps on | off | (sans argument — statut)',
 
   'schedule.fired':
-    '⏰ Planification « {name} » ({schedule}){missedNote}\n\n{prompt}',
+    '⏰ Planifié : {name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — manqué à {time}, rattrapage',
-  'schedule.checkFailed':
-    '🚨 Vérification « {name} » en échec : {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nJe réveille l’agent. Plus d’alerte tant que la vérification n’est pas de nouveau réussie.',
-  'schedule.checkRecovered': '✅ La vérification « {name} » réussit de nouveau.',
+  'schedule.checkFired': '🔔 La vérification « {name} » s’est déclenchée — je réveille l’agent.',
+  'schedule.workerFinished': '✅ Le worker « {name} » est terminé ({elapsed}). Je lis le résultat.',
+  'schedule.workerSilent': '⚠️ Le worker « {name} » est silencieux depuis {minutes} min. Je vérifie s’il est bloqué.',
+  'schedule.checkRecovered': '✅ La vérification « {name} » est de nouveau en ordre.',
   'schedule.statusLineText': '⏳ {name} · travaille depuis {elapsed}{activity}',
   'schedule.statusLineActivity': ' · en ce moment : {activity}',
   'schedule.statusElapsedMinutes': '{minutes} min',

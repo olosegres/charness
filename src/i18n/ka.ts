@@ -781,11 +781,12 @@ export const kaDict: Record<string, string> = {
   'timestamps.usageHint': 'გამოყენება: /timestamps on | off | (არგუმენტის გარეშე — სტატუსი)',
 
   'schedule.fired':
-    '⏰ განრიგი «{name}» ({schedule}){missedNote}\n\n{prompt}',
+    '⏰ დაგეგმილი: {name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — გამოტოვებულია {time}-ზე, მიწევს',
-  'schedule.checkFailed':
-    '🚨 შემოწმება «{name}» ვერ გაიარა: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nაგენტს ვაღვიძებ. ახალი გაფრთხილება აღარ იქნება, სანამ შემოწმება ისევ არ გაივლის.',
-  'schedule.checkRecovered': '✅ შემოწმება «{name}» ისევ გადის.',
+  'schedule.checkFired': '🔔 შემოწმება «{name}» ამოქმედდა — ვაღვიძებ აგენტს.',
+  'schedule.workerFinished': '✅ ვორკერი «{name}» დასრულდა ({elapsed}). ვკითხულობ შედეგს.',
+  'schedule.workerSilent': '⚠️ ვორკერი «{name}» {minutes} წუთია ჩუმადაა. ვამოწმებ, ხომ არ გაჭედა.',
+  'schedule.checkRecovered': '✅ შემოწმება «{name}» ისევ რიგზეა.',
   'schedule.statusLineText': '⏳ {name} · მუშაობს {elapsed}{activity}',
   'schedule.statusLineActivity': ' · ახლა: {activity}',
   'schedule.statusElapsedMinutes': '{minutes} წთ',

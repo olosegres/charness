@@ -38,7 +38,7 @@ import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import {
   workerWatchCheckCommand,
   workerWatchCheckCron,
-  workerWatchPinArgument,
+  workerWatchSilenceMinutes,
   workerWatchStatusArguments,
   workerWatchStatusEveryMinutes,
 } from './workerWatch';
@@ -181,7 +181,7 @@ function buildRemoteRunInstruction(runnerLines: readonly string[], shownCount: n
 const orchestrationInstructionHead = '• You orchestrate detached workers (a `claude -p` / `opencode run` builder, reviewer, researcher) →';
 /** What the worker-watch recipe says once a tool is named: shared by both wordings of the Telegram bullet. */
 const workerWatchRecipeText =
-  `its description has the recipe (checkCommand, cron, \`${workerWatchPinArgument}\`); never \`kill -0\` alone: it never fires on a hung worker.`;
+  'its description has the recipe (checkCommand, cron, status arguments); never `kill -0` alone: it never fires on a hung worker.';
 
 /**
  * The orchestration bullet of a conversation on a tracker, which has no scheduling tools: only the manager-skill hint, so
@@ -239,7 +239,7 @@ When to use it:
 • You want to deliver SEVERAL discrete messages (each its own message, e.g. a per-item news digest) → send_messages_to_user; an item may attach ONE file (the text becomes its caption).
 ${compactConversationInstruction}
 ${isTodoToolOffered ? `${todoInstruction}\n` : ''}• You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
-• You need a watchdog — keep an eye on a service, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron): the bot runs it in this folder, stays silent while it exits 0, and on the first failure pins an alert and wakes you with \`prompt\` + the exit code and output tail. Checks survive restarts and crashes. NEVER build your own watcher (background loop, nohup, sleep loop, tmux pane, shell crontab): it dies with your session or a restart, silently.
+• You need a watchdog — keep an eye on a service, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron): the bot runs it in this folder, stays silent while it exits 0, and on the first failure tells the topic in one line and wakes you with \`prompt\` + the exit code and output tail. Checks survive restarts and crashes. NEVER build your own watcher (background loop, nohup, sleep loop, tmux pane, shell crontab): it dies with your session or a restart, silently.
 ${buildTelegramOrchestrationInstruction(isBotSkillsEnabled)}
 ${answerRequestInstruction} The requester may not see your plain text: anything they must read goes through answer_request — yet your plain text is relayed into the topic too, so end the turn WITHOUT a recap of what you answered (it would show twice).
 ${claudeProfilesInstruction}${remoteRunInstructionText === null ? '' : `\n${remoteRunInstructionText}`}
@@ -453,7 +453,7 @@ export interface SchedulerMcpDeps {
   getThreadsForDirectory: (directory: string) => string[];
   /** Last-used adapter name for a thread, for the `lastAdapterName` snapshot. */
   getThreadAdapterName: (threadKey: string) => string | undefined;
-  /** Unpin these messages of the thread (best-effort: an already unpinned or deleted one is skipped). */
+  /** Unpin these messages of the thread (best-effort: an already unpinned or deleted one is skipped) — the old alert pins of a cancelled check. */
   unpinMessages: (threadKey: string, messageIds: readonly number[]) => Promise<void>;
   /** Delete a message of the thread (best-effort: one that is gone or too old to delete is skipped) — a cancelled check's status line. */
   deleteMessage: (threadKey: string, messageId: number) => Promise<void>;
@@ -737,7 +737,7 @@ const scheduleCreateShape = {
     .describe(
       'Makes the job a WATCHDOG CHECK: a shell command (run with /bin/sh -c in the bound folder) the bot ' +
         'executes at every fire instead of waking you. Exit 0 = healthy, nothing is posted. The first ' +
-        'non-zero exit or timeout pins an alert in the topic and wakes you with `prompt` plus the exit ' +
+        'non-zero exit or timeout tells the topic in one line (never the command) and wakes you with `prompt` plus the exit ' +
         'code and output tail; later failures stay silent until a run passes again (the topic is told). ' +
         'Keep it a quick probe, e.g. `systemctl --user is-active myapp`, `curl -fsS -m 10 http://127.0.0.1:8080/health`, ' +
         '`test $(df --output=pcent / | tail -1 | tr -dc 0-9) -lt 90`; a detached worker: the recipe in the tool description.',
@@ -785,7 +785,7 @@ const scheduleCreateShape = {
   isPinSilent: z
     .boolean()
     .optional()
-    .describe('Pin the fire announcement silently (no member notification). Default false = notify all.'),
+    .describe('DEPRECATED, has no effect: scheduled messages and check alerts are never pinned. Do not pass it.'),
   threadKey: threadKeyArgSchema,
 };
 const scheduleCreateInput = createStrictToolInput(scheduleCreateShape);
@@ -1017,6 +1017,17 @@ function summarizeRecord(record: ScheduleRecord): string {
   return `${record.name} (id: ${record.id}) — ${describeSchedule(record.spec)}${checkNote}${statusNote}; next run: ${next}${pausedNote}`;
 }
 
+/**
+ * The `schedule_create` confirmation, which also lands in the topic as a tool result: one line a person reads («Scheduled
+ * "Nightly build": daily at 02:00» / «Scheduled "API health": checks every 5m») and, on the next, the id the agent needs to
+ * cancel it. The command and the next-run stamp are in `schedule_list`.
+ */
+function summarizeCreated(record: ScheduleRecord): string {
+  const schedule = describeSchedule(record.spec);
+  const when = checkIsCheckSchedule(record) ? `checks ${schedule}` : schedule;
+  return `Scheduled "${record.name}": ${when}\nid: ${record.id}`;
+}
+
 // ─── tool handlers (scope-bound) ─────────────────────────────────────
 
 /**
@@ -1031,8 +1042,8 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
     {
       title: 'Create a scheduled prompt',
       description:
-        'Schedule a prompt to be delivered to this topic later. The bot announces, pins, and ' +
-        'forwards the prompt to the agent at fire time.\n\n' +
+        'Schedule a prompt to be delivered to this topic later. At fire time the bot posts a short silent line ' +
+        '(name and schedule, the prompt folded under it) and forwards the prompt to the agent. The line is never pinned.\n\n' +
         'Pick exactly ONE mode:\n' +
         '• one-shot (run once at a time): pass onceAt (ISO 8601); omit cron and repeatCount.\n' +
         '• recurring: pass cron (5-field); omit onceAt.\n' +
@@ -1051,9 +1062,9 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
         'background loop, nohup, a sleep loop, a tmux pane, a shell crontab) — it dies with your session ' +
         'or a restart and then fails silently.\n\n' +
         `A DETACHED WORKER you launched (a \`claude -p\` / \`opencode run\` process): cron \`${workerWatchCheckCron}\`, ` +
-        `\`${workerWatchPinArgument}\`, \`${workerWatchStatusArguments}\`, checkCommand \`${workerWatchCheckCommand}\` with its PID and run dir — it fails when ` +
-        'the worker exits OR nothing in its run dir changed for 45 min, so the first failure is also the "worker finished" ' +
-        'signal (hence the silent pin: a normal finish must not notify the user). Never `kill -0` alone: it stays green ' +
+        `\`${workerWatchStatusArguments}\`, checkCommand \`${workerWatchCheckCommand}\` with its PID and run dir — it fails when ` +
+        `the worker exits OR nothing in its run dir changed for ${workerWatchSilenceMinutes} min, so the first failure is also the "worker finished" ` +
+        'signal (the topic then reads «worker finished» or «worker silent», never the command). Never `kill -0` alone: it stays green ' +
         'while a worker hangs. The status arguments make the BOT post a silent status line into the topic every ' +
         `${workerWatchStatusEveryMinutes} min while the worker lives (works N min, its last action), so the topic never looks frozen — ` +
         'without waking you or spending tokens: never arm a schedule of your own for status lines. One check per worker run; ' +
@@ -1102,7 +1113,6 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
         createdBy: 'agent',
         nowMs,
         lastAdapterName: deps.getThreadAdapterName(resolved.threadKey),
-        isPinSilent: args.isPinSilent,
         ...(checkCommand
           ? { deliveryKind: 'check' as const, checkCommand, checkTimeoutSec: args.checkTimeoutSeconds }
           : {}),
@@ -1120,7 +1130,7 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
       const record = created.record;
       deps.armJob(record);
       const noteSuffix = notes.map((note) => `\n\nℹ️ ${note}`).join('');
-      return textResult(`Scheduled "${record.name}".\n${summarizeRecord(record)}${noteSuffix}`);
+      return textResult(`${summarizeCreated(record)}${noteSuffix}`);
     },
   );
 
@@ -1164,8 +1174,8 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
       title: 'Cancel a scheduled prompt',
       description:
         'Cancel (delete) a scheduled prompt by its id. Only schedules owned by this topic can be cancelled. Cancelling a ' +
-        'watchdog check also unpins the alerts it pinned and deletes its status line — cancel a worker watch once its wake ' +
-        'is handled, so a finished worker leaves no pinned alert and no status line behind.',
+        'watchdog check also deletes its status line — cancel a worker watch once its wake is handled, so a finished worker ' +
+        'leaves no status line behind.',
       inputSchema: scheduleCancelInput,
     },
     async (args) => {
@@ -1185,6 +1195,7 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
       await deps.store.removeSchedule(args.id);
       deps.disarmJob(args.id);
       const cleanedUp: string[] = [];
+      // Nothing pins a check alert any more, but a job made by an earlier version may still carry the ids of the ones it pinned.
       const alertPins = record.alertPinMessageIds ?? [];
       if (alertPins.length > 0) {
         await deps.unpinMessages(record.threadKey, alertPins);

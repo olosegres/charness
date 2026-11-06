@@ -97,8 +97,10 @@ per-backend controls are optional methods the bot checks before calling.
   `/reminders` is the bot-local twin (buttons only, the bot posts and pins itself, no agent, works in ANY
   topic, unbound/General included). One `schedules` store, split by `deliveryKind`. A `checkCommand` job is
   a WATCHDOG (`deliveryKind: 'check'`, `scheduler/checkRun.ts`): the bot runs the command in the bound
-  folder, stays silent while it exits 0, and only the FIRST failure after a pass pins an alert and wakes the
-  agent (`isCheckFailing` is stored before the wake, so a restart never repeats it); recovery posts one line.
+  folder, stays silent while it exits 0, and only the FIRST failure after a pass says so in one silent sentence (never
+  the command; the output folded under it) and wakes the agent (`isCheckFailing` is stored before the wake, so a restart
+  never repeats it); recovery posts one line. Nothing the scheduler posts is pinned except a reminder — the pin is what
+  pierces a muted topic; a prompt job's fire is one silent line with its prompt folded in an expandable quotation.
   A check with a status source (`statusWorkerRunDir` / `statusCommand`) also posts ONE silent status line per
   `statusEveryMinutes` (15) while it passes, replacing the previous one — the bot's own message, no agent wake,
   only in a Telegram topic whose view shows the stream (`scheduler/checkStatus.ts`).

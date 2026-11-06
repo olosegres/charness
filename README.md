@@ -32,7 +32,7 @@ One topic is one AI pipeline: its own project folder, its own agent, its own sch
 - **Video production** — scripts, cuts, subtitles and renders on a server with the tools installed; the agent sends the finished clips back into the topic.
 - **Images** — with an image tool or model connected (an MCP server or a CLI on the server), the agent generates pictures and sends them into the topic.
 - **Email and messengers** — with a mail or messenger tool connected (an MCP server), the agent answers an email or sends a message for you; ask it by voice, check the result in the topic.
-- **Monitoring and on-call** — a scheduled check runs a command (a service, a deploy, a disk, a URL), stays silent while it passes, and on the first failure pins an alert and wakes the agent with the output.
+- **Monitoring and on-call** — a scheduled check runs a command (a service, a deploy, a disk, a URL), stays silent while it passes, and on the first failure tells the topic in one line and wakes the agent with the output.
 - **Personal assistant and planning** — reminders and recurring tasks: a morning plan, a weekly review, a "finish this tomorrow at 9" hand-off, all by voice from your phone.
 - **Data analysis and reports** — drop a spreadsheet or a CSV into the topic; the agent analyses it and sends back charts and a report, and a cron job rebuilds the report every week.
 - **Translation and localization** — an agent keeps a project's locale files in sync: translates new strings and checks the existing ones.

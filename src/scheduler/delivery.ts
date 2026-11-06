@@ -1,5 +1,6 @@
 import { t } from '../i18n';
-import { getReminderScheduleText } from '../utils/reminderScheduleText';
+import { getReminderScheduleDescriptorText, getReminderScheduleText } from '../utils/reminderScheduleText';
+import { getReminderScheduleDescriptor } from '../utils/reminderWizard';
 import { formatLocalClock, formatLocalDateAndClock } from '../utils/localClock';
 import {
   buildCheckFailurePrompt,
@@ -7,7 +8,6 @@ import {
   checkIsCheckPassing,
   defaultCheckTimeoutSec,
   describeCheckFailure,
-  getCheckAlertCommand,
   getCheckAlertDecision,
   getOutputTail,
   type CheckRunResult,
@@ -17,24 +17,26 @@ import {
   checkIsCheckStatusDue,
   checkIsFinalCheckRun,
   checkStatusCommandTimeoutSec,
+  getCheckShownName,
   getCheckStatusActivityFromOutput,
+  getCheckStatusElapsedText,
   getCheckStatusIntervalMs,
   getCheckStatusSinceMs,
 } from './checkStatus';
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import { describeSchedule } from './recurrence';
-import type { CheckStatusLine, DeliveryOutcome, FireContext, ScheduleRecord } from './types';
+import type { CheckStatusLine, DeliveryOutcome, FireContext, ScheduleRecord, ScheduleSpec } from './types';
+import { getWorkerWatchEnd, workerWatchSilenceMinutes } from './workerWatch';
 import { postToSession, type PostToSessionDeps } from '../postToSession';
 
 /**
  * @description Scheduler delivery (plan S4): the real `deliver(job, fireContext)`
  * callback the engine (S3) invokes at fire time. The flow is locked by the plan:
  *
- *   1. announce — post a visible message into the topic (job name + human
- *      schedule text + the prompt; a "missed at HH:MM" note for a catch-up run).
- *   2. pin      — pin that announcement (silent ONLY when the job opted in;
- *      default notifies all members). A pin failure degrades to a `console.warn`
- *      and the flow continues — the announcement is already visible.
+ *   1. announce — post a SILENT message into the topic: «⏰ Scheduled: <name> ·
+ *      <human schedule>» (+ a "missed at HH:MM" note for a catch-up run), with the
+ *      prompt folded under it (an agent instruction, not something to read by
+ *      default). Never pinned: a scheduled run is ordinary output.
  *   3–4. post the prefixed prompt to the session ({@link postToSession}, shared
  *      with the Jira connector): ensure a session (starting one with the job's
  *      `lastAdapterName` snapshot as the adapter fallback — a topic that never
@@ -43,19 +45,21 @@ import { postToSession, type PostToSessionDeps } from '../postToSession';
  *      unbound topic → outcome `failed` with a distinct error string the engine
  *      records (S8 turns that into a pause).
  *
- * A REMINDER record (`deliveryKind: 'reminder'`) stops after step 2: its whole
- * delivery IS the announcement plus its pin, which is what pierces a muted topic.
- * Steps 3–4 are skipped entirely, so a reminder fires in an unbound topic and in
- * General — there is no session to ensure, nothing to interrupt, and no agent to
- * tell about the run.
+ * A REMINDER record (`deliveryKind: 'reminder'`) is the one thing still pinned:
+ * its whole delivery IS the announcement plus its pin, which is what pierces a
+ * muted topic, and it stops there. Steps 3–4 are skipped entirely, so a reminder
+ * fires in an unbound topic and in General — there is no session to ensure,
+ * nothing to interrupt, and no agent to tell about the run.
  *
  * A CHECK record (`deliveryKind: 'check'`) runs its command FIRST and decides
  * from the result and its persisted failing flag: a pass after a pass, or a
  * failure after a failure, posts nothing; a pass after a failure posts one
- * unpinned "passes again" line; the first failure posts the alert, pins it, and
- * then wakes the agent through steps 3–4 with the failure details ahead of the
- * job's prompt. An unbound topic fails with the same distinct error as a prompt
- * job, so it is paused the same way.
+ * "is back to normal" line; the first failure posts a one-sentence silent notice
+ * (never the command; a worker watch says "finished" or "silent", any other check
+ * folds the output under "fired") and then wakes the agent through steps 3–4 with
+ * the command, the failure details and the output ahead of the job's prompt. An
+ * unbound topic fails with the same distinct error as a prompt job, so it is
+ * paused the same way.
  *
  * It owns NO bot.ts import: every side effect is injected via
  * {@link ScheduleDeliveryDeps} (announce / pin / busy probe / ensure-session /
@@ -67,6 +71,26 @@ import { postToSession, type PostToSessionDeps } from '../postToSession';
 export const unboundDeliveryError = 'thread is unbound';
 
 /**
+ * @name ScheduleAnnounceOptions
+ * @description How a topic message of the scheduler is sent.
+ */
+export interface ScheduleAnnounceOptions {
+  /** Send without a notification: the bot's ordinary output. Absent only for a reminder, which is meant to ring. */
+  isSilent?: boolean;
+  /**
+   * Text folded under the message: the reader opens it on demand (Telegram: an expandable quote). Plain text — the
+   * platform escapes it.
+   */
+  foldedDetail?: string;
+}
+
+/** @name ScheduleAnnouncement @description What a fire or an alert says in the topic: the sentence, and the detail folded under it. */
+export interface ScheduleAnnouncement {
+  text: string;
+  foldedDetail?: string;
+}
+
+/**
  * @name ScheduleDeliveryDeps
  * @description Everything the delivery callback needs from bot.ts, injected so
  * the module stays free of bot.ts imports and the poll loop is testable.
@@ -75,19 +99,20 @@ export const unboundDeliveryError = 'thread is unbound';
  */
 export interface ScheduleDeliveryDeps extends PostToSessionDeps {
   /**
-   * Post the announcement into the topic (the bot bakes in priority
-   * `'interactive'`). Resolves with the sent message id, or `null` when the
-   * send failed — pinning is skipped on `null`.
+   * Post a message into the topic (the bot bakes in priority `'interactive'`). Resolves with the sent message id, or
+   * `null` when the send failed — a reminder's pin is skipped on `null`.
    */
-  announce: (threadKey: string, text: string) => Promise<number | null>;
-  /** Pin the announcement. `isSilent` ⇒ `disable_notification`. Rejects on failure. */
-  pin: (threadKey: string, messageId: number, isSilent: boolean) => Promise<void>;
+  announce: (threadKey: string, text: string, options?: ScheduleAnnounceOptions) => Promise<number | null>;
+  /** Pin a REMINDER's announcement, notifying (that is how a reminder pierces a muted topic). Rejects on failure. */
+  pin: (threadKey: string, messageId: number) => Promise<void>;
+  /** Unpin these messages of the topic, best effort: one already unpinned or deleted is not an error. */
+  unpinMessages: (threadKey: string, messageIds: readonly number[]) => Promise<void>;
   /** Run a check job's command in the thread's bound folder; `null` when the thread is unbound. */
   runCheck: (threadKey: string, command: string, timeoutMs: number) => Promise<CheckRunResult | null>;
   /** Persist a check job's failing flag (it decides whether the next run alerts). */
   setCheckFailing: (jobId: string, isFailing: boolean) => Promise<void>;
-  /** Remember a check alert's pinned message on its job, so cancelling the job unpins it. */
-  recordAlertPin: (jobId: string, messageId: number) => Promise<void>;
+  /** Forget the alert pins an earlier version recorded on a job (`ScheduleRecord.alertPinMessageIds`), once they are unpinned. */
+  clearAlertPins: (jobId: string) => Promise<void>;
   /** Whether this conversation shows status lines at all (a Telegram topic whose view shows the agent's stream). */
   checkIsStatusShown: (threadKey: string) => boolean;
   /**
@@ -124,35 +149,44 @@ export function prependScheduledRunMarker(jobName: string, prompt: string, optio
 }
 
 /**
- * @description Build the visible fire-announcement text via i18n, per delivery
- * kind: a prompt job frames the run as a scheduled prompt for the agent, a
- * reminder leads with its own text (the pin notification previews it, so the
- * operator reads the reminder without opening the topic). Both interpolate the
- * SAME `{missedNote}` — the catch-up annotation (host-local HH:MM of the missed
- * instant) for a `catch-up` fire, empty for an `on-time` run — so a replayed run
- * is annotated identically whichever kind it is.
- *
- * The `{schedule}` text differs per kind ON PURPOSE. A prompt job keeps
- * English-only {@link describeSchedule} (its announcement is read alongside the
- * agent-facing prompt). A reminder uses the LOCALIZED
- * {@link getReminderScheduleText} — the very same words its `/reminders` list row
- * and card show, because describing one reminder two different ways is a defect.
+ * @description The schedule as a person reads it in the topic: the localized wording a reminder shows where one exists
+ * (daily, weekdays, weekly, monthly, once), else English {@link describeSchedule} (`every 5m`, `cron …`, an N-times budget)
+ * — a shape the reminder wording would only print as a bare cron expression.
  */
-export function buildFireAnnouncement(job: ScheduleRecord, fireContext: FireContext): string {
+function getAnnouncedScheduleText(spec: ScheduleSpec): string {
+  const descriptor = getReminderScheduleDescriptor(spec);
+  return descriptor.kind === 'raw' ? describeSchedule(spec) : getReminderScheduleDescriptorText(descriptor);
+}
+
+/**
+ * @description Build the visible fire announcement via i18n, per delivery kind. A prompt job says «⏰ Scheduled: <name> ·
+ * <schedule>» and folds its prompt under it: the prompt is an instruction for the agent, not something a person reads by
+ * default. A reminder leads with its own text (the pin notification previews it, so the operator reads the reminder
+ * without opening the topic) and carries nothing folded. Both interpolate the SAME `{missedNote}` — the catch-up annotation
+ * (host-local HH:MM of the missed instant) for a `catch-up` fire, empty for an `on-time` run.
+ *
+ * A reminder's `{schedule}` is always the LOCALIZED {@link getReminderScheduleText} — the very same words its `/reminders`
+ * list row and card show, because describing one reminder two different ways is a defect.
+ */
+export function buildFireAnnouncement(job: ScheduleRecord, fireContext: FireContext): ScheduleAnnouncement {
   const missedNote = getMissedNote(fireContext);
   if (checkIsReminderSchedule(job)) {
-    return t('reminders.fired', {
-      text: job.prompt,
-      schedule: getReminderScheduleText(job.spec),
-      missedNote,
-    });
+    return {
+      text: t('reminders.fired', {
+        text: job.prompt,
+        schedule: getReminderScheduleText(job.spec),
+        missedNote,
+      }),
+    };
   }
-  return t('schedule.fired', {
-    name: job.name,
-    schedule: describeSchedule(job.spec),
-    prompt: job.prompt,
-    missedNote,
-  });
+  return {
+    text: t('schedule.fired', {
+      name: job.name,
+      schedule: getAnnouncedScheduleText(job.spec),
+      missedNote,
+    }),
+    foldedDetail: job.prompt,
+  };
 }
 
 /** @description The catch-up note of a fire, empty for an on-time run. */
@@ -162,39 +196,66 @@ function getMissedNote(fireContext: FireContext): string {
     : '';
 }
 
-/** @description The topic alert of a check's first failure: what failed, how, and the output tail. */
-export function buildCheckFailedAnnouncement(
-  job: ScheduleRecord,
-  fireContext: FireContext,
-  failure: string,
-  output: string,
-): string {
-  return t('schedule.checkFailed', {
-    name: job.name,
-    schedule: describeSchedule(job.spec),
-    missedNote: getMissedNote(fireContext),
-    failure,
-    command: getCheckAlertCommand(job.checkCommand ?? ''),
-    output: getOutputTail(output.trim(), checkAlertOutputMaxChars) || '—',
-  });
+/**
+ * @description The topic notice of a check's first failure, in one sentence and never with the command (that goes to the
+ * agent's prompt only). A worker watch (a check with a status source of a worker's run directory) says what happened to
+ * the worker: finished (its process is gone) or silent for {@link workerWatchSilenceMinutes} minutes. Any other check — and a
+ * worker watch that failed some other way, a timeout say — says it fired, with what failed and the output tail folded under
+ * it, because the failure is the only thing a person can use to tell why.
+ */
+export function buildCheckFailedAnnouncement(input: {
+  job: ScheduleRecord;
+  result: CheckRunResult;
+  failure: string;
+  nowMs: number;
+}): ScheduleAnnouncement {
+  const { job, result, failure } = input;
+  if (job.statusWorkerRunDir !== undefined) {
+    const workerEnd = getWorkerWatchEnd(result);
+    const name = getCheckShownName(job.name);
+    if (workerEnd === 'finished') {
+      return { text: t('schedule.workerFinished', { name, elapsed: getCheckStatusElapsedText(input.nowMs - Date.parse(job.createdAt)) }) };
+    }
+    if (workerEnd === 'silent') return { text: t('schedule.workerSilent', { name, minutes: workerWatchSilenceMinutes }) };
+  }
+  const outputTail = getOutputTail(result.output.trim(), checkAlertOutputMaxChars);
+  return {
+    text: t('schedule.checkFired', { name: job.name }),
+    foldedDetail: outputTail === '' ? failure : `${failure}\n\n${outputTail}`,
+  };
 }
 
 /**
- * @description Steps 1–2: post the announcement and pin it; resolves with the pinned message id. A pin failure only
- * logs — the announcement is already visible — and resolves null, as a failed send does.
+ * @description A REMINDER's step 1–2: post the announcement and pin it (notifying: the pin is what pierces a muted topic);
+ * a pin failure only logs — the announcement is already visible. The only pin the scheduler still makes.
  */
-async function announceAndPin(deps: ScheduleDeliveryDeps, job: ScheduleRecord, text: string): Promise<number | null> {
+async function announceAndPinReminder(deps: ScheduleDeliveryDeps, job: ScheduleRecord, text: string): Promise<void> {
   const messageId = await deps.announce(job.threadKey, text);
-  if (messageId === null) return null;
+  if (messageId === null) return;
   try {
-    await deps.pin(job.threadKey, messageId, job.isPinSilent === true);
-    return messageId;
+    await deps.pin(job.threadKey, messageId);
   } catch (error) {
     console.warn(
       `[scheduler] pin announcement for job ${job.id} failed:`,
       error instanceof Error ? error.message : error,
     );
-    return null;
+  }
+}
+
+/**
+ * @description Earlier versions pinned every check alert and remembered the pinned ids on the job. They are released once,
+ * at the job's next run: unpinned, then forgotten (in that order — a crash in between repeats the harmless unpin). Never
+ * rejects — a check must run whatever happens to an old pin. A job that never runs again (paused) keeps them until
+ * `schedule_cancel`, which releases them too.
+ */
+async function releaseLegacyAlertPins(deps: ScheduleDeliveryDeps, job: ScheduleRecord): Promise<void> {
+  const messageIds = job.alertPinMessageIds ?? [];
+  if (messageIds.length === 0) return;
+  try {
+    await deps.unpinMessages(job.threadKey, messageIds);
+    await deps.clearAlertPins(job.id);
+  } catch (error) {
+    console.warn(`[scheduler] releasing the old alert pins of job ${job.id} failed:`, error instanceof Error ? error.message : error);
   }
 }
 
@@ -298,17 +359,14 @@ async function updateCheckStatus(deps: ScheduleDeliveryDeps, job: ScheduleRecord
 
 /**
  * @description The check flow: run the command, then stay quiet, post the
- * "passes again" line, or raise the alert and wake the agent. The failing flag is
+ * "back to normal" line, or raise the alert and wake the agent. The failing flag is
  * stored BEFORE the agent is woken, so a restart mid-delivery cannot raise the
  * same alert twice.
  */
-async function deliverCheck(
-  deps: ScheduleDeliveryDeps,
-  job: ScheduleRecord,
-  fireContext: FireContext,
-): Promise<DeliveryOutcome> {
+async function deliverCheck(deps: ScheduleDeliveryDeps, job: ScheduleRecord): Promise<DeliveryOutcome> {
   const timeoutSec = job.checkTimeoutSec ?? defaultCheckTimeoutSec;
   const command = job.checkCommand ?? '';
+  await releaseLegacyAlertPins(deps, job);
   const result = await deps.runCheck(job.threadKey, command, timeoutSec * 1000);
   if (!result) {
     // A binding that went without `/unbind` (the unbind itself clears the line when it parks the job — `unbindPause.ts`): the
@@ -326,7 +384,7 @@ async function deliverCheck(
   }
   if (decision === 'recovered') {
     await deps.setCheckFailing(job.id, false);
-    await deps.announce(job.threadKey, t('schedule.checkRecovered', { name: job.name }));
+    await deps.announce(job.threadKey, t('schedule.checkRecovered', { name: job.name }), { isSilent: true });
     await updateCheckStatus(deps, job);
     return { status: 'delivered' };
   }
@@ -335,8 +393,8 @@ async function deliverCheck(
   await clearCheckStatusLine(deps, job);
   await deps.setCheckFailing(job.id, true);
   const failure = describeCheckFailure(result, timeoutSec);
-  const alertPinId = await announceAndPin(deps, job, buildCheckFailedAnnouncement(job, fireContext, failure, result.output));
-  if (alertPinId !== null) await deps.recordAlertPin(job.id, alertPinId);
+  const alert = buildCheckFailedAnnouncement({ job, result, failure, nowMs: deps.now() });
+  await deps.announce(job.threadKey, alert.text, { isSilent: true, foldedDetail: alert.foldedDetail });
   return deliverToAgent(
     deps,
     job,
@@ -352,18 +410,22 @@ export function createScheduleDelivery(
   deps: ScheduleDeliveryDeps,
 ): (job: ScheduleRecord, fireContext: FireContext) => Promise<DeliveryOutcome> {
   return async (job, fireContext) => {
-    if (checkIsCheckSchedule(job)) return deliverCheck(deps, job, fireContext);
-    // Read before the paced announce and pin, which can take a while under load:
+    if (checkIsCheckSchedule(job)) return deliverCheck(deps, job);
+    // Read before the paced announce, which can take a while under load:
     // a run held over a usage-limit wait says when it was due (R27).
     const dueAtMs = fireContext.kind === 'catch-up' && fireContext.missedAtMs !== undefined ? fireContext.missedAtMs : deps.now();
 
-    // 1–2. announce and pin
-    await announceAndPin(deps, job, buildFireAnnouncement(job, fireContext));
+    // 1. announce
+    const announcement = buildFireAnnouncement(job, fireContext);
 
-    // A reminder is done here: announced and pinned, with no agent involved at
+    // A reminder is done after its announcement and its pin, with no agent involved at
     // all. Returning before `ensureSession` is also what lets it fire in an
     // unbound topic and in General — there is no session to fail to ensure.
-    if (checkIsReminderSchedule(job)) return { status: 'delivered' };
+    if (checkIsReminderSchedule(job)) {
+      await announceAndPinReminder(deps, job, announcement.text);
+      return { status: 'delivered' };
+    }
+    await deps.announce(job.threadKey, announcement.text, { isSilent: true, foldedDetail: announcement.foldedDetail });
 
     // 3–4. wake the agent with the prompt. A run held over a usage-limit wait
     // reaches the agent later: it says when it was due (R27).

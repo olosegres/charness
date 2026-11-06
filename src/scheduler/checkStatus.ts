@@ -116,14 +116,18 @@ export function getCheckStatusElapsedText(elapsedMs: number): string {
   });
 }
 
+/** @description A check's name as the topic shows it: without the recipe's leading `watch ` (`watch builder S2` → `builder S2`). */
+export function getCheckShownName(name: string): string {
+  return name.replace(leadingWatchWordPattern, '').trim() || name;
+}
+
 /**
  * @description The status line: `⏳ <name> · works <elapsed>[ · now: <activity>]`. The name is the check's own without the
  * recipe's leading `watch `; the «now» part is left out when there is nothing readable to say.
  */
 export function buildCheckStatusLine(input: { name: string; elapsedMs: number; activity: string | null }): string {
-  const shownName = input.name.replace(leadingWatchWordPattern, '').trim() || input.name;
   return t('schedule.statusLineText', {
-    name: shownName,
+    name: getCheckShownName(input.name),
     elapsed: getCheckStatusElapsedText(input.elapsedMs),
     activity: input.activity === null ? '' : t('schedule.statusLineActivity', { activity: input.activity }),
   });

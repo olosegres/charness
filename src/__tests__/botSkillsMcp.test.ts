@@ -27,7 +27,6 @@ import {
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { makeJiraKey } from '../connectors/jira/sessionKeyCodec';
 import { setBotSkillsReader } from '../utils/botSkills';
-import { workerWatchPinArgument } from '../scheduler/workerWatch';
 import { claudeJsonStreamAdapterName, openCodeAdapterName } from '../adapters/adapterNames';
 
 const secret = 'e'.repeat(64);
@@ -104,7 +103,7 @@ describe('the instructions built for a platform', () => {
     const instructions = buildMcpServerInstructions('telegram', offered, true);
     assert.ok(instructions.includes(managerSkillHint));
     assert.ok(instructions.includes('Watch EACH worker with schedule_create'));
-    assert.ok(instructions.includes(`\`${workerWatchPinArgument}\``));
+    assert.doesNotMatch(instructions, /isPinSilent/);
   });
 
   it('with the skills off the hint goes and the worker-watch recipe stays — in the same bullet', () => {
@@ -113,7 +112,7 @@ describe('the instructions built for a platform', () => {
     assert.ok(!instructions.includes('charness:charness-manager'));
     const bullet = instructions.split('\n').find((line) => line.includes(orchestrationBullet)) ?? '';
     assert.ok(bullet.includes(workerWatchRecipe), bullet);
-    assert.ok(bullet.includes(`\`${workerWatchPinArgument}\``), 'the pin argument of the recipe is kept');
+    assert.match(bullet, /checkCommand, cron, status arguments/, 'the recipe\'s arguments are named');
     assert.match(bullet, /never `kill -0` alone/);
     assert.match(bullet, /→ schedule_create to watch EACH worker — /, 'the arrow leads to a tool, like every other bullet');
   });

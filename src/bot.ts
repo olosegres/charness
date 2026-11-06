@@ -230,6 +230,7 @@ import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
 import { StartupPromptBuffer, type BufferedPromptSettled } from './startupPromptBuffer';
 import { renderAgentHtml } from './connectors/telegram/renderAgentHtml';
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
+import { buildFoldedMessageHtml } from './connectors/telegram/foldedMessage';
 import { addPendingOutput, checkHasPendingOutput, getOutputFlushPlan, getUnsentRemainder, requeueUnsentRemainder, takePendingOutput, type PendingOutputBuffer } from './connectors/telegram/outputFlushPlan';
 import { glueBacklogFrames } from './connectors/telegram/outputBacklogGlue';
 import { checkShouldKeepTyping as checkShouldKeepTypingDecision } from './utils/typingActive';
@@ -401,7 +402,7 @@ import { joinPromptsNotTakenIn, type WakeUpMessage } from './requests/requestHea
 import type { OpenRequestState, RequestAlertReason, RequestPromptOutcome } from './requests/types';
 import { getThreadKeysForDirectory } from './scheduler/directoryThreads';
 import { getRebindResumeAction } from './scheduler/rebindResume';
-import { recordCheckStatusLine } from './scheduler/store';
+import { clearCheckAlertPins, recordCheckStatusLine } from './scheduler/store';
 import { pauseSchedulesOnUnbind } from './scheduler/unbindPause';
 import type { DeliveryOutcome, FireContext, ScheduleRecord } from './scheduler/types';
 import { decideRetryAction, type RetryAttemptsByKind, classifyAgentApiError, checkIsUsageLimitWindowOver, getUnconfirmedLimitAction, retryRecurrenceGraceMs, unconfirmedLimitProbeDelayMs, usageLimitDefaultMs, resetBufferMs } from './apiErrorRetry';
@@ -13955,20 +13956,31 @@ function createSessionPostDeps(): PostToSessionDeps {
 function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
   const { jiraConnector } = wiring;
   const ledger = new RunLedger();
+  const unpinThreadMessages = async (threadKeyStr: string, messageIds: readonly number[]): Promise<void> => {
+    const key = keyFromString(threadKeyStr);
+    for (const messageId of messageIds) await unpinMessageQuiet(key, messageId);
+  };
   const delivery = createScheduleDelivery({
     ...createSessionPostDeps(),
     ...checkStatusLinePorts,
-    announce: (threadKeyStr, text) => replyToThread(keyFromString(threadKeyStr), text),
-    pin: async (threadKeyStr, messageId, isSilent) => {
+    // A scheduled fire and a check alert are ordinary silent output; a folded detail (the prompt, a check's output) goes
+    // in an expandable quotation. Only a reminder is sent as it is, and pinned.
+    announce: (threadKeyStr, text, options) => {
+      const key = keyFromString(threadKeyStr);
+      const extra = options?.isSilent ? { disable_notification: true } : {};
+      return options?.foldedDetail === undefined
+        ? replyToThread(key, text, extra)
+        : replyToThread(key, buildFoldedMessageHtml(text, options.foldedDetail), { ...extra, parse_mode: 'HTML' });
+    },
+    // The only scheduler pin left: a reminder, which pierces a muted topic on purpose.
+    pin: async (threadKeyStr, messageId) => {
       const key = keyFromString(threadKeyStr);
       await enqueueSend(
         key,
-        () =>
-          bot.telegram.pinChatMessage(getTelegramChatId(key), messageId, {
-            disable_notification: isSilent,
-          }),
+        () => bot.telegram.pinChatMessage(getTelegramChatId(key), messageId, { disable_notification: false }),
       );
     },
+    unpinMessages: unpinThreadMessages,
     runCheck: async (threadKeyStr, command, timeoutMs) => {
       const decision = resolveBoundWorkDir(ENV.workRoot, state.getBinding(keyFromString(threadKeyStr)));
       if (decision.kind !== 'proceed') return null;
@@ -13980,14 +13992,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       await state.upsertSchedule({ ...record, isCheckFailing: isFailing, updatedAt: new Date().toISOString() });
       await state.flush();
     },
-    recordAlertPin: async (jobId, messageId) => {
-      const record = state.getSchedules()[jobId];
-      if (!record) return;
-      const alertPinMessageIds = [...(record.alertPinMessageIds ?? []), messageId];
-      await state.upsertSchedule({ ...record, alertPinMessageIds, updatedAt: new Date().toISOString() });
-      // Saved at once, like the failing flag: an id lost in a crash would leave its alert pinned for good.
-      await state.flush();
-    },
+    clearAlertPins: (jobId) => clearCheckAlertPins(state, jobId),
     checkIsStatusShown: (threadKeyStr) => {
       const key = keyFromString(threadKeyStr);
       return checkIsCheckStatusShown({ isTelegram: checkIsTelegramKey(key), view: state.getDisplayPrefs(key).view });
@@ -14038,10 +14043,7 @@ function wireScheduler(wiring: SchedulerWiringDeps): SchedulerMcpHandle {
       const key = keyFromString(threadKeyStr);
       return getThreadAdapterNameRaw(key) ?? state.getAgent(key)?.name;
     },
-    unpinMessages: async (threadKeyStr, messageIds) => {
-      const key = keyFromString(threadKeyStr);
-      for (const messageId of messageIds) await unpinMessageQuiet(key, messageId);
-    },
+    unpinMessages: unpinThreadMessages,
     // A cancelled check's status line goes through the same best-effort delete the delivery uses.
     deleteMessage: checkStatusLinePorts.deleteMessage,
     // Routed through the outbound seam: the agent-facing file tool is a

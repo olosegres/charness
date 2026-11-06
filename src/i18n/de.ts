@@ -781,11 +781,12 @@ export const deDict: Record<string, string> = {
   'timestamps.usageHint': 'Verwendung: /timestamps on | off | (kein Argument — Status)',
 
   'schedule.fired':
-    '⏰ Zeitplan „{name}« ({schedule}){missedNote}\n\n{prompt}',
+    '⏰ Geplant: {name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — verpasst um {time}, hole nach',
-  'schedule.checkFailed':
-    '🚨 Prüfung „{name}« fehlgeschlagen: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nDer Agent wird geweckt. Keine weiteren Alarme, bis die Prüfung wieder besteht.',
-  'schedule.checkRecovered': '✅ Prüfung „{name}« besteht wieder.',
+  'schedule.checkFired': '🔔 Prüfung „{name}« ausgelöst — der Agent wird geweckt.',
+  'schedule.workerFinished': '✅ Worker „{name}« ist fertig ({elapsed}). Ich lese das Ergebnis.',
+  'schedule.workerSilent': '⚠️ Worker „{name}« ist seit {minutes} Min. still. Ich prüfe, ob er hängt.',
+  'schedule.checkRecovered': '✅ Prüfung „{name}« ist wieder in Ordnung.',
   'schedule.statusLineText': '⏳ {name} · läuft seit {elapsed}{activity}',
   'schedule.statusLineActivity': ' · jetzt: {activity}',
   'schedule.statusElapsedMinutes': '{minutes} Min.',

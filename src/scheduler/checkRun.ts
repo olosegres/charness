@@ -4,9 +4,10 @@ import { spawn } from 'node:child_process';
  * @description The `'check'` delivery kind: a watchdog the agent creates with
  * `schedule_create` + `checkCommand`. At fire time the BOT runs the command in the
  * topic's bound folder; exit 0 is a pass and stays silent. The first failure after
- * a pass pins an alert and wakes the agent with the job's prompt plus the failure
- * and the output tail; further failures stay silent until a run passes again,
- * which posts one unpinned "passes again" line.
+ * a pass posts one short silent notice (never the command; the output tail folded
+ * under it) and wakes the agent with the job's prompt plus the failure and the
+ * output tail; further failures stay silent until a run passes again, which posts
+ * one "is back to normal" line.
  *
  * WHY the bot runs it: a watcher the agent builds itself (a background loop,
  * `nohup`, a `sleep` loop, a tmux pane) dies with the session, a bot restart or a
@@ -30,14 +31,11 @@ export const maxCheckCommandLength = 1000;
 export const checkOutputMaxChars = 3000;
 
 /**
- * Output tail shown in the topic alert. Shorter than {@link checkOutputMaxChars}
- * so the alert stays under Telegram's 4096-character message cap with the
- * command and the job name around it; the agent gets the full kept tail.
+ * Output tail shown (folded) in the topic alert. Shorter than {@link checkOutputMaxChars}
+ * so the alert stays well under Telegram's 4096-character message cap with the
+ * job name and the failure around it; the agent gets the full kept tail.
  */
 export const checkAlertOutputMaxChars = 1500;
-
-/** Command text shown in the topic alert. */
-const checkAlertCommandMaxChars = 300;
 
 /** Pause between SIGTERM and SIGKILL for a check that outlived its timeout. */
 const checkKillGraceMs = 5000;
@@ -67,7 +65,7 @@ export function checkIsCheckPassing(result: CheckRunResult): boolean {
 
 /**
  * What a finished run should produce: nothing (`quiet`), the alert that wakes
- * the agent (`alert`), or the one "passes again" line (`recovered`).
+ * the agent (`alert`), or the one "back to normal" line (`recovered`).
  */
 export type CheckAlertDecision = 'quiet' | 'alert' | 'recovered';
 
@@ -75,7 +73,7 @@ export type CheckAlertDecision = 'quiet' | 'alert' | 'recovered';
  * @description Alert on the passing → failing edge only, and announce the
  * failing → passing edge once. A check that keeps failing stays quiet: it already
  * raised its alert and woke the agent, and repeating that on every run would bury
- * the topic in pins.
+ * the topic in alerts.
  */
 export function getCheckAlertDecision(input: { isPassing: boolean; wasFailing: boolean }): CheckAlertDecision {
   if (input.isPassing) return input.wasFailing ? 'recovered' : 'quiet';
@@ -94,13 +92,6 @@ export function describeCheckFailure(result: CheckRunResult, timeoutSec: number)
 export function getOutputTail(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return `…${text.slice(text.length - maxChars + 1)}`;
-}
-
-/** @description The command as the topic alert shows it, cut to a readable length. */
-export function getCheckAlertCommand(command: string): string {
-  return command.length <= checkAlertCommandMaxChars
-    ? command
-    : `${command.slice(0, checkAlertCommandMaxChars - 1)}…`;
 }
 
 /**

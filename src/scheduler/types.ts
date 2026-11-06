@@ -29,10 +29,10 @@ export type ScheduleCreatedBy = 'user' | 'agent';
  * @description WHAT a fire does, for the kinds that are not the original
  * agent-prompt delivery:
  *  - `'reminder'` — a bot-LOCAL job whose whole delivery is the announcement +
- *    its pin (no session started, none touched).
+ *    its pin (no session started, none touched). The only kind that is pinned.
  *  - `'check'` — a watchdog: the bot runs {@link ScheduleRecord.checkCommand} in
  *    the bound folder, stays silent while it passes, and on the first failure
- *    pins an alert and wakes the agent with `prompt` (see `checkRun.ts`).
+ *    posts a short notice and wakes the agent with `prompt` (see `checkRun.ts`).
  */
 export type ScheduleDeliveryKind = 'reminder' | 'check';
 
@@ -85,12 +85,6 @@ export interface ScheduleRecord {
   /** True while paused (e.g. topic unbound); the engine disarms paused jobs. */
   isPaused?: boolean;
   pauseReason?: SchedulePauseReason;
-  /**
-   * Pin the fire announcement WITHOUT notifying group members. Default
-   * (absent/false) notifies everyone — user decision 2026-06-06; the agent
-   * sets this from the user's phrasing via `schedule_create.isPinSilent`.
-   */
-  isPinSilent?: boolean;
   /** Adapter name to start when delivering with no live session after a rebind. */
   lastAdapterName?: string;
   /**
@@ -111,8 +105,8 @@ export interface ScheduleRecord {
    */
   isCheckFailing?: boolean;
   /**
-   * The message ids of the check alerts this job pinned. `schedule_cancel` unpins them: a watch on a detached worker
-   * fails as the normal "worker finished" signal, and every finished worker would otherwise leave an alert pinned.
+   * LEGACY, never written any more: the message ids of the check alerts an earlier version pinned. The job's next run
+   * unpins and forgets them, and `schedule_cancel` unpins whatever is left, so no old alert stays pinned for good.
    */
   alertPinMessageIds?: number[];
   /**

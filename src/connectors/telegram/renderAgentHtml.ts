@@ -46,6 +46,11 @@ const PLACEHOLDER_REGEX = /\x00(\d+)\x00/g;
  */
 const CONTROL_CHARS_REGEX = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
 
+/** @description Drop the C0 control characters a Telegram message never carries (keeps `\n` and `\t`). */
+export function stripControlChars(text: string): string {
+  return text.replace(CONTROL_CHARS_REGEX, '');
+}
+
 /**
  * Code spans are protected first (stashed as placeholders) so prose-level
  * bold/link substitution can't reach inside them, then everything is
@@ -62,7 +67,7 @@ export function renderAgentHtml(text: string): string {
 
   // 0. Drop control chars up front so the placeholder sentinel we add in
   //    `stash` is the only `\x00` left to restore in step 5.
-  const source = text.replace(CONTROL_CHARS_REGEX, '');
+  const source = stripControlChars(text);
 
   // 0.5. Rewrite raw GFM markdown tables (mostly from OpenCode) into a readable
   //    form: narrow tables become a ```-fenced box (→ <pre> below), wide ones

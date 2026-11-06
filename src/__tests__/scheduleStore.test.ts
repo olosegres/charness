@@ -28,6 +28,7 @@ import {
   generateScheduleId,
   createScheduleRecord,
   createScheduleForThread,
+  clearCheckAlertPins,
   maxRemindersPerThread,
   maxSchedulesPerThread,
 } from '../scheduler/store';
@@ -189,6 +190,41 @@ describe('StateStore schedule collection', () => {
 
     assert.equal(await update, false, 'the job was cancelled: there is nothing to record on');
     assert.equal(store.getSchedules()[id], undefined, 'the cancelled job stayed cancelled');
+  });
+
+  it('createScheduleRecord has no pin option any more: the record carries no isPinSilent', () => {
+    const record = createScheduleRecord({ threadKey: threadA, name: 'Daily', spec: dailySpec, prompt: 'p', createdBy: 'agent', nowMs });
+    assert.ok(!('isPinSilent' in record));
+  });
+
+  it('clearCheckAlertPins forgets the alert pins an earlier version recorded, flushes at once, and leaves the rest of the record', async () => {
+    const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
+    await store.init();
+    const created = await createScheduleForThread(store, { threadKey: threadA, name: 'Watch', spec: dailySpec, prompt: 'go', createdBy: 'agent', nowMs });
+    assert.ok(created.ok);
+    const id = created.record.id;
+    await store.upsertSchedule({ ...created.record, deliveryKind: 'check', checkCommand: 'true', isCheckFailing: true, alertPinMessageIds: [501, 502] });
+
+    await clearCheckAlertPins(store, id);
+    const cleared = store.getSchedules()[id];
+    assert.ok(!('alertPinMessageIds' in cleared), 'the ids are gone');
+    assert.equal(cleared.isCheckFailing, true, 'the failing flag is untouched');
+    assert.equal(cleared.checkCommand, 'true');
+    const persisted: { schedules?: Record<string, { alertPinMessageIds?: number[] }> } = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+    assert.equal(persisted.schedules?.[id]?.alertPinMessageIds, undefined, 'written to disk by the call itself, not by the debounced save');
+  });
+
+  it('clearCheckAlertPins is a no-op for a job without any and for a job that is gone', async () => {
+    const store = trackStore(new StateStore(dataDir, { saveDebounceMs: 20 }));
+    await store.init();
+    const created = await createScheduleForThread(store, { threadKey: threadA, name: 'Watch', spec: dailySpec, prompt: 'go', createdBy: 'agent', nowMs });
+    assert.ok(created.ok);
+    const before = store.getSchedules()[created.record.id];
+
+    await clearCheckAlertPins(store, created.record.id);
+    assert.deepEqual(store.getSchedules()[created.record.id], before, 'nothing to forget: not even updatedAt moved');
+    await clearCheckAlertPins(store, 'no-such-job');
+    assert.equal(store.getSchedules()['no-such-job'], undefined);
   });
 
   it('filters schedules per thread', async () => {

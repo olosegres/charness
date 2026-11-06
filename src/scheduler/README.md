@@ -10,11 +10,17 @@ constants in the code; this README keeps what the code cannot say.
 `schedule_create`) and `'reminder'` for a bot-local `/reminders` job. Read the discriminator through
 `checkIsReminderSchedule` — never re-derive it.
 
-- **Agent-prompt job:** at fire time announce → PIN (notifies unless `isPinSilent`; pins accumulate as run
-  history, the bot never unpins) → `postToSession` (reuse an active session, waiting for idle rather than
-  interrupting live work, or start one) with a `[Scheduled run]` marker.
-- **Reminder:** announce → pin → `delivered`, and stops. It never reaches an agent, which is exactly why it
-  fires in an unbound topic and in General.
+- **Agent-prompt job:** at fire time announce → `postToSession` (reuse an active session, waiting for idle rather than
+  interrupting live work, or start one) with a `[Scheduled run]` marker. The announcement is ONE silent line («⏰ Scheduled:
+  <name> · <schedule>», plus the catch-up note) with the prompt folded under it in an expandable quotation — the prompt is an
+  agent instruction, not something to read by default. It is never pinned (`isPinSilent` of `schedule_create` is
+  accepted from older callers and does nothing).
+- **Reminder:** announce → pin → `delivered`, and stops — the ONE scheduler message that is pinned, with a notification:
+  the pin is how it pierces a muted topic. It never reaches an agent, which is exactly why it fires in an unbound topic
+  and in General.
+- **What reaches Telegram:** `ScheduleDeliveryDeps.announce(threadKey, text, { isSilent, foldedDetail })`. A `foldedDetail`
+  is sent as Telegram HTML (`connectors/telegram/foldedMessage.ts`: headline and detail escaped, `<blockquote expandable>`,
+  the detail cut to fit one message); without one the text is sent plain, as before.
 - **Caps are counted PER KIND** (`maxSchedulesPerThread`, `maxRemindersPerThread`): storage is shared, counters
   are not. One shared counter starved the operator's reminders behind 30 agent jobs, and made the agent read
   "maximum of 30" beside a list of 5 and cancel everything it could see.
@@ -28,7 +34,9 @@ constants in the code; this README keeps what the code cannot say.
 - `schedule_create` is agent-robust (`buildSpecFromCreateArgs`): a one-shot IGNORES a redundant `repeatCount`
   (the model sends `repeatCount:1` to mean "once"; rejecting it made it spiral into absurd counts), blank
   `cron` / `onceAt` count as absent, and a structural error echoes the whole 3-mode recipe. A single future run
-  is ALWAYS `onceAt` — a cron has no year and would re-fire every year.
+  is ALWAYS `onceAt` — a cron has no year and would re-fire every year. Its answer, which a topic shows as a tool result,
+  is one human line plus the id the agent cancels by (`Scheduled "<name>": <schedule>` / `… : checks <schedule>`, then
+  `id: <id>`); the command, the status rhythm and the next run are in `schedule_list`, for the agent.
 
 ## Restart and time
 
@@ -94,9 +102,13 @@ constants in the code; this README keeps what the code cannot say.
   agent sees edits only after it reconnects.
 - **Watching a detached worker.** `workerWatchCheckCommand` is the one recipe for a check on a worker an agent
   launched: it fails when the worker's PID is gone OR nothing in its run dir changed for 45 min (a `kill -0` alone
-  never fires on a hung worker), armed with `isPinSilent: true` (`workerWatchPinArgument`) because a normal finish
-  fires it too; the job remembers the alerts it pinned (`alertPinMessageIds`) and `schedule_cancel` unpins them, so a
-  finished worker leaves no pin once its watch is cancelled. The `schedule_create` description carries the full recipe; the Telegram instructions point at the
+  never fires on a hung worker), a normal finish fires it too, so the topic gets ONE silent sentence («Worker "builder S2"
+  finished (2 h 5 min). Reading the result.» for exit 1, «… has been silent for 45 min. Checking whether it hung.» for exit 2 —
+  `getWorkerWatchEnd` reads the recipe's own exit codes back, for a check with a `statusWorkerRunDir`), never the command and never
+  a pin. Any other check says «🔔 Check "<name>" fired — waking the agent.» with the failure and the output tail folded under it;
+  the command and the full output go to the AGENT's prompt only. Alert pins an earlier version made
+  (`ScheduleRecord.alertPinMessageIds`, never written now) are unpinned and forgotten once at the job's next run
+  (`releaseLegacyAlertPins`), and `schedule_cancel` unpins whatever is left. The `schedule_create` description carries the full recipe; the Telegram instructions point at the
   `charness-manager` skill (`agent-plugin/`, which carries it verbatim — `agentPluginSkills.test.ts` holds them equal)
   and at that description; the tracker instructions only at the skill. With the scope's «Bot skills» switch off
   (`utils/botSkills.ts`) the pointer at the skill is dropped — a Telegram bullet keeps the recipe, a tracker bullet goes

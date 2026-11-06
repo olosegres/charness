@@ -1,16 +1,18 @@
 /**
- * @description A worker watch's alert from start to finish, at PROCESS level: the BUILT charness started the way an
+ * @description A watch's alert from start to finish, at PROCESS level: the BUILT charness started the way an
  * isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API (`telegramE2e/fakeTelegram.ts`), with the
  * fake `claude` playing an orchestrator the way the `charness-manager` skill tells it to. The closest offline stand-in
  * for an agent really arming the two-signal watch (plan V9). One flow, in order:
  *
  *   boot → a topic bound, a Claude session started
  *   → the agent arms a watch with `schedule_create`: the REAL worker-watch recipe (`scheduler/workerWatch.ts`) on a
- *     worker that is gone, cron every minute, `isPinSilent: true`
- *   → the check fails (the worker "finished"): the alert is posted and pinned SILENTLY, and the agent is woken with the
+ *     worker that is gone, cron every minute — WITHOUT a status source, so for the bot it is an ordinary check (the
+ *     «worker finished» sentence belongs to a watch with a run directory: `workerStatusE2e.test.ts`)
+ *   → the check fails: ONE silent sentence is posted — «🔔 Check … fired — waking the agent.» — with the failure and the
+ *     output folded under it in an expandable quotation, never the command and NEVER pinned; the agent is woken with the
  *     watch's prompt
- *   → the agent handles the wake as the skill says — `schedule_list`, `schedule_cancel` — and the cancel unpins exactly
- *     that alert; the watch is gone from the persisted state, so a finished worker leaves nothing pinned.
+ *   → the agent handles the wake as the skill says — `schedule_list`, `schedule_cancel`; nothing was pinned, so nothing
+ *     is unpinned, and the watch is gone from the persisted state.
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is
  * stopped in `after`.
@@ -24,7 +26,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeLogFileNames, fakeWatchJobName, type FakeClaudeToolCall } from './jiraE2e/fakeClaudeContract';
+import { fakeClaudeLogFileNames, fakeGoneWorkerPid, fakeWatchJobName, type FakeClaudeToolCall } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -51,7 +53,7 @@ const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const topicFolder = 'watch-flow';
 const launchLine = 'Launching Telegraf bot (long polling';
-const alertMark = `Check "${fakeWatchJobName}" failed`;
+const alertMark = `Check "${fakeWatchJobName}" fired`;
 
 const bootTimeoutMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
@@ -139,7 +141,7 @@ describe('A worker watch end to end: built charness, fake Bot API, a fake orches
     await topic.sendAndAwaitReply('/claude', 'ready in');
   });
 
-  it('the agent arms the watch with the real recipe and a silent pin', async () => {
+  it('the agent arms the watch with the real recipe', async () => {
     fakeTelegram.pushOperatorMessage(topicThreadId, 'W-1 [fake:arm-watch] watch the worker you just launched');
     await getCharness().waitFor('the agent to arm the watch', agentTimeoutMs, () => getToolCalls('schedule_create').length === 1);
     const [created] = getToolCalls('schedule_create');
@@ -148,26 +150,36 @@ describe('A worker watch end to end: built charness, fake Bot API, a fake orches
     await getCharness().waitFor('the watch to be persisted', replyTimeoutMs, () => readPersistedSchedules().some((record) => record.name === fakeWatchJobName));
     const [watch] = readPersistedSchedules().filter((record) => record.name === fakeWatchJobName);
     assert.equal(watch.deliveryKind, 'check');
-    assert.equal(watch.isPinSilent, true);
+    assert.ok(!('isPinSilent' in watch), 'there is no pin option to persist any more');
+    assert.equal(created.outcome, `Scheduled "${fakeWatchJobName}": checks cron * * * * *\nid: ${watch.id}`, 'the topic shows one line and the id, not the recipe');
+    assert.doesNotMatch(created.outcome, /kill -0/, 'the command is not part of the confirmation the topic shows');
   });
 
-  it('the worker is gone: the alert is pinned silently and the agent is woken with the watch\'s prompt', async () => {
-    await getCharness().waitFor('the check alert to be pinned', checkFireTimeoutMs, () => fakeTelegram.pinEvents.some((event) => event.kind === 'pin' && (fakeTelegram.getMessage(event.messageId)?.text ?? '').includes(alertMark)));
-    const alertPin = fakeTelegram.pinEvents.find((event) => event.kind === 'pin' && (fakeTelegram.getMessage(event.messageId)?.text ?? '').includes(alertMark));
-    assert.ok(alertPin);
-    alertMessageId = alertPin.messageId;
-    assert.equal(alertPin.isSilent, true, 'a finished worker must not ring the muted operator');
-    assert.match(fakeTelegram.getMessage(alertMessageId)?.text ?? '', /worker 4194305 exited/, 'the recipe said why');
+  it('the check fails: one silent sentence, the reason folded under it, no command, NO pin — and the agent is woken with the watch\'s prompt', async () => {
+    await getCharness().waitFor('the check alert', checkFireTimeoutMs, () => topic.listMessages().some((message) => message.text.includes(alertMark)));
+    const alert = topic.listMessages().find((message) => message.text.includes(alertMark));
+    assert.ok(alert);
+    alertMessageId = alert.message_id;
+    assert.equal(alert.isSilent, true, 'a check alert is ordinary silent output');
+    assert.equal(alert.parseMode, 'HTML', 'the folded part needs Telegram HTML');
+    assert.equal(
+      alert.text,
+      `🔔 Check "${fakeWatchJobName}" fired — waking the agent.\n\n<blockquote expandable>exit 1\n\nworker ${fakeGoneWorkerPid} exited</blockquote>`,
+      'the sentence, then the failure and the recipe\'s own output in an expandable quotation',
+    );
+    assert.doesNotMatch(alert.text, /kill -0|\$ |find /, 'the command stays out of the topic');
     await getCharness().waitFor('the agent woken by the check to list its schedules', agentTimeoutMs, () => getToolCalls('schedule_list').length === 1);
+    assert.ok(
+      !fakeTelegram.pinEvents.some((event) => event.messageId === alertMessageId || (fakeTelegram.getMessage(event.messageId)?.text ?? '').includes(alertMark)),
+      'the alert has no pin event of any kind',
+    );
   });
 
-  it('the agent cancels the watch, which unpins exactly that alert, and the watch is gone', async () => {
+  it('the agent cancels the watch: there is nothing pinned to unpin, and the watch is gone', async () => {
     await getCharness().waitFor('the agent to cancel the watch', agentTimeoutMs, () => getToolCalls('schedule_cancel').length === 1);
     const [cancelled] = getToolCalls('schedule_cancel');
-    assert.match(cancelled.outcome, /1 pinned alert\(s\) unpinned/, cancelled.outcome);
-    await getCharness().waitFor('the alert to be unpinned', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(alertMessageId));
-    const unpins = fakeTelegram.pinEvents.filter((event) => event.kind === 'unpin');
-    assert.deepEqual(unpins.map((event) => event.messageId), [alertMessageId], 'that alert and nothing else');
+    assert.doesNotMatch(cancelled.outcome, /pinned/, cancelled.outcome);
+    assert.deepEqual(fakeTelegram.pinEvents.filter((event) => event.kind === 'unpin'), [], 'no unpin: nothing was pinned');
     await getCharness().waitFor('the watch to be gone from the persisted state', replyTimeoutMs, () => readPersistedSchedules().every((record) => record.name !== fakeWatchJobName));
   });
 });

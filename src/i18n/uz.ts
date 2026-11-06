@@ -781,11 +781,12 @@ export const uzDict: Record<string, string> = {
   'timestamps.usageHint': 'Foydalanish: /timestamps on | off | (argsiz — holat)',
 
   'schedule.fired':
-    '⏰ Reja «{name}» ({schedule}){missedNote}\n\n{prompt}',
+    '⏰ Rejalashtirilgan: {name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — {time} da o‘tkazib yuborildi, qazib olinmoqda',
-  'schedule.checkFailed':
-    '🚨 «{name}» tekshiruvi o‘tmadi: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nAgentni uyg‘otyapman. Tekshiruv yana o‘tmaguncha boshqa ogohlantirish bo‘lmaydi.',
-  'schedule.checkRecovered': '✅ «{name}» tekshiruvi yana o‘tmoqda.',
+  'schedule.checkFired': '🔔 «{name}» tekshiruvi ishga tushdi — agentni uyg‘otyapman.',
+  'schedule.workerFinished': '✅ «{name}» workeri tugadi ({elapsed}). Natijani o‘qiyapman.',
+  'schedule.workerSilent': '⚠️ «{name}» workeri {minutes} daqiqadan beri jim. Qotib qolmaganini tekshiryapman.',
+  'schedule.checkRecovered': '✅ «{name}» tekshiruvi yana joyida.',
   'schedule.statusLineText': '⏳ {name} · ishlayapti: {elapsed}{activity}',
   'schedule.statusLineActivity': ' · hozir: {activity}',
   'schedule.statusElapsedMinutes': '{minutes} daq',

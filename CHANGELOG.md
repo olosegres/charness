@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**A scheduled run and a check alert no longer pin themselves into the topic, and the alert says what happened in a sentence instead of printing a command line.**
+Before, every fired schedule and every check alert was pinned (the pins piled up as run history), and a check alert printed the shell command, its exit code and the raw output — «🚨 Check "watch builder S2" failed: exit 1 (every 5m) $ kill -0 4242 2>/dev/null || { echo "worker 4242 exited"; exit 1; }; …» — which says neither what happened nor why.
+Now:
+  - A scheduled run is announced by one silent line — «⏰ Scheduled: Nightly build · every day at 02:00», with the catch-up note when it fires late — and the prompt it carries is folded under it in an expandable quotation (the instruction to the agent is there when you want it, out of the way when you do not). Nothing is pinned: pins stay for the agent's questions and for `/reminders`, which are meant to ring through a muted topic.
+  - A check's first failure is one silent sentence, never the command: «🔔 Check "API health" fired — waking the agent.» with the failure and the tail of the output folded under it. A watch on a worker says «✅ Worker "builder S2" finished (2 h 5 min). Reading the result.» when the worker is gone, or «⚠️ Worker "builder S2" has been silent for 45 min. Checking whether it hung.» when its run directory went quiet. When the check passes again: «✅ Check "API health" is back to normal.». The agent still gets the command, the exit code and the output in its prompt.
+  - Alert pins left by earlier versions are unpinned by themselves at the check's next run (or when it is cancelled), so nothing stays pinned for good. Pins of old scheduled-run announcements were never tracked and stay until you unpin them.
+  - The agent's confirmation of a new schedule, which a topic shows as a tool result, is one line — `Scheduled "Nightly build": daily at 02:00` — plus the id it cancels by. `isPinSilent` of `schedule_create` is still accepted and does nothing.
+
 **A MacBook runner with its lid closed no longer gets a new job that dies when the Mac sleeps — it waits like an offline runner, and `runners` says «lid closed».**
 Before, a Mac runner with the lid shut (no external display) slept about a minute and a half later, and on power macOS woke it for a minute or two every quarter of an hour; the runner reconnected in those windows, looked available, and a job that landed there was cut when the Mac went back to sleep.
 Now:

@@ -794,11 +794,12 @@ export const enDict: Record<string, string> = {
   'timestamps.usageHint': 'Usage: /timestamps on | off | (no arg — status)',
 
   'schedule.fired':
-    '⏰ Schedule "{name}" ({schedule}){missedNote}\n\n{prompt}',
+    '⏰ Scheduled: {name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — missed at {time}, catching up',
-  'schedule.checkFailed':
-    '🚨 Check "{name}" failed: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nWaking the agent. No more alerts until the check passes again.',
-  'schedule.checkRecovered': '✅ Check "{name}" passes again.',
+  'schedule.checkFired': '🔔 Check "{name}" fired — waking the agent.',
+  'schedule.workerFinished': '✅ Worker "{name}" finished ({elapsed}). Reading the result.',
+  'schedule.workerSilent': '⚠️ Worker "{name}" has been silent for {minutes} min. Checking whether it hung.',
+  'schedule.checkRecovered': '✅ Check "{name}" is back to normal.',
   'schedule.statusLineText': '⏳ {name} · works {elapsed}{activity}',
   'schedule.statusLineActivity': ' · now: {activity}',
   'schedule.statusElapsedMinutes': '{minutes} min',

@@ -787,11 +787,12 @@ export const ukDict: Record<string, string> = {
   'timestamps.usageHint': 'Використання: /timestamps on | off | (без аргументу — статус)',
 
   'schedule.fired':
-    '⏰ Розклад «{name}» ({schedule}){missedNote}\n\n{prompt}',
+    '⏰ За розкладом: {name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — пропущено о {time}, надолужую',
-  'schedule.checkFailed':
-    '🚨 Перевірка «{name}» не пройшла: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nБуджу агента. Нових тривог не буде, доки перевірка знову не пройде.',
-  'schedule.checkRecovered': '✅ Перевірка «{name}» знову проходить.',
+  'schedule.checkFired': '🔔 Спрацювала перевірка «{name}» — бужу агента.',
+  'schedule.workerFinished': '✅ Воркер «{name}» завершив роботу ({elapsed}). Читаю результат.',
+  'schedule.workerSilent': '⚠️ Воркер «{name}» мовчить уже {minutes} хв. Перевіряю, чи не завис.',
+  'schedule.checkRecovered': '✅ Перевірка «{name}» знову в порядку.',
   'schedule.statusLineText': '⏳ {name} · працює {elapsed}{activity}',
   'schedule.statusLineActivity': ' · зараз: {activity}',
   'schedule.statusElapsedMinutes': '{minutes} хв',

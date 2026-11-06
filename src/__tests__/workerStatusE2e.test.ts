@@ -14,8 +14,10 @@
  *   → `/verbosity stream`: a line returns
  *   → «Leave current dir» on the `/bind` picker: the line is deleted, the watch is parked (paused for «unbound»), and no check
  *     run and no line follows; the folder bound again: the watch resumes and a line returns at the next due run
- *   → the worker is killed: the line is deleted, the alert is pinned silently, the agent is woken (`cancel-watch`)
- *   → `schedule_cancel`: the alert is unpinned, the watch is gone, and no status line of the whole flow is left in the topic.
+ *   → the worker is killed: the line is deleted, ONE silent sentence says the worker finished (how long it ran — no command, no
+ *     pin), the agent is woken (`cancel-watch`)
+ *   → `schedule_cancel`: the watch is gone (nothing was pinned, nothing is unpinned), and no status line of the whole flow is
+ *     left in the topic.
  *
  * No agent turn runs for any status line (the fake's prompt log proves it). Nothing leaves the machine: the Bot API is on
  * loopback and the agent is a fake. Everything the test starts is stopped in `after`.
@@ -68,9 +70,9 @@ const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const topicFolder = 'status-flow';
 const launchLine = 'Launching Telegraf bot (long polling';
-const alertMark = `Check "${fakeStatusWatchJobName}" failed`;
 /** What the topic shows of the watch's name: the recipe's own leading «watch » is dropped. */
 const shownWatchName = fakeStatusWatchJobName.replace(/^watch /, '');
+const alertMark = `Worker "${shownWatchName}" finished (`;
 const statusLinePrefix = `⏳ ${shownWatchName} · works `;
 
 const bootTimeoutMs = 60 * 1000;
@@ -267,13 +269,14 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
     await getCharness().waitFor('the agent to arm the watch', agentTimeoutMs, () => getToolCalls('schedule_create').length === 1);
     const [created] = getToolCalls('schedule_create');
     assert.doesNotMatch(created.outcome, /^error:/, created.outcome);
-    assert.match(created.outcome, new RegExp(`status every ${defaultCheckStatusEveryMinutes} min`), 'the list line says the status rhythm the recipe asked for');
+    assert.match(created.outcome, new RegExp(`^Scheduled "${fakeStatusWatchJobName}": checks cron \\* \\* \\* \\* \\*\\nid: `), 'the confirmation is one line and the id');
+    assert.doesNotMatch(created.outcome, /kill -0/, 'the command is not part of the confirmation the topic shows');
     // `state.json` is written a moment after the change (the save is debounced): wait for the record, do not read it at once.
     await getCharness().waitFor('the watch to be persisted', replyTimeoutMs, () => readPersistedSchedules().some((record) => record.name === fakeStatusWatchJobName));
     const [watch] = readPersistedSchedules().filter((record) => record.name === fakeStatusWatchJobName);
     watchId = watch.id;
     assert.equal(watch.deliveryKind, 'check');
-    assert.equal(watch.isPinSilent, true);
+    assert.ok(!('isPinSilent' in watch), 'there is no pin option to persist any more');
     assert.equal(watch.statusWorkerRunDir, runDir);
     assert.equal(watch.statusEveryMinutes, defaultCheckStatusEveryMinutes, 'the recipe\'s own rhythm is persisted; the test seam shortens it at run time');
     assert.match(watch.checkCommand ?? '', new RegExp(`kill -0 ${getWorkerPid()}\\b`));
@@ -383,26 +386,32 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
     assert.equal(watch?.isPaused, undefined, 'the watch is running again');
   });
 
-  it('the worker finishes: the status line is deleted, the alert is pinned silently, the agent is woken', async () => {
+  it('the worker finishes: the status line is deleted, ONE silent sentence says so without the command, nothing is pinned, the agent is woken', async () => {
     getWorker().kill('SIGKILL');
-    await getCharness().waitFor('the check alert to be pinned', checkRunTimeoutMs, () => fakeTelegram.pinEvents.some((event) => event.kind === 'pin' && (fakeTelegram.getMessage(event.messageId)?.text ?? '').includes(alertMark)));
-    const alertPin = fakeTelegram.pinEvents.find((event) => event.kind === 'pin' && (fakeTelegram.getMessage(event.messageId)?.text ?? '').includes(alertMark));
-    assert.ok(alertPin);
-    alertMessageId = alertPin.messageId;
-    assert.equal(alertPin.isSilent, true, 'a finished worker must not ring the muted operator');
-    assert.match(fakeTelegram.getMessage(alertMessageId)?.text ?? '', new RegExp(`worker ${getWorkerPid()} exited`), 'the recipe said why');
+    await getCharness().waitFor('the worker-finished sentence', checkRunTimeoutMs, () => topic.listMessages().some((message) => message.text.includes(alertMark)));
+    const alert = topic.listMessages().find((message) => message.text.includes(alertMark));
+    assert.ok(alert);
+    alertMessageId = alert.message_id;
+    assert.equal(alert.isSilent, true, 'a finished worker must not ring the muted operator');
+    assert.match(alert.text, new RegExp(`^✅ Worker "${shownWatchName}" finished \\(\\d+ min\\)\\. Reading the result\\.$`), 'a plain sentence: who, how long, what happens next — no fold, no markup');
+    assert.equal(alert.parseMode, undefined, 'one sentence needs no HTML');
+    assert.doesNotMatch(alert.text, /kill -0|worker \d+ exited|\$ /, 'neither the command nor its output');
+    assert.ok(
+      !fakeTelegram.pinEvents.some((event) => event.messageId === alert.message_id || (fakeTelegram.getMessage(event.messageId)?.text ?? '').includes(alertMark)),
+      'no pin of any kind for the alert',
+    );
     assert.equal(fakeTelegram.getMessage(resumedLine.message_id)?.isDeleted, true, 'a «works …» line under a finished worker would be wrong');
     assert.deepEqual(listVisibleStatusLines(), [], 'no status line under the alert');
     await getCharness().waitFor('the agent woken by the check to list its schedules', agentTimeoutMs, () => getToolCalls('schedule_list').length === 1);
     assert.equal(countAgentPrompts(), promptsAfterArming + 1, 'the failure woke the agent once — the only prompt since it armed the watch');
   });
 
-  it('the agent cancels the watch: the alert is unpinned, the watch is gone, and no status line of the flow is left', async () => {
+  it('the agent cancels the watch: nothing was pinned so nothing is unpinned, the watch is gone, and no status line of the flow is left', async () => {
     await getCharness().waitFor('the agent to cancel the watch', agentTimeoutMs, () => getToolCalls('schedule_cancel').length === 1);
     const [cancelled] = getToolCalls('schedule_cancel');
-    assert.match(cancelled.outcome, /1 pinned alert\(s\) unpinned/, cancelled.outcome);
+    assert.doesNotMatch(cancelled.outcome, /pinned/, cancelled.outcome);
     assert.doesNotMatch(cancelled.outcome, /status line/, 'the failure had already taken the line away');
-    await getCharness().waitFor('the alert to be unpinned', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(alertMessageId));
+    assert.ok(!fakeTelegram.pinEvents.some((event) => event.messageId === alertMessageId), 'the alert was never pinned, so never unpinned');
     await getCharness().waitFor('the watch to be gone from the persisted state', replyTimeoutMs, () => readPersistedSchedules().every((record) => record.name !== fakeStatusWatchJobName));
 
     assert.deepEqual(listVisibleStatusLines(), []);

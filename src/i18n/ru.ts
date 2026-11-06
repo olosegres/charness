@@ -785,11 +785,12 @@ export const ruDict: Record<string, string> = {
   'timestamps.usageHint': 'Использование: /timestamps on | off | (без аргумента — статус)',
 
   'schedule.fired':
-    '⏰ Расписание «{name}» ({schedule}){missedNote}\n\n{prompt}',
+    '⏰ По расписанию: {name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — пропущено в {time}, догоняю',
-  'schedule.checkFailed':
-    '🚨 Проверка «{name}» не прошла: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nБужу агента. Новых тревог не будет, пока проверка снова не пройдёт.',
-  'schedule.checkRecovered': '✅ Проверка «{name}» снова проходит.',
+  'schedule.checkFired': '🔔 Сработала проверка «{name}» — бужу агента.',
+  'schedule.workerFinished': '✅ Воркер «{name}» завершил работу ({elapsed}). Читаю результат.',
+  'schedule.workerSilent': '⚠️ Воркер «{name}» молчит уже {minutes} мин. Проверяю, не завис ли он.',
+  'schedule.checkRecovered': '✅ Проверка «{name}» снова в порядке.',
   'schedule.statusLineText': '⏳ {name} · работает {elapsed}{activity}',
   'schedule.statusLineActivity': ' · сейчас: {activity}',
   'schedule.statusElapsedMinutes': '{minutes} мин',

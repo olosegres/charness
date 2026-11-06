@@ -781,11 +781,12 @@ export const zhDict: Record<string, string> = {
   'timestamps.usageHint': '用法：/timestamps on | off |（无参数 — 状态）',
 
   'schedule.fired':
-    '⏰ 定时任务「{name}」({schedule}){missedNote}\n\n{prompt}',
+    '⏰ 定时执行：{name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — 在 {time} 错过，正在追赶',
-  'schedule.checkFailed':
-    '🚨 检查「{name}」失败：{failure}（{schedule}）{missedNote}\n$ {command}\n\n{output}\n\n正在唤醒代理。检查再次通过之前不会再发出警报。',
-  'schedule.checkRecovered': '✅ 检查「{name}」已再次通过。',
+  'schedule.checkFired': '🔔 检查「{name}」已触发 — 正在唤醒代理。',
+  'schedule.workerFinished': '✅ worker「{name}」已完成（{elapsed}）。正在读取结果。',
+  'schedule.workerSilent': '⚠️ worker「{name}」已沉默 {minutes} 分钟。正在检查它是否卡住。',
+  'schedule.checkRecovered': '✅ 检查「{name}」已恢复正常。',
   'schedule.statusLineText': '⏳ {name} · 已运行 {elapsed}{activity}',
   'schedule.statusLineActivity': ' · 当前：{activity}',
   'schedule.statusElapsedMinutes': '{minutes} 分钟',

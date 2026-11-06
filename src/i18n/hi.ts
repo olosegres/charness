@@ -781,11 +781,12 @@ export const hiDict: Record<string, string> = {
   'timestamps.usageHint': 'उपयोग: /timestamps on | off | (बिना तर्क — स्थिति)',
 
   'schedule.fired':
-    '⏰ शेड्यूल «{name}» ({schedule}){missedNote}\n\n{prompt}',
+    '⏰ निर्धारित: {name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — {time} पर छूटा, पकड़ रहा हूँ',
-  'schedule.checkFailed':
-    '🚨 जाँच «{name}» विफल: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nएजेंट को जगा रहा हूँ। जाँच फिर से पास होने तक और अलर्ट नहीं आएँगे।',
-  'schedule.checkRecovered': '✅ जाँच «{name}» फिर से पास हो रही है।',
+  'schedule.checkFired': '🔔 जाँच «{name}» सक्रिय हुई — एजेंट को जगा रहा हूँ।',
+  'schedule.workerFinished': '✅ वर्कर «{name}» पूरा हुआ ({elapsed})। नतीजा पढ़ रहा हूँ।',
+  'schedule.workerSilent': '⚠️ वर्कर «{name}» {minutes} मिनट से शांत है। देख रहा हूँ कि कहीं अटक तो नहीं गया।',
+  'schedule.checkRecovered': '✅ जाँच «{name}» फिर से सामान्य है।',
   'schedule.statusLineText': '⏳ {name} · {elapsed} से चल रहा है{activity}',
   'schedule.statusLineActivity': ' · अभी: {activity}',
   'schedule.statusElapsedMinutes': '{minutes} मिनट',

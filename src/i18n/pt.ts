@@ -781,11 +781,12 @@ export const ptDict: Record<string, string> = {
   'timestamps.usageHint': 'Uso: /timestamps on | off | (sem argumento — estado)',
 
   'schedule.fired':
-    '⏰ Agendamento «{name}» ({schedule}){missedNote}\n\n{prompt}',
+    '⏰ Agendado: {name} · {schedule}{missedNote}',
   'schedule.missedNote': ' — perdido às {time}, a recuperar',
-  'schedule.checkFailed':
-    '🚨 A verificação «{name}» falhou: {failure} ({schedule}){missedNote}\n$ {command}\n\n{output}\n\nA acordar o agente. Sem mais alertas até a verificação voltar a passar.',
-  'schedule.checkRecovered': '✅ A verificação «{name}» voltou a passar.',
+  'schedule.checkFired': '🔔 A verificação «{name}» disparou — a acordar o agente.',
+  'schedule.workerFinished': '✅ O worker «{name}» terminou ({elapsed}). A ler o resultado.',
+  'schedule.workerSilent': '⚠️ O worker «{name}» está em silêncio há {minutes} min. A verificar se travou.',
+  'schedule.checkRecovered': '✅ A verificação «{name}» voltou ao normal.',
   'schedule.statusLineText': '⏳ {name} · trabalhando há {elapsed}{activity}',
   'schedule.statusLineActivity': ' · agora: {activity}',
   'schedule.statusElapsedMinutes': '{minutes} min',

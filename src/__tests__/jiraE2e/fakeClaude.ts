@@ -172,8 +172,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - while `fakeClaudeUsageWindowsFileName` exists in the state dir, every turn starts with the `rate_limit_event` frame the
  *    real CLI streams: the usage windows the file lists for the account the process runs on;
  *  - `arm-watch`   — an orchestrator watching a worker the way `charness-manager` says: `schedule_create` with the real
- *    worker-watch recipe (`scheduler/workerWatch.ts`) on a worker that is gone, cron every minute, `isPinSilent:
- *    true`, a prompt carrying `cancel-watch`; then ends the turn. `cancel-watch` — the check's wake: `schedule_list`,
+ *    worker-watch recipe (`scheduler/workerWatch.ts`) on a worker that is gone, cron every minute (no status
+ *    arguments: for the bot an ordinary check), a prompt carrying `cancel-watch`; then ends the turn. `cancel-watch` — the check's wake: `schedule_list`,
  *    then `schedule_cancel` of that watch, as the skill's "cancel the check once the wake is handled". Both log every
  *    call to `tool-calls.jsonl` and are honoured by a turn with or without a request, by the token in its text;
  *  - `arm-status-watch` — the same orchestrator on a worker the TEST started (the pid and run directory in
@@ -635,7 +635,6 @@ async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-st
       name: fakeWatchJobName,
       cron: '* * * * *',
       checkCommand: workerWatchCheckCommand.replaceAll('<pid>', fakeGoneWorkerPid.toString()).replaceAll('<run-dir>', getStateDir()),
-      isPinSilent: true,
       prompt: `${fakeCancelWatchToken} The worker W-1 finished or stalled: read its result, then cancel this watch.`,
     };
     logToolCall('schedule_create', args, await callBotTool(server, 'schedule_create', args));
@@ -647,7 +646,6 @@ async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-st
       name: fakeStatusWatchJobName,
       cron: '* * * * *',
       checkCommand: workerWatchCheckCommand.replaceAll('<pid>', target.pid.toString()).replaceAll('<run-dir>', target.runDir),
-      isPinSilent: true,
       ...parseRecipeArguments(workerWatchStatusArguments.replaceAll('<run-dir>', target.runDir)),
       prompt: `${fakeCancelWatchToken} The worker S2 finished or stalled: read its result, then cancel this watch.`,
     };

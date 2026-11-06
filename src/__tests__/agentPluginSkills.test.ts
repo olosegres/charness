@@ -16,7 +16,6 @@ import * as path from 'path';
 import {
   workerWatchCheckCommand,
   workerWatchCheckCron,
-  workerWatchPinArgument,
   workerWatchStatusArguments,
 } from '../scheduler/workerWatch';
 
@@ -79,7 +78,7 @@ describe('agent-plugin', () => {
     const text = fs.readFileSync(path.join(skillsDir, 'charness-manager', 'SKILL.md'), 'utf8');
     assert.ok(text.includes(workerWatchCheckCommand), 'the checkCommand');
     assert.ok(text.includes(`cron \`${workerWatchCheckCron}\``), 'the cron');
-    assert.ok(text.includes(`\`${workerWatchPinArgument}\``), 'the silent pin: a normal finish fires the check');
+    assert.doesNotMatch(text, /isPinSilent/, 'the pin argument is gone: nothing a check posts is pinned');
     assert.ok(text.includes(`\`${workerWatchStatusArguments}\``), 'the status arguments: the bot posts the topic\'s status line itself');
     assert.match(text, /Never arm a schedule of your own for status lines/);
   });

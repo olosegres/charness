@@ -17,7 +17,8 @@
  *   → the fake agent started; in «Stream + answers» a message opens a request
  *     the agent answers through the bot MCP; in «Answers only» the header says
  *     the plain text and the thinking are not shown; in the full stream no request is opened; a
- *     silent turn is woken; `/schedule` and a scheduled run are requests too
+ *     silent turn is woken; `/schedule` and a scheduled run are requests too — the run is announced by one SILENT line
+ *     with its prompt folded under it, never pinned, while a reminder that fires beside it is still pinned
  *   → every answer is pinned with a notification and only the latest stays
  *     pinned, across a restart; a restart that finds the bot MCP port held for a
  *     moment waits it out, so the re-adopted agent still answers; an agent that
@@ -89,6 +90,10 @@ const replyTimeoutMs = 20 * 1000;
 const answerTimeoutMs = 60 * 1000;
 /** How soon after the restart the seeded scheduled run is due. */
 const seededRunDelayMs = 3 * 1000;
+/** The scheduled run's prompt: the label the fake answers, and markup characters that must reach Telegram escaped. */
+const seededRunPrompt = 'TOPIC-6 [fake:answer] <b>not markup</b> & more';
+/** The seeded reminder's text, which the bot posts and pins itself. */
+const seededReminderText = 'Take the evening pills';
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -383,27 +388,54 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     assert.deepEqual(readClosedRequests().find((record) => record.id === turn.requestId)?.origin, { kind: 'message', attributes: { source: 'schedule', requester: operator.id.toString() } });
   });
 
-  it('a scheduled run fires as a request: the announcement is pinned and the agent answers it', async () => {
+  it('a scheduled run fires as a request: a silent one-line announcement with the prompt folded, never pinned, and the agent answers it; a reminder beside it is pinned', async () => {
     // Seeded into the store while the bot is down, the way a persisted job re-arms at boot.
     await getCharness().stop();
     const persisted = readPersistedState();
     const dueAt = Date.now() + seededRunDelayMs;
+    const threadKey = `${group.id}:${topicThreadId}`;
     const seeded: ScheduleRecord = {
       id: 'run-topic-6-seeded',
-      threadKey: `${group.id}:${topicThreadId}`,
+      threadKey,
       name: 'Run TOPIC-6',
       spec: { kind: 'once', onceAtIso: new Date(dueAt).toISOString() },
-      prompt: 'TOPIC-6 [fake:answer]',
+      // Markup characters on purpose: the folded prompt must reach Telegram escaped.
+      prompt: seededRunPrompt,
       createdBy: 'user',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       nextRunAt: dueAt,
     };
-    persisted.schedules = { ...(persisted.schedules ?? {}), [seeded.id]: seeded };
+    const seededReminder: ScheduleRecord = {
+      id: 'take-the-pills-seeded',
+      threadKey,
+      name: 'Take the pills',
+      spec: { kind: 'once', onceAtIso: new Date(dueAt).toISOString() },
+      prompt: seededReminderText,
+      createdBy: 'user',
+      deliveryKind: 'reminder',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nextRunAt: dueAt,
+    };
+    persisted.schedules = { ...(persisted.schedules ?? {}), [seeded.id]: seeded, [seededReminder.id]: seededReminder };
     fs.writeFileSync(path.join(getLayout().dataDir, 'state.json'), JSON.stringify(persisted));
     await startCharness();
 
-    await waitForTopicMessage('the fire announcement', (message) => message.text.includes('Schedule "Run TOPIC-6"'));
+    const announcement = await waitForTopicMessage('the fire announcement', (message) => message.text.includes('Scheduled: Run TOPIC-6'));
+    assert.match(
+      announcement.text,
+      /^⏰ Scheduled: Run TOPIC-6 · \d{4}-\d{2}-\d{2} at \d{2}:\d{2}\n\n<blockquote expandable>TOPIC-6 \[fake:answer\] &lt;b&gt;not markup&lt;\/b&gt; &amp; more<\/blockquote>$/,
+      'a header a person reads, the prompt (escaped) in an expandable quotation',
+    );
+    assert.equal(announcement.parseMode, 'HTML');
+    assert.equal(announcement.isSilent, true, 'an ordinary silent message, like the rest of the bot\'s output');
+    const reminder = await waitForTopicMessage('the reminder', (message) => message.text.includes(seededReminderText));
+    assert.equal(reminder.isSilent, false, 'a reminder is meant to ring');
+    assert.equal(reminder.parseMode, undefined, 'a reminder is its own plain text');
+    await getCharness().waitFor('the reminder pinned', replyTimeoutMs, () => getPinKinds(reminder.message_id).includes('pin'));
+    assert.equal(fakeTelegram.pinEvents.find((event) => event.kind === 'pin' && event.messageId === reminder.message_id)?.isSilent, false, 'the reminder pin notifies: that is how it pierces a muted topic');
+    assert.deepEqual(getPinKinds(announcement.message_id), [], 'the scheduled run itself is never pinned');
     await waitForFakeAnswer('TOPIC-6');
     const [turn] = getTurns('TOPIC-6');
     assert.equal(turn.isRequestPrompt, true);
@@ -445,11 +477,13 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     assert.deepEqual(pinnedAnswers, [answerIds[answerIds.length - 1]]);
   });
 
-  it('the status banner and the scheduled run\'s announcement keep their own pins', () => {
+  it('the status banner keeps its pin, and the reminder its own; the scheduled run\'s announcement never had one', () => {
     const banner = fakeTelegram.pinEvents[0];
     assert.deepEqual(getPinKinds(banner.messageId), ['pin'], 'the banner pin was never touched');
-    const announcement = findTopicMessage('Schedule "Run TOPIC-6"');
-    assert.deepEqual(getPinKinds(announcement.message_id), ['pin'], 'the scheduled run\'s pin is a separate record');
+    const announcement = findTopicMessage('Scheduled: Run TOPIC-6');
+    assert.deepEqual(getPinKinds(announcement.message_id), [], 'the scheduled run\'s announcement is not pinned, and so never unpinned');
+    const reminder = findTopicMessage(seededReminderText);
+    assert.deepEqual(getPinKinds(reminder.message_id), ['pin'], 'the reminder\'s pin is a separate record that stays');
   });
 
   it('after a restart the next answer still unpins the one pinned before it', async () => {

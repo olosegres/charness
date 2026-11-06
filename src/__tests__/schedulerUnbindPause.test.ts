@@ -150,7 +150,8 @@ describe('pausing a topic\'s schedules on /unbind', () => {
       pin: async () => {},
       runCheck: async () => ({ exitCode: 0, signal: null, isTimedOut: false, output: '' }),
       setCheckFailing: async () => {},
-      recordAlertPin: async () => {},
+      unpinMessages: async () => {},
+      clearAlertPins: async () => {},
       checkIsStatusShown: () => true,
       readWorkerActivity: async () => null,
       // The unbind lands while the line is being sent: the pause parks the job before the run records the line.

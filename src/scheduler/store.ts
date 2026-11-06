@@ -87,7 +87,6 @@ export interface CreateScheduleArgs {
   createdBy: ScheduleCreatedBy;
   nowMs: number;
   lastAdapterName?: string;
-  isPinSilent?: boolean;
   /** Omit for the agent-prompt default; `'reminder'` for a bot-local reminder, `'check'` for a watchdog. */
   deliveryKind?: ScheduleDeliveryKind;
   /** The command of a `'check'` job. */
@@ -110,7 +109,7 @@ export interface CreateScheduleArgs {
  * writes it to the store.
  */
 export function createScheduleRecord(args: CreateScheduleArgs): ScheduleRecord {
-  const { threadKey, name, spec, prompt, createdBy, nowMs, lastAdapterName, isPinSilent } = args;
+  const { threadKey, name, spec, prompt, createdBy, nowMs, lastAdapterName } = args;
   const nowIso = new Date(nowMs).toISOString();
   const record: ScheduleRecord = {
     id: generateScheduleId(name),
@@ -124,7 +123,6 @@ export function createScheduleRecord(args: CreateScheduleArgs): ScheduleRecord {
     nextRunAt: getNextRunAt(spec, nowMs),
   };
   if (lastAdapterName !== undefined) record.lastAdapterName = lastAdapterName;
-  if (isPinSilent) record.isPinSilent = true;
   // Absent means the agent-prompt kind, so the field is written only when set.
   if (args.deliveryKind !== undefined) record.deliveryKind = args.deliveryKind;
   if (args.checkCommand !== undefined) record.checkCommand = args.checkCommand;
@@ -177,7 +175,7 @@ export async function createScheduleForThread(
  * @description Persist the status line a check job now has in its topic (`null`: it has none — only `statusMessageId` goes; the
  * `lastStatusAt` of the last line stays, it times the next one). Checked and written in ONE locked step
  * ({@link StateStore.updateScheduleIfPresent}), so a cancel that removes the job meanwhile is never undone, and flushed at once
- * like the alert pin: a line id lost in a crash would leave that line in the topic for good. Resolves `false` when the job is
+ * like the failing flag: a line id lost in a crash would leave that line in the topic for good. Resolves `false` when the job is
  * gone — or when a NEW line is offered for a PAUSED job: a paused job never runs again to take a line away (an `/unbind` that
  * lands while a run is already posting), so the caller deletes the line it just posted. Clearing a line is always allowed.
  */
@@ -199,4 +197,19 @@ export async function recordCheckStatusLine(
   });
   if (isRecorded) await store.flush();
   return isRecorded;
+}
+
+/**
+ * @description Forget the alert pins an earlier version recorded on a check job, once they are unpinned
+ * (`ScheduleRecord.alertPinMessageIds`). Checked and written in ONE locked step, so a cancel that removes the job meanwhile is
+ * never undone, and flushed at once: the next run must not unpin the same messages again after a restart.
+ */
+export async function clearCheckAlertPins(store: Pick<StateStore, 'updateScheduleIfPresent' | 'flush'>, jobId: string): Promise<void> {
+  const isCleared = await store.updateScheduleIfPresent(jobId, (record) => {
+    if (record.alertPinMessageIds === undefined) return null;
+    const updated: ScheduleRecord = { ...record, updatedAt: new Date().toISOString() };
+    delete updated.alertPinMessageIds;
+    return updated;
+  });
+  if (isCleared) await store.flush();
 }

@@ -84,7 +84,6 @@ import { holdPort } from './e2e/isolatedCharness';
 import {
   workerWatchCheckCommand,
   workerWatchCheckCron,
-  workerWatchPinArgument,
   workerWatchStatusArguments,
 } from '../scheduler/workerWatch';
 
@@ -213,7 +212,8 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     const description = scheduleCreate?.description ?? '';
     assert.ok(description.includes(`checkCommand \`${workerWatchCheckCommand}\``), description);
     assert.ok(description.includes(`cron \`${workerWatchCheckCron}\``));
-    assert.ok(description.includes(`\`${workerWatchPinArgument}\``), 'a normal worker finish fires the check: its pin must not notify');
+    assert.ok(!description.includes('isPinSilent'), 'nothing a check posts is pinned, so the recipe has no pin argument');
+    assert.match(description, /never the command/, 'the topic reads «worker finished» / «worker silent»');
     assert.ok(description.includes(`\`${workerWatchStatusArguments}\``), 'the status arguments: the bot posts the topic\'s status lines');
     assert.match(description, /never arm a schedule of your own for status lines/);
     assert.match(description, /Never `kill -0` alone/);
@@ -1189,7 +1189,8 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       const orchestrationBullet = instructions.split('\n').find((line) => line.includes('`charness-manager`')) ?? '';
       assert.ok(orchestrationBullet, 'names the bot\'s manager skill');
       assert.ok(orchestrationBullet.length <= maxOrchestrationBulletLength, `${orchestrationBullet.length} characters`);
-      assert.ok(orchestrationBullet.includes(`\`${workerWatchPinArgument}\``), 'a worker watch pins silently');
+      assert.match(orchestrationBullet, /checkCommand, cron, status arguments/, 'the recipe\'s arguments are named');
+      assert.doesNotMatch(orchestrationBullet, /isPinSilent/);
       assert.match(orchestrationBullet, /never `kill -0` alone/);
       assert.ok(!instructions.includes(workerWatchCheckCommand), 'the recipe is in the tool description only');
     } finally {
@@ -1981,7 +1982,9 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       arguments: { name: 'Daily', cron: '0 9 * * *', prompt: 'standup' },
     });
     assert.notEqual(cronResult.isError, true, firstText(cronResult));
-    assert.match(firstText(cronResult), /Scheduled "Daily"/);
+    const dailyRecord = fixture.armed.find((r) => r.name === 'Daily');
+    assert.ok(dailyRecord);
+    assert.equal(firstText(cronResult), `Scheduled "Daily": daily at 09:00\nid: ${dailyRecord.id}`, 'one human line, then the id the agent cancels by');
 
     const onceResult = await client.callTool({
       name: 'schedule_create',
@@ -2045,11 +2048,13 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     assert.equal(record.deliveryKind, 'check');
     assert.equal(record.checkCommand, 'curl -fsS http://127.0.0.1:8080/health');
     assert.equal(record.checkTimeoutSec, 15);
-    assert.match(firstText(result), /check: `curl -fsS http:\/\/127\.0\.0\.1:8080\/health` \(passing\)/);
+    assert.equal(firstText(result), `Scheduled "API health": checks every 5m\nid: ${record.id}`, 'no command in the confirmation the topic shows');
+    assert.doesNotMatch(firstText(result), /curl/);
 
-    // A check counts against the agent's cap and is listed like any agent job.
+    // A check counts against the agent's cap and is listed like any agent job — with its command, for the agent.
     const listText = firstText(await client.callTool({ name: 'schedule_list', arguments: {} }));
     assert.match(listText, /API health/);
+    assert.match(listText, /check: `curl -fsS http:\/\/127\.0\.0\.1:8080\/health` \(passing\)/);
     await client.close();
   });
 
@@ -2090,7 +2095,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     assert.equal(record.statusWorkerRunDir, '/runs/builder-s2');
     assert.equal(record.statusEveryMinutes, 30);
     assert.equal(record.statusCommand, undefined);
-    assert.match(firstText(result), /status every 30 min/);
+    assert.equal(firstText(result), `Scheduled "watch builder S2": checks every 5m\nid: ${record.id}`);
     assert.match(firstText(await client.callTool({ name: 'schedule_list', arguments: {} })), /status every 30 min/);
     await client.close();
   });
@@ -2107,7 +2112,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     assert.ok(record);
     assert.equal(record.statusCommand, 'tail -n 1 build.log');
     assert.equal(record.statusEveryMinutes, undefined);
-    assert.match(firstText(result), /status every 15 min/);
+    assert.match(firstText(await client.callTool({ name: 'schedule_list', arguments: {} })), /status every 15 min/);
     await client.close();
   });
 
@@ -2352,7 +2357,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     await client.close();
   });
 
-  it('schedule_cancel of a check unpins the alerts it pinned; a job without pinned alerts unpins nothing', async () => {
+  it('schedule_cancel of a check unpins the alerts an earlier version pinned for it; a job without any unpins nothing', async () => {
     const watch = await seedThreadSchedule('watch builder S1');
     await fixture.store.upsertSchedule({ ...watch, deliveryKind: 'check', checkCommand: 'kill -0 1', alertPinMessageIds: [501, 502] });
     const plain = await seedThreadSchedule('Check the deploy');
@@ -2409,7 +2414,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     await client.close();
   });
 
-  it('isPinSilent rides through to the persisted record', async () => {
+  it('isPinSilent is still accepted from an older caller and changes nothing: it is not stored and the answer does not mention it', async () => {
     const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
     const client = await buildClient(fixture.handle.port, token);
     const result = await client.callTool({
@@ -2419,8 +2424,24 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     assert.notEqual(result.isError, true, firstText(result));
     const record = fixture.armed.find((r) => r.name === 'Silent');
     assert.ok(record);
-    assert.equal(record.isPinSilent, true);
-    assert.equal(fixture.store.getSchedules()[record.id].isPinSilent, true);
+    assert.ok(!('isPinSilent' in fixture.store.getSchedules()[record.id]), 'the deprecated flag is not persisted');
+    assert.equal(firstText(result), `Scheduled "Silent": daily at 09:00\nid: ${record.id}`);
+
+    const scheduleCreate = (await client.listTools()).tools.find((tool) => tool.name === 'schedule_create');
+    const pinSilentProperty = (scheduleCreate?.inputSchema.properties ?? {}).isPinSilent;
+    assert.ok(pinSilentProperty && typeof pinSilentProperty === 'object' && 'description' in pinSilentProperty);
+    assert.match(String(pinSilentProperty.description), /DEPRECATED, has no effect/);
+    await client.close();
+  });
+
+  it('a one-shot is confirmed in the same one-line shape', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    const onceIso = new Date(Date.now() + 60 * 60_000).toISOString();
+    const once = await client.callTool({ name: 'schedule_create', arguments: { name: 'Once', onceAt: onceIso, prompt: 'p' } });
+    const onceRecord = fixture.armed.find((r) => r.name === 'Once');
+    assert.ok(onceRecord);
+    assert.match(firstText(once), new RegExp(`^Scheduled "Once": once at \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}\\nid: ${onceRecord.id}$`));
     await client.close();
   });
 });
