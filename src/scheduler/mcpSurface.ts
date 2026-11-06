@@ -240,7 +240,7 @@ When to use it:
 • You want to deliver SEVERAL discrete messages (each its own message, e.g. a per-item news digest) → send_messages_to_user; an item may attach ONE file (the text becomes its caption).
 ${compactConversationInstruction}
 ${isTodoToolOffered ? `${todoInstruction}\n` : ''}• You need to review or remove scheduled jobs → schedule_list / schedule_cancel.
-• You need a watchdog — keep an eye on a service, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron): the bot runs it in this folder, stays silent while it exits 0, and on the first failure tells the topic in one line and wakes you with \`prompt\` + the exit code and output tail. Checks survive restarts and crashes. NEVER build your own watcher (background loop, nohup, sleep loop, tmux pane, shell crontab): it dies with your session or a restart, silently.
+• You need a watchdog — keep an eye on a service, build, deploy, disk, URL… → schedule_create with \`checkCommand\` (cron): the bot runs it in this folder, stays silent while it exits 0, and on the first failure posts a notice and wakes you with \`prompt\` + the exit code and output tail. Checks survive restarts and crashes. NEVER build your own watcher (background loop, nohup, sleep loop, tmux pane, shell crontab): it dies with your session or a restart, silently.
 ${buildTelegramOrchestrationInstruction(isBotSkillsEnabled)}
 ${answerRequestInstruction} The requester may not see your plain text: anything they must read goes through answer_request — yet your plain text is relayed into the topic too, so end the turn WITHOUT a recap of what you answered (it would show twice).
 ${claudeProfilesInstruction}${remoteRunInstructionText === null ? '' : `\n${remoteRunInstructionText}`}

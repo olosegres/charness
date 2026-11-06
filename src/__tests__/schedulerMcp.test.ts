@@ -2487,10 +2487,10 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     assert.equal(firstText(twiceADay), `Scheduled "Twice": next: ${getExpectedNextStamp(twiceRecord)}\nid: ${twiceRecord.id}`);
     assert.doesNotMatch(firstText(twiceADay), /cron|9,18/);
 
-    const irregularCheck = await client.callTool({ name: 'schedule_create', arguments: { name: 'Odd check', cron: '*/7 * * * *', prompt: 'p', checkCommand: 'true' } });
+    const irregularCheck = await client.callTool({ name: 'schedule_create', arguments: { name: 'Odd check', cron: '*/40 * * * *', prompt: 'p', checkCommand: 'true' } });
     const checkRecord = fixture.armed.find((r) => r.name === 'Odd check');
     assert.ok(checkRecord);
-    assert.equal(firstText(irregularCheck), `Scheduled "Odd check": checks; next: ${getExpectedNextStamp(checkRecord)}\nid: ${checkRecord.id}`, '*/7 does not divide the hour: no «every 7m»');
+    assert.equal(firstText(irregularCheck), `Scheduled "Odd check": checks; next: ${getExpectedNextStamp(checkRecord)}\nid: ${checkRecord.id}`, '*/40 does not divide the hour (it fires at :00 and :40): no «every 40m»');
     await client.close();
   });
 

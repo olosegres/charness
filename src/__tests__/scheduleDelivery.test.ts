@@ -1032,7 +1032,7 @@ test('worker watch: a failure that is neither of the recipe\'s two signals says 
 test('worker watch: the sentences exist in a non-English locale too', async () => {
   const { deps, callLog } = createHarness({ checkResult: workerGoneRun, startMs: jobCreatedAtMs + 30 * minuteMs });
   await runWithLocale('ru', () => createScheduleDelivery(deps)(makeWorkerWatch(), onTime));
-  assert.equal(getAnnounced(callLog).text, '✅ Воркер «builder S2» завершил работу (30 мин). Читаю результат.');
+  assert.equal(getAnnounced(callLog).text, '✅ Воркер «builder S2» завершил работу (30 мин). Разбираю результат.');
 });
 
 // ─── alert pins an earlier version left on a check ───────────────────
