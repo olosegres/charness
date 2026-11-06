@@ -415,9 +415,12 @@ describe('/runners over its ports', () => {
       await harness.tapButton(findReply(() => true).messageId ?? 0, 'rnr_pair');
       const [adminMessage, plainMessage] = harness.replies.slice(-2);
       assert.ok(adminMessage !== undefined && plainMessage !== undefined);
+      /** The words of an HTML pairing message with the markup taken off: what must go out if Telegram refuses the markup. */
+      const decodeHtml = (html: string): string => html.replace(/<\/?pre>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
       for (const message of [adminMessage, plainMessage]) {
         assert.deepEqual(message.extra, { parse_mode: 'HTML' });
-        assert.deepEqual(message.options, { isSecret: true });
+        assert.deepEqual(message.options, { isSecret: true, plainFallbackText: decodeHtml(message.text) }, 'a secret, with its plain twin for a refusal of the markup');
+        assert.doesNotMatch(String(message.options?.plainFallbackText), /<\/?pre>|&(lt|gt|amp);/, 'the twin shows no tag and no entity');
         assert.ok(message.text.length <= 4096, `a pairing message must fit one Telegram message, is ${message.text.length}`);
         assert.ok(message.text.includes('cr1.'), 'the line carries the code');
         assert.ok(!message.text.slice(message.text.indexOf('<pre>') + 5, message.text.indexOf('</pre>')).match(/[<>]/), 'the line is HTML-escaped inside the <pre>');
