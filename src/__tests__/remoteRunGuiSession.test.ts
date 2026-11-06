@@ -29,6 +29,8 @@ let agent: GuiAgent | null = null;
 let ticker: NodeJS.Timeout | null = null;
 const accountName = os.userInfo().username;
 const waitBoundMs = 60_000;
+/** How long a step that has recorded its pids is left running before the test cuts it: long enough for the test to read the pids first. */
+const stepSettleMs = 200;
 
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gui-session-')));
@@ -72,7 +74,7 @@ interface SourcedRun {
 }
 
 /** The job script's functions, `source`d in a process of their own with the job's globals set the way `cmd_job` has them. */
-function runSourced(body: string, options: { signalAfterMs?: number } = {}): Promise<SourcedRun> {
+function runSourced(body: string, options: { signalOnceStepWrote?: string } = {}): Promise<SourcedRun> {
   const program = [
     `source ${scriptPath}`,
     `work=${workDir}; slug=${slug}; job=${jobId}; jd=${jobDir}; killed=0; job_locale=C.UTF-8`,
@@ -85,7 +87,7 @@ function runSourced(body: string, options: { signalAfterMs?: number } = {}): Pro
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-    if (options.signalAfterMs !== undefined) setTimeout(() => child.kill('SIGTERM'), options.signalAfterMs);
+    if (options.signalOnceStepWrote !== undefined) void afterStepWrote(options.signalOnceStepWrote, () => child.kill('SIGTERM'));
     const bound = setTimeout(() => child.kill('SIGKILL'), waitBoundMs);
     child.on('close', (status) => {
       clearTimeout(bound);
@@ -233,9 +235,50 @@ function createGroupRecordingStep(pidFile: string, options: { isStubborn?: boole
   return `${options.isStubborn === true ? "trap \"\" TERM; " : ''}sleep 300 & echo \"$$ $!\" > ${pidFile}; wait`;
 }
 
-async function readGroupPids(pidFile: string): Promise<number[]> {
+/** Whether a pid file holds both pids ({@link createGroupRecordingStep} writes them in one line). */
+function checkHasBothPids(content: string): boolean {
+  return content.trim().includes(' ');
+}
+
+/**
+ * Wait, bounded, until the step has written `file` (and `isReady` accepts what it holds): the step is running only then. A fixed
+ * delay from the start of the test is NOT that — a loaded machine can take longer than any such delay to start the step at all.
+ */
+async function waitForStepFile(file: string, isReady: (content: string) => boolean = () => true): Promise<void> {
   const deadline = Date.now() + waitBoundMs;
-  while (!(fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim().includes(' ')) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+  while (Date.now() < deadline) {
+    if (fs.existsSync(file) && isReady(fs.readFileSync(file, 'utf8'))) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+/** Run `action` a moment ({@link stepSettleMs}) after the step has written `file`; resolves the instant it ran. */
+async function afterStepWrote(file: string, action: () => void, isReady?: (content: string) => boolean): Promise<number> {
+  await waitForStepFile(file, isReady);
+  await new Promise((resolve) => setTimeout(resolve, stepSettleMs));
+  action();
+  return Date.now();
+}
+
+/** The agent stops looking and beating, as a process that died does (its steps keep running in their process groups). */
+function stopAgentTicks(): void {
+  if (ticker !== null) clearInterval(ticker);
+  ticker = null;
+}
+
+/** The agent's session ends: it stops beating and its status is gone, with the step still running in its process group. */
+function endAgentSession(): void {
+  stopAgentTicks();
+  fs.rmSync(paths.guiAgentStatus, { force: true });
+}
+
+/** End the agent's session once the step has recorded its pids; resolves the instant of the cut. */
+function endAgentSessionOnceStepRuns(pidFile: string): Promise<number> {
+  return afterStepWrote(pidFile, endAgentSession, checkHasBothPids);
+}
+
+async function readGroupPids(pidFile: string): Promise<number[]> {
+  await waitForStepFile(pidFile, checkHasBothPids);
   return fs.readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
 }
 
@@ -296,7 +339,7 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     markNeedsIos();
     startAgent();
     const marker = path.join(root, 'long.started');
-    const run = await runSourced(`run_step ${workDir} 'touch ${marker}; exec sleep 300'; echo "code=$step_code"`, { signalAfterMs: 1500 });
+    const run = await runSourced(`run_step ${workDir} 'touch ${marker}; exec sleep 300'; echo "code=$step_code"`, { signalOnceStepWrote: marker });
     assert.ok(fs.existsSync(marker), 'the step started before the signal');
     assert.equal(run.stdout.trim(), 'code=143', run.stderr);
   });
@@ -306,7 +349,7 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     startAgent();
     const pidFile = path.join(root, 'cut.pids');
     // The agent process dying: nothing looks at the folder any more and its heartbeat is gone. Its step, a process group of its own, is still running.
-    setTimeout(() => { if (ticker !== null) clearInterval(ticker); fs.rmSync(paths.guiAgentStatus, { force: true }); }, 1500);
+    void endAgentSessionOnceStepRuns(pidFile);
     const running = runSourced(`run_step ${workDir} '${createGroupRecordingStep(pidFile)}'; echo "code=$step_code"`);
     const pids = await readGroupPids(pidFile);
     assert.ok(pids.every((pid) => checkIsProcessAlive(pid)), 'the step is running');
@@ -319,11 +362,10 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     markNeedsIos();
     startAgent();
     const pidFile = path.join(root, 'stubborn.pids');
-    setTimeout(() => { if (ticker !== null) clearInterval(ticker); fs.rmSync(paths.guiAgentStatus, { force: true }); }, 1500);
-    const cutAt = Date.now() + 1500;
+    const cutAt = endAgentSessionOnceStepRuns(pidFile);
     const run = await runSourced(`kill_grace_sec=1; run_step ${workDir} '${createGroupRecordingStep(pidFile, { isStubborn: true })}'; echo "code=$step_code"`);
     assert.equal(run.stdout.trim().split('\n').at(-1), 'code=125', run.stderr);
-    assert.ok(Date.now() - cutAt >= 900, 'the grace was given before the kill');
+    assert.ok(Date.now() - (await cutAt) >= 900, 'the grace was given before the kill');
     for (const pid of await readGroupPids(pidFile)) assert.equal(checkIsProcessAlive(pid), false, `pid ${pid}`);
   });
 
@@ -331,7 +373,7 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     markNeedsIos();
     startAgent();
     const pidFile = path.join(root, 'slow-kill.pids');
-    setTimeout(() => { if (ticker !== null) clearInterval(ticker); fs.rmSync(paths.guiAgentStatus, { force: true }); }, 1500);
+    void endAgentSessionOnceStepRuns(pidFile);
     // `kill -KILL` returns at once and the signal lands 0.8 s later, as a machine that is busy elsewhere delivers it; every other signal is the shell's own.
     const slowKill = 'kill() { case "$1" in -KILL) ( sleep 0.8; builtin kill "$@" ) > /dev/null 2>&1 & ;; *) builtin kill "$@" ;; esac; }';
     const run = await runSourced(`${slowKill}; kill_grace_sec=1; run_step ${workDir} '${createGroupRecordingStep(pidFile, { isStubborn: true })}'; echo "code=$step_code"`);
@@ -344,7 +386,7 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     markNeedsIos();
     startAgent();
     const pidFile = path.join(root, 'survivor.pids');
-    setTimeout(() => { if (ticker !== null) clearInterval(ticker); fs.rmSync(paths.guiAgentStatus, { force: true }); }, 1500);
+    void endAgentSessionOnceStepRuns(pidFile);
     // A SIGKILL that never lands: `kill -KILL` succeeds and does nothing, every other signal is the shell's own. Two looks (0.4 s) of waiting instead of ten.
     const lostKill = 'kill() { case "$1" in -KILL) return 0 ;; *) builtin kill "$@" ;; esac; }';
     let pids: number[] = [];
@@ -370,9 +412,13 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     markNeedsIos();
     const first = startAgent();
     const pidFile = path.join(root, 'restarted.pids');
-    setTimeout(() => {
+    void afterStepWrote(pidFile, () => {
+      // The first instance is gone for good, as in a real restart: were it to keep beating, its next beat (every 5 s) would write its own
+      // start time back over the new instance's, and the script — it looks about once a second, far less often on a loaded machine —
+      // could miss the other instance altogether and wait for a step nobody answers.
+      stopAgentTicks();
       writeGuiAgentStatus(paths, { pid: process.pid, uid: os.userInfo().uid, account: accountName, startedAtMs: first.getStartedAtMs() + 123_456, beatAtMs: Date.now() });
-    }, 1500);
+    }, checkHasBothPids);
     const run = await runSourced(`run_step ${workDir} '${createGroupRecordingStep(pidFile)}'; echo "code=$step_code"`);
     assert.equal(run.stdout.trim().split('\n').at(-1), 'code=125', run.stderr);
     assert.match(run.stdout, /the login session's agent stopped while this step ran/);
