@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.10.0 — 2026-11-06
+
 **A MacBook runner with its lid closed no longer gets a new job that dies when the Mac sleeps — it waits like an offline runner, and `runners` says «lid closed».**
 Before, a Mac runner with the lid shut (no external display) slept about a minute and a half later, and on power macOS woke it for a minute or two every quarter of an hour; the runner reconnected in those windows, looked available, and a job that landed there was cut when the Mac went back to sleep.
 Now:
