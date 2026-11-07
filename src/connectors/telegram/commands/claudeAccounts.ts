@@ -37,6 +37,7 @@ import {
 } from '../../../utils/claudeProfiles';
 import type { AnthropicApiKeyCheck } from '../../../utils/anthropicApiKeyCheck';
 import { formatClaudeProfileUsageLines } from '../../../utils/claudeProfileUsageLines';
+import { readClaudeApiCreditAnchors } from '../../../utils/claudeApiCredit';
 import { refreshUsageWithinBudget } from '../../../utils/usageRefreshBudget';
 import {
   accountAddApiCallback,
@@ -317,7 +318,10 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
    * line on its own row. Nothing for a profile never polled.
    */
   function formatUsageLines(name: string): string {
-    const lines = formatClaudeProfileUsageLines(getState().getClaudeProfileInfo(name), getInstanceTimezone(), Date.now());
+    const record = getState().getClaudeProfileInfo(name);
+    const creditAnchor = readClaudeApiCreditAnchors(getDataDir())[name];
+    const source = record && creditAnchor ? { ...record, creditAnchor } : record;
+    const lines = formatClaudeProfileUsageLines(source, getInstanceTimezone(), Date.now());
     return lines.map((line) => `\n${line}`).join('');
   }
 

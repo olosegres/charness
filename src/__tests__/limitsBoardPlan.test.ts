@@ -156,6 +156,22 @@ describe('formatLimitsUsageBlock', () => {
     assert.equal(buildBlock(), '');
   });
 
+  it('an account billed to API credits shows its spend and, with the operator\'s Console figure, the bonus credit estimate — the very lines `/accounts` prints', () => {
+    const creditAnchor = { remainingUsd: 67.71, grantUsd: 200, anchoredAt: inHours(-2), expiresOn: '2026-10-25' };
+    const source = profile('console', {
+      billing: 'api',
+      apiSpend: { totalUsd: 6.51, since: inHours(-30), lastTurnUsd: 0.25, lastTurnAt: inHours(-1) },
+      creditAnchor,
+      creditSpend: { anchoredAt: creditAnchor.anchoredAt, usd: 6.51 },
+    });
+    assert.deepEqual(buildBlock({ detection: detectionOf([source]) }).split('\n'), [
+      'Usage (% used)',
+      'console — 💳 API · pay per use',
+      '    💳 $6.51 spent since 16.10 · last turn $0.25',
+      '    🎁 API credit ≈ $61.20 of $200.00 · $6.51 spent via the bot since 17.10 · expires 25.10',
+    ]);
+  });
+
   it('a connected OpenCode provider that reports usage (the ChatGPT subscription) follows the accounts: `openai (ChatGPT) — …`', () => {
     const block = buildBlock({
       detection: detectionOf([profile('default', { usage: usageOf(14, 3) })], ['openai/gpt-5', 'openrouter/gpt-5-mini']),

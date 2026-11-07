@@ -465,6 +465,24 @@ describe('the views off the registry and the state file', () => {
     assert.equal(buildClaudeProfileUsageViews({ dataDir: '/tmp/data', records: {} })[0].name, 'default', 'default is always listed');
   });
 
+  it('hands an API account its credit figure (the operator\'s anchor by name) and the spend the bot counted since it', () => {
+    const creditAnchor = { remainingUsd: 67.71, grantUsd: 200, anchoredAt: '2026-11-07T08:00:00.000Z' };
+    const creditSpend = { anchoredAt: creditAnchor.anchoredAt, usd: 1.5 };
+    const views = buildClaudeProfileUsageViews({
+      dataDir: '/tmp/data',
+      records: {
+        api: { createdAt: '2026-10-02T00:00:00Z', billing: 'api', creditSpend },
+        plain: { createdAt: '2026-10-03T00:00:00Z' },
+      },
+      creditAnchors: { api: creditAnchor },
+    });
+    const byName = Object.fromEntries(views.map((view) => [view.name, view]));
+    assert.deepEqual([byName.api.creditAnchor, byName.api.creditSpend], [creditAnchor, creditSpend]);
+    assert.equal('creditAnchor' in byName.plain, false, 'an account without a figure has none');
+    assert.equal('creditSpend' in byName.plain, false);
+    assert.equal('creditAnchor' in buildClaudeProfileUsageViews({ dataDir: '/tmp/data', records: { api: { createdAt: '2026-10-02T00:00:00Z' } } })[1], false, 'no anchors given at all');
+  });
+
   it('getClaudeProfileRecordsFromState picks the registry out of a state file already read: entries without a creation time are dropped, a missing or odd registry is empty', () => {
     assert.deepEqual(getClaudeProfileRecordsFromState({}), {});
     assert.deepEqual(getClaudeProfileRecordsFromState({ claudeProfiles: 'nope' }), {});

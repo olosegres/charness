@@ -302,6 +302,27 @@ balance), so the bot never uses it without you choosing it.
   the bot so far») and in its «credits used up» notice. It is what the bot
   saw, not the organization's balance — that one is on the Console's Billing
   page. The tmux backend reports no cost.
+- **The bonus credit.** A Max, Ultra or Team subscription comes with a monthly
+  credit for the Claude API, and it lands in the Console organization the API
+  account bills. No credential the bot has can read that balance — only the
+  Console's Billing page shows it — so give the bot the figure once and it keeps
+  an estimate from there: `charness claude-profiles credit <profile>
+  <remainingUsd> [--of <grantUsd>] [--expires YYYY-MM-DD]`, for example
+  `credit console 67.71 --of 200 --expires 2026-11-15` (`credit <profile> --clear`
+  forgets it; only an account billed to API credits takes a figure). `/accounts`
+  and `/limits` then show
+  `🎁 API credit ≈ $61.20 of $200.00 · $6.51 spent via the bot since 07.11 · expires 15.11`
+  under the account: your figure minus what the bot saw the account spend since
+  you gave it (the grant and the expiry only when you gave them). «≈» and «via the
+  bot» are meant: a spend by another key or machine is invisible to the bot, so
+  give a fresh figure now and then; a new figure starts the count over. A refusal
+  («Credit balance is too low») that comes after the figure turns the line into
+  `🎁 API credit used up`; the day after the expiry day (the credit counts as
+  usable through the whole of it, UTC) it reads `🎁 API credit expired 15.11 — set
+  the new figure from Console › Billing`. The figure is kept in
+  `DATA_DIR/claudeApiCredit.json`, not in `state.json` (a running bot rewrites
+  that file from its memory, so a figure written there from the command line
+  would be lost); the bot reads the file as it changes, no restart.
 
 ### `/effort`
 

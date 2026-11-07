@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**`/accounts` and `/limits` now show about how much of the Anthropic bonus API credit an API account has left — once you tell the bot the figure from the Console.**
+Before, the only number the bot had for an account billed to API credits was what it had spent through the bot («💳 $12.34 spent since 23.10»). How much of the monthly credit that comes with Max, Ultra and Team was left is shown only on the Console's Billing page, which no credential the bot has can read — so the credit ran out unseen, in the middle of a task, and the first sign was a refused request.
+Now:
+  - `charness claude-profiles credit <profile> <remainingUsd> [--of <grantUsd>] [--expires YYYY-MM-DD]` takes what the Billing page shows (`credit console 67.71 --of 200 --expires 2026-11-15`); `credit <profile> --clear` forgets it. Only an account billed to API credits takes a figure, a mistyped amount, a remainder above the grant, a day that does not exist or is already over are refused with the reason, and it works while the bot runs — no restart.
+  - Under the account `/accounts` and `/limits` write one line: «🎁 API credit ≈ $61.20 of $200.00 · $6.51 spent via the bot since 07.11 · expires 15.11» — your figure minus what the bot saw the account spend since you gave it (the grant and the expiry only when you gave them). The «≈» is meant: a spend by another key or machine is invisible to the bot, so a fresh figure corrects it, and a new figure starts the count over.
+  - A refusal («Credit balance is too low») that comes after the figure turns the line into «🎁 API credit used up»; once the expiry day is over it reads «🎁 API credit expired 15.11 — set the new figure from Console › Billing». An account without a figure shows no such line.
+  - The figure is kept in `DATA_DIR/claudeApiCredit.json`, not in `state.json`: a running bot rewrites `state.json` from its memory, so a figure written there from the command line would be lost at its next save.
+
 **An agent's call of `claude_profiles` (which account a worker should run on) now answers within 10 seconds from the last figures instead of hanging when the bot's usage refresh is stuck.**
 Before, the tool waited for the usage refresh without any limit, and every caller of that refresh (the 10-minute timer, `/limits`, `/accounts`, the tool, and the switch a topic makes when it hits a usage limit) shares the one poll in flight — so a poll that never finished held them all. On 6 November every call of the tool, from several topics, sat silent for 300 s until the agent's own client gave up, and so it went for nine hours; nothing else showed the stall, because `/limits` waits for the refresh only two seconds — `/accounts` and the account switch after a usage limit would have hung with it.
 Now:

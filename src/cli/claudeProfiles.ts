@@ -14,11 +14,16 @@
  *   --stopped-by-limit  that session broke off on a usage limit: leave `--current` out of the answer
  *   --json         the full report as JSON (the MCP tool's shape)
  *
+ *   credit <profile> <remainingUsd> [--of <grantUsd>] [--expires YYYY-MM-DD] | credit <profile> --clear
+ *                  give the bot the bonus API credit figure of an account billed to API credits (`claudeProfilesCredit.ts`)
+ *
  * Without a flag: one human line per profile. `DATA_DIR` comes from the environment the bot itself reads
  * (`~/.config/charness/.env`, `$PWD/.env`, or `ENV_FILE`).
  */
 
 import { loadEnvFiles } from './envLoader';
+import { readFlagValue } from './flagValue';
+import { runClaudeProfilesCreditCli } from './claudeProfilesCredit';
 import { resolveDataDir } from '../state';
 import { readStateFileObject } from '../stateFile';
 import { getDisabledClaudeProfileNames, normaliseFallbackChain } from '../utils/fallbackChain';
@@ -40,17 +45,11 @@ export interface ClaudeProfilesCliArgs {
   isStoppedByLimit: boolean;
 }
 
-const usageLine = 'Usage: charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit]] [--json]';
+const usageLine = 'Usage: charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit]] [--json]\n'
+  + '       charness claude-profiles credit <profile> <remainingUsd> [--of <grantUsd>] [--expires YYYY-MM-DD] | <profile> --clear';
 
-/** The value of a flag spelled `--name value` or `--name=value`; `null` when argument `index` is not that flag, `undefined` when it has no value. */
-function readFlagValue(argv: readonly string[], index: number, name: string): { value: string | undefined; consumed: number } | null {
-  const arg = argv[index];
-  if (arg === name) {
-    const value = argv[index + 1];
-    return value === undefined || value.startsWith('--') ? { value: undefined, consumed: 0 } : { value, consumed: 1 };
-  }
-  return arg.startsWith(`${name}=`) ? { value: arg.slice(name.length + 1), consumed: 0 } : null;
-}
+/** The first argument that turns the command into the one that gives the bot a profile's API credit figure. */
+const creditSubcommand = 'credit';
 
 /** Parse the subcommand's flags; `null` with a message for anything unknown. */
 export function parseClaudeProfilesCliArgs(argv: readonly string[]): { ok: true; args: ClaudeProfilesCliArgs } | { ok: false; error: string } {
@@ -115,6 +114,7 @@ export async function runClaudeProfilesCli(
     now?: () => number;
   } = {},
 ): Promise<number> {
+  if (argv[0] === creditSubcommand) return runClaudeProfilesCreditCli(argv.slice(1), io);
   const stdout = io.stdout ?? ((text: string) => process.stdout.write(text));
   const stderr = io.stderr ?? ((text: string) => process.stderr.write(text));
   const parsed = parseClaudeProfilesCliArgs(argv);

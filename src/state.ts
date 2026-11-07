@@ -24,6 +24,7 @@ import { resolveAutoContinueOnLimitEnabled, resolveClaudeAutoSwitchOnLimitEnable
 import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection, type ClaudeProfileBilling } from './utils/claudeProfiles';
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
 import type { ClaudeApiSpend, ClaudeCostBaseline } from './utils/claudeApiSpend';
+import type { ClaudeApiCreditSpend } from './utils/claudeApiCredit';
 import type { OpenCodeProviderUsageRecord } from './utils/openCodeUsage';
 import { pushRecentModel } from './utils/modelRecentPlan';
 import { normaliseFallbackChain, type FallbackChainEntry } from './utils/fallbackChain';
@@ -222,6 +223,8 @@ export interface ClaudeProfileRecord {
   creditExhaustedAt?: string;
   /** What an account billed to API credits spent through the bot (`utils/claudeApiSpend.ts`); absent before its first counted turn. */
   apiSpend?: ClaudeApiSpend;
+  /** What an account billed to API credits spent through the bot since its credit anchor was given (`utils/claudeApiCredit.ts`). */
+  creditSpend?: ClaudeApiCreditSpend;
   /** The last usage snapshot read for the profile (`utils/claudeUsage.ts`): the endpoint poll or a stream frame. */
   usage?: ClaudeUsageSnapshot;
   /**
@@ -2306,6 +2309,14 @@ export class StateStore {
     const record = this.touchClaudeProfileInfo(name);
     if (!record) return;
     record.apiSpend = spend;
+    this.scheduleSave();
+  }
+
+  /** Store what an API account spent since its credit anchor (`utils/claudeApiCredit.ts`); same record rules as the usage. Debounced. */
+  setClaudeProfileCreditSpend(name: string, spend: ClaudeApiCreditSpend): void {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record) return;
+    record.creditSpend = spend;
     this.scheduleSave();
   }
 

@@ -450,7 +450,7 @@ import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOver
 import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
 import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
-import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport } from './utils/claudeUsage';
+import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
@@ -488,6 +488,7 @@ import { createSelfUpdate } from './connectors/telegram/commands/selfUpdate';
 import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent, ClaudeTurnCostReport } from './adapters/claudeConfigDir';
 import { addClaudeApiSpend, computeClaudeTurnCostUsd, formatUsd, getClaudeTurnCostOutcome } from './utils/claudeApiSpend';
+import { addClaudeApiCreditSpend, readClaudeApiCreditAnchors } from './utils/claudeApiCredit';
 import { formatClaudeApiSpendWords } from './utils/claudeProfileUsageLines';
 import { resolveClaudeBinary } from './utils/resolveBinary';
 import { getRunnerSummaryLines } from './remoteRun/runnerSummary';
@@ -8101,7 +8102,17 @@ function onClaudeTurnCost(key: SessionKey, configDir: string | null, report: Cla
     billing: info?.billing ?? null, isCreditExhausted: info?.creditExhaustedAt !== undefined, isError: report.isError, turnCostUsd,
   });
   if (outcome.isCreditMarkCleared) state.setClaudeProfileCreditExhausted(name, null);
-  if (outcome.spendUsd !== null) state.setClaudeProfileApiSpend(name, addClaudeApiSpend(info?.apiSpend, outcome.spendUsd, new Date().toISOString()));
+  if (outcome.spendUsd === null) return;
+  state.setClaudeProfileApiSpend(name, addClaudeApiSpend(info?.apiSpend, outcome.spendUsd, new Date().toISOString()));
+  // The same spend also runs down the operator's credit figure, when one was given (`utils/claudeApiCredit.ts`).
+  const creditAnchor = readClaudeApiCreditAnchors(resolveDataDir())[name];
+  if (creditAnchor) state.setClaudeProfileCreditSpend(name, addClaudeApiCreditSpend(info?.creditSpend, creditAnchor, outcome.spendUsd));
+}
+
+/** Every Claude profile's usage view as the bot knows it now: its record plus the operator's credit figures. */
+function getClaudeProfileUsageViews(): ClaudeProfileUsageView[] {
+  const dataDir = resolveDataDir();
+  return buildClaudeProfileUsageViews({ dataDir, records: state.getAllClaudeProfileInfos(), creditAnchors: readClaudeApiCreditAnchors(dataDir) });
 }
 
 /** The model a topic's Claude session runs (or last ran), for the usage ranking's choice of windows. */
@@ -8145,7 +8156,7 @@ async function detectFallbackOptions(): Promise<FallbackDetection> {
     console.warn('[fallback] the OpenCode catalog is unavailable:', e instanceof Error ? e.message : e);
   }
   return {
-    claudeProfiles: buildClaudeProfileUsageViews({ dataDir: resolveDataDir(), records: state.getAllClaudeProfileInfos() }),
+    claudeProfiles: getClaudeProfileUsageViews(),
     openCodeModels,
     recentOpenCodeModels: listSavedOpenCodeModelLabels().reverse(),
     openCodeLimits: state.getOpenCodeModelLimits(),
@@ -8727,7 +8738,7 @@ async function takeFallbackSwitchOffer(key: SessionKey, episodeId: number, index
 async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<ClaudeProfilesReport> {
   await refreshClaudeUsageForLaunch(claudeUsageRefresher, { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, maxAgeMs: claudeUsageOnDemandMaxAgeMs });
   return buildClaudeProfilesReport(
-    buildClaudeProfileUsageViews({ dataDir: resolveDataDir(), records: state.getAllClaudeProfileInfos() }),
+    getClaudeProfileUsageViews(),
     query.model,
     Date.now(),
     { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, excludedNames: getDisabledClaudeProfileNames(state.getFallbackChain()) },

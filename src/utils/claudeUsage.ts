@@ -25,6 +25,7 @@ import * as path from 'path';
 import type { ClaudeProfileRecord } from '../state';
 import { getClaudeAccountKind, resolveClaudeProfileDir, resolveHomeClaudeDir, type ClaudeAccountKind, type ClaudeProfileBilling } from './claudeProfiles';
 import type { ClaudeApiSpend } from './claudeApiSpend';
+import type { ClaudeApiCreditAnchor, ClaudeApiCreditAnchors, ClaudeApiCreditSpend } from './claudeApiCredit';
 
 export const claudeUsageEndpoint = 'https://api.anthropic.com/api/oauth/usage';
 
@@ -349,6 +350,10 @@ export interface ClaudeProfileUsageView {
   creditExhaustedAt: string | null;
   /** What an account billed to API credits spent through the bot; absent before its first counted turn. */
   apiSpend?: ClaudeApiSpend;
+  /** The figure the operator read on the Console's Billing page (`utils/claudeApiCredit.ts`); absent = none given. */
+  creditAnchor?: ClaudeApiCreditAnchor;
+  /** What the account spent through the bot since that figure; absent before its first counted turn after it. */
+  creditSpend?: ClaudeApiCreditSpend;
 }
 
 /** One profile in the report the MCP tool and the CLI hand to an agent. */
@@ -710,6 +715,8 @@ export function buildClaudeProfileUsageViews(input: {
   dataDir: string;
   /** Every record, the hidden `default` one included (`StateStore.getClaudeProfileInfo` / the raw file). */
   records: Readonly<Record<string, ClaudeProfileRecord>>;
+  /** The operator's credit figures by profile name (`readClaudeApiCreditAnchors`); none = none given. */
+  creditAnchors?: ClaudeApiCreditAnchors;
 }): ClaudeProfileUsageView[] {
   // A `default` the operator signed out through /accounts stays out of every ranking until it is signed in again.
   const isDefaultRemoved = input.records.default?.isRemoved === true;
@@ -724,6 +731,8 @@ export function buildClaudeProfileUsageViews(input: {
     billing: record?.billing ?? null,
     creditExhaustedAt: record?.creditExhaustedAt ?? null,
     ...(record?.apiSpend ? { apiSpend: record.apiSpend } : {}),
+    ...(input.creditAnchors?.[name] ? { creditAnchor: input.creditAnchors[name] } : {}),
+    ...(record?.creditSpend ? { creditSpend: record.creditSpend } : {}),
   });
   const added = Object.entries(input.records)
     .filter(([name]) => name !== 'default')
