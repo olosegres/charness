@@ -410,6 +410,18 @@ export function markOutboundTextSecret(text: string): () => void {
   };
 }
 
+/**
+ * @description {@link markOutboundTextSecret} for every text one message can go out as — the text and the plain twin a refused
+ * markup is resent as (`undefined` and a repeat are skipped) — released together. A secret that is withheld from the trace only
+ * under the first of its forms would be quoted in the second.
+ */
+export function markOutboundTextsSecret(texts: ReadonlyArray<string | undefined>): () => void {
+  const releases = [...new Set(texts)].flatMap((text) => (text === undefined ? [] : [markOutboundTextSecret(text)]));
+  return () => {
+    for (const release of releases) release();
+  };
+}
+
 function createApiCallPreview(text: string): string {
   return secretOutboundTexts.has(text) ? secretTextPreview : createTracePreview(text);
 }

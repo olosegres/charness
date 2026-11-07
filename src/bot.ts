@@ -242,7 +242,7 @@ import { checkIsMessageNotFoundError, checkIsRetryableTelegramError, checkIsStal
 import {
   flushTraceBufferSyncOnExit,
   installCallApiTrace,
-  markOutboundTextSecret,
+  markOutboundTextsSecret,
   pruneTraceBuckets,
   setTraceConfig,
   traceAgentEmit,
@@ -3885,7 +3885,7 @@ interface ReplyToThreadOptions {
   unpaced?: boolean;
   /**
    * The text is a credential (a pairing line): the output trace records its length and nothing else, see
-   * `markOutboundTextSecret`. Default `false`.
+   * `markOutboundTextsSecret` — for `plainFallbackText` too, which goes out in its place when the markup is refused. Default `false`.
    */
   isSecret?: boolean;
   /**
@@ -3927,7 +3927,8 @@ async function replyToThread(
     return messageId;
   };
 
-  const releaseSecret = options.isSecret ? markOutboundTextSecret(text) : null;
+  // The plain twin goes out in place of `text` when Telegram refuses the markup: it is as much a secret, and the trace must not quote it.
+  const releaseSecret = options.isSecret ? markOutboundTextsSecret([text, options.plainFallbackText]) : null;
   try {
     return await trackSent(await sendOnce(buildSendExtra(key, extra)));
   } catch (e) {

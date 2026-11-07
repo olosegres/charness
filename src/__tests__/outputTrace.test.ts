@@ -12,6 +12,7 @@ import {
   getTraceConfig,
   installCallApiTrace,
   markOutboundTextSecret,
+  markOutboundTextsSecret,
   pruneTraceBuckets,
   setTraceConfig,
   traceAgentEmit,
@@ -509,5 +510,57 @@ describe('markOutboundTextSecret — a credential in a sent text never reaches t
     await fake.settle();
 
     assert.ok(!fake.written.includes('SECRET-CODE-VALUE'));
+  });
+});
+
+describe('markOutboundTextsSecret — a secret withheld from the trace under every form it can be sent in', () => {
+  const secretHtml = 'Pair a runner\n\n<pre>sh -c \'umask 077; echo cr1.SECRET-CODE-VALUE\'</pre>';
+  const secretPlain = 'Pair a runner\n\nsh -c \'umask 077; echo cr1.SECRET-CODE-VALUE\'';
+
+  it('the plain twin a refused markup is resent as is withheld too — the first send fails, the retry carries the twin', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    let isRefusing = true;
+    const host: CallApiHost = {
+      callApi: async () => {
+        if (isRefusing) throw Object.assign(new Error('Bad Request: can\'t parse entities'), { response: { error_code: 400, description: 'Bad Request: can\'t parse entities' } });
+        return { message_id: 11 };
+      },
+    };
+    installCallApiTrace(host);
+
+    const release = markOutboundTextsSecret([secretHtml, secretPlain]);
+    await assert.rejects(host.callApi('sendMessage', { chat_id: -100123, message_thread_id: 7, text: secretHtml, parse_mode: 'HTML' }));
+    isRefusing = false;
+    await host.callApi('sendMessage', { chat_id: -100123, message_thread_id: 7, text: secretPlain });
+    release();
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    assert.ok(!fake.written.includes('SECRET-CODE-VALUE'), 'the code is in neither form');
+    const entries = parseLines(fake.written);
+    assert.deepEqual(entries.map((entry) => entry.kind), ['sendTry', 'sendErr', 'sendTry', 'sendOk']);
+    assert.deepEqual(entries.map((entry) => entry.len), [secretHtml.length, secretHtml.length, secretPlain.length, secretPlain.length]);
+    for (const entry of entries) assert.equal(entry.preview, '[secret — text not recorded]');
+  });
+
+  it('an absent twin and a twin equal to the text are skipped; the release ends every mark', async () => {
+    const fake = createFakeWriter();
+    restoreWriter = configureTraceWriterForTests(fake.deps);
+    const host: CallApiHost = { callApi: async () => ({ message_id: 13 }) };
+    installCallApiTrace(host);
+
+    const releaseAlone = markOutboundTextsSecret([secretPlain, undefined]);
+    const releaseEqual = markOutboundTextsSecret([secretPlain, secretPlain]);
+    releaseAlone();
+    await host.callApi('sendMessage', { chat_id: -100123, message_thread_id: 7, text: secretPlain });
+    releaseEqual();
+    await host.callApi('sendMessage', { chat_id: -100123, message_thread_id: 7, text: secretPlain });
+    fake.fireFlushTimer();
+    await fake.settle();
+
+    const previews = parseLines(fake.written).filter((entry) => entry.kind === 'sendTry').map((entry) => entry.preview);
+    assert.equal(previews[0], '[secret — text not recorded]', 'still withheld while the other mark is up');
+    assert.ok(typeof previews[1] === 'string' && previews[1].startsWith('Pair a runner'), 'after every release it is an ordinary text again');
   });
 });
