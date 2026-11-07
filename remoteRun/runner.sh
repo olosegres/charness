@@ -74,7 +74,7 @@ prune_poll_sec=1
 # A removal that freed less than this although the copy was measured bigger says the disk's free figure is not following (APFS snapshots, purgeable space): removing more copies would
 # empty the runner for nothing, so the prune stops...
 no_progress_freed_kb=1048576
-# ...but only after this many removals IN A ROW did that: a job writing to the same disk meanwhile can eat the space one removal freed.
+# ...but only after this many such removals in a row did that (a copy too small to judge, or never measured, between them is not counted either way): a job writing to the same disk meanwhile can eat the space one removal freed.
 no_progress_stop_after=2
 # The refusal of a submit names this many of the biggest copies.
 refusal_copy_count=3
@@ -898,17 +898,19 @@ check_disk_is_short() {
 
 # Is process $1 alive AND one of this script's own (`bash …/runner-<hash>.sh …`, or `…/runner.sh` run from a checkout)? A pid written into a job folder, a lock, a marker, a trash name or a pid file outlives its
 # process, and after a crash or a reboot the number may belong to a daemon: `kill -0` alone would keep a copy "in use" for good, a project's queue stuck behind a lock no job holds, and a `kill` would signal a
-# stranger. The name is matched as the script's file name, not loosely (`actions-runner/runsvc.sh`, GitHub's service on build Macs, is not it); any version of the script counts. A `ps` that cannot
-# answer (not there, or a BusyBox one that rejects `-p` / `-o command=`) says nothing about the process that `kill -0` just saw alive: it counts as alive.
+# stranger. The name is matched as the script's exact file name — `runner-<8 hex>.sh` (what `runnerClient.ts` uploads; any version counts) or `runner.sh` — as the LAST path component: a `case` pattern's `*` also
+# crosses `/`, so a looser `*/runner-*.sh` would take `…/runner-01/runsvc.sh` (a self-hosted GitHub runner's service, long-lived on a build Mac) for ours. `ps -ww` asks for the whole command line: procps cuts
+# the column to an exported `$COLUMNS` even into a pipe, and a cut line would read a LIVE job, lock holder or exec as a stranger. A `ps` that cannot answer (not there, or a BusyBox one that rejects `-ww`, `-p` or
+# `-o command=`) says nothing about the process that `kill -0` just saw alive: it counts as alive.
 check_runner_pid_alive() {
   case $1 in '' | *[!0-9]*) return 1 ;; esac
   kill -0 "$1" 2> /dev/null || return 1
   command -v ps > /dev/null 2>&1 || return 0
   local command_line
-  command_line=$(ps -p "$1" -o command= 2> /dev/null) || return 0
+  command_line=$(ps -ww -p "$1" -o command= 2> /dev/null) || return 0
   [ -n "$command_line" ] || return 0
   case $command_line in
-    */runner-*.sh | */runner-*.sh[\ \;]* | */runner.sh | */runner.sh[\ \;]*) return 0 ;;
+    */runner-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].sh | */runner-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].sh[\ \;]* | */runner.sh | */runner.sh[\ \;]*) return 0 ;;
   esac
   return 1
 }
@@ -955,7 +957,9 @@ check_copy_is_busy() {
 # The copy-removal step is one at a time per work dir: of copies being removed by a prune that is still at it, a second prune would remove more than needed (the disk's free figure moves only when the
 # first one's `rm` ends) and `rm` the same folders. Its lock is `tmp/prune.lock`, made and broken by the project lock's own helpers (`create_lock_file`: the exclusive create, so the creator wins whatever the
 # clocks say; `check_lock_is_stale`; `break_stale_lock`: the generation-numbered right to break) — here with no job (`job` empty), `lock_max_age_min` set so a holder that has been at it for hours does not count
-# (a pid can be given to anything), and the pid test being `check_runner_pid_alive`. Fails when the lock is held, or when another process is breaking a stale one (it looks again soon).
+# (a pid can be given to anything), and the pid test being `check_runner_pid_alive`. Fails when the lock is held, or when another process is breaking a stale one (it looks again soon). The project lock's
+# proof of the break (a named holder is gone for good) covers a holder that is gone; a lock broken for its AGE has a live holder, so there a holder that ends at that very moment can have its lock replaced by a
+# new one that is then removed: two prunes at once for a few milliseconds after a two-hour hold, which `remove_and_report_copy` tolerates (a copy that is already gone is code 2).
 acquire_prune_lock() {
   local lock="$1/tmp/prune.lock" jobs_dir= job= lock_max_age_min=$prune_lock_max_age_min
   while ! create_lock_file "$lock"; do
@@ -1067,9 +1071,10 @@ prune_idle_copies() {
 }
 
 # While the disk is short of free space, remove the project copies that were used longest ago, one by one, until it is not — except copies in use and the copy of the job being submitted.
-# Stops, with a `stopped=` line, after no_progress_stop_after removals IN A ROW that each freed next to nothing from a copy measured bigger: the disk's free figure is not following the removals
+# Stops, with a `stopped=` line, after no_progress_stop_after removals in a row that each freed next to nothing from a copy measured bigger: the disk's free figure is not following the removals
 # (a Mac's APFS keeps the space of deleted files while Time Machine local snapshots hold it), and going on would remove every copy and refuse anyway; one such removal is not enough to say so
-# (a job writing to the same disk meanwhile can eat the space it freed). Sets prune_stopped_without_gain for the submit's refusal.
+# (a job writing to the same disk meanwhile can eat the space it freed). «In a row» counts only the removals that can say anything: a copy measured at most no_progress_freed_kb, or not measured, between two
+# of them neither counts nor resets the count; a removal that freed what it should does reset it. Sets prune_stopped_without_gain for the submit's refusal.
 prune_copies_for_space() {
   local work_dir=$1 keep_slug=$2
   local used_file lru_slug size_kb removal_code no_gain_removals=0

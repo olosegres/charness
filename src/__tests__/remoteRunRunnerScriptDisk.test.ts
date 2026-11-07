@@ -962,20 +962,39 @@ describe('a pid that went to a stranger pins nothing (after a crash or a reboot 
 });
 
 describe('the script\'s test of "that pid is still one of ours" (`check_runner_pid_alive`)', () => {
-  const alive = (pid: number | string): string => runShell(`check_runner_pid_alive ${pid} && echo alive || echo not`).stdout;
+  const alive = (pid: number | string, env: NodeJS.ProcessEnv = {}): string => runShell(`check_runner_pid_alive ${pid} && echo alive || echo not`, env).stdout;
+  const startNamed = (argv0: string): number => {
+    const child = spawn('bash', ['-c', 'read -r _', argv0, 'job'], { stdio: ['pipe', 'ignore', 'ignore'] });
+    liveProcesses.push(child);
+    assert.ok(child.pid !== undefined);
+    return child.pid;
+  };
 
   it('is the script\'s own file name, whatever its version or the way it was started — and nothing that merely has «runner» in its name', () => {
-    const named = (argv0: string): number => {
-      const child = spawn('bash', ['-c', 'read -r _', argv0, 'job'], { stdio: ['pipe', 'ignore', 'ignore'] });
-      liveProcesses.push(child);
-      assert.ok(child.pid !== undefined);
-      return child.pid;
-    };
+    const named = startNamed;
     assert.equal(alive(named('/work/bin/runner-0a1b2c3d.sh')), 'alive', 'the uploaded script');
     assert.equal(alive(named('/other/version/runner-ffffffff.sh')), 'alive', 'another version of it');
     assert.equal(alive(named('/repo/remoteRun/runner.sh')), 'alive', 'run from a checkout');
     assert.equal(alive(named('/Users/user/actions-runner/runsvc.sh')), 'not', 'GitHub\'s runner service, a long-lived process on build Macs');
     assert.equal(alive(named('/opt/some-runner-tool/start.sh')), 'not');
+  });
+
+  it('the name is the LAST path component and exactly the shape the hub uploads: a script under a folder called runner-… (a self-hosted CI runner installed as runner-01) is a stranger, so is a hash of another length or a letter past f', () => {
+    assert.equal(alive(startNamed('/Users/user/runner-01/runsvc.sh')), 'not', 'a second GitHub runner on one Mac, installed as runner-01');
+    assert.equal(alive(startNamed('/Users/user/runner-01/bin/run.sh')), 'not');
+    assert.equal(alive(startNamed('/work/bin/runner-0123abc.sh')), 'not', 'seven hex digits');
+    assert.equal(alive(startNamed('/work/bin/runner-0123abcde.sh')), 'not', 'nine hex digits');
+    assert.equal(alive(startNamed('/work/bin/runner-0123abcg.sh')), 'not', 'not hex');
+    assert.equal(alive(startNamed('/work/bin/runner-0123ABCD.sh')), 'not', 'the hash is lowercase');
+    assert.equal(alive(startNamed('/Users/user/runner-01/bin/runner-0a1b2c3d.sh')), 'alive', 'the script itself, in a work dir whose own path has runner-01 in it');
+  });
+
+  it('the whole command line is asked for: a short exported COLUMNS (a profile read by the ssh exec, a service unit) cuts what a plain `ps` prints, and a LIVE job must not read as a stranger because its long path was cut', () => {
+    const longPath = `/Volumes/an-external-disk-with-a-long-name/charness-runner-work/bin/runner-0a1b2c3d.sh`;
+    const pid = startNamed(longPath);
+    assert.equal(alive(pid, { COLUMNS: '20' }), 'alive');
+    assert.equal(alive(pid, { COLUMNS: '5' }), 'alive');
+    assert.equal(alive(startStrangerProcess(), { COLUMNS: '20' }), 'not', 'and a stranger is still a stranger');
   });
 
   it('is not alive for a process that is gone, a pid that is no number, or a stranger', () => {

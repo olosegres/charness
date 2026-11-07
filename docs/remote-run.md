@@ -514,7 +514,7 @@ is not taken before the job's own submit, which keeps its copy, arrives.
 
 **A Mac's disk may not give the space back.** On APFS, `df` leaves out *purgeable* space, and with Time Machine local snapshots a removed project copy frees nothing until the snapshots are thinned
 (`tmutil listlocalsnapshots /` lists them, `tmutil thinlocalsnapshots /` thins them; or turn Time Machine's local snapshots off on that Mac). When two removals in a row give next to nothing back from copies
-measured much bigger, the runner stops removing further copies (it would empty itself for nothing), says so, and the refusal names this cause — and the other one it can have anywhere: a job writing to the same
+measured much bigger (a small or never-measured copy between them is not counted), the runner stops removing further copies (it would empty itself for nothing), says so, and the refusal names this cause — and the other one it can have anywhere: a job writing to the same
 disk meanwhile eats the space a removal frees.
 
 `kill` sends SIGTERM to the job's whole process group and SIGKILL after 10 s. A process that leaves the group on purpose (`setsid`,
