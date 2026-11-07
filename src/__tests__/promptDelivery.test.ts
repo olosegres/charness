@@ -185,7 +185,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     // The race the re-ask flow hit: a tap read a live process, the idle stop ran during the tap's awaits, and the label
     // was forwarded to a session that was gone — dropped. The behaviour is `deliverLatePrompt`'s (below) and the e2e's.
     const deliver = botSource.slice(botSource.indexOf('async function deliverActivePrompt('), botSource.indexOf('async function cancelPendingQuestionAndForward('));
-    assert.match(deliver, /const opening = await openTopicRequest\(key, text, intake\);\n(?:\s*\/\/[^\n]*\n)+\s*const outcome = await deliverLatePrompt\(\{/);
+    assert.match(deliver, /const opening = await openTopicRequest\(key, text, intake, messageContext\);\n(?:\s*\/\/[^\n]*\n)+\s*const outcome = await deliverLatePrompt\(\{/);
     assert.ok(deliver.includes('forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header }),'), 'the forward\'s own outcome is the answer');
     assert.match(deliver, /reportNoSession: async \(isAlreadyTold\) => \{\n\s*if \(!isAlreadyTold\) await replyToThread\(key, t\('agent\.no_session'\)\);\n\s*\},/, 'the topic is told once; the request is settled below, for the wake and the forward alike');
     assert.ok(deliver.includes('wake: () => wakeSleepingSessionForPrompt(key),'), 'the wake says whether its start already posted why it failed');
