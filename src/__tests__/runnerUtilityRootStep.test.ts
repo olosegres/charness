@@ -9,13 +9,17 @@
  * Test case: N/A — Charness has no Jira tracker.
  */
 
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { spawnSync } from 'child_process';
 import ts from 'typescript';
-import { nodeBuiltins, readProjectCompilerOptions, walkImportGraph } from './importGraphKit';
+import { gunzipSync } from 'zlib';
+import { nodeBuiltins, projectRoot, readProjectCompilerOptions, walkImportGraph } from './importGraphKit';
+import { getHubPackage } from '../runners/hubPackage';
+import { createHubContext } from '../runners/hubPaths';
 import { parseInstallArguments, runInstallCommand, type RootStepIo } from '../runnerUtility/rootServiceCli';
 import type { AdminServiceDeps } from '../runnerUtility/adminService';
 import type { IsolatedCommandRunner } from '../runnerUtility/isolatedCommand';
@@ -44,7 +48,39 @@ describe('the admin line\'s root step: built-ins only', () => {
       'runnerUtility/serviceCommon.ts',
       'runnerUtility/serviceUnits.ts',
       'selfUpdate/commandRunner.ts',
+      // The one control-character stripper the runner and the bot share: no imports at all (next test), and packed with the rest of `dist/` (the one after).
+      'utils/stripControlCharacters.ts',
     ]);
+  });
+
+  it('the shared control-character helper imports nothing — not even a built-in — so the root step gains no dependency by reaching it', () => {
+    const helper = walkImportGraph(path.resolve(__dirname, '..', 'utils', 'stripControlCharacters.ts'), options);
+    assert.deepEqual(helper.files.map((file) => path.basename(file)), ['stripControlCharacters.ts']);
+    assert.deepEqual(helper.others, []);
+  });
+
+  describe('the package the admin line ships', () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'charness-rootstep-'));
+    after(() => fs.rmSync(work, { recursive: true, force: true }));
+
+    it('holds the compiled file of every source the step reaches, and the step loads from it unpacked with no `node_modules` anywhere near — the real build, packed as the hub packs it', () => {
+      assert.ok(fs.existsSync(path.join(projectRoot, 'dist', 'runnerUtility', 'rootServiceCli.js')), 'Built dist/ is missing. Run `yarn build` before `yarn test`.');
+      const hubPackage = getHubPackage(createHubContext({ homeDir: work, dir: path.join(work, 'registry'), packageRoot: projectRoot }));
+      const listing = spawnSync('tar', ['-tf', '-'], { input: gunzipSync(fs.readFileSync(hubPackage.filePath)), encoding: 'utf8' }).stdout.trim().split('\n');
+      const compiledFiles = names.map((name) => `dist/${name.replace(/\.ts$/, '.js')}`);
+      assert.deepEqual(compiledFiles.filter((file) => !listing.includes(file)), [], 'every compiled file of the step is in the archive');
+      assert.deepEqual(listing.filter((entry) => entry.includes('node_modules')), [], 'and no `node_modules` rides in it');
+
+      // Unpack it where the admin line does and load the step as root would: the folder it sits in has no `node_modules`, the environment is empty.
+      const unpacked = path.join(work, 'pkg');
+      fs.mkdirSync(unpacked);
+      assert.equal(spawnSync('tar', ['--no-same-owner', '-xzf', hubPackage.filePath, '-C', unpacked]).status, 0);
+      const loader = `require(${JSON.stringify(path.join(unpacked, 'dist', 'runnerUtility', 'rootServiceCli.js'))}); console.log(JSON.stringify(Object.keys(require.cache)));`;
+      const loaded = spawnSync(process.execPath, ['-e', loader], { cwd: work, env: {}, encoding: 'utf8' });
+      assert.equal(loaded.status, 0, loaded.stderr);
+      const loadedFiles = (JSON.parse(loaded.stdout) as string[]).map((file) => path.relative(unpacked, file).split(path.sep).join('/'));
+      assert.deepEqual(loadedFiles.sort(), compiledFiles.sort(), 'it loads exactly the graph the walk found, every file from inside the package');
+    });
   });
 
   it('the checker itself notices a package that is not a built-in — the account\'s own program (`runnerCommands.ts`) reaches some', () => {
