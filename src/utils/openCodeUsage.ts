@@ -150,7 +150,7 @@ export function parseChatGptUsageResponse(body: unknown, nowMs: number): ClaudeU
  */
 export function fetchChatGptUsage(
   credential: OpenCodeProviderCredential,
-  options: { fetchImpl?: UsageFetchLike; timeoutMs?: number; nowMs?: number } = {},
+  options: { fetchImpl?: UsageFetchLike; timeoutMs?: number; nowMs?: number; signal?: AbortSignal } = {},
 ): Promise<ClaudeUsageFetchResult> {
   const accessToken = credential.accessToken ?? '';
   const accountId = credential.accountId ?? readAccountIdFromJwt(accessToken);
@@ -165,15 +165,16 @@ export function fetchChatGptUsage(
     parse: (body) => parseChatGptUsageResponse(body, nowMs),
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs,
+    signal: options.signal,
   });
 }
 
-/** A provider's subscription usage reader: one poll with the stored credential. */
-export type OpenCodeUsageReader = (credential: OpenCodeProviderCredential) => Promise<ClaudeUsageFetchResult>;
+/** A provider's subscription usage reader: one poll with the stored credential; `signal` cancels it. */
+export type OpenCodeUsageReader = (credential: OpenCodeProviderCredential, signal?: AbortSignal) => Promise<ClaudeUsageFetchResult>;
 
 /** The subscription usage readers by provider id; a provider not here shows only its auth kind. */
 export const openCodeUsageReaders: Readonly<Record<string, OpenCodeUsageReader>> = {
-  [chatGptProviderId]: (credential) => fetchChatGptUsage(credential),
+  [chatGptProviderId]: (credential, signal) => fetchChatGptUsage(credential, { signal }),
 };
 
 // ── the poller ──
@@ -190,8 +191,11 @@ export interface OpenCodeUsagePollerDeps {
 }
 
 export interface OpenCodeUsagePoller {
-  /** Poll every provider `auth.json` lists; with `maxAgeMs`, only the subscriptions whose snapshot is older (or stale). */
-  refreshAll: (options?: { maxAgeMs?: number }) => Promise<void>;
+  /**
+   * Poll every provider `auth.json` lists; with `maxAgeMs`, only the subscriptions whose snapshot is older (or stale). A poll
+   * whose `signal` was aborted saves nothing: its caller has given up on it, and its late answer must not overwrite a newer one.
+   */
+  refreshAll: (options?: { maxAgeMs?: number; signal?: AbortSignal }) => Promise<void>;
 }
 
 /**
@@ -215,7 +219,12 @@ export function createOpenCodeUsagePoller(deps: OpenCodeUsagePollerDeps): OpenCo
     log(`[usage] OpenCode ${providerId}: usage unavailable (${reason})`);
   }
 
-  async function pollSubscription(providerId: string, credential: OpenCodeProviderCredential, previous: OpenCodeProviderUsageRecord | undefined): Promise<void> {
+  async function pollSubscription(
+    providerId: string,
+    credential: OpenCodeProviderCredential,
+    previous: OpenCodeProviderUsageRecord | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
     const reader = readers[providerId];
     if (reader === undefined) {
       saveIfChanged(providerId, previous, { authKind: 'subscription' });
@@ -227,7 +236,8 @@ export function createOpenCodeUsagePoller(deps: OpenCodeUsagePollerDeps): OpenCo
     };
     if (credential.accessToken === null) { markStale('not signed in'); return; }
     if (credential.expiresAtMs !== null && credential.expiresAtMs <= now()) { markStale('token expired'); return; }
-    const result = await reader(credential);
+    const result = await reader(credential, signal);
+    if (signal?.aborted) return;
     if (!result.ok) { markStale(result.error); return; }
     deps.saveRecord(providerId, { authKind: 'subscription', usage: mergeClaudeUsageSnapshot(previous?.usage, result.buckets, 'api', now()) });
   }
@@ -237,7 +247,7 @@ export function createOpenCodeUsagePoller(deps: OpenCodeUsagePollerDeps): OpenCo
     return now() - Date.parse(previous.usage.fetchedAt) >= maxAgeMs;
   }
 
-  async function refreshAll(options: { maxAgeMs?: number } = {}): Promise<void> {
+  async function refreshAll(options: { maxAgeMs?: number; signal?: AbortSignal } = {}): Promise<void> {
     const credentials = deps.readCredentials();
     if (credentials === null) return;
     await Promise.all(Object.entries(credentials).map(async ([providerId, credential]) => {
@@ -246,7 +256,7 @@ export function createOpenCodeUsagePoller(deps: OpenCodeUsagePollerDeps): OpenCo
         if (credential.kind !== 'subscription') {
           saveIfChanged(providerId, previous, { authKind: credential.kind });
         } else if (checkNeedsPoll(previous, options.maxAgeMs)) {
-          await pollSubscription(providerId, credential, previous);
+          await pollSubscription(providerId, credential, previous, options.signal);
         }
       } catch (e) {
         log(`[usage] OpenCode ${providerId}: usage poll threw: ${e instanceof Error ? e.message : String(e)}`);

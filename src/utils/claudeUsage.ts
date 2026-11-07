@@ -33,6 +33,9 @@ const claudeOAuthBetaHeader = 'oauth-2025-04-20';
 
 export const claudeUsageFetchTimeoutMs = 15_000;
 
+/** What a poll cancelled by its caller (not timed out) answers. */
+const cancelledReason = 'cancelled';
+
 /** The one usage window kind set, named by what it bounds rather than by the API's spelling. */
 export type ClaudeUsageBucketKind = 'session' | 'weekly_all' | 'weekly_scoped';
 
@@ -109,6 +112,8 @@ export interface UsageEndpointRequest {
   parse: (body: unknown) => ClaudeUsageBucket[];
   fetchImpl?: UsageFetchLike;
   timeoutMs?: number;
+  /** The caller's own cancel: aborting it ends the request at once, answered as `cancelled`. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -119,16 +124,19 @@ export interface UsageEndpointRequest {
  */
 export async function fetchUsageBuckets(request: UsageEndpointRequest): Promise<ClaudeUsageFetchResult> {
   const fetchImpl: UsageFetchLike = request.fetchImpl ?? (globalThis.fetch as unknown as UsageFetchLike);
+  if (request.signal?.aborted) return { ok: false, error: cancelledReason, isAuthError: false };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), request.timeoutMs ?? claudeUsageFetchTimeoutMs);
+  const signal = request.signal ? AbortSignal.any([controller.signal, request.signal]) : controller.signal;
   try {
-    const response = await fetchImpl(request.url, { headers: request.headers, signal: controller.signal });
+    const response = await fetchImpl(request.url, { headers: request.headers, signal });
     if (response.status === 401 || response.status === 403) return { ok: false, error: `http ${response.status}`, isAuthError: true };
     if (response.status !== 200) return { ok: false, error: `http ${response.status}`, isAuthError: false };
     const buckets = request.parse(await response.json());
     if (buckets.length === 0) return { ok: false, error: 'no limits in the response', isAuthError: false };
     return { ok: true, buckets };
   } catch (e) {
+    if (request.signal?.aborted) return { ok: false, error: cancelledReason, isAuthError: false };
     const reason = e instanceof Error ? (e.name === 'AbortError' ? 'timeout' : e.message) : String(e);
     return { ok: false, error: reason.slice(0, 120), isAuthError: false };
   } finally {
@@ -141,7 +149,7 @@ export async function fetchUsageBuckets(request: UsageEndpointRequest): Promise<
  */
 export async function fetchClaudeUsage(
   token: string,
-  options: { fetchImpl?: UsageFetchLike; timeoutMs?: number } = {},
+  options: { fetchImpl?: UsageFetchLike; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<ClaudeUsageFetchResult> {
   return fetchUsageBuckets({
     url: claudeUsageEndpoint,

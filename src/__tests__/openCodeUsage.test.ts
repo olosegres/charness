@@ -8,15 +8,17 @@
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
+  chatGptProviderId,
   chatGptUsageEndpoint,
   createOpenCodeUsagePoller,
   fetchChatGptUsage,
+  openCodeUsageReaders,
   parseChatGptUsageResponse,
   parseOpenCodeCredentials,
   readOpenCodeCredentials,
@@ -162,6 +164,26 @@ describe('fetchChatGptUsage', () => {
     const result = await fetchChatGptUsage(credential, { fetchImpl: async () => { throw new Error('socket hang up'); }, nowMs });
     assert.deepEqual(result, { ok: false, error: 'socket hang up', isAuthError: false });
   });
+
+  it('the shipped reader of the provider hands the caller\'s signal to the request, so a cancelled poll really stops it', async () => {
+    const caller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    const fetchMock = mock.method(globalThis, 'fetch', (_url: unknown, init: { signal: AbortSignal }) => {
+      seenSignal = init.signal;
+      return new Promise<never>((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+      });
+    });
+    try {
+      const pending = openCodeUsageReaders[chatGptProviderId](credential, caller.signal);
+      caller.abort();
+      const outcome = await Promise.race([pending, new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 500))]);
+      assert.deepEqual(outcome, { ok: false, error: 'cancelled', isAuthError: false });
+      assert.equal(seenSignal?.aborted, true);
+    } finally {
+      fetchMock.mock.restore();
+    }
+  });
 });
 
 describe('createOpenCodeUsagePoller', () => {
@@ -170,7 +192,7 @@ describe('createOpenCodeUsagePoller', () => {
   function createHarness(options: {
     credentials: Record<string, OpenCodeProviderCredential> | null;
     records?: Record<string, OpenCodeProviderUsageRecord>;
-    read?: (credential: OpenCodeProviderCredential) => Promise<ClaudeUsageFetchResult>;
+    read?: (credential: OpenCodeProviderCredential, signal?: AbortSignal) => Promise<ClaudeUsageFetchResult>;
   }) {
     const records = new Map<string, OpenCodeProviderUsageRecord>(Object.entries(options.records ?? {}));
     const saves: Array<[string, OpenCodeProviderUsageRecord]> = [];
@@ -181,9 +203,9 @@ describe('createOpenCodeUsagePoller', () => {
       getRecord: (providerId) => records.get(providerId),
       saveRecord: (providerId, record) => { records.set(providerId, record); saves.push([providerId, record]); },
       readers: {
-        openai: async (credential) => {
+        openai: async (credential, signal) => {
           reads.push(credential);
-          return options.read ? options.read(credential) : { ok: true, buckets };
+          return options.read ? options.read(credential, signal) : { ok: true, buckets };
         },
       },
       now: () => nowMs,
@@ -248,6 +270,30 @@ describe('createOpenCodeUsagePoller', () => {
     assert.equal(failing.records.get('openai')?.usage?.error, 'http 500');
     assert.deepEqual(failing.records.get('openai')?.usage?.buckets, buckets);
     assert.deepEqual(failing.logs, ['[usage] OpenCode openai: usage unavailable (http 500)']);
+  });
+
+  it('the caller\'s signal reaches the reader, and a read that settles AFTER the caller cancelled saves nothing — not the figures, not a stale mark', async () => {
+    const previous: OpenCodeProviderUsageRecord = { authKind: 'subscription', usage: { fetchedAt: '2026-10-17T09:00:00.000Z', source: 'api', buckets } };
+    const caller = new AbortController();
+    let release!: (result: ClaudeUsageFetchResult) => void;
+    let seenSignal: AbortSignal | undefined;
+    const h = createHarness({
+      credentials: { openai: subscription() },
+      records: { openai: previous },
+      read: (_credential, signal) => { seenSignal = signal; return new Promise<ClaudeUsageFetchResult>((resolve) => { release = resolve; }); },
+    });
+    const poll = h.poller.refreshAll({ signal: caller.signal });
+    assert.equal(seenSignal, caller.signal);
+    caller.abort();
+    release({ ok: true, buckets: [{ kind: 'session', percent: 99, resetsAt: null, scopeModel: null }] });
+    await poll;
+    assert.deepEqual(h.saves, [], 'a cancelled poll writes nothing');
+    assert.deepEqual(h.records.get('openai'), previous);
+
+    const failed = createHarness({ credentials: { openai: subscription() }, records: { openai: previous }, read: async () => { caller.abort(); return { ok: false, error: 'cancelled', isAuthError: false }; } });
+    await failed.poller.refreshAll({ signal: caller.signal });
+    assert.deepEqual(failed.saves, [], 'nor does the stale mark of a poll that was cancelled');
+    assert.deepEqual(failed.logs, []);
   });
 
   it('a reader that throws is logged and does not stop the other providers', async () => {

@@ -516,6 +516,35 @@ describe('fetchClaudeUsage', () => {
     const thrown = await fetchClaudeUsage('tok', { fetchImpl: async () => { throw new Error('ECONNRESET'); } });
     assert.deepEqual(thrown, { ok: false, error: 'ECONNRESET', isAuthError: false });
   });
+
+  it('a caller\'s signal cancels the request itself: the fetch gets an aborted signal, the answer is "cancelled" (not a timeout), and an already-aborted signal sends nothing', async () => {
+    const caller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    const hanging = async (_url: string, init: { signal: AbortSignal }) => {
+      seenSignal = init.signal;
+      return new Promise<never>((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+      });
+    };
+    const pending = fetchClaudeUsage('tok', { fetchImpl: hanging, signal: caller.signal });
+    assert.equal(seenSignal?.aborted, false);
+    caller.abort();
+    const outcome = await Promise.race([pending, new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 500))]);
+    assert.deepEqual(outcome, { ok: false, error: 'cancelled', isAuthError: false });
+    assert.equal(seenSignal?.aborted, true, 'the abort reached the request');
+
+    let calls = 0;
+    const counting = async () => { calls += 1; return { status: 200, json: async () => ({}) }; };
+    assert.deepEqual(await fetchClaudeUsage('tok', { fetchImpl: counting, signal: caller.signal }), { ok: false, error: 'cancelled', isAuthError: false });
+    assert.equal(calls, 0, 'nothing is sent for a poll that was cancelled before it started');
+  });
+
+  it('without a caller signal the 15 s timeout alone ends a hung request, still as "timeout"', async () => {
+    const hanging = async (_url: string, init: { signal: AbortSignal }) => new Promise<never>((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+    });
+    assert.deepEqual(await fetchClaudeUsage('tok', { fetchImpl: hanging, timeoutMs: 20 }), { ok: false, error: 'timeout', isAuthError: false });
+  });
 });
 
 describe('the human formats', () => {
