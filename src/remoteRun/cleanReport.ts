@@ -8,7 +8,7 @@ import { formatGigabytes } from './probe';
  * or that did not finish in time, has its own outcomes.
  */
 
-/** Why a copy is in use (`copy_busy_kind` in `runner.sh`). `results` is the prune's own protection of a job that just ended: `clean` never meets it. */
+/** Why a copy is in use (`copy_busy_kind` in `runner.sh`). `results`: a job ended under an hour ago and nobody has fetched its results (the prune keeps such a copy whatever; `clean` stops there only while the `fetched` mark is missing). */
 const copyBusyKinds = ['lock', 'exec', 'running', 'queued', 'submitting', 'results', 'name'] as const;
 export type CopyBusyKind = (typeof copyBusyKinds)[number];
 

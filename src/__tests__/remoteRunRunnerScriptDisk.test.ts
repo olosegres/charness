@@ -1218,6 +1218,43 @@ describe('`clean`: the owner of a task removes its project copy on request', () 
       assert.ok(fs.existsSync(path.join(trash, 'tree/file.txt')));
     });
 
+    it('«clean again» while the earlier removal is still at it: that remover HOLDS the copy-removal lock to the end of its `rm`, yet the answer is `removing=` AT ONCE — not after the wait for the lock', () => {
+      const removerPid = startRunnerStandIn();
+      const trash = makeTrash('task-aaaaaaaaaa', removerPid, 12);
+      writeFile(workDir, 'tmp/prune.lock', `${removerPid}\n`);
+      const outcome = runShell(`prune_wait_sec=4; prune_poll_sec=0.2; started=$SECONDS; cmd_clean ${workDir} task-aaaaaaaaaa; echo waited=$((SECONDS - started))`);
+      assert.equal(outcome.status, 0, outcome.stderr);
+      assert.match(outcome.stdout, /^removing=task-aaaaaaaaaa\nwaited=[01]$/, 'a wait for the lock would have shown as 4');
+      assert.ok(fs.existsSync(path.join(trash, 'tree/file.txt')), 'the leftover is the remover\'s');
+      assert.equal(fs.readFileSync(path.join(workDir, 'tmp', 'prune.lock'), 'utf8').trim(), `${removerPid}`, 'and so is the lock');
+    });
+
+    it('several leftovers, every one with a live remover, and no copy: also `removing=` at once; with one remover gone it is NOT (that one has to be finished, which needs the lock)', () => {
+      const first = startRunnerStandIn();
+      const second = startRunnerStandIn();
+      makeTrash('task-aaaaaaaaaa', first, 12);
+      makeTrash('task-aaaaaaaaaa', second, 12);
+      writeFile(workDir, 'tmp/prune.lock', `${first}\n`);
+      const quick = runShell(`prune_wait_sec=4; prune_poll_sec=0.2; started=$SECONDS; cmd_clean ${workDir} task-aaaaaaaaaa; echo waited=$((SECONDS - started))`);
+      assert.match(quick.stdout, /^removing=task-aaaaaaaaaa\nwaited=[01]$/);
+      makeTrash('task-aaaaaaaaaa', getDeadPid(), 3);
+      const waiting = runShell(`prune_wait_sec=1; prune_poll_sec=0.2; started=$SECONDS; cmd_clean ${workDir} task-aaaaaaaaaa; echo waited=$((SECONDS - started))`);
+      assert.match(waiting.stdout, /waited=[1-3]$/, 'it waited for the lock this time');
+      assert.match(waiting.stdout, /^removed=task-aaaaaaaaaa /m, 'and then finished the leftover whose remover was gone');
+    });
+
+    it('everything there was removed by another process while this call waited for the lock: «nothing there» (`absent=`), never an empty answer — the leftover of a dead remover is taken by the prune that holds the lock', () => {
+      const holder = startRunnerStandIn();
+      const trash = makeTrash('task-aaaaaaaaaa', getDeadPid(), 12);
+      const lock = path.join(workDir, 'tmp', 'prune.lock');
+      writeFile(workDir, 'tmp/prune.lock', `${holder}\n`);
+      // The prune at work finishes the leftover after a second and gives its lock back.
+      const body = `prune_poll_sec=0.1; ( sleep 1; command rm -rf "${trash}"; command rm -f "${lock}" ) & cmd_clean ${workDir} task-aaaaaaaaaa; echo "status=$?"`;
+      const outcome = runShell(body);
+      assert.equal(outcome.stdout, 'absent=task-aaaaaaaaaa\nstatus=0');
+      assert.equal(fs.existsSync(trash), false);
+    });
+
     it('a leftover with a job in it that runs (a copy put aside while it got busy) is not removed: busy, naming the job', () => {
       const trash = makeTrash('task-aaaaaaaaaa', getDeadPid(), 12);
       writeJob(trash, 'box1-runnin', { 'task-id': '5\n', pid: `${startRunnerStandIn()}\n` });

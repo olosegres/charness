@@ -205,7 +205,11 @@ describe('remote-run clean', () => {
     assert.equal(await runRemoteRunCli(['--help'], io), 0);
     const usage = out.join('');
     assert.match(usage, /charness remote-run clean \[<slug>\]/);
-    assert.match(usage, /Refused \(exit 125\) while a job of it runs or waits, an exec runs in it or a job is being submitted/);
+    const clean = usage.slice(usage.indexOf('charness remote-run clean'), usage.indexOf('Exit codes:')).replace(/\s+/g, ' ');
+    assert.match(clean, /remove this project folder's copy from every runner/);
+    assert.match(clean, /shared by every task run from the folder: clean when the LAST of them is closed/);
+    assert.match(clean, /Refused \(exit 125\) while a job of it runs or waits, an exec runs in it, a job is being submitted, or a job that ended under an hour ago was not fetched \(wait \/ fetch it\)/);
+    assert.doesNotMatch(clean, /a task's copy/, 'the copy is the folder\'s, not a task\'s');
   });
 });
 

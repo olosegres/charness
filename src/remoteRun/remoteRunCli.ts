@@ -57,9 +57,10 @@ export const remoteRunUsage = `Usage:
   charness remote-run exec [--runner <name>] <command…>
                               one-off command in the runner's copy as the last job left it (no sync)
   charness remote-run clean [<slug>]
-                              remove a task's copy of the project from every runner: the copy of the project you are in, or the named one
-                              (the name a runner's disk message gives: myapp-0a1b2c3d4e). Frees its disk; its jobs' logs and result files go
-                              with it. Refused (exit 125) while a job of it runs or waits, an exec runs in it or a job is being submitted.
+                              remove this project folder's copy from every runner (or the named one: the name a runner's disk message gives,
+                              myapp-0a1b2c3d4e). The copy is shared by every task run from the folder: clean when the LAST of them is closed.
+                              Frees its disk; its jobs' logs and result files go with it. Refused (exit 125) while a job of it runs or waits,
+                              an exec runs in it, a job is being submitted, or a job that ended under an hour ago was not fetched (wait / fetch it).
 Exit codes: the command's own; 125 remote-run failed, 124 timeout, 130/143/129 interrupted (SIGINT/SIGTERM/SIGHUP), 141 stdout closed (| head), 137 job killed, 2 bad usage.
 Setup: docs/remote-run.md
 `;

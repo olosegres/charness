@@ -323,9 +323,10 @@ export async function cleanOnRunner(client: RunnerClient, slug: string): Promise
 }
 
 /**
- * `clean [<slug>]`: the project copy of a closed task goes from every runner — the named one, or (no word) the copy of the project this command is run in. One line per runner on stdout: what was freed, or why
- * nothing was removed (a job of it runs or waits, an `exec` runs in it, a job is being submitted: the copy is in use). Exit 125 when a copy is still there although it was asked to go; a runner that could not be
- * reached is said so and does not fail the command (a sleeping Mac must not fail the closing of a task).
+ * `clean [<slug>]`: the copy of a project FOLDER goes from every runner — the named one, or (no word) the copy of the project this command is run in; every task run from the folder shares it, so it is for when the last
+ * of them is closed. One line per runner on stdout: what was freed, or why nothing was removed (a job of it runs or waits, an `exec` runs in it, a job is being submitted, or a job ended under an hour ago whose results
+ * nobody has fetched: the copy is in use). Exit 125 when a copy is still there although it was asked to go; a runner that could not be reached is said so and does not fail the command (a sleeping Mac must not fail the
+ * closing of a task).
  */
 export async function runCleanCommand(command: Extract<RemoteRunCommand, { kind: 'clean' }>, context: CommandContext): Promise<number> {
   const { io } = context;

@@ -1251,7 +1251,7 @@ cmd_measure_copies() {
 # `clean <work> <slug>`: remove ONE project copy because its owner is done with it (the last task of its project folder was closed), with the removal machinery of the prune — the copy-removal lock, the busy check (asked
 # again of the moved-aside folder), the rename + `chmod` + `rm`. What differs from the prune: the copy is named, not guessed; and a job that ENDED lately keeps the copy only while nobody has fetched its results (the
 # `fetched` mark of `wait` / `fetch` / a foreground run): the prune keeps it for result_keep_min whatever. A job that runs or waits, an `exec`, a job still being submitted and a held project lock refuse it — then nothing
-# is removed. A folder an earlier removal left (`p/.trash-<slug>-<pid>`: cut off, or past its caller's time limit) is finished first, so «clean again» sees it through. The answer is some lines on stdout (the exit status
+# is removed. A folder an earlier removal left (`p/.trash-<slug>-<pid>`: cut off, or past its caller's time limit) is finished first, so «clean again» sees it through (when no copy is left and every leftover is being removed by a live process, the answer is `removing=` AT ONCE: that remover holds the copy-removal lock to the end of its `rm`, and waiting for it would only keep the caller silent). The answer is some lines on stdout (the exit status
 # is 0 whenever the script could answer): `removed=<slug> freed_kb=<n> why=clean` (the copy, the leftover, or both: one line each) · `absent=<slug>` (no such copy, or a prune took it first) · `removing=<slug>` (a leftover
 # whose remover still lives) · `busy=<slug> kind=<kind> job=<id|->` · `stuck=<slug>` (it would not go). Its jobs' logs and result files go with it.
 cmd_clean() {
@@ -1260,22 +1260,31 @@ cmd_clean() {
   # The caller may hang up while this removes tens of GB (its call has a time limit); the removal goes on to its end.
   trap '' PIPE
   local clean_ignores_fetched=1
-  local leftover is_trash_left=0
+  local leftover is_trash_left=0 is_a_remover_gone=0
   for leftover in "$work_dir"/p/.trash-"$clean_slug"-*; do
-    [ -e "$leftover" ] && check_is_trash_of_slug "$leftover" "$clean_slug" && is_trash_left=1
+    [ -e "$leftover" ] && check_is_trash_of_slug "$leftover" "$clean_slug" || continue
+    is_trash_left=1
+    check_runner_pid_alive "${leftover##*-}" || is_a_remover_gone=1
   done
   if [ ! -d "$work_dir/p/$clean_slug" ] && [ "$is_trash_left" -eq 0 ]; then
     printf 'absent=%s\n' "$clean_slug"
     return 0
   fi
+  # No copy, and every leftover is being removed right now: nothing for this call to do, and nothing to wait for. The remover HOLDS the copy-removal lock until its `rm` ends, so waiting for the lock
+  # would keep the caller silent for minutes to hear the same thing (or, once the remover is done, to find nothing at all).
+  if [ ! -d "$work_dir/p/$clean_slug" ] && [ "$is_a_remover_gone" -eq 0 ]; then
+    printf 'removing=%s\n' "$clean_slug"
+    return 0
+  fi
   begin_copy_removal "$work_dir" always
-  local before_kb trash_code
+  local before_kb trash_code is_answered=0
   for leftover in "$work_dir"/p/.trash-"$clean_slug"-*; do
     [ -e "$leftover" ] && check_is_trash_of_slug "$leftover" "$clean_slug" || continue
     read_disk_kb "$work_dir"
     before_kb=$disk_free_kb
     finish_trash_removal "$leftover"
     trash_code=$?
+    is_answered=1
     case $trash_code in
       0) set_freed_kb_since "$work_dir" "$before_kb"; printf 'removed=%s freed_kb=%s why=clean\n' "$clean_slug" "$last_freed_kb" ;;
       1) printf 'removing=%s\n' "$clean_slug" ;;
@@ -1296,6 +1305,8 @@ cmd_clean() {
   case $removal_code in
     2) printf 'absent=%s\n' "$clean_slug" ;;
     3) printf 'busy=%s kind=%s job=%s\n' "$clean_slug" "$copy_busy_kind" "$copy_busy_job" ;;
+    # Everything that was there went while this call waited for the lock (another remover finished it): said as «nothing there», never as an empty answer.
+    -1) [ "$is_answered" -eq 1 ] || printf 'absent=%s\n' "$clean_slug" ;;
   esac
   return 0
 }
