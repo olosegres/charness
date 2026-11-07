@@ -17,6 +17,8 @@
  *     message is read by the very same process
  *   → a FORWARDED slash command the bot does not own (`/review the diff`): the agent reads it marked, not as a command of the
  *     operator's own
+ *   → a FORWARDED document and a FORWARDED photo, each with a caption: the file announcement the agent reads (saved path, caption)
+ *     leads with the mark; the same photo sent plainly has none
  *   → a pending question and a bare digit: typed, the digit answers the question; FORWARDED, it does not — the question is
  *     given up unanswered and the agent reads the digit marked
  *   → a plain text and a plain voice note: no block of either kind.
@@ -66,6 +68,13 @@ const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const projectFolder = 'context-proj';
 const voiceFileId = 'voice-context-1';
 const voiceFileBytes = 2048;
+const documentFileId = 'document-context-1';
+const photoFileId = 'photo-context-1';
+const plainPhotoFileId = 'photo-context-2';
+const attachmentFileBytes = 1024;
+const forwardedDocumentCaption = 'the disk alert, as a file';
+const forwardedPhotoCaption = 'the dashboard at the moment of the alert';
+const plainPhotoCaption = 'my own screenshot';
 const voiceDurationSeconds = 2;
 
 const replyTimeoutMs = 20 * 1000;
@@ -200,6 +209,7 @@ describe('message context end to end: built charness, fake Bot API, fake speech 
     // The voice settings the way an operator keeps them, beside the instance's env file: one engine, a loopback server.
     fs.writeFileSync(path.join(path.dirname(layout.envFile), 'stt.json'), `${JSON.stringify({ engines: [{ id: 'u1', kind: 'url', url: speechUrl }] }, null, 2)}\n`);
     fakeTelegram.registerFile(voiceFileId, Buffer.alloc(voiceFileBytes, 7));
+    for (const fileId of [documentFileId, photoFileId, plainPhotoFileId]) fakeTelegram.registerFile(fileId, Buffer.alloc(attachmentFileBytes, 9));
     const apiRoot = await fakeTelegram.start();
     writeInstanceEnvFile(layout, {
       CONNECTORS: 'telegram',
@@ -330,6 +340,21 @@ describe('message context end to end: built charness, fake Bot API, fake speech 
     assertForwardedMarkLeads(prompt, 'user "Alice" (@alice)', originalSentAtSeconds, '1');
     await getCharness().waitFor('the question to be given up', replyTimeoutMs, () => readAskOutcomes().length > outcomesBefore + 1);
     assert.equal(readAskOutcomes()[outcomesBefore + 1], fakeAskNoAnswerOutcome, 'the forwarded 1 answered nothing');
+  });
+
+  it('a forwarded document and a forwarded photo reach the agent marked: the mark leads the file announcement, then comes the caption', async () => {
+    fakeTelegram.pushOperatorFile(topicThreadId, 'document', documentFileId, { fileName: 'disk-alert.txt', caption: forwardedDocumentCaption, forwardOrigin: channelOrigin });
+    const document = await waitForAgentPrompt(forwardedDocumentCaption);
+    assertForwardedMarkLeads(document, 'channel "Ops Alerts"', originalSentAtSeconds, '[Telegram file] document saved to: ');
+    assert.match(document.text, new RegExp(`\\[Telegram file\\] document saved to: [^\\n]+\\n${forwardedDocumentCaption}`), 'the announcement is followed by the caption');
+
+    fakeTelegram.pushOperatorFile(topicThreadId, 'photo', photoFileId, { caption: forwardedPhotoCaption, forwardOrigin: personOrigin });
+    const photo = await waitForAgentPrompt(forwardedPhotoCaption);
+    assertForwardedMarkLeads(photo, 'user "Alice" (@alice)', originalSentAtSeconds, '[Telegram file] photo saved to: ');
+
+    fakeTelegram.pushOperatorFile(topicThreadId, 'photo', plainPhotoFileId, { caption: plainPhotoCaption });
+    const plain = await waitForAgentPrompt(plainPhotoCaption);
+    assert.ok(plain.text.includes('[Telegram file] photo saved to: ') && !plain.text.includes('[Forwarded message'), `a photo sent plainly carries no mark in:\n${plain.text}`);
   });
 
   it('a plain text and a plain voice note carry neither a reply quote nor a forwarded mark', async () => {

@@ -308,6 +308,24 @@ export class FakeTelegram {
     return message.message_id;
   }
 
+  /**
+   * @description The operator sends a document or a photo (a file registered with {@link registerFile}) in topic `threadId`,
+   * with a caption, as a reply or a forward when `options` say so; resolves the message id. The message is stored without the
+   * file object (a reply to it embeds none); on the wire it carries the field the Bot API gives that kind.
+   */
+  pushOperatorFile(threadId: number, kind: 'document' | 'photo', fileId: string, options: FakeOperatorMessageOptions & { caption?: string; fileName?: string } = {}): number {
+    const file = this.files.get(fileId);
+    if (!file) throw new Error(`register the file ${fileId} first`);
+    const message = this.storeMessage(threadId, '', this.options.operator);
+    // On the wire a file message has no `text`, only its file and its caption.
+    const { text: _text, ...wireMessage } = message;
+    const fileFields = kind === 'document'
+      ? { document: { file_id: fileId, file_unique_id: `unique-${fileId}`, file_name: options.fileName ?? `${fileId}.bin`, mime_type: 'application/octet-stream', file_size: file.bytes.length } }
+      : { photo: [{ file_id: fileId, file_unique_id: `unique-${fileId}`, width: 90, height: 60, file_size: file.bytes.length }] };
+    this.pushUpdate({ message: { ...wireMessage, ...fileFields, ...(options.caption ? { caption: options.caption } : {}), ...this.getContext(options) } });
+    return message.message_id;
+  }
+
   /** @description The operator taps the button carrying `callbackData` on the bot's message `messageId`. */
   pushCallback(messageId: number, callbackData: string): void {
     const message = this.messages.get(messageId);
