@@ -13,6 +13,7 @@ import {
   resolveLinuxAccount,
   resolveMacAccount,
   rootUid,
+  sharedNodeBase,
   systemLaunchDaemonsDir,
   type ServiceResult,
   type TargetAccount,
@@ -183,16 +184,16 @@ async function installUserServiceFor(account: TargetAccount, deps: AdminServiceD
 async function resolveServedAccount(accountName: string, deps: AdminServiceDeps): Promise<TargetAccount | ServiceResult> {
   if (deps.platform !== 'linux' && deps.platform !== 'darwin') return fail(`Services are supported on Linux (systemd) and macOS (launchd), not on ${deps.platform}.`);
   if (deps.uid !== rootUid) return fail('This step is root\'s: it is started by the admin pairing line from /runners, which asks for sudo.');
-  // The line picks a Node outside the home folders; a root step that still finds itself under one stops here — the service would depend on a folder
-  // that is someone's to change and to close, and root would run a program from it.
+  // The line installs the runner's own Node outside the home folders; a root step that still finds itself under one stops here — the service would depend
+  // on a folder that is someone's to change and to close, and root would run a program from it.
   const nodeHome = findHomeContaining(deps.nodePath);
-  if (nodeHome !== null) return fail(`This step runs under the Node.js at ${deps.nodePath}, which lives in a home folder (${nodeHome}): root runs nothing from a home, and the service must not depend on one. Install Node.js system-wide (macOS: brew install node) and paste the admin line again.`);
+  if (nodeHome !== null) return fail(`This step runs under the Node.js at ${deps.nodePath}, which lives in a home folder (${nodeHome}): root runs nothing from a home, and the service must not depend on one. Paste the admin line again from /runners: it installs the runner its own Node.js in ${sharedNodeBase}.`);
   const account = await deps.resolveAccount(accountName);
   if (account === null) return fail(`There is no account named «${accountName}», or its home folder cannot be read from the directory service.`);
   if (account.uid === rootUid) return fail('The service must run as a standard account, not as root.');
-  // And a Node the account can change is no Node for root to run: the account runs the agents' code. `remoteRun/pickNode.sh` asks the same before it picks.
+  // And a Node the account can change is no Node for root to run: the account runs the agents' code. `remoteRun/ensureNode.sh` asks the same before it prints the Node.
   const changeable = await findPathAccountCanWrite(deps.nodePath, account, deps);
-  if (changeable !== null) return fail(`This step runs under the Node.js at ${deps.nodePath}, which the account ${account.name} can change (it can write ${changeable}): root runs nothing the account can change. Install Node.js system-wide (macOS: brew install node) and paste the admin line again.`);
+  if (changeable !== null) return fail(`This step runs under the Node.js at ${deps.nodePath}, which the account ${account.name} can change (it can write ${changeable}): root runs nothing the account can change. Paste the admin line again from /runners: it installs the runner its own Node.js in ${sharedNodeBase}.`);
   return account;
 }
 

@@ -14,6 +14,12 @@ import { getAppDirPath, type RunnerHomePaths } from './runnerHome';
 
 /** The exit code that asks the launcher to start the app again (EX_TEMPFAIL) — after an update. */
 export const restartExitCode = 75;
+/**
+ * The exit code that asks for a fresh start of the LAUNCHER itself: the link moved to its own Node.js and rewrote the launcher (`managedNode.ts`), which the
+ * running script has already read. A launcher of this version starts itself again; an older one exits with it, and the service manager that keeps the link
+ * up (systemd `Restart=always`, launchd `KeepAlive`) starts the rewritten file.
+ */
+export const nodeMovedExitCode = 76;
 const npmInstallTimeoutMs = 10 * 60 * 1000;
 const appsToKeep = 2;
 const appDirPattern = /^app\.[0-9a-f]+$/;

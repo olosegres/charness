@@ -303,7 +303,7 @@ describe('installing and removing the services', () => {
       calls = [];
       const refused = await installService({ isSystem: false, userName: null }, createDeps({ nodePath }));
       assert.equal(refused.ok, false, nodePath);
-      assert.match(refused.lines.join(' '), /^The service would depend on the Node\.js at \S+, which lives in the home folder of another user \(\S+\)\. It stops working when that folder is closed.*Install Node\.js system-wide \(macOS: brew install node\) and use that one, then run this again\.$/, nodePath);
+      assert.match(refused.lines.join(' '), /^The service would depend on the Node\.js at \S+, which lives in the home folder of another user \(\S+\)\. It stops working when that folder is closed.*Pair again with a fresh line from \/runners: it installs the runner its own Node\.js, then run this again\.$/, nodePath);
       assert.deepEqual(calls, [], 'nothing was asked of a service manager');
     }
     for (const nodePath of [path.join(home, '.nvm', 'bin', 'node'), '/opt/homebrew/bin/node', '/usr/bin/node']) {

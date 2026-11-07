@@ -14,7 +14,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { getJobPathDirectories } from '../runnerUtility/execEnv';
-import { createShimDeps, ensurePackageManagerShims, formatShimLine, type ShimDeps } from '../runnerUtility/packageManagerShims';
+import { createShimDeps, ensurePackageManagerShims, formatShimLine, renderCorepackWrapper, type ShimDeps } from '../runnerUtility/packageManagerShims';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 
 const checkIsExecutableOnDisk = createShimDeps().checkIsExecutable;
@@ -54,15 +54,17 @@ function installFakeCorepack(options: { exitCode?: number; stderr?: string } = {
     `printf '%s\\n' "$*" >> "${argumentsLog}"`,
     `printf 'PATH=%s\\n' "$PATH" >> "${argumentsLog}"`,
     ...(options.exitCode === undefined || options.exitCode === 0 ? [] : [`echo "${options.stderr ?? ''}" >&2`, `exit ${options.exitCode}`]),
-    'dir=; names=',
+    'dir=; names=; is_enable=',
     'while [ $# -gt 0 ]; do',
     '  case $1 in',
-    '    enable) ;;',
+    '    enable) is_enable=1;;',
     '    --install-directory) dir=$2; shift ;;',
+    '    --install-directory=*) dir=${1#*=} ;;',
     '    *) names="$names $1" ;;',
     '  esac',
     '  shift',
     'done',
+    '[ -n "$is_enable" ] && [ -n "$dir" ] || exit 0',
     'for name in $names; do',
     `  ln -sf "${corepackDist}/$name.js" "$dir/$name"`,
     'done',
@@ -84,9 +86,9 @@ function createDeps(overrides: Partial<ShimDeps> = {}): ShimDeps {
 }
 
 describe('the job PATH folders', () => {
-  it('are the runner\'s bin first, then the Node\'s folder, then the system\'s — the order the environment of a job is built from', () => {
+  it('are the runner\'s bin first, then the bin of the jobs\' own npm prefix, then the Node\'s folder, then the system\'s — the order the environment of a job is built from', () => {
     const folders = getJobPathDirectories(getPaths(), nodeDir);
-    assert.deepEqual(folders.slice(0, 2), [getPaths().binDir, nodeDir]);
+    assert.deepEqual(folders.slice(0, 3), [getPaths().binDir, path.join(getPaths().npmPrefix, 'bin'), nodeDir]);
     assert.ok(folders.includes('/usr/bin'));
   });
 });
@@ -177,5 +179,133 @@ describe('ensurePackageManagerShims', () => {
     const offeredAgain = await ensurePackageManagerShims(getPaths(), createDeps({ nodeDir: offeredDir }));
     assert.deepEqual(offeredAgain.map((outcome) => outcome.kind), ['offered', 'offered']);
     for (const manager of ['yarn', 'pnpm']) assert.equal(fs.existsSync(path.join(getPaths().binDir, manager)), false, `the real shim of ${manager} was recognised as Corepack's and removed`);
+  });
+});
+
+describe('the `corepack` wrapper in the runner\'s bin', () => {
+  const wrapperPath = (): string => path.join(getPaths().binDir, 'corepack');
+  const readCalls = (): string[] => (fs.existsSync(argumentsLog) ? fs.readFileSync(argumentsLog, 'utf8').split('\n').filter((line) => !line.startsWith('PATH=') && line !== '') : []);
+
+  /** The wrapper as a job runs it: `corepack <args>` through the file `ensurePackageManagerShims` wrote. */
+  async function runWrapper(...args: string[]): Promise<void> {
+    installFakeCorepack();
+    await ensurePackageManagerShims(getPaths(), createDeps());
+    fs.rmSync(argumentsLog, { force: true });
+    fs.rmSync(path.join(getPaths().binDir, 'yarn'), { force: true });
+    assert.equal(spawnSync(wrapperPath(), args, { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } }).status, 0);
+  }
+
+  it('is written for a Node that has Corepack, executable, naming that Corepack and the runner\'s bin — and not rewritten when nothing changed', async () => {
+    installFakeCorepack();
+    await ensurePackageManagerShims(getPaths(), createDeps());
+    assert.equal(fs.readFileSync(wrapperPath(), 'utf8'), renderCorepackWrapper(path.join(nodeDir, 'corepack'), getPaths().binDir));
+    assert.equal(fs.statSync(wrapperPath()).mode & 0o777, 0o755);
+    const inode = fs.statSync(wrapperPath()).ino;
+    await ensurePackageManagerShims(getPaths(), createDeps());
+    assert.equal(fs.statSync(wrapperPath()).ino, inode);
+  });
+
+  it('turns a bare `corepack enable` (what a project\'s install step runs) into one for the runner\'s bin — the Node\'s own folder is not the account\'s to write', async () => {
+    await runWrapper('enable');
+    assert.deepEqual(readCalls(), [`enable --install-directory ${getPaths().binDir}`]);
+  });
+
+  it('keeps the names the job gave, and does the same for `disable`', async () => {
+    await runWrapper('enable', 'yarn', 'pnpm');
+    assert.deepEqual(readCalls(), [`enable --install-directory ${getPaths().binDir} yarn pnpm`]);
+    fs.rmSync(argumentsLog);
+    assert.equal(spawnSync(wrapperPath(), ['disable'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } }).status, 0);
+    assert.deepEqual(readCalls(), [`disable --install-directory ${getPaths().binDir}`]);
+  });
+
+  it('leaves a job\'s own `--install-directory` alone, in both spellings and wherever it stands', async () => {
+    const jobBin = path.join(root, 'job', 'bin');
+    const otherBin = path.join(root, 'other', 'bin');
+    fs.mkdirSync(jobBin, { recursive: true });
+    fs.mkdirSync(otherBin, { recursive: true });
+    await runWrapper('enable', '--install-directory', jobBin, 'yarn');
+    assert.deepEqual(readCalls(), [`enable --install-directory ${jobBin} yarn`]);
+    fs.rmSync(argumentsLog);
+    assert.equal(spawnSync(wrapperPath(), ['enable', 'yarn', `--install-directory=${otherBin}`], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } }).status, 0);
+    assert.deepEqual(readCalls(), [`enable yarn --install-directory=${otherBin}`]);
+    assert.equal(fs.existsSync(path.join(otherBin, 'yarn')), true, 'and it landed where the job said');
+  });
+
+  it('passes every other command through untouched (`prepare`, `install`, `--version`), and the real Corepack\'s exit status', async () => {
+    await runWrapper('prepare', 'yarn@1.22.22', '--activate');
+    assert.deepEqual(readCalls(), ['prepare yarn@1.22.22 --activate']);
+    fs.rmSync(argumentsLog);
+    assert.equal(spawnSync(wrapperPath(), ['--version'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } }).status, 0);
+    assert.deepEqual(readCalls(), ['--version']);
+  });
+
+  it('quotes its two paths, so a folder with a space or a quote in its name cannot become a command', () => {
+    const text = renderCorepackWrapper("/opt/it's here/corepack", '/home/a b/bin');
+    assert.ok(text.includes(`REAL='/opt/it'\\''s here/corepack'`));
+    assert.ok(text.includes("INSTALL_DIRECTORY='/home/a b/bin'"));
+    assert.equal(spawnSync('sh', ['-n', '-c', text]).status, 0);
+  });
+
+  it('is not made for a Node without Corepack; one made for an earlier Node is taken out; a `corepack` that is not ours is never touched', async () => {
+    await ensurePackageManagerShims(getPaths(), createDeps());
+    assert.equal(fs.existsSync(wrapperPath()), false, 'nothing to wrap');
+    installFakeCorepack();
+    await ensurePackageManagerShims(getPaths(), createDeps());
+    assert.equal(fs.existsSync(wrapperPath()), true);
+    fs.rmSync(path.join(nodeDir, 'corepack'));
+    await ensurePackageManagerShims(getPaths(), createDeps());
+    assert.equal(fs.existsSync(wrapperPath()), false, 'the Node it wrapped is gone');
+    writeExecutable(wrapperPath(), '#!/bin/sh\necho the operator\'s own\n');
+    installFakeCorepack();
+    await ensurePackageManagerShims(getPaths(), createDeps());
+    assert.equal(fs.readFileSync(wrapperPath(), 'utf8'), '#!/bin/sh\necho the operator\'s own\n');
+    fs.rmSync(path.join(nodeDir, 'corepack'));
+    await ensurePackageManagerShims(getPaths(), createDeps());
+    assert.equal(fs.existsSync(wrapperPath()), true, 'and not removed either');
+  });
+
+  // The thing it is for: a Node whose folder the account cannot write (the runner's Node is root's), the real Corepack, a bare `corepack enable`.
+  const realNodeDir = path.dirname(process.execPath);
+  const realCorepackFile = path.join(realNodeDir, 'corepack');
+  const skipReason = ((): string | false => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return 'root can write a read-only folder, so the case proves nothing';
+    return spawnSync(realCorepackFile, ['--version'], { encoding: 'utf8' }).status === 0 ? false : 'no Corepack in the folder of the Node that runs the tests';
+  })();
+  it('with the REAL Corepack in a Node folder the account cannot write, a bare `corepack enable` through the wrapper puts the shims in the runner\'s bin — where it fails without the wrapper', { skip: skipReason }, async () => {
+    const copiedNode = path.join(root, 'readonly-node');
+    fs.mkdirSync(path.join(copiedNode, 'bin'), { recursive: true });
+    fs.mkdirSync(path.join(copiedNode, 'lib', 'node_modules'), { recursive: true });
+    fs.cpSync(path.join(path.dirname(fs.realpathSync(realCorepackFile)), '..'), path.join(copiedNode, 'lib', 'node_modules', 'corepack'), { recursive: true });
+    fs.symlinkSync(process.execPath, path.join(copiedNode, 'bin', 'node'));
+    fs.symlinkSync('../lib/node_modules/corepack/dist/corepack.js', path.join(copiedNode, 'bin', 'corepack'));
+    fs.chmodSync(path.join(copiedNode, 'lib', 'node_modules', 'corepack', 'dist', 'corepack.js'), 0o755);
+    const run = (command: string, args: string[]): { status: number | null; output: string } => {
+      const result = spawnSync(command, args, { encoding: 'utf8', env: { PATH: `${path.join(copiedNode, 'bin')}:/usr/bin:/bin`, HOME: path.join(root, 'home') } });
+      return { status: result.status, output: `${result.stdout}${result.stderr}` };
+    };
+    const realNodeBin = path.join(copiedNode, 'bin');
+    const writableModeOff = (folder: string): void => {
+      for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+        if (entry.isDirectory()) writableModeOff(path.join(folder, entry.name));
+      }
+      fs.chmodSync(folder, 0o555);
+    };
+    writableModeOff(path.join(copiedNode, 'bin'));
+    try {
+      const bare = run(path.join(realNodeBin, 'corepack'), ['enable']);
+      assert.notEqual(bare.status, 0, 'without the wrapper the shims go into the Node\'s own folder, which the account cannot write');
+      assert.match(bare.output, /EACCES|EPERM|permission denied/i);
+      const deps = createDeps({ nodeDir: realNodeBin, checkIsExecutable: (candidate) => checkIsExecutableOnDisk(candidate) && candidate.startsWith(`${root}${path.sep}`), environment: { PATH: `${realNodeBin}:/usr/bin:/bin` } });
+      await ensurePackageManagerShims(getPaths(), deps);
+      fs.rmSync(path.join(getPaths().binDir, 'yarn'), { force: true });
+      fs.rmSync(path.join(getPaths().binDir, 'pnpm'), { force: true });
+      const wrapped = run(wrapperPath(), ['enable']);
+      assert.equal(wrapped.status, 0, wrapped.output);
+      for (const manager of ['yarn', 'pnpm']) assert.equal(fs.lstatSync(path.join(getPaths().binDir, manager)).isSymbolicLink(), true, manager);
+    } finally {
+      for (const folder of [path.join(copiedNode, 'bin'), path.join(copiedNode, 'lib')]) {
+        spawnSync('chmod', ['-R', 'u+w', folder]);
+      }
+    }
   });
 });

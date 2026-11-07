@@ -13,6 +13,8 @@ import type { LaunchdJobSpec, ServiceNames } from './serviceUnits';
 export const commandTimeoutMs = 60 * 1000;
 /** Where the admin line puts the always-on service's LaunchDaemon definitions (a folder only root can write). */
 export const systemLaunchDaemonsDir = '/Library/LaunchDaemons';
+/** Where the admin line installs the runner's Node.js, owned by root: root runs that Node, so the account must not be able to change it (`remoteRun/ensureNode.sh`, `managedNode.ts`). */
+export const sharedNodeBase = '/usr/local/lib/charness-runner/node';
 export const rootUid = 0;
 const wheelGid = 0;
 const unitFileMode = 0o644;

@@ -9,7 +9,10 @@ import * as path from 'path';
  *   status.json   what the link is doing right now (written by `run`, read by `status`)
  *   keys/         the runner's client key (logs in to the hub) and the host key of its built-in ssh server
  *   app.<id>/     an installed copy of the hub's charness package; `current` points at the one in use
- *   bin/          the `charness-runner` launcher, pueue, pueued, rsync when built
+ *   bin/          the `charness-runner` launcher, pueue, pueued, rsync when built, the Corepack shims of `yarn` / `pnpm` and the `corepack` wrapper (`packageManagerShims.ts`)
+ *   node/         the runner's OWN Node.js, when it is not the shared one under `/usr/local/lib/charness-runner/node`: `v<version>/bin/node` (`managedNode.ts`, `remoteRun/ensureNode.sh`)
+ *   npm/          the jobs' global npm prefix (`npm i -g`; its `bin/` is on a job's PATH), so no job writes into the Node's own folder
+ *   corepack/     the jobs' `COREPACK_HOME`: the package managers Corepack downloads
  *   env           the operator's KEY=VALUE lines, added to every job's environment
  *   work/         the work dir of remote-run (phase 1); pueue/ the private Pueue; logs/; build/ scratch for the rsync build
  *   awake         how the link keeps the machine awake (`keepAwake.ts`): `caffeinate 123`, `systemd-inhibit 123` or `none <reason>`; read by `runner.sh probe`
@@ -17,7 +20,10 @@ import * as path from 'path';
  *                 `install-failure` why the link could not put the agent in place (`guiAgentHeal.ts`; read by `runner.sh`)
  */
 
-const stateDirName = '.charness-runner';
+/** The runner's state folder in the account's home (`~/.charness-runner`). */
+export const runnerStateDirName = '.charness-runner';
+/** The folder of the runner's own Node.js installs inside the state folder. */
+export const ownNodeDirName = 'node';
 
 export interface RunnerHomePaths {
   homeDir: string;
@@ -45,6 +51,12 @@ export interface RunnerHomePaths {
   serverKey: string;
   currentApp: string;
   binDir: string;
+  /** The runner's own Node.js installs (`v<version>/` each), when it has none of the shared kind. */
+  ownNodeDir: string;
+  /** A job's global npm prefix (`NPM_CONFIG_PREFIX`): `npm i -g` writes here, never into the Node's folder. */
+  npmPrefix: string;
+  /** A job's `COREPACK_HOME`: where Corepack keeps the package managers it downloads. */
+  corepackHome: string;
   launcher: string;
   envFile: string;
   workDir: string;
@@ -55,7 +67,7 @@ export interface RunnerHomePaths {
 }
 
 export function getRunnerHomePaths(homeDir: string = os.homedir()): RunnerHomePaths {
-  const root = path.join(homeDir, stateDirName);
+  const root = path.join(homeDir, runnerStateDirName);
   return {
     homeDir,
     root,
@@ -74,6 +86,9 @@ export function getRunnerHomePaths(homeDir: string = os.homedir()): RunnerHomePa
     serverKey: path.join(root, 'keys', 'server_host_ed25519'),
     currentApp: path.join(root, 'current'),
     binDir: path.join(root, 'bin'),
+    ownNodeDir: path.join(root, ownNodeDirName),
+    npmPrefix: path.join(root, 'npm'),
+    corepackHome: path.join(root, 'corepack'),
     launcher: path.join(root, 'bin', 'charness-runner'),
     envFile: path.join(root, 'env'),
     workDir: path.join(root, 'work'),

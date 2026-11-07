@@ -23,7 +23,7 @@ A runner is attached in one of two ways:
   adds one marked block of key lines to the charness user's `~/.ssh/authorized_keys` and touches no other line. Each key is
   restricted to a single forced command — **no shell, no port or unix-socket forwarding** — so a runner can do nothing on the charness
   host but dial in, fetch charness's own package, hold its link and unpair itself.
-- **The runner machine** (Linux or macOS) needs outbound internet to that sshd, Node 22.12 or newer, `ssh` and `tar`. The utility
+- **The runner machine** (Linux or macOS) needs outbound internet to that sshd and to nodejs.org (the pairing installs the runner its own Node.js, see below), `ssh`, `tar` and `curl` or `wget`; it needs no Node.js of its own. The utility
   installs Pueue itself (pinned release, checksum-verified) and uses an `rsync` 3.1 or newer if it finds one — on a Mac without one
   (macOS 15.4 and later ship Apple's `openrsync`, which is not enough) it builds the pinned rsync with the Xcode command line tools, or
   names the one install command. Use **an account of its own** that you do not mind running the agents' code: a standard user, not an
@@ -66,19 +66,23 @@ A runner is attached in one of two ways:
      system log. The code is single use and good for 10 minutes: a line that was used is dead, and so is a retry's (see below), which
      closes its own code. A line that was refused (no such account, an admin account…) leaves its code open until it expires — on purpose,
      so you can fix the account and paste it again.
-   - **Node.** Both root and the account run one Node, and the line picks it itself, with a script of the package it has just fetched
-     (`remoteRun/pickNode.sh`, run as root from the root-owned copy): the `node` that `sudo` finds, else `/opt/homebrew/bin/node` or
-     `/usr/local/bin/node` — **never a Node inside a home folder** (`/Users/<name>`, `/home/<name>`, root's own; judged by its real path, so a link that
-     leads into one does not count), one the account can run and **cannot write — nor any folder above it** (root must never run what the account, who
-     runs the agents' code, can change: a Node in a prefix the runner account owns, such as an `n` or `fnm` folder or a `/usr/local` handed to it, is
-     refused), 22.12 or newer. Root runs nothing from somebody's home, and the runner's launcher and the daemons' `PATH` carry this Node, so a runner
-     must not stop the day that home is closed or nvm moves on. With none, the line stops before anything runs and says to install Node system-wide
-     (`brew install node` on a Mac, the OS package, nodejs.org); the plain line (the second message) uses the Node of the runner account's own login
-     and warns when it lives in another user's home, and `charness-runner service install` refuses one.
+   - **Node.** The runner gets **its own Node.js**, whatever the machine has: a Homebrew or system Node is the admin's to change, and a job that
+     runs `corepack enable` or `npm i -g` against it fails for lack of rights. The line installs it with a script of the package it has just fetched
+     (`remoteRun/ensureNode.sh`, run as root from the root-owned copy): the newest 22.x official build from nodejs.org for the machine, downloaded with
+     `curl` or `wget`, its SHA-256 checked against nodejs.org's `SHASUMS256.txt` before it is unpacked (the trust is TLS to nodejs.org), put in place
+     whole as `/usr/local/lib/charness-runner/node/v<version>`. Root runs it (the root step, and the pairing it starts as the account), so it must stay
+     where the account cannot change it: the script unpacks it as root without taking owners from the archive, takes group and world write away, and
+     checks again every time — also for an install that is already there — that its real path is **outside every home folder** (`/Users/<name>`,
+     `/home/<name>`, root's own; links followed), that the account can run it and **cannot write it, nor any folder above it**; if the account can (a
+     `/usr/local` handed to it), the line stops before anything runs. A second pairing reuses what is there and downloads the archive again only for a
+     newer release; with nodejs.org out of reach it uses the newest install it finds and says so; with none, the line stops and says what to check. The
+     launcher and the daemons' `PATH` carry this Node, so a runner depends on no package manager and no home. The plain line (the second message)
+     does the same as the account itself, into `~/.charness-runner/node`. A runner paired before this (on a system Node) moves to its own at its next
+     start after a self-update, without the admin (see «A runner's Node» below).
    - **Homes the runner account can read.** macOS makes every home `750` with group `staff`, and a standard account is in `staff`, so by default
      the agents' jobs — and the npm packages they install — can read the source code, keys and tokens of the people who use the machine. **Both
      lines** end with a warning naming the homes the runner account can read (the admin line asks as that account, not with root's rights) and the
-     one-line fix for each: `sudo chmod 700 /Users/<name>`. After closing a home that used to hold the Node, install Node system-wide first.
+     one-line fix for each: `sudo chmod 700 /Users/<name>`.
    - **Retry.** If the service step fails, the account stays paired and the line says so: **paste a fresh admin line** (from `/runners`)
      after fixing what it printed. A line pasted for an account that is already paired pairs nothing twice, closes its own code on the
      charness host and only installs the service. That is no failure: its Telegram messages read «This line was used on a machine that was already paired — nothing new was paired.», and `charness runners pair --wait` prints the same and exits 0.
@@ -117,9 +121,10 @@ cut, the jobs it was running are stopped (through the link, at once, when it is 
 `resume <name>` keeps a machine attached but sends it no jobs.
 
 **What a job sees.** A command runs as the runner account with a clean environment — `HOME`, `USER`, `LANG`, `TMPDIR`, a `PATH` of
-`~/.charness-runner/bin`, the folder of the `node` that runs the utility, Homebrew and the system folders, the Android SDK where the
-usual installers put it — and nothing of the charness host's environment. Anything else (`PATH` additions for a Node from nvm, `JAVA_HOME`,
-a token) goes into `~/.charness-runner/env`, one `KEY=VALUE` per line, read again for every job.
+`~/.charness-runner/bin`, the `bin` of the jobs' own npm prefix (`~/.charness-runner/npm/bin`), the folder of the `node` that runs the utility, Homebrew and
+the system folders, the Android SDK where the usual installers put it, and `NPM_CONFIG_PREFIX` / `COREPACK_HOME` pointing into `~/.charness-runner`
+(see «A runner's Node») — and nothing of the charness host's environment. Anything else (`JAVA_HOME`, a token, a `PATH` addition) goes into
+`~/.charness-runner/env`, one `KEY=VALUE` per line, read again for every job (and may change any of the above).
 
 **A runner keeps its machine awake — lid open, never asleep; lid closed, asleep as usual.** While the link runs it holds an IDLE-sleep assertion, the way
 `caffeinate -i` does: on a Mac `caffeinate -i -w <the link's pid>`, on Linux `systemd-inhibit --what=idle` around a loop that lasts as long as the link's
@@ -147,6 +152,17 @@ up all the same. It never touches `pmset` or any admin power setting, so nothing
 - **Only verifiable on the real Mac:** that `caffeinate -i -w` lets a closed lid sleep the machine, and that a SIGKILLed link frees the Mac to sleep again
   (the holder ends with `-w`). On Linux both are tested with the real `systemd-inhibit` (the lock shows in `systemd-inhibit --list` and is gone, holder
   and all, within seconds of the link being SIGKILLed).
+
+**A runner's Node.** A runner runs on its own Node.js (`~/.charness-runner/node/v<version>`, or the root-owned `/usr/local/lib/charness-runner/node/v<version>`
+the admin line installs). That Node's folder is not one the account can write, so nothing a job installs goes there: `npm i -g` writes into
+`~/.charness-runner/npm` (`NPM_CONFIG_PREFIX`; its `bin` is on the job's `PATH`), Corepack keeps the package managers it downloads in
+`~/.charness-runner/corepack` (`COREPACK_HOME`), and a `corepack` wrapper in `~/.charness-runner/bin` (first on the `PATH`) turns `corepack enable` /
+`disable` without `--install-directory` — what a project's install step runs — into one for `~/.charness-runner/bin`, where the shims below live. A
+runner paired on a system or Homebrew Node moves itself: at the first start of its link after the self-update that brings this, the account downloads
+the same verified build into `~/.charness-runner/node` (a self-update runs as the account, not root, so the copy is the account's own — root only ever
+runs the one the admin line installed), rewrites its launcher and restarts onto it (a service manager starts the new launcher by itself; a terminal run
+says to start it again). If that cannot be done — no network, a full disk, no `curl` or `wget` — the runner stays on the Node it has, its log says
+«could not get one: …», and it tries again at its next start; pasting a fresh admin line installs the root-owned Node for the root steps.
 
 **`yarn` and `pnpm` survive a change of Node.** A Node from nvm, Volta or Homebrew has Corepack but not its shims, so `yarn` is on a job's
 `PATH` only when somebody enabled it for exactly that Node — and a link restarted under another Node (nvm's default changed, a service

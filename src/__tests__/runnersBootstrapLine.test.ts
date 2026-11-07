@@ -44,6 +44,22 @@ function installStubSsh(binDir: string): void {
   fs.writeFileSync(path.join(binDir, 'ssh'), script, { mode: 0o755 });
 }
 
+/**
+ * The package's `remoteRun/ensureNode.sh` as these tests have it: a stand-in that records how the line called it and prints a Node to run under — the
+ * logging `node` of the admin stand-ins in `root` mode, the Node running this test in `own` mode. The real script is `runnersEnsureNode.test.ts`'s; here only
+ * the line's way of calling it and of using its answer is under test. `STUB_ENSURE_NODE_FAILS` makes it fail the way a download that cannot be made does.
+ */
+const ensureNodeStand = [
+  '#!/bin/sh',
+  'echo "$*" >> "$STUB_WORK_DIR/ensure-node.args"',
+  '[ -z "$STUB_ENSURE_NODE_FAILS" ] || { echo "charness-runner: could not download Node.js (stand-in)" >&2; exit 1; }',
+  'case $1 in',
+  '  root) echo "$STUB_WORK_DIR/bin/node";;',
+  '  own) echo "$STUB_NODE";;',
+  'esac',
+  '',
+].join('\n');
+
 /** What the hub's `bootstrap` sends: whatever its shell printed first (`noise`), then the gate's marker and the archive. */
 function createBootstrapAnswer(noise: string = ''): Buffer {
   // The stand-in programs say where they run from and, for the admin line, how the root-made folder looks to another account.
@@ -68,7 +84,7 @@ function createBootstrapAnswer(noise: string = ''): Buffer {
     '',
   ].join('\n');
   const archive = gzipSync(createTarArchive([
-    { path: 'remoteRun/pickNode.sh', content: fs.readFileSync(path.resolve(__dirname, '..', '..', 'remoteRun', 'pickNode.sh')), mode: 0o755 },
+    { path: 'remoteRun/ensureNode.sh', content: Buffer.from(ensureNodeStand), mode: 0o755 },
     { path: 'dist/runnerUtility/runnerCli.js', content: Buffer.from(runnerCli), mode: 0o644 },
     { path: 'dist/runnerUtility/rootServiceCli.js', content: Buffer.from(rootServiceCli), mode: 0o644 },
   ]));
@@ -77,10 +93,15 @@ function createBootstrapAnswer(noise: string = ''): Buffer {
   return answer;
 }
 
+/** The environment a pasted line runs in: the stand-ins first on the PATH, and what the stand-in `ensureNode.sh` needs to answer. */
+function createLineEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp'), STUB_WORK_DIR: workDir, STUB_NODE: process.execPath, ...extra };
+}
+
 function runLine(payload = createPairCodePayload()): ReturnType<typeof spawnSync> {
   return spawnSync('sh', ['-c', buildBootstrapLine(payload)], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp') },
+    env: createLineEnv(),
   });
 }
 
@@ -116,7 +137,7 @@ describe('bootstrap line', () => {
     createBootstrapAnswer();
     const result = spawnSync('sh', ['-c', buildBootstrapLine(payload)], {
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp') },
+      env: createLineEnv(),
     });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, new RegExp(`^RUNNER_CLI pair --bootstrap \\S+/pkg --archive \\S+/package\\.tgz --package-id 0123456789abcdef ${encodePairCode(payload).replace(/\./g, '\\.')}$`, 'm'));
@@ -177,7 +198,7 @@ describe('bootstrap line', () => {
     createBootstrapAnswer();
     const result = spawnSync('sh', ['-c', buildBootstrapLine(createPairCodePayload())], {
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp') },
+      env: createLineEnv(),
     });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), []);
@@ -188,7 +209,7 @@ describe('bootstrap line', () => {
     fs.writeFileSync(path.join(workDir, 'bin', 'ssh'), '#!/bin/sh\necho "Permission denied" >&2\nexit 255\n', { mode: 0o755 });
     const result = spawnSync('sh', ['-c', buildBootstrapLine(createPairCodePayload())], {
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp') },
+      env: createLineEnv(),
     });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Permission denied/, 'ssh\'s own message stays');
@@ -197,27 +218,39 @@ describe('bootstrap line', () => {
     assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), []);
   });
 
-  it('says what is missing when node is absent or too old, and cleans up', () => {
+  it('needs no Node on the machine: the runner\'s own is installed by the package\'s script into the account\'s state folder, and the pairing runs under the one it prints', () => {
     installStubSsh(path.join(workDir, 'bin'));
     createBootstrapAnswer();
     const toolsBin = path.join(workDir, 'tools');
     fs.mkdirSync(toolsBin);
-    for (const tool of ['sh', 'mktemp', 'rm', 'cat', 'tar', 'fold', 'mkdir', 'cp']) {
+    for (const tool of ['sh', 'mktemp', 'rm', 'cat', 'tar', 'gzip', 'fold', 'mkdir', 'cp', 'head', 'grep', 'tail']) {
       const resolved = spawnSync('sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
       if (resolved.startsWith('/')) fs.symlinkSync(resolved, path.join(toolsBin, tool));
     }
-    const oldNodeBin = path.join(workDir, 'oldnode');
-    fs.mkdirSync(oldNodeBin);
-    fs.writeFileSync(path.join(oldNodeBin, 'node'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
-    for (const pathValue of [toolsBin, `${oldNodeBin}:${toolsBin}`]) {
-      const result = spawnSync('/bin/sh', ['-c', buildBootstrapLine(createPairCodePayload())], {
-        encoding: 'utf8',
-        env: { ...process.env, PATH: pathValue, TMPDIR: path.join(workDir, 'tmp') },
-      });
-      assert.notEqual(result.status, 0, pathValue);
-      assert.match(result.stderr, /Node\.js 22\.12 or newer is needed/);
-      assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), []);
-    }
+    const result = spawnSync('/bin/sh', ['-c', buildBootstrapLine(createPairCodePayload())], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${toolsBin}`, TMPDIR: path.join(workDir, 'tmp'), HOME: path.join(workDir, 'machine-home'), STUB_WORK_DIR: workDir, STUB_NODE: process.execPath },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^RUNNER_CLI pair --bootstrap /m);
+    assert.deepEqual(readFileLines(path.join(workDir, 'ensure-node.args')), [`own ${path.join(workDir, 'machine-home', '.charness-runner', 'node')}`], 'the script was asked for the Node of the account\'s own state folder, as the account');
+  });
+
+  it('stops before the pairing when the Node cannot be installed — the script\'s own words on stderr, nothing run under a missing Node — and cleans up', () => {
+    installStubSsh(path.join(workDir, 'bin'));
+    createBootstrapAnswer();
+    const result = spawnSync('sh', ['-c', buildBootstrapLine(createPairCodePayload())], { encoding: 'utf8', env: createLineEnv({ STUB_ENSURE_NODE_FAILS: '1' }) });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /^charness-runner: could not download Node\.js \(stand-in\)$/m);
+    assert.ok(!result.stdout.includes('RUNNER_CLI'), 'the pairing never started');
+    assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), []);
+  });
+
+  it('asks nothing of the machine\'s Node: no `node` is named in the line before the Node install, and the version check of the old line is gone', () => {
+    const { script } = { script: /^sh -c '(.*)'$/.exec(buildBootstrapLine(createPairCodePayload()))?.[1] ?? '' };
+    assert.ok(!/(^|[ ;])node /.test(script), 'the pairing is started by the path the script printed, not by a `node` of the PATH');
+    assert.ok(!script.includes('process.versions'), 'and no version of a system Node is judged by the line');
+    assert.match(script, /; n=\$\(sh "\$d\/pkg\/remoteRun\/ensureNode\.sh" own "\$HOME\/\.charness-runner\/node"\); "\$n" "\$d\/pkg\/dist\/runnerUtility\/runnerCli\.js" pair --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" cr1\./);
   });
 });
 
@@ -291,7 +324,7 @@ function readStubLog(): string[] {
 function runAdminLine(account: string = defaultRunnerAccount, extraEnv: NodeJS.ProcessEnv = {}, payload = createPairCodePayload()): ReturnType<typeof spawnSync> {
   return spawnSync('sh', ['-c', buildAdminBootstrapLine(payload, account).replace(/^sudo /, '')], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp'), ...extraEnv },
+    env: createLineEnv(extraEnv),
   });
 }
 
@@ -328,8 +361,8 @@ describe('admin bootstrap line: how it is built', () => {
 
   it('runs the root step from that copy — never from the account\'s folder — and hands it the pairing: the shell has no `sudo -u` of its own, so nothing of the account\'s runs outside the root step\'s terminal-less runner', () => {
     const { script } = splitAdminLine(buildAdminBootstrapLine(createPairCodePayload()));
-    assert.match(script, /; n=\$\(sh "\$d\/pkg\/remoteRun\/pickNode\.sh" "\$a"\); "\$n" "\$d\/pkg\/dist\/runnerUtility\/rootServiceCli\.js" install "\$a" --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" cr1\./);
-    assert.ok(!script.includes('sudo -u'), 'no step of the account\'s is run by the line, with the admin\'s terminal attached — the Node pick, in the package\'s script, only asks `test`');
+    assert.match(script, /; n=\$\(sh "\$d\/pkg\/remoteRun\/ensureNode\.sh" root "\$a"\); "\$n" "\$d\/pkg\/dist\/runnerUtility\/rootServiceCli\.js" install "\$a" --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" cr1\./);
+    assert.ok(!script.includes('sudo -u'), 'no step of the account\'s is run by the line, with the admin\'s terminal attached — the Node install, in the package\'s script, asks the account nothing but `test`');
     assert.ok(!script.includes('runnerCli.js'), 'the account\'s pairing program is started by the root step');
     assert.ok(!script.includes('.charness-runner'), 'root is never pointed at the account\'s state folder or launcher');
     assert.ok(!script.includes('service install'), 'and never asked to run the account\'s `service install`');
@@ -466,7 +499,7 @@ describe('admin bootstrap line: the checks as root, the root-owned copy, the swi
       const result = spawnSync('sh', ['-c', `${line.slice(0, line.length - ' runner'.length).replace(/^sudo /, '')} '${edited}'`], {
         encoding: 'utf8',
         cwd: workDir,
-        env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp') },
+        env: createLineEnv(),
       });
       assert.notEqual(result.status, 0, JSON.stringify(edited));
       assert.match(String(result.stderr), /is not an account name/, JSON.stringify(edited));
@@ -491,34 +524,24 @@ describe('admin bootstrap line: the checks as root, the root-owned copy, the swi
     assertNothingFetched();
   });
 
-  it('has the package\'s script pick the Node it runs everything under — outside every home, the account unable to write it — and starts the root step with it', () => {
+  it('has the package\'s script install the runner its own Node as root, for the account named last, and starts the root step with the Node it printed', () => {
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
     const result = runAdminLine();
     assert.equal(result.status, 0, String(result.stderr));
-    assert.ok(readFileLines(path.join(workDir, 'node.log')).length >= 2, 'the version check and the root step both ran under the picked Node');
+    assert.deepEqual(readFileLines(path.join(workDir, 'ensure-node.args')), ['root runner'], 'asked once, in root mode, for the account');
+    assert.equal(readFileLines(path.join(workDir, 'node.log')).length, 1, 'and the root step ran under the Node it printed');
     assert.match(String(result.stdout), /^ROOT_SERVICE install runner --bootstrap /m);
-    assert.deepEqual(readAccountRuns(), [], 'the pick only asked what the account may do');
-    assert.ok(readStubLog().some((line) => line.startsWith('sudo-stub -u runner test -x') || / test -x /.test(line)) || readStubLog().length > 0, 'and it did ask');
+    assert.deepEqual(readAccountRuns(), [], 'the line itself asked the account nothing');
   });
 
-  it('refuses, after the package came but before anything runs, when there is no usable Node at all — with the way out — and the plain line keeps its own wording for its own case', () => {
+  it('stops before anything runs when the Node cannot be installed — the script\'s own words, the way out is its own message — and the root step never starts', () => {
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
-    fs.rmSync(path.join(workDir, 'bin', 'node'));
-    const toolsBin = path.join(workDir, 'tools');
-    fs.mkdirSync(toolsBin);
-    for (const tool of ['sh', 'mktemp', 'rm', 'chmod', 'cat', 'cp', 'tar', 'gzip', 'fold', 'mkdir', 'head', 'grep', 'tail', 'readlink', 'env', 'test', 'dirname', 'basename']) {
-      const resolved = spawnSync('sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
-      if (resolved.startsWith('/')) fs.symlinkSync(resolved, path.join(toolsBin, tool));
-    }
-    const result = spawnSync('/bin/sh', ['-c', buildAdminBootstrapLine(createPairCodePayload()).replace(/^sudo /, '')], {
-      encoding: 'utf8',
-      env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${toolsBin}`, TMPDIR: path.join(workDir, 'tmp') },
-    });
+    const result = runAdminLine(defaultRunnerAccount, { STUB_ENSURE_NODE_FAILS: '1' });
     assert.notEqual(result.status, 0);
-    assert.match(String(result.stderr), /^charness-runner: no Node\.js 22\.12\+ outside home folders that runner cannot write: install one system-wide \(macOS: brew install node\), paste again$/m);
+    assert.match(String(result.stderr), /^charness-runner: could not download Node\.js \(stand-in\)$/m);
     assert.ok(!String(result.stdout).includes('ROOT_SERVICE'), 'the root step never ran');
     assert.deepEqual(readAccountRuns(), []);
-    assert.ok(/Node\.js 22\.12 or newer is needed on this machine/.test(buildBootstrapLine(createPairCodePayload())), 'the plain line keeps its own wording');
+    assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), [], 'the root-made copy is gone');
   });
 
   /** Nothing was downloaded, nothing ran as an account: the hub was not asked and `sudo` was not called. */

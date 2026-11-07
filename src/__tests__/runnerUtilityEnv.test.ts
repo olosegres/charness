@@ -50,7 +50,8 @@ describe('buildExecEnv', () => {
     assert.equal(env.LOGNAME, 'runner');
     const dirs = (env.PATH ?? '').split(':');
     assert.equal(dirs[0], '/home/runner/.charness-runner/bin');
-    assert.equal(dirs[1], '/usr/local/bin');
+    assert.equal(dirs[1], '/home/runner/.charness-runner/npm/bin', 'the bin of the jobs\' own npm prefix, before the Node\'s folder');
+    assert.equal(dirs[2], '/usr/local/bin');
     assert.equal(new Set(dirs).size, dirs.length);
     for (const system of ['/opt/homebrew/bin', '/usr/bin', '/bin']) assert.ok(dirs.includes(system), system);
   });
@@ -71,6 +72,19 @@ describe('buildExecEnv', () => {
     assert.equal(env.EXTRA, '1');
     assert.equal(env.PATH, '/only');
     assert.equal(buildExecEnv(base).ANDROID_HOME, undefined);
+  });
+
+  it('sends what a job installs into the runner\'s state folder — `npm i -g` and Corepack\'s downloads — never into the Node\'s own (root-owned) folder', () => {
+    const env = buildExecEnv({ ...base, nodeDir: '/usr/local/lib/charness-runner/node/v22.23.4/bin' });
+    assert.equal(env.NPM_CONFIG_PREFIX, '/home/runner/.charness-runner/npm');
+    assert.equal(env.COREPACK_HOME, '/home/runner/.charness-runner/corepack');
+    assert.deepEqual(Object.keys(env).filter((name) => /^(NPM|COREPACK)_/.test(name)).sort(), ['COREPACK_HOME', 'NPM_CONFIG_PREFIX']);
+  });
+
+  it('lets the operator\'s own lines change them', () => {
+    const env = buildExecEnv({ ...base, operatorEnv: { NPM_CONFIG_PREFIX: '/elsewhere', COREPACK_HOME: '/cache' } });
+    assert.equal(env.NPM_CONFIG_PREFIX, '/elsewhere');
+    assert.equal(env.COREPACK_HOME, '/cache');
   });
 
   it('falls back to a UTF-8 locale', () => {

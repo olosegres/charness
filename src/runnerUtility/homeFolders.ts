@@ -23,7 +23,7 @@ const nonHomeEntries: ReadonlySet<string> = new Set(['Shared', 'Guest', '.locali
 const maxNamedHomes = 8;
 const plainShellWordPattern = /^[A-Za-z0-9._/@+-]+$/;
 
-function isInside(folder: string, target: string): boolean {
+export function isInside(folder: string, target: string): boolean {
   const relative = path.relative(folder, target);
   return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
@@ -117,7 +117,7 @@ export function formatReadableHomesWarning(accountName: string, homes: readonly 
 
 /** What is wrong with a runner that uses the Node.js at `nodePath`, which lives in `home` (another user's), and the way out. */
 export function describeForeignNode(nodePath: string, home: string): string {
-  return `the Node.js at ${nodePath}, which lives in the home folder of another user (${home}). It stops working when that folder is closed or the other user upgrades Node, and it is theirs to change. Install Node.js system-wide (macOS: brew install node) and use that one`;
+  return `the Node.js at ${nodePath}, which lives in the home folder of another user (${home}). It stops working when that folder is closed or the other user upgrades Node, and it is theirs to change. Pair again with a fresh line from /runners: it installs the runner its own Node.js`;
 }
 
 /** @description The warning for a runner that uses a Node.js in another user's home; `[]` when it is outside every home or in `ownHome`. */

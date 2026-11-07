@@ -389,7 +389,7 @@ agents can send such commands there with `charness remote-run`: output, exit cod
 had run locally. Without a runner nothing changes for anyone, and agents are not told of the command.
 
 **Pair it (the normal way).** Needs this machine's ordinary `sshd` (key login on) with an address the runner can reach — nothing else is
-opened or changed, no root, no VPN — and on the runner machine Node 22.12+, `ssh` and `tar`. In General send `/runners` → **＋ Pair a new
+opened or changed, no root, no VPN — and on the runner machine `ssh`, `tar`, `curl` or `wget`, and a way to reach nodejs.org (no Node.js needed: the pairing installs the runner its own). In General send `/runners` → **＋ Pair a new
 runner**; the first time the bot asks which address runners dial (the `runnerHost` row of the [instance settings](#instance-settings-settingsjson)) and
 proposes the public address it finds. It posts two lines (valid 10 minutes, single use, one code): the first from an admin account of the
 runner machine — it pairs a standard user there (`runner` unless you change the last word of the line) and installs its always-on service

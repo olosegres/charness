@@ -122,7 +122,7 @@ describe('the warnings', () => {
     const lines = formatForeignNodeWarning('/Users/alice/.nvm/versions/node/v22/bin/node', '/Users/runner');
     assert.equal(lines.length, 1);
     assert.match(lines[0], /^Warning: this runner uses the Node\.js at \/Users\/alice\/\.nvm\/versions\/node\/v22\/bin\/node, which lives in the home folder of another user \(\/Users\/alice\)\./);
-    assert.match(lines[0], /brew install node/);
+    assert.match(lines[0], /it installs the runner its own Node\.js/);
     assert.deepEqual(formatForeignNodeWarning('/opt/homebrew/bin/node', '/Users/runner'), []);
     assert.deepEqual(formatForeignNodeWarning('/Users/runner/.nvm/bin/node', '/Users/runner'), []);
     assert.match(describeForeignNode('/home/x/node', '/home/x'), /It stops working when that folder is closed/);

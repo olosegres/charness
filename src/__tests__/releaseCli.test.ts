@@ -32,7 +32,7 @@ const cliTimeoutMs = 90_000;
 const initialPackage = {
   name: 'demo-package',
   version: '3.2.0',
-  files: ['dist/', 'stt/gigaam_sidecar.py', 'remoteRun/runner-package-lock.json', 'remoteRun/pickNode.sh', 'agent-plugin/', 'README.md', 'LICENSE', 'CHANGELOG.md'],
+  files: ['dist/', 'stt/gigaam_sidecar.py', 'remoteRun/runner-package-lock.json', 'remoteRun/ensureNode.sh', 'agent-plugin/', 'README.md', 'LICENSE', 'CHANGELOG.md'],
   // No "./": npm >= 11.10 drops a "./dist/…" bin entry at publish, and check-pack refuses it.
   bin: { charness: 'dist/cli.js' },
   scripts: { version: 'tsx src/release/cli.ts changelog && git add CHANGELOG.md', test: 'node --test' },
@@ -372,7 +372,7 @@ describe('check-pack', () => {
     writeRepoFile(sidecarPath, '# sidecar\n');
     // The lock the hub gives its runners (`runners/runnerLock.ts`): a package without it cannot pair a machine.
     writeRepoFile('remoteRun/runner-package-lock.json', '{}\n');
-    writeRepoFile('remoteRun/pickNode.sh', '#!/bin/sh\n');
+    writeRepoFile('remoteRun/ensureNode.sh', '#!/bin/sh\n');
     // The skills the bot gives its agents; the manifest sits in a dot-folder npm must still pack.
     writeRepoFile('agent-plugin/.claude-plugin/plugin.json', '{ "name": "charness" }\n');
     writeRepoFile('agent-plugin/skills/charness-manager/SKILL.md', '---\nname: charness-manager\ndescription: d\n---\n');

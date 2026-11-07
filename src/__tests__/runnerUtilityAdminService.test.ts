@@ -445,14 +445,14 @@ describe('a Node.js in a home folder', () => {
   it('stops the root step before anything runs — the pairing and the service alike — when the Node it runs under is inside a home: root runs nothing from a home, and the service must not depend on one', async () => {
     for (const nodePath of ['/Users/alice/.nvm/versions/node/v22.12.0/bin/node', '/home/bob/.local/bin/node', '/Users/runner/.nvm/bin/node', '/var/root/node']) {
       calls = [];
-      const refusal = /lives in a home folder \(\S+\): root runs nothing from a home, and the service must not depend on one\. Install Node\.js system-wide \(macOS: brew install node\) and paste the admin line again\./;
+      const refusal = /lives in a home folder \(\S+\): root runs nothing from a home, and the service must not depend on one\. Paste the admin line again from \/runners: it installs the runner its own Node\.js in \/usr\/local\/lib\/charness-runner\/node\./;
       assert.match((await pairAccountFromPackage('runner', request, createDeps({ nodePath }))).lines.join(' '), refusal, nodePath);
       assert.match((await installServiceForAccount('runner', createDeps({ nodePath }))).lines.join(' '), refusal, nodePath);
       assert.deepEqual(calls, [], nodePath);
     }
   });
 
-  it('lets a system-wide Node through', async () => {
+  it('lets a Node outside every home that the account cannot write through — also a system one', async () => {
     for (const nodePath of ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node']) {
       assert.equal((await pairAccountFromPackage('runner', request, createDeps({ nodePath }))).ok, true, nodePath);
     }
@@ -467,7 +467,7 @@ describe('a Node.js the account can write', () => {
       calls = [];
       writablePaths = new Set([writable]);
       const deps = createDeps({ nodePath: '/opt/node/bin/node' });
-      const refusal = new RegExp(`the account runner can change \\(it can write ${writable.replace(/[/.]/g, '\\$&')}\\): root runs nothing the account can change\\. Install Node\\.js system-wide`);
+      const refusal = new RegExp(`the account runner can change \\(it can write ${writable.replace(/[/.]/g, '\\$&')}\\): root runs nothing the account can change\\. Paste the admin line again from \\/runners: it installs the runner its own Node\\.js in \\/usr\\/local\\/lib\\/charness-runner\\/node\\.`);
       assert.match((await pairAccountFromPackage('runner', request, deps)).lines.join(' '), refusal, writable);
       assert.match((await installServiceForAccount('runner', deps)).lines.join(' '), refusal, writable);
       assert.deepEqual(calls, [], `nothing ran (${writable})`);

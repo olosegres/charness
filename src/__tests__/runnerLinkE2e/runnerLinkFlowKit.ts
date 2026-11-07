@@ -19,11 +19,14 @@ import { installAppFromDirectory, switchCurrentApp, testNodeModulesEnvName } fro
 import { ensureLauncher } from '../../runnerUtility/launcher';
 import { getRunnerHomePaths } from '../../runnerUtility/runnerHome';
 import { runnerLockRelativePath } from '../../runners/runnerLock';
+import { testKeepNodeEnvName } from '../../runnerUtility/managedNode';
 
 export { waitUntil } from '../runnersTestKit';
 
 const sshdPath = '/usr/sbin/sshd';
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
+const ensureNodeScriptRelativePath = path.join('remoteRun', 'ensureNode.sh');
+const ensureNodeScriptPath = path.join(repoRoot, ensureNodeScriptRelativePath);
 const sshdStartAttempts = 5;
 const lineTimeoutMs = 180_000;
 
@@ -64,10 +67,39 @@ function copyBuiltCharness(destination: string): void {
   fs.copyFileSync(path.join(repoRoot, 'package.json'), path.join(destination, 'package.json'));
   fs.mkdirSync(path.join(destination, 'remoteRun'));
   fs.copyFileSync(path.join(repoRoot, 'remoteRun', 'runner.sh'), path.join(destination, 'remoteRun', 'runner.sh'));
-  fs.copyFileSync(path.join(repoRoot, 'remoteRun', 'pickNode.sh'), path.join(destination, 'remoteRun', 'pickNode.sh'));
+  writeNodeInstallerStandIn(path.join(destination, ensureNodeScriptRelativePath));
   // The lock the hub packs for the runner (`runners/runnerLock.ts`): a package is made of it and `package.json`, and refused without it.
   fs.copyFileSync(path.join(repoRoot, runnerLockRelativePath), path.join(destination, runnerLockRelativePath));
   fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(destination, 'node_modules'), 'dir');
+}
+
+/**
+ * The package's `remoteRun/ensureNode.sh` as a flow has it: no download — the runner's Node is the one running the flow. A flow that is about the Node
+ * install itself puts the real script back ({@link placeRealNodeInstaller}, {@link placeRootNodeInstallerWrapper}) and a local mirror of nodejs.org with it.
+ */
+function writeNodeInstallerStandIn(scriptPath: string): void {
+  fs.writeFileSync(scriptPath, `#!/bin/sh\n# A flow's stand-in: the Node that runs the flow, not a download.\necho ${JSON.stringify(process.execPath)}\n`, { mode: 0o755 });
+}
+
+/** @description Put the REAL `ensureNode.sh` at `scriptPath` (the runner's installed copy of the package, for a flow about the move off a system Node). */
+export function placeRealNodeInstaller(scriptPath: string): void {
+  fs.copyFileSync(ensureNodeScriptPath, scriptPath);
+  fs.chmodSync(scriptPath, 0o755);
+}
+
+/**
+ * @description Make the hub's package carry a `remoteRun/ensureNode.sh` that runs the REAL script in `root` mode (what the admin line runs as root) with this
+ * flow's own shared folder instead of `/usr/local` and this flow's mirror of nodejs.org instead of the network — the script's test seams, which the pasted line
+ * never passes. Everything the script does is the real thing; only where it reads from and writes to is the flow's.
+ */
+export function placeRootNodeInstallerWrapper(layout: RunnerLinkLayout, options: { base: string; distDir: string }): void {
+  const wrapper = [
+    '#!/bin/sh',
+    '# A flow\'s wrapper around the real script: its own shared folder, its own mirror of nodejs.org.',
+    `exec sh ${JSON.stringify(ensureNodeScriptPath)} "$1" "$2" ${JSON.stringify(options.base)} "" ${JSON.stringify(`file://${options.distDir}`)}`,
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(layout.hubInstall, ensureNodeScriptRelativePath), wrapper, { mode: 0o755 });
 }
 
 export interface SshdInstance {
@@ -247,6 +279,8 @@ export function startRunner(layout: RunnerLinkLayout, home: string = layout.runn
     env: createEnv(home, layout, {
       FLOW_SECRET: 'leak',
       [testNodeModulesEnvName]: path.join(repoRoot, 'node_modules'),
+      // The runner keeps the Node the flow runs on: only a flow about the move off a system Node lets it download (from a mirror).
+      [testKeepNodeEnvName]: '1',
       // The linked runner asks the hub for its package every 2 s instead of every 5 minutes, and a Mac's looks at its lid every second instead of every ten (the seam may only shorten the windows).
       CHARNESS_TEST_TIMINGS: JSON.stringify({ runnerVersionPollMs: 2000, runnerLidPollMs: 1000 }),
       ...extraEnv,

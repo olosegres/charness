@@ -396,12 +396,12 @@ describe('the pack check', () => {
   });
 
   test('every missing required file is named', () => {
-    const missing = ['CHANGELOG.md', 'stt/gigaam_sidecar.py', 'remoteRun/runner-package-lock.json', 'remoteRun/pickNode.sh', 'agent-plugin/.claude-plugin/plugin.json'];
+    const missing = ['CHANGELOG.md', 'stt/gigaam_sidecar.py', 'remoteRun/runner-package-lock.json', 'remoteRun/ensureNode.sh', 'agent-plugin/.claude-plugin/plugin.json'];
     const paths = goodFiles.filter((path) => !missing.includes(path));
     assert.deepEqual(getPackViolations(createListing(paths), '3.3.0'), [
       'missing from the package: stt/gigaam_sidecar.py',
       'missing from the package: remoteRun/runner-package-lock.json',
-      'missing from the package: remoteRun/pickNode.sh',
+      'missing from the package: remoteRun/ensureNode.sh',
       'missing from the package: agent-plugin/.claude-plugin/plugin.json',
       'missing from the package: CHANGELOG.md',
     ]);

@@ -24,7 +24,9 @@ charness-runner run  (through bin/charness-runner, a sh loop: exit 75 = restart 
 the id of the installed package), `status.json` (link state, written by `run`, read by `status`), `keys/` (the client key, the built-in
 server's host key — both from `generateEd25519KeyPair`, which reads every key back), `app.<id>/` + `current` (installed copies of the
 hub's package; `current` is a symlink replaced atomically; the previous copy is kept), `bin/` (`charness-runner` launcher, `pueue`,
-`pueued`, a built `rsync`), `env` (the operator's `KEY=VALUE` lines, read again for every job), `work/` (phase 1's work dir), `pueue/`
+`pueued`, a built `rsync`, Corepack's `yarn` / `pnpm` shims and the `corepack` wrapper), `node/` (the runner's OWN Node.js, `v<version>/bin/node`; or the root-owned
+`/usr/local/lib/charness-runner/node` the admin line installs into), `npm/` and `corepack/` (what a job's `npm i -g` and Corepack write: `NPM_CONFIG_PREFIX`,
+`COREPACK_HOME`), `env` (the operator's `KEY=VALUE` lines, read again for every job), `work/` (phase 1's work dir), `pueue/`
 (a private Pueue: own directories and unix socket; its daemon is started by `run` if it is not answering — a link restart never touches
 the queue), `logs/`, `build/`.
 
@@ -40,10 +42,12 @@ the queue), `logs/`, `build/`.
   shell, pty, subsystem, x11, agent, or forwarding in either direction; `env` requests are accepted and ignored. The link server serves no
   session at all, it only passes `direct-tcpip` channels to the session server.
 - **Exec semantics are sshd's.** `bash -c <cmd>` in a clean environment (`execEnv.ts`: HOME, USER, LOGNAME, LANG, TMPDIR, a PATH of
-  `~/.charness-runner/bin` + the `node` folder + Homebrew + system — `getJobPathDirectories`, the one place that order is written —, the Android SDK where installers put it, then the `env` file); the
+  `~/.charness-runner/bin` + the `bin` of the jobs' npm prefix + the `node` folder + Homebrew + system — `getJobPathDirectories`, the one place that order is written —, `NPM_CONFIG_PREFIX` /
+  `COREPACK_HOME` inside `~/.charness-runner` (the Node's own folder is not the account's to write: the shared one is root's), the Android SDK where installers put it, then the `env` file); the
   `yarn` / `pnpm` of that PATH are made sure of at every link start and `check` (`packageManagerShims.ts`: a manager neither the Node's folder nor the
   system offers gets Corepack's shim in `<root>/bin`, a shim the Node now makes unnecessary is removed; a Node without Corepack is reported, never fatal —
-  a link restarted under another Node otherwise lost `yarn` for every job, exit 127), and `runner.sh probe` reports `job_node` / `job_yarn` under that same PATH (`runners` shows them); the
+  a link restarted under another Node otherwise lost `yarn` for every job, exit 127; the same module keeps a `corepack` WRAPPER in `<root>/bin` that gives a bare
+  `corepack enable` / `disable` the `--install-directory <root>/bin` — written by hand against the real Corepack in a read-only Node folder, in its test), and `runner.sh probe` reports `job_node` / `job_yarn` under that same PATH (`runners` shows them); the
   client's EOF is the command's EOF (phase 1's lease relies on it); a CLOSED channel closes the pipes and does not kill the command; the
   exit status or signal goes back. A running command counts as busy until the process really ends.
 - **The attempt ends with the `link` CHANNEL.** The hub's gate dying, or the link being cut, closes that channel while the connection
@@ -64,6 +68,17 @@ the queue), `logs/`, `build/`.
   points `current` at it and exits with 75 — the launcher starts the new copy. A busy runner waits until its last command ends; while the
   update installs the link is closed on purpose and that closing does not start another attempt; a failed update is tried again by the
   next poll after a 10-minute cooldown. Pueue jobs are not commands over the link: a queue never blocks an update.
+- **The runner's own Node.js (`managedNode.ts`, `remoteRun/ensureNode.sh`).** No runner runs on a shared Node. The package's `ensureNode.sh` (plain `sh`: a machine may have no Node
+  at all) downloads the newest 22.x official build from nodejs.org (curl or wget, timeouts), checks its SHA-256 against `SHASUMS256.txt` before unpacking, unpacks it
+  next to its final place and moves it whole to `<base>/v<version>`; an install that is there and runs is reused, with nodejs.org out of reach the newest one is
+  used. `root <account>` mode (the admin line, as root, from its root-owned copy; base `sharedNodeBase`, `serviceCommon.ts`) also keeps the Node root requires — unpacked without
+  the archive's owners, no group/world write, real path outside every home, the account can run it and can write neither it nor any folder above it (`sudo -u <account> test`
+  only) — and fails otherwise; `own <base>` mode runs as the account (the plain line; and the MOVE below). **The move:** at the start of `runLink`, a link whose `process.execPath`
+  is in neither base (a runner paired on a system or Homebrew Node) runs `own` into `paths.ownNodeDir` (`moveToOwnNode`, the package's script of the running app), rewrites the
+  launcher with `ensureLauncher` and leaves with `nodeMovedExitCode` (76): the launcher of this version starts itself again, an older one exits and the service manager starts the
+  new file. A launcher that already names the Node while this link still runs on another is left alone (no loop); a move that fails is logged («could not get one») and tried
+  at the next start. A self-update runs as the account, so the copy is the account's own — root only ever runs the shared one. The login session's agent (macOS) follows at its
+  next restart. Test seams (flows only): `CHARNESS_TEST_RUNNER_KEEP_NODE=1` skips the move, `CHARNESS_TEST_RUNNER_NODE_DIST` names a `file://` mirror of nodejs.org.
 - **Tools.** Pueue 4.0.4 from the pinned release binaries, each checked against its sha256 before it is kept (`toolInstall.ts`;
   hashes taken from the v4.0.4 assets). rsync ≥ 3.1 is found (PATH, Homebrew, `/usr/local`, `/usr/bin`; Apple's `openrsync` does not count:
   no `--copy-dest`, no `--modify-window=-1`); otherwise rsync 3.4.1 is built from its pinned source with `cc`/`make`, or the one command to
@@ -127,9 +142,9 @@ from the hub (`charness runners service-removal <name>`, `charness runners remov
 service's record. The agents run as this account and can change what this program prints, so a command it printed could be anything.
 
 **What the admin line trusts.** Pasting it runs code from the charness host as root on this machine (see `src/runners/README.md`); the plain
-line trusts the host only with the runner account. A Mac's launcher and the daemons' `PATH` carry the Node the line picked: the package's
-`remoteRun/pickNode.sh` (run as root from the root-owned copy) chooses it — `sudo`'s own `node`, then `/opt/homebrew/bin`, `/usr/local/bin`; never one whose REAL
-path is under a home folder, one the account can run and cannot write (nor a folder above it), ≥ 22.12 — and refuses with the way out when none fits; the
+line trusts the host only with the runner account. A Mac's launcher and the daemons' `PATH` carry the Node the line INSTALLED for the runner: the package's
+`remoteRun/ensureNode.sh` (run as root from the root-owned copy) puts the official build in `/usr/local/lib/charness-runner/node/v<version>` — a Node root owns, whose
+REAL path is outside every home, that the account can run and cannot write (nor a folder above it), ≥ 22.12 — and refuses with the way out when it cannot be made so; the
 root step asks the same again before it runs anything (`findPathAccountCanWrite`, `findHomeContaining`), and `service install` as the account refuses a Node in ANOTHER user's home. **Homes the account can read**
 (`homeFolders.ts`): the admin line's root step asks AS the account (`sudo -u <account> -H test -r <home> -a -x <home>`) about every folder under `/Users` and
 `/home` but its own and says last which it can read, with `sudo chmod 700 <home>` for each; the plain line's pairing does the same as the account
@@ -340,7 +355,11 @@ the way the hub drives them, the link loop's backoff / removed state / update de
 admin line's refusals (no sudo; a missing, admin or root account; an edited name) before anything is fetched or runs as the account, then
 pair-as-account from root's own copy → the root step (no dependencies) → the account's service, with the code unspent until then, a trap
 in the account's launcher that fails the flow if ROOT ever starts it, a used line refused, and a failing service manager followed by a fresh
-line that only installs the service. Unit tests: `runnersBootstrapLine.test.ts` (the line against a real `sh` with stand-ins),
+line that only installs the service. The line's Node install is the REAL script there (`placeRootNodeInstallerWrapper` gives it the flow's own shared folder and a local mirror of
+nodejs.org — a copy of the Node running the flow — as its test seams): the machine has no Node on the line's PATH, and the pairing, the root step and the launcher run on the
+downloaded one; the retry finds it already there. `runnerNodeMoveE2e.test.ts`: a runner paired on a system Node moves to its own (a mirror with a wrong checksum moves nothing and says why;
+a good one: the launcher names the Node, the link comes back running on it, a job sees it first on its PATH and the npm / Corepack folders in `~/.charness-runner`; a start on it downloads
+nothing). `runnersEnsureNode.test.ts` is the script itself against a local mirror (checksum, reuse, offline, wget, root-mode refusals); `runnerUtilityManagedNode.test.ts` the move's logic. Unit tests: `runnersBootstrapLine.test.ts` (the line against a real `sh` with stand-ins),
 `runnerUtilityAdminService.test.ts` (root's step: every call that names the account's tree goes through `sudo -u`),
 `runnerUtilityService.test.ts` (the account's `system-step`, the removal commands). `runnerLinkE2e.test.ts` (kit: `runnerLinkE2e/runnerLinkFlowKit.ts`): the real pasted line, `charness-runner run`, plain ssh through
 `runner-proxy`, restart, gate killed, the runner key's refusals (each against an endpoint the test owns, with the session kept up), an expired

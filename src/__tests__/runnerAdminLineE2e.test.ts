@@ -19,8 +19,13 @@
  *   → a service manager that fails: the account stays paired, the line exits with a failure and says what to do; a fresh line then finds the
  *   account paired, pairs nothing twice, CLOSES its own code on the hub (the gate's `cancel`) and installs the service
  *
+ * The machine has NO Node.js the line may use: the folder of the Node running the flow is left off the line's PATH, and the package's REAL
+ * `remoteRun/ensureNode.sh` (run in `root` mode with this flow's own shared folder and a local mirror of nodejs.org, a copy of the Node running the flow,
+ * as its test seams) installs the runner its own, checks it the way root requires, and everything — the root step, the account's pairing, its
+ * launcher — runs on that one. The retry then finds it already there.
+ *
  * Needs sshd, ssh, ssh-keyscan, rsync, Pueue, tar, fakeroot and the built CLI (`yarn build`): a local run without them is SKIPPED with the
- * reason, CI fails without. No registry and no download is used. Test case: N/A — Charness has no Jira tracker.
+ * reason, CI fails without. No registry and no network is used. Test case: N/A — Charness has no Jira tracker.
  */
 
 import { after, before, describe, it } from 'node:test';
@@ -32,6 +37,7 @@ import { testNodeModulesEnvName } from '../runnerUtility/appInstall';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { getServiceNames } from '../runnerUtility/serviceUnits';
 import { installAdminStandIns, readStandInCalls, readStandInIsolation, type AdminStandIns } from './runnerAdminLineE2e/adminLineStandIns';
+import { mirrorRelease, writeNodeMirror } from './nodeMirrorKit';
 import {
   createExtraMachine,
   createRunnerLinkLayout,
@@ -39,6 +45,7 @@ import {
   getMissingTools,
   isCi,
   makePairingLines,
+  placeRootNodeInstallerWrapper,
   readJson,
   type RunnerLinkLayout,
 } from './runnerLinkE2e/runnerLinkFlowKit';
@@ -57,16 +64,16 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
   let runnerHome = '';
   let failingHome = '';
   let bossHome = '';
-  /** A copy of the Node binary outside every home folder, which the admin line must pick: the test's own Node may live in somebody's `~/.nvm`, which it refuses. */
-  let systemNode = '';
+  /** Where the line's Node install puts the runner's Node in this flow (the real one is `/usr/local/lib/charness-runner/node`, which a flow cannot write). */
+  let sharedNodeBase = '';
 
   before(async () => {
     assert.deepEqual(missingTools, [], 'CI installs everything this flow needs');
     layout = await createRunnerLinkLayout();
-    systemNode = path.join(layout.root, 'system-node', 'node');
-    fs.mkdirSync(path.dirname(systemNode), { recursive: true });
-    fs.copyFileSync(process.execPath, systemNode);
-    fs.chmodSync(systemNode, 0o755);
+    sharedNodeBase = path.join(layout.root, 'shared-node');
+    // The mirror of nodejs.org holds a copy of the Node running this flow: the runner is paired and its service installed on a Node that was DOWNLOADED, not found.
+    const distDir = writeNodeMirror(path.join(layout.root, 'node-dist'), path.join(layout.root, 'node-stage'), { nodeFrom: process.execPath });
+    placeRootNodeInstallerWrapper(layout, { base: sharedNodeBase, distDir });
     runnerHome = createExtraMachine(layout, 'acct-runner');
     failingHome = createExtraMachine(layout, 'acct-runner2');
     bossHome = createExtraMachine(layout, 'acct-boss');
@@ -89,7 +96,8 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
       timeout: lineTimeoutMs,
       env: {
         HOME: path.join(layout.root, 'admin-home'),
-        PATH: `${standIns.binDir}:${path.dirname(systemNode)}:${path.dirname(process.execPath)}:${process.env.PATH ?? ''}`,
+        // No Node.js for the line to find: not the one running this flow, nor a copy of it.
+        PATH: [standIns.binDir, ...(process.env.PATH ?? '').split(path.delimiter).filter((folder) => folder !== path.dirname(process.execPath))].join(path.delimiter),
         TMPDIR: path.join(layout.root, 'tmp'),
         LANG: 'C.UTF-8',
         [testNodeModulesEnvName]: path.join(repoRoot, 'node_modules'),
@@ -190,10 +198,13 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     const asRunner = 'sudo -u runner -H';
     const pairingRun = calls.findIndex((call) => call.startsWith(asRunner) && call.includes('runnerCli.js pair'));
     assert.match(calls[pairingRun], new RegExp(`^${asRunner.replace(/[-]/g, '\\-')} \\S+/node /tmp/charness-runner\\.[A-Za-z0-9]{8}/pkg/dist/runnerUtility/runnerCli\\.js pair\\b`), 'the account pairs from the copy root made');
-    // The Node everything runs under is the one outside the homes — not the test's own, in somebody's home, though that comes later on the PATH —
-    // and the account's launcher (what its service starts) names that one: the service depends on no home.
-    assert.ok(calls[pairingRun].startsWith(`${asRunner} ${systemNode} `), `the pairing ran under ${systemNode}: ${calls[pairingRun]}`);
-    assert.ok(fs.readFileSync(paths.launcher, 'utf8').includes(`NODE='${systemNode}'`) || fs.readFileSync(`${paths.launcher}.real`, 'utf8').includes(`NODE='${systemNode}'`), 'the launcher starts the Node outside the homes');
+    // The Node everything runs under is the one the line INSTALLED for the runner (the machine had none to offer): downloaded from the mirror, verified,
+    // in the shared folder — and the account's launcher (what its service starts) names that one: the service depends on no home and on no package manager.
+    const managedNode = path.join(fs.realpathSync(sharedNodeBase), mirrorRelease, 'bin', 'node');
+    assert.equal(fs.existsSync(managedNode), true, 'the Node was installed');
+    assert.match(result.stderr, new RegExp(`^charness-runner: installing Node\\.js ${mirrorRelease.replace(/\./g, '\\.')} for the runner into \\S+/shared-node/${mirrorRelease.replace(/\./g, '\\.')} \\(the official build from nodejs\\.org, checksum checked\\)$`, 'm'));
+    assert.ok(calls[pairingRun].startsWith(`${asRunner} ${managedNode} `), `the pairing ran under ${managedNode}: ${calls[pairingRun]}`);
+    assert.ok(fs.readFileSync(paths.launcher, 'utf8').includes(`NODE='${managedNode}'`) || fs.readFileSync(`${paths.launcher}.real`, 'utf8').includes(`NODE='${managedNode}'`), 'the launcher starts the runner\'s own Node');
     const lingering = indexOf('loginctl enable-linger runner');
     const managerAwaited = indexOf(`${asRunner} env XDG_RUNTIME_DIR=/run/user/${standardAccountUid} systemctl --user is-system-running`);
     const installRun = indexOf(`${asRunner} env XDG_RUNTIME_DIR=/run/user/${standardAccountUid} ${paths.launcher} service install`);
@@ -203,14 +214,14 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.equal(calls.filter((call) => call.startsWith(`${asRunner} `) && call.includes('runnerCli.js pair')).length, 1, 'the account was paired once');
 
     // Nothing the account runs has the admin's terminal: each call the ROOT STEP makes started with /dev/null for input, as the head of a session of its
-    // own — no controlling terminal, whatever terminal the line was pasted in. The calls the Node pick (a plain script) makes as the account are
+    // own — no controlling terminal, whatever terminal the line was pasted in. The calls the Node install (a plain script) makes as the account are
     // probes — `test -x` and `test -w` — that execute nothing of the account's.
     const lines = readStandInIsolation(standIns);
     const isProbeOfPick = (line: string): boolean => /^stdin=\S+ leader=no terminal=\S+ test -[xw] /.test(line);
     const probes = lines.filter(isProbeOfPick);
     const isolation = lines.filter((line) => !isProbeOfPick(line));
-    const escapedNode = systemNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    assert.ok(probes.some((line) => new RegExp(` test -x ${escapedNode}$`).test(line)), 'the pick asked whether the account may run the Node');
+    const escapedNode = managedNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.ok(probes.some((line) => new RegExp(` test -x ${escapedNode}$`).test(line)), 'the install asked whether the account may run the Node');
     assert.ok(probes.some((line) => new RegExp(` test -w ${escapedNode}$`).test(line)) && probes.some((line) => new RegExp(` test -w ${path.dirname(escapedNode)}$`).test(line)), 'and whether it can write the Node or its folder');
     assert.ok(probes.every((line) => / test -[xw] \/\S+$/.test(line)), 'and asked nothing else');
     assert.ok(isolation.some((line) => line.includes('runnerCli.js pair')), 'the pairing among them — it was the shell\'s own `sudo -u` before');
@@ -239,6 +250,8 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     const result = pasteLine(secondLine);
     assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
     assert.match(result.stdout, /Paired with charness @ExampleBot/, 'the pairing itself went through');
+    assert.match(result.stderr, new RegExp(`^charness-runner: Node\\.js ${mirrorRelease.replace(/\./g, '\\.')} for the runner is already in \\S+/shared-node/${mirrorRelease.replace(/\./g, '\\.')}$`, 'm'), 'the second account\'s line found the Node the first one installed and downloaded nothing');
+    assert.doesNotMatch(result.stderr, /installing Node\.js/);
     assert.match(result.stderr, /systemctl --user cannot reach a user session/);
     assert.match(result.stderr, /^charness-runner: runner2 is paired, but has no service: fix the above and paste a fresh admin line$/m);
     assert.doesNotMatch(`${result.stdout}${result.stderr}`, /sudo [^\n]*service install/, 'no command that has root run the account\'s program is offered');

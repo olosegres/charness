@@ -1,5 +1,6 @@
 import { linuxAdminGroups, macAdminGroup } from '../runnerUtility/adminCheck';
 import { gateMarker, maxGateNoiseBytes } from './gateProtocol';
+import { ownNodeDirName, runnerStateDirName } from '../runnerUtility/runnerHome';
 import { encodePairCode, type PairCodePayload } from './pairCode';
 
 /**
@@ -16,13 +17,17 @@ import { encodePairCode, type PairCodePayload } from './pairCode';
  * Every value in the line passed a strict pattern (`pairCode.ts`) that has no quote, space, `$`, backtick or backslash; the line
  * itself is wrapped in single quotes and so holds none.
  *
- * The PLAIN line ({@link buildBootstrapLine}) is run as the runner account itself: all of it is that account's.
+ * The PLAIN line ({@link buildBootstrapLine}) is run as the runner account itself: all of it is that account's — also the runner's own Node.js, which the
+ * package's `remoteRun/ensureNode.sh` puts in `~/.charness-runner/node` before the pairing runs under it. A machine needs no Node.js of its own for either line:
+ * only `curl` or `wget`, `tar`, and a way to reach nodejs.org.
  *
  * The ADMIN line ({@link buildAdminBootstrapLine}), `sudo sh -c '<script>' sh <account>`, is run from an admin account and does everything
  * for the account named by its last word. The runner account runs the agents' code, so ROOT never executes, reads through or writes into
  * anything that account can change. As root the script (1) checks the account (it exists; not root; not an admin; the OS is known),
  * (2) downloads the package into a folder of ITS OWN in `/tmp` — root-owned, readable by the account, extracted with `--no-same-owner`
- * — and (3) runs the root step from the same root-owned copy (`rootServiceCli.js install <account> --bootstrap …`: Node built-ins only,
+ * — (3) has the package's `remoteRun/ensureNode.sh` install the runner its own Node.js into a folder only root can write
+ * (`/usr/local/lib/charness-runner/node`; checked again for what root requires of it — outside every home, the account can run it and cannot write it) and
+ * (4) runs the root step with that Node from the same root-owned copy (`rootServiceCli.js install <account> --bootstrap …`: Node built-ins only,
  * because the copy has no dependencies). The root step has the account pair itself from that copy (`sudo -u <account> -H node
  * …/runnerCli.js pair`: its files are the account's, never root's) and then installs the always-on service. EVERY step that runs as the
  * account goes through one runner with no terminal attached (a session of its own, no standard input, its output piped through the root
@@ -39,8 +44,6 @@ import { encodePairCode, type PairCodePayload } from './pairCode';
  * offers the line says so: the Telegram message (`runners.pairingAdminIntro`) and the CLI's text (`adminLineTrustSentence` in `runnersCli.ts`).
  */
 
-const minNodeMajor = 22;
-const minNodeMinor = 12;
 const hubHostAlias = 'hub';
 const privateKeyFoldWidth = 70;
 const privateKeyHeader = '-----BEGIN OPENSSH PRIVATE KEY-----';
@@ -55,13 +58,13 @@ const bootstrapMarkerPattern = `^${gateMarker} bootstrap( [a-z]+=[A-Za-z0-9._:@/
 const sayFunction = 's() { echo "charness-runner: $*"; }';
 /** The same for a refusal: the line on stderr, then out. A function, defined once — three refusals of the fetch steps and the admin checks share it. */
 const failFunction = 'f() { echo "charness-runner: $*" >&2; exit 1; }';
-/** The test of a `node` program (`$1` is the program): exit status 0 when it is `minNodeMajor.minNodeMinor` or newer. */
-function nodeVersionCheck(program: string): string {
-  return `${program} -e "var v=process.versions.node.split(/[.]/);process.exit(v[0]>${minNodeMajor}||v[0]==${minNodeMajor}&&v[1]>=${minNodeMinor}?0:1)"`;
-}
-
-/** The Node pick the admin line runs as root from its copy of the package (see the script's own head): prints the real path of the Node root and the service run under. */
-const pickNodeInPackage = 'remoteRun/pickNode.sh';
+/**
+ * The Node install both lines run from their copy of the package (see the script's own head): it puts the runner's OWN Node.js in place — the official build
+ * from nodejs.org, checksum checked — and prints the real path of the `node` the pairing runs under. Kept out of the pasted line: a Telegram message holds 4096 characters.
+ */
+const ensureNodeInPackage = 'remoteRun/ensureNode.sh';
+/** Where the plain line's Node goes, as the shell spells it: inside the account's state folder. */
+const ownNodeBaseInShell = `"$HOME/${runnerStateDirName}/${ownNodeDirName}"`;
 
 const runnerCliInPackage = 'dist/runnerUtility/runnerCli.js';
 const rootServiceCliInPackage = 'dist/runnerUtility/rootServiceCli.js';
@@ -107,7 +110,6 @@ function renderFetchSteps(payload: PairCodePayload, isForAccount: boolean): stri
     `p="${payload.port}"`,
     `k="${payload.hostKey}"`,
     `b="${getPrivateKeyBody(payload.privateKey)}"`,
-    ...(isForAccount ? [] : [`command -v node >/dev/null 2>&1 && ${nodeVersionCheck('node')} || f "Node.js ${minNodeMajor}.${minNodeMinor} or newer is needed on this machine (https://nodejs.org)"`]),
     `{ printf "%s\\n" "${privateKeyHeader}"; printf "%s" "$b" | fold -w ${privateKeyFoldWidth}; printf "\\n%s\\n" "${privateKeyFooter}"; } > "$d/key"`,
     `printf "%s %s\\n" ${hubHostAlias} "$k" > "$d/kh"`,
     's "downloading the package from the hub"',
@@ -134,7 +136,11 @@ function checkScriptHasNoQuote(script: string, what: string): string {
 
 /** @description The command to paste on the runner machine, as the account that will run jobs, for the pairing `payload`. */
 export function buildBootstrapLine(payload: PairCodePayload): string {
-  const script = [...renderFetchSteps(payload, false), `node "$d/pkg/${runnerCliInPackage}" pair ${renderPairArguments(encodePairCode(payload))}`];
+  const script = [
+    ...renderFetchSteps(payload, false),
+    `n=$(sh "$d/pkg/${ensureNodeInPackage}" own ${ownNodeBaseInShell})`,
+    `"$n" "$d/pkg/${runnerCliInPackage}" pair ${renderPairArguments(encodePairCode(payload))}`,
+  ];
   return `sh -c '${checkScriptHasNoQuote(['set -eu', sayFunction, failFunction, ...script].join('; '), 'bootstrap')}'`;
 }
 
@@ -158,7 +164,7 @@ function renderAdminScript(payload: PairCodePayload): string {
   ];
   const steps = [
     ...renderFetchSteps(payload, true),
-    `n=$(sh "$d/pkg/${pickNodeInPackage}" "$a")`,
+    `n=$(sh "$d/pkg/${ensureNodeInPackage}" root "$a")`,
     `"$n" "$d/pkg/${rootServiceCliInPackage}" install "$a" ${renderPairArguments(encodePairCode(payload))}`,
   ];
   return checkScriptHasNoQuote(['set -eu', ...checks, ...steps].join('; '), 'admin');

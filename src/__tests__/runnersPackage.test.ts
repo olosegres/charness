@@ -67,7 +67,7 @@ describe('hub package', () => {
     const hubPackage = getHubPackage(fixture.ctx);
     assert.match(hubPackage.id, /^[0-9a-f]{16}$/);
     const names = runTar(gunzipSync(fs.readFileSync(hubPackage.filePath)), ['-tf', '-']).trim().split('\n');
-    assert.deepEqual(names, ['package.json', 'package-lock.json', 'remoteRun/runner.sh', 'remoteRun/pickNode.sh', 'dist/cli.js', 'dist/runners/example.js']);
+    assert.deepEqual(names, ['package.json', 'package-lock.json', 'remoteRun/runner.sh', 'remoteRun/ensureNode.sh', 'dist/cli.js', 'dist/runners/example.js']);
   });
 
   it('gives the runner a package.json cut down to the dependencies the runner needs — the hub\'s name, version and engines, none of its other dependencies or scripts', () => {

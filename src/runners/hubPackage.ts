@@ -11,7 +11,7 @@ import { parseRootPackageJson, parseRunnerLock, renderRunnerLockForPackage, rend
 import { createTarArchive, type TarEntry } from './tarArchive';
 
 /**
- * @description The charness package a runner installs: the hub's OWN `dist/`, `remoteRun/runner.sh` and `remoteRun/pickNode.sh` (the admin line's choice of Node), a `package.json` cut down to the runner's
+ * @description The charness package a runner installs: the hub's OWN `dist/`, `remoteRun/runner.sh` and `remoteRun/ensureNode.sh` (the runner's own Node.js install), a `package.json` cut down to the runner's
  * own dependencies and the `package-lock.json` that pins them (`runnerLock.ts`: made from `yarn.lock`, so the runner installs with `npm ci` exactly
  * what the hub has run and never a version published since), packed into a gzip tar, so a runner and its hub never run different code and no npm
  * release is needed. Its id is the sha256 of the tar before
@@ -41,8 +41,8 @@ const maxOpenAttempts = 3;
 const skippedFilePattern = /(?:\.d\.ts|\.d\.ts\.map|\.js\.map)$/;
 const skippedFolderName = '__tests__';
 const runnerScriptRelativePath = 'remoteRun/runner.sh';
-/** What the admin pairing line runs as root, from its copy of the package, to choose the Node it runs under (`remoteRun/pickNode.sh`). */
-const pickNodeScriptRelativePath = 'remoteRun/pickNode.sh';
+/** What both pairing lines (and a runner that moves off a system Node) run, from their copy of the package, to put the runner's own Node.js in place (`remoteRun/ensureNode.sh`). */
+const ensureNodeScriptRelativePath = 'remoteRun/ensureNode.sh';
 const packageJsonRelativePath = 'package.json';
 /** What the lock is called inside the package: where `npm ci` looks for it. */
 const packagedLockFileName = 'package-lock.json';
@@ -84,10 +84,10 @@ function statSourceFile(root: string, relativePath: string): SourceFile {
   return { relativePath, absolutePath, size: stat.size, mtimeMs: stat.mtimeMs, mode: stat.mode };
 }
 
-/** The source files in archive order: `package.json`, the runner's lock, the runner script, the Node pick, then everything under `dist/` sorted by path. */
+/** The source files in archive order: `package.json`, the runner's lock, the runner script, the Node install, then everything under `dist/` sorted by path. */
 function listPackageFiles(packageRoot: string): SourceFile[] {
   const distFiles = listDistFiles(packageRoot, distRelativePath);
-  return [statSourceFile(packageRoot, packageJsonRelativePath), statSourceFile(packageRoot, runnerLockRelativePath), statSourceFile(packageRoot, runnerScriptRelativePath), statSourceFile(packageRoot, pickNodeScriptRelativePath), ...distFiles];
+  return [statSourceFile(packageRoot, packageJsonRelativePath), statSourceFile(packageRoot, runnerLockRelativePath), statSourceFile(packageRoot, runnerScriptRelativePath), statSourceFile(packageRoot, ensureNodeScriptRelativePath), ...distFiles];
 }
 
 function createSourceStamp(files: readonly SourceFile[]): string {
@@ -128,7 +128,7 @@ function packFiles(files: readonly SourceFile[]): { id: string; gzip: Buffer } {
 
 /**
  * @description The current package of this hub, packed now unless the cache already holds this exact source. Throws when the source
- * (`dist/`, `package.json`, `remoteRun/runner.sh`, `remoteRun/pickNode.sh`, `remoteRun/runner-package-lock.json` under `ctx.packageRoot`) is missing, or the lock no longer
+ * (`dist/`, `package.json`, `remoteRun/runner.sh`, `remoteRun/ensureNode.sh`, `remoteRun/runner-package-lock.json` under `ctx.packageRoot`) is missing, or the lock no longer
  * matches `package.json` (`yarn runner-lock` brings it up to date). Safe without the registry lock: a cache file
  * is written whole and named by its id, and two packers of one source write identical bytes.
  */

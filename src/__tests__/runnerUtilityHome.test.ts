@@ -12,7 +12,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { spawn, spawnSync } from 'child_process';
-import { createAppId, installAppFromDirectory, installDependencies, npmInstallArgs, removeOldApps, restartExitCode, switchCurrentApp, testNodeModulesEnvName } from '../runnerUtility/appInstall';
+import { createAppId, installAppFromDirectory, installDependencies, nodeMovedExitCode, npmInstallArgs, removeOldApps, restartExitCode, switchCurrentApp, testNodeModulesEnvName } from '../runnerUtility/appInstall';
 import { ensureLauncher, renderLauncher } from '../runnerUtility/launcher';
 import { readRunnerConfig, readRunnerStatus, RunnerConfigError, writeRunnerConfig, writeRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getAppDirPath, getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
@@ -147,8 +147,32 @@ describe('launcher', () => {
     assert.ok(text.startsWith('#!/bin/sh\n'));
     assert.ok(text.includes(`NODE='/opt/node/bin/node'`));
     assert.ok(text.includes(`'${paths.currentApp}/dist/runnerUtility/runnerCli.js' "$@"`));
-    assert.ok(text.includes(`[ "$code" = ${restartExitCode} ] || exit "$code"`));
-    assert.equal(restartExitCode, 75);
+    assert.ok(text.includes(`[ "$code" = ${restartExitCode} ] && continue`));
+    assert.ok(text.includes(`[ "$code" = ${nodeMovedExitCode} ] && [ -x "$0" ] && exec "$0" "$@"`));
+    assert.deepEqual([restartExitCode, nodeMovedExitCode], [75, 76]);
+  });
+
+  it('starts ITSELF again on 76 — the link moved to its own Node and rewrote this very file, which the running script has already read — and the new file\'s Node runs the app', () => {
+    const appDir = path.join(paths.currentApp, 'dist', 'runnerUtility');
+    fs.mkdirSync(appDir, { recursive: true });
+    const marker = path.join(home, 'new-node-ran');
+    const newNode = path.join(home, 'new-node');
+    fs.writeFileSync(newNode, `#!/bin/sh\necho started >> ${JSON.stringify(marker)}\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o755 });
+    const rewritten = path.join(home, 'launcher.next');
+    fs.writeFileSync(rewritten, renderLauncher(paths, newNode), { mode: 0o755 });
+    const counter = path.join(home, 'counter');
+    fs.writeFileSync(path.join(appDir, 'runnerCli.js'), [
+      `const fs = require('fs');`,
+      `const runs = fs.existsSync(${JSON.stringify(counter)}) ? Number(fs.readFileSync(${JSON.stringify(counter)}, 'utf8')) : 0;`,
+      `fs.writeFileSync(${JSON.stringify(counter)}, String(runs + 1));`,
+      `if (runs === 0) { fs.renameSync(${JSON.stringify(rewritten)}, ${JSON.stringify(paths.launcher)}); process.exit(${nodeMovedExitCode}); }`,
+      `process.exit(3);`,
+    ].join('\n'));
+    const launcher = ensureLauncher(paths, process.execPath);
+    const result = spawnSync(launcher, ['run'], { encoding: 'utf8' });
+    assert.equal(result.status, 3, result.stderr);
+    assert.equal(fs.readFileSync(counter, 'utf8'), '2');
+    assert.equal(fs.readFileSync(marker, 'utf8'), 'started\n', 'the second run was started by the rewritten launcher\'s Node, not the first one\'s');
   });
 
   it('is valid sh, runs the app, and loops on 75 only', () => {

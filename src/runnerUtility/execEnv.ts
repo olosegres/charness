@@ -6,8 +6,12 @@ import type { RunnerHomePaths } from './runnerHome';
 /**
  * @description The environment of a command that runs over the link — CLEAN, like a login by a service: the runner's own environment
  * (a launchd job's, a terminal's) never leaks into the agents' jobs. HOME, USER, LOGNAME, LANG, TMPDIR; a PATH of `~/.charness-runner/bin`
- * (pueue, rsync), the folder of the `node` that runs the utility, the Homebrew and system folders; the Android SDK when it is where
- * the usual installers put it; then the operator's own `KEY=VALUE` lines from `~/.charness-runner/env`.
+ * (pueue, rsync, the Corepack shims), the bin of the jobs' own global npm prefix, the folder of the `node` that runs the utility, the Homebrew and system
+ * folders; the Android SDK when it is where the usual installers put it; then the operator's own `KEY=VALUE` lines from `~/.charness-runner/env`.
+ *
+ * The runner's Node.js sits in a folder the account cannot write (the shared one, owned by root) or that a job must not change (its own). Whatever a job
+ * installs therefore goes into the account's state folder instead: `NPM_CONFIG_PREFIX` (`npm i -g`) and `COREPACK_HOME` (the package managers Corepack
+ * downloads) point there, and a `corepack enable` is turned into one for `<root>/bin` by the wrapper of `packageManagerShims.ts`.
  */
 
 const systemPathDirs: readonly string[] = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/local/sbin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
@@ -50,9 +54,9 @@ export interface ExecEnvInputs {
   androidSdk: string | null;
 }
 
-/** @description The folders of a job's PATH, in order: the runner's own `bin`, the folder of the Node that runs the link, then Homebrew's and the system's. */
+/** @description The folders of a job's PATH, in order: the runner's own `bin`, the bin of the jobs' global npm prefix, the folder of the Node that runs the link, then Homebrew's and the system's. */
 export function getJobPathDirectories(paths: RunnerHomePaths, nodeDir: string): string[] {
-  return [...new Set([paths.binDir, nodeDir, ...systemPathDirs])];
+  return [...new Set([paths.binDir, path.join(paths.npmPrefix, 'bin'), nodeDir, ...systemPathDirs])];
 }
 
 export function buildExecEnv(inputs: ExecEnvInputs): NodeJS.ProcessEnv {
@@ -63,6 +67,8 @@ export function buildExecEnv(inputs: ExecEnvInputs): NodeJS.ProcessEnv {
     LANG: inputs.environment.LANG ?? defaultLang,
     TMPDIR: inputs.environment.TMPDIR ?? os.tmpdir(),
     PATH: getJobPathDirectories(inputs.paths, inputs.nodeDir).join(path.delimiter),
+    NPM_CONFIG_PREFIX: inputs.paths.npmPrefix,
+    COREPACK_HOME: inputs.paths.corepackHome,
     ...(inputs.androidSdk === null ? {} : { ANDROID_HOME: inputs.androidSdk, ANDROID_SDK_ROOT: inputs.androidSdk }),
     ...inputs.operatorEnv,
   };
