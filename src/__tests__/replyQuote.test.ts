@@ -172,3 +172,16 @@ test('extractReplyQuote → buildReplyQuoteBlock: end-to-end genuine reply', () 
     ['[Replying to an earlier message · from: assistant]', '> X did Y'].join('\n'),
   );
 });
+
+test('extractReplyQuote → buildReplyQuoteBlock: a reply to a FORWARDED message names who first wrote it, not only who forwarded it', () => {
+  const block = buildReplyQuoteBlock(extractReplyQuote(makeSource({ replyForwardedFrom: 'channel "Ops Alerts"' })));
+  assert.equal(
+    block,
+    ['[Replying to an earlier message · from: user, forwarded from channel "Ops Alerts"]', '> X did Y'].join('\n'),
+  );
+});
+
+test('extractReplyQuote: a reply to a message that was not forwarded carries no origin', () => {
+  assert.deepEqual(extractReplyQuote(makeSource()), { quotedText: 'X did Y', fromBot: false });
+  assert.equal(buildReplyQuoteBlock(extractReplyQuote(makeSource({ replyForwardedFrom: undefined }))), ['[Replying to an earlier message · from: user]', '> X did Y'].join('\n'));
+});

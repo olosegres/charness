@@ -32,7 +32,7 @@ import {
   type ReplyQuoteAttachment,
   type ReplyQuoteSource,
 } from '../../utils/replyQuote';
-import { buildForwardedMark, type ForwardedMarkSource } from '../../utils/forwardedMark';
+import { buildForwardedMark, describeForwardedOrigin, type ForwardedMarkSource } from '../../utils/forwardedMark';
 import { joinMessageContextBlocks } from '../../utils/messageContext';
 
 /**
@@ -203,6 +203,12 @@ function getReplyQuoteAttachment(replied: Message, findSavedFile?: SavedFileFind
   return { kind: meta.kind, fileName: meta.fileName, savedPath: findSavedFile?.(meta) };
 }
 
+/** Who first wrote a replied-to message that was itself forwarded into the topic, or `undefined` when it was not. */
+function describeRepliedForward(replied: Message): string | undefined {
+  const origin = getForwardedMarkSource(replied);
+  return origin ? describeForwardedOrigin(origin) : undefined;
+}
+
 /**
  * @description A message's Telegram REPLY reduced to the structural input of
  * {@link extractReplyQuote}, or `undefined` when the message replies to nothing.
@@ -225,6 +231,7 @@ function getReplyQuoteSource(
     topicRootId: 'message_thread_id' in message ? message.message_thread_id : undefined,
     isServiceMessage: 'forum_topic_created' in replied,
     fromBot: identity.userId !== undefined && replied.from?.id === identity.userId,
+    replyForwardedFrom: describeRepliedForward(replied),
   };
 }
 

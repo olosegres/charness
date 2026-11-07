@@ -124,7 +124,8 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   block, so a burst of forwards plus the operator's own words stays distinguishable; the two coalescing sites are an
   album (one block, the first member's) and the prompts held over a usage-limit wait, which follow the folded text of the
   prompt that releases them and so never read as part of a forward. A slash command or a terminal topic's shell line
-  never carries the block.
+  never carries the block. A reply TO a forwarded message names who first wrote it in the quote's header
+  (`from: user, forwarded from channel "Ops Alerts"`), read off the replied-to message's own `forward_origin`.
 - A scheduled run held over a usage-limit wait rides the resume as plain text, without a request.
 - **Answers only** (`utils/topicView.ts` `checkIsAgentEventShown`, applied per event in `bot.ts`): the agent's
   text, status/progress frames, thinking, tool results and sub-agent frames are dropped; a native question with

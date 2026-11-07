@@ -25,6 +25,9 @@ export const replyQuoteMaxChars = 4000;
 /** Header prefix of the injected block — recognisable, agent-facing English. */
 const replyQuoteHeaderPrefix = '[Replying to an earlier message · from: ';
 
+/** Between who sent the replied-to message and who first wrote it, when it was a forward. */
+const replyQuoteForwardedFromSeparator = ', forwarded from ';
+
 /** Marker appended when the quoted content is truncated to the cap. */
 const replyQuoteTruncationMarker = '… [truncated]';
 
@@ -66,12 +69,19 @@ export interface ReplyQuoteSource {
   isServiceMessage: boolean;
   /** Whether the replied-to message is the bot's own (`reply_to_message.from?.id === bot.botInfo.id`). */
   fromBot: boolean;
+  /**
+   * Who first wrote the replied-to message when it was itself FORWARDED into the topic (`describeForwardedOrigin`
+   * of its `forward_origin`): `from` is then only who forwarded it, and the quote must not pass its words for theirs.
+   */
+  replyForwardedFrom?: string;
 }
 
 /** The resolved quote: the content to render plus who authored it. */
 export interface ExtractedReplyQuote {
   quotedText: string;
   fromBot: boolean;
+  /** Who first wrote the quoted message, when it was forwarded into the topic. */
+  forwardedFrom?: string;
 }
 
 /**
@@ -106,7 +116,7 @@ export function extractReplyQuote(source: ReplyQuoteSource | undefined): Extract
   const attachmentLine = source.replyAttachment ? formatReplyAttachment(source.replyAttachment) : undefined;
   if (!text && !attachmentLine) return null;
   const quotedText = [attachmentLine, text].filter((line) => !!line).join('\n');
-  return { quotedText, fromBot: source.fromBot };
+  return { quotedText, fromBot: source.fromBot, ...(source.replyForwardedFrom ? { forwardedFrom: source.replyForwardedFrom } : {}) };
 }
 
 /**
@@ -135,7 +145,8 @@ export function buildReplyQuoteBlock(quote: ExtractedReplyQuote | null): string 
     content = `${content.slice(0, replyQuoteMaxChars)}${replyQuoteTruncationMarker}`;
   }
 
-  const header = `${replyQuoteHeaderPrefix}${quote.fromBot ? 'assistant' : 'user'}]`;
+  const forwardedFrom = quote.forwardedFrom ? `${replyQuoteForwardedFromSeparator}${quote.forwardedFrom}` : '';
+  const header = `${replyQuoteHeaderPrefix}${quote.fromBot ? 'assistant' : 'user'}${forwardedFrom}]`;
   const quotedLines = content.split('\n').map((line) => `${replyQuoteLinePrefix}${line}`);
   return [header, ...quotedLines].join('\n');
 }

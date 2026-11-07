@@ -728,6 +728,35 @@ test('getTelegramMessageContextBlock: a forward that is also a reply carries the
   );
 });
 
+/** A bot alert the operator forwarded into the topic earlier, as it is when the operator replies to it. */
+const forwardedAlert = {
+  message_id: 78,
+  date: 0,
+  chat: { id: -1001234567890, type: 'supergroup', title: 'g' },
+  from: makeUser(7),
+  message_thread_id: topicRootId,
+  text: 'ALERT: disk 91% on web-1',
+  forward_origin: forwardOrigins.channel,
+} as RepliedMessage;
+
+test('getTelegramReplyQuoteBlock: a reply to a FORWARDED message names who first wrote it, so its words do not pass for the operator\'s', () => {
+  const typedReply = makePlainMessage('is this real?');
+  typedReply.message_thread_id = topicRootId;
+  typedReply.reply_to_message = forwardedAlert;
+  const expected = ['[Replying to an earlier message · from: user, forwarded from channel "Ops Alerts"]', '> ALERT: disk 91% on web-1'].join('\n');
+  assert.equal(getTelegramReplyQuoteBlock(typedReply, identity), expected);
+  // A spoken reply gets the very same header.
+  assert.equal(getTelegramReplyQuoteBlock(makeTopicVoiceMessage(forwardedAlert), identity), expected);
+});
+
+test('getTelegramReplyQuoteBlock: a reply to a message forwarded from a person names the person, with their @username', () => {
+  const fromPerson = { ...forwardedAlert, forward_origin: forwardOrigins.user } as RepliedMessage;
+  assert.equal(
+    getTelegramReplyQuoteBlock(makeTopicVoiceMessage(fromPerson), identity),
+    ['[Replying to an earlier message · from: user, forwarded from user "Alice Smith" (@alice)]', '> ALERT: disk 91% on web-1'].join('\n'),
+  );
+});
+
 test('getTelegramMessageContextBlock: a message that is neither a reply nor a forward has no block', () => {
   assert.equal(getTelegramMessageContextBlock(makePlainMessage('hello'), identity), undefined);
 });
