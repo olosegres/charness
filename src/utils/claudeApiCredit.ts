@@ -88,10 +88,27 @@ export function checkIsClaudeApiCreditExpired(expiresOn: string, nowMs: number):
   return !Number.isNaN(dayStartMs) && nowMs >= dayStartMs + millisecondsPerDay;
 }
 
-/** Did the used-up-balance refusal come AFTER the figure was given (an older one is the balance the figure replaced)? */
-function checkIsExhaustedSince(creditExhaustedAt: string | null | undefined, anchoredAt: string): boolean {
+/**
+ * @description Is the used-up-balance mark (`creditExhaustedAt`) still news next to the operator's figure? Only when the
+ * refusal came AFTER the figure was given: a figure given later is the operator saying there is money, the same signal as
+ * a billed turn going through, and an older refusal is the balance the figure replaced.
+ */
+export function checkIsClaudeApiCreditMarkCurrent(creditExhaustedAt: string | null | undefined, anchoredAt: string): boolean {
   if (!creditExhaustedAt) return false;
   return Date.parse(creditExhaustedAt) > Date.parse(anchoredAt);
+}
+
+/**
+ * @description The profiles whose used-up mark an anchor has superseded (the anchor is the same instant or newer): the bot
+ * clears those marks when it reads the anchors, so the figure and the mark never tell opposite stories on one screen.
+ */
+export function listProfilesWithSupersededCreditMark(
+  records: Readonly<Record<string, { creditExhaustedAt?: string }>>,
+  anchors: ClaudeApiCreditAnchors,
+): string[] {
+  return Object.entries(records)
+    .filter(([name, record]) => record.creditExhaustedAt !== undefined && anchors[name] !== undefined && !checkIsClaudeApiCreditMarkCurrent(record.creditExhaustedAt, anchors[name].anchoredAt))
+    .map(([name]) => name);
 }
 
 /**
@@ -112,7 +129,7 @@ export function getClaudeApiCreditEstimate(input: {
     return { ...figures, leftUsd: 0, status: 'expired', expiresOn: anchor.expiresOn };
   }
   const expiresOn = anchor.expiresOn ?? null;
-  if (checkIsExhaustedSince(input.creditExhaustedAt, anchor.anchoredAt)) return { ...figures, leftUsd: 0, status: 'usedUp', expiresOn };
+  if (checkIsClaudeApiCreditMarkCurrent(input.creditExhaustedAt, anchor.anchoredAt)) return { ...figures, leftUsd: 0, status: 'usedUp', expiresOn };
   return { ...figures, leftUsd: Math.max(0, roundToCents(anchor.remainingUsd - spentUsd)), status: 'available', expiresOn };
 }
 
@@ -187,19 +204,21 @@ export function readClaudeApiCreditAnchors(dataDir: string): ClaudeApiCreditAnch
 }
 
 /**
- * @description Give `profile` an anchor (`null` removes it) and write the file atomically. Throws on an unwritable folder
- * or a broken existing file — a broken file is never overwritten, it holds other profiles' figures.
+ * @description Give `profile` an anchor (`null` removes it) and write the file atomically; `false` when there was nothing
+ * to remove (nothing written). Throws on an unwritable folder or a broken existing file — a broken file is never
+ * overwritten (it holds other profiles' figures) and never read as «no figure».
  */
-export function writeClaudeApiCreditAnchor(dataDir: string, profile: string, anchor: ClaudeApiCreditAnchor | null): void {
+export function writeClaudeApiCreditAnchor(dataDir: string, profile: string, anchor: ClaudeApiCreditAnchor | null): boolean {
   const filePath = getClaudeApiCreditFilePath(dataDir);
   const load = anchorsLoader.load(filePath);
   if (load.status === 'invalid') throw new Error(`${load.errors.join('; ')} — fix or delete ${filePath} first`);
   const { [profile]: previousAnchor, ...others } = load.config;
-  if (anchor === null && previousAnchor === undefined) return;
+  if (anchor === null && previousAnchor === undefined) return false;
   const next = anchor === null ? others : { ...others, [profile]: anchor };
   const validation = validateClaudeApiCreditAnchors(next);
   if (!validation.ok) throw new Error(`refusing to write an invalid ${claudeApiCreditFileName}: ${validation.errors.join('; ')}`);
   writeJsonFileAtomically(filePath, next, creditFileMode);
+  return true;
 }
 
 /** @description Forget every cached load — for tests, which swap files under one path. */

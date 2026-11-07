@@ -172,6 +172,15 @@ describe('runClaudeProfilesCreditCli', () => {
     assert.equal(fs.readFileSync(creditFilePath(), 'utf8'), '{ not json');
   });
 
+  it('--clear on a broken file fails and says what to do — it never claims there was no figure', async () => {
+    mock.method(console, 'warn', () => undefined);
+    fs.writeFileSync(creditFilePath(), '{ not json');
+    assert.equal(await runClaudeProfilesCreditCli(['api', '--clear'], io), 1);
+    assert.match(err.join(''), /could not save the API credit figure: .*fix or delete/);
+    assert.ok(!out.join('').includes('no API credit figure'));
+    assert.equal(fs.readFileSync(creditFilePath(), 'utf8'), '{ not json');
+  });
+
   it('is what `charness claude-profiles credit …` runs', async () => {
     const stdout: string[] = [];
     assert.equal(await runClaudeProfilesCli(['credit', 'api', '7.5'], { stdout: (text) => stdout.push(text) }), 0);

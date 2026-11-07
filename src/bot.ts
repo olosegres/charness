@@ -450,7 +450,7 @@ import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOver
 import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
 import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
-import { buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
+import { buildClaudeProfileUsageView, buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
@@ -488,7 +488,7 @@ import { createSelfUpdate } from './connectors/telegram/commands/selfUpdate';
 import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent, ClaudeTurnCostReport } from './adapters/claudeConfigDir';
 import { addClaudeApiSpend, computeClaudeTurnCostUsd, formatUsd, getClaudeTurnCostOutcome } from './utils/claudeApiSpend';
-import { addClaudeApiCreditSpend, readClaudeApiCreditAnchors } from './utils/claudeApiCredit';
+import { addClaudeApiCreditSpend, listProfilesWithSupersededCreditMark, readClaudeApiCreditAnchors, type ClaudeApiCreditAnchors } from './utils/claudeApiCredit';
 import { formatClaudeApiSpendWords } from './utils/claudeProfileUsageLines';
 import { resolveClaudeBinary } from './utils/resolveBinary';
 import { getRunnerSummaryLines } from './remoteRun/runnerSummary';
@@ -8097,6 +8097,8 @@ function onClaudeTurnCost(key: SessionKey, configDir: string | null, report: Cla
   state.setClaudeCostBaseline(key, { sessionId: report.sessionId, totalCostUsd: report.totalCostUsd });
   const name = resolveClaudeProfileNameForDir(configDir);
   if (name === null) return;
+  // Read first: a figure newer than the account's used-up mark ends the mark before this turn is judged against it.
+  const creditAnchors = getClaudeApiCreditAnchors();
   const info = state.getClaudeProfileInfo(name);
   const outcome = getClaudeTurnCostOutcome({
     billing: info?.billing ?? null, isCreditExhausted: info?.creditExhaustedAt !== undefined, isError: report.isError, turnCostUsd,
@@ -8105,14 +8107,29 @@ function onClaudeTurnCost(key: SessionKey, configDir: string | null, report: Cla
   if (outcome.spendUsd === null) return;
   state.setClaudeProfileApiSpend(name, addClaudeApiSpend(info?.apiSpend, outcome.spendUsd, new Date().toISOString()));
   // The same spend also runs down the operator's credit figure, when one was given (`utils/claudeApiCredit.ts`).
-  const creditAnchor = readClaudeApiCreditAnchors(resolveDataDir())[name];
+  const creditAnchor = creditAnchors[name];
   if (creditAnchor) state.setClaudeProfileCreditSpend(name, addClaudeApiCreditSpend(info?.creditSpend, creditAnchor, outcome.spendUsd));
+}
+
+/**
+ * The operator's credit figures (`utils/claudeApiCredit.ts`), read as the bot needs them: a figure newer than an account's
+ * used-up mark ends that mark — the operator saying there is money is the signal a billed turn going through is — so the
+ * stored mark, the fallback chain and the screens never contradict the figure.
+ */
+function getClaudeApiCreditAnchors(): ClaudeApiCreditAnchors {
+  const anchors = readClaudeApiCreditAnchors(resolveDataDir());
+  for (const name of listProfilesWithSupersededCreditMark(state.getAllClaudeProfileInfos(), anchors)) state.setClaudeProfileCreditExhausted(name, null);
+  return anchors;
 }
 
 /** Every Claude profile's usage view as the bot knows it now: its record plus the operator's credit figures. */
 function getClaudeProfileUsageViews(): ClaudeProfileUsageView[] {
-  const dataDir = resolveDataDir();
-  return buildClaudeProfileUsageViews({ dataDir, records: state.getAllClaudeProfileInfos(), creditAnchors: readClaudeApiCreditAnchors(dataDir) });
+  return buildClaudeProfileUsageViews({ dataDir: resolveDataDir(), records: state.getAllClaudeProfileInfos(), creditAnchors: getClaudeApiCreditAnchors() });
+}
+
+/** One profile's usage view — the very one `/limits` renders, for the rows of `/accounts`. */
+function getClaudeProfileUsageView(name: string): ClaudeProfileUsageView {
+  return buildClaudeProfileUsageView({ dataDir: resolveDataDir(), name, record: state.getClaudeProfileInfo(name), creditAnchor: getClaudeApiCreditAnchors()[name] });
 }
 
 /** The model a topic's Claude session runs (or last ran), for the usage ranking's choice of windows. */
@@ -8122,6 +8139,7 @@ function getThreadClaudeModel(key: SessionKey): string | null {
 
 /** What `/status` names of a Claude profile: its last probed sign-in and email, and its limit mark (none until probed). */
 function readStatusAccountSource(name: string): ThreadStatusAccountSource {
+  getClaudeApiCreditAnchors();
   const info = state.getClaudeProfileInfo(name);
   return {
     name, email: info?.email ?? null, loggedIn: info?.loggedIn, limitedUntil: info?.limitedUntil ?? null,
@@ -8222,6 +8240,7 @@ function getConversationAccountState(key: SessionKey): { isLimited: boolean; isA
   const nowMs = Date.now();
   const checkIsFuture = (instant: string | undefined): boolean => instant !== undefined && Date.parse(instant) > nowMs;
   if (position.backend === 'opencode') return { isLimited: checkIsFuture(state.getOpenCodeModelLimitedUntil(buildOpenCodeModelLabel(position))), isApiBilled: false };
+  getClaudeApiCreditAnchors();
   const info = state.getClaudeProfileInfo(position.profile);
   return { isLimited: checkIsFuture(info?.limitedUntil) || info?.creditExhaustedAt !== undefined, isApiBilled: info?.billing === 'api' };
 }
@@ -8805,6 +8824,7 @@ const {
   startOpenCodeConnect: showConnectMethodPicker,
   applyAutoSwitch,
   verifyAnthropicApiKey: (apiKey) => verifyAnthropicApiKey(apiKey),
+  getProfileUsageView: getClaudeProfileUsageView,
 });
 claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
 claudeProfileApiKeySink = storeClaudeProfileApiKey;

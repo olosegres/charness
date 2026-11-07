@@ -23,7 +23,6 @@ import { formatUsd } from '../utils/claudeApiSpend';
 import {
   checkIsClaudeApiCreditExpired,
   parseClaudeApiCreditDay,
-  readClaudeApiCreditAnchors,
   writeClaudeApiCreditAnchor,
   type ClaudeApiCreditAnchor,
 } from '../utils/claudeApiCredit';
@@ -131,13 +130,9 @@ export async function runClaudeProfilesCreditCli(
   const dataDir = resolveDataDir();
 
   if (change.kind === 'clear') {
-    if (readClaudeApiCreditAnchors(dataDir)[profile] === undefined) {
-      stdout(`"${profile}" has no API credit figure.\n`);
-      return 0;
-    }
-    const clearFailure = writeAnchor(dataDir, profile, null, stderr);
-    if (clearFailure !== null) return clearFailure;
-    stdout(`The API credit figure of "${profile}" is cleared.\n`);
+    const outcome = writeAnchor(dataDir, profile, null, stderr);
+    if (outcome.kind === 'failed') return outcome.code;
+    stdout(outcome.isChanged ? `The API credit figure of "${profile}" is cleared.\n` : `"${profile}" has no API credit figure.\n`);
     return 0;
   }
 
@@ -154,19 +149,18 @@ export async function runClaudeProfilesCreditCli(
     anchoredAt: new Date(nowMs).toISOString(),
     ...(change.expiresOn === null ? {} : { expiresOn: change.expiresOn }),
   };
-  const setFailure = writeAnchor(dataDir, profile, anchor, stderr);
-  if (setFailure !== null) return setFailure;
+  const written = writeAnchor(dataDir, profile, anchor, stderr);
+  if (written.kind === 'failed') return written.code;
   stdout(`${formatCreditConfirmation(profile, anchor)}\n`);
   return 0;
 }
 
-/** Write (or, with `null`, remove) the profile's figure; `null` on success, else the exit code after the reason went to `stderr`. */
-function writeAnchor(dataDir: string, profile: string, anchor: ClaudeApiCreditAnchor | null, stderr: (text: string) => void): number | null {
+/** Write (or, with `null`, remove) the profile's figure; on a failure the reason has gone to `stderr` and the exit code is in the outcome. */
+function writeAnchor(dataDir: string, profile: string, anchor: ClaudeApiCreditAnchor | null, stderr: (text: string) => void): { kind: 'done'; isChanged: boolean } | { kind: 'failed'; code: number } {
   try {
-    writeClaudeApiCreditAnchor(dataDir, profile, anchor);
-    return null;
+    return { kind: 'done', isChanged: writeClaudeApiCreditAnchor(dataDir, profile, anchor) };
   } catch (e) {
     stderr(`could not save the API credit figure: ${e instanceof Error ? e.message : 'unknown error'}\n`);
-    return 1;
+    return { kind: 'failed', code: 1 };
   }
 }

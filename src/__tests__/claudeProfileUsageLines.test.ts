@@ -118,27 +118,40 @@ describe('formatClaudeProfileUsageLines: the bonus API credit of an account bill
     assert.deepEqual(lines, ['    🎁 API credit ≈ $67.71 of $200.00 · $0.00 spent via the bot since 08.11 · expires 15.01.2027']);
   });
 
-  it('says used up after a refusal that came later — beside the existing out-of-credits line — and keeps the expiry', () => {
+  it('says used up after a refusal that came later — ONE used-up line, with what to do — and keeps the expiry', () => {
     assert.deepEqual(
       formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: anchor, creditSpend: spend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }, 'UTC', creditNowMs),
-      ['    🎁 API credit used up · expires 15.11', '    💸 API credits used up — top them up, then pick it again'],
+      ['    🎁 API credit used up · expires 15.11 — top it up, then pick the account again'],
     );
     assert.deepEqual(
       formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: { remainingUsd: 3, anchoredAt: anchor.anchoredAt }, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }, 'UTC', creditNowMs),
-      ['    🎁 API credit used up', '    💸 API credits used up — top them up, then pick it again'],
+      ['    🎁 API credit used up — top it up, then pick the account again'],
       'no expiry given, none written',
     );
   });
 
-  it('ignores a refusal older than the figure: the figure is newer news', () => {
-    const [line] = formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: anchor, creditExhaustedAt: '2026-11-06T09:00:00.000Z' }, 'UTC', creditNowMs);
-    assert.match(line, /^ {4}🎁 API credit ≈ \$67\.71 /);
+  it('a refusal older than the figure is no news: no used-up line of either kind, only the estimate', () => {
+    const lines = formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: anchor, creditExhaustedAt: '2026-11-06T09:00:00.000Z' }, 'UTC', creditNowMs);
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /^ {4}🎁 API credit ≈ \$67\.71 /);
   });
 
-  it('says expired past the expiry day and asks for the new figure', () => {
+  it('without a figure the used-up mark keeps its own line, as before', () => {
     assert.deepEqual(
-      formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: anchor, creditSpend: spend }, 'UTC', Date.parse('2026-11-16T00:00:00Z')),
-      ['    🎁 API credit expired 15.11 — set the new figure from Console › Billing'],
+      formatClaudeProfileUsageLines({ billing: 'api', creditExhaustedAt: '2026-11-07T09:00:00.000Z' }, 'UTC', creditNowMs),
+      ['    💸 API credits used up — top them up, then pick it again'],
+    );
+  });
+
+  it('says expired past the expiry day and names the command that sets the new figure for THIS profile', () => {
+    assert.deepEqual(
+      formatClaudeProfileUsageLines({ name: 'console', billing: 'api', creditAnchor: anchor, creditSpend: spend }, 'UTC', Date.parse('2026-11-16T00:00:00Z')),
+      ['    🎁 API credit expired 15.11 — give the new figure: charness claude-profiles credit console <left>'],
+    );
+    assert.match(
+      formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: anchor }, 'UTC', Date.parse('2026-11-16T00:00:00Z'))[0],
+      /credit <profile> <left>$/,
+      'a source without a name leaves a placeholder',
     );
   });
 

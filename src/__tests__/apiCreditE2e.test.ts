@@ -131,8 +131,13 @@ async function readAccountRowLines(): Promise<string[]> {
   const lines = screen.text.split('\n');
   const rowIndex = lines.findIndex((line) => line.includes(`• ${apiAccount} —`) || line.includes(`✓ ${apiAccount} —`));
   assert.ok(rowIndex >= 0, `the API account's row is on the screen: ${screen.text}`);
-  const rowEnd = lines.findIndex((line, index) => index > rowIndex && /^[✓•] /.test(line));
-  return lines.slice(rowIndex + 1, rowEnd < 0 ? undefined : rowEnd);
+  // The usage lines hang under the row, each indented by four spaces; the next row or the footer is not indented.
+  const hanging: string[] = [];
+  for (const line of lines.slice(rowIndex + 1)) {
+    if (!line.startsWith('    ')) break;
+    hanging.push(line);
+  }
+  return hanging;
 }
 
 function findCreditLine(lines: readonly string[]): string | undefined {
@@ -257,11 +262,17 @@ describe('The bonus API credit end to end: built charness, built command line, f
     await getCharness().waitFor('the account to be marked out of credits', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.[apiAccount]?.creditExhaustedAt !== undefined);
 
     const usedUpLines = await readAccountRowLines();
-    assert.equal(findCreditLine(usedUpLines), `    🎁 API credit used up · expires ${expiresShown}`);
-    assert.ok(usedUpLines.some((line) => line.includes('💸 API credits used up')), 'beside the existing out-of-credits line');
+    assert.equal(usedUpLines.length, 2, `the spend and ONE used-up line, no second one: ${usedUpLines.join(' | ')}`);
+    assert.match(usedUpLines[0], /^ {4}💳 \$0\.50 spent since \d{2}\.\d{2} · last turn \$0\.25$/);
+    assert.equal(usedUpLines[1], `    🎁 API credit used up · expires ${expiresShown} — top it up, then pick the account again`);
+    assert.ok(readPersistedState(getLayout()).claudeProfiles?.[apiAccount]?.creditExhaustedAt, 'the stored mark holds until the operator acts');
 
+    // A figure given after the refusal is the operator saying there is money: it ends the mark, and the row tells one story.
     assert.equal(runCreditCommand(apiAccount, '30', '--of', '200', '--expires', expiresOn).code, 0);
-    assert.match(findCreditLine(await readAccountRowLines()) ?? '', leftOfGrant('30\\.00'));
+    const toppedUpLines = await readAccountRowLines();
+    assert.equal(toppedUpLines.length, 2, `the spend and the estimate, no used-up line: ${toppedUpLines.join(' | ')}`);
+    assert.match(toppedUpLines[1], leftOfGrant('30\\.00'));
+    await getCharness().waitFor('the new figure to end the used-up mark', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.[apiAccount]?.creditExhaustedAt === undefined);
   });
 
   it('--clear takes the line away; a subscription account is refused with the reason and nothing is written for it', async () => {

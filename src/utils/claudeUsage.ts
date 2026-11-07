@@ -706,6 +706,32 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
   return { model, relevantBuckets, recommended: launch.pick, pickReason: launch.reason, nextAvailable: launch.nextAvailable, profiles: entries };
 }
 
+/** @description One profile's view: its record's usage, marks and spend, plus the operator's credit figure (what `/accounts` and `/limits` render). */
+export function buildClaudeProfileUsageView(input: {
+  dataDir: string;
+  name: string;
+  /** The profile's record; `undefined` for a name nothing was recorded for. */
+  record: ClaudeProfileRecord | undefined;
+  /** The operator's credit figure for it (`readClaudeApiCreditAnchors`); `undefined` = none given. */
+  creditAnchor?: ClaudeApiCreditAnchor;
+}): ClaudeProfileUsageView {
+  const { name, record, creditAnchor } = input;
+  return {
+    name,
+    configDir: resolveClaudeProfileDir(input.dataDir, name),
+    loggedIn: record?.loggedIn,
+    email: record?.email ?? null,
+    subscriptionType: record?.subscriptionType ?? null,
+    usage: record?.usage,
+    limitedUntil: record?.limitedUntil ?? null,
+    billing: record?.billing ?? null,
+    creditExhaustedAt: record?.creditExhaustedAt ?? null,
+    ...(record?.apiSpend ? { apiSpend: record.apiSpend } : {}),
+    ...(creditAnchor ? { creditAnchor } : {}),
+    ...(record?.creditSpend ? { creditSpend: record.creditSpend } : {}),
+  };
+}
+
 /**
  * @description The ranking's view of every profile off the registry: `default` (its hidden record, when the
  * bot has written one) first, then the added profiles in creation order. Shared by the bot (live state) and
@@ -720,20 +746,8 @@ export function buildClaudeProfileUsageViews(input: {
 }): ClaudeProfileUsageView[] {
   // A `default` the operator signed out through /accounts stays out of every ranking until it is signed in again.
   const isDefaultRemoved = input.records.default?.isRemoved === true;
-  const toView = (name: string, record: ClaudeProfileRecord | undefined): ClaudeProfileUsageView => ({
-    name,
-    configDir: resolveClaudeProfileDir(input.dataDir, name),
-    loggedIn: record?.loggedIn,
-    email: record?.email ?? null,
-    subscriptionType: record?.subscriptionType ?? null,
-    usage: record?.usage,
-    limitedUntil: record?.limitedUntil ?? null,
-    billing: record?.billing ?? null,
-    creditExhaustedAt: record?.creditExhaustedAt ?? null,
-    ...(record?.apiSpend ? { apiSpend: record.apiSpend } : {}),
-    ...(input.creditAnchors?.[name] ? { creditAnchor: input.creditAnchors[name] } : {}),
-    ...(record?.creditSpend ? { creditSpend: record.creditSpend } : {}),
-  });
+  const toView = (name: string, record: ClaudeProfileRecord | undefined): ClaudeProfileUsageView =>
+    buildClaudeProfileUsageView({ dataDir: input.dataDir, name, record, creditAnchor: input.creditAnchors?.[name] });
   const added = Object.entries(input.records)
     .filter(([name]) => name !== 'default')
     .sort(([, a], [, b]) => a.createdAt.localeCompare(b.createdAt));

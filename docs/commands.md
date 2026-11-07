@@ -315,11 +315,17 @@ balance), so the bot never uses it without you choosing it.
   under the account: your figure minus what the bot saw the account spend since
   you gave it (the grant and the expiry only when you gave them). «≈» and «via the
   bot» are meant: a spend by another key or machine is invisible to the bot, so
-  give a fresh figure now and then; a new figure starts the count over. A refusal
+  give a fresh figure now and then; a new figure starts the count over. Give it
+  while the account is idle: a turn that runs while you give the figure, or one
+  that finished while the bot was down and is replayed afterwards, is counted
+  in full (a turn's cost carries no end time to compare with). A refusal
   («Credit balance is too low») that comes after the figure turns the line into
-  `🎁 API credit used up`; the day after the expiry day (the credit counts as
-  usable through the whole of it, UTC) it reads `🎁 API credit expired 15.11 — set
-  the new figure from Console › Billing`. The figure is kept in
+  `🎁 API credit used up … — top it up, then pick the account again` (the only
+  used-up line of that account); a figure given AFTER a refusal ends the
+  used-up mark — you are saying there is money, as a billed turn going through
+  does. The day after the expiry day (the credit counts as usable through the
+  whole of it, UTC) the line reads `🎁 API credit expired 15.11 — give the new
+  figure: charness claude-profiles credit <name> <left>`. The figure is kept in
   `DATA_DIR/claudeApiCredit.json`, not in `state.json` (a running bot rewrites
   that file from its memory, so a figure written there from the command line
   would be lost); the bot reads the file as it changes, no restart.

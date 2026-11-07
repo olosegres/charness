@@ -12,6 +12,7 @@ import * as path from 'path';
 import { formatClaudeProfileCliLine } from '../cli/claudeProfiles';
 import {
   buildBucketsFromRateLimitWindows,
+  buildClaudeProfileUsageView,
   buildClaudeProfileUsageViews,
   buildClaudeProfilesReport,
   checkClaudeUsageBucketsChanged,
@@ -481,6 +482,14 @@ describe('the views off the registry and the state file', () => {
     assert.equal('creditAnchor' in byName.plain, false, 'an account without a figure has none');
     assert.equal('creditSpend' in byName.plain, false);
     assert.equal('creditAnchor' in buildClaudeProfileUsageViews({ dataDir: '/tmp/data', records: { api: { createdAt: '2026-10-02T00:00:00Z' } } })[1], false, 'no anchors given at all');
+  });
+
+  it('builds ONE profile\'s view the very way the list does — what /accounts and /limits both render', () => {
+    const creditAnchor = { remainingUsd: 5, anchoredAt: '2026-11-07T08:00:00.000Z' };
+    const record = { createdAt: '2026-10-02T00:00:00Z', billing: 'api' as const, creditSpend: { anchoredAt: creditAnchor.anchoredAt, usd: 1 } };
+    const [listed] = buildClaudeProfileUsageViews({ dataDir: '/tmp/data', records: { api: record }, creditAnchors: { api: creditAnchor } }).filter((view) => view.name === 'api');
+    assert.deepEqual(buildClaudeProfileUsageView({ dataDir: '/tmp/data', name: 'api', record, creditAnchor }), listed);
+    assert.equal(buildClaudeProfileUsageView({ dataDir: '/tmp/data', name: 'nobody', record: undefined }).billing, null, 'a name nothing was recorded for is a plain view');
   });
 
   it('getClaudeProfileRecordsFromState picks the registry out of a state file already read: entries without a creation time are dropped, a missing or odd registry is empty', () => {

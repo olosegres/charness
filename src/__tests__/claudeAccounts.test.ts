@@ -31,7 +31,7 @@ import type { FallbackChainEntry } from '../utils/fallbackChain';
 import type { BackendFamily } from '../utils/backendSwitchPlan';
 import type { OperatorSwitchOutcome } from '../utils/operatorSwitchPlan';
 import { t } from '../i18n';
-import { buildClaudeProfileUsageViews } from '../utils/claudeUsage';
+import { buildClaudeProfileUsageView, buildClaudeProfileUsageViews } from '../utils/claudeUsage';
 import { limitsUsageRefreshBudgetMs } from '../utils/usageRefreshBudget';
 import type { AnthropicApiKeyCheck } from '../utils/anthropicApiKeyCheck';
 import { createCommandHarness, type CommandHarness } from './commandModuleHarness';
@@ -85,6 +85,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
       checkIsGeneral: () => isGeneralTopic,
       getDataDir: () => dataDir,
       getInstanceTimezone: () => 'UTC',
+      getProfileUsageView: (name) => buildClaudeProfileUsageView({ dataDir, name, record: harness.state.getClaudeProfileInfo(name) }),
       refreshClaudeUsage: async (options) => {
         usageRefreshes.push(options);
         await runUsageRefresh();

@@ -37,8 +37,8 @@ import {
 } from '../../../utils/claudeProfiles';
 import type { AnthropicApiKeyCheck } from '../../../utils/anthropicApiKeyCheck';
 import { formatClaudeProfileUsageLines } from '../../../utils/claudeProfileUsageLines';
-import { readClaudeApiCreditAnchors } from '../../../utils/claudeApiCredit';
 import { refreshUsageWithinBudget } from '../../../utils/usageRefreshBudget';
+import type { ClaudeProfileUsageView } from '../../../utils/claudeUsage';
 import {
   accountAddApiCallback,
   accountAddCallback,
@@ -134,6 +134,8 @@ export interface ClaudeAccountsPorts
   getHomeClaudeDir?: () => string;
   /** Whether the API accepts a pasted key (`utils/anthropicApiKeyCheck.ts`); injectable so a test never reaches the network. */
   verifyAnthropicApiKey: (apiKey: string) => Promise<AnthropicApiKeyCheck>;
+  /** One profile as the usage screens render it: its record plus the operator's credit figure — the very view `/limits` renders (`bot.ts`). */
+  getProfileUsageView: (name: string) => ClaudeProfileUsageView;
 }
 
 /** Screens whose provider snapshot is kept (the newest); an older keyboard is refused as expired. */
@@ -149,7 +151,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     bot, command, getState, replyToThread, editThreadMessage, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
     applyClaudeProfileEverywhere, switchTopicByOperator, detectOpenCodeProviders, listOpenCodeModels, getTopicRun, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
-    verifyAnthropicApiKey,
+    verifyAnthropicApiKey, getProfileUsageView,
   } = ports;
   const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
@@ -318,10 +320,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
    * line on its own row. Nothing for a profile never polled.
    */
   function formatUsageLines(name: string): string {
-    const record = getState().getClaudeProfileInfo(name);
-    const creditAnchor = readClaudeApiCreditAnchors(getDataDir())[name];
-    const source = record && creditAnchor ? { ...record, creditAnchor } : record;
-    const lines = formatClaudeProfileUsageLines(source, getInstanceTimezone(), Date.now());
+    const lines = formatClaudeProfileUsageLines(getProfileUsageView(name), getInstanceTimezone(), Date.now());
     return lines.map((line) => `\n${line}`).join('');
   }
 

@@ -15,8 +15,10 @@ import path from 'path';
 import {
   addClaudeApiCreditSpend,
   checkIsClaudeApiCreditExpired,
+  checkIsClaudeApiCreditMarkCurrent,
   claudeApiCreditFileName,
   getClaudeApiCreditEstimate,
+  listProfilesWithSupersededCreditMark,
   parseClaudeApiCreditDay,
   readClaudeApiCreditAnchors,
   resetClaudeApiCreditCache,
@@ -96,6 +98,28 @@ describe('getClaudeApiCreditEstimate', () => {
   });
 });
 
+describe('the used-up mark next to the operator\'s figure', () => {
+  it('is current only when the refusal came after the figure', () => {
+    assert.equal(checkIsClaudeApiCreditMarkCurrent('2026-11-07T09:00:00.000Z', anchor.anchoredAt), true);
+    assert.equal(checkIsClaudeApiCreditMarkCurrent(anchor.anchoredAt, anchor.anchoredAt), false, 'the same instant is not after it');
+    assert.equal(checkIsClaudeApiCreditMarkCurrent('2026-11-06T09:00:00.000Z', anchor.anchoredAt), false);
+    assert.equal(checkIsClaudeApiCreditMarkCurrent(undefined, anchor.anchoredAt), false);
+    assert.equal(checkIsClaudeApiCreditMarkCurrent(null, anchor.anchoredAt), false);
+  });
+
+  it('lists the profiles whose mark a figure has superseded — and only those', () => {
+    const records = {
+      older: { creditExhaustedAt: '2026-11-06T09:00:00.000Z' },
+      newer: { creditExhaustedAt: '2026-11-07T09:00:00.000Z' },
+      noMark: {},
+      noFigure: { creditExhaustedAt: '2026-11-01T09:00:00.000Z' },
+    };
+    const anchors = { older: anchor, newer: anchor, noMark: anchor };
+    assert.deepEqual(listProfilesWithSupersededCreditMark(records, anchors), ['older'], 'a mark with no figure beside it stays');
+    assert.deepEqual(listProfilesWithSupersededCreditMark(records, {}), []);
+  });
+});
+
 describe('addClaudeApiCreditSpend', () => {
   it('adds a turn to the count of the same anchor and starts over for another', () => {
     const first = addClaudeApiCreditSpend(undefined, anchor, 0.25);
@@ -154,9 +178,11 @@ describe('the anchors file', () => {
     assert.equal(fs.statSync(filePath()).mode & 0o777, 0o600, 'owner-only');
   });
 
-  it('removing a profile that has no anchor writes nothing', () => {
-    writeClaudeApiCreditAnchor(dataDir, 'work', null);
+  it('removing a profile that has no anchor writes nothing and says so', () => {
+    assert.equal(writeClaudeApiCreditAnchor(dataDir, 'work', null), false);
     assert.equal(fs.existsSync(filePath()), false);
+    assert.equal(writeClaudeApiCreditAnchor(dataDir, 'work', anchor), true);
+    assert.equal(writeClaudeApiCreditAnchor(dataDir, 'work', null), true);
   });
 
   it('serves the last good anchors from a file that broke, and says why ONCE — never the value', () => {
@@ -197,6 +223,7 @@ describe('the anchors file', () => {
     mock.method(console, 'warn', () => undefined);
     fs.writeFileSync(filePath(), '{ not json');
     assert.throws(() => writeClaudeApiCreditAnchor(dataDir, 'work', anchor), /fix or delete/);
+    assert.throws(() => writeClaudeApiCreditAnchor(dataDir, 'work', null), /fix or delete/, 'removing is no exception: «no figure» would be a lie about a file that may hold it');
     assert.equal(fs.readFileSync(filePath(), 'utf8'), '{ not json');
   });
 

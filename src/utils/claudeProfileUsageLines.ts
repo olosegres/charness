@@ -20,6 +20,8 @@ import {
  * a usage view both fit).
  */
 export interface ClaudeProfileUsageSource {
+  /** The profile's name: the expired-credit line names the command that sets the new figure for it. */
+  name?: string;
   usage?: ClaudeUsageSnapshot;
   limitedUntil?: string | null;
   billing?: ClaudeProfileBilling | null;
@@ -29,6 +31,9 @@ export interface ClaudeProfileUsageSource {
   creditAnchor?: ClaudeApiCreditAnchor;
   creditSpend?: ClaudeApiCreditSpend;
 }
+
+/** What the expired-credit line names when the source carries no profile name (a placeholder the operator replaces). */
+const unknownProfileName = '<profile>';
 
 /** The localised words of a relative reset («🔄 in 2h»). */
 function getRelativeResetWords(): ClaudeRelativeResetWords {
@@ -77,8 +82,10 @@ function formatApiBillingLines(source: ClaudeProfileUsageSource, timezone: strin
   const lines: string[] = [];
   if (source.apiSpend) lines.push(t('account.row.apiSpend', formatClaudeApiSpendWords(source.apiSpend, timezone, nowMs)));
   const credit = getClaudeApiCreditEstimate({ anchor: source.creditAnchor, spend: source.creditSpend, creditExhaustedAt: source.creditExhaustedAt, nowMs });
-  if (credit) lines.push(formatClaudeApiCreditLine(credit, timezone, nowMs));
-  if (source.creditExhaustedAt) lines.push(t('account.row.creditExhausted'));
+  if (credit) lines.push(formatClaudeApiCreditLine(credit, source.name ?? unknownProfileName, timezone, nowMs));
+  // With a figure the credit line already says it — used up, or not (a refusal older than the figure is news no longer):
+  // a second used-up line beside it would repeat it or contradict it.
+  else if (source.creditExhaustedAt) lines.push(t('account.row.creditExhausted'));
   return lines;
 }
 
@@ -93,11 +100,11 @@ function formatCreditExpiryDay(expiresOn: string, nowMs: number): string {
 /**
  * @description The one line of the bonus API credit (`utils/claudeApiCredit.ts`): `🎁 API credit ≈ $61.20 of $200.00 ·
  * $6.51 spent via the bot since 07.11 · expires 15.11` — the size of the grant and the expiry only when the operator gave
- * them; or `used up` after a refusal; or `expired` with the way to set the new figure. The «≈» and «via the bot» say what
+ * them; or `used up` after a refusal (with what to do about it); or `expired` with the command that sets the new figure. The «≈» and «via the bot» say what
  * the figure is: the Console's balance minus what the bot saw spent, not the balance itself.
  */
-function formatClaudeApiCreditLine(credit: ClaudeApiCreditEstimate, timezone: string, nowMs: number): string {
-  if (credit.status === 'expired') return t('account.row.apiCreditExpired', { day: formatCreditExpiryDay(credit.expiresOn, nowMs) });
+function formatClaudeApiCreditLine(credit: ClaudeApiCreditEstimate, profileName: string, timezone: string, nowMs: number): string {
+  if (credit.status === 'expired') return t('account.row.apiCreditExpired', { day: formatCreditExpiryDay(credit.expiresOn, nowMs), name: profileName });
   const expires = credit.expiresOn === null ? '' : t('account.row.apiCreditExpires', { day: formatCreditExpiryDay(credit.expiresOn, nowMs) });
   if (credit.status === 'usedUp') return t('account.row.apiCreditUsedUp', { expires });
   return t('account.row.apiCredit', {
