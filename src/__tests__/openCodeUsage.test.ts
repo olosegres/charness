@@ -296,6 +296,22 @@ describe('createOpenCodeUsagePoller', () => {
     assert.deepEqual(failed.logs, []);
   });
 
+  it('markAllStale marks the figures of every subscription that has a reader stale with the reason, keeping them and their age; nothing else is touched or rewritten', () => {
+    const previous: OpenCodeProviderUsageRecord = { authKind: 'subscription', usage: { fetchedAt: '2026-10-17T09:00:00.000Z', source: 'api', buckets } };
+    const h = createHarness({
+      credentials: { openai: subscription(), anthropic: subscription(), openrouter: apiKey },
+      records: { openai: previous, anthropic: { authKind: 'subscription' }, openrouter: { authKind: 'apiKey' } },
+    });
+    h.poller.markAllStale('usage poll did not finish');
+    assert.deepEqual(h.records.get('openai'), { authKind: 'subscription', usage: { ...previous.usage, isStale: true, error: 'usage poll did not finish' } });
+    assert.deepEqual(h.records.get('anthropic'), { authKind: 'subscription' }, 'a provider with no reader has no figures to mark');
+    assert.deepEqual(h.records.get('openrouter'), { authKind: 'apiKey' });
+    assert.equal(h.saves.length, 1);
+    h.poller.markAllStale('usage poll did not finish');
+    assert.equal(h.saves.length, 1, 'already marked with that reason: not rewritten');
+    assert.equal(createHarness({ credentials: null }).poller.markAllStale('x'), undefined, 'an unreadable auth.json touches nothing');
+  });
+
   it('a reader that throws is logged and does not stop the other providers', async () => {
     const h = createHarness({ credentials: { openai: subscription(), openrouter: apiKey }, read: async () => { throw new Error('boom'); } });
     await h.poller.refreshAll();

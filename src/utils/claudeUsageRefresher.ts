@@ -61,12 +61,16 @@ export interface ClaudeUsageRefresherDeps {
   getSnapshot: (name: string) => ClaudeUsageSnapshot | undefined;
   saveSnapshot: (name: string, snapshot: ClaudeUsageSnapshot) => void;
   readToken: (configDir: string | null) => ClaudeOAuthToken | null;
-  fetchUsage: (accessToken: string) => Promise<ClaudeUsageFetchResult>;
+  /** One GET of the usage endpoint; `signal` cancels it — the refresher aborts it when it gives up on the poll. */
+  fetchUsage: (accessToken: string, signal?: AbortSignal) => Promise<ClaudeUsageFetchResult>;
   /**
    * The OpenCode providers' usage (`openCodeUsage.ts`) is polled on the same timer and by the same on-demand call; a
-   * failure there never reaches the Claude profiles' polls.
+   * failure there never reaches the Claude profiles' polls. `signal` is the poll's cancel: once it is aborted the poll
+   * saves nothing.
    */
-  refreshOpenCode?: (options: { maxAgeMs?: number }) => Promise<void>;
+  refreshOpenCode?: (options: { maxAgeMs?: number; signal?: AbortSignal }) => Promise<void>;
+  /** The OpenCode twin of a profile's give-up mark: their stored figures are marked stale with `reason`. */
+  markOpenCodeStale?: (reason: string) => void;
   /** {@link claudeUsagePollDeadlineMs} unless a test sets it. */
   pollDeadlineMs?: number;
   now?: () => number;
@@ -84,14 +88,29 @@ export interface ClaudeUsageRefresher {
   stop: () => void;
 }
 
+/** The stale mark a poll that was given up on leaves on its figures. */
+const usagePollGaveUpReason = 'usage poll did not finish';
+
+/** The key of the OpenCode providers' poll beside the profiles' (a profile is keyed by its name). */
+const openCodePollLabel = 'OpenCode providers';
+
+/** One poll per target (a profile, or the OpenCode providers) may be pending; `done` ends when it settles or is given up on. */
+interface PendingPoll {
+  isAbandoned: boolean;
+  done: Promise<void>;
+}
+
+type PollEnd = 'finished' | 'threw';
+
 export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): ClaudeUsageRefresher {
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? ((line: string) => console.log(line));
   const pollDeadlineMs = deps.pollDeadlineMs ?? claudeUsagePollDeadlineMs;
+  const pendingPolls = new Map<string, PendingPoll>();
   let inFlight: Promise<void> | null = null;
   let timer: NodeJS.Timeout | null = null;
 
-  async function pollProfile(profile: ClaudeUsageRefresherProfile): Promise<void> {
+  async function pollProfile(profile: ClaudeUsageRefresherProfile, signal: AbortSignal): Promise<void> {
     const previous = deps.getSnapshot(profile.name);
     const token = deps.readToken(profile.configDir);
     if (token === null) {
@@ -105,7 +124,9 @@ export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): Clau
       }
       return;
     }
-    const result = await deps.fetchUsage(token.accessToken);
+    const result = await deps.fetchUsage(token.accessToken, signal);
+    // The refresher gave up on this poll while it ran: a newer reading may have been stored since, so this one writes nothing.
+    if (signal.aborted) return;
     if (!result.ok) {
       log(`[usage] ${profile.name}: usage poll failed (${result.error})`);
       deps.saveSnapshot(profile.name, markClaudeUsageSnapshotStale(previous, result.error, now()));
@@ -114,9 +135,53 @@ export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): Clau
     deps.saveSnapshot(profile.name, mergeClaudeUsageSnapshot(previous, result.buckets, 'api', now()));
   }
 
-  /** Wait for a poll, but only until its deadline: a poll given up on is logged and left to finish (or not) on its own. */
-  async function waitForPoll(label: string, poll: Promise<void>): Promise<void> {
-    if (!(await waitUpTo(poll, pollDeadlineMs))) log(`[usage] ${label}: usage poll did not finish within ${pollDeadlineMs / 1000} s; not waiting for it any more`);
+  /** Run a poll and log how it ended — whenever that is, so a failure after the deadline is seen too. Never rejects. */
+  async function runLoggingFailure(label: string, poll: (signal: AbortSignal) => Promise<void>, signal: AbortSignal): Promise<PollEnd> {
+    try {
+      await poll(signal);
+      return 'finished';
+    } catch (e) {
+      log(`[usage] ${label}: usage poll threw: ${e instanceof Error ? e.message : String(e)}`);
+      return 'threw';
+    }
+  }
+
+  /**
+   * Run the poll of one target, waiting for it at most {@link claudeUsagePollDeadlineMs}. At the deadline the poll is given
+   * up on: its request is cancelled, `markStale` leaves a stale mark on the figures, and it is left pending until it finally
+   * settles — saving nothing, and logging when and how it ended — so a stuck target is never polled twice at once. A call for
+   * a target whose earlier poll was given up on returns at once; one whose poll is still within its deadline joins it.
+   */
+  function runPoll(label: string, poll: (signal: AbortSignal) => Promise<void>, markStale: () => void): Promise<void> {
+    const pending = pendingPolls.get(label);
+    if (pending) return pending.isAbandoned ? Promise.resolve() : pending.done;
+    const controller = new AbortController();
+    const startedAtMs = now();
+    const entry: PendingPoll = { isAbandoned: false, done: Promise.resolve() };
+    pendingPolls.set(label, entry);
+    const ended = runLoggingFailure(label, poll, controller.signal);
+    void ended.then((end) => {
+      if (pendingPolls.get(label) === entry) pendingPolls.delete(label);
+      if (!entry.isAbandoned) return;
+      const duration = `${((now() - startedAtMs) / 1000).toFixed(1)} s`;
+      log(`[usage] ${label}: the abandoned usage poll ${end === 'finished' ? `finished after ${duration}; its answer was dropped` : `failed after ${duration}`}`);
+    });
+    entry.done = waitUpTo(ended.then(() => undefined), pollDeadlineMs).then((isSettled) => {
+      if (isSettled) return;
+      entry.isAbandoned = true;
+      controller.abort();
+      markStale();
+      log(`[usage] ${label}: usage poll did not finish within ${pollDeadlineMs / 1000} s; not waiting for it any more`);
+    });
+    return entry.done;
+  }
+
+  function markProfileStale(name: string): void {
+    deps.saveSnapshot(name, markClaudeUsageSnapshotStale(deps.getSnapshot(name), usagePollGaveUpReason, now()));
+  }
+
+  function runProfilePoll(profile: ClaudeUsageRefresherProfile): Promise<void> {
+    return runPoll(profile.name, (signal) => pollProfile(profile, signal), () => markProfileStale(profile.name));
   }
 
   function checkNeedsPoll(profile: ClaudeUsageRefresherProfile, maxAgeMs: number | undefined): boolean {
@@ -131,13 +196,14 @@ export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): Clau
     if (inFlight) return inFlight;
     inFlight = (async () => {
       const due = deps.listProfiles().filter((profile) => checkNeedsPoll(profile, options.maxAgeMs));
+      const refreshOpenCode = deps.refreshOpenCode;
       await Promise.all([
-        ...due.map((profile) => waitForPoll(profile.name, pollProfile(profile)).catch((e) => {
-          log(`[usage] ${profile.name}: usage poll threw: ${e instanceof Error ? e.message : String(e)}`);
-        })),
-        deps.refreshOpenCode && waitForPoll('OpenCode providers', deps.refreshOpenCode(options)).catch((e) => {
-          log(`[usage] OpenCode providers: usage poll threw: ${e instanceof Error ? e.message : String(e)}`);
-        }),
+        ...due.map((profile) => runProfilePoll(profile)),
+        refreshOpenCode && runPoll(
+          openCodePollLabel,
+          (signal) => refreshOpenCode({ ...options, signal }),
+          () => deps.markOpenCodeStale?.(usagePollGaveUpReason),
+        ),
       ]);
     })().finally(() => { inFlight = null; });
     return inFlight;
@@ -145,7 +211,7 @@ export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): Clau
 
   async function refreshOne(name: string): Promise<void> {
     const profile = deps.listProfiles().find((candidate) => candidate.name === name);
-    if (profile && profile.billing !== 'api') await waitForPoll(profile.name, pollProfile(profile));
+    if (profile && profile.billing !== 'api') await runProfilePoll(profile);
   }
 
   function noteStreamWindows(name: string, windows: readonly ClaudeRateLimitWindow[]): void {
@@ -182,11 +248,17 @@ export async function refreshClaudeUsageForLaunch(
   options: { currentProfile: string | null; isStoppedByLimit: boolean; maxAgeMs: number; budgetMs?: number; log?: (line: string) => void },
 ): Promise<void> {
   const budgetMs = options.budgetMs ?? claudeLaunchRefreshBudgetMs;
+  const log = options.log ?? ((line: string) => console.log(line));
   const refresh = async (): Promise<void> => {
-    if (options.isStoppedByLimit && options.currentProfile !== null) await refresher.refreshOne(options.currentProfile);
-    await refresher.refreshAll({ maxAgeMs: options.maxAgeMs });
+    try {
+      if (options.isStoppedByLimit && options.currentProfile !== null) await refresher.refreshOne(options.currentProfile);
+      await refresher.refreshAll({ maxAgeMs: options.maxAgeMs });
+    } catch (e) {
+      // Whenever it fails — inside the budget or long after it — the answer is the cached figures, and the failure is on record.
+      log(`[usage] claude_profiles: the usage refresh threw: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
   if (!(await waitUpTo(refresh(), budgetMs))) {
-    (options.log ?? console.log)(`[usage] claude_profiles: the usage refresh did not finish within ${budgetMs / 1000} s; answering from the cached figures`);
+    log(`[usage] claude_profiles: the usage refresh did not finish within ${budgetMs / 1000} s; answering from the cached figures`);
   }
 }

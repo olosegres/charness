@@ -14,14 +14,16 @@ function createHarness(options: {
   profiles: ClaudeUsageRefresherProfile[];
   refreshOpenCode?: ClaudeUsageRefresherDeps['refreshOpenCode'];
   tokens?: Record<string, { accessToken: string; expiresAtMs: number | null } | null>;
-  fetch?: (token: string) => Promise<ClaudeUsageFetchResult>;
+  fetch?: (token: string, signal: AbortSignal | undefined) => Promise<ClaudeUsageFetchResult>;
   snapshots?: Record<string, ClaudeUsageSnapshot>;
   pollDeadlineMs?: number;
+  markOpenCodeStale?: ClaudeUsageRefresherDeps['markOpenCodeStale'];
 }) {
   let nowMs = Date.parse('2026-10-12T10:00:00Z');
   const snapshots = new Map<string, ClaudeUsageSnapshot>(Object.entries(options.snapshots ?? {}));
   const saves: Array<[string, ClaudeUsageSnapshot]> = [];
   const fetched: string[] = [];
+  const fetchSignals: Array<AbortSignal | undefined> = [];
   const logs: string[] = [];
   const deps: ClaudeUsageRefresherDeps = {
     listProfiles: () => options.profiles,
@@ -31,16 +33,18 @@ function createHarness(options: {
       const key = configDir ?? 'default';
       return options.tokens && key in options.tokens ? options.tokens[key] : { accessToken: `tok-${key}`, expiresAtMs: nowMs + 3_600_000 };
     },
-    fetchUsage: async (token) => {
+    fetchUsage: async (token, signal) => {
       fetched.push(token);
-      return options.fetch ? options.fetch(token) : { ok: true, buckets: [session(42)] };
+      fetchSignals.push(signal);
+      return options.fetch ? options.fetch(token, signal) : { ok: true, buckets: [session(42)] };
     },
     refreshOpenCode: options.refreshOpenCode,
+    markOpenCodeStale: options.markOpenCodeStale,
     pollDeadlineMs: options.pollDeadlineMs,
     now: () => nowMs,
     log: (line) => logs.push(line),
   };
-  return { refresher: createClaudeUsageRefresher(deps), snapshots, saves, fetched, logs, advance: (ms: number) => { nowMs += ms; } };
+  return { refresher: createClaudeUsageRefresher(deps), snapshots, saves, fetched, fetchSignals, logs, advance: (ms: number) => { nowMs += ms; } };
 }
 
 const defaultProfile: ClaudeUsageRefresherProfile = { name: 'default', configDir: null, loggedIn: true };
@@ -115,11 +119,12 @@ describe('refreshAll', () => {
 
 describe('refreshAll and the OpenCode providers', () => {
   it('polls the OpenCode providers beside the profiles, passing the max age on', async () => {
-    const asked: Array<{ maxAgeMs?: number }> = [];
+    const asked: Array<{ maxAgeMs?: number; signal?: AbortSignal }> = [];
     const h = createHarness({ profiles: [defaultProfile], refreshOpenCode: async (options) => { asked.push(options); } });
     await h.refresher.refreshAll();
     await h.refresher.refreshAll({ maxAgeMs: 60_000 });
-    assert.deepEqual(asked, [{}, { maxAgeMs: 60_000 }]);
+    assert.deepEqual(asked.map(({ maxAgeMs }) => maxAgeMs), [undefined, 60_000]);
+    assert.ok(asked.every(({ signal }) => signal instanceof AbortSignal), 'each OpenCode poll carries the signal that cancels it');
     assert.equal(h.fetched.length, 1, 'the Claude profile\'s own gate is untouched: polled on the first call, its fresh snapshot skipped on the second');
   });
 
@@ -169,18 +174,10 @@ async function settleOrHung<T>(task: Promise<T>, ms = 1_000): Promise<T | 'hung'
 const neverSettles = (): Promise<never> => new Promise<never>(() => {});
 
 describe('a poll that never settles must not pin the refresh', () => {
-  it('a stuck poll is given up after the poll deadline: the refresh ends, says which poll it gave up on, and the next refresh polls afresh', async () => {
-    let calls = 0;
-    const h = createHarness({
-      profiles: [defaultProfile],
-      pollDeadlineMs: 20,
-      fetch: () => (++calls === 1 ? neverSettles() : Promise.resolve({ ok: true, buckets: [session(7)] })),
-    });
+  it('a stuck poll is given up after the poll deadline: the refresh ends and says which poll it gave up on', async () => {
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, fetch: () => neverSettles() });
     assert.notEqual(await settleOrHung(h.refresher.refreshAll()), 'hung', 'the stuck poll is abandoned at its deadline');
     assert.match(h.logs.join('\n'), /default: usage poll did not finish within 0\.02 s/);
-    assert.notEqual(await settleOrHung(h.refresher.refreshAll()), 'hung', 'the next refresh is not stuck behind the abandoned one');
-    assert.equal(calls, 2, 'the second refresh polled again instead of joining the dead one');
-    assert.equal(h.snapshots.get('default')?.buckets[0].percent, 7);
   });
 
   it('every later caller gets out too: ten refreshes joined to a stuck poll all end at its deadline', async () => {
@@ -189,7 +186,7 @@ describe('a poll that never settles must not pin the refresh', () => {
     assert.notEqual(await settleOrHung(Promise.all(callers)), 'hung');
   });
 
-  it('a stuck profile does not hold back the others: their snapshots are stored while it is still being waited for', async () => {
+  it('a stuck profile does not hold back the others: their snapshots are stored while it is waited for, and its own figures are marked stale', async () => {
     const h = createHarness({
       profiles: [defaultProfile, workProfile],
       pollDeadlineMs: 20,
@@ -197,26 +194,122 @@ describe('a poll that never settles must not pin the refresh', () => {
     });
     assert.notEqual(await settleOrHung(h.refresher.refreshAll()), 'hung');
     assert.equal(h.snapshots.get('work')?.buckets[0].percent, 33);
-    assert.equal(h.snapshots.has('default'), false, 'the abandoned poll stored nothing');
+    assert.equal(h.snapshots.get('work')?.isStale, undefined);
+    assert.equal(h.snapshots.get('default')?.isStale, true, 'the abandoned poll left a stale mark, not a reading that looks current');
+    assert.equal(h.snapshots.get('default')?.error, 'usage poll did not finish');
   });
 
-  it('a stuck OpenCode poll is given up too, and the Claude profiles keep their figures', async () => {
-    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, refreshOpenCode: () => neverSettles() });
+  it('the give-up keeps the last figures and their age, and only marks them stale with the reason', async () => {
+    const previous: ClaudeUsageSnapshot = { fetchedAt: '2026-10-12T08:00:00.000Z', source: 'api', buckets: [session(61)] };
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, snapshots: { default: previous }, fetch: () => neverSettles() });
+    await settleOrHung(h.refresher.refreshAll());
+    assert.deepEqual(h.snapshots.get('default'), { ...previous, isStale: true, error: 'usage poll did not finish' });
+  });
+
+  it('a stuck OpenCode poll is given up too: the Claude profiles keep their figures, the OpenCode records are marked stale with the same reason', async () => {
+    const markedStale: string[] = [];
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, refreshOpenCode: () => neverSettles(), markOpenCodeStale: (reason) => markedStale.push(reason) });
     assert.notEqual(await settleOrHung(h.refresher.refreshAll()), 'hung');
     assert.equal(h.snapshots.get('default')?.buckets[0].percent, 42);
     assert.match(h.logs.join('\n'), /OpenCode providers: usage poll did not finish within 0\.02 s/);
+    assert.deepEqual(markedStale, ['usage poll did not finish']);
   });
 
-  it('refreshOne is bounded the same way (the forced read of the account a limit just stopped)', async () => {
+  it('refreshOne is bounded the same way (the forced read of the account a limit just stopped) and marks the same stale', async () => {
     const h = createHarness({ profiles: [defaultProfile, workProfile], pollDeadlineMs: 20, fetch: () => neverSettles() });
     assert.notEqual(await settleOrHung(h.refresher.refreshOne('work')), 'hung');
+    assert.equal(h.snapshots.get('work')?.isStale, true);
   });
 
-  it('a poll that answers inside its deadline is untouched: no give-up line, the figures are stored', async () => {
-    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 500 });
+  it('a poll that answers inside its deadline is untouched: no give-up line, no stale mark, the figures are stored', async () => {
+    const markedStale: string[] = [];
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 500, markOpenCodeStale: (reason) => markedStale.push(reason), refreshOpenCode: async () => {} });
     await h.refresher.refreshAll();
     assert.equal(h.snapshots.get('default')?.buckets[0].percent, 42);
+    assert.equal(h.snapshots.get('default')?.isStale, undefined);
     assert.deepEqual(h.logs, []);
+    assert.deepEqual(markedStale, []);
+  });
+});
+
+describe('a poll that was given up on', () => {
+  it('is cancelled: its request gets an aborted signal at the deadline', async () => {
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, fetch: () => neverSettles() });
+    await settleOrHung(h.refresher.refreshAll());
+    assert.equal(h.fetchSignals.length, 1);
+    assert.equal(h.fetchSignals[0]?.aborted, true);
+  });
+
+  it('never saves, even when the request ignores the cancel and settles late: a newer reading is not overwritten', async () => {
+    let release!: (result: ClaudeUsageFetchResult) => void;
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, fetch: () => new Promise<ClaudeUsageFetchResult>((resolve) => { release = resolve; }) });
+    await settleOrHung(h.refresher.refreshAll());
+    h.refresher.noteStreamWindows('default', [{ name: 'five_hour', utilization: 0.81, resetsAtMs: 1791810000000 }]);
+    const newer = h.snapshots.get('default');
+    assert.equal(newer?.buckets[0].percent, 81);
+    const savesBefore = h.saves.length;
+    release({ ok: true, buckets: [session(99)] });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(h.saves.length, savesBefore, 'the late answer wrote nothing');
+    assert.deepEqual(h.snapshots.get('default'), newer);
+  });
+
+  it('is not stacked on: refreshes during a systematic hang start no second poll of the profile, while the other profiles are polled as usual', async () => {
+    const h = createHarness({
+      profiles: [defaultProfile, workProfile],
+      pollDeadlineMs: 20,
+      fetch: (token) => (token === 'tok-default' ? neverSettles() : Promise.resolve({ ok: true, buckets: [session(5)] })),
+    });
+    for (let round = 0; round < 5; round += 1) await settleOrHung(h.refresher.refreshAll());
+    await settleOrHung(h.refresher.refreshOne('default'));
+    assert.equal(h.fetched.filter((token) => token === 'tok-default').length, 1, 'one pending poll of the stuck profile, however many refreshes ask');
+    assert.equal(h.fetched.filter((token) => token === 'tok-/p/work').length, 5, 'the healthy profile is polled every time');
+  });
+
+  it('and the OpenCode providers are not stacked on either: one pending poll at a time', async () => {
+    let started = 0;
+    const h = createHarness({ profiles: [], pollDeadlineMs: 20, refreshOpenCode: () => { started += 1; return neverSettles(); } });
+    for (let round = 0; round < 4; round += 1) await settleOrHung(h.refresher.refreshAll());
+    assert.equal(started, 1);
+  });
+
+  it('frees the profile when it finally settles: the next refresh polls afresh, and one line says how long it took', async () => {
+    let release!: (result: ClaudeUsageFetchResult) => void;
+    let calls = 0;
+    const h = createHarness({
+      profiles: [defaultProfile],
+      pollDeadlineMs: 20,
+      fetch: () => (++calls === 1 ? new Promise<ClaudeUsageFetchResult>((resolve) => { release = resolve; }) : Promise.resolve({ ok: true, buckets: [session(7)] })),
+    });
+    await settleOrHung(h.refresher.refreshAll());
+    h.advance(45_000);
+    release({ ok: true, buckets: [session(99)] });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.match(h.logs.join('\n'), /default: the abandoned usage poll finished after 45\.0 s; its answer was dropped/);
+    await settleOrHung(h.refresher.refreshAll());
+    assert.equal(calls, 2);
+    assert.equal(h.snapshots.get('default')?.buckets[0].percent, 7);
+  });
+
+  it('logs its failure when it arrives after the deadline, with how long it took — a late error is not swallowed', async () => {
+    let fail!: (error: Error) => void;
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, fetch: () => new Promise<ClaudeUsageFetchResult>((_resolve, reject) => { fail = reject; }) });
+    await settleOrHung(h.refresher.refreshAll());
+    h.advance(50_000);
+    fail(new Error('socket exploded'));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const log = h.logs.join('\n');
+    assert.match(log, /default: usage poll threw: socket exploded/);
+    assert.match(log, /default: the abandoned usage poll failed after 50\.0 s/);
+  });
+
+  it('a poll that fails inside its deadline is logged once and has no "abandoned" line; refreshOne logs its failure instead of throwing', async () => {
+    const h = createHarness({ profiles: [defaultProfile, workProfile], fetch: async () => { throw new Error('boom'); } });
+    await h.refresher.refreshAll();
+    assert.equal(h.logs.filter((line) => line.includes('usage poll threw: boom')).length, 2);
+    assert.ok(!h.logs.some((line) => line.includes('abandoned')));
+    await h.refresher.refreshOne('work');
+    assert.equal(h.logs.filter((line) => line.includes('work: usage poll threw: boom')).length, 2);
   });
 });
 
@@ -266,6 +359,13 @@ describe('refreshClaudeUsageForLaunch', () => {
     assert.equal(logs.length, 1);
     await new Promise((resolve) => setTimeout(resolve, 60));
     assert.deepEqual(order, ['one', 'all'], 'the refresh was given up on, not cancelled');
+  });
+
+  it('a refresh that throws is logged and the answer still comes from the cached figures', async () => {
+    const logs: string[] = [];
+    const broken = { refreshOne: async () => {}, refreshAll: async () => { throw new Error('profile list unreadable'); } };
+    await refreshClaudeUsageForLaunch(broken, { currentProfile: null, isStoppedByLimit: false, maxAgeMs, budgetMs: 500, log: (line) => logs.push(line) });
+    assert.deepEqual(logs, ['[usage] claude_profiles: the usage refresh threw: profile list unreadable']);
   });
 
   it('nothing to force without a current profile, or for a name that is no profile', async () => {

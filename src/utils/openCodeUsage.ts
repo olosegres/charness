@@ -196,6 +196,8 @@ export interface OpenCodeUsagePoller {
    * whose `signal` was aborted saves nothing: its caller has given up on it, and its late answer must not overwrite a newer one.
    */
   refreshAll: (options?: { maxAgeMs?: number; signal?: AbortSignal }) => Promise<void>;
+  /** Mark the stored figures of every subscription that has a reader stale with `reason` (the caller gave up on a poll); the figures and their age stay. */
+  markAllStale: (reason: string) => void;
 }
 
 /**
@@ -264,5 +266,15 @@ export function createOpenCodeUsagePoller(deps: OpenCodeUsagePollerDeps): OpenCo
     }));
   }
 
-  return { refreshAll };
+  function markAllStale(reason: string): void {
+    const credentials = deps.readCredentials();
+    if (credentials === null) return;
+    for (const [providerId, credential] of Object.entries(credentials)) {
+      if (credential.kind !== 'subscription' || readers[providerId] === undefined) continue;
+      const previous = deps.getRecord(providerId);
+      saveIfChanged(providerId, previous, { authKind: 'subscription', usage: markClaudeUsageSnapshotStale(previous?.usage, reason, now()) });
+    }
+  }
+
+  return { refreshAll, markAllStale };
 }

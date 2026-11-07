@@ -8055,8 +8055,9 @@ const claudeUsageRefresher = createClaudeUsageRefresher({
   getSnapshot: (name) => state.getClaudeProfileInfo(name)?.usage,
   saveSnapshot: (name, snapshot) => state.setClaudeProfileUsage(name, snapshot),
   readToken: (configDir) => readClaudeOAuthToken(configDir),
-  fetchUsage: (accessToken) => fetchClaudeUsage(accessToken),
+  fetchUsage: (accessToken, signal) => fetchClaudeUsage(accessToken, { signal }),
   refreshOpenCode: (options) => openCodeUsagePoller.refreshAll(options),
+  markOpenCodeStale: (reason) => openCodeUsagePoller.markAllStale(reason),
 });
 
 /** The profile that owns a config directory (`null` = default); `null` for a directory outside the profiles root. */
