@@ -14,9 +14,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { cleanOnRunner } from '../remoteRun/commands';
+import { markJobFetched } from '../remoteRun/jobFiles';
+import { lidClosedReason } from '../remoteRun/runners';
 import { runRemoteRunCli } from '../remoteRun/remoteRunCli';
 import { RemoteRunError, RunnerUnreachableError } from '../remoteRun/remoteRunError';
-import { prepareCallTimeoutMs, type RunnerClient } from '../remoteRun/runnerClient';
+import { prepareCallTimeoutMs, shortCallTimeoutMs, type RunnerClient } from '../remoteRun/runnerClient';
 import type { SshRunResult } from '../remoteRun/ssh';
 import type { CliIo } from '../remoteRun/output';
 import { getProjectContext } from '../remoteRun/project';
@@ -170,6 +172,15 @@ describe('remote-run clean', () => {
     assert.equal(readCalls().length, callsBefore, 'it was not called');
   });
 
+  it('a runner that drops while it removes (ssh ends with 255: a plain-ssh Mac that fell asleep) is «not reached», not a failure — the removal goes on as far as it can, and the line says to clean again', async () => {
+    writeRunners(['box1']);
+    const { slug } = getProjectContext(projectDir);
+    fs.writeFileSync(path.join(root, 'answers', 'box1.example.exit'), '255');
+    const { io, out } = createIo();
+    assert.equal(await runRemoteRunCli(['clean'], io), 0);
+    assert.match(out.join(''), new RegExp(`^box1: not reached \\(.+\\) — its copy of ${slug}, if any, stays; clean again when it is back\n$`));
+  });
+
   it('a paired Mac with its lid shut is not called either — the call may hang as it falls asleep', async () => {
     const runner = createPairedRunnerFixture({ name: 'mac' });
     const hubDir = createHubContext({ homeDir: root }).dir;
@@ -185,6 +196,7 @@ describe('remote-run clean', () => {
     const { io, out } = createIo();
     assert.equal(await runRemoteRunCli(['clean', 'myapp-0123456789'], io), 0);
     assert.match(out.join(''), /^mac: not reached \(its Mac has the lid closed\)/);
+    assert.equal(lidClosedReason, 'its Mac has the lid closed', 'the one wording, shared with the probe\'s gate');
     assert.deepEqual(readCalls(), []);
   });
 
@@ -230,9 +242,17 @@ describe('cleanOnRunner: what the call to one runner turns into', () => {
     assert.deepEqual(await cleanOnRunner(client, slug), { kind: 'timedOut', timeoutMinutes: prepareCallTimeoutMs / 60_000 });
   });
 
+  it('a connection that is lost during the call (ssh\'s own 255, or a killed ssh) is «unreachable» with the ssh reason; the script\'s own 125 is still a failure', async () => {
+    const lost = await cleanOnRunner(createClient(answered('', { exitCode: 255, stderr: 'client_loop: send disconnect: Broken pipe\n' })).client, slug);
+    assert.deepEqual(lost, { kind: 'unreachable', reason: 'client_loop: send disconnect: Broken pipe' });
+    const killed = await cleanOnRunner(createClient(answered('', { exitCode: null, stderr: '' })).client, slug);
+    assert.equal(killed.kind, 'unreachable');
+    assert.equal((await cleanOnRunner(createClient(answered('', { exitCode: 125, stderr: 'remote-run-runner: boom\n' })).client, slug)).kind, 'failed');
+  });
+
   it('a script that fails says its own last words (or the ssh failure when it said none)', async () => {
     assert.deepEqual(await cleanOnRunner(createClient(answered('', { exitCode: 125, stderr: 'remote-run-runner: bad name: x\n' })).client, slug), { kind: 'failed', message: 'bad name: x' });
-    const silent = await cleanOnRunner(createClient(answered('', { exitCode: 255, stderr: 'ssh: connect to host box1.example port 22: Connection refused\n' })).client, slug);
+    const silent = await cleanOnRunner(createClient(answered('', { exitCode: 3, stderr: '' })).client, slug);
     assert.equal(silent.kind, 'failed');
   });
 
@@ -242,5 +262,39 @@ describe('cleanOnRunner: what the call to one runner turns into', () => {
     assert.deepEqual(unreachable.calls, []);
     const broken = createClient(answered(''), async () => { throw new RemoteRunError('could not put the runner script on "box1"'); });
     assert.deepEqual(await cleanOnRunner(broken.client, slug), { kind: 'failed', message: 'could not put the runner script on "box1"' });
+  });
+});
+
+describe('markJobFetched: the sign to the runner that a job\'s results are with whoever submitted it', () => {
+  it('asks the runner script for `fetched - <job>` (found from the job id alone) with an ordinary call timeout', async () => {
+    const calls: Array<{ subcommand: string; args: readonly string[]; timeoutMs: number | undefined }> = [];
+    const refuse = (): never => { throw new Error('not used'); };
+    const client: RunnerClient = {
+      runner: { name: 'box1', ssh: 'user@box1.example', workDir: '/w' },
+      cacheDir: path.join(root, 'cache'),
+      rsyncSshCommand: 'ssh',
+      ensureScript: async () => undefined,
+      getAbsoluteWorkDir: refuse,
+      call: async (subcommand, args, options) => { calls.push({ subcommand, args, timeoutMs: options?.timeoutMs }); return { exitCode: 0, stdout: '', stderr: '', isTimedOut: false }; },
+      callOrThrow: refuse,
+      stream: refuse,
+    };
+    await markJobFetched(client, 'box1-abc234');
+    assert.deepEqual(calls, [{ subcommand: 'fetched', args: ['-', 'box1-abc234'], timeoutMs: shortCallTimeoutMs }]);
+  });
+
+  it('a call that fails is no failure of the command that fetched the files: the copy then simply stays protected for an hour', async () => {
+    const refuse = (): never => { throw new Error('not used'); };
+    const client: RunnerClient = {
+      runner: { name: 'box1', ssh: 'user@box1.example', workDir: '/w' },
+      cacheDir: path.join(root, 'cache'),
+      rsyncSshCommand: 'ssh',
+      ensureScript: async () => undefined,
+      getAbsoluteWorkDir: refuse,
+      call: async () => { throw new Error('the connection dropped'); },
+      callOrThrow: refuse,
+      stream: refuse,
+    };
+    await assert.doesNotReject(markJobFetched(client, 'box1-abc234'));
   });
 });

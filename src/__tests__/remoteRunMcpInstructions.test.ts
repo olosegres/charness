@@ -125,10 +125,11 @@ describe('the instructions built for a platform', () => {
     assert.match(bullet, /Longer than your tool timeout: `charness remote-run --bg <command>`.*`charness remote-run wait <id>` in the background/);
   });
 
-  it('the bullet tells an agent to free the runner copy of a task it closes, and not to touch the copies of others — in one sentence, since the text is near Claude Code\'s cut', () => {
+  it('the bullet tells an agent to free the runner copy when the LAST task of its folder is closed — one folder is one copy, shared by its tasks — and not to touch the copies of others, in one sentence (the text is near Claude Code\'s cut), without a «there» that could read as «on the runner»', () => {
     for (const platform of ['telegram', 'jira', null] as const) {
       const bullet = buildMcpServerInstructions(platform, offeredWith, true).split('\n').find((line) => line.includes('charness remote-run runners')) ?? '';
-      assert.match(bullet, /Task closed → `charness remote-run clean` there, never other tasks' copies/, `${platform ?? 'neutral'}`);
+      assert.match(bullet, /Folder's last task closed → `charness remote-run clean`, never others' copies/, `${platform ?? 'neutral'}`);
+      assert.doesNotMatch(bullet, /clean` there/, 'the folder is where the command is run, not the runner');
       assert.equal(bullet.split('charness remote-run clean').length - 1, 1, 'once');
     }
   });
@@ -184,12 +185,10 @@ describe('the instructions built for a platform', () => {
     }
   });
 
-  it('the bundled manager skill mentions remote-run for one thing only — cleaning the runner copies of a closed task — and nothing about running jobs there (that is the bullet\'s, and only while a runner exists)', () => {
-    const skill = fs.readFileSync(path.resolve(__dirname, '..', '..', 'agent-plugin', 'skills', 'charness-manager', 'SKILL.md'), 'utf8');
-    const mentions = skill.split('\n').filter((line) => line.includes('remote-run'));
-    assert.equal(mentions.length, 1, mentions.join(' | '));
-    assert.match(mentions.join(' '), /A closed task that ran on a runner \(`charness remote-run`\)/);
-    assert.match(skill, /run `charness remote-run clean`\s+in the task's project folder/);
+  it('the bundled manager skill mentions remote-run for one thing only — cleaning the runner copy when the last task of a folder is done — and nothing about running jobs there (that is the bullet\'s, and only while a runner exists)', () => {
+    const skill = fs.readFileSync(path.resolve(__dirname, '..', '..', 'agent-plugin', 'skills', 'charness-manager', 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    assert.equal(skill.split('remote-run').length - 1, 2, 'the name of the tool and the clean command: both in the one sentence');
+    assert.match(skill, /which ran on a runner \(`charness remote-run`\)\? Run `charness remote-run clean` in that folder BEFORE you remove the folder/);
     assert.ok(!/remote-run (--bg|--needs|wait|runners)/.test(skill));
   });
 });

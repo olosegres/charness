@@ -154,7 +154,7 @@ changing), report interim progress with `answer_request` kind `progress`, and en
 ## Finally
 
 Confirm from the reports that every changed file is listed, verification passed, the reviews are clean and the
-plan is archived. Blocked or incomplete → leave the plan as it is for inspection. Report one line of outcome.
-
-A closed task that ran on a runner (`charness remote-run`) leaves its project copy there, tens of GB: run `charness remote-run clean`
-in the task's project folder (or `clean <slug>`) for every copy it made, and never delete other tasks' copies by hand.
+plan is archived. Blocked or incomplete → leave the plan as it is for inspection. Done, and the LAST open task of its
+project folder (the tasks of one folder share ONE copy on a runner), which ran on a runner (`charness remote-run`)? Run
+`charness remote-run clean` in that folder BEFORE you remove the folder or worktree (the copy's name goes with it) and before
+you report; never delete other tasks' copies by hand. Report one line of outcome.

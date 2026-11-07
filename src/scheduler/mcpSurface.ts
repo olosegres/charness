@@ -156,11 +156,11 @@ const todoInstruction =
   '• BEFORE you start any task (fixes you found yourself included: a failing test, a leak) → todo_update adds it as inWork, naming the area (files, tests). Check the returned board for overlap with other agents. Take the queue top-down; mark items done / dropped at once. A ticket you create in a tracker gets an item with its key in `ref`.';
 /**
  * The `charness remote-run` bullet — present only while a runner is paired or listed in `runners.json`, for Telegram topics and tracker issues alike. The CLI's own `--help` has the job commands. It is the longest
- * line of the Telegram text, and that text is near Claude Code's cut (`claudeCodeInstructionsMaxLength`): every character here is a runner line less, so the `clean` sentence is the shortest that says when and what not to do,
+ * line of the Telegram text, and that text is near Claude Code's cut (`claudeCodeInstructionsMaxLength`): every character here is a runner line less, so the `clean` sentence is the shortest that says when (the LAST task of a project folder: one folder is ONE copy on a runner, shared by every task run from it) and what not to do,
  * and the capability names (`runners` shows them per runner) are not spelled out.
  */
 const remoteRunInstruction =
-  '• Heavy work (test suite, build, e2e run) → run it on a runner, not here: `charness remote-run runners` lists them and what each can do; `charness remote-run [--needs <capability>] <command>` (iOS: `--needs ios`) runs it in a copy of this project, returns output and exit code (edit files only here). Longer than your tool timeout: `charness remote-run --bg <command>`, then `charness remote-run wait <id>` in the background. Task closed → `charness remote-run clean` there, never other tasks\' copies; `--help`: the rest.';
+  '• Heavy work (test suite, build, e2e run) → run it on a runner, not here: `charness remote-run runners` lists them and what each can do; `charness remote-run [--needs <capability>] <command>` (iOS: `--needs ios`) runs it in a copy of this project, returns output and exit code (edit files only here). Longer than your tool timeout: `charness remote-run --bg <command>`, then `charness remote-run wait <id>` in the background. Folder\'s last task closed → `charness remote-run clean`, never others\' copies; `--help`: the rest.';
 
 /**
  * Claude Code cuts a server's connect-time `instructions` that are longer than this: whatever comes last is lost, silently. The Telegram

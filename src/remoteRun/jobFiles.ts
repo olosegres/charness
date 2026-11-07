@@ -6,7 +6,7 @@ import { sayOwn, type CliIo } from './output';
 import { getHookDirectories, readProjectConfig } from './project';
 import { RemoteRunError } from './remoteRunError';
 import { runRsync } from './rsync';
-import type { RunnerClient } from './runnerClient';
+import { shortCallTimeoutMs, type RunnerClient } from './runnerClient';
 import { copyFetchedFiles } from './safeCopy';
 import { buildRsyncFetchArgs } from './sendPlan';
 import type { LocalJobRecord } from './jobRecords';
@@ -37,6 +37,18 @@ export function resolveFetchTarget(record: LocalJobRecord | null): FetchTarget {
   if (record === null) throw new RemoteRunError('this machine did not submit the job as this user (or its record is gone) — its files are not fetched');
   if (!fs.existsSync(record.projectRoot) || !fs.statSync(record.projectRoot).isDirectory()) throw new RemoteRunError(`the job's project folder is gone from this machine: ${record.projectRoot}`);
   return createFetchTarget(record.projectRoot, record.slug, readProjectConfig(record.projectRoot).pull);
+}
+
+/**
+ * @description Tell the runner that the results of `jobId` are with whoever submitted it (`wait`, `fetch` and a foreground run call this once `fetchJobFiles` has returned without an error): a `clean` of the project copy
+ * then does not keep it for them. Best effort — a call that fails only means the copy stays protected for an hour after the job ended, the safe way round.
+ */
+export async function markJobFetched(client: RunnerClient, jobId: string): Promise<void> {
+  try {
+    await client.call('fetched', ['-', jobId], { timeoutMs: shortCallTimeoutMs });
+  } catch {
+    // Nothing to do: see above.
+  }
 }
 
 /** @description Fetch `jobId`'s result files into `target`; says how many came back. A job with none, or a project that names none, is not an error. */

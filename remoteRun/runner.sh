@@ -34,7 +34,8 @@
 #   pueue        run Pueue itself with the configured binary and config
 #   jobs         the meta.json of every job of a project (or of all), as a JSON array
 #   prune        remove old jobs, stale stage dirs, project copies unused for days, and — while the disk is short of free space — the least recently used ones
-#   clean        remove ONE project copy on request (`clean <work> <slug>`): refused while a job of it runs or waits, an exec runs in it, or a job is being submitted; says what it freed
+#   clean        remove ONE project copy on request (`clean <work> <slug>`): refused while a job of it runs or waits, an exec runs in it, a job is being submitted, or a job ended lately whose results nobody fetched; says what it freed
+#   fetched      mark a finished job's results as fetched (`fetched <work> - <job>`): `wait`, `fetch` and a foreground run say so once they have the files, and `clean` then does not keep the copy for them
 #   measure-copies  write down how big each project copy is (p/<slug>/size-kb); `probe` and `prepare` start it detached, it is never called by hand
 #   sync-tree    the apply step alone (tests)
 
@@ -84,6 +85,8 @@ low_disk_exit_code=28
 # Set by the free-space prune (prune_copies_for_space) for the refusal that may follow it, and by the last removal for its report.
 prune_stopped_without_gain=0
 last_freed_kb=
+# 1 = the caller is a `clean`: a job that ended lately whose results were fetched (the `fetched` mark in its folder) does not keep the copy (the prune does not know that: it keeps it result_keep_min).
+clean_ignores_fetched=0
 # Set by check_copy_dir_is_busy when it says «in use»: why (lock | exec | running | queued | submitting | results) and which job (`-` when none).
 copy_busy_kind=
 copy_busy_job=-
@@ -943,7 +946,9 @@ check_copy_dir_is_busy() {
     [ -d "$job_dir" ] || continue
     job_name=$(basename "$job_dir")
     if [ -f "$job_dir/exit" ]; then
-      if [ -n "$(find "$job_dir/exit" -maxdepth 0 -mmin -"$result_keep_min" 2> /dev/null)" ]; then
+      # A job that ended lately has its result files and log here until whoever submitted it has fetched them: `wait`, `fetch` and a foreground run leave the `fetched` mark when they have. A `clean` believes the mark
+      # (it was asked for this copy), the prune does not look for it (it only guesses).
+      if [ -n "$(find "$job_dir/exit" -maxdepth 0 -mmin -"$result_keep_min" 2> /dev/null)" ] && ! { [ "$clean_ignores_fetched" -eq 1 ] && [ -f "$job_dir/fetched" ]; }; then
         copy_busy_kind=results
         copy_busy_job=$job_name
         return 0
@@ -1027,15 +1032,33 @@ end_copy_removal() {
 # A removal that was cut off (ssh dropped, the machine slept) leaves its folder under a `.trash-<slug>-<pid>` name: the next prune finishes it — unless the pid of the one that made it still lives
 # (it is at it), or the folder holds something in use (a copy that got busy as it was moved aside and could not be put back).
 remove_leftover_trash() {
-  local leftover remover_pid
+  local leftover
   for leftover in "$1"/p/.trash-*; do
     [ -e "$leftover" ] || continue
-    remover_pid=${leftover##*-}
-    check_runner_pid_alive "$remover_pid" && continue
-    check_copy_dir_is_busy "$leftover" && continue
-    chmod -R u+rwX "$leftover" 2> /dev/null
-    rm -rf "$leftover"
+    finish_trash_removal "$leftover"
   done
+  return 0
+}
+
+# Finish the removal of the moved-aside folder $1 (`p/.trash-<slug>-<pid>`). Returns 0 gone · 1 its remover still lives (it is at it) · 2 something in it is in use (left as it is; copy_busy_kind says what) · 3 it would not go.
+finish_trash_removal() {
+  local leftover=$1
+  check_runner_pid_alive "${leftover##*-}" && return 1
+  check_copy_dir_is_busy "$leftover" && return 2
+  chmod -R u+rwX "$leftover" 2> /dev/null
+  rm -rf "$leftover" 2> /dev/null
+  [ ! -e "$leftover" ] || return 3
+}
+
+# Is $1 the moved-aside folder of project copy $2 — `p/.trash-<slug>-<pid>` with a number for the pid (another slug that starts with this one\'s name is not)?
+check_is_trash_of_slug() {
+  case ${1##*/} in
+    .trash-"$2"-*) ;;
+    *) return 1 ;;
+  esac
+  case ${1##*/.trash-"$2"-} in
+    '' | *[!0-9]*) return 1 ;;
+  esac
 }
 
 # Remove project copy $2 (a slug) under work dir $1. Moved aside by one rename first: a submit that meets the name afterwards makes a copy of its own, and a removal that is cut off is finished by the
@@ -1062,25 +1085,30 @@ remove_project_copy() {
   [ ! -e "$trash" ] || return 1
 }
 
+# last_freed_kb = how much the disk under $1 has gained since it had $2 KiB free (0 when it did not grow; empty when df said nothing).
+set_freed_kb_since() {
+  local work_dir=$1 before_kb=$2
+  last_freed_kb=
+  read_disk_kb "$work_dir"
+  if [ -n "$before_kb" ] && [ -n "$disk_free_kb" ]; then
+    last_freed_kb=$((disk_free_kb - before_kb))
+    [ "$last_freed_kb" -ge 0 ] || last_freed_kb=0
+  fi
+}
+
 # Remove copy $2 for reason $3 (idle | space | clean) and say so on stdout, one line the submit shows: `removed=<slug> freed_kb=<n> why=<reason>`; a copy that would not go: `stuck=<slug>`; one that
 # an earlier prune took, or that turned out in use, is not said anything of. freed_kb is the change of the disk's free space across the removal (empty when df said nothing).
 # Sets last_freed_kb. Returns remove_project_copy's code.
 remove_and_report_copy() {
   local work_dir=$1 copy_slug=$2 reason=$3
-  local before_kb after_kb removal_code
-  last_freed_kb=
+  local before_kb removal_code
   read_disk_kb "$work_dir"
   before_kb=$disk_free_kb
   remove_project_copy "$work_dir" "$copy_slug"
   removal_code=$?
   case $removal_code in
     0)
-      read_disk_kb "$work_dir"
-      after_kb=$disk_free_kb
-      if [ -n "$before_kb" ] && [ -n "$after_kb" ]; then
-        last_freed_kb=$((after_kb - before_kb))
-        [ "$last_freed_kb" -ge 0 ] || last_freed_kb=0
-      fi
+      set_freed_kb_since "$work_dir" "$before_kb"
       printf 'removed=%s freed_kb=%s why=%s\n' "$copy_slug" "$last_freed_kb" "$reason"
       ;;
     1) printf 'stuck=%s\n' "$copy_slug" ;;
@@ -1220,24 +1248,45 @@ cmd_measure_copies() {
   done
 }
 
-# `clean <work> <slug>`: remove ONE project copy because its owner is done with it (a task was closed), with the removal machinery of the prune — the copy-removal lock, the busy check (asked again of the moved-aside
-# folder), the rename + `chmod` + `rm`. What differs from the prune: the copy is named, not guessed; a job that ENDED lately does not protect it (its owner is the one who asks, and has the results or does not
-# want them), but one that runs or waits, an `exec`, a job still being submitted and a held project lock do — then nothing is removed. The answer is one line on stdout (the exit status is 0 whenever the script
-# could answer): `removed=<slug> freed_kb=<n> why=clean` · `absent=<slug>` (no such copy, or a prune took it first) · `busy=<slug> kind=<kind> job=<id|->` · `stuck=<slug>` (it would not go). Its jobs' logs and result files
-# go with it.
+# `clean <work> <slug>`: remove ONE project copy because its owner is done with it (the last task of its project folder was closed), with the removal machinery of the prune — the copy-removal lock, the busy check (asked
+# again of the moved-aside folder), the rename + `chmod` + `rm`. What differs from the prune: the copy is named, not guessed; and a job that ENDED lately keeps the copy only while nobody has fetched its results (the
+# `fetched` mark of `wait` / `fetch` / a foreground run): the prune keeps it for result_keep_min whatever. A job that runs or waits, an `exec`, a job still being submitted and a held project lock refuse it — then nothing
+# is removed. A folder an earlier removal left (`p/.trash-<slug>-<pid>`: cut off, or past its caller's time limit) is finished first, so «clean again» sees it through. The answer is some lines on stdout (the exit status
+# is 0 whenever the script could answer): `removed=<slug> freed_kb=<n> why=clean` (the copy, the leftover, or both: one line each) · `absent=<slug>` (no such copy, or a prune took it first) · `removing=<slug>` (a leftover
+# whose remover still lives) · `busy=<slug> kind=<kind> job=<id|->` · `stuck=<slug>` (it would not go). Its jobs' logs and result files go with it.
 cmd_clean() {
   local work_dir=$1 clean_slug=${2:-}
   check_name "$clean_slug"
   # The caller may hang up while this removes tens of GB (its call has a time limit); the removal goes on to its end.
   trap '' PIPE
-  local result_keep_min=0
-  if [ ! -d "$work_dir/p/$clean_slug" ]; then
+  local clean_ignores_fetched=1
+  local leftover is_trash_left=0
+  for leftover in "$work_dir"/p/.trash-"$clean_slug"-*; do
+    [ -e "$leftover" ] && check_is_trash_of_slug "$leftover" "$clean_slug" && is_trash_left=1
+  done
+  if [ ! -d "$work_dir/p/$clean_slug" ] && [ "$is_trash_left" -eq 0 ]; then
     printf 'absent=%s\n' "$clean_slug"
     return 0
   fi
   begin_copy_removal "$work_dir" always
+  local before_kb trash_code
+  for leftover in "$work_dir"/p/.trash-"$clean_slug"-*; do
+    [ -e "$leftover" ] && check_is_trash_of_slug "$leftover" "$clean_slug" || continue
+    read_disk_kb "$work_dir"
+    before_kb=$disk_free_kb
+    finish_trash_removal "$leftover"
+    trash_code=$?
+    case $trash_code in
+      0) set_freed_kb_since "$work_dir" "$before_kb"; printf 'removed=%s freed_kb=%s why=clean\n' "$clean_slug" "$last_freed_kb" ;;
+      1) printf 'removing=%s\n' "$clean_slug" ;;
+      2) printf 'busy=%s kind=%s job=%s\n' "$clean_slug" "$copy_busy_kind" "$copy_busy_job" ;;
+      3) printf 'stuck=%s\n' "$clean_slug" ;;
+    esac
+  done
   local removal_code=0
-  if check_copy_is_busy "$work_dir" "$clean_slug"; then
+  if [ ! -d "$work_dir/p/$clean_slug" ]; then
+    removal_code=-1
+  elif check_copy_is_busy "$work_dir" "$clean_slug"; then
     removal_code=3
   else
     remove_and_report_copy "$work_dir" "$clean_slug" clean
@@ -1249,6 +1298,13 @@ cmd_clean() {
     3) printf 'busy=%s kind=%s job=%s\n' "$clean_slug" "$copy_busy_kind" "$copy_busy_job" ;;
   esac
   return 0
+}
+
+# `fetched <work> - <job>`: leave the mark that the results of finished job $3 are with whoever submitted it (`wait`, `fetch` and a foreground run call this once they have the files): `clean` then does not keep the copy for them.
+cmd_fetched() {
+  set_paths "$1" "$2" "$3"
+  [ -d "$jd" ] || die "no such job: $job"
+  touch "$jd/fetched"
 }
 
 # ─────────────────────────── adding the job to Pueue ───────────────────────────
@@ -2109,6 +2165,7 @@ main() {
     prune) cmd_prune "$@" ;;
     measure-copies) cmd_measure_copies "$@" ;;
     clean) cmd_clean "$@" ;;
+    fetched) cmd_fetched "$@" ;;
     sync-tree) cmd_sync_tree "$@" ;;
     *) die "unknown subcommand: $subcommand" ;;
   esac

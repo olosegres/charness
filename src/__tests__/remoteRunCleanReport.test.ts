@@ -24,6 +24,27 @@ describe('parseCleanAnswer', () => {
     assert.deepEqual(parseCleanAnswer(`busy=${slug} kind=exec job=-\n`, slug), { kind: 'busy', reason: 'exec', jobId: null });
   });
 
+  it('a copy and a leftover of an earlier removal are two folders: what they freed is added up; a leftover whose remover still lives is «removing»', () => {
+    assert.deepEqual(parseCleanAnswer(`removed=${slug} freed_kb=1048576 why=clean\nremoved=${slug} freed_kb=2097152 why=clean\n`, slug), { kind: 'removed', freedMb: 3072 });
+    assert.deepEqual(parseCleanAnswer(`removed=${slug} freed_kb=1048576 why=clean\nremoved=${slug} freed_kb= why=clean\n`, slug), { kind: 'removed', freedMb: null }, 'one folder\'s figure is unknown: the sum is');
+    assert.deepEqual(parseCleanAnswer(`removing=${slug}\n`, slug), { kind: 'removing' });
+  });
+
+  it('when the script says several things the caller hears the most important: in use, then would not go, then still being removed, then removed, then nothing there', () => {
+    const lines = {
+      busy: `busy=${slug} kind=exec job=-`,
+      stuck: `stuck=${slug}`,
+      removing: `removing=${slug}`,
+      removed: `removed=${slug} freed_kb=1048576 why=clean`,
+      absent: `absent=${slug}`,
+    };
+    assert.equal(parseCleanAnswer(`${lines.removed}\n${lines.busy}\n`, slug).kind, 'busy', 'the leftover went but the copy is in use');
+    assert.equal(parseCleanAnswer(`${lines.removed}\n${lines.stuck}\n${lines.removing}\n`, slug).kind, 'stuck');
+    assert.equal(parseCleanAnswer(`${lines.removed}\n${lines.removing}\n`, slug).kind, 'removing');
+    assert.equal(parseCleanAnswer(`${lines.absent}\n${lines.removed}\n`, slug).kind, 'removed', 'the copy was taken by someone else but the leftover went');
+    assert.equal(parseCleanAnswer(`${lines.absent}\n`, slug).kind, 'absent');
+  });
+
   it('only an answer about THIS copy counts, and only a kind the runner script has: anything else is a failure naming nothing it was not told', () => {
     for (const text of ['', 'work=/w\n', `removed=other-0000000000 freed_kb=1 why=clean\n`, `absent=other-0000000000\n`, `busy=${slug} kind=teapot job=-\n`, `removed=${slug} freed_kb=1 why=idle junk\n`]) {
       assert.deepEqual(parseCleanAnswer(text, slug), { kind: 'failed', message: 'the runner did not say what it did with the copy' }, JSON.stringify(text));
@@ -35,6 +56,7 @@ describe('which outcomes fail the command', () => {
   const outcomes: Array<[CleanOutcome, boolean]> = [
     [{ kind: 'removed', freedMb: 1 }, false],
     [{ kind: 'absent' }, false],
+    [{ kind: 'removing' }, false],
     [{ kind: 'unreachable', reason: 'the runner is not connected' }, false],
     [{ kind: 'busy', reason: 'running', jobId: 'box1-abc234' }, true],
     [{ kind: 'stuck' }, true],
@@ -53,6 +75,7 @@ describe('formatCleanLine', () => {
     assert.equal(formatCleanLine('mac', slug, { kind: 'removed', freedMb: 41 * 1024 }), `mac: removed the project copy ${slug} (freed 41 GB)`);
     assert.equal(formatCleanLine('mac', slug, { kind: 'removed', freedMb: null }), `mac: removed the project copy ${slug}`);
     assert.equal(formatCleanLine('mac', slug, { kind: 'absent' }), `mac: no copy of ${slug} (nothing to clean)`);
+    assert.equal(formatCleanLine('mac', slug, { kind: 'removing' }), `mac: the copy ${slug} is already being removed (by an earlier clean or a prune) — clean again in a few minutes to see it gone`);
   });
 
   it('for every reason a copy is in use says it, names the job and what to do', () => {
@@ -63,7 +86,7 @@ describe('formatCleanLine', () => {
     assert.equal(busy('exec', null), 'mac: NOT cleaned — an `exec` is running in it — clean again when it ends');
     assert.equal(busy('lock', 'box1-abc234'), 'mac: NOT cleaned — its project lock is held by box1-abc234 — clean again when that job ends');
     assert.equal(busy('lock', null), 'mac: NOT cleaned — its project lock is held — clean again when that job ends');
-    assert.match(busy('results', 'box1-abc234'), /^mac: NOT cleaned — box1-abc234 ended a moment ago/);
+    assert.equal(busy('results', 'box1-abc234'), 'mac: NOT cleaned — box1-abc234 ended less than an hour ago and its results were not fetched — whoever submitted it fetches them (`charness remote-run wait box1-abc234` or `fetch box1-abc234`); clean again after that');
     assert.match(busy('name', null), /not the name of a copy/);
   });
 

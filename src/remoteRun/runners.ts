@@ -107,6 +107,40 @@ function writeLastProbe(cacheDir: string, runnerName: string, text: string, seen
   fs.writeFileSync(getStoredProbePath(cacheDir, runnerName), JSON.stringify(stored), { mode: 0o600 });
 }
 
+/** Why a Mac with its lid shut is not called (a shared wording: `clean` says it, the probe\'s `lid-closed` report is the same fact). */
+export const lidClosedReason = 'its Mac has the lid closed';
+
+/**
+ * @name RunnerReachability
+ * @description Whether a runner can be called at all right now: `offline` (a paired one whose link is down, or one whose script cannot be looked for over ssh: `reason` is the short cause), `lid-closed` (its link is up but its
+ * Mac\'s lid is shut: it may be falling asleep, so it is not called), `broken` (its script could not be put there for a reason that is not a lost connection) — or `reachable`, with the script in place.
+ */
+export type RunnerReachability =
+  | { kind: 'reachable' }
+  | { kind: 'offline'; reason: string; lastSeenMs: number | null }
+  | { kind: 'lid-closed'; lastSeenMs: number | null }
+  | { kind: 'broken'; message: string };
+
+/**
+ * @description The gate before any call to a runner (the probe, `clean`): a paired runner is asked at its link first (cheaper than an ssh call that fails through the proxy, and a Mac with its lid shut is not asked at all), then
+ * the script is looked for — and put there when missing. `signal` ends that ssh call from outside (a shared deadline).
+ */
+export async function checkRunnerReachability(client: RunnerClient, signal?: AbortSignal): Promise<RunnerReachability> {
+  const paired = client.runner.paired;
+  if (paired !== undefined) {
+    const link = await getRunnerLinkStatus(paired.hubDir, paired.runnerId);
+    if (!link.isOnline) return { kind: 'offline', reason: notConnectedReason, lastSeenMs: link.lastSeenMs };
+    if (link.isLidClosed) return { kind: 'lid-closed', lastSeenMs: link.lastSeenMs };
+  }
+  try {
+    await client.ensureScript(signal);
+  } catch (error) {
+    if (error instanceof RunnerUnreachableError) return { kind: 'offline', reason: error.reason, lastSeenMs: null };
+    return { kind: 'broken', message: error instanceof Error ? error.message : 'could not prepare the runner' };
+  }
+  return { kind: 'reachable' };
+}
+
 /**
  * @description Probe one runner: its report is `online` with what it said, `lid-closed` (its link is up, its Mac's lid is shut: no probe is made), or
  * `offline` with why and the last snapshot taken when it was seen. `signal` is the deadline of the whole view (see {@link probeRunners}): when it fires the ssh calls in flight are killed and the
@@ -129,22 +163,14 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
       isPausedByHub,
     };
   };
-  if (runner.paired !== undefined) {
-    // A paired runner is online when its link accepts a connection; asking is cheaper than an ssh call that fails through the proxy.
-    const link = await getRunnerLinkStatus(runner.paired.hubDir, runner.paired.runnerId);
-    if (!link.isOnline) return offline(notConnectedReason, link.lastSeenMs);
-    // A Mac with its lid shut is about to sleep, or has woken for a minute to do its housekeeping: it takes no new job, and is not even asked (the call may hang
-    // as the machine falls asleep). Jobs it already runs are not looked at here at all — they are reached by their own id.
-    if (link.isLidClosed) {
-      const last = readLastProbe(client.cacheDir, runner.name, runner.paired.pairedAtMs);
-      return { name: runner.name, status: 'lid-closed', lastSeenAtMs: link.lastSeenMs ?? last?.seenAtMs ?? null, lastProbe: last?.probe ?? null, groupLimits, isPausedByHub };
-    }
-  }
-  try {
-    await client.ensureScript(signal);
-  } catch (error) {
-    if (error instanceof RunnerUnreachableError) return offline(error.reason);
-    return offline(error instanceof Error ? error.message : 'could not prepare the runner');
+  // A paired runner is online when its link accepts a connection; asking is cheaper than an ssh call that fails through the proxy. A Mac with its lid shut is about to sleep, or has woken for a minute to do its
+  // housekeeping: it takes no new job, and is not even asked (the call may hang as the machine falls asleep). Jobs it already runs are not looked at here at all — they are reached by their own id.
+  const reachability = await checkRunnerReachability(client, signal);
+  if (reachability.kind === 'offline') return offline(reachability.reason, reachability.lastSeenMs);
+  if (reachability.kind === 'broken') return offline(reachability.message);
+  if (reachability.kind === 'lid-closed') {
+    const last = readLastProbe(client.cacheDir, runner.name, runner.paired?.pairedAtMs);
+    return { name: runner.name, status: 'lid-closed', lastSeenAtMs: reachability.lastSeenMs ?? last?.seenAtMs ?? null, lastProbe: last?.probe ?? null, groupLimits, isPausedByHub };
   }
   const result = await client.call('probe', options.isPruneAllowed === true ? [probePruneArgument] : [], { timeoutMs: deadlineMs, signal });
   if (result.exitCode !== 0) return offline(describeSshFailure(result));

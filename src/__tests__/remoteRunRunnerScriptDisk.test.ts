@@ -1133,9 +1133,9 @@ describe('`clean`: the owner of a task removes its project copy on request', () 
     assert.equal(fs.existsSync(renames), false, 'no rename was made');
   });
 
-  it('what only looks like use does not stop it: a job that ENDED a moment ago (the prune keeps such a copy for its results; its owner asks), a job or a lock of a pid that went to a stranger, a dead lock', () => {
+  it('what only looks like use does not stop it: a job that ENDED a moment ago whose results were FETCHED (the prune keeps such a copy for an hour; `wait` / `fetch` say they have the files), a job or a lock of a pid that went to a stranger, a dead lock', () => {
     const copyDir = makeCopy('done-aaaaaaaaaa', 20, 1 * hourMs);
-    writeJob(copyDir, 'box1-justen', { 'task-id': '1\n', exit: '0\n' });
+    writeJob(copyDir, 'box1-justen', { 'task-id': '1\n', exit: '0\n', fetched: '' });
     writeJob(copyDir, 'box1-crashed', { 'task-id': '2\n', pid: `${startStrangerProcess()}\n` });
     setAge(path.join(copyDir, 'jobs', 'box1-crashed'), 2 * hourMs);
     writeFile(copyDir, 'lock', `${getDeadPid()}\nbox1-crashed\n`);
@@ -1144,7 +1144,105 @@ describe('`clean`: the owner of a task removes its project copy on request', () 
     assert.deepEqual(listCopies(), []);
   });
 
-  it('the prune, on the contrary, still keeps a copy whose job ended a moment ago — only `clean` ignores that', () => {
+  describe('a project copy is shared by every task run from one folder: the results of a job nobody has fetched are not for another task\'s clean to take', () => {
+    it('an ended job whose results were never fetched keeps the copy, and the answer names it — the copy is neither moved nor touched', () => {
+      const copyDir = makeCopy('shared-aaaaaaaaaa', 20, 1 * hourMs);
+      writeJob(copyDir, 'box1-justen', { 'task-id': '1\n', exit: '0\n', log: 'its output\n' });
+      const renames = path.join(workRoot, 'renames.log');
+      const outcome = runShell(`mv() { echo "$*" >> ${renames}; command mv "$@"; }; cmd_clean ${workDir} shared-aaaaaaaaaa`);
+      assert.equal(outcome.stdout, 'busy=shared-aaaaaaaaaa kind=results job=box1-justen');
+      assert.equal(fs.existsSync(renames), false);
+      assert.equal(fs.readFileSync(path.join(copyDir, 'jobs', 'box1-justen', 'log'), 'utf8'), 'its output\n', 'and the job\'s log is still there to be read');
+    });
+
+    it('the same job once it is fetched, and an unfetched one that ended over an hour ago, do not', () => {
+      const fetchedDir = makeCopy('fetched-aaaaaaaaaa', 20, 1 * hourMs);
+      writeJob(fetchedDir, 'box1-justen', { 'task-id': '1\n', exit: '0\n', fetched: '' });
+      assert.match(clean('fetched-aaaaaaaaaa').stdout, /^removed=fetched-aaaaaaaaaa /);
+      const oldDir = makeCopy('old-bbbbbbbbbb', 20, 3 * hourMs);
+      setAge(path.join(writeJob(oldDir, 'box1-longag', { 'task-id': '2\n', exit: '0\n' }), 'exit'), 2 * hourMs);
+      assert.match(clean('old-bbbbbbbbbb').stdout, /^removed=old-bbbbbbbbbb /);
+    });
+
+    it('one unfetched job among fetched ones is enough to keep it', () => {
+      const copyDir = makeCopy('mixed-aaaaaaaaaa', 20, 1 * hourMs);
+      writeJob(copyDir, 'box1-first0', { 'task-id': '1\n', exit: '0\n', fetched: '' });
+      writeJob(copyDir, 'box1-second', { 'task-id': '2\n', exit: '0\n' });
+      assert.equal(clean('mixed-aaaaaaaaaa').stdout, 'busy=mixed-aaaaaaaaaa kind=results job=box1-second\n');
+    });
+
+    it('`fetched` leaves the mark in the job\'s folder — found from the job id alone, as `wait` and `fetch` know only that — and refuses a job that is not there', () => {
+      const copyDir = makeCopy('marked-aaaaaaaaaa', 20, 1 * hourMs);
+      const jobDir = writeJob(copyDir, 'box1-justen', { 'task-id': '1\n', exit: '0\n' });
+      const marked = runScript(['fetched', workDir, '-', 'box1-justen']);
+      assert.equal(marked.status, 0, marked.stderr);
+      assert.equal(fs.existsSync(path.join(jobDir, 'fetched')), true);
+      assert.match(clean('marked-aaaaaaaaaa').stdout, /^removed=marked-aaaaaaaaaa /, 'and a clean now takes the copy');
+      const missing = runScript(['fetched', workDir, '-', 'box1-nothing']);
+      assert.equal(missing.status, 125);
+      assert.match(missing.stderr, /no such job: box1-nothing/);
+      const missingInKnownProject = runScript(['fetched', workDir, 'marked-aaaaaaaaaa', 'box1-nothing']);
+      assert.equal(missingInKnownProject.status, 125, 'also when the project is named');
+      assert.equal(fs.existsSync(path.join(workDir, 'p', 'marked-aaaaaaaaaa', 'jobs', 'box1-nothing')), false, 'and no folder was made for it');
+    });
+
+    it('the prune does not look at the mark: it keeps a copy whose job ended lately, fetched or not — it only guesses', () => {
+      writeJob(makeCopy('fetched-results-aaaa', 30, 9 * hourMs), 'box1-justen', { 'task-id': '1\n', exit: '0\n', fetched: '' });
+      makeCopy('free-bbbbbbbbbb', 30, 5 * hourMs);
+      makeCopy('free-cccccccccc', 30, 3 * hourMs);
+      assert.deepEqual(parseRemovals(runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '70' }).stdout), ['free-bbbbbbbbbb', 'free-cccccccccc']);
+      assert.ok(fs.existsSync(path.join(workDir, 'p', 'fetched-results-aaaa')));
+    });
+  });
+
+  describe('a removal that was cut off, or ran past its caller\'s time limit, leaves its folder under a `.trash-` name — «clean again» finishes it', () => {
+    const trashOf = (copySlug: string, removerPid: number): string => path.join(workDir, 'p', `.trash-${copySlug}-${removerPid}`);
+    const makeTrash = (copySlug: string, removerPid: number, sizeGib: number): string => {
+      writeFile(trashOf(copySlug, removerPid), 'tree/file.txt');
+      writeFile(trashOf(copySlug, removerPid), 'fake-kb', `${sizeGib * kibPerGib}`);
+      return trashOf(copySlug, removerPid);
+    };
+
+    it('with no copy left, only the leftover of a remover that is gone: it is removed and the freed space said — not «absent»', () => {
+      const trash = makeTrash('task-aaaaaaaaaa', getDeadPid(), 12);
+      writeFile(path.join(workDir, 'p', 'other-bbbbbbbbbb'), 'fake-kb', `${1 * kibPerGib}`);
+      const result = clean('task-aaaaaaaaaa');
+      assert.equal(result.stdout, `removed=task-aaaaaaaaaa freed_kb=${12 * kibPerGib} why=clean\n`);
+      assert.equal(fs.existsSync(trash), false);
+      assert.ok(fs.existsSync(path.join(workDir, 'p', 'other-bbbbbbbbbb')));
+    });
+
+    it('a leftover whose remover still lives is left to it and said so — «removing», not a second rm of the same folder', () => {
+      const trash = makeTrash('task-aaaaaaaaaa', startRunnerStandIn(), 12);
+      assert.equal(clean('task-aaaaaaaaaa').stdout, 'removing=task-aaaaaaaaaa\n');
+      assert.ok(fs.existsSync(path.join(trash, 'tree/file.txt')));
+    });
+
+    it('a leftover with a job in it that runs (a copy put aside while it got busy) is not removed: busy, naming the job', () => {
+      const trash = makeTrash('task-aaaaaaaaaa', getDeadPid(), 12);
+      writeJob(trash, 'box1-runnin', { 'task-id': '5\n', pid: `${startRunnerStandIn()}\n` });
+      assert.equal(clean('task-aaaaaaaaaa').stdout, 'busy=task-aaaaaaaaaa kind=running job=box1-runnin\n');
+      assert.ok(fs.existsSync(path.join(trash, 'tree/file.txt')));
+    });
+
+    it('the copy AND a leftover of it: both go, one removed line each (the CLI adds them up)', () => {
+      const trash = makeTrash('task-aaaaaaaaaa', getDeadPid(), 12);
+      makeCopy('task-aaaaaaaaaa', 8, 1 * hourMs);
+      const result = clean('task-aaaaaaaaaa');
+      assert.deepEqual(result.stdout.trim().split('\n'), [`removed=task-aaaaaaaaaa freed_kb=${12 * kibPerGib} why=clean`, `removed=task-aaaaaaaaaa freed_kb=${8 * kibPerGib} why=clean`]);
+      assert.equal(fs.existsSync(trash), false);
+      assert.deepEqual(listCopies(), []);
+    });
+
+    it('the leftover of ANOTHER copy whose name starts with this one\'s is not this copy\'s: it is left alone and this one is «absent»', () => {
+      const other = makeTrash('task-aaaaaaaaaa-other-0123456789', getDeadPid(), 12);
+      const result = clean('task-aaaaaaaaaa');
+      assert.equal(result.stdout, 'absent=task-aaaaaaaaaa\n');
+      assert.ok(fs.existsSync(other));
+    });
+  });
+
+  it('the prune, on the contrary, still keeps a copy whose job ended a moment ago — only `clean` believes the «fetched» mark', () => {
     writeJob(makeCopy('fresh-results-aaaaaaa', 30, 9 * hourMs), 'box1-justen', { 'task-id': '1\n', exit: '0\n' });
     makeCopy('free-bbbbbbbbbb', 30, 5 * hourMs);
     makeCopy('free-cccccccccc', 30, 3 * hourMs);

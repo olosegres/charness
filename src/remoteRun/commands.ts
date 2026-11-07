@@ -6,7 +6,7 @@ import type { RemoteRunCommand } from './cliArgs';
 import { planInterrupt, remoteRunExitCodes, type InterruptSignal } from './exitCodes';
 import { addInterruptHandler, killCallTimeoutMs, waitForChildEnd } from './interrupts';
 import { describeEnd, followForeground, runExec } from './foreground';
-import { createFetchTarget, fetchJobFiles, resolveFetchTarget } from './jobFiles';
+import { createFetchTarget, fetchJobFiles, markJobFetched, resolveFetchTarget } from './jobFiles';
 import { formatJobList, formatJobStatus, type JobEntry } from './jobFormat';
 import { getJobLabel, parseJobId } from './jobId';
 import { parseJobMeta } from './jobMeta';
@@ -19,9 +19,8 @@ import { getProjectContext } from './project';
 import { RemoteRunError, RunnerUnreachableError } from './remoteRunError';
 import { checkIsCleanFailure, formatCleanLine, parseCleanAnswer, type CleanOutcome } from './cleanReport';
 import { millisecondsPerMinute } from './pruneReport';
-import { createRunnerClient, describeRunnerRefusal, describeSshFailure, notConnectedReason, prepareCallTimeoutMs, type RunnerClient, type RunnerScript } from './runnerClient';
-import { getRunnerLinkStatus } from '../runners/linkControl';
-import { chooseExecRunnerName, findRunnerOfJob, pickRunner, probeAllTimeoutMs, probeRunners } from './runners';
+import { createRunnerClient, describeRunnerRefusal, describeSshFailure, prepareCallTimeoutMs, type RunnerClient, type RunnerScript } from './runnerClient';
+import { checkRunnerReachability, chooseExecRunnerName, findRunnerOfJob, lidClosedReason, pickRunner, probeAllTimeoutMs, probeRunners } from './runners';
 import type { RunnersConfig } from './runnersConfig';
 import { defaultRunnerWaitSeconds } from './runnerWaitTiming';
 import { chooseRunnerWithWait, planRunnerWait } from './runnerWait';
@@ -273,6 +272,7 @@ export async function runWaitCommand(command: Extract<RemoteRunCommand, { kind: 
   router.flush();
   try {
     await fetchJobFiles({ client, facts, jobId: command.jobId, target: resolveFetchTarget(readLocalJobRecord(context.cacheDir, command.jobId)), io });
+    await markJobFetched(client, command.jobId);
   } catch (error) {
     sayOwn(io, error instanceof RemoteRunError ? error.message : 'the result files could not be fetched');
   }
@@ -285,6 +285,7 @@ export async function runFetchCommand(command: Extract<RemoteRunCommand, { kind:
   if (outcome.state !== 'done') throw new RemoteRunError(`job ${command.jobId} has not finished yet (${outcome.state}) — \`charness remote-run wait ${command.jobId}\` waits for it`);
   if (!facts.isWithArtifacts) sayOwn(context.io, 'the job left no result files');
   await fetchJobFiles({ client, facts, jobId: command.jobId, target: resolveFetchTarget(readLocalJobRecord(context.cacheDir, command.jobId)), io: context.io });
+  await markJobFetched(client, command.jobId);
   return 0;
 }
 
@@ -309,20 +310,14 @@ export function describeKillResult(jobId: string, runnerAnswer: string): string 
  * cannot be reached is `unreachable`, not a failure — its copy stays, and the line says to clean again. The call has the long timeout of `prepare`: removing a copy of tens of GB takes minutes.
  */
 export async function cleanOnRunner(client: RunnerClient, slug: string): Promise<CleanOutcome> {
-  const paired = client.runner.paired;
-  if (paired !== undefined) {
-    const link = await getRunnerLinkStatus(paired.hubDir, paired.runnerId);
-    if (!link.isOnline) return { kind: 'unreachable', reason: notConnectedReason };
-    if (link.isLidClosed) return { kind: 'unreachable', reason: 'its Mac has the lid closed' };
-  }
-  try {
-    await client.ensureScript();
-  } catch (error) {
-    if (error instanceof RunnerUnreachableError) return { kind: 'unreachable', reason: error.reason };
-    return { kind: 'failed', message: error instanceof Error ? error.message : 'the runner could not be prepared' };
-  }
+  const reachability = await checkRunnerReachability(client);
+  if (reachability.kind === 'offline') return { kind: 'unreachable', reason: reachability.reason };
+  if (reachability.kind === 'lid-closed') return { kind: 'unreachable', reason: lidClosedReason };
+  if (reachability.kind === 'broken') return { kind: 'failed', message: reachability.message };
   const result = await client.call('clean', [slug], { timeoutMs: prepareCallTimeoutMs });
   if (result.isTimedOut) return { kind: 'timedOut', timeoutMinutes: Math.round(prepareCallTimeoutMs / millisecondsPerMinute) };
+  // The connection dropped while it removed (a Mac that fell asleep): the same as a runner that was not there to begin with — the removal goes on as far as it can, and the line says to clean again.
+  if (checkIsConnectionLost(result.exitCode)) return { kind: 'unreachable', reason: describeSshFailure(result) };
   if (result.exitCode !== 0) return { kind: 'failed', message: describeRunnerRefusal(result.stderr, describeSshFailure(result)) };
   return parseCleanAnswer(result.stdout, slug);
 }

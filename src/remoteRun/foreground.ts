@@ -1,6 +1,6 @@
 import { killGraceSeconds, planInterrupt, remoteRunExitCodes, type InterruptSignal } from './exitCodes';
 import { addInterruptHandler, killCallTimeoutMs, waitForChildEnd } from './interrupts';
-import { fetchJobFiles, type FetchTarget } from './jobFiles';
+import { fetchJobFiles, markJobFetched, type FetchTarget } from './jobFiles';
 import { readJobOutcome } from './jobQuery';
 import { getHeartbeatIntervalMs } from './leaseTiming';
 import { createExitMarkerFilter, createJobOutputRouter, sayOwn, type CliIo } from './output';
@@ -118,6 +118,7 @@ export async function followForeground(params: {
   }
   try {
     await fetchJobFiles({ client, facts: result.facts, jobId: staged.jobId, target: params.target, io });
+    await markJobFetched(client, staged.jobId);
   } catch (error) {
     sayOwn(io, error instanceof RemoteRunError ? error.message : 'the result files could not be fetched');
   }

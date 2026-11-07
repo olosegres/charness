@@ -83,10 +83,12 @@ describe('agent-plugin', () => {
     assert.match(text, /Never arm a schedule of your own for status lines/);
   });
 
-  test('charness-manager closes a task by cleaning its runner copies — and leaves the copies of other tasks alone', () => {
+  test('charness-manager cleans the runner copy when the LAST open task of a project folder is done — in that folder, before the folder goes, before the report — and leaves the copies of other tasks alone', () => {
     const text = fs.readFileSync(path.join(skillsDir, 'charness-manager', 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
-    assert.match(text, /run `charness remote-run clean` in the task's project folder \(or `clean <slug>`\) for every copy it made/);
-    assert.match(text, /never delete other tasks' copies by hand/);
+    assert.match(text, /the LAST open task of its project folder \(the tasks of one folder share ONE copy on a runner\)/);
+    assert.match(text, /Run `charness remote-run clean` in that folder BEFORE you remove the folder or worktree/);
+    assert.match(text, /never delete other tasks' copies by hand\. Report one line of outcome\./);
+    assert.ok(text.indexOf('charness remote-run clean') < text.indexOf('Report one line of outcome'), 'the closing step comes before the report');
     assert.equal(text.split('charness remote-run clean').length - 1, 1, 'said once: the skill is loaded text too');
   });
 
