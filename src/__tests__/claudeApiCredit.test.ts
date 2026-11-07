@@ -1,8 +1,9 @@
 /**
- * @description The bonus API credit of an account billed to API credits (`utils/claudeApiCredit.ts`): the estimate
- * (`anchored amount − spend since`, used up after a refusal that came later, expired past its day), the spend count that
- * restarts with a new anchor, the day parser, and the anchors file — read stamp-cached, written atomically by the command
- * line, never overwritten when broken.
+ * @description The bonus API credit of an account billed to API credits (`utils/claudeApiCredit.ts`): the period its spend is
+ * counted in (the operator's figure, the bot's detected renewal — the newer wins — else the first counted turn), the estimate
+ * (spent; left when a figure or a grant is known; probably used up after a refusal that came inside the period; expired
+ * past the operator's expiry day), the spend count that restarts with a new period, the day parser, and the anchors file —
+ * read stamp-cached, written atomically by the command line, never overwritten when broken.
  */
 
 /** Test case: N/A — Charness has no Jira tracker. */
@@ -18,35 +19,41 @@ import {
   checkIsClaudeApiCreditMarkCurrent,
   claudeApiCreditFileName,
   getClaudeApiCreditEstimate,
+  getClaudeApiCreditPeriod,
   listProfilesWithSupersededCreditMark,
   parseClaudeApiCreditDay,
   readClaudeApiCreditAnchors,
   resetClaudeApiCreditCache,
   writeClaudeApiCreditAnchor,
   type ClaudeApiCreditAnchor,
+  type ClaudeApiCreditInput,
 } from '../utils/claudeApiCredit';
 
 const nowMs = Date.parse('2026-11-07T10:00:00Z');
 const anchor: ClaudeApiCreditAnchor = { remainingUsd: 67.71, grantUsd: 200, anchoredAt: '2026-11-07T08:00:00.000Z', expiresOn: '2026-11-15' };
+const apiSpend = { since: '2026-11-01T00:00:00.000Z', totalUsd: 39.12 };
+const renewedAt = '2026-11-07T09:00:00.000Z';
 
-function estimate(overrides: { anchor?: ClaudeApiCreditAnchor | undefined; spendUsd?: number; spendAnchoredAt?: string; creditExhaustedAt?: string | null; nowMs?: number } = {}) {
-  const usedAnchor = 'anchor' in overrides ? overrides.anchor : anchor;
-  return getClaudeApiCreditEstimate({
-    anchor: usedAnchor,
-    spend: overrides.spendUsd === undefined ? undefined : { anchoredAt: overrides.spendAnchoredAt ?? anchor.anchoredAt, usd: overrides.spendUsd },
-    creditExhaustedAt: overrides.creditExhaustedAt ?? null,
-    nowMs: overrides.nowMs ?? nowMs,
-  });
+function estimate(overrides: Partial<ClaudeApiCreditInput> = {}) {
+  return getClaudeApiCreditEstimate({ anchor, renewedAt: null, spend: undefined, apiSpend: undefined, creditExhaustedAt: null, nowMs, ...overrides });
 }
 
-describe('getClaudeApiCreditEstimate', () => {
-  it('has no estimate without an anchor', () => {
-    assert.equal(estimate({ anchor: undefined, spendUsd: 3 }), null);
+describe('getClaudeApiCreditPeriod', () => {
+  it('starts at the operator\'s figure, the bot\'s detected renewal — whichever is NEWER — else the account\'s first counted turn', () => {
+    assert.deepEqual(getClaudeApiCreditPeriod({ anchor, renewedAt: null, apiSpend }), { basis: 'anchor', since: anchor.anchoredAt });
+    assert.deepEqual(getClaudeApiCreditPeriod({ anchor, renewedAt: '2026-11-06T00:00:00.000Z', apiSpend }), { basis: 'anchor', since: anchor.anchoredAt }, 'a figure given after the renewal is newer news');
+    assert.deepEqual(getClaudeApiCreditPeriod({ anchor, renewedAt, apiSpend }), { basis: 'renewal', since: renewedAt });
+    assert.deepEqual(getClaudeApiCreditPeriod({ anchor: undefined, renewedAt, apiSpend }), { basis: 'renewal', since: renewedAt }, 'a renewal needs no figure');
+    assert.deepEqual(getClaudeApiCreditPeriod({ anchor: undefined, renewedAt: null, apiSpend }), { basis: 'firstTurn', since: apiSpend.since });
+    assert.deepEqual(getClaudeApiCreditPeriod({ anchor: undefined, renewedAt: null, apiSpend: undefined }), { basis: 'none', since: null });
+    assert.deepEqual(getClaudeApiCreditPeriod({ anchor, renewedAt: anchor.anchoredAt, apiSpend }), { basis: 'anchor', since: anchor.anchoredAt }, 'at the same instant the figure wins');
   });
+});
 
-  it('is the anchored amount minus what the bot saw spent since, with the grant and the expiry the operator gave', () => {
-    assert.deepEqual(estimate({ spendUsd: 6.51 }), {
-      status: 'available', leftUsd: 61.2, grantUsd: 200, spentUsd: 6.51, anchoredAt: anchor.anchoredAt, expiresOn: '2026-11-15',
+describe('getClaudeApiCreditEstimate: the operator\'s figure', () => {
+  it('is the figure minus what the bot saw spent since, with the grant and the expiry the operator gave', () => {
+    assert.deepEqual(estimate({ spend: { since: anchor.anchoredAt, usd: 6.51 } }), {
+      status: 'available', basis: 'anchor', since: anchor.anchoredAt, spentUsd: 6.51, leftUsd: 61.2, grantUsd: 200, expiresOn: '2026-11-15', renewedAt: null,
     }, '67.71 − 6.51');
     assert.equal(estimate()?.spentUsd, 0, 'nothing spent yet');
     assert.equal(estimate()?.leftUsd, 67.71);
@@ -59,42 +66,92 @@ describe('getClaudeApiCreditEstimate', () => {
     assert.equal(bare?.status, 'available');
   });
 
-  it('never goes below zero when the bot saw more spent than was left', () => {
-    assert.equal(estimate({ spendUsd: 80 })?.leftUsd, 0);
-    assert.equal(estimate({ spendUsd: 80 })?.status, 'available', 'only a refusal marks it used up');
+  it('never goes below zero when the bot saw more spent than was left — only a refusal says «probably used up»', () => {
+    assert.equal(estimate({ spend: { since: anchor.anchoredAt, usd: 80 } })?.leftUsd, 0);
+    assert.equal(estimate({ spend: { since: anchor.anchoredAt, usd: 80 } })?.status, 'available');
   });
 
-  it('ignores spend counted from an earlier anchor: a new figure starts the count over', () => {
-    const stale = estimate({ spendUsd: 40, spendAnchoredAt: '2026-11-01T00:00:00.000Z' });
+  it('ignores spend counted in an earlier period: a new figure starts the count over', () => {
+    const stale = estimate({ spend: { since: '2026-11-01T00:00:00.000Z', usd: 40 } });
     assert.equal(stale?.spentUsd, 0);
     assert.equal(stale?.leftUsd, 67.71);
   });
 
-  it('is used up by a refusal that came AFTER the anchor, and not by an older one', () => {
-    const after = estimate({ spendUsd: 6.51, creditExhaustedAt: '2026-11-07T09:00:00.000Z' });
-    assert.equal(after?.status, 'usedUp');
+  it('is probably used up after a refusal that came AFTER the figure, and not after an older one', () => {
+    const after = estimate({ spend: { since: anchor.anchoredAt, usd: 6.51 }, creditExhaustedAt: '2026-11-07T09:00:00.000Z' });
+    assert.equal(after?.status, 'probablyUsedUp');
     assert.equal(after?.leftUsd, 0);
     assert.equal(after?.spentUsd, 6.51, 'what it spent is still told');
-    assert.equal(after?.expiresOn, '2026-11-15');
     assert.equal(estimate({ creditExhaustedAt: '2026-11-06T09:00:00.000Z' })?.status, 'available', 'the refusal of the balance the figure replaced');
     assert.equal(estimate({ creditExhaustedAt: anchor.anchoredAt })?.status, 'available', 'at the very instant of the figure is not after it');
   });
 
-  it('is expired once the expiry day is over — through the whole of that day it is not', () => {
+  it('is expired once the expiry day is over — through the whole of that day it is not — and expired wins over probably used up', () => {
     assert.equal(estimate({ nowMs: Date.parse('2026-11-15T23:59:59Z') })?.status, 'available', 'the last day, last second');
-    const over = estimate({ nowMs: Date.parse('2026-11-16T00:00:00Z'), spendUsd: 1 });
+    const over = estimate({ nowMs: Date.parse('2026-11-16T00:00:00Z'), spend: { since: anchor.anchoredAt, usd: 1 } });
     assert.equal(over?.status, 'expired');
     assert.equal(over?.leftUsd, 0);
     assert.equal(over?.expiresOn, '2026-11-15');
-  });
-
-  it('expired wins over used up', () => {
     assert.equal(estimate({ nowMs: Date.parse('2026-11-20T00:00:00Z'), creditExhaustedAt: '2026-11-07T09:00:00.000Z' })?.status, 'expired');
   });
 
   it('never expires without an expiry day', () => {
     const open = estimate({ anchor: { remainingUsd: 10, anchoredAt: anchor.anchoredAt }, nowMs: Date.parse('2030-01-01T00:00:00Z') });
     assert.equal(open?.status, 'available');
+  });
+});
+
+describe('getClaudeApiCreditEstimate: a renewal the bot detected', () => {
+  it('re-anchors on the LAST GIVEN grant: the counter is at zero, the expiry is unknown — never the figure\'s old one', () => {
+    assert.deepEqual(estimate({ renewedAt, spend: { since: renewedAt, usd: 0 } }), {
+      status: 'available', basis: 'renewal', since: renewedAt, spentUsd: 0, leftUsd: 200, grantUsd: 200, expiresOn: null, renewedAt,
+    });
+    assert.equal(estimate({ renewedAt, spend: { since: renewedAt, usd: 0.25 } })?.leftUsd, 199.75);
+  });
+
+  it('ignores the spend counted before the renewal', () => {
+    const afterRenewal = estimate({ renewedAt, spend: { since: anchor.anchoredAt, usd: 6.51 } });
+    assert.equal(afterRenewal?.spentUsd, 0);
+    assert.equal(afterRenewal?.leftUsd, 200);
+  });
+
+  it('knows no remainder when no grant was ever given — only the renewal and the spend since', () => {
+    const noGrant = estimate({ anchor: { remainingUsd: 10, anchoredAt: '2026-11-01T00:00:00.000Z' }, renewedAt, spend: { since: renewedAt, usd: 0.5 } });
+    assert.equal(noGrant?.leftUsd, null);
+    assert.equal(noGrant?.grantUsd, null);
+    assert.equal(noGrant?.spentUsd, 0.5);
+    assert.equal(estimate({ anchor: undefined, renewedAt, spend: { since: renewedAt, usd: 0.5 } })?.leftUsd, null, 'no figure at all');
+  });
+
+  it('is never expired by the old figure\'s expiry day', () => {
+    assert.equal(estimate({ renewedAt, nowMs: Date.parse('2026-12-31T00:00:00Z') })?.status, 'available');
+  });
+
+  it('can be used up again: a refusal after the renewal', () => {
+    const again = estimate({ renewedAt, creditExhaustedAt: '2026-11-07T09:30:00.000Z', spend: { since: renewedAt, usd: 1 } });
+    assert.equal(again?.status, 'probablyUsedUp');
+    assert.equal(again?.spentUsd, 1);
+    assert.equal(again?.renewedAt, renewedAt);
+  });
+});
+
+describe('getClaudeApiCreditEstimate: no figure', () => {
+  it('tells the spend since the account\'s first counted turn', () => {
+    assert.deepEqual(estimate({ anchor: undefined, apiSpend }), {
+      status: 'available', basis: 'firstTurn', since: apiSpend.since, spentUsd: 39.12, leftUsd: null, grantUsd: null, expiresOn: null, renewedAt: null,
+    });
+  });
+
+  it('is probably used up after a refusal, with or without anything counted', () => {
+    const counted = estimate({ anchor: undefined, apiSpend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' });
+    assert.equal(counted?.status, 'probablyUsedUp');
+    assert.equal(counted?.spentUsd, 39.12);
+    const nothing = estimate({ anchor: undefined, creditExhaustedAt: '2026-11-07T09:00:00.000Z' });
+    assert.deepEqual([nothing?.status, nothing?.since, nothing?.spentUsd, nothing?.leftUsd], ['probablyUsedUp', null, 0, null]);
+  });
+
+  it('has nothing to say with no figure, no renewal, no spend and no refusal', () => {
+    assert.equal(estimate({ anchor: undefined }), null);
   });
 });
 
@@ -121,12 +178,19 @@ describe('the used-up mark next to the operator\'s figure', () => {
 });
 
 describe('addClaudeApiCreditSpend', () => {
-  it('adds a turn to the count of the same anchor and starts over for another', () => {
-    const first = addClaudeApiCreditSpend(undefined, anchor, 0.25);
-    assert.deepEqual(first, { anchoredAt: anchor.anchoredAt, usd: 0.25 });
-    assert.deepEqual(addClaudeApiCreditSpend(first, anchor, 0.5), { anchoredAt: anchor.anchoredAt, usd: 0.75 });
-    const newAnchor = { ...anchor, anchoredAt: '2026-11-08T08:00:00.000Z' };
-    assert.deepEqual(addClaudeApiCreditSpend(first, newAnchor, 0.5), { anchoredAt: newAnchor.anchoredAt, usd: 0.5 }, 'the old count belongs to the old figure');
+  const anchorPeriod = { basis: 'anchor', since: anchor.anchoredAt } as const;
+
+  it('adds a turn to the count of the same period and starts over for another', () => {
+    const first = addClaudeApiCreditSpend(undefined, anchorPeriod, 0.25);
+    assert.deepEqual(first, { since: anchor.anchoredAt, usd: 0.25 });
+    assert.deepEqual(addClaudeApiCreditSpend(first, anchorPeriod, 0.5), { since: anchor.anchoredAt, usd: 0.75 });
+    const renewal = { basis: 'renewal', since: renewedAt } as const;
+    assert.deepEqual(addClaudeApiCreditSpend(first, renewal, 0.5), { since: renewedAt, usd: 0.5 }, 'the old count belongs to the old period');
+  });
+
+  it('keeps no count of its own for a period that reads the account\'s whole spend, or none', () => {
+    assert.equal(addClaudeApiCreditSpend(undefined, { basis: 'firstTurn', since: apiSpend.since }, 0.25), null);
+    assert.equal(addClaudeApiCreditSpend(undefined, { basis: 'none', since: null }, 0.25), null);
   });
 });
 

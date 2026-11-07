@@ -25,7 +25,7 @@ import * as path from 'path';
 import type { ClaudeProfileRecord } from '../state';
 import { getClaudeAccountKind, resolveClaudeProfileDir, resolveHomeClaudeDir, type ClaudeAccountKind, type ClaudeProfileBilling } from './claudeProfiles';
 import type { ClaudeApiSpend } from './claudeApiSpend';
-import type { ClaudeApiCreditAnchor, ClaudeApiCreditAnchors, ClaudeApiCreditSpend } from './claudeApiCredit';
+import { checkIsClaudeApiCreditMarkCurrent, getClaudeApiCreditEstimate, type ClaudeApiCreditAnchor, type ClaudeApiCreditAnchors, type ClaudeApiCreditSpend } from './claudeApiCredit';
 
 export const claudeUsageEndpoint = 'https://api.anthropic.com/api/oauth/usage';
 
@@ -352,8 +352,10 @@ export interface ClaudeProfileUsageView {
   apiSpend?: ClaudeApiSpend;
   /** The figure the operator read on the Console's Billing page (`utils/claudeApiCredit.ts`); absent = none given. */
   creditAnchor?: ClaudeApiCreditAnchor;
-  /** What the account spent through the bot since that figure; absent before its first counted turn after it. */
+  /** What the account spent through the bot since its credit period began (that figure, or the last renewal); absent before its first counted turn after it. */
   creditSpend?: ClaudeApiCreditSpend;
+  /** When the bot detected that the account's used-up credit was back; absent = never. */
+  creditRenewedAt?: string;
 }
 
 /** One profile in the report the MCP tool and the CLI hand to an agent. */
@@ -378,6 +380,19 @@ export interface ClaudeProfileReportEntry {
   limitedUntil: string | null;
   /** When its prepaid API credits were found used up (`null`: not marked). */
   creditExhaustedAt: string | null;
+  // The five fields below are what the bot can tell of an account billed to API credits (`utils/claudeApiCredit.ts`); `null` /
+  // `false` for any other account and when nothing is known. All of it is the bot's own estimate: spend by another key or
+  // machine is invisible to it.
+  /** What the account spent through the bot in its current credit period (the operator's last figure, the last renewal, else since its first counted turn). */
+  spentUsd: number | null;
+  /** The operator's figure (or, after a renewal, the last grant they gave) minus the spend; `null` when no figure was ever given. */
+  remainingEstimateUsd: number | null;
+  /** The last day (`YYYY-MM-DD`, UTC) the operator said the credit is usable; `null` when none was given or after a renewal (unknown: the Console's Billing page shows it). */
+  expiresOn: string | null;
+  /** A refusal for a used-up balance came after the period began and nothing has answered since: the bot cannot be sure. */
+  probablyUsedUp: boolean;
+  /** When the bot detected the credit was back (the current period starts there); `null` = never or superseded by a newer figure. */
+  renewedAt: string | null;
   /** Signed in, not limited, its API credits not used up, and not at 100 % on a window the model drains — by the figures AS RECORDED. */
   isEligible: boolean;
   /** `100 − max(relevant percent)`; `null` when the usage is unknown. Informational: the pick ranks by reset, not by headroom. */
@@ -670,6 +685,21 @@ export function describeClaudeLaunchOutcome(report: Pick<ClaudeProfilesReport, '
   }
 }
 
+/** The credit fields of a report entry: the bot's estimate for an API account, empty for any other. */
+function getClaudeProfileReportCredit(profile: ClaudeProfileUsageView, nowMs: number): Pick<ClaudeProfileReportEntry, 'spentUsd' | 'remainingEstimateUsd' | 'expiresOn' | 'probablyUsedUp' | 'renewedAt'> {
+  const estimate = profile.billing === 'api'
+    ? getClaudeApiCreditEstimate({ anchor: profile.creditAnchor, renewedAt: profile.creditRenewedAt, spend: profile.creditSpend, apiSpend: profile.apiSpend, creditExhaustedAt: profile.creditExhaustedAt, nowMs })
+    : null;
+  return {
+    // Nothing counted yet (no figure, no renewal, no turn) is no count, not a count of zero.
+    spentUsd: estimate && estimate.basis !== 'none' ? estimate.spentUsd : null,
+    remainingEstimateUsd: estimate?.leftUsd ?? null,
+    expiresOn: estimate?.expiresOn ?? null,
+    probablyUsedUp: estimate?.status === 'probablyUsedUp',
+    renewedAt: estimate?.renewedAt ?? null,
+  };
+}
+
 /**
  * @description The report of every profile for a launch of `model`, with the pick of {@link getClaudeLaunchPick}
  * (`options`: the warm account, the limit stop, the switched-off accounts). `isEligible` is the strict reading — signed in,
@@ -695,6 +725,7 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
       isUsageStale: profile.usage?.isStale === true,
       limitedUntil: profile.limitedUntil,
       creditExhaustedAt: profile.creditExhaustedAt,
+      ...getClaudeProfileReportCredit(profile, nowMs),
       isEligible: checkIsClaudeProfileEligible(profile, relevant, nowMs),
       headroomPercent: maxPercent === null ? null : 100 - maxPercent,
       isRecommended: false,
@@ -725,10 +756,13 @@ export function buildClaudeProfileUsageView(input: {
     usage: record?.usage,
     limitedUntil: record?.limitedUntil ?? null,
     billing: record?.billing ?? null,
-    creditExhaustedAt: record?.creditExhaustedAt ?? null,
+    // A figure the operator gave after the refusal ends the mark (the bot clears the stored one when it reads the figures; a
+    // reader of `state.json` alone, the command line, must see the same).
+    creditExhaustedAt: record?.creditExhaustedAt && (!creditAnchor || checkIsClaudeApiCreditMarkCurrent(record.creditExhaustedAt, creditAnchor.anchoredAt)) ? record.creditExhaustedAt : null,
     ...(record?.apiSpend ? { apiSpend: record.apiSpend } : {}),
     ...(creditAnchor ? { creditAnchor } : {}),
     ...(record?.creditSpend ? { creditSpend: record.creditSpend } : {}),
+    ...(record?.creditRenewedAt ? { creditRenewedAt: record.creditRenewedAt } : {}),
   };
 }
 

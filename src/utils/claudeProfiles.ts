@@ -23,6 +23,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { z } from 'zod';
 
 /** The profile that is `~/.claude` itself (no `CLAUDE_CONFIG_DIR`). */
 export const defaultClaudeProfileName = 'default';
@@ -284,6 +285,39 @@ export function extractAnthropicApiKey(text: string): string | null {
 /** The key file of a profile directory. */
 export function resolveClaudeProfileApiKeyFile(configDir: string): string {
   return path.join(configDir, claudeProfileApiKeyFileName);
+}
+
+/** The profile's own `.claude.json`: where `claude auth login --console` keeps the key it created (`primaryApiKey`). */
+const claudeProfileStateFileName = '.claude.json';
+
+const claudeProfileStateKeySchema = z.object({ primaryApiKey: z.string() });
+
+/** The text of a file, `null` when it cannot be read. */
+function readTextFileOrNull(file: string): string | null {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @description The API key a profile's own sessions use, read to make ONE direct request on its behalf (the daily credit
+ * recheck): the pasted key file, else the key a Console login stored in the profile's `.claude.json`. `null` when the
+ * directory holds neither, or what it holds does not look like an API key. The caller puts it in a request header and
+ * nowhere else — it is never logged, echoed or stored.
+ */
+export function readClaudeProfileApiKey(configDir: string): string | null {
+  const pastedKey = readTextFileOrNull(resolveClaudeProfileApiKeyFile(configDir));
+  if (pastedKey !== null && checkIsPlausibleAnthropicApiKey(pastedKey)) return pastedKey.trim();
+  const stateText = readTextFileOrNull(path.join(configDir, claudeProfileStateFileName));
+  if (stateText === null) return null;
+  try {
+    const parsed = claudeProfileStateKeySchema.safeParse(JSON.parse(stateText));
+    return parsed.success && checkIsPlausibleAnthropicApiKey(parsed.data.primaryApiKey) ? parsed.data.primaryApiKey.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Whether the profile directory holds a pasted key (`null` = `~/.claude`, which never does: the bot writes none there). */

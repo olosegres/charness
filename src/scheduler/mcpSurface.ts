@@ -1850,7 +1850,11 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
         'window and the shared weekly window bound every model, Fable included; Fable also drains its own weekly ' +
         'window; signed-out, limited and operator-switched-off accounts are skipped. An account with `billing: "api"` ' +
         'pays per request from a Claude Console balance: it has no windows and is NEVER picked for a new agent — do ' +
-        'not launch a child on it unless the operator asked you to. `recommended: null` means nothing is usable now: ' +
+        'not launch a child on it unless the operator asked you to; its entry also carries the bot\'s own estimate of its API credit — ' +
+        '`spentUsd` through the bot in the current credit period, `remainingEstimateUsd` and `expiresOn` when the operator gave a ' +
+        'Console figure (null otherwise; `expiresOn` stays null after a renewal), `probablyUsedUp` after a refusal for the balance ' +
+        '(the bot cannot be sure; it rechecks daily) and `renewedAt` once it saw the credit come back — never the Console balance. ' +
+        '`recommended: null` means nothing is usable now: ' +
         '`nextAvailable` names the account and instant that frees up first — schedule ONE resume at that time instead ' +
         'of retrying; when `nextAvailable` is null too, tell the user and retry once in about 30 minutes. Call it BEFORE launching or resuming a child `claude` and start the child with ' +
         'CLAUDE_CONFIG_DIR=<configDir> in its environment — configDir null means the default profile: set nothing. ' +

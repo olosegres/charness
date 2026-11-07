@@ -28,6 +28,7 @@ import { DEFAULT_SAVE_DEBOUNCE_MS } from '../state';
 import { pendingWorkHoldDefaultMs } from '../utils/jsonStreamPendingWork';
 import { todoReminderDefaultMinutes } from '../todos/nag';
 import { todoReminderPollMs } from '../todos/reminderEngine';
+import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs } from '../utils/claudeApiCreditRecheck';
 import { remoteRunLeaseMinMs, remoteRunLeaseMs } from '../remoteRun/leaseTiming';
 import { lidPollMs } from '../runnerUtility/lidPollTiming';
 import { runnerVersionPollMs } from '../runnerUtility/versionPollTiming';
@@ -47,6 +48,8 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['backgroundHoldMaxMs', pendingWorkHoldDefaultMs],
   ['todoReminderPollMs', todoReminderPollMs],
   ['todoReminderIntervalMs', todoReminderDefaultMinutes * 60 * 1000],
+  ['creditRecheckIntervalMs', claudeApiCreditRecheckIntervalMs],
+  ['creditRecheckPollMs', claudeApiCreditRecheckPollMs],
   ['scheduleMinFireIntervalMs', minFireIntervalMs],
   ['checkStatusIntervalMs', defaultCheckStatusEveryMinutes * 60 * 1000],
   ['remoteRunLeaseMs', remoteRunLeaseMs],

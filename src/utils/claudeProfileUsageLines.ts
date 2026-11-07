@@ -30,6 +30,8 @@ export interface ClaudeProfileUsageSource {
   /** The operator's Console figure (`utils/claudeApiCredit.ts`): an account billed to API credits shows its estimate. */
   creditAnchor?: ClaudeApiCreditAnchor;
   creditSpend?: ClaudeApiCreditSpend;
+  /** When the bot detected that the used-up credit was back (the credit period starts there). */
+  creditRenewedAt?: string;
 }
 
 /** What the expired-credit line names when the source carries no profile name (a placeholder the operator replaces). */
@@ -45,8 +47,9 @@ function getRelativeResetWords(): ClaudeRelativeResetWords {
  * for one the snapshot lacks), Fable only when the account HAS that window (a corporate seat has none: nothing
  * is written about it) — `(stale)` when the last poll could not refresh, and the limit mark while it holds, the
  * reset instant in `timezone`, and the used-up-credits mark while it holds. An account billed to API credits has no
- * windows (its row already says it pays per use): what it spent through the bot, its bonus credit estimate when the
- * operator gave a Console figure (`utils/claudeApiCredit.ts`), and that mark. The lines carry the
+ * windows (its row already says it pays per use): what it spent through the bot and the one credit line
+ * (`utils/claudeApiCredit.ts`: the spend of the credit period, the operator's figure when there is one, and the «probably
+ * used up» sign in place of the plain used-up mark). The lines carry the
  * locale's own indentation (they hang under a row); empty for an account with nothing to show.
  */
 export function formatClaudeProfileUsageLines(source: ClaudeProfileUsageSource | undefined, timezone: string, nowMs: number): string[] {
@@ -75,17 +78,22 @@ export function formatClaudeProfileUsageLines(source: ClaudeProfileUsageSource |
 }
 
 /**
- * The lines of an account billed to API credits: its spend through the bot, the estimate of its bonus credit when the
- * operator gave a figure, and the used-up mark while it holds.
+ * The lines of an account billed to API credits: its spend through the bot, and the one credit line
+ * (`formatClaudeApiCreditLine`) that tells how the credit stands — it also carries the «probably used up» sign, so this
+ * account has no separate used-up line.
  */
 function formatApiBillingLines(source: ClaudeProfileUsageSource, timezone: string, nowMs: number): string[] {
   const lines: string[] = [];
   if (source.apiSpend) lines.push(t('account.row.apiSpend', formatClaudeApiSpendWords(source.apiSpend, timezone, nowMs)));
-  const credit = getClaudeApiCreditEstimate({ anchor: source.creditAnchor, spend: source.creditSpend, creditExhaustedAt: source.creditExhaustedAt, nowMs });
+  const credit = getClaudeApiCreditEstimate({
+    anchor: source.creditAnchor,
+    renewedAt: source.creditRenewedAt,
+    spend: source.creditSpend,
+    apiSpend: source.apiSpend,
+    creditExhaustedAt: source.creditExhaustedAt,
+    nowMs,
+  });
   if (credit) lines.push(formatClaudeApiCreditLine(credit, source.name ?? unknownProfileName, timezone, nowMs));
-  // With a figure the credit line already says it — used up, or not (a refusal older than the figure is news no longer):
-  // a second used-up line beside it would repeat it or contradict it.
-  else if (source.creditExhaustedAt) lines.push(t('account.row.creditExhausted'));
   return lines;
 }
 
@@ -98,22 +106,40 @@ function formatCreditExpiryDay(expiresOn: string, nowMs: number): string {
 }
 
 /**
- * @description The one line of the bonus API credit (`utils/claudeApiCredit.ts`): `🎁 API credit ≈ $61.20 of $200.00 ·
- * $6.51 spent via the bot since 07.11 · expires 15.11` — the size of the grant and the expiry only when the operator gave
- * them; or `used up` after a refusal (with what to do about it); or `expired` with the command that sets the new figure. The «≈» and «via the bot» say what
- * the figure is: the Console's balance minus what the bot saw spent, not the balance itself.
+ * @description The one line of the bonus API credit (`utils/claudeApiCredit.ts`), always there for an API account that has
+ * anything to say:
+ *   • a figure from the operator: `🎁 API credit ≈ $61.20 of $200.00 · $6.51 spent via the bot since 07.11 · expires 15.11`
+ *     (the grant and the expiry only when they were given);
+ *   • none: `🎁 API credit: $6.51 spent via the bot since 07.11` (since its first counted turn);
+ *   • after a renewal the bot detected: `🎁 API credit renewed ≈ 08.11 · ≈ $199.75 of $200.00 · $0.25 spent via the bot ·
+ *     check expiry in Console › Billing` on the last given grant, or only `renewed ≈ 08.11 · $0.25 spent since` without one;
+ *   • after a refusal for the balance: `🎁 API credit probably used up · $6.51 spent since 07.11` — «probably»: the bot cannot
+ *     be sure, and the daily recheck ends it by itself;
+ *   • past the expiry day the operator gave: `expired`, with the command that sets the new figure.
+ * The «≈» and «via the bot» say what the figures are: the bot's own count, not the Console's balance.
  */
 function formatClaudeApiCreditLine(credit: ClaudeApiCreditEstimate, profileName: string, timezone: string, nowMs: number): string {
   if (credit.status === 'expired') return t('account.row.apiCreditExpired', { day: formatCreditExpiryDay(credit.expiresOn, nowMs), name: profileName });
-  const expires = credit.expiresOn === null ? '' : t('account.row.apiCreditExpires', { day: formatCreditExpiryDay(credit.expiresOn, nowMs) });
-  if (credit.status === 'usedUp') return t('account.row.apiCreditUsedUp', { expires });
-  return t('account.row.apiCredit', {
-    left: formatUsd(credit.leftUsd),
-    grant: credit.grantUsd === null ? '' : t('account.row.apiCreditGrant', { grant: formatUsd(credit.grantUsd) }),
-    spent: formatUsd(credit.spentUsd),
-    since: formatSpendSinceDay(credit.anchoredAt, timezone, nowMs),
-    expires,
-  });
+  const spent = formatUsd(credit.spentUsd);
+  const since = credit.since === null ? '' : formatSpendSinceDay(credit.since, timezone, nowMs);
+  if (credit.status === 'probablyUsedUp') {
+    return credit.since === null ? t('account.row.apiCreditProbablyUsedUpBare') : t('account.row.apiCreditProbablyUsedUp', { spent, since });
+  }
+  if (credit.basis === 'anchor' && credit.leftUsd !== null) {
+    return t('account.row.apiCredit', {
+      left: formatUsd(credit.leftUsd),
+      grant: credit.grantUsd === null ? '' : t('account.row.apiCreditGrant', { grant: formatUsd(credit.grantUsd) }),
+      spent,
+      since,
+      expires: credit.expiresOn === null ? '' : t('account.row.apiCreditExpires', { day: formatCreditExpiryDay(credit.expiresOn, nowMs) }),
+    });
+  }
+  if (credit.basis === 'renewal') {
+    return credit.leftUsd !== null && credit.grantUsd !== null
+      ? t('account.row.apiCreditRenewedEstimate', { since, left: formatUsd(credit.leftUsd), grant: formatUsd(credit.grantUsd), spent })
+      : t('account.row.apiCreditRenewed', { since, spent });
+  }
+  return t('account.row.apiCreditSpent', { spent, since });
 }
 
 /** The placeholders every spend text fills: `total`, `since` (the day, in `timezone`), `last` (the last turn's). */

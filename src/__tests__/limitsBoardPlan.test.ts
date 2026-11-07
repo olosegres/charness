@@ -162,7 +162,7 @@ describe('formatLimitsUsageBlock', () => {
       billing: 'api',
       apiSpend: { totalUsd: 6.51, since: inHours(-30), lastTurnUsd: 0.25, lastTurnAt: inHours(-1) },
       creditAnchor,
-      creditSpend: { anchoredAt: creditAnchor.anchoredAt, usd: 6.51 },
+      creditSpend: { since: creditAnchor.anchoredAt, usd: 6.51 },
     });
     assert.deepEqual(buildBlock({ detection: detectionOf([source]) }).split('\n'), [
       'Usage (% used)',

@@ -449,7 +449,7 @@ import { sweepExpiredPairings } from './runners/hubPairing';
 import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOverview';
 import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
-import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
+import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { buildClaudeProfileUsageView, buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
@@ -488,7 +488,8 @@ import { createSelfUpdate } from './connectors/telegram/commands/selfUpdate';
 import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent, ClaudeTurnCostReport } from './adapters/claudeConfigDir';
 import { addClaudeApiSpend, computeClaudeTurnCostUsd, formatUsd, getClaudeTurnCostOutcome } from './utils/claudeApiSpend';
-import { addClaudeApiCreditSpend, listProfilesWithSupersededCreditMark, readClaudeApiCreditAnchors, type ClaudeApiCreditAnchors } from './utils/claudeApiCredit';
+import { addClaudeApiCreditSpend, getClaudeApiCreditPeriod, listProfilesWithSupersededCreditMark, readClaudeApiCreditAnchors, type ClaudeApiCreditAnchors } from './utils/claudeApiCredit';
+import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs, probeClaudeApiCredit, startClaudeApiCreditRechecks, type ClaudeApiCreditRecheckPorts } from './utils/claudeApiCreditRecheck';
 import { formatClaudeApiSpendWords } from './utils/claudeProfileUsageLines';
 import { resolveClaudeBinary } from './utils/resolveBinary';
 import { getRunnerSummaryLines } from './remoteRun/runnerSummary';
@@ -8061,6 +8062,31 @@ const claudeUsageRefresher = createClaudeUsageRefresher({
   markOpenCodeStale: (reason) => openCodeUsagePoller.markAllStale(reason),
 });
 
+/**
+ * What the daily recheck of a used-up API credit (`utils/claudeApiCreditRecheck.ts`) reads and does in the bot: the added
+ * profiles with their marks (after the operator's newer figures have ended the marks they supersede), their own keys, and
+ * the state it writes — the attempt BEFORE the request, the renewal after an answer.
+ */
+const claudeApiCreditRecheckPorts: ClaudeApiCreditRecheckPorts = {
+  nowMs: () => Date.now(),
+  intervalMs: ENV.testTimings.creditRecheckIntervalMs ?? claudeApiCreditRecheckIntervalMs,
+  listProfiles: () => {
+    getClaudeApiCreditAnchors();
+    return Object.entries(state.getClaudeProfileRecords()).map(([name, record]) => ({
+      name,
+      billing: record.billing ?? null,
+      configDir: resolveClaudeProfileDir(resolveDataDir(), name),
+      creditExhaustedAt: record.creditExhaustedAt ?? null,
+      creditRecheckedAt: record.creditRecheckedAt ?? null,
+    }));
+  },
+  readApiKey: readClaudeProfileApiKey,
+  probe: (apiKey) => probeClaudeApiCredit(apiKey),
+  markRechecked: (name, atIso) => state.setClaudeProfileCreditRechecked(name, atIso),
+  onRenewed: (name, atIso) => state.setClaudeProfileCreditRenewed(name, atIso),
+  log: (line) => console.log(line),
+};
+
 /** The profile that owns a config directory (`null` = default); `null` for a directory outside the profiles root. */
 function resolveClaudeProfileNameForDir(configDir: string | null): string | null {
   if (configDir === null) return defaultClaudeProfileName;
@@ -8103,12 +8129,18 @@ function onClaudeTurnCost(key: SessionKey, configDir: string | null, report: Cla
   const outcome = getClaudeTurnCostOutcome({
     billing: info?.billing ?? null, isCreditExhausted: info?.creditExhaustedAt !== undefined, isError: report.isError, turnCostUsd,
   });
-  if (outcome.isCreditMarkCleared) state.setClaudeProfileCreditExhausted(name, null);
+  const nowIso = new Date().toISOString();
+  // A billed turn that goes through on an API account marked used up is the proof the daily recheck looks for: the credit is
+  // back, and the account's spend counter starts over from this turn.
+  if (outcome.isCreditMarkCleared && info?.billing === 'api') state.setClaudeProfileCreditRenewed(name, nowIso);
+  else if (outcome.isCreditMarkCleared) state.setClaudeProfileCreditExhausted(name, null);
   if (outcome.spendUsd === null) return;
-  state.setClaudeProfileApiSpend(name, addClaudeApiSpend(info?.apiSpend, outcome.spendUsd, new Date().toISOString()));
-  // The same spend also runs down the operator's credit figure, when one was given (`utils/claudeApiCredit.ts`).
-  const creditAnchor = creditAnchors[name];
-  if (creditAnchor) state.setClaudeProfileCreditSpend(name, addClaudeApiCreditSpend(info?.creditSpend, creditAnchor, outcome.spendUsd));
+  const apiSpend = addClaudeApiSpend(info?.apiSpend, outcome.spendUsd, nowIso);
+  state.setClaudeProfileApiSpend(name, apiSpend);
+  // The same spend also counts in the account's credit period (`utils/claudeApiCredit.ts`), read AFTER a renewal above.
+  const period = getClaudeApiCreditPeriod({ anchor: creditAnchors[name], renewedAt: state.getClaudeProfileInfo(name)?.creditRenewedAt, apiSpend });
+  const creditSpend = addClaudeApiCreditSpend(state.getClaudeProfileInfo(name)?.creditSpend, period, outcome.spendUsd);
+  if (creditSpend) state.setClaudeProfileCreditSpend(name, creditSpend);
 }
 
 /**
@@ -14480,6 +14512,8 @@ export async function startBot(): Promise<void> {
   // The usage cache: a first poll now (off the boot path), then the timer.
   claudeUsageRefresher.start();
   void claudeUsageRefresher.refreshAll();
+  // The daily recheck of API accounts marked used up (`utils/claudeApiCreditRecheck.ts`): a pass now — a day may have passed while the bot was down — then the timer.
+  startClaudeApiCreditRechecks(claudeApiCreditRecheckPorts, ENV.testTimings.creditRecheckPollMs ?? claudeApiCreditRecheckPollMs);
 
   const jiraConnector = ENV.servedPlatforms.has('jira') ? await prepareJiraConnectorOrExit() : null;
   todoJiraConversations = jiraConnector;

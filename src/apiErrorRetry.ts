@@ -209,7 +209,7 @@ const conversationTailRe = /requests ending with a model turn are not supported/
  * An exhausted prepaid API credit balance: Claude Code's «Credit balance is too low», the API's «Your credit balance is
  * too low to access the Anthropic API». Waiting never refills it ({@link AgentApiErrorClass.isBalanceExhausted}).
  */
-const creditBalanceExhaustedRe = /credit balance (?:is )?too low/i;
+export const creditBalanceExhaustedRe = /credit balance (?:is )?too low/i;
 
 /** Throttling markers that are transient whatever else the text says (the live "not your usage limit" trap). */
 const transientMarkersRe = /rate.?limited|temporarily limiting requests|too many requests|overloaded|\b(429|503|529)\b/i;

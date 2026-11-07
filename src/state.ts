@@ -223,8 +223,12 @@ export interface ClaudeProfileRecord {
   creditExhaustedAt?: string;
   /** What an account billed to API credits spent through the bot (`utils/claudeApiSpend.ts`); absent before its first counted turn. */
   apiSpend?: ClaudeApiSpend;
-  /** What an account billed to API credits spent through the bot since its credit anchor was given (`utils/claudeApiCredit.ts`). */
+  /** What an account billed to API credits spent through the bot since its credit period began: the operator's figure or the last renewal (`utils/claudeApiCredit.ts`). */
   creditSpend?: ClaudeApiCreditSpend;
+  /** ISO instant the bot detected that an API account's used-up credit was back (the daily recheck, or a billed turn that went through); the credit period starts there. */
+  creditRenewedAt?: string;
+  /** ISO instant of the last daily recheck ATTEMPT on an API account marked used up (`utils/claudeApiCreditRecheck.ts`): written before the request, so a restart never brings it round sooner. */
+  creditRecheckedAt?: string;
   /** The last usage snapshot read for the profile (`utils/claudeUsage.ts`): the endpoint poll or a stream frame. */
   usage?: ClaudeUsageSnapshot;
   /**
@@ -2312,11 +2316,32 @@ export class StateStore {
     this.scheduleSave();
   }
 
-  /** Store what an API account spent since its credit anchor (`utils/claudeApiCredit.ts`); same record rules as the usage. Debounced. */
+  /** Store what an API account spent since its credit period began (`utils/claudeApiCredit.ts`); same record rules as the usage. Debounced. */
   setClaudeProfileCreditSpend(name: string, spend: ClaudeApiCreditSpend): void {
     const record = this.touchClaudeProfileInfo(name);
     if (!record) return;
     record.creditSpend = spend;
+    this.scheduleSave();
+  }
+
+  /**
+   * An API account's used-up credit is back at `renewedAt`: the mark ends, the renewal is recorded and the spend counter
+   * starts over from zero at that instant. Debounced.
+   */
+  setClaudeProfileCreditRenewed(name: string, renewedAt: string): void {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record) return;
+    delete record.creditExhaustedAt;
+    record.creditRenewedAt = renewedAt;
+    record.creditSpend = { since: renewedAt, usd: 0 };
+    this.scheduleSave();
+  }
+
+  /** That a daily recheck of an API account was attempted at `recheckedAt` (`utils/claudeApiCreditRecheck.ts`). Debounced. */
+  setClaudeProfileCreditRechecked(name: string, recheckedAt: string): void {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record) return;
+    record.creditRecheckedAt = recheckedAt;
     this.scheduleSave();
   }
 

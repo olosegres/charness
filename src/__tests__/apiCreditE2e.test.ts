@@ -12,9 +12,9 @@
  *     `🎁 API credit ≈ $67.71 of $200.00 · $0.00 spent via the bot since … · expires …` at once
  *   → a turn on the account runs the estimate down by exactly its own cost, and the bot keeps the count in its own record
  *   → a NEW figure starts the count over (the old turn is not subtracted from it)
- *   → the credits run out («Credit balance is too low») after the figure: `/accounts` says the credit is used up, and a
+ *   → the credits run out («Credit balance is too low») after the figure: `/accounts` says «probably used up», and a
  *     figure given after that brings the estimate back
- *   → `--clear` takes the line away; a subscription account is refused with a reason and nothing written
+ *   → `--clear` takes the figure away and the line falls back to the bare spend; a subscription account is refused with a reason and nothing written
  *
  * What the unit tests cover instead: the estimate and the file (`claudeApiCredit.test.ts`), every wording of the line
  * (`claudeProfileUsageLines.test.ts`), the command line's arguments (`claudeProfilesCredit.test.ts`).
@@ -27,7 +27,6 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram, generalTopicThreadId } from './telegramE2e/fakeTelegram';
@@ -40,7 +39,6 @@ import {
   getFlowDeadlineMs,
   getFreeFixedPort,
   getFreePort,
-  getIsolatedPath,
   IsolatedCharness,
   listTmuxSessions,
   removeIsolatedInstanceSync,
@@ -59,7 +57,7 @@ import {
   waitForSessionRespawn,
   type PersistedState,
 } from './e2e/fallbackFlowKit';
-import { claudeApiCreditFileName } from '../utils/claudeApiCredit';
+import { findCreditLine, readAccountRowLines as readAccountRowLinesOf, readCreditFile as readCreditFileOf, runCreditCommand as runCreditCommandOf, type CommandResult } from './e2e/apiCreditKit';
 import { createClaudeProfileLayout, writeClaudeProfileApiKey } from '../utils/claudeProfiles';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 
@@ -82,7 +80,6 @@ const expiresShown = '31.12.2099';
 
 const replyTimeoutMs = 20 * 1000;
 const agentStartTimeoutMs = 60 * 1000;
-const commandTimeoutMs = 30 * 1000;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -110,39 +107,9 @@ async function restartWithState(edit: (state: PersistedState) => void): Promise<
   charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), edit);
 }
 
-/** The built `charness claude-profiles credit …` of this instance (its env file names the data dir), as the operator runs it. */
-function runCreditCommand(...args: string[]): { code: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [builtCliPath, 'claude-profiles', 'credit', ...args], {
-    env: { ENV_FILE: getLayout().envFile, PATH: getIsolatedPath(getLayout()), HOME: getLayout().instanceHome },
-    encoding: 'utf8',
-    timeout: commandTimeoutMs,
-  });
-  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
-}
-
-/** The anchors file as the command line wrote it, by profile. */
-function readCreditFile(): Record<string, { remainingUsd: number; grantUsd?: number; anchoredAt: string; expiresOn?: string }> {
-  return JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, claudeApiCreditFileName), 'utf8'));
-}
-
-/** The lines `/accounts` writes under the API account's row (the row's own line first). */
-async function readAccountRowLines(): Promise<string[]> {
-  const screen = await topic.sendAndAwaitReply('/accounts', 'This topic runs on');
-  const lines = screen.text.split('\n');
-  const rowIndex = lines.findIndex((line) => line.includes(`• ${apiAccount} —`) || line.includes(`✓ ${apiAccount} —`));
-  assert.ok(rowIndex >= 0, `the API account's row is on the screen: ${screen.text}`);
-  // The usage lines hang under the row, each indented by four spaces; the next row or the footer is not indented.
-  const hanging: string[] = [];
-  for (const line of lines.slice(rowIndex + 1)) {
-    if (!line.startsWith('    ')) break;
-    hanging.push(line);
-  }
-  return hanging;
-}
-
-function findCreditLine(lines: readonly string[]): string | undefined {
-  return lines.find((line) => line.includes('🎁'));
-}
+const runCreditCommand = (...args: string[]): CommandResult => runCreditCommandOf(getLayout(), ...args);
+const readCreditFile = () => readCreditFileOf(getLayout());
+const readAccountRowLines = (): Promise<string[]> => readAccountRowLinesOf(topic, apiAccount);
 
 const leftOfGrant = (left: string): RegExp => new RegExp(`^ {4}🎁 API credit ≈ \\$${left} of \\$200\\.00 · `);
 
@@ -249,22 +216,22 @@ describe('The bonus API credit end to end: built charness, built command line, f
     // The earlier count (the old figure's, $0.25 too) is replaced only by a turn counted against the new anchor.
     await getCharness().waitFor('the next turn to be counted against the NEW figure', agentStartTimeoutMs, () => {
       const spend = readPersistedState(getLayout()).claudeProfiles?.[apiAccount]?.creditSpend;
-      return spend?.anchoredAt === newAnchoredAt && spend.usd === fakeTurnCostUsd;
+      return spend?.since === newAnchoredAt && spend.usd === fakeTurnCostUsd;
     });
     const after = findCreditLine(await readAccountRowLines());
     assert.match(after ?? '', new RegExp(`${leftOfGrant('49\\.75').source}\\$0\\.25 spent via the bot since `), '50 − 0.25, not 50 − 0.50');
   });
 
-  it('credits that run out after the figure: /accounts says the credit is used up; a figure given after that brings the estimate back', async () => {
+  it('credits that run out after the figure: /accounts says «probably used up»; a figure given after that brings the estimate back', async () => {
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), creditBalanceError);
     fakeTelegram.pushOperatorMessage(topicThreadId, 'CREDIT-3 please carry on');
     await topic.waitForMessage('the credits notice', (message) => message.text.startsWith('💸'));
     await getCharness().waitFor('the account to be marked out of credits', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.[apiAccount]?.creditExhaustedAt !== undefined);
 
     const usedUpLines = await readAccountRowLines();
-    assert.equal(usedUpLines.length, 2, `the spend and ONE used-up line, no second one: ${usedUpLines.join(' | ')}`);
+    assert.equal(usedUpLines.length, 2, `the spend and ONE credit line, no second used-up line: ${usedUpLines.join(' | ')}`);
     assert.match(usedUpLines[0], /^ {4}💳 \$0\.50 spent since \d{2}\.\d{2} · last turn \$0\.25$/);
-    assert.equal(usedUpLines[1], `    🎁 API credit used up · expires ${expiresShown} — top it up, then pick the account again`);
+    assert.match(usedUpLines[1], /^ {4}🎁 API credit probably used up · \$0\.25 spent since \d{2}\.\d{2}$/, 'the spend of the period the refusal came in, counted since the figure');
     assert.ok(readPersistedState(getLayout()).claudeProfiles?.[apiAccount]?.creditExhaustedAt, 'the stored mark holds until the operator acts');
 
     // A figure given after the refusal is the operator saying there is money: it ends the mark, and the row tells one story.
@@ -275,11 +242,12 @@ describe('The bonus API credit end to end: built charness, built command line, f
     await getCharness().waitFor('the new figure to end the used-up mark', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.[apiAccount]?.creditExhaustedAt === undefined);
   });
 
-  it('--clear takes the line away; a subscription account is refused with the reason and nothing is written for it', async () => {
+  it('--clear takes the figure away, the line falls back to the bare spend; a subscription account is refused with the reason and nothing is written for it', async () => {
     assert.match(findCreditLine(await readAccountRowLines()) ?? '', leftOfGrant('30\\.00'), 'the figure is on the screen before it is cleared');
     const cleared = runCreditCommand(apiAccount, '--clear');
     assert.equal(cleared.code, 0, cleared.stderr);
-    assert.equal(findCreditLine(await readAccountRowLines()), undefined);
+    // The figure is gone; the line is not — it falls back to what the bot saw the account spend since its first turn.
+    assert.match(findCreditLine(await readAccountRowLines()) ?? '', /^ {4}🎁 API credit: \$0\.50 spent via the bot since \d{2}\.\d{2}$/);
     assert.equal(readCreditFile()[apiAccount], undefined);
 
     const refused = runCreditCommand(subscriptionAccount, '5');

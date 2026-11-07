@@ -468,7 +468,7 @@ describe('the views off the registry and the state file', () => {
 
   it('hands an API account its credit figure (the operator\'s anchor by name) and the spend the bot counted since it', () => {
     const creditAnchor = { remainingUsd: 67.71, grantUsd: 200, anchoredAt: '2026-11-07T08:00:00.000Z' };
-    const creditSpend = { anchoredAt: creditAnchor.anchoredAt, usd: 1.5 };
+    const creditSpend = { since: creditAnchor.anchoredAt, usd: 1.5 };
     const views = buildClaudeProfileUsageViews({
       dataDir: '/tmp/data',
       records: {
@@ -486,7 +486,7 @@ describe('the views off the registry and the state file', () => {
 
   it('builds ONE profile\'s view the very way the list does — what /accounts and /limits both render', () => {
     const creditAnchor = { remainingUsd: 5, anchoredAt: '2026-11-07T08:00:00.000Z' };
-    const record = { createdAt: '2026-10-02T00:00:00Z', billing: 'api' as const, creditSpend: { anchoredAt: creditAnchor.anchoredAt, usd: 1 } };
+    const record = { createdAt: '2026-10-02T00:00:00Z', billing: 'api' as const, creditSpend: { since: creditAnchor.anchoredAt, usd: 1 } };
     const [listed] = buildClaudeProfileUsageViews({ dataDir: '/tmp/data', records: { api: record }, creditAnchors: { api: creditAnchor } }).filter((view) => view.name === 'api');
     assert.deepEqual(buildClaudeProfileUsageView({ dataDir: '/tmp/data', name: 'api', record, creditAnchor }), listed);
     assert.equal(buildClaudeProfileUsageView({ dataDir: '/tmp/data', name: 'nobody', record: undefined }).billing, null, 'a name nothing was recorded for is a plain view');
@@ -629,7 +629,7 @@ describe('the claude-profiles CLI line', () => {
         { kind: 'session', percent: 12, resetsAt: null, scopeModel: null },
         { kind: 'weekly_all', percent: 40, resetsAt: new Date(nowMs + 49 * 3_600_000).toISOString(), scopeModel: null },
       ],
-      usageFetchedAt: null, isUsageStale: false, limitedUntil: null, creditExhaustedAt: null, billing: null, isEligible: true, headroomPercent: 60, isRecommended: true,
+      usageFetchedAt: null, isUsageStale: false, limitedUntil: null, creditExhaustedAt: null, billing: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, headroomPercent: 60, isRecommended: true,
     } as const;
     const line = formatClaudeProfileCliLine({ ...entry, buckets: [...entry.buckets] }, nowMs);
     assert.match(line, /5h 12% 🔄 in 2d 1h · week 40% 🔄 in 2d 1h$/, 'an account with no Fable window says nothing about Fable');

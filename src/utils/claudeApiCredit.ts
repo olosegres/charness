@@ -1,19 +1,24 @@
 /**
- * @description The Anthropic bonus API credit of an account billed to API credits (`billing: 'api'`): the figure the
- * operator reads on the Console's Billing page, and the estimate the bot keeps from it.
+ * @description The Anthropic bonus API credit of an account billed to API credits (`billing: 'api'`): what the bot can
+ * honestly tell about it, and the figure the operator may add.
  *
- * No credential the bot has can read that balance, so the operator gives it once: an ANCHOR — what was left at an
- * instant, how big the grant was, the day it expires. The bot then counts what the account spends through it
- * (`ClaudeApiCreditSpend`, fed by the same turn costs as `claudeApiSpend.ts`, from the anchor on) and shows
- * `left ≈ anchored amount − spend since`. It is an estimate: spend by another key or machine is invisible to the bot.
- * A refusal for a used-up balance (`creditExhaustedAt`) newer than the anchor overrides it, and a credit past its
- * expiry day is shown as expired until a new figure is given.
+ * No credential the bot has can read that credit's balance, so the bot tells what it SAW: the account's spend through the
+ * bot (`ClaudeApiSpend`, the turn costs of `claudeApiSpend.ts`), counted from the start of the current PERIOD — the
+ * operator's last figure, or the bot's last detected renewal, or, with neither, the first counted turn. A refusal for a used-up
+ * balance (`creditExhaustedAt`) says «probably used up» (the bot cannot be sure); the daily recheck
+ * (`claudeApiCreditRecheck.ts`) or a billed turn that goes through ends it as a RENEWAL: the counter starts over from that
+ * moment.
+ *
+ * The operator's figure is an ANCHOR — what was left at an instant, how big the grant was, the day it expires — and adds
+ * `left ≈ anchored amount − spend since` to the line. A renewal re-anchors on the LAST GIVEN grant (never one derived from
+ * the plan: team grants are pooled and vary), expiry unknown; without a grant ever given there is no remainder to show.
+ * It is all an estimate: spend by another key or machine is invisible to the bot.
  *
  * WHY the anchors are a file of their own (`DATA_DIR/claudeApiCredit.json`) and not part of the profile record: the
  * operator sets one from the `charness claude-profiles credit` command line, a separate process, while the live bot
  * rewrites the whole `state.json` from its memory on every save — a figure a second process wrote there would be lost
  * at the bot's next save. The command is the file's only writer, the bot only reads it (stamp-cached, so an edit shows
- * at once, no restart); what the bot counts goes to its own record.
+ * at once, no restart); what the bot counts and detects goes to its own record.
  *
  * Pure except the file store at the bottom.
  */
@@ -21,6 +26,7 @@
 import * as path from 'path';
 import { z } from 'zod';
 import { createConfigFileLoader, writeJsonFileAtomically, type ConfigFileLoad, type ConfigValidation } from '../configDirFile';
+import type { ClaudeApiSpend } from './claudeApiSpend';
 
 /** The anchors file inside `DATA_DIR`. */
 export const claudeApiCreditFileName = 'claudeApiCredit.json';
@@ -52,30 +58,62 @@ export interface ClaudeApiCreditAnchor {
   expiresOn?: string;
 }
 
-/** What an account spent through the bot since the anchor `anchoredAt` was given (`ClaudeProfileRecord.creditSpend`). */
+/** What an account spent through the bot since `since`, the start of its current anchor or renewal (`ClaudeProfileRecord.creditSpend`). */
 export interface ClaudeApiCreditSpend {
-  /** The `anchoredAt` of the anchor this was counted from: another anchor starts the count over. */
-  anchoredAt: string;
+  /** The start of the period this was counted from (the anchor's `anchoredAt`, or the renewal instant): another period starts the count over. */
+  since: string;
   usd: number;
+}
+
+/**
+ * @name ClaudeApiCreditBasis
+ * @description What the counted spend starts at: the operator's `anchor`, the bot's detected `renewal` (the newer of the
+ * two wins), else the account's `firstTurn` counted; `none` while nothing was counted.
+ */
+export type ClaudeApiCreditBasis = 'anchor' | 'renewal' | 'firstTurn' | 'none';
+
+/** The current period of a profile's credit: what it starts at, and when. */
+export interface ClaudeApiCreditPeriod {
+  basis: ClaudeApiCreditBasis;
+  /** ISO instant; `null` for `none`. */
+  since: string | null;
+}
+
+/** What the period and the estimate read of a profile. */
+export interface ClaudeApiCreditInput {
+  anchor: ClaudeApiCreditAnchor | undefined;
+  /** When the bot last detected a renewal (`ClaudeProfileRecord.creditRenewedAt`). */
+  renewedAt: string | null | undefined;
+  /** The spend counted since the period began (not the lifetime `apiSpend`). */
+  spend: ClaudeApiCreditSpend | undefined;
+  /** The account's whole spend through the bot: the spend of the `firstTurn` period. */
+  apiSpend: Pick<ClaudeApiSpend, 'since' | 'totalUsd'> | undefined;
+  creditExhaustedAt: string | null | undefined;
+  nowMs: number;
 }
 
 /** The figures every estimate carries. */
 interface ClaudeApiCreditEstimateFigures {
-  /** `anchored amount − spent via the bot`, never below 0; 0 when used up or expired. */
-  leftUsd: number;
-  grantUsd: number | null;
-  /** What the account spent through the bot since `anchoredAt`. */
+  basis: ClaudeApiCreditBasis;
+  /** The start of the period `spentUsd` is counted from; `null` while nothing was counted. */
+  since: string | null;
+  /** What the account spent through the bot in the period. */
   spentUsd: number;
-  anchoredAt: string;
+  /** `anchored amount (or the last grant, after a renewal) − spent`, never below 0; `null` when no figure is known. */
+  leftUsd: number | null;
+  grantUsd: number | null;
+  /** When the bot detected the renewal the period starts at (`basis: 'renewal'`), else `null`. */
+  renewedAt: string | null;
 }
 
 /**
  * @name ClaudeApiCreditEstimate
- * @description The estimate a profile's anchor and counted spend give at an instant. `usedUp`: a refusal for a used-up
- * balance came after the anchor; `expired`: the expiry day is over (so it always has one).
+ * @description What the bot can tell of a profile's credit at an instant. `probablyUsedUp`: a refusal for a used-up balance
+ * came after the period began (the bot cannot be sure: spend elsewhere, a renewal it has not seen yet); `expired`: the
+ * operator's expiry day is over (so it always has one). `expiresOn` is the operator's, never guessed: unknown after a renewal.
  */
 export type ClaudeApiCreditEstimate =
-  | (ClaudeApiCreditEstimateFigures & { status: 'available' | 'usedUp'; expiresOn: string | null })
+  | (ClaudeApiCreditEstimateFigures & { status: 'available' | 'probablyUsedUp'; expiresOn: string | null })
   | (ClaudeApiCreditEstimateFigures & { status: 'expired'; expiresOn: string });
 
 /**
@@ -89,8 +127,8 @@ export function checkIsClaudeApiCreditExpired(expiresOn: string, nowMs: number):
 }
 
 /**
- * @description Is the used-up-balance mark (`creditExhaustedAt`) still news next to the operator's figure? Only when the
- * refusal came AFTER the figure was given: a figure given later is the operator saying there is money, the same signal as
+ * @description Is the used-up-balance mark (`creditExhaustedAt`) still news next to the instant a period began (the operator's
+ * figure)? Only when the refusal came AFTER it: a figure given later is the operator saying there is money, the same signal as
  * a billed turn going through, and an older refusal is the balance the figure replaced.
  */
 export function checkIsClaudeApiCreditMarkCurrent(creditExhaustedAt: string | null | undefined, anchoredAt: string): boolean {
@@ -112,31 +150,55 @@ export function listProfilesWithSupersededCreditMark(
 }
 
 /**
- * @description The estimate for a profile, `null` without an anchor. Expired wins over used up (a past credit is gone
- * whatever was spent); spend counted from another anchor is ignored.
+ * @description The period the profile's credit is in: the operator's figure and the bot's detected renewal compete by time
+ * (the newer wins), with neither the account's first counted turn starts it.
  */
-export function getClaudeApiCreditEstimate(input: {
-  anchor: ClaudeApiCreditAnchor | undefined;
-  spend: ClaudeApiCreditSpend | undefined;
-  creditExhaustedAt: string | null | undefined;
-  nowMs: number;
-}): ClaudeApiCreditEstimate | null {
-  const { anchor } = input;
-  if (!anchor) return null;
-  const spentUsd = input.spend?.anchoredAt === anchor.anchoredAt ? input.spend.usd : 0;
-  const figures = { grantUsd: anchor.grantUsd ?? null, spentUsd, anchoredAt: anchor.anchoredAt };
-  if (anchor.expiresOn !== undefined && checkIsClaudeApiCreditExpired(anchor.expiresOn, input.nowMs)) {
-    return { ...figures, leftUsd: 0, status: 'expired', expiresOn: anchor.expiresOn };
-  }
-  const expiresOn = anchor.expiresOn ?? null;
-  if (checkIsClaudeApiCreditMarkCurrent(input.creditExhaustedAt, anchor.anchoredAt)) return { ...figures, leftUsd: 0, status: 'usedUp', expiresOn };
-  return { ...figures, leftUsd: Math.max(0, roundToCents(anchor.remainingUsd - spentUsd)), status: 'available', expiresOn };
+export function getClaudeApiCreditPeriod(input: Pick<ClaudeApiCreditInput, 'anchor' | 'renewedAt' | 'apiSpend'>): ClaudeApiCreditPeriod {
+  const { anchor, renewedAt } = input;
+  if (anchor && (!renewedAt || Date.parse(anchor.anchoredAt) >= Date.parse(renewedAt))) return { basis: 'anchor', since: anchor.anchoredAt };
+  if (renewedAt) return { basis: 'renewal', since: renewedAt };
+  if (input.apiSpend) return { basis: 'firstTurn', since: input.apiSpend.since };
+  return { basis: 'none', since: null };
 }
 
-/** The spend after a turn that cost `turnCostUsd` on an account holding `anchor` (a count of another anchor starts over). */
-export function addClaudeApiCreditSpend(previous: ClaudeApiCreditSpend | undefined, anchor: ClaudeApiCreditAnchor, turnCostUsd: number): ClaudeApiCreditSpend {
-  const countedUsd = previous?.anchoredAt === anchor.anchoredAt ? previous.usd : 0;
-  return { anchoredAt: anchor.anchoredAt, usd: countedUsd + turnCostUsd };
+/**
+ * @description What the bot can tell of a profile's credit now, `null` when it knows nothing worth a line (no figure, no
+ * renewal, nothing spent, no refusal). Expired (the operator's expiry day is over) wins over probably used up (a refusal
+ * after the period began) which wins over available.
+ */
+export function getClaudeApiCreditEstimate(input: ClaudeApiCreditInput): ClaudeApiCreditEstimate | null {
+  const period = getClaudeApiCreditPeriod(input);
+  const isCounted = period.basis === 'anchor' || period.basis === 'renewal';
+  const spentUsd = isCounted
+    ? (input.spend?.since === period.since ? input.spend.usd : 0)
+    : (period.basis === 'firstTurn' ? input.apiSpend?.totalUsd ?? 0 : 0);
+  // After a renewal the credit is re-anchored on the LAST GIVEN grant: with none ever given, no remainder is known.
+  const grantUsd = input.anchor?.grantUsd ?? null;
+  const remainingUsd = period.basis === 'anchor' ? input.anchor?.remainingUsd ?? null : period.basis === 'renewal' ? grantUsd : null;
+  const figures: ClaudeApiCreditEstimateFigures = {
+    basis: period.basis,
+    since: period.since,
+    spentUsd,
+    leftUsd: remainingUsd === null ? null : Math.max(0, roundToCents(remainingUsd - spentUsd)),
+    grantUsd,
+    renewedAt: period.basis === 'renewal' ? period.since : null,
+  };
+  const expiresOn = period.basis === 'anchor' ? input.anchor?.expiresOn ?? null : null;
+  if (expiresOn !== null && checkIsClaudeApiCreditExpired(expiresOn, input.nowMs)) return { ...figures, leftUsd: 0, status: 'expired', expiresOn };
+  const isMarkCurrent = !!input.creditExhaustedAt && (period.since === null || checkIsClaudeApiCreditMarkCurrent(input.creditExhaustedAt, period.since));
+  if (isMarkCurrent) return { ...figures, leftUsd: figures.leftUsd === null ? null : 0, status: 'probablyUsedUp', expiresOn };
+  if (period.basis === 'none') return null;
+  return { ...figures, status: 'available', expiresOn };
+}
+
+/**
+ * @description The spend counted after a turn that cost `turnCostUsd` in `period`; `null` when the period keeps no count of its
+ * own (`firstTurn` reads the account's whole spend, `none` has none). A count of another period starts over.
+ */
+export function addClaudeApiCreditSpend(previous: ClaudeApiCreditSpend | undefined, period: ClaudeApiCreditPeriod, turnCostUsd: number): ClaudeApiCreditSpend | null {
+  if ((period.basis !== 'anchor' && period.basis !== 'renewal') || period.since === null) return null;
+  const countedUsd = previous?.since === period.since ? previous.usd : 0;
+  return { since: period.since, usd: countedUsd + turnCostUsd };
 }
 
 /**

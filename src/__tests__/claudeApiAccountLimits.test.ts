@@ -19,7 +19,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyAgentApiError } from '../apiErrorRetry';
-import { buildClaudeProfilesReport, type ClaudeProfileUsageView, type ClaudeUsageSnapshot } from '../utils/claudeUsage';
+import { buildClaudeProfilesReport, buildClaudeProfileUsageView, type ClaudeProfileUsageView, type ClaudeUsageSnapshot } from '../utils/claudeUsage';
 import { pickClaudeLimitSwitchCandidates } from '../utils/claudeLimitSwitch';
 import {
   getFallbackEntryAvailability,
@@ -62,6 +62,16 @@ function buildView(name: string, patch: Partial<ClaudeProfileUsageView> = {}): C
     creditExhaustedAt: null,
     ...patch,
   };
+}
+
+/** The view of an API account whose refusal (an hour ago) is OLDER than the operator's figure: built the way the command line builds it, off a record. */
+function buildClaudeProfileUsageViewsForTest(anchor: { remainingUsd: number; anchoredAt: string }): ClaudeProfileUsageView {
+  return buildClaudeProfileUsageView({
+    dataDir: '/home/user/.charness',
+    name: 'console',
+    record: { createdAt: '2026-10-01T00:00:00.000Z', loggedIn: true, billing: 'api', creditExhaustedAt: new Date(Date.parse(anchor.anchoredAt) - 3_600_000).toISOString() },
+    creditAnchor: anchor,
+  });
 }
 
 const apiView = (patch: Partial<ClaudeProfileUsageView> = {}): ClaudeProfileUsageView =>
@@ -194,13 +204,13 @@ describe('what the screens say', () => {
     assert.deepEqual(rows.map((row) => row.label), ['Claude · default', '✓ Claude · console 💳']);
     assert.equal(
       formatLimitsUsageBlock({ detection, openCodeProviderUsage: {}, nowMs, timezone: 'UTC' }),
-      'Usage (% used)\nconsole — 💳 API · pay per use\n    💸 API credits used up — top them up, then pick it again',
+      'Usage (% used)\nconsole — 💳 API · pay per use\n    🎁 API credit probably used up',
     );
   });
 
-  it('/accounts hangs only the used-up mark under an API row (its row already says how it pays)', () => {
+  it('/accounts hangs only the credit line under an API row (its row already says how it pays): «probably used up» after a refusal', () => {
     assert.deepEqual(formatClaudeProfileUsageLines({ billing: 'api', creditExhaustedAt: null }, 'UTC', nowMs), []);
-    assert.deepEqual(formatClaudeProfileUsageLines({ billing: 'api', creditExhaustedAt: inHours(-1) }, 'UTC', nowMs), ['    💸 API credits used up — top them up, then pick it again']);
+    assert.deepEqual(formatClaudeProfileUsageLines({ billing: 'api', creditExhaustedAt: inHours(-1) }, 'UTC', nowMs), ['    🎁 API credit probably used up']);
   });
 
   it('/status marks the metered account and its used-up credits', () => {
@@ -228,7 +238,57 @@ describe('what the screens say', () => {
     const report = buildClaudeProfilesReport([apiView({ creditExhaustedAt: inHours(-1) })], null, nowMs);
     assert.equal(
       formatClaudeProfileCliLine(report.profiles[0], nowMs),
-      '✗ console  /home/user/.charness/claude-profiles/console  console@example.com API billing (pay per use, never picked for a new agent)  no windows  CREDITS USED UP',
+      '✗ console  /home/user/.charness/claude-profiles/console  console@example.com API billing (pay per use, never picked for a new agent)  no windows  CREDITS PROBABLY USED UP',
     );
+  });
+});
+
+describe('what the bot can tell of an API account\'s credit, for an agent and for the command line', () => {
+  const anchor = { remainingUsd: 67.71, grantUsd: 200, anchoredAt: inHours(-2), expiresOn: '2026-10-31' };
+  const entryOf = (view: ClaudeProfileUsageView) => buildClaudeProfilesReport([view], null, nowMs).profiles[0];
+
+  it('the report entry carries spentUsd, remainingEstimateUsd, expiresOn, probablyUsedUp and renewedAt from the operator\'s figure', () => {
+    const entry = entryOf(apiView({ creditAnchor: anchor, creditSpend: { since: anchor.anchoredAt, usd: 6.51 } }));
+    assert.deepEqual(
+      [entry.spentUsd, entry.remainingEstimateUsd, entry.expiresOn, entry.probablyUsedUp, entry.renewedAt],
+      [6.51, 61.2, '2026-10-31', false, null],
+    );
+  });
+
+  it('with no figure it carries the spend since the first counted turn and no remainder', () => {
+    const entry = entryOf(apiView({ apiSpend: { totalUsd: 12.34, since: inHours(-30), lastTurnUsd: 0.25, lastTurnAt: inHours(-1) } }));
+    assert.deepEqual([entry.spentUsd, entry.remainingEstimateUsd, entry.expiresOn, entry.probablyUsedUp, entry.renewedAt], [12.34, null, null, false, null]);
+  });
+
+  it('says probablyUsedUp after a refusal, and after a renewal the renewal instant, the last grant and no expiry', () => {
+    assert.equal(entryOf(apiView({ creditAnchor: anchor, creditExhaustedAt: inHours(-1) })).probablyUsedUp, true);
+    const renewed = entryOf(apiView({ creditAnchor: anchor, creditRenewedAt: inHours(-1), creditSpend: { since: inHours(-1), usd: 0.25 } }));
+    assert.deepEqual([renewed.renewedAt, renewed.remainingEstimateUsd, renewed.expiresOn, renewed.spentUsd, renewed.probablyUsedUp], [inHours(-1), 199.75, null, 0.25, false]);
+  });
+
+  it('has no spend to tell for an API account that has not been counted at all, and says only that it is probably used up when it was refused', () => {
+    const entry = entryOf(apiView({ creditExhaustedAt: inHours(-1) }));
+    assert.deepEqual([entry.spentUsd, entry.remainingEstimateUsd, entry.probablyUsedUp], [null, null, true]);
+    assert.deepEqual([entryOf(apiView()).spentUsd, entryOf(apiView()).probablyUsedUp], [null, false]);
+  });
+
+  it('is empty for an account that is not billed to API credits — whatever stray figure it carries', () => {
+    const entry = entryOf(buildView('work', { creditAnchor: anchor, creditSpend: { since: anchor.anchoredAt, usd: 1 }, creditExhaustedAt: inHours(-1) }));
+    assert.deepEqual([entry.spentUsd, entry.remainingEstimateUsd, entry.expiresOn, entry.probablyUsedUp, entry.renewedAt], [null, null, null, false, null]);
+  });
+
+  it('the command line prints the same parts after «no windows»', () => {
+    const line = formatClaudeProfileCliLine(entryOf(apiView({ creditAnchor: anchor, creditSpend: { since: anchor.anchoredAt, usd: 6.51 } })), nowMs);
+    assert.match(line, /no windows {2}\$6\.51 spent via the bot {2}≈ \$61\.20 left {2}expires 2026-10-31$/);
+    const renewed = formatClaudeProfileCliLine(entryOf(apiView({ creditAnchor: anchor, creditRenewedAt: '2026-10-23T09:00:00.000Z', creditSpend: { since: '2026-10-23T09:00:00.000Z', usd: 0 } })), nowMs);
+    assert.match(renewed, /no windows {2}\$0\.00 spent via the bot {2}≈ \$200\.00 left {2}renewed ≈ 2026-10-23$/);
+    assert.match(formatClaudeProfileCliLine(entryOf(apiView({ creditExhaustedAt: inHours(-1) })), nowMs), /no windows {2}CREDITS PROBABLY USED UP$/);
+  });
+
+  it('a figure the operator gave after the refusal ends the mark in the view too — for a reader of state.json alone', () => {
+    const views = buildClaudeProfileUsageViewsForTest(anchor);
+    assert.equal(views.creditExhaustedAt, null);
+    assert.equal(entryOf(views).probablyUsedUp, false);
+    assert.equal(entryOf(views).isEligible, true, 'and the account is no longer out of the ranking');
   });
 });

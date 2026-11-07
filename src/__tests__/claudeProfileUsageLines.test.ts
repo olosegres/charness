@@ -89,84 +89,98 @@ describe('formatClaudeProfileUsageLines', () => {
 describe('formatClaudeProfileUsageLines: the bonus API credit of an account billed to API credits', () => {
   const creditNowMs = Date.parse('2026-11-07T10:00:00Z');
   const anchor: ClaudeApiCreditAnchor = { remainingUsd: 67.71, grantUsd: 200, anchoredAt: '2026-11-07T08:00:00.000Z', expiresOn: '2026-11-15' };
-  const spend = { anchoredAt: anchor.anchoredAt, usd: 6.51 };
+  const spend = { since: anchor.anchoredAt, usd: 6.51 };
   const apiSpend = { totalUsd: 12.34, since: '2026-11-06T17:21:00.000Z', lastTurnUsd: 0.25, lastTurnAt: '2026-11-07T09:30:00.000Z' };
+  const spendLine = '    💳 $12.34 spent since 06.11 · last turn $0.25';
+  const lines = (source: Parameters<typeof formatClaudeProfileUsageLines>[0], atMs = creditNowMs) => formatClaudeProfileUsageLines({ billing: 'api', ...source }, 'UTC', atMs);
 
-  it('writes the estimate under the spend line: left, of the grant, spent via the bot since the figure, the expiry', () => {
-    assert.deepEqual(
-      formatClaudeProfileUsageLines({ billing: 'api', apiSpend, creditAnchor: anchor, creditSpend: spend }, 'UTC', creditNowMs),
-      [
-        '    💳 $12.34 spent since 06.11 · last turn $0.25',
-        '    🎁 API credit ≈ $61.20 of $200.00 · $6.51 spent via the bot since 07.11 · expires 15.11',
-      ],
-    );
+  it('with the operator\'s figure: left, of the grant, spent via the bot since the figure, the expiry — under the spend line', () => {
+    assert.deepEqual(lines({ apiSpend, creditAnchor: anchor, creditSpend: spend }), [
+      spendLine,
+      '    🎁 API credit ≈ $61.20 of $200.00 · $6.51 spent via the bot since 07.11 · expires 15.11',
+    ]);
   });
 
   it('leaves out the grant and the expiry when none was given, and counts nothing spent before the first turn after the figure', () => {
     assert.deepEqual(
-      formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: { remainingUsd: 12.5, anchoredAt: anchor.anchoredAt } }, 'UTC', creditNowMs),
+      lines({ creditAnchor: { remainingUsd: 12.5, anchoredAt: anchor.anchoredAt } }),
       ['    🎁 API credit ≈ $12.50 · $0.00 spent via the bot since 07.11'],
     );
   });
 
-  it('shows the dates in the instance zone for the figure and as plain days for the expiry, with the year when it is not this one', () => {
-    const lines = formatClaudeProfileUsageLines(
-      { billing: 'api', creditAnchor: { ...anchor, anchoredAt: '2026-11-07T22:30:00.000Z', expiresOn: '2027-01-15' } },
-      'Asia/Tbilisi',
-      creditNowMs,
-    );
-    assert.deepEqual(lines, ['    🎁 API credit ≈ $67.71 of $200.00 · $0.00 spent via the bot since 08.11 · expires 15.01.2027']);
-  });
-
-  it('says used up after a refusal that came later — ONE used-up line, with what to do — and keeps the expiry', () => {
+  it('shows the figure\'s day in the instance zone and the expiry as a plain day, with the year when it is not this one', () => {
     assert.deepEqual(
-      formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: anchor, creditSpend: spend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }, 'UTC', creditNowMs),
-      ['    🎁 API credit used up · expires 15.11 — top it up, then pick the account again'],
-    );
-    assert.deepEqual(
-      formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: { remainingUsd: 3, anchoredAt: anchor.anchoredAt }, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }, 'UTC', creditNowMs),
-      ['    🎁 API credit used up — top it up, then pick the account again'],
-      'no expiry given, none written',
+      formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: { ...anchor, anchoredAt: '2026-11-07T22:30:00.000Z', expiresOn: '2027-01-15' } }, 'Asia/Tbilisi', creditNowMs),
+      ['    🎁 API credit ≈ $67.71 of $200.00 · $0.00 spent via the bot since 08.11 · expires 15.01.2027'],
     );
   });
 
-  it('a refusal older than the figure is no news: no used-up line of either kind, only the estimate', () => {
-    const lines = formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: anchor, creditExhaustedAt: '2026-11-06T09:00:00.000Z' }, 'UTC', creditNowMs);
-    assert.equal(lines.length, 1);
-    assert.match(lines[0], /^ {4}🎁 API credit ≈ \$67\.71 /);
+  it('with no figure: the spend since the first counted turn — the line is always there for an account that spent', () => {
+    assert.deepEqual(lines({ apiSpend }), [spendLine, '    🎁 API credit: $12.34 spent via the bot since 06.11']);
+    assert.deepEqual(lines({}), [], 'nothing counted, nothing to say');
   });
 
-  it('without a figure the used-up mark keeps its own line, as before', () => {
+  it('probably used up after a refusal — with the spend since, with no figure and with one, and bare when nothing was counted; no second used-up line', () => {
+    assert.deepEqual(lines({ apiSpend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }), [spendLine, '    🎁 API credit probably used up · $12.34 spent since 06.11']);
     assert.deepEqual(
-      formatClaudeProfileUsageLines({ billing: 'api', creditExhaustedAt: '2026-11-07T09:00:00.000Z' }, 'UTC', creditNowMs),
-      ['    💸 API credits used up — top them up, then pick it again'],
+      lines({ apiSpend, creditAnchor: anchor, creditSpend: spend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }),
+      [spendLine, '    🎁 API credit probably used up · $6.51 spent since 07.11'],
     );
+    assert.deepEqual(lines({ creditExhaustedAt: '2026-11-07T09:00:00.000Z' }), ['    🎁 API credit probably used up']);
+  });
+
+  it('a refusal older than the figure is no news: the estimate stands', () => {
+    const [line] = lines({ creditAnchor: anchor, creditExhaustedAt: '2026-11-06T09:00:00.000Z' });
+    assert.match(line, /^ {4}🎁 API credit ≈ \$67\.71 /);
+  });
+
+  it('after a renewal the bot detected: the last given grant, the counter from the renewal, the expiry to be checked on the Console', () => {
+    const renewedAt = '2026-11-07T09:00:00.000Z';
+    assert.deepEqual(
+      lines({ creditAnchor: anchor, creditSpend: { since: renewedAt, usd: 0.25 }, creditRenewedAt: renewedAt }),
+      ['    🎁 API credit renewed ≈ 07.11 · ≈ $199.75 of $200.00 · $0.25 spent via the bot · check expiry in Console › Billing'],
+    );
+  });
+
+  it('after a renewal with no grant ever given: only the renewal day and the spend since — no remainder', () => {
+    const renewedAt = '2026-11-07T09:00:00.000Z';
+    assert.deepEqual(lines({ creditSpend: { since: renewedAt, usd: 0.25 }, creditRenewedAt: renewedAt }), ['    🎁 API credit renewed ≈ 07.11 · $0.25 spent since']);
+    assert.deepEqual(
+      lines({ creditAnchor: { remainingUsd: 3, anchoredAt: '2026-11-01T00:00:00.000Z' }, creditRenewedAt: renewedAt }),
+      ['    🎁 API credit renewed ≈ 07.11 · $0.00 spent since'],
+      'a figure without a grant gives nothing to re-anchor on',
+    );
+  });
+
+  it('a figure given AFTER the renewal is the newer news and takes over again', () => {
+    const [line] = lines({ creditAnchor: anchor, creditRenewedAt: '2026-11-06T09:00:00.000Z' });
+    assert.match(line, /^ {4}🎁 API credit ≈ \$67\.71 of \$200\.00 · /);
   });
 
   it('says expired past the expiry day and names the command that sets the new figure for THIS profile', () => {
     assert.deepEqual(
-      formatClaudeProfileUsageLines({ name: 'console', billing: 'api', creditAnchor: anchor, creditSpend: spend }, 'UTC', Date.parse('2026-11-16T00:00:00Z')),
+      lines({ name: 'console', creditAnchor: anchor, creditSpend: spend }, Date.parse('2026-11-16T00:00:00Z')),
       ['    🎁 API credit expired 15.11 — give the new figure: charness claude-profiles credit console <left>'],
     );
-    assert.match(
-      formatClaudeProfileUsageLines({ billing: 'api', creditAnchor: anchor }, 'UTC', Date.parse('2026-11-16T00:00:00Z'))[0],
-      /credit <profile> <left>$/,
-      'a source without a name leaves a placeholder',
-    );
+    assert.match(lines({ creditAnchor: anchor }, Date.parse('2026-11-16T00:00:00Z'))[0], /credit <profile> <left>$/, 'a source without a name leaves a placeholder');
   });
 
-  it('writes no credit line without a figure, and none for an account that is not billed to API credits', () => {
-    assert.deepEqual(formatClaudeProfileUsageLines({ billing: 'api', apiSpend }, 'UTC', creditNowMs), ['    💳 $12.34 spent since 06.11 · last turn $0.25']);
+  it('writes no credit line for an account that is not billed to API credits', () => {
     assert.deepEqual(formatClaudeProfileUsageLines({ billing: 'subscription', creditAnchor: anchor, creditSpend: spend }, 'UTC', creditNowMs), []);
     assert.deepEqual(formatClaudeProfileUsageLines({ creditAnchor: anchor }, 'UTC', creditNowMs), []);
   });
 
+  it('keeps the plain used-up line for a subscription account a refusal landed on', () => {
+    assert.deepEqual(
+      formatClaudeProfileUsageLines({ billing: 'subscription', creditExhaustedAt: '2026-11-07T09:00:00.000Z' }, 'UTC', creditNowMs),
+      ['    💸 API credits used up — top them up, then pick it again'],
+    );
+  });
+
   it('is localised', async () => {
-    const lines = await runWithLocale('ru', async () => formatClaudeProfileUsageLines(
-      { billing: 'api', creditAnchor: anchor, creditSpend: spend },
-      'UTC',
-      creditNowMs,
-    ));
-    assert.deepEqual(lines, ['    🎁 API-кредит ≈ $61.20 из $200.00 · через бота потрачено $6.51 с 07.11 · истекает 15.11']);
+    const russian = await runWithLocale('ru', async () => lines({ creditAnchor: anchor, creditSpend: spend }));
+    assert.deepEqual(russian, ['    🎁 API-кредит ≈ $61.20 из $200.00 · через бота потрачено $6.51 с 07.11 · истекает 15.11']);
+    const probably = await runWithLocale('ru', async () => lines({ apiSpend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }));
+    assert.equal(probably[1], '    🎁 API-кредит, вероятно, израсходован · $12.34 потрачено с 06.11');
   });
 });

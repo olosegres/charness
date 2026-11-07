@@ -27,6 +27,8 @@ import { runClaudeProfilesCreditCli } from './claudeProfilesCredit';
 import { resolveDataDir } from '../state';
 import { readStateFileObject } from '../stateFile';
 import { getDisabledClaudeProfileNames, normaliseFallbackChain } from '../utils/fallbackChain';
+import { formatUsd } from '../utils/claudeApiSpend';
+import { readClaudeApiCreditAnchors } from '../utils/claudeApiCredit';
 import {
   buildClaudeProfileUsageViews,
   buildClaudeProfilesReport,
@@ -44,6 +46,9 @@ export interface ClaudeProfilesCliArgs {
   currentProfile: string | null;
   isStoppedByLimit: boolean;
 }
+
+/** The length of `YYYY-MM-DD`, the day part of an ISO instant. */
+const isoDayLength = 10;
 
 const usageLine = 'Usage: charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit]] [--json]\n'
   + '       charness claude-profiles credit <profile> <remainingUsd> [--of <grantUsd>] [--expires YYYY-MM-DD] | <profile> --clear';
@@ -75,6 +80,17 @@ export function parseClaudeProfilesCliArgs(argv: readonly string[]): { ok: true;
   return { ok: true, args };
 }
 
+/** What the bot can tell of an API account's credit, each part after two spaces (the bot's own estimate: see `utils/claudeApiCredit.ts`). */
+function formatApiCreditParts(entry: ClaudeProfileReportEntry): string {
+  const parts: string[] = [];
+  if (entry.probablyUsedUp) parts.push('CREDITS PROBABLY USED UP');
+  if (entry.spentUsd !== null) parts.push(`${formatUsd(entry.spentUsd)} spent via the bot`);
+  if (entry.remainingEstimateUsd !== null) parts.push(`≈ ${formatUsd(entry.remainingEstimateUsd)} left`);
+  if (entry.expiresOn !== null) parts.push(`expires ${entry.expiresOn}`);
+  if (entry.renewedAt !== null) parts.push(`renewed ≈ ${entry.renewedAt.slice(0, isoDayLength)}`);
+  return parts.map((part) => `  ${part}`).join('');
+}
+
 /** One human line: `✓ work  /data/…/work  mail@example.com personal max  5h 12% 🔄 in 2h · week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h` (no Fable part for an account without that window; an account billed to API credits says so and has no windows). */
 export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowMs: number): string {
   const find = (kind: ClaudeUsageBucketKind) => entry.buckets.find((bucket) => bucket.kind === kind) ?? null;
@@ -97,7 +113,7 @@ export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowM
       ...(find('weekly_scoped') === null ? [] : [`Fable ${read('weekly_scoped')}`]),
     ].join(' · ')}${entry.isUsageStale ? ' (stale)' : ''}`);
   // An account billed to API credits has no windows; its limit is the balance.
-  const usage = isApi ? `no windows${entry.creditExhaustedAt === null ? '' : '  CREDITS USED UP'}` : formatWindows();
+  const usage = isApi ? `no windows${formatApiCreditParts(entry)}` : formatWindows();
   const limited = entry.limitedUntil && Date.parse(entry.limitedUntil) > nowMs ? `  LIMITED until ${entry.limitedUntil}` : '';
   return `${marker} ${entry.name}  ${entry.configDir ?? '(default: no CLAUDE_CONFIG_DIR)'}  ${account}  ${usage}${limited}`;
 }
@@ -128,7 +144,7 @@ export async function runClaudeProfilesCli(
   const nowMs = (io.now ?? Date.now)();
   const stateFile = readStateFileObject(dataDir);
   const records = getClaudeProfileRecordsFromState(stateFile);
-  const report = buildClaudeProfilesReport(buildClaudeProfileUsageViews({ dataDir, records }), args.model, nowMs, {
+  const report = buildClaudeProfilesReport(buildClaudeProfileUsageViews({ dataDir, records, creditAnchors: readClaudeApiCreditAnchors(dataDir) }), args.model, nowMs, {
     currentProfile: args.currentProfile,
     isStoppedByLimit: args.isStoppedByLimit,
     excludedNames: getDisabledClaudeProfileNames(normaliseFallbackChain(stateFile.fallbackChain)),
