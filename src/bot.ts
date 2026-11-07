@@ -289,6 +289,7 @@ import {
 import { checkIsAgentEventShown, checkIsStreamShown, type AgentStreamEvent } from './utils/topicView';
 import {
   buildTopicRequestHeader,
+  buildTopicRequestPrompt,
   checkShouldOpenTopicRequest,
   getTopicRequesterId,
   getTopicRequestOrigin,
@@ -1125,20 +1126,28 @@ const noTopicRequest: TopicRequestOpening = { header: '', requestId: null };
  * the topic's view has requests on and the text is not a slash command. Called
  * at the USER entry points — text, voice, file, album, `/schedule`, the
  * scheduler's forward — BEFORE the prompt is forwarded or buffered: the ledger
- * keeps the header + text as the request's prompt (re-posted when the session
- * never took it in), and `createRequest` resolves only once the id is on disk. A
+ * keeps the header + text as the request's prompt, with the message context (reply
+ * quote, forwarded mark) folded in (re-posted when the session never took it in), and `createRequest` resolves only once the id is on disk. A
  * conversation of another platform opens its requests itself (Jira: J5). A
  * `null` intake is a prompt that is not a request by rule — an answer to the
  * agent's own question, delivered as a prompt. The intake's requester decides
  * which open request, if any, the new one supersedes (`requestGroup.ts`); the
  * header then names the replaced ones.
  */
-async function openTopicRequest(key: SessionKey, text: string, intake: TopicRequestIntake | null): Promise<TopicRequestOpening> {
+async function openTopicRequest(
+  key: SessionKey,
+  text: string,
+  intake: TopicRequestIntake | null,
+  messageContext?: string,
+): Promise<TopicRequestOpening> {
   if (intake === null || !topicRequestLedger || !checkIsTelegramKey(key)) return noTopicRequest;
   const view = state.getDisplayPrefs(key).view;
   if (!checkShouldOpenTopicRequest(view, checkShouldSkipPreambleForText(text))) return noTopicRequest;
+  // The ledger keeps the prompt as it is posted — the message context folded in — because a stored prompt is what is posted
+  // AGAIN when the session never took it in; the raw text would come back without the forwarded mark or the quote.
+  const promptBody = getPromptWithThreadMessageContext(key, text, messageContext);
   const request = await topicRequestLedger.createRequest(key, getTopicRequestOrigin(intake), {
-    createPrompt: (requestId, supersededRequestIds) => `${buildTopicRequestHeader(requestId, intake.source, view, supersededRequestIds)}${text}`,
+    createPrompt: (requestId, supersededRequestIds) => buildTopicRequestPrompt({ requestId, source: intake.source, view, supersededRequestIds, promptBody }),
   });
   return { header: buildTopicRequestHeader(request.id, intake.source, view, request.supersededRequestIds), requestId: request.id };
 }
@@ -10262,7 +10271,7 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       // A user album is genuine user activity → clear the compact-on-idle latch (D2).
       notePersonActivity(key);
       try {
-        const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId });
+        const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId }, messageContext);
         const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
         const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
         await settleTopicRequestAfterDelivery(key, opening, delivery);
@@ -10362,9 +10371,10 @@ async function handleIncomingFile(
   cancelApiRetry(key);
   // A user file is genuine user activity → clear the compact-on-idle latch (D2).
   notePersonActivity(key);
-  const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) });
   // A file sent as a REPLY carries the message it answers, a forwarded one its origin, as a typed or spoken message does.
-  const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, getMessageContextBlock(key, ctx.message));
+  const messageContext = getMessageContextBlock(key, ctx.message);
+  const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) }, messageContext);
+  const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
   const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
   await settleTopicRequestAfterDelivery(key, opening, delivery);
 }
@@ -11036,7 +11046,7 @@ async function bufferPromptDuringStartup(
   // `deliverActivePrompt` — the idle latch clears, and a question the idle compaction re-asked is closed (the idle fire
   // posts it just before the stop, so this window is where a message instead of a tap most often lands).
   notePersonActivity(key);
-  const opening = await openTopicRequest(key, text, intake);
+  const opening = await openTopicRequest(key, text, intake, messageContext);
   const quotedText = getPromptWithThreadMessageContext(key, text, messageContext);
   await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true);
   trackTopicRequestTurn(key, opening);
@@ -11085,7 +11095,7 @@ async function deliverActivePrompt(
       return null;
     }
     // Free-form text cancels the question and is a fresh prompt — a request (S7).
-    const opening = await openTopicRequest(key, text, intake);
+    const opening = await openTopicRequest(key, text, intake, messageContext);
     const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header);
     await settleTopicRequestAfterDelivery(key, opening, delivery);
     return null;
@@ -11118,7 +11128,7 @@ async function deliverActivePrompt(
   // The request (S7) is opened AFTER the user takeover cancelled an armed limit
   // wait (the handlers' `cancelApiRetry`) and before the forward, so its id is
   // durable by the time the agent reads it.
-  const opening = await openTopicRequest(key, text, intake);
+  const opening = await openTopicRequest(key, text, intake, messageContext);
   // Routed now, not when the message arrived: the idle stop may have begun or ended during the awaits since.
   // The forward can itself end in no session — a prompt that waited for an adopt replay found the session gone and nothing to wake;
   // it has told the person already (`forwardPromptToAgent`), so what is left here is the request this prompt opened.

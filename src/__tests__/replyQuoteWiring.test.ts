@@ -99,10 +99,8 @@ test('every route folds the block with the one rule', () => {
 
 test('a single file sent as a reply carries the quote into its announcement', () => {
   const body = getFunctionBody('handleIncomingFile');
-  assert.match(
-    body,
-    /const\s+quotedPrompt\s*=\s*getPromptWithThreadMessageContext\(\s*key\s*,\s*promptText\s*,\s*getMessageContextBlock\(\s*key\s*,\s*ctx\.message\s*\)\s*\)/,
-  );
+  assert.match(body, /const\s+messageContext\s*=\s*getMessageContextBlock\(\s*key\s*,\s*ctx\.message\s*\)/);
+  assert.match(body, /const\s+quotedPrompt\s*=\s*getPromptWithThreadMessageContext\(\s*key\s*,\s*promptText\s*,\s*messageContext\s*\)/);
   assert.match(body, /deliverPromptOrBuffer\(\s*key\s*,\s*`\$\{opening\.header\}\$\{quotedPrompt\}`/);
 });
 
@@ -112,4 +110,18 @@ test('an album sent as a reply carries the quote: each member records it, the fl
   assert.match(flush, /const\s+messageContext\s*=\s*orderedItems\.find\(\(item\)\s*=>\s*item\.messageContext\)\?\.messageContext/);
   assert.match(flush, /const\s+quotedPrompt\s*=\s*getPromptWithThreadMessageContext\(\s*key\s*,\s*promptText\s*,\s*messageContext\s*\)/);
   assert.match(flush, /deliverPromptOrBuffer\(\s*key\s*,\s*`\$\{opening\.header\}\$\{quotedPrompt\}`/);
+});
+
+test('the request ledger keeps the prompt WITH its message context, at every entry point that carries one', () => {
+  // A stored prompt is what is posted again when the session never took the first post in; kept raw, a forwarded message
+  // would come back as the operator's own words.
+  const opener = getFunctionBody('openTopicRequest');
+  assert.match(opener, /const\s+promptBody\s*=\s*getPromptWithThreadMessageContext\(\s*key\s*,\s*text\s*,\s*messageContext\s*\)/);
+  assert.match(opener, /buildTopicRequestPrompt\(\{[^}]*\bpromptBody\b[^}]*\}\)/);
+  assert.match(getFunctionBody('bufferPromptDuringStartup'), /openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*\)/);
+  const active = getFunctionBody('deliverActivePrompt');
+  assert.equal(active.match(/openTopicRequest\(\s*key\s*,\s*text\s*,\s*intake\s*,\s*messageContext\s*\)/g)?.length, 2, 'both the question-cancel route and the plain route');
+  assert.match(getFunctionBody('handleIncomingFile'), /openTopicRequest\([^;]*,\s*messageContext\s*\)/);
+  const flush = getSourceSlice('const albumCollector = ', 'function buildAlbumGroupKey(');
+  assert.match(flush, /openTopicRequest\([^;]*,\s*messageContext\s*\)/);
 });

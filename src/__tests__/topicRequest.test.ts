@@ -18,6 +18,7 @@ import { answerStyleInstruction } from '../requests/answerStyle';
 import { topicViewOptions } from '../utils/topicView';
 import {
   buildTopicRequestHeader,
+  buildTopicRequestPrompt,
   checkShouldOpenTopicRequest,
   getTopicRequesterId,
   getTopicRequestOrigin,
@@ -26,6 +27,9 @@ import {
   type TopicRequestSource,
 } from '../utils/topicRequest';
 import { requestRequesterAttribute } from '../requests/requestGroup';
+import { getWakeUpMessage, joinPromptsNotTakenIn } from '../requests/requestHeader';
+import type { OpenRequestState } from '../requests/types';
+import { getPromptWithMessageContext } from '../utils/messageContext';
 
 const sources: readonly TopicRequestSource[] = ['text', 'voice', 'file', 'album', 'schedule', 'scheduledRun'];
 
@@ -102,5 +106,43 @@ describe('buildTopicRequestHeader', () => {
     const descriptions = new Set(sources.map((source) => /from: ([^\]]+)\]/.exec(buildTopicRequestHeader('req_abc', source, 'answers'))?.[1]));
     assert.equal(descriptions.size, sources.length);
     assert.ok(!descriptions.has(undefined));
+  });
+});
+
+describe('the prompt a topic request keeps', () => {
+  const forwardedMark = '[Forwarded message · from: channel "Ops Alerts" · originally sent: 2026-11-06T14:20:00+04:00]';
+  const quoteBlock = ['[Replying to an earlier message · from: assistant]', '> The build failed'].join('\n');
+  const forwardedWords = 'ALERT: disk 91% on web-1';
+
+  /** A request whose prompt the session never took in (a failed post, a restart, a usage-limit wait), as the ledger keeps it. */
+  function createUntakenRequest(promptBody: string): OpenRequestState {
+    return {
+      id: 'req_abc',
+      origin: { kind: 'message', attributes: {} },
+      createdAt: 1,
+      progressAnswerCount: 0,
+      silentTurnCount: 0,
+      wakeCount: 0,
+      isWakeStopped: false,
+      prompt: buildTopicRequestPrompt({ requestId: 'req_abc', source: 'text', view: 'streamAnswers', supersededRequestIds: [], promptBody }),
+    };
+  }
+
+  it('is the header ahead of the body, and the body is exactly what is posted', () => {
+    const prompt = buildTopicRequestPrompt({ requestId: 'req_abc', source: 'text', view: 'streamAnswers', supersededRequestIds: ['req_a'], promptBody: 'hello' });
+    assert.equal(prompt, `${buildTopicRequestHeader('req_abc', 'text', 'streamAnswers', ['req_a'])}hello`);
+  });
+
+  it('a forwarded message re-posted from the ledger still carries its mark — a replay never turns it into the operator\'s own words', () => {
+    const body = getPromptWithMessageContext(forwardedWords, { block: forwardedMark, isSlashCommand: false, isShellInput: false });
+    const request = createUntakenRequest(body);
+    for (const replayed of [joinPromptsNotTakenIn([request]), getWakeUpMessage(request, 'postRetry').text]) {
+      assert.ok(replayed?.endsWith(`${forwardedMark}\n\n${forwardedWords}`), `the replayed prompt keeps the mark ahead of the words:\n${replayed}`);
+    }
+  });
+
+  it('a reply re-posted from the ledger keeps its quote too', () => {
+    const body = getPromptWithMessageContext('why?', { block: quoteBlock, isSlashCommand: false, isShellInput: false });
+    assert.ok(joinPromptsNotTakenIn([createUntakenRequest(body)])?.endsWith(`${quoteBlock}\n\nwhy?`));
   });
 });

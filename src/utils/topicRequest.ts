@@ -98,3 +98,19 @@ export function buildTopicRequestHeader(
     supersededRequestIds,
   });
 }
+
+/**
+ * @description The prompt a topic request keeps in the ledger (R21) — the one the bot posts AGAIN when the session never took
+ * the first post in: after a failed post, a restart, a usage-limit wait. `promptBody` is the message's text with its message
+ * context already folded in (reply quote, forwarded mark): a body kept raw would be replayed without them, and a forwarded
+ * message would come back as the operator's own words.
+ */
+export function buildTopicRequestPrompt(input: {
+  requestId: string;
+  source: TopicRequestSource;
+  view: TopicView;
+  supersededRequestIds: readonly string[];
+  promptBody: string;
+}): string {
+  return `${buildTopicRequestHeader(input.requestId, input.source, input.view, input.supersededRequestIds)}${input.promptBody}`;
+}

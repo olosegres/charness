@@ -111,6 +111,9 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   per prompt, so it stays true when the view is switched mid-conversation). A prompt buffered behind a session
   start carries its header and its reply quote from capture time (a typed text and a voice transcript alike).
   A file or an album sent as a reply carries the quote too (an album takes the first member's).
+  The ledger keeps that prompt with its message context (the quote, the forwarded mark) folded in
+  (`openTopicRequest` → `buildTopicRequestPrompt`): the stored prompt is what is posted again after a failed post, a restart or a
+  usage-limit wait, and a bare text would come back without them.
   A reply TO a file names it (`[photo, saved to: …]`): the path is the thread's saved copy
   (`findSavedFileName`, matched exactly by the intake's file name), absent once purged or never taken in.
 - **Message context** (`inbound.ts` `getTelegramMessageContextBlock`, folded by `utils/messageContext.ts`): ONE reader
