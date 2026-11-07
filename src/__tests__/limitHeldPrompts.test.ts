@@ -20,10 +20,12 @@ import {
   getHeldPromptsWith,
   getLimitResumeMessage,
   getTextWithHeldPrompts,
+  heldPromptsHeader,
   limitHeldPromptsMax,
   type LimitHeldPrompt,
 } from '../utils/limitHeldPrompts';
 import { LimitHeldPromptQueue } from '../utils/limitHeldPromptQueue';
+import { getPromptWithMessageContext } from '../utils/messageContext';
 
 const topicKey = makeTelegramKey(-1001234567890, 42);
 const otherTopicKey = makeTelegramKey(-1001234567890, 43);
@@ -58,14 +60,30 @@ describe('getHeldPromptsWith', () => {
 
 describe('getTextWithHeldPrompts / getHeldPromptsText', () => {
   it('the forwarded text first, then the held prompts in arrival order — a held copy of the text itself is not repeated', () => {
-    assert.equal(getTextWithHeldPrompts('mine', prompts('a', 'b')), 'mine\n\na\n\nb');
-    assert.equal(getTextWithHeldPrompts(scheduledRun, prompts(scheduledRun, 'b')), `${scheduledRun}\n\nb`);
+    assert.equal(getTextWithHeldPrompts('mine', prompts('a', 'b')), `mine\n\n${heldPromptsHeader}\n\na\n\nb`);
+    assert.equal(getTextWithHeldPrompts(scheduledRun, prompts(scheduledRun, 'b')), `${scheduledRun}\n\n${heldPromptsHeader}\n\nb`);
+  });
+
+  it('no header when nothing is left to hold after the text: only the text\'s own copy was held', () => {
+    assert.equal(getTextWithHeldPrompts(scheduledRun, prompts(scheduledRun)), scheduledRun);
+    assert.equal(getTextWithHeldPrompts('mine', []), 'mine');
+  });
+
+  it('a held run under a FORWARDED message sits below a line of its own, so it never reads as the rest of the forwarded words', () => {
+    const forwardedMark = '[Forwarded message · from: channel "Ops Alerts" · originally sent: 2026-11-06T14:20:00+04:00]';
+    const forwardedWords = 'ALERT: disk 91% on web-1';
+    const ownBody = getPromptWithMessageContext(forwardedWords, { block: forwardedMark, isSlashCommand: false, isShellInput: false });
+    const delivered = getTextWithHeldPrompts(ownBody, prompts(scheduledRun));
+    assert.equal(delivered, `${forwardedMark}\n\n${forwardedWords}\n\n${heldPromptsHeader}\n\n${scheduledRun}`);
+    const [forwardedPart, heldPart] = delivered.split(`\n\n${heldPromptsHeader}\n\n`);
+    assert.ok(forwardedPart.endsWith(forwardedWords) && !forwardedPart.includes(scheduledRun), 'the forwarded part ends with the forwarded words');
+    assert.equal(heldPart, scheduledRun, 'the held run is a part of its own');
   });
 
   it('a held run says when it was due; the same run forwarded at once is not repeated by its late copy (R27)', () => {
     const held: LimitHeldPrompt[] = [{ text: scheduledRun, heldText: scheduledRunDueAt('09:00') }, { text: 'b' }];
-    assert.equal(getTextWithHeldPrompts('mine', held), `mine\n\n${scheduledRunDueAt('09:00')}\n\nb`);
-    assert.equal(getTextWithHeldPrompts(scheduledRun, held), `${scheduledRun}\n\nb`);
+    assert.equal(getTextWithHeldPrompts('mine', held), `mine\n\n${heldPromptsHeader}\n\n${scheduledRunDueAt('09:00')}\n\nb`);
+    assert.equal(getTextWithHeldPrompts(scheduledRun, held), `${scheduledRun}\n\n${heldPromptsHeader}\n\nb`);
   });
 
   it('on their own: one message, or nothing', () => {
@@ -156,7 +174,7 @@ describe('LimitHeldPromptQueue — a held prompt is never dropped', () => {
     queue.holdPrompt(topicKey, otherScheduledRun);
 
     isLimitWaitArmed = false; // the operator wrote: the wait is cancelled
-    assert.equal(queue.releaseWithForward(topicKey, 'my question'), `my question\n\n${scheduledRun}\n\n${otherScheduledRun}`);
+    assert.equal(queue.releaseWithForward(topicKey, 'my question'), `my question\n\n${heldPromptsHeader}\n\n${scheduledRun}\n\n${otherScheduledRun}`);
     assert.deepEqual(store.getLimitHeldPrompts(topicKey), []);
     assert.equal(queue.releaseWithForward(topicKey, 'next'), 'next', 'delivered once');
   });

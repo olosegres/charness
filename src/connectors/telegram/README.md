@@ -123,7 +123,7 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   folds it with the same rule. There is NO coalescing of text or voice: each message is its own prompt with its own
   block, so a burst of forwards plus the operator's own words stays distinguishable; the two coalescing sites are an
   album (one block, the first member's) and the prompts held over a usage-limit wait, which follow the folded text of the
-  prompt that releases them and so never read as part of a forward. A slash command or a terminal topic's shell line
+  prompt that releases them under a header line of their own (`heldPromptsHeader`) and so never read as part of a forward. A slash command or a terminal topic's shell line
   never carries the block. A reply TO a forwarded message names who first wrote it in the quote's header
   (`from: user, forwarded from channel "Ops Alerts"`), read off the replied-to message's own `forward_origin`.
 - A scheduled run held over a usage-limit wait rides the resume as plain text, without a request.

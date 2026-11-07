@@ -12,6 +12,11 @@
 export const limitHeldPromptsMax = 10;
 /** Between two prompts delivered as one: each carries its own header. */
 const heldPromptSeparator = '\n\n';
+/**
+ * The line that opens the held prompts after a message's own text. The message may be a forwarded one, whose mark has no end: without a
+ * line of their own the scheduled runs below would read as the rest of the forwarded words.
+ */
+export const heldPromptsHeader = '[Held over the usage-limit wait — not part of the message above]';
 
 /**
  * @name LimitHeldPrompt
@@ -48,11 +53,13 @@ export function getHeldPromptsWith(
 
 /**
  * @description The forwarded `text` with the held prompts after it, in arrival
- * order — one message, so nothing can slip between them. A held copy of `text`
- * itself is not repeated: it is being delivered right now.
+ * order — one message, so nothing can slip between them — under a line of their
+ * own ({@link heldPromptsHeader}), so they never read as part of `text`. A held
+ * copy of `text` itself is not repeated: it is being delivered right now.
  */
 export function getTextWithHeldPrompts(text: string, held: readonly LimitHeldPrompt[]): string {
-  return [text, ...held.filter((prompt) => prompt.text !== text).map(getDeliveredText)].join(heldPromptSeparator);
+  const heldTexts = held.filter((prompt) => prompt.text !== text).map(getDeliveredText);
+  return heldTexts.length === 0 ? text : [text, heldPromptsHeader, ...heldTexts].join(heldPromptSeparator);
 }
 
 /**

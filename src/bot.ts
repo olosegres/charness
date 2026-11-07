@@ -5853,9 +5853,10 @@ async function forwardPromptToLiveAgent(
   // WHOSE words these are — only for a normal prompt, since a slash command forwarded to
   // the agent is a control token a prefixed block would corrupt, and a terminal's input
   // is a shell line the block's `> ` lines would turn into file-overwriting redirections.
-  // The held prompts come AFTER the folded text: the block describes the message's own
-  // words, and a held scheduled run must not read as part of a forwarded message. The
-  // folded `body` is what gets cached, preamble-wrapped and timestamped below.
+  // The held prompts come AFTER the folded text, under a header line of their own: the
+  // block describes the message's own words, and a held scheduled run must not read as
+  // part of a forwarded message. The folded `body` is what gets cached,
+  // preamble-wrapped and timestamped below.
   const ownBody = getPromptWithMessageContext(text, {
     block: options.messageContext,
     isSlashCommand: checkShouldSkipPreambleForText(text),
