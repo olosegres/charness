@@ -19,6 +19,8 @@
  *     operator's own
  *   → a FORWARDED document and a FORWARDED photo, each with a caption: the file announcement the agent reads (saved path, caption)
  *     leads with the mark; the same photo sent plainly has none
+ *   → a FORWARDED `/pair now`: where the typed one is answered by the pairing lock, the forward pairs nothing, is not swallowed,
+ *     and reaches the agent marked
  *   → a pending question and a bare digit: typed, the digit answers the question; FORWARDED, it does not — the question is
  *     given up unanswered and the agent reads the digit marked
  *   → a plain text and a plain voice note: no block of either kind.
@@ -110,6 +112,9 @@ const forwardedAlertText = 'ALERT: disk 91% on web-1';
 const forwardedQuitText = '/quit now';
 const afterForwardedQuitText = 'still here after the forward';
 const forwardedSlashText = '/review the diff';
+const forwardedPairText = '/pair now';
+/** The notice a typed `/pair` gets in this instance, whose group is fixed by `ALLOWED_GROUP_ID`. */
+const pairingLockedNoticeRe = /auto-pairing is disabled/;
 const burstFirstText = 'ALERT: queue is stuck';
 const burstSecondText = 'We deploy at noon';
 const ownBurstText = 'these three are only examples';
@@ -325,6 +330,24 @@ describe('message context end to end: built charness, fake Bot API, fake speech 
     fakeTelegram.pushOperatorMessage(topicThreadId, forwardedSlashText, { forwardOrigin: channelOrigin });
     const prompt = await waitForAgentPrompt(forwardedSlashText);
     assertForwardedMarkLeads(prompt, 'channel "Ops Alerts"', originalSentAtSeconds, forwardedSlashText);
+  });
+
+  it('a forwarded /pair pairs nothing and is not swallowed: it reaches the agent marked, where the typed one is answered by the pairing lock', async () => {
+    // The control: typed, `/pair` is answered with the lock notice (this instance's group is fixed by ALLOWED_GROUP_ID).
+    const typedMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, '/pair');
+    await topic.waitForMessage('the pairing lock notice for the typed /pair', (message) => message.message_id > typedMessageId && pairingLockedNoticeRe.test(message.text));
+
+    const forwardedMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, forwardedPairText, { forwardOrigin: channelOrigin });
+    const prompt = await waitForAgentPrompt(forwardedPairText);
+    assertForwardedMarkLeads(prompt, 'channel "Ops Alerts"', originalSentAtSeconds, forwardedPairText);
+    // The bot's messages go out in the order they were made: the agent's answer to the forward comes after any reply the pairing
+    // code would have made to it, so once the answer is here a notice that was going to come has come.
+    await topic.waitForMessage('the agent\'s answer to the forwarded /pair', (message) => message.message_id > forwardedMessageId && !pairingLockedNoticeRe.test(message.text));
+    assert.deepEqual(
+      topic.listMessages().filter((message) => message.message_id > forwardedMessageId && pairingLockedNoticeRe.test(message.text)),
+      [],
+      'the forward was answered by no pairing notice',
+    );
   });
 
   it('a bare digit answers a pending question when the operator types it, and does not when it is forwarded', async () => {

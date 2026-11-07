@@ -7210,11 +7210,12 @@ command('whoami', async (ctx, key) => {
  * locked by `ALLOWED_GROUP_ID` env. Only a creator/administrator of the target
  * group may pair, so a random group can't hijack the binding.
  */
-bot.command('pair', async (ctx) => {
+bot.command('pair', async (ctx, next) => {
+  // A forwarded `/pair` is somebody else's words: it re-points the bot to no group, and it is not swallowed either —
+  // it goes on to the text handler, which hands it to the agent under its mark like any other forwarded text.
+  if (checkIsTelegramForward(ctx.message)) return next();
   const userId = ctx.from?.id;
   if (!userId) return;
-  // A forwarded `/pair` is somebody else's words: it re-points the bot to no group.
-  if (checkIsTelegramForward(ctx.message)) return;
 
   // A private chat has no group to pair. Reply with the DM hint only to the
   // owner (a resolvable DM key); any other private chat stays silent so foreign

@@ -160,6 +160,8 @@ test('the decoration of a forwarded prompt and the request it opens ask «is it 
   assert.match(getFunctionBody('openTopicRequest'), /checkShouldOpenTopicRequest\(\s*view\s*,\s*checkIsSlashCommandPrompt\(\s*text\s*,\s*messageContext\s*\)\s*\)/);
 });
 
-test('a forwarded /pair re-points the bot to no group', () => {
-  assert.match(getSourceSlice("bot.command('pair', async (ctx) => {", 'const routeChat'), /if\s*\(checkIsTelegramForward\(ctx\.message\)\)\s*return;/);
+test('a forwarded /pair re-points the bot to no group, and goes on to the text handler instead of being swallowed', () => {
+  const pairHandler = getSourceSlice("bot.command('pair', async (ctx, next) => {", 'const routeChat');
+  assert.match(pairHandler, /if\s*\(checkIsTelegramForward\(ctx\.message\)\)\s*return\s+next\(\);/);
+  assert.ok(pairHandler.indexOf('checkIsTelegramForward') < pairHandler.indexOf('const userId'), 'asked before anything else');
 });
