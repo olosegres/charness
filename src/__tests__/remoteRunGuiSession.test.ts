@@ -87,7 +87,7 @@ function runSourced(body: string, options: { signalOnceStepWrote?: string } = {}
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-    if (options.signalOnceStepWrote !== undefined) void afterStepWrote(options.signalOnceStepWrote, () => child.kill('SIGTERM'));
+    if (options.signalOnceStepWrote !== undefined) afterStepWroteInBackground(options.signalOnceStepWrote, () => child.kill('SIGTERM'));
     const bound = setTimeout(() => child.kill('SIGKILL'), waitBoundMs);
     child.on('close', (status) => {
       clearTimeout(bound);
@@ -240,9 +240,18 @@ function checkHasBothPids(content: string): boolean {
   return content.trim().includes(' ');
 }
 
+/** The step never wrote the file a test waits for: it did not run, or not the way the test expects. */
+class StepFileNeverWrittenError extends Error {
+  constructor(file: string) {
+    super(`the step never wrote ${path.basename(file)} within ${waitBoundMs / 1000} s`);
+    this.name = 'StepFileNeverWrittenError';
+  }
+}
+
 /**
  * Wait, bounded, until the step has written `file` (and `isReady` accepts what it holds): the step is running only then. A fixed
  * delay from the start of the test is NOT that — a loaded machine can take longer than any such delay to start the step at all.
+ * At the deadline it throws {@link StepFileNeverWrittenError}: a waiter that gave up must not go on to act.
  */
 async function waitForStepFile(file: string, isReady: (content: string) => boolean = () => true): Promise<void> {
   const deadline = Date.now() + waitBoundMs;
@@ -250,14 +259,27 @@ async function waitForStepFile(file: string, isReady: (content: string) => boole
     if (fs.existsSync(file) && isReady(fs.readFileSync(file, 'utf8'))) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  throw new StepFileNeverWrittenError(file);
 }
 
-/** Run `action` a moment ({@link stepSettleMs}) after the step has written `file`; resolves the instant it ran. */
+/** Run `action` a moment ({@link stepSettleMs}) after the step has written `file`; resolves the instant it ran, rejects (without acting) when the file never came. */
 async function afterStepWrote(file: string, action: () => void, isReady?: (content: string) => boolean): Promise<number> {
   await waitForStepFile(file, isReady);
   await new Promise((resolve) => setTimeout(resolve, stepSettleMs));
   action();
   return Date.now();
+}
+
+/**
+ * {@link afterStepWrote} for an action nobody awaits. A step that never wrote its file is the test's own failure to report — the
+ * test waits for the same file and names it (`readGroupPids`) — so the waiter just ends, WITHOUT having acted: a test that
+ * failed early must not have its waiter fire up to a minute later inside the next test, on the paths and the ticker that are now
+ * that test's. Any other error is loud.
+ */
+function afterStepWroteInBackground(file: string, action: () => void, isReady?: (content: string) => boolean): void {
+  afterStepWrote(file, action, isReady).catch((error: unknown) => {
+    if (!(error instanceof StepFileNeverWrittenError)) throw error;
+  });
 }
 
 /** The agent stops looking and beating, as a process that died does (its steps keep running in their process groups). */
@@ -275,6 +297,11 @@ function endAgentSession(): void {
 /** End the agent's session once the step has recorded its pids; resolves the instant of the cut. */
 function endAgentSessionOnceStepRuns(pidFile: string): Promise<number> {
   return afterStepWrote(pidFile, endAgentSession, checkHasBothPids);
+}
+
+/** {@link endAgentSessionOnceStepRuns} for a test that does not need the instant of the cut. */
+function endAgentSessionInBackground(pidFile: string): void {
+  afterStepWroteInBackground(pidFile, endAgentSession, checkHasBothPids);
 }
 
 async function readGroupPids(pidFile: string): Promise<number[]> {
@@ -349,7 +376,7 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     startAgent();
     const pidFile = path.join(root, 'cut.pids');
     // The agent process dying: nothing looks at the folder any more and its heartbeat is gone. Its step, a process group of its own, is still running.
-    void endAgentSessionOnceStepRuns(pidFile);
+    endAgentSessionInBackground(pidFile);
     const running = runSourced(`run_step ${workDir} '${createGroupRecordingStep(pidFile)}'; echo "code=$step_code"`);
     const pids = await readGroupPids(pidFile);
     assert.ok(pids.every((pid) => checkIsProcessAlive(pid)), 'the step is running');
@@ -363,6 +390,7 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     startAgent();
     const pidFile = path.join(root, 'stubborn.pids');
     const cutAt = endAgentSessionOnceStepRuns(pidFile);
+    cutAt.catch(() => {}); // a step that never wrote its file fails where `cutAt` and the pids are awaited, below, by name
     const run = await runSourced(`kill_grace_sec=1; run_step ${workDir} '${createGroupRecordingStep(pidFile, { isStubborn: true })}'; echo "code=$step_code"`);
     assert.equal(run.stdout.trim().split('\n').at(-1), 'code=125', run.stderr);
     assert.ok(Date.now() - (await cutAt) >= 900, 'the grace was given before the kill');
@@ -373,7 +401,7 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     markNeedsIos();
     startAgent();
     const pidFile = path.join(root, 'slow-kill.pids');
-    void endAgentSessionOnceStepRuns(pidFile);
+    endAgentSessionInBackground(pidFile);
     // `kill -KILL` returns at once and the signal lands 0.8 s later, as a machine that is busy elsewhere delivers it; every other signal is the shell's own.
     const slowKill = 'kill() { case "$1" in -KILL) ( sleep 0.8; builtin kill "$@" ) > /dev/null 2>&1 & ;; *) builtin kill "$@" ;; esac; }';
     const run = await runSourced(`${slowKill}; kill_grace_sec=1; run_step ${workDir} '${createGroupRecordingStep(pidFile, { isStubborn: true })}'; echo "code=$step_code"`);
@@ -386,7 +414,7 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     markNeedsIos();
     startAgent();
     const pidFile = path.join(root, 'survivor.pids');
-    void endAgentSessionOnceStepRuns(pidFile);
+    endAgentSessionInBackground(pidFile);
     // A SIGKILL that never lands: `kill -KILL` succeeds and does nothing, every other signal is the shell's own. Two looks (0.4 s) of waiting instead of ten.
     const lostKill = 'kill() { case "$1" in -KILL) return 0 ;; *) builtin kill "$@" ;; esac; }';
     let pids: number[] = [];
@@ -412,7 +440,7 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     markNeedsIos();
     const first = startAgent();
     const pidFile = path.join(root, 'restarted.pids');
-    void afterStepWrote(pidFile, () => {
+    afterStepWroteInBackground(pidFile, () => {
       // The first instance is gone for good, as in a real restart: were it to keep beating, its next beat (every 5 s) would write its own
       // start time back over the new instance's, and the script — it looks about once a second, far less often on a loaded machine —
       // could miss the other instance altogether and wait for a step nobody answers.
