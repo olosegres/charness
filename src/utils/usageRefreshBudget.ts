@@ -5,6 +5,7 @@
  * none is held by a slow endpoint.
  */
 import { claudeUsageOnDemandMaxAgeMs } from './claudeUsageRefresher';
+import { waitUpTo } from './waitUpTo';
 
 export const limitsUsageRefreshBudgetMs = 2_000;
 
@@ -13,11 +14,5 @@ export const limitsUsageRefreshBudgetMs = 2_000;
  * {@link limitsUsageRefreshBudgetMs}: the screen is never held by a slow usage endpoint.
  */
 export async function refreshUsageWithinBudget(refresh: (options: { maxAgeMs?: number }) => Promise<void>): Promise<void> {
-  let timer: NodeJS.Timeout | undefined;
-  const budget = new Promise<void>((resolve) => { timer = setTimeout(resolve, limitsUsageRefreshBudgetMs); });
-  try {
-    await Promise.race([refresh({ maxAgeMs: claudeUsageOnDemandMaxAgeMs }), budget]);
-  } finally {
-    clearTimeout(timer);
-  }
+  await waitUpTo(refresh({ maxAgeMs: claudeUsageOnDemandMaxAgeMs }), limitsUsageRefreshBudgetMs);
 }
