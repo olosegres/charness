@@ -96,9 +96,12 @@ const openCodePollLabel = 'OpenCode providers';
 
 /** One poll per target (a profile, or the OpenCode providers) may be pending; `done` ends when it settles or is given up on. */
 interface PendingPoll {
+  startedAtMs: number;
   isAbandoned: boolean;
   done: Promise<void>;
 }
+
+const millisecondsPerMinute = 60_000;
 
 type PollEnd = 'finished' | 'threw';
 
@@ -148,16 +151,24 @@ export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): Clau
 
   /**
    * Run the poll of one target, waiting for it at most {@link claudeUsagePollDeadlineMs}. At the deadline the poll is given
-   * up on: its request is cancelled, `markStale` leaves a stale mark on the figures, and it is left pending until it finally
-   * settles — saving nothing, and logging when and how it ended — so a stuck target is never polled twice at once. A call for
-   * a target whose earlier poll was given up on returns at once; one whose poll is still within its deadline joins it.
+   * up on: its request is cancelled, `markStale` (told when the poll started) leaves a stale mark on the figures, and it is
+   * left pending until it finally settles — saving nothing, and logging when and how it ended — so a stuck target is not
+   * polled twice at once. A call for a target whose earlier poll was given up on returns at once, until that poll has been
+   * pending for a whole refresh interval: a poll the cancel cannot reach must not block its target for good, so the next
+   * call says so in one line and polls afresh (the old poll's cleanup leaves the new entry alone). A call for a target whose
+   * poll is still within its deadline joins it.
    */
-  function runPoll(label: string, poll: (signal: AbortSignal) => Promise<void>, markStale: () => void): Promise<void> {
+  function runPoll(label: string, poll: (signal: AbortSignal) => Promise<void>, markStale: (pollStartedAtMs: number) => void): Promise<void> {
     const pending = pendingPolls.get(label);
-    if (pending) return pending.isAbandoned ? Promise.resolve() : pending.done;
+    if (pending) {
+      if (!pending.isAbandoned) return pending.done;
+      const pendingForMs = now() - pending.startedAtMs;
+      if (pendingForMs < claudeUsageRefreshIntervalMs) return Promise.resolve();
+      log(`[usage] ${label}: the abandoned usage poll is still pending after ${Math.round(pendingForMs / millisecondsPerMinute)} min; polling afresh`);
+    }
     const controller = new AbortController();
     const startedAtMs = now();
-    const entry: PendingPoll = { isAbandoned: false, done: Promise.resolve() };
+    const entry: PendingPoll = { startedAtMs, isAbandoned: false, done: Promise.resolve() };
     pendingPolls.set(label, entry);
     const ended = runLoggingFailure(label, poll, controller.signal);
     void ended.then((end) => {
@@ -170,18 +181,21 @@ export function createClaudeUsageRefresher(deps: ClaudeUsageRefresherDeps): Clau
       if (isSettled) return;
       entry.isAbandoned = true;
       controller.abort();
-      markStale();
+      markStale(startedAtMs);
       log(`[usage] ${label}: usage poll did not finish within ${pollDeadlineMs / 1000} s; not waiting for it any more`);
     });
     return entry.done;
   }
 
-  function markProfileStale(name: string): void {
-    deps.saveSnapshot(name, markClaudeUsageSnapshotStale(deps.getSnapshot(name), usagePollGaveUpReason, now()));
+  /** A reading stored since the poll began (a json-stream frame) is newer than anything the poll could have told: it stays as it is. */
+  function markProfileStale(name: string, pollStartedAtMs: number): void {
+    const snapshot = deps.getSnapshot(name);
+    if (snapshot && Date.parse(snapshot.fetchedAt) > pollStartedAtMs) return;
+    deps.saveSnapshot(name, markClaudeUsageSnapshotStale(snapshot, usagePollGaveUpReason, now()));
   }
 
   function runProfilePoll(profile: ClaudeUsageRefresherProfile): Promise<void> {
-    return runPoll(profile.name, (signal) => pollProfile(profile, signal), () => markProfileStale(profile.name));
+    return runPoll(profile.name, (signal) => pollProfile(profile, signal), (pollStartedAtMs) => markProfileStale(profile.name, pollStartedAtMs));
   }
 
   function checkNeedsPoll(profile: ClaudeUsageRefresherProfile, maxAgeMs: number | undefined): boolean {

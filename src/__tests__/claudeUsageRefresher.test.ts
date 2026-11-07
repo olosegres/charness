@@ -5,7 +5,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createClaudeUsageRefresher, refreshClaudeUsageForLaunch, type ClaudeUsageRefresherDeps, type ClaudeUsageRefresherProfile } from '../utils/claudeUsageRefresher';
+import { claudeUsageRefreshIntervalMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch, type ClaudeUsageRefresherDeps, type ClaudeUsageRefresherProfile } from '../utils/claudeUsageRefresher';
 import type { ClaudeUsageBucket, ClaudeUsageFetchResult, ClaudeUsageSnapshot } from '../utils/claudeUsage';
 
 const session = (percent: number): ClaudeUsageBucket => ({ kind: 'session', percent, resetsAt: '2026-10-12T13:00:00.000Z', scopeModel: null });
@@ -254,7 +254,7 @@ describe('a poll that was given up on', () => {
     assert.deepEqual(h.snapshots.get('default'), newer);
   });
 
-  it('is not stacked on: refreshes during a systematic hang start no second poll of the profile, while the other profiles are polled as usual', async () => {
+  it('is not stacked on within the ceiling: refreshes during a systematic hang start no second poll of the profile, while the other profiles are polled as usual', async () => {
     const h = createHarness({
       profiles: [defaultProfile, workProfile],
       pollDeadlineMs: 20,
@@ -266,11 +266,77 @@ describe('a poll that was given up on', () => {
     assert.equal(h.fetched.filter((token) => token === 'tok-/p/work').length, 5, 'the healthy profile is polled every time');
   });
 
-  it('and the OpenCode providers are not stacked on either: one pending poll at a time', async () => {
+  it('and the OpenCode providers are not stacked on within the ceiling either: one pending poll at a time', async () => {
     let started = 0;
     const h = createHarness({ profiles: [], pollDeadlineMs: 20, refreshOpenCode: () => { started += 1; return neverSettles(); } });
     for (let round = 0; round < 4; round += 1) await settleOrHung(h.refresher.refreshAll());
     assert.equal(started, 1);
+  });
+
+  it('never blocks a profile for good: once it has been pending for the ceiling (one refresh interval) the next refresh logs one line and polls afresh, then is held off again for another ceiling', async () => {
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, fetch: () => neverSettles() });
+    await settleOrHung(h.refresher.refreshAll());
+    h.advance(claudeUsageRefreshIntervalMs - 1);
+    await settleOrHung(h.refresher.refreshAll());
+    assert.equal(h.fetched.length, 1, 'a millisecond short of the ceiling: still not stacked on');
+    assert.ok(!h.logs.some((line) => line.includes('polling afresh')));
+
+    h.advance(1);
+    await settleOrHung(h.refresher.refreshAll());
+    assert.equal(h.fetched.length, 2, 'at the ceiling the profile is polled again');
+    assert.equal(h.logs.filter((line) => line.includes('default: the abandoned usage poll is still pending after 10 min; polling afresh')).length, 1);
+    await settleOrHung(h.refresher.refreshAll());
+    await settleOrHung(h.refresher.refreshOne('default'));
+    assert.equal(h.fetched.length, 2, 'the fresh poll is the pending one now: no third');
+
+    h.advance(claudeUsageRefreshIntervalMs);
+    await settleOrHung(h.refresher.refreshAll());
+    assert.equal(h.fetched.length, 3, 'a poll that is stuck for good costs one pending request per interval, not one per refresh');
+  });
+
+  it('the OpenCode providers get the same ceiling: polled afresh after a refresh interval, with the line', async () => {
+    let started = 0;
+    const h = createHarness({ profiles: [], pollDeadlineMs: 20, refreshOpenCode: () => { started += 1; return neverSettles(); } });
+    await settleOrHung(h.refresher.refreshAll());
+    h.advance(claudeUsageRefreshIntervalMs);
+    await settleOrHung(h.refresher.refreshAll());
+    assert.equal(started, 2);
+    assert.match(h.logs.join('\n'), /OpenCode providers: the abandoned usage poll is still pending after 10 min; polling afresh/);
+  });
+
+  it('when the old poll finally settles after the fresh one took its place, it frees nothing of the fresh one and saves nothing', async () => {
+    const releases: Array<(result: ClaudeUsageFetchResult) => void> = [];
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, fetch: () => new Promise<ClaudeUsageFetchResult>((resolve) => { releases.push(resolve); }) });
+    await settleOrHung(h.refresher.refreshAll());
+    h.advance(claudeUsageRefreshIntervalMs);
+    await settleOrHung(h.refresher.refreshAll());
+    assert.equal(releases.length, 2);
+
+    const savesBefore = h.saves.length;
+    releases[0]({ ok: true, buckets: [session(99)] });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(h.saves.length, savesBefore, 'the old poll was cancelled: its late answer is dropped');
+    assert.match(h.logs.join('\n'), /default: the abandoned usage poll finished after 600\.0 s; its answer was dropped/);
+    await settleOrHung(h.refresher.refreshAll());
+    assert.equal(releases.length, 2, 'the fresh poll still holds the profile: the old one settling did not delete its entry');
+
+    releases[1]({ ok: true, buckets: [session(8)] });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settleOrHung(h.refresher.refreshAll());
+    assert.equal(releases.length, 3, 'once the fresh poll settles the profile is free');
+  });
+
+  it('keeps a reading that arrived while it ran: a stream frame during the stuck poll is not marked stale at the give-up', async () => {
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, fetch: () => neverSettles() });
+    const refresh = h.refresher.refreshAll();
+    h.advance(1_000);
+    h.refresher.noteStreamWindows('default', [{ name: 'five_hour', utilization: 0.81, resetsAtMs: 1791810000000 }]);
+    const fresh = h.snapshots.get('default');
+    assert.equal(fresh?.source, 'stream');
+    await settleOrHung(refresh);
+    assert.match(h.logs.join('\n'), /default: usage poll did not finish/, 'the poll was still given up on');
+    assert.deepEqual(h.snapshots.get('default'), fresh, 'but the newer reading stays as it was: not stale');
+    assert.equal(h.snapshots.get('default')?.isStale, undefined);
   });
 
   it('frees the profile when it finally settles: the next refresh polls afresh, and one line says how long it took', async () => {
