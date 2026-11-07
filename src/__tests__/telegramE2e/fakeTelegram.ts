@@ -89,6 +89,30 @@ export interface FakeTelegramMessage {
   deletedAtMs?: number;
 }
 
+/** A message embedded as another one's `reply_to_message`: a voice note has no `text` on the wire. */
+export type FakeRepliedMessage = Omit<FakeTelegramMessage, 'text'> & { text?: string };
+
+/** The wire fields of an operator message that arrives as a reply and/or a forward. */
+interface OperatorMessageContext {
+  reply_to_message?: FakeRepliedMessage;
+  forward_origin?: FakeForwardOrigin;
+}
+
+/** The origin of a forwarded message, in the four shapes the Bot API reports (`date` is the original send time, unix seconds). */
+export type FakeForwardOrigin =
+  | { type: 'user'; sender_user: TelegramUser; date: number }
+  | { type: 'hidden_user'; sender_user_name: string; date: number }
+  | { type: 'chat'; sender_chat: { id: number; type: 'supergroup'; title: string }; author_signature?: string; date: number }
+  | { type: 'channel'; chat: { id: number; type: 'channel'; title: string }; message_id: number; author_signature?: string; date: number };
+
+/** How the operator's message arrives besides its content: as a reply to a message already in the topic, and/or forwarded from elsewhere. */
+export interface FakeOperatorMessageOptions {
+  /** The id of the message in the topic this one replies to (the bot's or a person's). */
+  replyToMessageId?: number;
+  /** Where the message was first written. */
+  forwardOrigin?: FakeForwardOrigin;
+}
+
 /** The `voice` object of a voice-note message. */
 export interface FakeTelegramVoice {
   file_id: string;
@@ -136,6 +160,13 @@ const telegramTextMaxLength = 4096;
 const maxDeleteMessagesPerCall = 100;
 /** The icon colour every topic made in the fake group has (Telegram's first preset). */
 const topicIconColor = 0x6FB9F0;
+
+/** A stored message as the Bot API embeds it in a reply: a voice note without `text`. */
+function embedAsReplied(message: FakeTelegramMessage): FakeRepliedMessage {
+  if (!message.voice) return message;
+  const { text: _noText, ...voiceOnly } = message;
+  return voiceOnly;
+}
 
 /** `/command args` → the `bot_command` entity Telegram attaches to a typed command. */
 function getCommandEntities(text: string): FakeTelegramMessage['entities'] {
@@ -236,15 +267,15 @@ export class FakeTelegram {
 
   // ─── what the operator does ───────────────────────────────────────
 
-  /** @description The operator writes `text` in topic `threadId`; resolves the message id. */
-  pushOperatorMessage(threadId: number, text: string): number {
-    return this.pushUserMessage(threadId, text, this.options.operator);
+  /** @description The operator writes `text` in topic `threadId` (as a reply or a forward, when `options` say so); resolves the message id. */
+  pushOperatorMessage(threadId: number, text: string, options: FakeOperatorMessageOptions = {}): number {
+    return this.pushUserMessage(threadId, text, this.options.operator, options);
   }
 
   /** @description `from` writes `text` in topic `threadId` (another admin, say); resolves the message id. */
-  pushUserMessage(threadId: number, text: string, from: TelegramUser): number {
+  pushUserMessage(threadId: number, text: string, from: TelegramUser, options: FakeOperatorMessageOptions = {}): number {
     const message = this.storeMessage(threadId, text, from, { entities: getCommandEntities(text) });
-    this.pushUpdate({ message });
+    this.pushUpdate({ message: { ...message, ...this.getContext(options) } });
     return message.message_id;
   }
 
@@ -263,14 +294,17 @@ export class FakeTelegram {
     this.files.set(fileId, { filePath: `voice/${fileId}.oga`, bytes });
   }
 
-  /** @description The operator sends a voice note (a file registered with {@link registerFile}) in topic `threadId`; resolves the message id. */
-  pushOperatorVoice(threadId: number, fileId: string, durationSeconds: number): number {
+  /**
+   * @description The operator sends a voice note (a file registered with {@link registerFile}) in topic `threadId` — as a reply
+   * or a forward, when `options` say so; resolves the message id.
+   */
+  pushOperatorVoice(threadId: number, fileId: string, durationSeconds: number, options: FakeOperatorMessageOptions = {}): number {
     if (!this.files.has(fileId)) throw new Error(`register the voice file ${fileId} first`);
     const voice: FakeTelegramVoice = { file_id: fileId, file_unique_id: `unique-${fileId}`, duration: durationSeconds, mime_type: 'audio/ogg' };
     const message = this.storeMessage(threadId, '', this.options.operator, { voice });
     // On the wire a voice note has no `text` at all; an empty one would still match the bot's text handler.
     const { text: _text, ...wireMessage } = message;
-    this.pushUpdate({ message: wireMessage });
+    this.pushUpdate({ message: { ...wireMessage, ...this.getContext(options) } });
     return message.message_id;
   }
 
@@ -331,6 +365,15 @@ export class FakeTelegram {
 
   private wakeAllPolls(): void {
     for (const wake of [...this.pollWakers]) wake();
+  }
+
+  private getContext(options: FakeOperatorMessageOptions): OperatorMessageContext {
+    const replied = options.replyToMessageId === undefined ? undefined : this.messages.get(options.replyToMessageId);
+    if (options.replyToMessageId !== undefined && !replied) throw new Error(`no message ${options.replyToMessageId} to reply to`);
+    return {
+      ...(replied ? { reply_to_message: embedAsReplied(replied) } : {}),
+      ...(options.forwardOrigin ? { forward_origin: options.forwardOrigin } : {}),
+    };
   }
 
   private storeMessage(
