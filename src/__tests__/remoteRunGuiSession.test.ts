@@ -31,6 +31,8 @@ const accountName = os.userInfo().username;
 const waitBoundMs = 60_000;
 /** How long a step that has recorded its pids is left running before the test cuts it: long enough for the test to read the pids first. */
 const stepSettleMs = 200;
+/** How often the test's new agent instance beats: well inside the 20 s after which the script calls a heartbeat stale. */
+const newInstanceBeatEveryMs = 1000;
 
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gui-session-')));
@@ -440,12 +442,19 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     markNeedsIos();
     const first = startAgent();
     const pidFile = path.join(root, 'restarted.pids');
+    const beatAsNewInstance = (): void => {
+      writeGuiAgentStatus(paths, { pid: process.pid, uid: os.userInfo().uid, account: accountName, startedAtMs: first.getStartedAtMs() + 123_456, beatAtMs: Date.now() });
+    };
     afterStepWroteInBackground(pidFile, () => {
       // The first instance is gone for good, as in a real restart: were it to keep beating, its next beat (every 5 s) would write its own
       // start time back over the new instance's, and the script — it looks about once a second, far less often on a loaded machine —
-      // could miss the other instance altogether and wait for a step nobody answers.
+      // could miss the other instance altogether and wait for a step nobody answers. The NEW instance, on the other hand, is alive and
+      // keeps beating: the agent is never «gone» (`gui_agent_alive` stays true), so the ONLY thing that can cut the step is that it
+      // started at another time. Without this beat the step would be cut anyway ~20 s later, by the stale heartbeat, and the test
+      // would pass without the restart check it is named for.
       stopAgentTicks();
-      writeGuiAgentStatus(paths, { pid: process.pid, uid: os.userInfo().uid, account: accountName, startedAtMs: first.getStartedAtMs() + 123_456, beatAtMs: Date.now() });
+      beatAsNewInstance();
+      ticker = setInterval(beatAsNewInstance, newInstanceBeatEveryMs);
     }, checkHasBothPids);
     const run = await runSourced(`run_step ${workDir} '${createGroupRecordingStep(pidFile)}'; echo "code=$step_code"`);
     assert.equal(run.stdout.trim().split('\n').at(-1), 'code=125', run.stderr);
