@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getCaughtErrnoCode, writeTextFileAtomically } from '../configDirFile';
 import { getOutputTail, type CommandResult, type CommandRunner } from '../selfUpdate/commandRunner';
-import { stripControlCharacters } from './isolatedCommand';
+import { stripControlCharacters } from '../utils/stripControlCharacters';
 import type { PueueState } from './pueueDaemon';
 import type { RunnerHomePaths } from './runnerHome';
 import { bootOutAndWaitUntilGone, commandTimeoutMs, getGuiAgentFile, restorePreviousDefinitions, writeDefinition } from './serviceCommon';

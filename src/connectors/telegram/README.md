@@ -116,8 +116,9 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
 - **Message context** (`inbound.ts` `getTelegramMessageContextBlock`, folded by `utils/messageContext.ts`): ONE reader
   turns how a message arrived into the block that leads its prompt — the reply quote (`[Replying to an earlier
   message · from: …]`, `utils/replyQuote.ts`), then, for a FORWARDED message (`forward_origin`: user, hidden user, chat or
-  channel), the mark `[Forwarded message · from: <kind> <name> · originally sent: <local ISO>]`
-  (`utils/forwardedMark.ts`) next to the words it describes. The reader works off the message, so a text, a caption, a
+  channel), the mark `[Forwarded message · from: <kind> "<name>" · originally sent: <local ISO>]`
+  (`utils/forwardedMark.ts`; the names, titles and signatures are a stranger's, so they are quoted and stripped of brackets and
+  control characters by the shared `utils/stripControlCharacters.ts`) next to the words it describes. The reader works off the message, so a text, a caption, a
   voice transcript and a file announcement are marked alike, and every route (live forward, startup buffer, file, album)
   folds it with the same rule. There is NO coalescing of text or voice: each message is its own prompt with its own
   block, so a burst of forwards plus the operator's own words stays distinguishable; the two coalescing sites are an

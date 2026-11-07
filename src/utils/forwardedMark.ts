@@ -15,6 +15,7 @@
  */
 
 import { formatIsoLocalOffset } from './isoTimestamp';
+import { stripControlCharacters } from './stripControlCharacters';
 
 /** Header prefix of the mark — recognisable, agent-facing English. */
 const forwardedMarkHeaderPrefix = '[Forwarded message · from: ';
@@ -52,9 +53,35 @@ export interface ForwardedMarkSource {
 /** Fallback for an origin with no name at all. */
 const unknownOriginName = 'unknown';
 
-/** One line: a newline inside a name would end the mark's header early. */
-function flattenToOneLine(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
+/**
+ * A third party's text (a sender's name, a chat's title, a post signature — all chosen by someone else) as ONE line
+ * that cannot take part in the mark's own syntax: control and bidirectional characters out, whitespace flattened, and the square brackets that
+ * close the header turned into parentheses.
+ */
+function cleanThirdPartyText(value: string): string {
+  return stripControlCharacters(value).replace(/\s+/g, ' ').trim().replace(/\[/g, '(').replace(/\]/g, ')');
+}
+
+/** A cleaned text as a quoted token: what a stranger wrote reads as DATA, whatever it says (`"` and `\` are escaped). */
+function quoteCleanText(cleanText: string): string {
+  return JSON.stringify(cleanText);
+}
+
+/**
+ * @description Who first wrote a forwarded message, as it reads in the mark and in the header of a reply to it:
+ * `channel "Ops Alerts"`, `user "Alice Smith" (@alice)`, `chat "Team room" (signed "Chief")`. A name is quoted, so
+ * the origin cannot be told apart from what it says.
+ */
+export function describeForwardedOrigin(source: ForwardedMarkSource): string {
+  const cleanName = cleanThirdPartyText(source.name);
+  const name = cleanName ? quoteCleanText(cleanName) : unknownOriginName;
+  const cleanUsername = source.username ? cleanThirdPartyText(source.username) : '';
+  const cleanSignature = source.signature ? cleanThirdPartyText(source.signature) : '';
+  const details = [
+    ...(cleanUsername ? [`@${cleanUsername}`] : []),
+    ...(cleanSignature ? [`signed ${quoteCleanText(cleanSignature)}`] : []),
+  ];
+  return `${originKindLabels[source.kind]} ${name}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
 }
 
 /**
@@ -65,12 +92,8 @@ function flattenToOneLine(value: string): string {
  */
 export function buildForwardedMark(source: ForwardedMarkSource | undefined): string | null {
   if (!source) return null;
-  const name = flattenToOneLine(source.name) || unknownOriginName;
-  const username = source.username ? ` (@${source.username})` : '';
-  const signature = source.signature ? flattenToOneLine(source.signature) : '';
   const parts = [
-    `${forwardedMarkHeaderPrefix}${originKindLabels[source.kind]} ${name}${username}`,
-    ...(signature ? [`signed: ${signature}`] : []),
+    `${forwardedMarkHeaderPrefix}${describeForwardedOrigin(source)}`,
     ...(source.originalSentAtSeconds && source.originalSentAtSeconds > 0
       ? [`originally sent: ${formatIsoLocalOffset(source.originalSentAtSeconds * millisecondsPerSecond)}`]
       : []),

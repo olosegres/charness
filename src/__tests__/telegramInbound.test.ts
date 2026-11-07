@@ -647,19 +647,19 @@ function makeForwardedTextMessage(forwardOrigin: ForwardOrigin | undefined, repl
 test('getTelegramForwardedMark: each origin reads as its own kind, with the original date', () => {
   assert.equal(
     getTelegramForwardedMark(makeForwardedTextMessage(forwardOrigins.user)),
-    `[Forwarded message · from: user Alice Smith (@alice) · originally sent: ${originalSentAtIso}]`,
+    `[Forwarded message · from: user "Alice Smith" (@alice) · originally sent: ${originalSentAtIso}]`,
   );
   assert.equal(
     getTelegramForwardedMark(makeForwardedTextMessage(forwardOrigins.hiddenUser)),
-    `[Forwarded message · from: hidden user Jane Doe · originally sent: ${originalSentAtIso}]`,
+    `[Forwarded message · from: hidden user "Jane Doe" · originally sent: ${originalSentAtIso}]`,
   );
   assert.equal(
     getTelegramForwardedMark(makeForwardedTextMessage(forwardOrigins.chat)),
-    `[Forwarded message · from: chat Team room · signed: Chief · originally sent: ${originalSentAtIso}]`,
+    `[Forwarded message · from: chat "Team room" (signed "Chief") · originally sent: ${originalSentAtIso}]`,
   );
   assert.equal(
     getTelegramForwardedMark(makeForwardedTextMessage(forwardOrigins.channel)),
-    `[Forwarded message · from: channel Ops Alerts · originally sent: ${originalSentAtIso}]`,
+    `[Forwarded message · from: channel "Ops Alerts" · originally sent: ${originalSentAtIso}]`,
   );
 });
 
@@ -667,7 +667,7 @@ test('getTelegramForwardedMark: the bot\'s own message forwarded from another to
   const botOrigin = { type: 'user', sender_user: makeUser(identity.userId, { is_bot: true, first_name: 'Charness', username: 'myCodeBot' }), date: originalSentAtSeconds } as ForwardOrigin;
   assert.equal(
     getTelegramForwardedMark(makeForwardedTextMessage(botOrigin)),
-    `[Forwarded message · from: user Charness (@myCodeBot) · originally sent: ${originalSentAtIso}]`,
+    `[Forwarded message · from: user "Charness" (@myCodeBot) · originally sent: ${originalSentAtIso}]`,
   );
 });
 
@@ -680,7 +680,7 @@ test('getTelegramForwardedMark: an origin with no date still marks the message, 
   const { date: _date, ...undatedOrigin } = forwardOrigins.channel as ForwardOrigin & { date: number };
   assert.equal(
     getTelegramForwardedMark(makeForwardedTextMessage(undatedOrigin as ForwardOrigin)),
-    '[Forwarded message · from: channel Ops Alerts]',
+    '[Forwarded message · from: channel "Ops Alerts"]',
   );
 });
 
@@ -698,7 +698,7 @@ test('getTelegramForwardedMark: a forwarded voice note, photo and document carry
 test('getTelegramMessageContextBlock: a forwarded message carries the mark alone', () => {
   assert.equal(
     getTelegramMessageContextBlock(makeForwardedTextMessage(forwardOrigins.channel, topicRootMessage), identity),
-    `[Forwarded message · from: channel Ops Alerts · originally sent: ${originalSentAtIso}]`,
+    `[Forwarded message · from: channel "Ops Alerts" · originally sent: ${originalSentAtIso}]`,
   );
 });
 
@@ -706,7 +706,7 @@ test('getTelegramMessageContextBlock: a forwarded voice note carries the mark, a
   const forwardedVoice = { ...makeTopicVoiceMessage(topicRootMessage), forward_origin: forwardOrigins.channel } as Message.VoiceMessage;
   assert.equal(
     getTelegramMessageContextBlock(forwardedVoice, identity),
-    `[Forwarded message · from: channel Ops Alerts · originally sent: ${originalSentAtIso}]`,
+    `[Forwarded message · from: channel "Ops Alerts" · originally sent: ${originalSentAtIso}]`,
   );
   assert.equal(
     getTelegramMessageContextBlock(makeTopicVoiceMessage(agentAnswer), identity),
@@ -723,7 +723,7 @@ test('getTelegramMessageContextBlock: a forward that is also a reply carries the
       '> The build failed:',
       '> API_URL is not set',
       '',
-      `[Forwarded message · from: channel Ops Alerts · originally sent: ${originalSentAtIso}]`,
+      `[Forwarded message · from: channel "Ops Alerts" · originally sent: ${originalSentAtIso}]`,
     ].join('\n'),
   );
 });

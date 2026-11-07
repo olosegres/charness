@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'child_process';
 import type { CommandOptions, CommandResult } from '../selfUpdate/commandRunner';
+import { stripControlCharacters } from '../utils/stripControlCharacters';
 
 /**
  * @description How the ROOT step of the admin pairing line runs everything that is the runner account's — and the account runs the agents' code, so
@@ -29,14 +30,6 @@ export type IsolatedCommandRunner = (file: string, args: readonly string[], opti
 const maxKeptOutputBytes = 4 * 1024 * 1024;
 /** Signals that reach this process and are passed on to the child's group. */
 const forwardedSignals: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-/** Everything that is a control character (C0, DEL, C1 — escape sequences start with one), the bidirectional overrides and isolates, and the line and paragraph separators. */
-const unsafeCharacterPattern = /[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]/gu;
-const keptControlCharacters = new Set(['\n', '\t']);
-
-/** @description `text` with every character that a terminal could act on, or that could disguise what is printed, taken out; newlines and tabs stay. */
-export function stripControlCharacters(text: string): string {
-  return text.replace(unsafeCharacterPattern, (character) => (keptControlCharacters.has(character) ? character : ''));
-}
 
 function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   if (child.pid === undefined) return;

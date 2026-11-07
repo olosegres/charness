@@ -152,10 +152,10 @@ function escapeRegExp(text: string): string {
  * and the instant in the mark must be `sentAtSeconds` (whatever offset the instance writes it in).
  */
 function assertForwardedMarkLeads(prompt: FakeClaudePrompt, originOf: string, sentAtSeconds: number, words: string): void {
-  const markRe = new RegExp(`\\[Forwarded message · from: ${escapeRegExp(originOf)}( · signed: [^·\\]]+)? · originally sent: (\\S+)\\]\\n\\n${escapeRegExp(words)}`);
+  const markRe = new RegExp(`\\[Forwarded message · from: ${escapeRegExp(originOf)} · originally sent: (\\S+)\\]\\n\\n${escapeRegExp(words)}`);
   const match = markRe.exec(prompt.text);
   assert.ok(match, `the mark of «${originOf}» must lead «${words}» in:\n${prompt.text}`);
-  assert.equal(Date.parse(match[2]), sentAtSeconds * 1000, 'the mark carries the ORIGINAL send time, as an offset-aware ISO instant');
+  assert.equal(Date.parse(match[1]), sentAtSeconds * 1000, 'the mark carries the ORIGINAL send time, as an offset-aware ISO instant');
 }
 
 describe('message context end to end: built charness, fake Bot API, fake speech engine, fake agent', () => {
@@ -250,7 +250,7 @@ describe('message context end to end: built charness, fake Bot API, fake speech 
   it('a forwarded text reaches the agent marked: who first wrote it and when, ahead of the text', async () => {
     fakeTelegram.pushOperatorMessage(topicThreadId, forwardedAlertText, { forwardOrigin: channelOrigin });
     const prompt = await waitForAgentPrompt(forwardedAlertText);
-    assertForwardedMarkLeads(prompt, 'channel Ops Alerts', originalSentAtSeconds, forwardedAlertText);
+    assertForwardedMarkLeads(prompt, 'channel "Ops Alerts"', originalSentAtSeconds, forwardedAlertText);
     assert.ok(!prompt.text.includes('[Replying to an earlier message'), 'a forward that was not a reply carries no reply quote');
   });
 
@@ -258,7 +258,7 @@ describe('message context end to end: built charness, fake Bot API, fake speech 
     const voiceMessageId = fakeTelegram.pushOperatorVoice(topicThreadId, voiceFileId, voiceDurationSeconds, { forwardOrigin: personOrigin });
     await topic.waitForMessage('the transcript echo', (message) => message.message_id > voiceMessageId && message.text === `🎤 ${spokenTranscripts[2]}`);
     const prompt = await waitForAgentPrompt(spokenTranscripts[2]);
-    assertForwardedMarkLeads(prompt, 'user Alice (@alice)', originalSentAtSeconds, spokenTranscripts[2]);
+    assertForwardedMarkLeads(prompt, 'user "Alice" (@alice)', originalSentAtSeconds, spokenTranscripts[2]);
   });
 
   it('a burst of two forwarded texts and the operator\'s own words: each forwarded one is marked with its own origin, the own words are not', async () => {
@@ -269,8 +269,8 @@ describe('message context end to end: built charness, fake Bot API, fake speech 
     const second = await waitForAgentPrompt(burstSecondText);
     const own = await waitForAgentPrompt(ownBurstText);
 
-    assertForwardedMarkLeads(first, 'hidden user Jane Doe', burstFirstSentAtSeconds, burstFirstText);
-    assertForwardedMarkLeads(second, 'chat Team room', burstSecondSentAtSeconds, burstSecondText);
+    assertForwardedMarkLeads(first, 'hidden user "Jane Doe"', burstFirstSentAtSeconds, burstFirstText);
+    assertForwardedMarkLeads(second, 'chat "Team room" (signed "Chief")', burstSecondSentAtSeconds, burstSecondText);
     assert.ok(!first.text.includes('Team room') && !second.text.includes('Jane Doe'), 'each forwarded part carries its own origin only');
     assert.ok(!own.text.includes('[Forwarded message'), `the operator's own words carry no mark in:\n${own.text}`);
     assert.ok(own.readAt >= second.readAt && second.readAt >= first.readAt, 'the parts reach the agent in the order they were sent');
