@@ -25,8 +25,9 @@ export function escapeHtmlText(text: string): string {
 /**
  * @name AgentFrame
  * @description A text of the agent as the two forms it can go out in: `html` for `parse_mode: 'HTML'`, and `plain` — the source
- * text, no markup — for the send or edit Telegram falls back to when it refuses the markup. Made together so no caller can send
- * the one without the other.
+ * text, no markup — for the send or edit Telegram falls back to when it refuses the markup. Used where the text is HELD before
+ * it is sent (the thinking coalescer keeps its pending frame as one value, so the twin cannot be lost on the way); the sites
+ * that render and send in one step pair `renderAgentHtml(text)` with `text` by hand.
  */
 export interface AgentFrame {
   html: string;

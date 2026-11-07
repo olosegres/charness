@@ -228,7 +228,7 @@ import {
 import { formatPinnedStatus } from './pinnedStatus';
 import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
 import { StartupPromptBuffer, type BufferedPromptSettled } from './startupPromptBuffer';
-import { renderAgentFrame, renderAgentHtml } from './connectors/telegram/renderAgentHtml';
+import { renderAgentFrame, renderAgentHtml, type AgentFrame } from './connectors/telegram/renderAgentHtml';
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
 import { unpinMessagesReportingRetryable } from './connectors/telegram/unpinMessages';
@@ -1635,10 +1635,8 @@ interface StatusCoalesceState {
  * {@link StatusCoalesceState} but for the dedicated thinking message id).
  */
 interface ThinkingCoalesceState {
-  /** Latest rendered thinking-frame HTML not yet sent. `null` = nothing pending. */
-  pendingHtml: string | null;
-  /** The source text `pendingHtml` was rendered from: its plain twin, for a refusal of the markup. */
-  pendingPlain: string | null;
+  /** Latest thinking frame not yet sent — its HTML and its plain twin as ONE value. `null` = nothing pending. */
+  pending: AgentFrame | null;
   /** A `flushThinkingCoalescer` loop is currently running. */
   inFlight: boolean;
   /** Last frame that actually reached Telegram — skip an identical re-send. */
@@ -3078,7 +3076,7 @@ function getThinkingCoalesceState(key: SessionKey): ThinkingCoalesceState {
   const k = keyToString(key);
   let s = thinkingCoalescers.get(k);
   if (!s) {
-    s = { pendingHtml: null, pendingPlain: null, inFlight: false, lastSentHtml: null, detachAfterDrain: false };
+    s = { pending: null, inFlight: false, lastSentHtml: null, detachAfterDrain: false };
     thinkingCoalescers.set(k, s);
   }
   return s;
@@ -3096,8 +3094,7 @@ function clearThinkingMessage(key: SessionKey): void {
   const s = getThreadMessageState(key);
   const coalescer = thinkingCoalescers.get(keyToString(key));
   if (coalescer) {
-    coalescer.pendingHtml = null;
-    coalescer.pendingPlain = null;
+    coalescer.pending = null;
     coalescer.lastSentHtml = null;
     coalescer.detachAfterDrain = false;
   }
@@ -11763,9 +11760,7 @@ function finishThinkingMessage(key: SessionKey): void {
  */
 function queueThinkingFrame(key: SessionKey, frameText: string, isTerminal: boolean): void {
   const c = getThinkingCoalesceState(key);
-  const frame = renderAgentFrame(frameText);
-  c.pendingHtml = frame.html;
-  c.pendingPlain = frame.plain;
+  c.pending = renderAgentFrame(frameText);
   if (isTerminal) c.detachAfterDrain = true;
   if (!c.inFlight) void flushThinkingCoalescer(key);
 }
@@ -11783,14 +11778,12 @@ async function flushThinkingCoalescer(key: SessionKey): Promise<void> {
   if (c.inFlight) return;
   c.inFlight = true;
   try {
-    while (c.pendingHtml !== null) {
-      const html = c.pendingHtml;
-      const plain = c.pendingPlain ?? html;
-      c.pendingHtml = null;
-      c.pendingPlain = null;
-      if (html === c.lastSentHtml) continue;
-      const sent = await sendThinkingFrame(key, html, plain);
-      if (sent) c.lastSentHtml = html;
+    while (c.pending !== null) {
+      const frame = c.pending;
+      c.pending = null;
+      if (frame.html === c.lastSentHtml) continue;
+      const sent = await sendThinkingFrame(key, frame);
+      if (sent) c.lastSentHtml = frame.html;
     }
     if (c.detachAfterDrain) {
       c.detachAfterDrain = false;
@@ -11807,12 +11800,12 @@ async function flushThinkingCoalescer(key: SessionKey): Promise<void> {
  * are tail-trimmed to fit) with its source text as the plain twin that goes out
  * if Telegram refuses the markup. Returns `true` when the frame reached Telegram.
  */
-async function sendThinkingFrame(key: SessionKey, renderedHtml: string, plainText: string): Promise<boolean> {
+async function sendThinkingFrame(key: SessionKey, frame: AgentFrame): Promise<boolean> {
   const msgState = getThreadMessageState(key);
   try {
     if (msgState.thinkingMessageId !== null) {
       const editId = msgState.thinkingMessageId;
-      const ok = await editThreadMessage(key, editId, renderedHtml, { parse_mode: 'HTML' }, plainText);
+      const ok = await editThreadMessage(key, editId, frame.html, { parse_mode: 'HTML' }, frame.plain);
       // A clear (session end / takeover) may have nulled the id mid-edit — only
       // treat the edit as live if the id still points at the message we edited.
       if (ok && msgState.thinkingMessageId === editId) return true;
@@ -11824,7 +11817,7 @@ async function sendThinkingFrame(key: SessionKey, renderedHtml: string, plainTex
     // just-created message instead of resurrecting it as an orphan under a
     // "session ended" / question UI (the leftover-frame guard).
     const generationAtStart = msgState.thinkingFrameGeneration;
-    const id = await replyChunkWithFallback(key, renderedHtml, plainText);
+    const id = await replyChunkWithFallback(key, frame.html, frame.plain);
     if (id === null) return false;
     if (msgState.thinkingFrameGeneration !== generationAtStart) {
       await deleteThreadMessage(key, id);
