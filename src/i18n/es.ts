@@ -1202,6 +1202,7 @@ export const esDict: Record<string, string> = {
   'runners.cpuLoad': 'carga {load}',
   'runners.jobsLine': 'trabajos: {running} en curso, {queued} en cola · proyectos: {projects}',
   'runners.copiesLine': 'copias de proyectos: {count} · {size}',
+  'runners.diskLowNote': 'BAJO — el runner mantiene {minFree} libres',
   'runners.pueueMissing': 'Falta Pueue en este runner',
   'runners.jobToolsLine': 'los trabajos se ejecutan con: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'no está (un trabajo que lo llame falla)',

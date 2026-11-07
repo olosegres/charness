@@ -1208,6 +1208,7 @@ export const ukDict: Record<string, string> = {
   'runners.cpuLoad': 'навантаження {load}',
   'runners.jobsLine': 'завдання: {running} виконуються, {queued} у черзі · проєктів: {projects}',
   'runners.copiesLine': 'копії проєктів: {count} · {size}',
+  'runners.diskLowNote': 'МАЛО — раннер тримає вільними {minFree}',
   'runners.pueueMissing': 'На цьому раннері немає Pueue',
   'runners.jobToolsLine': 'завдання працюють із: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'немає (завдання, якому він потрібен, впаде)',

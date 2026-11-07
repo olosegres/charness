@@ -364,7 +364,7 @@ One file per OS user, shared by every charness instance of that user (a Telegram
 | `workDir` | Where the runner keeps project copies, job logs and result files: an absolute path on the runner, or `~/…`. Created when missing. |
 | `pueue` | Optional `bin` / `config` when Pueue is not on the runner's `PATH` or uses a non-default config. |
 | `groups` | Optional Pueue groups and how many jobs each runs at once (`default` always exists). A job joins one with `--group`; two jobs of one *project* never run at the same time whatever the groups say. |
-| `minFreeGb` | Optional. The free space the runner keeps on its work disk, in GB; the default is the smaller of 60 GB and 15 % of the disk. `0` turns the upkeep and the refusal off. See [Queue, limits, cleanup](#queue-limits-cleanup). |
+| `minFreeGb` | Optional. The free space the runner keeps on its work disk, in GB; the default is the smaller of 60 GB and 15 % of the disk. `0` turns the free-space upkeep (and the refusal of a submit on a full disk) off; unused copies still go after `copyMaxIdleDays`. See [Queue, limits, cleanup](#queue-limits-cleanup). |
 | `copyMaxIdleDays` | Optional. Days a project copy may stay unused before it is removed (default 3). |
 
 A paired runner takes the same two fields from its entry in the hub's `paired.json` (edit it by hand; `charness runners` has no command for them).
@@ -498,11 +498,21 @@ result files on the runner are removed after 3 days.
 **The runner's disk keeps itself free.** A project copy is a whole checkout with its build output (an iOS build alone is tens of GB), so copies of finished
 tasks pile up. On every submit (and when `runners` probes it) the runner removes a project copy that was not used for 3 days (`copyMaxIdleDays`), and while the
 disk of its work dir has less free space than it keeps (the smaller of 60 GB and 15 % of the disk; `minFreeGb`) it removes the least recently used copies one by
-one until it has. Never removed: a copy whose project lock is held by a live job, a copy with a queued, running or just-submitted job, and the copy of the job being
-submitted. Each removal is one line of the submit's output (`runner mac: removed the project copy app-1a2b3c (freed 41 GB, the disk was short of free space)`); the result
+one until it has. Never removed: a copy whose project lock is held by a live job, a copy an `exec` is running in, a copy with a queued, running or just-submitted job (a first
+upload of a big project counts as long as files keep arriving), a copy whose job ended within the last hour (its result files are about to be fetched), and the copy of the job being
+submitted. A copy's «last use» is its last activity: a submit, an `exec` (start and end) or the end of one of its jobs. Each removal is one line of the submit's output (`runner mac: removed the project copy app-1a2b3c (freed 41 GB, the disk was short of free space)`); the result
 files of a finished job go with its copy. If the disk is still short after that, the submit fails at once (exit 125) instead of a build failing half-way with «No space left on
 device»: `runner mac: only 8 GB free on the work disk, the runner needs 60 GB; biggest project copies: app-1a2b3c 41 GB, …; free space with `charness remote-run clean <slug>` …`.
-`runners` shows the free space, a **LOW** mark under the target, and how many project copies the runner keeps and what they take.
+`runners` (and the bot's `/runners`) shows the free space, a **LOW** mark under the target, and how many project copies the runner keeps and what they take (sizes are measured in the
+background, and a copy again only after it was used, so a figure can lag: `~` / «so far» while some are not measured yet).
+
+If a submit has to remove copies first it can take minutes: when the runner's last probe found its disk short, the submit says so before it starts, and a preparation that runs past 15 minutes
+says to submit again (the runner finishes the removal by itself). Several prunes never work at once: the one that starts later waits for the one at it (the probe's own, started in the
+background, just leaves the work to it).
+
+**A Mac's disk may not give the space back.** On APFS, `df` leaves out *purgeable* space, and with Time Machine local snapshots a removed project copy frees nothing until the snapshots are thinned
+(`tmutil listlocalsnapshots /` lists them, `tmutil thinlocalsnapshots /` thins them; or turn Time Machine's local snapshots off on that Mac). When a removal gives next to nothing back from a copy measured much
+bigger, the runner stops removing further copies (it would empty itself for nothing), says so, and the refusal names this cause.
 
 `kill` sends SIGTERM to the job's whole process group and SIGKILL after 10 s. A process that leaves the group on purpose (`setsid`,
 as a Gradle daemon or the adb server do) survives by design — it is the runner's long-lived helper, not the job's.

@@ -134,17 +134,26 @@ label (`check_task_belongs_to_job`: `pueue status --json label=rr-<job>`).
 **Prune** (`prune_work`; on every submit in `prepare`, and `prune` itself) removes jobs older than 3 days that ended (an exit file, no task, or — for one an earlier script SIGKILLed unrecorded —
 a process that is gone), stage folders older than a day **unless their job is
 still queued** (a job can wait behind a busy group for days), lease/probe scratch state, and project copies — two rules, both skipping a copy that is IN USE
-(`check_copy_is_busy`: its lock is held by a live job — a stale lock is not —, or a job folder of it has no exit and either waits/runs (a task, no dead process) or is younger than 30 minutes
-with no task yet, i.e. a submit still sending its files) and the copy of the job being submitted (`prepare`'s slug):
+(`check_copy_dir_is_busy`: its lock is held by a live job — a stale lock is not —; an `exec` runs in it (`exec.<pid>`, written by `cmd_exec` before it looks at the copy, removed by its exit hook, which also
+touches `used`; a dead pid's marker is cleared); a job of it waits or runs (a task, no dead process); a job of it ended less than 60 minutes ago (`result_keep_min`: its result files are about to be
+fetched); or a job of it is being submitted — no task yet, and its job folder or its `stage/<job>` touched (ctime: rsync keeps the source mtimes) less than 30 minutes ago, because a first upload of a
+big project is quiet in the job folder for as long as it takes) and the copy of the job being submitted (`prepare`'s slug). `used` means last ACTIVITY: `prepare`, `exec` (start and end), `finish_job`, `finish_killed_job`:
 - **by age**: unused (`p/<slug>/used` older than) 3 days — `copyMaxIdleDays` of the runner's config, `REMOTE_RUN_COPY_MAX_IDLE_DAYS` on the script;
 - **by free space**: while `df -Pk` of the work dir says less is free than the target — the smaller of 60 GB and 15 % of the disk, `minFreeGb` / `REMOTE_RUN_MIN_FREE_GB` (0 = off) — the copy with the oldest `used` mark goes first
   (`prepare` touches it, so does `exec`), then the next, until the target is met or only protected copies are left.
-A removal moves the copy to `p/.trash-<slug>-<pid>` with one rename (a submit that meets the name afterwards makes a copy of its own; a cut-off removal is finished by the next prune), makes the tree writable (`chmod -R u+rwX`:
-CocoaPods' xcframeworks are read-only folders that stop `rm`), removes it, and prints `removed=<slug> freed_kb=<n> why=idle|space` (freed = the change of free space across it; `stuck=<slug>` when it would not go) —
-`submit.ts` shows each as one line. `prepare` ends with **exit 28** and one line on stderr when the disk is still short after the prune (free, target, the biggest copies from their `size-kb`, the way out); it takes back the job folder and stage it made, and a first-ever copy of the project with them.
+A removal moves the copy to `p/.trash-<slug>-<pid>` with one rename (a submit that meets the name afterwards makes a copy of its own; a cut-off removal is finished by the next prune — not while the pid in
+the name lives, nor while the folder holds something in use), and asks the busy question AGAIN of the moved folder (the check that chose the copy and the rename are two steps, and a `prepare` can land between them):
+a copy that turned out in use is put back (`remove_project_copy` returns 3; when its name was taken meanwhile it stays under its trash name). Then it makes the tree writable (`chmod -R u+rwX`:
+CocoaPods' xcframeworks are read-only folders that stop `rm`), removes it, and prints `removed=<slug> freed_kb=<n> why=idle|space` (freed = the change of free space across it; `stuck=<slug>` when it would not go; nothing for
+a copy another prune took first or one that turned out in use) —
+`submit.ts` shows each as one line. The free-space loop stops, with `stopped=<slug> freed_kb=<n> size_kb=<n>`, after a removal that freed under 1 GB from a copy whose written size is over 1 GB (`no_progress_freed_kb`:
+APFS keeps the space of deleted files while Time Machine snapshots hold it; removing every copy would still not help). The copy-removal step of `prune_work` is one at a time per work dir by an advisory marker
+`tmp/prune.<pid>` (live pid, younger than 2 h): a submit's prune waits for the other (up to `prune_wait_sec`, 10 min), the probe's detached `prune` skips the step (`prune_work … skip`). `prepare` dies with «the project copy was
+being removed» when its job folder is gone after the prune. `prepare` ends with **exit 28** and one line on stderr when the disk is still short after the prune (free, target, the biggest copies from their `size-kb`, the way out); it takes back the job folder and stage it made, and a first-ever copy of the project with them.
 `prepare` therefore gets a 15-minute call timeout (`prepareCallTimeoutMs`): removing copies of tens of GB takes minutes.
+The refusal measures nothing: it names the copies that have a written `size-kb` and counts the others («and N not measured yet»; `prepare` starts `measure-copies` just before it, so the next submit has sizes).
 `probe` never prunes inline (it must answer in seconds, or the runner would read as offline): on a short disk it starts `prune` **detached** (`start_detached_run`, one at a time by a pid file in `tmp/`), and it reports `disk_total_mb`, `disk_min_free_mb`,
-`copies_count`, `copies_size_mb` and `copies_unmeasured` — the sizes are the `p/<slug>/size-kb` figures that the detached `measure-copies` (started by `prepare` and `probe` when a figure is missing or older than an hour; `du -sk` of a copy takes long) wrote; `runners` and the bot's `/runners` show count and total.
+`copies_count`, `copies_size_mb` and `copies_unmeasured` — the sizes are the `p/<slug>/size-kb` figures that the detached `measure-copies` (started by `prepare` and `probe` when a figure is missing or older than the copy's `used` mark — a copy is measured again only after it was used, never by the clock; `du -sk` of a copy takes long) wrote; `runners` and the bot's `/runners` show count and total.
 
 **The project lock** is a file created with the shell's own exclusive create (`set -C`, `open(O_EXCL)`) holding the holder's pid and job — never
 `mkdir`: the uutils coreutils that current Ubuntu installs as `/usr/bin/mkdir` let simultaneous `mkdir` of one path all succeed (265 of 1200 races with five

@@ -1202,6 +1202,7 @@ export const uzDict: Record<string, string> = {
   'runners.cpuLoad': 'yuklama {load}',
   'runners.jobsLine': 'ishlar: {running} bajarilmoqda, {queued} navbatda · loyihalar: {projects}',
   'runners.copiesLine': 'loyiha nusxalari: {count} · {size}',
+  'runners.diskLowNote': 'KAM — runner {minFree} bo‘sh joy saqlaydi',
   'runners.pueueMissing': 'Bu runnerda Pueue yo‘q',
   'runners.jobToolsLine': 'ishlar shular bilan bajariladi: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'yo‘q (uni chaqiradigan ish xato bilan tugaydi)',

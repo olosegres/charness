@@ -199,6 +199,40 @@ describe('stageJob and what the runner says to prepare', () => {
     ]);
   });
 
+  it('a disk the last probe found under its target is announced BEFORE prepare (which says nothing until it is done): the figures and what is about to happen', async () => {
+    const cacheDir = path.join(workRoot, 'cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, 'box1.probe.json'), JSON.stringify({ seenAtMs: Date.now(), text: 'os=Darwin\ndisk_free_mb=8192\ndisk_min_free_mb=61440\n' }));
+    const events: string[] = [];
+    const { client } = createRecordingClient();
+    const answering: RunnerClient = { ...client, call: async () => { events.push('prepare'); return preparedAnswer({ exitCode: 1, stderr: 'remote-run-runner: boom\n' }); } };
+    const project = path.join(workRoot, 'project');
+    fs.mkdirSync(project);
+    git(project, 'init', '-q', '-b', 'main');
+    await assert.rejects(stageJob({ client: answering, project: getProjectContext(project), command: 'true', options: { ...withGitOptions, isWithGit: false }, metaDirectory: fs.mkdtempSync(path.join(workRoot, 'meta-')), say: (line) => events.push(line) }));
+    assert.deepEqual(events, ['runner box1: 8 GB free, it keeps 60 GB — removing the least recently used project copies first (this can take minutes)', 'prepare']);
+  });
+
+  it('with no probe on record, or a disk at its target, nothing is added before prepare', async () => {
+    const { said } = await stageWithPrepareAnswer(preparedAnswer({ exitCode: 1, stderr: 'remote-run-runner: boom\n' }));
+    assert.deepEqual(said, []);
+  });
+
+  it('a prune that stopped because a removal gave nothing back says so — also when the submit then goes on', async () => {
+    const { said } = await stageWithPrepareAnswer(preparedAnswer({ stdout: 'removed=app-1 freed_kb=0 why=space\nstopped=app-1 freed_kb=0 size_kb=31457280\n' }));
+    assert.deepEqual(said, [
+      'runner box1: removed the project copy app-1 (freed 0 GB, the disk was short of free space)',
+      "runner box1: removing the project copy app-1 gave back 0 GB of its 30 GB — the disk's free space is not following (on a Mac: Time Machine local snapshots or purgeable space, see docs/remote-run.md), so it stopped removing more copies",
+    ]);
+  });
+
+  it('a prepare that timed out says the runner goes on by itself — not «prepare failed»', async () => {
+    const { error } = await stageWithPrepareAnswer(preparedAnswer({ exitCode: null, isTimedOut: true, stderr: '' }));
+    assert.ok(error instanceof RemoteRunError);
+    assert.match(error.message, /^runner "box1": preparing the job took longer than 15 minutes .* submit again in a few minutes$/);
+    assert.doesNotMatch(error.message, /prepare failed/);
+  });
+
   it('prepare gets the long call timeout: removing project copies of tens of GB takes minutes', async () => {
     const { prepareTimeoutMs } = await stageWithPrepareAnswer(preparedAnswer({ exitCode: 1, stderr: 'remote-run-runner: boom\n' }));
     assert.equal(prepareTimeoutMs, prepareCallTimeoutMs);

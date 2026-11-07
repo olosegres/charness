@@ -11,8 +11,9 @@ import { recordHeldBackFiles } from './heldBackNotice';
 import { compilePathPatterns, createPathMatcher, getPathPatternSearchRoots } from './pathPatterns';
 import { planProjectSend, type ProjectContext } from './project';
 import { RemoteRunError } from './remoteRunError';
-import { diskTooLowRunnerExitCode, formatPrunedCopyLine, parsePrunedCopies } from './pruneReport';
+import { describePrepareTimeout, diskTooLowRunnerExitCode, formatPrunedCopyLine, formatPruneHeadsUp, formatRemovalStopLine, parsePrunedCopies, parseRemovalStop } from './pruneReport';
 import { runRsync } from './rsync';
+import { readLastProbe } from './runners';
 import { describeCallFailure, describeRunnerRefusal, prepareCallTimeoutMs, type RunnerClient } from './runnerClient';
 import { defaultPueueGroup, formatGroupLimits } from './runnersConfig';
 import { buildRsyncGitArgs, buildRsyncMetaArgs, buildRsyncSendArgs, formatHeldBackNotice, formatManifest, formatNulSeparatedList, formatSentOnRequestNotice } from './sendPlan';
@@ -122,9 +123,15 @@ export async function stageJob(params: {
     ...(options.needs === 'ios' ? { 'needs-ios': '' } : {}),
   });
 
-  // The runner prunes before it accepts the job, which can take minutes (a project copy is tens of GB): what it removed is said, also when it then refuses the job.
+  // The runner prunes before it accepts the job, which can take minutes (a project copy is tens of GB) and says nothing until it is done: when its probe of a moment ago found the disk short, say what is
+  // about to happen; what it removed is said afterwards, also when it then refuses the job.
+  const headsUp = formatPruneHeadsUp(runner.name, readLastProbe(client.cacheDir, runner.name, runner.paired?.pairedAtMs)?.probe ?? null);
+  if (headsUp !== null) params.say(headsUp);
   const preparing = await client.call('prepare', [project.slug, jobId, formatGroupLimits(runner.groups)], { timeoutMs: prepareCallTimeoutMs });
   for (const removed of parsePrunedCopies(preparing.stdout)) params.say(formatPrunedCopyLine(runner.name, removed));
+  const removalStop = parseRemovalStop(preparing.stdout);
+  if (removalStop !== null) params.say(formatRemovalStopLine(runner.name, removalStop));
+  if (preparing.isTimedOut) throw new RemoteRunError(describePrepareTimeout(runner.name, prepareCallTimeoutMs));
   if (preparing.exitCode === diskTooLowRunnerExitCode) throw new RemoteRunError(`runner "${runner.name}": ${describeRunnerRefusal(preparing.stderr, 'its disk is too full for a new job')}`);
   if (preparing.exitCode !== 0) throw describeCallFailure(runner.name, 'prepare', preparing);
   const workDirLine = preparing.stdout.split('\n').find((line) => line.startsWith('work='));

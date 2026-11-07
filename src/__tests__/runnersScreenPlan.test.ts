@@ -182,6 +182,27 @@ describe('runnersScreenPlan: the list', () => {
     assert.ok(lines.indexOf('  project copies: 2 · 2 GB') === lines.findIndex((line) => line.startsWith('  jobs:')) + 1, 'right under the jobs line');
   });
 
+  it('a disk under what the runner keeps free is marked LOW on the hardware line, like the CLI\'s `runners` does — also on the «as it was then» line of a machine that is offline; a disk at its target, a target of 0 and a runner that did not say show nothing', () => {
+    const entryWith = (lines: string[], overrides: Partial<RunnerScreenEntry> = {}): RunnerScreenEntry => createEntry({ probe: parseProbeOutput([probeText, ...lines].join('\n')), ...overrides });
+    const hardwareLineOf = (entry: RunnerScreenEntry): string => buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text.split('\n').find((line) => line.includes('RAM 32 GB')) ?? '';
+    assert.match(hardwareLineOf(entryWith(['disk_min_free_mb=235520'])), /disk 210 GB free — LOW — the runner wants 230 GB kept free$/);
+    assert.match(hardwareLineOf(entryWith(['disk_min_free_mb=235520'], { isOnline: false })), /as it was then: .* disk 210 GB free — LOW — the runner wants 230 GB kept free$/);
+    assert.doesNotMatch(hardwareLineOf(entryWith(['disk_min_free_mb=61440'])), /LOW/);
+    assert.doesNotMatch(hardwareLineOf(entryWith(['disk_min_free_mb=0'])), /LOW/);
+    assert.doesNotMatch(hardwareLineOf(createEntry()), /LOW/);
+  });
+
+  it('in every language the LOW mark names the amount the runner keeps free and leaves no placeholder behind', () => {
+    for (const locale of localeCodes) {
+      runWithLocale(locale, () => {
+        const text = buildRunnersScreen({ revision, entries: [createEntry({ probe: parseProbeOutput(`${probeText}\ndisk_min_free_mb=235520`) })], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+        const line = text.split('\n').find((candidate) => candidate.includes('230 GB'));
+        assert.ok(line !== undefined, `${locale}: ${text}`);
+        assert.doesNotMatch(line, /\{[a-z]+\}/, `${locale}: no placeholder is left`);
+      });
+    }
+  });
+
   it('in every language the project copies line carries the count and the size and leaves no placeholder behind', () => {
     for (const locale of localeCodes) {
       runWithLocale(locale, () => {

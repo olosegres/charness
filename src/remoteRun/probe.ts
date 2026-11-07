@@ -207,9 +207,14 @@ function formatKeepsAwake(probe: RunnerProbe): string[] {
   return [`  keeps awake: yes (${describeKeepAwakeMethod(probe.keepsAwake.method)})`];
 }
 
-/** ` — LOW, the runner wants 60 GB kept free` when the work disk is under what the runner wants kept free (it frees itself by removing unused project copies, and refuses a job it cannot make room for). */
+/** @description Is the work disk under what the runner wants kept free (it frees itself by removing unused project copies, and refuses a job it cannot make room for)? Not when it wants none (`0`) or did not say. */
+export function checkIsDiskLow(probe: RunnerProbe): boolean {
+  return probe.diskFreeMb !== null && probe.diskMinFreeMb !== null && probe.diskMinFreeMb > 0 && probe.diskFreeMb < probe.diskMinFreeMb;
+}
+
+/** ` — LOW, the runner wants 60 GB kept free` (the bot's `/runners` says the same, localized: `runners.diskLowNote`). */
 function formatLowDisk(probe: RunnerProbe): string {
-  if (probe.diskFreeMb === null || probe.diskMinFreeMb === null || probe.diskMinFreeMb <= 0 || probe.diskFreeMb >= probe.diskMinFreeMb) return '';
+  if (!checkIsDiskLow(probe) || probe.diskMinFreeMb === null) return '';
   return ` — LOW, the runner wants ${formatGigabytes(probe.diskMinFreeMb)} kept free`;
 }
 

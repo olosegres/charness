@@ -1,9 +1,9 @@
-import { formatGigabytes } from './probe';
+import { checkIsDiskLow, formatGigabytes, type RunnerProbe } from './probe';
 
 /**
  * @description What `runner.sh prepare` says about the project copies its prune removed: one `removed=<slug> freed_kb=<n> why=<idle|space>` line per copy
- * (`stuck=<slug>` for one that would not go), shown to the user as one short line each. The refusal of a submit on a disk that is still too full is the
- * runner's own words under {@link diskTooLowRunnerExitCode}.
+ * (`stuck=<slug>` for one that would not go), shown to the user as one short line each; `stopped=<slug> freed_kb=<n> size_kb=<n>` when a removal gave next to nothing back and the prune
+ * stopped. The refusal of a submit on a disk that is still too full is the runner's own words under {@link diskTooLowRunnerExitCode}.
  */
 
 /** The exit code `runner.sh prepare` ends with when the work disk is still short of free space after the prune (`low_disk_exit_code` there: the two are one number; 28 is ENOSPC). */
@@ -44,4 +44,43 @@ export function formatPrunedCopyLine(runnerName: string, copy: PrunedCopy): stri
   const why = copy.reason === 'idle' ? 'unused for days' : 'the disk was short of free space';
   const freed = copy.freedMb === null ? '' : `freed ${formatGigabytes(copy.freedMb)}, `;
   return `runner ${runnerName}: removed the project copy ${copy.slug} (${freed}${why})`;
+}
+
+const stoppedLinePattern = /^stopped=(\S+) freed_kb=(\d+) size_kb=(\d+)$/;
+
+/** @name RemovalStop @description The prune stopped after removing `slug` because the disk's free space did not grow by what the copy took: `freedMb` of `sizeMb`. */
+export interface RemovalStop {
+  slug: string;
+  freedMb: number;
+  sizeMb: number;
+}
+
+/** @description The `stopped=` line of a `prepare` answer, `null` when the prune did not stop that way. */
+export function parseRemovalStop(prepareOutput: string): RemovalStop | null {
+  for (const line of prepareOutput.split('\n')) {
+    const stopped = stoppedLinePattern.exec(line.trim());
+    if (stopped !== null) return { slug: stopped[1], freedMb: Number(stopped[2]) / kilobytesPerMegabyte, sizeMb: Number(stopped[3]) / kilobytesPerMegabyte };
+  }
+  return null;
+}
+
+/** @description `runner mac: removing the project copy app-1 gave back 0 GB of its 30 GB …` — why the runner did not remove more, and the Mac cause it points at. */
+export function formatRemovalStopLine(runnerName: string, stop: RemovalStop): string {
+  return `runner ${runnerName}: removing the project copy ${stop.slug} gave back ${formatGigabytes(stop.freedMb)} of its ${formatGigabytes(stop.sizeMb)} — the disk's free space is not following (on a Mac: Time Machine local snapshots or purgeable space, see docs/remote-run.md), so it stopped removing more copies`;
+}
+
+const millisecondsPerMinute = 60 * 1000;
+
+/**
+ * @description The line before a `prepare` that is going to be slow: the runner's disk (as its probe a moment ago found it) is under what it keeps free, so it will remove old project copies first —
+ * minutes of silence on a big disk. `null` when the disk is fine or nothing is known (a submit says nothing extra then).
+ */
+export function formatPruneHeadsUp(runnerName: string, probe: RunnerProbe | null): string | null {
+  if (probe === null || !checkIsDiskLow(probe) || probe.diskMinFreeMb === null) return null;
+  return `runner ${runnerName}: ${formatGigabytes(probe.diskFreeMb)} free, it keeps ${formatGigabytes(probe.diskMinFreeMb)} — removing the least recently used project copies first (this can take minutes)`;
+}
+
+/** @description What a `prepare` that ran out of its time says: the runner goes on with the removal by itself, so trying again soon is the way (not a failure of the runner). */
+export function describePrepareTimeout(runnerName: string, timeoutMs: number): string {
+  return `runner "${runnerName}": preparing the job took longer than ${Math.round(timeoutMs / millisecondsPerMinute)} minutes (it removes old project copies first, which is slow on a big disk) — the runner goes on with that by itself: submit again in a few minutes`;
 }

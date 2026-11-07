@@ -1196,6 +1196,7 @@ export const jaDict: Record<string, string> = {
   'runners.cpuLoad': '負荷 {load}',
   'runners.jobsLine': 'ジョブ: 実行中 {running}、待機中 {queued} · プロジェクト: {projects}',
   'runners.copiesLine': 'プロジェクトのコピー: {count} · {size}',
+  'runners.diskLowNote': '不足 — このランナーは {minFree} の空きを保ちます',
   'runners.pueueMissing': 'このランナーには Pueue がありません',
   'runners.jobToolsLine': 'ジョブの実行環境: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'なし（呼び出すジョブは失敗します）',

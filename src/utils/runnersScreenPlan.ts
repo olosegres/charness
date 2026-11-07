@@ -14,7 +14,7 @@
  */
 
 import type { Translate } from '../i18n';
-import { formatGigabytes, jobToolNone, jobToolUnknown, runnerCapabilities, type RunnerProbe } from '../remoteRun/probe';
+import { checkIsDiskLow, formatGigabytes, jobToolNone, jobToolUnknown, runnerCapabilities, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner, RunnerServiceKind } from '../runners/hubRegistry';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { getCurrentServiceKind } from '../runners/runnerServiceKind';
@@ -200,6 +200,11 @@ function describeProjectCopies(probe: RunnerProbe, t: Translate): string[] {
   return [`  ${t('runners.copiesLine', { count: probe.copies.count, size })}`];
 }
 
+/** ` — LOW …` for the end of the hardware line when the work disk is under what the runner wants kept free (the same test as the CLI's `runners`); nothing otherwise. */
+function describeLowDisk(probe: RunnerProbe, t: Translate): string {
+  return checkIsDiskLow(probe) ? ` — ${t('runners.diskLowNote', { minFree: formatGigabytes(probe.diskMinFreeMb) })}` : '';
+}
+
 function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: FormatTime): string[] {
   const { runner, probe } = entry;
   const status = entry.isOnline
@@ -214,7 +219,7 @@ function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: For
   // A Mac with its lid shut is not asked: what is shown is the last snapshot, as for a machine that is offline.
   if (entry.isOnline && entry.isLidClosed !== true) {
     lines.push(
-      `  ${t('runners.hardwareLine', { cpu: describeCpu(probe, t, true), ramTotal: formatGigabytes(probe.ramTotalMb), ramFree: formatGigabytes(probe.ramFreeMb), disk: formatGigabytes(probe.diskFreeMb) })}`,
+      `  ${t('runners.hardwareLine', { cpu: describeCpu(probe, t, true), ramTotal: formatGigabytes(probe.ramTotalMb), ramFree: formatGigabytes(probe.ramFreeMb), disk: formatGigabytes(probe.diskFreeMb) })}${describeLowDisk(probe, t)}`,
       `  ${t('runners.jobsLine', { running: probe.jobsRunning, queued: probe.jobsQueued, projects: probe.jobsProjects })}${probe.pueueVersion === null ? ` · ${t('runners.pueueMissing')}` : ''}`,
       ...describeProjectCopies(probe, t),
       `  ${describeCapabilities(probe, t)}`,
@@ -222,7 +227,7 @@ function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: For
       ...describeKeepsAwake(probe, t),
     );
   } else {
-    lines.push(`  ${t('runners.hardwareOldLine', { cpu: describeCpu(probe, t, false), ramTotal: formatGigabytes(probe.ramTotalMb), disk: formatGigabytes(probe.diskFreeMb) })}`);
+    lines.push(`  ${t('runners.hardwareOldLine', { cpu: describeCpu(probe, t, false), ramTotal: formatGigabytes(probe.ramTotalMb), disk: formatGigabytes(probe.diskFreeMb) })}${describeLowDisk(probe, t)}`);
   }
   return lines;
 }
