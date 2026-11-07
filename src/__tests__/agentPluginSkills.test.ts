@@ -83,6 +83,13 @@ describe('agent-plugin', () => {
     assert.match(text, /Never arm a schedule of your own for status lines/);
   });
 
+  test('charness-manager closes a task by cleaning its runner copies — and leaves the copies of other tasks alone', () => {
+    const text = fs.readFileSync(path.join(skillsDir, 'charness-manager', 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    assert.match(text, /run `charness remote-run clean` in the task's project folder \(or `clean <slug>`\) for every copy it made/);
+    assert.match(text, /never delete other tasks' copies by hand/);
+    assert.equal(text.split('charness remote-run clean').length - 1, 1, 'said once: the skill is loaded text too');
+  });
+
   test('both delegate skills name the resume log files events-2.jsonl, … — the bot reads the newest events*.jsonl for its status line, and no other name', () => {
     for (const folder of ['charness-delegate-claude', 'charness-delegate-opencode']) {
       const text = fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');

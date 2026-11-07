@@ -1054,3 +1054,160 @@ describe('a caller that hangs up while `prepare` removes copies', () => {
     assert.deepEqual(listCopies(), ['newest-cccccccccc', slug].sort(), 'both copies that had to go are gone');
   });
 });
+
+describe('`clean`: the owner of a task removes its project copy on request', () => {
+  const clean = (copySlug: string, env: NodeJS.ProcessEnv = {}): { status: number | null; stdout: string; stderr: string } => runScript(['clean', workDir, copySlug], env);
+
+  it('removes the named copy only — read-only folders included — and says what it freed; the other copies are untouched', () => {
+    const copyDir = makeCopy('task-aaaaaaaaaa', 41, 1 * hourMs);
+    writeFile(copyDir, 'tree/ios/Pods/Core.xcframework/Headers/a.h');
+    fs.chmodSync(path.join(copyDir, 'tree/ios/Pods/Core.xcframework/Headers'), 0o555);
+    fs.chmodSync(path.join(copyDir, 'tree/ios/Pods/Core.xcframework'), 0o555);
+    makeCopy('other-bbbbbbbbbb', 30, 2 * hourMs);
+    const result = clean('task-aaaaaaaaaa');
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, `removed=task-aaaaaaaaaa freed_kb=${41 * kibPerGib} why=clean\n`);
+    assert.deepEqual(fs.readdirSync(path.join(workDir, 'p')), ['other-bbbbbbbbbb'], 'nothing is left of it, not even a moved-aside folder');
+    assert.ok(fs.existsSync(path.join(workDir, 'p', 'other-bbbbbbbbbb', 'tree/file.txt')));
+  });
+
+  it('a copy that is not there is «absent», not an error; a name that is no plain copy name is refused before anything is touched', () => {
+    makeCopy('other-bbbbbbbbbb', 1, hourMs);
+    const result = clean('never-there-aaaaaaaaaa');
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, 'absent=never-there-aaaaaaaaaa\n');
+    for (const bad of ['../other-bbbbbbbbbb', '.trash-x-1', 'a/b', '']) {
+      const refused = clean(bad);
+      assert.equal(refused.status, 125, bad);
+      assert.match(refused.stderr, /bad name/, bad);
+    }
+    assert.deepEqual(listCopies(), ['other-bbbbbbbbbb']);
+  });
+
+  describe('a copy that is in use is refused, and left exactly as it was', () => {
+    const refusalFor = (setUp: (copyDir: string) => void): string => {
+      const copyDir = makeCopy('busy-aaaaaaaaaa', 20, 1 * hourMs);
+      setUp(copyDir);
+      const result = clean('busy-aaaaaaaaaa');
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(fs.existsSync(path.join(copyDir, 'tree/file.txt')), 'nothing of it was removed');
+      assert.deepEqual(fs.readdirSync(path.join(workDir, 'p')), ['busy-aaaaaaaaaa'], 'and it was not moved aside');
+      return result.stdout.trim();
+    };
+
+    it('a job of it runs (a task and a live process)', () => {
+      assert.equal(refusalFor((copyDir) => writeJob(copyDir, 'box1-runnin', { 'task-id': '5\n', pid: `${startRunnerStandIn()}\n` })), 'busy=busy-aaaaaaaaaa kind=running job=box1-runnin');
+    });
+
+    it('a job that runs holds the project lock too: the answer names the job, not the lock', () => {
+      const pid = startRunnerStandIn();
+      assert.equal(refusalFor((copyDir) => { writeJob(copyDir, 'box1-runnin', { 'task-id': '5\n', pid: `${pid}\n` }); writeFile(copyDir, 'lock', `${pid}\nbox1-runnin\n`); }), 'busy=busy-aaaaaaaaaa kind=running job=box1-runnin');
+    });
+
+    it('a job of it waits in the queue (a task, no process yet)', () => {
+      assert.equal(refusalFor((copyDir) => writeJob(copyDir, 'box1-queued', { 'task-id': '4\n' })), 'busy=busy-aaaaaaaaaa kind=queued job=box1-queued');
+    });
+
+    it('a job of it is being submitted (no task yet, its job folder or its stage still moving)', () => {
+      assert.equal(refusalFor((copyDir) => writeJob(copyDir, 'box1-sendin', { 'meta.json': '{}' })), 'busy=busy-aaaaaaaaaa kind=submitting job=box1-sendin');
+      fs.rmSync(path.join(workDir, 'p'), { recursive: true, force: true });
+      fs.mkdirSync(path.join(workDir, 'p'));
+      assert.equal(refusalFor((copyDir) => { setAge(writeJob(copyDir, 'box1-upload', { log: '' }), 3 * hourMs); writeFile(copyDir, 'stage/box1-upload/projects/app/big-file.bin'); }), 'busy=busy-aaaaaaaaaa kind=submitting job=box1-upload');
+    });
+
+    it('an `exec` runs in it', () => {
+      assert.equal(refusalFor((copyDir) => { const pid = startRunnerStandIn(); writeFile(copyDir, `exec.${pid}`, `${pid}\n`); }), 'busy=busy-aaaaaaaaaa kind=exec job=-');
+    });
+
+    it('its project lock is held by a live job', () => {
+      assert.equal(refusalFor((copyDir) => writeFile(copyDir, 'lock', `${startRunnerStandIn()}\n${jobId}\n`)), `busy=busy-aaaaaaaaaa kind=lock job=${jobId}`);
+    });
+  });
+
+  it('a copy in use is never even MOVED aside (the rename alone would pull the folder from under a running job\'s working directory): the busy check comes before the rename, not only after it', () => {
+    const copyDir = makeCopy('busy-aaaaaaaaaa', 20, 1 * hourMs);
+    writeJob(copyDir, 'box1-runnin', { 'task-id': '5\n', pid: `${startRunnerStandIn()}\n` });
+    const renames = path.join(workRoot, 'renames.log');
+    const outcome = runShell(`mv() { echo "$*" >> ${renames}; command mv "$@"; }; cmd_clean ${workDir} busy-aaaaaaaaaa`);
+    assert.equal(outcome.stdout, 'busy=busy-aaaaaaaaaa kind=running job=box1-runnin');
+    assert.equal(fs.existsSync(renames), false, 'no rename was made');
+  });
+
+  it('what only looks like use does not stop it: a job that ENDED a moment ago (the prune keeps such a copy for its results; its owner asks), a job or a lock of a pid that went to a stranger, a dead lock', () => {
+    const copyDir = makeCopy('done-aaaaaaaaaa', 20, 1 * hourMs);
+    writeJob(copyDir, 'box1-justen', { 'task-id': '1\n', exit: '0\n' });
+    writeJob(copyDir, 'box1-crashed', { 'task-id': '2\n', pid: `${startStrangerProcess()}\n` });
+    setAge(path.join(copyDir, 'jobs', 'box1-crashed'), 2 * hourMs);
+    writeFile(copyDir, 'lock', `${getDeadPid()}\nbox1-crashed\n`);
+    const result = clean('done-aaaaaaaaaa');
+    assert.equal(result.stdout, `removed=done-aaaaaaaaaa freed_kb=${20 * kibPerGib} why=clean\n`);
+    assert.deepEqual(listCopies(), []);
+  });
+
+  it('the prune, on the contrary, still keeps a copy whose job ended a moment ago — only `clean` ignores that', () => {
+    writeJob(makeCopy('fresh-results-aaaaaaa', 30, 9 * hourMs), 'box1-justen', { 'task-id': '1\n', exit: '0\n' });
+    makeCopy('free-bbbbbbbbbb', 30, 5 * hourMs);
+    makeCopy('free-cccccccccc', 30, 3 * hourMs);
+    assert.deepEqual(parseRemovals(runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '70' }).stdout), ['free-bbbbbbbbbb', 'free-cccccccccc']);
+    assert.ok(fs.existsSync(path.join(workDir, 'p', 'fresh-results-aaaaaaa')));
+  });
+
+  it('a job that turns up between the check and the rename is found out by the second look at the moved folder: the copy goes back and the answer says why', () => {
+    makeCopy('late-aaaaaaaaaa', 5, 1 * hourMs);
+    const body = `mv() { command mv "$@"; case "$2" in */.trash-*) command mkdir -p "$2/jobs/box1-latejb"; : > "$2/jobs/box1-latejb/task-id" ;; esac; }; cmd_clean ${workDir} late-aaaaaaaaaa`;
+    const outcome = runShell(body);
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.equal(outcome.stdout, 'busy=late-aaaaaaaaaa kind=queued job=box1-latejb');
+    assert.deepEqual(fs.readdirSync(path.join(workDir, 'p')), ['late-aaaaaaaaaa'], 'put back, not removed');
+    assert.ok(fs.existsSync(path.join(workDir, 'p', 'late-aaaaaaaaaa', 'jobs', 'box1-latejb')));
+  });
+
+  it('a prune that took the copy first leaves nothing to clean: «absent», not «stuck»', () => {
+    makeCopy('raced-aaaaaaaaaa', 5, 1 * hourMs);
+    const outcome = runShell(`remove_project_copy() { return 2; }; cmd_clean ${workDir} raced-aaaaaaaaaa`);
+    assert.equal(outcome.stdout, 'absent=raced-aaaaaaaaaa');
+  });
+
+  it('one that would not go is «stuck»', () => {
+    makeCopy('stuck-aaaaaaaaaa', 5, 1 * hourMs);
+    const outcome = runShell(`remove_project_copy() { return 1; }; cmd_clean ${workDir} stuck-aaaaaaaaaa`);
+    assert.equal(outcome.stdout, 'stuck=stuck-aaaaaaaaaa');
+  });
+
+  it('it takes the copy-removal lock like the prune does — and waits for a prune that is at it (a disk that is fine does not make it leave), then removes', () => {
+    makeCopy('task-aaaaaaaaaa', 10, 1 * hourMs);
+    const lock = path.join(workDir, 'tmp', 'prune.lock');
+    writeFile(workDir, 'tmp/prune.lock', `${startRunnerStandIn()}\n`);
+    // The other prune ends after a second: its lock goes.
+    const body = `prune_poll_sec=0.1; ( sleep 1; command rm -f "${lock}" ) & started=$SECONDS; cmd_clean ${workDir} task-aaaaaaaaaa; echo waited=$((SECONDS - started))`;
+    const outcome = runShell(body, { REMOTE_RUN_MIN_FREE_GB: '1' });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.match(outcome.stdout, /^removed=task-aaaaaaaaaa freed_kb=\d+ why=clean\nwaited=[1-9]$/);
+    assert.equal(fs.existsSync(lock), false, 'and it leaves no lock of its own behind');
+  });
+
+  it('the wait for another prune is bounded: past prune_wait_sec it goes on, and the other prune\'s lock is not touched', () => {
+    makeCopy('task-aaaaaaaaaa', 10, 1 * hourMs);
+    const livePid = startRunnerStandIn();
+    writeFile(workDir, 'tmp/prune.lock', `${livePid}\n`);
+    const outcome = runShell(`prune_wait_sec=1; prune_poll_sec=0.2; cmd_clean ${workDir} task-aaaaaaaaaa`);
+    assert.match(outcome.stdout, /^removed=task-aaaaaaaaaa /);
+    assert.equal(fs.readFileSync(path.join(workDir, 'tmp', 'prune.lock'), 'utf8').trim(), `${livePid}`);
+  });
+
+  it('a caller that hangs up while it removes does not leave the removal half-done nor its lock behind (the closed pipe is no reason to die before the report line, which comes before the lock is given back)', async () => {
+    makeCopy('task-aaaaaaaaaa', 30, 1 * hourMs);
+    const child = spawn('bash', [scriptPath, 'clean', workDir, 'task-aaaaaaaaaa'], { env: getEnv({ FAKE_RM_DELAY: '0.8' }), stdio: ['ignore', 'pipe', 'ignore'] });
+    child.stdout.destroy();
+    await new Promise<void>((resolve) => { child.on('close', () => resolve()); });
+    assert.deepEqual(fs.readdirSync(path.join(workDir, 'p')), []);
+    assert.equal(fs.existsSync(path.join(workDir, 'tmp', 'prune.lock')), false, 'the copy-removal lock was given back');
+  });
+
+  it('works through the real subcommand dispatch, as the CLI calls it (the work dir first, then the slug)', () => {
+    makeCopy('task-aaaaaaaaaa', 3, hourMs);
+    const result = spawnSync('bash', [scriptPath, 'clean', workDir, 'task-aaaaaaaaaa'], { encoding: 'utf8', env: getEnv(), timeout: 30_000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^removed=task-aaaaaaaaaa /);
+  });
+});

@@ -42,6 +42,7 @@ export type RemoteRunCommand =
   | { kind: 'kill'; jobId: string }
   | { kind: 'fetch'; jobId: string }
   | { kind: 'exec'; runner: string | null; command: string }
+  | { kind: 'clean'; slug: string | null }
   | { kind: 'runners' };
 
 export type RemoteRunArgsParse = { ok: true; command: RemoteRunCommand } | { ok: false; error: string };
@@ -51,6 +52,9 @@ export const defaultTimeoutSeconds = 3 * 60 * 60;
 export const maxTimeoutSeconds = 7 * 24 * 60 * 60;
 
 const groupNamePattern = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+/** A project copy\'s name on a runner (`<basename>-<10 hex>`, see `getProjectSlug`): one safe path component, as `runner.sh` checks it too. */
+const slugPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const slugMaxLength = 80;
 const envNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const durationPartPattern = /(\d+)([hms]?)/g;
 const secondsPerUnit: Record<string, number> = { h: 3600, m: 60, s: 1, '': 1 };
@@ -103,6 +107,16 @@ function parseLogsArguments(words: readonly string[]): RemoteRunArgsParse {
   }
   const jobId = parseJobIdArgument(positional, 'logs');
   return jobId.ok ? { ok: true, command: { kind: 'logs', jobId: jobId.jobId, isFollow, tail } } : jobId;
+}
+
+/** `clean [<slug>]`: no word = the copy of the project the command is run in. */
+function parseCleanArguments(words: readonly string[]): RemoteRunArgsParse {
+  const [slug, ...extra] = words;
+  if (slug === undefined) return { ok: true, command: { kind: 'clean', slug: null } };
+  if (slug.startsWith('-')) return { ok: false, error: `unknown option for clean: ${slug} (clean takes a project copy\'s name, or nothing for the copy of this project)` };
+  if (!slugPattern.test(slug) || slug.length > slugMaxLength) return { ok: false, error: `"${slug}" is not the name of a project copy (they look like myapp-0a1b2c3d4e)` };
+  if (extra.length > 0) return { ok: false, error: `clean takes one project copy name, got extra: ${extra.join(' ')}` };
+  return { ok: true, command: { kind: 'clean', slug } };
 }
 
 function parseExecArguments(words: readonly string[]): RemoteRunArgsParse {
@@ -168,7 +182,7 @@ function applyRunOption(options: RemoteRunOptions, name: string, value: string):
 const runValueOptions: readonly string[] = ['--runner', '--needs', '--runner-wait', '--group', '--timeout', '--send'];
 
 /** The words that name a subcommand when they come first; after options they are read as the subcommand or refused (`parseOptionsBeforeSubcommand`). */
-const subcommandNames: readonly string[] = ['help', 'ls', 'runners', 'logs', 'exec', 'status', 'wait', 'kill', 'fetch'];
+const subcommandNames: readonly string[] = ['help', 'ls', 'runners', 'logs', 'exec', 'status', 'wait', 'kill', 'fetch', 'clean'];
 
 /**
  * @description A subcommand name that follows options. `exec` takes `--runner`, so `--runner box1 exec ls` is the exec of `ls` on box1 (a
@@ -240,6 +254,8 @@ export function parseRemoteRunArgs(words: readonly string[]): RemoteRunArgsParse
       return parseLogsArguments(rest);
     case 'exec':
       return parseExecArguments(rest);
+    case 'clean':
+      return parseCleanArguments(rest);
     case 'status':
     case 'wait':
     case 'kill':

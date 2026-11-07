@@ -155,3 +155,6 @@ changing), report interim progress with `answer_request` kind `progress`, and en
 
 Confirm from the reports that every changed file is listed, verification passed, the reviews are clean and the
 plan is archived. Blocked or incomplete → leave the plan as it is for inspection. Report one line of outcome.
+
+A closed task that ran on a runner (`charness remote-run`) leaves its project copy there, tens of GB: run `charness remote-run clean`
+in the task's project folder (or `clean <slug>`) for every copy it made, and never delete other tasks' copies by hand.

@@ -17,7 +17,10 @@ import { createJobOutputRouter, sayOwn, type CliIo } from './output';
 import { formatRunnerBlock, type RunnerCapability } from './probe';
 import { getProjectContext } from './project';
 import { RemoteRunError, RunnerUnreachableError } from './remoteRunError';
-import { createRunnerClient, describeRunnerRefusal, type RunnerClient, type RunnerScript } from './runnerClient';
+import { checkIsCleanFailure, formatCleanLine, parseCleanAnswer, type CleanOutcome } from './cleanReport';
+import { millisecondsPerMinute } from './pruneReport';
+import { createRunnerClient, describeRunnerRefusal, describeSshFailure, notConnectedReason, prepareCallTimeoutMs, type RunnerClient, type RunnerScript } from './runnerClient';
+import { getRunnerLinkStatus } from '../runners/linkControl';
 import { chooseExecRunnerName, findRunnerOfJob, pickRunner, probeAllTimeoutMs, probeRunners } from './runners';
 import type { RunnersConfig } from './runnersConfig';
 import { defaultRunnerWaitSeconds } from './runnerWaitTiming';
@@ -297,6 +300,46 @@ export async function runKillCommand(command: Extract<RemoteRunCommand, { kind: 
 export function describeKillResult(jobId: string, runnerAnswer: string): string {
   const ended = /^already-ended (\d+)$/m.exec(runnerAnswer);
   return ended === null ? `job ${jobId} killed` : `job ${jobId} had already ended (exit ${ended[1]}) — nothing to kill`;
+}
+
+// ─────────────────────────── clean ───────────────────────────
+
+/**
+ * Remove the copy `slug` on one runner. A paired runner whose link is down, or whose Mac has the lid shut, is not called (as for a probe: the call may hang as the machine falls asleep); a runner that
+ * cannot be reached is `unreachable`, not a failure — its copy stays, and the line says to clean again. The call has the long timeout of `prepare`: removing a copy of tens of GB takes minutes.
+ */
+export async function cleanOnRunner(client: RunnerClient, slug: string): Promise<CleanOutcome> {
+  const paired = client.runner.paired;
+  if (paired !== undefined) {
+    const link = await getRunnerLinkStatus(paired.hubDir, paired.runnerId);
+    if (!link.isOnline) return { kind: 'unreachable', reason: notConnectedReason };
+    if (link.isLidClosed) return { kind: 'unreachable', reason: 'its Mac has the lid closed' };
+  }
+  try {
+    await client.ensureScript();
+  } catch (error) {
+    if (error instanceof RunnerUnreachableError) return { kind: 'unreachable', reason: error.reason };
+    return { kind: 'failed', message: error instanceof Error ? error.message : 'the runner could not be prepared' };
+  }
+  const result = await client.call('clean', [slug], { timeoutMs: prepareCallTimeoutMs });
+  if (result.isTimedOut) return { kind: 'timedOut', timeoutMinutes: Math.round(prepareCallTimeoutMs / millisecondsPerMinute) };
+  if (result.exitCode !== 0) return { kind: 'failed', message: describeRunnerRefusal(result.stderr, describeSshFailure(result)) };
+  return parseCleanAnswer(result.stdout, slug);
+}
+
+/**
+ * `clean [<slug>]`: the project copy of a closed task goes from every runner — the named one, or (no word) the copy of the project this command is run in. One line per runner on stdout: what was freed, or why
+ * nothing was removed (a job of it runs or waits, an `exec` runs in it, a job is being submitted: the copy is in use). Exit 125 when a copy is still there although it was asked to go; a runner that could not be
+ * reached is said so and does not fail the command (a sleeping Mac must not fail the closing of a task).
+ */
+export async function runCleanCommand(command: Extract<RemoteRunCommand, { kind: 'clean' }>, context: CommandContext): Promise<number> {
+  const { io } = context;
+  const slug = command.slug ?? getProjectContext(io.cwd).slug;
+  const clients = context.config.runners.map((runner) => createRunnerClient(runner, context.cacheDir, context.script));
+  sayOwn(io, `cleaning ${slug} on ${clients.map((client) => client.runner.name).join(', ')} (removing a big copy can take minutes)`);
+  const results = await Promise.all(clients.map(async (client) => ({ name: client.runner.name, outcome: await cleanOnRunner(client, slug) })));
+  io.stdout(`${results.map((result) => formatCleanLine(result.name, slug, result.outcome)).join('\n')}\n`);
+  return results.some((result) => checkIsCleanFailure(result.outcome)) ? remoteRunExitCodes.failed : 0;
 }
 
 // ─────────────────────────── exec ───────────────────────────

@@ -404,6 +404,13 @@ and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn 
   runner of this project's last job unless you name another with `--runner` (with several runners the first one in the file may
   hold no copy, or an old one); a project that has no job yet goes to the first online runner. Not for editing. Killed like a foreground job. Its exit code is the command's own, also 255 — only a connection that dropped before the
   runner reported the code ends with 125.
+- **`clean [<slug>]`**: removes a task's copy of the project from every runner and prints what each freed — the copy of the project you run it
+  in, or the one named (the name a runner's disk message gives, `myapp-0a1b2c3d4e`). For a closed task, so that its tens of GB of build output do
+  not wait for the 3-day prune. Refused — exit 125, the copy untouched — while a job of it runs or waits in the queue, an `exec` runs in it or a job
+  is being submitted; the line names the job (`wait` or `kill` it, then clean again). A job that ended a moment ago does not stop it, and the logs and
+  result files of that copy's jobs go with it, so `fetch` what you need first. A runner that cannot be reached (offline, its Mac's lid shut) is said
+  so and does not fail the command — its copy stays until you clean again; a copy that is not there is «nothing to clean». A command that is simply
+  called `clean` goes after `--`.
 - **`runners`**: one short block per runner, all probed at once (at most 20 s; a runner that does not answer in time is shown offline
   with its last snapshot):
 
@@ -523,8 +530,8 @@ as a Gradle daemon or the adb server do) survives by design — it is the runner
 ## Agents
 
 While `runners.json` lists at least one runner or one is paired, the bot MCP's instructions (Telegram topics and tracker conversations alike) carry
-one bullet: what remote-run is for, `runners` first, and `--bg` plus `wait` in the background for anything longer than the tool
-timeout — with one line under it per runner: its name, its OS and what it could do when it was last probed (`mac — macOS 15.1, android,
+one bullet: what remote-run is for, `runners` first, `--bg` plus `wait` in the background for anything longer than the tool
+timeout, and `clean` for the runner copy of a task that is closed (never the copies of other tasks) — with one line under it per runner: its name, its OS and what it could do when it was last probed (`mac — macOS 15.1, android,
 playwright`; `(paused)` after the name of a runner that is held back; a runner nobody has probed yet shows only its name and, if paired,
 the OS it reported). Claude Code cuts a server's instructions at 4,096 characters, so the list gets the room that is left after the rest of the
 text — every runner when it fits, else the first ones and «… and N more» (the bullet itself always stays; `runners` is the full list). The lines are a snapshot taken at connect — `charness remote-run runners` has the live state. Nobody without a runner

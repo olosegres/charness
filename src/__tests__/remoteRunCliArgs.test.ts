@@ -165,6 +165,22 @@ describe('subcommands', () => {
     assert.match(parseError(['logs', jobId, '--nope']), /unknown option for logs/);
   });
 
+  it('clean: no word = the project this is run in, one word = that project copy\'s name; anything else is refused with the reason', () => {
+    assert.deepEqual(parseOk(['clean']), { kind: 'clean', slug: null });
+    assert.deepEqual(parseOk(['clean', 'myapp-0a1b2c3d4e']), { kind: 'clean', slug: 'myapp-0a1b2c3d4e' });
+    assert.deepEqual(parseOk(['clean', 'my.app_1-0a1b2c3d4e']), { kind: 'clean', slug: 'my.app_1-0a1b2c3d4e' });
+    assert.match(parseError(['clean', 'a', 'b']), /clean takes one project copy name, got extra: b/);
+    assert.match(parseError(['clean', '--all']), /unknown option for clean: --all/);
+    for (const bad of ['../x', 'a/b', '.hidden', 'a b', 'x'.repeat(81)]) assert.match(parseError(['clean', bad]), /is not the name of a project copy/, bad);
+  });
+
+  it('a job that is simply called «clean» goes after -- like any subcommand name; options before it are refused with the way out', () => {
+    const asJob = parseOk(['--bg', '--', 'clean']);
+    assert.ok(asJob.kind === 'run' && asJob.command === 'clean' && asJob.options.isBackground);
+    assert.match(parseError(['--bg', 'clean']), /^"clean" is a remote-run subcommand and subcommands come first/);
+    assert.match(parseError(['--runner', 'box1', 'clean']), /called "clean" goes after --/);
+  });
+
   it('options BEFORE exec: --runner is understood (the exec runs on that runner), the other run options are refused — exec is never run as a shell builtin job', () => {
     assert.deepEqual(parseOk(['--runner', 'box1', 'exec', 'ls', 'build/']), { kind: 'exec', runner: 'box1', command: 'ls build/' });
     assert.deepEqual(parseOk(['--runner=box1', 'exec', 'adb', 'logcat', '-d']), { kind: 'exec', runner: 'box1', command: 'adb logcat -d' });

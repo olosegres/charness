@@ -1,4 +1,5 @@
 import {
+  runCleanCommand,
   runExecCommand,
   runFetchCommand,
   runKillCommand,
@@ -55,6 +56,10 @@ export const remoteRunUsage = `Usage:
   charness remote-run fetch <id>              bring a finished job's result files back (again)
   charness remote-run exec [--runner <name>] <command…>
                               one-off command in the runner's copy as the last job left it (no sync)
+  charness remote-run clean [<slug>]
+                              remove a task's copy of the project from every runner: the copy of the project you are in, or the named one
+                              (the name a runner's disk message gives: myapp-0a1b2c3d4e). Frees its disk; its jobs' logs and result files go
+                              with it. Refused (exit 125) while a job of it runs or waits, an exec runs in it or a job is being submitted.
 Exit codes: the command's own; 125 remote-run failed, 124 timeout, 130/143/129 interrupted (SIGINT/SIGTERM/SIGHUP), 141 stdout closed (| head), 137 job killed, 2 bad usage.
 Setup: docs/remote-run.md
 `;
@@ -125,6 +130,7 @@ export async function runRemoteRunCli(argv: readonly string[], io: CliIo = creat
       case 'fetch': return await runFetchCommand(command, context);
       case 'kill': return await runKillCommand(command, context);
       case 'exec': return await runExecCommand(command, context);
+      case 'clean': return await runCleanCommand(command, context);
     }
   } catch (error) {
     if (error instanceof RemoteRunError) {

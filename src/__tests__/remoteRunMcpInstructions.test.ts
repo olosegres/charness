@@ -125,6 +125,14 @@ describe('the instructions built for a platform', () => {
     assert.match(bullet, /Longer than your tool timeout: `charness remote-run --bg <command>`.*`charness remote-run wait <id>` in the background/);
   });
 
+  it('the bullet tells an agent to free the runner copy of a task it closes, and not to touch the copies of others — in one sentence, since the text is near Claude Code\'s cut', () => {
+    for (const platform of ['telegram', 'jira', null] as const) {
+      const bullet = buildMcpServerInstructions(platform, offeredWith, true).split('\n').find((line) => line.includes('charness remote-run runners')) ?? '';
+      assert.match(bullet, /Task closed → `charness remote-run clean` there, never other tasks' copies/, `${platform ?? 'neutral'}`);
+      assert.equal(bullet.split('charness remote-run clean').length - 1, 1, 'once');
+    }
+  });
+
   it('lists every runner by name with its OS and capabilities, one line each under the bullet, in order — for Telegram and tracker instructions alike', () => {
     for (const platform of ['telegram', 'jira', null] as const) {
       const lines = buildMcpServerInstructions(platform, offeredWith, true).split('\n');
@@ -159,7 +167,8 @@ describe('the instructions built for a platform', () => {
     ];
     const text = buildMcpServerInstructions('telegram', { ...offeredWithout, remoteRunRunnerLines: typicalLines }, true);
     assert.deepEqual(text.split('\n').filter((line) => line.startsWith('  – ')), typicalLines.map((line) => `  – ${line}`), 'none of them is reduced to a count');
-    assert.ok(text.length <= claudeCodeInstructionsMaxLength - 60, `a margin of at least 60 characters: ${text.length} of ${claudeCodeInstructionsMaxLength}`);
+    // 60 characters of room until the `clean` sentence went into the bullet (+25, with the capability list shortened to make room); a runner line is 40-60 characters, so this is still less than one more runner.
+    assert.ok(text.length <= claudeCodeInstructionsMaxLength - 40, `a margin of at least 40 characters: ${text.length} of ${claudeCodeInstructionsMaxLength}`);
   });
 
   it('a short list is shown whole on a Telegram topic with the bot\'s skills on — the default, and the longest text', () => {
@@ -175,9 +184,13 @@ describe('the instructions built for a platform', () => {
     }
   });
 
-  it('the bundled manager skill stays unchanged in phase 1: it does not mention remote-run', () => {
+  it('the bundled manager skill mentions remote-run for one thing only — cleaning the runner copies of a closed task — and nothing about running jobs there (that is the bullet\'s, and only while a runner exists)', () => {
     const skill = fs.readFileSync(path.resolve(__dirname, '..', '..', 'agent-plugin', 'skills', 'charness-manager', 'SKILL.md'), 'utf8');
-    assert.ok(!skill.includes('remote-run'));
+    const mentions = skill.split('\n').filter((line) => line.includes('remote-run'));
+    assert.equal(mentions.length, 1, mentions.join(' | '));
+    assert.match(mentions.join(' '), /A closed task that ran on a runner \(`charness remote-run`\)/);
+    assert.match(skill, /run `charness remote-run clean`\s+in the task's project folder/);
+    assert.ok(!/remote-run (--bg|--needs|wait|runners)/.test(skill));
   });
 });
 

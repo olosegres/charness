@@ -34,6 +34,7 @@
 #   pueue        run Pueue itself with the configured binary and config
 #   jobs         the meta.json of every job of a project (or of all), as a JSON array
 #   prune        remove old jobs, stale stage dirs, project copies unused for days, and — while the disk is short of free space — the least recently used ones
+#   clean        remove ONE project copy on request (`clean <work> <slug>`): refused while a job of it runs or waits, an exec runs in it, or a job is being submitted; says what it freed
 #   measure-copies  write down how big each project copy is (p/<slug>/size-kb); `probe` and `prepare` start it detached, it is never called by hand
 #   sync-tree    the apply step alone (tests)
 
@@ -83,6 +84,9 @@ low_disk_exit_code=28
 # Set by the free-space prune (prune_copies_for_space) for the refusal that may follow it, and by the last removal for its report.
 prune_stopped_without_gain=0
 last_freed_kb=
+# Set by check_copy_dir_is_busy when it says «in use»: why (lock | exec | running | queued | submitting | results) and which job (`-` when none).
+copy_busy_kind=
+copy_busy_job=-
 drain_interval_sec=0.2
 probe_step_sec=4
 exit_file_wait_sec=5
@@ -918,38 +922,63 @@ check_runner_pid_alive() {
 # Is the project copy in folder $1 in use — never to be removed? Its lock is held by a live job; or an `exec` runs in it (`exec.<pid>`: exec takes no lock and leaves no job folder, so it writes this
 # marker, and a marker of a process that is gone is cleared); or a job of it waits or runs; or a job ended less than result_keep_min ago (its result files are about to be fetched); or a job of
 # it is being submitted (no task yet, no exit, and its job folder or its stage folder touched less than pending_submit_grace_min ago: a long upload only moves files in the stage folder).
+# When it is, copy_busy_kind (exec | running | queued | submitting | results | lock — the most telling first) and copy_busy_job (the job id, or `-`) say why: `clean` tells its caller.
 check_copy_dir_is_busy() {
   local copy_dir=$1
-  if [ -e "$copy_dir/lock" ] && ! ( lock="$copy_dir/lock"; jobs_dir="$copy_dir/jobs"; check_lock_is_stale ); then
-    return 0
-  fi
+  copy_busy_kind=
+  copy_busy_job=-
   local marker marker_pid
   for marker in "$copy_dir"/exec.*; do
     [ -e "$marker" ] || continue
     marker_pid=${marker##*/exec.}
     case $marker_pid in '' | *[!0-9]*) continue ;; esac
-    if check_runner_pid_alive "$marker_pid"; then return 0; fi
+    if check_runner_pid_alive "$marker_pid"; then
+      copy_busy_kind=exec
+      return 0
+    fi
     rm -f "$marker"
   done
-  local job_dir
+  local job_dir job_name
   for job_dir in "$copy_dir"/jobs/*/; do
     [ -d "$job_dir" ] || continue
+    job_name=$(basename "$job_dir")
     if [ -f "$job_dir/exit" ]; then
-      [ -n "$(find "$job_dir/exit" -maxdepth 0 -mmin -"$result_keep_min" 2> /dev/null)" ] && return 0
+      if [ -n "$(find "$job_dir/exit" -maxdepth 0 -mmin -"$result_keep_min" 2> /dev/null)" ]; then
+        copy_busy_kind=results
+        copy_busy_job=$job_name
+        return 0
+      fi
       continue
     fi
-    check_job_dir_ended "$job_dir" || return 0
+    if ! check_job_dir_ended "$job_dir"; then
+      copy_busy_kind=queued
+      [ -n "$(read_file "$job_dir/pid")" ] && copy_busy_kind=running
+      copy_busy_job=$job_name
+      return 0
+    fi
     # No task yet, no exit: a submit that is still sending its files looks like this; a job nobody touched for a while is one that failed half-way.
-    [ -n "$(find "$job_dir" -maxdepth 0 -mmin -"$pending_submit_grace_min" 2> /dev/null)" ] && return 0
-    [ -n "$(find "$copy_dir/stage/$(basename "$job_dir")" -cmin -"$pending_submit_grace_min" 2> /dev/null | head -n 1)" ] && return 0
+    if [ -n "$(find "$job_dir" -maxdepth 0 -mmin -"$pending_submit_grace_min" 2> /dev/null)" ] ||
+      [ -n "$(find "$copy_dir/stage/$job_name" -cmin -"$pending_submit_grace_min" 2> /dev/null | head -n 1)" ]; then
+      copy_busy_kind=submitting
+      copy_busy_job=$job_name
+      return 0
+    fi
   done
+  # The lock is looked at LAST: a job that runs holds it, and «job X is running» says more than «its lock is held by X». What is left is a lock whose holder shows in no job folder.
+  if [ -e "$copy_dir/lock" ] && ! ( lock="$copy_dir/lock"; jobs_dir="$copy_dir/jobs"; check_lock_is_stale ); then
+    local holder_pid holder_job
+    read_lock_holder "$copy_dir/lock"
+    copy_busy_kind=lock
+    copy_busy_job=${holder_job:--}
+    return 0
+  fi
   return 1
 }
 
 # The same for slug $2 under work dir $1. A name that is not a plain slug is not ours to judge: it counts as in use.
 check_copy_is_busy() {
   case $2 in
-    '' | *[!A-Za-z0-9._-]* | .*) return 0 ;;
+    '' | *[!A-Za-z0-9._-]* | .*) copy_busy_kind=name; copy_busy_job=-; return 0 ;;
   esac
   check_copy_dir_is_busy "$1/p/$2"
 }
@@ -971,14 +1000,16 @@ acquire_prune_lock() {
   return 0
 }
 
-# Take the copy-removal step. A prune that finds another at it leaves the step (and says so by failing) when $2 is `skip`, or when its own disk is not short (what the other one does is what the idle
-# copies need); else it waits for it, up to prune_wait_sec, and then goes on without the lock: it never hangs on one.
+# Take the copy-removal step. A prune that finds another at it leaves the step (and says so by failing) when $2 is `skip`, or when it is `wait` and its own disk is not short (what the other one does is
+# what the idle copies need); else (`wait` on a short disk, and `always`: a `clean`, which was asked for this very copy and has no disk to judge by) it waits for it, up to prune_wait_sec, and then goes on
+# without the lock: it never hangs on one.
 begin_copy_removal() {
   local work_dir=$1 when_busy=$2
   mkdir -p "$work_dir/tmp" 2> /dev/null
   local waited_since=$SECONDS
   until acquire_prune_lock "$work_dir"; do
-    if [ "$when_busy" = skip ] || ! check_disk_is_short "$work_dir"; then return 1; fi
+    if [ "$when_busy" = skip ]; then return 1; fi
+    if [ "$when_busy" = wait ] && ! check_disk_is_short "$work_dir"; then return 1; fi
     [ $((SECONDS - waited_since)) -ge "$prune_wait_sec" ] && return 0
     ( trap '' TERM; exec sleep "$prune_poll_sec" )
   done
@@ -1031,7 +1062,7 @@ remove_project_copy() {
   [ ! -e "$trash" ] || return 1
 }
 
-# Remove copy $2 for reason $3 (idle | space) and say so on stdout, one line the submit shows: `removed=<slug> freed_kb=<n> why=<reason>`; a copy that would not go: `stuck=<slug>`; one that
+# Remove copy $2 for reason $3 (idle | space | clean) and say so on stdout, one line the submit shows: `removed=<slug> freed_kb=<n> why=<reason>`; a copy that would not go: `stuck=<slug>`; one that
 # an earlier prune took, or that turned out in use, is not said anything of. freed_kb is the change of the disk's free space across the removal (empty when df said nothing).
 # Sets last_freed_kb. Returns remove_project_copy's code.
 remove_and_report_copy() {
@@ -1187,6 +1218,37 @@ cmd_measure_copies() {
     [ -d "$copy_dir" ] || continue
     read_copy_size_kb "$work_dir" "$(basename "$copy_dir")" current > /dev/null
   done
+}
+
+# `clean <work> <slug>`: remove ONE project copy because its owner is done with it (a task was closed), with the removal machinery of the prune — the copy-removal lock, the busy check (asked again of the moved-aside
+# folder), the rename + `chmod` + `rm`. What differs from the prune: the copy is named, not guessed; a job that ENDED lately does not protect it (its owner is the one who asks, and has the results or does not
+# want them), but one that runs or waits, an `exec`, a job still being submitted and a held project lock do — then nothing is removed. The answer is one line on stdout (the exit status is 0 whenever the script
+# could answer): `removed=<slug> freed_kb=<n> why=clean` · `absent=<slug>` (no such copy, or a prune took it first) · `busy=<slug> kind=<kind> job=<id|->` · `stuck=<slug>` (it would not go). Its jobs' logs and result files
+# go with it.
+cmd_clean() {
+  local work_dir=$1 clean_slug=${2:-}
+  check_name "$clean_slug"
+  # The caller may hang up while this removes tens of GB (its call has a time limit); the removal goes on to its end.
+  trap '' PIPE
+  local result_keep_min=0
+  if [ ! -d "$work_dir/p/$clean_slug" ]; then
+    printf 'absent=%s\n' "$clean_slug"
+    return 0
+  fi
+  begin_copy_removal "$work_dir" always
+  local removal_code=0
+  if check_copy_is_busy "$work_dir" "$clean_slug"; then
+    removal_code=3
+  else
+    remove_and_report_copy "$work_dir" "$clean_slug" clean
+    removal_code=$?
+  fi
+  end_copy_removal "$work_dir"
+  case $removal_code in
+    2) printf 'absent=%s\n' "$clean_slug" ;;
+    3) printf 'busy=%s kind=%s job=%s\n' "$clean_slug" "$copy_busy_kind" "$copy_busy_job" ;;
+  esac
+  return 0
 }
 
 # ─────────────────────────── adding the job to Pueue ───────────────────────────
@@ -2046,6 +2108,7 @@ main() {
     jobs) cmd_jobs "$@" ;;
     prune) cmd_prune "$@" ;;
     measure-copies) cmd_measure_copies "$@" ;;
+    clean) cmd_clean "$@" ;;
     sync-tree) cmd_sync_tree "$@" ;;
     *) die "unknown subcommand: $subcommand" ;;
   esac

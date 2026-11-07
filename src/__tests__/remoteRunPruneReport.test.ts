@@ -21,6 +21,11 @@ describe('parsePrunedCopies', () => {
     ]);
   });
 
+  it('a copy removed on request (`clean`) is read like a pruned one and says so', () => {
+    assert.deepEqual(parsePrunedCopies('removed=app-1 freed_kb=1048576 why=clean\n'), [{ slug: 'app-1', isStuck: false, freedMb: 1024, reason: 'clean' }]);
+    assert.equal(formatPrunedCopyLine('mac', { slug: 'app-1', isStuck: false, freedMb: 1024, reason: 'clean' }), 'runner mac: removed the project copy app-1 (freed 1 GB, cleaned on request)');
+  });
+
   it('a line that is not exactly the format (a word before it, an unknown reason, a slug with a path) is ignored', () => {
     assert.deepEqual(parsePrunedCopies('x removed=a freed_kb=1 why=idle\nremoved=a freed_kb=1 why=whim\nstuck=a b\n'), []);
   });

@@ -8,6 +8,7 @@
  *   → SIGKILL of a foreground run, and a frozen one (no heartbeat), end the job when the lease runs out
  *   → `--timeout` and `kill <id>` leave nothing, a job killed while queued, a task number Pueue gives to another job
  *   → `exec` runs in the copy of the project's latest job and is killed like a foreground job
+ *   → `clean` refuses a copy a job or an `exec` is using, and removes it (and says what it freed) once nothing is
  *
  * "Nothing left" is asserted on real pids: every decoy writes its own pid and its child's.
  *
@@ -356,6 +357,57 @@ describe('charness remote-run against a loopback runner — what ends a job', { 
       } finally {
         writeRunnersJson(layout, [createRunnerEntry(layout)]);
       }
+    });
+  });
+
+  describe('clean', () => {
+    registerOpenJobCleanup();
+    // The copy of this project on the runner: made by a first job, removed and made again by the steps below.
+    before(async () => {
+      writeProjectFile(project, 'src/a.txt', 'version A\n');
+      assert.equal((await run(['true'])).exitCode, 0);
+    });
+
+    it('is refused, naming the job, while a job of the project runs — the copy is untouched; once the job is killed it removes the copy and says what it freed, a second clean has nothing to do, and the next run makes a fresh copy', async () => {
+      const jobId = readJobId(await run(['--bg', createDecoyCommand('decoy-clean')]));
+      const decoyPid = await waitForPidFile(project, 'decoy-clean.pid');
+      const childPid = await waitForPidFile(project, 'decoy-clean.child');
+      const refused = await run(['clean']);
+      assert.equal(refused.exitCode, 125, refused.stderr);
+      assert.match(refused.stdout, new RegExp(`^box1: NOT cleaned — ${jobId} is running in it`, 'm'));
+      assert.ok(fs.existsSync(path.join(project.runnerDirectory, 'tree', 'src', 'a.txt')), 'the copy is untouched');
+      assert.equal((await run(['kill', jobId])).exitCode, 0);
+      await expectNothingLeft(decoyPid, childPid, 20_000);
+
+      const cleaned = await run(['clean']);
+      assert.equal(cleaned.exitCode, 0, cleaned.stderr);
+      assert.match(cleaned.stdout, /^box1: removed the project copy \S+( \(freed [0-9.]+ GB\))?$/m);
+      assert.equal(fs.existsSync(project.runnerDirectory), false, 'nothing of the copy is left on the runner');
+      const again = await run(['clean']);
+      assert.equal(again.exitCode, 0, again.stderr);
+      assert.match(again.stdout, /^box1: no copy of \S+ \(nothing to clean\)$/m);
+
+      const rerun = await run(['cat src/a.txt']);
+      assert.equal(rerun.exitCode, 0, rerun.stderr);
+      assert.match(rerun.stdout, /version A/, 'the next run sends the project afresh');
+    });
+
+    it('is refused while an `exec` runs in the copy, and removes it once the exec has ended', async () => {
+      const cli = startCli(layout, ['exec', createDecoyCommand('decoy-clean-exec')], { cwd: project.root, env: flowEnv });
+      const decoyPid = await waitForPidFile(project, 'decoy-clean-exec.pid');
+      const childPid = await waitForPidFile(project, 'decoy-clean-exec.child');
+      const refused = await run(['clean']);
+      assert.equal(refused.exitCode, 125, refused.stderr);
+      assert.match(refused.stdout, /^box1: NOT cleaned — an `exec` is running in it/m);
+      assert.ok(fs.existsSync(path.join(project.runnerDirectory, 'tree')), 'the copy is untouched');
+      cli.child.kill('SIGINT');
+      assert.equal(await waitForExit(cli, afterInterruptTimeoutMs), 130, cli.stderr());
+      await expectNothingLeft(decoyPid, childPid, 20_000);
+      await waitUntil('the exec to take its marker out of the copy', 20_000, () => (fs.readdirSync(project.runnerDirectory).some((name) => name.startsWith('exec.')) ? null : true));
+      const cleaned = await run(['clean']);
+      assert.equal(cleaned.exitCode, 0, cleaned.stderr);
+      assert.match(cleaned.stdout, /^box1: removed the project copy /m);
+      assert.equal(fs.existsSync(project.runnerDirectory), false);
     });
   });
 });

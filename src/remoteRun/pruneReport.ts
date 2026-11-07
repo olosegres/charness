@@ -11,14 +11,16 @@ export const diskTooLowRunnerExitCode = 28;
 
 const kilobytesPerMegabyte = 1024;
 
-export type PrunedCopyReason = 'idle' | 'space';
+/** Why a copy was removed: unused for days, the disk was short of free space, or its owner asked (`remote-run clean`). */
+const prunedCopyReasons = ['idle', 'space', 'clean'] as const;
+export type PrunedCopyReason = (typeof prunedCopyReasons)[number];
 
 /** @name PrunedCopy @description One project copy the runner removed, or failed to remove (`isStuck`). */
 export type PrunedCopy =
   | { slug: string; isStuck: false; freedMb: number | null; reason: PrunedCopyReason }
   | { slug: string; isStuck: true };
 
-const removedLinePattern = /^removed=(\S+) freed_kb=(\d*) why=(idle|space)$/;
+const removedLinePattern = /^removed=(\S+) freed_kb=(\d*) why=(idle|space|clean)$/;
 const stuckLinePattern = /^stuck=(\S+)$/;
 
 /** @description The copies a `prepare` answer says were removed, in the order the runner removed them. Other lines (`work=…`) are not this report's. */
@@ -26,9 +28,9 @@ export function parsePrunedCopies(prepareOutput: string): PrunedCopy[] {
   const copies: PrunedCopy[] = [];
   for (const line of prepareOutput.split('\n')) {
     const removed = removedLinePattern.exec(line.trim());
-    if (removed !== null) {
+    const reason = removed === null ? undefined : prunedCopyReasons.find((candidate) => candidate === removed[3]);
+    if (removed !== null && reason !== undefined) {
       const freedKb = removed[2] === '' ? null : Number(removed[2]);
-      const reason: PrunedCopyReason = removed[3] === 'idle' ? 'idle' : 'space';
       copies.push({ slug: removed[1], isStuck: false, freedMb: freedKb === null ? null : freedKb / kilobytesPerMegabyte, reason });
       continue;
     }
@@ -41,7 +43,8 @@ export function parsePrunedCopies(prepareOutput: string): PrunedCopy[] {
 /** @description `runner mac: removed the project copy app-1a2b3c (freed 41 GB, unused for days)` — one line for the submit's output. */
 export function formatPrunedCopyLine(runnerName: string, copy: PrunedCopy): string {
   if (copy.isStuck) return `runner ${runnerName}: could not remove the project copy ${copy.slug} completely (read-only or in use) — the next prune tries again`;
-  const why = copy.reason === 'idle' ? 'unused for days' : 'the disk was short of free space';
+  const reasonTexts: Record<PrunedCopyReason, string> = { idle: 'unused for days', space: 'the disk was short of free space', clean: 'cleaned on request' };
+  const why = reasonTexts[copy.reason];
   const freed = copy.freedMb === null ? '' : `freed ${formatGigabytes(copy.freedMb)}, `;
   return `runner ${runnerName}: removed the project copy ${copy.slug} (${freed}${why})`;
 }
@@ -72,7 +75,7 @@ export function formatRemovalStopLine(runnerName: string, stop: RemovalStop): st
   return `runner ${runnerName}: removing project copies gave back almost nothing twice in a row (the last, ${stop.slug}: ${formatGigabytes(stop.freedMb)} of its ${formatGigabytes(stop.sizeMb)}) — the disk's free space is not following (a Mac keeps it while Time Machine local snapshots or purgeable space hold it; jobs writing meanwhile eat it too, see docs/remote-run.md), so it stopped removing more copies`;
 }
 
-const millisecondsPerMinute = 60 * 1000;
+export const millisecondsPerMinute = 60 * 1000;
 
 /**
  * @description The line before a `prepare` that is going to be slow: the runner's disk (as its probe a moment ago found it) is under what it keeps free, so it will remove old project copies first —
