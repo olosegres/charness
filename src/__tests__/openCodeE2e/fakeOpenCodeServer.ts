@@ -176,10 +176,49 @@ export class FakeOpenCodeServer {
    * started) and the text streamed into it (`message.part.delta`, field `text`).
    */
   emitAssistantText(sessionId: string, messageId: string, text: string): void {
+    const session = this.getSessionOrThrow(sessionId);
+    this.broadcastAssistantMessage(sessionId, messageId, session.directory);
+    this.broadcast({ type: 'message.part.delta', properties: { sessionID: sessionId, messageID: messageId, partID: `${messageId}_text`, field: 'text', delta: text } }, session.directory);
+  }
+
+  /**
+   * @description The assistant THINKING: a reasoning part of its message (`message.part.updated` names the part's type) and the
+   * chain-of-thought text streamed into it (`message.part.delta`, field `text`) — the bot's thinking frame.
+   */
+  emitReasoningText(sessionId: string, messageId: string, text: string): void {
+    const session = this.getSessionOrThrow(sessionId);
+    const partId = `${messageId}_reasoning`;
+    this.broadcastAssistantMessage(sessionId, messageId, session.directory);
+    this.broadcast({ type: 'message.part.updated', properties: { part: { id: partId, messageID: messageId, sessionID: sessionId, type: 'reasoning' } } }, session.directory);
+    this.broadcast({ type: 'message.part.delta', properties: { sessionID: sessionId, messageID: messageId, partID: partId, field: 'text', delta: text } }, session.directory);
+  }
+
+  /**
+   * @description A tool call of the assistant at one stage of its life (`message.part.updated` for a `tool` part with its
+   * `state`): `pending`, `running` and `completed` give the bot's transient «🔄 / 🔧 / ✅» status line, `task` (the delegation
+   * tool) opens the sub-agent status message. `title` is what the state shows; `description` rides in the input, where the
+   * delegation's title is also read from.
+   */
+  emitToolPart(
+    sessionId: string,
+    messageId: string,
+    tool: string,
+    state: { status: 'pending' | 'running' | 'completed' | 'error'; title?: string; input?: Record<string, unknown> },
+  ): void {
+    const session = this.getSessionOrThrow(sessionId);
+    this.broadcastAssistantMessage(sessionId, messageId, session.directory);
+    this.broadcast({ type: 'message.part.updated', properties: { part: { id: `${messageId}_${tool}`, messageID: messageId, sessionID: sessionId, type: 'tool', tool, state } } }, session.directory);
+  }
+
+  private getSessionOrThrow(sessionId: string): FakeOpenCodeSession {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`no such fake OpenCode session: ${sessionId}`);
-    this.broadcast({ type: 'message.updated', properties: { info: { id: messageId, sessionID: sessionId, role: 'assistant', time: { created: Date.now() } } } }, session.directory);
-    this.broadcast({ type: 'message.part.delta', properties: { sessionID: sessionId, messageID: messageId, partID: `${messageId}_text`, field: 'text', delta: text } }, session.directory);
+    return session;
+  }
+
+  /** The assistant message the parts below belong to (`message.updated`: what tells the bot the turn genuinely started). */
+  private broadcastAssistantMessage(sessionId: string, messageId: string, directory: string | null): void {
+    this.broadcast({ type: 'message.updated', properties: { info: { id: messageId, sessionID: sessionId, role: 'assistant', time: { created: Date.now() } } } }, directory);
   }
 
   /**
