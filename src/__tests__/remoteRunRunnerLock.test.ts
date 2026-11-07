@@ -14,7 +14,7 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { scriptPath, slug, writeFile } from './remoteRunRunnerScriptKit';
+import { scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile } from './remoteRunRunnerScriptKit';
 
 let workRoot = '';
 let workDir = '';
@@ -25,6 +25,7 @@ beforeEach(() => {
   fs.mkdirSync(workDir);
 });
 afterEach(() => {
+  stopRunnerStandIns();
   fs.rmSync(workRoot, { recursive: true, force: true });
 });
 
@@ -98,7 +99,8 @@ describe('the project lock', () => {
       fs.utimesSync(target, when, when);
     };
     const deadPid = (): number => spawnSync('true').pid ?? 0;
-    const aliveContent = `${process.pid}\nbox1-slow00\n`;
+    /** The content of a lock or a right held by a live runner process (a fresh stand-in, for each test: the hook ends them after it). */
+    const getAliveContent = (): string => `${startRunnerStandIn()}\nbox1-slow00\n`;
 
     /** A project whose lock is held by `lockContent`; runs `body` as the waiter job and returns its status line. */
     function runWaiter(lockContent: string, body: string): string {
@@ -108,6 +110,7 @@ describe('the project lock', () => {
     }
 
     it('a right held by a breaker that is ALIVE is never taken from it: the waiter yields and the lock is not touched', () => {
+      const aliveContent = getAliveContent();
       const dead = deadPid();
       fs.mkdirSync(projectDirectory(), { recursive: true });
       fs.writeFileSync(rightFile(dead, 'box1-dead00', 0), aliveContent);
@@ -139,6 +142,7 @@ describe('the project lock', () => {
     });
 
     it('a lock that another job took after the dead holder was seen is NOT removed: the right names the dead holder, and the lock no longer carries it', () => {
+      const aliveContent = getAliveContent();
       const dead = deadPid();
       const outcome = runWaiter(aliveContent, `break_lock_of_holder ${dead} box1-dead00`);
       assert.equal(outcome, 'returned=0');
@@ -165,11 +169,19 @@ describe('the project lock', () => {
       assert.equal(fs.existsSync(lockFile()), false);
     });
 
+    it('a right whose breaker\'s pid went to a stranger (a daemon after a reboot) is passed on at once: it is not a breaker', () => {
+      const dead = deadPid();
+      fs.mkdirSync(projectDirectory(), { recursive: true });
+      fs.writeFileSync(rightFile(dead, 'box1-dead00', 0), `${startStrangerProcess()}\nbox1-reused0\n`);
+      assert.equal(runWaiter(`${dead}\nbox1-dead00\n`, 'break_stale_lock'), 'returned=0', 'the waiter takes the next generation and breaks the lock');
+      assert.equal(fs.existsSync(lockFile()), false);
+    });
+
     it('a right whose breaker died and whose pid went to another process is passed on once the breaker\'s job has an exit record — a live pid alone does not keep it', () => {
       const dead = deadPid();
       fs.mkdirSync(projectDirectory(), { recursive: true });
-      // The breaker's pid is alive (this test process: standing in for the long-lived process that got the number), its job is not over.
-      fs.writeFileSync(rightFile(dead, 'box1-dead00', 0), `${process.pid}\nbox1-reused0\n`);
+      // The breaker's pid is alive and is a runner process (its job is not over: it stands in for a breaker that is at it) .
+      fs.writeFileSync(rightFile(dead, 'box1-dead00', 0), `${startRunnerStandIn()}\nbox1-reused0\n`);
       assert.equal(runWaiter(`${dead}\nbox1-dead00\n`, 'break_stale_lock'), 'returned=1', 'a breaker whose job is still running keeps its right');
       assert.equal(fs.existsSync(lockFile()), true);
       writeFile(path.join(projectDirectory(), 'jobs', 'box1-reused0'), 'exit', '137\n');
@@ -179,6 +191,7 @@ describe('the project lock', () => {
     });
 
     it('a lock that is not stale is left alone and no right is made', () => {
+      const aliveContent = getAliveContent();
       assert.equal(runWaiter(aliveContent, 'break_stale_lock'), 'returned=0');
       assert.equal(fs.readFileSync(lockFile(), 'utf8'), aliveContent);
       assert.deepEqual(listRights(), []);
@@ -193,6 +206,7 @@ describe('the project lock', () => {
     });
 
     it('a job that takes the lock clears the rights to break it: they name holders that are gone', () => {
+      const aliveContent = getAliveContent();
       fs.mkdirSync(projectDirectory(), { recursive: true });
       fs.writeFileSync(rightFile(123456, 'box1-dead00', 0), aliveContent);
       fs.writeFileSync(rightFile(123456, 'box1-dead00', 1), aliveContent);
@@ -236,10 +250,11 @@ describe('the project lock', () => {
     const own = runBash(`work=${workDir}; killed=0; set_paths ${workDir} ${slug} box1-mine00; acquire_lock; [ -e "$lock" ] && echo held; release_lock; [ -e "$lock" ] && echo STILL || echo released`);
     assert.equal(own.stdout.trim(), 'held\nreleased');
     // Someone else's: another job holds it now.
-    fs.writeFileSync(lockFile, `${process.pid}\nbox1-other0\n`);
+    const otherPid = startRunnerStandIn();
+    fs.writeFileSync(lockFile, `${otherPid}\nbox1-other0\n`);
     const foreign = runBash(`work=${workDir}; killed=0; set_paths ${workDir} ${slug} box1-mine00; lock_held=1; release_lock; [ -e "$lock" ] && echo kept || echo REMOVED`);
     assert.equal(foreign.stdout.trim(), 'kept');
-    assert.equal(fs.readFileSync(lockFile, 'utf8'), `${process.pid}\nbox1-other0\n`);
+    assert.equal(fs.readFileSync(lockFile, 'utf8'), `${otherPid}\nbox1-other0\n`);
   });
 
   it('a lock whose holder is alive is never broken, and one with a dead process or a finished job\'s name is', () => {
@@ -250,9 +265,11 @@ describe('the project lock', () => {
       fs.writeFileSync(path.join(project, 'lock'), `${lockPid}\n${lockJob}\n`);
       return runBash(`set_paths ${workDir} ${slug} box1-race00; check_lock_is_stale && echo stale || echo held`).stdout.trim();
     };
-    assert.equal(probe(`${process.pid}`, 'box1-running'), 'held');
+    const livePid = startRunnerStandIn();
+    assert.equal(probe(`${livePid}`, 'box1-running'), 'held');
     assert.equal(probe(`${spawnSync('true').pid}`, 'box1-gone00'), 'stale', 'its process is gone');
-    assert.equal(probe(`${process.pid}`, 'box1-done00'), 'stale', 'its job has an exit record');
+    assert.equal(probe(`${livePid}`, 'box1-done00'), 'stale', 'its job has an exit record');
+    assert.equal(probe(`${startStrangerProcess()}`, 'box1-reused'), 'stale', 'its pid went to a stranger (a daemon after a reboot): nobody holds it, the project\'s queue must drain');
   });
 
   it('a lock with no holder written is left alone while it is young and broken once it is over a minute old', () => {

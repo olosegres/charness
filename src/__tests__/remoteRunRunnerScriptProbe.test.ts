@@ -15,7 +15,7 @@ import os from 'os';
 import path from 'path';
 import { parseProbeOutput } from '../remoteRun/probe';
 import { iosBootFailureReasonPrefix } from '../runnerUtility/iosCheck';
-import { scriptPath, slug, writeFile } from './remoteRunRunnerScriptKit';
+import { scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile } from './remoteRunRunnerScriptKit';
 
 const systemToolFolders = ['/usr/bin', '/bin'];
 
@@ -50,6 +50,7 @@ beforeEach(() => {
   fs.mkdirSync(workDir);
 });
 afterEach(() => {
+  stopRunnerStandIns();
   fs.rmSync(workRoot, { recursive: true, force: true });
 });
 
@@ -77,10 +78,18 @@ describe('probe', () => {
     for (const directory of [runningDir, queuedDir, finishedDir]) {
       writeFile(directory, 'task-id', '1\n');
     }
-    writeFile(runningDir, 'pid', `${process.pid}\n`);
+    writeFile(runningDir, 'pid', `${startRunnerStandIn()}\n`);
     writeFile(finishedDir, 'exit', '0\n');
     const probe = parseProbeOutput(runScript(['probe', workDir]).stdout);
     assert.deepEqual([probe.jobsRunning, probe.jobsQueued, probe.jobsProjects], [1, 1, 2]);
+  });
+
+  it('a job whose recorded pid went to a stranger (a daemon after a reboot) is not counted as running, and its project is not active', () => {
+    const strangerDir = path.join(workDir, 'p', 'app-cccccccccc', 'jobs', 'box1-strange');
+    writeFile(strangerDir, 'task-id', '1\n');
+    writeFile(strangerDir, 'pid', `${startStrangerProcess()}\n`);
+    const probe = parseProbeOutput(runScript(['probe', workDir]).stdout);
+    assert.deepEqual([probe.jobsRunning, probe.jobsQueued, probe.jobsProjects], [0, 0, 0]);
   });
 });
 

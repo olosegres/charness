@@ -135,8 +135,7 @@ label (`check_task_belongs_to_job`: `pueue status --json label=rr-<job>`).
 a process that is gone), stage folders older than a day **unless their job is
 still queued** (a job can wait behind a busy group for days), lease/probe scratch state, and project copies — two rules, both skipping a copy that is IN USE
 (`check_copy_dir_is_busy`: its lock is held by a live job — a stale lock is not —; an `exec` runs in it (`exec.<pid>`, written by `cmd_exec` before it looks at the copy, removed by its exit hook, which also
-touches `used`; the marker of a pid that is gone, or that a reboot gave to a process that is not the script's — `check_runner_pid_alive`: alive AND its command line names `runner*.sh` — is cleared; the same
-test guards the prune lock, the trash names and the pid files of detached runs); a job of it waits or runs (a task, no dead process); a job of it ended less than 60 minutes ago (`result_keep_min`: its result files are about to be
+touches `used`; the marker of a pid that is gone, or that a reboot gave to a process that is not the script's, is cleared); a job of it waits or runs (a task, no dead process); a job of it ended less than 60 minutes ago (`result_keep_min`: its result files are about to be
 fetched); or a job of it is being submitted — no task yet, and its job folder or its `stage/<job>` touched (ctime: rsync keeps the source mtimes) less than 30 minutes ago, because a first upload of a
 big project is quiet in the job folder for as long as it takes) and the copy of the job being submitted (`prepare`'s slug). `used` means last ACTIVITY: `prepare`, `exec` (start and end), `finish_job`, `finish_killed_job`:
 - **by age**: unused (`p/<slug>/used` older than) 3 days — `copyMaxIdleDays` of the runner's config, `REMOTE_RUN_COPY_MAX_IDLE_DAYS` on the script;
@@ -149,19 +148,23 @@ CocoaPods' xcframeworks are read-only folders that stop `rm`), removes it, and p
 a copy another prune took first or one that turned out in use) —
 `submit.ts` shows each as one line. The free-space loop stops, with `stopped=<slug> freed_kb=<n> size_kb=<n>`, after a removal that freed under 1 GB from a copy whose written size is over 1 GB (`no_progress_freed_kb`:
 APFS keeps the space of deleted files while Time Machine snapshots hold it; removing every copy would still not help) — but only after `no_progress_stop_after` (2) such removals in a row, since a job writing to the same disk meanwhile can eat what one removal freed. The copy-removal step of
-`prune_work` is one at a time per work dir by a lock file `tmp/prune.lock` (the pid of its holder inside), made with the shell's exclusive create — the creator wins, whatever the clocks and the pids say (markers ordered by their mtimes would let two prunes
-that start in the same tick, or a bash 3.2 that compares whole seconds, both pass). It is held while its holder is a live runner process
-(`check_runner_pid_alive`) and it is younger than 2 h; an empty one is held for a minute (its creator is between the create and the write); anything else is stale, and breaking it follows the project lock's rule: the
-RIGHT to break the lock of that holder is a file `prune.lock.breaking.<pid>` made with the same exclusive create, the winner removes the lock only while it still carries that holder, a right whose winner died is none
-after a minute. A prune that finds the lock held leaves the step when it was started as the probe's detached `prune` (`prune_work … skip`) or when its own disk is not short (what the other one does is what the idle
-copies need), and otherwise waits for it up to `prune_wait_sec` (10 min), then goes on without the lock and never gives back one it did not take. A prune that goes first and one that waits are therefore never both
-removing. `prepare` ignores SIGPIPE while it prunes, so a caller that hangs up (its call timed out) does not end the removal after the copy it is at. `prepare` dies with «the project copy was
+`prune_work` is one at a time per work dir by a lock file `tmp/prune.lock`, which is the PROJECT LOCK's own mechanism (`acquire_prune_lock` calls `create_lock_file`, `check_lock_is_stale`, `break_stale_lock` with `job`
+empty and `lock_max_age_min` set — see «The project lock» below for the proofs): the exclusive create makes the creator win whatever the clocks and the pids say (markers ordered by their mtimes would let two prunes
+that start in the same tick, or a bash 3.2 that compares whole seconds, both pass). It is held while its holder is one of the script's own processes and it is younger than 2 h (a pid can be given to anything). A prune that
+finds the lock held leaves the step when it was started as the probe's detached `prune` (`prune_work … skip`) or when its own disk is not short (what the other one does is what the idle copies need), and otherwise waits for
+it up to `prune_wait_sec` (10 min), then goes on WITHOUT the lock (and never gives back one it did not take): a waiting prune removes alongside the first one only after that wait, or when it breaks a lock its holder has
+held for over 2 h. `prepare` ignores SIGPIPE while it prunes, so a caller that hangs up (its call timed out) does not end the removal after the copy it is at. `prepare` dies with «the project copy was
 being removed» when its job folder is gone after the prune. `prepare` ends with **exit 28** and one line on stderr when the disk is still short after the prune (free, target, the biggest copies from their `size-kb`, the way out); it takes back the job folder and stage it made, and a first-ever copy of the project with them.
 `prepare` therefore gets a 15-minute call timeout (`prepareCallTimeoutMs`): removing copies of tens of GB takes minutes.
 The refusal measures nothing: it names the copies that have a written `size-kb` and counts the others («and N not measured yet»; `prepare` starts `measure-copies` just before it, so the next submit has sizes).
 `probe` never prunes inline (it must answer in seconds, or the runner would read as offline): on a short disk it starts `prune` **detached** (`start_detached_run`, one at a time by a pid file in `tmp/`) — only when called as `probe <work> prune`, which a
 VIEW of the runners does (`probeRunners` with `isPruneAllowed`: `remote-run runners`, the bot's `/runners`); the probe `chooseClient` makes for a run or an `exec` does not: that prune has no `keep_slug`, and the project about to be used is typically the least recently used copy. It reports `disk_total_mb`, `disk_min_free_mb`,
 `copies_count`, `copies_size_mb` and `copies_unmeasured` — the sizes are the `p/<slug>/size-kb` figures that the detached `measure-copies` (started by `prepare` and `probe` when a figure is missing or older than the copy's `used` mark — a copy is measured again only after it was used, never by the clock; `du -sk` of a copy takes long) wrote; `runners` and the bot's `/runners` show count and total.
+
+**A recorded pid is only believed while it is the script's own** (`check_runner_pid_alive`: `kill -0` AND a command line that names the script's file — `…/runner-<hash>.sh` of any version, or `…/runner.sh` from a checkout —,
+never `actions-runner/runsvc.sh` or whatever else has «runner» in its name; a `ps` that cannot answer counts as alive). After a crash or a reboot the number may belong to a daemon, and a bare `kill -0` would keep a copy in use, a project's queue
+behind a lock nobody holds, a job «running» in `probe`, and — worst — let `kill` signal a stranger's process group. It guards every pid the script wrote down: a job's `pid` file (`check_job_dir_ended`, `check_job_ended`, `probe_jobs`,
+`signal_job_group`), a project lock's holder and a breaker's right (`check_lock_is_stale`, `check_breaker_is_alive`), an `exec` marker, a trash folder's remover and the pid file of a detached run.
 
 **The project lock** is a file created with the shell's own exclusive create (`set -C`, `open(O_EXCL)`) holding the holder's pid and job — never
 `mkdir`: the uutils coreutils that current Ubuntu installs as `/usr/bin/mkdir` let simultaneous `mkdir` of one path all succeed (265 of 1200 races with five

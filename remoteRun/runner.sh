@@ -64,7 +64,10 @@ pending_submit_grace_min=30
 # The result files of a job that ended this recently are still on their way to whoever submitted it (`wait`, `fetch`): the copy that holds them is in use.
 result_keep_min=60
 # `prune` runs one at a time per work dir: the lock of the copy-removal step (tmp/prune.lock) is believed while its holder lives and the lock is younger than this.
-prune_marker_stale_min=120
+prune_lock_max_age_min=120
+# The age (minutes) after which `check_lock_is_stale` calls a lock stale although its holder lives (a pid can be given to anything); 0 = no limit, as for a project's lock, which a job of any length holds.
+# The prune lock sets its own for the length of its calls.
+lock_max_age_min=0
 # A prune that finds another one at its copy-removal step waits for it this long, looking every prune_poll_sec (then goes on: it never hangs on one).
 prune_wait_sec=600
 prune_poll_sec=1
@@ -468,7 +471,7 @@ probe_jobs() {
     [ -f "$job_dir/task-id" ] || continue
     slug=$(basename "$(dirname "$(dirname "$job_dir")")")
     pid=$(read_file "$job_dir/pid")
-    if [ -n "$pid" ] && kill -0 "$pid" 2> /dev/null; then
+    if [ -n "$pid" ] && check_runner_pid_alive "$pid"; then
       running=$((running + 1))
     elif [ -z "$pid" ]; then
       queued=$((queued + 1))
@@ -806,7 +809,7 @@ check_job_dir_ended() {
   [ -f "$1/task-id" ] || return 0
   local recorded_pid
   recorded_pid=$(read_file "$1/pid")
-  [ -n "$recorded_pid" ] && ! kill -0 "$recorded_pid" 2> /dev/null
+  [ -n "$recorded_pid" ] && ! check_runner_pid_alive "$recorded_pid"
 }
 
 # Is Pueue's task number $1 the task of job $2? Pueue hands a number it has freed (a task that was removed, or cleaned) to the next task
@@ -893,14 +896,19 @@ check_disk_is_short() {
   [ "$min_free_kb" -gt 0 ] && [ "$disk_free_kb" -lt "$min_free_kb" ]
 }
 
-# Is process $1 alive AND one of this script's own (`bash …/runner-<hash>.sh …`)? A pid written into a marker, a trash name or a pid file outlives its process, and after a crash or a reboot the
-# number may belong to a daemon: `kill -0` alone would then keep a copy "in use" (or a trash folder of tens of GB "being removed") for good. Where `ps` cannot say, being alive is all there is to go by.
+# Is process $1 alive AND one of this script's own (`bash …/runner-<hash>.sh …`, or `…/runner.sh` run from a checkout)? A pid written into a job folder, a lock, a marker, a trash name or a pid file outlives its
+# process, and after a crash or a reboot the number may belong to a daemon: `kill -0` alone would keep a copy "in use" for good, a project's queue stuck behind a lock no job holds, and a `kill` would signal a
+# stranger. The name is matched as the script's file name, not loosely (`actions-runner/runsvc.sh`, GitHub's service on build Macs, is not it); any version of the script counts. A `ps` that cannot
+# answer (not there, or a BusyBox one that rejects `-p` / `-o command=`) says nothing about the process that `kill -0` just saw alive: it counts as alive.
 check_runner_pid_alive() {
   case $1 in '' | *[!0-9]*) return 1 ;; esac
   kill -0 "$1" 2> /dev/null || return 1
   command -v ps > /dev/null 2>&1 || return 0
-  case $(ps -p "$1" -o command= 2> /dev/null) in
-    *runner*.sh*) return 0 ;;
+  local command_line
+  command_line=$(ps -p "$1" -o command= 2> /dev/null) || return 0
+  [ -n "$command_line" ] || return 0
+  case $command_line in
+    */runner-*.sh | */runner-*.sh[\ \;]* | */runner.sh | */runner.sh[\ \;]*) return 0 ;;
   esac
   return 1
 }
@@ -945,31 +953,18 @@ check_copy_is_busy() {
 }
 
 # The copy-removal step is one at a time per work dir: of copies being removed by a prune that is still at it, a second prune would remove more than needed (the disk's free figure moves only when the
-# first one's `rm` ends) and `rm` the same folders. The step's lock is a file made with the shell's own exclusive create (`tmp/prune.lock`, the pid of its holder inside) — the creator wins, whatever the
-# clocks and the pids say. The lock is held while its holder is a live runner process (check_runner_pid_alive) and younger than prune_marker_stale_min; an empty one (its creator is between the create and
-# the write) is held for a minute. A lock that is none of that is stale, and breaking it follows the project lock's rule (`break_lock_of_holder`): the RIGHT to break the lock of that holder is a file named
-# for it, made with the same exclusive create, so of the processes that saw it stale one wins; the winner removes the lock only while it still carries that holder, and nothing else can replace it
-# meanwhile (creators fail on the lock that is there, the others on the right). A right whose winner died is no right once it is over a minute old.
+# first one's `rm` ends) and `rm` the same folders. Its lock is `tmp/prune.lock`, made and broken by the project lock's own helpers (`create_lock_file`: the exclusive create, so the creator wins whatever the
+# clocks say; `check_lock_is_stale`; `break_stale_lock`: the generation-numbered right to break) — here with no job (`job` empty), `lock_max_age_min` set so a holder that has been at it for hours does not count
+# (a pid can be given to anything), and the pid test being `check_runner_pid_alive`. Fails when the lock is held, or when another process is breaking a stale one (it looks again soon).
 acquire_prune_lock() {
-  local lock_file="$1/tmp/prune.lock" holder right attempt
-  for attempt in 1 2 3; do
-    if ( set -C; printf '%s\n' "$$" > "$lock_file" ) 2> /dev/null; then return 0; fi
-    holder=$(read_file "$lock_file")
-    if [ -n "$holder" ] && check_runner_pid_alive "$holder" && [ -n "$(find "$lock_file" -maxdepth 0 -mmin -"$prune_marker_stale_min" 2> /dev/null)" ]; then
-      return 1
-    fi
-    case $holder in '') right="$lock_file.breaking.none" ;; *[!0-9]*) right="$lock_file.breaking.junk" ;; *) right="$lock_file.breaking.$holder" ;; esac
-    if ! ( set -C; printf '%s\n' "$$" > "$right" ) 2> /dev/null; then
-      [ -n "$(find "$right" -maxdepth 0 -mmin +1 2> /dev/null)" ] && rm -f "$right"
-      return 1
-    fi
-    # Still that holder's lock, and an empty one still over a minute old (a fresh empty lock is a creator about to write): ours to break.
-    if [ "$(read_file "$lock_file")" = "$holder" ] && { [ -n "$holder" ] || [ -n "$(find "$lock_file" -maxdepth 0 -mmin +1 2> /dev/null)" ]; }; then
-      rm -f "$lock_file"
-    fi
-    rm -f "$right"
+  local lock="$1/tmp/prune.lock" jobs_dir= job= lock_max_age_min=$prune_lock_max_age_min
+  while ! create_lock_file "$lock"; do
+    check_lock_is_stale && break_stale_lock && continue
+    return 1
   done
-  return 1
+  # The rights to break the lock name holders that are gone and can never hold it again: nothing needs them any more.
+  rm -f "$lock".breaking.* 2> /dev/null
+  return 0
 }
 
 # Take the copy-removal step. A prune that finds another at it leaves the step (and says so by failing) when $2 is `skip`, or when its own disk is not short (what the other one does is what the idle
@@ -988,7 +983,9 @@ begin_copy_removal() {
 
 # Give the lock back — only if it is still this process's own (a prune that went on after its wait never had it).
 end_copy_removal() {
-  [ "$(read_file "$1/tmp/prune.lock")" = "$$" ] && rm -f "$1/tmp/prune.lock"
+  local holder_pid holder_job
+  read_lock_holder "$1/tmp/prune.lock"
+  [ "$holder_pid" = "$$" ] && rm -f "$1/tmp/prune.lock"
   return 0
 }
 
@@ -1086,18 +1083,21 @@ prune_copies_for_space() {
     remove_and_report_copy "$work_dir" "$lru_slug" space
     removal_code=$?
     [ "$removal_code" -eq 0 ] || continue
+    # Only a copy measured bigger than the threshold says anything about whether the disk follows: one too small or never measured leaves the count as it is (an LRU order of big, small, big, small
+    # must not hide a disk that keeps every big copy's space); a removal that freed what it should resets it.
     case "$size_kb:$last_freed_kb" in
-      *[!0-9:]* | : | :* | *:) no_gain_removals=0; continue ;;
+      *[!0-9:]* | : | :* | *:) continue ;;
     esac
-    if [ "$size_kb" -gt "$no_progress_freed_kb" ] && [ "$last_freed_kb" -lt "$no_progress_freed_kb" ]; then
-      no_gain_removals=$((no_gain_removals + 1))
-      if [ "$no_gain_removals" -ge "$no_progress_stop_after" ]; then
-        printf 'stopped=%s freed_kb=%s size_kb=%s\n' "$lru_slug" "$last_freed_kb" "$size_kb"
-        prune_stopped_without_gain=1
-        break
-      fi
-    else
+    [ "$size_kb" -gt "$no_progress_freed_kb" ] || continue
+    if [ "$last_freed_kb" -ge "$no_progress_freed_kb" ]; then
       no_gain_removals=0
+      continue
+    fi
+    no_gain_removals=$((no_gain_removals + 1))
+    if [ "$no_gain_removals" -ge "$no_progress_stop_after" ]; then
+      printf 'stopped=%s freed_kb=%s size_kb=%s\n' "$lru_slug" "$last_freed_kb" "$size_kb"
+      prune_stopped_without_gain=1
+      break
     fi
   done < <(ls -1tr "$work_dir"/p/*/used 2> /dev/null)
 }
@@ -1222,7 +1222,7 @@ cmd_submit() {
 signal_job_group() {
   local job_pid group_id
   job_pid=$(read_file "$jd/pid")
-  [ -n "$job_pid" ] && kill -0 "$job_pid" 2> /dev/null || return 1
+  [ -n "$job_pid" ] && check_runner_pid_alive "$job_pid" || return 1
   group_id=$(ps -o pgid= -p "$job_pid" 2> /dev/null | tr -d ' ')
   [ -n "$group_id" ] && [ "$group_id" = "$job_pid" ] || return 1
   kill "-$1" -- "-$group_id" 2> /dev/null
@@ -1294,7 +1294,7 @@ check_job_ended() {
   [ -f "$jd/exit" ] && return 0
   local pid
   pid=$(read_file "$jd/pid")
-  [ -n "$pid" ] && ! kill -0 "$pid" 2> /dev/null && return 0
+  [ -n "$pid" ] && ! check_runner_pid_alive "$pid" && return 0
   return 1
 }
 
@@ -1557,15 +1557,18 @@ read_lock_holder() {
   return 0
 }
 
-# Is the lock held by nobody any more? Its holder's process is gone, or its job has an exit record, or no holder was ever written and it
-# is over a minute old (its creator died between creating the file and writing it).
+# Is the lock held by nobody any more? Its holder's process is gone (or a stranger's now: check_runner_pid_alive), or its job has an exit record, or it is over lock_max_age_min old (when that is set), or no
+# holder was ever written and it is over a minute old (its creator died between creating the file and writing it).
 check_lock_is_stale() {
   local holder_pid holder_job
   read_lock_holder "$lock"
-  if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2> /dev/null; then
+  if [ -n "$holder_pid" ] && ! check_runner_pid_alive "$holder_pid"; then
     return 0
   fi
   if [ -n "$holder_job" ] && [ -f "$jobs_dir/$holder_job/exit" ]; then
+    return 0
+  fi
+  if [ "$lock_max_age_min" -gt 0 ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +"$lock_max_age_min" 2> /dev/null)" ]; then
     return 0
   fi
   [ -z "$holder_pid" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2> /dev/null)" ]
@@ -1620,7 +1623,7 @@ check_breaker_is_alive() {
     return 1
   fi
   if [ -n "$holder_pid" ]; then
-    kill -0 "$holder_pid" 2> /dev/null
+    check_runner_pid_alive "$holder_pid"
     return
   fi
   [ -z "$(find "$1" -maxdepth 0 -mmin +1 2> /dev/null)" ]

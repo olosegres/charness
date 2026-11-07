@@ -18,7 +18,7 @@ import os from 'os';
 import path from 'path';
 import { diskTooLowRunnerExitCode } from '../remoteRun/pruneReport';
 import { parseProbeOutput } from '../remoteRun/probe';
-import { jobId, scriptPath, slug, writeFile } from './remoteRunRunnerScriptKit';
+import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile } from './remoteRunRunnerScriptKit';
 
 const kibPerGib = 1024 * 1024;
 const dayMs = 24 * 60 * 60 * 1000;
@@ -106,24 +106,8 @@ function writeJob(copyDir: string, id: string, files: Record<string, string>): s
   return jobDir;
 }
 
-/** Processes the tests keep alive to stand for other processes; the hook below ends them. */
+/** Other children the tests keep (an `exec`, a prune): the hook below ends them with the stand-ins of the kit. */
 const liveProcesses: ChildProcess[] = [];
-
-/** A live process that is one of the runner script\'s own (its command line names `runner.sh`, as `bash …/runner-<hash>.sh prune …` does): another prune, an `exec`. */
-function startLiveProcess(): number {
-  const child = spawn('bash', ['-c', 'read -r _', 'runner.sh'], { stdio: ['pipe', 'ignore', 'ignore'] });
-  liveProcesses.push(child);
-  assert.ok(child.pid !== undefined);
-  return child.pid;
-}
-
-/** A live process that is NOT the script\'s: what a recorded pid names after a reboot when a daemon got the number. */
-function startStrangerProcess(): number {
-  const child = spawn('sleep', ['120'], { stdio: 'ignore' });
-  liveProcesses.push(child);
-  assert.ok(child.pid !== undefined);
-  return child.pid;
-}
 
 function getDeadPid(): number {
   const pid = spawnSync('true').pid;
@@ -157,6 +141,7 @@ beforeEach(() => {
   writeExecutable(path.join(fakeBinDir, 'rm'), fakeRm);
 });
 afterEach(() => {
+  stopRunnerStandIns();
   for (const child of liveProcesses.splice(0)) child.kill('SIGKILL');
   removeTree(workRoot);
 });
@@ -287,7 +272,7 @@ describe('prune by free space', () => {
     }
 
     it('its lock is held by a live job', () => {
-      const removed = pruneWithOldestProtected((copyDir) => writeFile(copyDir, 'lock', `${process.pid}\n${jobId}\n`));
+      const removed = pruneWithOldestProtected((copyDir) => writeFile(copyDir, 'lock', `${startRunnerStandIn()}\n${jobId}\n`));
       assert.deepEqual(removed, ['free-one-iiiiiiiiii', 'free-two-jjjjjjjjjj']);
       assert.ok(fs.existsSync(path.join(workDir, 'p', 'keep-hhhhhhhhhh')));
     });
@@ -299,7 +284,7 @@ describe('prune by free space', () => {
     });
 
     it('a job of it runs (a task and a live process)', () => {
-      const removed = pruneWithOldestProtected((copyDir) => writeJob(copyDir, 'box1-runnin', { 'task-id': '5\n', pid: `${process.pid}\n` }));
+      const removed = pruneWithOldestProtected((copyDir) => writeJob(copyDir, 'box1-runnin', { 'task-id': '5\n', pid: `${startRunnerStandIn()}\n` }));
       assert.deepEqual(removed, ['free-one-iiiiiiiiii', 'free-two-jjjjjjjjjj']);
       assert.ok(fs.existsSync(path.join(workDir, 'p', 'keep-hhhhhhhhhh')));
     });
@@ -470,7 +455,7 @@ describe('sizes of the project copies (`measure-copies`) and what `probe` says o
 describe('probe: a copy counts as measured while nobody used it since its figure was written, however old the figure is', () => {
   it('a figure newer than the copy\'s last use is measured; one written before it is not (and the detached measuring is asked for)', () => {
     // A «detached measuring» that is already running keeps the probe from starting its own while this one reads the figures.
-    writeFile(workDir, 'tmp/measure-copies.pid', `${startLiveProcess()}\n`);
+    writeFile(workDir, 'tmp/measure-copies.pid', `${startRunnerStandIn()}\n`);
     makeCopy('still-right-aaaaaaaaaa', 4, 30 * hourMs);
     writeFile(path.join(workDir, 'p', 'still-right-aaaaaaaaaa'), 'size-kb', `${4 * kibPerGib}`);
     setAge(path.join(workDir, 'p', 'still-right-aaaaaaaaaa', 'size-kb'), 20 * hourMs);
@@ -491,7 +476,7 @@ describe('a copy an `exec` runs in is in use (exec takes no lock and leaves no j
   }
 
   it('a marker of a live process keeps the copy, however old its mark of use', () => {
-    const livePid = startLiveProcess();
+    const livePid = startRunnerStandIn();
     const removed = pruneForSpaceWithOldestHolding((copyDir) => writeFile(copyDir, `exec.${livePid}`, `${livePid}\n`));
     assert.deepEqual(removed, ['free-one-iiiiiiiiii', 'free-two-jjjjjjjjjj']);
     assert.ok(fs.existsSync(path.join(workDir, 'p', 'keep-hhhhhhhhhh')));
@@ -645,7 +630,7 @@ describe('two prunes at once', () => {
   }
 
   it('a trash folder whose remover still lives is left to it; one whose remover is gone is finished', () => {
-    const livePid = startLiveProcess();
+    const livePid = startRunnerStandIn();
     const deadPid = getDeadPid();
     writeFile(path.join(workDir, 'p', `.trash-being-removed-${livePid}`), 'tree/file.txt');
     writeFile(path.join(workDir, 'p', `.trash-cut-off-${deadPid}`), 'tree/file.txt');
@@ -656,7 +641,7 @@ describe('two prunes at once', () => {
 
   it('the probe\'s detached prune (`prune`) leaves the copy-removal step to a prune that is at it, and says nothing — the lock stays the other\'s', () => {
     makeThreeCopies();
-    const livePid = startLiveProcess();
+    const livePid = startRunnerStandIn();
     putPruneLock(livePid);
     const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '70' });
     assert.equal(result.status, 0, result.stderr);
@@ -667,7 +652,7 @@ describe('two prunes at once', () => {
 
   it('in skip mode it leaves at once even though its disk is short — it never waits (a probe must not hang)', () => {
     makeThreeCopies();
-    putPruneLock(startLiveProcess());
+    putPruneLock(startRunnerStandIn());
     const outcome = runShell(`prune_wait_sec=3; prune_poll_sec=0.2; started=$SECONDS; prune_work ${workDir} "" skip; echo waited=$((SECONDS - started))`, { REMOTE_RUN_MIN_FREE_GB: '70' });
     assert.equal(outcome.status, 0, outcome.stderr);
     assert.match(outcome.stdout, /waited=[0-2]$/, 'not the 3 s of the wait it must not make');
@@ -678,7 +663,7 @@ describe('two prunes at once', () => {
     const scenarios: Array<[string, () => void]> = [
       ['its holder is gone', () => { putPruneLock(getDeadPid()); }],
       ['its pid went to a stranger (a daemon after a reboot)', () => { putPruneLock(startStrangerProcess()); }],
-      ['it is over two hours old (a pid can be given to anything)', () => { putPruneLock(startLiveProcess(), 3 * hourMs); }],
+      ['it is over two hours old (a pid can be given to anything)', () => { putPruneLock(startRunnerStandIn(), 3 * hourMs); }],
       ['it is empty and over a minute old (its creator died between the create and the write)', () => { putPruneLock('', 3 * 60_000); }],
       ['it holds no pid at all', () => { putPruneLock('not a pid\n', 60_000); }],
     ];
@@ -692,6 +677,14 @@ describe('two prunes at once', () => {
         assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')).filter((entry) => entry.startsWith('prune.lock')), [], 'no right to break it is left behind');
       });
     }
+
+    it('a right to break the lock that its winner died holding does not block anybody: the next generation takes it (the project lock\'s rule, not a second copy of it)', () => {
+      const deadHolder = getDeadPid();
+      putPruneLock(deadHolder);
+      writeFile(workDir, `tmp/prune.lock.breaking.${deadHolder}.none.0`, `${getDeadPid()}\n\n`);
+      const outcome = runShell(`acquire_prune_lock ${workDir} && echo won || echo lost`);
+      assert.equal(outcome.stdout, 'won');
+    });
 
     it('an EMPTY lock that is young is a creator about to write: it is held', () => {
       makeThreeCopies();
@@ -716,11 +709,11 @@ describe('two prunes at once', () => {
       assert.deepEqual(outputs, ['B-won', 'A-lost']);
     });
 
-    it('a breaker that was slow BEFORE it took the right finds a fresh lock of somebody else when it gets there, and leaves it alone (it breaks only the lock of the holder it saw)', async () => {
+    it('a stale verdict made on an old read does not break a fresh lock: a process that was slow after reading the stale holder finds somebody else\'s lock when it goes on, and leaves it alone', async () => {
       putPruneLock(getDeadPid());
       const flag = path.join(workRoot, 'stalled-once');
-      // B reads the stale holder and then stalls for a second, once; A comes 0.3 s later, breaks the lock and takes a fresh one. When B goes on, the lock is A's and must stay.
-      const slowReader = `read_file() { cat "$1" 2> /dev/null; case "$1" in *prune.lock) [ -e ${flag} ] || { : > ${flag}; sleep 1; } ;; esac; }; acquire_prune_lock ${workDir} && { echo B-won; sleep 3; } || echo B-lost`;
+      // B reads the stale holder and stalls for a second, once; A comes 0.3 s later, breaks the lock and takes a fresh one. When B goes on, the lock is A's and must stay.
+      const slowReader = `eval "orig_$(declare -f read_lock_holder)"; read_lock_holder() { orig_read_lock_holder "$@"; case "$1" in *prune.lock) [ -e ${flag} ] || { : > ${flag}; sleep 1; } ;; esac; }; acquire_prune_lock ${workDir} && { echo B-won; sleep 3; } || echo B-lost`;
       const quickBreaker = `sleep 0.3; acquire_prune_lock ${workDir} && { echo A-won; sleep 3; } || echo A-lost`;
       const outputs = await Promise.all([slowReader, quickBreaker].map((body) => new Promise<string>((resolve) => {
         const child = spawn('bash', ['-c', `source ${scriptPath}; ${body}`], { env: getEnv(), stdio: ['ignore', 'pipe', 'ignore'] });
@@ -749,7 +742,7 @@ describe('two prunes at once', () => {
 
   it('a submit\'s prune WAITS for the other one and then decides by the disk as the other left it (here the other freed enough: it removes nothing)', () => {
     makeThreeCopies();
-    const otherLock = putPruneLock(startLiveProcess());
+    const otherLock = putPruneLock(startRunnerStandIn());
     // The other prune ends its work after a second: it removed the oldest copy and its lock goes.
     const body = `prune_poll_sec=0.1; ( sleep 1; command rm -rf "${path.join(workDir, 'p', 'oldest-aaaaaaaaaa')}" "${otherLock}" ) & started=$SECONDS; prune_work ${workDir} ""; echo waited=$((SECONDS - started))`;
     const outcome = runShell(body, { REMOTE_RUN_MIN_FREE_GB: '40' });
@@ -760,7 +753,7 @@ describe('two prunes at once', () => {
 
   it('the wait is bounded: a prune that never ends is waited for prune_wait_sec, then the submit goes on without the lock — and leaves the other\'s lock alone', () => {
     makeThreeCopies();
-    const livePid = startLiveProcess();
+    const livePid = startRunnerStandIn();
     putPruneLock(livePid);
     const outcome = runShell(`prune_wait_sec=1; prune_poll_sec=0.2; started=$SECONDS; prune_work ${workDir} ""; echo waited=$((SECONDS - started))`, { REMOTE_RUN_MIN_FREE_GB: '40' });
     assert.equal(outcome.status, 0, outcome.stderr);
@@ -792,7 +785,7 @@ describe('two prunes at once', () => {
 describe('the refusal never measures', () => {
   function refuse(env: NodeJS.ProcessEnv = {}): { status: number | null; stderr: string; duLog: string } {
     // A «detached measuring» that is already running keeps `prepare` from starting its own (which would call du too).
-    writeFile(workDir, 'tmp/measure-copies.pid', `${startLiveProcess()}\n`);
+    writeFile(workDir, 'tmp/measure-copies.pid', `${startRunnerStandIn()}\n`);
     const duLog = path.join(workRoot, 'du.log');
     const result = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '60', FAKE_DU_LOG: duLog, ...env });
     return { status: result.status, stderr: result.stderr, duLog: fs.existsSync(duLog) ? fs.readFileSync(duLog, 'utf8') : '' };
@@ -851,6 +844,30 @@ describe('a disk whose free figure does not follow the removals (APFS snapshots,
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(parseRemovals(result.stdout), ['c1-aaaaaaaaaa', 'c2-bbbbbbbbbb', 'c3-cccccccccc', 'c4-dddddddddd']);
     assert.doesNotMatch(result.stdout, /stopped=/);
+  });
+
+  it('a small copy between two big ones that freed nothing neither hides nor resets the verdict (an LRU order of big, small, big must not empty the runner of its big copies for nothing)', () => {
+    makeCopyFreeing('big-one-aaaaaaaaaa', 30, 0, 9 * hourMs);
+    makeCopyFreeing('small-bbbbbbbbbb', 0, 0, 7 * hourMs);
+    writeFile(path.join(workDir, 'p', 'small-bbbbbbbbbb'), 'size-kb', '500000');
+    makeCopyFreeing('big-two-cccccccccc', 30, 0, 5 * hourMs);
+    makeCopyFreeing('big-three-dddddddddd', 30, 0, 3 * hourMs);
+    // A disk whose free figure does not move at all (frozen at 10 GB, short of the 95 GB wanted).
+    const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '95', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(parseRemovals(result.stdout), ['big-one-aaaaaaaaaa', 'small-bbbbbbbbbb', 'big-two-cccccccccc'], 'two big copies gave nothing back, whatever came between them');
+    assert.match(result.stdout, /^stopped=big-two-cccccccccc freed_kb=0 size_kb=31457280$/m);
+    assert.deepEqual(listCopies(), ['big-three-dddddddddd']);
+  });
+
+  it('a copy with no written size leaves the count as it is too: big (nothing), unmeasured, big (nothing) is two in a row', () => {
+    makeCopyFreeing('big-one-aaaaaaaaaa', 30, 0, 9 * hourMs);
+    makeCopy('unmeasured-bbbbbbbbbb', 0, 7 * hourMs);
+    makeCopyFreeing('big-two-cccccccccc', 30, 0, 5 * hourMs);
+    makeCopyFreeing('big-three-dddddddddd', 30, 0, 3 * hourMs);
+    const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '95', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
+    assert.deepEqual(parseRemovals(result.stdout), ['big-one-aaaaaaaaaa', 'unmeasured-bbbbbbbbbb', 'big-two-cccccccccc']);
+    assert.deepEqual(listCopies(), ['big-three-dddddddddd']);
   });
 
   it('goes on while it cannot tell: a copy with no written size, or a small one, gives little back by itself', () => {
@@ -922,16 +939,67 @@ describe('a pid that went to a stranger pins nothing (after a crash or a reboot 
 
   it('a process that IS the runner script\'s (a live exec) still counts', () => {
     const copyDir = makeCopy('real-marker-aaaaaaaaaa', 1, 9 * hourMs);
-    const livePid = startLiveProcess();
+    const livePid = startRunnerStandIn();
     writeFile(copyDir, `exec.${livePid}`, `${livePid}\n`);
     assert.equal(runShell(`check_copy_dir_is_busy ${copyDir} && echo busy || echo free`).stdout, 'busy');
+  });
+
+  it('a JOB whose recorded pid is a stranger\'s (it died with the machine) and a project LOCK held by a stranger\'s pid do not keep the copy in use — the job or the lock that are really there still do', () => {
+    const isBusy = (copyDir: string): string => runShell(`check_copy_dir_is_busy ${copyDir} && echo busy || echo free`).stdout;
+    const strangerJob = makeCopy('stranger-job-aaaaaaaaaa', 1, 9 * hourMs);
+    setAge(writeJob(strangerJob, 'box1-crashed', { 'task-id': '4\n', pid: `${startStrangerProcess()}\n` }), 2 * hourMs);
+    assert.equal(isBusy(strangerJob), 'free', 'the job it names is no process of the script');
+    const strangerLock = makeCopy('stranger-lock-bbbbbbbbbb', 1, 9 * hourMs);
+    writeFile(strangerLock, 'lock', `${startStrangerProcess()}\nbox1-crashed\n`);
+    assert.equal(isBusy(strangerLock), 'free', 'nobody holds the lock');
+    const liveJob = makeCopy('live-job-cccccccccc', 1, 9 * hourMs);
+    setAge(writeJob(liveJob, 'box1-runnin', { 'task-id': '4\n', pid: `${startRunnerStandIn()}\n` }), 2 * hourMs);
+    assert.equal(isBusy(liveJob), 'busy');
+    const liveLock = makeCopy('live-lock-dddddddddd', 1, 9 * hourMs);
+    writeFile(liveLock, 'lock', `${startRunnerStandIn()}\nbox1-runnin\n`);
+    assert.equal(isBusy(liveLock), 'busy');
+  });
+});
+
+describe('the script\'s test of "that pid is still one of ours" (`check_runner_pid_alive`)', () => {
+  const alive = (pid: number | string): string => runShell(`check_runner_pid_alive ${pid} && echo alive || echo not`).stdout;
+
+  it('is the script\'s own file name, whatever its version or the way it was started — and nothing that merely has «runner» in its name', () => {
+    const named = (argv0: string): number => {
+      const child = spawn('bash', ['-c', 'read -r _', argv0, 'job'], { stdio: ['pipe', 'ignore', 'ignore'] });
+      liveProcesses.push(child);
+      assert.ok(child.pid !== undefined);
+      return child.pid;
+    };
+    assert.equal(alive(named('/work/bin/runner-0a1b2c3d.sh')), 'alive', 'the uploaded script');
+    assert.equal(alive(named('/other/version/runner-ffffffff.sh')), 'alive', 'another version of it');
+    assert.equal(alive(named('/repo/remoteRun/runner.sh')), 'alive', 'run from a checkout');
+    assert.equal(alive(named('/Users/user/actions-runner/runsvc.sh')), 'not', 'GitHub\'s runner service, a long-lived process on build Macs');
+    assert.equal(alive(named('/opt/some-runner-tool/start.sh')), 'not');
+  });
+
+  it('is not alive for a process that is gone, a pid that is no number, or a stranger', () => {
+    assert.equal(alive(getDeadPid()), 'not');
+    assert.equal(alive("'1; echo hacked'"), 'not');
+    assert.equal(alive(startStrangerProcess()), 'not');
+    assert.equal(alive(startRunnerStandIn()), 'alive');
+  });
+
+  it('a `ps` that cannot answer (rejects the options, or says nothing) is no evidence against a process that is there: it counts as alive — a live exec must never be read as dead', () => {
+    const strangerPid = startStrangerProcess();
+    const deadPid = getDeadPid();
+    for (const [name, body] of [['fails', 'exit 1'], ['says nothing', 'exit 0'], ['rejects the options', 'echo "ps: invalid option -- p" >&2; exit 1']] as const) {
+      writeExecutable(path.join(fakeBinDir, 'ps'), `#!/bin/sh\n${body}\n`);
+      assert.equal(alive(strangerPid), 'alive', `a ps that ${name}`);
+      assert.equal(alive(deadPid), 'not', `a dead pid is dead whatever ps does (${name})`);
+    }
   });
 });
 
 describe('a submit waits behind another prune only while its own disk is short', () => {
   it('with the disk at its target it does not wait for the prune that is removing idle copies (it has nothing to remove: the other one does it)', () => {
     makeCopy('idle-aaaaaaaaaa', 30, 5 * hourMs);
-    writeFile(workDir, 'tmp/prune.lock', `${startLiveProcess()}\n`);
+    writeFile(workDir, 'tmp/prune.lock', `${startRunnerStandIn()}\n`);
     const outcome = runShell(`prune_wait_sec=20; prune_poll_sec=0.2; started=$SECONDS; prune_work ${workDir} ""; echo waited=$((SECONDS - started))`, { REMOTE_RUN_MIN_FREE_GB: '5' });
     assert.equal(outcome.status, 0, outcome.stderr);
     assert.match(outcome.stdout, /waited=[0-2]$/);

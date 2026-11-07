@@ -19,7 +19,7 @@ import os from 'os';
 import path from 'path';
 import { parseJobFacts } from '../remoteRun/jobState';
 import { checkIsProcessRunning } from './e2e/isolatedCharness';
-import { jobId, scriptPath, slug, writeFile } from './remoteRunRunnerScriptKit';
+import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile } from './remoteRunRunnerScriptKit';
 
 const isCi = process.env.CI === 'true' || process.env.CI === '1';
 const hasRsync = spawnSync('rsync', ['--version'], { stdio: 'ignore' }).status === 0;
@@ -44,6 +44,7 @@ beforeEach(() => {
   fs.mkdirSync(workDir);
 });
 afterEach(() => {
+  stopRunnerStandIns();
   fs.rmSync(workRoot, { recursive: true, force: true });
 });
 
@@ -214,8 +215,9 @@ describe('prune', () => {
 
   function writeJobFolder(id: string, files: string[], ageDays: number): string {
     const jobDir = path.join(workDir, 'p', slug, 'jobs', id);
-    // A pid file names a process of the runner's own user: this test process stands for a job that runs.
-    for (const file of files) writeFile(jobDir, file, file === 'pid' ? `${process.pid}\n` : '1\n');
+    // A pid file names the job's own process: a stand-in for the script stands for a job that runs.
+    const runningPid = startRunnerStandIn();
+    for (const file of files) writeFile(jobDir, file, file === 'pid' ? `${runningPid}\n` : '1\n');
     makeOld(jobDir, ageDays);
     return jobDir;
   }
@@ -445,7 +447,8 @@ describe('prune keeps what a queued job still needs', () => {
     writeFile(stageDir, 'a.txt');
     const when = new Date(Date.now() - 2 * dayMs);
     fs.utimesSync(stageDir, when, when);
-    for (const file of jobFiles) writeFile(path.join(workDir, 'p', slug, 'jobs', id), file, file === 'pid' ? `${process.pid}\n` : '1\n');
+    const runningPid = startRunnerStandIn();
+    for (const file of jobFiles) writeFile(path.join(workDir, 'p', slug, 'jobs', id), file, file === 'pid' ? `${runningPid}\n` : '1\n');
     return stageDir;
   }
 
@@ -459,6 +462,53 @@ describe('prune keeps what a queued job still needs', () => {
     assert.equal(fs.existsSync(running), true);
     assert.equal(fs.existsSync(finished), false);
     assert.equal(fs.existsSync(neverSubmitted), false);
+  });
+});
+
+describe('a job pid that went to a stranger (after a crash or a reboot a daemon can get the number) is no job', () => {
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  function writeJobWithPid(id: string, pid: number, ageDays = 0): string {
+    const jobDir = path.join(workDir, 'p', slug, 'jobs', id);
+    writeFile(jobDir, 'task-id', '7\n');
+    writeFile(jobDir, 'pid', `${pid}\n`);
+    if (ageDays > 0) {
+      const when = new Date(Date.now() - ageDays * dayMs);
+      fs.utimesSync(jobDir, when, when);
+    }
+    return jobDir;
+  }
+
+  const runShell = (body: string): { status: number | null; stdout: string } => {
+    const result = spawnSync('bash', ['-c', `source ${scriptPath}; ${body}`], { encoding: 'utf8', timeout: 60_000 });
+    return { status: result.status, stdout: result.stdout.trim() };
+  };
+
+  it('a job that never wrote its exit is ended when its pid is a stranger\'s, running when it is the script\'s — for prune, for `check_job_ended` and for the folder check', () => {
+    const stranger = writeJobWithPid('box1-strang', startStrangerProcess());
+    const running = writeJobWithPid('box1-runnin', startRunnerStandIn());
+    const ended = (folder: string): string => runShell(`check_job_dir_ended ${folder} && echo ended || echo running`).stdout;
+    assert.equal(ended(stranger), 'ended');
+    assert.equal(ended(running), 'running');
+    const jobEnded = (id: string): string => runShell(`set_paths ${workDir} ${slug} ${id}; check_job_ended && echo ended || echo running`).stdout;
+    assert.equal(jobEnded('box1-strang'), 'ended');
+    assert.equal(jobEnded('box1-runnin'), 'running');
+  });
+
+  it('prune removes the old folder of such a job like any ended one, and keeps the one of a job that runs', () => {
+    const stranger = writeJobWithPid('box1-strang', startStrangerProcess(), 4);
+    const running = writeJobWithPid('box1-runnin', startRunnerStandIn(), 4);
+    assert.equal(runScript(['prune', workDir]).status, 0);
+    assert.equal(fs.existsSync(stranger), false);
+    assert.equal(fs.existsSync(running), true);
+  });
+
+  it('`kill` never signals the process group of a stranger that happens to lead its own — the bug a bare `kill -0` of a recorded pid has', () => {
+    const strangerPid = startStrangerProcess();
+    writeJobWithPid(jobId, strangerPid);
+    const outcome = runShell(`set_paths ${workDir} ${slug} ${jobId}; signal_job_group TERM; echo rc=$?`);
+    assert.equal(outcome.stdout, 'rc=1', 'no group was signalled');
+    assert.equal(checkIsProcessRunning(strangerPid), true, 'the stranger is still there');
   });
 });
 
@@ -492,7 +542,8 @@ describe('a job that had to be SIGKILLed is an ended job', () => {
   function startStubbornJob(): { jobDir: string; pid: number } {
     const paths = getPaths();
     fs.mkdirSync(paths.jobDir, { recursive: true });
-    decoy = spawn('sh', ['-c', 'trap "" TERM; sleep 100'], { detached: true, stdio: 'ignore' });
+    // Its command line is the script's own (`…/runner-<hash>.sh job`): that is what the script takes for «the job's process» in a pid file.
+    decoy = spawn('sh', ['-c', 'trap "" TERM; sleep 100; :', '/runner/bin/runner-0123abcd.sh', 'job'], { detached: true, stdio: 'ignore' });
     const pid = decoy.pid ?? 0;
     writeFile(paths.jobDir, 'task-id', '1\n');
     writeFile(paths.jobDir, 'pid', `${pid}\n`);
@@ -604,7 +655,7 @@ describe('a job that had to be SIGKILLed is an ended job', () => {
       return jobDir;
     };
     const killedEarlier = writeOldJob('box1-killed', { 'task-id': '4\n', pid: `${deadPid}\n` });
-    const running = writeOldJob('box1-runnin', { 'task-id': '5\n', pid: `${process.pid}\n` });
+    const running = writeOldJob('box1-runnin', { 'task-id': '5\n', pid: `${startRunnerStandIn()}\n` });
     const queued = writeOldJob('box1-queued', { 'task-id': '6\n' });
     assert.equal(runScript(['prune', workDir]).status, 0);
     assert.equal(fs.existsSync(killedEarlier), false, 'the SIGKILLed job is pruned');
