@@ -8081,7 +8081,7 @@ const claudeApiCreditRecheckPorts: ClaudeApiCreditRecheckPorts = {
     }));
   },
   readApiKey: (name) => {
-    if (name === defaultClaudeProfileName) return readDefaultClaudeProfileApiKey();
+    if (name === defaultClaudeProfileName) return readDefaultClaudeProfileApiKey(state.getClaudeProfileInfo(name)?.isConsoleLoginKey === true);
     const configDir = resolveClaudeProfileDir(resolveDataDir(), name);
     return configDir === null ? null : readClaudeProfileApiKey(configDir);
   },

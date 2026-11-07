@@ -252,6 +252,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       ...(name === defaultClaudeProfileName && status.loggedIn ? { isRemoved: undefined } : {}),
       // The CLI's word on how the account pays wins over the kind it was added as, both ways.
       ...(status.billing !== null ? { billing: status.billing } : {}),
+      // Which key the sessions use decides whether the stored one may be asked on (the daily credit recheck of `default`).
+      isConsoleLoginKey: status.apiKeySource === claudeConsoleLoginKeySource,
       loggedIn: status.loggedIn,
       email: status.email ?? undefined,
       subscriptionType: status.subscriptionType ?? undefined,

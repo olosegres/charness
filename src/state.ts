@@ -227,6 +227,12 @@ export interface ClaudeProfileRecord {
    * recheck, still records the renewal and starts the spend counter over. A new refusal replaces it with the mark again.
    */
   creditUnconfirmedSince?: string;
+  /**
+   * From the last auth probe: the account's sessions run on the key a Console login stored in its `.claude.json`
+   * (`apiKeySource` «/login managed key») — not on an `apiKeyHelper` or a variable, which the CLI prefers over that key. Only then
+   * is the `primaryApiKey` there the key the daily credit recheck may ask on (`readDefaultClaudeProfileApiKey`).
+   */
+  isConsoleLoginKey?: boolean;
   /** What an account billed to API credits spent through the bot (`utils/claudeApiSpend.ts`); absent before its first counted turn. */
   apiSpend?: ClaudeApiSpend;
   /** What an account billed to API credits spent through the bot since its credit period began: the operator's figure or the last renewal (`utils/claudeApiCredit.ts`). */
@@ -2333,13 +2339,15 @@ export class StateStore {
   /**
    * An API account's used-up credit is back at `renewedAt`: the mark ends, the renewal is recorded and the spend counter
    * starts over from zero at that instant. Refused (`false`, nothing changes) when a refusal newer than `renewedAt` is
-   * recorded — a turn on the account failed while the answer that says «renewed» was on its way, and the newer news wins.
+   * recorded — a turn on the account failed while the answer that says «renewed» was on its way (and the operator may have
+   * picked the account since), and the newer news wins.
    * Debounced.
    */
   setClaudeProfileCreditRenewed(name: string, renewedAt: string): boolean {
     const record = this.touchClaudeProfileInfo(name);
     if (!record) return false;
-    if (record.creditExhaustedAt !== undefined && Date.parse(record.creditExhaustedAt) > Date.parse(renewedAt)) return false;
+    // A refusal the operator already acted on is still a refusal: either kind newer than the answer wins over it.
+    if ([record.creditExhaustedAt, record.creditUnconfirmedSince].some((refusedAt) => refusedAt !== undefined && Date.parse(refusedAt) > Date.parse(renewedAt))) return false;
     delete record.creditExhaustedAt;
     delete record.creditUnconfirmedSince;
     record.creditRenewedAt = renewedAt;
@@ -2382,12 +2390,18 @@ export class StateStore {
   /**
    * The operator acted on an account marked used up (picked it again, signed it in again, pasted a key): the mark ends and
    * the account is usable. An API account keeps the refusal as `creditUnconfirmedSince`, so the first billed turn that goes
-   * through still records the renewal (and starts the spend counter over); any other account just loses the mark. Debounced.
+   * through still records the renewal (and starts the spend counter over); any other account loses the mark AND any refusal
+   * it kept while it was an API account (a sign-in that turned it into a subscription must not leave the field behind: nothing
+   * else would ever clear it). A pick with nothing to lift changes nothing. Debounced.
    */
   liftClaudeProfileCreditExhaustion(name: string): void {
     const record = this.touchClaudeProfileInfo(name);
-    if (!record || record.creditExhaustedAt === undefined) return;
-    if (record.billing === 'api') record.creditUnconfirmedSince = record.creditExhaustedAt;
+    if (!record || (record.creditExhaustedAt === undefined && record.creditUnconfirmedSince === undefined)) return;
+    if (record.billing === 'api') {
+      if (record.creditExhaustedAt !== undefined) record.creditUnconfirmedSince = record.creditExhaustedAt;
+    } else {
+      delete record.creditUnconfirmedSince;
+    }
     delete record.creditExhaustedAt;
     this.scheduleSave();
   }

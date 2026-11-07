@@ -368,20 +368,25 @@ describe('readDefaultClaudeProfileApiKey', () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
-  it('reads the primaryApiKey of the HOME .claude.json — where the CLI keeps the default profile\'s state', () => {
+  it('reads the primaryApiKey of the HOME .claude.json — where the CLI keeps the default profile\'s state — when its sessions run on the Console login\'s key', () => {
     fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ primaryApiKey: apiKey }));
-    assert.equal(readDefaultClaudeProfileApiKey(home), apiKey);
+    assert.equal(readDefaultClaudeProfileApiKey(true, home), apiKey);
+  });
+
+  it('is null when the sessions run on something else (an apiKeyHelper, a variable — the CLI prefers them): a stale primaryApiKey from an earlier login is a key they do not use', () => {
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ primaryApiKey: apiKey }));
+    assert.equal(readDefaultClaudeProfileApiKey(false, home), null);
   });
 
   it('is null with no home state file, no key in it, or something that is no API key — and never reads the .claude directory\'s own files', () => {
-    assert.equal(readDefaultClaudeProfileApiKey(home), null);
+    assert.equal(readDefaultClaudeProfileApiKey(true, home), null);
     fs.mkdirSync(path.join(home, '.claude'));
     fs.writeFileSync(path.join(home, '.claude', 'charness-api-key'), apiKey);
     fs.writeFileSync(path.join(home, '.claude', '.claude.json'), JSON.stringify({ primaryApiKey: apiKey }));
-    assert.equal(readDefaultClaudeProfileApiKey(home), null, 'the bot writes no key for the default profile; only a Console login\'s home key counts');
+    assert.equal(readDefaultClaudeProfileApiKey(true, home), null, 'the bot writes no key for the default profile; only a Console login\'s home key counts');
     fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: {} }));
-    assert.equal(readDefaultClaudeProfileApiKey(home), null);
+    assert.equal(readDefaultClaudeProfileApiKey(true, home), null);
     fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ primaryApiKey: 'sk-ant-oat01-notakey' }));
-    assert.equal(readDefaultClaudeProfileApiKey(home), null);
+    assert.equal(readDefaultClaudeProfileApiKey(true, home), null);
   });
 });

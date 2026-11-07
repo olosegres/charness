@@ -326,12 +326,14 @@ export function readClaudeProfileApiKey(configDir: string): string | null {
 }
 
 /**
- * @description The API key of the `default` profile (`~/.claude`, when it is billed to API credits): the bot never writes a
- * pasted key there, so only the key a Console login left in the home `.claude.json` (`primaryApiKey`) counts. Same rules as
+ * @description The API key of the `default` profile (`~/.claude`, when it is billed to API credits), `null` unless its sessions
+ * run on the key a Console login left in the home `.claude.json` (`primaryApiKey`; `isConsoleLoginKey`, from the auth probe):
+ * the CLI prefers an `apiKeyHelper` or a variable over that key, and a stale `primaryApiKey` left by an earlier login would be
+ * asked on a key the sessions do not use. The bot never writes a pasted key for the default. Same rules as
  * {@link readClaudeProfileApiKey}.
  */
-export function readDefaultClaudeProfileApiKey(homeDir: string = os.homedir()): string | null {
-  return readPrimaryApiKey(path.join(homeDir, claudeProfileStateFileName));
+export function readDefaultClaudeProfileApiKey(isConsoleLoginKey: boolean, homeDir: string = os.homedir()): string | null {
+  return isConsoleLoginKey ? readPrimaryApiKey(path.join(homeDir, claudeProfileStateFileName)) : null;
 }
 
 /** Whether the profile directory holds a pasted key (`null` = `~/.claude`, which never does: the bot writes none there). */

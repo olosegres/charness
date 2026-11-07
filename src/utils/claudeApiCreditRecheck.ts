@@ -10,7 +10,7 @@
  *   • answered → the credit is back: the bot records a RENEWAL (`onRenewed`) and its spend counter starts over.
  *
  * Never on a subscription account (only `billing: 'api'`; the `default` profile included when it is billed that way and
- * `~/.claude.json` holds its key), never more than once per interval (a day) per account — the
+ * sessions run on the key a Console login left in `~/.claude.json`), never more than once per interval (a day) per account — the
  * attempt is recorded BEFORE the request, in the account's persisted record, so a restart, a hang or a failure does not
  * bring it round again sooner. A real turn that goes through on the account is a recheck too (the bot's turn-cost path),
  * and a refused one moves the mark, so the day starts from it.
@@ -204,7 +204,7 @@ export async function runDueClaudeApiCreditRechecks(ports: ClaudeApiCreditRechec
 export function startClaudeApiCreditRechecks(ports: ClaudeApiCreditRecheckPorts, pollMs: number): () => void {
   const unreadable = listClaudeApiCreditProfilesWithoutKey(ports);
   if (unreadable.length > 0) {
-    ports.log(`[credit] ${unreadable.join(', ')}: billed to API credits, but the bot can read no API key for ${unreadable.length === 1 ? 'it' : 'them'} (an apiKeyHelper of its own, or no primaryApiKey in the .claude.json) — a used-up credit there is never rechecked`);
+    ports.log(`[credit] ${unreadable.join(', ')}: billed to API credits, but the bot can read no API key for ${unreadable.length === 1 ? 'it' : 'them'} (it runs on an apiKeyHelper or a variable of its own, or no Console login's key is stored for it — or /accounts has not probed it yet) — a used-up credit there is never rechecked`);
   }
   let isRunning = false;
   const runPass = (): void => {

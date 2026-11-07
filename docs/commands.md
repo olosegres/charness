@@ -365,10 +365,15 @@ balance), so the bot never uses it without you choosing it.
     naming it and nothing renews by itself until the constant is updated.
     **Which accounts can be asked:** those whose key the bot can read — the pasted
     key, the key a Console login stored in the account's own `.claude.json`, and for
-    the `default` profile the `primaryApiKey` in the home `~/.claude.json`. An API
-    account that runs on an `apiKeyHelper` of its own (or a default profile without
-    such a key) is never rechecked; the bot says so in ONE log line at boot, naming
-    it.
+    the `default` profile the `primaryApiKey` in the home `~/.claude.json` — the last
+    one only while the default's sessions really run on that Console login's key
+    (the CLI prefers an `apiKeyHelper` or a variable over it, and a stale key left by
+    an earlier login is not the one the sessions use; the bot learns which from
+    `/accounts`' sign-in probe, so a default is not asked until `/accounts` has been
+    opened once). An API account that runs on an `apiKeyHelper` of its own (or a
+    default profile that does not run on such a key) is never rechecked; the bot says
+    so in ONE log line at boot, naming it. An answer that arrives after a newer
+    refusal — also one you already acted on by picking the account — does not renew.
   - **For agents.** The `claude_profiles` tool's entry (and `charness claude-profiles
     --json`) of an API account carries the bot's estimate: `spentUsd` in the
     period, `remainingEstimateUsd` and `expiresOn` (only what you gave; `expiresOn`

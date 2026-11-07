@@ -119,6 +119,18 @@ describe('StateStore: the used-up credit evidence of an account', () => {
     assert.deepEqual([record('api')?.creditExhaustedAt, record('api')?.creditUnconfirmedSince], ['2026-11-07T10:00:00.000Z', undefined]);
   });
 
+  it('a kept refusal never outlives the account being an API account: once it is a subscription a lift clears it, so it cannot come back as stale news if the account turns API again', async () => {
+    credits.setClaudeProfileCreditExhausted('api', refusedAt);
+    credits.liftClaudeProfileCreditExhaustion('api');
+    assert.equal(record('api')?.creditUnconfirmedSince, refusedAt);
+    await credits.upsertClaudeProfileRecord('api', { billing: 'subscription' });
+    // The first subscription turn that goes through (it reports a cost) ends the evidence — the mark is already gone, the kept refusal must go too.
+    credits.liftClaudeProfileCreditExhaustion('api');
+    assert.deepEqual([record('api')?.creditExhaustedAt, record('api')?.creditUnconfirmedSince], [undefined, undefined]);
+    await credits.upsertClaudeProfileRecord('api', { billing: 'api' });
+    assert.equal(record('api')?.creditUnconfirmedSince, undefined, 'turning API again finds nothing left over');
+  });
+
   it('a newer figure clears both the mark and the kept refusal', () => {
     credits.liftClaudeProfileCreditExhaustion('api');
     credits.clearClaudeProfileCreditEvidence('api');
@@ -143,6 +155,17 @@ describe('StateStore: the used-up credit evidence of an account', () => {
     assert.deepEqual([record('api')?.creditExhaustedAt, record('api')?.creditRenewedAt], ['2026-11-09T09:00:05.000Z', '2026-11-08T09:00:00.000Z']);
     assert.equal(credits.setClaudeProfileCreditRenewed('api', '2026-11-09T09:00:05.000Z'), true, 'a refusal at the very instant is not newer');
     assert.equal(credits.setClaudeProfileCreditRenewed('ghost', '2026-11-09T09:00:05.000Z'), false, 'an unregistered name is ignored');
+  });
+
+  it('and it is refused when the newer refusal is one the operator ALREADY acted on (picked the account right after it): an acted-on refusal is still a refusal', () => {
+    credits.setClaudeProfileCreditExhausted('api', '2026-11-10T09:00:05.000Z');
+    credits.liftClaudeProfileCreditExhaustion('api');
+    assert.deepEqual([record('api')?.creditExhaustedAt, record('api')?.creditUnconfirmedSince], [undefined, '2026-11-10T09:00:05.000Z']);
+    const renewedBefore = record('api')?.creditRenewedAt;
+    assert.equal(credits.setClaudeProfileCreditRenewed('api', '2026-11-10T09:00:00.000Z'), false);
+    assert.deepEqual([record('api')?.creditUnconfirmedSince, record('api')?.creditRenewedAt], ['2026-11-10T09:00:05.000Z', renewedBefore], 'nothing wiped, nothing reset');
+    assert.equal(credits.setClaudeProfileCreditRenewed('api', '2026-11-10T09:00:06.000Z'), true, 'an answer AFTER the refusal renews');
+    assert.equal(record('api')?.creditUnconfirmedSince, undefined);
   });
 });
 

@@ -854,6 +854,22 @@ describe('claudeAccounts: /accounts over its ports', () => {
     await harness.state.setClaudeProfileOverride(harness.key, null);
   });
 
+  it('records whether the default\'s sessions run on the key a Console login stored — the one fact the daily credit recheck may ask on — from every auth probe, both ways', async () => {
+    const original = statusByDir.get(null);
+    try {
+      setStatus(null, { loggedIn: true, email: 'me@example.com', subscriptionType: null, orgName: null, authMethod: 'api_key', apiKeySource: '/login managed key', billing: 'api' });
+      await harness.runCommand('accounts');
+      assert.equal(harness.state.getClaudeProfileInfo('default')?.isConsoleLoginKey, true);
+
+      setStatus(null, { loggedIn: true, email: 'me@example.com', subscriptionType: null, orgName: null, authMethod: 'api_key_helper', apiKeySource: 'apiKeyHelper', billing: 'api' });
+      await harness.runCommand('accounts');
+      assert.equal(harness.state.getClaudeProfileInfo('default')?.isConsoleLoginKey, false, 'a helper replaced the login\'s key: the stored one is no longer the sessions\' key');
+    } finally {
+      statusByDir.set(null, original ?? null);
+      await harness.runCommand('accounts');
+    }
+  });
+
   it('the operator\'s own act on an API account marked used up — a pasted key, a pick in General — lifts the mark but KEEPS the refusal as unconfirmed, so the first turn that goes through still renews it', async () => {
     const dir = path.join(dataDir, 'claude-profiles', 'console');
     const refusedAt = '2026-11-07T09:00:00.000Z';
