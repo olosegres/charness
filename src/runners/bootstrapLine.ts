@@ -1,5 +1,6 @@
 import { linuxAdminGroups, macAdminGroup } from '../runnerUtility/adminCheck';
 import { gateMarker, maxGateNoiseBytes } from './gateProtocol';
+import { ensureNodeScriptRelativePath } from '../runnerUtility/managedNode';
 import { ownNodeDirName, runnerStateDirName } from '../runnerUtility/runnerHome';
 import { encodePairCode, type PairCodePayload } from './pairCode';
 
@@ -58,11 +59,9 @@ const bootstrapMarkerPattern = `^${gateMarker} bootstrap( [a-z]+=[A-Za-z0-9._:@/
 const sayFunction = 's() { echo "charness-runner: $*"; }';
 /** The same for a refusal: the line on stderr, then out. A function, defined once — three refusals of the fetch steps and the admin checks share it. */
 const failFunction = 'f() { echo "charness-runner: $*" >&2; exit 1; }';
-/**
- * The Node install both lines run from their copy of the package (see the script's own head): it puts the runner's OWN Node.js in place — the official build
- * from nodejs.org, checksum checked — and prints the real path of the `node` the pairing runs under. Kept out of the pasted line: a Telegram message holds 4096 characters.
- */
-const ensureNodeInPackage = 'remoteRun/ensureNode.sh';
+// The Node install both lines run from their copy of the package (`ensureNodeScriptRelativePath`; see the script's own head): it puts the runner's OWN Node.js in
+// place — the official build from nodejs.org, checksum checked — and prints the real path of the `node` the pairing runs under. Kept out of the pasted line: a
+// Telegram message holds 4096 characters.
 /** Where the plain line's Node goes, as the shell spells it: inside the account's state folder. */
 const ownNodeBaseInShell = `"$HOME/${runnerStateDirName}/${ownNodeDirName}"`;
 
@@ -138,7 +137,7 @@ function checkScriptHasNoQuote(script: string, what: string): string {
 export function buildBootstrapLine(payload: PairCodePayload): string {
   const script = [
     ...renderFetchSteps(payload, false),
-    `n=$(sh "$d/pkg/${ensureNodeInPackage}" own ${ownNodeBaseInShell})`,
+    `n=$(sh "$d/pkg/${ensureNodeScriptRelativePath}" own ${ownNodeBaseInShell})`,
     `"$n" "$d/pkg/${runnerCliInPackage}" pair ${renderPairArguments(encodePairCode(payload))}`,
   ];
   return `sh -c '${checkScriptHasNoQuote(['set -eu', sayFunction, failFunction, ...script].join('; '), 'bootstrap')}'`;
@@ -164,7 +163,7 @@ function renderAdminScript(payload: PairCodePayload): string {
   ];
   const steps = [
     ...renderFetchSteps(payload, true),
-    `n=$(sh "$d/pkg/${ensureNodeInPackage}" root "$a")`,
+    `n=$(sh "$d/pkg/${ensureNodeScriptRelativePath}" root "$a")`,
     `"$n" "$d/pkg/${rootServiceCliInPackage}" install "$a" ${renderPairArguments(encodePairCode(payload))}`,
   ];
   return checkScriptHasNoQuote(['set -eu', ...checks, ...steps].join('; '), 'admin');

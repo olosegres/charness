@@ -5,7 +5,7 @@ import { formatListTimestamp } from '../runners/runnersList';
 import { cancelReplySchema, redeemReplySchema, unpairReplySchema, type RedeemReply, type RedeemRequest } from '../runners/gateProtocol';
 import { decodePairCode, type PairCodePayload } from '../runners/pairCode';
 import { checkIsAdminAccount, formatAdminWarning, readAccountFacts } from './adminCheck';
-import { checkLauncherIsFor, ensureLauncher } from './launcher';
+import { ensureLauncher } from './launcher';
 import { nodeMovedExitCode, removeOldApps, restartExitCode, switchCurrentApp } from './appInstall';
 import { connectToHub, HubConnectionError, requestGateJson, type HubEndpoint } from './hubClient';
 import { recoverPairing } from './pairingRecovery';
@@ -33,7 +33,9 @@ import { ensureRunnerKeys, readRunnerKeys, type RunnerKeys } from './runnerKeys'
 import { readExecEnv } from './execEnv';
 import { createRunnerServers } from './runnerServers';
 import { createStepRunner, stepLabels, type RunStep } from './progress';
-import { createNodeMoveDeps, moveToOwnNode, testKeepNodeEnvName, type NodeMoveDeps } from './managedNode';
+import { createNodeMoveDeps } from './managedNode';
+import { createIdleRestart, ensureLauncherForRunningNode, listRunningExecutables, restartHint, runNodeUpkeep } from './nodeUpkeep';
+import { readNodeUpkeepIntervalMs } from './nodeUpkeepTiming';
 import { createShimDeps, ensurePackageManagerShims, formatShimLine, type ShimOutcome } from './packageManagerShims';
 import { createToolDeps, ensurePueue, ensureRsync, findPueue, findRsync, type ToolDeps, type ToolInstallOutcome } from './toolInstall';
 
@@ -417,42 +419,36 @@ export async function runGuiAgentCommand(io: CommandIo, homeDir: string = os.hom
   return result === 'restart' ? restartExitCode : 0;
 }
 
-/** What the log calls the Node.js this link runs on: its version and where it lives. */
-function describeRunningNode(nodePath: string): string {
-  return `Node.js ${process.versions.node} at ${nodePath}`;
-}
-
 /**
- * What the start of a link does after it looked at its Node.js: `restart` — it moved and the launcher is rewritten, so leave with {@link nodeMovedExitCode};
- * `keep-launcher` — the launcher already names the runner's own Node but this link still runs on another, so go on and leave the launcher exactly as it is;
- * `continue` — nothing to do (it runs on its own Node, or could not get one, or a flow keeps the one it has), the launcher follows the Node that runs.
+ * Look after the runner's Node.js once the link is up and then every `nodeUpkeepIntervalMs` (`nodeUpkeepTiming.ts`): a move off a system Node, a newer
+ * release of the own one, the removal of what no process uses. In the background — the runner is on the hub while a download runs — and when it
+ * has put a Node in place that this link does not run on, the link leaves for the launcher's new start only when no command runs over it.
  */
-export type NodeMoveStep = 'restart' | 'keep-launcher' | 'continue';
-
-/**
- * @description A runner runs on its OWN Node.js (`managedNode.ts`). One paired on a system or Homebrew Node moves at its first link start on code that
- * knows this — the start right after the self-update that brought the code: the package's script puts the official Node in `~/.charness-runner/node`, the
- * launcher is rewritten to name it, and the link leaves with {@link nodeMovedExitCode} for a start of the new launcher (a service manager restarts it).
- * A move that cannot be made (no network, a full disk) is told in the log and tried again at the next start; the link goes on with the Node it has. A
- * launcher that already names the Node while this process still runs under another is an old launcher process that has not been restarted yet, or a
- * launcher whose Node could not be started: leaving again would only loop, and rewriting it for the Node that runs would undo the move — it is left alone.
- */
-export async function moveToOwnNodeIfNeeded(paths: RunnerHomePaths, io: CommandIo, deps: NodeMoveDeps, environment: NodeJS.ProcessEnv = process.env): Promise<NodeMoveStep> {
-  if (environment[testKeepNodeEnvName] === '1') return 'continue';
-  const outcome = await moveToOwnNode(paths, deps);
-  if (outcome.kind === 'managed') return 'continue';
-  if (outcome.kind === 'failed') {
-    io.stderr(`charness-runner: this runner runs on ${describeRunningNode(deps.currentNodePath)}, not on a Node.js of its own, and could not get one: ${outcome.reason}. It tries again at its next start.\n`);
-    return 'continue';
-  }
-  if (outcome.log !== '') io.stderr(`${outcome.log}\n`);
-  if (checkLauncherIsFor(paths, outcome.nodePath)) {
-    io.stderr(`charness-runner: the launcher already names ${outcome.nodePath}, but this link still runs on ${describeRunningNode(deps.currentNodePath)}: start the launcher again to use it.\n`);
-    return 'keep-launcher';
-  }
-  ensureLauncher(paths, outcome.nodePath);
-  io.stdout(`charness-runner: this runner now has its own Node.js (${outcome.nodePath}) and leaves ${deps.currentNodePath}; the launcher starts again on it\n`);
-  return 'restart';
+function startNodeUpkeep(paths: RunnerHomePaths, appDir: string, io: CommandIo, restart: { request: () => void }): void {
+  const deps = {
+    paths,
+    move: createNodeMoveDeps(appDir, runCommand),
+    log: (line: string): void => { io.stderr(`charness-runner: ${line}\n`); },
+    say: (line: string): void => { io.stdout(`${line}\n`); },
+    now: Date.now,
+    getAppId: () => readCurrentAppName(paths),
+    listRunningExecutables: () => listRunningExecutables(),
+    environment: process.env,
+  };
+  let isRunning = false;
+  const look = async (): Promise<void> => {
+    if (isRunning) return;
+    isRunning = true;
+    try {
+      if ((await runNodeUpkeep(deps)) === 'restart') restart.request();
+    } catch (error) {
+      deps.log(`looking after this runner's Node.js failed (${error instanceof Error ? error.message : 'unknown error'})`);
+    } finally {
+      isRunning = false;
+    }
+  };
+  void look();
+  setInterval(() => { void look(); }, readNodeUpkeepIntervalMs(process.env)).unref();
 }
 
 /** @description `charness-runner run`: ensure the tools and Pueue, then hold the link until stopped. Returns the exit code (75 = restart onto an update). */
@@ -474,9 +470,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     io.stderr('charness-runner: this account is not paired. Run the line from /runners on this machine first.\n');
     return 1;
   }
-  const nodeMove = await moveToOwnNodeIfNeeded(paths, io, createNodeMoveDeps(appDir, runCommand));
-  if (nodeMove === 'restart') return nodeMovedExitCode;
-  if (nodeMove === 'continue') ensureLauncher(paths, process.execPath);
+  ensureLauncherForRunningNode(paths, process.execPath);
   startGuiAgentHealing(paths, io);
   const toolDeps = createToolDeps();
   if (!(await findPueue(paths, toolDeps))) await ensurePueue(paths, toolDeps);
@@ -489,12 +483,26 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   if (simulatorWork.linkChecksSimulator) startIosCheck(paths, io);
   if (simulatorWork.linkSilencesSimulators) startSimulatorSilencing(io);
   const loopRef: { current: ReturnType<typeof createLinkLoop> | null } = { current: null };
+  const controller = new AbortController();
+  /** Set when the link leaves because the runner's Node changed (see {@link startNodeUpkeep}); the launcher then starts itself again. */
+  const leave: { code: number | null } = { code: null };
+  const nodeRestart = createIdleRestart({
+    getActiveCount: () => servers.getActiveExecCount(),
+    leave: () => {
+      leave.code = nodeMovedExitCode;
+      io.stdout(`charness-runner: no command runs over the link: leaving for the launcher's new start (${restartHint})\n`);
+      controller.abort();
+    },
+  });
   const servers = createRunnerServers({
     serverPrivateKey: keys.server.privateKey,
     hubPublicKey: config.hub.publicKey,
     readEnv: () => readExecEnv(paths),
     cwd: paths.workDir,
-    onActiveCountChange: () => loopRef.current?.notifyActiveCountChange(),
+    onActiveCountChange: () => {
+      loopRef.current?.notifyActiveCountChange();
+      nodeRestart.notifyActiveCountChange();
+    },
   });
   loopRef.current = createLinkLoop({
     paths,
@@ -506,7 +514,6 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     log: (line) => io.stderr(`charness-runner: ${line}\n`),
     stopJobs: async () => { await stopAllPueueJobs(paths); },
   });
-  const controller = new AbortController();
   const stop = (): void => {
     controller.abort();
     setTimeout(() => process.exit(0), shutdownGraceMs).unref();
@@ -517,8 +524,10 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   process.once('exit', () => { keepAwake.stop(); });
   io.stdout(`${describeKeepAwake(keepAwake.getState())}\n`);
   io.stdout(`charness-runner: serving ${config.hub.label} as “${config.name}” (Ctrl-C stops)\n`);
+  startNodeUpkeep(paths, appDir, io, nodeRestart);
   try {
-    return await loopRef.current.run(controller.signal);
+    const code = await loopRef.current.run(controller.signal);
+    return leave.code ?? code;
   } finally {
     keepAwake.stop();
   }

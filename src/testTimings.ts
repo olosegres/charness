@@ -16,6 +16,7 @@ import { minFireIntervalMs } from './scheduler/recurrence';
 import { defaultCheckStatusEveryMinutes } from './scheduler/checkStatus';
 import { remoteRunLeaseMinMs, remoteRunLeaseMs } from './remoteRun/leaseTiming';
 import { lidPollMinMs, lidPollMs } from './runnerUtility/lidPollTiming';
+import { nodeUpkeepIntervalMs, nodeUpkeepMinMs } from './runnerUtility/nodeUpkeepTiming';
 import { runnerVersionPollMinMs, runnerVersionPollMs } from './runnerUtility/versionPollTiming';
 import { pairingLifetimeMinMs, pairingLifetimeMs } from './runners/pairingTiming';
 import { runnerWaitPollMinMs, runnerWaitPollMs } from './remoteRun/runnerWaitTiming';
@@ -82,6 +83,8 @@ const testTimingsSchema = z.strictObject({
   remoteRunLeaseMs: createShorterWindowSchema(remoteRunLeaseMs).min(remoteRunLeaseMinMs).optional(),
   /** How often a linked `charness-runner` asks the hub for its current package (production: `runnerVersionPollMs`, 5 min; at least `runnerVersionPollMinMs`). Read by the runner utility, not by the bot. */
   runnerVersionPollMs: createShorterWindowSchema(runnerVersionPollMs).min(runnerVersionPollMinMs).optional(),
+  /** How often a linked `charness-runner` looks after its own Node.js again (production: `nodeUpkeepIntervalMs`, 24 h; at least `nodeUpkeepMinMs`). Read by the runner utility, not by the bot. */
+  runnerNodeUpkeepMs: createShorterWindowSchema(nodeUpkeepIntervalMs).min(nodeUpkeepMinMs).optional(),
   /** How often a Mac's `charness-runner` looks at its lid (production: `lidPollMs`, 10 s; at least `lidPollMinMs`). Read by the runner utility, not by the bot. */
   runnerLidPollMs: createShorterWindowSchema(lidPollMs).min(lidPollMinMs).optional(),
   /** How long a runner pairing code works (production: `pairingLifetimeMs`, 10 min; at least `pairingLifetimeMinMs`). Read by `charness runners pair`, not by the bot's boot. */

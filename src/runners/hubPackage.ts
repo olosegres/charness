@@ -5,6 +5,7 @@ import * as path from 'path';
 import { gzipSync } from 'zlib';
 import { z } from 'zod';
 import { getCaughtErrnoCode, writeJsonFileAtomically } from '../configDirFile';
+import { ensureNodeScriptRelativePath } from '../runnerUtility/managedNode';
 import { ensureHubDir } from './hubLock';
 import { getHubFilePaths, type HubContext } from './hubPaths';
 import { parseRootPackageJson, parseRunnerLock, renderRunnerLockForPackage, renderRunnerPackageJson, runnerLockRelativePath } from './runnerLock';
@@ -41,8 +42,6 @@ const maxOpenAttempts = 3;
 const skippedFilePattern = /(?:\.d\.ts|\.d\.ts\.map|\.js\.map)$/;
 const skippedFolderName = '__tests__';
 const runnerScriptRelativePath = 'remoteRun/runner.sh';
-/** What both pairing lines (and a runner that moves off a system Node) run, from their copy of the package, to put the runner's own Node.js in place (`remoteRun/ensureNode.sh`). */
-const ensureNodeScriptRelativePath = 'remoteRun/ensureNode.sh';
 const packageJsonRelativePath = 'package.json';
 /** What the lock is called inside the package: where `npm ci` looks for it. */
 const packagedLockFileName = 'package-lock.json';

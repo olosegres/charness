@@ -125,7 +125,10 @@ function syncCorepackWrapper(paths: RunnerHomePaths, deps: ShimDeps): void {
 /** @description Make the job PATH offer `yarn` and `pnpm` where a Corepack is at hand; never throws — what cannot be done is a `missing` outcome with its reason. */
 export async function ensurePackageManagerShims(paths: RunnerHomePaths, deps: ShimDeps): Promise<ShimOutcome[]> {
   syncCorepackWrapper(paths, deps);
-  const otherFolders = getJobPathDirectories(paths, deps.nodeDir).filter((folder) => folder !== paths.binDir);
+  // Neither the runner's own `bin` (its shims are what is decided here) nor the bin of the jobs' npm prefix offers a manager: that prefix is state a job
+  // writes (`npm i -g yarn`), and a yarn 1 installed there would otherwise replace Corepack's shim — which follows each project's `packageManager` — for every project.
+  const jobWrittenFolders = [paths.binDir, path.join(paths.npmPrefix, 'bin')];
+  const otherFolders = getJobPathDirectories(paths, deps.nodeDir).filter((folder) => !jobWrittenFolders.includes(folder));
   const outcomes: ShimOutcome[] = [];
   const unoffered: JobPackageManager[] = [];
   for (const manager of jobPackageManagers) {

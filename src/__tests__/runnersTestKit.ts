@@ -7,6 +7,7 @@ import type { RedeemRequest } from '../runners/gateProtocol';
 import { createHubContext, type HubContext } from '../runners/hubPaths';
 import { generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
 import type { PairCodePayload } from '../runners/pairCode';
+import { ensureNodeScriptRelativePath } from '../runnerUtility/managedNode';
 
 /**
  * Shared fixtures of the `runners*.test.ts` files: a throwaway hub (registry folder, `authorized_keys`, a package root to pack), fresh
@@ -53,7 +54,7 @@ export function createHubFixture(): HubFixture {
   fs.writeFileSync(path.join(packageRoot, 'package.json'), `${JSON.stringify(fixturePackageJson, null, 2)}\n`);
   fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'runner-package-lock.json'), `${JSON.stringify(fixtureRunnerLock, null, 2)}\n`);
   fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'runner.sh'), '#!/usr/bin/env bash\necho runner\n', { mode: 0o755 });
-  fs.writeFileSync(path.join(packageRoot, 'remoteRun', 'ensureNode.sh'), '#!/bin/sh\necho picked\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(packageRoot, ensureNodeScriptRelativePath), '#!/bin/sh\necho picked\n', { mode: 0o755 });
   fs.writeFileSync(path.join(packageRoot, 'dist', 'cli.js'), 'console.log("cli");\n', { mode: 0o755 });
   fs.writeFileSync(path.join(packageRoot, 'dist', 'runners', 'example.js'), 'module.exports = 1;\n');
   fs.writeFileSync(path.join(packageRoot, 'dist', 'runners', 'example.d.ts'), 'export {};\n');

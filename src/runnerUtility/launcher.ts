@@ -38,6 +38,19 @@ export function renderLauncher(paths: Pick<RunnerHomePaths, 'currentApp'>, nodeP
   ].join('\n');
 }
 
+/** `NODE='…'` as {@link renderLauncher} writes it: a single-quoted word, in which a quote is `'\\''`. */
+const launcherNodePattern = /^NODE='((?:[^']|'\\'')*)'$/m;
+
+/** @description The Node the launcher on disk starts, or `null` when there is no launcher or it names none. */
+export function readLauncherNodePath(paths: Pick<RunnerHomePaths, 'launcher'>): string | null {
+  try {
+    const match = launcherNodePattern.exec(fs.readFileSync(paths.launcher, 'utf8'));
+    return match === null ? null : match[1].replace(/'\\''/g, "'");
+  } catch {
+    return null;
+  }
+}
+
 /** @description Is the launcher on disk exactly the one that starts `nodePath`? */
 export function checkLauncherIsFor(paths: RunnerHomePaths, nodePath: string): boolean {
   try {

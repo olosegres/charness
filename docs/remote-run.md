@@ -68,17 +68,20 @@ A runner is attached in one of two ways:
      so you can fix the account and paste it again.
    - **Node.** The runner gets **its own Node.js**, whatever the machine has: a Homebrew or system Node is the admin's to change, and a job that
      runs `corepack enable` or `npm i -g` against it fails for lack of rights. The line installs it with a script of the package it has just fetched
-     (`remoteRun/ensureNode.sh`, run as root from the root-owned copy): the newest 22.x official build from nodejs.org for the machine, downloaded with
-     `curl` or `wget`, its SHA-256 checked against nodejs.org's `SHASUMS256.txt` before it is unpacked (the trust is TLS to nodejs.org), put in place
-     whole as `/usr/local/lib/charness-runner/node/v<version>`. Root runs it (the root step, and the pairing it starts as the account), so it must stay
-     where the account cannot change it: the script unpacks it as root without taking owners from the archive, takes group and world write away, and
-     checks again every time — also for an install that is already there — that its real path is **outside every home folder** (`/Users/<name>`,
-     `/home/<name>`, root's own; links followed), that the account can run it and **cannot write it, nor any folder above it**; if the account can (a
-     `/usr/local` handed to it), the line stops before anything runs. A second pairing reuses what is there and downloads the archive again only for a
+     (`remoteRun/ensureNode.sh`, run as root from the root-owned copy): the newest LTS release of Node.js from 22.12 up to 24 (the last line that ships
+     Corepack) from nodejs.org's list for the machine, downloaded with `curl` or `wget` (a total time limit on each), its SHA-256 checked against the
+     release's `SHASUMS256.txt` before it is unpacked (the trust is TLS to nodejs.org), put in place whole as `/usr/local/lib/charness-runner/node/v<version>`.
+     Only x86-64 and ARM64 machines, macOS and Linux with glibc can be runners: an Alpine (musl) machine cannot, and nothing offers a system Node instead.
+     Root runs it (the root step, and the pairing it starts as the account), so it must stay where the account cannot change it: the script judges the
+     folder **before it writes anything into it** (the deepest part of it that exists, then its real path, which every later step uses) and judges every
+     install **before root runs any Node of it** — also one that is already there, and one it finds when nodejs.org is out of reach. A Node qualifies only if its
+     real path is **outside every home folder** (`/Users/<name>`, `/home/<name>`, root's own; links followed) and the account can run it and **cannot write
+     it, nor any folder above it**; if the account can (a `/usr/local` handed to it), the line stops before anything runs. The script unpacks as root without
+     taking owners from the archive and takes group and world write away. A second pairing reuses what is there and downloads an archive again only for a
      newer release; with nodejs.org out of reach it uses the newest install it finds and says so; with none, the line stops and says what to check. The
-     launcher and the daemons' `PATH` carry this Node, so a runner depends on no package manager and no home. The plain line (the second message)
-     does the same as the account itself, into `~/.charness-runner/node`. A runner paired before this (on a system Node) moves to its own at its next
-     start after a self-update, without the admin (see «A runner's Node» below).
+     launcher and the daemons' `PATH` carry this Node, so a runner depends on no package manager and no home. **A root-owned install is refreshed only by
+     the next admin line.** The plain line (the second message) does the same as the account itself, into `~/.charness-runner/node`. A runner paired
+     before this (on a system Node) moves to its own once its link is up, without the admin (see «A runner's Node» below).
    - **Homes the runner account can read.** macOS makes every home `750` with group `staff`, and a standard account is in `staff`, so by default
      the agents' jobs — and the npm packages they install — can read the source code, keys and tokens of the people who use the machine. **Both
      lines** end with a warning naming the homes the runner account can read (the admin line asks as that account, not with root's rights) and the
@@ -154,15 +157,34 @@ up all the same. It never touches `pmset` or any admin power setting, so nothing
   and all, within seconds of the link being SIGKILLed).
 
 **A runner's Node.** A runner runs on its own Node.js (`~/.charness-runner/node/v<version>`, or the root-owned `/usr/local/lib/charness-runner/node/v<version>`
-the admin line installs). That Node's folder is not one the account can write, so nothing a job installs goes there: `npm i -g` writes into
-`~/.charness-runner/npm` (`NPM_CONFIG_PREFIX`; its `bin` is on the job's `PATH`), Corepack keeps the package managers it downloads in
-`~/.charness-runner/corepack` (`COREPACK_HOME`), and a `corepack` wrapper in `~/.charness-runner/bin` (first on the `PATH`) turns `corepack enable` /
-`disable` without `--install-directory` — what a project's install step runs — into one for `~/.charness-runner/bin`, where the shims below live. A
-runner paired on a system or Homebrew Node moves itself: at the first start of its link after the self-update that brings this, the account downloads
-the same verified build into `~/.charness-runner/node` (a self-update runs as the account, not root, so the copy is the account's own — root only ever
-runs the one the admin line installed), rewrites its launcher and restarts onto it (a service manager starts the new launcher by itself; a terminal run
-says to start it again). If that cannot be done — no network, a full disk, no `curl` or `wget` — the runner stays on the Node it has, its log says
-«could not get one: …», and it tries again at its next start; pasting a fresh admin line installs the root-owned Node for the root steps.
+the admin line installs), and **so do its jobs**: a job's `PATH` starts with that Node's folder, ahead of Homebrew and the system. That Node's folder is not
+one the account can write, so nothing a job installs goes there: `npm i -g` writes into `~/.charness-runner/npm` (`NPM_CONFIG_PREFIX`; its `bin` is on the
+job's `PATH`, after `~/.charness-runner/bin`, so a `yarn` or `pnpm` a job installs globally never replaces Corepack's shims, which follow each project's
+`packageManager`), Corepack keeps the package managers it downloads in `~/.charness-runner/corepack` (`COREPACK_HOME`), and a `corepack` wrapper in
+`~/.charness-runner/bin` (first on the `PATH`) turns `corepack enable` / `disable` without `--install-directory` — what a project's install step runs — into one
+for `~/.charness-runner/bin`, where the shims below live.
+
+*A runner paired on a system or Homebrew Node moves itself.* Once its link is up (the runner is on the hub while it downloads), the account fetches the
+newest LTS build into `~/.charness-runner/node` (a self-update runs as the account, not root, so that copy is the account's own — root only ever runs the
+one the admin line installed), rewrites its launcher, and the link leaves for the launcher's new start **only when no command runs over it**: a service
+manager starts the launcher again by itself; **started from a terminal, start `charness-runner run` again**. The log names the Node it leaves, with its
+path and version. If the move cannot be made — no network, a full disk, no `curl` or `wget`, a download that does not run here — the runner stays on the Node
+it has, says «could not get a Node.js of its own or a newer one: …», writes the failure down (`~/.charness-runner/node-failure.json`), and tries again after
+**24 hours or the next update of the program**, not at every start. A Node an own install is on moves up to the newest release **of its line** (the same major;
+a new major would change what every job runs) when its link starts and then daily; the folders of versions that no process uses any more, and what a killed
+install left, are removed. The root-owned Node an admin line installed is refreshed only by the next admin line.
+
+*What changes for the jobs of a runner that moves.* They get that Node's `node` and `npm` — a Homebrew Node 25 becomes Node 24, the newest LTS line that ships
+Corepack (25 and later do not) —, they no longer find a command that was installed globally into the OLD Node (an nvm Node's `eas` or `firebase`, say: install it
+again, it goes to `~/.charness-runner/npm`), and `NPM_CONFIG_PREFIX` is set for them, which nvm refuses to work with («nvm is not compatible with the
+"NPM_CONFIG_PREFIX" environment variable»). Everything is undone from `~/.charness-runner/env`, read again for every job:
+
+```
+# keep jobs on the old Node: the runner's own bin (its Corepack shims, pueue, rsync), the old Node's folder, then the rest (the file is not expanded: write the whole value)
+PATH=/home/runner/.charness-runner/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+# let nvm work in a job: an EMPTY value removes the variable from the job's environment
+NPM_CONFIG_PREFIX=
+```
 
 **`yarn` and `pnpm` survive a change of Node.** A Node from nvm, Volta or Homebrew has Corepack but not its shims, so `yarn` is on a job's
 `PATH` only when somebody enabled it for exactly that Node — and a link restarted under another Node (nvm's default changed, a service

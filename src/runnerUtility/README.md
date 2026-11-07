@@ -68,17 +68,26 @@ the queue), `logs/`, `build/`.
   points `current` at it and exits with 75 — the launcher starts the new copy. A busy runner waits until its last command ends; while the
   update installs the link is closed on purpose and that closing does not start another attempt; a failed update is tried again by the
   next poll after a 10-minute cooldown. Pueue jobs are not commands over the link: a queue never blocks an update.
-- **The runner's own Node.js (`managedNode.ts`, `remoteRun/ensureNode.sh`).** No runner runs on a shared Node. The package's `ensureNode.sh` (plain `sh`: a machine may have no Node
-  at all) downloads the newest 22.x official build from nodejs.org (curl or wget, timeouts), checks its SHA-256 against `SHASUMS256.txt` before unpacking, unpacks it
-  next to its final place and moves it whole to `<base>/v<version>`; an install that is there and runs is reused, with nodejs.org out of reach the newest one is
-  used. `root <account>` mode (the admin line, as root, from its root-owned copy; base `sharedNodeBase`, `serviceCommon.ts`) also keeps the Node root requires — unpacked without
-  the archive's owners, no group/world write, real path outside every home, the account can run it and can write neither it nor any folder above it (`sudo -u <account> test`
-  only) — and fails otherwise; `own <base>` mode runs as the account (the plain line; and the MOVE below). **The move:** at the start of `runLink`, a link whose `process.execPath`
-  is in neither base (a runner paired on a system or Homebrew Node) runs `own` into `paths.ownNodeDir` (`moveToOwnNode`, the package's script of the running app), rewrites the
-  launcher with `ensureLauncher` and leaves with `nodeMovedExitCode` (76): the launcher of this version starts itself again, an older one exits and the service manager starts the
-  new file. A launcher that already names the Node while this link still runs on another is left alone (no loop); a move that fails is logged («could not get one») and tried
-  at the next start. A self-update runs as the account, so the copy is the account's own — root only ever runs the shared one. The login session's agent (macOS) follows at its
-  next restart. Test seams (flows only): `CHARNESS_TEST_RUNNER_KEEP_NODE=1` skips the move, `CHARNESS_TEST_RUNNER_NODE_DIST` names a `file://` mirror of nodejs.org.
+- **The runner's own Node.js (`managedNode.ts`, `nodeUpkeep.ts`, `remoteRun/ensureNode.sh`).** No runner runs on a shared Node, and its jobs run on the runner's. The package's
+  `ensureNode.sh` (plain `sh`: a machine may have no Node at all) picks the newest LTS release from 22.12 up to 24 (the last line that ships Corepack) out of nodejs.org's
+  `index.json` — by number, with a `<major>` it keeps to that line instead —, fetches the release's `SHASUMS256.txt` and the archive (curl, or wget under `timeout`: a total limit on
+  each; the outer deadline `moveDeadlineMs` is longer than all the script's limits together), checks the SHA-256 before unpacking, unpacks next to the final place and moves
+  it whole to `<base>/v<version>`; an install that is there and runs is reused, with nodejs.org out of reach the newest one is used. Only x86-64 / ARM64, macOS and glibc Linux
+  (musl cannot be a runner; no system Node is offered instead). `root <account>` mode (the admin line, as root, from its root-owned copy; base `sharedNodeBase`,
+  `serviceCommon.ts`) also keeps the Node root requires — unpacked without the archive's owners, no group/world write, real path outside every home, the account can run it and can
+  write neither it nor any folder above it (`sudo -u <account> test` only) — judged BEFORE root writes anything (the deepest existing part of the base, then its real path, which
+  every later step uses) and before root runs any Node of an install (also a reused one, and one found offline: an unfit one is skipped, never run); `own <base>` mode runs as the
+  account (the plain line; and the upkeep below). **The upkeep** (`runNodeUpkeep`, started by `runLink` once the link is UP, and every `nodeUpkeepIntervalMs`): a link whose
+  `process.execPath` is in neither base (a runner paired on a system or Homebrew Node) asks `ensureOwnNode` for a Node in `paths.ownNodeDir`; a link on an own Node asks for the
+  newest release of ITS major; the shared Node is left to the next admin line. A Node in place that the link does not run on gets the launcher rewritten (`ensureLauncher`) and
+  `createIdleRestart` makes the link leave with `nodeMovedExitCode` (76) only when no command runs over it: the launcher of this version starts itself again, an older one exits
+  and the service manager starts the new file (a terminal run is started again by hand, which the log says). A failed look is written to `node-failure.json` with the app copy it
+  happened under and not repeated until a day has passed or the app copy changed (`checkIsAttemptDue`) — never a download at every start. `pruneOwnNodes` removes the version
+  folders that are not the running Node, the launcher's, the new one, nor an executable of any running process (`/proc/*/exe`, `ps -axo comm=`), and the `.install.*` folders an
+  hour old. `ensureLauncherForRunningNode` keeps the launcher from being rewritten back for an old Node by a link that an old launcher process restarted. A self-update runs as the
+  account, so the copy is the account's own — root only ever runs the shared one. The login session's agent (macOS) follows at its next restart. A job's environment takes
+  `NPM_CONFIG_PREFIX` / `COREPACK_HOME` out when the operator's `env` line for them is empty. Test seams (flows only): `CHARNESS_TEST_RUNNER_KEEP_NODE=1` skips the upkeep,
+  `CHARNESS_TEST_RUNNER_NODE_DIST` names a `file://` mirror of nodejs.org, `CHARNESS_TEST_TIMINGS` `runnerNodeUpkeepMs` shortens the daily look.
 - **Tools.** Pueue 4.0.4 from the pinned release binaries, each checked against its sha256 before it is kept (`toolInstall.ts`;
   hashes taken from the v4.0.4 assets). rsync ≥ 3.1 is found (PATH, Homebrew, `/usr/local`, `/usr/bin`; Apple's `openrsync` does not count:
   no `--copy-dest`, no `--modify-window=-1`); otherwise rsync 3.4.1 is built from its pinned source with `cc`/`make`, or the one command to
@@ -357,9 +366,11 @@ pair-as-account from root's own copy → the root step (no dependencies) → the
 in the account's launcher that fails the flow if ROOT ever starts it, a used line refused, and a failing service manager followed by a fresh
 line that only installs the service. The line's Node install is the REAL script there (`placeRootNodeInstallerWrapper` gives it the flow's own shared folder and a local mirror of
 nodejs.org — a copy of the Node running the flow — as its test seams): the machine has no Node on the line's PATH, and the pairing, the root step and the launcher run on the
-downloaded one; the retry finds it already there. `runnerNodeMoveE2e.test.ts`: a runner paired on a system Node moves to its own (a mirror with a wrong checksum moves nothing and says why;
-a good one: the launcher names the Node, the link comes back running on it, a job sees it first on its PATH and the npm / Corepack folders in `~/.charness-runner`; a start on it downloads
-nothing). `runnersEnsureNode.test.ts` is the script itself against a local mirror (checksum, reuse, offline, wget, root-mode refusals); `runnerUtilityManagedNode.test.ts` the move's logic. Unit tests: `runnersBootstrapLine.test.ts` (the line against a real `sh` with stand-ins),
+downloaded one; the retry finds it already there. `runnerNodeMoveE2e.test.ts`: a runner paired on a system Node moves to its own (a mirror with a wrong checksum moves nothing, says why and waits a day; the link is up first;
+a day later: the launcher names the Node, the link comes back running on it and the failure record is gone; a job sees it first on its PATH and the npm / Corepack folders in `~/.charness-runner`;
+a newer release of the line is moved up to — not the newer major — and the old one removed; with a command held over the link the new release is put in place but the link leaves only when the command ends).
+`runnersEnsureNode.test.ts` is the script itself against a local mirror (selection, checksum, reuse, offline, wget under `timeout`, root-mode refusals and ordering); `runnerUtilityManagedNode.test.ts` the install's logic,
+`runnerUtilityNodeUpkeep.test.ts` the upkeep (the failure record and its day, the log lines, pruning, the idle hand-over). Unit tests: `runnersBootstrapLine.test.ts` (the line against a real `sh` with stand-ins),
 `runnerUtilityAdminService.test.ts` (root's step: every call that names the account's tree goes through `sudo -u`),
 `runnerUtilityService.test.ts` (the account's `system-step`, the removal commands). `runnerLinkE2e.test.ts` (kit: `runnerLinkE2e/runnerLinkFlowKit.ts`): the real pasted line, `charness-runner run`, plain ssh through
 `runner-proxy`, restart, gate killed, the runner key's refusals (each against an endpoint the test owns, with the session kept up), an expired

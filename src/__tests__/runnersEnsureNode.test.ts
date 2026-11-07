@@ -1,7 +1,7 @@
 /**
  * @description `remoteRun/ensureNode.sh`: the script that gives a runner its OWN Node.js — the official build from nodejs.org, checked against
- * `SHASUMS256.txt`, unpacked whole into `<base>/v<version>`. Run here for real in `sh` against a local mirror laid out like `nodejs.org/dist` (a tarball
- * with a stand-in `bin/node`, and the `latest-v22.x/SHASUMS256.txt` that names it): no network. In `root` mode (the admin line) it must also keep what
+ * `SHASUMS256.txt`, unpacked whole into `<base>/v<version>`. Run here for real in `sh` against a local mirror laid out like `nodejs.org/dist` (its
+ * `index.json`, and per release a `SHASUMS256.txt` and a tarball with a stand-in `bin/node`): no network. In `root` mode (the admin line) it must also keep what
  * root requires of the Node it runs — a real path outside every home folder, runnable by the account, NOT writable by the account nor by any folder above
  * it — with a stand-in `sudo` (`sudo -u <account> test …` is all it asks, so the account's rights are the test's to say).
  *
@@ -21,8 +21,8 @@ import { architectureName, getArchiveName, mirrorRelease, nodeThatIsTooOld, node
 const scriptPath = path.resolve(__dirname, '..', '..', 'remoteRun', 'ensureNode.sh');
 const shellPath = '/bin/sh';
 const systemToolFolders = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'];
-/** What the script runs besides the shell's own builtins (and `cp`, for the stand-in `wget`); `curl` is linked for the cases that want it. Missing ones are skipped (`ldd`, `sysctl`, `chown` are not everywhere). */
-const scriptTools = ['uname', 'grep', 'head', 'cut', 'sed', 'mktemp', 'mkdir', 'rm', 'mv', 'tar', 'gzip', 'chmod', 'chown', 'id', 'readlink', 'dirname', 'test', 'cat', 'cp', 'sha256sum', 'shasum', 'openssl', 'ldd', 'sysctl'];
+/** What the script runs besides the shell's own builtins (and `cp` for the stand-in `wget`, `ln` for the stand-in `mktemp`); `curl` is linked for the cases that want it. Missing ones are skipped (`ldd`, `sysctl`, `chown` are not everywhere). */
+const scriptTools = ['uname', 'grep', 'head', 'cut', 'sed', 'mktemp', 'mkdir', 'rm', 'mv', 'tar', 'gzip', 'chmod', 'chown', 'id', 'readlink', 'dirname', 'test', 'cat', 'cp', 'ln', 'sha256sum', 'shasum', 'openssl', 'ldd', 'sysctl'];
 const release = mirrorRelease;
 const olderRelease = 'v22.50.0';
 
@@ -97,6 +97,8 @@ interface RunOptions {
   /** `file://` url of the mirror; `null` = a place that does not exist. */
   dist?: string | null;
   homes?: string;
+  /** The `<major>` argument: keep to that line of Node.js. */
+  line?: string;
   withoutReadlinkF?: boolean;
   /** Extra folders ahead of the script's tools on the PATH. */
   onPath?: string[];
@@ -115,15 +117,15 @@ function runScript(args: string[], options: RunOptions = {}): Run {
 const toUrl = (dist: string): string => `file://${dist}`;
 const homesSeam = (): string => path.join(fs.realpathSync(workDir), 'home', '*');
 
-/** `ensureNode.sh own <base> [<dist>]`. */
+/** `ensureNode.sh own <base> [<dist> [<major>]]`. */
 function runOwn(base: string, dist: string | null = toUrl(path.join(workDir, 'dist')), options: RunOptions = {}): Run {
-  return runScript(['own', base, dist ?? toUrl(path.join(workDir, 'no-such-dist'))], options);
+  return runScript(['own', base, dist ?? toUrl(path.join(workDir, 'no-such-dist')), ...(options.line === undefined ? [] : [options.line])], options);
 }
 
 /** `ensureNode.sh root runner <base> <homes> <dist>`, the way the admin line's package runs it with the test seams. */
 function runRoot(base: string, options: RunOptions = {}): Run {
   const dist = options.dist === null ? toUrl(path.join(workDir, 'no-such-dist')) : (options.dist ?? toUrl(path.join(workDir, 'dist')));
-  return runScript(['root', 'runner', base, options.homes ?? homesSeam(), dist], options);
+  return runScript(['root', 'runner', base, options.homes ?? homesSeam(), dist, ...(options.line === undefined ? [] : [options.line])], options);
 }
 
 const ownBase = (): string => path.join(workDir, 'machine', '.charness-runner', 'node');
@@ -139,7 +141,7 @@ afterEach(() => {
 });
 
 describe('the runner\'s own Node (own mode: the plain line, a runner that moves off a system Node)', () => {
-  it('downloads the newest 22.x build for this machine, checks it against SHASUMS256.txt, and prints the real path of its `node`', () => {
+  it('downloads the build for this machine that nodejs.org\'s list names, checks it against the release\'s SHASUMS256.txt, and prints the real path of its `node`', () => {
     writeMirror();
     const result = runOwn(ownBase());
     const expected = path.join(fs.realpathSync(ownBase()), release, 'bin', 'node');
@@ -182,7 +184,7 @@ describe('the runner\'s own Node (own mode: the plain line, a runner that moves 
     writeMirror({ isPlatformMissing: true });
     const noBuild = runOwn(ownBase());
     assert.equal(noBuild.status, 1);
-    assert.match(noBuild.stderr, new RegExp(`has no build for ${platformName}-${architectureName}`));
+    assert.match(noBuild.stderr, new RegExp(`nodejs\\.org's list has no LTS release of Node\\.js 22\\.12 to 24\\.x with a build for ${platformName}-${architectureName}`));
     const distDir = writeMirror();
     fs.rmSync(path.join(distDir, release, getArchiveName(release)));
     const noArchive = runOwn(ownBase());
@@ -234,7 +236,7 @@ describe('the runner\'s own Node (own mode: the plain line, a runner that moves 
     const viaWget = runOwn(ownBase());
     assert.equal(viaWget.status, 0, viaWget.stderr);
     const wgetCalls = fs.readFileSync(path.join(workDir, 'fetch.log'), 'utf8');
-    assert.match(wgetCalls, /-q -T 60 -t 2 -O \S+SHASUMS256\.txt file:\/\//, 'with timeouts');
+    assert.match(wgetCalls, /-q -T 60 -t 2 -O \S+index\.json file:\/\//, 'with timeouts');
     fs.rmSync(path.join(workDir, 'bin', 'wget'));
     fs.rmSync(ownBase(), { recursive: true });
     const neither = runOwn(ownBase());
@@ -250,7 +252,7 @@ describe('the runner\'s own Node (own mode: the plain line, a runner that moves 
     fs.writeFileSync(path.join(workDir, 'tools', 'curl'), `#!/bin/sh\necho "curl $*" >> "${workDir}/fetch.log"\nexec "${real}" "$@"\n`, { mode: 0o755 });
     assert.equal(runOwn(ownBase()).status, 0);
     const calls = fs.readFileSync(path.join(workDir, 'fetch.log'), 'utf8').split('\n').filter((line) => line !== '');
-    assert.equal(calls.length, 2, 'the list and the archive');
+    assert.equal(calls.length, 3, 'the list of releases, the release\'s checksums and the archive');
     for (const call of calls) assert.match(call, /--proto-redir =https --connect-timeout 20 --max-time \d+ /);
   });
 
@@ -261,6 +263,56 @@ describe('the runner\'s own Node (own mode: the plain line, a runner that moves 
     assert.equal(result.stdout, path.join(fs.realpathSync(ownBase()), release, 'bin', 'node'));
   });
 
+  it('picks the highest LTS release from 22.12 up to the last line with Corepack (24) — by NUMBER, not by position in the list — and never a decoy: not an LTS, newer than 24, older than 22.12', () => {
+    // The list is newest-first by date, so a security release of an older line can sit above the newest of a newer one.
+    writeMirror({ releases: [{ version: 'v22.100.0', lts: 'Jod' }, { version: 'v24.99.0', lts: 'Krypton' }] });
+    const result = runOwn(ownBase());
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /\/v24\.99\.0\/bin\/node$/);
+    assert.deepEqual(fs.readdirSync(ownBase()), ['v24.99.0'], 'and only that one was downloaded');
+  });
+
+  it('with a <major> given, takes the newest release of THAT line — an LTS or not — and keeps to it when nodejs.org cannot be reached', () => {
+    writeMirror({ releases: [{ version: 'v22.99.0', lts: 'Jod' }, { version: 'v22.100.0', lts: false }, { version: 'v24.99.0', lts: 'Krypton' }] });
+    assert.match(runOwn(ownBase(), undefined, { line: '22' }).stdout, /\/v22\.100\.0\/bin\/node$/);
+    assert.match(runOwn(path.join(workDir, 'other-base')).stdout, /\/v24\.99\.0\/bin\/node$/, 'without it, the newest LTS');
+    for (const version of ['v22.9.0', 'v24.1.0']) {
+      fs.mkdirSync(path.join(ownBase(), version, 'bin'), { recursive: true });
+      fs.writeFileSync(path.join(ownBase(), version, 'bin', 'node'), nodeThatRuns, { mode: 0o755 });
+    }
+    const offline = runOwn(ownBase(), null, { line: '22' });
+    assert.match(offline.stdout, /\/v22\.100\.0\/bin\/node$/, 'the newest install OF THAT LINE (22.100 is newer than 22.9; 24.1 is another line)');
+    const offlineWithoutLine = runOwn(ownBase(), null);
+    assert.match(offlineWithoutLine.stdout, /\/v24\.1\.0\/bin\/node$/, 'and without a line, the newest of all');
+  });
+
+  it('refuses a <major> that is not a number', () => {
+    writeMirror();
+    const result = runOwn(ownBase(), undefined, { line: '22;touch pwned' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /must be a major number/);
+    assert.equal(fs.existsSync(path.join(workDir, 'pwned')), false);
+  });
+
+  it('asks wget for a TOTAL time limit — it only has per-read ones — by running it under `timeout` where there is one', () => {
+    fs.rmSync(path.join(workDir, 'tools', 'curl'));
+    installFakeWget(path.join(workDir, 'bin'));
+    fs.writeFileSync(path.join(workDir, 'bin', 'timeout'), `#!/bin/sh\necho "timeout $1" >> "${workDir}/fetch.log"\nshift\nexec "$@"\n`, { mode: 0o755 });
+    writeMirror();
+    assert.equal(runOwn(ownBase()).status, 0);
+    const log = fs.readFileSync(path.join(workDir, 'fetch.log'), 'utf8').split('\n').filter((line) => line.startsWith('timeout '));
+    assert.deepEqual(log, ['timeout 60', 'timeout 60', 'timeout 900'], 'the list, the release\'s checksums, the archive');
+  });
+
+  it('says plainly that a processor other than x86-64 and ARM64 cannot be a runner', () => {
+    writeMirror();
+    fs.rmSync(path.join(workDir, 'tools', 'uname'));
+    fs.writeFileSync(path.join(workDir, 'tools', 'uname'), `#!/bin/sh\n[ "$1" = -m ] && { echo armv7l; exit 0; }\nexec "${findSystemTool('uname')}" "$@"\n`, { mode: 0o755 });
+    const result = runOwn(ownBase());
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /^charness-runner: a runner supports only x86-64 and ARM64 processors, and this one is armv7l$/m);
+  });
+
   it('refuses musl libc (Alpine): the builds of nodejs.org are glibc builds', (context) => {
     if (platformName !== 'linux') context.skip('Linux only');
     writeMirror();
@@ -268,7 +320,8 @@ describe('the runner\'s own Node (own mode: the plain line, a runner that moves 
     fs.writeFileSync(path.join(workDir, 'tools', 'ldd'), '#!/bin/sh\necho "musl libc (x86_64)" >&2\nexit 1\n', { mode: 0o755 });
     const result = runOwn(ownBase());
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /uses musl libc \(Alpine\)/);
+    assert.match(result.stderr, /^charness-runner: this Linux uses musl libc \(Alpine\), and nodejs\.org's Node\.js builds, which every runner runs on, need glibc: this machine cannot be a runner$/m);
+    assert.doesNotMatch(result.stderr, /install Node/, 'no way round it is offered: a runner never runs on a system Node');
     assert.equal(fs.existsSync(ownBase()), false, 'nothing was created');
   });
 });
@@ -313,7 +366,7 @@ describe('the Node the admin line installs (root mode)', () => {
     assert.equal(match?.[1], sharedNodeBase);
   });
 
-  it('asks the account nothing but `test` — it executes no program of the account\'s — and checks the shared folder (before root writes into it), then the Node and every folder above it, for writing', () => {
+  it('asks the account nothing but `test` — it executes no program of the account\'s — and checks the deepest folder of the base that exists and then the base itself (before root writes into it), then the Node and every folder above it, for writing', () => {
     writeMirror();
     const result = runRoot(systemBase());
     assert.equal(result.status, 0, result.stderr);
@@ -325,7 +378,8 @@ describe('the Node the admin line installs (root mode)', () => {
       for (let folder = start; folder !== '/' && folder !== ''; folder = path.dirname(folder)) chain.push(folder);
       return chain;
     };
-    assert.deepEqual(writeChecks, [...chainUp(fs.realpathSync(systemBase())), ...chainUp(result.stdout)]);
+    // Nothing of the base existed: the deepest folder that did is the work folder itself.
+    assert.deepEqual(writeChecks, [...chainUp(fs.realpathSync(workDir)), ...chainUp(fs.realpathSync(systemBase())), ...chainUp(result.stdout)]);
     assert.ok(calls.includes(`-u runner test -x ${result.stdout}`));
     assert.ok(calls.indexOf(`-u runner test -x ${result.stdout}`) > calls.findIndex((call) => call.startsWith('-u runner test -w ')), 'the base was judged before anything was unpacked into it');
   });
@@ -397,6 +451,64 @@ describe('the Node the admin line installs (root mode)', () => {
     assert.deepEqual([again.status, again.stdout], [0, first.stdout], again.stderr);
     fs.writeFileSync(path.join(workDir, 'writable'), `${fs.realpathSync(systemBase())}\n`);
     assert.equal(runRoot(systemBase(), { dist: null }).status, 1, 'and an install the account could write is refused all the same');
+  });
+
+  /** A Node whose every run is logged by the path it was started as. */
+  const loggingNode = (): string => `#!/bin/sh\necho "$0" >> "${workDir}/node-runs.log"\nexit 0\n`;
+  const readNodeRuns = (): string[] => (fs.existsSync(path.join(workDir, 'node-runs.log')) ? fs.readFileSync(path.join(workDir, 'node-runs.log'), 'utf8').split('\n').filter((line) => line !== '') : []);
+
+  it('never RUNS an install that the account could write — one that was there already is not "reused", it is looked at first: nothing of the shared folder is executed before it passed', () => {
+    writeMirror({ nodeScript: loggingNode() });
+    const first = runRoot(systemBase());
+    assert.equal(first.status, 0, first.stderr);
+    const installedFolder = path.dirname(path.dirname(first.stdout));
+    fs.rmSync(path.join(workDir, 'node-runs.log'));
+    fs.writeFileSync(path.join(workDir, 'writable'), `${installedFolder}\n`);
+    const again = runRoot(systemBase());
+    assert.deepEqual([again.status, again.stdout], [1, ''], again.stderr);
+    assert.match(again.stderr, /can write \S+, and root runs this Node\.js/);
+    assert.deepEqual(readNodeRuns().filter((run) => run.startsWith(`${installedFolder}/`)), [], 'the install in the shared folder was never started');
+  });
+
+  it('with nodejs.org out of reach, SKIPS an install the account could write instead of running it to see its version — and uses the next one that is fit', () => {
+    for (const version of ['v22.60.0', 'v22.70.0']) {
+      fs.mkdirSync(path.join(systemBase(), version, 'bin'), { recursive: true });
+      fs.writeFileSync(path.join(systemBase(), version, 'bin', 'node'), loggingNode(), { mode: 0o755 });
+    }
+    fs.writeFileSync(path.join(workDir, 'writable'), `${fs.realpathSync(path.join(systemBase(), 'v22.70.0'))}\n`);
+    const result = runRoot(systemBase(), { dist: null });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /\/v22\.60\.0\/bin\/node$/);
+    assert.deepEqual(readNodeRuns().filter((run) => run.includes('v22.70.0')), [], 'the newer one, which the account could write, was never run');
+  });
+
+  it('judges the deepest folder of the base that EXISTS before it creates anything: a base under a folder the account can write is refused with nothing made', () => {
+    writeMirror();
+    fs.mkdirSync(path.join(workDir, 'acct-owned'));
+    fs.writeFileSync(path.join(workDir, 'writable'), `${fs.realpathSync(path.join(workDir, 'acct-owned'))}\n`);
+    const result = runRoot(path.join(workDir, 'acct-owned', 'sub', 'node'));
+    assert.deepEqual([result.status, result.stdout], [1, '']);
+    assert.match(result.stderr, /can write \S+acct-owned, and root runs this Node\.js/);
+    assert.deepEqual(fs.readdirSync(path.join(workDir, 'acct-owned')), [], 'not even the missing folders of the base were created');
+  });
+
+  it('uses the base\'s REAL path from then on: a link in it that the account re-points after the check cannot move root\'s work somewhere else', () => {
+    writeMirror();
+    const realFolder = path.join(workDir, 'real-folder');
+    const elsewhere = path.join(workDir, 'elsewhere');
+    fs.mkdirSync(realFolder);
+    fs.mkdirSync(path.join(elsewhere, 'node'), { recursive: true });
+    const link = path.join(workDir, 'system-link');
+    fs.symlinkSync(realFolder, link);
+    // The moment root asks for its work folder (after the checks), the link is pointed at a folder the check never saw.
+    const realMktemp = findSystemTool('mktemp');
+    assert.notEqual(realMktemp, null);
+    fs.rmSync(path.join(workDir, 'tools', 'mktemp'));
+    fs.writeFileSync(path.join(workDir, 'tools', 'mktemp'), `#!/bin/sh\nln -sfn "${elsewhere}" "${link}"\nexec "${realMktemp}" "$@"\n`, { mode: 0o755 });
+    const result = runRoot(path.join(link, 'node'));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, path.join(fs.realpathSync(realFolder), 'node', release, 'bin', 'node'));
+    assert.deepEqual(fs.readdirSync(path.join(elsewhere, 'node')), [], 'nothing of root\'s was written where the link was pointed to');
   });
 
   it('is not given a test seam by the line: its own default places and the shared folder are what it uses', (context) => {

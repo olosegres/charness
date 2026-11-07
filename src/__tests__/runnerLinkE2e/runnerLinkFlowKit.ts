@@ -19,13 +19,12 @@ import { installAppFromDirectory, switchCurrentApp, testNodeModulesEnvName } fro
 import { ensureLauncher } from '../../runnerUtility/launcher';
 import { getRunnerHomePaths } from '../../runnerUtility/runnerHome';
 import { runnerLockRelativePath } from '../../runners/runnerLock';
-import { testKeepNodeEnvName } from '../../runnerUtility/managedNode';
+import { ensureNodeScriptRelativePath, testKeepNodeEnvName } from '../../runnerUtility/managedNode';
 
 export { waitUntil } from '../runnersTestKit';
 
 const sshdPath = '/usr/sbin/sshd';
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
-const ensureNodeScriptRelativePath = path.join('remoteRun', 'ensureNode.sh');
 const ensureNodeScriptPath = path.join(repoRoot, ensureNodeScriptRelativePath);
 const sshdStartAttempts = 5;
 const lineTimeoutMs = 180_000;
@@ -304,10 +303,10 @@ export async function stopRunner(layout: RunnerLinkLayout, child: ChildProcess):
   layout.groups.delete(child);
 }
 
-/** @description Plain `ssh` from the hub to the runner through the link, exactly as remote-run's ssh calls go. */
-export function sshThroughLink(layout: RunnerLinkLayout, runnerId: string, command: string): SpawnSyncReturns<string> {
+/** The arguments of a plain `ssh` from the hub to the runner through the link, exactly as remote-run's ssh calls go. */
+function buildSshThroughLinkArguments(layout: RunnerLinkLayout, runnerId: string, command: string): string[] {
   const hubDir = layout.hubDir;
-  return spawnSync('ssh', [
+  return [
     '-F', '/dev/null',
     '-o', `ProxyCommand=${process.execPath} ${getHubCliPath(layout)} runner-proxy ${path.join(hubDir, 'link', `${runnerId}.sock`)}`,
     '-o', `HostKeyAlias=charness-runner-${runnerId}`,
@@ -321,7 +320,17 @@ export function sshThroughLink(layout: RunnerLinkLayout, runnerId: string, comma
     '-o', 'ConnectTimeout=20',
     'runner@link',
     command,
-  ], { encoding: 'utf8', timeout: 60_000, env: createEnv(layout.hubHome, layout) });
+  ];
+}
+
+/** @description Plain `ssh` from the hub to the runner through the link, exactly as remote-run's ssh calls go. */
+export function sshThroughLink(layout: RunnerLinkLayout, runnerId: string, command: string): SpawnSyncReturns<string> {
+  return spawnSync('ssh', buildSshThroughLinkArguments(layout, runnerId, command), { encoding: 'utf8', timeout: 60_000, env: createEnv(layout.hubHome, layout) });
+}
+
+/** @description The same, left running: a command held over the link while the flow looks at what the runner does meanwhile. The caller ends it. */
+export function startSshThroughLink(layout: RunnerLinkLayout, runnerId: string, command: string): ChildProcess {
+  return spawn('ssh', buildSshThroughLinkArguments(layout, runnerId, command), { stdio: 'ignore', env: createEnv(layout.hubHome, layout) });
 }
 
 /** @description `ssh` to the hub's sshd with the RUNNER'S OWN key and `extraArgs` — what a runner (or someone holding its key) could try. */

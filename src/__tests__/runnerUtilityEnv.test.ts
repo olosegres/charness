@@ -8,6 +8,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { buildExecEnv, findAndroidSdk, parseEnvFile } from '../runnerUtility/execEnv';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 
@@ -85,6 +89,58 @@ describe('buildExecEnv', () => {
     const env = buildExecEnv({ ...base, operatorEnv: { NPM_CONFIG_PREFIX: '/elsewhere', COREPACK_HOME: '/cache' } });
     assert.equal(env.NPM_CONFIG_PREFIX, '/elsewhere');
     assert.equal(env.COREPACK_HOME, '/cache');
+  });
+
+  it('an EMPTY line (`NPM_CONFIG_PREFIX=`) takes the variable away from the job instead of leaving it set to nothing — and an empty value of any other variable stays as the operator wrote it', () => {
+    const { values } = parseEnvFile('NPM_CONFIG_PREFIX=\nCOREPACK_HOME=""\nKEEP_EMPTY=\n');
+    const env = buildExecEnv({ ...base, operatorEnv: values });
+    assert.equal('NPM_CONFIG_PREFIX' in env, false);
+    assert.equal('COREPACK_HOME' in env, false);
+    assert.equal(env.KEEP_EMPTY, '');
+    assert.equal('NPM_CONFIG_PREFIX' in buildExecEnv(base), true, 'while the operator says nothing, it is set');
+  });
+
+  it('with the REAL npm: a job gets the runner\'s own global prefix by default, and — with the empty line — npm\'s own default again', (context) => {
+    const nodeDir = path.dirname(process.execPath);
+    const npm = path.join(nodeDir, 'npm');
+    if (!fs.existsSync(npm)) context.skip('no npm beside the Node that runs the tests');
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'env-npm-'));
+    try {
+      const homePaths = getRunnerHomePaths(home);
+      const readPrefix = (operatorEnv: Record<string, string>): string => spawnSync(npm, ['config', 'get', 'prefix'], {
+        encoding: 'utf8',
+        env: { ...buildExecEnv({ paths: homePaths, accountName: 'runner', environment: {}, nodeDir, operatorEnv, androidSdk: null }), HOME: home },
+      }).stdout.trim();
+      assert.equal(readPrefix({}), homePaths.npmPrefix);
+      assert.equal(readPrefix(parseEnvFile('NPM_CONFIG_PREFIX=\n').values), path.dirname(nodeDir), 'the prefix of the Node\'s own install');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('with the REAL nvm: `nvm use` refuses while NPM_CONFIG_PREFIX is set (the default job environment) and works once the operator\'s empty line took it away', (context) => {
+    const nvmDir = process.env.NVM_DIR ?? path.join(os.homedir(), '.nvm');
+    const installed = fs.existsSync(path.join(nvmDir, 'versions', 'node')) ? fs.readdirSync(path.join(nvmDir, 'versions', 'node')) : [];
+    if (!fs.existsSync(path.join(nvmDir, 'nvm.sh')) || installed.length === 0) context.skip('no nvm with an installed Node here');
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'env-nvm-'));
+    try {
+      const homePaths = getRunnerHomePaths(home);
+      const nvmUse = (operatorEnv: Record<string, string>): { status: number | null; output: string } => {
+        const result = spawnSync('bash', ['-c', `. "${nvmDir}/nvm.sh" >/dev/null 2>&1; nvm use ${installed[0]} 2>&1`], {
+          encoding: 'utf8',
+          env: { ...buildExecEnv({ paths: homePaths, accountName: 'runner', environment: {}, nodeDir: '/usr/bin', operatorEnv, androidSdk: null }), HOME: home, NVM_DIR: nvmDir },
+        });
+        return { status: result.status, output: result.stdout };
+      };
+      const byDefault = nvmUse({});
+      assert.notEqual(byDefault.status, 0, byDefault.output);
+      assert.match(byDefault.output, /nvm is not compatible with the "NPM_CONFIG_PREFIX" environment variable/);
+      const withEmptyLine = nvmUse(parseEnvFile('NPM_CONFIG_PREFIX=\n').values);
+      assert.equal(withEmptyLine.status, 0, withEmptyLine.output);
+      assert.match(withEmptyLine.output, /Now using node/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('falls back to a UTF-8 locale', () => {

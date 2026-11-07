@@ -13,7 +13,7 @@ import os from 'os';
 import path from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { createAppId, installAppFromDirectory, installDependencies, nodeMovedExitCode, npmInstallArgs, removeOldApps, restartExitCode, switchCurrentApp, testNodeModulesEnvName } from '../runnerUtility/appInstall';
-import { ensureLauncher, renderLauncher } from '../runnerUtility/launcher';
+import { ensureLauncher, readLauncherNodePath, renderLauncher } from '../runnerUtility/launcher';
 import { readRunnerConfig, readRunnerStatus, RunnerConfigError, writeRunnerConfig, writeRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getAppDirPath, getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { ensureRunnerKeys, readRunnerKeys } from '../runnerUtility/runnerKeys';
@@ -211,6 +211,16 @@ describe('launcher', () => {
     assert.equal(await exited, 0, 'the launcher ends with the app\'s exit code');
     assert.equal(fs.existsSync(gotTerm), true, 'the app received the TERM');
     assert.throws(() => process.kill(Number(fs.readFileSync(appPid, 'utf8')), 0), 'the app is gone: nothing is left running unsupervised');
+  });
+
+  it('names the Node it starts, and that name can be read back — also a path with a quote in it — and is nothing when there is no launcher', () => {
+    assert.equal(readLauncherNodePath(paths), null);
+    for (const nodePath of ['/a/node', "/opt/it's here/bin/node", '/with space/node']) {
+      ensureLauncher(paths, nodePath);
+      assert.equal(readLauncherNodePath(paths), nodePath);
+    }
+    fs.writeFileSync(paths.launcher, '#!/bin/sh\necho no node here\n');
+    assert.equal(readLauncherNodePath(paths), null);
   });
 
   it('is rewritten only when its text changes', () => {

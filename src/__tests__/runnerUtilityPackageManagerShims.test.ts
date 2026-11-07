@@ -93,6 +93,28 @@ describe('the job PATH folders', () => {
   });
 });
 
+describe('the jobs\' global npm prefix', () => {
+  it('never counts as OFFERING a manager: a yarn that one job installed with `npm i -g` does not replace Corepack\'s shim, which follows each project\'s `packageManager`', async () => {
+    installFakeCorepack();
+    const npmBin = path.join(getPaths().npmPrefix, 'bin');
+    writeExecutable(path.join(npmBin, 'yarn'), '#!/bin/sh\n');
+    writeExecutable(path.join(npmBin, 'pnpm'), '#!/bin/sh\n');
+    const outcomes = await ensurePackageManagerShims(getPaths(), createDeps());
+    assert.deepEqual(outcomes.map(({ manager, kind }) => [manager, kind]), [['yarn', 'shim'], ['pnpm', 'shim']]);
+    // …and the next link start, with the global yarn still there, keeps the shims it made (it does not take them for stale).
+    const again = await ensurePackageManagerShims(getPaths(), createDeps());
+    assert.deepEqual(again.map(({ manager, kind }) => [manager, kind]), [['yarn', 'shim'], ['pnpm', 'shim']]);
+    assert.equal(fs.readlinkSync(path.join(getPaths().binDir, 'yarn')), path.join(corepackDist, 'yarn.js'));
+  });
+
+  it('still lets the Node\'s own folder and the system\'s offer one — only the prefix a job writes is left out', async () => {
+    installFakeCorepack();
+    writeExecutable(path.join(nodeDir, 'yarn'), '#!/bin/sh\n');
+    const outcomes = await ensurePackageManagerShims(getPaths(), createDeps());
+    assert.deepEqual(outcomes.map(({ manager, kind }) => [manager, kind]), [['yarn', 'offered'], ['pnpm', 'shim']]);
+  });
+});
+
 describe('ensurePackageManagerShims', () => {
   it('a Node that has no yarn or pnpm gets Corepack\'s shims in the runner\'s bin, asked for with the install directory and the names', async () => {
     installFakeCorepack();

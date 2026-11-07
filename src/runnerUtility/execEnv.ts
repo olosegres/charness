@@ -11,7 +11,9 @@ import type { RunnerHomePaths } from './runnerHome';
  *
  * The runner's Node.js sits in a folder the account cannot write (the shared one, owned by root) or that a job must not change (its own). Whatever a job
  * installs therefore goes into the account's state folder instead: `NPM_CONFIG_PREFIX` (`npm i -g`) and `COREPACK_HOME` (the package managers Corepack
- * downloads) point there, and a `corepack enable` is turned into one for `<root>/bin` by the wrapper of `packageManagerShims.ts`.
+ * downloads) point there, and a `corepack enable` is turned into one for `<root>/bin` by the wrapper of `packageManagerShims.ts`. A job therefore runs the
+ * runner's own Node — not the one that was first on the machine's PATH — and finds the global tools of ITS npm prefix; the operator's `env` file takes either
+ * back (a `PATH=` line for the Node, an empty `NPM_CONFIG_PREFIX=` for nvm's sake, see «A runner's Node» in `docs/remote-run.md`).
  */
 
 const systemPathDirs: readonly string[] = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/local/sbin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
@@ -59,8 +61,15 @@ export function getJobPathDirectories(paths: RunnerHomePaths, nodeDir: string): 
   return [...new Set([paths.binDir, path.join(paths.npmPrefix, 'bin'), nodeDir, ...systemPathDirs])];
 }
 
+/**
+ * Variables the runner sets for a job that the operator may also take away: a line with an EMPTY value (`NPM_CONFIG_PREFIX=`) in `~/.charness-runner/env` removes
+ * the variable from the job's environment instead of leaving it set to nothing. Tools do not agree on what an empty value means (nvm refuses to work while
+ * `NPM_CONFIG_PREFIX` is set at all; npm treats an empty one as not set), so it is removed.
+ */
+const removableNames: readonly string[] = ['NPM_CONFIG_PREFIX', 'COREPACK_HOME'];
+
 export function buildExecEnv(inputs: ExecEnvInputs): NodeJS.ProcessEnv {
-  return {
+  const environment: NodeJS.ProcessEnv = {
     HOME: inputs.paths.homeDir,
     USER: inputs.accountName,
     LOGNAME: inputs.accountName,
@@ -72,6 +81,8 @@ export function buildExecEnv(inputs: ExecEnvInputs): NodeJS.ProcessEnv {
     ...(inputs.androidSdk === null ? {} : { ANDROID_HOME: inputs.androidSdk, ANDROID_SDK_ROOT: inputs.androidSdk }),
     ...inputs.operatorEnv,
   };
+  for (const name of removableNames) if (environment[name] === '') delete environment[name];
+  return environment;
 }
 
 /** @description The environment for the next command: the `env` file is read fresh each time, so an edit applies to the next job without a restart. */

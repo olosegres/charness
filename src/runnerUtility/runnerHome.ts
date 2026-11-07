@@ -11,6 +11,7 @@ import * as path from 'path';
  *   app.<id>/     an installed copy of the hub's charness package; `current` points at the one in use
  *   bin/          the `charness-runner` launcher, pueue, pueued, rsync when built, the Corepack shims of `yarn` / `pnpm` and the `corepack` wrapper (`packageManagerShims.ts`)
  *   node/         the runner's OWN Node.js, when it is not the shared one under `/usr/local/lib/charness-runner/node`: `v<version>/bin/node` (`managedNode.ts`, `remoteRun/ensureNode.sh`)
+ *   node-failure.json  why the last attempt to give the runner a Node of its own (or a newer one) failed, when, and under which app copy; the next attempt waits for a day or the next update (`nodeUpkeep.ts`)
  *   npm/          the jobs' global npm prefix (`npm i -g`; its `bin/` is on a job's PATH), so no job writes into the Node's own folder
  *   corepack/     the jobs' `COREPACK_HOME`: the package managers Corepack downloads
  *   env           the operator's KEY=VALUE lines, added to every job's environment
@@ -53,6 +54,8 @@ export interface RunnerHomePaths {
   binDir: string;
   /** The runner's own Node.js installs (`v<version>/` each), when it has none of the shared kind. */
   ownNodeDir: string;
+  /** Why the last attempt to give the runner a Node of its own failed (`nodeUpkeep.ts`); absent = nothing is wrong. */
+  nodeFailure: string;
   /** A job's global npm prefix (`NPM_CONFIG_PREFIX`): `npm i -g` writes here, never into the Node's folder. */
   npmPrefix: string;
   /** A job's `COREPACK_HOME`: where Corepack keeps the package managers it downloads. */
@@ -87,6 +90,7 @@ export function getRunnerHomePaths(homeDir: string = os.homedir()): RunnerHomePa
     currentApp: path.join(root, 'current'),
     binDir: path.join(root, 'bin'),
     ownNodeDir: path.join(root, ownNodeDirName),
+    nodeFailure: path.join(root, 'node-failure.json'),
     npmPrefix: path.join(root, 'npm'),
     corepackHome: path.join(root, 'corepack'),
     launcher: path.join(root, 'bin', 'charness-runner'),
