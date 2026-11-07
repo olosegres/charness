@@ -22,6 +22,22 @@ export function escapeHtmlText(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * @name AgentFrame
+ * @description A text of the agent as the two forms it can go out in: `html` for `parse_mode: 'HTML'`, and `plain` — the source
+ * text, no markup — for the send or edit Telegram falls back to when it refuses the markup. Made together so no caller can send
+ * the one without the other.
+ */
+export interface AgentFrame {
+  html: string;
+  plain: string;
+}
+
+/** @description The HTML of an agent text with the text itself as its plain twin (see {@link AgentFrame}). */
+export function renderAgentFrame(text: string): AgentFrame {
+  return { html: renderAgentHtml(text), plain: text };
+}
+
 // Matchers for the adapter's "markdown-ish" intermediate. Hoisted so they
 // aren't recompiled per chunk; `g`-flag regexes are stateful, so every use
 // goes through `String.replace` (which resets `lastIndex`), never `.exec`.

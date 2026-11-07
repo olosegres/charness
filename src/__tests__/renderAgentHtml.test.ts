@@ -11,7 +11,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { renderAgentHtml, escapeHtmlText } from '../connectors/telegram/renderAgentHtml';
+import { renderAgentHtml, renderAgentFrame, escapeHtmlText } from '../connectors/telegram/renderAgentHtml';
 
 test('fenced block with a language tag → <pre><code class="language-...">, no literal backticks', () => {
   const input = '```diff\n- old line\n+ new line\n```';
@@ -147,4 +147,13 @@ test('a double-quote in the language tag cannot break the class attribute', () =
 
 test('escapeHtmlText handles the three specials and leaves the rest', () => {
   assert.equal(escapeHtmlText('a&b<c>d*e`f'), 'a&amp;b&lt;c&gt;d*e`f');
+});
+
+test('renderAgentFrame: the HTML of a text and the text itself as its plain twin — the two forms an edit or send can go out in', () => {
+  const text = '**Read** <a & b> `code`';
+  const frame = renderAgentFrame(text);
+  assert.equal(frame.html, renderAgentHtml(text), 'the HTML is the one every other path renders');
+  assert.equal(frame.html, '<b>Read</b> &lt;a &amp; b&gt; <code>code</code>');
+  assert.equal(frame.plain, text, 'the twin is the source text: nothing rendered, nothing escaped');
+  assert.doesNotMatch(frame.plain, /&(lt|gt|amp);|<b>/);
 });

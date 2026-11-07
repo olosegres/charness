@@ -643,6 +643,23 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     await getCharness().waitFor('the answer pinned', replyTimeoutMs, () => getPinKinds(answer.message_id).includes('pin'));
   });
 
+  it('Telegram refusing the markup of the «🔧 tool» status frame: it is created again as plain text — the tool name as written, no entity shown', async () => {
+    // A tool name with markup characters, so the HTML (`Read&lt;&amp;&gt;`) and the plain twin (`Read<&>`) differ.
+    fakeTelegram.failNextCall(
+      'sendMessage',
+      'Bad Request: can\'t parse entities: Unsupported start tag "x" at byte offset 0',
+      (payload) => payload.parse_mode === 'HTML' && String(payload.text).includes('Read&lt;&amp;&gt;'),
+    );
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-14 [tool-name:Read<&>] [fake:answer]');
+    await waitForFakeAnswer('TOPIC-14');
+    // The status frame is transient (the stream text that follows replaces it), so its sends are read from the calls, not the topic.
+    await getCharness().waitFor('the status frame to be sent as plain text after the refusal', replyTimeoutMs, () => fakeTelegram.listCalls('sendMessage').some((call) => call.payload.text === '🔧 Read<&>'));
+    const statusSends = fakeTelegram.listCalls('sendMessage').filter((call) => String(call.payload.text).startsWith('🔧 Read'));
+    assert.deepEqual(statusSends.map((call) => call.payload.parse_mode), ['HTML', undefined], 'the HTML send was refused once, then the plain one went through');
+    assert.equal(statusSends[0].payload.text, '🔧 Read&lt;&amp;&gt;', 'the refused send carried the escaped markup');
+    assert.equal(statusSends[1].payload.text, '🔧 Read<&>', 'the retry carries the plain twin: the tool name as written');
+  });
+
   it('every tmux call named the private server; nothing of the instance runs on the default tmux server', () => {
     const instance = getLayout();
     // A call without `-L` would have started (or reached) a `default` server beside the named one.

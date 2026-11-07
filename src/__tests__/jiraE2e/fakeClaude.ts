@@ -188,7 +188,8 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * Todo tokens in the text of a turn that gets as far as answering (with or without a request): `[todo:<status>:<title>]`
  * adds an item, `[todo-id:<id>:<status>]` changes one, `[todo-touch]` confirms the list — sent as ONE `todo_update`
  * call before the turn answers, its outcome logged to `tool-calls.jsonl` (the shared todo registry, as a real agent
- * publishes). A `[work-ms:<n>]` token makes a turn that gets that far work n ms (busy, silent) before it answers; a
+ * publishes). A `[tool-name:<name>]` token names the tool call every turn streams before its answer (default `Read`), so the bot's
+ * `🔧 <name>` status line can carry markup characters. A `[work-ms:<n>]` token makes a turn that gets that far work n ms (busy, silent) before it answers; a
  * `[tool-after-ms:<n>]` token makes one more tool call n ms later, after which the launch's `PostToolUse` hooks (its
  * last `--settings`) run as the real CLI runs them — what one gives the agent as `additionalContext` is logged to
  * `hooks.jsonl`.
@@ -246,6 +247,9 @@ const todoPatchRe = /\[todo-id:(t\d+):(queued|inWork|done|dropped)\]/g;
 const todoTouchToken = '[todo-touch]';
 const workMsRe = /\[work-ms:(\d+)\]/;
 const toolAfterMsRe = /\[tool-after-ms:(\d+)\]/;
+/** `[tool-name:<name>]`: the tool call of the turn's activity carries this name (default `Read`) — the bot's `🔧 <name>` status line shows it. */
+const toolNameRe = /\[tool-name:([^\]]+)\]/;
+const defaultTurnToolName = 'Read';
 const bgCountRe = /\[bg-count:(\d+)\]/;
 const todoUpdateToolName = 'todo_update';
 /** The request header's line that the requester sees neither the agent's plain text nor its thinking (`requests/requestHeader.ts`). */
@@ -678,13 +682,13 @@ async function runTodoTokens(server: McpServerConfig | null, content: string, is
 }
 
 /** R6: what a real turn streams before its answer — a `system/status` frame, a thinking block, a tool call and its result. */
-function emitTurnActivity(sessionId: string, issueKey: string): void {
+function emitTurnActivity(sessionId: string, issueKey: string, content: string = ''): void {
   writeStdout({ type: 'system', subtype: 'status', status: 'requesting', session_id: sessionId });
   writeStdout({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: `Looking at ${issueKey}.` } } });
   const toolUseId = `toolu_${randomUUID()}`;
   writeStdout({
     type: 'assistant',
-    message: { role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: 'Read', input: { file_path: 'README.md' } }] },
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: toolNameRe.exec(content)?.[1] ?? defaultTurnToolName, input: { file_path: 'README.md' } }] },
     parent_tool_use_id: null,
     session_id: sessionId,
   });
@@ -935,7 +939,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     // A turn without a request (a topic whose view has requests off): logged, so a test can prove none was opened.
     appendJsonLine(fakeClaudeLogFileNames.turns, { requestId: null, issueKey: issueKeyRe.exec(content)?.[1] ?? 'unknown', isRequestPrompt: false, isPlainTextHidden: false, supersededRequestIds: [], turnCount: 1, pid: process.pid });
     const noRequestIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';
-    emitTurnActivity(sessionId, noRequestIssueKey);
+    emitTurnActivity(sessionId, noRequestIssueKey, content);
     await runTodoTokens(getBotMcpServer(argv), content, noRequestIssueKey);
     await waitTurnWork(content);
     await runLateToolCall(argv, sessionId, content, noRequestIssueKey);
@@ -968,7 +972,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   writeRequestState(requestId, state);
   appendJsonLine(fakeClaudeLogFileNames.turns, { requestId, issueKey: state.issueKey, isRequestPrompt, isPlainTextHidden, supersededRequestIds, turnCount: state.turnCount, pid: process.pid });
 
-  emitTurnActivity(sessionId, state.issueKey);
+  emitTurnActivity(sessionId, state.issueKey, content);
   const isFirstTurn = state.turnCount === 1;
   if (state.mode === 'silent' || (state.mode === 'silent-once' && isFirstTurn)) {
     endTurn(sessionId, 'Thinking about it.');

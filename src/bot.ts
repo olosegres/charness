@@ -228,7 +228,7 @@ import {
 import { formatPinnedStatus } from './pinnedStatus';
 import { checkIsProgressChunk, collapseProgressChunk } from './progressLine';
 import { StartupPromptBuffer, type BufferedPromptSettled } from './startupPromptBuffer';
-import { renderAgentHtml } from './connectors/telegram/renderAgentHtml';
+import { renderAgentFrame, renderAgentHtml } from './connectors/telegram/renderAgentHtml';
 import { splitMessage, MAX_MESSAGE_LEN } from './connectors/telegram/messageSplit';
 import { buildFoldedMessage } from './connectors/telegram/foldedMessage';
 import { unpinMessagesReportingRetryable } from './connectors/telegram/unpinMessages';
@@ -1637,6 +1637,8 @@ interface StatusCoalesceState {
 interface ThinkingCoalesceState {
   /** Latest rendered thinking-frame HTML not yet sent. `null` = nothing pending. */
   pendingHtml: string | null;
+  /** The source text `pendingHtml` was rendered from: its plain twin, for a refusal of the markup. */
+  pendingPlain: string | null;
   /** A `flushThinkingCoalescer` loop is currently running. */
   inFlight: boolean;
   /** Last frame that actually reached Telegram — skip an identical re-send. */
@@ -3076,7 +3078,7 @@ function getThinkingCoalesceState(key: SessionKey): ThinkingCoalesceState {
   const k = keyToString(key);
   let s = thinkingCoalescers.get(k);
   if (!s) {
-    s = { pendingHtml: null, inFlight: false, lastSentHtml: null, detachAfterDrain: false };
+    s = { pendingHtml: null, pendingPlain: null, inFlight: false, lastSentHtml: null, detachAfterDrain: false };
     thinkingCoalescers.set(k, s);
   }
   return s;
@@ -3095,6 +3097,7 @@ function clearThinkingMessage(key: SessionKey): void {
   const coalescer = thinkingCoalescers.get(keyToString(key));
   if (coalescer) {
     coalescer.pendingHtml = null;
+    coalescer.pendingPlain = null;
     coalescer.lastSentHtml = null;
     coalescer.detachAfterDrain = false;
   }
@@ -4529,7 +4532,7 @@ async function sendOutputImmediate(
   if (shouldEditFirstChunk) {
     const editedOk =
       chunks[0] === msgState.lastMessageText ||
-      (await editThreadMessage(key, msgState.lastMessageId!, renderAgentHtml(chunks[0]), { parse_mode: 'HTML' }));
+      (await editThreadMessage(key, msgState.lastMessageId!, renderAgentHtml(chunks[0]), { parse_mode: 'HTML' }, chunks[0]));
     if (editedOk) {
       msgState.lastMessageText = chunks[0];
       startIndex = 1;
@@ -11629,7 +11632,7 @@ async function sendStatusFrame(key: SessionKey, status: string): Promise<boolean
       const editId = msgState.statusMessageId;
       const ok = await editThreadMessage(key, editId, firstRendered, {
         parse_mode: 'HTML',
-      });
+      }, chunks[0]);
       // A delete that landed during the edit already nulled (or replaced) the id;
       // don't claim the frame as live — let the create path below re-evaluate.
       if (ok && msgState.statusMessageId === editId) {
@@ -11760,7 +11763,9 @@ function finishThinkingMessage(key: SessionKey): void {
  */
 function queueThinkingFrame(key: SessionKey, frameText: string, isTerminal: boolean): void {
   const c = getThinkingCoalesceState(key);
-  c.pendingHtml = renderAgentHtml(frameText);
+  const frame = renderAgentFrame(frameText);
+  c.pendingHtml = frame.html;
+  c.pendingPlain = frame.plain;
   if (isTerminal) c.detachAfterDrain = true;
   if (!c.inFlight) void flushThinkingCoalescer(key);
 }
@@ -11780,9 +11785,11 @@ async function flushThinkingCoalescer(key: SessionKey): Promise<void> {
   try {
     while (c.pendingHtml !== null) {
       const html = c.pendingHtml;
+      const plain = c.pendingPlain ?? html;
       c.pendingHtml = null;
+      c.pendingPlain = null;
       if (html === c.lastSentHtml) continue;
-      const sent = await sendThinkingFrame(key, html);
+      const sent = await sendThinkingFrame(key, html, plain);
       if (sent) c.lastSentHtml = html;
     }
     if (c.detachAfterDrain) {
@@ -11797,14 +11804,15 @@ async function flushThinkingCoalescer(key: SessionKey): Promise<void> {
 /**
  * @description Edit the thread's thinking message in place, or create it on the
  * first frame. The frame is pre-rendered HTML (one message — `full`-mode bodies
- * are tail-trimmed to fit). Returns `true` when the frame reached Telegram.
+ * are tail-trimmed to fit) with its source text as the plain twin that goes out
+ * if Telegram refuses the markup. Returns `true` when the frame reached Telegram.
  */
-async function sendThinkingFrame(key: SessionKey, renderedHtml: string): Promise<boolean> {
+async function sendThinkingFrame(key: SessionKey, renderedHtml: string, plainText: string): Promise<boolean> {
   const msgState = getThreadMessageState(key);
   try {
     if (msgState.thinkingMessageId !== null) {
       const editId = msgState.thinkingMessageId;
-      const ok = await editThreadMessage(key, editId, renderedHtml, { parse_mode: 'HTML' });
+      const ok = await editThreadMessage(key, editId, renderedHtml, { parse_mode: 'HTML' }, plainText);
       // A clear (session end / takeover) may have nulled the id mid-edit — only
       // treat the edit as live if the id still points at the message we edited.
       if (ok && msgState.thinkingMessageId === editId) return true;
@@ -11816,7 +11824,7 @@ async function sendThinkingFrame(key: SessionKey, renderedHtml: string): Promise
     // just-created message instead of resurrecting it as an orphan under a
     // "session ended" / question UI (the leftover-frame guard).
     const generationAtStart = msgState.thinkingFrameGeneration;
-    const id = await replyChunkWithFallback(key, renderedHtml, renderedHtml);
+    const id = await replyChunkWithFallback(key, renderedHtml, plainText);
     if (id === null) return false;
     if (msgState.thinkingFrameGeneration !== generationAtStart) {
       await deleteThreadMessage(key, id);
@@ -12153,6 +12161,7 @@ async function refreshSubagentStatus(key: SessionKey): Promise<void> {
       messageId,
       renderAgentHtml(text),
       { parse_mode: 'HTML' },
+      text,
     );
     // Guard the post-await mutations against a close+reopen that swapped the
     // frame WHILE this edit was draining the pacer: `lastSubagentText` /

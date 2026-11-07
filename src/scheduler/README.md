@@ -117,7 +117,9 @@ constants in the code; this README keeps what the code cannot say.
   the command and the full output go to the AGENT's prompt only. The folded message (`connectors/telegram/foldedMessage.ts`)
   carries its plain-text twin: if Telegram refuses the markup, `replyToThread` resends THOSE words (`plainFallbackText`), never
   the tags shown literally — every `parse_mode: 'HTML'` caller of `replyToThread` passes its twin (the rendered agent chunks, the
-  sub-agent frame, the runners' pairing messages too). Alert pins an earlier version made
+  sub-agent frame, the runners' pairing messages too — a secret's twin is withheld from the output trace like the message itself,
+  `markOutboundTextsSecret`), and so does every HTML EDIT (`editThreadMessage`: the first chunk of an agent's output, the status,
+  thinking and sub-agent frames — the thinking coalescer carries the source text of its pending frame for that). Alert pins an earlier version made
   (`ScheduleRecord.alertPinMessageIds`, never written now) are unpinned at the job's next run (`releaseLegacyAlertPins`) and
   forgotten — but only the ones that are released: the `unpinMessages` port (`connectors/telegram/unpinMessages.ts`) answers
   with the ids Telegram did not answer for (the network failed, a rate limit, a 5xx), and those stay on the job to be tried again. An
