@@ -16,6 +16,7 @@ function createHarness(options: {
   tokens?: Record<string, { accessToken: string; expiresAtMs: number | null } | null>;
   fetch?: (token: string) => Promise<ClaudeUsageFetchResult>;
   snapshots?: Record<string, ClaudeUsageSnapshot>;
+  pollDeadlineMs?: number;
 }) {
   let nowMs = Date.parse('2026-10-12T10:00:00Z');
   const snapshots = new Map<string, ClaudeUsageSnapshot>(Object.entries(options.snapshots ?? {}));
@@ -35,6 +36,7 @@ function createHarness(options: {
       return options.fetch ? options.fetch(token) : { ok: true, buckets: [session(42)] };
     },
     refreshOpenCode: options.refreshOpenCode,
+    pollDeadlineMs: options.pollDeadlineMs,
     now: () => nowMs,
     log: (line) => logs.push(line),
   };
@@ -153,6 +155,71 @@ describe('noteStreamWindows', () => {
   });
 });
 
+/** Settles with `'hung'` when `task` is still pending after `ms` — a test of "never returns" must fail by assertion, not by hanging the runner. */
+async function settleOrHung<T>(task: Promise<T>, ms = 1_000): Promise<T | 'hung'> {
+  let timer: NodeJS.Timeout | undefined;
+  const hung = new Promise<'hung'>((resolve) => { timer = setTimeout(() => resolve('hung'), ms); });
+  try {
+    return await Promise.race([task, hung]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const neverSettles = (): Promise<never> => new Promise<never>(() => {});
+
+describe('a poll that never settles must not pin the refresh', () => {
+  it('a stuck poll is given up after the poll deadline: the refresh ends, says which poll it gave up on, and the next refresh polls afresh', async () => {
+    let calls = 0;
+    const h = createHarness({
+      profiles: [defaultProfile],
+      pollDeadlineMs: 20,
+      fetch: () => (++calls === 1 ? neverSettles() : Promise.resolve({ ok: true, buckets: [session(7)] })),
+    });
+    assert.notEqual(await settleOrHung(h.refresher.refreshAll()), 'hung', 'the stuck poll is abandoned at its deadline');
+    assert.match(h.logs.join('\n'), /default: usage poll did not finish within 0\.02 s/);
+    assert.notEqual(await settleOrHung(h.refresher.refreshAll()), 'hung', 'the next refresh is not stuck behind the abandoned one');
+    assert.equal(calls, 2, 'the second refresh polled again instead of joining the dead one');
+    assert.equal(h.snapshots.get('default')?.buckets[0].percent, 7);
+  });
+
+  it('every later caller gets out too: ten refreshes joined to a stuck poll all end at its deadline', async () => {
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, fetch: () => neverSettles() });
+    const callers = Array.from({ length: 10 }, () => h.refresher.refreshAll({ maxAgeMs: 60_000 }));
+    assert.notEqual(await settleOrHung(Promise.all(callers)), 'hung');
+  });
+
+  it('a stuck profile does not hold back the others: their snapshots are stored while it is still being waited for', async () => {
+    const h = createHarness({
+      profiles: [defaultProfile, workProfile],
+      pollDeadlineMs: 20,
+      fetch: (token) => (token === 'tok-default' ? neverSettles() : Promise.resolve({ ok: true, buckets: [session(33)] })),
+    });
+    assert.notEqual(await settleOrHung(h.refresher.refreshAll()), 'hung');
+    assert.equal(h.snapshots.get('work')?.buckets[0].percent, 33);
+    assert.equal(h.snapshots.has('default'), false, 'the abandoned poll stored nothing');
+  });
+
+  it('a stuck OpenCode poll is given up too, and the Claude profiles keep their figures', async () => {
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 20, refreshOpenCode: () => neverSettles() });
+    assert.notEqual(await settleOrHung(h.refresher.refreshAll()), 'hung');
+    assert.equal(h.snapshots.get('default')?.buckets[0].percent, 42);
+    assert.match(h.logs.join('\n'), /OpenCode providers: usage poll did not finish within 0\.02 s/);
+  });
+
+  it('refreshOne is bounded the same way (the forced read of the account a limit just stopped)', async () => {
+    const h = createHarness({ profiles: [defaultProfile, workProfile], pollDeadlineMs: 20, fetch: () => neverSettles() });
+    assert.notEqual(await settleOrHung(h.refresher.refreshOne('work')), 'hung');
+  });
+
+  it('a poll that answers inside its deadline is untouched: no give-up line, the figures are stored', async () => {
+    const h = createHarness({ profiles: [defaultProfile], pollDeadlineMs: 500 });
+    await h.refresher.refreshAll();
+    assert.equal(h.snapshots.get('default')?.buckets[0].percent, 42);
+    assert.deepEqual(h.logs, []);
+  });
+});
+
 describe('refreshClaudeUsageForLaunch', () => {
   const maxAgeMs = 60_000;
   const freshSnapshot = (): ClaudeUsageSnapshot => ({ fetchedAt: '2026-10-12T09:59:30.000Z', source: 'api', buckets: [session(10)] });
@@ -168,6 +235,37 @@ describe('refreshClaudeUsageForLaunch', () => {
     await refreshClaudeUsageForLaunch(h.refresher, { currentProfile: 'work', isStoppedByLimit: true, maxAgeMs });
     assert.deepEqual(h.fetched, ['tok-/p/work', 'tok-default'], 'work is forced first; default has no snapshot and is due');
     assert.equal(h.snapshots.get('work')?.buckets[0].percent, 42, 'the forced read replaced the cached figure');
+  });
+
+  it('a refresh that never ends does not hold the answer: it is given up at the budget, one line says so, and the cached figures are answered', async () => {
+    const logs: string[] = [];
+    const stuck = { refreshOne: () => neverSettles(), refreshAll: () => neverSettles() };
+    const outcome = await settleOrHung(refreshClaudeUsageForLaunch(stuck, { currentProfile: 'work', isStoppedByLimit: true, maxAgeMs, budgetMs: 20, log: (line) => logs.push(line) }));
+    assert.notEqual(outcome, 'hung');
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /claude_profiles: the usage refresh did not finish within 0\.02 s; answering from the cached figures/);
+  });
+
+  it('a refresh that is done inside the budget logs nothing', async () => {
+    const logs: string[] = [];
+    const h = createHarness({ profiles: [defaultProfile, workProfile] });
+    await refreshClaudeUsageForLaunch(h.refresher, { currentProfile: null, isStoppedByLimit: false, maxAgeMs, budgetMs: 500, log: (line) => logs.push(line) });
+    assert.equal(h.fetched.length, 2);
+    assert.deepEqual(logs, []);
+  });
+
+  it('the budget covers the whole launch refresh, the forced read of the stopped account and the rest together; what is left runs on in the background', async () => {
+    const order: string[] = [];
+    const logs: string[] = [];
+    const slowRefresher = {
+      refreshOne: async () => { order.push('one'); await new Promise((resolve) => setTimeout(resolve, 40)); },
+      refreshAll: async () => { order.push('all'); },
+    };
+    await refreshClaudeUsageForLaunch(slowRefresher, { currentProfile: 'work', isStoppedByLimit: true, maxAgeMs, budgetMs: 15, log: (line) => logs.push(line) });
+    assert.deepEqual(order, ['one'], 'the budget ran out inside the first step');
+    assert.equal(logs.length, 1);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.deepEqual(order, ['one', 'all'], 'the refresh was given up on, not cancelled');
   });
 
   it('nothing to force without a current profile, or for a name that is no profile', async () => {

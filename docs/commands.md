@@ -220,7 +220,10 @@ so one account's usage limit does not stop every topic.
   it stays on the warm account, moved (the account stopped on a limit or can no
   longer run), soonest weekly reset, or none usable. The agent then
   starts the child with `CLAUDE_CONFIG_DIR=<configDir>` (`null` = the default
-  profile: set nothing). The same answer from a shell, for a worker without
+  profile: set nothing). The bot refreshes the usage figures before it answers but
+  waits for that at most 10 seconds: a slower refresh goes on in the background and
+  the answer is built from the figures already stored (each profile says when it
+  was read), so the tool never leaves the agent waiting. The same answer from a shell, for a worker without
   MCP: `charness claude-profiles [--best] [--model <name>] [--current <name>
   [--stopped-by-limit]] [--json]` —
   `--best` prints just the directory (an empty line for the default; exit 1 and

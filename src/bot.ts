@@ -8718,7 +8718,9 @@ async function takeFallbackSwitchOffer(key: SessionKey, episodeId: number, index
 /**
  * The `claude_profiles` MCP tool's answer: snapshots refreshed on demand (a minute's cache; the account a resumed session
  * was stopped on is re-read at once), then the launch pick — a new agent, or the session's own account when it is warm.
- * The accounts the operator switched off in the `/limits` list are never picked for a new agent.
+ * The accounts the operator switched off in the `/limits` list are never picked for a new agent. The refresh is waited for
+ * only up to `claudeLaunchRefreshBudgetMs`; past it the cached figures are answered (an agent that waits on a silent tool
+ * call is dropped by its own client after 300 s).
  */
 async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<ClaudeProfilesReport> {
   await refreshClaudeUsageForLaunch(claudeUsageRefresher, { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, maxAgeMs: claudeUsageOnDemandMaxAgeMs });

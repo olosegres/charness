@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**An agent's call of `claude_profiles` (which account a worker should run on) no longer waits for minutes and dies when the bot's usage refresh is stuck — it answers at once from the last figures.**
+Before, the tool waited for the usage refresh without any limit, and every caller of that refresh (the 10-minute timer, `/limits`, the tool) shares the one poll in flight — so a poll that never finished held them all. On 6 November every call of the tool, from several topics, sat silent for 300 s until the agent's own client gave up, and so it went for nine hours; nothing else showed the stall, because `/limits` waits for the refresh only two seconds.
+Now:
+  - The tool waits for fresh figures for at most 10 seconds and then answers from what is stored; each profile in the answer says when its figures were read, and the refresh goes on in the background.
+  - No single usage poll (an account's, or the OpenCode providers') is waited for longer than 30 seconds; one that is stuck is dropped with a log line naming it («[usage] <account>: usage poll did not finish within 30 s …»), so the next refresh starts afresh instead of joining it, and the other accounts' figures are stored meanwhile.
+
 **A message you forward into a topic now reaches the agent marked as forwarded — from whom and when it was originally sent — instead of passing for your own words.**
 Before, the agent got only the text of a forwarded message: two bot alerts you forwarded as examples were read as your own report, and nothing told it they came from somewhere else.
 Now:
