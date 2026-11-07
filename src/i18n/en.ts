@@ -1245,6 +1245,7 @@ export const enDict: Record<string, string> = {
   'runners.cpuThreads': '{model}, {threads} threads',
   'runners.cpuLoad': 'load {load}',
   'runners.jobsLine': 'jobs: {running} running, {queued} queued · projects: {projects}',
+  'runners.copiesLine': 'project copies: {count} · {size}',
   'runners.pueueMissing': 'Pueue is missing on this runner',
   'runners.jobToolsLine': 'jobs run with: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'none (a job that calls it fails)',

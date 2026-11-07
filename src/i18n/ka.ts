@@ -1201,6 +1201,7 @@ export const kaDict: Record<string, string> = {
   'runners.cpuThreads': '{model}, {threads} ნაკადი',
   'runners.cpuLoad': 'დატვირთვა {load}',
   'runners.jobsLine': 'ამოცანები: {running} სრულდება, {queued} რიგშია · პროექტები: {projects}',
+  'runners.copiesLine': 'პროექტის ასლები: {count} · {size}',
   'runners.pueueMissing': 'ამ რანერზე Pueue არ არის',
   'runners.jobToolsLine': 'ამოცანები ამით სრულდება: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'არ არის (მისი გამომძახებელი ამოცანა ჩავარდება)',

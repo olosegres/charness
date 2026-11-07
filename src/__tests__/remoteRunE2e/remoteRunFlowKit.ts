@@ -221,6 +221,8 @@ export function createRunnerEntry(layout: FlowLayout, overrides: Partial<Runners
     workDir: layout.workDir,
     pueue: { bin: layout.pueueBin, config: layout.pueueConfigPath },
     groups: { default: 3, emulator: 1 },
+    // These flows are about jobs, not the disk upkeep: the host's free space must not decide whether a submit is refused.
+    minFreeGb: 0,
     ...overrides,
   };
 }

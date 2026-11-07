@@ -17,7 +17,7 @@ remoteRunCli.ts → commands.ts ──ssh (one master per runner)──►      
 ```
 
 The pure planners (`cliArgs`, `pathPatterns`, `projectConfig`, `runnersConfig`, `sendPlan`, `depsPlan`, `jobId`, `jobState`, `jobFormat`,
-`probe`, `exitCodes`, `leaseTiming`, `safeCopy`) know nothing of ssh; the I/O modules (`ssh`, `rsync`, `runnerClient`, `runners`,
+`probe`, `pruneReport`, `exitCodes`, `leaseTiming`, `safeCopy`) know nothing of ssh; the I/O modules (`ssh`, `rsync`, `runnerClient`, `runners`,
 `submit`, `foreground`, `jobFiles`, `commands`) are thin over them. The CLI loads **no env file** (it would read the PROJECT's `.env`:
 agents run it from project folders) and never touches `DATA_DIR` or the state store.
 
@@ -26,7 +26,7 @@ agents run it from project folders) and never touches `DATA_DIR` or the state st
 - **Config** — `~/.config/charness/runners.json` (`runnersConfig.ts`), one per OS user, beside the global env file whatever `ENV_FILE`
   says (a Jira agent has neither `ENV_FILE` nor `DATA_DIR`): the hand-made runners. The paired ones come from the hub's registry
   `~/.config/charness/runners/paired.json` (`pairedRunners.ts`). `runnersCatalog.ts` is the only place that knows both: hand-made first, then
-  paired, a name in both is an error naming it. The bot MCP offers the instruction bullet while the catalog lists a runner
+  paired, a name in both is an error naming it. An entry of either may carry `minFreeGb` and `copyMaxIdleDays` (the disk upkeep, «Prune» below): `ssh.ts` hands them to every script call as `REMOTE_RUN_MIN_FREE_GB` / `REMOTE_RUN_COPY_MAX_IDLE_DAYS`. The bot MCP offers the instruction bullet while the catalog lists a runner
   (`runnerSummary.ts` reads the catalog on every connect, both files stamp-cached).
 - **Local cache** — `${XDG_CACHE_HOME:-~/.cache}/charness/remote-run/` (0700): ssh control sockets (`ssh/`), the last probe of each runner
   (`<runner>.probe.json`: named by the runner, and a name is handed on to the next machine — so a paired runner reads it only if it was taken since the runner was paired; removing the runner from the hub deletes it, while a runner that unpaired itself leaves it behind and the pairing floor ignores it), and `jobs/<id>.json` — the main box's own record of which local project a job came from.
@@ -34,7 +34,7 @@ agents run it from project folders) and never touches `DATA_DIR` or the state st
   share this one cache — the runner lines of the agents' bullet (`runnerSummary.ts`), the `/runners` screen and `remote-run` itself read the same snapshots.
   (Before, a tracker agent's cache followed `HOME` while the bot's did not, and what one wrote the other could not read.)
 - **Runner** — `<workDir>/`: `bin/runner-<sha8>.sh`; `tmp/lease.*` (a lease watcher's state, removed when it ends, `prune` sweeps what a killed one left);
-  `p/<slug>/{tree,stage/<job>,jobs/<job>,manifest,deps.hash,used,lock}`.
+  `p/<slug>/{tree,stage/<job>,jobs/<job>,manifest,deps.hash,used,lock,size-kb}`.
   `slug` = `<basename>-<sha256(hostname:uid:root)[0..10]>`. A job folder holds `meta.json`, `cmd`, `env`, `pull.ere`, `pull.roots`, `manifest`,
   `install-command`/`install-key`, `log`, `phase`, `pid`, `task-id`, `exit`, markers (`timeout`, `killed`, `failed-step`), `artifacts/`.
 
@@ -131,9 +131,20 @@ act on whoever holds a number (a number nobody holds: `wait` returns 0 at once).
 (`wait_for_task`), and prune removes a task only when it is not marked and Pueue says the task under that number carries the job's own
 label (`check_task_belongs_to_job`: `pueue status --json label=rr-<job>`).
 
-**Prune** (on every submit) removes jobs older than 3 days that ended (an exit file, no task, or — for one an earlier script SIGKILLed unrecorded —
+**Prune** (`prune_work`; on every submit in `prepare`, and `prune` itself) removes jobs older than 3 days that ended (an exit file, no task, or — for one an earlier script SIGKILLed unrecorded —
 a process that is gone), stage folders older than a day **unless their job is
-still queued** (a job can wait behind a busy group for days), lease/probe scratch state and project copies unused for 30 days.
+still queued** (a job can wait behind a busy group for days), lease/probe scratch state, and project copies — two rules, both skipping a copy that is IN USE
+(`check_copy_is_busy`: its lock is held by a live job — a stale lock is not —, or a job folder of it has no exit and either waits/runs (a task, no dead process) or is younger than 30 minutes
+with no task yet, i.e. a submit still sending its files) and the copy of the job being submitted (`prepare`'s slug):
+- **by age**: unused (`p/<slug>/used` older than) 3 days — `copyMaxIdleDays` of the runner's config, `REMOTE_RUN_COPY_MAX_IDLE_DAYS` on the script;
+- **by free space**: while `df -Pk` of the work dir says less is free than the target — the smaller of 60 GB and 15 % of the disk, `minFreeGb` / `REMOTE_RUN_MIN_FREE_GB` (0 = off) — the copy with the oldest `used` mark goes first
+  (`prepare` touches it, so does `exec`), then the next, until the target is met or only protected copies are left.
+A removal moves the copy to `p/.trash-<slug>-<pid>` with one rename (a submit that meets the name afterwards makes a copy of its own; a cut-off removal is finished by the next prune), makes the tree writable (`chmod -R u+rwX`:
+CocoaPods' xcframeworks are read-only folders that stop `rm`), removes it, and prints `removed=<slug> freed_kb=<n> why=idle|space` (freed = the change of free space across it; `stuck=<slug>` when it would not go) —
+`submit.ts` shows each as one line. `prepare` ends with **exit 28** and one line on stderr when the disk is still short after the prune (free, target, the biggest copies from their `size-kb`, the way out); it takes back the job folder and stage it made, and a first-ever copy of the project with them.
+`prepare` therefore gets a 15-minute call timeout (`prepareCallTimeoutMs`): removing copies of tens of GB takes minutes.
+`probe` never prunes inline (it must answer in seconds, or the runner would read as offline): on a short disk it starts `prune` **detached** (`start_detached_run`, one at a time by a pid file in `tmp/`), and it reports `disk_total_mb`, `disk_min_free_mb`,
+`copies_count`, `copies_size_mb` and `copies_unmeasured` — the sizes are the `p/<slug>/size-kb` figures that the detached `measure-copies` (started by `prepare` and `probe` when a figure is missing or older than an hour; `du -sk` of a copy takes long) wrote; `runners` and the bot's `/runners` show count and total.
 
 **The project lock** is a file created with the shell's own exclusive create (`set -C`, `open(O_EXCL)`) holding the holder's pid and job — never
 `mkdir`: the uutils coreutils that current Ubuntu installs as `/usr/bin/mkdir` let simultaneous `mkdir` of one path all succeed (265 of 1200 races with five
@@ -179,7 +190,7 @@ whole subshell).
 ## Tests
 
 Unit tests (`src/__tests__/remoteRun*.test.ts`) cover every planner (the paired runners' ssh options and catalog in `remoteRunPairedRunners.test.ts`, the wait in `remoteRunRunnerWait.test.ts`), the CLI entry, the MCP bullet, the runner script (probe, apply step,
-prune, the lease through `exec`), ssh quoting against a real shell and file selection against real git repositories.
+prune, the lease through `exec`, the disk upkeep — `remoteRunRunnerScriptDisk.test.ts`: LRU order, the protected copies, read-only folders, the refusal and the sizes, against the real script and a `df` / `du` on the PATH that read a `fake-kb` file per copy), ssh quoting against a real shell and file selection against real git repositories.
 The flow (`remoteRunE2e.test.ts` and `remoteRunLifecycleE2e.test.ts`, side by side with a runner each, helpers in `remoteRunE2e/remoteRunFlowHarness.ts`: a single file was close to the 20 minutes a flow may take) drives the BUILT CLI against a throwaway loopback `sshd` (no root) and a private Pueue in temp dirs
 (`remoteRunE2e/remoteRunFlowKit.ts`), with decoy jobs that write their own and a child's pid so "nothing left" is asserted on real pids.
 `remoteRunPairedE2e.test.ts` runs the same CLI through a PAIRED runner (the runner-link flow's hub and runner machine, `runnerLinkE2e/runnerLinkFlowKit.ts`): pass / fail codes, live output, `--bg` + `wait`, interrupt, `exec`, paused, `--needs` with the runner offline.

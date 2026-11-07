@@ -233,21 +233,21 @@ describe('prune', () => {
     assert.equal(fs.existsSync(youngFinished), true);
   });
 
-  it('removes stage folders older than a day and project copies unused for 30 days — but never a copy that holds the lock', () => {
+  it('removes stage folders older than a day and project copies unused for 3 days — but never a copy that holds the lock', () => {
     const staleStage = path.join(workDir, 'p', slug, 'stage', 'box1-stale');
     const freshStage = path.join(workDir, 'p', slug, 'stage', 'box1-fresh');
     for (const stage of [staleStage, freshStage]) writeFile(stage, 'a.txt');
     makeOld(staleStage, 2);
     const unusedCopy = path.join(workDir, 'p', 'unused-aaaaaaaaaa');
     writeFile(unusedCopy, 'used');
-    makeOld(path.join(unusedCopy, 'used'), 31);
+    makeOld(path.join(unusedCopy, 'used'), 4);
     const lockedCopy = path.join(workDir, 'p', 'locked-bbbbbbbbbb');
     writeFile(lockedCopy, 'used');
-    makeOld(path.join(lockedCopy, 'used'), 31);
+    makeOld(path.join(lockedCopy, 'used'), 4);
     fs.mkdirSync(path.join(lockedCopy, 'lock'));
     const usedCopy = path.join(workDir, 'p', 'used-cccccccccc');
     writeFile(usedCopy, 'used');
-    makeOld(path.join(usedCopy, 'used'), 5);
+    makeOld(path.join(usedCopy, 'used'), 2);
     assert.equal(runScript(['prune', workDir]).status, 0);
     assert.equal(fs.existsSync(staleStage), false);
     assert.equal(fs.existsSync(freshStage), true);

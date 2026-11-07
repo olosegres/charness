@@ -144,6 +144,13 @@ describe('the commands run on the runner', () => {
     assert.equal(command, "PUEUE_BIN=/home/runner/.local/bin/pueue PUEUE_CONFIG='/tmp/p ueue.yml' bash ~/charness-runner/bin/runner-abc12345.sh prepare ~/charness-runner app-1 box1-abc234 default=2");
   });
 
+  it('the runner\'s disk upkeep settings go through the environment too (numbers only) — and only the ones its config sets', () => {
+    const both = buildRunnerScriptCommand({ runner: { workDir: '/w', minFreeGb: 40, copyMaxIdleDays: 7 }, scriptName: 's.sh', subcommand: 'prepare', args: [] });
+    assert.equal(both, 'REMOTE_RUN_MIN_FREE_GB=40 REMOTE_RUN_COPY_MAX_IDLE_DAYS=7 bash /w/bin/s.sh prepare /w');
+    const zero = buildRunnerScriptCommand({ runner: { workDir: '/w', minFreeGb: 0 }, scriptName: 's.sh', subcommand: 'prune', args: [] });
+    assert.equal(zero, 'REMOTE_RUN_MIN_FREE_GB=0 bash /w/bin/s.sh prune /w', '0 (no free-space target) is a setting, not an absence');
+  });
+
   it('a call without Pueue settings has no environment prefix; an argument that would break a shell is quoted', () => {
     const command = buildRunnerScriptCommand({ runner: { workDir: '/w' }, scriptName: 's.sh', subcommand: 'exec', args: ['slug', '', '4000', 'echo "a b" && ls; $(x)'] });
     assert.equal(command, `bash /w/bin/s.sh exec /w slug '' 4000 'echo "a b" && ls; $(x)'`);

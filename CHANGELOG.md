@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**A runner no longer fills its disk with the project copies of finished tasks: it removes the unused ones itself, and a job that would not fit is refused up front instead of failing in the middle of a build.**
+Before, every task of a project left its own copy on the runner (16–41 GB each when it holds an iOS build), a copy was removed only after 30 days without use, and nothing looked at the free space — a Mac runner with 16 such copies had 10 GB of 460 free, and the first sign was «No space left on device» in someone else's build.
+Now:
+  - A project copy unused for 3 days is removed (`copyMaxIdleDays` in the runner's config), and while the work disk has less free space than the runner keeps — the smaller of 60 GB and 15 % of the disk (`minFreeGb`; `0` turns it off) — the least recently used copies are removed, one by one, until it has. Never a copy whose project lock is held by a live job, a copy with a queued, running or just-submitted job, or the copy of the job being submitted; folders CocoaPods leaves read-only no longer stop a removal. A submit prints one line per removed copy (what it freed and why); `runners` starts the same prune in the background when the disk is short.
+  - If the disk is still short after that, the submit fails at once (exit 125): «runner mac: only 8 GB free on the work disk, the runner needs 60 GB; biggest project copies: …».
+  - `charness remote-run runners` and the bot's `/runners` show how many project copies a runner keeps and what they take (and `LOW` next to a disk under its target).
+
 **`/accounts` and `/limits` now show how much an API account has spent of its Anthropic bonus credit, say when it is probably used up, notice by itself when it comes back — and an agent choosing an account sees the same.**
 Before, the only number the bot had for an account billed to API credits was a running total (the «💳» line); how much of the monthly credit that comes with Max, Ultra and Team was left is shown only on the Console's Billing page, which no credential the bot has can read. The credit ran out unseen, in the middle of a task, the first sign was a refused request — and after it ran out nothing told the bot, or you, when the new month's credit arrived, so the account stayed out of use.
 Now:

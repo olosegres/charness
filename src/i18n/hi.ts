@@ -1200,6 +1200,7 @@ export const hiDict: Record<string, string> = {
   'runners.cpuThreads': '{model}, {threads} थ्रेड',
   'runners.cpuLoad': 'लोड {load}',
   'runners.jobsLine': 'जॉब: {running} चल रहे, {queued} कतार में · प्रोजेक्ट: {projects}',
+  'runners.copiesLine': 'प्रोजेक्ट कॉपी: {count} · {size}',
   'runners.pueueMissing': 'इस रनर पर Pueue नहीं है',
   'runners.jobToolsLine': 'जॉब इनके साथ चलते हैं: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'नहीं है (इसे बुलाने वाला जॉब विफल होगा)',

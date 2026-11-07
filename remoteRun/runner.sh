@@ -33,7 +33,8 @@
 #   workdir      the work dir as an absolute path
 #   pueue        run Pueue itself with the configured binary and config
 #   jobs         the meta.json of every job of a project (or of all), as a JSON array
-#   prune        remove old jobs, stale stage dirs and unused project copies
+#   prune        remove old jobs, stale stage dirs, project copies unused for days, and — while the disk is short of free space — the least recently used ones
+#   measure-copies  write down how big each project copy is (p/<slug>/size-kb); `probe` and `prepare` start it detached, it is never called by hand
 #   sync-tree    the apply step alone (tests)
 
 # The script's own tools (sort, sed, grep) run in the C locale: byte-wise and the same everywhere. The user's commands do NOT — see job_locale.
@@ -49,8 +50,22 @@ kill_settle_polls=10
 pueue_start_wait_sec=8
 default_timeout_sec=10800
 job_keep_days=3
-copy_keep_days=30
+# A project copy nobody has used for this many days is removed (the runner's config can say another number: REMOTE_RUN_COPY_MAX_IDLE_DAYS).
+copy_keep_days=3
 stage_keep_days=1
+# The free space the work dir's disk should keep: the smaller of this many GiB and this percent of the disk (REMOTE_RUN_MIN_FREE_GB replaces both; 0 = no target).
+min_free_cap_gb=60
+min_free_percent=15
+kib_per_gib=1048576
+minutes_per_day=1440
+# A job folder without an exit file that is this young may be a submit still sending its files (no task yet): its project copy is in use.
+pending_submit_grace_min=30
+# The size written down in a copy (`size-kb`) is trusted for this long.
+copy_size_fresh_min=60
+# The refusal of a submit names this many of the biggest copies.
+refusal_copy_count=3
+# `prepare` ends with this exit code when the disk is still short of free space after the prune (28 is ENOSPC); src/remoteRun/pruneReport.ts has the same number.
+low_disk_exit_code=28
 drain_interval_sec=0.2
 probe_step_sec=4
 exit_file_wait_sec=5
@@ -459,6 +474,45 @@ probe_jobs() {
   echo "jobs_projects=$project_count"
 }
 
+# disk_total_mb and disk_min_free_mb (what the runner wants kept free; 0 = no target) from the disk step's "<total kb> <free kb>" ($1), and whether the disk is short of it
+# (probe_disk_is_short, acted on by cmd_probe once the slow questions are over).
+probe_disk_target() {
+  probe_disk_is_short=0
+  local total_kb=${1%% *} free_kb=${1##* } target_kb
+  case "$total_kb$free_kb" in
+    '' | *[!0-9]*) return 0 ;;
+  esac
+  target_kb=$(get_min_free_kb "$total_kb")
+  echo "disk_total_mb=$(kb_to_mb "$total_kb")"
+  echo "disk_min_free_mb=$(kb_to_mb "$target_kb")"
+  [ "$target_kb" -gt 0 ] && [ "$free_kb" -lt "$target_kb" ] && probe_disk_is_short=1
+  return 0
+}
+
+# copies_count= / copies_size_mb= / copies_unmeasured= : the project copies, their size from the figures `measure-copies` wrote down (a stale one still counts; the number of copies
+# with no figure or an old one is copies_unmeasured). Asking never waits for a `du`: a missing figure starts the measuring detached.
+probe_copies() {
+  local count=0 total_kb=0 unmeasured=0 copy_dir size_file size_kb
+  for copy_dir in "$work"/p/*/; do
+    [ -d "$copy_dir" ] || continue
+    count=$((count + 1))
+    size_file="${copy_dir}size-kb"
+    size_kb=$(read_file "$size_file")
+    case $size_kb in
+      '' | *[!0-9]*) unmeasured=$((unmeasured + 1)) ;;
+      *)
+        total_kb=$((total_kb + size_kb))
+        [ -n "$(find "$size_file" -maxdepth 0 -mmin +"$copy_size_fresh_min" 2> /dev/null)" ] && unmeasured=$((unmeasured + 1))
+        ;;
+    esac
+  done
+  echo "copies_count=$count"
+  echo "copies_size_mb=$(kb_to_mb "$total_kb")"
+  echo "copies_unmeasured=$unmeasured"
+  [ "$unmeasured" -gt 0 ] && start_detached_run "$work" measure-copies
+  return 0
+}
+
 # The probe's slow questions — Pueue, the disk, Xcode and its simulators, Docker — are asked at once, each bounded by probe_step_sec, so
 # a hung one costs that much in all, not that much each: the caller gives the whole probe 20 s, and a Mac with a slow simctl, a stalled
 # mount and a sleeping Docker would otherwise read as offline. One step: output in $probe_dir/<name>.out, its status in <name>.status
@@ -520,6 +574,7 @@ probe_slow() {
   wait
 
   echo "disk_free_mb=$(kb_to_mb "$(probe_step_output disk | awk 'NR == 2 { print $4 }')")"
+  probe_disk_target "$(probe_step_output disk | awk 'NR == 2 { print $2, $4 }')"
   echo "job_node=$(probe_tool_version node)"
   echo "job_yarn=$(probe_tool_version yarn)"
   if [ "$(probe_step_status pueue)" = 0 ]; then
@@ -662,6 +717,9 @@ cmd_probe() {
     Darwin) probe_darwin ;;
   esac
   probe_slow
+  # A disk short of free space frees itself: the prune runs detached (a probe must answer in seconds, removing a copy takes minutes).
+  [ "${probe_disk_is_short:-0}" -eq 1 ] && start_detached_run "$work" prune
+  probe_copies
   probe_jobs
   probe_android
   probe_playwright
@@ -712,6 +770,8 @@ cmd_prepare() {
   fi
   apply_groups "$groups"
   prune_work "$work" "$slug"
+  refuse_when_disk_is_short
+  start_detached_run "$work" measure-copies
   echo "work=$(cd "$work" && pwd -P)"
 }
 
@@ -754,16 +814,213 @@ prune_work() {
   find "$work_dir/tmp" -mindepth 1 -maxdepth 1 -mtime +"$stage_keep_days" 2> /dev/null | while IFS= read -r old_lease; do
     rm -rf "$old_lease"
   done
-  find "$work_dir/p" -mindepth 2 -maxdepth 2 -name used -type f -mtime +"$copy_keep_days" 2> /dev/null | while IFS= read -r used_file; do
-    old_copy=$(dirname "$used_file")
-    [ "$(basename "$old_copy")" = "$keep_slug" ] && continue
-    [ -e "$old_copy/lock" ] && continue
-    rm -rf "$old_copy"
-  done
+  remove_leftover_trash "$work_dir"
+  prune_idle_copies "$work_dir" "$keep_slug"
+  prune_copies_for_space "$work_dir" "$keep_slug"
 }
 
 cmd_prune() {
   prune_work "$1" ""
+}
+
+# ─────────────────────────── project copies: age, free space, size ───────────────────────────
+
+# The settings a runner's config can replace arrive in the environment of every call (the main box sets them from runners.json / the registry); a
+# value that is not a plain number is the same as none.
+get_copy_keep_days() {
+  case ${REMOTE_RUN_COPY_MAX_IDLE_DAYS:-} in
+    '' | *[!0-9]*) ;;
+    *) [ "$((10#$REMOTE_RUN_COPY_MAX_IDLE_DAYS))" -gt 0 ] && { printf '%s\n' "$((10#$REMOTE_RUN_COPY_MAX_IDLE_DAYS))"; return 0; } ;;
+  esac
+  printf '%s\n' "$copy_keep_days"
+}
+
+# disk_total_kb and disk_free_kb of the disk under directory $1 (`df -Pk`: 1024-byte blocks, the same layout on Linux and macOS); both empty when df says nothing usable.
+read_disk_kb() {
+  local line
+  line=$(df -Pk "$1" 2> /dev/null | awk 'NR == 2 { print $2, $4 }')
+  disk_total_kb=${line%% *}
+  disk_free_kb=${line##* }
+  case "$disk_total_kb$disk_free_kb" in
+    '' | *[!0-9]*) disk_total_kb=; disk_free_kb= ;;
+  esac
+}
+
+# The free space (KiB) the disk should keep, given its total size $1; 0 = no target.
+get_min_free_kb() {
+  case ${REMOTE_RUN_MIN_FREE_GB:-} in
+    '' | *[!0-9]*) ;;
+    *) printf '%s\n' "$((10#$REMOTE_RUN_MIN_FREE_GB * kib_per_gib))"; return 0 ;;
+  esac
+  local cap_kb=$((min_free_cap_gb * kib_per_gib))
+  local share_kb=$(($1 * min_free_percent / 100))
+  if [ "$share_kb" -lt "$cap_kb" ]; then printf '%s\n' "$share_kb"; else printf '%s\n' "$cap_kb"; fi
+}
+
+# Is the disk under directory $1 short of its free-space target? Sets disk_total_kb, disk_free_kb and min_free_kb; false when the target is off or the disk unreadable.
+check_disk_is_short() {
+  read_disk_kb "$1"
+  [ -n "$disk_free_kb" ] || return 1
+  min_free_kb=$(get_min_free_kb "$disk_total_kb")
+  [ "$min_free_kb" -gt 0 ] && [ "$disk_free_kb" -lt "$min_free_kb" ]
+}
+
+# Is project copy $2 (a slug, under work dir $1) in use: its lock is held by a live job, or a job of it waits, runs, or is being submitted? Such a copy is never removed.
+# A name that is not a plain slug is not ours to judge: it counts as in use.
+check_copy_is_busy() {
+  local work_dir=$1 copy_slug=$2
+  case $copy_slug in
+    '' | *[!A-Za-z0-9._-]* | .*) return 0 ;;
+  esac
+  local copy_dir="$work_dir/p/$copy_slug"
+  if [ -e "$copy_dir/lock" ] && ! ( lock="$copy_dir/lock"; jobs_dir="$copy_dir/jobs"; check_lock_is_stale ); then
+    return 0
+  fi
+  local job_dir
+  for job_dir in "$copy_dir"/jobs/*/; do
+    [ -d "$job_dir" ] || continue
+    [ -f "$job_dir/exit" ] && continue
+    check_job_dir_ended "$job_dir" || return 0
+    # No task yet, no exit: a submit that is still sending its files looks like this; a folder nobody touched for a while is one that failed half-way.
+    [ -n "$(find "$job_dir" -maxdepth 0 -mmin -"$pending_submit_grace_min" 2> /dev/null)" ] && return 0
+  done
+  return 1
+}
+
+# A removal that was cut off (ssh dropped, the machine slept) leaves its folder under a `.trash-` name: the next prune finishes it.
+remove_leftover_trash() {
+  local leftover
+  for leftover in "$1"/p/.trash-*; do
+    [ -e "$leftover" ] || continue
+    chmod -R u+rwX "$leftover" 2> /dev/null
+    rm -rf "$leftover"
+  done
+}
+
+# Remove project copy $2 (a slug) under work dir $1. It is moved aside by one rename first: a submit that meets the name afterwards makes a copy of its own, and a removal that is cut off is
+# finished by the next prune. The folders CocoaPods' xcframeworks leave read-only stop `rm`, so the tree is made writable before it. Succeeds when the copy is gone.
+remove_project_copy() {
+  local trash="$1/p/.trash-$2-$$"
+  mv "$1/p/$2" "$trash" 2> /dev/null || return 1
+  chmod -R u+rwX "$trash" 2> /dev/null
+  rm -rf "$trash" 2> /dev/null
+  [ ! -e "$trash" ]
+}
+
+# Remove copy $2 for reason $3 (idle | space) and say so on stdout, one line the submit shows: `removed=<slug> freed_kb=<n> why=<reason>`; a copy that would not go: `stuck=<slug>`.
+# freed_kb is the change of the disk's free space across the removal (empty when df said nothing).
+remove_and_report_copy() {
+  local work_dir=$1 copy_slug=$2 reason=$3
+  local before_kb after_kb freed_kb=
+  read_disk_kb "$work_dir"
+  before_kb=$disk_free_kb
+  if remove_project_copy "$work_dir" "$copy_slug"; then
+    read_disk_kb "$work_dir"
+    after_kb=$disk_free_kb
+    if [ -n "$before_kb" ] && [ -n "$after_kb" ]; then
+      freed_kb=$((after_kb - before_kb))
+      [ "$freed_kb" -ge 0 ] || freed_kb=0
+    fi
+    printf 'removed=%s freed_kb=%s why=%s\n' "$copy_slug" "$freed_kb" "$reason"
+  else
+    printf 'stuck=%s\n' "$copy_slug"
+    return 1
+  fi
+}
+
+# Project copies unused for copy_keep_days (the runner's setting, else the default) are removed, unless in use or the copy of the job being submitted.
+prune_idle_copies() {
+  local work_dir=$1 keep_slug=$2
+  local idle_minutes=$(($(get_copy_keep_days) * minutes_per_day))
+  local used_file idle_slug
+  while IFS= read -r used_file; do
+    idle_slug=$(basename "$(dirname "$used_file")")
+    [ "$idle_slug" = "$keep_slug" ] && continue
+    check_copy_is_busy "$work_dir" "$idle_slug" && continue
+    remove_and_report_copy "$work_dir" "$idle_slug" idle || true
+  done < <(find "$work_dir/p" -mindepth 2 -maxdepth 2 -name used -type f -mmin +"$idle_minutes" 2> /dev/null)
+}
+
+# While the disk is short of free space, remove the project copies that were used longest ago, one by one, until it is not — except copies in use and the copy of the job being submitted.
+prune_copies_for_space() {
+  local work_dir=$1 keep_slug=$2
+  local used_file lru_slug
+  check_disk_is_short "$work_dir" || return 0
+  while IFS= read -r used_file; do
+    lru_slug=$(basename "$(dirname "$used_file")")
+    [ "$lru_slug" = "$keep_slug" ] && continue
+    check_copy_is_busy "$work_dir" "$lru_slug" && continue
+    remove_and_report_copy "$work_dir" "$lru_slug" space || continue
+    check_disk_is_short "$work_dir" || break
+  done < <(ls -1tr "$work_dir"/p/*/used 2> /dev/null)
+}
+
+# KiB project copy $2 (a slug, under work dir $1) takes: the figure `measure-copies` wrote into the copy (size-kb) when it is younger than $3 minutes ("any" = of any age), else measured now
+# with `du -sk` and written down. Fails when the copy cannot be measured.
+read_copy_size_kb() {
+  local size_file="$1/p/$2/size-kb" size_kb=
+  if [ -f "$size_file" ] && { [ "$3" = any ] || [ -z "$(find "$size_file" -maxdepth 0 -mmin +"$3" 2> /dev/null)" ]; }; then
+    size_kb=$(read_file "$size_file")
+  fi
+  case $size_kb in
+    '' | *[!0-9]*)
+      size_kb=$(du -sk "$1/p/$2" 2> /dev/null | awk '{ print $1 }')
+      case $size_kb in '' | *[!0-9]*) return 1 ;; esac
+      printf '%s\n' "$size_kb" > "$size_file.tmp.$$" 2> /dev/null && mv "$size_file.tmp.$$" "$size_file" 2> /dev/null
+      ;;
+  esac
+  printf '%s\n' "$size_kb"
+}
+
+# `5 GB` / `41 GB` / `0.4 GB` for KiB $1 (the words `formatGigabytes` in probe.ts uses).
+format_kb_as_gb() {
+  awk -v kb="$1" 'BEGIN { g = kb / 1048576; if (g >= 10) printf "%d GB", g + 0.5; else printf "%g GB", int(g * 10 + 0.5) / 10 }'
+}
+
+# The submit's refusal when the disk is still short after the prune: free, needed, the biggest copies, the way out. One line on stderr, exit low_disk_exit_code.
+refuse_when_disk_is_short() {
+  check_disk_is_short "$work" || return 0
+  # This submit goes no further: take back what `prepare` made for it (a project that has nothing else in it, its first submit, goes away with it).
+  rm -rf "$jd" "$stage"
+  rmdir "$proj/stage" "$jobs_dir" "$tree" 2> /dev/null
+  [ -z "$(ls -A "$proj" 2> /dev/null | grep -v -x used)" ] && rm -rf "$proj"
+  local copy_dir copy_slug size_kb sizes= listing=
+  for copy_dir in "$work"/p/*/; do
+    [ -d "$copy_dir" ] || continue
+    copy_slug=$(basename "$copy_dir")
+    size_kb=$(read_copy_size_kb "$work" "$copy_slug" any) || continue
+    sizes="$sizes$size_kb $copy_slug"$'\n'
+  done
+  while read -r size_kb copy_slug; do
+    listing="${listing:+$listing, }$copy_slug $(format_kb_as_gb "$size_kb")"
+  done < <(printf '%s' "$sizes" | sort -rn | head -n "$refusal_copy_count")
+  local advice="there is no project copy here to free: the disk is full of other files"
+  [ -n "$listing" ] && advice="biggest project copies: $listing; free space with \`charness remote-run clean <slug>\` on the copies of your own finished tasks"
+  printf 'remote-run-runner: only %s free on the work disk, the runner needs %s; %s\n' "$(format_kb_as_gb "$disk_free_kb")" "$(format_kb_as_gb "$min_free_kb")" "$advice" >&2
+  exit "$low_disk_exit_code"
+}
+
+get_script_path() {
+  printf '%s\n' "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+}
+
+# Run subcommand $2 of this script on work dir $1 detached (output and input away, so an ssh call that started it returns), unless a run of it is still going.
+start_detached_run() {
+  local work_dir=$1 subcommand=$2
+  local pid_file="$work_dir/tmp/$subcommand.pid" running_pid
+  mkdir -p "$work_dir/tmp" 2> /dev/null
+  running_pid=$(read_file "$pid_file")
+  [ -n "$running_pid" ] && kill -0 "$running_pid" 2> /dev/null && return 0
+  ( nice -n 19 bash "$(get_script_path)" "$subcommand" "$work_dir" > /dev/null 2>&1 < /dev/null & echo "$!" > "$pid_file" )
+}
+
+# Write down the size of every project copy whose figure is missing or old (`du` of a copy of tens of GB takes long: this runs detached).
+cmd_measure_copies() {
+  local work_dir=$1 copy_dir
+  for copy_dir in "$work_dir"/p/*/; do
+    [ -d "$copy_dir" ] || continue
+    read_copy_size_kb "$work_dir" "$(basename "$copy_dir")" "$copy_size_fresh_min" > /dev/null
+  done
 }
 
 # ─────────────────────────── adding the job to Pueue ───────────────────────────
@@ -776,7 +1033,7 @@ quote_word() {
 add_job() {
   local group=$1
   local script_path
-  script_path=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+  script_path=$(get_script_path)
   local command_line
   command_line="exec bash $(quote_word "$script_path") job $(quote_word "$work") $(quote_word "$slug") $(quote_word "$job")"
   local task
@@ -1522,6 +1779,8 @@ cmd_exec() {
   shift 4
   check_relative_path "$subfolder" || die "bad subfolder"
   [ -d "$tree/$subfolder" ] || die "the runner has no copy of this project yet (run a command first)"
+  # Using the copy counts as using it: the least recently used one is the first to go when the disk is short.
+  touch "$proj/used"
   exec 3<&0
   # Own process group, so the lease can stop the command and everything it started.
   set -m
@@ -1604,6 +1863,7 @@ main() {
     workdir) cmd_workdir "$@" ;;
     jobs) cmd_jobs "$@" ;;
     prune) cmd_prune "$@" ;;
+    measure-copies) cmd_measure_copies "$@" ;;
     sync-tree) cmd_sync_tree "$@" ;;
     *) die "unknown subcommand: $subcommand" ;;
   esac

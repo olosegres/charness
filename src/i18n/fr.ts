@@ -1201,6 +1201,7 @@ export const frDict: Record<string, string> = {
   'runners.cpuThreads': '{model}, {threads} threads',
   'runners.cpuLoad': 'charge {load}',
   'runners.jobsLine': 'jobs : {running} en cours, {queued} en attente · projets : {projects}',
+  'runners.copiesLine': 'copies de projets : {count} · {size}',
   'runners.pueueMissing': 'Pueue est absent sur ce runner',
   'runners.jobToolsLine': 'les jobs tournent avec : Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'absent (un job qui l’appelle échoue)',

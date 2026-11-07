@@ -109,7 +109,7 @@ export function quoteRemotePath(remotePath: string): string {
 }
 
 export interface RunnerScriptCall {
-  runner: Pick<RunnerConfig, 'workDir' | 'pueue'>;
+  runner: Pick<RunnerConfig, 'workDir' | 'pueue' | 'minFreeGb' | 'copyMaxIdleDays'>;
   /** `runner-<sha8>.sh` */
   scriptName: string;
   subcommand: string;
@@ -117,11 +117,14 @@ export interface RunnerScriptCall {
   args: readonly string[];
 }
 
-/** @description The command line that runs one subcommand of the uploaded script on the runner (Pueue's binary and config through the environment). */
+/** @description The command line that runs one subcommand of the uploaded script on the runner (Pueue's binary and config, and the runner's disk upkeep settings, through the environment). */
 export function buildRunnerScriptCommand(call: RunnerScriptCall): string {
   const environment = [
     ...(call.runner.pueue?.bin === undefined ? [] : [`PUEUE_BIN=${quoteRemotePath(call.runner.pueue.bin)}`]),
     ...(call.runner.pueue?.config === undefined ? [] : [`PUEUE_CONFIG=${quoteRemotePath(call.runner.pueue.config)}`]),
+    // The disk upkeep settings of the runner's config; numbers only (the schema), so nothing needs quoting. The script reads these names (REMOTE_RUN_* in runner.sh).
+    ...(call.runner.minFreeGb === undefined ? [] : [`REMOTE_RUN_MIN_FREE_GB=${call.runner.minFreeGb}`]),
+    ...(call.runner.copyMaxIdleDays === undefined ? [] : [`REMOTE_RUN_COPY_MAX_IDLE_DAYS=${call.runner.copyMaxIdleDays}`]),
   ];
   const scriptPath = `${quoteRemotePath(call.runner.workDir)}/bin/${call.scriptName}`;
   return [...environment, 'bash', scriptPath, call.subcommand, quoteRemotePath(call.runner.workDir), ...call.args.map(quoteShellWord)].join(' ');

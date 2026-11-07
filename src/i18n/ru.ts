@@ -1205,6 +1205,7 @@ export const ruDict: Record<string, string> = {
   'runners.cpuThreads': '{model}, потоков: {threads}',
   'runners.cpuLoad': 'нагрузка {load}',
   'runners.jobsLine': 'задачи: {running} выполняются, {queued} в очереди · проектов: {projects}',
+  'runners.copiesLine': 'копии проектов: {count} · {size}',
   'runners.pueueMissing': 'На этом раннере нет Pueue',
   'runners.jobToolsLine': 'задачи работают с: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'нет (задача, которой он нужен, упадёт)',

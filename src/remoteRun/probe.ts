@@ -34,6 +34,10 @@ export interface RunnerProbe {
   ramTotalMb: number | null;
   ramFreeMb: number | null;
   diskFreeMb: number | null;
+  /** The free space the runner wants kept on its work disk (the smaller of 60 GB and 15 % of the disk, or its config's number); `null` when the runner did not say, `0` when it wants none. */
+  diskMinFreeMb: number | null;
+  /** The project copies on the runner: how many, how much they take as last measured (measuring runs detached, so `unmeasuredCount` copies have no fresh figure yet); `null` when the runner did not say. */
+  copies: { count: number; sizeMb: number; unmeasuredCount: number } | null;
   /** The Pueue version, `null` when Pueue is missing on the runner. */
   pueueVersion: string | null;
   jobsRunning: number;
@@ -77,6 +81,13 @@ function parseJobTools(fields: ReadonlyMap<string, string>): RunnerProbe['jobToo
   return node === undefined || yarn === undefined || node === '' || yarn === '' ? null : { node, yarn };
 }
 
+function parseCopies(fields: ReadonlyMap<string, string>): RunnerProbe['copies'] {
+  const count = readNumber(fields.get('copies_count'));
+  const sizeMb = readNumber(fields.get('copies_size_mb'));
+  if (count === null || sizeMb === null) return null;
+  return { count, sizeMb, unmeasuredCount: readNumber(fields.get('copies_unmeasured')) ?? 0 };
+}
+
 export type KeepAwakeMethod = 'caffeinate' | 'systemd-inhibit';
 const keepAwakeMethods: readonly KeepAwakeMethod[] = ['caffeinate', 'systemd-inhibit'];
 
@@ -118,6 +129,8 @@ export function parseProbeOutput(text: string): RunnerProbe {
     ramTotalMb: readNumber(fields.get('ram_total_mb')),
     ramFreeMb: readNumber(fields.get('ram_free_mb')),
     diskFreeMb: readNumber(fields.get('disk_free_mb')),
+    diskMinFreeMb: readNumber(fields.get('disk_min_free_mb')),
+    copies: parseCopies(fields),
     pueueVersion: pueue === undefined || pueue === 'missing' || pueue === '' ? null : pueue,
     jobsRunning: readNumber(fields.get('jobs_running')) ?? 0,
     jobsQueued: readNumber(fields.get('jobs_queued')) ?? 0,
@@ -194,6 +207,19 @@ function formatKeepsAwake(probe: RunnerProbe): string[] {
   return [`  keeps awake: yes (${describeKeepAwakeMethod(probe.keepsAwake.method)})`];
 }
 
+/** ` — LOW, the runner wants 60 GB kept free` when the work disk is under what the runner wants kept free (it frees itself by removing unused project copies, and refuses a job it cannot make room for). */
+function formatLowDisk(probe: RunnerProbe): string {
+  if (probe.diskFreeMb === null || probe.diskMinFreeMb === null || probe.diskMinFreeMb <= 0 || probe.diskFreeMb >= probe.diskMinFreeMb) return '';
+  return ` — LOW, the runner wants ${formatGigabytes(probe.diskMinFreeMb)} kept free`;
+}
+
+/** ` · 16 project copies, 290 GB` (the size as last measured, "so far" while a figure is still being measured); nothing while there is no copy. */
+function formatCopies(probe: RunnerProbe): string {
+  if (probe.copies === null || probe.copies.count === 0) return '';
+  const { count, sizeMb, unmeasuredCount } = probe.copies;
+  return ` · ${count} project ${count === 1 ? 'copy' : 'copies'}, ${formatGigabytes(sizeMb)}${unmeasuredCount > 0 ? ' so far (measuring)' : ''}`;
+}
+
 /** The line of a paired runner under its capabilities: the charness it runs and how it is kept running. Nothing for a hand-made one. */
 function formatRunnerProgram(probe: RunnerProbe): string[] {
   const parts = [
@@ -208,7 +234,7 @@ export function formatRunnerDetails(probe: RunnerProbe, groupLimits: Readonly<Re
   const groups = Object.entries(groupLimits).map(([groupName, parallel]) => `${groupName} ${parallel}`).join(', ');
   const jobs = `jobs: ${probe.jobsRunning} running, ${probe.jobsQueued} queued, ${probe.jobsProjects} ${probe.jobsProjects === 1 ? 'project' : 'projects'}`;
   return [
-    `  ${formatCpu(probe)} · RAM ${formatGigabytes(probe.ramTotalMb)}, ${formatGigabytes(probe.ramFreeMb)} free · disk ${formatGigabytes(probe.diskFreeMb)} free (work dir)`,
+    `  ${formatCpu(probe)} · RAM ${formatGigabytes(probe.ramTotalMb)}, ${formatGigabytes(probe.ramFreeMb)} free · disk ${formatGigabytes(probe.diskFreeMb)} free (work dir)${formatLowDisk(probe)}${formatCopies(probe)}`,
     `  ${jobs}${groups === '' ? '' : ` · groups: ${groups}`}${probe.pueueVersion === null ? ' · Pueue: MISSING (install it, see docs/remote-run.md)' : ''}`,
     `  can: ${formatCapabilities(probe).join(' · ')}`,
     ...formatJobTools(probe),

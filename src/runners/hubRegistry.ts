@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import { z } from 'zod';
 import { writeJsonFileAtomically, writeTextFileAtomically } from '../configDirFile';
-import { runnerNamePattern, runnerWorkDirSchema } from '../remoteRun/runnersConfig';
+import { runnerDiskSettingsShape, runnerNamePattern, runnerWorkDirSchema } from '../remoteRun/runnersConfig';
 import { buildRunnerKeyLine, buildTempKeyLine, writeManagedBlock } from './authorizedKeys';
 import { hubHostSchema, hubIdSchema, hubPortSchema } from './hubIds';
 import { getHubFilePaths, getRunnerHostAlias, type HubContext } from './hubPaths';
@@ -58,6 +58,8 @@ const pairedRunnerSchema = z.strictObject({
   port: hubPortSchema,
   /** Set from the hub: the runner stays attached, but no job is sent to it. */
   isPaused: z.boolean(),
+  /** The runner's disk upkeep, when the operator replaced the defaults by editing this entry (`minFreeGb`, `copyMaxIdleDays`: see `runnersConfig.ts`). */
+  ...runnerDiskSettingsShape,
 });
 
 export const pairedFileSchema = z.strictObject({

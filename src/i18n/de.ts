@@ -1201,6 +1201,7 @@ export const deDict: Record<string, string> = {
   'runners.cpuThreads': '{model}, {threads} Threads',
   'runners.cpuLoad': 'Last {load}',
   'runners.jobsLine': 'Jobs: {running} laufen, {queued} wartend · Projekte: {projects}',
+  'runners.copiesLine': 'Projektkopien: {count} · {size}',
   'runners.pueueMissing': 'Auf diesem Runner fehlt Pueue',
   'runners.jobToolsLine': 'Jobs laufen mit: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'fehlt (ein Job, der ihn aufruft, schlägt fehl)',

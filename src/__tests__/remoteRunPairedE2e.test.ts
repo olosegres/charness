@@ -36,6 +36,7 @@ import { spawnSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
+import type { PairedFile } from '../runners/hubRegistry';
 import { getRunnerLinkStatus } from '../runners/linkControl';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import {
@@ -113,7 +114,12 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
 
     const pairing = runPairingLine(layout, makePairingLine(layout));
     assert.equal(pairing.status, 0, `${pairing.stderr}\n${pairing.stdout}`);
-    const pairedRunner = readJson<{ runners: Array<{ name: string; id: string }> }>(path.join(layout.hubDir, 'paired.json')).runners[0];
+    const pairedFilePath = path.join(layout.hubDir, 'paired.json');
+    const pairedFile = readJson<PairedFile>(pairedFilePath);
+    // This flow is about jobs, not the disk upkeep: the host's free space must not decide whether a submit is refused (and the registry entry carries the setting through the link).
+    pairedFile.runners[0].minFreeGb = 0;
+    fs.writeFileSync(pairedFilePath, JSON.stringify(pairedFile));
+    const pairedRunner = pairedFile.runners[0];
     runnerName = pairedRunner.name;
     runnerId = pairedRunner.id;
     ioreg = createIoregStandIn(layout.root);

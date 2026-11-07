@@ -24,6 +24,8 @@ import {
 const scriptHashLength = 8;
 /** An ordinary call: a prepare may start the Pueue daemon, a result or a kill is quicker. */
 export const shortCallTimeoutMs = 60 * 1000;
+/** `prepare` prunes: removing project copies of tens of GB each takes minutes (see `runner.sh`, «project copies»). */
+export const prepareCallTimeoutMs = 15 * 60 * 1000;
 const scriptUploadTimeoutMs = 60 * 1000;
 
 export interface RunnerScript {
@@ -91,6 +93,12 @@ export function describeRunnerRefusal(stderr: string, fallback: string): string 
   return lastLine === undefined ? fallback : lastLine.replace(/^remote-run-runner: /, '');
 }
 
+/** @description The error of a runner script call that ended with a non-zero exit: the runner's own last lines, or the ssh failure when it said nothing. */
+export function describeCallFailure(runnerName: string, subcommand: string, result: SshRunResult): RemoteRunError {
+  const detail = result.stderr.trim() === '' ? describeSshFailure(result) : result.stderr.trim().split('\n').slice(-3).join(' / ');
+  return new RemoteRunError(`runner "${runnerName}": ${subcommand} failed — ${detail}`);
+}
+
 /** @description Create the client of `runner`. `script` and the spawn functions are injectable for the tests. */
 export function createRunnerClient(runner: RunnerConfig, cacheDir: string, script: RunnerScript = readRunnerScript()): RunnerClient {
   const call: RunnerClient['call'] = (subcommand, args, options = {}) =>
@@ -128,10 +136,7 @@ export function createRunnerClient(runner: RunnerConfig, cacheDir: string, scrip
     call,
     async callOrThrow(subcommand, args, options) {
       const result = await call(subcommand, args, options);
-      if (result.exitCode !== 0) {
-        const detail = result.stderr.trim() === '' ? describeSshFailure(result) : result.stderr.trim().split('\n').slice(-3).join(' / ');
-        throw new RemoteRunError(`runner "${runner.name}": ${subcommand} failed — ${detail}`);
-      }
+      if (result.exitCode !== 0) throw describeCallFailure(runner.name, subcommand, result);
       return result.stdout;
     },
     stream(subcommand, args) {

@@ -94,6 +94,8 @@ export function buildPairedRunnerConfig(runner: PairedRunner, hub: PairedHubEnvi
     sshOptions: buildPairedSshOptions({ runnerId: runner.id, nodePath: hub.nodePath, cliPath: hub.cliPath, hubDir: hub.hubDir }),
     workDir: runner.workDir,
     pueue: getPairedRunnerPueue(runner.workDir),
+    minFreeGb: runner.minFreeGb,
+    copyMaxIdleDays: runner.copyMaxIdleDays,
     paired: link,
   };
 }

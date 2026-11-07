@@ -11,8 +11,9 @@ import { recordHeldBackFiles } from './heldBackNotice';
 import { compilePathPatterns, createPathMatcher, getPathPatternSearchRoots } from './pathPatterns';
 import { planProjectSend, type ProjectContext } from './project';
 import { RemoteRunError } from './remoteRunError';
+import { diskTooLowRunnerExitCode, formatPrunedCopyLine, parsePrunedCopies } from './pruneReport';
 import { runRsync } from './rsync';
-import type { RunnerClient } from './runnerClient';
+import { describeCallFailure, describeRunnerRefusal, prepareCallTimeoutMs, type RunnerClient } from './runnerClient';
 import { defaultPueueGroup, formatGroupLimits } from './runnersConfig';
 import { buildRsyncGitArgs, buildRsyncMetaArgs, buildRsyncSendArgs, formatHeldBackNotice, formatManifest, formatNulSeparatedList, formatSentOnRequestNotice } from './sendPlan';
 
@@ -121,8 +122,12 @@ export async function stageJob(params: {
     ...(options.needs === 'ios' ? { 'needs-ios': '' } : {}),
   });
 
-  const prepared = await client.callOrThrow('prepare', [project.slug, jobId, formatGroupLimits(runner.groups)]);
-  const workDirLine = prepared.split('\n').find((line) => line.startsWith('work='));
+  // The runner prunes before it accepts the job, which can take minutes (a project copy is tens of GB): what it removed is said, also when it then refuses the job.
+  const preparing = await client.call('prepare', [project.slug, jobId, formatGroupLimits(runner.groups)], { timeoutMs: prepareCallTimeoutMs });
+  for (const removed of parsePrunedCopies(preparing.stdout)) params.say(formatPrunedCopyLine(runner.name, removed));
+  if (preparing.exitCode === diskTooLowRunnerExitCode) throw new RemoteRunError(`runner "${runner.name}": ${describeRunnerRefusal(preparing.stderr, 'its disk is too full for a new job')}`);
+  if (preparing.exitCode !== 0) throw describeCallFailure(runner.name, 'prepare', preparing);
+  const workDirLine = preparing.stdout.split('\n').find((line) => line.startsWith('work='));
   if (workDirLine === undefined) throw new RemoteRunError(`runner "${runner.name}": prepare did not report its work dir`);
   const workDir = workDirLine.slice('work='.length);
 

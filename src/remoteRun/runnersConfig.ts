@@ -12,7 +12,8 @@ import { resolveGlobalConfigEnvPath } from '../legacyNames';
  *   { "runners": [{ "name": "box1", "ssh": "runner@box1.example", "workDir": "/home/runner/charness-runner",
  *                   "sshOptions": ["-i", "/home/user/.ssh/runner_key"],
  *                   "pueue": { "bin": "/home/runner/.local/bin/pueue", "config": "/home/runner/.config/pueue/pueue.yml" },
- *                   "groups": { "default": 2, "emulator": 1 } }] }
+ *                   "groups": { "default": 2, "emulator": 1 },
+ *                   "minFreeGb": 60, "copyMaxIdleDays": 3 }] }
  *
  * Validation is strict (an unknown key, a bad name, a duplicate is an error that names the field and echoes no value). The loader is
  * the shared stamp-cached one, so the bot's MCP can ask "is any runner listed?" on every connect for the cost of one `stat`.
@@ -21,12 +22,23 @@ import { resolveGlobalConfigEnvPath } from '../legacyNames';
 const configFileName = 'runners.json';
 /** @description What a runner's name may be: lowercase letters and digits, single dashes between. */
 export const runnerNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** A GB or a day count beyond this is a typo (and a number the runner script's shell arithmetic should never meet). */
+const maxDiskSettingNumber = 100_000;
 const groupNamePattern = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 /** The group every runner has; its parallel limit may be set, it never needs `group add`. */
 export const defaultPueueGroup = 'default';
 
 /** @description A runner's work folder: an absolute path on the runner, or one the runner's shell expands from `~`. */
 export const runnerWorkDirSchema = z.string().min(1).refine((workDir) => workDir.startsWith('/') || workDir === '~' || workDir.startsWith('~/'), 'must be an absolute path on the runner or start with ~/');
+
+/**
+ * @description The two numbers of a runner's disk upkeep that its config can replace (the runner script has the defaults: free space kept = the smaller of 60 GB and 15 % of the disk, a project copy
+ * kept 3 days without use). `minFreeGb` 0 turns the free-space upkeep (and the refusal of a submit on a full disk) off. Shared by the `runners.json` entry and the registry entry of a paired runner.
+ */
+export const runnerDiskSettingsShape = {
+  minFreeGb: z.number().int().nonnegative().max(maxDiskSettingNumber).optional(),
+  copyMaxIdleDays: z.number().int().positive().max(maxDiskSettingNumber).optional(),
+};
 
 const runnerSchema = z.strictObject({
   name: z.string().regex(runnerNamePattern, 'must be lowercase letters, digits and single dashes'),
@@ -35,6 +47,7 @@ const runnerSchema = z.strictObject({
   workDir: runnerWorkDirSchema,
   pueue: z.strictObject({ bin: z.string().min(1).optional(), config: z.string().min(1).optional() }).optional(),
   groups: z.record(z.string().regex(groupNamePattern, 'is not a valid group name'), z.number().int().positive()).optional(),
+  ...runnerDiskSettingsShape,
 });
 
 const runnersConfigSchema = z.strictObject({

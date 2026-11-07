@@ -196,3 +196,30 @@ describe('formatRunnerBlock', () => {
     assert.equal(formatRunnerBlock({ name: 'new', status: 'offline', reason: 'ssh: no route', lastSeenAtMs: null, lastProbe: null, groupLimits: {}, isPausedByHub: false }), 'new — offline (ssh: no route) · never seen');
   });
 });
+
+describe('the disk upkeep in the probe: what the runner wants kept free and its project copies', () => {
+  const lowDiskText = `${linuxProbeText}\ndisk_total_mb=460000\ndisk_min_free_mb=61440\ncopies_count=16\ncopies_size_mb=296960\ncopies_unmeasured=0`.replace('disk_free_mb=184320', 'disk_free_mb=10035');
+  const blockOf = (text: string): string => formatRunnerBlock({ name: 'box1', status: 'online', probe: parseProbeOutput(text), groupLimits: {}, isPausedByHub: false });
+
+  it('are parsed; a probe from a script that does not say has none (null, never a guess)', () => {
+    const probe = parseProbeOutput(lowDiskText);
+    assert.equal(probe.diskMinFreeMb, 61440);
+    assert.deepEqual(probe.copies, { count: 16, sizeMb: 296960, unmeasuredCount: 0 });
+    const silent = parseProbeOutput(linuxProbeText);
+    assert.equal(silent.diskMinFreeMb, null);
+    assert.equal(silent.copies, null);
+  });
+
+  it('`runners` shows the number and total size of the copies next to the free disk — and says LOW when the disk is under what the runner wants kept free', () => {
+    const lines = blockOf(lowDiskText).split('\n');
+    assert.match(lines[1], /disk 9\.8 GB free \(work dir\) — LOW, the runner wants 60 GB kept free · 16 project copies, 290 GB$/);
+  });
+
+  it('a disk at its target is not LOW; a target of 0 is none; one copy reads «copy»; a figure still being measured says so', () => {
+    const fine = blockOf(`${linuxProbeText}\ndisk_min_free_mb=61440\ncopies_count=1\ncopies_size_mb=2048\ncopies_unmeasured=1`).split('\n')[1];
+    assert.match(fine, /disk 180 GB free \(work dir\) · 1 project copy, 2 GB so far \(measuring\)$/);
+    assert.doesNotMatch(blockOf(`${linuxProbeText}\ndisk_min_free_mb=0`), /LOW/);
+    assert.doesNotMatch(blockOf(`${linuxProbeText}\ndisk_min_free_mb=0`).split('\n')[1], /project cop/);
+    assert.doesNotMatch(blockOf(`${linuxProbeText}\ncopies_count=0\ncopies_size_mb=0\ncopies_unmeasured=0`).split('\n')[1], /project cop/, 'no copy, nothing to say about copies');
+  });
+});

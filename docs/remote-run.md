@@ -364,6 +364,10 @@ One file per OS user, shared by every charness instance of that user (a Telegram
 | `workDir` | Where the runner keeps project copies, job logs and result files: an absolute path on the runner, or `~/…`. Created when missing. |
 | `pueue` | Optional `bin` / `config` when Pueue is not on the runner's `PATH` or uses a non-default config. |
 | `groups` | Optional Pueue groups and how many jobs each runs at once (`default` always exists). A job joins one with `--group`; two jobs of one *project* never run at the same time whatever the groups say. |
+| `minFreeGb` | Optional. The free space the runner keeps on its work disk, in GB; the default is the smaller of 60 GB and 15 % of the disk. `0` turns the upkeep and the refusal off. See [Queue, limits, cleanup](#queue-limits-cleanup). |
+| `copyMaxIdleDays` | Optional. Days a project copy may stay unused before it is removed (default 3). |
+
+A paired runner takes the same two fields from its entry in the hub's `paired.json` (edit it by hand; `charness runners` has no command for them).
 
 The file is checked strictly: an unknown key or a bad value is an error that names the field (never a value). It is read on every
 call, so an edit applies at once; agents learn that runners exist when the first one is listed (see [Agents](#agents)).
@@ -405,7 +409,7 @@ and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn 
 
   ```
   box1 — online · Ubuntu 24.04 (Linux 6.8, x86_64)
-    CPU AMD Ryzen 7 9700X 8-Core Processor, 8 cores / 16 threads, load 2.1 · RAM 63 GB, 41 GB free · disk 180 GB free (work dir)
+    CPU AMD Ryzen 7 9700X 8-Core Processor, 8 cores / 16 threads, load 2.1 · RAM 63 GB, 41 GB free · disk 180 GB free (work dir) · 3 project copies, 24 GB
     jobs: 1 running, 2 queued, 2 projects · groups: default 2, emulator 1
     can: android (KVM, emulator) · docker · playwright (chromium) · ios: no (Linux)
   mac — offline (ssh: connection timed out) · last seen 2026-10-30 14:02 UTC — as it was then: macOS 15.1 (Darwin 24.1, arm64)
@@ -489,7 +493,16 @@ segment of any depth; a pattern naming a folder brings everything below it. `sna
 Two runs of one project queue on the runner: each runs against the tree **as it was when it was submitted**, one after the other.
 (A queued run holds one of its Pueue group's slots while it waits.) A queued foreground run prints «waiting for job <id> of this
 project» and keeps waiting, bounded by its `--timeout`. Other projects run in parallel up to the group limits. Job records, logs and
-result files on the runner are removed after 3 days, a project copy not used for 30 days.
+result files on the runner are removed after 3 days.
+
+**The runner's disk keeps itself free.** A project copy is a whole checkout with its build output (an iOS build alone is tens of GB), so copies of finished
+tasks pile up. On every submit (and when `runners` probes it) the runner removes a project copy that was not used for 3 days (`copyMaxIdleDays`), and while the
+disk of its work dir has less free space than it keeps (the smaller of 60 GB and 15 % of the disk; `minFreeGb`) it removes the least recently used copies one by
+one until it has. Never removed: a copy whose project lock is held by a live job, a copy with a queued, running or just-submitted job, and the copy of the job being
+submitted. Each removal is one line of the submit's output (`runner mac: removed the project copy app-1a2b3c (freed 41 GB, the disk was short of free space)`); the result
+files of a finished job go with its copy. If the disk is still short after that, the submit fails at once (exit 125) instead of a build failing half-way with «No space left on
+device»: `runner mac: only 8 GB free on the work disk, the runner needs 60 GB; biggest project copies: app-1a2b3c 41 GB, …; free space with `charness remote-run clean <slug>` …`.
+`runners` shows the free space, a **LOW** mark under the target, and how many project copies the runner keeps and what they take.
 
 `kill` sends SIGTERM to the job's whole process group and SIGKILL after 10 s. A process that leaves the group on purpose (`setsid`,
 as a Gradle daemon or the adb server do) survives by design — it is the runner's long-lived helper, not the job's.

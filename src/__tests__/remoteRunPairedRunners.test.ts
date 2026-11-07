@@ -137,6 +137,22 @@ describe('a registry entry as a RunnerConfig', () => {
   });
 });
 
+describe('a registry entry with disk upkeep settings', () => {
+  it('hands them to the RunnerConfig (so every call to the runner carries them); an entry without has none', () => {
+    const hub = { hubDir: '/home/user/.config/charness/runners', nodePath: '/usr/bin/node', cliPath: '/opt/charness/dist/cli.js' };
+    const withSettings = buildPairedRunnerConfig(createPairedRunner({ minFreeGb: 25, copyMaxIdleDays: 2 }), hub);
+    assert.deepEqual([withSettings.minFreeGb, withSettings.copyMaxIdleDays], [25, 2]);
+    const without = buildPairedRunnerConfig(createPairedRunner(), hub);
+    assert.deepEqual([without.minFreeGb, without.copyMaxIdleDays], [undefined, undefined]);
+  });
+
+  it('survive a round trip through paired.json (the hub rewrites the file on every pause and removal)', () => {
+    writePaired([createPairedRunner({ minFreeGb: 25, copyMaxIdleDays: 2 })]);
+    const runner = loadPairedRunners(homeDir).config?.runners[0];
+    assert.deepEqual([runner?.minFreeGb, runner?.copyMaxIdleDays], [25, 2]);
+  });
+});
+
 describe('loading the paired runners', () => {
   it('nothing paired: missing, no runners', () => {
     const load = loadPairedRunners(homeDir);

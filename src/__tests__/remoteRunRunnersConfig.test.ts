@@ -61,6 +61,20 @@ describe('runners.json', () => {
     assert.equal(formatGroupLimits(undefined), '');
   });
 
+  it('a runner may replace the disk upkeep numbers (free space kept, idle days of a project copy); nonsense is an error that names the field', () => {
+    writeRunnersFile({ runners: [{ ...validRunner, minFreeGb: 0, copyMaxIdleDays: 7 }] });
+    const load = loadRunnersConfig(homeDir);
+    assert.equal(load.status, 'ok');
+    assert.deepEqual([load.config?.runners[0].minFreeGb, load.config?.runners[0].copyMaxIdleDays], [0, 7]);
+    for (const [field, bad] of [['minFreeGb', -1], ['minFreeGb', 1.5], ['minFreeGb', '60'], ['copyMaxIdleDays', 0], ['copyMaxIdleDays', 1_000_000]] as const) {
+      writeRunnersFile({ runners: [{ ...validRunner, [field]: bad }] });
+      resetRunnersConfigCache();
+      const invalid = loadRunnersConfig(homeDir);
+      assert.equal(invalid.status, 'invalid', `${field}=${bad}`);
+      assert.ok(invalid.status === 'invalid' && invalid.errors.some((error) => error.includes(`runners.0.${field}`)), `${field}=${bad}`);
+    }
+  });
+
   it('an empty list offers nothing', () => {
     writeRunnersFile({ runners: [] });
     assert.equal(getRunnerSummaryLines(homeDir, {}).length > 0, false);

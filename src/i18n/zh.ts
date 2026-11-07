@@ -1195,6 +1195,7 @@ export const zhDict: Record<string, string> = {
   'runners.cpuThreads': '{model}，{threads} 线程',
   'runners.cpuLoad': '负载 {load}',
   'runners.jobsLine': '任务：{running} 个运行中，{queued} 个排队 · 项目：{projects}',
+  'runners.copiesLine': '项目副本：{count} · {size}',
   'runners.pueueMissing': '此 runner 上缺少 Pueue',
   'runners.jobToolsLine': '任务使用：Node {node} · yarn {yarn}',
   'runners.jobToolNone': '没有（调用它的任务会失败）',

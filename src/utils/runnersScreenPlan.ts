@@ -193,6 +193,13 @@ function buildEntryBlock(entry: RunnerScreenEntry, t: Translate, formatTime: For
   return lines.join('\n');
 }
 
+/** The project copies a runner keeps and what they take (`~` before the size while some figure is still being measured); nothing when the runner did not say or has none. */
+function describeProjectCopies(probe: RunnerProbe, t: Translate): string[] {
+  if (probe.copies === null || probe.copies.count === 0) return [];
+  const size = `${probe.copies.unmeasuredCount > 0 ? '~' : ''}${formatGigabytes(probe.copies.sizeMb)}`;
+  return [`  ${t('runners.copiesLine', { count: probe.copies.count, size })}`];
+}
+
 function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: FormatTime): string[] {
   const { runner, probe } = entry;
   const status = entry.isOnline
@@ -209,6 +216,7 @@ function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: For
     lines.push(
       `  ${t('runners.hardwareLine', { cpu: describeCpu(probe, t, true), ramTotal: formatGigabytes(probe.ramTotalMb), ramFree: formatGigabytes(probe.ramFreeMb), disk: formatGigabytes(probe.diskFreeMb) })}`,
       `  ${t('runners.jobsLine', { running: probe.jobsRunning, queued: probe.jobsQueued, projects: probe.jobsProjects })}${probe.pueueVersion === null ? ` · ${t('runners.pueueMissing')}` : ''}`,
+      ...describeProjectCopies(probe, t),
       `  ${describeCapabilities(probe, t)}`,
       ...describeJobTools(probe, t),
       ...describeKeepsAwake(probe, t),

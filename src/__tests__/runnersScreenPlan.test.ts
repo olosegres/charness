@@ -171,6 +171,28 @@ describe('runnersScreenPlan: the list', () => {
     );
   });
 
+  it('the project copies a machine keeps are one line under its jobs — how many and what they take, with ~ while a figure is still being measured; nothing when it has none or did not say', () => {
+    const withCopies = (lines: string[]): string[] => buildRunnersScreen({ revision, entries: [createEntry({ probe: parseProbeOutput([probeText, ...lines].join('\n')) })], openPairingExpiries: [], isChecking: false }, t, formatTime).text.split('\n');
+    const lineOf = (lines: string[]): string | undefined => withCopies(lines).find((line) => line.includes('project copies'));
+    assert.equal(lineOf(['copies_count=16', 'copies_size_mb=296960', 'copies_unmeasured=0']), '  project copies: 16 · 290 GB');
+    assert.equal(lineOf(['copies_count=16', 'copies_size_mb=296960', 'copies_unmeasured=3']), '  project copies: 16 · ~290 GB');
+    assert.equal(lineOf(['copies_count=0', 'copies_size_mb=0', 'copies_unmeasured=0']), undefined);
+    assert.equal(lineOf([]), undefined);
+    const lines = withCopies(['copies_count=2', 'copies_size_mb=2048', 'copies_unmeasured=0']);
+    assert.ok(lines.indexOf('  project copies: 2 · 2 GB') === lines.findIndex((line) => line.startsWith('  jobs:')) + 1, 'right under the jobs line');
+  });
+
+  it('in every language the project copies line carries the count and the size and leaves no placeholder behind', () => {
+    for (const locale of localeCodes) {
+      runWithLocale(locale, () => {
+        const text = buildRunnersScreen({ revision, entries: [createEntry({ probe: parseProbeOutput(`${probeText}\ncopies_count=16\ncopies_size_mb=296960\ncopies_unmeasured=0`) })], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+        const line = text.split('\n').find((candidate) => candidate.includes('290 GB'));
+        assert.ok(line !== undefined && line.includes('16'), `${locale}: ${line}`);
+        assert.doesNotMatch(line, /\{[a-z]+\}/, `${locale}: no placeholder is left`);
+      });
+    }
+  });
+
   it('the Node and yarn the jobs run with are one line under what it can do — a version, «none» or «gave no answer»; nothing when its script did not report them', () => {
     const withTools = (tools: string[]): RunnerScreenEntry => createEntry({ probe: parseProbeOutput([probeText, ...tools].join('\n')) });
     const lineOf = (entry: RunnerScreenEntry): string | undefined => buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text.split('\n').find((line) => line.includes('jobs run with'));
