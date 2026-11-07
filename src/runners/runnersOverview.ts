@@ -93,7 +93,7 @@ export async function probeRunnersOverview(ctx: HubContext, overview: RunnersOve
     });
   if (clients.length === 0) return overview;
   ensureRemoteRunCacheDir(cacheDir);
-  const reports = await probeRunners(clients, nowMs, deadlineMs);
+  const reports = await probeRunners(clients, nowMs, deadlineMs, undefined, { isPruneAllowed: true });
   return { ...overview, entries: overview.entries.map((entry) => applyReport(entry, reports.find((report) => report.name === entry.runner.name))) };
 }
 

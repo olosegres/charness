@@ -48,7 +48,7 @@ describe('the prune that stopped because a removal gave nothing back', () => {
   it('says what it saw and the Mac cause it points at', () => {
     assert.equal(
       formatRemovalStopLine('mac', { slug: 'app-1', freedMb: 0, sizeMb: 30720 }),
-      "runner mac: removing the project copy app-1 gave back 0 GB of its 30 GB — the disk's free space is not following (on a Mac: Time Machine local snapshots or purgeable space, see docs/remote-run.md), so it stopped removing more copies",
+      "runner mac: removing project copies gave back almost nothing twice in a row (the last, app-1: 0 GB of its 30 GB) — the disk's free space is not following (a Mac keeps it while Time Machine local snapshots or purgeable space hold it; jobs writing meanwhile eat it too, see docs/remote-run.md), so it stopped removing more copies",
     );
   });
 });
@@ -70,10 +70,10 @@ describe('the words before and after a slow prepare', () => {
     assert.equal(formatPruneHeadsUp('mac', null), null);
   });
 
-  it('a prepare that ran out of its time says the runner goes on by itself and to submit again, not that something failed', () => {
+  it('a prepare that ran out of its time says the runner carries on as far as it can and the next submit continues — not that something failed, and not that it finishes by itself', () => {
     assert.equal(
       describePrepareTimeout('mac', 15 * 60 * 1000),
-      'runner "mac": preparing the job took longer than 15 minutes (it removes old project copies first, which is slow on a big disk) — the runner goes on with that by itself: submit again in a few minutes',
+      'runner "mac": preparing the job took longer than 15 minutes (it removes old project copies first, which is slow on a big disk) — the runner carries on with that as far as it can: submit again in a few minutes, the next submit continues where it stopped',
     );
   });
 });

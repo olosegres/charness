@@ -222,14 +222,14 @@ describe('stageJob and what the runner says to prepare', () => {
     const { said } = await stageWithPrepareAnswer(preparedAnswer({ stdout: 'removed=app-1 freed_kb=0 why=space\nstopped=app-1 freed_kb=0 size_kb=31457280\n' }));
     assert.deepEqual(said, [
       'runner box1: removed the project copy app-1 (freed 0 GB, the disk was short of free space)',
-      "runner box1: removing the project copy app-1 gave back 0 GB of its 30 GB — the disk's free space is not following (on a Mac: Time Machine local snapshots or purgeable space, see docs/remote-run.md), so it stopped removing more copies",
+      "runner box1: removing project copies gave back almost nothing twice in a row (the last, app-1: 0 GB of its 30 GB) — the disk's free space is not following (a Mac keeps it while Time Machine local snapshots or purgeable space hold it; jobs writing meanwhile eat it too, see docs/remote-run.md), so it stopped removing more copies",
     ]);
   });
 
-  it('a prepare that timed out says the runner goes on by itself — not «prepare failed»', async () => {
+  it('a prepare that timed out says the runner carries on as far as it can — not «prepare failed»', async () => {
     const { error } = await stageWithPrepareAnswer(preparedAnswer({ exitCode: null, isTimedOut: true, stderr: '' }));
     assert.ok(error instanceof RemoteRunError);
-    assert.match(error.message, /^runner "box1": preparing the job took longer than 15 minutes .* submit again in a few minutes$/);
+    assert.match(error.message, /^runner "box1": preparing the job took longer than 15 minutes .* carries on with that as far as it can: submit again in a few minutes, the next submit continues where it stopped$/);
     assert.doesNotMatch(error.message, /prepare failed/);
   });
 

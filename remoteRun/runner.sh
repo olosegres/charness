@@ -18,7 +18,7 @@
 # `timeout(1)`, no `read -t` (its timeout status differs between 3.2 and 4+), no GNU-only flags. Time limits are done by background watchdogs.
 #
 # Subcommands (the contract is in src/remoteRun/README.md):
-#   probe        key=value lines: OS, CPU, RAM, disk, jobs, capabilities (paused / service / iOS boot check of a paired runner)
+#   probe        key=value lines: OS, CPU, RAM, disk, jobs, capabilities (paused / service / iOS boot check of a paired runner); `probe <work> prune`: a view of the runners that may start the background prune of a short disk
 #   prepare      layout for a job, Pueue daemon + groups, prune
 #   lease        add the job to Pueue, stream its log, kill it when the caller's heartbeat stops (foreground run)
 #   submit       add the job to Pueue and return (--bg)
@@ -63,14 +63,16 @@ minutes_per_day=1440
 pending_submit_grace_min=30
 # The result files of a job that ended this recently are still on their way to whoever submitted it (`wait`, `fetch`): the copy that holds them is in use.
 result_keep_min=60
-# `prune` runs one at a time per work dir: another run's marker (tmp/prune.<pid>) is believed while that process lives and the marker is younger than this.
+# `prune` runs one at a time per work dir: the lock of the copy-removal step (tmp/prune.lock) is believed while its holder lives and the lock is younger than this.
 prune_marker_stale_min=120
 # A prune that finds another one at its copy-removal step waits for it this long, looking every prune_poll_sec (then goes on: it never hangs on one).
 prune_wait_sec=600
 prune_poll_sec=1
-# A removal that freed less than this although the copy was measured bigger tells the disk's free figure is not following (APFS snapshots, purgeable space): removing more copies would
-# empty the runner for nothing, so the prune stops there.
+# A removal that freed less than this although the copy was measured bigger says the disk's free figure is not following (APFS snapshots, purgeable space): removing more copies would
+# empty the runner for nothing, so the prune stops...
 no_progress_freed_kb=1048576
+# ...but only after this many removals IN A ROW did that: a job writing to the same disk meanwhile can eat the space one removal freed.
+no_progress_stop_after=2
 # The refusal of a submit names this many of the biggest copies.
 refusal_copy_count=3
 # `prepare` ends with this exit code when the disk is still short of free space after the prune (28 is ENOSPC); src/remoteRun/pruneReport.ts has the same number.
@@ -719,6 +721,9 @@ probe_runner_state() {
 
 cmd_probe() {
   work=$1
+  # $2 = `prune`: the caller is a VIEW of the runners (`remote-run runners`, the bot's /runners) and may start the background prune on a short disk. The probe that picks a runner for a run or an `exec`
+  # never does: that prune has no copy to keep, and the project about to be used is typically the least recently used one — the very one it would take before the job's own `prepare` arrives.
+  probe_may_prune=${2:-}
   mkdir -p "$work" 2> /dev/null
   read_runner_state
   echo "os=$(uname -s)"
@@ -729,8 +734,8 @@ cmd_probe() {
     Darwin) probe_darwin ;;
   esac
   probe_slow
-  # A disk short of free space frees itself: the prune runs detached (a probe must answer in seconds, removing a copy takes minutes).
-  [ "${probe_disk_is_short:-0}" -eq 1 ] && start_detached_run "$work" prune
+  # A disk short of free space frees itself, when a view of the runners asks for it: the prune runs detached (a probe must answer in seconds, removing a copy takes minutes).
+  [ "${probe_disk_is_short:-0}" -eq 1 ] && [ "$probe_may_prune" = prune ] && start_detached_run "$work" prune
   probe_copies
   probe_jobs
   probe_android
@@ -781,7 +786,11 @@ cmd_prepare() {
     die "Pueue daemon is not reachable and could not be started (check PUEUE_BIN / the pueue settings of this runner)"
   fi
   apply_groups "$groups"
+  # The caller may hang up while this removes copies for minutes (its call has a time limit): writing a report line to a closed pipe is no reason to die half-way (SIGPIPE would end the removal after
+  # the copy it is at). Only here: elsewhere a closed pipe still ends a pipeline early, as it should.
+  trap '' PIPE
   prune_work "$work" "$slug"
+  trap - PIPE
   # A prune that ran at the same moment may have taken the folder this job was just given (its copy looked unused): say so, never answer with a folder that is gone.
   [ -d "$jd" ] || die "the project copy was being removed while this job was prepared — submit again"
   # Before the refusal, so that the next submit has sizes to name.
@@ -884,6 +893,18 @@ check_disk_is_short() {
   [ "$min_free_kb" -gt 0 ] && [ "$disk_free_kb" -lt "$min_free_kb" ]
 }
 
+# Is process $1 alive AND one of this script's own (`bash …/runner-<hash>.sh …`)? A pid written into a marker, a trash name or a pid file outlives its process, and after a crash or a reboot the
+# number may belong to a daemon: `kill -0` alone would then keep a copy "in use" (or a trash folder of tens of GB "being removed") for good. Where `ps` cannot say, being alive is all there is to go by.
+check_runner_pid_alive() {
+  case $1 in '' | *[!0-9]*) return 1 ;; esac
+  kill -0 "$1" 2> /dev/null || return 1
+  command -v ps > /dev/null 2>&1 || return 0
+  case $(ps -p "$1" -o command= 2> /dev/null) in
+    *runner*.sh*) return 0 ;;
+  esac
+  return 1
+}
+
 # Is the project copy in folder $1 in use — never to be removed? Its lock is held by a live job; or an `exec` runs in it (`exec.<pid>`: exec takes no lock and leaves no job folder, so it writes this
 # marker, and a marker of a process that is gone is cleared); or a job of it waits or runs; or a job ended less than result_keep_min ago (its result files are about to be fetched); or a job of
 # it is being submitted (no task yet, no exit, and its job folder or its stage folder touched less than pending_submit_grace_min ago: a long upload only moves files in the stage folder).
@@ -897,7 +918,7 @@ check_copy_dir_is_busy() {
     [ -e "$marker" ] || continue
     marker_pid=${marker##*/exec.}
     case $marker_pid in '' | *[!0-9]*) continue ;; esac
-    if kill -0 "$marker_pid" 2> /dev/null; then return 0; fi
+    if check_runner_pid_alive "$marker_pid"; then return 0; fi
     rm -f "$marker"
   done
   local job_dir
@@ -923,36 +944,52 @@ check_copy_is_busy() {
   check_copy_dir_is_busy "$1/p/$2"
 }
 
-# Is another prune at its copy-removal step? Its marker `tmp/prune.<pid>` names a live process and is younger than prune_marker_stale_min (a pid can be given to a stranger).
-check_other_prune_is_running() {
-  local marker marker_pid
-  for marker in "$1"/tmp/prune.*; do
-    [ -e "$marker" ] || continue
-    marker_pid=${marker##*/prune.}
-    case $marker_pid in '' | *[!0-9]*) continue ;; esac
-    [ "$marker_pid" = "$$" ] && continue
-    kill -0 "$marker_pid" 2> /dev/null || continue
-    [ -n "$(find "$marker" -maxdepth 0 -mmin -"$prune_marker_stale_min" 2> /dev/null)" ] && return 0
+# The copy-removal step is one at a time per work dir: of copies being removed by a prune that is still at it, a second prune would remove more than needed (the disk's free figure moves only when the
+# first one's `rm` ends) and `rm` the same folders. The step's lock is a file made with the shell's own exclusive create (`tmp/prune.lock`, the pid of its holder inside) — the creator wins, whatever the
+# clocks and the pids say. The lock is held while its holder is a live runner process (check_runner_pid_alive) and younger than prune_marker_stale_min; an empty one (its creator is between the create and
+# the write) is held for a minute. A lock that is none of that is stale, and breaking it follows the project lock's rule (`break_lock_of_holder`): the RIGHT to break the lock of that holder is a file named
+# for it, made with the same exclusive create, so of the processes that saw it stale one wins; the winner removes the lock only while it still carries that holder, and nothing else can replace it
+# meanwhile (creators fail on the lock that is there, the others on the right). A right whose winner died is no right once it is over a minute old.
+acquire_prune_lock() {
+  local lock_file="$1/tmp/prune.lock" holder right attempt
+  for attempt in 1 2 3; do
+    if ( set -C; printf '%s\n' "$$" > "$lock_file" ) 2> /dev/null; then return 0; fi
+    holder=$(read_file "$lock_file")
+    if [ -n "$holder" ] && check_runner_pid_alive "$holder" && [ -n "$(find "$lock_file" -maxdepth 0 -mmin -"$prune_marker_stale_min" 2> /dev/null)" ]; then
+      return 1
+    fi
+    case $holder in '') right="$lock_file.breaking.none" ;; *[!0-9]*) right="$lock_file.breaking.junk" ;; *) right="$lock_file.breaking.$holder" ;; esac
+    if ! ( set -C; printf '%s\n' "$$" > "$right" ) 2> /dev/null; then
+      [ -n "$(find "$right" -maxdepth 0 -mmin +1 2> /dev/null)" ] && rm -f "$right"
+      return 1
+    fi
+    # Still that holder's lock, and an empty one still over a minute old (a fresh empty lock is a creator about to write): ours to break.
+    if [ "$(read_file "$lock_file")" = "$holder" ] && { [ -n "$holder" ] || [ -n "$(find "$lock_file" -maxdepth 0 -mmin +1 2> /dev/null)" ]; }; then
+      rm -f "$lock_file"
+    fi
+    rm -f "$right"
   done
   return 1
 }
 
-# Take the copy-removal step: of copies being removed by a prune that is still at it, a second prune would remove more than needed (the disk's free figure moves only when the first one's `rm` ends)
-# and `rm` the same folders. Advisory — a marker per prune, no lock to go stale. Fails (for $2 = skip) when another prune is at it; else waits for it, up to prune_wait_sec.
+# Take the copy-removal step. A prune that finds another at it leaves the step (and says so by failing) when $2 is `skip`, or when its own disk is not short (what the other one does is what the idle
+# copies need); else it waits for it, up to prune_wait_sec, and then goes on without the lock: it never hangs on one.
 begin_copy_removal() {
-  mkdir -p "$1/tmp" 2> /dev/null
+  local work_dir=$1 when_busy=$2
+  mkdir -p "$work_dir/tmp" 2> /dev/null
   local waited_since=$SECONDS
-  while check_other_prune_is_running "$1"; do
-    [ "$2" = skip ] && return 1
-    [ $((SECONDS - waited_since)) -ge "$prune_wait_sec" ] && break
+  until acquire_prune_lock "$work_dir"; do
+    if [ "$when_busy" = skip ] || ! check_disk_is_short "$work_dir"; then return 1; fi
+    [ $((SECONDS - waited_since)) -ge "$prune_wait_sec" ] && return 0
     ( trap '' TERM; exec sleep "$prune_poll_sec" )
   done
-  { : > "$1/tmp/prune.$$"; } 2> /dev/null
   return 0
 }
 
+# Give the lock back — only if it is still this process's own (a prune that went on after its wait never had it).
 end_copy_removal() {
-  rm -f "$1/tmp/prune.$$"
+  [ "$(read_file "$1/tmp/prune.lock")" = "$$" ] && rm -f "$1/tmp/prune.lock"
+  return 0
 }
 
 # A removal that was cut off (ssh dropped, the machine slept) leaves its folder under a `.trash-<slug>-<pid>` name: the next prune finishes it — unless the pid of the one that made it still lives
@@ -962,7 +999,7 @@ remove_leftover_trash() {
   for leftover in "$1"/p/.trash-*; do
     [ -e "$leftover" ] || continue
     remover_pid=${leftover##*-}
-    case $remover_pid in '' | *[!0-9]*) ;; *) kill -0 "$remover_pid" 2> /dev/null && continue ;; esac
+    check_runner_pid_alive "$remover_pid" && continue
     check_copy_dir_is_busy "$leftover" && continue
     chmod -R u+rwX "$leftover" 2> /dev/null
     rm -rf "$leftover"
@@ -981,7 +1018,11 @@ remove_project_copy() {
     return 2
   fi
   if check_copy_dir_is_busy "$trash"; then
-    [ -e "$source" ] || mv "$trash" "$source" 2> /dev/null
+    if [ ! -e "$source" ]; then
+      mv "$trash" "$source" 2> /dev/null
+      # A `prepare` can make the folder between the test and the `mv`, which then moves the copy INTO it: out again, to where the next prune looks for trash (and where its markers are seen).
+      [ -e "$source/${trash##*/}" ] && mv "$source/${trash##*/}" "$trash" 2> /dev/null
+    fi
     return 3
   fi
   chmod -R u+rwX "$trash" 2> /dev/null
@@ -1029,11 +1070,12 @@ prune_idle_copies() {
 }
 
 # While the disk is short of free space, remove the project copies that were used longest ago, one by one, until it is not — except copies in use and the copy of the job being submitted.
-# Stops, with a `stopped=` line, after a removal that freed next to nothing from a copy measured bigger: the disk's free figure is not following the removals (a Mac's APFS keeps the space of
-# deleted files while Time Machine local snapshots hold it), and going on would remove every copy and refuse anyway. Sets prune_stopped_without_gain for the submit's refusal.
+# Stops, with a `stopped=` line, after no_progress_stop_after removals IN A ROW that each freed next to nothing from a copy measured bigger: the disk's free figure is not following the removals
+# (a Mac's APFS keeps the space of deleted files while Time Machine local snapshots hold it), and going on would remove every copy and refuse anyway; one such removal is not enough to say so
+# (a job writing to the same disk meanwhile can eat the space it freed). Sets prune_stopped_without_gain for the submit's refusal.
 prune_copies_for_space() {
   local work_dir=$1 keep_slug=$2
-  local used_file lru_slug size_kb removal_code
+  local used_file lru_slug size_kb removal_code no_gain_removals=0
   prune_stopped_without_gain=0
   while IFS= read -r used_file; do
     check_disk_is_short "$work_dir" || break
@@ -1045,12 +1087,17 @@ prune_copies_for_space() {
     removal_code=$?
     [ "$removal_code" -eq 0 ] || continue
     case "$size_kb:$last_freed_kb" in
-      *[!0-9:]* | : | :* | *:) continue ;;
+      *[!0-9:]* | : | :* | *:) no_gain_removals=0; continue ;;
     esac
     if [ "$size_kb" -gt "$no_progress_freed_kb" ] && [ "$last_freed_kb" -lt "$no_progress_freed_kb" ]; then
-      printf 'stopped=%s freed_kb=%s size_kb=%s\n' "$lru_slug" "$last_freed_kb" "$size_kb"
-      prune_stopped_without_gain=1
-      break
+      no_gain_removals=$((no_gain_removals + 1))
+      if [ "$no_gain_removals" -ge "$no_progress_stop_after" ]; then
+        printf 'stopped=%s freed_kb=%s size_kb=%s\n' "$lru_slug" "$last_freed_kb" "$size_kb"
+        prune_stopped_without_gain=1
+        break
+      fi
+    else
+      no_gain_removals=0
     fi
   done < <(ls -1tr "$work_dir"/p/*/used 2> /dev/null)
 }
@@ -1108,7 +1155,7 @@ refuse_when_disk_is_short() {
     [ "$unmeasured" -gt 0 ] && also_unmeasured=" (and $unmeasured not measured yet)"
     [ -n "$listing" ] && advice="biggest project copies: $listing$also_unmeasured; $advice"
     [ -z "$listing" ] && advice="$copies project copies, their sizes are still being measured; $advice"
-    [ "$prune_stopped_without_gain" -eq 1 ] && advice="$advice. Removing a copy did not give its space back (on a Mac: APFS local snapshots or purgeable space, see docs/remote-run.md)"
+    [ "$prune_stopped_without_gain" -eq 1 ] && advice="$advice. Removing copies did not give their space back (on a Mac: APFS local snapshots or purgeable space; anywhere: jobs writing meanwhile, see docs/remote-run.md)"
   fi
   printf 'remote-run-runner: only %s free on the work disk, the runner needs %s; %s\n' "$(format_kb_as_gb "$disk_free_kb")" "$(format_kb_as_gb "$min_free_kb")" "$advice" >&2
   exit "$low_disk_exit_code"
@@ -1124,7 +1171,7 @@ start_detached_run() {
   local pid_file="$work_dir/tmp/$subcommand.pid" running_pid
   mkdir -p "$work_dir/tmp" 2> /dev/null
   running_pid=$(read_file "$pid_file")
-  [ -n "$running_pid" ] && kill -0 "$running_pid" 2> /dev/null && return 0
+  check_runner_pid_alive "$running_pid" && return 0
   ( nice -n 19 bash "$(get_script_path)" "$subcommand" "$work_dir" > /dev/null 2>&1 < /dev/null & echo "$!" > "$pid_file" )
 }
 

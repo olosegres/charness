@@ -47,6 +47,11 @@ target=\${@: -1}
 if [ -f "$target/fake-kb" ]; then printf '%s\\t%s\\n' "$(cat "$target/fake-kb")" "$target"; else exec /usr/bin/du "$@"; fi
 `;
 const fakePueue = '#!/bin/sh\nexit 0\n';
+/** `rm` that takes its time when FAKE_RM_DELAY says so: a removal of tens of GB lasts minutes, and the caller may hang up meanwhile. */
+const fakeRm = `#!/bin/bash
+[ -n "\${FAKE_RM_DELAY:-}" ] && sleep "$FAKE_RM_DELAY"
+exec /bin/rm "$@"
+`;
 
 function writeExecutable(file: string, content: string): void {
   fs.writeFileSync(file, content, { mode: 0o755 });
@@ -101,10 +106,19 @@ function writeJob(copyDir: string, id: string, files: Record<string, string>): s
   return jobDir;
 }
 
-/** Processes the tests keep alive to stand for another process of the runner (a prune, an `exec`); the hook below ends them. */
+/** Processes the tests keep alive to stand for other processes; the hook below ends them. */
 const liveProcesses: ChildProcess[] = [];
 
+/** A live process that is one of the runner script\'s own (its command line names `runner.sh`, as `bash …/runner-<hash>.sh prune …` does): another prune, an `exec`. */
 function startLiveProcess(): number {
+  const child = spawn('bash', ['-c', 'read -r _', 'runner.sh'], { stdio: ['pipe', 'ignore', 'ignore'] });
+  liveProcesses.push(child);
+  assert.ok(child.pid !== undefined);
+  return child.pid;
+}
+
+/** A live process that is NOT the script\'s: what a recorded pid names after a reboot when a daemon got the number. */
+function startStrangerProcess(): number {
   const child = spawn('sleep', ['120'], { stdio: 'ignore' });
   liveProcesses.push(child);
   assert.ok(child.pid !== undefined);
@@ -140,6 +154,7 @@ beforeEach(() => {
   writeExecutable(path.join(fakeBinDir, 'df'), fakeDf);
   writeExecutable(path.join(fakeBinDir, 'du'), fakeDu);
   writeExecutable(path.join(fakeBinDir, 'pueue'), fakePueue);
+  writeExecutable(path.join(fakeBinDir, 'rm'), fakeRm);
 });
 afterEach(() => {
   for (const child of liveProcesses.splice(0)) child.kill('SIGKILL');
@@ -435,10 +450,10 @@ describe('sizes of the project copies (`measure-copies`) and what `probe` says o
     assert.equal(fs.readFileSync(sizeFile('unknown-zzzzzzzzzz'), 'utf8').trim(), `${3 * kibPerGib}`);
   });
 
-  it('probe on a disk short of free space starts the prune detached instead of making the probe wait for it', async () => {
+  it('probe of a VIEW (`probe <work> prune`) on a disk short of free space starts the prune detached instead of making the probe wait for it', async () => {
     makeCopy('oldest-aaaaaaaaaa', 45, 5 * hourMs);
     makeCopy('newest-cccccccccc', 45, 1 * hourMs);
-    const result = runScript(['probe', workDir]);
+    const result = runScript(['probe', workDir, 'prune']);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(parseProbeOutput(result.stdout).diskFreeMb, 10 * 1024, 'the probe reports the disk as it found it');
     await waitFor(() => listCopies().length === 1, 'the detached prune');
@@ -620,6 +635,15 @@ describe('two prunes at once', () => {
     makeCopy('newest-cccccccccc', 30, 1 * hourMs);
   }
 
+  const lockFile = (): string => path.join(workDir, 'tmp', 'prune.lock');
+
+  /** The lock of the copy-removal step as another prune holds it: its pid inside, made `ageMs` ago. */
+  function putPruneLock(holderPid: number | string, ageMs = 60_000): string {
+    writeFile(workDir, 'tmp/prune.lock', typeof holderPid === 'number' ? `${holderPid}\n` : holderPid);
+    setAge(lockFile(), ageMs);
+    return lockFile();
+  }
+
   it('a trash folder whose remover still lives is left to it; one whose remover is gone is finished', () => {
     const livePid = startLiveProcess();
     const deadPid = getDeadPid();
@@ -630,50 +654,138 @@ describe('two prunes at once', () => {
     assert.equal(fs.existsSync(path.join(workDir, 'p', `.trash-cut-off-${deadPid}`)), false);
   });
 
-  it('the probe\'s detached prune (`prune`) leaves the copy-removal step to a prune that is at it, and says nothing', () => {
+  it('the probe\'s detached prune (`prune`) leaves the copy-removal step to a prune that is at it, and says nothing — the lock stays the other\'s', () => {
     makeThreeCopies();
-    writeFile(workDir, `tmp/prune.${startLiveProcess()}`, '');
+    const livePid = startLiveProcess();
+    putPruneLock(livePid);
     const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '70' });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, '');
     assert.equal(listCopies().length, 3);
+    assert.equal(fs.readFileSync(lockFile(), 'utf8').trim(), `${livePid}`);
   });
 
-  it('a marker of a process that is gone, or an old one (a pid that went to a stranger), blocks nothing', () => {
+  it('in skip mode it leaves at once even though its disk is short — it never waits (a probe must not hang)', () => {
     makeThreeCopies();
-    writeFile(workDir, `tmp/prune.${getDeadPid()}`, '');
-    const strangerMarker = path.join(workDir, 'tmp', `prune.${startLiveProcess()}`);
-    writeFile(workDir, path.relative(workDir, strangerMarker), '');
-    setAge(strangerMarker, 3 * hourMs);
-    const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '70' });
-    assert.deepEqual(parseRemovals(result.stdout), ['oldest-aaaaaaaaaa', 'middle-bbbbbbbbbb']);
+    putPruneLock(startLiveProcess());
+    const outcome = runShell(`prune_wait_sec=3; prune_poll_sec=0.2; started=$SECONDS; prune_work ${workDir} "" skip; echo waited=$((SECONDS - started))`, { REMOTE_RUN_MIN_FREE_GB: '70' });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.match(outcome.stdout, /waited=[0-2]$/, 'not the 3 s of the wait it must not make');
+    assert.equal(listCopies().length, 3, 'and it removed nothing: after a wait it would have gone on without the lock');
+  });
+
+  describe('a lock that nobody holds any more is taken over, and the prune goes on', () => {
+    const scenarios: Array<[string, () => void]> = [
+      ['its holder is gone', () => { putPruneLock(getDeadPid()); }],
+      ['its pid went to a stranger (a daemon after a reboot)', () => { putPruneLock(startStrangerProcess()); }],
+      ['it is over two hours old (a pid can be given to anything)', () => { putPruneLock(startLiveProcess(), 3 * hourMs); }],
+      ['it is empty and over a minute old (its creator died between the create and the write)', () => { putPruneLock('', 3 * 60_000); }],
+      ['it holds no pid at all', () => { putPruneLock('not a pid\n', 60_000); }],
+    ];
+    for (const [name, setUp] of scenarios) {
+      it(name, () => {
+        makeThreeCopies();
+        setUp();
+        const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '70' });
+        assert.deepEqual(parseRemovals(result.stdout), ['oldest-aaaaaaaaaa', 'middle-bbbbbbbbbb']);
+        assert.equal(fs.existsSync(lockFile()), false, 'and its own lock is gone when it ends');
+        assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')).filter((entry) => entry.startsWith('prune.lock')), [], 'no right to break it is left behind');
+      });
+    }
+
+    it('an EMPTY lock that is young is a creator about to write: it is held', () => {
+      makeThreeCopies();
+      putPruneLock('', 1000);
+      const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '70' });
+      assert.equal(result.stdout, '');
+      assert.equal(listCopies().length, 3);
+    });
+
+    it('a breaker that is slow between checking the lock and removing it cannot take a fresh lock away: the right to break is exclusive, so a second process that finds the same stale lock meanwhile loses', async () => {
+      putPruneLock(getDeadPid());
+      // B stalls for a second just before it removes the lock (its `rm`); A arrives 0.3 s later at the same stale lock. If A could break it too, A would remove it, take a fresh one, and B's late `rm` would delete A's
+      // fresh lock — two holders.
+      const slowBreaker = `rm() { case "$*" in *prune.lock) sleep 1 ;; esac; command rm "$@"; }; acquire_prune_lock ${workDir} && { echo B-won; sleep 3; } || echo B-lost`;
+      const quickBreaker = `sleep 0.3; acquire_prune_lock ${workDir} && { echo A-won; sleep 3; } || echo A-lost`;
+      const outputs = await Promise.all([slowBreaker, quickBreaker].map((body) => new Promise<string>((resolve) => {
+        const child = spawn('bash', ['-c', `source ${scriptPath}; ${body}`], { env: getEnv(), stdio: ['ignore', 'pipe', 'ignore'] });
+        let output = '';
+        child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+        child.on('close', () => resolve(output.trim()));
+      })));
+      assert.deepEqual(outputs, ['B-won', 'A-lost']);
+    });
+
+    it('a breaker that was slow BEFORE it took the right finds a fresh lock of somebody else when it gets there, and leaves it alone (it breaks only the lock of the holder it saw)', async () => {
+      putPruneLock(getDeadPid());
+      const flag = path.join(workRoot, 'stalled-once');
+      // B reads the stale holder and then stalls for a second, once; A comes 0.3 s later, breaks the lock and takes a fresh one. When B goes on, the lock is A's and must stay.
+      const slowReader = `read_file() { cat "$1" 2> /dev/null; case "$1" in *prune.lock) [ -e ${flag} ] || { : > ${flag}; sleep 1; } ;; esac; }; acquire_prune_lock ${workDir} && { echo B-won; sleep 3; } || echo B-lost`;
+      const quickBreaker = `sleep 0.3; acquire_prune_lock ${workDir} && { echo A-won; sleep 3; } || echo A-lost`;
+      const outputs = await Promise.all([slowReader, quickBreaker].map((body) => new Promise<string>((resolve) => {
+        const child = spawn('bash', ['-c', `source ${scriptPath}; ${body}`], { env: getEnv(), stdio: ['ignore', 'pipe', 'ignore'] });
+        let output = '';
+        child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+        child.on('close', () => resolve(output.trim()));
+      })));
+      assert.deepEqual(outputs, ['B-lost', 'A-won']);
+    });
+
+    it('of several processes that find the same stale lock exactly one gets it (the right to break it is exclusive); the rest see it held', () => {
+      putPruneLock(getDeadPid());
+      const contenders = 8;
+      // The winner keeps the lock for two seconds, like a prune at work: a lock whose holder had already exited would be stale again for the next contender.
+      const body = `acquire_prune_lock ${workDir} && { echo won; sleep 2; } || echo lost`;
+      const results = Array.from({ length: contenders }, () => spawn('bash', ['-c', `source ${scriptPath}; ${body}`], { env: getEnv(), stdio: ['ignore', 'pipe', 'ignore'] }));
+      return Promise.all(results.map((child) => new Promise<string>((resolve) => {
+        let output = '';
+        child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+        child.on('close', () => resolve(output.trim()));
+      }))).then((outputs) => {
+        assert.equal(outputs.filter((output) => output === 'won').length, 1, outputs.join(','));
+      });
+    });
   });
 
   it('a submit\'s prune WAITS for the other one and then decides by the disk as the other left it (here the other freed enough: it removes nothing)', () => {
     makeThreeCopies();
-    const otherMarker = path.join(workDir, 'tmp', `prune.${startLiveProcess()}`);
-    writeFile(workDir, path.relative(workDir, otherMarker), '');
-    // The other prune ends its work after a second: it removed the oldest copy and its marker goes.
-    const body = `prune_poll_sec=0.1; ( sleep 1; command rm -rf "${path.join(workDir, 'p', 'oldest-aaaaaaaaaa')}" "${otherMarker}" ) & started=$SECONDS; prune_work ${workDir} ""; echo waited=$((SECONDS - started))`;
+    const otherLock = putPruneLock(startLiveProcess());
+    // The other prune ends its work after a second: it removed the oldest copy and its lock goes.
+    const body = `prune_poll_sec=0.1; ( sleep 1; command rm -rf "${path.join(workDir, 'p', 'oldest-aaaaaaaaaa')}" "${otherLock}" ) & started=$SECONDS; prune_work ${workDir} ""; echo waited=$((SECONDS - started))`;
     const outcome = runShell(body, { REMOTE_RUN_MIN_FREE_GB: '40' });
     assert.equal(outcome.status, 0, outcome.stderr);
     assert.deepEqual(listCopies(), ['middle-bbbbbbbbbb', 'newest-cccccccccc'], 'it removed nothing of its own: 40 GB were free once the other was done');
     assert.match(outcome.stdout, /waited=[1-9]/);
   });
 
-  it('the wait is bounded: a prune that never ends is waited for prune_wait_sec and then not obeyed', () => {
+  it('the wait is bounded: a prune that never ends is waited for prune_wait_sec, then the submit goes on without the lock — and leaves the other\'s lock alone', () => {
     makeThreeCopies();
-    writeFile(workDir, `tmp/prune.${startLiveProcess()}`, '');
+    const livePid = startLiveProcess();
+    putPruneLock(livePid);
     const outcome = runShell(`prune_wait_sec=1; prune_poll_sec=0.2; started=$SECONDS; prune_work ${workDir} ""; echo waited=$((SECONDS - started))`, { REMOTE_RUN_MIN_FREE_GB: '40' });
     assert.equal(outcome.status, 0, outcome.stderr);
     assert.deepEqual(listCopies(), ['middle-bbbbbbbbbb', 'newest-cccccccccc']);
     assert.match(outcome.stdout, /waited=[1-4]$/);
+    assert.equal(fs.readFileSync(lockFile(), 'utf8').trim(), `${livePid}`, 'a prune that never had the lock does not give it back');
   });
 
-  it('its own marker is gone when it ends', () => {
+  it('its own lock is gone when it ends', () => {
     makeThreeCopies();
     assert.equal(runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '40' }).status, 0);
-    assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')).filter((name) => name.startsWith('prune.') && name !== 'prune.pid'), []);
+    assert.equal(fs.existsSync(lockFile()), false);
+  });
+
+  it('two real prunes started at the same moment remove ONE copy between them, not one each (the second finds the first at it and leaves, or waits and finds the disk fine)', async () => {
+    makeThreeCopies();
+    const env = getEnv({ REMOTE_RUN_MIN_FREE_GB: '40', FAKE_RM_DELAY: '1' });
+    const outputs = await Promise.all([0, 1].map(() => new Promise<string>((resolve) => {
+      const child = spawn('bash', [scriptPath, 'prune', workDir], { env, stdio: ['ignore', 'pipe', 'ignore'] });
+      let output = '';
+      child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+      child.on('close', () => resolve(output));
+    })));
+    assert.equal(outputs.flatMap(parseRemovals).length, 1, outputs.join(' | '));
+    assert.deepEqual(listCopies(), ['middle-bbbbbbbbbb', 'newest-cccccccccc']);
   });
 });
 
@@ -711,16 +823,34 @@ describe('a disk whose free figure does not follow the removals (APFS snapshots,
     assert.equal(runScript(['measure-copies', workDir]).status, 0);
   }
 
-  it('stops after a removal that freed next to nothing from a copy measured bigger — instead of removing every idle copy — and says so', () => {
+  /** A copy measured at `sizeGib` whose removal gives `freedGib` back to the fake disk (0: as on a disk whose free figure does not follow). */
+  function makeCopyFreeing(copySlug: string, sizeGib: number, freedGib: number, usedAgoMs: number): void {
+    makeCopy(copySlug, freedGib, usedAgoMs);
+    writeFile(path.join(workDir, 'p', copySlug), 'size-kb', `${sizeGib * kibPerGib}`);
+  }
+
+  it('stops after two removals IN A ROW that freed next to nothing from copies measured bigger — instead of removing every idle copy — and says so', () => {
     makeCopy('oldest-aaaaaaaaaa', 30, 5 * hourMs);
     makeCopy('middle-bbbbbbbbbb', 30, 3 * hourMs);
     makeCopy('newest-cccccccccc', 30, 1 * hourMs);
     writeSizes();
     const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '70', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(parseRemovals(result.stdout), ['oldest-aaaaaaaaaa'], 'one removal, which gave nothing back, and the prune stopped');
-    assert.match(result.stdout, /^stopped=oldest-aaaaaaaaaa freed_kb=0 size_kb=31457280$/m);
-    assert.deepEqual(listCopies(), ['middle-bbbbbbbbbb', 'newest-cccccccccc']);
+    assert.deepEqual(parseRemovals(result.stdout), ['oldest-aaaaaaaaaa', 'middle-bbbbbbbbbb'], 'two removals that gave nothing back, and the prune stopped');
+    assert.match(result.stdout, /^stopped=middle-bbbbbbbbbb freed_kb=0 size_kb=31457280$/m);
+    assert.deepEqual(listCopies(), ['newest-cccccccccc']);
+  });
+
+  it('one removal that gave little back is not a verdict (a job writing to the same disk meanwhile can eat what it freed): it goes on, and a removal that did free resets the count', () => {
+    // no gain (count 1) · gain (reset) · no gain (count 1 again, not 2) · gain: all four go, and nothing says «stopped».
+    makeCopyFreeing('c1-aaaaaaaaaa', 30, 0, 9 * hourMs);
+    makeCopyFreeing('c2-bbbbbbbbbb', 30, 30, 7 * hourMs);
+    makeCopyFreeing('c3-cccccccccc', 30, 0, 5 * hourMs);
+    makeCopyFreeing('c4-dddddddddd', 30, 30, 3 * hourMs);
+    const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '95' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(parseRemovals(result.stdout), ['c1-aaaaaaaaaa', 'c2-bbbbbbbbbb', 'c3-cccccccccc', 'c4-dddddddddd']);
+    assert.doesNotMatch(result.stdout, /stopped=/);
   });
 
   it('goes on while it cannot tell: a copy with no written size, or a small one, gives little back by itself', () => {
@@ -733,12 +863,107 @@ describe('a disk whose free figure does not follow the removals (APFS snapshots,
     assert.doesNotMatch(result.stdout, /stopped=/);
   });
 
-  it('the refusal that follows names the cause on a Mac', () => {
-    writeJob(makeCopy('oldest-aaaaaaaaaa', 30, 5 * hourMs), 'box1-busy00', { 'task-id': '2\n' });
-    makeCopy('removable-bbbbbbbbbb', 30, 3 * hourMs);
+  it('the refusal that follows names the causes', () => {
+    writeJob(makeCopy('busy-aaaaaaaaaa', 30, 7 * hourMs), 'box1-busy00', { 'task-id': '2\n' });
+    makeCopy('removable-bbbbbbbbbb', 30, 5 * hourMs);
+    makeCopy('removable-cccccccccc', 30, 3 * hourMs);
     writeSizes();
     const result = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '70', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
     assert.equal(result.status, diskTooLowRunnerExitCode);
-    assert.match(result.stderr, /Removing a copy did not give its space back \(on a Mac: APFS local snapshots or purgeable space, see docs\/remote-run\.md\)/);
+    assert.match(result.stderr, /Removing copies did not give their space back \(on a Mac: APFS local snapshots or purgeable space; anywhere: jobs writing meanwhile, see docs\/remote-run\.md\)/);
+  });
+});
+
+describe('the probe that picks a runner for a run or an `exec` never prunes (only a view of the runners does)', () => {
+  it('on a short disk it starts no prune, and nothing is removed; the probe of a view does start it', () => {
+    makeCopy('oldest-aaaaaaaaaa', 45, 5 * hourMs);
+    makeCopy('newest-cccccccccc', 45, 1 * hourMs);
+    assert.equal(runScript(['probe', workDir]).status, 0);
+    assert.equal(fs.existsSync(path.join(workDir, 'tmp', 'prune.pid')), false, 'no detached prune was started');
+    assert.deepEqual(listCopies(), ['newest-cccccccccc', 'oldest-aaaaaaaaaa']);
+    assert.equal(runScript(['probe', workDir, 'prune']).status, 0);
+    assert.equal(fs.existsSync(path.join(workDir, 'tmp', 'prune.pid')), true, 'a view\'s probe does');
+  });
+
+  it('the project about to be used is the least recently used copy: the probe of its own submit leaves it alone, and the `prepare` that follows keeps it and removes the others instead', () => {
+    const projectDir = makeCopy(slug, 30, 9 * hourMs);
+    makeCopy('other-one-aaaaaaaaaa', 30, 5 * hourMs);
+    makeCopy('other-two-bbbbbbbbbb', 30, 3 * hourMs);
+    assert.equal(runScript(['probe', workDir]).status, 0, 'what chooseClient does first');
+    const result = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '70' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(parseRemovals(result.stdout), ['other-one-aaaaaaaaaa', 'other-two-bbbbbbbbbb']);
+    assert.ok(fs.existsSync(path.join(projectDir, 'tree/file.txt')), 'the project\'s copy survived: no from-scratch send, no from-scratch build');
+    assert.ok(fs.existsSync(path.join(projectDir, 'jobs', jobId)));
+  });
+});
+
+describe('a pid that went to a stranger pins nothing (after a crash or a reboot pids start again from low numbers)', () => {
+  it('an `exec` marker, a prune marker and a trash folder whose pid is a live process that is NOT the runner script\'s are as good as dead — and cleared or finished', () => {
+    const strangerPid = startStrangerProcess();
+    const copyDir = makeCopy('stranger-marker-aaaaaaaa', 1, 9 * hourMs);
+    writeFile(copyDir, `exec.${strangerPid}`, `${strangerPid}\n`);
+    assert.equal(runShell(`check_copy_dir_is_busy ${copyDir} && echo busy || echo free`).stdout, 'free');
+    assert.equal(fs.existsSync(path.join(copyDir, `exec.${strangerPid}`)), false);
+    writeFile(path.join(workDir, 'p', `.trash-orphan-bbbbbbbbbb-${strangerPid}`), 'tree/file.txt');
+    assert.equal(runShell(`remove_leftover_trash ${workDir}`).status, 0);
+    assert.equal(fs.existsSync(path.join(workDir, 'p', `.trash-orphan-bbbbbbbbbb-${strangerPid}`)), false, 'the trash of tens of GB is finished, not left for good');
+  });
+
+  it('a pid file of a detached run that names a stranger does not stop the next one from starting', async () => {
+    writeFile(workDir, 'tmp/measure-copies.pid', `${startStrangerProcess()}\n`);
+    makeCopy('unmeasured-aaaaaaaaaa', 3, hourMs);
+    assert.equal(runScript(['probe', workDir]).status, 0);
+    const sizeFile = path.join(workDir, 'p', 'unmeasured-aaaaaaaaaa', 'size-kb');
+    const deadline = Date.now() + 20_000;
+    while (!fs.existsSync(sizeFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(fs.existsSync(sizeFile), 'the detached measuring ran');
+  });
+
+  it('a process that IS the runner script\'s (a live exec) still counts', () => {
+    const copyDir = makeCopy('real-marker-aaaaaaaaaa', 1, 9 * hourMs);
+    const livePid = startLiveProcess();
+    writeFile(copyDir, `exec.${livePid}`, `${livePid}\n`);
+    assert.equal(runShell(`check_copy_dir_is_busy ${copyDir} && echo busy || echo free`).stdout, 'busy');
+  });
+});
+
+describe('a submit waits behind another prune only while its own disk is short', () => {
+  it('with the disk at its target it does not wait for the prune that is removing idle copies (it has nothing to remove: the other one does it)', () => {
+    makeCopy('idle-aaaaaaaaaa', 30, 5 * hourMs);
+    writeFile(workDir, 'tmp/prune.lock', `${startLiveProcess()}\n`);
+    const outcome = runShell(`prune_wait_sec=20; prune_poll_sec=0.2; started=$SECONDS; prune_work ${workDir} ""; echo waited=$((SECONDS - started))`, { REMOTE_RUN_MIN_FREE_GB: '5' });
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.match(outcome.stdout, /waited=[0-2]$/);
+    assert.deepEqual(listCopies(), ['idle-aaaaaaaaaa']);
+  });
+});
+
+describe('a put-back that meets a folder somebody just made', () => {
+  it('does not leave the copy nested INSIDE it (where no prune looks and its markers cannot be seen): it comes out again, under its trash name', () => {
+    makeCopy('late-busy-dddddddddd', 5, 9 * hourMs);
+    // After the rename a `prepare` plants a job in the moved copy (so it must go back), and makes the folder of the name just before the `mv` that puts it back.
+    const body = `mv() { if [[ "$1" == */.trash-* && "$2" != */.trash-* ]]; then command mkdir -p "$2"; fi; command mv "$@"; case "$2" in */.trash-*) command mkdir -p "$2/jobs/box1-latejb" ;; esac; }; remove_project_copy ${workDir} late-busy-dddddddddd; echo code=$?`;
+    const outcome = runShell(body);
+    assert.equal(outcome.stdout.split('=').pop(), '3', outcome.stdout);
+    const names = fs.readdirSync(path.join(workDir, 'p')).sort();
+    assert.equal(names.length, 2, names.join(', '));
+    assert.ok(names.includes('late-busy-dddddddddd'), 'the new folder of the name is there');
+    assert.deepEqual(fs.readdirSync(path.join(workDir, 'p', 'late-busy-dddddddddd')), [], 'with nothing nested in it');
+    const trashName = names.find((name) => name.startsWith('.trash-late-busy-dddddddddd-'));
+    assert.ok(trashName !== undefined && fs.existsSync(path.join(workDir, 'p', trashName, 'jobs', 'box1-latejb')), 'the copy is whole under its trash name');
+  });
+});
+
+describe('a caller that hangs up while `prepare` removes copies', () => {
+  it('does not stop the removal half-way: the closed pipe is no reason to die (SIGPIPE would end it after the copy it is at)', async () => {
+    makeCopy('oldest-aaaaaaaaaa', 30, 5 * hourMs);
+    makeCopy('middle-bbbbbbbbbb', 30, 3 * hourMs);
+    makeCopy('newest-cccccccccc', 30, 1 * hourMs);
+    const child = spawn('bash', [scriptPath, 'prepare', workDir, slug, jobId, 'default=1'], { env: getEnv({ REMOTE_RUN_MIN_FREE_GB: '60', FAKE_RM_DELAY: '0.8' }), stdio: ['ignore', 'pipe', 'ignore'] });
+    // The ssh call is gone before the first removal ends.
+    child.stdout.destroy();
+    await new Promise<void>((resolve) => { child.on('close', () => resolve()); });
+    assert.deepEqual(listCopies(), ['newest-cccccccccc', slug].sort(), 'both copies that had to go are gone');
   });
 });

@@ -507,12 +507,15 @@ device»: `runner mac: only 8 GB free on the work disk, the runner needs 60 GB; 
 background, and a copy again only after it was used, so a figure can lag: `~` / «so far» while some are not measured yet).
 
 If a submit has to remove copies first it can take minutes: when the runner's last probe found its disk short, the submit says so before it starts, and a preparation that runs past 15 minutes
-says to submit again (the runner finishes the removal by itself). Several prunes never work at once: the one that starts later waits for the one at it (the probe's own, started in the
-background, just leaves the work to it).
+says to submit again (the runner carries on with the removal as far as it can, and the next submit continues where it stopped). Prunes do not pile up: a submit whose disk is short waits for the one
+already at work (up to 10 minutes, then it goes on), one whose disk is fine does not wait at all, and the prune that `runners` starts in the background leaves the work to the one at it. Only a view of the
+runners — `runners` and the bot's `/runners` — starts that background prune: the probe a `run` or an `exec` makes first never does, so the project about to be used (typically the least recently used copy)
+is not taken before the job's own submit, which keeps its copy, arrives.
 
 **A Mac's disk may not give the space back.** On APFS, `df` leaves out *purgeable* space, and with Time Machine local snapshots a removed project copy frees nothing until the snapshots are thinned
-(`tmutil listlocalsnapshots /` lists them, `tmutil thinlocalsnapshots /` thins them; or turn Time Machine's local snapshots off on that Mac). When a removal gives next to nothing back from a copy measured much
-bigger, the runner stops removing further copies (it would empty itself for nothing), says so, and the refusal names this cause.
+(`tmutil listlocalsnapshots /` lists them, `tmutil thinlocalsnapshots /` thins them; or turn Time Machine's local snapshots off on that Mac). When two removals in a row give next to nothing back from copies
+measured much bigger, the runner stops removing further copies (it would empty itself for nothing), says so, and the refusal names this cause — and the other one it can have anywhere: a job writing to the same
+disk meanwhile eats the space a removal frees.
 
 `kill` sends SIGTERM to the job's whole process group and SIGKILL after 10 s. A process that leaves the group on purpose (`setsid`,
 as a Gradle daemon or the adb server do) survives by design — it is the runner's long-lived helper, not the job's.

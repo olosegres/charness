@@ -133,7 +133,7 @@ export async function runRunCommand(command: Extract<RemoteRunCommand, { kind: '
 
 export async function runRunnersCommand(context: CommandContext): Promise<number> {
   const clients = context.config.runners.map((runner) => createRunnerClient(runner, context.cacheDir, context.script));
-  const reports = await probeRunners(clients, context.now());
+  const reports = await probeRunners(clients, context.now(), undefined, undefined, { isPruneAllowed: true });
   context.io.stdout(`${reports.map(formatRunnerBlock).join('\n\n')}\n`);
   return 0;
 }

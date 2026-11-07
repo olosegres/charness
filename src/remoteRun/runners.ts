@@ -22,8 +22,20 @@ import type { RunnerConfig, RunnersConfig } from './runnersConfig';
  * then the paired runners) that answers, is not paused and, with `--needs`, has the capability.
  */
 
+/**
+ * @name ProbeOptions
+ * @description `isPruneAllowed`: the probe is a VIEW of the runners (`remote-run runners`, the bot's `/runners`) and may start the runner's background prune when its disk is short. The probe that picks a runner
+ * for a run or an `exec` never does (the default): that prune has no copy to keep, and the project about to be used is typically the least recently used one — the very copy it would take before the job's own
+ * `prepare`, which keeps its slug, arrives.
+ */
+export interface ProbeOptions {
+  isPruneAllowed?: boolean;
+}
+
 /** The whole probing of all runners ends by then (a dead host costs its ssh connect timeout, once, in parallel with the others). */
 export const probeAllTimeoutMs = 20 * 1000;
+/** The word that lets `runner.sh probe` start the background prune of a short disk (see {@link ProbeOptions}). */
+const probePruneArgument = 'prune';
 const probeFileSuffix = '.probe.json';
 const probeFailureFileSuffix = '.probe-failed.json';
 const millisecondsPerSecond = 1000;
@@ -100,7 +112,7 @@ function writeLastProbe(cacheDir: string, runnerName: string, text: string, seen
  * `offline` with why and the last snapshot taken when it was seen. `signal` is the deadline of the whole view (see {@link probeRunners}): when it fires the ssh calls in flight are killed and the
  * runner is reported offline — with the snapshot, like any other way of not answering.
  */
-export async function probeRunner(client: RunnerClient, nowMs: number = Date.now(), signal?: AbortSignal, deadlineMs: number = probeAllTimeoutMs): Promise<RunnerReport> {
+export async function probeRunner(client: RunnerClient, nowMs: number = Date.now(), signal?: AbortSignal, deadlineMs: number = probeAllTimeoutMs, options: ProbeOptions = {}): Promise<RunnerReport> {
   const runner = client.runner;
   const groupLimits = { ...(runner.groups ?? {}) };
   const isPausedByHub = runner.paired?.isPausedByHub ?? false;
@@ -134,7 +146,7 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
     if (error instanceof RunnerUnreachableError) return offline(error.reason);
     return offline(error instanceof Error ? error.message : 'could not prepare the runner');
   }
-  const result = await client.call('probe', [], { timeoutMs: deadlineMs, signal });
+  const result = await client.call('probe', options.isPruneAllowed === true ? [probePruneArgument] : [], { timeoutMs: deadlineMs, signal });
   if (result.exitCode !== 0) return offline(describeSshFailure(result));
   writeLastProbe(client.cacheDir, runner.name, result.stdout, nowMs);
   return { name: runner.name, status: 'online', probe: parseProbeOutput(result.stdout), groupLimits, isPausedByHub };
@@ -145,12 +157,12 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
  * last snapshot and its ssh calls are killed, so the view ends on time and nothing keeps the process alive afterwards. The others are not
  * held back by it. `stop` ends the same ssh calls from outside — the user interrupted the command that asked.
  */
-export async function probeRunners(clients: readonly RunnerClient[], nowMs: number = Date.now(), deadlineMs: number = probeAllTimeoutMs, stop?: AbortSignal): Promise<RunnerReport[]> {
+export async function probeRunners(clients: readonly RunnerClient[], nowMs: number = Date.now(), deadlineMs: number = probeAllTimeoutMs, stop?: AbortSignal, options: ProbeOptions = {}): Promise<RunnerReport[]> {
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort(), deadlineMs);
   const signal = stop === undefined ? deadline.signal : AbortSignal.any([deadline.signal, stop]);
   try {
-    return await Promise.all(clients.map((client) => probeRunner(client, nowMs, signal, deadlineMs)));
+    return await Promise.all(clients.map((client) => probeRunner(client, nowMs, signal, deadlineMs, options)));
   } finally {
     clearTimeout(timer);
   }

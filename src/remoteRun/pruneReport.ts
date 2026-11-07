@@ -64,9 +64,12 @@ export function parseRemovalStop(prepareOutput: string): RemovalStop | null {
   return null;
 }
 
-/** @description `runner mac: removing the project copy app-1 gave back 0 GB of its 30 GB …` — why the runner did not remove more, and the Mac cause it points at. */
+/**
+ * @description `runner mac: removing project copies gave back almost nothing twice in a row (the last, app-1: 0 GB of its 30 GB) …` — why the runner did not remove more, and the causes it points at.
+ * «Twice» is `no_progress_stop_after` in `runner.sh`: one removal that frees little can be a job writing to the same disk meanwhile.
+ */
 export function formatRemovalStopLine(runnerName: string, stop: RemovalStop): string {
-  return `runner ${runnerName}: removing the project copy ${stop.slug} gave back ${formatGigabytes(stop.freedMb)} of its ${formatGigabytes(stop.sizeMb)} — the disk's free space is not following (on a Mac: Time Machine local snapshots or purgeable space, see docs/remote-run.md), so it stopped removing more copies`;
+  return `runner ${runnerName}: removing project copies gave back almost nothing twice in a row (the last, ${stop.slug}: ${formatGigabytes(stop.freedMb)} of its ${formatGigabytes(stop.sizeMb)}) — the disk's free space is not following (a Mac keeps it while Time Machine local snapshots or purgeable space hold it; jobs writing meanwhile eat it too, see docs/remote-run.md), so it stopped removing more copies`;
 }
 
 const millisecondsPerMinute = 60 * 1000;
@@ -80,7 +83,7 @@ export function formatPruneHeadsUp(runnerName: string, probe: RunnerProbe | null
   return `runner ${runnerName}: ${formatGigabytes(probe.diskFreeMb)} free, it keeps ${formatGigabytes(probe.diskMinFreeMb)} — removing the least recently used project copies first (this can take minutes)`;
 }
 
-/** @description What a `prepare` that ran out of its time says: the runner goes on with the removal by itself, so trying again soon is the way (not a failure of the runner). */
+/** @description What a `prepare` that ran out of its time says: the runner carries on with the removal as far as it can (it ignores the closed pipe, `cmd_prepare`) and the next submit continues where it stopped, so trying again soon is the way (not a failure of the runner). */
 export function describePrepareTimeout(runnerName: string, timeoutMs: number): string {
-  return `runner "${runnerName}": preparing the job took longer than ${Math.round(timeoutMs / millisecondsPerMinute)} minutes (it removes old project copies first, which is slow on a big disk) — the runner goes on with that by itself: submit again in a few minutes`;
+  return `runner "${runnerName}": preparing the job took longer than ${Math.round(timeoutMs / millisecondsPerMinute)} minutes (it removes old project copies first, which is slow on a big disk) — the runner carries on with that as far as it can: submit again in a few minutes, the next submit continues where it stopped`;
 }
