@@ -1014,6 +1014,7 @@ export const jaDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 API クレジット: {day} に拒否 — 次に通ったターンで復活したか分かります',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API クレジットはおそらく使い切り · {since} から {spent} 使用',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API クレジットはおそらく使い切り',
+  'account.row.apiCreditPickAgain': ' — チャージしてからアカウントを選び直してください',
   'account.usageHint': '使用状況: 各ウィンドウの使用 %、続いてリセットまでの時間（🔄 2時間後 = 2 時間後）。',
   'account.autoSwitchHint': '使用量制限時の動作は /limits で設定します。',
   'fallback.backendClaude': 'Claude',

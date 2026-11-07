@@ -1020,6 +1020,7 @@ export const frDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 crédit API : refusé le {day} — le prochain tour qui passera montrera qu\'il est revenu',
   'account.row.apiCreditProbablyUsedUp': '    🎁 crédit API probablement épuisé · {spent} dépensés depuis le {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 crédit API probablement épuisé',
+  'account.row.apiCreditPickAgain': ' — recharge-le, puis choisis à nouveau le compte',
   'account.usageHint': 'Usage : % de chaque fenêtre consommé, puis quand elle se réinitialise (🔄 dans 2h = dans deux heures).',
   'account.autoSwitchHint': 'Que faire à une limite d’usage se règle dans /limits.',
   'fallback.backendClaude': 'Claude',

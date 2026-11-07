@@ -231,7 +231,7 @@ describe('The bonus API credit end to end: built charness, built command line, f
     const usedUpLines = await readAccountRowLines();
     assert.equal(usedUpLines.length, 2, `the spend and ONE credit line, no second used-up line: ${usedUpLines.join(' | ')}`);
     assert.match(usedUpLines[0], /^ {4}💳 \$0\.50 spent since \d{2}\.\d{2} · last turn \$0\.25$/);
-    assert.match(usedUpLines[1], /^ {4}🎁 API credit probably used up · \$0\.25 spent since \d{2}\.\d{2}$/, 'the spend of the period the refusal came in, counted since the figure');
+    assert.match(usedUpLines[1], /^ {4}🎁 API credit probably used up · \$0\.25 spent since \d{2}\.\d{2} — top it up, then pick the account again$/, 'the spend of the period the refusal came in, counted since the figure');
     assert.ok(readPersistedState(getLayout()).claudeProfiles?.[apiAccount]?.creditExhaustedAt, 'the stored mark holds until the operator acts');
 
     // A figure given after the refusal is the operator saying there is money: it ends the mark, and the row tells one story.

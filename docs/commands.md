@@ -337,9 +337,12 @@ balance), so the bot never uses it without you choosing it.
     `🎁 API credit expired 15.11 — give the new figure: charness claude-profiles
     credit <name> <left>`.
   - **Probably used up.** A refusal («Credit balance is too low») turns the credit
-    line into `🎁 API credit probably used up · $6.51 spent since 07.11` —
+    line into `🎁 API credit probably used up · $6.51 spent since 07.11 — top it up,
+    then pick the account again` —
     «probably»: the bot cannot be sure; with no figure and no renewal just
-    `🎁 API credit probably used up` (the `💳` line above carries the spend). A
+    `🎁 API credit probably used up — top it up, then pick the account again` (the
+    `💳` line above carries the spend; the tail is the way back the old `💸` line
+    told, kept so a topped-up balance is picked again at once). A
     figure you give AFTER a refusal ends the mark (you are saying there is
     money, as a billed turn going through does). Picking the account again ends
     the mark too, but keeps the refusal as «unconfirmed» until a turn goes

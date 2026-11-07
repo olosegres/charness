@@ -1020,6 +1020,7 @@ export const deDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 API-Guthaben: abgelehnt am {day} — die nächste Runde, die durchgeht, zeigt, dass es wieder da ist',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API-Guthaben wahrscheinlich aufgebraucht · {spent} ausgegeben seit {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API-Guthaben wahrscheinlich aufgebraucht',
+  'account.row.apiCreditPickAgain': ' — aufladen, dann das Konto erneut wählen',
   'account.usageHint': 'Nutzung: % jedes Fensters verbraucht, dann wann es zurückgesetzt wird (🔄 in 2h = in zwei Stunden).',
   'account.autoSwitchHint': 'Was bei einem Nutzungslimit geschieht, wird in /limits eingestellt.',
   'fallback.backendClaude': 'Claude',

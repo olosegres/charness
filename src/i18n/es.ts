@@ -1020,6 +1020,7 @@ export const esDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 crédito de API: rechazado el {day} — el próximo turno que pase mostrará que ha vuelto',
   'account.row.apiCreditProbablyUsedUp': '    🎁 crédito de API probablemente agotado · {spent} gastados desde el {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 crédito de API probablemente agotado',
+  'account.row.apiCreditPickAgain': ' — recárgalo y vuelve a elegir la cuenta',
   'account.usageHint': 'Uso: % de cada ventana consumido, luego cuándo se reinicia (🔄 en 2h = dentro de dos horas).',
   'account.autoSwitchHint': 'Qué ocurre ante un límite de uso se configura en /limits.',
   'fallback.backendClaude': 'Claude',

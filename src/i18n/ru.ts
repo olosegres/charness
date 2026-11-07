@@ -1024,6 +1024,7 @@ export const ruDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 API-кредит: отказ {day} — следующий ход, который пройдёт, покажет, что он вернулся',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API-кредит, вероятно, израсходован · {spent} потрачено с {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API-кредит, вероятно, израсходован',
+  'account.row.apiCreditPickAgain': ' — пополни и выбери аккаунт снова',
   'account.usageHint': 'Использование: % окна израсходовано, затем когда сбросится (🔄 через 2ч = через два часа).',
   'account.autoSwitchHint': 'Что делать при лимите использования — настраивается в /limits.',
   'fallback.backendClaude': 'Claude',

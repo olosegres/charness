@@ -31,7 +31,7 @@ import type { FallbackChainEntry } from '../utils/fallbackChain';
 import type { BackendFamily } from '../utils/backendSwitchPlan';
 import type { OperatorSwitchOutcome } from '../utils/operatorSwitchPlan';
 import { t } from '../i18n';
-import { buildClaudeProfileUsageView, buildClaudeProfileUsageViews } from '../utils/claudeUsage';
+import { buildClaudeProfileUsageView, buildClaudeProfileUsageViews } from '../utils/claudeProfileUsageViews';
 import { limitsUsageRefreshBudgetMs } from '../utils/usageRefreshBudget';
 import type { AnthropicApiKeyCheck } from '../utils/anthropicApiKeyCheck';
 import { createCommandHarness, type CommandHarness } from './commandModuleHarness';

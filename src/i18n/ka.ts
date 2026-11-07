@@ -1020,6 +1020,7 @@ export const kaDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 API კრედიტი: უარი {day} — შემდეგი სვლა, რომელიც გაივლის, აჩვენებს, რომ დაბრუნდა',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API კრედიტი, სავარაუდოდ, ამოიწურა · {since}-დან დახარჯულია {spent}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API კრედიტი, სავარაუდოდ, ამოიწურა',
+  'account.row.apiCreditPickAgain': ' — შეავსე და ანგარიში ისევ აირჩიე',
   'account.usageHint': 'გამოყენება: თითოეული ფანჯრის % გამოყენებულია, შემდეგ — როდის განულდება (🔄 2სთ-ში = ორ საათში).',
   'account.autoSwitchHint': 'რა ხდება გამოყენების ლიმიტზე — /limits-ში მიეთითება.',
   'fallback.backendClaude': 'Claude',

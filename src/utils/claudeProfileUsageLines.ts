@@ -116,8 +116,9 @@ function formatCreditExpiryDay(expiresOn: string, nowMs: number): string {
  *     (the grant and the expiry only when they were given) — the period differs from the «💳» lifetime total, so both show;
  *   • after a renewal the bot detected: `🎁 API credit renewed ≈ 08.11 · ≈ $199.75 of $200.00 · $0.25 spent via the bot ·
  *     check expiry in Console › Billing` on the last given grant, or only `renewed ≈ 08.11 · $0.25 spent since` without one;
- *   • after a refusal for the balance: `🎁 API credit probably used up · $6.51 spent since 07.11` — «probably»: the bot cannot
- *     be sure, and the daily recheck ends it by itself — or just `probably used up` when the «💳» line carries the spend;
+ *   • after a refusal for the balance: `🎁 API credit probably used up · $6.51 spent since 07.11 — top it up, then pick the account
+ *     again` — «probably»: the bot cannot be sure, and the daily recheck ends it by itself — or just `probably used up` when the
+ *     «💳» line carries the spend; the tail is what the old used-up line told, so a topped-up balance is picked again at once;
  *   • after a refusal the operator acted on (picked the account again): `refused 07.11 — the next turn that goes through shows
  *     it is back` — no claim of «used up» and no stale remainder;
  *   • past the expiry day the operator gave: `expired`, with the command that sets the new figure.
@@ -128,7 +129,11 @@ function formatClaudeApiCreditLine(credit: ClaudeApiCreditEstimate, profileName:
   const spent = formatUsd(credit.spentUsd);
   const since = credit.since === null ? '' : formatSpendSinceDay(credit.since, timezone, nowMs);
   const isPeriodOfItsOwn = credit.basis === 'anchor' || credit.basis === 'renewal';
-  if (credit.status === 'probablyUsedUp') return isPeriodOfItsOwn ? t('account.row.apiCreditProbablyUsedUp', { spent, since }) : t('account.row.apiCreditProbablyUsedUpBare');
+  if (credit.status === 'probablyUsedUp') {
+    // The old used-up line told what to do; this one still does (the refusal notice in the topic says it once and scrolls away).
+    const pickAgain = t('account.row.apiCreditPickAgain');
+    return (isPeriodOfItsOwn ? t('account.row.apiCreditProbablyUsedUp', { spent, since }) : t('account.row.apiCreditProbablyUsedUpBare')) + pickAgain;
+  }
   if (credit.status === 'unconfirmed') {
     return t('account.row.apiCreditUnconfirmed', { day: credit.unconfirmedSince === null ? '' : formatSpendSinceDay(credit.unconfirmedSince, timezone, nowMs) });
   }

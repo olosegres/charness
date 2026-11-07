@@ -1014,6 +1014,7 @@ export const zhDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 API 额度：{day} 被拒绝 — 下一次成功的回合会显示它已恢复',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API 额度可能已用完 · 自 {since} 起已花费 {spent}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API 额度可能已用完',
+  'account.row.apiCreditPickAgain': ' — 充值后重新选择该账号',
   'account.usageHint': '用量：各窗口已用 %，然后是何时重置（🔄 2小时后 = 两小时后）。',
   'account.autoSwitchHint': '遇到用量上限时怎么办，请在 /limits 中设置。',
   'fallback.backendClaude': 'Claude',

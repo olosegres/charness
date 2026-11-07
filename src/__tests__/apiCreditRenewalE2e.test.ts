@@ -280,7 +280,7 @@ describe('A used-up API credit that comes back, end to end: built charness, fake
 
     const lines = await readAccountRowLines();
     assert.equal(lines.length, 2, `the spend and ONE credit line: ${lines.join(' | ')}`);
-    assert.match(lines[1], /^ {4}🎁 API credit probably used up · \$0\.25 spent since \d{2}\.\d{2}$/);
+    assert.match(lines[1], /^ {4}🎁 API credit probably used up · \$0\.25 spent since \d{2}\.\d{2} — top it up, then pick the account again$/);
     assert.equal(fakeApi.requests.length, 0, `nothing asks the API before a day is up: ${JSON.stringify(fakeApi.requests)}; state ${JSON.stringify(getApiRecord())}`);
   });
 
@@ -300,7 +300,7 @@ describe('A used-up API credit that comes back, end to end: built charness, fake
     await getCharness().waitFor('the attempt to be persisted', replyTimeoutMs, () => getApiRecord()?.creditRecheckedAt !== undefined);
     assert.ok(getApiRecord()?.creditExhaustedAt, 'still refused: the mark holds');
     const lines = await readAccountRowLines();
-    assert.match(lines[1], /^ {4}🎁 API credit probably used up · /);
+    assert.match(lines[1], /^ {4}🎁 API credit probably used up · .* — top it up, then pick the account again$/);
     assert.equal(fakeApi.requests.length, 1);
   });
 
@@ -349,7 +349,7 @@ describe('A used-up API credit that comes back, end to end: built charness, fake
     const renewedBefore = getApiRecord()?.creditRenewedAt ?? '';
     runOutOfCredits('RENEW-4');
     await getCharness().waitFor('the account to be marked out of credits again', replyTimeoutMs, () => getApiRecord()?.creditExhaustedAt !== undefined);
-    assert.match((await readAccountRowLines())[1], /^ {4}🎁 API credit probably used up · \$0\.25 spent since \d{2}\.\d{2}$/, 'counted since the renewal');
+    assert.match((await readAccountRowLines())[1], /^ {4}🎁 API credit probably used up · \$0\.25 spent since \d{2}\.\d{2} — top it up, then pick the account again$/, 'counted since the renewal');
 
     fakeTelegram.pushOperatorMessage(topicThreadId, 'RENEW-5 please carry on');
     await getCharness().waitFor('the turn that goes through to renew the credit', agentStartTimeoutMs, () => {

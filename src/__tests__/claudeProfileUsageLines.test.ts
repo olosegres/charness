@@ -121,18 +121,18 @@ describe('formatClaudeProfileUsageLines: the bonus API credit of an account bill
   });
 
   it('probably used up after a refusal — with the spend since when a figure or a renewal gives its own period, just «probably used up» when the «💳» line carries the spend; no second used-up line', () => {
-    assert.deepEqual(lines({ apiSpend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }), [spendLine, '    🎁 API credit probably used up'], 'the spend is in the line above');
+    assert.deepEqual(lines({ apiSpend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }), [spendLine, '    🎁 API credit probably used up — top it up, then pick the account again'], 'the spend is in the line above, and the way back is told');
     assert.deepEqual(
       lines({ apiSpend, creditAnchor: anchor, creditSpend: spend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }),
-      [spendLine, '    🎁 API credit probably used up · $6.51 spent since 07.11'],
+      [spendLine, '    🎁 API credit probably used up · $6.51 spent since 07.11 — top it up, then pick the account again'],
     );
     const renewedAt = '2026-11-07T07:00:00.000Z';
     assert.deepEqual(
       lines({ apiSpend, creditRenewedAt: renewedAt, creditSpend: { since: renewedAt, usd: 1 }, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }),
-      [spendLine, '    🎁 API credit probably used up · $1.00 spent since 07.11'],
+      [spendLine, '    🎁 API credit probably used up · $1.00 spent since 07.11 — top it up, then pick the account again'],
       'a renewal is a period of its own too',
     );
-    assert.deepEqual(lines({ creditExhaustedAt: '2026-11-07T09:00:00.000Z' }), ['    🎁 API credit probably used up']);
+    assert.deepEqual(lines({ creditExhaustedAt: '2026-11-07T09:00:00.000Z' }), ['    🎁 API credit probably used up — top it up, then pick the account again']);
   });
 
   it('after a refusal the operator acted on (picked the account again): says it was refused and awaits the answer — neither «used up» nor the stale remainder', () => {
@@ -194,7 +194,7 @@ describe('formatClaudeProfileUsageLines: the bonus API credit of an account bill
     const russian = await runWithLocale('ru', async () => lines({ creditAnchor: anchor, creditSpend: spend }));
     assert.deepEqual(russian, ['    🎁 API-кредит ≈ $61.20 из $200.00 · через бота потрачено $6.51 с 07.11 · истекает 15.11']);
     const probably = await runWithLocale('ru', async () => lines({ apiSpend, creditAnchor: anchor, creditSpend: spend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }));
-    assert.equal(probably[1], '    🎁 API-кредит, вероятно, израсходован · $6.51 потрачено с 07.11');
+    assert.equal(probably[1], '    🎁 API-кредит, вероятно, израсходован · $6.51 потрачено с 07.11 — пополни и выбери аккаунт снова');
     const unconfirmed = await runWithLocale('ru', async () => lines({ creditUnconfirmedSince: '2026-11-07T09:00:00.000Z' }));
     assert.equal(unconfirmed[0], '    🎁 API-кредит: отказ 07.11 — следующий ход, который пройдёт, покажет, что он вернулся');
   });

@@ -1019,6 +1019,7 @@ export const hiDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 API क्रेडिट: {day} को अस्वीकृत — अगला टर्न जो चलेगा, दिखाएगा कि यह लौट आया',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API क्रेडिट शायद खत्म · {since} से {spent} खर्च',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API क्रेडिट शायद खत्म',
+  'account.row.apiCreditPickAgain': ' — भरें, फिर खाता दोबारा चुनें',
   'account.usageHint': 'उपयोग: हर विंडो का % खर्च, फिर कब रीसेट होगी (🔄 2घं में = दो घंटे बाद)।',
   'account.autoSwitchHint': 'उपयोग-सीमा पर क्या हो, यह /limits में तय होता है।',
   'fallback.backendClaude': 'Claude',

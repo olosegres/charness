@@ -23,7 +23,6 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { z } from 'zod';
 
 /** The profile that is `~/.claude` itself (no `CLAUDE_CONFIG_DIR`). */
 export const defaultClaudeProfileName = 'default';
@@ -290,8 +289,6 @@ export function resolveClaudeProfileApiKeyFile(configDir: string): string {
 /** The profile's own `.claude.json`: where `claude auth login --console` keeps the key it created (`primaryApiKey`). */
 const claudeProfileStateFileName = '.claude.json';
 
-const claudeProfileStateKeySchema = z.object({ primaryApiKey: z.string() });
-
 /** The text of a file, `null` when it cannot be read. */
 function readTextFileOrNull(file: string): string | null {
   try {
@@ -306,8 +303,11 @@ function readPrimaryApiKey(stateFile: string): string | null {
   const stateText = readTextFileOrNull(stateFile);
   if (stateText === null) return null;
   try {
-    const parsed = claudeProfileStateKeySchema.safeParse(JSON.parse(stateText));
-    return parsed.success && checkIsPlausibleAnthropicApiKey(parsed.data.primaryApiKey) ? parsed.data.primaryApiKey.trim() : null;
+    // The file is the CLI's, not ours: whatever it holds is checked before it is trusted (no schema library — this module is
+    // loaded by the connector guards before any env file is read).
+    const parsed: { primaryApiKey?: string } | null = JSON.parse(stateText);
+    const key = parsed?.primaryApiKey;
+    return typeof key === 'string' && checkIsPlausibleAnthropicApiKey(key) ? key.trim() : null;
   } catch {
     return null;
   }

@@ -1064,6 +1064,7 @@ export const enDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 API credit: refused {day} — the next turn that goes through shows it is back',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API credit probably used up · {spent} spent since {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API credit probably used up',
+  'account.row.apiCreditPickAgain': ' — top it up, then pick the account again',
   'account.usageHint': 'Usage: % of each window used, then when it resets (🔄 in 2h = in two hours).',
   'account.autoSwitchHint': 'What happens on a usage limit is set in /limits.',
   'fallback.backendClaude': 'Claude',

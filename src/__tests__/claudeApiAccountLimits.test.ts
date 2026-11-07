@@ -19,7 +19,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyAgentApiError } from '../apiErrorRetry';
-import { buildClaudeProfilesReport, buildClaudeProfileUsageView, type ClaudeProfileUsageView, type ClaudeUsageSnapshot } from '../utils/claudeUsage';
+import { buildClaudeProfilesReport, type ClaudeProfileUsageView, type ClaudeUsageSnapshot } from '../utils/claudeUsage';
+import { addClaudeApiCreditToReport, buildClaudeProfileUsageView } from '../utils/claudeProfileUsageViews';
 import { pickClaudeLimitSwitchCandidates } from '../utils/claudeLimitSwitch';
 import {
   getFallbackEntryAvailability,
@@ -204,13 +205,13 @@ describe('what the screens say', () => {
     assert.deepEqual(rows.map((row) => row.label), ['Claude · default', '✓ Claude · console 💳']);
     assert.equal(
       formatLimitsUsageBlock({ detection, openCodeProviderUsage: {}, nowMs, timezone: 'UTC' }),
-      'Usage (% used)\nconsole — 💳 API · pay per use\n    🎁 API credit probably used up',
+      'Usage (% used)\nconsole — 💳 API · pay per use\n    🎁 API credit probably used up — top it up, then pick the account again',
     );
   });
 
   it('/accounts hangs only the credit line under an API row (its row already says how it pays): «probably used up» after a refusal', () => {
     assert.deepEqual(formatClaudeProfileUsageLines({ billing: 'api', creditExhaustedAt: null }, 'UTC', nowMs), []);
-    assert.deepEqual(formatClaudeProfileUsageLines({ billing: 'api', creditExhaustedAt: inHours(-1) }, 'UTC', nowMs), ['    🎁 API credit probably used up']);
+    assert.deepEqual(formatClaudeProfileUsageLines({ billing: 'api', creditExhaustedAt: inHours(-1) }, 'UTC', nowMs), ['    🎁 API credit probably used up — top it up, then pick the account again']);
   });
 
   it('/status marks the metered account and its used-up credits', () => {
@@ -235,7 +236,8 @@ describe('what the screens say', () => {
   });
 
   it('`charness claude-profiles` says the account pays per use and is never picked for a new agent', () => {
-    const report = buildClaudeProfilesReport([apiView({ creditExhaustedAt: inHours(-1) })], null, nowMs);
+    const view = apiView({ creditExhaustedAt: inHours(-1) });
+    const report = addClaudeApiCreditToReport(buildClaudeProfilesReport([view], null, nowMs), [view], nowMs);
     assert.equal(
       formatClaudeProfileCliLine(report.profiles[0], nowMs),
       '✗ console  /home/user/.charness/claude-profiles/console  console@example.com API billing (pay per use, never picked for a new agent)  no windows  CREDITS PROBABLY USED UP',
@@ -245,7 +247,7 @@ describe('what the screens say', () => {
 
 describe('what the bot can tell of an API account\'s credit, for an agent and for the command line', () => {
   const anchor = { remainingUsd: 67.71, grantUsd: 200, anchoredAt: inHours(-2), expiresOn: '2026-10-31' };
-  const entryOf = (view: ClaudeProfileUsageView) => buildClaudeProfilesReport([view], null, nowMs).profiles[0];
+  const entryOf = (view: ClaudeProfileUsageView) => addClaudeApiCreditToReport(buildClaudeProfilesReport([view], null, nowMs), [view], nowMs).profiles[0];
 
   it('the report entry carries spentUsd, remainingEstimateUsd, expiresOn, probablyUsedUp and renewedAt from the operator\'s figure', () => {
     const entry = entryOf(apiView({ creditAnchor: anchor, creditSpend: { since: anchor.anchoredAt, usd: 6.51 } }));
@@ -264,6 +266,15 @@ describe('what the bot can tell of an API account\'s credit, for an agent and fo
     assert.equal(entryOf(apiView({ creditAnchor: anchor, creditExhaustedAt: inHours(-1) })).probablyUsedUp, true);
     const renewed = entryOf(apiView({ creditAnchor: anchor, creditRenewedAt: inHours(-1), creditSpend: { since: inHours(-1), usd: 0.25 } }));
     assert.deepEqual([renewed.renewedAt, renewed.remainingEstimateUsd, renewed.expiresOn, renewed.spentUsd, renewed.probablyUsedUp], [inHours(-1), 199.75, null, 0.25, false]);
+  });
+
+  it('the report builder itself leaves the credit fields empty (it is loaded by the connector guards and must not reach the credit module); the fill adds them for the API accounts it has views for, and leaves an entry without a view as it is', () => {
+    const view = apiView({ creditAnchor: anchor });
+    const bare = buildClaudeProfilesReport([view], null, nowMs);
+    assert.deepEqual([bare.profiles[0].spentUsd, bare.profiles[0].remainingEstimateUsd, bare.profiles[0].probablyUsedUp], [null, null, false]);
+    const filled = addClaudeApiCreditToReport(bare, [view], nowMs);
+    assert.equal(filled.profiles[0].remainingEstimateUsd, 67.71);
+    assert.deepEqual(addClaudeApiCreditToReport(bare, [], nowMs).profiles, bare.profiles);
   });
 
   it('has no spend to tell for an API account that has not been counted at all, and says only that it is probably used up when it was refused', () => {

@@ -23,9 +23,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ClaudeProfileRecord } from '../state';
-import { getClaudeAccountKind, resolveClaudeProfileDir, resolveHomeClaudeDir, type ClaudeAccountKind, type ClaudeProfileBilling } from './claudeProfiles';
+import { getClaudeAccountKind, resolveHomeClaudeDir, type ClaudeAccountKind, type ClaudeProfileBilling } from './claudeProfiles';
 import type { ClaudeApiSpend } from './claudeApiSpend';
-import { checkIsClaudeApiCreditMarkCurrent, getClaudeApiCreditEstimate, type ClaudeApiCreditAnchor, type ClaudeApiCreditAnchors, type ClaudeApiCreditSpend } from './claudeApiCredit';
+import type { ClaudeApiCreditAnchor, ClaudeApiCreditSpend } from './claudeApiCredit';
 
 export const claudeUsageEndpoint = 'https://api.anthropic.com/api/oauth/usage';
 
@@ -687,29 +687,18 @@ export function describeClaudeLaunchOutcome(report: Pick<ClaudeProfilesReport, '
   }
 }
 
-/** The credit fields of a report entry: the bot's estimate for an API account, empty for any other. */
-function getClaudeProfileReportCredit(profile: ClaudeProfileUsageView, nowMs: number): Pick<ClaudeProfileReportEntry, 'spentUsd' | 'remainingEstimateUsd' | 'expiresOn' | 'probablyUsedUp' | 'renewedAt'> {
-  const estimate = profile.billing === 'api'
-    ? getClaudeApiCreditEstimate({
-      anchor: profile.creditAnchor,
-      renewedAt: profile.creditRenewedAt,
-      spend: profile.creditSpend,
-      apiSpend: profile.apiSpend,
-      creditExhaustedAt: profile.creditExhaustedAt,
-      creditUnconfirmedSince: profile.creditUnconfirmedSince,
-      nowMs,
-    })
-    : null;
-  return {
-    // Nothing counted yet (no figure, no renewal, no turn) is no count, not a count of zero.
-    spentUsd: estimate && estimate.basis !== 'none' ? estimate.spentUsd : null,
-    remainingEstimateUsd: estimate?.leftUsd ?? null,
-    expiresOn: estimate?.expiresOn ?? null,
-    // From the refusal itself, not from the line: an expired credit with a pending refusal is still refused.
-    probablyUsedUp: estimate?.isProbablyUsedUp ?? false,
-    renewedAt: estimate?.renewedAt ?? null,
-  };
-}
+/**
+ * The credit fields of a report entry before the bot's estimate is added (`utils/claudeProfileUsageViews.ts` fills them for an
+ * API account): this module is loaded by the connector guards, before any env file is read, and must not reach the credit
+ * module (its file store, zod).
+ */
+const emptyClaudeProfileReportCredit: Pick<ClaudeProfileReportEntry, 'spentUsd' | 'remainingEstimateUsd' | 'expiresOn' | 'probablyUsedUp' | 'renewedAt'> = {
+  spentUsd: null,
+  remainingEstimateUsd: null,
+  expiresOn: null,
+  probablyUsedUp: false,
+  renewedAt: null,
+};
 
 /**
  * @description The report of every profile for a launch of `model`, with the pick of {@link getClaudeLaunchPick}
@@ -736,7 +725,7 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
       isUsageStale: profile.usage?.isStale === true,
       limitedUntil: profile.limitedUntil,
       creditExhaustedAt: profile.creditExhaustedAt,
-      ...getClaudeProfileReportCredit(profile, nowMs),
+      ...emptyClaudeProfileReportCredit,
       isEligible: checkIsClaudeProfileEligible(profile, relevant, nowMs),
       headroomPercent: maxPercent === null ? null : 100 - maxPercent,
       isRecommended: false,
@@ -746,58 +735,6 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
   const recommended = entries.find((entry) => entry.name === launch.pick);
   if (recommended) recommended.isRecommended = true;
   return { model, relevantBuckets, recommended: launch.pick, pickReason: launch.reason, nextAvailable: launch.nextAvailable, profiles: entries };
-}
-
-/** @description One profile's view: its record's usage, marks and spend, plus the operator's credit figure (what `/accounts` and `/limits` render). */
-export function buildClaudeProfileUsageView(input: {
-  dataDir: string;
-  name: string;
-  /** The profile's record; `undefined` for a name nothing was recorded for. */
-  record: ClaudeProfileRecord | undefined;
-  /** The operator's credit figure for it (`readClaudeApiCreditAnchors`); `undefined` = none given. */
-  creditAnchor?: ClaudeApiCreditAnchor;
-}): ClaudeProfileUsageView {
-  const { name, record, creditAnchor } = input;
-  return {
-    name,
-    configDir: resolveClaudeProfileDir(input.dataDir, name),
-    loggedIn: record?.loggedIn,
-    email: record?.email ?? null,
-    subscriptionType: record?.subscriptionType ?? null,
-    usage: record?.usage,
-    limitedUntil: record?.limitedUntil ?? null,
-    billing: record?.billing ?? null,
-    // A figure the operator gave after the refusal ends the mark (the bot clears the stored one when it reads the figures; a
-    // reader of `state.json` alone, the command line, must see the same).
-    creditExhaustedAt: record?.creditExhaustedAt && (!creditAnchor || checkIsClaudeApiCreditMarkCurrent(record.creditExhaustedAt, creditAnchor.anchoredAt)) ? record.creditExhaustedAt : null,
-    ...(record?.creditUnconfirmedSince && (!creditAnchor || checkIsClaudeApiCreditMarkCurrent(record.creditUnconfirmedSince, creditAnchor.anchoredAt)) ? { creditUnconfirmedSince: record.creditUnconfirmedSince } : {}),
-    ...(record?.apiSpend ? { apiSpend: record.apiSpend } : {}),
-    ...(creditAnchor ? { creditAnchor } : {}),
-    ...(record?.creditSpend ? { creditSpend: record.creditSpend } : {}),
-    ...(record?.creditRenewedAt ? { creditRenewedAt: record.creditRenewedAt } : {}),
-  };
-}
-
-/**
- * @description The ranking's view of every profile off the registry: `default` (its hidden record, when the
- * bot has written one) first, then the added profiles in creation order. Shared by the bot (live state) and
- * the CLI (`state.json` read directly).
- */
-export function buildClaudeProfileUsageViews(input: {
-  dataDir: string;
-  /** Every record, the hidden `default` one included (`StateStore.getClaudeProfileInfo` / the raw file). */
-  records: Readonly<Record<string, ClaudeProfileRecord>>;
-  /** The operator's credit figures by profile name (`readClaudeApiCreditAnchors`); none = none given. */
-  creditAnchors?: ClaudeApiCreditAnchors;
-}): ClaudeProfileUsageView[] {
-  // A `default` the operator signed out through /accounts stays out of every ranking until it is signed in again.
-  const isDefaultRemoved = input.records.default?.isRemoved === true;
-  const toView = (name: string, record: ClaudeProfileRecord | undefined): ClaudeProfileUsageView =>
-    buildClaudeProfileUsageView({ dataDir: input.dataDir, name, record, creditAnchor: input.creditAnchors?.[name] });
-  const added = Object.entries(input.records)
-    .filter(([name]) => name !== 'default')
-    .sort(([, a], [, b]) => a.createdAt.localeCompare(b.createdAt));
-  return [...(isDefaultRemoved ? [] : [toView('default', input.records.default)]), ...added.map(([name, record]) => toView(name, record))];
 }
 
 /** The profile registry out of a `state.json` already read (`stateFile.ts`): entries without a creation time are dropped. */

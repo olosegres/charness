@@ -238,15 +238,25 @@ describe('runDueClaudeApiCreditRechecks', () => {
 });
 
 describe('startClaudeApiCreditRechecks', () => {
+  /** Poll until `check` holds, at most `limitMs` (the timer under test is 10 ms; a loaded box needs more than a fixed sleep). */
+  async function waitUntil(check: () => boolean, limitMs: number): Promise<boolean> {
+    const deadline = Date.now() + limitMs;
+    while (!check() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+    return check();
+  }
+
   it('runs a pass at once and then on the timer, never two at the same time, and stops', async () => {
-    let passes = 0;
+    let listings = 0;
     let concurrent = 0;
     let maxConcurrent = 0;
     const ports: ClaudeApiCreditRecheckPorts = {
       nowMs: () => nowMs,
       intervalMs: dayMs,
       listProfiles: () => {
-        passes += 1;
+        listings += 1;
+        concurrent += 1;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        concurrent -= 1;
         return [];
       },
       readApiKey: () => null,
@@ -256,23 +266,41 @@ describe('startClaudeApiCreditRechecks', () => {
       log: () => undefined,
       warn: () => undefined,
     };
-    const originalList = ports.listProfiles;
-    ports.listProfiles = () => {
-      concurrent += 1;
-      maxConcurrent = Math.max(maxConcurrent, concurrent);
-      const listed = originalList();
-      concurrent -= 1;
-      return listed;
+    const stop = startClaudeApiCreditRechecks(ports, 10);
+    assert.equal(listings, 2, 'the boot look for accounts without a key, and a pass at once');
+    assert.ok(await waitUntil(() => listings >= 5, 5_000), `the timer ran more passes (${listings})`);
+    stop();
+    const stoppedAt = listings;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(listings, stoppedAt, 'stopped');
+    assert.equal(maxConcurrent, 1);
+  });
+
+  it('does not start a pass while the one before is still running', async () => {
+    let started = 0;
+    let release: () => void = () => undefined;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const ports: ClaudeApiCreditRecheckPorts = {
+      nowMs: () => nowMs,
+      intervalMs: dayMs,
+      listProfiles: () => [{ name: 'console', billing: 'api', creditExhaustedAt: new Date(nowMs - 2 * dayMs).toISOString(), creditRecheckedAt: null }],
+      readApiKey: () => apiKey,
+      probe: async () => {
+        started += 1;
+        await hold;
+        return { kind: 'stillUsedUp' };
+      },
+      markRechecked: () => undefined,
+      onRenewed: () => undefined,
+      log: () => undefined,
+      warn: () => undefined,
     };
     const stop = startClaudeApiCreditRechecks(ports, 10);
-    assert.equal(passes, 2, 'the boot look for accounts without a key, and a pass at once');
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.ok(await waitUntil(() => started >= 1, 5_000));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(started, 1, 'ten timer ticks passed while the probe was held: no second pass started');
+    release();
     stop();
-    const stoppedAt = passes;
-    assert.ok(stoppedAt >= 4, `the timer ran passes (${stoppedAt})`);
-    assert.equal(maxConcurrent, 1);
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    assert.equal(passes, stoppedAt, 'stopped');
   });
 });
 

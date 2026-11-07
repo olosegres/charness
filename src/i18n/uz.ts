@@ -1020,6 +1020,7 @@ export const uzDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 API krediti: {day} da rad etildi — o\'tgan keyingi navbat uning qaytganini ko\'rsatadi',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API krediti, ehtimol, tugadi · {since} dan beri {spent} sarflandi',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API krediti, ehtimol, tugadi',
+  'account.row.apiCreditPickAgain': ' — to\'ldir, so\'ng hisobni qayta tanla',
   'account.usageHint': 'Foydalanish: har bir oynaning ishlatilgan %, so‘ng qachon tiklanishi (🔄 2soat dan keyin = ikki soatdan keyin).',
   'account.autoSwitchHint': 'Foydalanish limitida nima bo‘lishi /limits da belgilanadi.',
   'fallback.backendClaude': 'Claude',

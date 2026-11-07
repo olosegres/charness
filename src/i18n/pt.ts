@@ -1021,6 +1021,7 @@ export const ptDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 crédito de API: recusado em {day} — o próximo turno que passar mostrará que voltou',
   'account.row.apiCreditProbablyUsedUp': '    🎁 crédito de API provavelmente esgotado · {spent} gastos desde {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 crédito de API provavelmente esgotado',
+  'account.row.apiCreditPickAgain': ' — recarregue e escolha a conta de novo',
   'account.usageHint': 'Uso: % de cada janela consumido, depois quando reinicia (🔄 em 2h = daqui a duas horas).',
   'account.autoSwitchHint': 'O que acontece num limite de uso define-se em /limits.',
   'fallback.backendClaude': 'Claude',

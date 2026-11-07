@@ -1026,6 +1026,7 @@ export const ukDict: Record<string, string> = {
   'account.row.apiCreditUnconfirmed': '    🎁 API-кредит: відмова {day} — наступний хід, що пройде, покаже, що він повернувся',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API-кредит, ймовірно, вичерпано · {spent} витрачено з {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API-кредит, ймовірно, вичерпано',
+  'account.row.apiCreditPickAgain': ' — поповни й обери акаунт знову',
   'account.usageHint': 'Використання: % вікна витрачено, потім коли скинеться (🔄 за 2г = за дві години).',
   'account.autoSwitchHint': 'Що робити при ліміті використання — налаштовується в /limits.',
   'fallback.backendClaude': 'Claude',

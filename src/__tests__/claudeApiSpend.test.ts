@@ -127,7 +127,7 @@ describe('as the screens show it', () => {
   it('/accounts and /limits hang the spend under the account, the used-up mark after it', () => {
     assert.deepEqual(formatClaudeProfileUsageLines({ billing: 'api', apiSpend: spend, creditExhaustedAt: '2026-10-23T09:30:00.000Z' }, 'UTC', nowMs), [
       '    💳 $12.35 spent since 20.10 · last turn <$0.01',
-      '    💸 API credits used up — top them up, then pick it again',
+      '    🎁 API credit probably used up — top it up, then pick the account again',
     ]);
     const block = formatLimitsUsageBlock({
       detection: {

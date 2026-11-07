@@ -386,7 +386,7 @@ describe('the guards are wired where they must run', () => {
   });
 
   it('the guards load only their own small module set — they run before any env file is read (J4)', () => {
-    const { projectModules } = getModulesLoadedBy('cli/connectorGuards.ts');
+    const { projectModules, packages } = getModulesLoadedBy('cli/connectorGuards.ts');
     // A module joins this list only once it is known to read no settings at load time.
     const allowed = [
       'adapters/adapterNames.ts', 'cli/connectorGuards.ts', 'cli/envLoader.ts', 'connectors/jira/configFile.ts', 'legacyNames.ts', 'platform/connectorSet.ts',
@@ -396,5 +396,7 @@ describe('the guards are wired where they must run', () => {
     ];
     assert.deepEqual(projectModules.filter((name) => !allowed.includes(name)), []);
     assert.ok(projectModules.includes('cli/connectorGuards.ts'), 'the probe is not vacuous');
+    // Packages too: a schema library pulled in by a guard-reachable module is the same violation as a module (J4).
+    assert.deepEqual(packages, ['dotenv']);
   });
 });
