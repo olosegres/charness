@@ -116,7 +116,7 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   usage-limit wait, and a bare text would come back without them.
   A reply TO a file names it (`[photo, saved to: …]`): the path is the thread's saved copy
   (`findSavedFileName`, matched exactly by the intake's file name), absent once purged or never taken in.
-- **Message context** (`inbound.ts` `getTelegramMessageContextBlock`, folded by `utils/messageContext.ts`): ONE reader
+- **Message context** (`inbound.ts` `getTelegramMessageContext`, folded by `utils/messageContext.ts`): ONE reader
   turns how a message arrived into the block that leads its prompt — the reply quote (`[Replying to an earlier
   message · from: …]`, `utils/replyQuote.ts`), then, for a FORWARDED message (`forward_origin`: user, hidden user, chat or
   channel), the mark `[Forwarded message · from: <kind> "<name>" · originally sent: <local ISO>]`
@@ -126,8 +126,12 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   folds it with the same rule. There is NO coalescing of text or voice: each message is its own prompt with its own
   block, so a burst of forwards plus the operator's own words stays distinguishable; the two coalescing sites are an
   album (one block, the first member's) and the prompts held over a usage-limit wait, which follow the folded text of the
-  prompt that releases them under a header line of their own (`heldPromptsHeader`) and so never read as part of a forward. A slash command or a terminal topic's shell line
-  never carries the block. A reply TO a forwarded message names who first wrote it in the quote's header
+  prompt that releases them under a header line of their own (`heldPromptsHeader`) and so never read as part of a forward. A slash command the operator TYPED or a terminal topic's
+  shell line never carries the block. A FORWARDED message is content, never control input (`MessageContext.isForwarded`,
+  `checkIsTelegramForward`): `getTelegramCommand` returns `null` for it (Telegram keeps the original's `bot_command` entity), its
+  text starting with `/` is folded under the mark and decorated like any prompt (`checkIsSlashCommandPrompt`), and it answers no
+  pending question, option pick or selector, starts no agent and wipes no context; the routes that take text as an ANSWER the bot
+  asked for (a pasted code, a name, a key, a reminder's text) still take it. A terminal topic types it like any text. A reply TO a forwarded message names who first wrote it in the quote's header
   (`from: user, forwarded from channel "Ops Alerts"`), read off the replied-to message's own `forward_origin`.
 - A scheduled run held over a usage-limit wait rides the resume as plain text, without a request.
 - **Answers only** (`utils/topicView.ts` `checkIsAgentEventShown`, applied per event in `bot.ts`): the agent's

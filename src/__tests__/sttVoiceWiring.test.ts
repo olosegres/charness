@@ -33,7 +33,7 @@ test('a voice note warms the local engine up as it ARRIVES — after the no-engi
 test('the «transcribing…» note is armed LAST, right before the job is queued, and the queue chain finishes it whatever happened to the job', () => {
   const handler = botSource.slice(botSource.indexOf("bot.on(message('voice')"), botSource.indexOf('async function processVoiceJob'));
   const armed = handler.indexOf('const progressNote = startVoiceProgressNote(key);');
-  assert.ok(armed > handler.indexOf('const messageContextBlock = getMessageContextBlock(key, ctx.message);'), 'after the last statement that can still throw, or an armed note would be stranded');
+  assert.ok(armed > handler.indexOf('const messageContext = getMessageContext(key, ctx.message);'), 'after the last statement that can still throw, or an armed note would be stranded');
   assert.ok(armed > handler.indexOf('getNoEngineNoticeCode(sttSettings)'), 'a voice refused for having no engine gets no note');
   assert.ok(armed < handler.indexOf('getVoiceTranscriptionQueue(key)'), 'before the job is queued: the clock runs from the voice\'s arrival');
   assert.match(handler, /\.catch\(\(err\) => \{[^}]*\}\)\n\s+\.finally\(\(\) => progressNote\.finish\(\)\);/, 'a job that never ran or rejected still ends the wait');

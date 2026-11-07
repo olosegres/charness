@@ -13,6 +13,12 @@
  *   → a FORWARDED voice note (from a person): the same mark ahead of the transcript
  *   → a BURST — two forwarded texts and then the operator's own words, back to back: three prompts, each forwarded one
  *     marked with ITS OWN origin, the operator's own unmarked
+ *   → a FORWARDED bot command (`/quit now`): it is content — no agent is stopped, the agent reads it marked, and the next plain
+ *     message is read by the very same process
+ *   → a FORWARDED slash command the bot does not own (`/review the diff`): the agent reads it marked, not as a command of the
+ *     operator's own
+ *   → a pending question and a bare digit: typed, the digit answers the question; FORWARDED, it does not — the question is
+ *     given up unanswered and the agent reads the digit marked
  *   → a plain text and a plain voice note: no block of either kind.
  *
  * What the unit tests cover instead: the block and the mark themselves (`replyQuote.test.ts`, `forwardedMark.test.ts`),
@@ -32,7 +38,7 @@ import * as path from 'path';
 import { FakeSpeechEngine } from './telegramE2e/fakeSpeechEngine';
 import { FakeTelegram, type FakeForwardOrigin, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeLogFileNames, type FakeClaudePrompt } from './jiraE2e/fakeClaudeContract';
+import { fakeAskNoAnswerOutcome, fakeAskQuestion, fakeAskToolName, fakeClaudeLogFileNames, type FakeClaudePrompt, type FakeClaudeToolCall } from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -92,6 +98,9 @@ const groupOrigin: FakeForwardOrigin = {
 };
 
 const forwardedAlertText = 'ALERT: disk 91% on web-1';
+const forwardedQuitText = '/quit now';
+const afterForwardedQuitText = 'still here after the forward';
+const forwardedSlashText = '/review the diff';
 const burstFirstText = 'ALERT: queue is stuck';
 const burstSecondText = 'We deploy at noon';
 const ownBurstText = 'these three are only examples';
@@ -127,15 +136,31 @@ function readAgentPrompts(): FakeClaudePrompt[] {
   return readJsonLines<FakeClaudePrompt>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.prompts));
 }
 
-/** The prompt the agent read that carries `words` (the operator's text or a transcript); waits for it. */
-async function waitForAgentPrompt(words: string): Promise<FakeClaudePrompt> {
+/** The first prompt the agent read that `check` accepts; waits for it. */
+async function waitForAgentPromptMatching(description: string, check: (prompt: FakeClaudePrompt) => boolean): Promise<FakeClaudePrompt> {
   let found: FakeClaudePrompt | undefined;
-  await getCharness().waitFor(`the agent to read «${words}»`, replyTimeoutMs, () => {
-    found = readAgentPrompts().find((prompt) => prompt.text.includes(words));
+  await getCharness().waitFor(`the agent to read ${description}`, replyTimeoutMs, () => {
+    found = readAgentPrompts().find(check);
     return found !== undefined;
   });
-  if (!found) throw new Error(`the agent never read «${words}»`);
+  if (!found) throw new Error(`the agent never read ${description}`);
   return found;
+}
+
+/** The prompt the agent read that carries `words` (the operator's text or a transcript); waits for it. */
+async function waitForAgentPrompt(words: string): Promise<FakeClaudePrompt> {
+  return waitForAgentPromptMatching(`«${words}»`, (prompt) => prompt.text.includes(words));
+}
+
+/** What the agent was told each `AskUserQuestion` it put came back with, in order. */
+function readAskOutcomes(): string[] {
+  return readJsonLines<FakeClaudeToolCall>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.toolCalls)).filter((call) => call.tool === fakeAskToolName).map((call) => call.outcome);
+}
+
+/** The agent puts a question to the topic (the fake's `ask` mode); resolves the question's message once it is on screen. */
+async function putQuestionToTopic(label: string): Promise<FakeTelegramMessage> {
+  const sentMessageId = fakeTelegram.pushOperatorMessage(topicThreadId, `${label} [fake:ask] ask me something`);
+  return topic.waitForMessage(`the question of ${label}`, (message) => message.message_id > sentMessageId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
 }
 
 /** The reply-quote block the agent is owed for a reply to a message with this text, from the bot (`assistant`) or a person (`user`). */
@@ -274,6 +299,37 @@ describe('message context end to end: built charness, fake Bot API, fake speech 
     assert.ok(!first.text.includes('Team room') && !second.text.includes('Jane Doe'), 'each forwarded part carries its own origin only');
     assert.ok(!own.text.includes('[Forwarded message'), `the operator's own words carry no mark in:\n${own.text}`);
     assert.ok(own.readAt >= second.readAt && second.readAt >= first.readAt, 'the parts reach the agent in the order they were sent');
+  });
+
+  it('a forwarded bot command is content: it stops no agent, and the agent reads it marked', async () => {
+    fakeTelegram.pushOperatorMessage(topicThreadId, forwardedQuitText, { forwardOrigin: personOrigin });
+    const forwarded = await waitForAgentPrompt(forwardedQuitText);
+    assertForwardedMarkLeads(forwarded, 'user "Alice" (@alice)', originalSentAtSeconds, forwardedQuitText);
+    // The same words typed would have stopped the agent: the next plain message is read by the very process that read the forward.
+    fakeTelegram.pushOperatorMessage(topicThreadId, afterForwardedQuitText);
+    const next = await waitForAgentPrompt(afterForwardedQuitText);
+    assert.equal(next.pid, forwarded.pid, 'the agent was not stopped by a forwarded /quit');
+  });
+
+  it('a forwarded slash command the bot does not own reaches the agent marked, not as a command of the operator\'s own', async () => {
+    fakeTelegram.pushOperatorMessage(topicThreadId, forwardedSlashText, { forwardOrigin: channelOrigin });
+    const prompt = await waitForAgentPrompt(forwardedSlashText);
+    assertForwardedMarkLeads(prompt, 'channel "Ops Alerts"', originalSentAtSeconds, forwardedSlashText);
+  });
+
+  it('a bare digit answers a pending question when the operator types it, and does not when it is forwarded', async () => {
+    const outcomesBefore = readAskOutcomes().length;
+    await putQuestionToTopic('ASKTYPED');
+    fakeTelegram.pushOperatorMessage(topicThreadId, '1');
+    await getCharness().waitFor('the typed digit to answer the question', replyTimeoutMs, () => readAskOutcomes().length > outcomesBefore);
+    assert.equal(readAskOutcomes()[outcomesBefore], fakeAskQuestion.shortOptionLabel, 'the typed 1 picked the first option');
+
+    await putQuestionToTopic('ASKFORWARDED');
+    fakeTelegram.pushOperatorMessage(topicThreadId, '1', { forwardOrigin: personOrigin });
+    const prompt = await waitForAgentPromptMatching('the forwarded digit, marked', (candidate) => /originally sent: \S+\]\n\n1(\n|$)/.test(candidate.text));
+    assertForwardedMarkLeads(prompt, 'user "Alice" (@alice)', originalSentAtSeconds, '1');
+    await getCharness().waitFor('the question to be given up', replyTimeoutMs, () => readAskOutcomes().length > outcomesBefore + 1);
+    assert.equal(readAskOutcomes()[outcomesBefore + 1], fakeAskNoAnswerOutcome, 'the forwarded 1 answered nothing');
   });
 
   it('a plain text and a plain voice note carry neither a reply quote nor a forwarded mark', async () => {

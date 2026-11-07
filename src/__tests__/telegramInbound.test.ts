@@ -20,6 +20,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import type { ChatMember, Message, User } from 'telegraf/typings/core/types/typegram';
 import {
+  checkIsTelegramForward,
   checkShouldInvalidateAdminCache,
   createTelegramConnectorInbound,
   getInboundEvent,
@@ -27,7 +28,7 @@ import {
   getPlatformMembers,
   getTelegramCommand,
   getTelegramForwardedMark,
-  getTelegramMessageContextBlock,
+  getTelegramMessageContext,
   getTelegramReplyQuoteBlock,
 } from '../connectors/telegram/inbound';
 import type { InboundEvent } from '../platform/inbound';
@@ -83,6 +84,18 @@ test('getTelegramCommand: argsText preserves the user inner spacing verbatim', (
   assert.equal(parsed?.argsText, 'my  long  title');
   // The pre-seam expression this replaced, for comparison.
   assert.equal(parsed?.argsText, '/rename_session my  long  title'.split(' ').slice(1).join(' ').trim());
+});
+
+test('getTelegramCommand: a FORWARDED command is content, not a command — Telegram keeps the original\'s bot_command entity', () => {
+  const forwarded = { ...makeCommandMessage('/quit now'), forward_origin: { type: 'hidden_user', sender_user_name: 'Jane Doe', date: 1 } } as Message.TextMessage;
+  assert.equal(getTelegramCommand(forwarded, identity), null);
+  assert.notEqual(getTelegramCommand(makeCommandMessage('/quit now'), identity), null, 'the same words typed in the topic are a command');
+  assert.equal(getInboundEvent(forwarded, makeTelegramKey(-1001234567890, 1), identity).command, undefined);
+});
+
+test('checkIsTelegramForward: a message with a forward origin, of any kind', () => {
+  assert.equal(checkIsTelegramForward(makePlainMessage('hello')), false);
+  for (const origin of Object.values(forwardOrigins)) assert.equal(checkIsTelegramForward(makeForwardedTextMessage(origin)), true, origin.type);
 });
 
 test('getTelegramCommand: a command addressed to THIS bot is accepted, case-insensitively', () => {
@@ -695,36 +708,39 @@ test('getTelegramForwardedMark: a forwarded voice note, photo and document carry
   }
 });
 
-test('getTelegramMessageContextBlock: a forwarded message carries the mark alone', () => {
-  assert.equal(
-    getTelegramMessageContextBlock(makeForwardedTextMessage(forwardOrigins.channel, topicRootMessage), identity),
-    `[Forwarded message · from: channel "Ops Alerts" · originally sent: ${originalSentAtIso}]`,
+test('getTelegramMessageContext: a forwarded message carries the mark alone, and is flagged as forwarded', () => {
+  assert.deepEqual(
+    getTelegramMessageContext(makeForwardedTextMessage(forwardOrigins.channel, topicRootMessage), identity),
+    { block: `[Forwarded message · from: channel "Ops Alerts" · originally sent: ${originalSentAtIso}]`, isForwarded: true },
   );
 });
 
-test('getTelegramMessageContextBlock: a forwarded voice note carries the mark, a reply voice note the quote, a plain one nothing', () => {
+test('getTelegramMessageContext: a forwarded voice note carries the mark, a reply voice note the quote, a plain one nothing', () => {
   const forwardedVoice = { ...makeTopicVoiceMessage(topicRootMessage), forward_origin: forwardOrigins.channel } as Message.VoiceMessage;
-  assert.equal(
-    getTelegramMessageContextBlock(forwardedVoice, identity),
-    `[Forwarded message · from: channel "Ops Alerts" · originally sent: ${originalSentAtIso}]`,
+  assert.deepEqual(
+    getTelegramMessageContext(forwardedVoice, identity),
+    { block: `[Forwarded message · from: channel "Ops Alerts" · originally sent: ${originalSentAtIso}]`, isForwarded: true },
   );
-  assert.equal(
-    getTelegramMessageContextBlock(makeTopicVoiceMessage(agentAnswer), identity),
-    ['[Replying to an earlier message · from: assistant]', '> The build failed:', '> API_URL is not set'].join('\n'),
+  assert.deepEqual(
+    getTelegramMessageContext(makeTopicVoiceMessage(agentAnswer), identity),
+    { block: ['[Replying to an earlier message · from: assistant]', '> The build failed:', '> API_URL is not set'].join('\n'), isForwarded: false },
   );
-  assert.equal(getTelegramMessageContextBlock(makeTopicVoiceMessage(topicRootMessage), identity), undefined);
+  assert.equal(getTelegramMessageContext(makeTopicVoiceMessage(topicRootMessage), identity), undefined);
 });
 
-test('getTelegramMessageContextBlock: a forward that is also a reply carries the quote first, the mark next to the forwarded words', () => {
-  assert.equal(
-    getTelegramMessageContextBlock(makeForwardedTextMessage(forwardOrigins.channel, agentAnswer), identity),
-    [
-      '[Replying to an earlier message · from: assistant]',
-      '> The build failed:',
-      '> API_URL is not set',
-      '',
-      `[Forwarded message · from: channel "Ops Alerts" · originally sent: ${originalSentAtIso}]`,
-    ].join('\n'),
+test('getTelegramMessageContext: a forward that is also a reply carries the quote first, the mark next to the forwarded words', () => {
+  assert.deepEqual(
+    getTelegramMessageContext(makeForwardedTextMessage(forwardOrigins.channel, agentAnswer), identity),
+    {
+      block: [
+        '[Replying to an earlier message · from: assistant]',
+        '> The build failed:',
+        '> API_URL is not set',
+        '',
+        `[Forwarded message · from: channel "Ops Alerts" · originally sent: ${originalSentAtIso}]`,
+      ].join('\n'),
+      isForwarded: true,
+    },
   );
 });
 
@@ -757,6 +773,6 @@ test('getTelegramReplyQuoteBlock: a reply to a message forwarded from a person n
   );
 });
 
-test('getTelegramMessageContextBlock: a message that is neither a reply nor a forward has no block', () => {
-  assert.equal(getTelegramMessageContextBlock(makePlainMessage('hello'), identity), undefined);
+test('getTelegramMessageContext: a message that is neither a reply nor a forward has no block', () => {
+  assert.equal(getTelegramMessageContext(makePlainMessage('hello'), identity), undefined);
 });

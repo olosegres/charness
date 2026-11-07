@@ -33,7 +33,7 @@ import {
   type ReplyQuoteSource,
 } from '../../utils/replyQuote';
 import { buildForwardedMark, describeForwardedOrigin, type ForwardedMarkSource } from '../../utils/forwardedMark';
-import { joinMessageContextBlocks } from '../../utils/messageContext';
+import { joinMessageContextBlocks, type MessageContext } from '../../utils/messageContext';
 
 /**
  * @description The two Telegram membership statuses that grant elevated rights
@@ -163,12 +163,15 @@ export function getNormalizedAttachments(message: Message): NormalizedAttachment
  *   - everything after the command token is the argument remainder.
  *
  * Returns `null` when the message is not a command — the caller then treats it
- * as plain text.
+ * as plain text. A FORWARDED message is never one, whatever its entities say
+ * (Telegram keeps the `bot_command` entity of the original): somebody else's
+ * `/quit` is content to read, not an order to run.
  */
 export function getTelegramCommand(
   message: Message.TextMessage,
   identity: TelegramBotIdentity,
 ): InboundCommand | null {
+  if (checkIsTelegramForward(message)) return null;
   const commandEntity = message.entities?.[0];
   if (commandEntity?.type !== 'bot_command' || commandEntity.offset > 0) return null;
   const [commandPart, addressee] = message.text.slice(0, commandEntity.length).split('@');
@@ -323,18 +326,27 @@ export function getTelegramForwardedMark(message: Message): string | undefined {
 }
 
 /**
+ * @description Whether the message was FORWARDED into the topic (it carries a `forward_origin`). A forwarded message is
+ * content, never control input: it runs no bot command, answers no question, starts no agent.
+ */
+export function checkIsTelegramForward(message: Message): boolean {
+  return 'forward_origin' in message && !!message.forward_origin;
+}
+
+/**
  * @description EVERYTHING the bot folds ahead of a prompt because of how its
  * Telegram message arrived — the reply quote, then the forwarded mark (which sits
- * next to the forwarded words it describes) — or `undefined` when the message is
- * neither a reply nor a forward. The one entry point of the text, voice, file and
- * album handlers.
+ * next to the forwarded words it describes) — and whether the message was forwarded,
+ * or `undefined` when it is neither a reply nor a forward. The one entry point of the
+ * text, voice, file and album handlers.
  */
-export function getTelegramMessageContextBlock(
+export function getTelegramMessageContext(
   message: Message,
   identity: TelegramBotIdentity,
   findSavedFile?: SavedFileFinder,
-): string | undefined {
-  return joinMessageContextBlocks([getTelegramReplyQuoteBlock(message, identity, findSavedFile), getTelegramForwardedMark(message)]);
+): MessageContext | undefined {
+  const block = joinMessageContextBlocks([getTelegramReplyQuoteBlock(message, identity, findSavedFile), getTelegramForwardedMark(message)]);
+  return block === undefined ? undefined : { block, isForwarded: checkIsTelegramForward(message) };
 }
 
 /**

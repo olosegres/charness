@@ -166,8 +166,9 @@ import { AdminCache, ADMIN_CACHE_TTL_MS } from './accessControl';
 import {
   checkShouldInvalidateAdminCache,
   createTelegramConnectorInbound,
+  checkIsTelegramForward,
   getTelegramCommand,
-  getTelegramMessageContextBlock,
+  getTelegramMessageContext,
 } from './connectors/telegram/inbound';
 import { createTelegramConnectorOutbound } from './connectors/telegram/outbound';
 import { createCommandRouter } from './platform/commandRouter';
@@ -327,7 +328,7 @@ import {
   checkShouldSkipPreambleForText,
 } from './threadContextPreamble';
 import { getPinnedBannerSkipDecision } from './utils/pinnedBannerSkipDecision';
-import { getPromptWithMessageContext } from './utils/messageContext';
+import { checkIsSlashCommandPrompt, getPromptWithMessageContext, type MessageContext } from './utils/messageContext';
 import {
   getTelegramFileMeta,
   getMediaGroupId,
@@ -1138,11 +1139,11 @@ async function openTopicRequest(
   key: SessionKey,
   text: string,
   intake: TopicRequestIntake | null,
-  messageContext?: string,
+  messageContext?: MessageContext,
 ): Promise<TopicRequestOpening> {
   if (intake === null || !topicRequestLedger || !checkIsTelegramKey(key)) return noTopicRequest;
   const view = state.getDisplayPrefs(key).view;
-  if (!checkShouldOpenTopicRequest(view, checkShouldSkipPreambleForText(text))) return noTopicRequest;
+  if (!checkShouldOpenTopicRequest(view, checkIsSlashCommandPrompt(text, messageContext))) return noTopicRequest;
   // The ledger keeps the prompt as it is posted — the message context folded in — because a stored prompt is what is posted
   // AGAIN when the session never took it in; the raw text would come back without the forwarded mark or the quote.
   const promptBody = getPromptWithThreadMessageContext(key, text, messageContext);
@@ -5829,7 +5830,7 @@ interface PromptForwardOptions {
   isRecoveryReplay?: boolean;
   isRequestReminder?: boolean;
   isTechnicalPrompt?: boolean;
-  messageContext?: string;
+  messageContext?: MessageContext;
   requestHeader?: string;
 }
 
@@ -5844,11 +5845,14 @@ async function forwardPromptToLiveAgent(
   // A forwarded prompt is thread activity — reset the compact-on-idle watchdog (F2).
   noteThreadActivity(key);
   const isTechnicalPrompt = options.isTechnicalPrompt ?? false;
+  // A slash command typed by the operator is a control token; the same words FORWARDED from elsewhere are
+  // content (the mark ahead of them says so) and are decorated and replayed like any prompt.
+  const isSlashCommand = checkIsSlashCommandPrompt(text, options.messageContext);
   // Skip slash commands (not worth replaying), the recovery replay itself (keeps
   // the once-per-episode guard intact), a request reminder (the request's own
   // prompt stays the one to replay) and a bot-made technical prompt.
   const isReplayable = checkIsReplayablePrompt({
-    isSlashCommand: checkShouldSkipPreambleForText(text),
+    isSlashCommand,
     isRecoveryReplay: options.isRecoveryReplay ?? false,
     isRequestReminder: options.isRequestReminder ?? false,
     isTechnicalPrompt,
@@ -5867,8 +5871,7 @@ async function forwardPromptToLiveAgent(
   // part of a forwarded message. The folded `body` is what gets cached,
   // preamble-wrapped and timestamped below.
   const ownBody = getPromptWithMessageContext(text, {
-    block: options.messageContext,
-    isSlashCommand: checkShouldSkipPreambleForText(text),
+    context: options.messageContext,
     isShellInput: adapter.name === 'terminal',
   });
   const quotedBody = isReplayable && adapter.checkIsActive(key) ? limitHeldPrompts.releaseWithForward(key, ownBody) : ownBody;
@@ -5900,13 +5903,13 @@ async function forwardPromptToLiveAgent(
   // (scheduled runs, buffered replay, api-retry nudge, file intake) fall back
   // to now. Slash commands skip it for the same reason they skip the preamble.
   let promptText = getPromptWithThreadContext(key, body);
-  if (state.checkIsTimestampsEnabled(key) && !checkShouldSkipPreambleForText(text)) {
+  if (state.checkIsTimestampsEnabled(key) && !isSlashCommand) {
     promptText = `${formatIsoLocalOffset(sentAtMs ?? Date.now())}\n\n${promptText}`;
   }
   // The project board rides every turn start the bot makes (D20: whole on a fresh context, else only what changed),
   // then the todo list's staleness reminder rides the next real prompt from any source (D11 form a) — never a slash
   // command or a shell line; the reminder never rides the standalone reminder itself.
-  const isTodoDecorated = !checkShouldSkipPreambleForText(text) && adapter.name !== 'terminal';
+  const isTodoDecorated = !isSlashCommand && adapter.name !== 'terminal';
   if (isTodoDecorated) discardTodoInbox(key);
   const todoBoardBlock = isTodoDecorated ? takeTodoPromptBoard(key) : null;
   if (todoBoardBlock !== null) promptText = `${promptText}\n\n${todoBoardBlock}`;
@@ -6010,12 +6013,12 @@ function getPromptWithThreadContext(key: SessionKey, text: string): string {
  * so the agent sees WHAT is being referenced; when the message was FORWARDED, it
  * folds the mark that says whose words they are. Returns the block, or `undefined`
  * when there is nothing to inject — the connector's
- * {@link getTelegramMessageContextBlock} decides. The bot's own id
+ * {@link getTelegramMessageContext} decides. The bot's own id
  * (`bot.botInfo.id`) drives the `from: assistant` attribution; a replied-to file
  * is looked up among the files this thread took in.
  */
-function getMessageContextBlock(key: SessionKey, message: Message): string | undefined {
-  return getTelegramMessageContextBlock(message, { userId: bot.botInfo?.id }, (meta) => findThreadSavedFile(key, meta));
+function getMessageContext(key: SessionKey, message: Message): MessageContext | undefined {
+  return getTelegramMessageContext(message, { userId: bot.botInfo?.id }, (meta) => findThreadSavedFile(key, meta));
 }
 
 /**
@@ -6042,10 +6045,9 @@ function findThreadSavedFile(key: SessionKey, meta: TelegramFileMeta): string | 
  * rule `forwardPromptToAgent` applies to a live prompt. The thread's adapter is
  * the one the text reaches, so a terminal keeps the block out of its shell line.
  */
-function getPromptWithThreadMessageContext(key: SessionKey, text: string, messageContext: string | undefined): string {
+function getPromptWithThreadMessageContext(key: SessionKey, text: string, messageContext: MessageContext | undefined): string {
   return getPromptWithMessageContext(text, {
-    block: messageContext,
-    isSlashCommand: checkShouldSkipPreambleForText(text),
+    context: messageContext,
     isShellInput: getThreadAdapter(key).name === 'terminal',
   });
 }
@@ -7211,6 +7213,8 @@ command('whoami', async (ctx, key) => {
 bot.command('pair', async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  // A forwarded `/pair` is somebody else's words: it re-points the bot to no group.
+  if (checkIsTelegramForward(ctx.message)) return;
 
   // A private chat has no group to pair. Reply with the DM hint only to the
   // owner (a resolvable DM key); any other private chat stays silent so foreign
@@ -9535,9 +9539,14 @@ bot.on(message('text'), async (ctx) => {
   // back when that one was still forwarded).
   const text = stripCommandBotMention(ctx.message.text.trim());
   const kStr = keyToString(key);
+  // A FORWARDED message is content, never control input: its words are somebody else's, so a `/quit` in it is not an
+  // order, a bare digit is not a pick or an answer, a phrase is not a start — the mark the agent reads says so. The routes
+  // that take text as an ANSWER the bot asked for (a pasted code, a name, a key, a reminder's text) still take it.
+  const isForwarded = checkIsTelegramForward(ctx.message);
+  const isSlashText = !isForwarded && text.startsWith('/');
 
   // Slash commands we don't own → forward to the agent (e.g. `/context`, `/help`).
-  if (text.startsWith('/')) {
+  if (isSlashText) {
     const cmd = text.slice(1).split(' ')[0].split('@')[0].toLowerCase();
     // A slash command ends a pending «Add account» name prompt (the command itself runs normally).
     cancelProfileNameCapture(key);
@@ -9576,7 +9585,7 @@ bot.on(message('text'), async (ctx) => {
   // keeps a message typed in the pre-URL boot window from being swallowed/deleted
   // as a code. A slash command falls through (so /quit, /new, etc. still run and
   // their teardown cancels the pending login; /esc cancels it outright).
-  if (checkIsAuthLoginAwaitingCode(key) && !text.startsWith('/')) {
+  if (checkIsAuthLoginAwaitingCode(key) && !isSlashText) {
     await submitClaudeAuthLoginCode(key, text, ctx.message.message_id);
     return;
   }
@@ -9587,28 +9596,28 @@ bot.on(message('text'), async (ctx) => {
   // a secret; NOT recognised → the flow stays armed and hints (never forwarded
   // to the agent). A slash command falls through so /quit, /new, etc. still run
   // + cancel the flow.
-  if (checkIsOpenCodeOAuthAwaitingReply(key) && !text.startsWith('/')) {
+  if (checkIsOpenCodeOAuthAwaitingReply(key) && !isSlashText) {
     await submitOpenCodeOAuthReply(key, text, ctx.message.message_id);
     return;
   }
 
   // `/account` «Add» asked for the new profile's name → this message is it (a bad name keeps the prompt
   // armed and says so; a slash command above already disarmed it).
-  if (checkIsAwaitingProfileName(key) && !text.startsWith('/')) {
+  if (checkIsAwaitingProfileName(key) && !isSlashText) {
     await submitProfileName(key, text, ctx.message.message_id);
     return;
   }
 
   // `/topic` asked for the new topic's name, or for the name of a folder to create → this message is the answer (a bad
   // name keeps the prompt armed and says so; a slash command above already ended it).
-  if (checkIsAwaitingTopicInput(key) && !text.startsWith('/')) {
+  if (checkIsAwaitingTopicInput(key) && !isSlashText) {
     await submitTopicInput(key, text);
     return;
   }
 
   // `/stt` asked for a server address or an API key → this message is the answer. A plausible key is deleted at
   // once and never echoed; anything else re-arms the step. A slash command above already disarmed it.
-  if (getAwaitedSttStep(key) !== null && !text.startsWith('/')) {
+  if (getAwaitedSttStep(key) !== null && !isSlashText) {
     await submitSttInput(key, text, ctx.message.message_id);
     return;
   }
@@ -9618,14 +9627,14 @@ bot.on(message('text'), async (ctx) => {
   // must NOT be forwarded to the agent as a prompt — that both leaks the code
   // into the transcript and produced the confusing header error (live
   // 2026-07-20). Delete it as a secret and hint to re-run /connect.
-  if (!text.startsWith('/') && parseOAuthCallbackFromReply(text)) {
+  if (!isSlashText && parseOAuthCallbackFromReply(text)) {
     await deleteThreadMessage(key, ctx.message.message_id);
     await replyToThread(key, t('connect.oauth_callback_no_flow'));
     return;
   }
 
   const pendingProviderConnect = pendingProviderConnects.get(kStr);
-  if (pendingProviderConnect && text.startsWith('/')) {
+  if (pendingProviderConnect && isSlashText) {
     pendingProviderConnects.delete(kStr);
     await replyToThread(key, t('connect.cancelled'));
   } else if (pendingProviderConnect) {
@@ -9650,7 +9659,7 @@ bot.on(message('text'), async (ctx) => {
   // one wizard yields exactly one reminder.
   const reminderTextRoute = claimReminderTextCapture(key);
   if (reminderTextRoute === 'capture' || reminderTextRoute === 'expired') {
-    if (text.startsWith('/')) {
+    if (isSlashText) {
       await cancelReminderWizard(key);
     } else if (reminderTextRoute === 'expired') {
       await expireReminderWizard(key);
@@ -9666,7 +9675,7 @@ bot.on(message('text'), async (ctx) => {
   // Session is mid-startup → buffer the prompt and replay it once the agent is
   // ready, instead of dropping it into the "no agent running" guidance below.
   if (startupPromptBuffer.checkIsStarting(kStr)) {
-    await bufferPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getMessageContextBlock(key, ctx.message));
+    await bufferPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getMessageContext(key, ctx.message));
     return;
   }
 
@@ -9728,7 +9737,7 @@ bot.on(message('text'), async (ctx) => {
   // natural-language start + forwarded to the agent. `applyNumberedModelPick`
   // always replies (even for the unsupported case), so we always return after a
   // numeric pick — the user clearly intended a model pick, not a prompt.
-  if (/^\d+$/.test(text) && awaitingModelSelection.has(kStr)) {
+  if (!isForwarded && /^\d+$/.test(text) && awaitingModelSelection.has(kStr)) {
     await applyNumberedModelPick(adapter, key, parseInt(text, 10));
     return;
   }
@@ -9736,7 +9745,7 @@ bot.on(message('text'), async (ctx) => {
   // Session-pick mode (armed by `/sessions` / `/resume`). Only while the
   // thread is armed is a bare digit treated as a pick — a normal numeric
   // prompt is never hijacked. See `checkSessionPickAction` for the rules.
-  if (awaitingSessionSelection.has(kStr)) {
+  if (!isForwarded && awaitingSessionSelection.has(kStr)) {
     const sessionList = threadSessionLists.get(kStr) ?? [];
     const pick = checkSessionPickAction(text, sessionList.length);
     if (pick.kind === 'invalid') {
@@ -9762,7 +9771,7 @@ bot.on(message('text'), async (ctx) => {
   }
 
   // Natural-language start.
-  if (!adapter.checkIsActive(key)) {
+  if (!isForwarded && !adapter.checkIsActive(key)) {
     const startMatch = checkIsStartAgentPhrase(text);
     if (startMatch.isMatch && startMatch.adapterName) {
       if (checkIsGeneral(key)) {
@@ -9807,7 +9816,7 @@ bot.on(message('text'), async (ctx) => {
   // never surfaced, so a bare digit during a survey window is NOT a route here —
   // it falls through to the normal prompt path instead of being dropped.
   const replyRoute = getClaudeReplyRoute({
-    isQuestionPending: adapter.isQuestionPending?.(key) ?? false,
+    isQuestionPending: !isForwarded && (adapter.isQuestionPending?.(key) ?? false),
     isLoginPastePending: adapter.isLoginPastePending?.(key) ?? false,
     text,
   });
@@ -9844,17 +9853,17 @@ bot.on(message('text'), async (ctx) => {
   // branches above already returned for their own cases, so this is reached only
   // for a generic active prompt. The message's real send time (Telegram `date`,
   // unix seconds) rides along for the `/timestamps` injection, and a Telegram
-  // REPLY or FORWARD folds its context into the prompt (see `getMessageContextBlock`).
+  // REPLY or FORWARD folds its context into the prompt (see `getMessageContext`).
   if (adapter.checkIsActive(key)) {
-    const messageContextBlock = getMessageContextBlock(key, ctx.message);
-    await deliverActivePrompt(key, adapter, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, messageContextBlock);
+    const messageContext = getMessageContext(key, ctx.message);
+    await deliverActivePrompt(key, adapter, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, messageContext);
     return;
   }
 
   // A sleeping conversation (its process stopped, its session kept) is resumed by
   // the message itself (L-D4) — the prompt continues the same conversation.
   if (await resumeSleepingSessionForPrompt(key)) {
-    await deliverActivePrompt(key, getThreadAdapter(key), text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, getMessageContextBlock(key, ctx.message));
+    await deliverActivePrompt(key, getThreadAdapter(key), text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, getMessageContext(key, ctx.message));
     return;
   }
 
@@ -9913,13 +9922,13 @@ bot.on(message('voice'), async (ctx) => {
   // A Telegram REPLY on the voice note folds the quoted message into the prompt, a
   // FORWARD of it the mark of its origin. Compute it HERE (only the handler has
   // `ctx`); the job runs later off the update loop and only sees `key`/`bot`.
-  const messageContextBlock = getMessageContextBlock(key, ctx.message);
+  const messageContext = getMessageContext(key, ctx.message);
   // Armed LAST, right before the job is queued: nothing between here and the queue may throw and strand an armed note. The
   // clock runs from the voice's arrival, so a voice waiting in line behind an earlier one gets its note too; the job finishes it
   // the moment its text arrives, and the `finally` is the backstop for a job that never ran or ended some other way.
   const progressNote = startVoiceProgressNote(key);
   void getVoiceTranscriptionQueue(key)
-    .run(() => processVoiceJob(key, fileId, durationSeconds, getTopicRequesterId(ctx.from), warmedEndpoint, progressNote, sentAtMs, messageContextBlock))
+    .run(() => processVoiceJob(key, fileId, durationSeconds, getTopicRequesterId(ctx.from), warmedEndpoint, progressNote, sentAtMs, messageContext))
     .catch((err) => {
       console.error('[Bot] Voice job error (already handled):', err);
     })
@@ -9952,7 +9961,7 @@ async function processVoiceJob(
   warmedEndpoint: WarmedEndpoint | null,
   progressNote: VoiceProgressNote,
   sentAtMs?: number,
-  messageContext?: string,
+  messageContext?: MessageContext,
 ): Promise<void> {
   try {
     // Audit S14 / #33: `getFileLink` builds the bot-token URL in one
@@ -10018,7 +10027,8 @@ async function processVoiceJob(
       return;
     }
 
-    if (!getThreadAdapter(key).checkIsActive(key)) {
+    // A FORWARDED voice note saying «Claude» is somebody else's words, not the operator's order to start an agent.
+    if (messageContext?.isForwarded !== true && !getThreadAdapter(key).checkIsActive(key)) {
       const startMatch = checkIsStartAgentPhrase(transcript);
       if (startMatch.isMatch && startMatch.adapterName) {
         if (checkIsGeneral(key)) {
@@ -10238,7 +10248,7 @@ interface AlbumCollectorItem {
    * client may mark every album member or only some, so the flush, like the
    * caption's, takes the first one.
    */
-  messageContext?: string;
+  messageContext?: MessageContext;
   /** The sender, by Telegram user id — the album's request is filed under them. */
   requesterId: string;
 }
@@ -10332,7 +10342,7 @@ async function handleAlbumFile(
     messageId: ctx.message.message_id,
     albumFile: { kind: meta.kind, savedPath, fileSize: meta.fileSize },
     caption: meta.caption,
-    messageContext: getMessageContextBlock(key, ctx.message),
+    messageContext: getMessageContext(key, ctx.message),
     requesterId: getTopicRequesterId(ctx.from),
   });
 }
@@ -10372,7 +10382,7 @@ async function handleIncomingFile(
   // A user file is genuine user activity → clear the compact-on-idle latch (D2).
   notePersonActivity(key);
   // A file sent as a REPLY carries the message it answers, a forwarded one its origin, as a typed or spoken message does.
-  const messageContext = getMessageContextBlock(key, ctx.message);
+  const messageContext = getMessageContext(key, ctx.message);
   const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) }, messageContext);
   const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
   const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
@@ -11038,10 +11048,11 @@ async function bufferPromptDuringStartup(
   key: SessionKey,
   text: string,
   intake: TopicRequestIntake,
-  messageContext?: string,
+  messageContext?: MessageContext,
 ): Promise<void> {
-  // The same for a bare option number typed in that window: it answers the question asked again.
-  if (await answerReAskedQuestionByNumber(key, text)) return;
+  // The same for a bare option number typed in that window: it answers the question asked again. A FORWARDED "1" is somebody
+  // else's words, not the operator's pick: it is delivered, marked, like any other message.
+  if (messageContext?.isForwarded !== true && await answerReAskedQuestionByNumber(key, text)) return;
   // A person wrote, in a window where the session is starting or being stopped: it counts like a message that reaches
   // `deliverActivePrompt` — the idle latch clears, and a question the idle compaction re-asked is closed (the idle fire
   // posts it just before the stop, so this window is where a message instead of a tap most often lands).
@@ -11075,10 +11086,12 @@ async function deliverActivePrompt(
   text: string,
   intake: TopicRequestIntake | null,
   sentAtMs?: number,
-  messageContext?: string,
+  messageContext?: MessageContext,
 ): Promise<LatePromptOutcome | null> {
+  // A FORWARDED message is content, never control input: it answers no question and purges no context, whatever its words are.
+  const isForwarded = messageContext?.isForwarded === true;
   // A bare option number answers the question the idle compaction asked again (a tap's own label comes in with no intake).
-  if (intake !== null && await answerReAskedQuestionByNumber(key, text)) return null;
+  if (intake !== null && !isForwarded && await answerReAskedQuestionByNumber(key, text)) return null;
   // A genuine USER message (text or voice) — clear the compact-on-idle latch so
   // the next idle period can compact again (D2), whether it answers a pending
   // question or is a fresh prompt.
@@ -11087,10 +11100,11 @@ async function deliverActivePrompt(
   if (pending && adapter.answerQuestion) {
     const currentQuestion = pending.data.questions[pending.currentIndex];
     const route = getQuestionReplyRoute(text, currentQuestion);
-    if (route.kind === 'answer') {
+    if (route.kind === 'answer' && !isForwarded) {
       // Answering a pending question (bare digit) is a pick, not a prompt about
       // the quote — the reply context is deliberately dropped here. Not a request
-      // either: the turn it unblocks continues under the open one.
+      // either: the turn it unblocks continues under the open one. A forwarded digit
+      // is not a pick: it falls to the free-form route below and reaches the agent marked.
       await applyQuestionAnswer(key, route.labels);
       return null;
     }
@@ -11106,7 +11120,7 @@ async function deliverActivePrompt(
   // before forwarding — the slash text itself never gets a preamble. The agent's
   // context is gone, so any intake files it might reference are now useless —
   // purge the thread's files dir in the same breath.
-  if (text === forwardedClearCommand) {
+  if (text === forwardedClearCommand && !isForwarded) {
     clearThreadContextMarker(key);
     await purgeThreadFiles(getDataDir(), key).catch((e) =>
       console.warn(`[file] purge on /clear failed for ${keyToString(key)}:`, e),
@@ -11198,7 +11212,7 @@ async function cancelPendingQuestionAndForward(
   adapter: AgentAdapter,
   text: string,
   sentAtMs?: number,
-  messageContext?: string,
+  messageContext?: MessageContext,
   requestHeader?: string,
 ): Promise<LatePromptOutcome> {
   // When the question bubble itself was closed with its «not answered» note, that IS the

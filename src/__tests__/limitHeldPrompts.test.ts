@@ -72,7 +72,7 @@ describe('getTextWithHeldPrompts / getHeldPromptsText', () => {
   it('a held run under a FORWARDED message sits below a line of its own, so it never reads as the rest of the forwarded words', () => {
     const forwardedMark = '[Forwarded message · from: channel "Ops Alerts" · originally sent: 2026-11-06T14:20:00+04:00]';
     const forwardedWords = 'ALERT: disk 91% on web-1';
-    const ownBody = getPromptWithMessageContext(forwardedWords, { block: forwardedMark, isSlashCommand: false, isShellInput: false });
+    const ownBody = getPromptWithMessageContext(forwardedWords, { context: { block: forwardedMark, isForwarded: true }, isShellInput: false });
     const delivered = getTextWithHeldPrompts(ownBody, prompts(scheduledRun));
     assert.equal(delivered, `${forwardedMark}\n\n${forwardedWords}\n\n${heldPromptsHeader}\n\n${scheduledRun}`);
     const [forwardedPart, heldPart] = delivered.split(`\n\n${heldPromptsHeader}\n\n`);

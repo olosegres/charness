@@ -134,7 +134,7 @@ describe('the prompt a topic request keeps', () => {
   });
 
   it('a forwarded message re-posted from the ledger still carries its mark — a replay never turns it into the operator\'s own words', () => {
-    const body = getPromptWithMessageContext(forwardedWords, { block: forwardedMark, isSlashCommand: false, isShellInput: false });
+    const body = getPromptWithMessageContext(forwardedWords, { context: { block: forwardedMark, isForwarded: true }, isShellInput: false });
     const request = createUntakenRequest(body);
     for (const replayed of [joinPromptsNotTakenIn([request]), getWakeUpMessage(request, 'postRetry').text]) {
       assert.ok(replayed?.endsWith(`${forwardedMark}\n\n${forwardedWords}`), `the replayed prompt keeps the mark ahead of the words:\n${replayed}`);
@@ -142,7 +142,7 @@ describe('the prompt a topic request keeps', () => {
   });
 
   it('a reply re-posted from the ledger keeps its quote too', () => {
-    const body = getPromptWithMessageContext('why?', { block: quoteBlock, isSlashCommand: false, isShellInput: false });
+    const body = getPromptWithMessageContext('why?', { context: { block: quoteBlock, isForwarded: false }, isShellInput: false });
     assert.ok(joinPromptsNotTakenIn([createUntakenRequest(body)])?.endsWith(`${quoteBlock}\n\nwhy?`));
   });
 });

@@ -9,7 +9,7 @@
  * side-effecting `bot.ts` entrypoint and depend on Telegram + download +
  * transcription I/O, so they cannot be exercised in isolation. The pieces they
  * wire are pure and covered behaviourally — reading the block off a voice or file
- * message in `telegramInbound.test.ts` (`getTelegramMessageContextBlock`), folding it
+ * message in `telegramInbound.test.ts` (`getTelegramMessageContext`), folding it
  * into a prompt in `messageContext.test.ts` (`getPromptWithMessageContext`). This guard
  * locks the seam between them: the startup buffer used to forward the bare
  * transcript, and a file announcement never carried the block at all, so either
@@ -47,18 +47,18 @@ function getFunctionBody(name: string): string {
 
 test('the voice handler reads the message-context block off the voice message and hands it to the job', () => {
   const handler = getSourceSlice("bot.on(message('voice')", 'async function processVoiceJob(');
-  assert.match(handler, /const\s+messageContextBlock\s*=\s*getMessageContextBlock\(\s*key\s*,\s*ctx\.message\s*\)/);
+  assert.match(handler, /const\s+messageContext\s*=\s*getMessageContext\(\s*key\s*,\s*ctx\.message\s*\)/);
   assert.match(
     handler,
-    /processVoiceJob\(\s*key\s*,\s*fileId\s*,.*,\s*messageContextBlock\s*\)/,
+    /processVoiceJob\(\s*key\s*,\s*fileId\s*,.*,\s*messageContext\s*\)/,
     'the block must ride into the job, which no longer has ctx',
   );
 });
 
 test('the bot reads a message\'s context with the connector\'s one reader — the reply quote AND the forwarded mark', () => {
   assert.match(
-    getFunctionBody('getMessageContextBlock'),
-    /return\s+getTelegramMessageContextBlock\(\s*message\s*,\s*\{\s*userId:\s*bot\.botInfo\?\.id\s*\}\s*,/,
+    getFunctionBody('getMessageContext'),
+    /return\s+getTelegramMessageContext\(\s*message\s*,\s*\{\s*userId:\s*bot\.botInfo\?\.id\s*\}\s*,/,
   );
 });
 
@@ -79,7 +79,7 @@ test('a voice transcript forwarded to a live session keeps its reply quote', () 
 test('a typed text buffered behind a session start keeps its reply quote too', () => {
   assert.match(
     botSource,
-    /await\s+bufferPromptDuringStartup\(\s*key\s*,\s*text\s*,\s*\{\s*source:\s*'text'[^}]*\}\s*,\s*getMessageContextBlock\(\s*key\s*,\s*ctx\.message\s*\)\s*\)/,
+    /await\s+bufferPromptDuringStartup\(\s*key\s*,\s*text\s*,\s*\{\s*source:\s*'text'[^}]*\}\s*,\s*getMessageContext\(\s*key\s*,\s*ctx\.message\s*\)\s*\)/,
   );
 });
 
@@ -99,13 +99,13 @@ test('every route folds the block with the one rule', () => {
 
 test('a single file sent as a reply carries the quote into its announcement', () => {
   const body = getFunctionBody('handleIncomingFile');
-  assert.match(body, /const\s+messageContext\s*=\s*getMessageContextBlock\(\s*key\s*,\s*ctx\.message\s*\)/);
+  assert.match(body, /const\s+messageContext\s*=\s*getMessageContext\(\s*key\s*,\s*ctx\.message\s*\)/);
   assert.match(body, /const\s+quotedPrompt\s*=\s*getPromptWithThreadMessageContext\(\s*key\s*,\s*promptText\s*,\s*messageContext\s*\)/);
   assert.match(body, /deliverPromptOrBuffer\(\s*key\s*,\s*`\$\{opening\.header\}\$\{quotedPrompt\}`/);
 });
 
 test('an album sent as a reply carries the quote: each member records it, the flush folds the first', () => {
-  assert.match(getFunctionBody('handleAlbumFile'), /messageContext:\s*getMessageContextBlock\(\s*key\s*,\s*ctx\.message\s*\)/);
+  assert.match(getFunctionBody('handleAlbumFile'), /messageContext:\s*getMessageContext\(\s*key\s*,\s*ctx\.message\s*\)/);
   const flush = getSourceSlice('const albumCollector = ', 'function buildAlbumGroupKey(');
   assert.match(flush, /const\s+messageContext\s*=\s*orderedItems\.find\(\(item\)\s*=>\s*item\.messageContext\)\?\.messageContext/);
   assert.match(flush, /const\s+quotedPrompt\s*=\s*getPromptWithThreadMessageContext\(\s*key\s*,\s*promptText\s*,\s*messageContext\s*\)/);
@@ -124,4 +124,42 @@ test('the request ledger keeps the prompt WITH its message context, at every ent
   assert.match(getFunctionBody('handleIncomingFile'), /openTopicRequest\([^;]*,\s*messageContext\s*\)/);
   const flush = getSourceSlice('const albumCollector = ', 'function buildAlbumGroupKey(');
   assert.match(flush, /openTopicRequest\([^;]*,\s*messageContext\s*\)/);
+});
+
+test('a FORWARDED text is content: the text handler never takes it for a command, a pick, a start phrase or a selector answer', () => {
+  const handler = getSourceSlice("bot.on(message('text'), async (ctx) => {", "//  Voice message handler");
+  assert.match(handler, /const\s+isForwarded\s*=\s*checkIsTelegramForward\(\s*ctx\.message\s*\)/);
+  assert.match(handler, /const\s+isSlashText\s*=\s*!isForwarded\s*&&\s*text\.startsWith\('\/'\)/);
+  assert.equal(handler.match(/text\.startsWith\('\/'\)/g)?.length, 1, 'the one definition of «a slash command»; every other route asks isSlashText');
+  assert.match(handler, /!isForwarded\s*&&\s*\/\^\\d\+\$\/\.test\(text\)\s*&&\s*awaitingModelSelection/, 'the numeric model pick');
+  assert.match(handler, /!isForwarded\s*&&\s*awaitingSessionSelection\.has/, 'the session pick');
+  assert.match(handler, /if\s*\(!isForwarded\s*&&\s*!adapter\.checkIsActive\(key\)\)\s*\{\s*const startMatch\s*=\s*checkIsStartAgentPhrase\(text\)/, 'the natural-language start');
+  assert.match(handler, /isQuestionPending:\s*!isForwarded\s*&&/, 'the TUI selector answer');
+});
+
+test('a FORWARDED voice note is content too: its transcript starts no agent', () => {
+  assert.match(
+    getFunctionBody('processVoiceJob'),
+    /if\s*\(messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*!getThreadAdapter\(key\)\.checkIsActive\(key\)\)\s*\{\s*const startMatch\s*=\s*checkIsStartAgentPhrase\(transcript\)/,
+  );
+});
+
+test('a FORWARDED message answers no pending question and wipes no context, whatever its words are', () => {
+  const active = getFunctionBody('deliverActivePrompt');
+  assert.match(active, /const\s+isForwarded\s*=\s*messageContext\?\.isForwarded\s*===\s*true/);
+  assert.match(active, /intake\s*!==\s*null\s*&&\s*!isForwarded\s*&&\s*await\s+answerReAskedQuestionByNumber/);
+  assert.match(active, /route\.kind\s*===\s*'answer'\s*&&\s*!isForwarded/);
+  assert.match(active, /text\s*===\s*forwardedClearCommand\s*&&\s*!isForwarded/);
+  assert.match(getFunctionBody('bufferPromptDuringStartup'), /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*await\s+answerReAskedQuestionByNumber/);
+});
+
+test('the decoration of a forwarded prompt and the request it opens ask «is it a slash command» with the context, not the bare text', () => {
+  const live = getFunctionBody('forwardPromptToLiveAgent');
+  assert.match(live, /const\s+isSlashCommand\s*=\s*checkIsSlashCommandPrompt\(\s*text\s*,\s*options\.messageContext\s*\)/);
+  assert.doesNotMatch(live, /checkShouldSkipPreambleForText\(/, 'no bare-text slash test is left in the live forward');
+  assert.match(getFunctionBody('openTopicRequest'), /checkShouldOpenTopicRequest\(\s*view\s*,\s*checkIsSlashCommandPrompt\(\s*text\s*,\s*messageContext\s*\)\s*\)/);
+});
+
+test('a forwarded /pair re-points the bot to no group', () => {
+  assert.match(getSourceSlice("bot.command('pair', async (ctx) => {", 'const routeChat'), /if\s*\(checkIsTelegramForward\(ctx\.message\)\)\s*return;/);
 });
