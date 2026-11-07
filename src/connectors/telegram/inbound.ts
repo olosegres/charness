@@ -10,7 +10,7 @@
  * {@link InboundCommand} the neutral router can dispatch.
  */
 
-import type { ChatMember, Message, User } from 'telegraf/typings/core/types/typegram';
+import type { Chat, ChatMember, Message, User } from 'telegraf/typings/core/types/typegram';
 import type { SessionKey } from '../../sessionKey';
 import { splitCommandArgs } from '../../platform/commandRouter';
 import type {
@@ -32,6 +32,8 @@ import {
   type ReplyQuoteAttachment,
   type ReplyQuoteSource,
 } from '../../utils/replyQuote';
+import { buildForwardedMark, type ForwardedMarkSource } from '../../utils/forwardedMark';
+import { joinMessageContextBlocks } from '../../utils/messageContext';
 
 /**
  * @description The two Telegram membership statuses that grant elevated rights
@@ -265,6 +267,67 @@ export function getTelegramReplyQuoteBlock(
   findSavedFile?: SavedFileFinder,
 ): string | undefined {
   return buildReplyQuoteBlock(extractReplyQuote(getReplyQuoteSource(message, identity, findSavedFile))) ?? undefined;
+}
+
+/**
+ * @description A message's Telegram FORWARD ORIGIN (`forward_origin`: a known user,
+ * a hidden one, a chat or a channel, each with the date of the original) reduced
+ * to the structural input of {@link buildForwardedMark}, or `undefined` for a
+ * message that was not forwarded. Read off the message itself, so a typed text, a
+ * voice note and a file are marked the same way.
+ */
+function getForwardedMarkSource(message: Message): ForwardedMarkSource | undefined {
+  const origin = 'forward_origin' in message ? message.forward_origin : undefined;
+  if (!origin) return undefined;
+  const originalSentAtSeconds = getOriginDateSeconds(origin);
+  switch (origin.type) {
+    case 'user':
+      return { kind: 'user', name: getDisplayName(origin.sender_user), username: origin.sender_user.username, originalSentAtSeconds };
+    case 'hidden_user':
+      return { kind: 'hiddenUser', name: origin.sender_user_name, originalSentAtSeconds };
+    case 'chat':
+      return { kind: 'chat', name: getChatTitle(origin.sender_chat), signature: origin.author_signature, originalSentAtSeconds };
+    case 'channel':
+      return { kind: 'channel', name: getChatTitle(origin.chat), signature: origin.author_signature, originalSentAtSeconds };
+  }
+}
+
+/**
+ * The `date` the Bot API puts on EVERY message origin (unix seconds) — the typings
+ * declare it only on an abstract base the four origin types do not extend.
+ */
+function getOriginDateSeconds(origin: NonNullable<Message.CommonMessage['forward_origin']>): number | undefined {
+  return 'date' in origin && typeof origin.date === 'number' ? origin.date : undefined;
+}
+
+/** A group's or channel's title; a private chat has none (its name is the person's). */
+function getChatTitle(chat: Chat): string {
+  return 'title' in chat ? chat.title : '';
+}
+
+/**
+ * @description The agent-facing forwarded mark for a message the bot forwards as a
+ * prompt, or `undefined` when the message was not forwarded. One reader for a
+ * typed text, a voice note whose transcript becomes the prompt, and a file or
+ * album whose announcement does — like {@link getTelegramReplyQuoteBlock}.
+ */
+export function getTelegramForwardedMark(message: Message): string | undefined {
+  return buildForwardedMark(getForwardedMarkSource(message)) ?? undefined;
+}
+
+/**
+ * @description EVERYTHING the bot folds ahead of a prompt because of how its
+ * Telegram message arrived — the reply quote, then the forwarded mark (which sits
+ * next to the forwarded words it describes) — or `undefined` when the message is
+ * neither a reply nor a forward. The one entry point of the text, voice, file and
+ * album handlers.
+ */
+export function getTelegramMessageContextBlock(
+  message: Message,
+  identity: TelegramBotIdentity,
+  findSavedFile?: SavedFileFinder,
+): string | undefined {
+  return joinMessageContextBlocks([getTelegramReplyQuoteBlock(message, identity, findSavedFile), getTelegramForwardedMark(message)]);
 }
 
 /**

@@ -113,6 +113,17 @@ maintainer must not break (`fileSendGateway.ts` with `../../utils/fileSendServic
   A file or an album sent as a reply carries the quote too (an album takes the first member's).
   A reply TO a file names it (`[photo, saved to: …]`): the path is the thread's saved copy
   (`findSavedFileName`, matched exactly by the intake's file name), absent once purged or never taken in.
+- **Message context** (`inbound.ts` `getTelegramMessageContextBlock`, folded by `utils/messageContext.ts`): ONE reader
+  turns how a message arrived into the block that leads its prompt — the reply quote (`[Replying to an earlier
+  message · from: …]`, `utils/replyQuote.ts`), then, for a FORWARDED message (`forward_origin`: user, hidden user, chat or
+  channel), the mark `[Forwarded message · from: <kind> <name> · originally sent: <local ISO>]`
+  (`utils/forwardedMark.ts`) next to the words it describes. The reader works off the message, so a text, a caption, a
+  voice transcript and a file announcement are marked alike, and every route (live forward, startup buffer, file, album)
+  folds it with the same rule. There is NO coalescing of text or voice: each message is its own prompt with its own
+  block, so a burst of forwards plus the operator's own words stays distinguishable; the two coalescing sites are an
+  album (one block, the first member's) and the prompts held over a usage-limit wait, which follow the folded text of the
+  prompt that releases them and so never read as part of a forward. A slash command or a terminal topic's shell line
+  never carries the block.
 - A scheduled run held over a usage-limit wait rides the resume as plain text, without a request.
 - **Answers only** (`utils/topicView.ts` `checkIsAgentEventShown`, applied per event in `bot.ts`): the agent's
   text, status/progress frames, thinking, tool results and sub-agent frames are dropped; a native question with

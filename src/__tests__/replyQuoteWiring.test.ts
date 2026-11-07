@@ -1,19 +1,20 @@
 /**
- * @description Wiring guard — a voice note or a file sent as a Telegram REPLY
- * reaches the agent with the same reply-quote block a typed reply does, on every
- * route it can take: forwarded to a live session, or buffered behind a session
- * start (a fresh start, a resume of a sleeping conversation, an idle or per-turn
- * stop in progress).
+ * @description Wiring guard — a voice note or a file sent as a Telegram REPLY (or a
+ * FORWARD) reaches the agent with the same message-context block a typed one does (the
+ * reply quote, the forwarded mark), on every route it can take: forwarded to a live
+ * session, or buffered behind a session start (a fresh start, a resume of a sleeping
+ * conversation, an idle or per-turn stop in progress).
  *
  * Why a structural test (and not a behavioural one): the handlers live in the
  * side-effecting `bot.ts` entrypoint and depend on Telegram + download +
  * transcription I/O, so they cannot be exercised in isolation. The pieces they
  * wire are pure and covered behaviourally — reading the block off a voice or file
- * message in `telegramInbound.test.ts` (`getTelegramReplyQuoteBlock`), folding it
- * into a prompt in `replyQuote.test.ts` (`getPromptWithReplyQuote`). This guard
+ * message in `telegramInbound.test.ts` (`getTelegramMessageContextBlock`), folding it
+ * into a prompt in `messageContext.test.ts` (`getPromptWithMessageContext`). This guard
  * locks the seam between them: the startup buffer used to forward the bare
  * transcript, and a file announcement never carried the block at all, so either
- * reached the agent without the message it pointed at.
+ * reached the agent without the message it pointed at. The process-level proof is
+ * `messageContextE2e.test.ts`.
  */
 
 import { test } from 'node:test';
@@ -44,34 +45,41 @@ function getFunctionBody(name: string): string {
   return after.slice(0, nextDeclMatch === -1 ? undefined : nextDeclMatch);
 }
 
-test('the voice handler reads the reply-quote block off the voice message and hands it to the job', () => {
+test('the voice handler reads the message-context block off the voice message and hands it to the job', () => {
   const handler = getSourceSlice("bot.on(message('voice')", 'async function processVoiceJob(');
-  assert.match(handler, /const\s+replyBlock\s*=\s*getReplyQuoteBlock\(\s*key\s*,\s*ctx\.message\s*\)/);
+  assert.match(handler, /const\s+messageContextBlock\s*=\s*getMessageContextBlock\(\s*key\s*,\s*ctx\.message\s*\)/);
   assert.match(
     handler,
-    /processVoiceJob\(\s*key\s*,\s*fileId\s*,.*,\s*replyBlock\s*\)/,
+    /processVoiceJob\(\s*key\s*,\s*fileId\s*,.*,\s*messageContextBlock\s*\)/,
     'the block must ride into the job, which no longer has ctx',
+  );
+});
+
+test('the bot reads a message\'s context with the connector\'s one reader — the reply quote AND the forwarded mark', () => {
+  assert.match(
+    getFunctionBody('getMessageContextBlock'),
+    /return\s+getTelegramMessageContextBlock\(\s*message\s*,\s*\{\s*userId:\s*bot\.botInfo\?\.id\s*\}\s*,/,
   );
 });
 
 test('a voice transcript buffered behind a session start keeps its reply quote', () => {
   assert.match(
     getFunctionBody('processVoiceJob'),
-    /await\s+bufferPromptDuringStartup\(\s*key\s*,\s*transcript\s*,\s*\{\s*source:\s*'voice'\s*,\s*requesterId\s*\}\s*,\s*replyContext\s*\)/,
+    /await\s+bufferPromptDuringStartup\(\s*key\s*,\s*transcript\s*,\s*\{\s*source:\s*'voice'\s*,\s*requesterId\s*\}\s*,\s*messageContext\s*\)/,
   );
 });
 
 test('a voice transcript forwarded to a live session keeps its reply quote', () => {
   assert.match(
     getFunctionBody('processVoiceJob'),
-    /await\s+deliverActivePrompt\([^;]*\{\s*source:\s*'voice'\s*,\s*requesterId\s*\}\s*,\s*sentAtMs\s*,\s*replyContext\s*\)/,
+    /await\s+deliverActivePrompt\([^;]*\{\s*source:\s*'voice'\s*,\s*requesterId\s*\}\s*,\s*sentAtMs\s*,\s*messageContext\s*\)/,
   );
 });
 
 test('a typed text buffered behind a session start keeps its reply quote too', () => {
   assert.match(
     botSource,
-    /await\s+bufferPromptDuringStartup\(\s*key\s*,\s*text\s*,\s*\{\s*source:\s*'text'[^}]*\}\s*,\s*getReplyQuoteBlock\(\s*key\s*,\s*ctx\.message\s*\)\s*\)/,
+    /await\s+bufferPromptDuringStartup\(\s*key\s*,\s*text\s*,\s*\{\s*source:\s*'text'[^}]*\}\s*,\s*getMessageContextBlock\(\s*key\s*,\s*ctx\.message\s*\)\s*\)/,
   );
 });
 
@@ -79,13 +87,13 @@ test('every route folds the block with the one rule', () => {
   // The live forward and the finished-text helper end in the same agent-facing
   // shape only while they share the pure fold; an inline copy is how one of them
   // drifts (or loses the shell guard).
-  for (const name of ['getPromptWithThreadReplyQuote', 'forwardPromptToLiveAgent']) {
-    assert.match(getFunctionBody(name), /getPromptWithReplyQuote\(/, `${name} must fold through getPromptWithReplyQuote`);
+  for (const name of ['getPromptWithThreadMessageContext', 'forwardPromptToLiveAgent']) {
+    assert.match(getFunctionBody(name), /getPromptWithMessageContext\(/, `${name} must fold through getPromptWithMessageContext`);
     assert.match(getFunctionBody(name), /isShellInput:\s*[^,\n]*\.name\s*===\s*'terminal'/, `${name} must keep the block out of a terminal`);
   }
   assert.match(
     getFunctionBody('bufferPromptDuringStartup'),
-    /getPromptWithThreadReplyQuote\(\s*key\s*,\s*text\s*,\s*replyContext\s*\)/,
+    /getPromptWithThreadMessageContext\(\s*key\s*,\s*text\s*,\s*messageContext\s*\)/,
   );
 });
 
@@ -93,15 +101,15 @@ test('a single file sent as a reply carries the quote into its announcement', ()
   const body = getFunctionBody('handleIncomingFile');
   assert.match(
     body,
-    /const\s+quotedPrompt\s*=\s*getPromptWithThreadReplyQuote\(\s*key\s*,\s*promptText\s*,\s*getReplyQuoteBlock\(\s*key\s*,\s*ctx\.message\s*\)\s*\)/,
+    /const\s+quotedPrompt\s*=\s*getPromptWithThreadMessageContext\(\s*key\s*,\s*promptText\s*,\s*getMessageContextBlock\(\s*key\s*,\s*ctx\.message\s*\)\s*\)/,
   );
   assert.match(body, /deliverPromptOrBuffer\(\s*key\s*,\s*`\$\{opening\.header\}\$\{quotedPrompt\}`/);
 });
 
 test('an album sent as a reply carries the quote: each member records it, the flush folds the first', () => {
-  assert.match(getFunctionBody('handleAlbumFile'), /replyContext:\s*getReplyQuoteBlock\(\s*key\s*,\s*ctx\.message\s*\)/);
+  assert.match(getFunctionBody('handleAlbumFile'), /messageContext:\s*getMessageContextBlock\(\s*key\s*,\s*ctx\.message\s*\)/);
   const flush = getSourceSlice('const albumCollector = ', 'function buildAlbumGroupKey(');
-  assert.match(flush, /const\s+replyContext\s*=\s*orderedItems\.find\(\(item\)\s*=>\s*item\.replyContext\)\?\.replyContext/);
-  assert.match(flush, /const\s+quotedPrompt\s*=\s*getPromptWithThreadReplyQuote\(\s*key\s*,\s*promptText\s*,\s*replyContext\s*\)/);
+  assert.match(flush, /const\s+messageContext\s*=\s*orderedItems\.find\(\(item\)\s*=>\s*item\.messageContext\)\?\.messageContext/);
+  assert.match(flush, /const\s+quotedPrompt\s*=\s*getPromptWithThreadMessageContext\(\s*key\s*,\s*promptText\s*,\s*messageContext\s*\)/);
   assert.match(flush, /deliverPromptOrBuffer\(\s*key\s*,\s*`\$\{opening\.header\}\$\{quotedPrompt\}`/);
 });

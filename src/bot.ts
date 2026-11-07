@@ -167,7 +167,7 @@ import {
   checkShouldInvalidateAdminCache,
   createTelegramConnectorInbound,
   getTelegramCommand,
-  getTelegramReplyQuoteBlock,
+  getTelegramMessageContextBlock,
 } from './connectors/telegram/inbound';
 import { createTelegramConnectorOutbound } from './connectors/telegram/outbound';
 import { createCommandRouter } from './platform/commandRouter';
@@ -326,7 +326,7 @@ import {
   checkShouldSkipPreambleForText,
 } from './threadContextPreamble';
 import { getPinnedBannerSkipDecision } from './utils/pinnedBannerSkipDecision';
-import { getPromptWithReplyQuote } from './utils/replyQuote';
+import { getPromptWithMessageContext } from './utils/messageContext';
 import {
   getTelegramFileMeta,
   getMediaGroupId,
@@ -5799,7 +5799,7 @@ async function forwardPromptToAgent(
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => adapter.checkIsActive(key) && !(isTechnicalPrompt && (adapter.checkIsBusy?.(key) ?? false)),
     buffer: async () => {
-      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadReplyQuote(key, text, options.replyContext)}`, true);
+      await deliverPromptOrBuffer(key, `${options.requestHeader ?? ''}${getPromptWithThreadMessageContext(key, text, options.messageContext)}`, true);
     },
     wake: () => wakeSleepingSessionForPrompt(key),
     forward: async () => {
@@ -5820,7 +5820,7 @@ interface PromptForwardOptions {
   isRecoveryReplay?: boolean;
   isRequestReminder?: boolean;
   isTechnicalPrompt?: boolean;
-  replyContext?: string;
+  messageContext?: string;
   requestHeader?: string;
 }
 
@@ -5848,19 +5848,21 @@ async function forwardPromptToLiveAgent(
   // forwarded to a live session once no wait holds them — after it, in arrival
   // order (the resume's, the operator's message that ended the wait, a later
   // post). Only a replayable one carries them, so a wedge recovery replays them too.
-  const textWithHeld = isReplayable && adapter.checkIsActive(key) ? limitHeldPrompts.releaseWithForward(key, text) : text;
-  // Fold the reply-quote block (from a Telegram REPLY) ahead of the user's text
-  // so the agent sees WHAT is being referenced — only for a normal prompt, since
-  // a slash command forwarded to the agent is a control token a prefixed block
-  // would corrupt, and a terminal's input is a shell line the block's `> ` lines
-  // would turn into file-overwriting redirections. The folded `body` is what gets
-  // cached, preamble-wrapped and timestamped below.
-  const quotedBody = getPromptWithReplyQuote(textWithHeld, {
-    block: options.replyContext,
+  // Fold the message-context block (the reply quote of a Telegram REPLY, the mark of a
+  // FORWARD) ahead of the user's text so the agent sees WHAT is being referenced and
+  // WHOSE words these are — only for a normal prompt, since a slash command forwarded to
+  // the agent is a control token a prefixed block would corrupt, and a terminal's input
+  // is a shell line the block's `> ` lines would turn into file-overwriting redirections.
+  // The held prompts come AFTER the folded text: the block describes the message's own
+  // words, and a held scheduled run must not read as part of a forwarded message. The
+  // folded `body` is what gets cached, preamble-wrapped and timestamped below.
+  const ownBody = getPromptWithMessageContext(text, {
+    block: options.messageContext,
     isSlashCommand: checkShouldSkipPreambleForText(text),
     isShellInput: adapter.name === 'terminal',
   });
-  // The request header (S7) leads the per-message body, like the reply quote and
+  const quotedBody = isReplayable && adapter.checkIsActive(key) ? limitHeldPrompts.releaseWithForward(key, ownBody) : ownBody;
+  // The request header (S7) leads the per-message body, like the message context and
   // unlike the once-per-change thread preamble: it names THIS message's request.
   const messageBody = options.requestHeader ? `${options.requestHeader}${quotedBody}` : quotedBody;
   // A loss the agent was not told about yet (`utils/lostWork.ts`) rides the first real prompt, once, ahead of it.
@@ -5993,16 +5995,17 @@ function getPromptWithThreadContext(key: SessionKey, text: string): string {
 
 /**
  * @description Bridge a telegraf message (text, voice, or a file) to the
- * agent-facing reply-quote block. When the operator uses Telegram's REPLY
+ * agent-facing message-context block. When the operator uses Telegram's REPLY
  * feature, this folds the replied-to message's content into the forwarded prompt
- * so the agent sees WHAT is being referenced. Returns the block, or `undefined`
+ * so the agent sees WHAT is being referenced; when the message was FORWARDED, it
+ * folds the mark that says whose words they are. Returns the block, or `undefined`
  * when there is nothing to inject — the connector's
- * {@link getTelegramReplyQuoteBlock} decides. The bot's own id
+ * {@link getTelegramMessageContextBlock} decides. The bot's own id
  * (`bot.botInfo.id`) drives the `from: assistant` attribution; a replied-to file
  * is looked up among the files this thread took in.
  */
-function getReplyQuoteBlock(key: SessionKey, message: Message): string | undefined {
-  return getTelegramReplyQuoteBlock(message, { userId: bot.botInfo?.id }, (meta) => findThreadSavedFile(key, meta));
+function getMessageContextBlock(key: SessionKey, message: Message): string | undefined {
+  return getTelegramMessageContextBlock(message, { userId: bot.botInfo?.id }, (meta) => findThreadSavedFile(key, meta));
 }
 
 /**
@@ -6023,15 +6026,15 @@ function findThreadSavedFile(key: SessionKey, meta: TelegramFileMeta): string | 
 }
 
 /**
- * @description Fold a reply-quote block into a prompt that leaves as finished
+ * @description Fold a message-context block into a prompt that leaves as finished
  * text through {@link deliverPromptOrBuffer} — one buffered behind a session
  * start, whose replay forwards it as is, or a file announcement — by the one
  * rule `forwardPromptToAgent` applies to a live prompt. The thread's adapter is
  * the one the text reaches, so a terminal keeps the block out of its shell line.
  */
-function getPromptWithThreadReplyQuote(key: SessionKey, text: string, replyContext: string | undefined): string {
-  return getPromptWithReplyQuote(text, {
-    block: replyContext,
+function getPromptWithThreadMessageContext(key: SessionKey, text: string, messageContext: string | undefined): string {
+  return getPromptWithMessageContext(text, {
+    block: messageContext,
     isSlashCommand: checkShouldSkipPreambleForText(text),
     isShellInput: getThreadAdapter(key).name === 'terminal',
   });
@@ -9653,7 +9656,7 @@ bot.on(message('text'), async (ctx) => {
   // Session is mid-startup → buffer the prompt and replay it once the agent is
   // ready, instead of dropping it into the "no agent running" guidance below.
   if (startupPromptBuffer.checkIsStarting(kStr)) {
-    await bufferPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getReplyQuoteBlock(key, ctx.message));
+    await bufferPromptDuringStartup(key, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, getMessageContextBlock(key, ctx.message));
     return;
   }
 
@@ -9831,17 +9834,17 @@ bot.on(message('text'), async (ctx) => {
   // branches above already returned for their own cases, so this is reached only
   // for a generic active prompt. The message's real send time (Telegram `date`,
   // unix seconds) rides along for the `/timestamps` injection, and a Telegram
-  // REPLY folds the quoted message into the prompt (see `getReplyQuoteBlock`).
+  // REPLY or FORWARD folds its context into the prompt (see `getMessageContextBlock`).
   if (adapter.checkIsActive(key)) {
-    const replyBlock = getReplyQuoteBlock(key, ctx.message);
-    await deliverActivePrompt(key, adapter, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, replyBlock);
+    const messageContextBlock = getMessageContextBlock(key, ctx.message);
+    await deliverActivePrompt(key, adapter, text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, messageContextBlock);
     return;
   }
 
   // A sleeping conversation (its process stopped, its session kept) is resumed by
   // the message itself (L-D4) — the prompt continues the same conversation.
   if (await resumeSleepingSessionForPrompt(key)) {
-    await deliverActivePrompt(key, getThreadAdapter(key), text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, getReplyQuoteBlock(key, ctx.message));
+    await deliverActivePrompt(key, getThreadAdapter(key), text, { source: 'text', requesterId: getTopicRequesterId(ctx.from) }, ctx.message.date * 1000, getMessageContextBlock(key, ctx.message));
     return;
   }
 
@@ -9897,16 +9900,16 @@ bot.on(message('voice'), async (ctx) => {
   const fileId = ctx.message.voice.file_id;
   const durationSeconds = ctx.message.voice.duration;
   const sentAtMs = ctx.message.date * 1000;
-  // A Telegram REPLY on the voice note folds the quoted message into the prompt.
-  // Compute it HERE (only the handler has `ctx`); the job runs later off the
-  // update loop and only sees `key`/`bot`.
-  const replyBlock = getReplyQuoteBlock(key, ctx.message);
+  // A Telegram REPLY on the voice note folds the quoted message into the prompt, a
+  // FORWARD of it the mark of its origin. Compute it HERE (only the handler has
+  // `ctx`); the job runs later off the update loop and only sees `key`/`bot`.
+  const messageContextBlock = getMessageContextBlock(key, ctx.message);
   // Armed LAST, right before the job is queued: nothing between here and the queue may throw and strand an armed note. The
   // clock runs from the voice's arrival, so a voice waiting in line behind an earlier one gets its note too; the job finishes it
   // the moment its text arrives, and the `finally` is the backstop for a job that never ran or ended some other way.
   const progressNote = startVoiceProgressNote(key);
   void getVoiceTranscriptionQueue(key)
-    .run(() => processVoiceJob(key, fileId, durationSeconds, getTopicRequesterId(ctx.from), warmedEndpoint, progressNote, sentAtMs, replyBlock))
+    .run(() => processVoiceJob(key, fileId, durationSeconds, getTopicRequesterId(ctx.from), warmedEndpoint, progressNote, sentAtMs, messageContextBlock))
     .catch((err) => {
       console.error('[Bot] Voice job error (already handled):', err);
     })
@@ -9921,9 +9924,9 @@ bot.on(message('voice'), async (ctx) => {
  * Uses only `key`/`bot`, never the request `ctx`, so it survives past the
  * handler's return. `sentAtMs` is the voice note's real Telegram send time,
  * captured by the handler for the `/timestamps` injection (transcription can
- * take ~20s, so "now" at forward time would drift). `replyContext` is the
- * reply-quote block the handler built from `ctx.message` (a Telegram REPLY on
- * the voice note), plumbed here since the job no longer has `ctx`; so is
+ * take ~20s, so "now" at forward time would drift). `messageContext` is the
+ * message-context block the handler built from `ctx.message` (a Telegram REPLY
+ * or a FORWARD of the voice note), plumbed here since the job no longer has `ctx`; so is
  * `requesterId`, the sender the transcript's request is filed under, and
  * `warmedEndpoint`, the first engine's endpoint asked for when the note arrived
  * (the job reuses that one ask — see `warmUpFirstEngine`), and `progressNote`, the
@@ -9939,7 +9942,7 @@ async function processVoiceJob(
   warmedEndpoint: WarmedEndpoint | null,
   progressNote: VoiceProgressNote,
   sentAtMs?: number,
-  replyContext?: string,
+  messageContext?: string,
 ): Promise<void> {
   try {
     // Audit S14 / #33: `getFileLink` builds the bot-token URL in one
@@ -10001,7 +10004,7 @@ async function processVoiceJob(
 
     // Session is mid-startup → buffer the transcript and replay it once ready.
     if (startupPromptBuffer.checkIsStarting(keyToString(key))) {
-      await bufferPromptDuringStartup(key, transcript, { source: 'voice', requesterId }, replyContext);
+      await bufferPromptDuringStartup(key, transcript, { source: 'voice', requesterId }, messageContext);
       return;
     }
 
@@ -10054,7 +10057,7 @@ async function processVoiceJob(
     // delivered as a fresh prompt — closing the gap where voice queued behind a
     // blocked question-turn and the user got no reply.
     // Read AFTER the wake: the resume may have switched the thread's adapter.
-    await deliverActivePrompt(key, getThreadAdapter(key), transcript, { source: 'voice', requesterId }, sentAtMs, replyContext);
+    await deliverActivePrompt(key, getThreadAdapter(key), transcript, { source: 'voice', requesterId }, sentAtMs, messageContext);
   } catch (err) {
     console.error('[Bot] Voice handling error:', err);
     await progressNote.finish();
@@ -10221,11 +10224,11 @@ interface AlbumCollectorItem {
   albumFile: AlbumFile;
   caption?: string;
   /**
-   * The reply-quote block when THIS item was sent as a REPLY. A client may mark
-   * every album member or only some, so the flush, like the caption's, takes the
-   * first one.
+   * The message-context block when THIS item was sent as a REPLY or forwarded. A
+   * client may mark every album member or only some, so the flush, like the
+   * caption's, takes the first one.
    */
-  replyContext?: string;
+  messageContext?: string;
   /** The sender, by Telegram user id — the album's request is filed under them. */
   requesterId: string;
 }
@@ -10249,7 +10252,7 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       const orderedItems = [...items].sort((a, b) => a.messageId - b.messageId);
       const files = orderedItems.map((item) => item.albumFile);
       const caption = orderedItems.find((item) => item.caption && item.caption.trim())?.caption;
-      const replyContext = orderedItems.find((item) => item.replyContext)?.replyContext;
+      const messageContext = orderedItems.find((item) => item.messageContext)?.messageContext;
       const promptText = buildAlbumPromptText(files, caption);
       const isStarting = startupPromptBuffer.checkIsStarting(keyToString(key));
       // User took over (album upload) before a pending API-error retry fired →
@@ -10259,7 +10262,7 @@ const albumCollector = createMediaGroupCollector<AlbumCollectorItem>({
       notePersonActivity(key);
       try {
         const opening = await openTopicRequest(key, promptText, { source: 'album', requesterId: orderedItems[0].requesterId });
-        const quotedPrompt = getPromptWithThreadReplyQuote(key, promptText, replyContext);
+        const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, messageContext);
         const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
         await settleTopicRequestAfterDelivery(key, opening, delivery);
       } catch (err) {
@@ -10319,7 +10322,7 @@ async function handleAlbumFile(
     messageId: ctx.message.message_id,
     albumFile: { kind: meta.kind, savedPath, fileSize: meta.fileSize },
     caption: meta.caption,
-    replyContext: getReplyQuoteBlock(key, ctx.message),
+    messageContext: getMessageContextBlock(key, ctx.message),
     requesterId: getTopicRequesterId(ctx.from),
   });
 }
@@ -10359,8 +10362,8 @@ async function handleIncomingFile(
   // A user file is genuine user activity → clear the compact-on-idle latch (D2).
   notePersonActivity(key);
   const opening = await openTopicRequest(key, promptText, { source: 'file', requesterId: getTopicRequesterId(ctx.from) });
-  // A file sent as a REPLY carries the message it answers, as a typed or spoken reply does.
-  const quotedPrompt = getPromptWithThreadReplyQuote(key, promptText, getReplyQuoteBlock(key, ctx.message));
+  // A file sent as a REPLY carries the message it answers, a forwarded one its origin, as a typed or spoken message does.
+  const quotedPrompt = getPromptWithThreadMessageContext(key, promptText, getMessageContextBlock(key, ctx.message));
   const delivery = await deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting);
   await settleTopicRequestAfterDelivery(key, opening, delivery);
 }
@@ -11016,15 +11019,15 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
  * @description Buffer a free-form prompt (text OR voice) that arrived while the
  * thread's session is starting — the startup twin of {@link deliverActivePrompt}.
  * The request is opened at capture time (S7), so the buffered text carries its
- * header; the reply-quote block is folded in here too, since the replay forwards
- * the buffered text as is and a REPLY made during the boot would otherwise reach
- * the agent without the message it points at.
+ * header; the message-context block is folded in here too, since the replay forwards
+ * the buffered text as is and a REPLY or a FORWARD made during the boot would
+ * otherwise reach the agent without the message it points at, or as the operator's own words.
  */
 async function bufferPromptDuringStartup(
   key: SessionKey,
   text: string,
   intake: TopicRequestIntake,
-  replyContext?: string,
+  messageContext?: string,
 ): Promise<void> {
   // The same for a bare option number typed in that window: it answers the question asked again.
   if (await answerReAskedQuestionByNumber(key, text)) return;
@@ -11033,7 +11036,7 @@ async function bufferPromptDuringStartup(
   // posts it just before the stop, so this window is where a message instead of a tap most often lands).
   notePersonActivity(key);
   const opening = await openTopicRequest(key, text, intake);
-  const quotedText = getPromptWithThreadReplyQuote(key, text, replyContext);
+  const quotedText = getPromptWithThreadMessageContext(key, text, messageContext);
   await deliverPromptOrBuffer(key, `${opening.header}${quotedText}`, true);
   trackTopicRequestTurn(key, opening);
 }
@@ -11061,7 +11064,7 @@ async function deliverActivePrompt(
   text: string,
   intake: TopicRequestIntake | null,
   sentAtMs?: number,
-  replyContext?: string,
+  messageContext?: string,
 ): Promise<LatePromptOutcome | null> {
   // A bare option number answers the question the idle compaction asked again (a tap's own label comes in with no intake).
   if (intake !== null && await answerReAskedQuestionByNumber(key, text)) return null;
@@ -11082,7 +11085,7 @@ async function deliverActivePrompt(
     }
     // Free-form text cancels the question and is a fresh prompt — a request (S7).
     const opening = await openTopicRequest(key, text, intake);
-    const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, replyContext, opening.header);
+    const delivery = await cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header);
     await settleTopicRequestAfterDelivery(key, opening, delivery);
     return null;
   }
@@ -11122,10 +11125,10 @@ async function deliverActivePrompt(
     checkIsWindowOpen: () => startupPromptBuffer.checkIsStarting(keyToString(key)),
     checkIsSessionActive: () => adapter.checkIsActive(key),
     buffer: async () => {
-      await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadReplyQuote(key, text, replyContext)}`, true);
+      await deliverPromptOrBuffer(key, `${opening.header}${getPromptWithThreadMessageContext(key, text, messageContext)}`, true);
     },
     wake: () => wakeSleepingSessionForPrompt(key),
-    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { replyContext, requestHeader: opening.header }),
+    forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header }),
     reportNoSession: async (isAlreadyTold) => {
       if (!isAlreadyTold) await replyToThread(key, t('agent.no_session'));
     },
@@ -11184,7 +11187,7 @@ async function cancelPendingQuestionAndForward(
   adapter: AgentAdapter,
   text: string,
   sentAtMs?: number,
-  replyContext?: string,
+  messageContext?: string,
   requestHeader?: string,
 ): Promise<LatePromptOutcome> {
   // When the question bubble itself was closed with its «not answered» note, that IS the
@@ -11206,7 +11209,7 @@ async function cancelPendingQuestionAndForward(
   if (!didLabelQuestionMessage) {
     await replyToThread(key, t('agent.question_cancelled_for_prompt'));
   }
-  return forwardPromptToAgent(key, adapter, text, sentAtMs, { replyContext, requestHeader });
+  return forwardPromptToAgent(key, adapter, text, sentAtMs, { messageContext, requestHeader });
 }
 
 /**

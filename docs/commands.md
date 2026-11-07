@@ -63,6 +63,7 @@ them. How the agents run (the Claude Code backends, OpenCode, restarts, the bot'
   - [Natural language and voice](#natural-language-and-voice)
   - [File intake](#file-intake)
   - [Reply context](#reply-context)
+  - [Forwarded messages](#forwarded-messages)
 
 ## Commands available in any topic
 
@@ -868,3 +869,7 @@ the agent:
 ### Reply context
 
 Reply to a message in a topic and the quoted text is folded into the prompt the agent receives, so it sees what you point at without re-pasting; works for text, voice and files (a photo, a document, an album…), both agents; a reply TO a photo, file or voice note names it, with the path of the bot's saved copy when it has one.
+
+### Forwarded messages
+
+Forward a message into a topic and the agent is told it is forwarded — and from whom — instead of reading the words as yours: a line like `[Forwarded message · from: channel Ops Alerts · originally sent: 2026-11-06T14:20:00+04:00]` leads the text. It names the origin (a user with their @username, a hidden user, a chat or a channel, with the post signature when there is one) and when the message was originally sent, on your `/timezone` clock. It works for text, captions, voice notes (the transcript carries it) and files, both agents. Each forwarded message is marked on its own, so several forwards followed by your own words stay apart: only your words come unmarked. A forwarded message that is also a reply carries both lines.

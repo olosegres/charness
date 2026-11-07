@@ -26,11 +26,14 @@ import {
   getNormalizedAttachments,
   getPlatformMembers,
   getTelegramCommand,
+  getTelegramForwardedMark,
+  getTelegramMessageContextBlock,
   getTelegramReplyQuoteBlock,
 } from '../connectors/telegram/inbound';
 import type { InboundEvent } from '../platform/inbound';
 import { AdminCache } from '../accessControl';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import { formatIsoLocalOffset } from '../utils/isoTimestamp';
 
 const identity = { username: 'myCodeBot', userId: 1000 };
 
@@ -611,4 +614,120 @@ test('a rejected membership lookup keeps the cached admins instead of locking ev
   roster = [makeChatMember('creator', 1), makeChatMember('administrator', 2)];
   now += failureRetryMs + 1;
   assert.deepEqual([...(await cache.getAdminIds())].sort(), ['1', '2']);
+});
+
+// ─── forwarded mark (typed text, voice note, file) ──────────────────────
+
+/** When the forwarded message was ORIGINALLY sent, unix seconds. */
+const originalSentAtSeconds = 1_793_000_000;
+const originalSentAtIso = formatIsoLocalOffset(originalSentAtSeconds * 1000);
+
+/** What a message's `forward_origin` holds (telegraf does not export the name). */
+type ForwardOrigin = NonNullable<Message.CommonMessage['forward_origin']>;
+
+/** The four origins Telegram reports, as the Bot API puts them on the wire (`date` included). */
+const forwardOrigins = {
+  user: { type: 'user', sender_user: makeUser(55, { first_name: 'Alice', last_name: 'Smith', username: 'alice' }), date: originalSentAtSeconds },
+  hiddenUser: { type: 'hidden_user', sender_user_name: 'Jane Doe', date: originalSentAtSeconds },
+  chat: { type: 'chat', sender_chat: { id: -1005550000001, type: 'supergroup', title: 'Team room' }, author_signature: 'Chief', date: originalSentAtSeconds },
+  channel: { type: 'channel', chat: { id: -1005550000002, type: 'channel', title: 'Ops Alerts' }, message_id: 9, date: originalSentAtSeconds },
+} as Record<'user' | 'hiddenUser' | 'chat' | 'channel', ForwardOrigin>;
+
+/** A text message forwarded into the topic. */
+function makeForwardedTextMessage(forwardOrigin: ForwardOrigin | undefined, replyTo?: RepliedMessage): Message.TextMessage {
+  return {
+    ...makePlainMessage('ALERT: disk 91% on web-1'),
+    message_thread_id: topicRootId,
+    is_topic_message: true,
+    reply_to_message: replyTo,
+    forward_origin: forwardOrigin,
+  } as Message.TextMessage;
+}
+
+test('getTelegramForwardedMark: each origin reads as its own kind, with the original date', () => {
+  assert.equal(
+    getTelegramForwardedMark(makeForwardedTextMessage(forwardOrigins.user)),
+    `[Forwarded message · from: user Alice Smith (@alice) · originally sent: ${originalSentAtIso}]`,
+  );
+  assert.equal(
+    getTelegramForwardedMark(makeForwardedTextMessage(forwardOrigins.hiddenUser)),
+    `[Forwarded message · from: hidden user Jane Doe · originally sent: ${originalSentAtIso}]`,
+  );
+  assert.equal(
+    getTelegramForwardedMark(makeForwardedTextMessage(forwardOrigins.chat)),
+    `[Forwarded message · from: chat Team room · signed: Chief · originally sent: ${originalSentAtIso}]`,
+  );
+  assert.equal(
+    getTelegramForwardedMark(makeForwardedTextMessage(forwardOrigins.channel)),
+    `[Forwarded message · from: channel Ops Alerts · originally sent: ${originalSentAtIso}]`,
+  );
+});
+
+test('getTelegramForwardedMark: the bot\'s own message forwarded from another topic names the bot', () => {
+  const botOrigin = { type: 'user', sender_user: makeUser(identity.userId, { is_bot: true, first_name: 'Charness', username: 'myCodeBot' }), date: originalSentAtSeconds } as ForwardOrigin;
+  assert.equal(
+    getTelegramForwardedMark(makeForwardedTextMessage(botOrigin)),
+    `[Forwarded message · from: user Charness (@myCodeBot) · originally sent: ${originalSentAtIso}]`,
+  );
+});
+
+test('getTelegramForwardedMark: a message typed in the topic has no mark', () => {
+  assert.equal(getTelegramForwardedMark(makeForwardedTextMessage(undefined)), undefined);
+  assert.equal(getTelegramForwardedMark(makePlainMessage('hello')), undefined);
+});
+
+test('getTelegramForwardedMark: an origin with no date still marks the message, without a date', () => {
+  const { date: _date, ...undatedOrigin } = forwardOrigins.channel as ForwardOrigin & { date: number };
+  assert.equal(
+    getTelegramForwardedMark(makeForwardedTextMessage(undatedOrigin as ForwardOrigin)),
+    '[Forwarded message · from: channel Ops Alerts]',
+  );
+});
+
+test('getTelegramForwardedMark: a forwarded voice note, photo and document carry the mark a forwarded text does', () => {
+  const textMark = getTelegramForwardedMark(makeForwardedTextMessage(forwardOrigins.channel));
+  assert.ok(textMark !== undefined);
+  const voice = { ...makeTopicVoiceMessage(undefined), forward_origin: forwardOrigins.channel } as Message.VoiceMessage;
+  assert.equal(getTelegramForwardedMark(voice), textMark);
+  for (const kind of ['photo', 'document'] as const) {
+    const file = { ...makeTopicFileMessage(kind, undefined), forward_origin: forwardOrigins.channel } as Message;
+    assert.equal(getTelegramForwardedMark(file), textMark, kind);
+  }
+});
+
+test('getTelegramMessageContextBlock: a forwarded message carries the mark alone', () => {
+  assert.equal(
+    getTelegramMessageContextBlock(makeForwardedTextMessage(forwardOrigins.channel, topicRootMessage), identity),
+    `[Forwarded message · from: channel Ops Alerts · originally sent: ${originalSentAtIso}]`,
+  );
+});
+
+test('getTelegramMessageContextBlock: a forwarded voice note carries the mark, a reply voice note the quote, a plain one nothing', () => {
+  const forwardedVoice = { ...makeTopicVoiceMessage(topicRootMessage), forward_origin: forwardOrigins.channel } as Message.VoiceMessage;
+  assert.equal(
+    getTelegramMessageContextBlock(forwardedVoice, identity),
+    `[Forwarded message · from: channel Ops Alerts · originally sent: ${originalSentAtIso}]`,
+  );
+  assert.equal(
+    getTelegramMessageContextBlock(makeTopicVoiceMessage(agentAnswer), identity),
+    ['[Replying to an earlier message · from: assistant]', '> The build failed:', '> API_URL is not set'].join('\n'),
+  );
+  assert.equal(getTelegramMessageContextBlock(makeTopicVoiceMessage(topicRootMessage), identity), undefined);
+});
+
+test('getTelegramMessageContextBlock: a forward that is also a reply carries the quote first, the mark next to the forwarded words', () => {
+  assert.equal(
+    getTelegramMessageContextBlock(makeForwardedTextMessage(forwardOrigins.channel, agentAnswer), identity),
+    [
+      '[Replying to an earlier message · from: assistant]',
+      '> The build failed:',
+      '> API_URL is not set',
+      '',
+      `[Forwarded message · from: channel Ops Alerts · originally sent: ${originalSentAtIso}]`,
+    ].join('\n'),
+  );
+});
+
+test('getTelegramMessageContextBlock: a message that is neither a reply nor a forward has no block', () => {
+  assert.equal(getTelegramMessageContextBlock(makePlainMessage('hello'), identity), undefined);
 });

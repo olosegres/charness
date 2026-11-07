@@ -186,7 +186,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     // was forwarded to a session that was gone — dropped. The behaviour is `deliverLatePrompt`'s (below) and the e2e's.
     const deliver = botSource.slice(botSource.indexOf('async function deliverActivePrompt('), botSource.indexOf('async function cancelPendingQuestionAndForward('));
     assert.match(deliver, /const opening = await openTopicRequest\(key, text, intake\);\n(?:\s*\/\/[^\n]*\n)+\s*const outcome = await deliverLatePrompt\(\{/);
-    assert.ok(deliver.includes('forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { replyContext, requestHeader: opening.header }),'), 'the forward\'s own outcome is the answer');
+    assert.ok(deliver.includes('forward: () => forwardPromptToAgent(key, getThreadAdapter(key), text, sentAtMs, { messageContext, requestHeader: opening.header }),'), 'the forward\'s own outcome is the answer');
     assert.match(deliver, /reportNoSession: async \(isAlreadyTold\) => \{\n\s*if \(!isAlreadyTold\) await replyToThread\(key, t\('agent\.no_session'\)\);\n\s*\},/, 'the topic is told once; the request is settled below, for the wake and the forward alike');
     assert.ok(deliver.includes('wake: () => wakeSleepingSessionForPrompt(key),'), 'the wake says whether its start already posted why it failed');
     assert.doesNotMatch(deliver, /closeRequest|trackTopicRequestTurn/, 'the request is closed or tracked in one place');
@@ -198,7 +198,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
     assert.doesNotMatch(botSource, /forwardPrompt: async \(key, text\) => \{ await forwardPromptToAgent/);
     const cancel = botSource.slice(botSource.indexOf('async function cancelPendingQuestionAndForward('), botSource.indexOf('async function applyQuestionAnswer('));
     assert.match(cancel, /\): Promise<LatePromptOutcome> \{/);
-    assert.ok(cancel.includes('return forwardPromptToAgent(key, adapter, text, sentAtMs, { replyContext, requestHeader });'));
+    assert.ok(cancel.includes('return forwardPromptToAgent(key, adapter, text, sentAtMs, { messageContext, requestHeader });'));
   });
 
   it('a request is settled by where its prompt went: tracked, or closed when no session was left to take it', () => {
@@ -216,7 +216,7 @@ describe('the bot buffers a prompt for a starting session through it, in one pla
       { name: '/schedule', call: 'deliverPromptOrBuffer(key, `${opening.header}${wrappedPrompt}`, isStarting)', count: 1 },
       { name: 'an album and a file', call: 'deliverPromptOrBuffer(key, `${opening.header}${quotedPrompt}`, isStarting)', count: 2 },
       { name: 'a scheduled run', call: 'deliverPromptOrBuffer(key, `${opening.header}${text}`, startupPromptBuffer.checkIsStarting(conversationKey))', count: 1 },
-      { name: 'free text that cancels a pending question', call: 'cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, replyContext, opening.header)', count: 1 },
+      { name: 'free text that cancels a pending question', call: 'cancelPendingQuestionAndForward(key, adapter, text, sentAtMs, messageContext, opening.header)', count: 1 },
     ];
     for (const { name, call, count } of sites) {
       const settled = new RegExp(`const delivery = await ${call.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')};\\n\\s*await settleTopicRequestAfterDelivery\\(key, opening, delivery\\);`, 'g');

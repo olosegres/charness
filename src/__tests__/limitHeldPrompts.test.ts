@@ -216,7 +216,9 @@ describe('the bot holds and releases them (R23)', () => {
 
   it('they ride the next prompt forwarded to a live session — the operator\'s message, the resume\'s nudge — and a recovery replays them', () => {
     const forward = getFunction('async function forwardPromptToLiveAgent(');
-    assert.match(forward, /const textWithHeld = isReplayable && adapter\.checkIsActive\(key\) \? limitHeldPrompts\.releaseWithForward\(key, text\) : text;/);
+    assert.match(forward, /const quotedBody = isReplayable && adapter\.checkIsActive\(key\) \? limitHeldPrompts\.releaseWithForward\(key, ownBody\) : ownBody;/);
+    // The message's own words take the reply quote / forwarded mark; the held prompts follow the folded text, unmarked.
+    assert.ok(forward.indexOf('const ownBody = getPromptWithMessageContext(text,') < forward.indexOf('limitHeldPrompts.releaseWithForward'));
     const fold = forward.indexOf('limitHeldPrompts.releaseWithForward');
     const cache = forward.indexOf('lastForwardedPrompt.set(keyToString(key), body);');
     assert.ok(fold > 0 && cache > fold, 'folded before the wedge-recovery cache');

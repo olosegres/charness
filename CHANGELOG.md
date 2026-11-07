@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**A message you forward into a topic now reaches the agent marked as forwarded — from whom and when it was originally sent — instead of passing for your own words.**
+Before, the agent got only the text of a forwarded message: two bot alerts you forwarded as examples were read as your own report, and nothing told it they came from somewhere else.
+Now:
+  - A forwarded text, a caption, a voice note (its transcript) and a file or an album lead with one line — «[Forwarded message · from: channel Ops Alerts · originally sent: 2026-11-06T14:20:00+04:00]». It names the origin (a user with their @username, a hidden user, a chat or a channel, with the post's signature when it has one) and the original send time on your `/timezone` clock.
+  - Each forwarded message is marked on its own: several forwards followed by your own words reach the agent as separate messages, every forward with its own origin and only your words unmarked. A forward that is also a reply carries the reply quote and the mark. A message that starts with a slash and a message typed into a terminal topic reach the agent unmarked, as before.
+  - A scheduled run held over a usage-limit wait rides after the message that ends the wait, and no longer sits under that message's reply quote or forwarded mark as if it were part of it.
+
 **A scheduled run and a check alert no longer pin themselves into the topic, and the alert says what happened in a sentence instead of printing a command line.**
 Before, every fired schedule and every check alert was pinned (the pins piled up as run history), and a check alert printed the shell command, its exit code and the raw output — «🚨 Check "watch builder S2" failed: exit 1 (every 5m) $ kill -0 4242 2>/dev/null || { echo "worker 4242 exited"; exit 1; }; …» — which says neither what happened nor why.
 Now:

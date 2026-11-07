@@ -12,10 +12,9 @@
  *   - forum service message → null;
  *   - no textual content → null;
  *   - over-cap text → truncated + `… [truncated]`, still line-prefixed;
- *   - DM (no `topicRootId`) genuine reply → block;
- *   - folding (`getPromptWithReplyQuote`): the block leads the prompt after a
- *     blank line; no block, a slash command or a terminal's shell line → the
- *     prompt unchanged.
+ *   - DM (no `topicRootId`) genuine reply → block.
+ *
+ * Folding the block into a prompt is `messageContext.test.ts`.
  */
 
 import { test } from 'node:test';
@@ -23,7 +22,6 @@ import * as assert from 'node:assert/strict';
 import {
   extractReplyQuote,
   buildReplyQuoteBlock,
-  getPromptWithReplyQuote,
   replyQuoteMaxChars,
   type ReplyQuoteSource,
 } from '../utils/replyQuote';
@@ -172,38 +170,5 @@ test('extractReplyQuote → buildReplyQuoteBlock: end-to-end genuine reply', () 
   assert.equal(
     block,
     ['[Replying to an earlier message · from: assistant]', '> X did Y'].join('\n'),
-  );
-});
-
-/** The block of a reply to the agent's answer, as the bridge renders it. */
-const assistantBlock = ['[Replying to an earlier message · from: assistant]', '> X did Y'].join('\n');
-
-/** An agent prompt — neither a slash command nor a terminal's shell line. */
-const agentPrompt = { isSlashCommand: false, isShellInput: false };
-
-test('getPromptWithReplyQuote: the block leads the prompt, a blank line between', () => {
-  assert.equal(
-    getPromptWithReplyQuote('why did it fail?', { ...agentPrompt, block: assistantBlock }),
-    `${assistantBlock}\n\nwhy did it fail?`,
-  );
-});
-
-test('getPromptWithReplyQuote: no block (not a reply, or nothing quotable) → the prompt unchanged', () => {
-  assert.equal(getPromptWithReplyQuote('why did it fail?', { ...agentPrompt, block: undefined }), 'why did it fail?');
-});
-
-test('getPromptWithReplyQuote: a slash command stays a bare control token', () => {
-  assert.equal(
-    getPromptWithReplyQuote('/compact', { ...agentPrompt, block: assistantBlock, isSlashCommand: true }),
-    '/compact',
-  );
-});
-
-test('getPromptWithReplyQuote: a terminal shell line never carries the block', () => {
-  // Typed into a shell, `> X did Y` would run `did Y` with its output
-  // overwriting a file named `X` in the bound folder.
-  assert.equal(
-    getPromptWithReplyQuote('ls -la', { ...agentPrompt, block: assistantBlock, isShellInput: true }),
-    'ls -la',
   );
 });
