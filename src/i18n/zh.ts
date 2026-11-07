@@ -1011,7 +1011,7 @@ export const zhDict: Record<string, string> = {
   'account.row.apiCreditExpired': '    🎁 API 额度已于 {day} 到期 — 请设置新金额：charness claude-profiles credit {name} <余额>',
   'account.row.apiCreditRenewedEstimate': '    🎁 API 额度已更新 ≈ {since} · ≈ {left} / {grant} · 通过机器人花费 {spent} · 到期时间请看 Console › Billing',
   'account.row.apiCreditRenewed': '    🎁 API 额度已更新 ≈ {since} · 此后已花费 {spent}',
-  'account.row.apiCreditSpent': '    🎁 API 额度：自 {since} 起通过机器人花费 {spent}',
+  'account.row.apiCreditUnconfirmed': '    🎁 API 额度：{day} 被拒绝 — 下一次成功的回合会显示它已恢复',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API 额度可能已用完 · 自 {since} 起已花费 {spent}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API 额度可能已用完',
   'account.usageHint': '用量：各窗口已用 %，然后是何时重置（🔄 2小时后 = 两小时后）。',

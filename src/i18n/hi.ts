@@ -1016,7 +1016,7 @@ export const hiDict: Record<string, string> = {
   'account.row.apiCreditExpired': '    🎁 API क्रेडिट {day} को समाप्त हो गया — नया आँकड़ा दें: charness claude-profiles credit {name} <शेष>',
   'account.row.apiCreditRenewedEstimate': '    🎁 API क्रेडिट नवीनीकृत ≈ {since} · ≈ {left} / {grant} · बॉट से {spent} खर्च · समाप्ति: Console › Billing देखें',
   'account.row.apiCreditRenewed': '    🎁 API क्रेडिट नवीनीकृत ≈ {since} · तब से {spent} खर्च',
-  'account.row.apiCreditSpent': '    🎁 API क्रेडिट: {since} से बॉट के जरिए {spent} खर्च',
+  'account.row.apiCreditUnconfirmed': '    🎁 API क्रेडिट: {day} को अस्वीकृत — अगला टर्न जो चलेगा, दिखाएगा कि यह लौट आया',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API क्रेडिट शायद खत्म · {since} से {spent} खर्च',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API क्रेडिट शायद खत्म',
   'account.usageHint': 'उपयोग: हर विंडो का % खर्च, फिर कब रीसेट होगी (🔄 2घं में = दो घंटे बाद)।',

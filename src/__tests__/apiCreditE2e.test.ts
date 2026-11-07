@@ -14,7 +14,7 @@
  *   → a NEW figure starts the count over (the old turn is not subtracted from it)
  *   → the credits run out («Credit balance is too low») after the figure: `/accounts` says «probably used up», and a
  *     figure given after that brings the estimate back
- *   → `--clear` takes the figure away and the line falls back to the bare spend; a subscription account is refused with a reason and nothing written
+ *   → `--clear` takes the figure and the credit line away (the «💳» spend line stays); a subscription account is refused with a reason and nothing written
  *
  * What the unit tests cover instead: the estimate and the file (`claudeApiCredit.test.ts`), every wording of the line
  * (`claudeProfileUsageLines.test.ts`), the command line's arguments (`claudeProfilesCredit.test.ts`).
@@ -242,12 +242,14 @@ describe('The bonus API credit end to end: built charness, built command line, f
     await getCharness().waitFor('the new figure to end the used-up mark', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.[apiAccount]?.creditExhaustedAt === undefined);
   });
 
-  it('--clear takes the figure away, the line falls back to the bare spend; a subscription account is refused with the reason and nothing is written for it', async () => {
+  it('--clear takes the figure and the credit line away, the «💳» spend line stays; a subscription account is refused with the reason and nothing is written for it', async () => {
     assert.match(findCreditLine(await readAccountRowLines()) ?? '', leftOfGrant('30\\.00'), 'the figure is on the screen before it is cleared');
     const cleared = runCreditCommand(apiAccount, '--clear');
     assert.equal(cleared.code, 0, cleared.stderr);
-    // The figure is gone; the line is not — it falls back to what the bot saw the account spend since its first turn.
-    assert.match(findCreditLine(await readAccountRowLines()) ?? '', /^ {4}🎁 API credit: \$0\.50 spent via the bot since \d{2}\.\d{2}$/);
+    // The figure is gone, and with it the credit line: the «💳» line above already says what the account spent since its first turn.
+    const afterClear = await readAccountRowLines();
+    assert.equal(findCreditLine(afterClear), undefined);
+    assert.match(afterClear[0], /^ {4}💳 \$0\.50 spent since \d{2}\.\d{2} · last turn \$0\.25$/);
     assert.equal(readCreditFile()[apiAccount], undefined);
 
     const refused = runCreditCommand(subscriptionAccount, '5');

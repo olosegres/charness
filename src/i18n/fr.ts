@@ -1017,7 +1017,7 @@ export const frDict: Record<string, string> = {
   'account.row.apiCreditExpired': '    🎁 crédit API expiré le {day} — indique la nouvelle valeur : charness claude-profiles credit {name} <reste>',
   'account.row.apiCreditRenewedEstimate': '    🎁 crédit API renouvelé ≈ {since} · ≈ {left} sur {grant} · {spent} dépensés via le bot · expiration : voir Console › Billing',
   'account.row.apiCreditRenewed': '    🎁 crédit API renouvelé ≈ {since} · {spent} dépensés depuis',
-  'account.row.apiCreditSpent': '    🎁 crédit API : {spent} dépensés via le bot depuis le {since}',
+  'account.row.apiCreditUnconfirmed': '    🎁 crédit API : refusé le {day} — le prochain tour qui passera montrera qu\'il est revenu',
   'account.row.apiCreditProbablyUsedUp': '    🎁 crédit API probablement épuisé · {spent} dépensés depuis le {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 crédit API probablement épuisé',
   'account.usageHint': 'Usage : % de chaque fenêtre consommé, puis quand elle se réinitialise (🔄 dans 2h = dans deux heures).',

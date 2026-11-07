@@ -83,6 +83,69 @@ describe('StateStore: Claude profile usage and the hidden default record', () =>
   });
 });
 
+describe('StateStore: the used-up credit evidence of an account', () => {
+  let creditDir = '';
+  let credits: StateStore;
+  const refusedAt = '2026-11-07T09:00:00.000Z';
+
+  before(async () => {
+    creditDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-profiles-credit-state-'));
+    credits = new StateStore(creditDir, { saveDebounceMs: 5 });
+    await credits.init();
+    await credits.upsertClaudeProfileRecord('api', { createdAt: '2026-10-01T00:00:00.000Z', billing: 'api' });
+    await credits.upsertClaudeProfileRecord('sub', { createdAt: '2026-10-01T00:00:00.000Z', billing: 'subscription' });
+  });
+
+  after(async () => {
+    await credits.flush();
+    fs.rmSync(creditDir, { recursive: true, force: true });
+  });
+
+  const record = (name: string) => credits.getClaudeProfileRecord(name);
+
+  it('the operator acting on an API account lifts the mark but KEEPS the refusal, so the next billed turn still renews; on any other account the mark just ends', () => {
+    credits.setClaudeProfileCreditExhausted('api', refusedAt);
+    credits.setClaudeProfileCreditExhausted('sub', refusedAt);
+    credits.liftClaudeProfileCreditExhaustion('api');
+    credits.liftClaudeProfileCreditExhaustion('sub');
+    assert.deepEqual([record('api')?.creditExhaustedAt, record('api')?.creditUnconfirmedSince], [undefined, refusedAt]);
+    assert.deepEqual([record('sub')?.creditExhaustedAt, record('sub')?.creditUnconfirmedSince], [undefined, undefined]);
+  });
+
+  it('a second pick changes nothing; a new refusal replaces the kept one with the mark again', () => {
+    credits.liftClaudeProfileCreditExhaustion('api');
+    assert.equal(record('api')?.creditUnconfirmedSince, refusedAt, 'a pick with no mark leaves the kept refusal alone');
+    credits.setClaudeProfileCreditExhausted('api', '2026-11-07T10:00:00.000Z');
+    assert.deepEqual([record('api')?.creditExhaustedAt, record('api')?.creditUnconfirmedSince], ['2026-11-07T10:00:00.000Z', undefined]);
+  });
+
+  it('a newer figure clears both the mark and the kept refusal', () => {
+    credits.liftClaudeProfileCreditExhaustion('api');
+    credits.clearClaudeProfileCreditEvidence('api');
+    assert.deepEqual([record('api')?.creditExhaustedAt, record('api')?.creditUnconfirmedSince], [undefined, undefined]);
+    credits.clearClaudeProfileCreditEvidence('api');
+    credits.clearClaudeProfileCreditEvidence('ghost');
+  });
+
+  it('a renewal ends the mark and the kept refusal, starts the spend counter at 0 from its instant, and says it did', () => {
+    credits.setClaudeProfileCreditExhausted('api', refusedAt);
+    credits.liftClaudeProfileCreditExhaustion('api');
+    assert.equal(credits.setClaudeProfileCreditRenewed('api', '2026-11-08T09:00:00.000Z'), true);
+    assert.deepEqual(
+      [record('api')?.creditExhaustedAt, record('api')?.creditUnconfirmedSince, record('api')?.creditRenewedAt, record('api')?.creditSpend],
+      [undefined, undefined, '2026-11-08T09:00:00.000Z', { since: '2026-11-08T09:00:00.000Z', usd: 0 }],
+    );
+  });
+
+  it('a renewal is REFUSED when a refusal newer than it is recorded — a turn failed while the answer was on its way — and nothing changes', () => {
+    credits.setClaudeProfileCreditExhausted('api', '2026-11-09T09:00:05.000Z');
+    assert.equal(credits.setClaudeProfileCreditRenewed('api', '2026-11-09T09:00:00.000Z'), false);
+    assert.deepEqual([record('api')?.creditExhaustedAt, record('api')?.creditRenewedAt], ['2026-11-09T09:00:05.000Z', '2026-11-08T09:00:00.000Z']);
+    assert.equal(credits.setClaudeProfileCreditRenewed('api', '2026-11-09T09:00:05.000Z'), true, 'a refusal at the very instant is not newer');
+    assert.equal(credits.setClaudeProfileCreditRenewed('ghost', '2026-11-09T09:00:05.000Z'), false, 'an unregistered name is ignored');
+  });
+});
+
 describe('StateStore: OpenCode provider usage', () => {
   it('a provider\'s auth kind and usage are stored per provider id and survive a reload; an unseen provider reads as nothing', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-usage-state-'));

@@ -272,6 +272,19 @@ describe('what the bot can tell of an API account\'s credit, for an agent and fo
     assert.deepEqual([entryOf(apiView()).spentUsd, entryOf(apiView()).probablyUsedUp], [null, false]);
   });
 
+  it('an expired credit with a pending refusal is STILL reported probablyUsedUp — the refusal the exclusion reads, not the line — with its expiry', () => {
+    const expiredAnchor = { ...anchor, expiresOn: '2026-10-20' };
+    const entry = entryOf(apiView({ creditAnchor: expiredAnchor, creditExhaustedAt: inHours(-1) }));
+    assert.deepEqual([entry.probablyUsedUp, entry.expiresOn, entry.remainingEstimateUsd], [true, '2026-10-20', 0]);
+    assert.equal(entry.isEligible, false, 'and the account stays out of the ranking, as the report says');
+    assert.equal(entryOf(apiView({ creditAnchor: expiredAnchor })).probablyUsedUp, false, 'expired alone is not a refusal');
+  });
+
+  it('a refusal the operator acted on is NOT reported as used up: the account is usable, the remainder is unknown, the renewal awaits', () => {
+    const entry = entryOf(apiView({ creditAnchor: anchor, creditSpend: { since: anchor.anchoredAt, usd: 66 }, creditUnconfirmedSince: inHours(-1) }));
+    assert.deepEqual([entry.probablyUsedUp, entry.remainingEstimateUsd, entry.spentUsd, entry.renewedAt, entry.isEligible], [false, null, 66, null, true]);
+  });
+
   it('is empty for an account that is not billed to API credits — whatever stray figure it carries', () => {
     const entry = entryOf(buildView('work', { creditAnchor: anchor, creditSpend: { since: anchor.anchoredAt, usd: 1 }, creditExhaustedAt: inHours(-1) }));
     assert.deepEqual([entry.spentUsd, entry.remainingEstimateUsd, entry.expiresOn, entry.probablyUsedUp, entry.renewedAt], [null, null, null, false, null]);
@@ -283,6 +296,24 @@ describe('what the bot can tell of an API account\'s credit, for an agent and fo
     const renewed = formatClaudeProfileCliLine(entryOf(apiView({ creditAnchor: anchor, creditRenewedAt: '2026-10-23T09:00:00.000Z', creditSpend: { since: '2026-10-23T09:00:00.000Z', usd: 0 } })), nowMs);
     assert.match(renewed, /no windows {2}\$0\.00 spent via the bot {2}≈ \$200\.00 left {2}renewed ≈ 2026-10-23$/);
     assert.match(formatClaudeProfileCliLine(entryOf(apiView({ creditExhaustedAt: inHours(-1) })), nowMs), /no windows {2}CREDITS PROBABLY USED UP$/);
+  });
+
+  it('a figure the operator gave after a refusal they had acted on ends that too in the view', () => {
+    const view = buildClaudeProfileUsageView({
+      dataDir: '/home/user/.charness',
+      name: 'console',
+      record: { createdAt: '2026-10-01T00:00:00.000Z', billing: 'api', creditUnconfirmedSince: new Date(Date.parse(anchor.anchoredAt) - 3_600_000).toISOString() },
+      creditAnchor: anchor,
+    });
+    assert.equal(view.creditUnconfirmedSince, undefined);
+    assert.equal(entryOf(view).remainingEstimateUsd, 67.71);
+    const newer = buildClaudeProfileUsageView({
+      dataDir: '/home/user/.charness',
+      name: 'console',
+      record: { createdAt: '2026-10-01T00:00:00.000Z', billing: 'api', creditUnconfirmedSince: new Date(Date.parse(anchor.anchoredAt) + 3_600_000).toISOString() },
+      creditAnchor: anchor,
+    });
+    assert.ok(newer.creditUnconfirmedSince, 'a refusal AFTER the figure stays');
   });
 
   it('a figure the operator gave after the refusal ends the mark in the view too — for a reader of state.json alone', () => {

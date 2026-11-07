@@ -115,18 +115,31 @@ describe('formatClaudeProfileUsageLines: the bonus API credit of an account bill
     );
   });
 
-  it('with no figure: the spend since the first counted turn — the line is always there for an account that spent', () => {
-    assert.deepEqual(lines({ apiSpend }), [spendLine, '    🎁 API credit: $12.34 spent via the bot since 06.11']);
+  it('with no figure and no renewal the «💳» line already says the spend since the first turn: no second line saying it again', () => {
+    assert.deepEqual(lines({ apiSpend }), [spendLine]);
     assert.deepEqual(lines({}), [], 'nothing counted, nothing to say');
   });
 
-  it('probably used up after a refusal — with the spend since, with no figure and with one, and bare when nothing was counted; no second used-up line', () => {
-    assert.deepEqual(lines({ apiSpend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }), [spendLine, '    🎁 API credit probably used up · $12.34 spent since 06.11']);
+  it('probably used up after a refusal — with the spend since when a figure or a renewal gives its own period, just «probably used up» when the «💳» line carries the spend; no second used-up line', () => {
+    assert.deepEqual(lines({ apiSpend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }), [spendLine, '    🎁 API credit probably used up'], 'the spend is in the line above');
     assert.deepEqual(
       lines({ apiSpend, creditAnchor: anchor, creditSpend: spend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }),
       [spendLine, '    🎁 API credit probably used up · $6.51 spent since 07.11'],
     );
+    const renewedAt = '2026-11-07T07:00:00.000Z';
+    assert.deepEqual(
+      lines({ apiSpend, creditRenewedAt: renewedAt, creditSpend: { since: renewedAt, usd: 1 }, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }),
+      [spendLine, '    🎁 API credit probably used up · $1.00 spent since 07.11'],
+      'a renewal is a period of its own too',
+    );
     assert.deepEqual(lines({ creditExhaustedAt: '2026-11-07T09:00:00.000Z' }), ['    🎁 API credit probably used up']);
+  });
+
+  it('after a refusal the operator acted on (picked the account again): says it was refused and awaits the answer — neither «used up» nor the stale remainder', () => {
+    const unconfirmed = lines({ apiSpend, creditAnchor: anchor, creditSpend: spend, creditUnconfirmedSince: '2026-11-07T09:00:00.000Z' });
+    assert.deepEqual(unconfirmed, [spendLine, '    🎁 API credit: refused 07.11 — the next turn that goes through shows it is back']);
+    assert.ok(!unconfirmed.some((line) => line.includes('≈') || line.includes('used up')));
+    assert.deepEqual(lines({ creditUnconfirmedSince: '2026-11-07T09:00:00.000Z' }), ['    🎁 API credit: refused 07.11 — the next turn that goes through shows it is back']);
   });
 
   it('a refusal older than the figure is no news: the estimate stands', () => {
@@ -180,7 +193,9 @@ describe('formatClaudeProfileUsageLines: the bonus API credit of an account bill
   it('is localised', async () => {
     const russian = await runWithLocale('ru', async () => lines({ creditAnchor: anchor, creditSpend: spend }));
     assert.deepEqual(russian, ['    🎁 API-кредит ≈ $61.20 из $200.00 · через бота потрачено $6.51 с 07.11 · истекает 15.11']);
-    const probably = await runWithLocale('ru', async () => lines({ apiSpend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }));
-    assert.equal(probably[1], '    🎁 API-кредит, вероятно, израсходован · $12.34 потрачено с 06.11');
+    const probably = await runWithLocale('ru', async () => lines({ apiSpend, creditAnchor: anchor, creditSpend: spend, creditExhaustedAt: '2026-11-07T09:00:00.000Z' }));
+    assert.equal(probably[1], '    🎁 API-кредит, вероятно, израсходован · $6.51 потрачено с 07.11');
+    const unconfirmed = await runWithLocale('ru', async () => lines({ creditUnconfirmedSince: '2026-11-07T09:00:00.000Z' }));
+    assert.equal(unconfirmed[0], '    🎁 API-кредит: отказ 07.11 — следующий ход, который пройдёт, покажет, что он вернулся');
   });
 });

@@ -20,7 +20,7 @@ import {
   claudeApiCreditFileName,
   getClaudeApiCreditEstimate,
   getClaudeApiCreditPeriod,
-  listProfilesWithSupersededCreditMark,
+  listProfilesWithSupersededCreditEvidence,
   parseClaudeApiCreditDay,
   readClaudeApiCreditAnchors,
   resetClaudeApiCreditCache,
@@ -53,7 +53,7 @@ describe('getClaudeApiCreditPeriod', () => {
 describe('getClaudeApiCreditEstimate: the operator\'s figure', () => {
   it('is the figure minus what the bot saw spent since, with the grant and the expiry the operator gave', () => {
     assert.deepEqual(estimate({ spend: { since: anchor.anchoredAt, usd: 6.51 } }), {
-      status: 'available', basis: 'anchor', since: anchor.anchoredAt, spentUsd: 6.51, leftUsd: 61.2, grantUsd: 200, expiresOn: '2026-11-15', renewedAt: null,
+      status: 'available', basis: 'anchor', since: anchor.anchoredAt, spentUsd: 6.51, leftUsd: 61.2, grantUsd: 200, expiresOn: '2026-11-15', renewedAt: null, isProbablyUsedUp: false, unconfirmedSince: null,
     }, '67.71 − 6.51');
     assert.equal(estimate()?.spentUsd, 0, 'nothing spent yet');
     assert.equal(estimate()?.leftUsd, 67.71);
@@ -104,7 +104,7 @@ describe('getClaudeApiCreditEstimate: the operator\'s figure', () => {
 describe('getClaudeApiCreditEstimate: a renewal the bot detected', () => {
   it('re-anchors on the LAST GIVEN grant: the counter is at zero, the expiry is unknown — never the figure\'s old one', () => {
     assert.deepEqual(estimate({ renewedAt, spend: { since: renewedAt, usd: 0 } }), {
-      status: 'available', basis: 'renewal', since: renewedAt, spentUsd: 0, leftUsd: 200, grantUsd: 200, expiresOn: null, renewedAt,
+      status: 'available', basis: 'renewal', since: renewedAt, spentUsd: 0, leftUsd: 200, grantUsd: 200, expiresOn: null, renewedAt, isProbablyUsedUp: false, unconfirmedSince: null,
     });
     assert.equal(estimate({ renewedAt, spend: { since: renewedAt, usd: 0.25 } })?.leftUsd, 199.75);
   });
@@ -138,7 +138,7 @@ describe('getClaudeApiCreditEstimate: a renewal the bot detected', () => {
 describe('getClaudeApiCreditEstimate: no figure', () => {
   it('tells the spend since the account\'s first counted turn', () => {
     assert.deepEqual(estimate({ anchor: undefined, apiSpend }), {
-      status: 'available', basis: 'firstTurn', since: apiSpend.since, spentUsd: 39.12, leftUsd: null, grantUsd: null, expiresOn: null, renewedAt: null,
+      status: 'available', basis: 'firstTurn', since: apiSpend.since, spentUsd: 39.12, leftUsd: null, grantUsd: null, expiresOn: null, renewedAt: null, isProbablyUsedUp: false, unconfirmedSince: null,
     });
   });
 
@@ -164,16 +164,53 @@ describe('the used-up mark next to the operator\'s figure', () => {
     assert.equal(checkIsClaudeApiCreditMarkCurrent(null, anchor.anchoredAt), false);
   });
 
-  it('lists the profiles whose mark a figure has superseded — and only those', () => {
+  it('lists the profiles whose evidence a figure has superseded — the mark or the refusal the operator acted on — and only those', () => {
     const records = {
       older: { creditExhaustedAt: '2026-11-06T09:00:00.000Z' },
       newer: { creditExhaustedAt: '2026-11-07T09:00:00.000Z' },
       noMark: {},
       noFigure: { creditExhaustedAt: '2026-11-01T09:00:00.000Z' },
+      olderUnconfirmed: { creditUnconfirmedSince: '2026-11-06T09:00:00.000Z' },
+      newerUnconfirmed: { creditUnconfirmedSince: '2026-11-07T09:00:00.000Z' },
     };
-    const anchors = { older: anchor, newer: anchor, noMark: anchor };
-    assert.deepEqual(listProfilesWithSupersededCreditMark(records, anchors), ['older'], 'a mark with no figure beside it stays');
-    assert.deepEqual(listProfilesWithSupersededCreditMark(records, {}), []);
+    const anchors = { older: anchor, newer: anchor, noMark: anchor, olderUnconfirmed: anchor, newerUnconfirmed: anchor };
+    assert.deepEqual(listProfilesWithSupersededCreditEvidence(records, anchors), ['older', 'olderUnconfirmed'], 'a mark with no figure beside it stays');
+    assert.deepEqual(listProfilesWithSupersededCreditEvidence(records, {}), []);
+  });
+});
+
+describe('getClaudeApiCreditEstimate: the refusal the operator acted on', () => {
+  const refusedAt = '2026-11-07T09:00:00.000Z';
+
+  it('is «unconfirmed»: no claim of «used up», no stale remainder — the spend is still told', () => {
+    const unconfirmed = estimate({ spend: { since: anchor.anchoredAt, usd: 6.51 }, creditUnconfirmedSince: refusedAt });
+    assert.equal(unconfirmed?.status, 'unconfirmed');
+    assert.equal(unconfirmed?.isProbablyUsedUp, false, 'the exclusion is lifted: an agent must not read it as refused');
+    assert.equal(unconfirmed?.unconfirmedSince, refusedAt);
+    assert.equal(unconfirmed?.leftUsd, null, 'the remainder the refusal just contradicted is not shown');
+    assert.equal(unconfirmed?.spentUsd, 6.51);
+  });
+
+  it('the mark wins when both are there (a new refusal replaces it), an older refusal than the figure is ignored, and with nothing counted it still speaks', () => {
+    assert.equal(estimate({ creditExhaustedAt: refusedAt, creditUnconfirmedSince: '2026-11-07T08:30:00.000Z' })?.status, 'probablyUsedUp');
+    assert.equal(estimate({ creditUnconfirmedSince: '2026-11-06T09:00:00.000Z' })?.status, 'available');
+    const bare = estimate({ anchor: undefined, creditUnconfirmedSince: refusedAt });
+    assert.deepEqual([bare?.status, bare?.since], ['unconfirmed', null]);
+  });
+
+  it('expired outranks it on the line, and after a renewal a refusal older than the renewal is no news', () => {
+    assert.equal(estimate({ creditUnconfirmedSince: refusedAt, nowMs: Date.parse('2026-11-20T00:00:00Z') })?.status, 'expired');
+    assert.equal(estimate({ renewedAt: '2026-11-07T09:30:00.000Z', creditUnconfirmedSince: refusedAt })?.status, 'available');
+  });
+});
+
+describe('getClaudeApiCreditEstimate: probably used up is read from the refusal, not from the line', () => {
+  it('an expired credit with a pending refusal is still refused: the line says expired, isProbablyUsedUp says used up', () => {
+    const both = estimate({ nowMs: Date.parse('2026-11-20T00:00:00Z'), creditExhaustedAt: '2026-11-07T09:00:00.000Z' });
+    assert.equal(both?.status, 'expired');
+    assert.equal(both?.isProbablyUsedUp, true);
+    assert.equal(estimate({ nowMs: Date.parse('2026-11-20T00:00:00Z') })?.isProbablyUsedUp, false);
+    assert.equal(estimate({ creditExhaustedAt: '2026-11-06T09:00:00.000Z' })?.isProbablyUsedUp, false, 'a refusal older than the figure is no refusal');
   });
 });
 

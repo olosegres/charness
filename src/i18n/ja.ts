@@ -1011,7 +1011,7 @@ export const jaDict: Record<string, string> = {
   'account.row.apiCreditExpired': '    🎁 API クレジットは {day} に失効しました — 新しい金額を設定: charness claude-profiles credit {name} <残高>',
   'account.row.apiCreditRenewedEstimate': '    🎁 API クレジット更新 ≈ {since} · ≈ {left} / {grant} · ボット経由で {spent} 使用 · 有効期限は Console › Billing で確認',
   'account.row.apiCreditRenewed': '    🎁 API クレジット更新 ≈ {since} · それ以降 {spent} 使用',
-  'account.row.apiCreditSpent': '    🎁 API クレジット: {since} からボット経由で {spent} 使用',
+  'account.row.apiCreditUnconfirmed': '    🎁 API クレジット: {day} に拒否 — 次に通ったターンで復活したか分かります',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API クレジットはおそらく使い切り · {since} から {spent} 使用',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API クレジットはおそらく使い切り',
   'account.usageHint': '使用状況: 各ウィンドウの使用 %、続いてリセットまでの時間（🔄 2時間後 = 2 時間後）。',

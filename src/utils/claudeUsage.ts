@@ -356,6 +356,8 @@ export interface ClaudeProfileUsageView {
   creditSpend?: ClaudeApiCreditSpend;
   /** When the bot detected that the account's used-up credit was back; absent = never. */
   creditRenewedAt?: string;
+  /** The refusal the operator acted on (picked the account again): not excluded any more, the renewal still awaited; absent = none. */
+  creditUnconfirmedSince?: string;
 }
 
 /** One profile in the report the MCP tool and the CLI hand to an agent. */
@@ -688,14 +690,23 @@ export function describeClaudeLaunchOutcome(report: Pick<ClaudeProfilesReport, '
 /** The credit fields of a report entry: the bot's estimate for an API account, empty for any other. */
 function getClaudeProfileReportCredit(profile: ClaudeProfileUsageView, nowMs: number): Pick<ClaudeProfileReportEntry, 'spentUsd' | 'remainingEstimateUsd' | 'expiresOn' | 'probablyUsedUp' | 'renewedAt'> {
   const estimate = profile.billing === 'api'
-    ? getClaudeApiCreditEstimate({ anchor: profile.creditAnchor, renewedAt: profile.creditRenewedAt, spend: profile.creditSpend, apiSpend: profile.apiSpend, creditExhaustedAt: profile.creditExhaustedAt, nowMs })
+    ? getClaudeApiCreditEstimate({
+      anchor: profile.creditAnchor,
+      renewedAt: profile.creditRenewedAt,
+      spend: profile.creditSpend,
+      apiSpend: profile.apiSpend,
+      creditExhaustedAt: profile.creditExhaustedAt,
+      creditUnconfirmedSince: profile.creditUnconfirmedSince,
+      nowMs,
+    })
     : null;
   return {
     // Nothing counted yet (no figure, no renewal, no turn) is no count, not a count of zero.
     spentUsd: estimate && estimate.basis !== 'none' ? estimate.spentUsd : null,
     remainingEstimateUsd: estimate?.leftUsd ?? null,
     expiresOn: estimate?.expiresOn ?? null,
-    probablyUsedUp: estimate?.status === 'probablyUsedUp',
+    // From the refusal itself, not from the line: an expired credit with a pending refusal is still refused.
+    probablyUsedUp: estimate?.isProbablyUsedUp ?? false,
     renewedAt: estimate?.renewedAt ?? null,
   };
 }
@@ -759,6 +770,7 @@ export function buildClaudeProfileUsageView(input: {
     // A figure the operator gave after the refusal ends the mark (the bot clears the stored one when it reads the figures; a
     // reader of `state.json` alone, the command line, must see the same).
     creditExhaustedAt: record?.creditExhaustedAt && (!creditAnchor || checkIsClaudeApiCreditMarkCurrent(record.creditExhaustedAt, creditAnchor.anchoredAt)) ? record.creditExhaustedAt : null,
+    ...(record?.creditUnconfirmedSince && (!creditAnchor || checkIsClaudeApiCreditMarkCurrent(record.creditUnconfirmedSince, creditAnchor.anchoredAt)) ? { creditUnconfirmedSince: record.creditUnconfirmedSince } : {}),
     ...(record?.apiSpend ? { apiSpend: record.apiSpend } : {}),
     ...(creditAnchor ? { creditAnchor } : {}),
     ...(record?.creditSpend ? { creditSpend: record.creditSpend } : {}),

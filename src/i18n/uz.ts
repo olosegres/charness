@@ -1017,7 +1017,7 @@ export const uzDict: Record<string, string> = {
   'account.row.apiCreditExpired': '    🎁 API kreditining muddati {day} da tugadi — yangi qiymatni kiriting: charness claude-profiles credit {name} <qoldiq>',
   'account.row.apiCreditRenewedEstimate': '    🎁 API krediti yangilandi ≈ {since} · ≈ {left} / {grant} · bot orqali {spent} sarflandi · muddati: Console › Billing da',
   'account.row.apiCreditRenewed': '    🎁 API krediti yangilandi ≈ {since} · shundan beri {spent} sarflandi',
-  'account.row.apiCreditSpent': '    🎁 API krediti: bot orqali {since} dan beri {spent} sarflandi',
+  'account.row.apiCreditUnconfirmed': '    🎁 API krediti: {day} da rad etildi — o\'tgan keyingi navbat uning qaytganini ko\'rsatadi',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API krediti, ehtimol, tugadi · {since} dan beri {spent} sarflandi',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API krediti, ehtimol, tugadi',
   'account.usageHint': 'Foydalanish: har bir oynaning ishlatilgan %, so‘ng qachon tiklanishi (🔄 2soat dan keyin = ikki soatdan keyin).',

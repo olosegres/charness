@@ -301,16 +301,9 @@ function readTextFileOrNull(file: string): string | null {
   }
 }
 
-/**
- * @description The API key a profile's own sessions use, read to make ONE direct request on its behalf (the daily credit
- * recheck): the pasted key file, else the key a Console login stored in the profile's `.claude.json`. `null` when the
- * directory holds neither, or what it holds does not look like an API key. The caller puts it in a request header and
- * nowhere else — it is never logged, echoed or stored.
- */
-export function readClaudeProfileApiKey(configDir: string): string | null {
-  const pastedKey = readTextFileOrNull(resolveClaudeProfileApiKeyFile(configDir));
-  if (pastedKey !== null && checkIsPlausibleAnthropicApiKey(pastedKey)) return pastedKey.trim();
-  const stateText = readTextFileOrNull(path.join(configDir, claudeProfileStateFileName));
+/** The `primaryApiKey` of a Claude Code state file (`.claude.json`), `null` when there is none or it is no API key. */
+function readPrimaryApiKey(stateFile: string): string | null {
+  const stateText = readTextFileOrNull(stateFile);
   if (stateText === null) return null;
   try {
     const parsed = claudeProfileStateKeySchema.safeParse(JSON.parse(stateText));
@@ -318,6 +311,27 @@ export function readClaudeProfileApiKey(configDir: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * @description The API key an ADDED profile's own sessions use, read to make ONE direct request on its behalf (the daily
+ * credit recheck): the pasted key file, else the key a Console login stored in the profile's `.claude.json`. `null` when the
+ * directory holds neither, or what it holds does not look like an API key. The caller puts it in a request header and
+ * nowhere else — it is never logged, echoed or stored.
+ */
+export function readClaudeProfileApiKey(configDir: string): string | null {
+  const pastedKey = readTextFileOrNull(resolveClaudeProfileApiKeyFile(configDir));
+  if (pastedKey !== null && checkIsPlausibleAnthropicApiKey(pastedKey)) return pastedKey.trim();
+  return readPrimaryApiKey(path.join(configDir, claudeProfileStateFileName));
+}
+
+/**
+ * @description The API key of the `default` profile (`~/.claude`, when it is billed to API credits): the bot never writes a
+ * pasted key there, so only the key a Console login left in the home `.claude.json` (`primaryApiKey`) counts. Same rules as
+ * {@link readClaudeProfileApiKey}.
+ */
+export function readDefaultClaudeProfileApiKey(homeDir: string = os.homedir()): string | null {
+  return readPrimaryApiKey(path.join(homeDir, claudeProfileStateFileName));
 }
 
 /** Whether the profile directory holds a pasted key (`null` = `~/.claude`, which never does: the bot writes none there). */

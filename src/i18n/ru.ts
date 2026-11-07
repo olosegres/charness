@@ -1021,7 +1021,7 @@ export const ruDict: Record<string, string> = {
   'account.row.apiCreditExpired': '    🎁 API-кредит истёк {day} — укажи новую цифру: charness claude-profiles credit {name} <остаток>',
   'account.row.apiCreditRenewedEstimate': '    🎁 API-кредит обновился ≈ {since} · ≈ {left} из {grant} · через бота потрачено {spent} · срок — в Console › Billing',
   'account.row.apiCreditRenewed': '    🎁 API-кредит обновился ≈ {since} · {spent} потрачено с тех пор',
-  'account.row.apiCreditSpent': '    🎁 API-кредит: через бота потрачено {spent} с {since}',
+  'account.row.apiCreditUnconfirmed': '    🎁 API-кредит: отказ {day} — следующий ход, который пройдёт, покажет, что он вернулся',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API-кредит, вероятно, израсходован · {spent} потрачено с {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API-кредит, вероятно, израсходован',
   'account.usageHint': 'Использование: % окна израсходовано, затем когда сбросится (🔄 через 2ч = через два часа).',

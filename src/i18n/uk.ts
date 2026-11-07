@@ -1023,7 +1023,7 @@ export const ukDict: Record<string, string> = {
   'account.row.apiCreditExpired': '    🎁 API-кредит сплив {day} — вкажи нову цифру: charness claude-profiles credit {name} <залишок>',
   'account.row.apiCreditRenewedEstimate': '    🎁 API-кредит оновився ≈ {since} · ≈ {left} з {grant} · через бота витрачено {spent} · термін — у Console › Billing',
   'account.row.apiCreditRenewed': '    🎁 API-кредит оновився ≈ {since} · {spent} витрачено відтоді',
-  'account.row.apiCreditSpent': '    🎁 API-кредит: через бота витрачено {spent} з {since}',
+  'account.row.apiCreditUnconfirmed': '    🎁 API-кредит: відмова {day} — наступний хід, що пройде, покаже, що він повернувся',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API-кредит, ймовірно, вичерпано · {spent} витрачено з {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API-кредит, ймовірно, вичерпано',
   'account.usageHint': 'Використання: % вікна витрачено, потім коли скинеться (🔄 за 2г = за дві години).',

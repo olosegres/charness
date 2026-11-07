@@ -32,6 +32,8 @@ export interface ClaudeProfileUsageSource {
   creditSpend?: ClaudeApiCreditSpend;
   /** When the bot detected that the used-up credit was back (the credit period starts there). */
   creditRenewedAt?: string;
+  /** The refusal the operator acted on: the account is usable again, the renewal still awaited. */
+  creditUnconfirmedSince?: string;
 }
 
 /** What the expired-credit line names when the source carries no profile name (a placeholder the operator replaces). */
@@ -79,8 +81,8 @@ export function formatClaudeProfileUsageLines(source: ClaudeProfileUsageSource |
 
 /**
  * The lines of an account billed to API credits: its spend through the bot, and the one credit line
- * (`formatClaudeApiCreditLine`) that tells how the credit stands — it also carries the «probably used up» sign, so this
- * account has no separate used-up line.
+ * (`formatClaudeApiCreditLine`) that tells how the credit stands when the spend line does not already — it also carries the
+ * «probably used up» sign, so this account has no separate used-up line.
  */
 function formatApiBillingLines(source: ClaudeProfileUsageSource, timezone: string, nowMs: number): string[] {
   const lines: string[] = [];
@@ -91,9 +93,11 @@ function formatApiBillingLines(source: ClaudeProfileUsageSource, timezone: strin
     spend: source.creditSpend,
     apiSpend: source.apiSpend,
     creditExhaustedAt: source.creditExhaustedAt,
+    creditUnconfirmedSince: source.creditUnconfirmedSince,
     nowMs,
   });
-  if (credit) lines.push(formatClaudeApiCreditLine(credit, source.name ?? unknownProfileName, timezone, nowMs));
+  const creditLine = credit ? formatClaudeApiCreditLine(credit, source.name ?? unknownProfileName, timezone, nowMs) : null;
+  if (creditLine !== null) lines.push(creditLine);
   return lines;
 }
 
@@ -106,24 +110,27 @@ function formatCreditExpiryDay(expiresOn: string, nowMs: number): string {
 }
 
 /**
- * @description The one line of the bonus API credit (`utils/claudeApiCredit.ts`), always there for an API account that has
- * anything to say:
+ * @description The one line of the bonus API credit (`utils/claudeApiCredit.ts`), `null` when the «💳» spend line above it
+ * already says everything (no figure, no renewal, nothing refused: both would show the same total from the same day):
  *   • a figure from the operator: `🎁 API credit ≈ $61.20 of $200.00 · $6.51 spent via the bot since 07.11 · expires 15.11`
- *     (the grant and the expiry only when they were given);
- *   • none: `🎁 API credit: $6.51 spent via the bot since 07.11` (since its first counted turn);
+ *     (the grant and the expiry only when they were given) — the period differs from the «💳» lifetime total, so both show;
  *   • after a renewal the bot detected: `🎁 API credit renewed ≈ 08.11 · ≈ $199.75 of $200.00 · $0.25 spent via the bot ·
  *     check expiry in Console › Billing` on the last given grant, or only `renewed ≈ 08.11 · $0.25 spent since` without one;
  *   • after a refusal for the balance: `🎁 API credit probably used up · $6.51 spent since 07.11` — «probably»: the bot cannot
- *     be sure, and the daily recheck ends it by itself;
+ *     be sure, and the daily recheck ends it by itself — or just `probably used up` when the «💳» line carries the spend;
+ *   • after a refusal the operator acted on (picked the account again): `refused 07.11 — the next turn that goes through shows
+ *     it is back` — no claim of «used up» and no stale remainder;
  *   • past the expiry day the operator gave: `expired`, with the command that sets the new figure.
  * The «≈» and «via the bot» say what the figures are: the bot's own count, not the Console's balance.
  */
-function formatClaudeApiCreditLine(credit: ClaudeApiCreditEstimate, profileName: string, timezone: string, nowMs: number): string {
+function formatClaudeApiCreditLine(credit: ClaudeApiCreditEstimate, profileName: string, timezone: string, nowMs: number): string | null {
   if (credit.status === 'expired') return t('account.row.apiCreditExpired', { day: formatCreditExpiryDay(credit.expiresOn, nowMs), name: profileName });
   const spent = formatUsd(credit.spentUsd);
   const since = credit.since === null ? '' : formatSpendSinceDay(credit.since, timezone, nowMs);
-  if (credit.status === 'probablyUsedUp') {
-    return credit.since === null ? t('account.row.apiCreditProbablyUsedUpBare') : t('account.row.apiCreditProbablyUsedUp', { spent, since });
+  const isPeriodOfItsOwn = credit.basis === 'anchor' || credit.basis === 'renewal';
+  if (credit.status === 'probablyUsedUp') return isPeriodOfItsOwn ? t('account.row.apiCreditProbablyUsedUp', { spent, since }) : t('account.row.apiCreditProbablyUsedUpBare');
+  if (credit.status === 'unconfirmed') {
+    return t('account.row.apiCreditUnconfirmed', { day: credit.unconfirmedSince === null ? '' : formatSpendSinceDay(credit.unconfirmedSince, timezone, nowMs) });
   }
   if (credit.basis === 'anchor' && credit.leftUsd !== null) {
     return t('account.row.apiCredit', {
@@ -139,7 +146,7 @@ function formatClaudeApiCreditLine(credit: ClaudeApiCreditEstimate, profileName:
       ? t('account.row.apiCreditRenewedEstimate', { since, left: formatUsd(credit.leftUsd), grant: formatUsd(credit.grantUsd), spent })
       : t('account.row.apiCreditRenewed', { since, spent });
   }
-  return t('account.row.apiCreditSpent', { spent, since });
+  return null;
 }
 
 /** The placeholders every spend text fills: `total`, `since` (the day, in `timezone`), `last` (the last turn's). */

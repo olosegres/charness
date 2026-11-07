@@ -1018,7 +1018,7 @@ export const ptDict: Record<string, string> = {
   'account.row.apiCreditExpired': '    🎁 crédito de API expirou em {day} — informe o novo valor: charness claude-profiles credit {name} <restante>',
   'account.row.apiCreditRenewedEstimate': '    🎁 crédito de API renovado ≈ {since} · ≈ {left} de {grant} · {spent} gastos pelo bot · validade: veja Console › Billing',
   'account.row.apiCreditRenewed': '    🎁 crédito de API renovado ≈ {since} · {spent} gastos desde então',
-  'account.row.apiCreditSpent': '    🎁 crédito de API: {spent} gastos pelo bot desde {since}',
+  'account.row.apiCreditUnconfirmed': '    🎁 crédito de API: recusado em {day} — o próximo turno que passar mostrará que voltou',
   'account.row.apiCreditProbablyUsedUp': '    🎁 crédito de API provavelmente esgotado · {spent} gastos desde {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 crédito de API provavelmente esgotado',
   'account.usageHint': 'Uso: % de cada janela consumido, depois quando reinicia (🔄 em 2h = daqui a duas horas).',

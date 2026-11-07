@@ -1017,7 +1017,7 @@ export const esDict: Record<string, string> = {
   'account.row.apiCreditExpired': '    🎁 crédito de API caducado el {day}: indica la nueva cifra con charness claude-profiles credit {name} <resto>',
   'account.row.apiCreditRenewedEstimate': '    🎁 crédito de API renovado ≈ {since} · ≈ {left} de {grant} · {spent} gastados con el bot · caducidad: ver Console › Billing',
   'account.row.apiCreditRenewed': '    🎁 crédito de API renovado ≈ {since} · {spent} gastados desde entonces',
-  'account.row.apiCreditSpent': '    🎁 crédito de API: {spent} gastados con el bot desde el {since}',
+  'account.row.apiCreditUnconfirmed': '    🎁 crédito de API: rechazado el {day} — el próximo turno que pase mostrará que ha vuelto',
   'account.row.apiCreditProbablyUsedUp': '    🎁 crédito de API probablemente agotado · {spent} gastados desde el {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 crédito de API probablemente agotado',
   'account.usageHint': 'Uso: % de cada ventana consumido, luego cuándo se reinicia (🔄 en 2h = dentro de dos horas).',

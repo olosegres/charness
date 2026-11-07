@@ -854,6 +854,29 @@ describe('claudeAccounts: /accounts over its ports', () => {
     await harness.state.setClaudeProfileOverride(harness.key, null);
   });
 
+  it('the operator\'s own act on an API account marked used up — a pasted key, a pick in General — lifts the mark but KEEPS the refusal as unconfirmed, so the first turn that goes through still renews it', async () => {
+    const dir = path.join(dataDir, 'claude-profiles', 'console');
+    const refusedAt = '2026-11-07T09:00:00.000Z';
+    apiKeyCheck = 'valid';
+    setStatus(dir, { loggedIn: true, email: null, subscriptionType: null, orgName: null, authMethod: 'api_key_helper', apiKeySource: 'apiKeyHelper', billing: 'api' });
+
+    harness.state.setClaudeProfileCreditExhausted('console', refusedAt);
+    await accounts.onClaudeProfileApiKey(harness.key, { name: 'console', configDir: dir, billing: 'api' }, `sk-ant-api03-${'y'.repeat(40)}`);
+    const afterKey = harness.state.getClaudeProfileRecord('console');
+    assert.deepEqual([afterKey?.creditExhaustedAt, afterKey?.creditUnconfirmedSince], [undefined, refusedAt], 'a pasted key');
+
+    harness.state.setClaudeProfileCreditExhausted('console', '2026-11-08T09:00:00.000Z');
+    isGeneralTopic = true;
+    try {
+      await harness.runCommand('accounts', 'use console');
+      await harness.runCommand('accounts', 'use default');
+    } finally {
+      isGeneralTopic = false;
+    }
+    const afterPick = harness.state.getClaudeProfileRecord('console');
+    assert.deepEqual([afterPick?.creditExhaustedAt, afterPick?.creditUnconfirmedSince], [undefined, '2026-11-08T09:00:00.000Z'], 'the pick in General');
+  });
+
   it('a Console sign-in that created its key replaces an older pasted key; the record takes what the sessions see', async () => {
     const dir = path.join(dataDir, 'claude-profiles', 'console');
     assert.equal(fs.existsSync(path.join(dir, 'charness-api-key')), true);

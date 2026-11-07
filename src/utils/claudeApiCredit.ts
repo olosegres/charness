@@ -7,7 +7,9 @@
  * operator's last figure, or the bot's last detected renewal, or, with neither, the first counted turn. A refusal for a used-up
  * balance (`creditExhaustedAt`) says «probably used up» (the bot cannot be sure); the daily recheck
  * (`claudeApiCreditRecheck.ts`) or a billed turn that goes through ends it as a RENEWAL: the counter starts over from that
- * moment.
+ * moment. When the operator acts on the account first (picks it again, signs it in again) the refusal is not forgotten:
+ * the exclusion ends but the refusal stays as `creditUnconfirmedSince`, so the first billed turn that goes through is still
+ * the renewal — the line says the refusal is unconfirmed, and claims neither «used up» nor a stale remainder.
  *
  * The operator's figure is an ANCHOR — what was left at an instant, how big the grant was, the day it expires — and adds
  * `left ≈ anchored amount − spend since` to the line. A renewal re-anchors on the LAST GIVEN grant (never one derived from
@@ -89,6 +91,8 @@ export interface ClaudeApiCreditInput {
   /** The account's whole spend through the bot: the spend of the `firstTurn` period. */
   apiSpend: Pick<ClaudeApiSpend, 'since' | 'totalUsd'> | undefined;
   creditExhaustedAt: string | null | undefined;
+  /** The refusal the operator acted on (picked the account again, signed it in again): the exclusion is lifted, the renewal still awaited. */
+  creditUnconfirmedSince?: string | null;
   nowMs: number;
 }
 
@@ -104,16 +108,24 @@ interface ClaudeApiCreditEstimateFigures {
   grantUsd: number | null;
   /** When the bot detected the renewal the period starts at (`basis: 'renewal'`), else `null`. */
   renewedAt: string | null;
+  /**
+   * A refusal for a used-up balance came after the period began and the operator has not acted on it — whatever else the
+   * estimate says (an expired credit with a pending refusal is still refused): what an agent reads as `probablyUsedUp`.
+   */
+  isProbablyUsedUp: boolean;
+  /** The refusal the operator acted on, while it still awaits the answer that confirms the renewal; `null` otherwise. */
+  unconfirmedSince: string | null;
 }
 
 /**
  * @name ClaudeApiCreditEstimate
  * @description What the bot can tell of a profile's credit at an instant. `probablyUsedUp`: a refusal for a used-up balance
- * came after the period began (the bot cannot be sure: spend elsewhere, a renewal it has not seen yet); `expired`: the
- * operator's expiry day is over (so it always has one). `expiresOn` is the operator's, never guessed: unknown after a renewal.
+ * came after the period began (the bot cannot be sure: spend elsewhere, a renewal it has not seen yet); `unconfirmed`: such a
+ * refusal the operator has since acted on — no claim of «used up», no stale remainder; `expired`: the operator's expiry day
+ * is over (so it always has one). `expiresOn` is the operator's, never guessed: unknown after a renewal.
  */
 export type ClaudeApiCreditEstimate =
-  | (ClaudeApiCreditEstimateFigures & { status: 'available' | 'probablyUsedUp'; expiresOn: string | null })
+  | (ClaudeApiCreditEstimateFigures & { status: 'available' | 'probablyUsedUp' | 'unconfirmed'; expiresOn: string | null })
   | (ClaudeApiCreditEstimateFigures & { status: 'expired'; expiresOn: string });
 
 /**
@@ -137,15 +149,20 @@ export function checkIsClaudeApiCreditMarkCurrent(creditExhaustedAt: string | nu
 }
 
 /**
- * @description The profiles whose used-up mark an anchor has superseded (the anchor is the same instant or newer): the bot
- * clears those marks when it reads the anchors, so the figure and the mark never tell opposite stories on one screen.
+ * @description The profiles whose used-up evidence (the mark, or the refusal the operator acted on) an anchor has
+ * superseded (the anchor is the same instant or newer): the bot clears it when it reads the anchors, so the figure and the
+ * mark never tell opposite stories on one screen.
  */
-export function listProfilesWithSupersededCreditMark(
-  records: Readonly<Record<string, { creditExhaustedAt?: string }>>,
+export function listProfilesWithSupersededCreditEvidence(
+  records: Readonly<Record<string, { creditExhaustedAt?: string; creditUnconfirmedSince?: string }>>,
   anchors: ClaudeApiCreditAnchors,
 ): string[] {
   return Object.entries(records)
-    .filter(([name, record]) => record.creditExhaustedAt !== undefined && anchors[name] !== undefined && !checkIsClaudeApiCreditMarkCurrent(record.creditExhaustedAt, anchors[name].anchoredAt))
+    .filter(([name, record]) => {
+      const anchor = anchors[name];
+      if (anchor === undefined) return false;
+      return [record.creditExhaustedAt, record.creditUnconfirmedSince].some((instant) => instant !== undefined && !checkIsClaudeApiCreditMarkCurrent(instant, anchor.anchoredAt));
+    })
     .map(([name]) => name);
 }
 
@@ -175,7 +192,7 @@ export function getClaudeApiCreditEstimate(input: ClaudeApiCreditInput): ClaudeA
   // After a renewal the credit is re-anchored on the LAST GIVEN grant: with none ever given, no remainder is known.
   const grantUsd = input.anchor?.grantUsd ?? null;
   const remainingUsd = period.basis === 'anchor' ? input.anchor?.remainingUsd ?? null : period.basis === 'renewal' ? grantUsd : null;
-  const figures: ClaudeApiCreditEstimateFigures = {
+  const figures: Omit<ClaudeApiCreditEstimateFigures, 'isProbablyUsedUp' | 'unconfirmedSince'> = {
     basis: period.basis,
     since: period.since,
     spentUsd,
@@ -184,11 +201,16 @@ export function getClaudeApiCreditEstimate(input: ClaudeApiCreditInput): ClaudeA
     renewedAt: period.basis === 'renewal' ? period.since : null,
   };
   const expiresOn = period.basis === 'anchor' ? input.anchor?.expiresOn ?? null : null;
-  if (expiresOn !== null && checkIsClaudeApiCreditExpired(expiresOn, input.nowMs)) return { ...figures, leftUsd: 0, status: 'expired', expiresOn };
-  const isMarkCurrent = !!input.creditExhaustedAt && (period.since === null || checkIsClaudeApiCreditMarkCurrent(input.creditExhaustedAt, period.since));
-  if (isMarkCurrent) return { ...figures, leftUsd: figures.leftUsd === null ? null : 0, status: 'probablyUsedUp', expiresOn };
+  const checkIsCurrent = (instant: string | null | undefined): boolean => !!instant && (period.since === null || checkIsClaudeApiCreditMarkCurrent(instant, period.since));
+  const isProbablyUsedUp = checkIsCurrent(input.creditExhaustedAt);
+  const unconfirmedSince = !isProbablyUsedUp && checkIsCurrent(input.creditUnconfirmedSince) ? input.creditUnconfirmedSince ?? null : null;
+  const withEvidence = { ...figures, isProbablyUsedUp, unconfirmedSince };
+  if (expiresOn !== null && checkIsClaudeApiCreditExpired(expiresOn, input.nowMs)) return { ...withEvidence, leftUsd: 0, status: 'expired', expiresOn };
+  if (isProbablyUsedUp) return { ...withEvidence, leftUsd: figures.leftUsd === null ? null : 0, status: 'probablyUsedUp', expiresOn };
+  // The refusal was acted on: the remainder the figures would give is the one the refusal just contradicted.
+  if (unconfirmedSince !== null) return { ...withEvidence, leftUsd: null, status: 'unconfirmed', expiresOn };
   if (period.basis === 'none') return null;
-  return { ...figures, status: 'available', expiresOn };
+  return { ...withEvidence, status: 'available', expiresOn };
 }
 
 /**

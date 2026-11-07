@@ -1061,7 +1061,7 @@ export const enDict: Record<string, string> = {
   'account.row.apiCreditExpired': '    🎁 API credit expired {day} — give the new figure: charness claude-profiles credit {name} <left>',
   'account.row.apiCreditRenewedEstimate': '    🎁 API credit renewed ≈ {since} · ≈ {left} of {grant} · {spent} spent via the bot · check expiry in Console › Billing',
   'account.row.apiCreditRenewed': '    🎁 API credit renewed ≈ {since} · {spent} spent since',
-  'account.row.apiCreditSpent': '    🎁 API credit: {spent} spent via the bot since {since}',
+  'account.row.apiCreditUnconfirmed': '    🎁 API credit: refused {day} — the next turn that goes through shows it is back',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API credit probably used up · {spent} spent since {since}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API credit probably used up',
   'account.usageHint': 'Usage: % of each window used, then when it resets (🔄 in 2h = in two hours).',

@@ -449,7 +449,7 @@ import { sweepExpiredPairings } from './runners/hubPairing';
 import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOverview';
 import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
-import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
+import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
 import { buildClaudeProfileUsageView, buildClaudeProfileUsageViews, buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
@@ -488,7 +488,7 @@ import { createSelfUpdate } from './connectors/telegram/commands/selfUpdate';
 import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent, ClaudeTurnCostReport } from './adapters/claudeConfigDir';
 import { addClaudeApiSpend, computeClaudeTurnCostUsd, formatUsd, getClaudeTurnCostOutcome } from './utils/claudeApiSpend';
-import { addClaudeApiCreditSpend, getClaudeApiCreditPeriod, listProfilesWithSupersededCreditMark, readClaudeApiCreditAnchors, type ClaudeApiCreditAnchors } from './utils/claudeApiCredit';
+import { addClaudeApiCreditSpend, getClaudeApiCreditPeriod, listProfilesWithSupersededCreditEvidence, readClaudeApiCreditAnchors, type ClaudeApiCreditAnchors } from './utils/claudeApiCredit';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs, probeClaudeApiCredit, startClaudeApiCreditRechecks, type ClaudeApiCreditRecheckPorts } from './utils/claudeApiCreditRecheck';
 import { formatClaudeApiSpendWords } from './utils/claudeProfileUsageLines';
 import { resolveClaudeBinary } from './utils/resolveBinary';
@@ -8063,28 +8063,35 @@ const claudeUsageRefresher = createClaudeUsageRefresher({
 });
 
 /**
- * What the daily recheck of a used-up API credit (`utils/claudeApiCreditRecheck.ts`) reads and does in the bot: the added
- * profiles with their marks (after the operator's newer figures have ended the marks they supersede), their own keys, and
- * the state it writes — the attempt BEFORE the request, the renewal after an answer.
+ * What the daily recheck of a used-up API credit (`utils/claudeApiCreditRecheck.ts`) reads and does in the bot: the profiles
+ * with their marks (after the operator's newer figures have ended the marks they supersede), their own keys, and the state it
+ * writes — the attempt BEFORE the request, the renewal after an answer.
  */
 const claudeApiCreditRecheckPorts: ClaudeApiCreditRecheckPorts = {
   nowMs: () => Date.now(),
   intervalMs: ENV.testTimings.creditRecheckIntervalMs ?? claudeApiCreditRecheckIntervalMs,
   listProfiles: () => {
-    getClaudeApiCreditAnchors();
-    return Object.entries(state.getClaudeProfileRecords()).map(([name, record]) => ({
+    syncClaudeApiCreditAnchors();
+    return Object.entries(state.getAllClaudeProfileInfos()).map(([name, record]) => ({
       name,
       billing: record.billing ?? null,
-      configDir: resolveClaudeProfileDir(resolveDataDir(), name),
-      creditExhaustedAt: record.creditExhaustedAt ?? null,
+      // The refusal the operator acted on awaits its answer too: the account is in use again, but nothing has confirmed the credit.
+      creditExhaustedAt: record.creditExhaustedAt ?? record.creditUnconfirmedSince ?? null,
       creditRecheckedAt: record.creditRecheckedAt ?? null,
     }));
   },
-  readApiKey: readClaudeProfileApiKey,
+  readApiKey: (name) => {
+    if (name === defaultClaudeProfileName) return readDefaultClaudeProfileApiKey();
+    const configDir = resolveClaudeProfileDir(resolveDataDir(), name);
+    return configDir === null ? null : readClaudeProfileApiKey(configDir);
+  },
   probe: (apiKey) => probeClaudeApiCredit(apiKey),
   markRechecked: (name, atIso) => state.setClaudeProfileCreditRechecked(name, atIso),
-  onRenewed: (name, atIso) => state.setClaudeProfileCreditRenewed(name, atIso),
+  onRenewed: (name, atIso) => {
+    if (!state.setClaudeProfileCreditRenewed(name, atIso)) console.log(`[credit] ${name}: a refusal came in while the recheck was running, so the credit is not marked renewed`);
+  },
   log: (line) => console.log(line),
+  warn: (line) => console.warn(line),
 };
 
 /** The profile that owns a config directory (`null` = default); `null` for a directory outside the profiles root. */
@@ -8123,17 +8130,21 @@ function onClaudeTurnCost(key: SessionKey, configDir: string | null, report: Cla
   state.setClaudeCostBaseline(key, { sessionId: report.sessionId, totalCostUsd: report.totalCostUsd });
   const name = resolveClaudeProfileNameForDir(configDir);
   if (name === null) return;
-  // Read first: a figure newer than the account's used-up mark ends the mark before this turn is judged against it.
-  const creditAnchors = getClaudeApiCreditAnchors();
+  // Read first: a figure newer than the account's used-up evidence ends it before this turn is judged against it.
+  const creditAnchors = syncClaudeApiCreditAnchors();
   const info = state.getClaudeProfileInfo(name);
+  // The refusal the operator acted on (picked the account again) is still evidence: the turn that now goes through renews.
   const outcome = getClaudeTurnCostOutcome({
-    billing: info?.billing ?? null, isCreditExhausted: info?.creditExhaustedAt !== undefined, isError: report.isError, turnCostUsd,
+    billing: info?.billing ?? null,
+    isCreditExhausted: info?.creditExhaustedAt !== undefined || info?.creditUnconfirmedSince !== undefined,
+    isError: report.isError,
+    turnCostUsd,
   });
   const nowIso = new Date().toISOString();
-  // A billed turn that goes through on an API account marked used up is the proof the daily recheck looks for: the credit is
-  // back, and the account's spend counter starts over from this turn.
+  // A billed turn that goes through on an API account marked used up — or one the operator picked again after the refusal — is
+  // the proof the daily recheck looks for: the credit is back, and the account's spend counter starts over from this turn.
   if (outcome.isCreditMarkCleared && info?.billing === 'api') state.setClaudeProfileCreditRenewed(name, nowIso);
-  else if (outcome.isCreditMarkCleared) state.setClaudeProfileCreditExhausted(name, null);
+  else if (outcome.isCreditMarkCleared) state.liftClaudeProfileCreditExhaustion(name);
   if (outcome.spendUsd === null) return;
   const apiSpend = addClaudeApiSpend(info?.apiSpend, outcome.spendUsd, nowIso);
   state.setClaudeProfileApiSpend(name, apiSpend);
@@ -8144,24 +8155,25 @@ function onClaudeTurnCost(key: SessionKey, configDir: string | null, report: Cla
 }
 
 /**
- * The operator's credit figures (`utils/claudeApiCredit.ts`), read as the bot needs them: a figure newer than an account's
- * used-up mark ends that mark — the operator saying there is money is the signal a billed turn going through is — so the
- * stored mark, the fallback chain and the screens never contradict the figure.
+ * Read the operator's credit figures (`utils/claudeApiCredit.ts`) AND settle what they supersede: a figure newer than an
+ * account's used-up evidence (the mark, or the refusal the operator acted on) ends that evidence — the operator saying there is
+ * money is the signal a billed turn going through is — so the stored mark, the fallback chain and the screens never contradict
+ * the figure. It writes state: a call whose result is dropped is meant (a read path that must see the settled marks).
  */
-function getClaudeApiCreditAnchors(): ClaudeApiCreditAnchors {
+function syncClaudeApiCreditAnchors(): ClaudeApiCreditAnchors {
   const anchors = readClaudeApiCreditAnchors(resolveDataDir());
-  for (const name of listProfilesWithSupersededCreditMark(state.getAllClaudeProfileInfos(), anchors)) state.setClaudeProfileCreditExhausted(name, null);
+  for (const name of listProfilesWithSupersededCreditEvidence(state.getAllClaudeProfileInfos(), anchors)) state.clearClaudeProfileCreditEvidence(name);
   return anchors;
 }
 
 /** Every Claude profile's usage view as the bot knows it now: its record plus the operator's credit figures. */
 function getClaudeProfileUsageViews(): ClaudeProfileUsageView[] {
-  return buildClaudeProfileUsageViews({ dataDir: resolveDataDir(), records: state.getAllClaudeProfileInfos(), creditAnchors: getClaudeApiCreditAnchors() });
+  return buildClaudeProfileUsageViews({ dataDir: resolveDataDir(), records: state.getAllClaudeProfileInfos(), creditAnchors: syncClaudeApiCreditAnchors() });
 }
 
 /** One profile's usage view — the very one `/limits` renders, for the rows of `/accounts`. */
 function getClaudeProfileUsageView(name: string): ClaudeProfileUsageView {
-  return buildClaudeProfileUsageView({ dataDir: resolveDataDir(), name, record: state.getClaudeProfileInfo(name), creditAnchor: getClaudeApiCreditAnchors()[name] });
+  return buildClaudeProfileUsageView({ dataDir: resolveDataDir(), name, record: state.getClaudeProfileInfo(name), creditAnchor: syncClaudeApiCreditAnchors()[name] });
 }
 
 /** The model a topic's Claude session runs (or last ran), for the usage ranking's choice of windows. */
@@ -8171,7 +8183,7 @@ function getThreadClaudeModel(key: SessionKey): string | null {
 
 /** What `/status` names of a Claude profile: its last probed sign-in and email, and its limit mark (none until probed). */
 function readStatusAccountSource(name: string): ThreadStatusAccountSource {
-  getClaudeApiCreditAnchors();
+  syncClaudeApiCreditAnchors();
   const info = state.getClaudeProfileInfo(name);
   return {
     name, email: info?.email ?? null, loggedIn: info?.loggedIn, limitedUntil: info?.limitedUntil ?? null,
@@ -8272,7 +8284,7 @@ function getConversationAccountState(key: SessionKey): { isLimited: boolean; isA
   const nowMs = Date.now();
   const checkIsFuture = (instant: string | undefined): boolean => instant !== undefined && Date.parse(instant) > nowMs;
   if (position.backend === 'opencode') return { isLimited: checkIsFuture(state.getOpenCodeModelLimitedUntil(buildOpenCodeModelLabel(position))), isApiBilled: false };
-  getClaudeApiCreditAnchors();
+  syncClaudeApiCreditAnchors();
   const info = state.getClaudeProfileInfo(position.profile);
   return { isLimited: checkIsFuture(info?.limitedUntil) || info?.creditExhaustedAt !== undefined, isApiBilled: info?.billing === 'api' };
 }
@@ -8704,8 +8716,9 @@ function buildBackendSwitchTargetOfRung(to: FallbackChainEntry): BackendSwitchTa
  */
 async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): Promise<OperatorSwitchOutcome> {
   // The operator's own pick of an account whose API credits were used up is the act that ends that mark (topped up, or
-  // trying anyway): a failing request marks it again.
-  if (to.backend === 'claude') state.setClaudeProfileCreditExhausted(to.profile, null);
+  // trying anyway): a failing request marks it again. An API account keeps the refusal as unconfirmed, so the first turn that
+  // goes through still records the renewal.
+  if (to.backend === 'claude') state.liftClaudeProfileCreditExhaustion(to.profile);
   const currentFamily = getTopicBackendFamily(key);
   const from = getTopicFallbackPosition(key);
   const isUsageLimitWaitArmed = getArmedApiRetry(key)?.kind === 'usageLimit';

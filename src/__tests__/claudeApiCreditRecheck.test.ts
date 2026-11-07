@@ -1,6 +1,6 @@
 /**
  * @description The daily recheck of a used-up API credit (`utils/claudeApiCreditRecheck.ts`): the request is ONE tiny POST on
- * the account's own key with a bounded timeout and no retry, read as renewed / still used up / no conclusion; an account is
+ * the account's own key with a bounded timeout and no retry, read as renewed / still used up / model gone / no conclusion; an account is
  * due only while marked used up and a full interval after the later of the mark and its last attempt; a pass touches API
  * accounts only, records the attempt BEFORE the request, and logs one line for an answer it cannot read. Also the account's
  * own key (a pasted key file, else the key a Console login stored) and the API root (`ANTHROPIC_BASE_URL`).
@@ -17,6 +17,7 @@ import {
   checkIsClaudeApiCreditRecheckDue,
   claudeApiCreditProbeModel,
   getClaudeApiCreditProbeUrl,
+  listClaudeApiCreditProfilesWithoutKey,
   probeClaudeApiCredit,
   runDueClaudeApiCreditRechecks,
   startClaudeApiCreditRechecks,
@@ -25,7 +26,7 @@ import {
   type ClaudeApiCreditRecheckPorts,
   type ClaudeApiCreditRecheckProfile,
 } from '../utils/claudeApiCreditRecheck';
-import { claudeProfileApiKeyFileName, readClaudeProfileApiKey } from '../utils/claudeProfiles';
+import { claudeProfileApiKeyFileName, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey } from '../utils/claudeProfiles';
 
 const apiKey = `sk-ant-api03-${'k'.repeat(40)}`;
 const otherKey = `sk-ant-api03-${'o'.repeat(40)}`;
@@ -67,6 +68,15 @@ describe('probeClaudeApiCredit', () => {
     for (const status of [400, 402, 403]) {
       assert.deepEqual(await probeClaudeApiCredit(apiKey, { url: 'http://x.test/v1/messages', fetchImpl: createFetch({ status, body: balanceBody }).fetchImpl }), { kind: 'stillUsedUp' }, String(status));
     }
+  });
+
+  it('reads a model the API no longer knows (404, or a not_found_error body) as its own outcome — not as a quiet no-conclusion', async () => {
+    const gone = JSON.stringify({ type: 'error', error: { type: 'not_found_error', message: 'model: claude-haiku-5-5' } });
+    assert.deepEqual(await probeClaudeApiCredit(apiKey, { url: 'http://x.test/v1/messages', fetchImpl: createFetch({ status: 404, body: gone }).fetchImpl }), { kind: 'modelNotFound' });
+    assert.deepEqual(await probeClaudeApiCredit(apiKey, { url: 'http://x.test/v1/messages', fetchImpl: createFetch({ status: 400, body: gone }).fetchImpl }), { kind: 'modelNotFound' }, 'by the error type, whatever the status');
+    assert.deepEqual(await probeClaudeApiCredit(apiKey, { url: 'http://x.test/v1/messages', fetchImpl: createFetch({ status: 404, body: 'not found' }).fetchImpl }), { kind: 'modelNotFound' });
+    // The balance wording still wins: a refused balance is an answer about the account, whatever else the body says.
+    assert.deepEqual(await probeClaudeApiCredit(apiKey, { url: 'http://x.test/v1/messages', fetchImpl: createFetch({ status: 404, body: balanceBody }).fetchImpl }), { kind: 'stillUsedUp' });
   });
 
   it('reads any other answer as no conclusion, naming the status and nothing else — no body, no key', async () => {
@@ -128,16 +138,16 @@ describe('checkIsClaudeApiCreditRecheckDue', () => {
 describe('runDueClaudeApiCreditRechecks', () => {
   const markedAgo = new Date(nowMs - 2 * dayMs).toISOString();
   const profile = (overrides: Partial<ClaudeApiCreditRecheckProfile> = {}): ClaudeApiCreditRecheckProfile =>
-    ({ name: 'console', billing: 'api', configDir: '/profiles/console', creditExhaustedAt: markedAgo, creditRecheckedAt: null, ...overrides });
+    ({ name: 'console', billing: 'api', creditExhaustedAt: markedAgo, creditRecheckedAt: null, ...overrides });
 
   function createPorts(profiles: ClaudeApiCreditRecheckProfile[], probeOutcome: ClaudeApiCreditProbeOutcome = { kind: 'stillUsedUp' }) {
     const events: string[] = [];
-    const keys: Record<string, string | null> = { '/profiles/console': apiKey, '/profiles/spare': otherKey, '/profiles/nokey': null };
+    const keys: Record<string, string | null> = { console: apiKey, spare: otherKey, default: otherKey, nokey: null };
     const ports: ClaudeApiCreditRecheckPorts = {
       nowMs: () => nowMs,
       intervalMs: dayMs,
       listProfiles: () => profiles,
-      readApiKey: (configDir) => keys[configDir] ?? null,
+      readApiKey: (name) => keys[name] ?? null,
       probe: async (key) => {
         events.push(`probe ${key === apiKey ? 'console-key' : key === otherKey ? 'spare-key' : 'other-key'}`);
         return probeOutcome;
@@ -145,6 +155,7 @@ describe('runDueClaudeApiCreditRechecks', () => {
       markRechecked: (name, atIso) => events.push(`mark ${name} ${atIso}`),
       onRenewed: (name, atIso) => events.push(`renewed ${name} ${atIso}`),
       log: (line) => events.push(`log ${line}`),
+      warn: (line) => events.push(`warn ${line}`),
     };
     return { ports, events };
   }
@@ -178,24 +189,40 @@ describe('runDueClaudeApiCreditRechecks', () => {
     assert.ok(!logs[0].includes(apiKey));
   });
 
+  it('a model the API no longer knows is a WARNING naming the model — not an ordinary log line — and the credit is not marked renewed', async () => {
+    const { ports, events } = createPorts([profile()], { kind: 'modelNotFound' });
+    await runDueClaudeApiCreditRechecks(ports);
+    const warnings = events.filter((event) => event.startsWith('warn'));
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes(`"${claudeApiCreditProbeModel}"`), warnings[0]);
+    assert.ok(!events.some((event) => event.startsWith('renewed') || event.startsWith('log')));
+  });
+
   it('NEVER touches a subscription account — marked used up or not, with a key or not', async () => {
-    const { ports, events } = createPorts([profile({ name: 'sub', billing: 'subscription', configDir: '/profiles/spare' }), profile({ name: 'unrecorded', billing: null, configDir: '/profiles/spare' })], { kind: 'renewed' });
+    const { ports, events } = createPorts([profile({ name: 'spare', billing: 'subscription' }), profile({ name: 'unrecorded', billing: null })], { kind: 'renewed' });
     assert.deepEqual(await runDueClaudeApiCreditRechecks(ports), []);
     assert.deepEqual(events, []);
   });
 
-  it('leaves alone an API account that is not marked, one whose day is not up, and the default profile (no directory of its own)', async () => {
+  it('leaves alone an API account that is not marked and one whose day is not up', async () => {
     const { ports, events } = createPorts([
       profile({ creditExhaustedAt: null }),
-      profile({ name: 'recent', configDir: '/profiles/spare', creditRecheckedAt: new Date(nowMs - 3_600_000).toISOString() }),
-      profile({ name: 'default', configDir: null }),
+      profile({ name: 'spare', creditRecheckedAt: new Date(nowMs - 3_600_000).toISOString() }),
     ]);
     assert.deepEqual(await runDueClaudeApiCreditRechecks(ports), []);
     assert.deepEqual(events, []);
   });
 
+  it('rechecks the DEFAULT profile too when it is billed to API credits — on the key the bot reads for it', async () => {
+    const { ports, events } = createPorts([profile({ name: 'default' })], { kind: 'renewed' });
+    const results = await runDueClaudeApiCreditRechecks(ports);
+    assert.deepEqual(results, [{ name: 'default', outcome: { kind: 'renewed' } }]);
+    assert.deepEqual(events.filter((event) => event.startsWith('probe')), ['probe spare-key']);
+    assert.ok(events.includes(`renewed default ${new Date(nowMs).toISOString()}`));
+  });
+
   it('an account whose key the bot cannot read spends its day with ONE line and no request', async () => {
-    const { ports, events } = createPorts([profile({ name: 'nokey', configDir: '/profiles/nokey' })]);
+    const { ports, events } = createPorts([profile({ name: 'nokey' })]);
     const results = await runDueClaudeApiCreditRechecks(ports);
     assert.deepEqual(results, [{ name: 'nokey', outcome: { kind: 'noKey' } }]);
     assert.ok(events.some((event) => event.startsWith('mark nokey')), 'the day is spent');
@@ -204,7 +231,7 @@ describe('runDueClaudeApiCreditRechecks', () => {
   });
 
   it('rechecks each due API account on its OWN key, one after another', async () => {
-    const { ports, events } = createPorts([profile(), profile({ name: 'spare', configDir: '/profiles/spare' })]);
+    const { ports, events } = createPorts([profile(), profile({ name: 'spare' })]);
     await runDueClaudeApiCreditRechecks(ports);
     assert.deepEqual(events.filter((event) => event.startsWith('probe')), ['probe console-key', 'probe spare-key']);
   });
@@ -227,6 +254,7 @@ describe('startClaudeApiCreditRechecks', () => {
       markRechecked: () => undefined,
       onRenewed: () => undefined,
       log: () => undefined,
+      warn: () => undefined,
     };
     const originalList = ports.listProfiles;
     ports.listProfiles = () => {
@@ -237,14 +265,59 @@ describe('startClaudeApiCreditRechecks', () => {
       return listed;
     };
     const stop = startClaudeApiCreditRechecks(ports, 10);
-    assert.equal(passes, 1, 'a pass at once');
+    assert.equal(passes, 2, 'the boot look for accounts without a key, and a pass at once');
     await new Promise((resolve) => setTimeout(resolve, 60));
     stop();
     const stoppedAt = passes;
-    assert.ok(stoppedAt >= 3, `the timer ran passes (${stoppedAt})`);
+    assert.ok(stoppedAt >= 4, `the timer ran passes (${stoppedAt})`);
     assert.equal(maxConcurrent, 1);
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(passes, stoppedAt, 'stopped');
+  });
+});
+
+describe('the boot line for API accounts the bot can read no key for', () => {
+  const profiles: ClaudeApiCreditRecheckProfile[] = [
+    { name: 'default', billing: 'api', creditExhaustedAt: null, creditRecheckedAt: null },
+    { name: 'console', billing: 'api', creditExhaustedAt: null, creditRecheckedAt: null },
+    { name: 'work', billing: 'subscription', creditExhaustedAt: null, creditRecheckedAt: null },
+  ];
+  const keys: Record<string, string | null> = { default: null, console: apiKey, work: null };
+  const makePorts = (lines: string[]): ClaudeApiCreditRecheckPorts => ({
+    nowMs: () => nowMs,
+    intervalMs: dayMs,
+    listProfiles: () => profiles,
+    readApiKey: (name) => keys[name] ?? null,
+    probe: async () => ({ kind: 'stillUsedUp' }),
+    markRechecked: () => undefined,
+    onRenewed: () => undefined,
+    log: (line) => lines.push(line),
+    warn: (line) => lines.push(line),
+  });
+
+  it('lists the API accounts without a readable key — never a subscription account, never one with a key', () => {
+    assert.deepEqual(listClaudeApiCreditProfilesWithoutKey(makePorts([])), ['default']);
+  });
+
+  it('says it ONCE at boot, naming them, and not again on the passes after', async () => {
+    const lines: string[] = [];
+    const stop = startClaudeApiCreditRechecks(makePorts(lines), 10);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    stop();
+    assert.equal(lines.length, 1, lines.join(' | '));
+    assert.match(lines[0], /^\[credit\] default: billed to API credits, but the bot can read no API key for it .* never rechecked$/);
+  });
+
+  it('says nothing when every API account has a key', () => {
+    const lines: string[] = [];
+    keys.default = apiKey;
+    try {
+      const stop = startClaudeApiCreditRechecks(makePorts(lines), 1_000_000);
+      stop();
+    } finally {
+      keys.default = null;
+    }
+    assert.deepEqual(lines, []);
   });
 });
 
@@ -283,5 +356,32 @@ describe('readClaudeProfileApiKey', () => {
     fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ primaryApiKey: 42 }));
     assert.equal(readClaudeProfileApiKey(dir), null);
     assert.equal(readClaudeProfileApiKey(path.join(dir, 'missing')), null);
+  });
+});
+
+describe('readDefaultClaudeProfileApiKey', () => {
+  let home = '';
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-home-key-'));
+  });
+  afterEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('reads the primaryApiKey of the HOME .claude.json — where the CLI keeps the default profile\'s state', () => {
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ primaryApiKey: apiKey }));
+    assert.equal(readDefaultClaudeProfileApiKey(home), apiKey);
+  });
+
+  it('is null with no home state file, no key in it, or something that is no API key — and never reads the .claude directory\'s own files', () => {
+    assert.equal(readDefaultClaudeProfileApiKey(home), null);
+    fs.mkdirSync(path.join(home, '.claude'));
+    fs.writeFileSync(path.join(home, '.claude', 'charness-api-key'), apiKey);
+    fs.writeFileSync(path.join(home, '.claude', '.claude.json'), JSON.stringify({ primaryApiKey: apiKey }));
+    assert.equal(readDefaultClaudeProfileApiKey(home), null, 'the bot writes no key for the default profile; only a Console login\'s home key counts');
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: {} }));
+    assert.equal(readDefaultClaudeProfileApiKey(home), null);
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ primaryApiKey: 'sk-ant-oat01-notakey' }));
+    assert.equal(readDefaultClaudeProfileApiKey(home), null);
   });
 });

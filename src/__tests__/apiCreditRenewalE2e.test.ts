@@ -17,7 +17,10 @@
  *   → `charness claude-profiles --json` (the `claude_profiles` tool's report) carries the same: spent, remaining estimate,
  *     no expiry, not probably used up, the renewal instant
  *   → used up again, and a REAL turn that goes through is a recheck too: renewed at once, the API asked no more
- *   → through all of it the subscription account and the unmarked API account were never asked, and the API was asked exactly twice
+ *   → used up once more and the operator PICKS the account on /limits, as the refusal notice asks: it works at once, the mark
+ *     is lifted but the refusal stays «unconfirmed» (no «used up», no stale remainder), and the first turn that goes through
+ *     still renews it — the counter at 0 from that turn, nothing carried over from before the refusal
+ *   → through all of it the subscription account and the unmarked API account were never asked, and the API never twice within an interval
  *
  * What the unit tests cover instead: the probe's request and its reading, the due rule, a pass over the accounts
  * (`claudeApiCreditRecheck.test.ts`), the period and the estimate (`claudeApiCredit.test.ts`), every wording of the line
@@ -55,6 +58,7 @@ import {
   getAccountConfigDir,
   getAgentTurns,
   getSessionLaunches,
+  openLimitsBoard,
   readPersistedState,
   restartCharnessWithState,
   startCharnessOnInstance,
@@ -353,11 +357,51 @@ describe('A used-up API credit that comes back, end to end: built charness, fake
       return record?.creditExhaustedAt === undefined && (record?.creditRenewedAt ?? '') > renewedBefore;
     });
     assert.deepEqual(getApiRecord()?.creditSpend?.usd, fakeTurnCostUsd, 'the turn that proved it counts in the new period');
+    assert.equal(fakeApi.requests.length, 2, 'renewed by the turn: the API was asked no more');
     assert.match((await readAccountRowLines())[1], /^ {4}🎁 API credit renewed ≈ \d{2}\.\d{2} · ≈ \$199\.75 of \$200\.00 · \$0\.25 spent via the bot · /);
   });
 
-  it('through all of it the API was asked exactly twice, on the one account\'s key — never for the subscription account that was due all along, never for the API account that was not marked', () => {
-    assert.deepEqual(fakeApi.requests.map((request) => request.apiKey), [apiKey, apiKey]);
+  it('used up with a subscription to fall back on: the topic moves there; the operator PICKS the account again on /limits, as the notice asks — it works at once, the refusal stays «unconfirmed», and the first turn that goes through renews it with the counter at 0', async () => {
+    // The refusal now has a place to go: the subscription is next in the chain, so the topic leaves the exhausted account by itself.
+    await restartWithState((persisted) => {
+      persisted.fallbackChain = [{ backend: 'claude', profile: apiAccount, model: null }, { backend: 'claude', profile: 'default', model: null }];
+      persisted.claudeAutoSwitchOnLimitEnabled = true;
+    });
+    const renewedBefore = getApiRecord()?.creditRenewedAt ?? '';
+    assert.ok((getApiRecord()?.creditSpend?.usd ?? 0) > 0, 'the period before the refusal has spend that must NOT be carried over');
+    let launchesBefore = getSessionLaunches(getLayout()).length;
+    runOutOfCredits('RENEW-6');
+    await waitForSessionRespawn(getCharness(), getLayout(), 'the topic to move to the subscription', null, sessionId, launchesBefore);
+    await getCharness().waitFor('the account to be marked out of credits again', replyTimeoutMs, () => getApiRecord()?.creditExhaustedAt !== undefined);
+
+    // The topic is on the subscription now, so the API account's row on the board is a PICK (the current account's row opens its model page).
+    const board = await openLimitsBoard(fakeTelegram, topic, topicThreadId);
+    launchesBefore = getSessionLaunches(getLayout()).length;
+    await topic.tapAndAwaitAnswer(board.message, board.rowData(`Claude · ${apiAccount}`));
+    await waitForSessionRespawn(getCharness(), getLayout(), 'the session back under the API account', getAccountConfigDir(getLayout(), apiAccount), sessionId, launchesBefore);
+    const picked = getApiRecord();
+    assert.equal(picked?.creditExhaustedAt, undefined, 'the pick ended the mark: the account works');
+    assert.ok(picked?.creditUnconfirmedSince, 'and the refusal is kept, awaiting the answer that confirms the renewal');
+    const unconfirmedLines = await readAccountRowLines();
+    assert.match(unconfirmedLines[1], /^ {4}🎁 API credit: refused \d{2}\.\d{2} — the next turn that goes through shows it is back$/);
+    assert.ok(!unconfirmedLines.some((line) => line.includes('used up') || line.includes('≈')), 'neither «used up» nor the stale remainder');
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'RENEW-7 please carry on');
+    await getCharness().waitFor('the turn that goes through to record the renewal', agentStartTimeoutMs, () => {
+      const record = getApiRecord();
+      return record?.creditUnconfirmedSince === undefined && (record?.creditRenewedAt ?? '') > renewedBefore;
+    });
+    const record = getApiRecord();
+    assert.deepEqual(record?.creditSpend, { since: record?.creditRenewedAt, usd: fakeTurnCostUsd }, 'counted from 0: only the turn that proved it, nothing from before the refusal');
+    assert.match((await readAccountRowLines())[1], /^ {4}🎁 API credit renewed ≈ \d{2}\.\d{2} · ≈ \$199\.75 of \$200\.00 · \$0\.25 spent via the bot · /);
+  });
+
+  it('through all of it the API was asked only on the one account\'s key — never for the subscription account that was due all along, never for the API account that was not marked — and never twice within a day', () => {
+    assert.ok(fakeApi.requests.length >= 2);
+    assert.ok(fakeApi.requests.every((request) => request.apiKey === apiKey), 'only the account\'s own key');
+    for (let index = 1; index < fakeApi.requests.length; index += 1) {
+      assert.ok(fakeApi.requests[index].at - fakeApi.requests[index - 1].at >= recheckIntervalMs - 1_000, `request ${index + 1} came a full interval after request ${index}`);
+    }
     const profiles = readPersistedState(getLayout()).claudeProfiles ?? {};
     assert.equal(profiles[subscriptionAccount]?.creditRecheckedAt, undefined, 'no attempt recorded for the subscription account');
     assert.equal(profiles[idleAccount]?.creditRecheckedAt, undefined, 'none for the account that was never marked');

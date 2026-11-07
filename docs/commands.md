@@ -285,14 +285,22 @@ balance), so the bot never uses it without you choosing it.
 - **When the credits run out** («Credit balance is too low») the bot does not
   wait for a reset — there is none — and never retries hourly. The topic gets
   one `💸` notice, the account is marked as out of credits (`💸` in
-  `/limits_autoswitch`, `/accounts`, `/limits` and `/status`) and the fallback
+  `/limits_autoswitch` and `/status`; `/accounts` and `/limits` show it as the
+  credit line «🎁 API credit probably used up», see the bonus-credit bullet
+  below — only a subscription account a refusal landed
+  on keeps the `💸` line there) and the fallback
   list decides as for a limit: switching on moves the topic at once, otherwise
   the notice carries «🔁 Switch to …» buttons. If nothing can take over now but
   another entry comes back at a known time (a subscription's weekly reset), the
   topic waits for that and continues there; otherwise the notice is all. The
   mark lasts until you act: pick the account again (after topping the balance
-  up), or sign it in again — or until a request on it goes through again. A
-  rate limit of the API (429) is still a short retry.
+  up), or sign it in again — or until a request on it goes through again. Your
+  pick, sign-in or pasted key ends the mark and lets the account work, but the
+  bot keeps the refusal as «unconfirmed» (`🎁 API credit: refused 07.11 — the next
+  turn that goes through shows it is back`): the first turn that goes through is
+  then the renewal like any other — the spend counter starts at 0 from it — and
+  the daily recheck keeps asking meanwhile. A new refusal marks the account
+  again. A rate limit of the API (429) is still a short retry.
 - **What it spent.** On the default (stream) backend every turn reports the
   conversation's running cost; the bot counts the part each turn on the API
   account added (a subscription turn of the same conversation is never
@@ -307,11 +315,13 @@ balance), so the bot never uses it without you choosing it.
   account bills. No credential the bot has can read that balance — only the
   Console's Billing page shows it — so the bot tells what it SAW, and the figure
   you give adds to it. Under every API account that has spent anything,
-  `/accounts` and `/limits` carry one credit line, counted in a **period** that
-  starts at your last figure, or at the last renewal the bot detected, or — with
-  neither — at the account's first counted turn:
-  `🎁 API credit: $6.51 spent via the bot since 07.11`. «via the bot» is meant:
-  a spend by another key or machine is invisible to it.
+  `/accounts` and `/limits` carry the account's spend, counted in a **period**
+  that starts at your last figure, or at the last renewal the bot detected, or —
+  with neither — at the account's first counted turn. With neither a figure nor
+  a renewal that is the `💳 $6.51 spent since 07.11 · last turn $0.21` line and
+  nothing more; a figure or a renewal adds the `🎁` credit line below it (its
+  period differs from the lifetime total). «via the bot» is meant: a spend by
+  another key or machine is invisible to it.
   - **Your figure.** `charness claude-profiles credit <profile> <remainingUsd>
     [--of <grantUsd>] [--expires YYYY-MM-DD]`, for example
     `credit console 67.71 --of 200 --expires 2026-11-15` (`credit <profile> --clear`
@@ -326,10 +336,14 @@ balance), so the bot never uses it without you choosing it.
     credit counts as usable through the whole of it, UTC) the line reads
     `🎁 API credit expired 15.11 — give the new figure: charness claude-profiles
     credit <name> <left>`.
-  - **Probably used up.** A refusal («Credit balance is too low») turns the line into
-    `🎁 API credit probably used up · $6.51 spent since 07.11` — «probably»: the
-    bot cannot be sure. A figure you give AFTER a refusal ends the mark (you are
-    saying there is money, as a billed turn going through does).
+  - **Probably used up.** A refusal («Credit balance is too low») turns the credit
+    line into `🎁 API credit probably used up · $6.51 spent since 07.11` —
+    «probably»: the bot cannot be sure; with no figure and no renewal just
+    `🎁 API credit probably used up` (the `💳` line above carries the spend). A
+    figure you give AFTER a refusal ends the mark (you are saying there is
+    money, as a billed turn going through does). Picking the account again ends
+    the mark too, but keeps the refusal as «unconfirmed» until a turn goes
+    through (see above).
   - **Renewed.** While an account is marked used up the bot asks the API once a
     day, on that account's own key (the pasted key, or the one its Console login
     stored): one request of one token on the cheapest model, a short timeout, no
@@ -345,11 +359,22 @@ balance), so the bot never uses it without you choosing it.
     rechecked, never a subscription; the attempt is recorded in `state.json`
     before the request, so a restart does not bring it round sooner than a day.
     A request goes to `ANTHROPIC_BASE_URL` when the bot's environment sets it (the
-    root the account's sessions use), else to the API.
+    root the account's sessions use), else to the API. A refusal that comes in
+    while the request is on its way wins over the answer: no renewal is recorded.
+    If the API stops knowing the probe's model (404), the bot logs a WARNING
+    naming it and nothing renews by itself until the constant is updated.
+    **Which accounts can be asked:** those whose key the bot can read — the pasted
+    key, the key a Console login stored in the account's own `.claude.json`, and for
+    the `default` profile the `primaryApiKey` in the home `~/.claude.json`. An API
+    account that runs on an `apiKeyHelper` of its own (or a default profile without
+    such a key) is never rechecked; the bot says so in ONE log line at boot, naming
+    it.
   - **For agents.** The `claude_profiles` tool's entry (and `charness claude-profiles
     --json`) of an API account carries the bot's estimate: `spentUsd` in the
     period, `remainingEstimateUsd` and `expiresOn` (only what you gave; `expiresOn`
-    is `null` after a renewal), `probablyUsedUp` and `renewedAt` — `null` / `false`
+    is `null` after a renewal), `probablyUsedUp` (a refusal is pending and nothing
+    has answered since — also when the expiry day you gave has passed; `false` once
+    you picked the account again) and `renewedAt` — `null` / `false`
     for any other account. `charness claude-profiles` prints them after «no
     windows». They are never the Console's balance.
   - **Where it is kept.** Your figure lives in `DATA_DIR/claudeApiCredit.json`, not

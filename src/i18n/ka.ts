@@ -1017,7 +1017,7 @@ export const kaDict: Record<string, string> = {
   'account.row.apiCreditExpired': '    🎁 API კრედიტის ვადა გავიდა {day} — მიუთითე ახალი თანხა: charness claude-profiles credit {name} <დარჩენილი>',
   'account.row.apiCreditRenewedEstimate': '    🎁 API კრედიტი განახლდა ≈ {since} · ≈ {left} {grant}-დან · ბოტით დახარჯულია {spent} · ვადა — Console › Billing-ში',
   'account.row.apiCreditRenewed': '    🎁 API კრედიტი განახლდა ≈ {since} · მას შემდეგ დახარჯულია {spent}',
-  'account.row.apiCreditSpent': '    🎁 API კრედიტი: ბოტით დახარჯულია {spent} {since}-დან',
+  'account.row.apiCreditUnconfirmed': '    🎁 API კრედიტი: უარი {day} — შემდეგი სვლა, რომელიც გაივლის, აჩვენებს, რომ დაბრუნდა',
   'account.row.apiCreditProbablyUsedUp': '    🎁 API კრედიტი, სავარაუდოდ, ამოიწურა · {since}-დან დახარჯულია {spent}',
   'account.row.apiCreditProbablyUsedUpBare': '    🎁 API კრედიტი, სავარაუდოდ, ამოიწურა',
   'account.usageHint': 'გამოყენება: თითოეული ფანჯრის % გამოყენებულია, შემდეგ — როდის განულდება (🔄 2სთ-ში = ორ საათში).',

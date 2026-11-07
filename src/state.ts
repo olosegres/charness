@@ -221,6 +221,12 @@ export interface ClaudeProfileRecord {
    * the ranking till then.
    */
   creditExhaustedAt?: string;
+  /**
+   * An API account only: the refusal the operator acted on (picked the account again, signed it in again). The mark above
+   * ended — the account is usable — but the refusal is kept here so the first billed turn that goes through, or the daily
+   * recheck, still records the renewal and starts the spend counter over. A new refusal replaces it with the mark again.
+   */
+  creditUnconfirmedSince?: string;
   /** What an account billed to API credits spent through the bot (`utils/claudeApiSpend.ts`); absent before its first counted turn. */
   apiSpend?: ClaudeApiSpend;
   /** What an account billed to API credits spent through the bot since its credit period began: the operator's figure or the last renewal (`utils/claudeApiCredit.ts`). */
@@ -2326,15 +2332,20 @@ export class StateStore {
 
   /**
    * An API account's used-up credit is back at `renewedAt`: the mark ends, the renewal is recorded and the spend counter
-   * starts over from zero at that instant. Debounced.
+   * starts over from zero at that instant. Refused (`false`, nothing changes) when a refusal newer than `renewedAt` is
+   * recorded — a turn on the account failed while the answer that says «renewed» was on its way, and the newer news wins.
+   * Debounced.
    */
-  setClaudeProfileCreditRenewed(name: string, renewedAt: string): void {
+  setClaudeProfileCreditRenewed(name: string, renewedAt: string): boolean {
     const record = this.touchClaudeProfileInfo(name);
-    if (!record) return;
+    if (!record) return false;
+    if (record.creditExhaustedAt !== undefined && Date.parse(record.creditExhaustedAt) > Date.parse(renewedAt)) return false;
     delete record.creditExhaustedAt;
+    delete record.creditUnconfirmedSince;
     record.creditRenewedAt = renewedAt;
     record.creditSpend = { since: renewedAt, usd: 0 };
     this.scheduleSave();
+    return true;
   }
 
   /** That a daily recheck of an API account was attempted at `recheckedAt` (`utils/claudeApiCreditRecheck.ts`). Debounced. */
@@ -2359,16 +2370,34 @@ export class StateStore {
     this.scheduleSave();
   }
 
-  /** The used-up-balance mark (`null` clears it); same record rules as the usage. Debounced. */
-  setClaudeProfileCreditExhausted(name: string, exhaustedAt: string | null): void {
+  /** A refusal for a used-up balance at `exhaustedAt` marks the account (and replaces the evidence of an older, acted-on one); same record rules as the usage. Debounced. */
+  setClaudeProfileCreditExhausted(name: string, exhaustedAt: string): void {
     const record = this.touchClaudeProfileInfo(name);
     if (!record) return;
-    if (exhaustedAt === null) {
-      if (record.creditExhaustedAt === undefined) return;
-      delete record.creditExhaustedAt;
-    } else {
-      record.creditExhaustedAt = exhaustedAt;
-    }
+    record.creditExhaustedAt = exhaustedAt;
+    delete record.creditUnconfirmedSince;
+    this.scheduleSave();
+  }
+
+  /**
+   * The operator acted on an account marked used up (picked it again, signed it in again, pasted a key): the mark ends and
+   * the account is usable. An API account keeps the refusal as `creditUnconfirmedSince`, so the first billed turn that goes
+   * through still records the renewal (and starts the spend counter over); any other account just loses the mark. Debounced.
+   */
+  liftClaudeProfileCreditExhaustion(name: string): void {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record || record.creditExhaustedAt === undefined) return;
+    if (record.billing === 'api') record.creditUnconfirmedSince = record.creditExhaustedAt;
+    delete record.creditExhaustedAt;
+    this.scheduleSave();
+  }
+
+  /** The operator's newer figure supersedes the refusal: the mark and the acted-on refusal both end, no renewal is implied. Debounced. */
+  clearClaudeProfileCreditEvidence(name: string): void {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record || (record.creditExhaustedAt === undefined && record.creditUnconfirmedSince === undefined)) return;
+    delete record.creditExhaustedAt;
+    delete record.creditUnconfirmedSince;
     this.scheduleSave();
   }
 

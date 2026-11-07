@@ -4,10 +4,13 @@
  * back (the monthly bonus renews by itself, with no sign the bot can read).
  *
  *   • refused for the balance («credit balance is too low») → still used up, nothing changes;
+ *   • the probe's model is gone (404 `not_found_error`) → no conclusion, a WARNING naming the model: the constant needs updating
+ *     or no account ever renews by itself again;
  *   • any other answer or failure (a 401, a 5xx, a timeout, no network) → no conclusion, ONE log line, no retry;
  *   • answered → the credit is back: the bot records a RENEWAL (`onRenewed`) and its spend counter starts over.
  *
- * Never on a subscription account (only `billing: 'api'`), never more than once per interval (a day) per account — the
+ * Never on a subscription account (only `billing: 'api'`; the `default` profile included when it is billed that way and
+ * `~/.claude.json` holds its key), never more than once per interval (a day) per account — the
  * attempt is recorded BEFORE the request, in the account's persisted record, so a restart, a hang or a failure does not
  * bring it round again sooner. A real turn that goes through on the account is a recheck too (the bot's turn-cost path),
  * and a refused one moves the mark, so the day starts from it.
@@ -39,10 +42,15 @@ export const claudeApiCreditProbeTimeoutMs = 15_000;
 /** How much of an error body is read to look for the balance wording. */
 const probeBodyMaxChars = 2_000;
 
+/** The API's error type for a model id it no longer serves. */
+const modelNotFoundRe = /not_found_error/i;
+
 /** What the request answered, as the recheck reads it. `inconclusive` names no key and no body: a status or an error kind. */
 export type ClaudeApiCreditProbeOutcome =
   | { kind: 'renewed' }
   | { kind: 'stillUsedUp' }
+  /** The API does not know {@link claudeApiCreditProbeModel} any more: every probe would end this way until the constant is updated. */
+  | { kind: 'modelNotFound' }
   | { kind: 'inconclusive'; reason: string };
 
 /** The part of `fetch` the probe uses, injectable so a test never reaches the network. */
@@ -74,7 +82,7 @@ export async function probeClaudeApiCredit(
   apiKey: string,
   options: { url?: string; fetchImpl?: ClaudeApiCreditProbeFetch; timeoutMs?: number } = {},
 ): Promise<ClaudeApiCreditProbeOutcome> {
-  const fetchImpl: ClaudeApiCreditProbeFetch = options.fetchImpl ?? (globalThis.fetch as unknown as ClaudeApiCreditProbeFetch);
+  const fetchImpl: ClaudeApiCreditProbeFetch = options.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? claudeApiCreditProbeTimeoutMs);
   try {
@@ -87,6 +95,7 @@ export async function probeClaudeApiCredit(
     if (response.status >= 200 && response.status < 300) return { kind: 'renewed' };
     const body = (await response.text()).slice(0, probeBodyMaxChars);
     if (creditBalanceExhaustedRe.test(body)) return { kind: 'stillUsedUp' };
+    if (response.status === 404 || modelNotFoundRe.test(body)) return { kind: 'modelNotFound' };
     return { kind: 'inconclusive', reason: `http ${response.status}` };
   } catch (e) {
     return { kind: 'inconclusive', reason: e instanceof Error && e.name === 'AbortError' ? 'timeout' : 'network error' };
@@ -120,8 +129,7 @@ export function checkIsClaudeApiCreditRecheckDue(input: {
 export interface ClaudeApiCreditRecheckProfile {
   name: string;
   billing: ClaudeProfileBilling | null;
-  /** The profile's directory (`null` = the default profile, which is never an API account of the bot's own). */
-  configDir: string | null;
+  /** The refusal the recheck waits a day after: the used-up mark, or the refusal the operator acted on and nothing has confirmed yet. */
   creditExhaustedAt: string | null;
   creditRecheckedAt: string | null;
 }
@@ -131,20 +139,30 @@ export interface ClaudeApiCreditRecheckPorts {
   nowMs: () => number;
   intervalMs: number;
   listProfiles: () => ClaudeApiCreditRecheckProfile[];
-  /** The key the profile's own sessions use (`readClaudeProfileApiKey`). */
-  readApiKey: (configDir: string) => string | null;
+  /** The key the profile's own sessions use (`readClaudeProfileApiKey`; the default profile's is in the home `.claude.json`); `null` = none the bot can read. */
+  readApiKey: (name: string) => string | null;
   probe: (apiKey: string) => Promise<ClaudeApiCreditProbeOutcome>;
   /** Persist that a recheck of `name` was ATTEMPTED at `atIso` (before the request goes out). */
   markRechecked: (name: string, atIso: string) => void;
   /** The balance is back: record the renewal at `atIso`. */
   onRenewed: (name: string, atIso: string) => void;
   log: (line: string) => void;
+  /** A line that must not be missed: the recheck cannot work until someone acts (the probe's model is gone). */
+  warn: (line: string) => void;
 }
 
 /** What one pass did to each account whose day was up. */
 export interface ClaudeApiCreditRecheckResult {
   name: string;
   outcome: ClaudeApiCreditProbeOutcome | { kind: 'noKey' };
+}
+
+/**
+ * @description The API accounts the bot can read no key for: their used-up credit is never rechecked (an account that runs
+ * on an `apiKeyHelper` of its own, a default profile whose `~/.claude.json` holds no key). Said ONCE at boot, naming them.
+ */
+export function listClaudeApiCreditProfilesWithoutKey(ports: Pick<ClaudeApiCreditRecheckPorts, 'listProfiles' | 'readApiKey'>): string[] {
+  return ports.listProfiles().filter((profile) => profile.billing === 'api' && ports.readApiKey(profile.name) === null).map((profile) => profile.name);
 }
 
 /**
@@ -155,13 +173,13 @@ export async function runDueClaudeApiCreditRechecks(ports: ClaudeApiCreditRechec
   const results: ClaudeApiCreditRecheckResult[] = [];
   for (const profile of ports.listProfiles()) {
     const nowMs = ports.nowMs();
-    if (profile.billing !== 'api' || profile.configDir === null) continue;
+    if (profile.billing !== 'api') continue;
     if (!checkIsClaudeApiCreditRecheckDue({ creditExhaustedAt: profile.creditExhaustedAt, creditRecheckedAt: profile.creditRecheckedAt, nowMs, intervalMs: ports.intervalMs })) continue;
     const atIso = new Date(nowMs).toISOString();
     ports.markRechecked(profile.name, atIso);
-    const apiKey = ports.readApiKey(profile.configDir);
+    const apiKey = ports.readApiKey(profile.name);
     if (apiKey === null) {
-      ports.log(`[credit] ${profile.name}: no API key the bot can read in the account's directory, so its used-up credit cannot be rechecked`);
+      ports.log(`[credit] ${profile.name}: no API key the bot can read for the account, so its used-up credit cannot be rechecked`);
       results.push({ name: profile.name, outcome: { kind: 'noKey' } });
       continue;
     }
@@ -170,6 +188,8 @@ export async function runDueClaudeApiCreditRechecks(ports: ClaudeApiCreditRechec
     if (outcome.kind === 'renewed') {
       ports.log(`[credit] ${profile.name}: the daily recheck was answered — the credit is back`);
       ports.onRenewed(profile.name, atIso);
+    } else if (outcome.kind === 'modelNotFound') {
+      ports.warn(`[credit] ${profile.name}: the daily recheck's model "${claudeApiCreditProbeModel}" was not found by the API (404) — update claudeApiCreditProbeModel; used-up credits are not rechecked until then`);
     } else if (outcome.kind === 'inconclusive') {
       ports.log(`[credit] ${profile.name}: the daily recheck gave no answer about the balance (${outcome.reason}); asked again in a day`);
     }
@@ -182,6 +202,10 @@ export async function runDueClaudeApiCreditRechecks(ports: ClaudeApiCreditRechec
  * open, a pass that is still running is not started twice. Returns the stop function.
  */
 export function startClaudeApiCreditRechecks(ports: ClaudeApiCreditRecheckPorts, pollMs: number): () => void {
+  const unreadable = listClaudeApiCreditProfilesWithoutKey(ports);
+  if (unreadable.length > 0) {
+    ports.log(`[credit] ${unreadable.join(', ')}: billed to API credits, but the bot can read no API key for ${unreadable.length === 1 ? 'it' : 'them'} (an apiKeyHelper of its own, or no primaryApiKey in the .claude.json) — a used-up credit there is never rechecked`);
+  }
   let isRunning = false;
   const runPass = (): void => {
     if (isRunning) return;
