@@ -37,7 +37,7 @@ import {
 } from '../../../utils/claudeProfiles';
 import type { AnthropicApiKeyCheck } from '../../../utils/anthropicApiKeyCheck';
 import { formatClaudeProfileUsageLines } from '../../../utils/claudeProfileUsageLines';
-import { claudeUsageOnDemandMaxAgeMs } from '../../../utils/claudeUsageRefresher';
+import { refreshUsageWithinBudget } from '../../../utils/usageRefreshBudget';
 import {
   accountAddApiCallback,
   accountAddCallback,
@@ -339,8 +339,8 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
   }
 
   async function buildPickerRows(key: SessionKey, isGeneral: boolean): Promise<AccountPickerRow[]> {
-    // The usage poll runs beside the status probes; a snapshot younger than a minute is kept.
-    const [defaultStatus] = await Promise.all([refreshProfileStatuses(), refreshClaudeUsage({ maxAgeMs: claudeUsageOnDemandMaxAgeMs })]);
+    // The usage poll runs beside the status probes; a snapshot younger than a minute is kept, and a slow usage endpoint never holds the screen.
+    const [defaultStatus] = await Promise.all([refreshProfileStatuses(), refreshUsageWithinBudget(refreshClaudeUsage)]);
     const state = getState();
     const topicCounts = countTopicsPerProfile(state.listBindings().map(({ key: boundKey }) => state.resolveClaudeProfileName(boundKey)));
     return buildAccountPickerRows({

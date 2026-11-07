@@ -8261,8 +8261,9 @@ async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, epis
       fallbackMs: usageLimitDefaultMs,
     }));
   }
-  // The Claude rungs are judged on fresh figures whatever backend hit the limit (a minute's cache).
-  await claudeUsageRefresher.refreshAll({ maxAgeMs: claudeUsageOnDemandMaxAgeMs });
+  // The Claude rungs are judged on fresh figures whatever backend hit the limit (a minute's cache) — waited for only briefly:
+  // a stuck usage endpoint must never hold the switch or the wait notice of a topic that just hit its limit.
+  await refreshUsageWithinBudget((options) => claudeUsageRefresher.refreshAll(options));
   const detection = await detectFallbackOptions();
   let chain = state.getFallbackChain();
   if (chain.length === 0 && from.backend === 'claude') {

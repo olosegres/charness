@@ -32,11 +32,15 @@ import type { BackendFamily } from '../utils/backendSwitchPlan';
 import type { OperatorSwitchOutcome } from '../utils/operatorSwitchPlan';
 import { t } from '../i18n';
 import { buildClaudeProfileUsageViews } from '../utils/claudeUsage';
+import { limitsUsageRefreshBudgetMs } from '../utils/usageRefreshBudget';
 import type { AnthropicApiKeyCheck } from '../utils/anthropicApiKeyCheck';
 import { createCommandHarness, type CommandHarness } from './commandModuleHarness';
 
 /** A test sets it to make the stand-in `applyAutoSwitch` word its answer differently (a long one). */
 let autoSwitchWordingOverride: string | null = null;
+/** What the stand-in usage refresh does, and what it was asked (a hung usage endpoint is a promise that never settles). */
+let runUsageRefresh: () => Promise<void> = async () => {};
+const usageRefreshes: Array<{ maxAgeMs?: number }> = [];
 let harness: CommandHarness;
 let accounts: ReturnType<typeof createClaudeAccounts>;
 let dataDir: string;
@@ -81,7 +85,10 @@ describe('claudeAccounts: /accounts over its ports', () => {
       checkIsGeneral: () => isGeneralTopic,
       getDataDir: () => dataDir,
       getInstanceTimezone: () => 'UTC',
-      refreshClaudeUsage: async () => {},
+      refreshClaudeUsage: async (options) => {
+        usageRefreshes.push(options);
+        await runUsageRefresh();
+      },
       readClaudeAuthStatus: async (configDir) => statusByDir.get(configDir) ?? null,
       startClaudeProfileLogin: async (key, profile) => {
         startedLogins.push({ key, profile });
@@ -175,6 +182,29 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.deepEqual(Object.keys(harness.state.getClaudeProfileRecords()), []);
     assert.match(picker?.text ?? '', /Usage: % of each window used/);
     assert.match(picker?.text ?? '', /Tap an account or a provider to switch this topic to it .*🔑 .*🗑 .*🔌 disconnects a provider/);
+  });
+
+  it('the usage refresh is bounded like /limits\'s: the picker is posted when the budget ends even if the usage endpoint never answers, and a normal refresh still asks for the minute\'s cache', async () => {
+    usageRefreshes.length = 0;
+    await harness.runCommand('account');
+    assert.deepEqual(usageRefreshes, [{ maxAgeMs: 60_000 }]);
+
+    runUsageRefresh = () => new Promise<void>(() => {});
+    try {
+      const repliesBefore = harness.replies.length;
+      const startedAt = Date.now();
+      const outcome = await Promise.race([
+        harness.runCommand('account').then(() => 'posted' as const),
+        new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), limitsUsageRefreshBudgetMs + 3_000)),
+      ]);
+      const elapsedMs = Date.now() - startedAt;
+      assert.equal(outcome, 'posted', 'a usage refresh that never settles must not hold the account screen');
+      assert.equal(harness.replies.length, repliesBefore + 1);
+      assert.match(harness.replies.at(-1)?.text ?? '', /✓ default — me@example\.com/);
+      assert.ok(elapsedMs >= limitsUsageRefreshBudgetMs - 50 && elapsedMs < limitsUsageRefreshBudgetMs + 1_500, `held for the budget only (${elapsedMs} ms)`);
+    } finally {
+      runUsageRefresh = async () => {};
+    }
   });
 
   it('a polled profile\'s windows hang under its row (the renderer `/limits` shares): 5h / week with relative resets and no arrow, Fable left out when the account has no such window, the stale mark and the limit mark', async () => {
