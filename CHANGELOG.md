@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.11.0 — 2026-11-07
+
 **An agent's call of `claude_profiles` (which account a worker should run on) now answers within 10 seconds from the last figures instead of hanging when the bot's usage refresh is stuck.**
 Before, the tool waited for the usage refresh without any limit, and every caller of that refresh (the 10-minute timer, `/limits`, `/accounts`, the tool, and the switch a topic makes when it hits a usage limit) shares the one poll in flight — so a poll that never finished held them all. On 6 November every call of the tool, from several topics, sat silent for 300 s until the agent's own client gave up, and so it went for nine hours; nothing else showed the stall, because `/limits` waits for the refresh only two seconds — `/accounts` and the account switch after a usage limit would have hung with it.
 Now:
