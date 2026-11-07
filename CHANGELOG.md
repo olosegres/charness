@@ -11,6 +11,8 @@ Now:
   - Alert pins left by earlier versions are unpinned by themselves at the check's next run (or when it is cancelled), so nothing stays pinned for good; a pin Telegram did not answer for is tried again at the run after. Pins of old scheduled-run announcements were never tracked and stay until you unpin them.
   - The agent's confirmation of a new schedule, which a topic shows as a tool result, is one line — `Scheduled "Nightly build": daily at 02:00; next: 2026-06-07 02:00` — plus the id it cancels by, so a schedule read in the wrong timezone shows at once. `isPinSilent` of `schedule_create` is still accepted and does nothing.
 
+## 3.10.0 — 2026-11-06
+
 **A MacBook runner with its lid closed no longer gets a new job that dies when the Mac sleeps — it waits like an offline runner, and `runners` says «lid closed».**
 Before, a Mac runner with the lid shut (no external display) slept about a minute and a half later, and on power macOS woke it for a minute or two every quarter of an hour; the runner reconnected in those windows, looked available, and a job that landed there was cut when the Mac went back to sleep.
 Now:
