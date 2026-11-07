@@ -20,7 +20,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyAgentApiError } from '../apiErrorRetry';
 import { buildClaudeProfilesReport, type ClaudeProfileUsageView, type ClaudeUsageSnapshot } from '../utils/claudeUsage';
-import { addClaudeApiCreditToReport, buildClaudeProfileUsageView } from '../utils/claudeProfileUsageViews';
+import { addClaudeApiCreditToReport, buildClaudeProfileUsageView, buildClaudeProfilesCreditReport } from '../utils/claudeProfileUsageViews';
 import { pickClaudeLimitSwitchCandidates } from '../utils/claudeLimitSwitch';
 import {
   getFallbackEntryAvailability,
@@ -236,8 +236,7 @@ describe('what the screens say', () => {
   });
 
   it('`charness claude-profiles` says the account pays per use and is never picked for a new agent', () => {
-    const view = apiView({ creditExhaustedAt: inHours(-1) });
-    const report = addClaudeApiCreditToReport(buildClaudeProfilesReport([view], null, nowMs), [view], nowMs);
+    const report = buildClaudeProfilesCreditReport([apiView({ creditExhaustedAt: inHours(-1) })], null, nowMs);
     assert.equal(
       formatClaudeProfileCliLine(report.profiles[0], nowMs),
       '✗ console  /home/user/.charness/claude-profiles/console  console@example.com API billing (pay per use, never picked for a new agent)  no windows  CREDITS PROBABLY USED UP',
@@ -247,7 +246,7 @@ describe('what the screens say', () => {
 
 describe('what the bot can tell of an API account\'s credit, for an agent and for the command line', () => {
   const anchor = { remainingUsd: 67.71, grantUsd: 200, anchoredAt: inHours(-2), expiresOn: '2026-10-31' };
-  const entryOf = (view: ClaudeProfileUsageView) => addClaudeApiCreditToReport(buildClaudeProfilesReport([view], null, nowMs), [view], nowMs).profiles[0];
+  const entryOf = (view: ClaudeProfileUsageView) => buildClaudeProfilesCreditReport([view], null, nowMs).profiles[0];
 
   it('the report entry carries spentUsd, remainingEstimateUsd, expiresOn, probablyUsedUp and renewedAt from the operator\'s figure', () => {
     const entry = entryOf(apiView({ creditAnchor: anchor, creditSpend: { since: anchor.anchoredAt, usd: 6.51 } }));
@@ -275,6 +274,17 @@ describe('what the bot can tell of an API account\'s credit, for an agent and fo
     const filled = addClaudeApiCreditToReport(bare, [view], nowMs);
     assert.equal(filled.profiles[0].remainingEstimateUsd, 67.71);
     assert.deepEqual(addClaudeApiCreditToReport(bare, [], nowMs).profiles, bare.profiles);
+  });
+
+  it('the composer every shown report goes through is the pick of the bare builder with the credit fields filled — nothing else differs', () => {
+    const views = [buildView('default', { usage: buildUsage(30) }), apiView({ creditAnchor: anchor, creditExhaustedAt: inHours(-1) })];
+    const options = { currentProfile: 'default', excludedNames: new Set<string>() };
+    const bare = buildClaudeProfilesReport(views, 'sonnet', nowMs, options);
+    const composed = buildClaudeProfilesCreditReport(views, 'sonnet', nowMs, options);
+    assert.deepEqual(composed, addClaudeApiCreditToReport(bare, views, nowMs));
+    assert.deepEqual([composed.recommended, composed.pickReason], [bare.recommended, bare.pickReason], 'the pick is the builder\'s');
+    assert.equal(composed.profiles[1].probablyUsedUp, true);
+    assert.equal(bare.profiles[1].probablyUsedUp, false, 'the bare builder stays credit-free');
   });
 
   it('has no spend to tell for an API account that has not been counted at all, and says only that it is probably used up when it was refused', () => {

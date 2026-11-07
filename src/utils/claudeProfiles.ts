@@ -302,15 +302,17 @@ function readTextFileOrNull(file: string): string | null {
 function readPrimaryApiKey(stateFile: string): string | null {
   const stateText = readTextFileOrNull(stateFile);
   if (stateText === null) return null;
+  // The file is the CLI's, not ours: whatever it holds is narrowed step by step before it is trusted (no schema library —
+  // this module is loaded by the connector guards before any env file is read).
+  let parsed: unknown;
   try {
-    // The file is the CLI's, not ours: whatever it holds is checked before it is trusted (no schema library — this module is
-    // loaded by the connector guards before any env file is read).
-    const parsed: { primaryApiKey?: string } | null = JSON.parse(stateText);
-    const key = parsed?.primaryApiKey;
-    return typeof key === 'string' && checkIsPlausibleAnthropicApiKey(key) ? key.trim() : null;
+    parsed = JSON.parse(stateText);
   } catch {
     return null;
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const key = 'primaryApiKey' in parsed ? parsed.primaryApiKey : undefined;
+  return typeof key === 'string' && checkIsPlausibleAnthropicApiKey(key) ? key.trim() : null;
 }
 
 /**

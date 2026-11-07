@@ -245,18 +245,13 @@ describe('startClaudeApiCreditRechecks', () => {
     return check();
   }
 
-  it('runs a pass at once and then on the timer, never two at the same time, and stops', async () => {
+  it('runs a pass at once and then on the timer, and stops', async () => {
     let listings = 0;
-    let concurrent = 0;
-    let maxConcurrent = 0;
     const ports: ClaudeApiCreditRecheckPorts = {
       nowMs: () => nowMs,
       intervalMs: dayMs,
       listProfiles: () => {
         listings += 1;
-        concurrent += 1;
-        maxConcurrent = Math.max(maxConcurrent, concurrent);
-        concurrent -= 1;
         return [];
       },
       readApiKey: () => null,
@@ -273,7 +268,6 @@ describe('startClaudeApiCreditRechecks', () => {
     const stoppedAt = listings;
     await new Promise((resolve) => setTimeout(resolve, 60));
     assert.equal(listings, stoppedAt, 'stopped');
-    assert.equal(maxConcurrent, 1);
   });
 
   it('does not start a pass while the one before is still running', async () => {
@@ -383,6 +377,11 @@ describe('readClaudeProfileApiKey', () => {
     assert.equal(readClaudeProfileApiKey(dir), null);
     fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ primaryApiKey: 42 }));
     assert.equal(readClaudeProfileApiKey(dir), null);
+    // A file that is JSON but not an object holding a key: narrowed, never trusted to have the shape.
+    for (const document of ['null', '[]', '"a string"', '7', '[{"primaryApiKey":"x"}]', '{"primaryApiKey":null}', '{"primaryApiKey":["sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}']) {
+      fs.writeFileSync(path.join(dir, '.claude.json'), document);
+      assert.equal(readClaudeProfileApiKey(dir), null, document);
+    }
     assert.equal(readClaudeProfileApiKey(path.join(dir, 'missing')), null);
   });
 });

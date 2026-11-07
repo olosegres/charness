@@ -11,7 +11,7 @@
 import type { ClaudeProfileRecord } from '../state';
 import { resolveClaudeProfileDir } from './claudeProfiles';
 import { checkIsClaudeApiCreditMarkCurrent, getClaudeApiCreditEstimate, type ClaudeApiCreditAnchor, type ClaudeApiCreditAnchors } from './claudeApiCredit';
-import type { ClaudeProfileReportEntry, ClaudeProfilesReport, ClaudeProfileUsageView } from './claudeUsage';
+import { buildClaudeProfilesReport, type ClaudeLaunchPickOptions, type ClaudeProfileReportEntry, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './claudeUsage';
 
 /** @description One profile's view: its record's usage, marks and spend, plus the operator's credit figure (what `/accounts` and `/limits` render). */
 export function buildClaudeProfileUsageView(input: {
@@ -101,4 +101,19 @@ export function addClaudeApiCreditToReport(report: ClaudeProfilesReport, views: 
       return view === undefined ? entry : { ...entry, ...getClaudeProfileReportCredit(view, nowMs) };
     }),
   };
+}
+
+/**
+ * @description THE report an agent, the CLI or any other reader of the credit gets: {@link buildClaudeProfilesReport} (the
+ * launch pick, the windows) with the credit fields of the API accounts filled from their views. `claude_profiles` (the bot) and
+ * `charness claude-profiles` (the CLI) both call exactly this, so the CLI's end-to-end run proves the code the MCP tool runs —
+ * never assemble "build + fill" by hand at a call site.
+ */
+export function buildClaudeProfilesCreditReport(
+  views: readonly ClaudeProfileUsageView[],
+  model: string | null,
+  nowMs: number,
+  options: ClaudeLaunchPickOptions = {},
+): ClaudeProfilesReport {
+  return addClaudeApiCreditToReport(buildClaudeProfilesReport(views, model, nowMs, options), views, nowMs);
 }

@@ -29,9 +29,8 @@ import { readStateFileObject } from '../stateFile';
 import { getDisabledClaudeProfileNames, normaliseFallbackChain } from '../utils/fallbackChain';
 import { formatUsd } from '../utils/claudeApiSpend';
 import { readClaudeApiCreditAnchors } from '../utils/claudeApiCredit';
-import { addClaudeApiCreditToReport, buildClaudeProfileUsageViews } from '../utils/claudeProfileUsageViews';
+import { buildClaudeProfilesCreditReport, buildClaudeProfileUsageViews } from '../utils/claudeProfileUsageViews';
 import {
-  buildClaudeProfilesReport,
   describeClaudeLaunchOutcome,
   formatClaudeUsageBucket,
   getClaudeProfileRecordsFromState,
@@ -144,12 +143,11 @@ export async function runClaudeProfilesCli(
   const nowMs = (io.now ?? Date.now)();
   const stateFile = readStateFileObject(dataDir);
   const records = getClaudeProfileRecordsFromState(stateFile);
-  const views = buildClaudeProfileUsageViews({ dataDir, records, creditAnchors: readClaudeApiCreditAnchors(dataDir) });
-  const report = addClaudeApiCreditToReport(buildClaudeProfilesReport(views, args.model, nowMs, {
+  const report = buildClaudeProfilesCreditReport(buildClaudeProfileUsageViews({ dataDir, records, creditAnchors: readClaudeApiCreditAnchors(dataDir) }), args.model, nowMs, {
     currentProfile: args.currentProfile,
     isStoppedByLimit: args.isStoppedByLimit,
     excludedNames: getDisabledClaudeProfileNames(normaliseFallbackChain(stateFile.fallbackChain)),
-  }), views, nowMs);
+  });
   const outcome = describeClaudeLaunchOutcome(report, args.currentProfile);
   if (args.isJson) {
     stdout(`${JSON.stringify(report, null, 2)}\n`);

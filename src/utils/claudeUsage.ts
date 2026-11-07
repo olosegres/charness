@@ -706,6 +706,11 @@ const emptyClaudeProfileReportCredit: Pick<ClaudeProfileReportEntry, 'spentUsd' 
  * not marked limited, its API credits not used up, not at 100 % on a relevant window as recorded — which the explicit
  * fallback chain's availability reads; `recommended` is the pick, an account billed to API credits only when a warm
  * session already runs on it. The entries keep the input order.
+ *
+ * The credit fields of the entries (`spentUsd`, `remainingEstimateUsd`, `expiresOn`, `probablyUsedUp`, `renewedAt`) are left
+ * EMPTY here: this module is loaded by the connector guards, which may not reach the credit module. Anything that is shown to
+ * an agent or an operator — the `claude_profiles` tool, `charness claude-profiles` — uses `buildClaudeProfilesCreditReport`
+ * (`utils/claudeProfileUsageViews.ts`) instead; this builder is for the ranking (`fallbackChain.ts` reads `isEligible`).
  */
 export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageView[], model: string | null, nowMs: number, options: ClaudeLaunchPickOptions = {}): ClaudeProfilesReport {
   const relevantBuckets = getRelevantClaudeUsageKinds(model);

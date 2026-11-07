@@ -450,7 +450,7 @@ import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOver
 import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
 import { checkIsSameClaudeConfigDir, claudeConfigDirVariableName, defaultClaudeProfileName, getProcessFailureReason, parseClaudeAuthStatus, readClaudeProfileApiKey, readDefaultClaudeProfileApiKey, readProcessErrorStdout, resolveClaudeProfileDir, resolveClaudeProfilesRoot, type ClaudeAuthStatus } from './utils/claudeProfiles';
-import { buildClaudeProfilesReport, checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
+import { checkIsClaudeModelClearOfLimit, checkIsClaudeUsageExhausted, fetchClaudeUsage, readClaudeOAuthToken, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './utils/claudeUsage';
 import { claudeUsageOnDemandMaxAgeMs, createClaudeUsageRefresher, refreshClaudeUsageForLaunch } from './utils/claudeUsageRefresher';
 import { createOpenCodeUsagePoller, readOpenCodeCredentials } from './utils/openCodeUsage';
 import { refreshUsageWithinBudget } from './utils/usageRefreshBudget';
@@ -488,7 +488,7 @@ import { createSelfUpdate } from './connectors/telegram/commands/selfUpdate';
 import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent, ClaudeTurnCostReport } from './adapters/claudeConfigDir';
 import { addClaudeApiSpend, computeClaudeTurnCostUsd, formatUsd, getClaudeTurnCostOutcome } from './utils/claudeApiSpend';
-import { addClaudeApiCreditToReport, buildClaudeProfileUsageView, buildClaudeProfileUsageViews } from './utils/claudeProfileUsageViews';
+import { buildClaudeProfilesCreditReport, buildClaudeProfileUsageView, buildClaudeProfileUsageViews } from './utils/claudeProfileUsageViews';
 import { addClaudeApiCreditSpend, getClaudeApiCreditPeriod, listProfilesWithSupersededCreditEvidence, readClaudeApiCreditAnchors, type ClaudeApiCreditAnchors } from './utils/claudeApiCredit';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs, probeClaudeApiCredit, startClaudeApiCreditRechecks, type ClaudeApiCreditRecheckPorts } from './utils/claudeApiCreditRecheck';
 import { formatClaudeApiSpendWords } from './utils/claudeProfileUsageLines';
@@ -8802,15 +8802,12 @@ async function takeFallbackSwitchOffer(key: SessionKey, episodeId: number, index
  */
 async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<ClaudeProfilesReport> {
   await refreshClaudeUsageForLaunch(claudeUsageRefresher, { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, maxAgeMs: claudeUsageOnDemandMaxAgeMs });
-  const views = getClaudeProfileUsageViews();
-  const nowMs = Date.now();
-  const report = buildClaudeProfilesReport(
-    views,
+  return buildClaudeProfilesCreditReport(
+    getClaudeProfileUsageViews(),
     query.model,
-    nowMs,
+    Date.now(),
     { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, excludedNames: getDisabledClaudeProfileNames(state.getFallbackChain()) },
   );
-  return addClaudeApiCreditToReport(report, views, nowMs);
 }
 
 const { registerFallbackChainCommands, registerFallbackChainCallbacks, openAutoSwitchView, runAutoSwitchCommand, applyAutoSwitch } = createFallbackChain({
