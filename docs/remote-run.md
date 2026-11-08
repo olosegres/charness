@@ -543,8 +543,10 @@ build makes again anyway. This key names what the runner removes from its copy w
 **off unless the project asks**, and takes patterns like `pull:` (`projects/*/ios/build/**/Intermediates.noindex` for every app of a monorepo). The rules: the paths stay inside the copy (`..`, absolute and `~`
 paths are refused, and so is a pattern made of wildcards alone — it would name the whole project); a folder goes with everything in it, a symlink goes as the link and what it points at is never touched; `.git` is
 never entered; read-only folders (CocoaPods leaves them) are removed like the prune does; the files the job's `pull:` names are collected first, so a path in both lists still comes back; it happens before the next
-job of the project may start, and the job's log says how many paths went (or which would not — the job's result is never changed by it). **Do not name a folder the dependencies step fills** (`node_modules`,
-`Pods`): that step runs again only when the lockfile changes, not when its folder is gone. Nothing of this is shared between projects: there is no shared DerivedData, and a path outside the project is never touched.
+job of the project may start, and the job's log says how many paths went (or which would not). The job's result is recorded **before** the removal starts, so a `kill`, a lost connection or a `wait` meets a job that has
+ended with its exit 0 — the removal (minutes, for tens of GB) finishes behind it, with the project's lock held. **`.git`, `node_modules` and `Pods` are never cleaned:** a pattern with such a folder in its path is refused, and the
+walk does not enter them — the dependencies step runs again only when the lockfile changes, not when its folder is gone, so a pattern like `**/build` would otherwise empty the `build` folders of every installed package for good.
+Nothing of this is shared between projects: there is no shared DerivedData, and a path outside the project is never touched.
 
 ## Queue, limits, cleanup
 
@@ -570,12 +572,14 @@ already at work (up to 10 minutes, then it goes on), one whose disk is fine does
 runners — `runners` and the bot's `/runners` — starts that background prune: the probe a `run` or an `exec` makes first never does, so the project about to be used (typically the least recently used copy)
 is not taken before the job's own submit, which keeps its copy, arrives.
 
-**Simulators on a Mac.** Xcode leaves behind the simulators whose runtime is gone (an updated Xcode, a removed runtime): each is small, but their apps' data runs to GB. On a Mac with Xcode, the first
-probe of a view of the runners (`runners`, the bot's `/runners`) each day also runs `xcrun simctl delete unavailable` on the runner — in the background, bounded to 120 s, what it said is in `simctl-cleanup.log` in
-the runner's work dir — so a run or an `exec` never waits for it. That is **all** the runner ever deletes among the simulators: no erase of a simulator, no device of a runtime that is installed, no runtime. The
-simulators of **older runtimes** (an `iOS 26.4` while `iOS 26.5` is installed — same platform and major) are only **listed**, with their device count, under the runner in `runners` and `/runners`; they are the
-operator's to remove (Xcode ▸ Settings ▸ Platforms). Both act on the simulators the runner's probe sees, in the session the probe runs in: on an always-on Mac every login session has its own CoreSimulator service (see «A known
-limit» above), and whether the System session's `simctl` sees the same set as the account's login session has not been verified.
+**Simulators on a Mac.** Xcode leaves behind the simulators whose runtime is gone (an updated Xcode, a removed runtime): each is small, but their apps' data runs to GB. On a Mac **whose iOS works** (`ios: yes` — not
+while the account has no login session, nor after a failed Simulator check) a view of the runners (`runners`, the bot's `/runners`) runs `xcrun simctl delete unavailable` on the runner, **at most once in 24 hours**, in the
+background and bounded to 120 s, so a run or an `exec` never waits for it. It asks first for the runtimes the session sees (`simctl list runtimes available`) and **refuses when it sees none** — a CoreSimulator that sees no
+runtime calls every device «unavailable» and the call would delete them all; the refusal and what simctl said are in `simctl-cleanup.log` in the runner's work dir. That is **all** the runner ever deletes among the simulators:
+no erase of a simulator, no device of a runtime that is installed, no runtime. The simulators of **older runtimes** (an `iOS 26.4` while `iOS 26.5` is installed — same platform and major) are only **listed**, with their
+device count, under the runner in `runners` and `/runners`; they are the operator's to remove (Xcode ▸ Settings ▸ Platforms). Both act on the simulators the runner's probe sees, in the session the probe runs in: on an
+always-on Mac every login session has its own CoreSimulator service (see «A known limit» above), and whether the System session's `simctl` sees the same set as the account's login session has not been verified — which is why the
+cleanup is only started where iOS is known to work, and refuses where no runtime is visible.
 
 **A Mac's disk may not give the space back.** On APFS, `df` leaves out *purgeable* space, and with Time Machine local snapshots a removed project copy frees nothing until the snapshots are thinned
 (`tmutil listlocalsnapshots /` lists them, `tmutil thinlocalsnapshots /` thins them; or turn Time Machine's local snapshots off on that Mac). When two removals in a row give next to nothing back from copies

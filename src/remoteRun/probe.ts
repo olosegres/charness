@@ -226,7 +226,7 @@ export function formatOlderSimulators(probe: RunnerProbe): string {
   return probe.olderSimulators.map((entry) => `${entry.runtime} (${entry.deviceCount})`).join(', ');
 }
 
-/** `simulators of older runtimes (devices in brackets; nothing is removed): iOS 26.4 (11)` — only information: they take disk, and Xcode's Settings ▸ Platforms is where a runtime is removed. */
+/** `simulators of older runtimes (devices in brackets; remote-run removes nothing of them): iOS 26.4 (11)` — only information: they take disk, and Xcode's Settings ▸ Platforms is where a runtime is removed. */
 function formatOlderSimulatorsLine(probe: RunnerProbe): string[] {
   if (probe.olderSimulators.length === 0) return [];
   return [`  simulators of older runtimes (devices in brackets; remote-run removes nothing of them): ${formatOlderSimulators(probe)}`];

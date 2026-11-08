@@ -108,10 +108,11 @@ command (`bash -c`, `-e` variables, own timeout watchdog), copies the files that
 never `node_modules` or a build folder; `.` when a pattern starts with a wildcard; no `pull.roots` from an older main box = the whole copy; a
 root with a symlink on its way is skipped), then — only for a job whose FINAL code is 0 (not a failure, a timeout or a kill) and only when the project's `.remote-run` has `clean-after-success:` —
 removes from the copy what those patterns name (`clean_after_success`: the same two files as `pull.*`, `clean-after-success.ere`/`.roots`, read by the one `read_job_patterns`; after the files above were collected, so
-a path both lists is kept first and then removed; the lock is still held; a folder goes whole, a link as the link, `.git` is never entered, a root that is a link or leaves the copy is skipped, a read-only tree is made
-writable first as the prune does — `remove_path_even_if_read_only`, the one removal both use; says «removed N paths» or «could not remove X» in the job's log and never changes the job's result; `projectConfig.ts` refuses
-a pattern made of wildcards alone), releases the lock. Two jobs of one project therefore queue and each runs the tree as it was when IT was submitted. Never name a folder the dependencies step fills: that step runs
-on the lockfile's key, not on the folder, and would not run again.
+a path in both lists is kept first and then removed; the job's result (`exit`) is written BEFORE the removal, so a `kill`, a lost lease or a waiting caller meets an ended job, and the lock stays held until the removal is
+over; the walk is NUL-separated and a path is removed only if `find` listed it as such; a folder goes whole, a link as the link, a root that is a link or leaves the copy is skipped, a read-only tree is made
+writable first as the prune does — `remove_path_even_if_read_only`, the one removal both use; says «removed N paths» or «could not remove X» in the job's log; `.git`, `node_modules` and `Pods` are never entered, nor a root
+inside one — `check_is_protected_path`, and `projectConfig.ts` refuses such a pattern, and one made of wildcards alone), releases the lock. Two jobs of one project therefore queue and each runs the tree as it was when IT
+was submitted. The dependencies step runs on the lockfile's key, not on its folder, which is why `node_modules` and `Pods` are out of reach: what was removed there would not come back.
 
 **Time limit** (`--timeout`, default 3 h, both modes) counts from the moment the job is queued (`queued-at`, written when it is handed to Pueue):
 a foreground run's timer starts there, and the job script starts its watchdog with what is left — a job that waited its whole limit behind a busy
@@ -123,10 +124,12 @@ group is over (124) the moment it starts, its command never runs.
 **Probe.** `runners` gives the whole probe 20 s. Its slow questions (Pueue, the disk, Xcode, the simulators, Docker) are asked at once, each
 bounded by 4 s, so a hung one costs 4 s in all; an Xcode that does not answer is «did not answer in time», not «not found», and a slow
 simctl keeps the Xcode version without inventing a simulator count. The same simctl answer gives `sim_older_runtimes=iOS 26.4:11,…` (`list_older_simulator_runtimes`, awk over `simctl list devices available`: a runtime
-that has a newer one of the same platform AND major, with its device count — information for `runners` and `/runners`, nothing is removed). On a Mac with Xcode the probe of a VIEW of the runners (`probe <work> prune`, the same
-argument that lets a short disk start the prune) also starts `simctl-cleanup` detached (`start_simctl_cleanup_if_due`) — at most once in 24 h (the stamp `<work>/simctl-cleanup.at`, touched by the run itself, so a run that
-hangs is not started again at every probe), bounded by a 120 s watchdog, its output in `<work>/simctl-cleanup.log` — which runs `xcrun simctl delete unavailable` and nothing else of `simctl` (no erase, no runtime, no device
-of an installed runtime). The probe a run or an `exec` makes first never starts it.
+that has a newer one of the same platform AND major, with its device count — information for `runners` and `/runners`, nothing is removed). On a Mac the probe of a VIEW of the runners (`probe <work> prune`, the same
+argument that lets a short disk start the prune) also starts `simctl-cleanup` detached (`start_simctl_cleanup_if_due`) — but only when that very probe said `cap_ios=yes` (not «no login session», not a failed or running Simulator
+check) and its simctl step answered (`probe_may_clean_simulators`), at most once in 24 h (the stamp `<work>/simctl-cleanup.at`, touched before the start and again by the run, so two views a second apart start one run and
+a run that hangs is not started again at every probe). The run first asks `simctl list runtimes available` (30 s) and REFUSES when it shows no runtime — a CoreSimulator that sees none calls every device «unavailable», and
+the call would delete them all — writing `refused: …` to `<work>/simctl-cleanup.log`; otherwise it runs `xcrun simctl delete unavailable` (120 s watchdog, `run_bounded_to_file`) and nothing else of `simctl` (no erase,
+no runtime, no device of an installed runtime). The probe a run or an `exec` makes first never starts it.
 
 **A job that had to be SIGKILLed** (it ignored SIGTERM through `kill`, a lost lease or the time limit) cannot write its own result, so whoever kills
 it records it first (`finish_killed_job`: exit 137, or 124 when the limit did it, `phase=done`, a finish time) — it is then an ended job like any

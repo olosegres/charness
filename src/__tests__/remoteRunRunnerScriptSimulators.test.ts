@@ -36,6 +36,11 @@ const deviceListWithoutOlderRuntimes = `== Devices ==
 -- watchOS 11.0 --
     Apple Watch Series 10 (55555555-5555-5555-5555-555555555555) (Shutdown)
 `;
+/** What `xcrun simctl list runtimes available` prints when the session sees a runtime. */
+const runtimeListWithARuntime = `== Runtimes ==
+iOS 26.5 (26.5 - 23F77) - com.apple.CoreSimulator.SimRuntime.iOS-26-5
+`;
+const runtimeListWithoutRuntimes = '== Runtimes ==\n';
 const cleanupWaitMs = 20_000;
 const dayHours = 24;
 
@@ -44,13 +49,17 @@ let workDir = '';
 let fakeBin = '';
 let xcrunLog = '';
 let deviceListFile = '';
+let runtimeListFile = '';
 let releaseFile = '';
 
 function writeFake(name: string, body: string): void {
   fs.writeFileSync(path.join(fakeBin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 }
 
-/** A `xcrun` that writes down every call; `simctl delete unavailable` waits for the `release` file when `XCRUN_HOLD_DELETE` is set (a hung simctl, until the test lets it go). */
+/**
+ * A `xcrun` that writes down every call; `simctl delete unavailable` waits for the `release` file when `XCRUN_HOLD_DELETE` is set (a hung simctl, until the test lets it go); `XCRUN_FAIL_DEVICES` /
+ * `XCRUN_FAIL_RUNTIMES` make the device list / the runtime list fail.
+ */
 function installFakeMac(): void {
   writeFake('uname', 'case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; -r) echo 24.0.0 ;; *) echo Darwin ;; esac');
   writeFake('xcodebuild', 'echo "Xcode 16.2"');
@@ -59,7 +68,8 @@ function installFakeMac(): void {
     'xcrun',
     `echo "$*" >> "$XCRUN_LOG"
 case "$*" in
-  "simctl list devices available") cat "$SIM_LIST_FILE" ;;
+  "simctl list devices available") [ -n "$XCRUN_FAIL_DEVICES" ] && exit 1; cat "$SIM_LIST_FILE" ;;
+  "simctl list runtimes available") cat "$SIM_RUNTIMES_FILE"; if [ -n "$XCRUN_FAIL_RUNTIMES" ]; then exit 1; fi ;;
   "simctl delete unavailable")
     waited=0
     while [ -n "$XCRUN_HOLD_DELETE" ] && [ ! -e "$XCRUN_RELEASE_FILE" ] && [ "$waited" -lt 200 ]; do sleep 0.1; waited=$((waited + 1)); done
@@ -76,6 +86,7 @@ function getEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     PUEUE_BIN: path.join(fakeBin, 'pueue'),
     XCRUN_LOG: xcrunLog,
     SIM_LIST_FILE: deviceListFile,
+    SIM_RUNTIMES_FILE: runtimeListFile,
     XCRUN_RELEASE_FILE: releaseFile,
     ...extra,
   };
@@ -112,7 +123,7 @@ function readCleanupLog(): string {
 async function waitForCleanupToEnd(): Promise<string> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < cleanupWaitMs) {
-    if (/^exit \d+$/m.test(readCleanupLog())) return readCleanupLog();
+    if (/^(exit \d+|refused: .*)$/m.test(readCleanupLog())) return readCleanupLog();
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`the cleanup did not end: ${readCleanupLog()}`);
@@ -126,8 +137,10 @@ beforeEach(() => {
   fs.mkdirSync(fakeBin);
   xcrunLog = path.join(workRoot, 'xcrun.log');
   deviceListFile = path.join(workRoot, 'devices.txt');
+  runtimeListFile = path.join(workRoot, 'runtimes.txt');
   releaseFile = path.join(workRoot, 'release');
   fs.writeFileSync(deviceListFile, deviceListWithOlderRuntimes);
+  fs.writeFileSync(runtimeListFile, runtimeListWithARuntime);
   installFakeMac();
 });
 afterEach(() => {
@@ -181,7 +194,7 @@ describe('xcrun simctl delete unavailable', () => {
     assert.ok(fs.existsSync(getCleanupPidPath()), 'the run was started (its pid is written down before the probe returns)');
     const log = await waitForCleanupToEnd();
     assert.match(log, /xcrun simctl delete unavailable\nDeleting unavailable devices\nexit 0\n$/);
-    assert.deepEqual(readXcrunCalls(), ['simctl list devices available', 'simctl delete unavailable'], 'no erase, no runtime, no other device command');
+    assert.deepEqual(readXcrunCalls(), ['simctl list devices available', 'simctl list runtimes available', 'simctl delete unavailable'], 'the list of the probe, the look at the runtimes, the one deletion — no erase, no runtime, no other device command');
     assert.ok(fs.existsSync(getStampPath()), 'and the day is written down');
     assert.equal(parseProbeOutput(answer.stdout).os, 'Darwin');
   });
@@ -249,5 +262,83 @@ describe('xcrun simctl delete unavailable', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.existsSync(path.join(workDir, 'simctl-cleanup.log')), false);
     assert.ok(fs.existsSync(getStampPath()));
+  });
+});
+
+describe('where the cleanup is NOT allowed to start: iOS is not known to work in this session', () => {
+  /** A paired runner's state folder (`<state>/work` is the work dir): `service` says how it is kept running, `ios-check.json` is the record of the Simulator check. */
+  function writeStateFolder(options: { service?: 'system-service' | 'user-service'; iosCheck?: 'pass' | 'fail' | null }): void {
+    writeFile(workRoot, 'config.json', '{}');
+    fs.mkdirSync(path.join(workRoot, 'keys'), { recursive: true });
+    if (options.service !== undefined) writeFile(workRoot, 'service', `${options.service}\n`);
+    if (options.iosCheck === 'pass') writeFile(workRoot, 'ios-check.json', '{"status":"pass","checkedAtMs":1,"xcode":"16.2 (16C5032a)","reason":null}\n');
+    if (options.iosCheck === 'fail') writeFile(workRoot, 'ios-check.json', '{"status":"fail","checkedAtMs":1,"xcode":"16.2","reason":"the Simulator did not boot"}\n');
+  }
+
+  function expectNothingStarted(answer: { stdout: string }, expectedCapIos: string): void {
+    assert.match(answer.stdout, new RegExp(`^cap_ios=${expectedCapIos}$`, 'm'));
+    assert.equal(fs.existsSync(getCleanupPidPath()), false, 'no run was started');
+    assert.equal(fs.existsSync(getStampPath()), false, 'and the day was not written down');
+    assert.equal(countDeleteCalls(), 0, '`delete` was never asked');
+  }
+
+  it('an always-on Mac (System session) with no login agent: iOS is «no», and the cleanup — which would run in the System session — never starts', () => {
+    writeStateFolder({ service: 'system-service', iosCheck: 'pass' });
+    expectNothingStarted(probe(['prune']), 'no');
+  });
+
+  it('a failed Simulator check: iOS is «no», nothing is started', () => {
+    writeStateFolder({ service: 'user-service', iosCheck: 'fail' });
+    expectNothingStarted(probe(['prune']), 'no');
+  });
+
+  it('a Simulator check that has not answered yet (a paired runner whose link just started): iOS is «no», nothing is started', () => {
+    writeStateFolder({ service: 'user-service', iosCheck: null });
+    expectNothingStarted(probe(['prune']), 'no');
+  });
+
+  it('a simctl that does not answer the probe\'s list is no ground to delete anything: iOS is «yes» without a count, nothing is started', () => {
+    const answer = probe(['prune'], { XCRUN_FAIL_DEVICES: '1' });
+    expectNothingStarted(answer, 'yes');
+    assert.match(answer.stdout, /^cap_ios_detail=Xcode 16\.2$/m);
+  });
+
+  it('the same Mac with a passed check and an answering simctl DOES start it (the gates above are what holds it back)', async () => {
+    writeStateFolder({ service: 'user-service', iosCheck: 'pass' });
+    probe(['prune']);
+    assert.ok(fs.existsSync(getCleanupPidPath()));
+    await waitForCleanupToEnd();
+    assert.equal(countDeleteCalls(), 1);
+  });
+});
+
+describe('the run itself refuses where the session sees no runtime', () => {
+  it('no runtime listed: nothing is deleted, the log says why, `delete` is never asked', async () => {
+    fs.writeFileSync(runtimeListFile, runtimeListWithoutRuntimes);
+    probe(['prune']);
+    const log = await waitForCleanupToEnd();
+    assert.match(log, /^refused: this session sees no Simulator runtime \(simctl exit 0\)/m);
+    assert.deepEqual(readXcrunCalls(), ['simctl list devices available', 'simctl list runtimes available']);
+  });
+
+  it('a runtime list that fails — even after it printed a runtime — is the same: nothing is deleted', async () => {
+    probe(['prune'], { XCRUN_FAIL_RUNTIMES: '1' });
+    const log = await waitForCleanupToEnd();
+    assert.match(log, /^refused: this session sees no Simulator runtime \(simctl exit 1\)/m);
+    assert.equal(countDeleteCalls(), 0);
+  });
+});
+
+describe('the day is written down BEFORE the run starts', () => {
+  it('two views a second apart cannot both pass: the stamp is there when the start returns, whatever the started run has done by then', () => {
+    const result = spawnSync('bash', ['--norc', '--noprofile', '-c', `source ${scriptPath}; work=${workDir}; start_detached_run() { echo "start $2"; }; start_simctl_cleanup_if_due; start_simctl_cleanup_if_due; ls ${workDir}`], {
+      encoding: 'utf8',
+      env: getEnvironment(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 60_000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.stdout.split('\n').filter((line) => line.startsWith('start ')), ['start simctl-cleanup'], 'the second look found the stamp of the first');
+    assert.match(result.stdout, /^simctl-cleanup\.at$/m);
   });
 });

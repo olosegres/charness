@@ -201,22 +201,37 @@ describe('startKeepAwake with a stand-in holder', () => {
   });
 });
 
+/** The `--why` of the lock the runner's link takes (`keepAwake.ts`). */
+const lockReason = 'the runner link is up';
+
 const hasWorkingSystemdInhibit = process.platform === 'linux' && spawnSync('systemd-inhibit', ['--what=idle', '--why=test', '--mode=block', 'true']).status === 0;
 
 describe('the real systemd-inhibit', { skip: hasWorkingSystemdInhibit ? false : 'no working systemd-inhibit here' }, () => {
   let root = '';
   let standInLink: ChildProcess | null = null;
+  let decoyHolder: ChildProcess | null = null;
 
   beforeEach(() => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'keep-awake-')));
   });
   afterEach(() => {
     if (standInLink !== null && standInLink.pid !== undefined && checkIsProcessAlive(standInLink.pid)) standInLink.kill('SIGKILL');
+    if (decoyHolder !== null && decoyHolder.pid !== undefined && checkIsProcessAlive(decoyHolder.pid)) decoyHolder.kill('SIGKILL');
+    decoyHolder = null;
     fs.rmSync(root, { recursive: true, force: true });
   });
 
   function listLocks(): string {
     return spawnSync('systemd-inhibit', ['--list', '--no-pager'], { encoding: 'utf8' }).stdout;
+  }
+
+  /**
+   * The lines of systemd's list that are the lock of process `holderPid` (its PID column). Never "any lock with this text": another process on the box (a runner of another account, a test of
+   * another checkout) may hold a lock with the very same who and why, and a check that took it for ours failed whenever one came or went between two looks.
+   */
+  function listLocksOfHolder(holderPid: number): string[] {
+    const pidColumn = new RegExp(`\\s${holderPid}\\s`);
+    return listLocks().split('\n').filter((line) => line.includes(lockReason) && pidColumn.test(line));
   }
 
   async function waitUntil(description: string, check: () => boolean, timeoutMs = 20_000): Promise<void> {
@@ -234,10 +249,11 @@ describe('the real systemd-inhibit', { skip: hasWorkingSystemdInhibit ? false : 
     assert.equal(state.method, 'systemd-inhibit', JSON.stringify(state));
     const holderPid = state.method === null ? 0 : state.holderPid;
     assert.equal(fs.readFileSync(paths.awakeFile, 'utf8'), `systemd-inhibit ${holderPid}\n`);
-    assert.match(listLocks(), /charness-runner .*\bidle\b +the runner link is up +block/, 'systemd lists the lock: who, what (idle), why, mode (block)');
+    assert.equal(listLocksOfHolder(holderPid).length, 1, 'systemd lists the holder\'s lock');
+    assert.match(listLocksOfHolder(holderPid)[0], /charness-runner .*\bidle\b +the runner link is up +block/, 'who, what (idle), why, mode (block)');
 
     standInLink.kill('SIGKILL');
-    await waitUntil('the lock to go', () => !listLocks().includes('the runner link is up'));
+    await waitUntil('the lock to go', () => listLocksOfHolder(holderPid).length === 0);
     await waitUntil('the holder to be gone', () => !checkIsProcessAlive(holderPid));
     keepAwake.stop();
   });
@@ -249,9 +265,29 @@ describe('the real systemd-inhibit', { skip: hasWorkingSystemdInhibit ? false : 
     const keepAwake = await startKeepAwake({ ...createKeepAwakeDeps(paths), linkPid: standInLink.pid ?? 0 });
     const state = keepAwake.getState();
     assert.equal(state.method, 'systemd-inhibit');
+    const holderPid = state.method === null ? 0 : state.holderPid;
     keepAwake.stop();
     assert.equal(fs.existsSync(paths.awakeFile), false);
-    await waitUntil('the lock to go', () => !listLocks().includes('the runner link is up'));
-    if (state.method !== null) await waitUntil('the holder to be gone', () => !checkIsProcessAlive(state.holderPid));
+    await waitUntil('the lock to go', () => listLocksOfHolder(holderPid).length === 0);
+    await waitUntil('the holder to be gone', () => !checkIsProcessAlive(holderPid));
+  });
+
+  it('a lock with the very same text held by ANOTHER process neither hides this holder\'s lock going nor fails the check — it is not ours', async () => {
+    // What another runner on the box looks like to `systemd-inhibit --list`: same who, same why, a pid of its own, and it outlives this test's holder.
+    decoyHolder = spawn('systemd-inhibit', ['--what=idle', '--who=charness-runner', `--why=${lockReason}`, '--mode=block', 'sleep', '120'], { stdio: 'ignore' });
+    const decoyPid = decoyHolder.pid ?? 0;
+    await waitUntil('the decoy\'s lock to show', () => listLocksOfHolder(decoyPid).length === 1);
+    standInLink = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], { stdio: 'ignore' });
+    const paths = getRunnerHomePaths(path.join(root, 'home'));
+    fs.mkdirSync(paths.root, { recursive: true });
+    const keepAwake = await startKeepAwake({ ...createKeepAwakeDeps(paths), linkPid: standInLink.pid ?? 0 });
+    const state = keepAwake.getState();
+    const holderPid = state.method === null ? 0 : state.holderPid;
+    assert.notEqual(holderPid, decoyPid);
+    assert.equal(listLocksOfHolder(holderPid).length, 1);
+    keepAwake.stop();
+    await waitUntil('the holder\'s lock to go', () => listLocksOfHolder(holderPid).length === 0);
+    await waitUntil('the holder to be gone', () => !checkIsProcessAlive(holderPid));
+    assert.equal(listLocksOfHolder(decoyPid).length, 1, 'the other process\'s lock is still listed, with the same text: a check on the text alone would never see this holder\'s lock go');
   });
 });

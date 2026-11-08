@@ -57,6 +57,18 @@ describe('parseProjectConfig', () => {
     }
   });
 
+  it('`clean-after-success` never goes into the repository or the dependencies: a pattern with `.git`, `node_modules` or `Pods` in its path is refused — their step does not put them back — while a name that merely contains one is fine', () => {
+    for (const pattern of ['.git/hooks', 'a/.git/objects', '.git', 'node_modules/pkg/build', '**/node_modules', 'ios/Pods', 'Pods/**', './node_modules/x/']) {
+      const parsed = parseProjectConfig(`clean-after-success: ${pattern}`);
+      assert.equal(parsed.ok, false, pattern);
+      assert.match(parsed.ok ? '' : parsed.errors.join('\n'), /^\.remote-run line 1: "clean-after-success" pattern names a path in "(\.git|node_modules|Pods)", which is never cleaned/, pattern);
+    }
+    for (const pattern of ['.github/workflows', 'ios/build/Pods.build', 'my_node_modules', 'gitignored/.gitkeep', '**/Intermediates.noindex']) {
+      assert.equal(parseProjectConfig(`clean-after-success: ${pattern}`).ok, true, pattern);
+    }
+    assert.equal(parseProjectConfig('pull: node_modules/.cache').ok, true, 'and the other keys are not restricted by this');
+  });
+
   it('the other list keys keep taking a wildcard-only pattern (`pull: **` is the whole tree on purpose)', () => {
     assert.equal(parseProjectConfig('pull: **').ok, true);
   });

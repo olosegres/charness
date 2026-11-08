@@ -22,6 +22,7 @@ const hasRsync = spawnSync('rsync', ['--version'], { stdio: 'ignore' }).status =
 const rsyncSkip = !hasRsync && !isCi ? 'rsync is not installed here (CI installs it)' : false;
 const jobPollMs = 100;
 const jobGiveUpMs = 40_000;
+const slowRemovalSec = 5;
 
 let workRoot = '';
 let workDir = '';
@@ -152,6 +153,48 @@ describe('clean_after_success', () => {
     assert.deepEqual(listTree(), ['.git/Intermediates.noindex/head', 'vendor/lib/.git/Intermediates.noindex/head']);
   });
 
+  it('a pattern that goes INTO `.git` (`.git/hooks`, `.git/objects`) removes nothing: the root is dropped, so the repository of the copy keeps its hooks and objects', () => {
+    const { tree } = getPaths();
+    writeFile(tree, '.git/hooks/pre-commit');
+    writeFile(tree, '.git/objects/ab/cdef');
+    writeFile(tree, 'vendor/lib/.git/hooks/pre-push');
+    writeFile(tree, 'src/keep.ts');
+    writeCleanFiles(['.git/hooks', '.git/objects', 'vendor/lib/.git/hooks']);
+    const outcome = cleanAfterSuccess();
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.equal(outcome.stdout, '');
+    assert.deepEqual(listTree(), ['.git/hooks/pre-commit', '.git/objects/ab/cdef', 'src/keep.ts', 'vendor/lib/.git/hooks/pre-push']);
+  });
+
+  it('`node_modules` and `Pods` are not walked and not cleaned, however a pattern reaches them: `**/build` takes the project\'s build folders and leaves the installed packages\' own', () => {
+    const { tree } = getPaths();
+    writeFile(tree, 'src/build/o.o');
+    writeFile(tree, 'node_modules/pkg/build/index.js');
+    writeFile(tree, 'node_modules/@scope/pkg/dist/build/x.js');
+    writeFile(tree, 'ios/Pods/Target Support Files/build/y.xcconfig');
+    writeFile(tree, 'ios/build/Intermediates.noindex/z.o');
+    writeCleanFiles(['**/build']);
+    const outcome = cleanAfterSuccess();
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.deepEqual(listTree().filter((entry) => !entry.startsWith('src/') && !entry.startsWith('ios/build')), [
+      'ios/Pods/Target Support Files/build/y.xcconfig',
+      'node_modules/@scope/pkg/dist/build/x.js',
+      'node_modules/pkg/build/index.js',
+    ]);
+    assert.ok(!fs.existsSync(path.join(tree, 'src/build')) && !fs.existsSync(path.join(tree, 'ios/build')), 'and the project\'s own build folders are gone');
+  });
+
+  it('a root inside the dependencies (a job file from an older or a hostile main box) is dropped too — nothing is walked, nothing removed', () => {
+    const { tree } = getPaths();
+    writeFile(tree, 'node_modules/pkg/build/index.js');
+    writeFile(tree, 'ios/Pods/build/y.xcconfig');
+    writeCleanFiles(['node_modules/pkg/build', 'ios/Pods/build']);
+    const outcome = cleanAfterSuccess();
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.equal(outcome.stdout, '');
+    assert.deepEqual(listTree(), ['ios/Pods/build/y.xcconfig', 'node_modules/pkg/build/index.js']);
+  });
+
   it('a link that a pattern names goes as the link — what it points at is never touched — and a link to a folder is not walked into', () => {
     const { tree } = getPaths();
     const outside = path.join(workRoot, 'outside');
@@ -196,6 +239,22 @@ describe('clean_after_success', () => {
     const outcome = cleanAfterSuccess();
     assert.equal(outcome.status, 0, outcome.stderr);
     assert.ok(fs.existsSync(path.join(project, 'victim')), 'what lies beside the copy is untouched');
+  });
+
+  it('a name with a newline in it is ONE name: a cut-in-two name cannot make `rm` reach through a link inside the copy to a file outside it', () => {
+    const { tree } = getPaths();
+    const outside = path.join(workRoot, 'outside');
+    writeFile(outside, 'x.o', 'outside the copy');
+    fs.mkdirSync(path.join(tree, 'ios/build'), { recursive: true });
+    fs.symlinkSync(outside, path.join(tree, 'ios/build/linked'));
+    // The folder is called "d", a newline, "ios": listed one path per line this is «d» and «ios/build/linked/x.o» — the real, linked path of the file outside.
+    writeFile(tree, 'd\nios/build/linked/x.o', 'the copy\'s own file');
+    writeFile(tree, 'src/keep.ts');
+    writeCleanFiles(['**/*.o']);
+    const outcome = cleanAfterSuccess();
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.ok(fs.existsSync(path.join(outside, 'x.o')), 'the file outside the copy is untouched');
+    assert.ok(!fs.existsSync(path.join(tree, 'd\nios/build/linked/x.o')), 'while the copy\'s own file of that odd name, which the pattern does name, is removed as the one name it is');
   });
 
   it('a root that leaves the copy — `..` or absolute — is refused: nothing outside is looked at, let alone removed', () => {
@@ -246,26 +305,61 @@ describe('a job that ends (runner.sh job)', () => {
     if (options.clean !== undefined) writeCleanFiles(options.clean);
   }
 
-  /** `runner.sh job` as Pueue starts it: a process group of its own. Resolves with the exit file's content. */
+  interface StartedJob {
+    /** Resolves when the `runner.sh job` process has ended. */
+    ended: Promise<void>;
+    /** Kills what is left of its process group. */
+    stop: () => void;
+  }
+
+  /** `runner.sh job` as Pueue starts it: a process group of its own. */
+  function startJob(env: NodeJS.ProcessEnv = {}): StartedJob {
+    const child = spawn('bash', [scriptPath, 'job', workDir, slug, jobId], { detached: true, stdio: 'ignore', env: { ...process.env, PUEUE_BIN: '/nonexistent/pueue', ...env } });
+    const ended = new Promise<void>((resolve) => child.once('close', () => resolve()));
+    const stop = (): void => {
+      if (child.pid === undefined) return;
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        /* ended */
+      }
+    };
+    return { ended, stop };
+  }
+
+  /** Runs the job until its process has ended (the exit file is written BEFORE a cleanup after success, which goes on behind it); resolves with the exit file's content. */
   async function runJobUntilItEnds(): Promise<string> {
-    const startedAt = Date.now();
-    const child = spawn('bash', [scriptPath, 'job', workDir, slug, jobId], { detached: true, stdio: 'ignore', env: { ...process.env, PUEUE_BIN: '/nonexistent/pueue' } });
-    const exitPath = path.join(getPaths().jobDir, 'exit');
+    const job = startJob();
+    let giveUpTimer: NodeJS.Timeout | undefined;
     try {
-      while (Date.now() - startedAt < jobGiveUpMs) {
-        if (fs.existsSync(exitPath)) return fs.readFileSync(exitPath, 'utf8').trim();
-        await new Promise((resolve) => setTimeout(resolve, jobPollMs));
-      }
-      return 'still running';
+      const outcome = await Promise.race([job.ended.then(() => 'ended'), new Promise<string>((resolve) => { giveUpTimer = setTimeout(() => resolve('still running'), jobGiveUpMs); })]);
+      return outcome === 'ended' ? readJobFile('exit') : outcome;
     } finally {
-      if (child.pid !== undefined) {
-        try {
-          process.kill(-child.pid, 'SIGKILL');
-        } catch {
-          /* ended */
-        }
-      }
+      clearTimeout(giveUpTimer);
+      job.stop();
     }
+  }
+
+  function readJobFile(name: string): string {
+    const filePath = path.join(getPaths().jobDir, name);
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8').trim() : '';
+  }
+
+  async function waitFor(description: string, check: () => boolean): Promise<void> {
+    const startedAt = Date.now();
+    while (!check()) {
+      if (Date.now() - startedAt > jobGiveUpMs) throw new Error(`${description} did not happen`);
+      await new Promise((resolve) => setTimeout(resolve, jobPollMs));
+    }
+  }
+
+  /** A folder with a `rm` in front of the real one that takes its time over anything in an `Intermediates.noindex`: a removal that is still going when the test looks. */
+  function installSlowRm(): string {
+    const folder = path.join(workRoot, 'slow-rm');
+    fs.mkdirSync(folder);
+    const realRm = spawnSync('which', ['rm'], { encoding: 'utf8' }).stdout.trim();
+    fs.writeFileSync(path.join(folder, 'rm'), `#!/bin/sh\ncase "$*" in *Intermediates.noindex*) sleep ${slowRemovalSec} ;; esac\nexec ${realRm} "$@"\n`, { mode: 0o755 });
+    return folder;
   }
 
   function readJobLog(): string {
@@ -279,7 +373,29 @@ describe('a job that ends (runner.sh job)', () => {
     assert.deepEqual(listTree().filter((entry) => entry.startsWith('build/')), ['build/Products/app.txt'], 'the build products stay, the intermediates are gone');
     assert.equal(fs.readFileSync(path.join(paths.jobDir, 'artifacts', 'build/Intermediates.noindex/o.o'), 'utf8'), 'object\n', 'and the file the job was to bring back was kept before it went');
     assert.match(readJobLog(), /remote-run: clean-after-success: removed 1 path of the copy/);
-    assert.equal(fs.readFileSync(path.join(paths.jobDir, 'phase'), 'utf8').trim(), 'done');
+    assert.equal(readJobFile('phase'), 'done');
+    assert.equal(fs.existsSync(path.join(paths.project, 'lock')), false, 'and the project lock is released');
+  });
+
+  it('the result is final BEFORE the removal begins: a `kill` while it goes on finds the job ended with 0 — it cannot turn a job that worked into 137 — and the lock stays held until the removal is over', { skip: rsyncSkip }, async () => {
+    prepareJob({ command: buildCommand, clean: ['build/Intermediates.noindex'] });
+    const job = startJob({ PATH: `${installSlowRm()}:${process.env.PATH}` });
+    try {
+      await waitFor('the job to reach the removal', () => readJobFile('phase') === 'cleaning');
+      assert.equal(readJobFile('exit'), '0', 'the result is written already');
+      assert.ok(fs.existsSync(path.join(getPaths().project, 'lock')), 'and the project lock is still held');
+      const killed = spawnSync('bash', [scriptPath, 'kill', workDir, slug, jobId], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, PUEUE_BIN: '/nonexistent/pueue' } });
+      assert.equal(killed.stdout.trim(), 'already-ended 0', killed.stderr);
+      assert.equal(readJobFile('exit'), '0', 'the kill did not rewrite it');
+      assert.ok(fs.existsSync(path.join(getPaths().tree, 'build/Intermediates.noindex')), 'and did not stop the removal: it is still under way');
+      await job.ended;
+      assert.deepEqual(listTree().filter((entry) => entry.startsWith('build/')), ['build/Products/app.txt'], 'the removal ran to its end');
+      assert.equal(readJobFile('exit'), '0');
+      assert.equal(readJobFile('phase'), 'done');
+      assert.equal(fs.existsSync(path.join(getPaths().project, 'lock')), false, 'and only then was the lock released');
+    } finally {
+      job.stop();
+    }
   });
 
   it('a job that failed (exit 3) cleans nothing: its copy is what a person looks at to find out why', { skip: rsyncSkip }, async () => {

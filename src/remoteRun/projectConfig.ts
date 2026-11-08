@@ -29,8 +29,8 @@ export interface ProjectConfig {
   send: string[];
   /**
    * Paths of the runner's copy removed after a job that succeeded (exit 0): a build's intermediates, tens of GB on a Mac, that the next job rebuilds anyway. Patterns as everywhere
-   * (`pathPatterns.ts`: relative to the project root, inside it, a folder is removed whole). Empty = nothing is removed. NOT for the folders the dependencies step fills: that step
-   * is keyed on the lockfile, not on the folder, and would not run again.
+   * (`pathPatterns.ts`: relative to the project root, inside it, a folder is removed whole). Empty = nothing is removed. Never inside `.git`, `node_modules` or `Pods` (refused here, and skipped by the runner):
+   * the dependencies step is keyed on the lockfile, not on the folder, and would not put them back.
    */
   cleanAfterSuccess: string[];
 }
@@ -44,8 +44,13 @@ const commentPattern = /(^|\s)#.*$/;
 /** A pattern of wildcards and dots only (`**`, `*`, `**` + `/*`) names every path of the project: as a removal after each job it would empty the copy, dependencies included. */
 const patternWithoutNameCharacters = /^[*?/.]*$/;
 
+/** Folders the cleanup never goes into: the repository, and the installed dependencies — their step runs on the lockfile's key, not on their folder, so what is removed from there is not put back. */
+const protectedFolderNames: readonly string[] = ['.git', 'node_modules', 'Pods'];
+
 function getCleanAfterSuccessProblem(pattern: string): string | null {
-  return patternWithoutNameCharacters.test(pattern) ? 'names the whole project (give it a part of a real name, e.g. ios/build)' : null;
+  if (patternWithoutNameCharacters.test(pattern)) return 'names the whole project (give it a part of a real name, e.g. ios/build)';
+  const protectedName = pattern.split('/').find((segment) => protectedFolderNames.includes(segment));
+  return protectedName === undefined ? null : `names a path in "${protectedName}", which is never cleaned (${protectedFolderNames.join(', ')})`;
 }
 
 export function createEmptyProjectConfig(): ProjectConfig {
