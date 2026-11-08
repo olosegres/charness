@@ -107,7 +107,7 @@ export interface GuiAgentHealDeps {
   nodeDir: string;
   /** `system-service` when an admin's line installed the always-on service (`readServiceKind`); asked at every look, an admin may install it while the link runs. */
   getServiceKind: () => string | null;
-  /** What Pueue holds ({@link readPueueView}: a queue that did not answer is `unknown`, which counts as busy): asked with the queued jobs counted (they start the moment the old agent is gone), and asked again right before the old agent is stopped. */
+  /** What Pueue holds ({@link readPueueView}: a queue that did not answer (`unanswered`) or answered with something that is not a status (`unreadable`) counts as busy): asked with the queued jobs counted (they start the moment the old agent is gone), and asked again right before the old agent is stopped. */
   readQueue: () => Promise<PueueView>;
 }
 
