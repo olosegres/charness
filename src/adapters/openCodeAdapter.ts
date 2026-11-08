@@ -231,6 +231,10 @@ export interface OpenCodeSession {
   /** Id of the newest compaction summary message (`message.updated` with `summary: true`), learned
    *  before its text streams, so its parts can be told apart from an ordinary answer. */
   compactionSummaryMessageId: string | null;
+  /** The bot's own `compactContext` call is open: a summary message announced now is the one that call writes. */
+  isBotCompactionInFlight: boolean;
+  /** The id of the summary message the bot's own compaction wrote (learned while its call was open), kept after the call returned: the last of its text may stream later. */
+  botCompactionSummaryMessageId: string | null;
   /** {@link currentResponseText} holds that summary: its tails carry `isCompactionSummary`. Reset alongside it. */
   isResponseCompactionSummary: boolean;
   /**
@@ -2189,6 +2193,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           lastEmittedLength: 0,
           outputTimer: null,
           compactionSummaryMessageId: null,
+          isBotCompactionInFlight: false,
+          botCompactionSummaryMessageId: null,
           isResponseCompactionSummary: false,
           childResponseText: '',
           childLastEmittedLength: 0,
@@ -3205,6 +3211,9 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // compaction prompt (F2/S6) — only send it when non-empty so an ordinary
     // `/compact` stays byte-identical to before.
     const trimmedInstruction = instruction?.trim();
+    // While the call is open the summary message the server announces is this call's (see `handleMessageUpdate`): the bot
+    // reads its section itself after the call, so its streamed tails are marked as the bot's.
+    session.isBotCompactionInFlight = true;
     try {
       await this.apiRequest(
         'POST',
@@ -3225,6 +3234,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       const reason = e instanceof Error ? e.message : String(e);
       console.warn(`[OpenCode] context compaction failed:`, reason);
       return { ok: false, error: t('compact.failed', { reason }) };
+    } finally {
+      session.isBotCompactionInFlight = false;
     }
   }
 
@@ -3459,6 +3470,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         lastEmittedLength: 0,
         outputTimer: null,
         compactionSummaryMessageId: null,
+        isBotCompactionInFlight: false,
+        botCompactionSummaryMessageId: null,
         isResponseCompactionSummary: false,
         childResponseText: '',
         childLastEmittedLength: 0,
@@ -4796,7 +4809,11 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // `isFinal` rides only the idle-triggered flush so the bot can skip the
     // possibly-429-stretched debounce for the turn's last frame.
     const meta: OutboundHints = { isContinuation, isFinal };
-    if (session.isResponseCompactionSummary) meta.isCompactionSummary = true;
+    if (session.isResponseCompactionSummary && session.compactionSummaryMessageId !== null) {
+      meta.isCompactionSummary = true;
+      meta.compactionSummaryMessageId = session.compactionSummaryMessageId;
+      meta.isBotIssuedCompaction = session.compactionSummaryMessageId === session.botCompactionSummaryMessageId;
+    }
     this.emit('output', key, tail, meta);
     session.lastEmittedLength = session.currentResponseText.length;
   }
@@ -5161,7 +5178,11 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // every wedge as "active" and masked it (live miss 2026-08-16).
     if (info.role === 'assistant') session.sawTurnActivity = true;
     // The summary message is stored (and announced here) before its text streams.
-    if (isParentAssistantMessage && info.summary === true && info.id) session.compactionSummaryMessageId = info.id;
+    if (isParentAssistantMessage && info.summary === true && info.id) {
+      session.compactionSummaryMessageId = info.id;
+      // A summary announced while the bot's own compaction call is open is that call's: it, not the server, started it.
+      if (session.isBotCompactionInFlight) session.botCompactionSummaryMessageId = info.id;
+    }
     if (info.role === 'user' && (!info.sessionID || info.sessionID === session.sessionId)) {
       this.noteUserMessageSeen(session, info.id);
     }

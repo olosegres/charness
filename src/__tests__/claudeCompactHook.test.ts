@@ -20,6 +20,7 @@ import {
   prepareClaudeCompactHookFlags,
 } from '../utils/claudeCompactHook';
 import {
+  buildCompactionInstruction,
   compactionChecklistGuidance,
   compactionGapsGuidance,
   compactionResumeGuidance,
@@ -82,6 +83,27 @@ test('PreCompact hook: an overflow compaction is asked for the agent-mistakes se
   const output = runHook(hookCommand, { hook_event_name: 'PreCompact', trigger: 'auto', custom_instructions: null });
   assert.ok(output.includes(compactionGapsGuidance), 'the hook asks for the section the bot posts even when the summary is hidden');
   assert.ok(output.indexOf(compactionGapsGuidance) < output.indexOf(compactionChecklistGuidance), 'the checklist is still the last part');
+});
+
+test('PreCompact hook: a process started BEFORE the agent-mistakes section keeps its old hook, which still skips a bot-issued instruction', () => {
+  // A json-stream process is adopted across a hot deploy and keeps the hook command it was started with — its marker is the
+  // OLD resume guidance (skills + checklist). The new text carries that as a contiguous substring, so the old hook finds it
+  // and prints nothing; otherwise the model would read the skills and the checklist instructions twice.
+  const oldHookCommand = buildPreCompactHookCommand({
+    instruction: 'the instruction the old hook would print',
+    alreadySentMarker: `${compactionSkillsGuidance} ${compactionChecklistGuidance}`,
+  });
+  const botIssuedInstruction = buildCompactionInstruction({
+    bakesSummaryGuidance: false,
+    summaryGuidance: compactionSummaryGuidance,
+    bakesResumeGuidance: false,
+    resumeGuidance: compactionResumeGuidance,
+    closingSectionInstruction: 'CLOSING',
+  });
+  assert.ok(botIssuedInstruction);
+  for (const trigger of ['manual', 'auto']) {
+    assert.equal(runHook(oldHookCommand, { hook_event_name: 'PreCompact', trigger, custom_instructions: botIssuedInstruction }), '', `trigger ${trigger}`);
+  }
 });
 
 test('PreCompact hook: an instruction from before the agent-mistakes section (skills + checklist only) still gets the whole text', () => {

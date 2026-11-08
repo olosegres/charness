@@ -203,6 +203,31 @@ describe('OpenCode compaction summary output', () => {
     assert.equal(metas[2]?.isContinuation, false, 'the answer after the summary starts its own message');
   });
 
+  it('every tail of the summary names the summary message, so the bot can tell one summary from the next; an answer names none', () => {
+    const { adapter, metas } = createAdapterWithSession();
+
+    feedAssistantMessageUpdated(adapter, 'msg_summary', { summary: true });
+    feedTextDelta(adapter, 'Summary, part one. ', 'msg_summary');
+    mock.timers.tick(sseOutputBatchMs + 1);
+    feedTextDelta(adapter, 'Part two.', 'msg_summary');
+    feedAssistantMessageUpdated(adapter, 'msg_summary', { summary: true, finish: 'stop' });
+    feedTextDelta(adapter, 'Back to work.', 'msg_after');
+    feedSessionIdle(adapter);
+
+    assert.deepEqual(metas.map((meta) => meta?.compactionSummaryMessageId), ['msg_summary', 'msg_summary', undefined]);
+  });
+
+  it('a summary the server wrote by itself (an overflow) is not marked as one the bot issued', () => {
+    const { adapter, metas } = createAdapterWithSession();
+
+    feedAssistantMessageUpdated(adapter, 'msg_summary', { summary: true });
+    feedTextDelta(adapter, 'Summary.', 'msg_summary');
+    feedSessionIdle(adapter);
+
+    assert.equal(metas[0]?.isCompactionSummary, true);
+    assert.notEqual(metas[0]?.isBotIssuedCompaction, true);
+  });
+
   it('an ordinary answer is never marked as a summary', () => {
     const { adapter, metas } = createAdapterWithSession();
 

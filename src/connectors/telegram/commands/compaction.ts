@@ -14,7 +14,7 @@ import {
   compactionResumeGuidance,
   compactionClosingStartMarker,
   compactionClosingEndMarker,
-  stripCompactionSectionMarkers,
+  formatCompactionSummaryForTopic,
   extractCompactionInstructionGaps,
   checkShouldPostCompactionSummary,
   checkShouldPostInstructionGaps,
@@ -28,6 +28,8 @@ import {
   getIdleFireDecision,
   getPendingWorkRecheckDelayMs,
 } from '../../../utils/compactOnIdle';
+import { createStreamedSummaryTracker } from '../../../utils/streamedCompactionSummary';
+import type { OutboundHints } from '../../../platform/outbound';
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from '../questionKeyboards';
 import { splitMessage, MAX_MESSAGE_LEN } from '../messageSplit';
 import type { BotCore } from './botCore';
@@ -330,7 +332,7 @@ export function createCompaction(ports: CompactionPorts) {
         : null;
       return {
         ok: true,
-        summary: isWithSummary && summary ? stripCompactionSectionMarkers(summary) : null,
+        summary: isWithSummary && summary ? formatCompactionSummaryForTopic(summary, t('compact.instructionGapsHeader')) : null,
         instructionGaps: isWithInstructionGaps && summary ? extractCompactionInstructionGaps(summary) : null,
         preTokens: compaction.preTokens,
         postTokens: compaction.postTokens,
@@ -454,31 +456,36 @@ export function createCompaction(ports: CompactionPorts) {
     if (instructionGaps) await withThreadLocale(key, () => postCompactionInstructionGaps(key, instructionGaps));
   }
 
-  /**
-   * The compaction summary a backend that streams its own (OpenCode) is writing while `/compact_summary` is OFF, per
-   * thread: its text so far, and whether its agent-mistakes section has gone out. The stream is that backend's one channel
-   * for EVERY compaction — the bot's own and the server's at an overflow — so the section is taken out of it here.
-   */
-  const streamedSummaries = new Map<string, { text: string; isInstructionGapsPosted: boolean }>();
+  /** The summary each thread's backend is streaming (OpenCode): what `streamedCompactionSummary.ts` follows tail by tail. */
+  const streamedSummaryTracker = createStreamedSummaryTracker();
 
   /**
-   * @description One tail of a backend's streamed compaction summary that the topic does not get (hide mode): collect it,
-   * and post the agent-mistakes section the moment its end marker has arrived. Called with the tails in order; the first
-   * tail of a summary (`isContinuation` false) starts it afresh. The section goes out once per summary.
+   * @description One tail of a compaction summary that a backend STREAMS (OpenCode), on its way to the topic: the one place
+   * that decides what of it the topic sees. Called by `handleAgentOutput` for every tail marked `isCompactionSummary`; the
+   * tail goes on to the topic as the returned text (`null`: nothing of it does).
+   *
+   *  - `/compact_summary` ON: the summary is shown, minus the scaffolding the agent was asked to write (the marker lines,
+   *    the «none» line), with the agent-mistakes section under its header;
+   *  - OFF: nothing is shown, and the section is posted on its own — here, once complete, only for a compaction the BACKEND
+   *    ran (an overflow). One the bot issued has its section read after the compaction, in order ({@link runThreadCompaction}).
+   *
+   * A non-Telegram conversation has no topic to post into: its tails go on as they are.
    */
-  function noteStreamedCompactionSummaryTail(key: SessionKey, tail: string, isContinuation: boolean): void {
-    if (!checkIsTelegramKey(key)) return;
+  function routeStreamedCompactionSummaryTail(key: SessionKey, tail: string, hints: OutboundHints): { text: string; isContinuation: boolean } | null {
+    const isContinuation = hints.isContinuation === true;
+    if (!checkIsTelegramKey(key)) return { text: tail, isContinuation };
     const kStr = keyToString(key);
-    const previous = isContinuation ? streamedSummaries.get(kStr) : undefined;
-    const summary = { text: `${previous?.text ?? ''}${tail}`, isInstructionGapsPosted: previous?.isInstructionGapsPosted ?? false };
-    streamedSummaries.set(kStr, summary);
-    if (summary.isInstructionGapsPosted) return;
-    const instructionGaps = extractCompactionInstructionGaps(summary.text);
-    if (instructionGaps === null) return;
-    summary.isInstructionGapsPosted = true;
-    summary.text = '';
-    void withThreadLocale(key, () => postCompactionInstructionGaps(key, instructionGaps))
-      .catch((error) => console.warn(`[compact] ${kStr} the agent-mistakes section was not posted:`, error instanceof Error ? error.message : error));
+    const outcome = streamedSummaryTracker.push(
+      kStr,
+      { text: tail, isContinuation, summaryId: hints.compactionSummaryMessageId ?? null, isBotIssued: hints.isBotIssuedCompaction === true },
+      { isSummaryShown: getState().checkIsCompactSummaryEnabled(key), gapsHeader: t('compact.instructionGapsHeader') },
+    );
+    if (outcome.instructionGaps !== null) {
+      const instructionGaps = outcome.instructionGaps;
+      void withThreadLocale(key, () => postCompactionInstructionGaps(key, instructionGaps))
+        .catch((error) => console.warn(`[compact] ${kStr} the agent-mistakes section was not posted:`, error instanceof Error ? error.message : error));
+    }
+    return outcome.shown;
   }
 
   const threadCompactionStates = new Map<string, ThreadCompactionState>();
@@ -636,7 +643,7 @@ export function createCompaction(ports: CompactionPorts) {
     const compactionState = threadCompactionStates.get(kStr);
     if (compactionState?.idleTimer) clearTimeout(compactionState.idleTimer);
     threadCompactionStates.delete(kStr);
-    streamedSummaries.delete(kStr);
+    streamedSummaryTracker.clear(kStr);
     // Drop the persisted instants too, so the NEXT session in this topic starts with
     // no history and therefore gets the FULL idle window — which is why the fresh-start
     // path needs no special case (do not "fix" it by adding one).
@@ -1556,7 +1563,7 @@ export function createCompaction(ports: CompactionPorts) {
     noteThreadUserActivity,
     markThreadTurnProducedOutput,
     postOwnCompactionInstructionGaps,
-    noteStreamedCompactionSummaryTail,
+    routeStreamedCompactionSummaryTail,
     clearThreadCompaction,
     rearmThreadIdleTimer,
     armDeferredCompaction,

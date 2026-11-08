@@ -6157,7 +6157,7 @@ const {
   noteThreadUserActivity,
   markThreadTurnProducedOutput,
   postOwnCompactionInstructionGaps,
-  noteStreamedCompactionSummaryTail,
+  routeStreamedCompactionSummaryTail,
   clearThreadCompaction,
   rearmThreadIdleTimer,
   armDeferredCompaction,
@@ -11451,14 +11451,23 @@ function handleAgentOutput(key: SessionKey, output: string, meta?: OutboundHints
   markThreadTurnProducedOutput(key);
   noteThreadActivity(key);
 
-  // A backend's own streamed compaction summary (OpenCode) obeys `/compact_summary`, like the
-  // summary the bot posts for the other backends: off → the compaction ends in its short notices — plus the summary's
-  // agent-mistakes section, which is shown in hide mode too and is taken out of the stream here.
-  if (meta?.isCompactionSummary && !state.checkIsCompactSummaryEnabled(key)) {
-    noteStreamedCompactionSummaryTail(key, output, meta.isContinuation === true);
+  // A backend's own streamed compaction summary (OpenCode) obeys `/compact_summary`, like the summary the bot posts for the
+  // other backends: off → the compaction ends in its short notices, plus the summary's agent-mistakes section, which is
+  // shown in hide mode too; on → the summary is shown without the marker lines the agent was asked to write.
+  if (meta?.isCompactionSummary) {
+    const summaryTail = routeStreamedCompactionSummaryTail(key, output, meta);
+    if (summaryTail === null) return;
+    deliverAgentOutput(key, summaryTail.text, { ...meta, isContinuation: summaryTail.isContinuation });
     return;
   }
+  deliverAgentOutput(key, output, meta);
+}
 
+/**
+ * @description The rest of {@link handleAgentOutput} for the text that is going to the topic: the answers-only view, the
+ * sub-agent chunks, the questions and the answer itself.
+ */
+function deliverAgentOutput(key: SessionKey, output: string, meta?: OutboundHints): void {
   // Answers-only view (S9): the agent's text — sub-agent chunks and progress
   // bursts included — never reaches the topic; a native question still does (it
   // falls through to its branch below). A real answer still retires a pinned

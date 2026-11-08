@@ -24,6 +24,7 @@ import assert from 'node:assert/strict';
 import { createCompaction } from '../connectors/telegram/commands/compaction';
 import { MAX_MESSAGE_LEN } from '../connectors/telegram/messageSplit';
 import type { AgentAdapter, AgentSession, CompactionResult, OpenCodeQuestion, PendingQuestionState } from '../types';
+import type { OutboundHints } from '../platform/outbound';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { enDict } from '../i18n/en';
@@ -199,9 +200,12 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       assert.equal(texts.length, 3, `started, done, the full summary: ${JSON.stringify(texts)}`);
       assert.ok(texts[2].startsWith(enDict['compact.summaryHeader']));
       assert.equal(countRepliesWith(instructionGapsText), 1, 'the section is in exactly one message');
-      assert.ok(!texts.some((text) => text.includes(enDict['compact.instructionGapsHeader'])), 'no separate section message');
+      assert.ok(!texts.some((text) => text.startsWith(enDict['compact.instructionGapsHeader'])), 'no separate section message');
       assert.ok(texts[2].includes('finish the refactor') && texts[2].includes('Next: run the suite.'), 'the summary body and the closing section are there');
       assert.ok(!texts[2].includes('<<<'), 'the markers of both sections are stripped');
+      // The proposals are labelled, so they do not blur into the numbered next steps right after them.
+      assert.ok(texts[2].includes(`${enDict['compact.instructionGapsHeader']}\n${instructionGapsText}\n`), `the section sits under its header: ${texts[2]}`);
+      assert.equal(texts[2].split(enDict['compact.instructionGapsHeader']).length - 1, 1, 'one header');
     });
 
     it('a section that says there were no mistakes (the none line, or nothing) posts nothing, in either mode', async () => {
@@ -210,7 +214,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
           await setSummaryVisible(isVisible);
           adapter.summary = buildSummary(body);
           await harness.runCommand('compact');
-          assert.ok(!getReplyTexts().some((text) => text.includes(enDict['compact.instructionGapsHeader'])), `no section message (visible: ${isVisible}, body "${body}")`);
+          assert.ok(!getReplyTexts().some((text) => text.includes(enDict['compact.instructionGapsHeader'])), `no section message and no header over an empty section (visible: ${isVisible}, body "${body}")`);
           // Neither as a section of its own nor inside the full summary: it is scaffolding, like the markers.
           assert.ok(!getReplyTexts().some((text) => text.includes(compactionNoGapsLine)), `the none line never reaches the topic (visible: ${isVisible})`);
           harness.replies.length = 0;
@@ -229,17 +233,29 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       assert.deepEqual(getReplyTexts().map((text) => Array.from(text)[0]), ['🧹', '✅'], 'only the notices');
     });
 
-    it('a backend that streams its own summary is not read here: its stream is its channel, so the section is never posted twice', async () => {
+    it('a backend that streams its own summary, the summary HIDDEN: its stream is dropped, so the bot reads the section itself and posts it AFTER its notices', async () => {
       adapter.streamsCompactionSummary = true;
       adapter.summary = buildSummary(instructionGapsText);
 
-      for (const isVisible of [false, true]) {
-        await setSummaryVisible(isVisible);
-        await harness.runCommand('compact');
-        assert.equal(adapter.summaryReads, 0, `the summary is not read (visible: ${isVisible})`);
-        assert.equal(countRepliesWith(instructionGapsText), 0, `nothing of the section is posted by the seam (visible: ${isVisible})`);
-        harness.replies.length = 0;
-      }
+      await harness.runCommand('compact');
+
+      const texts = getReplyTexts();
+      assert.equal(adapter.summaryReads, 1, 'the summary is read once');
+      assert.equal(texts.length, 3, `started, done, the section: ${JSON.stringify(texts)}`);
+      assert.equal(texts[0], enDict['compact.started']);
+      assert.ok(texts[1].startsWith('✅'));
+      assert.equal(texts[2], `${enDict['compact.instructionGapsHeader']}\n\n${instructionGapsText}`);
+    });
+
+    it('a backend that streams its own summary, the summary SHOWN: the stream carries it, so the bot reads and posts nothing', async () => {
+      adapter.streamsCompactionSummary = true;
+      adapter.summary = buildSummary(instructionGapsText);
+      await setSummaryVisible(true);
+
+      await harness.runCommand('compact');
+
+      assert.equal(adapter.summaryReads, 0, 'the summary is not read');
+      assert.deepEqual(getReplyTexts().map((text) => Array.from(text)[0]), ['🧹', '✅'], 'only the notices: the summary comes by the stream');
     });
 
     it('a long section is SPLIT to Telegram\'s limit, never truncated, the header on the first part', async () => {
@@ -303,6 +319,23 @@ describe('the agent-mistakes section of a compaction summary, through the compac
     });
   });
 
+  describe('the idle compaction of a backend that streams its own summary (OpenCode), the summary hidden', () => {
+    it('notice → section → the re-asked question, which stays LAST — the section is read after the compaction, not taken from a stream that may still be arriving', async () => {
+      adapter.streamsCompactionSummary = true;
+      adapter.summary = buildSummary(instructionGapsText);
+      pendingQuestions.set(keyString, { data: { requestId: 'que_1', questions: [question] }, messageId: 77, answers: [null], currentIndex: 0 });
+      compaction.markThreadTurnProducedOutput(key);
+      compaction.noteThreadActivity(key);
+      await idleFireFinished.promise;
+
+      const texts = getReplyTexts();
+      assert.equal(texts.length, 3, JSON.stringify(texts));
+      assert.equal(texts[0], enDict['compactOnIdle.notice']);
+      assert.ok(texts[1].startsWith(enDict['compact.instructionGapsHeader']));
+      assert.ok(harness.getKeyboardData(harness.replies[2]).flat().some((data) => data.startsWith('reask_')), 'the re-asked question is the last message and carries its buttons');
+    });
+  });
+
   describe('the CLI\'s own compaction at a context overflow (nobody posts its summary)', () => {
     it('posts the section whatever /compact_summary says', async () => {
       adapter.summary = buildSummary(instructionGapsText);
@@ -340,66 +373,127 @@ describe('the agent-mistakes section of a compaction summary, through the compac
     });
   });
 
-  describe('a backend that streams its own summary (OpenCode), the summary hidden', () => {
+  describe('a backend that streams its own summary (OpenCode): the tails of a summary the bot did not issue', () => {
     const streamedSummary = buildSummary(instructionGapsText);
+    const firstId = 'msg_summary_1';
+    const secondId = 'msg_summary_2';
 
-    it('posts the section once its end marker has arrived — however the tails cut the markers — and once per summary', async () => {
-      // Cut the summary in the middle of the start marker and of the end marker: no tail holds a whole marker line.
-      const cutAt = [streamedSummary.indexOf(compactionGapsStartMarker) + 6, streamedSummary.indexOf(compactionGapsEndMarker) + 9];
-      const tails = [streamedSummary.slice(0, cutAt[0]), streamedSummary.slice(cutAt[0], cutAt[1]), streamedSummary.slice(cutAt[1])];
+    function tailHints(overrides: OutboundHints = {}): OutboundHints {
+      return { isCompactionSummary: true, compactionSummaryMessageId: firstId, isContinuation: false, ...overrides };
+    }
 
-      compaction.noteStreamedCompactionSummaryTail(key, tails[0], false);
-      compaction.noteStreamedCompactionSummaryTail(key, tails[1], true);
-      assert.deepEqual(getReplyTexts(), [], 'the section is not complete yet: nothing is posted');
-      compaction.noteStreamedCompactionSummaryTail(key, tails[2], true);
-      await waitUntil('the section to be posted', () => harness.replies.length === 1);
-      assert.equal(harness.replies[0].text, `${enDict['compact.instructionGapsHeader']}\n\n${instructionGapsText}`);
-
-      compaction.noteStreamedCompactionSummaryTail(key, '\n1. load these skills: commit', true);
+    async function settle(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, waitStepMs * 3));
-      assert.equal(harness.replies.length, 1, 'more tails of the same summary post nothing more');
+    }
+
+    describe('with the summary HIDDEN', () => {
+      it('posts the section once its end marker has arrived — however the tails cut the markers — and once per summary', async () => {
+        // Cut the summary in the middle of the start marker and of the end marker: no tail holds a whole marker line.
+        const cutAt = [streamedSummary.indexOf(compactionGapsStartMarker) + 6, streamedSummary.indexOf(compactionGapsEndMarker) + 9];
+        const tails = [streamedSummary.slice(0, cutAt[0]), streamedSummary.slice(cutAt[0], cutAt[1]), streamedSummary.slice(cutAt[1])];
+
+        assert.equal(compaction.routeStreamedCompactionSummaryTail(key, tails[0], tailHints()), null, 'a hidden summary shows nothing');
+        assert.equal(compaction.routeStreamedCompactionSummaryTail(key, tails[1], tailHints({ isContinuation: true })), null);
+        await settle();
+        assert.deepEqual(getReplyTexts(), [], 'the section is not complete yet: nothing is posted');
+        assert.equal(compaction.routeStreamedCompactionSummaryTail(key, tails[2], tailHints({ isContinuation: true })), null);
+        await waitUntil('the section to be posted', () => harness.replies.length === 1);
+        assert.equal(harness.replies[0].text, `${enDict['compact.instructionGapsHeader']}\n\n${instructionGapsText}`);
+
+        compaction.routeStreamedCompactionSummaryTail(key, '\n1. load these skills: commit', tailHints({ isContinuation: true }));
+        await settle();
+        assert.equal(harness.replies.length, 1, 'more tails of the same summary post nothing more');
+      });
+
+      it('a second section in the SAME summary (the model restates it) is not posted again', async () => {
+        compaction.routeStreamedCompactionSummaryTail(key, streamedSummary, tailHints());
+        await waitUntil('the section', () => harness.replies.length === 1);
+        compaction.routeStreamedCompactionSummaryTail(key, `\n${compactionGapsStartMarker}\n1. Mistake: restated. Change: restated.\n${compactionGapsEndMarker}`, tailHints({ isContinuation: true }));
+        await settle();
+        assert.equal(harness.replies.length, 1, 'one summary, one section message');
+      });
+
+      it('a LATER summary of the session is a new one — its section is posted even when every one of its tails is a continuation', async () => {
+        // The server compacts again mid-turn, after the agent already streamed text: the adapter marks every tail of that
+        // summary a continuation, so only the summary message's id tells it from the first one.
+        compaction.routeStreamedCompactionSummaryTail(key, streamedSummary, tailHints());
+        await waitUntil('the first section', () => harness.replies.length === 1);
+        compaction.routeStreamedCompactionSummaryTail(key, buildSummary('1. Mistake: another one. Change: another rule.'), tailHints({ compactionSummaryMessageId: secondId, isContinuation: true }));
+        await waitUntil('the second section', () => harness.replies.length === 2);
+        assert.ok(harness.replies[1].text.endsWith('1. Mistake: another one. Change: another rule.'));
+      });
+
+      it('a summary whose section says there were no mistakes posts nothing', async () => {
+        compaction.routeStreamedCompactionSummaryTail(key, buildSummary(compactionNoGapsLine), tailHints());
+        await settle();
+        assert.deepEqual(getReplyTexts(), []);
+      });
+
+      it('a summary of a compaction the BOT issued posts nothing from the stream — the bot reads its section itself, in order', async () => {
+        compaction.routeStreamedCompactionSummaryTail(key, streamedSummary, tailHints({ isBotIssuedCompaction: true }));
+        await settle();
+        assert.deepEqual(getReplyTexts(), []);
+      });
+
+      it('a continuation with no first tail before it (the bot started mid-summary) never posts a half section', async () => {
+        compaction.routeStreamedCompactionSummaryTail(key, `${instructionGapsText}\n${compactionGapsEndMarker}`, tailHints({ isContinuation: true }));
+        await settle();
+        assert.deepEqual(getReplyTexts(), []);
+      });
+
+      it('a tracker issue has no topic to post into', async () => {
+        compaction.routeStreamedCompactionSummaryTail(trackerKey, streamedSummary, tailHints());
+        await settle();
+        assert.deepEqual(getReplyTexts(), []);
+      });
+
+      it('a thread that ends mid-summary forgets it: the next summary starts clean', async () => {
+        compaction.routeStreamedCompactionSummaryTail(key, `${compactionGapsStartMarker}\n${instructionGapsText}`, tailHints());
+        compaction.clearThreadCompaction(key);
+        compaction.routeStreamedCompactionSummaryTail(key, `\n${compactionGapsEndMarker}`, tailHints({ isContinuation: true }));
+        await settle();
+        assert.deepEqual(getReplyTexts(), [], 'the end marker alone completes nothing');
+      });
     });
 
-    it('a second section in the SAME summary (the model restates it) is not posted again', async () => {
-      compaction.noteStreamedCompactionSummaryTail(key, streamedSummary, false);
-      await waitUntil('the section', () => harness.replies.length === 1);
-      compaction.noteStreamedCompactionSummaryTail(key, `\n${compactionGapsStartMarker}\n1. Mistake: restated. Change: restated.\n${compactionGapsEndMarker}`, true);
-      await new Promise((resolve) => setTimeout(resolve, waitStepMs * 3));
-      assert.equal(harness.replies.length, 1, 'one summary, one section message');
-    });
+    describe('with the summary SHOWN', () => {
+      beforeEach(async () => {
+        await setSummaryVisible(true);
+      });
 
-    it('the next summary (a first tail again) is a new one: its section is posted too', async () => {
-      compaction.noteStreamedCompactionSummaryTail(key, streamedSummary, false);
-      await waitUntil('the first section', () => harness.replies.length === 1);
-      compaction.noteStreamedCompactionSummaryTail(key, buildSummary('1. Mistake: another one. Change: another rule.'), false);
-      await waitUntil('the second section', () => harness.replies.length === 2);
-      assert.ok(harness.replies[1].text.endsWith('1. Mistake: another one. Change: another rule.'));
-    });
+      it('what goes on to the topic has no marker line and no none line, the section sits under its header, and nothing is posted on the side', async () => {
+        const shown = [] as string[];
+        for (const [index, slice] of [streamedSummary.slice(0, 40), streamedSummary.slice(40, 130), streamedSummary.slice(130)].entries()) {
+          const routed = compaction.routeStreamedCompactionSummaryTail(key, slice, tailHints({ isContinuation: index > 0 }));
+          if (routed !== null) shown.push(routed.text);
+        }
+        const text = shown.join('');
+        assert.ok(!text.includes('<<<'), `no marker reaches the topic: ${text}`);
+        assert.ok(text.includes(`${enDict['compact.instructionGapsHeader']}\n${instructionGapsText}\n`), `the section sits under its header: ${text}`);
+        assert.ok(text.includes('finish the refactor'), 'the rest of the summary is shown');
+        await settle();
+        assert.deepEqual(getReplyTexts(), [], 'the bot posts nothing of its own: the stream is the summary');
+      });
 
-    it('a summary whose section says there were no mistakes posts nothing', async () => {
-      compaction.noteStreamedCompactionSummaryTail(key, buildSummary(compactionNoGapsLine), false);
-      await new Promise((resolve) => setTimeout(resolve, waitStepMs * 3));
-      assert.deepEqual(getReplyTexts(), []);
-    });
+      it('a section that says «none» leaves no trace in what is shown', () => {
+        const routed = compaction.routeStreamedCompactionSummaryTail(key, buildSummary(compactionNoGapsLine), tailHints());
+        assert.ok(routed);
+        assert.ok(!routed.text.includes(compactionNoGapsLine) && !routed.text.includes(enDict['compact.instructionGapsHeader']) && !routed.text.includes('<<<'), routed.text);
+      });
 
-    it('a continuation with no first tail before it (the bot started mid-summary) never posts a half section', async () => {
-      compaction.noteStreamedCompactionSummaryTail(key, `${instructionGapsText}\n${compactionGapsEndMarker}`, true);
-      await new Promise((resolve) => setTimeout(resolve, waitStepMs * 3));
-      assert.deepEqual(getReplyTexts(), []);
-    });
+      it('a tail whose whole text is scaffolding is not shown, and the next one that is shown does not continue a message that was never started', () => {
+        assert.equal(compaction.routeStreamedCompactionSummaryTail(key, `${compactionGapsStartMarker}\n`, tailHints()), null);
+        const next = compaction.routeStreamedCompactionSummaryTail(key, '1. Mistake: a.\n', tailHints({ isContinuation: true }));
+        assert.ok(next);
+        assert.equal(next.isContinuation, false);
+      });
 
-    it('a tracker issue has no topic to post into', async () => {
-      compaction.noteStreamedCompactionSummaryTail(trackerKey, streamedSummary, false);
-      await new Promise((resolve) => setTimeout(resolve, waitStepMs * 3));
-      assert.deepEqual(getReplyTexts(), []);
-    });
-
-    it('a thread that ends mid-summary forgets it: the next summary starts clean', async () => {
-      compaction.noteStreamedCompactionSummaryTail(key, `${compactionGapsStartMarker}\n${instructionGapsText}`, false);
-      compaction.clearThreadCompaction(key);
-      compaction.noteStreamedCompactionSummaryTail(key, `\n${compactionGapsEndMarker}`, true);
-      await new Promise((resolve) => setTimeout(resolve, waitStepMs * 3));
-      assert.deepEqual(getReplyTexts(), [], 'the end marker alone completes nothing');
+      it('a tracker issue\'s summary passes through as it is', () => {
+        assert.deepEqual(
+          compaction.routeStreamedCompactionSummaryTail(trackerKey, streamedSummary, tailHints({ isContinuation: true })),
+          { text: streamedSummary, isContinuation: true },
+        );
+      });
     });
   });
 });

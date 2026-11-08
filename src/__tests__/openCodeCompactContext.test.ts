@@ -24,12 +24,13 @@
  * answered at the stubbed HTTP boundary, sessions injected via bracket access.
  */
 
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenCodeAdapter } from '../adapters/openCodeAdapter';
 import type { CompactionResult } from '../types';
 import { keyToString, type SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
+import type { OutboundHints } from '../platform/outbound';
 import { OpenCodeApiFailure, useStubbedOpenCodeServer, type OpenCodeApiRequest } from './openCodeServerStub';
 import { createOpenCodeSessionFixture } from './openCodeSessionFixture';
 
@@ -189,5 +190,65 @@ describe('OpenCode context compaction', () => {
     assert.ok(!error.includes('{'), `notice must be fully substituted: "${error}"`);
     assert.ok(error.includes('500 boom'), `the failure reason must reach the user: "${error}"`);
     assert.equal(getSummarizePosts(calls).length, 1, 'the POST was attempted');
+  });
+
+  describe('the summary the bot\'s compaction writes is marked as the bot\'s', () => {
+    const summaryMessageId = 'msg_bot_summary';
+    const serverSummaryMessageId = 'msg_server_summary';
+    const sseOutputBatchMs = 500;
+
+    /** Feed an event through the same dispatcher the live `/global/event` reader uses. */
+    function feedEvent(adapter: OpenCodeAdapter, type: string, properties: Record<string, unknown>): void {
+      adapter['routeSseData'](JSON.stringify({ directory: workDir, project: 'proj', payload: { type, properties } }));
+    }
+
+    function feedSummaryAnnounced(adapter: OpenCodeAdapter, messageId: string): void {
+      feedEvent(adapter, 'message.updated', { info: { id: messageId, sessionID: sessionId, role: 'assistant', summary: true } });
+    }
+
+    function feedSummaryText(adapter: OpenCodeAdapter, messageId: string, delta: string): void {
+      feedEvent(adapter, 'message.part.delta', { sessionID: sessionId, messageID: messageId, partID: `prt_${messageId}`, field: 'text', delta });
+    }
+
+    it('its tails say so — those streamed while the call is open and the one that comes after it returned — and a later server compaction\'s do not', async () => {
+      mock.timers.enable({ apis: ['setTimeout'] });
+      try {
+        const adapter = new OpenCodeAdapter();
+        const metas: Array<OutboundHints | undefined> = [];
+        adapter.on('output', (_key: SessionKey, _text: string, meta?: OutboundHints) => { metas.push(meta); });
+        openCodeServer.answerApiWith((request) => {
+          if (request.method === 'GET' && request.urlPath.startsWith('/config')) return { defaultModel: serverDefaultModel };
+          if (request.method === 'POST' && request.urlPath.startsWith(`/session/${sessionId}/summarize`)) {
+            // The server announces the summary message and streams its text while the call is open.
+            feedSummaryAnnounced(adapter, summaryMessageId);
+            feedSummaryText(adapter, summaryMessageId, 'Summary, part one. ');
+            mock.timers.tick(sseOutputBatchMs + 1);
+          }
+          return undefined;
+        });
+        adapter['connectSse'] = () => {};
+        const key: SessionKey = makeTelegramKey(-100, 11);
+        injectSession(adapter, key, sessionOverrideModel);
+
+        const result = await adapter.compactContext(key);
+        assert.equal(result.ok, true);
+
+        // The rest of the summary reaches the bot AFTER the HTTP call returned (its own debounce): still the bot's.
+        feedSummaryText(adapter, summaryMessageId, 'Part two.');
+        mock.timers.tick(sseOutputBatchMs + 1);
+        feedEvent(adapter, 'message.updated', { info: { id: summaryMessageId, sessionID: sessionId, role: 'assistant', summary: true, finish: 'stop' } });
+        // Later the server compacts by itself: a new summary message, announced with no call of the bot's open.
+        feedSummaryAnnounced(adapter, serverSummaryMessageId);
+        feedSummaryText(adapter, serverSummaryMessageId, 'Overflow summary.');
+        mock.timers.tick(sseOutputBatchMs + 1);
+
+        assert.deepEqual(
+          metas.map((meta) => [meta?.compactionSummaryMessageId, meta?.isBotIssuedCompaction === true]),
+          [[summaryMessageId, true], [summaryMessageId, true], [serverSummaryMessageId, false]],
+        );
+      } finally {
+        mock.timers.reset();
+      }
+    });
   });
 });

@@ -221,7 +221,9 @@ describe('The agent-mistakes section of a compaction summary: built charness, fa
     assert.ok(summaryMessage.text.includes(summaryBody) && summaryMessage.text.includes(closingText), 'the summary body and its closing section are posted');
     assert.equal(texts.filter((text) => text.includes(instructionGapsText)).length, 1, 'the section is in exactly one message');
     assert.ok(summaryMessage.text.includes(instructionGapsText), 'and that message is the full summary');
-    assert.ok(!texts.some((text) => text.includes(enDict['compact.instructionGapsHeader'])), 'no separate section message');
+    // The proposals are labelled where they stand, so they do not read as more of the numbered next steps after them.
+    assert.ok(summaryMessage.text.includes(`${enDict['compact.instructionGapsHeader']}\n${instructionGapsText}\n`), `the section sits under its header: ${summaryMessage.text}`);
+    assert.ok(!texts.some((text) => text.startsWith(enDict['compact.instructionGapsHeader'])), 'no separate section message');
     assert.ok(!summaryMessage.text.includes('<<<'), 'the markers of both sections are stripped');
   });
 

@@ -145,6 +145,18 @@ export interface OutboundHints {
    */
   isCompactionSummary?: boolean;
   /**
+   * The id of the compaction summary message a tail of {@link isCompactionSummary} text belongs to. A backend that streams
+   * its summary marks a tail a continuation whenever its buffer already holds text, so the id is what tells one summary
+   * of a session from the next.
+   */
+  compactionSummaryMessageId?: string;
+  /**
+   * True when the bot itself issued the compaction that wrote the summary (`/compact`, the idle compaction, the agent's own
+   * request) rather than the backend running it by itself at a context overflow. The bot reads the section of its own
+   * compaction's summary after the compaction, in order, so it does not take it out of the stream too.
+   */
+  isBotIssuedCompaction?: boolean;
+  /**
    * True when this content is an interactive question the user is expected to
    * answer. The connector gives it its own prominent message rather than
    * appending it to the streaming cursor. (Claude scrapes questions out of its

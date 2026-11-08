@@ -14,6 +14,11 @@
  *     `POST /question/:id/reply` and `POST /question/:id/reject` (accepted and recorded);
  *   • `POST /instance/dispose`.
  *
+ * A compaction can be played out ({@link FakeOpenCodeServer.setNextSummarize}, {@link FakeOpenCodeServer.emitCompactionSummary}):
+ * the summary message the server stores (`message.updated` with `summary: true`, served by `GET /session/:id/message` after
+ * the compaction), its text streamed in chunks far enough apart that the bot's output debounce makes each its own tail, and
+ * the idle the session goes to after.
+ *
  * Every request is recorded; one that is none of these is answered `404` AND listed in `unhandled`, so a flow can
  * assert the bot asked for nothing the fake does not model. A prompt is recorded with its text and model, and never
  * answered by itself — a flow decides what the "model" does next: {@link FakeOpenCodeServer.emitUsageLimit} makes the
@@ -64,6 +69,18 @@ export interface FakeOpenCodeSession {
   title: string | null;
 }
 
+/** A compaction summary the fake plays out: the assistant message the server stores with `summary: true` and the text streamed into it. */
+export interface FakeCompactionSummary {
+  messageId: string;
+  /** The summary's text in the pieces the server streams it in; a piece may cut a line, even a marker. */
+  chunks: readonly string[];
+  /** Milliseconds between two pieces: longer than the bot's output debounce (500 ms), so each piece reaches it as its own tail. */
+  chunkGapMs?: number;
+}
+
+/** What the fake waits between the pieces of a summary unless a flow says otherwise: past the adapter's 500 ms debounce. */
+const defaultSummaryChunkGapMs = 650;
+
 export interface FakeOpenCodeOptions {
   /** What `GET /global/health` and `opencode --version` report. */
   version: string;
@@ -91,6 +108,10 @@ export class FakeOpenCodeServer {
   private readonly runningTurns = new Set<string>();
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private sessionCounter = 0;
+  /** The compaction summaries each session's server stored, oldest first: what `GET /session/:id/message` adds after the prompts. */
+  private readonly storedSummaries = new Map<string, Array<{ messageId: string; text: string }>>();
+  /** The summary the NEXT `POST /session/:id/summarize` plays out before it answers; none: it answers at once. */
+  private nextSummarize: FakeCompactionSummary | null = null;
   /** The requests a flow holds: each is let go (or refused) by the first request that matches it, once. */
   private readonly requestHolds: Array<{ method: string; pathPattern: RegExp; outcome: Promise<number | null> }> = [];
 
@@ -210,6 +231,37 @@ export class FakeOpenCodeServer {
     this.broadcast({ type: 'message.part.updated', properties: { part: { id: `${messageId}_${tool}`, messageID: messageId, sessionID: sessionId, type: 'tool', tool, state } } }, session.directory);
   }
 
+  /**
+   * @description The next `POST /session/:id/summarize` (the bot's `/compact`, the idle compaction) plays `summary` out —
+   * the way the real server compacts while the call is open — and only then answers.
+   */
+  setNextSummarize(summary: FakeCompactionSummary): void {
+    this.nextSummarize = summary;
+  }
+
+  /**
+   * @description A compaction summary written by the server: the busy status, the summary message announced
+   * (`message.updated` with `summary: true`, before its text streams), the text in chunks, the message finished, the
+   * session idle. With no `POST /summarize` open this is the server's OWN compaction (a context overflow). The stored
+   * message is what `GET /session/:id/message` returns afterwards. Resolves when the last piece and the idle are out.
+   */
+  async emitCompactionSummary(sessionId: string, summary: FakeCompactionSummary): Promise<void> {
+    const session = this.getSessionOrThrow(sessionId);
+    const gapMs = summary.chunkGapMs ?? defaultSummaryChunkGapMs;
+    this.runningTurns.add(sessionId);
+    this.broadcast({ type: 'session.status', properties: { sessionID: sessionId, status: { type: 'busy' } } }, session.directory);
+    const info = { id: summary.messageId, sessionID: sessionId, role: 'assistant', summary: true, time: { created: Date.now() } };
+    this.broadcast({ type: 'message.updated', properties: { info } }, session.directory);
+    for (const [index, chunk] of summary.chunks.entries()) {
+      this.broadcast({ type: 'message.part.delta', properties: { sessionID: sessionId, messageID: summary.messageId, partID: `${summary.messageId}_text`, field: 'text', delta: chunk } }, session.directory);
+      if (index < summary.chunks.length - 1) await new Promise<void>((resolve) => setTimeout(resolve, gapMs));
+    }
+    this.storedSummaries.set(sessionId, [...(this.storedSummaries.get(sessionId) ?? []), { messageId: summary.messageId, text: summary.chunks.join('') }]);
+    await new Promise<void>((resolve) => setTimeout(resolve, gapMs));
+    this.broadcast({ type: 'message.updated', properties: { info: { ...info, finish: 'stop' } } }, session.directory);
+    this.emitSessionIdle(sessionId);
+  }
+
   private getSessionOrThrow(sessionId: string): FakeOpenCodeSession {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`no such fake OpenCode session: ${sessionId}`);
@@ -323,8 +375,14 @@ export class FakeOpenCodeServer {
         if (this.runningTurns.has(session.id)) this.emitAbortedTurn(session.id);
         return;
       }
-      // A compaction (`/compact`): accepted and recorded; what the model then does is the flow's to emit.
-      if (session && method === 'POST' && action === '/summarize') return reply(true);
+      // A compaction (`/compact`): recorded; a flow that gave it a summary ({@link setNextSummarize}) has it played out
+      // before the answer, as the real server does; any other emits what it wants itself.
+      if (session && method === 'POST' && action === '/summarize') {
+        const summary = this.nextSummarize;
+        this.nextSummarize = null;
+        if (summary) await this.emitCompactionSummary(session.id, summary);
+        return reply(true);
+      }
       if (session && method === 'POST' && action === '/prompt_async') {
         this.recordPrompt(session, record.body as PromptBody | null);
         response.writeHead(noContentStatus);
@@ -381,11 +439,14 @@ export class FakeOpenCodeServer {
     return session;
   }
 
-  /** What `GET /session/:id/message` returns: the prompts the bot sent into the session, as stored user messages. */
-  private buildStoredMessages(session: FakeOpenCodeSession): Array<{ info: { id: string; role: 'user' }; parts: Array<{ type: 'text'; text: string }> }> {
-    return this.prompts
+  /** What `GET /session/:id/message` returns: the prompts the bot sent into the session, as stored user messages, then the compaction summaries. */
+  private buildStoredMessages(session: FakeOpenCodeSession): Array<{ info: { id: string; role: 'user' | 'assistant'; summary?: true }; parts: Array<{ type: 'text'; text: string }> }> {
+    const prompts = this.prompts
       .filter((prompt) => prompt.sessionId === session.id)
       .map((prompt, index) => ({ info: { id: `msg_${session.id}_${index}`, role: 'user' as const }, parts: [{ type: 'text' as const, text: prompt.text }] }));
+    const summaries = (this.storedSummaries.get(session.id) ?? [])
+      .map((summary) => ({ info: { id: summary.messageId, role: 'assistant' as const, summary: true as const }, parts: [{ type: 'text' as const, text: summary.text }] }));
+    return [...prompts, ...summaries];
   }
 
   private recordPrompt(session: FakeOpenCodeSession, body: PromptBody | null): void {
