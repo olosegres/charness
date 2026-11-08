@@ -1262,4 +1262,5 @@ export const kaDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': 'რამდენ ამოცანას შეასრულებს ახალი მანქანა გვერდიგვერდ. მოგვიანებით შეიძლება შეიცვალოს /runners-ში.',
   'runners.pairingJobsAtOnceChosenToast': 'ახალი მანქანა ერთდროულად {count} ამოცანას შეასრულებს.',
   'runners.pairedJobsAtOnceNote': 'ერთდროულად ამოცანები: {count} — შეცვალეთ /runners-ში.',
+  'runners.pairingJobsAtOnceClosedToast': 'ეს დაწყვილების სტრიქონი აღარ არის ღია — თუ მანქანა დაწყვილდა, რიცხვი /runners-ში დააყენეთ.',
 };

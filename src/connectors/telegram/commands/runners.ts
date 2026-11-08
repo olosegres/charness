@@ -515,8 +515,8 @@ export function createRunners(ports: RunnersPorts) {
   }
 
   /**
-   * A number picked on a pairing message. While the code is open it is kept for the machine to come (the ✓ moves); once the code was used it changes the runner it made
-   * and is told to it; an expired code is only said so (the watcher turns the message into «expired»).
+   * A number picked on a pairing message. While the code is open it is kept for the machine to come (the ✓ moves); once the code was used it changes the runner it made,
+   * is told to it, and the message is set to «paired» naming the number; a code that is not open (expired, closed, its runner removed) is only said so — the watcher settles the message.
    */
   async function handlePairingJobs(ctx: Context, key: SessionKey, messageId: number | null, callback: Extract<RunnersCallback, { kind: 'pairingJobs' }>): Promise<void> {
     let change: PairingJobsAtOnceChange | null;
@@ -528,12 +528,16 @@ export function createRunners(ports: RunnersPorts) {
       return;
     }
     if (change === null) {
-      await answerCallbackQuerySafely(ctx, t('runners.expiredText'));
+      // Not «expired»: the code may also have been CLOSED unused, or the runner it made removed, and a keyboard whose message could not be settled yet stays for a while.
+      await answerCallbackQuerySafely(ctx, t('runners.pairingJobsAtOnceClosedToast'));
       return;
     }
     if (change.kind === 'paired') {
       const outcome = await ports.applyGroups(change.runner);
       await answerCallbackQuerySafely(ctx, buildJobsAtOnceOutcomeToast(change.runner.name, getJobsAtOnce(change.runner), outcome, t));
+      // The watcher may already have a «paired» edit queued that it built from the registry before this tap, and that edit drops the keyboard: the text it carries is the old
+      // number. The send gate is first come, first served, so an edit queued now goes out after it and has the last word (an edit of the same text is «not modified», which counts as done).
+      if (messageId !== null) await editThreadMessage(key, messageId, buildPairedText(change.runner.name, change.runner.pairedAtMs, getJobsAtOnce(change.runner), t, formatRunnersTime));
       return;
     }
     await answerCallbackQuerySafely(ctx, t('runners.pairingJobsAtOnceChosenToast', { count: callback.jobsAtOnce }));

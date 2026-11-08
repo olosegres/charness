@@ -990,6 +990,8 @@ describe('/runners over its ports', () => {
 
   describe('jobs at once', () => {
     const pickerTextStart = 'How many jobs may mac run at once? Now ';
+    /** What a tap on a pairing row answers when its code is not open any more — expired, closed, or the runner it made removed. */
+    const closedLineToast = 'This pairing line is no longer open — if the machine paired, set its number in /runners.';
 
     /** The list is drawn and the machine has a snapshot (so the picker can suggest a number for its size); returns the list message and the revision its buttons carry. */
     async function openList(): Promise<{ messageId: number; revision: number }> {
@@ -1143,30 +1145,87 @@ describe('/runners over its ports', () => {
         assert.match(harness.edits.at(-1)?.text ?? '', /\nJobs at once: 3 — change it in \/runners\.$/);
       });
 
-      it('a number chosen after the code was used (before the message turned into «paired») changes the runner it made, tells it, and says so', async () => {
+      it('a number chosen after the code was used (before the message turned into «paired») changes the runner it made, tells it, says so, and the message names the new number at once — without its keyboard', async () => {
         const offer = await offerPairing();
         await redeemPairing(hubFixture.ctx, offer.pairId, createRedeemFixture({ suggestedName: 'Mac Mini' }).request, clockMs);
         await harness.tapButton(offer.messageId, `rnr_pj_${offer.pairId}_4`);
         assert.equal(readPairedFile(hubFixture.ctx.dir).runners[0].jobsAtOnce, 4);
         assert.deepEqual(appliedGroups, [{ name: 'mac-mini', jobsAtOnce: 4 }]);
         assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'mac-mini: 4 at once');
-        assert.equal(keyboardEdits.length, 0, 'the message is turned into «paired» by the watcher, not edited here');
+        assert.equal(keyboardEdits.length, 0, 'the keyboard goes with the text edit, not with an edit of its own');
+        assert.deepEqual(harness.edits.map((edit) => edit.messageId), [offer.messageId]);
+        assert.match(harness.edits[0].text, /^Runner “mac-mini” paired .*\nJobs at once: 4 — change it in \/runners\.$/su);
+        assert.equal(harness.edits[0].extra, undefined, 'plain text: no keyboard');
         await feature.watchPairingsOnce();
         assert.match(harness.edits.at(-1)?.text ?? '', /\nJobs at once: 4 — change it in \/runners\.$/);
       });
 
-      it('a code that ran out takes no choice: the tap says it expired, nothing is written', async () => {
+      it('a tap that lands while the watcher\'s «paired» edit is already queued (built from the registry before the tap) has the LAST word: the message ends naming the new number, never the old one', async () => {
+        const offer = await offerPairing();
+        await redeemPairing(hubFixture.ctx, offer.pairId, createRedeemFixture({ suggestedName: 'Mac Mini' }).request, clockMs);
+        let isWatcherEditQueued = false;
+        let isTapEditQueued = false;
+        let releaseWatcherEdit: () => void = () => {};
+        let releaseTapEdit: () => void = () => {};
+        const watcherGate = new Promise<void>((resolve) => { releaseWatcherEdit = resolve; });
+        const tapGate = new Promise<void>((resolve) => { releaseTapEdit = resolve; });
+        // The paced send queue is first come, first served: the edit queued first goes out first. The test holds each one and lets them go in that order.
+        editHook = (_messageId, text) => {
+          if (text.includes('Jobs at once: 1')) {
+            isWatcherEditQueued = true;
+            return watcherGate.then(() => true);
+          }
+          isTapEditQueued = true;
+          return tapGate.then(() => true);
+        };
+        const watcherTick = feature.watchPairingsOnce();
+        await waitUntilAsync('the watcher\'s edit to be queued', () => isWatcherEditQueued);
+        const tap = harness.tapButton(offer.messageId, `rnr_pj_${offer.pairId}_4`);
+        await waitUntilAsync('the tap\'s edit to be queued behind the watcher\'s', () => isTapEditQueued);
+        releaseWatcherEdit();
+        await watcherTick;
+        assert.match(harness.edits.at(-1)?.text ?? '', /Jobs at once: 1 /, 'the watcher\'s edit went out first, built before the tap');
+        releaseTapEdit();
+        await tap;
+        assert.equal(readPairedFile(hubFixture.ctx.dir).runners[0].jobsAtOnce, 4);
+        assert.deepEqual(harness.edits.map((edit) => edit.messageId), [offer.messageId, offer.messageId]);
+        assert.match(readMessageText(offer.messageId), /\nJobs at once: 4 — change it in \/runners\.$/, 'the settled message says what the registry holds');
+      });
+
+      it('a code that ran out takes no choice: the tap says the line is no longer open, nothing is written', async () => {
         const offer = await offerPairing();
         clockMs += pairingLifetimeMs + 1;
         await harness.tapButton(offer.messageId, `rnr_pj_${offer.pairId}_2`);
-        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Pairing code expired.');
+        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), closedLineToast);
         assert.equal(readPendingFile(hubFixture.ctx.dir).pending[0].jobsAtOnce, undefined);
         assert.equal(keyboardEdits.length, 0);
       });
 
+      it('a code that was CLOSED (its line was pasted for a machine that was already paired) is not called «expired» by a tap on the keyboard that is still there: the answer is true for it too', async () => {
+        const offer = await offerPairing();
+        assert.equal(await cancelPairing(hubFixture.ctx, offer.pairId, clockMs), true);
+        await harness.tapButton(offer.messageId, `rnr_pj_${offer.pairId}_3`);
+        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), closedLineToast);
+        assert.doesNotMatch(harness.fakeTelegram.callbackAnswers.at(-1) ?? '', /expired/i);
+        assert.deepEqual(readPendingFile(hubFixture.ctx.dir).pending, []);
+        assert.equal(keyboardEdits.length, 0);
+        assert.deepEqual(appliedGroups, []);
+      });
+
+      it('a runner removed after it paired takes no choice from its old pairing message either: the same true answer, nothing is set or told', async () => {
+        const offer = await offerPairing();
+        await redeemPairing(hubFixture.ctx, offer.pairId, createRedeemFixture({ suggestedName: 'Mac Mini' }).request, clockMs);
+        await removeRunnerAndEndItsWork(hubFixture.ctx, 'mac-mini', clockMs);
+        await harness.tapButton(offer.messageId, `rnr_pj_${offer.pairId}_3`);
+        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), closedLineToast);
+        assert.deepEqual(readPairedFile(hubFixture.ctx.dir).runners, []);
+        assert.deepEqual(appliedGroups, []);
+        assert.equal(harness.edits.length, 0);
+      });
+
       it('a code nobody made takes no choice either (a keyboard of another hub)', async () => {
         await harness.tapButton(900, 'rnr_pj_0123456789ab_2');
-        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Pairing code expired.');
+        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), closedLineToast);
       });
 
       it('the label button explains the row', async () => {

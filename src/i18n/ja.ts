@@ -1256,4 +1256,5 @@ export const jaDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': '新しいマシンが並行して実行するジョブの数。後から /runners で変更できます。',
   'runners.pairingJobsAtOnceChosenToast': '新しいマシンは同時に {count} 個のジョブを実行します。',
   'runners.pairedJobsAtOnceNote': '同時ジョブ数: {count} — /runners で変更できます。',
+  'runners.pairingJobsAtOnceClosedToast': 'このペアリング行はもう有効ではありません。マシンがペアリング済みなら、/runners で数を設定してください。',
 };

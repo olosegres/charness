@@ -1262,4 +1262,5 @@ export const deDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': 'Wie viele Jobs die neue Maschine nebeneinander ausführt. Später änderbar in /runners.',
   'runners.pairingJobsAtOnceChosenToast': 'Die neue Maschine führt {count} Jobs gleichzeitig aus.',
   'runners.pairedJobsAtOnceNote': 'Jobs gleichzeitig: {count} — änderbar in /runners.',
+  'runners.pairingJobsAtOnceClosedToast': 'Diese Kopplungszeile ist nicht mehr offen — falls die Maschine gekoppelt wurde, die Zahl in /runners einstellen.',
 };

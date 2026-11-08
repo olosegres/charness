@@ -1256,4 +1256,5 @@ export const zhDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': '新机器并行运行的任务数。之后可在 /runners 中更改。',
   'runners.pairingJobsAtOnceChosenToast': '新机器将同时运行 {count} 个任务。',
   'runners.pairedJobsAtOnceNote': '同时运行：{count} — 可在 /runners 中更改。',
+  'runners.pairingJobsAtOnceClosedToast': '这行配对命令已不再有效 — 如果机器已配对，请在 /runners 中设置数量。',
 };

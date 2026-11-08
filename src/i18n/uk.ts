@@ -1268,4 +1268,5 @@ export const ukDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': 'Скільки завдань нова машина виконуватиме одночасно. Пізніше це можна змінити в /runners.',
   'runners.pairingJobsAtOnceChosenToast': 'Нова машина виконуватиме {count} одночасно.',
   'runners.pairedJobsAtOnceNote': 'Завдань одночасно: {count} — змінюється в /runners.',
+  'runners.pairingJobsAtOnceClosedToast': 'Цей рядок підключення вже не відкритий — якщо машина підключилася, задайте число в /runners.',
 };

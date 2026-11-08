@@ -1263,4 +1263,5 @@ export const ptDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': 'Quantos jobs a nova máquina executa lado a lado. Pode ser mudado depois em /runners.',
   'runners.pairingJobsAtOnceChosenToast': 'A nova máquina executará {count} ao mesmo tempo.',
   'runners.pairedJobsAtOnceNote': 'Jobs ao mesmo tempo: {count} — mude em /runners.',
+  'runners.pairingJobsAtOnceClosedToast': 'Esta linha de emparelhamento não está mais aberta — se a máquina emparelhou, defina o número dela em /runners.',
 };

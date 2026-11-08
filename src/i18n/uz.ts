@@ -1262,4 +1262,5 @@ export const uzDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': 'Yangi mashina yonma-yon nechta ish bajaradi. Keyinroq /runners da o‘zgartirish mumkin.',
   'runners.pairingJobsAtOnceChosenToast': 'Yangi mashina bir vaqtda {count} ta ish bajaradi.',
   'runners.pairedJobsAtOnceNote': 'Bir vaqtda ishlar: {count} — /runners da o‘zgartiring.',
+  'runners.pairingJobsAtOnceClosedToast': 'Bu ulanish qatori endi ochiq emas — mashina ulangan bo‘lsa, sonini /runners da belgilang.',
 };

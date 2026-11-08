@@ -742,6 +742,7 @@ describe('runnersScreenPlan: how many jobs a runner runs at once', () => {
       toasts: (['applied', 'offline', 'failed'] as const).map((outcome) => buildJobsAtOnceOutcomeToast('mac', 2, outcome, t)),
       help: t('runners.pairingJobsAtOnceHelpToast'),
       chosen: t('runners.pairingJobsAtOnceChosenToast', { count: 2 }),
+      closed: t('runners.pairingJobsAtOnceClosedToast'),
       back: t('runners.jobsAtOnceBackButton'),
       button: t('runners.jobsAtOnceButton', { name: 'mac', count: 2 }),
       note: t('runners.jobsAtOnceNote', { count: 2 }),
@@ -755,6 +756,7 @@ describe('runnersScreenPlan: how many jobs a runner runs at once', () => {
           paired: buildPairedText('mac', 42, 2, t, formatTime),
           help: t('runners.pairingJobsAtOnceHelpToast'),
           chosen: t('runners.pairingJobsAtOnceChosenToast', { count: 2 }),
+          closed: t('runners.pairingJobsAtOnceClosedToast'),
           back: t('runners.jobsAtOnceBackButton'),
           button: t('runners.jobsAtOnceButton', { name: 'mac', count: 2 }),
           note: t('runners.jobsAtOnceNote', { count: 2 }),
@@ -769,7 +771,8 @@ describe('runnersScreenPlan: how many jobs a runner runs at once', () => {
         assert.ok(texts.note.includes('2') && texts.chosen.includes('2') && texts.paired.includes('mac') && texts.paired.includes('2'), `${locale}: the numbers`);
         // The picker text carries a docs reference the person is sent to, and the callback answers stay inside Telegram's 200 characters.
         assert.ok(texts.picker.includes('docs/remote-run.md'), `${locale}: the docs`);
-        assert.ok([...toasts, texts.help, texts.chosen].every((toast) => toast.length <= 200), `${locale}: a callback answer holds 200 characters`);
+        assert.ok([...toasts, texts.help, texts.chosen, texts.closed].every((toast) => toast.length <= 200), `${locale}: a callback answer holds 200 characters`);
+        assert.ok(texts.closed.includes('/runners'), `${locale}: the closed-line answer says where the number is set`);
         assert.ok(texts.row.length <= 40, `${locale}: the label fits a full-width button`);
         if (locale !== 'en') {
           assert.notEqual(texts.picker, english.picker, `${locale}: picker translated`);
@@ -777,6 +780,7 @@ describe('runnersScreenPlan: how many jobs a runner runs at once', () => {
           assert.notEqual(texts.paired, english.paired, `${locale}: paired note translated`);
           assert.notEqual(texts.help, english.help, `${locale}: help translated`);
           assert.notEqual(texts.chosen, english.chosen, `${locale}: chosen translated`);
+          assert.notEqual(texts.closed, english.closed, `${locale}: closed translated`);
           assert.notEqual(texts.back, english.back, `${locale}: back translated`);
           assert.notEqual(texts.button, english.button, `${locale}: button translated`);
           assert.notEqual(texts.note, english.note, `${locale}: note translated`);

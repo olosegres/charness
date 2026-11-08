@@ -1266,4 +1266,5 @@ export const ruDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': 'Сколько задач новая машина будет выполнять одновременно. Позже это можно изменить в /runners.',
   'runners.pairingJobsAtOnceChosenToast': 'Новая машина будет выполнять {count} одновременно.',
   'runners.pairedJobsAtOnceNote': 'Задач одновременно: {count} — меняется в /runners.',
+  'runners.pairingJobsAtOnceClosedToast': 'Эта строка подключения больше не открыта — если машина подключилась, задайте число в /runners.',
 };

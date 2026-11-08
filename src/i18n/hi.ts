@@ -1261,4 +1261,5 @@ export const hiDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': 'नई मशीन एक साथ कितने जॉब चलाएगी। इसे बाद में /runners में बदला जा सकता है।',
   'runners.pairingJobsAtOnceChosenToast': 'नई मशीन एक साथ {count} जॉब चलाएगी।',
   'runners.pairedJobsAtOnceNote': 'एक साथ जॉब: {count} — /runners में बदलें।',
+  'runners.pairingJobsAtOnceClosedToast': 'यह जोड़ने वाली लाइन अब खुली नहीं है — अगर मशीन जुड़ चुकी है, तो उसकी संख्या /runners में तय करें।',
 };

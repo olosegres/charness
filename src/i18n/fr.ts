@@ -1262,4 +1262,5 @@ export const frDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': 'Combien de jobs la nouvelle machine exécute côte à côte. Modifiable plus tard dans /runners.',
   'runners.pairingJobsAtOnceChosenToast': 'La nouvelle machine exécutera {count} jobs en parallèle.',
   'runners.pairedJobsAtOnceNote': 'Jobs en parallèle : {count} — modifiable dans /runners.',
+  'runners.pairingJobsAtOnceClosedToast': 'Cette ligne d’association n’est plus ouverte — si la machine est associée, réglez son nombre dans /runners.',
 };

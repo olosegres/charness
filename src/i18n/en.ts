@@ -1306,4 +1306,5 @@ export const enDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': 'How many jobs the new machine runs side by side. It can be changed later in /runners.',
   'runners.pairingJobsAtOnceChosenToast': 'The new machine will run {count} at once.',
   'runners.pairedJobsAtOnceNote': 'Jobs at once: {count} — change it in /runners.',
+  'runners.pairingJobsAtOnceClosedToast': 'This pairing line is no longer open — if the machine paired, set its number in /runners.',
 };

@@ -1262,4 +1262,5 @@ export const esDict: Record<string, string> = {
   'runners.pairingJobsAtOnceHelpToast': 'Cuántos trabajos ejecuta la máquina nueva en paralelo. Se puede cambiar luego en /runners.',
   'runners.pairingJobsAtOnceChosenToast': 'La máquina nueva ejecutará {count} a la vez.',
   'runners.pairedJobsAtOnceNote': 'Trabajos a la vez: {count} — se cambia en /runners.',
+  'runners.pairingJobsAtOnceClosedToast': 'Esta línea de vinculación ya no está abierta — si la máquina se vinculó, ajusta su número en /runners.',
 };
