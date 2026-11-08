@@ -32,6 +32,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { npmInstallArgs } from '../runnerUtility/appInstall';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
@@ -108,6 +109,10 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     });
   }
 
+  function escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   /** The line as the operator edits it: the last word is the account. */
   function withAccount(line: string, account: string): string {
     return `${line.slice(0, line.lastIndexOf(' ') + 1)}${account}`;
@@ -139,8 +144,11 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
   }
 
   it('without sudo it is the account\'s own way — and refuses an account that is not the one it runs as, before anything else', () => {
-    // Pasted without its leading `sudo` by a user who is not `runner` (the flow\'s own user): the line pairs the account it runs as and finds it is another.
-    assertRefusedBeforeAnything(pasteLine(adminLine.replace(/^sudo /, '')), /you are not runner: run the line as runner or with sudo/);
+    // Pasted without its leading `sudo`, the line pairs the account it runs as and finds the last word names another. The word is made from the user who runs this
+    // flow, so it can never BE that user: the line's own default, `runner`, is exactly the name of the account CI runs as (a GitHub-hosted runner's user is `runner`).
+    const otherAccount = `not-${os.userInfo().username}`;
+    const refusal = new RegExp(`you are not ${escapeRegExp(otherAccount)}: run the line as ${escapeRegExp(otherAccount)} or with sudo`);
+    assertRefusedBeforeAnything(pasteLine(withAccount(adminLine, otherAccount).replace(/^sudo /, '')), refusal);
   });
 
   it('stops on an account that does not exist — names it, creates nothing, pairs nothing', () => {
