@@ -1201,6 +1201,7 @@ export const hiDict: Record<string, string> = {
   'runners.cpuLoad': 'लोड {load}',
   'runners.jobsLine': 'जॉब: {running} चल रहे, {queued} कतार में · प्रोजेक्ट: {projects}',
   'runners.copiesLine': 'प्रोजेक्ट कॉपी: {count} · {size}',
+  'runners.oldSimulatorsLine': 'पुराने रनटाइम के सिमुलेटर (कोष्ठक में डिवाइस; कुछ हटाया नहीं जाता): {runtimes}',
   'runners.diskLowNote': 'कम — रनर {minFree} खाली रखता है',
   'runners.pueueMissing': 'इस रनर पर Pueue नहीं है',
   'runners.jobToolsLine': 'जॉब इनके साथ चलते हैं: Node {node} · yarn {yarn}',

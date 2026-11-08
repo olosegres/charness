@@ -225,6 +225,25 @@ describe('runnersScreenPlan: the list', () => {
     assert.equal(lineOf({ ...offline, isOnline: false }), undefined, 'a machine that is offline shows no live tools');
   });
 
+  it('the Simulator runtimes older than the newest of their major are one information line under what it can do; nothing without them, and nothing for a machine that is offline', () => {
+    const withSimulators = (lines: string[]): RunnerScreenEntry => createEntry({ probe: parseProbeOutput([probeText, ...lines].join('\n')) });
+    const lineOf = (entry: RunnerScreenEntry): string | undefined => buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text.split('\n').find((line) => line.includes('older runtimes'));
+    assert.equal(lineOf(withSimulators(['sim_older_runtimes=iOS 26.4:11,watchOS 11.0:2'])), '  simulators of older runtimes (devices in brackets; nothing is removed): iOS 26.4 (11), watchOS 11.0 (2)');
+    assert.equal(lineOf(createEntry()), undefined);
+    assert.equal(lineOf({ ...withSimulators(['sim_older_runtimes=iOS 26.4:11']), isOnline: false }), undefined, 'a machine that is offline shows no live state');
+  });
+
+  it('in every language the older-simulators line carries the runtimes and leaves no placeholder behind', () => {
+    for (const locale of localeCodes) {
+      runWithLocale(locale, () => {
+        const text = buildRunnersScreen({ revision, entries: [createEntry({ probe: parseProbeOutput(`${probeText}\nsim_older_runtimes=iOS 26.4:11`) })], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+        const line = text.split('\n').find((candidate) => candidate.includes('iOS 26.4 (11)'));
+        assert.ok(line !== undefined, `${locale}: the line is there`);
+        assert.doesNotMatch(line, /\{[a-z]+\}/, `${locale}: no placeholder is left`);
+      });
+    }
+  });
+
   it('how the link keeps the machine awake is one line under the tools — yes with how, or NO with why; nothing when the runner did not say, and a reason it reported is clipped', () => {
     const withAwake = (lines: string[]): RunnerScreenEntry => createEntry({ probe: parseProbeOutput([probeText, ...lines].join('\n')) });
     const lineOf = (entry: RunnerScreenEntry): string | undefined => buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text.split('\n').find((line) => line.includes('keeps awake'));

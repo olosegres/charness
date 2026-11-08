@@ -1,5 +1,5 @@
 /**
- * @description The ONE definition of what a path pattern of `.remote-run` (`pull:`, `exclude:`, `send:`, `install-key:`) means, as
+ * @description The ONE definition of what a path pattern of `.remote-run` (`pull:`, `exclude:`, `send:`, `install-key:`, `clean-after-success:`) means, as
  * extended regular expressions: the main box applies them with `RegExp` and the runner script with bash's `=~` over the very same
  * strings, so the two can never disagree about which files a pattern names.
  *

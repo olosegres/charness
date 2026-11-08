@@ -1202,6 +1202,7 @@ export const frDict: Record<string, string> = {
   'runners.cpuLoad': 'charge {load}',
   'runners.jobsLine': 'jobs : {running} en cours, {queued} en attente · projets : {projects}',
   'runners.copiesLine': 'copies de projets : {count} · {size}',
+  'runners.oldSimulatorsLine': 'simulateurs de runtimes plus anciens (appareils entre parenthèses ; rien n’est supprimé) : {runtimes}',
   'runners.diskLowNote': 'FAIBLE — le runner garde {minFree} libres',
   'runners.pueueMissing': 'Pueue est absent sur ce runner',
   'runners.jobToolsLine': 'les jobs tournent avec : Node {node} · yarn {yarn}',

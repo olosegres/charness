@@ -1203,6 +1203,7 @@ export const ptDict: Record<string, string> = {
   'runners.cpuLoad': 'carga {load}',
   'runners.jobsLine': 'jobs: {running} em execução, {queued} na fila · projetos: {projects}',
   'runners.copiesLine': 'cópias de projetos: {count} · {size}',
+  'runners.oldSimulatorsLine': 'simuladores de runtimes mais antigos (dispositivos entre parênteses; nada é removido): {runtimes}',
   'runners.diskLowNote': 'BAIXO — o runner mantém {minFree} livres',
   'runners.pueueMissing': 'O Pueue não está instalado neste runner',
   'runners.jobToolsLine': 'os jobs rodam com: Node {node} · yarn {yarn}',

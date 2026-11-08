@@ -14,7 +14,7 @@
  */
 
 import type { Translate } from '../i18n';
-import { checkIsDiskLow, formatGigabytes, jobToolNone, jobToolUnknown, runnerCapabilities, type RunnerProbe } from '../remoteRun/probe';
+import { checkIsDiskLow, formatGigabytes, formatOlderSimulators, jobToolNone, jobToolUnknown, runnerCapabilities, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner, RunnerServiceKind } from '../runners/hubRegistry';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { getCurrentServiceKind } from '../runners/runnerServiceKind';
@@ -205,6 +205,12 @@ function describeLowDisk(probe: RunnerProbe, t: Translate): string {
   return checkIsDiskLow(probe) ? ` — ${t('runners.diskLowNote', { minFree: formatGigabytes(probe.diskMinFreeMb) })}` : '';
 }
 
+/** The Simulator runtimes of a Mac that have a newer one of the same major (information only: the bot, like remote-run, removes nothing of them); nothing when there are none. */
+function describeOlderSimulators(probe: RunnerProbe, t: Translate): string[] {
+  if (probe.olderSimulators.length === 0) return [];
+  return [`  ${t('runners.oldSimulatorsLine', { runtimes: formatOlderSimulators(probe) })}`];
+}
+
 function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: FormatTime): string[] {
   const { runner, probe } = entry;
   const status = entry.isOnline
@@ -223,6 +229,7 @@ function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: For
       `  ${t('runners.jobsLine', { running: probe.jobsRunning, queued: probe.jobsQueued, projects: probe.jobsProjects })}${probe.pueueVersion === null ? ` · ${t('runners.pueueMissing')}` : ''}`,
       ...describeProjectCopies(probe, t),
       `  ${describeCapabilities(probe, t)}`,
+      ...describeOlderSimulators(probe, t),
       ...describeJobTools(probe, t),
       ...describeKeepsAwake(probe, t),
     );

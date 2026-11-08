@@ -117,6 +117,9 @@ export async function stageJob(params: {
     env: options.env.map((entry) => `${entry.name}=${entry.value}\n`).join(''),
     'pull.ere': compilePathPatterns(project.config.pull).map((expression) => `${expression}\n`).join(''),
     'pull.roots': getPathPatternSearchRoots(project.config.pull).map((root) => `${root}\n`).join(''),
+    // What the runner removes from its copy after this job, if it succeeds (`clean-after-success:` of .remote-run): the same two files as `pull:`, patterns and the folders to walk.
+    'clean-after-success.ere': compilePathPatterns(project.config.cleanAfterSuccess).map((expression) => `${expression}\n`).join(''),
+    'clean-after-success.roots': getPathPatternSearchRoots(project.config.cleanAfterSuccess).map((root) => `${root}\n`).join(''),
     'meta.json': `${JSON.stringify(meta)}\n`,
     ...(deps === null || depsKey === null ? {} : { 'install-command': deps.command, 'install-key': depsKey }),
     // An always-on Mac runs such a job in the account's login session, or refuses it with the reason (`runner.sh`, «the login session»).

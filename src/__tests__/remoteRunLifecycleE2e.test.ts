@@ -9,6 +9,7 @@
  *   → `--timeout` and `kill <id>` leave nothing, a job killed while queued, a task number Pueue gives to another job
  *   → `exec` runs in the copy of the project's latest job and is killed like a foreground job
  *   → `clean` refuses a copy a job or an `exec` is using, and removes it (and says what it freed) once nothing is
+ *   → `clean-after-success:` of `.remote-run` empties the named folders of the copy after a job that succeeded — and only then
  *
  * "Nothing left" is asserted on real pids: every decoy writes its own pid and its child's.
  *
@@ -446,6 +447,36 @@ describe('charness remote-run against a loopback runner — what ends a job', { 
       assert.equal(cleaned.exitCode, 0, cleaned.stderr);
       assert.match(cleaned.stdout, /^box1: removed the project copy /m);
       assert.equal(fs.existsSync(cleanProject.runnerDirectory), false);
+    });
+  });
+
+  describe('clean-after-success', () => {
+    registerOpenJobCleanup();
+    // A project of its own: its `.remote-run` names the folder, and its copy is not shared with the other steps of this flow.
+    let buildProject: FlowProject;
+    const runHere = (args: string[]): ReturnType<typeof run> => run(args, { cwd: buildProject.root });
+    const buildCommand = 'mkdir -p build/Intermediates.noindex build/Products && echo object > build/Intermediates.noindex/o.o && echo app > build/Products/app.txt';
+    const getRunnerPath = (relativePath: string): string => path.join(buildProject.runnerDirectory, 'tree', relativePath);
+    before(() => {
+      buildProject = createProject(layout, 'clean-after-app', { 'src/a.txt': 'version A\n', '.remote-run': 'clean-after-success: build/Intermediates.noindex\n' });
+    });
+
+    it('a job that fails keeps what it built in the runner\'s copy — it is what a person looks at to find out why', async () => {
+      const failed = await runHere([`${buildCommand} && exit 3`]);
+      assert.equal(failed.exitCode, 3, failed.stderr);
+      assert.ok(fs.existsSync(getRunnerPath('build/Intermediates.noindex/o.o')), 'the intermediates of the failed job are still there');
+      assert.ok(fs.existsSync(getRunnerPath('build/Products/app.txt')));
+    });
+
+    it('a job that succeeds leaves the copy without the folder the project named (also what an earlier, failed job left in it) — the rest stays for the next job', async () => {
+      const succeeded = await runHere([buildCommand]);
+      assert.equal(succeeded.exitCode, 0, succeeded.stderr);
+      assert.equal(fs.existsSync(getRunnerPath('build/Intermediates.noindex')), false, 'the named folder is gone');
+      assert.ok(fs.existsSync(getRunnerPath('build/Products/app.txt')), 'the products are not named, so they stay');
+      assert.ok(fs.existsSync(getRunnerPath('src/a.txt')), 'and so does the project');
+      const next = await runHere(['cat build/Products/app.txt']);
+      assert.equal(next.exitCode, 0, next.stderr);
+      assert.match(next.stdout, /^app$/m, 'the next job finds the copy as it was left');
     });
   });
 });

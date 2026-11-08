@@ -521,6 +521,7 @@ install: yarn install --immutable          # replaces the detected command; "ins
 install-key: yarn.lock package.json patches .yarnrc.yml
 exclude: fixtures/huge                     # more paths that are never sent
 send: .env.test                            # opt a held-back secret-looking file in
+clean-after-success: ios/build/Intermediates.noindex   # removed from the runner's copy after a job that SUCCEEDED
 ```
 
 A failed dependencies step ends with the **first** error lines of its output (up to 8) and, when the tool names a `build.log` («logs can
@@ -532,6 +533,14 @@ the tool has already removed the build log, the line says so and names the way t
 Patterns are relative to the project root. `*` is any run of characters inside one path segment, `?` one character, `**` a whole
 segment of any depth; a pattern naming a folder brings everything below it. `snapshots` is the folder at the root only —
 `**/snapshots` any folder of that name.
+
+**`clean-after-success:` — give the disk back after a job that worked.** A build leaves tens of GB of intermediates in the runner's copy (on a Mac, Xcode's `Intermediates.noindex` under `ios/build`), which the next
+build makes again anyway. This key names what the runner removes from its copy when a job **ends with exit 0** — not after a failure, a time limit or a `kill`, when the copy is what you look at to find out why. It is
+**off unless the project asks**, and takes patterns like `pull:` (`projects/*/ios/build/**/Intermediates.noindex` for every app of a monorepo). The rules: the paths stay inside the copy (`..`, absolute and `~`
+paths are refused, and so is a pattern made of wildcards alone — it would name the whole project); a folder goes with everything in it, a symlink goes as the link and what it points at is never touched; `.git` is
+never entered; read-only folders (CocoaPods leaves them) are removed like the prune does; the files the job's `pull:` names are collected first, so a path in both lists still comes back; it happens before the next
+job of the project may start, and the job's log says how many paths went (or which would not — the job's result is never changed by it). **Do not name a folder the dependencies step fills** (`node_modules`,
+`Pods`): that step runs again only when the lockfile changes, not when its folder is gone. Nothing of this is shared between projects: there is no shared DerivedData, and a path outside the project is never touched.
 
 ## Queue, limits, cleanup
 
@@ -556,6 +565,13 @@ says to submit again (the runner carries on with the removal as far as it can, a
 already at work (up to 10 minutes, then it goes on), one whose disk is fine does not wait at all, and the prune that `runners` starts in the background leaves the work to the one at it. Only a view of the
 runners — `runners` and the bot's `/runners` — starts that background prune: the probe a `run` or an `exec` makes first never does, so the project about to be used (typically the least recently used copy)
 is not taken before the job's own submit, which keeps its copy, arrives.
+
+**Simulators on a Mac.** Xcode leaves behind the simulators whose runtime is gone (an updated Xcode, a removed runtime): each is small, but their apps' data runs to GB. On a Mac with Xcode, the first
+probe of a view of the runners (`runners`, the bot's `/runners`) each day also runs `xcrun simctl delete unavailable` on the runner — in the background, bounded to 120 s, what it said is in `simctl-cleanup.log` in
+the runner's work dir — so a run or an `exec` never waits for it. That is **all** the runner ever deletes among the simulators: no erase of a simulator, no device of a runtime that is installed, no runtime. The
+simulators of **older runtimes** (an `iOS 26.4` while `iOS 26.5` is installed — same platform and major) are only **listed**, with their device count, under the runner in `runners` and `/runners`; they are the
+operator's to remove (Xcode ▸ Settings ▸ Platforms). Both act on the simulators the runner's probe sees, in the session the probe runs in: on an always-on Mac every login session has its own CoreSimulator service (see «A known
+limit» above), and whether the System session's `simctl` sees the same set as the account's login session has not been verified.
 
 **A Mac's disk may not give the space back.** On APFS, `df` leaves out *purgeable* space, and with Time Machine local snapshots a removed project copy frees nothing until the snapshots are thinned
 (`tmutil listlocalsnapshots /` lists them, `tmutil thinlocalsnapshots /` thins them; or turn Time Machine's local snapshots off on that Mac). When two removals in a row give next to nothing back from copies

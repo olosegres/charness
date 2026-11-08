@@ -35,6 +35,7 @@
 #   jobs         the meta.json of every job of a project (or of all), as a JSON array
 #   prune        remove old jobs, stale stage dirs, project copies unused for days, and — while the disk is short of free space — the least recently used ones
 #   clean        remove ONE project copy on request (`clean <work> <slug>`): refused while a job of it runs or waits, an exec runs in it, a job is being submitted, or a job ended lately whose results nobody fetched; says what it freed
+#   simctl-cleanup  `xcrun simctl delete unavailable` on a Mac, bounded; started detached by the probe of a view of the runners at most once a day, never called by hand
 #   fetched      mark a finished job's results as fetched (`fetched <work> - <job>`): `wait`, `fetch` and a foreground run say so once they have the files, and `clean` then does not keep the copy for them
 #   measure-copies  write down how big each project copy is (p/<slug>/size-kb); `probe` and `prepare` start it detached, it is never called by hand
 #   sync-tree    the apply step alone (tests)
@@ -85,6 +86,11 @@ low_disk_exit_code=28
 # Set by the free-space prune (prune_copies_for_space) for the refusal that may follow it, and by the last removal for its report.
 prune_stopped_without_gain=0
 last_freed_kb=
+# Set by probe_slow: 1 when Xcode answered (a Mac that can build for iOS).
+probe_has_xcode=0
+# `xcrun simctl delete unavailable` (the simulators of runtimes that are gone) is tried at most this often, and given this long.
+simctl_cleanup_interval_hours=24
+simctl_cleanup_sec=120
 # 1 = the caller is a `clean`: a job that ended lately whose results were fetched (the `fetched` mark in its folder) does not keep the copy (the prune does not know that: it keeps it result_keep_min).
 clean_ignores_fetched=0
 # Set by check_copy_dir_is_busy when it says «in use»: why (lock | exec | running | queued | submitting | results) and which job (`-` when none).
@@ -576,6 +582,44 @@ probe_tool_version() {
   fi
 }
 
+# The simulators of OLDER runtimes than the newest of the same platform and major (`iOS 26.5` next to `iOS 27.1` is not older: another major; `iOS 26.4` next to `iOS 26.5` is), from the text of
+# `xcrun simctl list devices available` on stdin: `iOS 26.4:11,watchOS 11.0:2` (runtime:devices), nothing when there are none. Only information: nothing here deletes anything.
+list_older_simulator_runtimes() {
+  awk '
+    # The order of two versions of the SAME major (the major is the group, so it is not part of the rank).
+    function key(version,   parts, count) {
+      count = split(version, parts, ".")
+      return (count > 1 ? parts[2] : 0) * 1000 + (count > 2 ? parts[3] : 0)
+    }
+    /^-- / {
+      runtime = ""
+      header = $0
+      sub(/^-- /, "", header)
+      sub(/ --$/, "", header)
+      if (match(header, /^[A-Za-z]+ [0-9]+(\.[0-9]+)*/)) {
+        runtime = substr(header, RSTART, RLENGTH)
+        split(runtime, words, " ")
+        split(words[2], numbers, ".")
+        group[runtime] = words[1] " " numbers[1]
+        rank[runtime] = key(words[2])
+        if (!(runtime in listed)) { listed[runtime] = 1; order[++count] = runtime }
+        if (!(group[runtime] in newest) || rank[runtime] > newest[group[runtime]]) newest[group[runtime]] = rank[runtime]
+      }
+      next
+    }
+    /^ +[^ ].*\([A-Za-z ]+\) *$/ { if (runtime != "") devices[runtime]++ }
+    END {
+      for (index_ = 1; index_ <= count; index_++) {
+        runtime = order[index_]
+        if (devices[runtime] > 0 && rank[runtime] < newest[group[runtime]]) {
+          output = output (output == "" ? "" : ",") runtime ":" devices[runtime]
+        }
+      }
+      if (output != "") print output
+    }
+  '
+}
+
 probe_slow() {
   mkdir -p "$work/tmp"
   probe_dir="$work/tmp/probe.$$.$RANDOM"
@@ -612,6 +656,8 @@ probe_slow() {
   elif [ "$(probe_step_status xcode)" = 0 ]; then
     local xcode_version
     xcode_version=$(probe_step_output xcode | head -n 1 | sed 's/^Xcode //')
+    probe_has_xcode=1
+    local older_runtimes
     if gui_session_expected && ! gui_agent_alive; then
       # An always-on Mac runs its iOS work in the account's login session: with none, builds crash (Xcode's nested builds) and the Simulator will not boot.
       echo "cap_ios=no"
@@ -635,6 +681,8 @@ probe_slow() {
       echo "cap_ios=yes"
       if [ "$(probe_step_status simctl)" = 0 ]; then
         echo "cap_ios_detail=Xcode $xcode_version, $(probe_step_output simctl | grep -c '(Shutdown)\|(Booted)') simulators"
+        older_runtimes=$(probe_step_output simctl | list_older_simulator_runtimes)
+        [ -z "$older_runtimes" ] || echo "sim_older_runtimes=$older_runtimes"
       else
         # A slow simctl is no reason to say there is no Xcode, nor to invent a simulator count.
         echo "cap_ios_detail=Xcode $xcode_version"
@@ -743,7 +791,10 @@ cmd_probe() {
     Linux) probe_linux ;;
     Darwin) probe_darwin ;;
   esac
+  probe_has_xcode=0
   probe_slow
+  # A Mac with Xcode forgets the simulators of runtimes that are gone, when a view of the runners asks (a run or an `exec` never waits for it: it is started detached, and at most once a day).
+  [ "$probe_has_xcode" -eq 1 ] && [ "$probe_may_prune" = prune ] && start_simctl_cleanup_if_due
   # A disk short of free space frees itself, when a view of the runners asks for it: the prune runs detached (a probe must answer in seconds, removing a copy takes minutes).
   [ "${probe_disk_is_short:-0}" -eq 1 ] && [ "$probe_may_prune" = prune ] && start_detached_run "$work" prune
   probe_copies
@@ -1045,12 +1096,10 @@ finish_trash_removal() {
   local leftover=$1
   check_runner_pid_alive "${leftover##*-}" && return 1
   check_copy_dir_is_busy "$leftover" && return 2
-  chmod -R u+rwX "$leftover" 2> /dev/null
-  rm -rf "$leftover" 2> /dev/null
-  [ ! -e "$leftover" ] || return 3
+  remove_path_even_if_read_only "$leftover" || return 3
 }
 
-# Is $1 the moved-aside folder of project copy $2 — `p/.trash-<slug>-<pid>` with a number for the pid (another slug that starts with this one\'s name is not)?
+# Is $1 the moved-aside folder of project copy $2 — `p/.trash-<slug>-<pid>` with a number for the pid (another slug that starts with this one's name is not)?
 check_is_trash_of_slug() {
   case ${1##*/} in
     .trash-"$2"-*) ;;
@@ -1061,9 +1110,21 @@ check_is_trash_of_slug() {
   esac
 }
 
+# Remove the path $1 (a folder, a file, a link) however read-only it is. A link goes as the link, never followed. The folders CocoaPods' xcframeworks leave read-only stop `rm`, so a tree is made writable first, and a
+# read-only parent is the last resort. Succeeds when nothing is left there.
+remove_path_even_if_read_only() {
+  local target=$1
+  [ -L "$target" ] || chmod -R u+rwX "$target" 2> /dev/null
+  rm -rf "$target" 2> /dev/null
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    chmod u+w "$(dirname "$target")" 2> /dev/null
+    rm -rf "$target" 2> /dev/null
+  fi
+  [ ! -e "$target" ] && [ ! -L "$target" ]
+}
+
 # Remove project copy $2 (a slug) under work dir $1. Moved aside by one rename first: a submit that meets the name afterwards makes a copy of its own, and a removal that is cut off is finished by the
 # next prune. The busy check that chose the copy and the rename are two steps, and a job can be prepared between them — so it is asked AGAIN of the moved folder, and a copy that turned out in use is put back.
-# The folders CocoaPods' xcframeworks leave read-only stop `rm`, so the tree is made writable before it.
 # Returns: 0 removed · 1 would not go · 2 gone already (another prune took it) · 3 in use after all (put back when its name is still free; else left under its trash name, which is never removed while it is in use).
 remove_project_copy() {
   local source="$1/p/$2" trash="$1/p/.trash-$2-$$"
@@ -1080,9 +1141,7 @@ remove_project_copy() {
     fi
     return 3
   fi
-  chmod -R u+rwX "$trash" 2> /dev/null
-  rm -rf "$trash" 2> /dev/null
-  [ ! -e "$trash" ] || return 1
+  remove_path_even_if_read_only "$trash" || return 1
 }
 
 # last_freed_kb = how much the disk under $1 has gained since it had $2 KiB free (0 when it did not grow; empty when df said nothing).
@@ -1246,6 +1305,34 @@ cmd_measure_copies() {
     [ -d "$copy_dir" ] || continue
     read_copy_size_kb "$work_dir" "$(basename "$copy_dir")" current > /dev/null
   done
+}
+
+# A probe of a VIEW of the runners on a Mac with Xcode starts `simctl-cleanup` detached, unless it ran in the last simctl_cleanup_interval_hours (the stamp `$work/simctl-cleanup.at`, touched by the run itself when it STARTS, so a
+# run that hangs or dies is not started again at every probe).
+start_simctl_cleanup_if_due() {
+  local stamp="$work/simctl-cleanup.at"
+  if [ -f "$stamp" ] && [ -z "$(find "$stamp" -maxdepth 0 -mmin +"$((simctl_cleanup_interval_hours * 60))" 2> /dev/null)" ]; then
+    return 0
+  fi
+  start_detached_run "$work" simctl-cleanup
+}
+
+# `xcrun simctl delete unavailable`: the simulators whose runtime is gone (an Xcode that was updated or an old runtime that was removed leave them behind: 17 MB each, but their apps' data is 2-10 GB). Nothing else is deleted — no
+# erase, no device of an installed runtime, no runtime. Bounded by simctl_cleanup_sec (a watchdog, as the probe's steps: no `timeout(1)` on a Mac); what it said is in `$work/simctl-cleanup.log`.
+cmd_simctl_cleanup() {
+  local work_dir=$1
+  local log="$work_dir/simctl-cleanup.log"
+  touch "$work_dir/simctl-cleanup.at"
+  command -v xcrun > /dev/null 2>&1 || return 0
+  echo "$(date '+%Y-%m-%d %H:%M:%S') xcrun simctl delete unavailable" > "$log"
+  xcrun simctl delete unavailable >> "$log" 2>&1 < /dev/null &
+  local command_pid=$!
+  ( sleep "$simctl_cleanup_sec"; kill -9 "$command_pid" ) > /dev/null 2>&1 &
+  local watchdog_pid=$!
+  wait "$command_pid" 2> /dev/null
+  echo "exit $?" >> "$log"
+  kill "$watchdog_pid" > /dev/null 2>&1
+  return 0
 }
 
 # `clean <work> <slug>`: remove ONE project copy because its owner is done with it (the last task of its project folder was closed), with the removal machinery of the prune — the copy-removal lock, the busy check (asked
@@ -1936,44 +2023,84 @@ check_has_no_symlink() {
   [ "$physical" = "$(cd "$tree" && pwd -P)/$parent" ]
 }
 
-# Files the command created or changed that match pull.ere (one extended regular expression per line), kept per job. Only the folders in
-# pull.roots are walked (the fixed prefixes of the patterns, `e2e/artifacts`): the copy also holds node_modules and every build folder,
-# which a Gradle or Metro build fills with hundreds of thousands of files. `.` there (a pattern that starts with a wildcard) or no
-# pull.roots at all (an older main box) walks the whole copy.
-collect_artifacts() {
-  [ -s "$jd/pull.ere" ] || return 0
-  [ -f "$jd/start-marker" ] || return 0
-  local roots=()
-  local root
-  if [ -s "$jd/pull.roots" ]; then
+# The patterns of a job's pattern file $1 (`pull.ere`, `clean-after-success.ere`: one extended regular expression per line) and the folders to walk for them, from $2 (the matching `.roots`: the fixed prefixes of the patterns).
+# Sets the arrays job_patterns and job_roots. Fails when there is nothing to do: no pattern, or no root that exists in the copy with no symlink on its way. `.` among the roots (a pattern that starts with a wildcard),
+# or no roots file at all (an older main box) walks the whole copy.
+read_job_patterns() {
+  job_patterns=()
+  job_roots=()
+  local pattern root
+  while IFS= read -r pattern; do
+    [ -n "$pattern" ] && job_patterns+=("$pattern")
+  done < "$1"
+  [ "${#job_patterns[@]}" -gt 0 ] || return 1
+  if [ -s "$2" ]; then
     while IFS= read -r root; do
       [ -n "$root" ] || continue
       if [ "$root" = . ]; then
-        roots=(.)
+        job_roots=(.)
         break
       fi
-      check_relative_path "$root" && [ -e "$tree/$root" ] && check_has_no_symlink "$root" && roots+=("$root")
-    done < "$jd/pull.roots"
-    [ "${#roots[@]}" -gt 0 ] || return 0
+      check_relative_path "$root" && [ -e "$tree/$root" ] && check_has_no_symlink "$root" && job_roots+=("$root")
+    done < "$2"
+    [ "${#job_roots[@]}" -gt 0 ] || return 1
   else
-    roots=(.)
+    job_roots=(.)
   fi
-  local patterns=()
-  local pattern
-  while IFS= read -r pattern; do
-    [ -n "$pattern" ] && patterns+=("$pattern")
-  done < "$jd/pull.ere"
-  [ "${#patterns[@]}" -gt 0 ] || return 0
-  local candidate relative
+}
+
+# Files the command created or changed that match pull.ere, kept per job. Only the folders in pull.roots are walked (the fixed prefixes of the patterns, `e2e/artifacts`): the copy also holds node_modules and every
+# build folder, which a Gradle or Metro build fills with hundreds of thousands of files.
+collect_artifacts() {
+  [ -s "$jd/pull.ere" ] || return 0
+  [ -f "$jd/start-marker" ] || return 0
+  read_job_patterns "$jd/pull.ere" "$jd/pull.roots" || return 0
+  local pattern candidate relative
   while IFS= read -r -d '' candidate; do
     relative=${candidate#./}
-    for pattern in "${patterns[@]}"; do
+    for pattern in "${job_patterns[@]}"; do
       if [[ $relative =~ $pattern ]]; then
         mkdir -p "$jd/artifacts/$(dirname "$relative")" && cp -p "$tree/$relative" "$jd/artifacts/$relative"
         break
       fi
     done
-  done < <(cd "$tree" && find "${roots[@]}" -name .git -prune -o -type f -newer "$jd/start-marker" -print0 2> /dev/null)
+  done < <(cd "$tree" && find "${job_roots[@]}" -name .git -prune -o -type f -newer "$jd/start-marker" -print0 2> /dev/null)
+}
+
+# After a job that SUCCEEDED: remove from the copy what the project's `clean-after-success:` names (a build's intermediates, tens of GB on a Mac, which the next job rebuilds anyway). Off unless the project says
+# so. A pattern names a file or a folder (a folder goes whole), inside the copy only: the walk starts from the patterns' fixed prefixes, a root with a symlink on its way is skipped, `.git` is never entered, a candidate that is
+# not a clean relative path of the copy (a name with a newline in it can be cut in two) is dropped, and a symlink goes as the link. Read-only folders are handled like the prune does. The lock is still held, so no
+# other job of the project sees the tree half-cleaned. Says how many paths went (and which would not) in the job's log; never changes the job's result.
+clean_after_success() {
+  [ -s "$jd/clean-after-success.ere" ] || return 0
+  read_job_patterns "$jd/clean-after-success.ere" "$jd/clean-after-success.roots" || return 0
+  local grep_arguments=() pattern candidate relative
+  for pattern in "${job_patterns[@]}"; do
+    grep_arguments+=(-e "$pattern")
+  done
+  # The matches are listed first and removed after: a folder removed while `find` is still walking it would only make `find` complain.
+  local listing="$jd/clean-after-success.list"
+  (cd "$tree" && find "${job_roots[@]}" -name .git -prune -o -print 2> /dev/null | sed -e 's|^\./||' | grep -E "${grep_arguments[@]}") > "$listing" 2> /dev/null
+  local removed=0 failed=0
+  while IFS= read -r relative; do
+    check_relative_path "$relative" || continue
+    # Gone already: below a folder that was just removed (the listing has its contents too — a pattern names a folder with everything below it).
+    [ -e "$tree/$relative" ] || [ -L "$tree/$relative" ] || continue
+    for pattern in "${job_patterns[@]}"; do
+      if [[ $relative =~ $pattern ]]; then
+        if remove_path_even_if_read_only "$tree/$relative"; then
+          removed=$((removed + 1))
+        else
+          failed=$((failed + 1))
+          say "clean-after-success: could not remove $relative"
+        fi
+        break
+      fi
+    done
+  done < "$listing"
+  rm -f "$listing"
+  [ "$removed" -gt 0 ] && say "clean-after-success: removed $removed path$([ "$removed" -eq 1 ] || echo s) of the copy"
+  return 0
 }
 
 finish_job() {
@@ -1988,6 +2115,11 @@ finish_job() {
   stop_watchdog
   set_phase collecting
   collect_artifacts
+  # Only a job that succeeded (its final code, after a timeout or a kill have had their say): its results are collected above, so nothing a `pull:` names is lost to this.
+  if [ "$code" -eq 0 ]; then
+    set_phase cleaning
+    clean_after_success
+  fi
   release_lock
   rm -rf "$stage"
   set_phase done
@@ -2176,6 +2308,7 @@ main() {
     prune) cmd_prune "$@" ;;
     measure-copies) cmd_measure_copies "$@" ;;
     clean) cmd_clean "$@" ;;
+    simctl-cleanup) cmd_simctl_cleanup "$@" ;;
     fetched) cmd_fetched "$@" ;;
     sync-tree) cmd_sync_tree "$@" ;;
     *) die "unknown subcommand: $subcommand" ;;

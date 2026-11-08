@@ -36,7 +36,7 @@ agents run it from project folders) and never touches `DATA_DIR` or the state st
 - **Runner** — `<workDir>/`: `bin/runner-<sha8>.sh`; `tmp/lease.*` (a lease watcher's state, removed when it ends, `prune` sweeps what a killed one left);
   `p/<slug>/{tree,stage/<job>,jobs/<job>,manifest,deps.hash,used,lock,size-kb}`.
   `slug` = `<basename>-<sha256(hostname:uid:root)[0..10]>`. A job folder holds `meta.json`, `cmd`, `env`, `pull.ere`, `pull.roots`, `manifest`,
-  `install-command`/`install-key`, `log`, `phase`, `pid`, `task-id`, `exit`, markers (`timeout`, `killed`, `failed-step`), `artifacts/`.
+  `clean-after-success.ere`/`.roots`, `install-command`/`install-key`, `log`, `phase`, `pid`, `task-id`, `exit`, markers (`timeout`, `killed`, `failed-step`), `artifacts/`.
 
 ## Paired runners
 
@@ -96,7 +96,7 @@ call's `--send` does (`planSendList`'s `callSend`; the files only it opted in ar
 said when the list changes, not on every submit (`heldBackNotice.ts`: a hash per project in `<cache>/held-back/`); a name with a newline is refused.
 `.git` only with `--with-git`.
 
-**Path patterns** (`pull:`, `exclude:`, `send:`, `install-key:`) are compiled once to extended regular expressions that `RegExp` (main box) and
+**Path patterns** (`pull:`, `exclude:`, `send:`, `install-key:`, `clean-after-success:`) are compiled once to extended regular expressions that `RegExp` (main box) and
 `grep -E` / bash `=~` (runner) read the same way — `remoteRunPathPatterns.test.ts` runs all three over the same samples.
 
 **Submit = stage, the job applies.** The main box stages the tree into `stage/<job>/` (`rsync --copy-dest=<tree>`, never `--link-dest`: a job
@@ -106,7 +106,12 @@ check skips a same-length edit made within a second). The job (`runner.sh job`) 
 command (`bash -c`, `-e` variables, own timeout watchdog), copies the files that match `pull.ere` and are newer than the start marker into
 `jobs/<job>/artifacts/` (walking only the folders of `pull.roots` — the fixed prefixes of the `pull:` patterns, `getPathPatternSearchRoots` —
 never `node_modules` or a build folder; `.` when a pattern starts with a wildcard; no `pull.roots` from an older main box = the whole copy; a
-root with a symlink on its way is skipped), releases the lock. Two jobs of one project therefore queue and each runs the tree as it was when IT was submitted.
+root with a symlink on its way is skipped), then — only for a job whose FINAL code is 0 (not a failure, a timeout or a kill) and only when the project's `.remote-run` has `clean-after-success:` —
+removes from the copy what those patterns name (`clean_after_success`: the same two files as `pull.*`, `clean-after-success.ere`/`.roots`, read by the one `read_job_patterns`; after the files above were collected, so
+a path both lists is kept first and then removed; the lock is still held; a folder goes whole, a link as the link, `.git` is never entered, a root that is a link or leaves the copy is skipped, a read-only tree is made
+writable first as the prune does — `remove_path_even_if_read_only`, the one removal both use; says «removed N paths» or «could not remove X» in the job's log and never changes the job's result; `projectConfig.ts` refuses
+a pattern made of wildcards alone), releases the lock. Two jobs of one project therefore queue and each runs the tree as it was when IT was submitted. Never name a folder the dependencies step fills: that step runs
+on the lockfile's key, not on the folder, and would not run again.
 
 **Time limit** (`--timeout`, default 3 h, both modes) counts from the moment the job is queued (`queued-at`, written when it is handed to Pueue):
 a foreground run's timer starts there, and the job script starts its watchdog with what is left — a job that waited its whole limit behind a busy
@@ -117,7 +122,11 @@ group is over (124) the moment it starts, its command never runs.
 
 **Probe.** `runners` gives the whole probe 20 s. Its slow questions (Pueue, the disk, Xcode, the simulators, Docker) are asked at once, each
 bounded by 4 s, so a hung one costs 4 s in all; an Xcode that does not answer is «did not answer in time», not «not found», and a slow
-simctl keeps the Xcode version without inventing a simulator count.
+simctl keeps the Xcode version without inventing a simulator count. The same simctl answer gives `sim_older_runtimes=iOS 26.4:11,…` (`list_older_simulator_runtimes`, awk over `simctl list devices available`: a runtime
+that has a newer one of the same platform AND major, with its device count — information for `runners` and `/runners`, nothing is removed). On a Mac with Xcode the probe of a VIEW of the runners (`probe <work> prune`, the same
+argument that lets a short disk start the prune) also starts `simctl-cleanup` detached (`start_simctl_cleanup_if_due`) — at most once in 24 h (the stamp `<work>/simctl-cleanup.at`, touched by the run itself, so a run that
+hangs is not started again at every probe), bounded by a 120 s watchdog, its output in `<work>/simctl-cleanup.log` — which runs `xcrun simctl delete unavailable` and nothing else of `simctl` (no erase, no runtime, no device
+of an installed runtime). The probe a run or an `exec` makes first never starts it.
 
 **A job that had to be SIGKILLed** (it ignored SIGTERM through `kill`, a lost lease or the time limit) cannot write its own result, so whoever kills
 it records it first (`finish_killed_job`: exit 137, or 124 when the limit did it, `phase=done`, a finish time) — it is then an ended job like any

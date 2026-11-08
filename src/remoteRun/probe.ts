@@ -62,6 +62,11 @@ export interface RunnerProbe {
    * it ends with exit 127) or `unknown` (there, but no answer in time). `null` when the runner's script did not report them (an older one).
    */
   jobTools: { node: string; yarn: string } | null;
+  /**
+   * The Simulator runtimes of this Mac that have a NEWER one of the same platform and major (`iOS 26.4` while `iOS 26.5` is installed), with the devices each still has: information for the operator (they take disk;
+   * removing them is Xcode's Settings ▸ Platforms, never remote-run's). Empty = none, or the runner did not say (not a Mac, an older script).
+   */
+  olderSimulators: Array<{ runtime: string; deviceCount: number }>;
 }
 
 const megabytesPerGigabyte = 1024;
@@ -74,6 +79,18 @@ function readNumber(value: string | undefined): number | null {
 
 export const jobToolNone = 'none';
 export const jobToolUnknown = 'unknown';
+
+/** One entry of the runner's `sim_older_runtimes=iOS 26.4:11,watchOS 11.0:2`: a platform, a version, a device count — anything else (it comes from the runner machine) is dropped. */
+const olderSimulatorPattern = /^([A-Za-z]{2,12} [0-9]+(?:\.[0-9]+){0,2}):([0-9]{1,5})$/;
+
+function parseOlderSimulators(fields: ReadonlyMap<string, string>): RunnerProbe['olderSimulators'] {
+  const entries: RunnerProbe['olderSimulators'] = [];
+  for (const item of (fields.get('sim_older_runtimes') ?? '').split(',')) {
+    const match = olderSimulatorPattern.exec(item.trim());
+    if (match !== null) entries.push({ runtime: match[1], deviceCount: Number(match[2]) });
+  }
+  return entries;
+}
 
 function parseJobTools(fields: ReadonlyMap<string, string>): RunnerProbe['jobTools'] {
   const node = fields.get('job_node');
@@ -146,6 +163,7 @@ export function parseProbeOutput(text: string): RunnerProbe {
     runnerVersion: fields.get('runner_version') || null,
     iosBoot: iosBootStatus === undefined ? null : { status: iosBootStatus, detail: fields.get('ios_boot_detail') ?? '' },
     jobTools: parseJobTools(fields),
+    olderSimulators: parseOlderSimulators(fields),
     keepsAwake: parseKeepsAwake(fields),
   };
 }
@@ -200,6 +218,20 @@ function formatJobTools(probe: RunnerProbe): string[] {
   return [`  jobs run with: ${describe('Node', probe.jobTools.node)} · ${describe('yarn', probe.jobTools.yarn)}`];
 }
 
+/**
+ * @description `iOS 26.4 (11), watchOS 11.0 (2)` — the older Simulator runtimes of a Mac with their device counts, for the line under the capabilities (the bot's `/runners` puts the same list in its own words).
+ * Empty when there are none.
+ */
+export function formatOlderSimulators(probe: RunnerProbe): string {
+  return probe.olderSimulators.map((entry) => `${entry.runtime} (${entry.deviceCount})`).join(', ');
+}
+
+/** `simulators of older runtimes (devices in brackets; nothing is removed): iOS 26.4 (11)` — only information: they take disk, and Xcode's Settings ▸ Platforms is where a runtime is removed. */
+function formatOlderSimulatorsLine(probe: RunnerProbe): string[] {
+  if (probe.olderSimulators.length === 0) return [];
+  return [`  simulators of older runtimes (devices in brackets; remote-run removes nothing of them): ${formatOlderSimulators(probe)}`];
+}
+
 /** `keeps awake: yes (caffeinate -i)` — or `NO` with why: a Mac that sleeps under a job drops the link (the thing `runners` is there to show). Nothing when the runner did not say. */
 function formatKeepsAwake(probe: RunnerProbe): string[] {
   if (probe.keepsAwake === null) return [];
@@ -242,6 +274,7 @@ export function formatRunnerDetails(probe: RunnerProbe, groupLimits: Readonly<Re
     `  ${formatCpu(probe)} · RAM ${formatGigabytes(probe.ramTotalMb)}, ${formatGigabytes(probe.ramFreeMb)} free · disk ${formatGigabytes(probe.diskFreeMb)} free (work dir)${formatLowDisk(probe)}${formatCopies(probe)}`,
     `  ${jobs}${groups === '' ? '' : ` · groups: ${groups}`}${probe.pueueVersion === null ? ' · Pueue: MISSING (install it, see docs/remote-run.md)' : ''}`,
     `  can: ${formatCapabilities(probe).join(' · ')}`,
+    ...formatOlderSimulatorsLine(probe),
     ...formatJobTools(probe),
     ...formatKeepsAwake(probe),
     ...formatRunnerProgram(probe),

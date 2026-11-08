@@ -55,7 +55,7 @@ function createRecordingClient(): { client: RunnerClient; calls: string[] } {
 
 const withGitOptions: RemoteRunOptions = { runner: null, needs: null, runnerWaitSeconds: null, group: null, timeoutSeconds: null, isWithGit: true, send: [], env: [], isBackground: false };
 
-async function stage(projectRoot: string, options: RemoteRunOptions): Promise<{ error: Error | null; calls: string[]; cacheEntries: string[]; metaFiles: string[] }> {
+async function stage(projectRoot: string, options: RemoteRunOptions): Promise<{ error: Error | null; calls: string[]; cacheEntries: string[]; metaFiles: string[]; metaDirectory: string }> {
   const { client, calls } = createRecordingClient();
   const metaDirectory = fs.mkdtempSync(path.join(workRoot, 'meta-'));
   let error: Error | null = null;
@@ -64,7 +64,7 @@ async function stage(projectRoot: string, options: RemoteRunOptions): Promise<{ 
   } catch (caught) {
     error = caught instanceof Error ? caught : new Error('not an error');
   }
-  return { error, calls, cacheEntries: fs.existsSync(client.cacheDir) ? fs.readdirSync(client.cacheDir) : [], metaFiles: fs.readdirSync(metaDirectory) };
+  return { error, calls, cacheEntries: fs.existsSync(client.cacheDir) ? fs.readdirSync(client.cacheDir) : [], metaFiles: fs.readdirSync(metaDirectory), metaDirectory };
 }
 
 describe('stageJob with --with-git', () => {
@@ -135,6 +135,29 @@ describe('stageJob and a job that needs iOS', () => {
       const other = await stage(project, { ...withGitOptions, isWithGit: false, needs });
       assert.ok(!other.metaFiles.includes('needs-ios'), `${needs}: ${other.metaFiles.join(', ')}`);
     }
+  });
+});
+
+describe('stageJob and what the project asks the runner to clean after the job', () => {
+  beforeEach(() => {
+    workRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-run-submit-')));
+  });
+  afterEach(() => {
+    fs.rmSync(workRoot, { recursive: true, force: true });
+  });
+
+  it('`clean-after-success:` of .remote-run reaches the runner as the job\'s two files — the compiled patterns and the folders to walk, as `pull:` does; a project without the line sends them empty (the runner removes nothing)', async () => {
+    const project = path.join(workRoot, 'project');
+    fs.mkdirSync(project);
+    git(project, 'init', '-q', '-b', 'main');
+    const without = await stage(project, { ...withGitOptions, isWithGit: false });
+    assert.equal(fs.readFileSync(path.join(without.metaDirectory, 'clean-after-success.ere'), 'utf8'), '');
+    assert.equal(fs.readFileSync(path.join(without.metaDirectory, 'clean-after-success.roots'), 'utf8'), '');
+    fs.writeFileSync(path.join(project, '.remote-run'), 'pull: test-results\nclean-after-success: ios/build/Intermediates.noindex projects/*/ios/build/**/Intermediates.noindex\n');
+    const asked = await stage(project, { ...withGitOptions, isWithGit: false });
+    assert.equal(fs.readFileSync(path.join(asked.metaDirectory, 'clean-after-success.ere'), 'utf8'), '^ios/build/Intermediates\\.noindex(/.*)?$\n^projects/[^/]*/ios/build/(.*/)?Intermediates\\.noindex(/.*)?$\n');
+    assert.equal(fs.readFileSync(path.join(asked.metaDirectory, 'clean-after-success.roots'), 'utf8'), 'ios/build/Intermediates.noindex\nprojects\n');
+    assert.equal(fs.readFileSync(path.join(asked.metaDirectory, 'pull.roots'), 'utf8'), 'test-results\n', 'and `pull:` is its own list');
   });
 });
 

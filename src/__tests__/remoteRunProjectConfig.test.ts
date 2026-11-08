@@ -21,6 +21,7 @@ describe('parseProjectConfig', () => {
       'install-key: yarn.lock package.json patches .yarnrc.yml',
       'exclude: fixtures/huge',
       'send: .env.test',
+      'clean-after-success: ios/build/Intermediates.noindex projects/*/ios/build/**/Intermediates.noindex',
     ].join('\n'));
     assert.deepEqual(parsed, {
       ok: true,
@@ -30,8 +31,34 @@ describe('parseProjectConfig', () => {
         installKey: ['yarn.lock', 'package.json', 'patches', '.yarnrc.yml'],
         exclude: ['fixtures/huge'],
         send: ['.env.test'],
+        cleanAfterSuccess: ['ios/build/Intermediates.noindex', 'projects/*/ios/build/**/Intermediates.noindex'],
       },
     });
+  });
+
+  it('`clean-after-success` is off unless given, accumulates over lines like the other list keys, and is not mixed up with `pull`', () => {
+    assert.deepEqual(createEmptyProjectConfig().cleanAfterSuccess, []);
+    const parsed = parseProjectConfig('pull: results\nclean-after-success: a/b\nclean-after-success: c *.o');
+    assert.ok(parsed.ok);
+    assert.deepEqual(parsed.ok && parsed.config.cleanAfterSuccess, ['a/b', 'c', '*.o']);
+    assert.deepEqual(parsed.ok && parsed.config.pull, ['results']);
+  });
+
+  it('`clean-after-success` stays inside the copy and never names the whole project: `..`, absolute and `~` paths, and patterns made of wildcards alone, are refused with the line', () => {
+    for (const pattern of ['../outside', '/abs/path', '~/x', 'a/../b', '**', '*', '**/*', '?', './**', '.*']) {
+      const parsed = parseProjectConfig(`clean-after-success: ${pattern}`);
+      assert.equal(parsed.ok, false, pattern);
+      assert.match(parsed.ok ? '' : parsed.errors.join('\n'), /^\.remote-run line 1: "clean-after-success" pattern /, pattern);
+    }
+    const wholeProject = parseProjectConfig('clean-after-success: **');
+    assert.match(wholeProject.ok ? '' : wholeProject.errors.join('\n'), /names the whole project/);
+    for (const pattern of ['ios/build', '**/Intermediates.noindex', '*.o', 'a*', 'build/**']) {
+      assert.equal(parseProjectConfig(`clean-after-success: ${pattern}`).ok, true, pattern);
+    }
+  });
+
+  it('the other list keys keep taking a wildcard-only pattern (`pull: **` is the whole tree on purpose)', () => {
+    assert.equal(parseProjectConfig('pull: **').ok, true);
   });
 
   it('list keys may repeat and accumulate; `install: none` is kept as the word', () => {

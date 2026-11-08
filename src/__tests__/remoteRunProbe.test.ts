@@ -66,6 +66,28 @@ describe('the tools a job runs with', () => {
   });
 });
 
+describe('the Simulator runtimes older than the newest of their major', () => {
+  const block = (lines: string): string => formatRunnerBlock({ name: 'mac', status: 'online', probe: parseProbeOutput(`${linuxProbeText}\n${lines}`), groupLimits: {}, isPausedByHub: false });
+
+  it('`sim_older_runtimes=` is a list of runtime:devices, read as it came; a damaged entry is dropped (it comes from another machine), and none or an older script is an empty list', () => {
+    assert.deepEqual(parseProbeOutput(`${linuxProbeText}\nsim_older_runtimes=iOS 26.4:11,watchOS 11.0:2`).olderSimulators, [
+      { runtime: 'iOS 26.4', deviceCount: 11 },
+      { runtime: 'watchOS 11.0', deviceCount: 2 },
+    ]);
+    assert.deepEqual(parseProbeOutput('sim_older_runtimes=iOS 26.4:2,<script>:3,iOS:4,iOS 26.4.1:x,tvOS 18:1').olderSimulators, [
+      { runtime: 'iOS 26.4', deviceCount: 2 },
+      { runtime: 'tvOS 18', deviceCount: 1 },
+    ]);
+    assert.deepEqual(parseProbeOutput(linuxProbeText).olderSimulators, []);
+    assert.deepEqual(parseProbeOutput('sim_older_runtimes=').olderSimulators, []);
+  });
+
+  it('`runners` shows them on one line under what the runner can do, and says that remote-run removes nothing of them; no line when there are none', () => {
+    assert.match(block('sim_older_runtimes=iOS 26.4:11,watchOS 11.0:2'), /\n {2}simulators of older runtimes \(devices in brackets; remote-run removes nothing of them\): iOS 26\.4 \(11\), watchOS 11\.0 \(2\)$/m);
+    assert.ok(!block('').includes('simulators of older runtimes'));
+  });
+});
+
 describe('how a runner keeps its machine awake', () => {
   it('one description of a method serves the link\'s own start line and `runners`: the command, and that a closed lid still sleeps it', () => {
     assert.equal(describeKeepAwakeMethod('caffeinate'), 'caffeinate -i; a closed lid still sleeps it');

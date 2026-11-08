@@ -1202,6 +1202,7 @@ export const kaDict: Record<string, string> = {
   'runners.cpuLoad': 'დატვირთვა {load}',
   'runners.jobsLine': 'ამოცანები: {running} სრულდება, {queued} რიგშია · პროექტები: {projects}',
   'runners.copiesLine': 'პროექტის ასლები: {count} · {size}',
+  'runners.oldSimulatorsLine': 'ძველი რანტაიმების სიმულატორები (ფრჩხილებში — მოწყობილობები; არაფერი იშლება): {runtimes}',
   'runners.diskLowNote': 'ცოტაა — რანერი {minFree}-ს თავისუფლად ინახავს',
   'runners.pueueMissing': 'ამ რანერზე Pueue არ არის',
   'runners.jobToolsLine': 'ამოცანები ამით სრულდება: Node {node} · yarn {yarn}',

@@ -1202,6 +1202,7 @@ export const deDict: Record<string, string> = {
   'runners.cpuLoad': 'Last {load}',
   'runners.jobsLine': 'Jobs: {running} laufen, {queued} wartend · Projekte: {projects}',
   'runners.copiesLine': 'Projektkopien: {count} · {size}',
+  'runners.oldSimulatorsLine': 'Simulatoren älterer Runtimes (in Klammern: Geräte; nichts wird entfernt): {runtimes}',
   'runners.diskLowNote': 'ZU WENIG — der Runner hält {minFree} frei',
   'runners.pueueMissing': 'Auf diesem Runner fehlt Pueue',
   'runners.jobToolsLine': 'Jobs laufen mit: Node {node} · yarn {yarn}',
