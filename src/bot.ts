@@ -463,8 +463,8 @@ import {
   buildFallbackSwitchCallbackData,
   buildOpenCodeModelLabel,
   decideFallbackSwitch,
-  getDisabledClaudeProfileNames,
   formatFallbackEntryLabel,
+  getClaudeLaunchChainScope,
   getFallbackModelToPin,
   getFallbackSwitchTapDecision,
   parseOpenCodeModelLabel,
@@ -488,7 +488,7 @@ import { createSelfUpdate } from './connectors/telegram/commands/selfUpdate';
 import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent, ClaudeTurnCostReport } from './adapters/claudeConfigDir';
 import { addClaudeApiSpend, computeClaudeTurnCostUsd, formatUsd, getClaudeTurnCostOutcome } from './utils/claudeApiSpend';
-import { buildClaudeProfilesCreditReport, buildClaudeProfileUsageView, buildClaudeProfileUsageViews } from './utils/claudeProfileUsageViews';
+import { buildClaudeProfilesCreditReport, buildClaudeProfileUsageView, buildClaudeProfileUsageViews, getApiProfileStoppedByAgent } from './utils/claudeProfileUsageViews';
 import { addClaudeApiCreditSpend, getClaudeApiCreditPeriod, listProfilesWithSupersededCreditEvidence, readClaudeApiCreditAnchors, type ClaudeApiCreditAnchors } from './utils/claudeApiCredit';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs, probeClaudeApiCredit, startClaudeApiCreditRechecks, type ClaudeApiCreditRecheckPorts } from './utils/claudeApiCreditRecheck';
 import { formatClaudeApiSpendWords } from './utils/claudeProfileUsageLines';
@@ -8796,17 +8796,22 @@ async function takeFallbackSwitchOffer(key: SessionKey, episodeId: number, index
 /**
  * The `claude_profiles` MCP tool's answer: snapshots refreshed on demand (a minute's cache; the account a resumed session
  * was stopped on is re-read at once), then the launch pick — a new agent, or the session's own account when it is warm.
- * The accounts the operator switched off in the `/limits` list are never picked for a new agent. The refresh is waited for
- * only up to `claudeLaunchRefreshBudgetMs`; past it the cached figures are answered (an agent that waits on a silent tool
- * call is dropped by its own client after 300 s).
+ * Only the accounts the operator's `/limits` list holds with an enabled rung are named once it lists any Claude account (an
+ * account billed to API credits among them goes first, `getClaudeLaunchPick`). A resumed session reported stopped on an API
+ * account is a used-up balance (it has no other limit): the account is marked so, like a topic's refusal, and the daily
+ * credit recheck lifts the mark when the credit is back — otherwise every NEW worker would be sent to the same refused
+ * balance. The refresh is waited for only up to `claudeLaunchRefreshBudgetMs`; past it the cached figures are answered (an agent
+ * that waits on a silent tool call is dropped by its own client after 300 s).
  */
 async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<ClaudeProfilesReport> {
   await refreshClaudeUsageForLaunch(claudeUsageRefresher, { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, maxAgeMs: claudeUsageOnDemandMaxAgeMs });
+  const stoppedApiProfile = getApiProfileStoppedByAgent(getClaudeProfileUsageViews(), query);
+  if (stoppedApiProfile !== null) state.setClaudeProfileCreditExhausted(stoppedApiProfile, new Date().toISOString());
   return buildClaudeProfilesCreditReport(
     getClaudeProfileUsageViews(),
     query.model,
     Date.now(),
-    { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, excludedNames: getDisabledClaudeProfileNames(state.getFallbackChain()) },
+    { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, chainScope: getClaudeLaunchChainScope(state.getFallbackChain()) },
   );
 }
 

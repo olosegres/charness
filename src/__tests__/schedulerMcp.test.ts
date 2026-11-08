@@ -1052,6 +1052,8 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         const { model, currentProfile, isStoppedByLimit } = query;
         const isNothingUsable = model === 'exhausted' || model === 'nowhere';
         const isWarmAccountGone = model === 'gone';
+        // The /limits list leaves «work» out for this model: the report says why, and the verdict line repeats it.
+        const isWorkUnlisted = model === 'unlisted';
         const pickReason = isNothingUsable ? 'none'
           : currentProfile === null ? 'soonestWeeklyReset'
             : isStoppedByLimit ? 'movedFromLimited'
@@ -1065,8 +1067,8 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
           pickReason,
           nextAvailable: model === 'exhausted' ? { profile: 'work', at: '2026-10-20T10:00:00.000Z' } : null,
           profiles: [
-            { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, headroomPercent: 19, isRecommended: recommended === 'default' },
-            { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, headroomPercent: 90, isRecommended: recommended === 'work' },
+            { name: 'default', configDir: null, email: 'me@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 19, isRecommended: recommended === 'default' },
+            { name: 'work', configDir: '/data/profiles/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'pro', loggedIn: true, buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null, billing: null, creditExhaustedAt: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: !isWorkUnlisted, chainExclusion: isWorkUnlisted ? 'notListed' as const : null, headroomPercent: 90, isRecommended: recommended === 'work' },
           ],
         };
       },
@@ -1238,6 +1240,8 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'claude_profiles');
         assert.ok(tool, `claude_profiles is offered to a ${scope.kind} scope`);
         assert.match(tool.description ?? '', /CLAUDE_CONFIG_DIR/);
+        assert.match(tool.description ?? '', /\/limits auto-switch list/, 'the description says the pick follows the operator\'s list');
+        assert.doesNotMatch(tool.description ?? '', /NEVER picked|unless the operator asked/, 'the old «never an API account unless asked» rule is gone');
         assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ['currentProfile', 'isStoppedByLimit', 'model']);
         assert.equal((tool.inputSchema.properties?.currentProfile as { maxLength?: number } | undefined)?.maxLength, claudeProfileNameMaxLength, 'a profile name is never longer than the registry allows');
         const [verdict, ...rest] = (await callProfiles(client, { model: 'fable' })).split('\n');
@@ -1265,6 +1269,13 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
           'a warm session whose account can no longer run is reported as moved, not as a new agent',
         );
         assert.equal((await callProfiles(client, { model: 'nowhere' })).split('\n')[0], 'none usable — no account names a time it frees up');
+        const unlisted = await callProfiles(client, { model: 'unlisted' });
+        assert.equal(
+          unlisted.split('\n')[0],
+          'recommended: default → default profile, set no CLAUDE_CONFIG_DIR (soonest weekly reset) [not offered — not in the /limits list: work]',
+          'an account the list leaves out is named with its reason on the first line',
+        );
+        assert.match(unlisted, /"chainExclusion": "notListed"/);
         for (const args of [{ isStoppedByLimit: true }, { isStoppedByLimit: true, currentProfile: '   ' }]) {
           const refusal = await client.callTool({ name: 'claude_profiles', arguments: args });
           assert.equal(refusal.isError, true, `${JSON.stringify(args)} is refused: a stop on a limit needs the account that was stopped`);
@@ -1287,6 +1298,7 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       { model: 'exhausted', currentProfile: null, isStoppedByLimit: false },
       { model: 'gone', currentProfile: 'work', isStoppedByLimit: false },
       { model: 'nowhere', currentProfile: null, isStoppedByLimit: false },
+      { model: 'unlisted', currentProfile: null, isStoppedByLimit: false },
     ];
     assert.deepEqual(fixture.claudeProfilesCalls, [...callsOfOneScope, ...callsOfOneScope], 'the refused calls never reached the port');
   });

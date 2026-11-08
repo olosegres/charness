@@ -197,28 +197,40 @@ so one account's usage limit does not stop every topic.
 - **Which account for a child process.** An agent that launches a detached
   `claude` (a worker, a reviewer) asks the bot's `telegramBot` MCP tool
   `claude_profiles` — optionally with the model it will run — and gets every
-  profile with its windows plus `recommended`. A **new** agent goes to the usable
-  profile whose weekly limit resets soonest, so what would burn soonest is spent
+  profile with its windows plus `recommended`. **Your `/limits_autoswitch` list says
+  which accounts an agent may be pointed at:** once it holds any Claude account, only
+  the accounts with an enabled entry there are recommended (to a new worker and to a
+  resumed one alike); an account the list leaves out or has only 🚫 entries for is shown
+  with `chainExclusion` (`notListed` / `switchedOff`, and the first line of the answer
+  names it) and is never `recommended`. A list with no Claude entry (empty, or OpenCode
+  only) restricts nothing: every signed-in subscription account is open, an account billed
+  to API credits is not. Among the open accounts, an account billed to API credits goes
+  **first** while it is signed in, not limited and its credit is not marked used up (the
+  bonus credit is spent before any subscription; several of them keep the list's order);
+  then a **new** agent goes to the usable
+  subscription whose weekly limit resets soonest, so what would burn soonest is spent
   first; usable means signed in, not marked limited, below 100 % on the windows the
   model drains (the session window and the shared weekly window bound every model;
   Fable additionally drains its own weekly window, and Fable's window at 100 % takes
   out Fable only) and the five-hour window under 90 % — a profile above that waits,
   the next reset is taken. Resets less than a minute apart count as one moment and
   the lower five-hour percent decides; an unknown reset ranks after every known
-  one. An account billed to API credits is never picked for a new agent, nor is one
-  whose entries in `/limits_autoswitch` are all left out. A **resumed** worker
+  one. A **resumed** worker
   passes `currentProfile` (the profile it last ran on) and stays on it unless the
-  account is signed out, marked limited, out of credits or at 100 % on a window
-  the model drains; the 90 % ceiling does not apply to it. One that broke off on a
-  usage limit passes `isStoppedByLimit` too: the bot re-reads that account's usage
-  and leaves it out whatever the figures say, and the worker resumes the same
-  session at once on the answer. With nothing usable `recommended` is `null` and
+  account is signed out, marked limited, out of credits, left out of the list or at
+  100 % on a window the model drains; the 90 % ceiling does not apply to it. One that
+  broke off on a usage limit — or on «Credit balance is too low» — passes
+  `isStoppedByLimit` too: the bot re-reads that account's usage (an account billed
+  to API credits has none: it is marked as having used up its credit, like a topic's
+  refusal, and the daily recheck lifts the mark when the credit is back) and leaves it
+  out whatever the figures say, and the worker resumes the same session at once on
+  the answer. With nothing usable `recommended` is `null` and
   `nextAvailable` names the account and the instant that frees up first, for a
   one-off resume (an account a limit just stopped, whose figures show no blocker
   yet, frees up at its five-hour reset); when no account names a time, the manager
   asks you and retries in about 30 minutes. The first line of the answer states why:
   it stays on the warm account, moved (the account stopped on a limit or can no
-  longer run), soonest weekly reset, or none usable. The agent then
+  longer run), API credit first, soonest weekly reset, or none usable. The agent then
   starts the child with `CLAUDE_CONFIG_DIR=<configDir>` (`null` = the default
   profile: set nothing). The bot refreshes the usage figures before it answers, and
   the tool answers within 10 seconds from the last figures instead of hanging: a
@@ -273,15 +285,17 @@ balance), so the bot never uses it without you choosing it.
   General — says that every request is billed. The bot reads the billing from
   `claude auth status` each time it checks the account, so a mistaken
   subscription login shows as a subscription.
-- **Never used by itself.** It has no windows, so to every headroom rule it
-  would look inexhaustible: the `claude_profiles` recommendation (and
-  `charness claude-profiles --best`) never picks it for a new agent (a worker
-  already running on it stays), the within-Claude switch
-  never offers it, and «🔄 Fill from connected» in `/limits_autoswitch` puts it
-  LAST in the fallback list and left out of automatic switching (🚫). To use it,
-  tap it on the `/limits` board (`Claude · console 💳`) — or include its entry
-  («✅ Use») so a limit notice offers it, or switches to it by itself with
-  switching on. A rebuilt list keeps it included once you did.
+- **Never used unless you include it.** It has no windows, so to every headroom rule it
+  would look inexhaustible: the within-Claude switch (the one without a list) never
+  offers it, and «🔄 Fill from connected» in `/limits_autoswitch` puts it LAST in the
+  fallback list and left out of automatic switching (🚫) — and an account the list leaves
+  out is not one an agent is pointed at either. To use it, tap it on the `/limits` board
+  (`Claude · console 💳`) — or include its entry («✅ Use») so a limit notice offers it,
+  switches to it by itself with switching on, **and the `claude_profiles` recommendation
+  (and `charness claude-profiles --best`) names it FIRST for every new agent while its
+  credit lasts**, before any subscription; when it stops answering (the credit is used
+  up) the agents move on to the subscriptions in the list. A rebuilt list keeps it included
+  once you did.
 - **When the credits run out** («Credit balance is too low») the bot does not
   wait for a reset — there is none — and never retries hourly. The topic gets
   one `💸` notice, the account is marked as out of credits (`💸` in

@@ -20,6 +20,7 @@ import {
   checkIsClaudeModelClearOfLimit,
   checkIsClaudeProfileLaunchable,
   checkIsClaudeTokenExpired,
+  describeClaudeChainExclusions,
   describeClaudeLaunchOutcome,
   fetchClaudeUsage,
   getClaudeProfileRecordsFromState,
@@ -33,6 +34,7 @@ import {
   parseClaudeUsageResponse,
   readClaudeOAuthToken,
   sortClaudeProfilesByLaunchRank,
+  type ClaudeLaunchChainScope,
   type ClaudeProfileUsageView,
   type ClaudeUsageSnapshot,
 } from '../utils/claudeUsage';
@@ -211,6 +213,9 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
   });
   const pick = (profiles: ClaudeProfileUsageView[], extra: Partial<Parameters<typeof getClaudeLaunchPick>[0]> = {}) =>
     getClaudeLaunchPick({ profiles, model: 'sonnet', nowMs, ...extra });
+  /** The `/limits` list as the pick reads it: accounts with an enabled rung (in the list's order), accounts with only switched-off rungs. */
+  const listScope = (enabled: string[], disabled: string[] = []): ClaudeLaunchChainScope => ({ enabledNames: new Set(enabled), disabledNames: new Set(disabled) });
+
 
   describe('a new agent', () => {
     it('goes to the account whose weekly window resets soonest, whatever its headroom', () => {
@@ -275,13 +280,11 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
       assert.equal(pick([d, a]).pick, 'd', 'a full tie keeps the input order');
     });
 
-    it('never picks an account billed to API credits, nor one switched off in the /limits list', () => {
+    it('never picks an account billed to API credits while the /limits list names no Claude account', () => {
       const api = view('console', undefined, { billing: 'api', subscriptionType: null });
-      const switchedOff = view('off', usage({ session: 0, weekly: 0, weeklyResetsAt: days(1) }));
-      const later = view('later', usage({ session: 0, weekly: 0, weeklyResetsAt: days(6) }));
-      assert.equal(pick([api, switchedOff, later], { excludedNames: new Set(['off']) }).pick, 'later');
-      assert.equal(pick([api, switchedOff]).pick, 'off');
-      assert.deepEqual(pick([api], { excludedNames: new Set() }), { pick: null, reason: 'none', nextAvailable: null });
+      const sub = view('sub', usage({ session: 0, weekly: 0, weeklyResetsAt: days(1) }));
+      assert.equal(pick([api, sub]).pick, 'sub');
+      assert.deepEqual(pick([api]), { pick: null, reason: 'none', nextAvailable: null });
     });
 
     it('skips signed-out, limited and out-of-credits accounts', () => {
@@ -296,6 +299,73 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
       ];
       assert.equal(pick(profiles).pick, 'expiredMark', 'a mark in the past no longer excludes');
       assert.equal(pick(profiles.slice(0, 3)).pick, null);
+    });
+  });
+
+  describe('the /limits list decides who an agent may be pointed at', () => {
+    const api = view('console', undefined, { billing: 'api', subscriptionType: null });
+    const soon = view('soon', usage({ session: 0, weekly: 0, weeklyResetsAt: days(1) }));
+    const late = view('late', usage({ session: 0, weekly: 0, weeklyResetsAt: days(5) }));
+
+    it('an API account the list holds goes FIRST, before a subscription that resets sooner', () => {
+      assert.deepEqual(pick([soon, late, api], { chainScope: listScope(['soon', 'late', 'console']) }), { pick: 'console', reason: 'apiCreditFirst', nextAvailable: null });
+      assert.equal(describeClaudeLaunchOutcome(buildClaudeProfilesReport([soon, api], 'sonnet', nowMs, { chainScope: listScope(['soon', 'console']) }), null), 'API credit first, as the /limits list allows');
+    });
+
+    it('API first whatever its place in the list; several API accounts keep the list\'s order among themselves', () => {
+      const second = view('second', undefined, { billing: 'api', subscriptionType: null });
+      assert.equal(pick([soon, api, second], { chainScope: listScope(['soon', 'console']) }).pick, 'console', 'the list puts the subscription first, the API account still goes first');
+      assert.equal(pick([api, second, soon], { chainScope: listScope(['soon', 'second', 'console']) }).pick, 'second', 'two API accounts: the list\'s order');
+    });
+
+    it('API credit used up, limited or signed out: the subscription with the soonest weekly reset', () => {
+      const chainScope = listScope(['late', 'soon', 'console']);
+      for (const patch of [{ creditExhaustedAt: hours(-1) }, { limitedUntil: hours(3) }, { loggedIn: false }]) {
+        assert.deepEqual(pick([late, soon, view('console', undefined, { billing: 'api', subscriptionType: null, ...patch })], { chainScope }), { pick: 'soon', reason: 'soonestWeeklyReset', nextAvailable: null }, JSON.stringify(patch));
+      }
+    });
+
+    it('an API account NOT in the list, or switched off there, is never picked — the drafted «left out» rung stays out', () => {
+      assert.equal(pick([api, soon], { chainScope: listScope(['soon']) }).pick, 'soon');
+      assert.equal(pick([api, soon], { chainScope: listScope(['soon'], ['console']) }).pick, 'soon');
+      assert.equal(pick([api], { chainScope: listScope(['soon'], ['console']) }).pick, null);
+    });
+
+    it('a subscription not in the list is never picked; a switched-off one neither', () => {
+      assert.equal(pick([soon, late], { chainScope: listScope(['late']) }).pick, 'late', 'soon resets first but the list does not name it');
+      assert.equal(pick([soon, late], { chainScope: listScope(['late'], ['soon']) }).pick, 'late');
+      assert.deepEqual(pick([soon], { chainScope: listScope(['late']) }), { pick: null, reason: 'none', nextAvailable: null });
+    });
+
+    it('no scope (the list names no Claude account) changes nothing: every signed-in subscription is open, API never', () => {
+      assert.deepEqual(pick([late, soon, api], { chainScope: null }), pick([late, soon, api]));
+      assert.equal(pick([late, soon, api]).pick, 'soon');
+    });
+
+    it('a warm API session stays while the list holds it; a stopped one moves to the next eligible account', () => {
+      const chainScope = listScope(['soon', 'console']);
+      assert.deepEqual(pick([soon, api], { chainScope, currentProfile: 'console' }), { pick: 'console', reason: 'warm', nextAvailable: null });
+      assert.deepEqual(pick([soon, api], { chainScope, currentProfile: 'console', isStoppedByLimit: true }), { pick: 'soon', reason: 'movedFromLimited', nextAvailable: null });
+      const broke = view('console', undefined, { billing: 'api', subscriptionType: null, creditExhaustedAt: hours(-1) });
+      assert.deepEqual(pick([soon, broke], { chainScope, currentProfile: 'console' }), { pick: 'soon', reason: 'movedFromUnavailable', nextAvailable: null });
+      assert.deepEqual(pick([soon, api], { chainScope: listScope(['soon']), currentProfile: 'console' }), { pick: 'soon', reason: 'movedFromUnavailable', nextAvailable: null }, 'taken out of the list');
+    });
+
+    it('a NEW agent that moves off an API account (resumed with another name) is not sent back to it by the stop flag', () => {
+      assert.equal(pick([api, soon], { chainScope: listScope(['console', 'soon']), currentProfile: 'console', isStoppedByLimit: true }).pick, 'soon');
+    });
+
+    it('the report names the reason for each account it does not offer, and marks it not eligible', () => {
+      const chainScope = listScope(['soon'], ['late']);
+      const report = buildClaudeProfilesReport([soon, late, api], 'sonnet', nowMs, { chainScope });
+      assert.deepEqual(report.profiles.map((entry) => [entry.name, entry.chainExclusion, entry.isEligible, entry.isRecommended]), [
+        ['soon', null, true, true],
+        ['late', 'switchedOff', false, false],
+        ['console', 'notListed', false, false],
+      ]);
+      assert.equal(describeClaudeChainExclusions(report), 'not offered — not in the /limits list: console; switched off in the /limits list: late');
+      assert.equal(describeClaudeChainExclusions(buildClaudeProfilesReport([soon, late], 'sonnet', nowMs)), null, 'no list, nothing to say');
+      assert.deepEqual(buildClaudeProfilesReport([soon, late], 'sonnet', nowMs).profiles.map((entry) => [entry.chainExclusion, entry.isEligible]), [[null, true], [null, true]]);
     });
   });
 
@@ -343,8 +413,16 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
       assert.equal(describeClaudeLaunchOutcome(buildClaudeProfilesReport([warm, sooner], 'sonnet', nowMs, { currentProfile: 'gone' }), 'gone'), 'soonest weekly reset');
     });
 
-    it('stays on its account although it is switched off in the /limits list', () => {
-      assert.equal(pick([sooner, warm], { currentProfile: 'warm', excludedNames: new Set(['warm']) }).pick, 'warm');
+    it('moves when its account was taken out of the /limits list (switched off, or removed) — like an account that can no longer run', () => {
+      for (const chainScope of [listScope(['sooner'], ['warm']), listScope(['sooner'])]) {
+        assert.deepEqual(pick([sooner, warm], { currentProfile: 'warm', chainScope }), { pick: 'sooner', reason: 'movedFromUnavailable', nextAvailable: null });
+      }
+      assert.deepEqual(pick([sooner, warm], { currentProfile: 'warm', chainScope: listScope(['warm', 'sooner']) }), { pick: 'warm', reason: 'warm', nextAvailable: null }, 'listed and enabled: it stays');
+      assert.equal(pick([sooner, warm], { currentProfile: 'warm', chainScope: listScope([], ['warm', 'sooner']) }).pick, null, 'every Claude rung switched off: nothing is offered');
+    });
+
+    it('stopped by a limit AND removed from the list: moves, the reason names the limit', () => {
+      assert.deepEqual(pick([sooner, warm], { currentProfile: 'warm', isStoppedByLimit: true, chainScope: listScope(['sooner']) }), { pick: 'sooner', reason: 'movedFromLimited', nextAvailable: null });
     });
   });
 
@@ -366,11 +444,14 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
 
     it('never names an account that does not come back on its own, or whose blocker has no reset', () => {
       const signedOut = view('out', undefined, { loggedIn: false });
-      const api = view('console', undefined, { billing: 'api', subscriptionType: null });
+      const api = view('console', undefined, { billing: 'api', subscriptionType: null, limitedUntil: hours(3) });
       const credits = view('credits', undefined, { creditExhaustedAt: hours(-1) });
       const switchedOff = view('off', usage({ session: 100, weekly: 0, weeklyResetsAt: days(1), sessionResetsAt: hours(1) }));
       const noReset = view('noReset', usage({ session: 100, weekly: 0, weeklyResetsAt: days(1), sessionResetsAt: null }));
-      assert.deepEqual(pick([signedOut, api, credits, switchedOff, noReset], { excludedNames: new Set(['off']) }), { pick: null, reason: 'none', nextAvailable: null });
+      assert.deepEqual(pick([signedOut, api, credits, switchedOff, noReset], { chainScope: listScope(['noReset', 'out', 'console', 'credits'], ['off']) }), { pick: null, reason: 'none', nextAvailable: null });
+      const unlisted = view('unlisted', usage({ session: 100, weekly: 0, weeklyResetsAt: days(1), sessionResetsAt: hours(1) }));
+      assert.equal(pick([unlisted], { chainScope: listScope(['someoneElse']) }).nextAvailable, null, 'an account the list leaves out is not a «next» either');
+      assert.equal(pick([unlisted]).nextAvailable?.profile, 'unlisted', 'the same account with no list is');
     });
 
     it('a session stopped by a limit whose figures show a blocker is named at that blocker\'s reset', () => {
@@ -628,7 +709,7 @@ describe('the claude-profiles CLI line', () => {
         { kind: 'session', percent: 12, resetsAt: null, scopeModel: null },
         { kind: 'weekly_all', percent: 40, resetsAt: new Date(nowMs + 49 * 3_600_000).toISOString(), scopeModel: null },
       ],
-      usageFetchedAt: null, isUsageStale: false, limitedUntil: null, creditExhaustedAt: null, billing: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, headroomPercent: 60, isRecommended: true,
+      usageFetchedAt: null, isUsageStale: false, limitedUntil: null, creditExhaustedAt: null, billing: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: true, chainExclusion: null, headroomPercent: 60, isRecommended: true,
     } as const;
     const line = formatClaudeProfileCliLine({ ...entry, buckets: [...entry.buckets] }, nowMs);
     assert.match(line, /5h 12% 🔄 in 2d 1h · week 40% 🔄 in 2d 1h$/, 'an account with no Fable window says nothing about Fable');

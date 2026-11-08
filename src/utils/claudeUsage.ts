@@ -1,7 +1,8 @@
 /**
  * @description Per-profile Claude USAGE — how much of each subscription window an account profile
- * (`utils/claudeProfiles.ts`) has used, and which profile a process should run on: a NEW agent goes to the
- * account whose weekly window resets soonest (spend first what burns soonest), a WARM session stays on the
+ * (`utils/claudeProfiles.ts`) has used, and which profile a process should run on: only the accounts the operator's
+ * `/limits` list holds (when it holds any Claude account); a NEW agent goes to an API-credit account of the list first, then
+ * to the subscription whose weekly window resets soonest (spend first what burns soonest), a WARM session stays on the
  * account it worked on ({@link getClaudeLaunchPick}).
  *
  * Two sources feed one snapshot per profile (`ClaudeProfileRecord.usage`):
@@ -369,9 +370,9 @@ export interface ClaudeProfileReportEntry {
   kind: ClaudeAccountKind;
   subscriptionType: string | null;
   /**
-   * `api`: billed per request to a Claude Console organization's API credits — no windows, so no headroom figure, and
-   * NEVER picked for a NEW agent (it would look inexhaustible and spend money); only a warm session already on it stays.
-   * `null`: a subscription not recorded as such.
+   * `api`: billed per request to a Claude Console organization's API credits — no windows, so no headroom figure. It is
+   * recommended to a NEW agent only when the operator's `/limits` list holds it as an enabled rung (then FIRST, while its
+   * credit lasts); with no such rung only a warm session already on it stays. `null`: a subscription not recorded as such.
    */
   billing: ClaudeProfileBilling | null;
   /** `null` when never probed. */
@@ -395,8 +396,10 @@ export interface ClaudeProfileReportEntry {
   probablyUsedUp: boolean;
   /** When the bot detected the credit was back (the current period starts there); `null` = never or superseded by a newer figure. */
   renewedAt: string | null;
-  /** Signed in, not limited, its API credits not used up, and not at 100 % on a window the model drains — by the figures AS RECORDED. */
+  /** Signed in, not limited, its API credits not used up, not at 100 % on a window the model drains — by the figures AS RECORDED — and not kept off agents by the `/limits` list (`chainExclusion`). */
   isEligible: boolean;
+  /** Why the operator's `/limits` list keeps agents off this account ({@link ClaudeChainExclusion}); `null` = no objection (it has an enabled rung there, or the list names no Claude account at all). */
+  chainExclusion: ClaudeChainExclusion | null;
   /** `100 − max(relevant percent)`; `null` when the usage is unknown. Informational: the pick ranks by reset, not by headroom. */
   headroomPercent: number | null;
   /** The profile {@link getClaudeLaunchPick} chose (the figures read as of now). */
@@ -429,10 +432,12 @@ export const claudeSessionWindowMs = 5 * 3_600_000;
 
 /**
  * `warm`: the session stays on its account; `movedFromLimited`: it was stopped by a limit and goes elsewhere;
- * `movedFromUnavailable`: its account can no longer run (signed out, marked limited, out of credits, a window full) and it
- * goes elsewhere; `soonestWeeklyReset`: a new agent; `none`: nothing is usable.
+ * `movedFromUnavailable`: its account can no longer run (signed out, marked limited, out of credits, a window full, or
+ * taken out of the `/limits` list) and it goes elsewhere; `soonestWeeklyReset`: a new agent on the subscription whose weekly
+ * window resets soonest; `apiCreditFirst`: a new agent on an account billed to API credits the `/limits` list holds (it goes
+ * before every subscription while its credit lasts); `none`: nothing is usable.
  */
-export type ClaudeLaunchPickReason = 'warm' | 'movedFromLimited' | 'movedFromUnavailable' | 'soonestWeeklyReset' | 'none';
+export type ClaudeLaunchPickReason = 'warm' | 'movedFromLimited' | 'movedFromUnavailable' | 'soonestWeeklyReset' | 'apiCreditFirst' | 'none';
 
 /** The account that frees up first and the ISO instant it does. */
 export interface ClaudeNextAvailable {
@@ -452,8 +457,38 @@ export interface ClaudeLaunchPickOptions {
   currentProfile?: string | null;
   /** The session broke off on a usage limit of `currentProfile`: it is left out of this answer whatever the figures say. */
   isStoppedByLimit?: boolean;
-  /** Accounts the operator switched off in the `/limits` list (every rung disabled): never picked for a new agent. */
-  excludedNames?: ReadonlySet<string>;
+  /** What the operator's `/limits` list says about the accounts agents may use; absent / `null` = the list names no Claude account (every signed-in subscription account is open). */
+  chainScope?: ClaudeLaunchChainScope | null;
+}
+
+/**
+ * What the operator's `/limits` auto-switch list (the fallback chain) says about the Claude accounts an AGENT may be pointed
+ * at: once the list names any Claude account, only the accounts with an ENABLED rung are recommended — to a new agent and
+ * to a resumed one alike. `fallbackChain.ts` builds it (`getClaudeLaunchChainScope`); `null` stands for a list with no Claude rung.
+ */
+export interface ClaudeLaunchChainScope {
+  /** Accounts with at least one enabled Claude rung, in the list's order (several API accounts go first-listed-first). */
+  enabledNames: ReadonlySet<string>;
+  /** Accounts the list names only with switched-off rungs (🚫). */
+  disabledNames: ReadonlySet<string>;
+}
+
+/** Why the `/limits` list keeps agents off an account: `switchedOff` = every rung of it is switched off, `notListed` = the list names the account nowhere. */
+export type ClaudeChainExclusion = 'switchedOff' | 'notListed';
+
+/** Every exclusion, in the order an answer names them. */
+export const claudeChainExclusions: readonly ClaudeChainExclusion[] = ['notListed', 'switchedOff'];
+
+/** The words of an exclusion for the first line of an answer and the command line. */
+export const claudeChainExclusionWords: Readonly<Record<ClaudeChainExclusion, string>> = {
+  notListed: 'not in the /limits list',
+  switchedOff: 'switched off in the /limits list',
+};
+
+/** Why `scope` keeps agents off the account `name`; `null` when it does not (no Claude account listed, or an enabled rung of it). */
+export function getClaudeChainExclusion(name: string, scope: ClaudeLaunchChainScope | null | undefined): ClaudeChainExclusion | null {
+  if (!scope || scope.enabledNames.has(name)) return null;
+  return scope.disabledNames.has(name) ? 'switchedOff' : 'notListed';
 }
 
 /**
@@ -606,13 +641,13 @@ function getClaudeNextAvailable(
   profiles: readonly ClaudeProfileUsageView[],
   model: string | null,
   nowMs: number,
-  excludedNames: ReadonlySet<string>,
+  chainScope: ClaudeLaunchChainScope | null,
   stoppedName: string | null,
 ): ClaudeNextAvailable | null {
   let next: { profile: string; atMs: number } | null = null;
   for (const profile of profiles) {
-    // These never come back at a known time: switched off, signed out, API-billed, out of credits.
-    if (excludedNames.has(profile.name) || profile.loggedIn === false || profile.billing === 'api' || profile.creditExhaustedAt !== null) continue;
+    // These never come back at a known time: kept off agents by the /limits list, signed out, API-billed, out of credits.
+    if (getClaudeChainExclusion(profile.name, chainScope) !== null || profile.loggedIn === false || profile.billing === 'api' || profile.creditExhaustedAt !== null) continue;
     let freeAtMs = getClaudeProfileFreeAtMs(profile, model, nowMs);
     // The limit stopped this account, yet its figures show no blocker, so nothing says WHICH limit it was (a weekly window
     // the usage endpoint has not caught up with, or the five-hour one). The five-hour reset is a guess — the earliest it
@@ -625,19 +660,36 @@ function getClaudeNextAvailable(
 }
 
 /**
+ * Whether a NEW agent may start on the account billed to API credits `profile` now: the operator's `/limits` list holds it as an
+ * enabled rung (without such a list an API account is never picked: it would look inexhaustible and spend money unasked), it is
+ * signed in, not marked limited and its credits are not marked used up. No window to read: the balance is its only limit.
+ */
+function checkIsClaudeApiProfileLaunchable(profile: ClaudeProfileUsageView, chainScope: ClaudeLaunchChainScope | null, nowMs: number): boolean {
+  return chainScope !== null && chainScope.enabledNames.has(profile.name) && checkIsClaudeProfileEligible(profile, [], nowMs);
+}
+
+/**
  * @description The account a process of `model` should run on.
  *
- * NEW agent (no `currentProfile`): of the USABLE accounts — subscription, signed in, not marked limited, not out of API
- * credits, not switched off (`excludedNames`), every weekly window the model drains below 100 % and the five-hour window
- * below {@link claudeLaunchSessionCeilingPercent} — the one whose weekly window resets soonest
- * ({@link sortClaudeProfilesByLaunchRank}): spend first what burns first, and move to a farther reset only when the
- * five-hour window is exhausted. Fable's own window at 100 % takes only Fable out.
+ * The operator's `/limits` list rules who may be named at all (`chainScope`): once it names any Claude account, only an account
+ * with an ENABLED rung there is recommended — one the list leaves out or switches off never is, for a new agent or a resumed one.
+ * A list with no Claude rung restricts nothing.
+ *
+ * NEW agent (no `currentProfile`): first an account billed to API credits the list holds (the operator's choice: spend the
+ * bonus credit before any subscription), as long as it is signed in, not marked limited and its credits are not marked used up;
+ * then, of the USABLE subscription accounts — signed in, not marked limited, not out of API credits, every weekly window the
+ * model drains below 100 % and the five-hour window below {@link claudeLaunchSessionCeilingPercent} — the one whose weekly
+ * window resets soonest ({@link sortClaudeProfilesByLaunchRank}): spend first what burns first, and move to a farther reset only
+ * when the five-hour window is exhausted. Fable's own window at 100 % takes only Fable out. The list's ORDER ranks nothing but
+ * several API accounts among themselves: it was written for a topic's fallback, the agents' order is "API credit, then what
+ * burns soonest".
  *
  * WARM session (`currentProfile` known): it stays on that account unless the account is signed out, marked limited, out
- * of API credits or at 100 % on a window the model drains — the ceiling does not apply, and an API-billed account the
- * session already works on is kept (the spend was approved). `isStoppedByLimit` takes `currentProfile` out of the answer
- * whatever the figures say (they may lag the limit); the rest follows the new-agent rule, and the reason says the
- * session moved (`movedFromLimited`, or `movedFromUnavailable` when the account could no longer run by its own figures).
+ * of API credits, at 100 % on a window the model drains, or no longer allowed by the list — the ceiling does not apply, and an
+ * API-billed account the session already works on is kept (the spend was approved) while the list does not take it out.
+ * `isStoppedByLimit` takes `currentProfile` out of the answer whatever the figures say (they may lag the limit); the rest
+ * follows the new-agent rule, and the reason says the session moved (`movedFromLimited`, or `movedFromUnavailable` when the
+ * account could no longer run by its own figures or the list).
  *
  * Nothing usable → `pick: null` and {@link ClaudeLaunchPick.nextAvailable}.
  */
@@ -646,28 +698,36 @@ export function getClaudeLaunchPick(input: ClaudeLaunchPickOptions & {
   model: string | null;
   nowMs: number;
 }): ClaudeLaunchPick {
-  const excludedNames = input.excludedNames ?? new Set<string>();
+  const chainScope = input.chainScope ?? null;
   const current = input.currentProfile ? input.profiles.find((profile) => profile.name === input.currentProfile) : undefined;
   const isStopped = current !== undefined && input.isStoppedByLimit === true;
   if (current && !isStopped
+    && getClaudeChainExclusion(current.name, chainScope) === null
     && checkIsClaudeProfileEligible(current, getRelevantClaudeBucketsAsOf(current, input.model, input.nowMs), input.nowMs)) {
     return { pick: current.name, reason: 'warm', nextAvailable: null };
   }
   const movedFrom = current?.name ?? null;
-  const usable = input.profiles.filter((profile) => profile.name !== movedFrom
-    && !excludedNames.has(profile.name)
-    && checkIsClaudeProfileLaunchable(profile, input.model, input.nowMs));
-  const [first] = sortClaudeProfilesByLaunchRank(usable, input.model, input.nowMs);
+  const allowed = input.profiles.filter((profile) => profile.name !== movedFrom && getClaudeChainExclusion(profile.name, chainScope) === null);
+  const chainOrder = chainScope === null ? [] : [...chainScope.enabledNames];
+  const apiFirst = allowed
+    .filter((profile) => profile.billing === 'api' && checkIsClaudeApiProfileLaunchable(profile, chainScope, input.nowMs))
+    .sort((a, b) => chainOrder.indexOf(a.name) - chainOrder.indexOf(b.name));
+  const subscriptions = sortClaudeProfilesByLaunchRank(
+    allowed.filter((profile) => profile.billing !== 'api' && checkIsClaudeProfileLaunchable(profile, input.model, input.nowMs)),
+    input.model,
+    input.nowMs,
+  );
+  const [first] = [...apiFirst, ...subscriptions];
   if (first) {
-    const reason = movedFrom === null ? 'soonestWeeklyReset' : isStopped ? 'movedFromLimited' : 'movedFromUnavailable';
+    const reason = movedFrom !== null ? (isStopped ? 'movedFromLimited' : 'movedFromUnavailable') : first.billing === 'api' ? 'apiCreditFirst' : 'soonestWeeklyReset';
     return { pick: first.name, reason, nextAvailable: null };
   }
-  return { pick: null, reason: 'none', nextAvailable: getClaudeNextAvailable(input.profiles, input.model, input.nowMs, excludedNames, isStopped ? movedFrom : null) };
+  return { pick: null, reason: 'none', nextAvailable: getClaudeNextAvailable(input.profiles, input.model, input.nowMs, chainScope, isStopped ? movedFrom : null) };
 }
 
 /**
  * @description The pick in words, for the first line of the `claude_profiles` answer and the CLI: why the account was chosen
- * (`stays on the warm account`, `moved: <name> stopped on a limit` / `can no longer run`, `soonest weekly reset`), or that nothing is usable
+ * (`stays on the warm account`, `moved: <name> stopped on a limit` / `can no longer run`, `soonest weekly reset`, `API credit first`), or that nothing is usable
  * and which account frees up when. `currentProfile` is the account the caller passed for a resumed session.
  */
 export function describeClaudeLaunchOutcome(report: Pick<ClaudeProfilesReport, 'pickReason' | 'nextAvailable'>, currentProfile: string | null): string {
@@ -680,11 +740,26 @@ export function describeClaudeLaunchOutcome(report: Pick<ClaudeProfilesReport, '
       return `moved: ${currentProfile ?? 'the warm account'} can no longer run`;
     case 'soonestWeeklyReset':
       return 'soonest weekly reset';
+    case 'apiCreditFirst':
+      return 'API credit first, as the /limits list allows';
     case 'none':
       return report.nextAvailable === null
         ? 'none usable — no account names a time it frees up'
         : `none usable — next: ${report.nextAvailable.profile} at ${report.nextAvailable.at}`;
   }
+}
+
+/**
+ * @description The accounts the `/limits` list keeps agents off, one clause per reason (`not offered — not in the /limits list:
+ * a, b; switched off in the /limits list: c`), or `null` when there are none. The first lines of the `claude_profiles` answer
+ * and the CLI add it, so an agent that sees a signed-in account missing from `recommended` is told why.
+ */
+export function describeClaudeChainExclusions(report: Pick<ClaudeProfilesReport, 'profiles'>): string | null {
+  const clauses = claudeChainExclusions
+    .map((exclusion) => ({ exclusion, names: report.profiles.filter((entry) => entry.chainExclusion === exclusion).map((entry) => entry.name) }))
+    .filter(({ names }) => names.length > 0)
+    .map(({ exclusion, names }) => `${claudeChainExclusionWords[exclusion]}: ${names.join(', ')}`);
+  return clauses.length === 0 ? null : `not offered — ${clauses.join('; ')}`;
 }
 
 /**
@@ -702,10 +777,10 @@ const emptyClaudeProfileReportCredit: Pick<ClaudeProfileReportEntry, 'spentUsd' 
 
 /**
  * @description The report of every profile for a launch of `model`, with the pick of {@link getClaudeLaunchPick}
- * (`options`: the warm account, the limit stop, the switched-off accounts). `isEligible` is the strict reading — signed in,
- * not marked limited, its API credits not used up, not at 100 % on a relevant window as recorded — which the explicit
- * fallback chain's availability reads; `recommended` is the pick, an account billed to API credits only when a warm
- * session already runs on it. The entries keep the input order.
+ * (`options`: the warm account, the limit stop, the `/limits` list). `isEligible` is the strict reading — signed in,
+ * not marked limited, its API credits not used up, not at 100 % on a relevant window as recorded, not kept off agents by the
+ * list (`chainExclusion`) — which the explicit fallback chain's availability reads (it passes no list); `recommended` is the
+ * pick. The entries keep the input order.
  *
  * The credit fields of the entries (`spentUsd`, `remainingEstimateUsd`, `expiresOn`, `probablyUsedUp`, `renewedAt`) are left
  * EMPTY here: this module is loaded by the connector guards, which may not reach the credit module. Anything that is shown to
@@ -717,6 +792,7 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
   const entries = profiles.map((profile): ClaudeProfileReportEntry => {
     const relevant = getRelevantClaudeUsageBuckets(profile.usage, model);
     const maxPercent = relevant.length === 0 ? null : Math.max(...relevant.map((bucket) => bucket.percent));
+    const chainExclusion = getClaudeChainExclusion(profile.name, options.chainScope);
     return {
       name: profile.name,
       configDir: profile.configDir,
@@ -731,7 +807,8 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
       limitedUntil: profile.limitedUntil,
       creditExhaustedAt: profile.creditExhaustedAt,
       ...emptyClaudeProfileReportCredit,
-      isEligible: checkIsClaudeProfileEligible(profile, relevant, nowMs),
+      isEligible: chainExclusion === null && checkIsClaudeProfileEligible(profile, relevant, nowMs),
+      chainExclusion,
       headroomPercent: maxPercent === null ? null : 100 - maxPercent,
       isRecommended: false,
     };

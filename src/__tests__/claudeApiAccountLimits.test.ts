@@ -4,8 +4,9 @@
  *
  *   • «Credit balance is too low» is a usage limit flagged `isBalanceExhausted` with no reset, whatever status code or
  *     retry hint rides along (no wait refills a balance); an API rate limit (429, per minute) stays a short retry;
- *   • the ranking (`claude_profiles`' `recommended`, `charness claude-profiles --best`) NEVER names an API account,
- *     even with nothing else eligible; one out of credits is not eligible at all;
+ *   • the ranking (`claude_profiles`' `recommended`, `charness claude-profiles --best`) names an API account for a new agent
+ *     ONLY when the operator's `/limits` list holds it as an enabled rung (then FIRST); with no such list it never does, even
+ *     with nothing else eligible; one out of credits is not eligible at all;
  *   • the within-Claude switch candidates leave API accounts out whatever figures they carry;
  *   • the chain: an account out of credits is `exhausted` (never a candidate, never the end of a wait — it has no
  *     reset); the draft lists API accounts LAST and left out of automatic switching, unless the chain being replaced
@@ -19,10 +20,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyAgentApiError } from '../apiErrorRetry';
-import { buildClaudeProfilesReport, type ClaudeProfileUsageView, type ClaudeUsageSnapshot } from '../utils/claudeUsage';
-import { addClaudeApiCreditToReport, buildClaudeProfileUsageView, buildClaudeProfilesCreditReport } from '../utils/claudeProfileUsageViews';
+import { buildClaudeProfilesReport, getClaudeLaunchPick, type ClaudeProfileUsageView, type ClaudeUsageSnapshot } from '../utils/claudeUsage';
+import { addClaudeApiCreditToReport, buildClaudeProfileUsageView, buildClaudeProfilesCreditReport, getApiProfileStoppedByAgent } from '../utils/claudeProfileUsageViews';
 import { pickClaudeLimitSwitchCandidates } from '../utils/claudeLimitSwitch';
 import {
+  getClaudeLaunchChainScope,
   getFallbackEntryAvailability,
   pickEarliestResetRung,
   pickFallbackCandidates,
@@ -110,8 +112,8 @@ describe('classification: the balance is no window', () => {
   });
 });
 
-describe('ranking: an API account is never picked for a new agent', () => {
-  it('a subscription with headroom wins; an API account is listed with its billing but never picked', () => {
+describe('ranking: an API account is picked for a new agent only when the /limits list holds it', () => {
+  it('with no list, a subscription with headroom wins; an API account is listed with its billing but never picked', () => {
     const report = buildClaudeProfilesReport([buildView('default', { usage: buildUsage(80) }), apiView()], null, nowMs);
     assert.equal(report.recommended, 'default');
     const api = report.profiles.find((entry) => entry.name === 'console');
@@ -121,7 +123,7 @@ describe('ranking: an API account is never picked for a new agent', () => {
     assert.equal(api?.headroomPercent, null, 'no windows, no headroom figure');
   });
 
-  it('even with every subscription limited, the advice is none rather than the metered account', () => {
+  it('with no list, even with every subscription limited, the advice is none rather than the metered account', () => {
     const report = buildClaudeProfilesReport([buildView('default', { limitedUntil: inHours(5) }), apiView()], 'fable', nowMs);
     assert.equal(report.recommended, null);
   });
@@ -130,6 +132,38 @@ describe('ranking: an API account is never picked for a new agent', () => {
     const report = buildClaudeProfilesReport([apiView({ creditExhaustedAt: inHours(-1) })], null, nowMs);
     assert.equal(report.profiles[0].isEligible, false);
     assert.equal(report.profiles[0].creditExhaustedAt, inHours(-1));
+  });
+
+  it('with the account in the list it is recommended FIRST — before a subscription that resets sooner — and the report says so', () => {
+    const chainScope = getClaudeLaunchChainScope([claudeRung('default'), claudeRung('console')]);
+    const report = buildClaudeProfilesCreditReport([buildView('default', { usage: buildUsage(10) }), apiView()], null, nowMs, { chainScope });
+    assert.equal(report.recommended, 'console');
+    assert.equal(report.pickReason, 'apiCreditFirst');
+    assert.deepEqual(report.profiles.map((entry) => [entry.name, entry.isRecommended, entry.chainExclusion]), [['default', false, null], ['console', true, null]]);
+  });
+
+  it('the draft\'s left-out API rung keeps agents off the account; the operator including the rung opens it', () => {
+    const detection = buildDetection([buildView('default'), apiView()]);
+    const drafted = getClaudeLaunchChainScope(proposeFallbackChain(detection));
+    const views = detection.claudeProfiles;
+    assert.equal(getClaudeLaunchPick({ profiles: views, model: null, nowMs, chainScope: drafted }).pick, 'default');
+    assert.deepEqual(buildClaudeProfilesReport(views, null, nowMs, { chainScope: drafted }).profiles.map((entry) => entry.chainExclusion), [null, 'switchedOff']);
+    const included = getClaudeLaunchChainScope(proposeFallbackChain(detection, [claudeRung('default'), claudeRung('console')]));
+    assert.equal(getClaudeLaunchPick({ profiles: views, model: null, nowMs, chainScope: included }).pick, 'console');
+  });
+
+  it('a stop reported for an API account marks its balance used up once; any other stop, or none, marks nothing', () => {
+    const views = [buildView('default'), apiView()];
+    assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'console', isStoppedByLimit: true }), 'console');
+    assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'console', isStoppedByLimit: false }), null, 'a plain resume is no stop');
+    assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'default', isStoppedByLimit: true }), null, 'a subscription has windows and its own limit handling');
+    assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: null, isStoppedByLimit: true }), null);
+    assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'gone', isStoppedByLimit: true }), null, 'an unknown account is nothing to mark');
+    assert.equal(getApiProfileStoppedByAgent([buildView('default'), apiView({ creditExhaustedAt: inHours(-1) })], { currentProfile: 'console', isStoppedByLimit: true }), null, 'already marked');
+    // The marked account is then skipped by a NEW worker too — the point of the mark.
+    const marked = [buildView('default'), apiView({ creditExhaustedAt: new Date(nowMs).toISOString() })];
+    const chainScope = getClaudeLaunchChainScope([claudeRung('console'), claudeRung('default')]);
+    assert.equal(getClaudeLaunchPick({ profiles: marked, model: null, nowMs, chainScope }).pick, 'default');
   });
 
   it('the within-Claude switch never offers an API account, whatever figures it carries', () => {
@@ -154,6 +188,13 @@ describe('the fallback chain', () => {
     assert.deepEqual(pickEarliestResetRung({ chain: [claudeRung('default'), ...chain], current: claudeRung('console'), detection, nowMs }), {
       entry: claudeRung('work'), untilMs: Date.parse(inHours(5)), isCurrent: false,
     });
+  });
+
+  it('an API rung the operator put in the list is a rung like any: a limit moves a topic onto it (nothing refuses it or marks it 🚫)', () => {
+    const detection = buildDetection([buildView('default', { limitedUntil: inHours(5) }), apiView()]);
+    const chain = [claudeRung('default'), claudeRung('console')];
+    assert.deepEqual(pickFallbackCandidates({ chain, current: claudeRung('default'), detection, nowMs }), [claudeRung('console')]);
+    assert.deepEqual(pickFallbackCandidates({ chain: [claudeRung('default'), { ...claudeRung('console'), disabled: true }], current: claudeRung('default'), detection, nowMs }), [], 'only a rung the operator left out (the draft\'s default for an API account) is refused');
   });
 
   it('the draft lists API accounts LAST — after OpenCode — and left out of automatic switching', () => {
@@ -235,12 +276,14 @@ describe('what the screens say', () => {
     assert.deepEqual(lines, ['Account: default · me@example.com · 💸 credits used up']);
   });
 
-  it('`charness claude-profiles` says the account pays per use and is never picked for a new agent', () => {
+  it('`charness claude-profiles` says the account pays per use and is offered to agents only when the /limits list holds it', () => {
     const report = buildClaudeProfilesCreditReport([apiView({ creditExhaustedAt: inHours(-1) })], null, nowMs);
     assert.equal(
       formatClaudeProfileCliLine(report.profiles[0], nowMs),
-      '✗ console  /home/user/.charness/claude-profiles/console  console@example.com API billing (pay per use, never picked for a new agent)  no windows  CREDITS PROBABLY USED UP',
+      '✗ console  /home/user/.charness/claude-profiles/console  console@example.com API billing (pay per use; offered to agents only when the /limits list holds it)  no windows  CREDITS PROBABLY USED UP',
     );
+    const unlisted = buildClaudeProfilesCreditReport([apiView()], null, nowMs, { chainScope: getClaudeLaunchChainScope([claudeRung('default')]) });
+    assert.match(formatClaudeProfileCliLine(unlisted.profiles[0], nowMs), /no windows {2}NOT OFFERED: not in the \/limits list$/);
   });
 });
 

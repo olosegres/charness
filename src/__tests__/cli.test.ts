@@ -124,7 +124,7 @@ const inHours = (hours: number): string => new Date(Math.floor((Date.now() + hou
 const usageBucket = (kind: string, percent: number, resetsAt: string, scopeModel: string | null = null) => ({ kind, percent, resetsAt, scopeModel });
 
 /** A `state.json` with the two profiles' usage snapshots (and the fallback chain, when given). */
-function writeProfilesState(profiles: { default: unknown[]; work: unknown[] }, fallbackChain: unknown[] = []): void {
+function writeProfilesState(profiles: { default: unknown[]; work: unknown[] }, fallbackChain: unknown[] = [], extraRecords: Record<string, unknown> = {}): void {
   const record = (createdAt: string, email: string, subscriptionType: string, buckets: unknown[]) => ({
     createdAt, loggedIn: true, email, subscriptionType, usage: { fetchedAt: new Date().toISOString(), source: 'api', buckets },
   });
@@ -132,6 +132,7 @@ function writeProfilesState(profiles: { default: unknown[]; work: unknown[] }, f
     claudeProfiles: {
       default: record('2026-10-01T00:00:00.000Z', 'me@example.com', 'max', profiles.default),
       work: record('2026-10-02T00:00:00.000Z', 'w@example.com', 'pro', profiles.work),
+      ...extraRecords,
     },
     fallbackChain,
   }));
@@ -222,7 +223,46 @@ test('claude-profiles with nothing usable: --best exits 1 and names the account 
   );
   const switchedOff = runCli(['claude-profiles', '--best']);
   assert.equal(switchedOff.stdout, `${path.join(tmpRoot, 'claude-profiles', 'work')}\n`, '«default» resets first, but the operator switched it off');
-  assert.equal(runCli(['claude-profiles', '--best', '--current', 'default']).stdout, '\n', 'a session already on it stays');
+  assert.equal(
+    runCli(['claude-profiles', '--best', '--current', 'default']).stdout,
+    `${path.join(tmpRoot, 'claude-profiles', 'work')}\n`,
+    'a session already on it moves: an account switched off in the list is not one an agent may be pointed at',
+  );
+});
+
+test('claude-profiles follows the /limits list: an API account it holds goes first, an account it leaves out is never offered and says so', () => {
+  const apiRecord = { createdAt: '2026-10-03T00:00:00.000Z', loggedIn: true, email: 'api@example.com', billing: 'api' };
+  const buckets = {
+    default: [usageBucket('session', 10, inHours(1)), usageBucket('weekly_all', 10, inHours(24))],
+    work: [usageBucket('session', 10, inHours(1)), usageBucket('weekly_all', 10, inHours(120))],
+  };
+  const workDir = path.join(tmpRoot, 'claude-profiles', 'work');
+  const consoleDir = path.join(tmpRoot, 'claude-profiles', 'console');
+  // No list: the API account is never offered, the subscriptions rank by the soonest weekly reset.
+  writeProfilesState(buckets, [], { console: apiRecord });
+  assert.equal(runCli(['claude-profiles', '--best']).stdout, '\n', 'no list: «default» resets first');
+  assert.match(runCli(['claude-profiles']).stdout, /recommended for any model: default \(soonest weekly reset\)/);
+
+  // The list holds the API account and «work» but not «default».
+  writeProfilesState(buckets, [{ backend: 'claude', profile: 'work', model: null }, { backend: 'claude', profile: 'console', model: null }], { console: apiRecord });
+  const first = runCli(['claude-profiles', '--best']);
+  assert.equal(first.stdout, `${consoleDir}\n`, 'the API account the list holds goes first');
+  const json = JSON.parse(runCli(['claude-profiles', '--json']).stdout) as { recommended: string; pickReason: string; profiles: Array<{ name: string; chainExclusion: string | null; isEligible: boolean }> };
+  assert.equal(json.pickReason, 'apiCreditFirst');
+  assert.deepEqual(json.profiles.map((profile) => [profile.name, profile.chainExclusion, profile.isEligible]), [['default', 'notListed', false], ['work', null, true], ['console', null, true]]);
+  const human = runCli(['claude-profiles']).stdout;
+  assert.match(human, /✗ default .* NOT OFFERED: not in the \/limits list\n/);
+  assert.match(human, /recommended for any model: console \(API credit first, as the \/limits list allows\)/);
+  assert.equal(runCli(['claude-profiles', '--best', '--current', 'default']).stdout, `${consoleDir}\n`, 'a session on an account the list leaves out moves');
+
+  // The API balance is used up: the next eligible account in the list.
+  writeProfilesState(buckets, [{ backend: 'claude', profile: 'work', model: null }, { backend: 'claude', profile: 'console', model: null }], { console: { ...apiRecord, creditExhaustedAt: inHours(-1) } });
+  assert.equal(runCli(['claude-profiles', '--best']).stdout, `${workDir}\n`);
+  // Nothing is offered: the list names «console» only and its balance is out.
+  writeProfilesState(buckets, [{ backend: 'claude', profile: 'console', model: null }], { console: { ...apiRecord, creditExhaustedAt: inHours(-1) } });
+  const none = runCli(['claude-profiles', '--best']);
+  assert.equal(none.status, 1);
+  assert.match(none.stderr, /no usable Claude profile: none usable — no account names a time it frees up \(not offered — not in the \/limits list: default, work\)/);
 });
 
 test('claude-profiles with no state file: default is the only profile, with unknown usage, and is recommended', () => {

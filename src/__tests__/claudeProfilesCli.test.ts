@@ -27,7 +27,7 @@ describe('runClaudeProfilesCli', () => {
     });
     fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({
       claudeProfiles: { default: record(20), work: record(40) },
-      fallbackChain: [{ backend: 'claude', profile: 'default', model: null, disabled: true }],
+      fallbackChain: [{ backend: 'claude', profile: 'default', model: null, disabled: true }, { backend: 'claude', profile: 'work', model: null }],
     }));
   });
 
@@ -52,7 +52,7 @@ describe('runClaudeProfilesCli', () => {
       await runClaudeProfilesCli(argv, { stdout: (text) => out.push(text), stderr: (text) => out.push(text) });
       assert.equal(reads.length, 1, `${argv.join(' ') || '(no flags)'}: ${out.join('')}`);
     }
-    // And the one read feeds both: «default» is switched off in the chain (so «work» is the pick) and both profiles are listed.
+    // And the one read feeds both: «default» is switched off in the chain and «work» is listed (so «work» is the pick) and both profiles are listed.
     const out: string[] = [];
     await runClaudeProfilesCli(['--json'], { stdout: (text) => out.push(text) });
     const report = JSON.parse(out.join('')) as { recommended: string; profiles: Array<{ name: string }> };

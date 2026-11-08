@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**An agent starting a worker now follows your `/limits` list: the accounts in it are the ones it uses — an API-credit account first, the subscriptions after it — and the ones not in it are never offered.**
+Before, `claude_profiles` (and `charness claude-profiles`) never pointed a new worker at an account billed to API credits, so the bonus credit sat unused while the subscriptions burned, and it ignored which accounts you had put into `/limits_autoswitch` (only an account whose every entry was switched off was skipped).
+Now:
+  - Once your `/limits_autoswitch` list holds any Claude account, a worker is only pointed at an account with an enabled entry there — a new one and a resumed one alike; an account the list leaves out, or has only 🚫 entries for, is shown as not offered with the reason (`chainExclusion`, and the first line of the answer), and a worker already on it moves on at its next resume. A list with no Claude entry (empty, or OpenCode only) changes nothing for subscriptions.
+  - An API-credit account in the list goes FIRST, while it is signed in, not limited and its credit is not marked used up; then the subscriptions as before (soonest weekly reset, five-hour window under 90 %). The list's order only ranks several API accounts among themselves. A list drafted by «🔄 Fill from connected» still leaves the API account out (🚫) — «✅ Use» on its entry is what opens it.
+  - A worker stopped by «Credit balance is too low» is reported like a usage limit (`currentProfile` + `isStoppedByLimit`): the bot marks the account's credit as used up, the next pick takes the next account in the list, and the daily credit recheck lifts the mark when the credit is back.
+  - The shipped manager and delegate skills no longer say «never launch on an account billed to API credits unless the user asked»: they take what `claude_profiles` recommends.
+
 **A runner machine no longer needs Node.js: pairing installs the runner its own, so the admin line works on a machine with no shared Node — and every runner now runs its jobs on that Node.**
 Before, the admin line stopped with «no Node.js 22.12+ outside home folders that runner cannot write: install one system-wide…» on a Linux machine whose runner account had no system-wide Node, and a runner that did run on a system or Homebrew Node saw `corepack enable`, `npm i -g` and the installers of package managers fail with permission errors the moment they wrote into that Node's folder.
 Now:

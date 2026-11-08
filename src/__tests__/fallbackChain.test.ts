@@ -39,7 +39,7 @@ import {
   formatFallbackEntryLabel,
   getFallbackChainRevision,
   getFallbackEntryAvailability,
-  getDisabledClaudeProfileNames,
+  getClaudeLaunchChainScope,
   getFallbackSwitchTapDecision,
   listOpenCodeModelsOfProvider,
   listOpenCodeProviders,
@@ -509,8 +509,9 @@ test('a list is mixed when its enabled rungs span both backends', () => {
   assert.equal(checkIsMixedFallbackChain([claude('default'), { ...openCode('openai', 'gpt-5'), disabled: true }]), false, 'a left-out rung never receives a topic');
 });
 
-test('the accounts switched off are those whose every Claude rung is left out — an empty list or an unlisted account switches nobody off', () => {
-  assert.deepEqual([...getDisabledClaudeProfileNames([])], [], 'an empty list: the implicit chain, nobody is switched off');
+test('the list tells agents which Claude accounts are open: those with an enabled rung — none named, nothing restricted', () => {
+  assert.equal(getClaudeLaunchChainScope([]), null, 'an empty list: the implicit chain, nothing is restricted');
+  assert.equal(getClaudeLaunchChainScope([openCode('openai', 'gpt-5')]), null, 'a list of OpenCode rungs only names no Claude account');
   const chain: FallbackChainEntry[] = [
     { ...claude('off'), disabled: true },
     { ...claude('partly'), disabled: true },
@@ -518,8 +519,10 @@ test('the accounts switched off are those whose every Claude rung is left out �
     claude('on'),
     { ...openCode('openai', 'gpt-5'), disabled: true },
   ];
-  assert.deepEqual([...getDisabledClaudeProfileNames(chain)], ['off'], 'one enabled rung of the account is enough to keep it in; an OpenCode rung is no Claude account; an account not in the list is not switched off');
-  assert.deepEqual([...getDisabledClaudeProfileNames([{ ...claude('off'), disabled: true }, { ...claude('off', 'opus'), disabled: true }])], ['off']);
+  const scope = getClaudeLaunchChainScope(chain);
+  assert.deepEqual(scope && [[...scope.enabledNames], [...scope.disabledNames]], [['partly', 'on'], ['off']], 'one enabled rung of the account keeps it in (the list\'s order); an OpenCode rung is no Claude account');
+  const allOff = getClaudeLaunchChainScope([{ ...claude('off'), disabled: true }, { ...claude('off', 'opus'), disabled: true }]);
+  assert.deepEqual(allOff && [[...allOff.enabledNames], [...allOff.disabledNames]], [[], ['off']], 'a list that names Claude accounts only switched off restricts to nobody');
 });
 
 test('the confirmation buttons of the new-backend question bake the list revision (toggle also its index) and round-trip', () => {

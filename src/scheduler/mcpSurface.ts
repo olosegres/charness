@@ -16,7 +16,7 @@ import { openCodeAdapterName } from '../adapters/adapterNames';
 import { keyFromString, tryKeyFromString, type PlatformId, type SessionKey } from '../sessionKey';
 import { checkIsBotSkillsEnabled } from '../utils/botSkills';
 import { claudeProfileNameMaxLength } from '../utils/claudeProfiles';
-import { describeClaudeLaunchOutcome, type ClaudeProfilesReport } from '../utils/claudeUsage';
+import { describeClaudeChainExclusions, describeClaudeLaunchOutcome, type ClaudeProfilesReport } from '../utils/claudeUsage';
 import type { SendFilesToThread } from '../utils/fileSendService';
 import { formatIsoLocalOffset } from '../utils/isoTimestamp';
 import { formatLocalDateAndClock } from '../utils/localClock';
@@ -1827,10 +1827,12 @@ function registerBotTools(
 /** The first line of the `claude_profiles` answer: the pick with how to launch it and why, or that nothing is usable and when something is. */
 function buildClaudeProfilesVerdict(report: ClaudeProfilesReport, currentProfile: string | null): string {
   const outcome = describeClaudeLaunchOutcome(report, currentProfile);
-  if (report.recommended === null) return outcome;
+  const exclusions = describeClaudeChainExclusions(report);
+  const notOffered = exclusions === null ? '' : ` [${exclusions}]`;
+  if (report.recommended === null) return `${outcome}${notOffered}`;
   const dir = report.profiles.find((profile) => profile.name === report.recommended)?.configDir ?? null;
   const launch = dir === null ? 'default profile, set no CLAUDE_CONFIG_DIR' : `CLAUDE_CONFIG_DIR=${dir}`;
-  return `recommended: ${report.recommended} → ${launch} (${outcome})`;
+  return `recommended: ${report.recommended} → ${launch} (${outcome})${notOffered}`;
 }
 
 /**
@@ -1849,15 +1851,18 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
         'the model you pass should run on. A NEW agent (omit `currentProfile`) goes to the usable account whose weekly ' +
         'limit resets SOONEST — what burns soonest is spent first; an account whose five-hour window is at 90 % or more ' +
         'is skipped until it resets. A session you RESUME (pass `currentProfile`, the profile it last ran on) stays on ' +
-        'it unless that account is signed out, limited or at 100 % on a window the model drains; when it broke off on a ' +
+        'it unless that account is signed out, limited, out of the list or at 100 % on a window the model drains; when it broke off on a ' +
         'usage limit pass `isStoppedByLimit: true` and resume the SAME session at once on the answer. The session ' +
         'window and the shared weekly window bound every model, Fable included; Fable also drains its own weekly ' +
-        'window; signed-out, limited and operator-switched-off accounts are skipped. An account with `billing: "api"` ' +
-        'pays per request from a Claude Console balance: it has no windows and is NEVER picked for a new agent — do ' +
-        'not launch a child on it unless the operator asked you to; its entry also carries the bot\'s own estimate of its API credit — ' +
-        '`spentUsd` through the bot in the current credit period, `remainingEstimateUsd` and `expiresOn` when the operator gave a ' +
-        'Console figure (null otherwise; `expiresOn` stays null after a renewal), `probablyUsedUp` after a refusal for the balance ' +
-        '(the bot cannot be sure; it rechecks daily) and `renewedAt` once it saw the credit come back — never the Console balance. ' +
+        'window; signed-out and limited accounts are skipped. `recommended` follows the operator\'s /limits auto-switch list: ' +
+        'once it names a Claude account, only accounts with an enabled rung there are offered (the others show `chainExclusion`, ' +
+        'also for a session you resume) — take the one `recommended` names, an `api`-billed one included (a Claude Console ' +
+        'balance, no windows): it comes FIRST while its credit lasts. Its entry also carries the bot\'s own estimate of its API ' +
+        'credit — `spentUsd` through the bot in the current credit period, `remainingEstimateUsd` and `expiresOn` when the ' +
+        'operator gave a Console figure (null otherwise; `expiresOn` stays null after a renewal), `probablyUsedUp` after a refusal ' +
+        'for the balance (the bot cannot be sure; it rechecks daily) and `renewedAt` once it saw the credit come back — never the ' +
+        'Console balance. A run stopped by "Credit balance is too low" is reported like a usage limit (`currentProfile` + ' +
+        '`isStoppedByLimit: true`). ' +
         '`recommended: null` means nothing is usable now: ' +
         '`nextAvailable` names the account and instant that frees up first — schedule ONE resume at that time instead ' +
         'of retrying; when `nextAvailable` is null too, tell the user and retry once in about 30 minutes. Call it BEFORE launching or resuming a child `claude` and start the child with ' +

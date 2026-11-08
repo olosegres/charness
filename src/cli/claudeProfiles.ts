@@ -1,8 +1,8 @@
 /**
  * @description `charness claude-profiles [--best] [--model <name>] [--current <name> [--stopped-by-limit]] [--json]` — the
  * command-line twin of the `claude_profiles` MCP tool, for a worker that has no MCP (a shell script, a child started by
- * hand): which Claude account profile a process should run on — a new one goes to the account whose weekly limit resets
- * soonest. It reads the bot's cache off `DATA_DIR/state.json` (`utils/claudeUsage.ts`; the bot polls every profile's usage
+ * hand): which Claude account profile a process should run on — one the `/limits_autoswitch` list holds; a new one goes to
+ * an API-credit account of the list first, then to the account whose weekly limit resets soonest. It reads the bot's cache off `DATA_DIR/state.json` (`utils/claudeUsage.ts`; the bot polls every profile's usage
  * on a timer, so the figures are at most a poll old) and never opens the `StateStore` (that would migrate and lock a live
  * bot's file) nor the network — so `--stopped-by-limit` can only leave the account out, not re-read its usage.
  *
@@ -26,11 +26,13 @@ import { readFlagValue } from './flagValue';
 import { runClaudeProfilesCreditCli } from './claudeProfilesCredit';
 import { resolveDataDir } from '../state';
 import { readStateFileObject } from '../stateFile';
-import { getDisabledClaudeProfileNames, normaliseFallbackChain } from '../utils/fallbackChain';
+import { getClaudeLaunchChainScope, normaliseFallbackChain } from '../utils/fallbackChain';
 import { formatUsd } from '../utils/claudeApiSpend';
 import { readClaudeApiCreditAnchors } from '../utils/claudeApiCredit';
 import { buildClaudeProfilesCreditReport, buildClaudeProfileUsageViews } from '../utils/claudeProfileUsageViews';
 import {
+  claudeChainExclusionWords,
+  describeClaudeChainExclusions,
   describeClaudeLaunchOutcome,
   formatClaudeUsageBucket,
   getClaudeProfileRecordsFromState,
@@ -100,7 +102,7 @@ export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowM
   const account = entry.loggedIn === false
     ? 'not signed in'
     : isApi
-      ? `${entry.email ?? 'API key'} API billing (pay per use, never picked for a new agent)`
+      ? `${entry.email ?? 'API key'} API billing (pay per use; offered to agents only when the /limits list holds it)`
       : entry.loggedIn === null && entry.email === null
         ? 'not probed yet (open /account once)'
         : `${entry.email ?? '?'} ${entry.kind} ${entry.subscriptionType ?? '?'}`;
@@ -114,7 +116,8 @@ export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowM
   // An account billed to API credits has no windows; its limit is the balance.
   const usage = isApi ? `no windows${formatApiCreditParts(entry)}` : formatWindows();
   const limited = entry.limitedUntil && Date.parse(entry.limitedUntil) > nowMs ? `  LIMITED until ${entry.limitedUntil}` : '';
-  return `${marker} ${entry.name}  ${entry.configDir ?? '(default: no CLAUDE_CONFIG_DIR)'}  ${account}  ${usage}${limited}`;
+  const notOffered = entry.chainExclusion === null ? '' : `  NOT OFFERED: ${claudeChainExclusionWords[entry.chainExclusion]}`;
+  return `${marker} ${entry.name}  ${entry.configDir ?? '(default: no CLAUDE_CONFIG_DIR)'}  ${account}  ${usage}${limited}${notOffered}`;
 }
 
 /**
@@ -146,16 +149,17 @@ export async function runClaudeProfilesCli(
   const report = buildClaudeProfilesCreditReport(buildClaudeProfileUsageViews({ dataDir, records, creditAnchors: readClaudeApiCreditAnchors(dataDir) }), args.model, nowMs, {
     currentProfile: args.currentProfile,
     isStoppedByLimit: args.isStoppedByLimit,
-    excludedNames: getDisabledClaudeProfileNames(normaliseFallbackChain(stateFile.fallbackChain)),
+    chainScope: getClaudeLaunchChainScope(normaliseFallbackChain(stateFile.fallbackChain)),
   });
   const outcome = describeClaudeLaunchOutcome(report, args.currentProfile);
+  const exclusions = describeClaudeChainExclusions(report);
   if (args.isJson) {
     stdout(`${JSON.stringify(report, null, 2)}\n`);
     return report.recommended === null && args.isBest ? 1 : 0;
   }
   if (args.isBest) {
     if (report.recommended === null) {
-      stderr(`no usable Claude profile: ${outcome}\n`);
+      stderr(`no usable Claude profile: ${outcome}${exclusions === null ? '' : ` (${exclusions})`}\n`);
       return 1;
     }
     const entry = report.profiles.find((profile) => profile.name === report.recommended);

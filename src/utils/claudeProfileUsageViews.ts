@@ -117,3 +117,18 @@ export function buildClaudeProfilesCreditReport(
 ): ClaudeProfilesReport {
   return addClaudeApiCreditToReport(buildClaudeProfilesReport(views, model, nowMs, options), views, nowMs);
 }
+
+/**
+ * @description The API account a resumed agent's stop means the used-up credit of: the stop (`isStoppedByLimit`) came from an
+ * account billed to API credits, which has no window to hit — its limit is the balance — and is not marked yet. `null` for any
+ * other stop, or without one. The bot marks it (`creditExhaustedAt`) so the next pick moves on instead of sending every new
+ * worker to the refused balance; the daily credit recheck ends a mark that turns out wrong.
+ */
+export function getApiProfileStoppedByAgent(
+  views: readonly ClaudeProfileUsageView[],
+  query: { currentProfile: string | null; isStoppedByLimit: boolean },
+): string | null {
+  if (!query.isStoppedByLimit || query.currentProfile === null) return null;
+  const stopped = views.find((view) => view.name === query.currentProfile);
+  return stopped !== undefined && stopped.billing === 'api' && stopped.creditExhaustedAt === null ? stopped.name : null;
+}

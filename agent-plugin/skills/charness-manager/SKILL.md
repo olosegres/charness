@@ -121,8 +121,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 ## Accounts and usage limits
 
 - Before every Claude worker launch call `claude_profiles` with the worker's model and start the worker with
-  `CLAUDE_CONFIG_DIR=<configDir>` of `recommended` (nothing when it is null). A new worker goes to the account whose
-  weekly limit resets soonest. Never launch on an account billed to API credits unless the user asked.
+  `CLAUDE_CONFIG_DIR=<configDir>` of `recommended` (nothing when it is null). Take the account it names without
+  asking — it follows the operator's /limits auto-switch list (an API-credit account first, then the soonest weekly reset).
 - Record the profile name beside the worker's session id. Every resume calls `claude_profiles` with
   `currentProfile` = that name, so a warm worker stays on its account.
 - A worker stopped by a usage limit resumes its SAME session at once, never a fresh worker (which would redo the

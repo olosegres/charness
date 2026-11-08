@@ -12,13 +12,14 @@
  * (`StateStore.getFallbackChain`), the detection and the switch itself in `bot.ts`, the `/limits` screen in
  * `connectors/telegram/commands/fallbackChain.ts`. The within-Claude ranking by the soonest weekly reset
  * (`claudeLimitSwitch.ts`) is what an EMPTY chain falls back to, so a bot without a configured chain still moves a
- * topic to another account on a limit.
+ * topic to another account on a limit. The same list tells AGENTS which Claude accounts they may be pointed at
+ * (`getClaudeLaunchChainScope`).
  *
  * No I/O, no `Date.now()`: the caller passes the clock and the detection views, so every rule is unit-tested.
  */
 
 import { checkIsValidClaudeProfileName, defaultClaudeProfileName } from './claudeProfiles';
-import { buildClaudeProfilesReport, formatClaudeUsageResetAt, getClaudeUsageBucket, getRelevantClaudeUsageKinds, type ClaudeProfileUsageView } from './claudeUsage';
+import { buildClaudeProfilesReport, formatClaudeUsageResetAt, getClaudeUsageBucket, getRelevantClaudeUsageKinds, type ClaudeLaunchChainScope, type ClaudeProfileUsageView } from './claudeUsage';
 
 /**
  * One rung of the chain. A Claude entry with `model: null` keeps the topic's own model. `disabled: true`
@@ -189,19 +190,22 @@ export function checkIsFallbackEntryDisabled(entry: FallbackChainEntry): boolean
 }
 
 /**
- * @description The Claude accounts the operator switched off: every rung of the account is excluded from automatic
- * switching. An account with no rung at all is not among them — and an empty chain switches nobody off — so the launch
- * pick (`getClaudeLaunchPick`) leaves out only what the operator explicitly turned off.
+ * @description What the list says about the Claude accounts AGENTS may be pointed at (`claude_profiles`, `charness
+ * claude-profiles`, `getClaudeLaunchPick`): the operator's «auto-switch accounts are the ones to use». An account with at least one
+ * ENABLED Claude rung is in; one the list names only with switched-off rungs (🚫) is out, and so is one it does not name at all,
+ * as soon as it names any Claude account. `null` when it names none — an empty list, or one of OpenCode rungs only (the implicit
+ * chain): nothing is restricted then and every signed-in subscription account stays open. Enabled accounts keep the list's order.
  */
-export function getDisabledClaudeProfileNames(chain: readonly FallbackChainEntry[]): Set<string> {
-  const listedProfiles = new Set<string>();
-  const enabledProfiles = new Set<string>();
+export function getClaudeLaunchChainScope(chain: readonly FallbackChainEntry[]): ClaudeLaunchChainScope | null {
+  const enabledNames = new Set<string>();
+  const listedNames = new Set<string>();
   for (const rung of chain) {
     if (rung.backend !== 'claude') continue;
-    listedProfiles.add(rung.profile);
-    if (!checkIsFallbackEntryDisabled(rung)) enabledProfiles.add(rung.profile);
+    listedNames.add(rung.profile);
+    if (!checkIsFallbackEntryDisabled(rung)) enabledNames.add(rung.profile);
   }
-  return new Set([...listedProfiles].filter((profile) => !enabledProfiles.has(profile)));
+  if (listedNames.size === 0) return null;
+  return { enabledNames, disabledNames: new Set([...listedNames].filter((name) => !enabledNames.has(name))) };
 }
 
 /** Flip the rung at `index` between included and excluded (a NEW chain). */
@@ -316,7 +320,8 @@ export function pickPreferredOpenCodeModel(models: readonly string[], providerId
  * registry order (each keeping the topic's model), then OpenCode — the recently picked models that are still
  * in the catalog, then every other provider's preferred model — and LAST the Claude accounts billed to API credits,
  * left out of automatic switching (🚫): with no windows they never look exhausted, so an automatic switch onto one
- * would spend money unasked; the operator moves a topic there by hand, or includes the rung. Only what is actually
+ * would spend money unasked; the operator moves a topic there by hand, or includes the rung (which also opens the account to
+ * agents: `getClaudeLaunchChainScope`). Only what is actually
  * available is proposed; a profile never probed counts as signed in (the CLI reports a signed-out one as `false`).
  */
 export function proposeFallbackChain(detection: FallbackDetection, previous: readonly FallbackChainEntry[] = []): FallbackChainEntry[] {

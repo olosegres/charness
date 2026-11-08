@@ -12,7 +12,7 @@ A worker is `claude -p`: one turn per process, the conversation kept between run
 
 - New worker: call `claude_profiles` with the worker's model and no `currentProfile`. Start the worker with
   `CLAUDE_CONFIG_DIR=<configDir>` of the `recommended` profile (nothing when its `configDir` is null); without it
-  the worker drains YOUR account. The bot picks the account whose weekly limit resets soonest.
+  the worker drains YOUR account. The bot picks it from the operator's /limits auto-switch list: take it without asking.
 - `recommended: null`: no account is usable now. Do not launch; `schedule_create` with `onceAt` = `nextAvailable.at`
   and a prompt that stands on its own (plan path, scope, what to launch), then end the turn. If `nextAvailable` is
   null too, no account names a time it frees up: ask the user a native question (nothing can run, no time known) and
@@ -76,7 +76,7 @@ echo $! > "<run-dir>/pid"
 - Keep the model, effort and flags of the first run.
 - The account: call `claude_profiles` with `currentProfile` = the profile name recorded at launch; the worker stays on
   it unless it can no longer run. Launch under the `recommended` profile's `configDir`, record that name.
-- A run rejected on a usage limit ("You've hit your session limit"): call `claude_profiles` with `currentProfile` and
+- A run rejected on a usage limit ("You've hit your session limit", "Credit balance is too low"): call `claude_profiles` with `currentProfile` and
   `isStoppedByLimit: true`, and resume the SAME session at once under the `recommended` profile — never wait while an
   account is usable. `recommended: null` → `schedule_create` with `onceAt` = `nextAvailable.at` and a prompt that
   stands on its own (resume this session, call `claude_profiles` again); `nextAvailable` null too → ask the user a
