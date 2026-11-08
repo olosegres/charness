@@ -42,6 +42,7 @@
 #   measure-copies  write down how big each project copy is (p/<slug>/size-kb); the probe of a view of the runners starts it detached, and `prepare` when the disk is short; it is never called by hand
 #   ios-device   `ios-device <work> <slug>`: a job's own Simulator device (create or reuse `charness-<slug>`, boot it); run BY the job as a step, never called by hand
 #   ios-device-shutdown  `ios-device-shutdown <work> <slug> <udid>`: shut that device down (the step at the end of a job); never called by hand
+#   sweep-tmpdirs  remove the files of the TMPDIRs of idle project copies (`<work>/t/<n>`) that were not modified for tmpdir_keep_days; `prepare` starts it detached at most every tmpdir_sweep_interval_hours; never called by hand
 #   sync-tree    the apply step alone (tests)
 
 # The script's own tools (sort, sed, grep) run in the C locale: byte-wise and the same everywhere. The user's commands do NOT — see job_locale.
@@ -119,6 +120,10 @@ error_line_pattern='error|fatal|fail|exception|cannot|couldn|not found|no such|d
 # unix-socket path at 104 bytes) and — for a job that needs iOS — its own Simulator device. The numbers are handed out under `tmp/index.lock` (a short hold; one that cannot be had in index_lock_wait_sec is
 # said and the job runs without the three).
 max_copy_indexes=100
+# The system sweeps its own TMPDIR (macOS the files not touched for 3 days, a Linux tmpfs on reboot); the TMPDIR of a project copy it does not. Metro's and Jest's caches and every tool's leftovers land there, so the files of
+# it that were not modified for tmpdir_keep_days go while no job of the copy runs (`sweep_idle_tmpdirs`), looked at every tmpdir_sweep_interval_hours at most.
+tmpdir_keep_days=3
+tmpdir_sweep_interval_hours=6
 port_base_start=20000
 port_block_size=100
 index_lock_wait_sec=30
@@ -886,6 +891,7 @@ cmd_prepare() {
   trap '' PIPE
   prune_work "$work" "$slug"
   trap - PIPE
+  start_tmpdir_sweep_if_due "$work"
   # A prune that ran at the same moment may have taken the folder this job was just given (its copy looked unused): say so, never answer with a folder that is gone.
   [ -d "$jd" ] || die "the project copy was being removed while this job was prepared — submit again"
   # Only a refusal needs fresh sizes (it names the biggest copies; the walk is started before it, so that the next submit has them): a submit that goes on does not start a walk over its neighbours' trees.
@@ -913,11 +919,31 @@ check_job_dir_ended() {
   [ -n "$recorded_pid" ] && ! check_runner_pid_alive "$recorded_pid"
 }
 
+# Ask Pueue about the task $1 of job $2: sets job_task_state to `present` (it holds a task with that number and the job's label), `done` (that task has finished) or `absent`. Fails - and sets nothing - when Pueue does not answer
+# or answers with something that is not its task list: only an ANSWER may say that a task is gone.
+read_job_task_state() {
+  local reply
+  job_task_state=
+  reply=$(pq status --json "label=rr-$2" < /dev/null 2> /dev/null) || return 1
+  case $reply in
+    *'"tasks"'*) ;;
+    *) return 1 ;;
+  esac
+  if ! printf '%s\n' "$reply" | grep -Eq "\"$1\": ?\{ ?\"id\": ?$1[,}]"; then
+    job_task_state=absent
+  elif printf '%s\n' "$reply" | grep -Eq '"status": ?\{ ?"Done"'; then
+    job_task_state=done
+  else
+    job_task_state=present
+  fi
+  return 0
+}
+
 # Is Pueue's task number $1 the task of job $2? Pueue hands a number it has freed (a task that was removed, or cleaned) to the next task
-# added, and `pueue wait` / `pueue remove` of a number act on whoever holds it — so a job's recorded number is only good while the task
-# under it carries the job's own label. The label filter is Pueue's (`status --json label=…`: an exact match), the answer the task's id.
+# added - after a `reset` it counts from 0 again - and `pueue wait` / `pueue remove` / `pueue kill` of a number act on whoever holds it: so a job's recorded number is only good while the task
+# under it carries the job's own label. The label filter is Pueue's (`status --json label=…`: an exact match), the answer the task's id. A Pueue that does not answer confirms nothing.
 check_task_belongs_to_job() {
-  pq status --json "label=rr-$2" 2> /dev/null | grep -Eq "\"$1\": ?\{ ?\"id\": ?$1[,}]"
+  read_job_task_state "$1" "$2" && [ "$job_task_state" != absent ]
 }
 
 # Remove: jobs older than the keep time (and their Pueue tasks), leftover stage dirs, project copies unused for long. $3 = `skip`: when another prune is at the copy-removal step,
@@ -948,6 +974,8 @@ prune_work() {
   begin_copy_removal "$work_dir" "$when_busy" || return 0
   remove_leftover_trash "$work_dir"
   prune_idle_copies "$work_dir" "$keep_slug"
+  # A short disk gives up the stale files of the TMPDIRs before it gives up a copy.
+  check_disk_is_short "$work_dir" && sweep_idle_tmpdirs "$work_dir"
   prune_copies_for_space "$work_dir" "$keep_slug"
   end_copy_removal "$work_dir"
 }
@@ -1314,6 +1342,16 @@ read_copy_size_kb() {
       [ "$3" = written ] && return 1
       size_kb=$(du -sk "$1/p/$2" 2> /dev/null | awk '{ print $1 }')
       case $size_kb in '' | *[!0-9]*) return 1 ;; esac
+      # The copy's TMPDIR (`t/<n>`, outside the copy's folder) belongs to its figure: it is removed with the copy, and it is where a copy in daily use piles up caches.
+      local tmp_number tmp_kb
+      tmp_number=$(read_file "$1/p/$2/index")
+      case $tmp_number in
+        '' | *[!0-9]*) ;;
+        *)
+          tmp_kb=$(du -sk "$1/t/$((10#$tmp_number))" 2> /dev/null | awk '{ print $1 }')
+          case $tmp_kb in '' | *[!0-9]*) ;; *) size_kb=$((size_kb + tmp_kb)) ;; esac
+          ;;
+      esac
       { printf '%s\n' "$size_kb" > "$size_file.tmp.$$" && mv "$size_file.tmp.$$" "$size_file"; } 2> /dev/null
       ;;
   esac
@@ -1604,6 +1642,9 @@ cmd_ios_device() {
 # `ios-device-shutdown <work> <slug> <udid>`: shut that device down — the step at the end of a job (frees its memory for the next one; never `erase`: the app installed on it is what the next job reuses). Bounded.
 # A device that is shut down already is no failure.
 cmd_ios_device_shutdown() {
+  # Deaf to TERM, INT and HUP: this step is what a kill waits for (the device must be shut down after a kill), and a kill that reads the job's phase and sends TERM to the group is check-then-act - the job can enter this phase
+  # in between, and a second kill (the lease watcher's, an agent's retry) arrives while it runs. `run_bounded` still SIGKILLs a `simctl` that hangs; an ignored signal stays ignored in what is exec'd from here.
+  trap '' TERM INT HUP
   set_paths "$1" "$2" ""
   local udid=${3:-}
   if ! check_is_udid "$udid"; then
@@ -1743,36 +1784,17 @@ check_project_has_unended_job() {
   return 1
 }
 
-# Ask Pueue about the task $1 of job $2: sets job_task_state to `present` (it holds a task with that number and the job's label), `done` (that task has finished) or `absent`. Fails - and sets nothing - when Pueue does not answer
-# or answers with something that is not its task list: only an ANSWER may say that a task is gone.
-read_job_task_state() {
-  local reply
-  job_task_state=
-  reply=$(pq status --json "label=rr-$2" < /dev/null 2> /dev/null) || return 1
-  case $reply in
-    *'"tasks"'*) ;;
-    *) return 1 ;;
-  esac
-  if ! printf '%s\n' "$reply" | grep -Eq "\"$1\": ?\{ ?\"id\": ?$1[,}]"; then
-    job_task_state=absent
-  elif printf '%s\n' "$reply" | grep -Eq '"status": ?\{ ?"Done"'; then
-    job_task_state=done
-  else
-    job_task_state=present
-  fi
-  return 0
-}
-
 # End the job in folder $2 of project copy $1 as one that never ran: its Pueue task is gone (the queue was reset by a hub removal or an unpair, a state file was lost). It reads as killed (137) with a line in its log, and its
 # stash mark goes, so that it stops counting as under way and no later job of the project waits for it for ever.
 end_lost_job() {
   printf 'remote-run: the Pueue task of this job is gone (the queue was reset, or Pueue lost it), so it did not run\n' >> "$2/log"
-  touch "$2/task-removed" "$2/killed"
+  touch "$2/task-removed"
+  [ -f "$2/timeout" ] || touch "$2/killed"
   ( jd=$2; proj=$1; stage="$1/stage/$(basename "$2")"; finish_killed_job )
 }
 
 # End every job of the project copy in folder $1 that waits for a Pueue task Pueue does not have: a job with a task number, no result and no process (it never started) whose task is absent from Pueue's answer, or is
-# done there. A Pueue that does not answer ends nothing. The scheduling mutex must be held.
+# done there. A Pueue that does not answer ends nothing, and the answer is 1 (a caller then judges nothing either). Pueue is asked once per such job and not at all when the project has none. The scheduling mutex must be held.
 end_lost_jobs_of_project() {
   local job_dir task
   for job_dir in "$1"/jobs/*/; do
@@ -1782,7 +1804,7 @@ end_lost_jobs_of_project() {
     [ -f "$job_dir/pid" ] && continue
     task=$(read_file "$job_dir/task-id")
     case $task in '' | *[!0-9]*) continue ;; esac
-    read_job_task_state "$task" "$(basename "$job_dir")" || return 0
+    read_job_task_state "$task" "$(basename "$job_dir")" || return 1
     case $job_task_state in
       absent | done) end_lost_job "$1" "$job_dir" ;;
     esac
@@ -1790,16 +1812,14 @@ end_lost_jobs_of_project() {
   return 0
 }
 
-# Enqueue (`pueue enqueue`) the oldest stashed job of the project copy in folder $1 - if no other job of the copy is under way: its predecessor ended (`finish_job`), or died before it could say so (the next `prepare` or `probe`,
-# `enqueue_idle_stashed`; a `wait` on the stashed job). Jobs whose Pueue task is gone are ended first (`end_lost_jobs_of_project`). A stashed job that has a result already (it was killed) only loses its mark. Under the scheduling
-# mutex, so that a job being added at the same moment is either seen here (stashed before this looks) or sees its predecessor ended (and is queued as usual): none is left stashed with nobody to enqueue it. Pueue is asked only
-# when something is stashed, and a Pueue that does not answer judges nothing: marks stay.
+# Settle the waiting jobs of the project copy in folder $1: end the ones whose Pueue task is gone (`end_lost_jobs_of_project`), then enqueue (`pueue enqueue`) the oldest stashed job - if no other job of the copy is under
+# way: its predecessor ended (`finish_job`), or died before it could say so (the next `prepare` or `probe`, `enqueue_idle_stashed`; a `wait` on the stashed job, `kill_job`). A stashed job that has a result already (it was
+# killed) only loses its mark. Under the scheduling mutex, so that a job being added at the same moment is either seen here (stashed before this looks) or sees its predecessor ended (and is queued as usual): none is left
+# stashed with nobody to enqueue it. Pueue is asked only when a job waits for a task (a stashed one always does), and a Pueue that does not answer judges nothing: marks stay.
 enqueue_idle_stashed_of_project() {
   local project_dir=$1 marker job_dir task stashed_marks
   acquire_sched_lock "$project_dir" || return 0
-  stashed_marks=$(ls -1tr "$project_dir"/jobs/*/stashed 2> /dev/null)
-  if [ -n "$stashed_marks" ] && pq status < /dev/null > /dev/null 2>&1; then
-    end_lost_jobs_of_project "$project_dir"
+  if end_lost_jobs_of_project "$project_dir"; then
     stashed_marks=$(ls -1tr "$project_dir"/jobs/*/stashed 2> /dev/null)
     if [ -n "$stashed_marks" ] && ! check_project_has_unended_job "$project_dir" active; then
       while IFS= read -r marker; do
@@ -1825,17 +1845,42 @@ enqueue_idle_stashed_of_project() {
   return 0
 }
 
-# The safety net of the scheduling: every project copy of work dir $1 that has a stashed job gets `enqueue_idle_stashed_of_project` - a job that was SIGKILLed never ran its `finish_job`, so its successor would wait for ever.
-# Run by `prepare` and by `probe` (both are asked often); costs a look at the marks when nothing is stashed.
+# The safety net of the scheduling: every project copy of work dir $1 that has a stashed job, or a job waiting for a Pueue task (no process, no result: queued, or lost), gets `enqueue_idle_stashed_of_project` - a job that was
+# SIGKILLed never ran its `finish_job`, so its successor would wait for ever; a job whose task Pueue lost (a reset) would be under way for ever, in `ls`, in the queued count, and in the way of the copy's removal.
+# Run by `prepare` and by `probe` (both are asked often); costs a look at the job folders when nothing waits.
 enqueue_idle_stashed() {
-  local marker project_dir seen=" "
-  for marker in "$1"/p/*/jobs/*/stashed; do
-    [ -f "$marker" ] || continue
-    project_dir=$(dirname "$(dirname "$(dirname "$marker")")")
+  local job_dir project_dir seen=" "
+  for job_dir in "$1"/p/*/jobs/*/; do
+    [ -d "$job_dir" ] || continue
+    if [ ! -f "$job_dir/stashed" ]; then
+      [ -f "$job_dir/task-id" ] && [ ! -f "$job_dir/exit" ] && [ ! -f "$job_dir/pid" ] || continue
+    fi
+    project_dir=${job_dir%/jobs/*}
     case $seen in *" $project_dir "*) continue ;; esac
     seen="$seen$project_dir "
     enqueue_idle_stashed_of_project "$project_dir"
   done
+  return 0
+}
+
+# Is the job of `$jd` waiting for a Pueue task that Pueue does not have (the queue was reset, a state file was lost)? It has a task number, no process and no result, and Pueue's answer holds no task of that number with
+# the job's label, or one that is done. A Pueue that does not answer says nothing: the job is not judged lost.
+check_own_job_is_lost() {
+  local task
+  [ -f "$jd/exit" ] && return 1
+  [ -f "$jd/pid" ] && return 1
+  task=$(read_file "$jd/task-id")
+  case $task in '' | *[!0-9]*) return 1 ;; esac
+  read_job_task_state "$task" "$job" || return 1
+  [ "$job_task_state" != present ]
+}
+
+# A caller that looks at the job of `$jd` (a `wait`, a `follow`, a lease, a `result`) ends it when Pueue has lost its task - a `pueue wait` on the number would return at once, or follow the stranger that holds the number
+# now for hours, and `result` would show it as queued for ever - and lets the stashed jobs behind a job that never ran go (a job killed in the queue, or ended just now as lost). Cheap: one question to Pueue, for a job that
+# has no process and no result yet.
+end_own_job_if_lost() {
+  check_own_job_is_lost && end_lost_job "$proj" "$jd"
+  if [ -f "$jd/task-removed" ] && [ ! -f "$jd/pid" ]; then enqueue_idle_stashed_of_project "$proj"; fi
   return 0
 }
 
@@ -1895,32 +1940,53 @@ signal_job_group() {
   kill "-$1" -- "-$group_id" 2> /dev/null
 }
 
+# Pueue's own kill of the task `$1` of this job - only while the task under that number carries the job's label. Pueue hands a number it has freed to the next task it adds (after a `reset` it counts from 0 again), so a
+# number written down long ago may be another project's running job: acting on one that was not confirmed would kill a stranger. A Pueue that does not answer confirms nothing.
+kill_pueue_task_of_job() {
+  check_task_belongs_to_job "$1" "$job" || return 1
+  pq kill "$1" > /dev/null 2>&1
+}
+
 # Stop a job: a queued one is removed, a running one gets SIGTERM (its whole group) and, after the grace time, Pueue's own kill of the
 # whole task tree. $1 says why: `timeout` when the caller's own time limit ran out (recorded like the job's own watchdog does it — 124,
-# "timed out" — whichever of the two gets there first), anything else is a kill (137).
+# "timed out" — whichever of the two gets there first), anything else is a kill (137). A job with no process yet is looked up in Pueue by its LABEL first
+# (`read_job_task_state`): its recorded number is acted on only when it is the job's own (`remove`), and a job Pueue has lost (a reset) is ended as one that never ran without a call on the number. The answer is 1 for a job
+# that has no task, 2 when Pueue did not answer (nothing is done then: a number that was not confirmed is never acted on).
 kill_job() {
   local task
   task=$(read_file "$jd/task-id")
   [ -n "$task" ] || return 1
   [ -f "$jd/exit" ] && return 0
+  local has_process=1
+  if [ ! -f "$jd/pid" ]; then
+    has_process=0
+    read_job_task_state "$task" "$job" || return 2
+  fi
   if [ "${1:-}" = timeout ]; then
     touch "$jd/timeout"
   else
     touch "$jd/killed"
   fi
-  if [ ! -f "$jd/pid" ] && pq remove "$task" > /dev/null 2>&1; then
-    # Pueue gives a number it has freed to the next task it is asked to add: from here on `task-id` is a number that may belong to another
-    # job, so nothing may act on it any more (`prune_work` skips such a job's task; waiting is decided by the exit file below).
-    touch "$jd/task-removed"
-    finish_killed_job
-    # A job of the same project that waits stashed behind this one may go now (it is a no-op while another job of the project is under way).
-    enqueue_idle_stashed_of_project "$proj"
-    return 0
+  if [ "$has_process" -eq 0 ]; then
+    if [ "$job_task_state" != present ]; then
+      end_lost_job "$proj" "$jd"
+      enqueue_idle_stashed_of_project "$proj"
+      return 0
+    fi
+    if pq remove "$task" > /dev/null 2>&1; then
+      # Pueue gives a number it has freed to the next task it is asked to add: from here on `task-id` is a number that may belong to another
+      # job, so nothing may act on it any more (`prune_work` skips such a job's task; waiting is decided by the exit file below).
+      touch "$jd/task-removed"
+      finish_killed_job
+      # A job of the same project that waits stashed behind this one may go now (it is a no-op while another job of the project is under way).
+      enqueue_idle_stashed_of_project "$proj"
+      return 0
+    fi
   fi
   # A job that is already shutting its Simulator device down is past its command: there is nothing left to stop, and a TERM to its group would reach the shutdown step (a second kill - the lease watcher's after the caller's,
-  # an agent's retry - must not leave the device booted).
+  # an agent's retry - must not leave the device booted). The step itself ignores TERM as well (`shutdown_job_simulator`): this read is only the quick way out, and the phase may change right after it.
   if [ "$(read_file "$jd/phase")" != simulator-off ]; then
-    signal_job_group TERM || pq kill "$task" > /dev/null 2>&1
+    signal_job_group TERM || kill_pueue_task_of_job "$task"
   fi
   local started=$SECONDS grace_sec=$kill_grace_sec
   while :; do
@@ -1949,8 +2015,8 @@ kill_job() {
 hard_kill_job() {
   trap '' TERM HUP
   finish_killed_job
-  signal_job_group KILL || pq kill "$1" > /dev/null 2>&1
-  pq kill "$1" > /dev/null 2>&1
+  signal_job_group KILL || kill_pueue_task_of_job "$1"
+  kill_pueue_task_of_job "$1"
   return 0
 }
 
@@ -1986,7 +2052,10 @@ cmd_kill() {
     echo "already-ended $(read_file "$jd/exit")"
     return 0
   fi
-  kill_job "${4:-}" || die "no such job: $job"
+  kill_job "${4:-}" || case $? in
+    2) die "Pueue did not answer, so the task of job $job could not be told from another job's: nothing was killed" ;;
+    *) die "no such job: $job" ;;
+  esac
   echo killed
 }
 
@@ -2026,7 +2095,7 @@ stream_log() {
 wait_for_task() {
   [ -f "$jd/exit" ] && return 0
   set -m
-  pq wait "$1" < /dev/null > /dev/null 2>&1 &
+  wait_for_own_task "$1" < /dev/null > /dev/null 2>&1 &
   local waiter_pid=$!
   set +m
   local looks=0
@@ -2043,7 +2112,19 @@ wait_for_task() {
     sleep 0.2
   done
   { wait "$waiter_pid"; } 2> /dev/null
+  # Pueue forgot the task while this waited (a reset ends its wait without a result), or the waiter ended a lost job: say so now, and let the jobs stashed behind it go.
+  end_own_job_if_lost
   return 0
+}
+
+# What the waiter of `wait_for_task` runs, in its process group (so the exit file can cut it, however long a question to Pueue or its wait takes): a job Pueue has lost is ended instead of waited for - a `pueue wait`
+# on its number would follow whoever holds the number now - else Pueue's wait.
+wait_for_own_task() {
+  if check_own_job_is_lost; then
+    end_lost_job "$proj" "$jd"
+    return 0
+  fi
+  pq wait "$1"
 }
 
 # Stream the log of the task until Pueue reports it done.
@@ -2119,6 +2200,7 @@ print_job_facts() {
 cmd_result() {
   set_paths "$1" "$2" "$3"
   [ -d "$jd" ] || die "no such job: $job"
+  end_own_job_if_lost
   print_job_facts
 }
 
@@ -2520,19 +2602,74 @@ remove_finished_tmpdir_removals() {
   return 0
 }
 
-# `$jd/runner-env`: the variables the runner gives every step of this job, one `NAME=VALUE` per line — TMPDIR (made here), REMOTE_RUN_PORT_BASE (the job owns this port and the 99 after it) and, once the job's own Simulator
-# device is booted, REMOTE_RUN_IOS_SIMULATOR_UDID. Empty when the copy has no number. `exec` gets none of them: it takes no lock and may run beside a job of its own copy.
-write_runner_env() {
-  : > "$jd/runner-env"
-  [ -n "$copy_index" ] || return 0
-  local tmp_dir="$work/t/$copy_index"
-  if ! mkdir -p "$tmp_dir" 2> /dev/null; then
-    say "no TMPDIR of its own for this job: $tmp_dir cannot be made"
+# The slug of the project copy that holds number $2 (`p/<slug>/index`) under work dir $1; nothing when no copy does.
+read_slug_of_copy_index() {
+  local index_file recorded owner
+  for index_file in "$1"/p/*/index; do
+    [ -f "$index_file" ] || continue
+    recorded=$(read_file "$index_file")
+    case $recorded in '' | *[!0-9]*) continue ;; esac
+    [ "$((10#$recorded))" -eq "$((10#$2))" ] || continue
+    owner=${index_file%/index}
+    printf '%s\n' "${owner##*/}"
+    return 0
+  done
+  return 0
+}
+
+# Remove, from the TMPDIR of every project copy of work dir $1, the files and links not modified for tmpdir_keep_days, then the empty folders of that age (a chain of them goes a level per run). A copy that is busy (a job
+# runs or waits, results not fetched, ...) is not touched. Going by age keeps a fresh file even if a job is given the copy at that very moment. A TMPDIR no copy holds the number of (its copy was removed) is swept too.
+sweep_idle_tmpdirs() {
+  local work_dir=$1 tmp_dir tmp_number owner_slug
+  for tmp_dir in "$work_dir"/t/*/; do
+    [ -d "$tmp_dir" ] || continue
+    tmp_dir=${tmp_dir%/}
+    tmp_number=${tmp_dir##*/}
+    case $tmp_number in '' | *[!0-9]*) continue ;; esac
+    owner_slug=$(read_slug_of_copy_index "$work_dir" "$tmp_number")
+    if [ -n "$owner_slug" ] && check_copy_is_busy "$work_dir" "$owner_slug"; then
+      continue
+    fi
+    find "$tmp_dir" -mindepth 1 \( -type f -o -type l \) -mtime +"$tmpdir_keep_days" -exec rm -f {} + 2> /dev/null
+    find "$tmp_dir" -mindepth 1 -depth -type d -empty -mtime +"$tmpdir_keep_days" -exec rmdir {} + 2> /dev/null
+  done
+  return 0
+}
+
+cmd_sweep_tmpdirs() {
+  sweep_idle_tmpdirs "$1"
+}
+
+# `prepare` sweeps the TMPDIRs of idle copies detached, unless it ran in the last tmpdir_sweep_interval_hours (the stamp `$work/tmpdir-sweep.at`, touched BEFORE the start so that two prepares at once start one run): a walk
+# over a TMPDIR of hundreds of thousands of files is not something a submit waits for.
+start_tmpdir_sweep_if_due() {
+  local stamp="$1/tmpdir-sweep.at"
+  [ -d "$1/t" ] || return 0
+  if [ -f "$stamp" ] && [ -z "$(find "$stamp" -maxdepth 0 -mmin +"$((tmpdir_sweep_interval_hours * 60))" 2> /dev/null)" ]; then
     return 0
   fi
+  touch "$stamp"
+  start_detached_run "$1" sweep-tmpdirs
+}
+
+# `$jd/runner-env`: the variables the runner gives every step of this job, one `NAME=VALUE` per line — TMPDIR (made here), REMOTE_RUN_PORT_BASE (the job owns this port and the 99 after it) and, once the job's own Simulator
+# device is booted, REMOTE_RUN_IOS_SIMULATOR_UDID. Without a number for the copy there are no TMPDIR and no port block, but the device's id is still given. `exec` gets none of them: it takes no lock and may run beside a job of its own copy.
+write_runner_env() {
+  : > "$jd/runner-env"
+  local tmp_dir=
+  if [ -n "$copy_index" ]; then
+    tmp_dir="$work/t/$copy_index"
+    if ! mkdir -p "$tmp_dir" 2> /dev/null; then
+      say "no TMPDIR of its own for this job: $tmp_dir cannot be made"
+      tmp_dir=
+    fi
+  fi
   {
-    printf 'TMPDIR=%s\n' "$tmp_dir"
-    printf 'REMOTE_RUN_PORT_BASE=%s\n' "$((port_base_start + port_block_size * copy_index))"
+    if [ -n "$tmp_dir" ]; then
+      printf 'TMPDIR=%s\n' "$tmp_dir"
+      printf 'REMOTE_RUN_PORT_BASE=%s\n' "$((port_base_start + port_block_size * copy_index))"
+    fi
+    # The device does not depend on the copy's number: a job that was given none (the index lock was not had, all numbers are taken) still knows its own device, or the guard and the tests would fall back to whichever is booted.
     [ -z "$ios_udid" ] || printf 'REMOTE_RUN_IOS_SIMULATOR_UDID=%s\n' "$ios_udid"
   } > "$jd/runner-env"
 }
@@ -2615,7 +2752,7 @@ start_watchdog() {
     done
     [ -f "$jd/watchdog-cancel" ] && exit 0
     touch "$jd/timeout"
-    signal_job_group TERM || pq kill "$task" > /dev/null 2>&1
+    signal_job_group TERM || kill_pueue_task_of_job "$task"
     local grace_started=$SECONDS
     while [ $((SECONDS - grace_started)) -lt "$kill_grace_sec" ]; do
       [ -f "$jd/watchdog-cancel" ] && exit 0
@@ -2807,7 +2944,10 @@ shutdown_job_simulator() {
   # The phase tells a `kill` that is about to SIGKILL the group that this step is under way (`kill_job` waits for it).
   set_phase simulator-off
   killed=0
+  # A TERM that reaches the job from here on must neither set `killed` (the gui path would write `kill` to the agent, which stops the step) nor end the step's process (the daemon path: the step inherits the ignored signals).
+  trap '' TERM INT HUP
   run_step "$tree" "bash $(quote_word "$(get_script_path)") ios-device-shutdown $(quote_word "$work") $(quote_word "$slug") $(quote_word "$udid")"
+  trap 'killed=1' TERM INT HUP
   killed=$was_killed
 }
 
@@ -3041,6 +3181,7 @@ main() {
     jobs) cmd_jobs "$@" ;;
     prune) cmd_prune "$@" ;;
     measure-copies) cmd_measure_copies "$@" ;;
+    sweep-tmpdirs) cmd_sweep_tmpdirs "$@" ;;
     clean) cmd_clean "$@" ;;
     simctl-cleanup) cmd_simctl_cleanup "$@" ;;
     fetched) cmd_fetched "$@" ;;

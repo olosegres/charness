@@ -186,6 +186,8 @@ case $command in
       exit 0
     fi
     [ -f "$sim/dev/$1" ] || { echo "Invalid device: $1" >&2; exit 164; }
+    # FAKE_SHUTDOWN_STARTED_FILE: made the moment the shutdown begins, so a test can send its signal at that instant.
+    [ -z "\${FAKE_SHUTDOWN_STARTED_FILE:-}" ] || : > "$FAKE_SHUTDOWN_STARTED_FILE"
     [ -z "\${FAKE_SHUTDOWN_SLEEP:-}" ] || sleep "$FAKE_SHUTDOWN_SLEEP"
     read_device "$1"
     if [ "$state" = Shutdown ]; then

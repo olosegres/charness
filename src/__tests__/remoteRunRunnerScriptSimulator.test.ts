@@ -324,6 +324,78 @@ describe('a second `kill` while the device is being shut down', () => {
   });
 });
 
+describe('a TERM that reaches the job at the first instant of the shutdown step', () => {
+  // The phase a `kill` reads (`running`) and the group TERM it sends are two steps: the job can enter `simulator-off` in between (a foreground run reaching its limit: the job's watchdog and the hub's own timer fire
+  // within milliseconds of each other). The step must not depend on that read.
+  it('does not end the step: the device is shut down all the same and the job ends with 137', async () => {
+    const startedFile = path.join(root, 'shutdown-started');
+    const spec = iosJob(slugA, 'box1-aaaaaa', { command: `touch '${root}/started'; sleep 120` });
+    const child = startJob(state.workDir, spec, { ...sims.environment, FAKE_SHUTDOWN_SLEEP: '4', FAKE_SHUTDOWN_STARTED_FILE: startedFile });
+    try {
+      await waitUntil('the command to start', () => fs.existsSync(path.join(root, 'started')), 60_000);
+      process.kill(-(child.pid ?? 0), 'SIGTERM');
+      await waitUntil('the shutdown step to begin', () => fs.existsSync(startedFile), 60_000);
+      process.kill(-(child.pid ?? 0), 'SIGTERM');
+      assert.equal(await waitForJobExit(state.workDir, spec, 60_000), '137');
+      assert.equal(readFakeDevices(sims)[udidOne].state, 'Shutdown', 'the late TERM did not cut the shutdown off');
+    } finally {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          /* gone */
+        }
+      }
+    }
+  });
+
+  it('`shutdown_job_simulator` ignores a TERM while its step runs - on the agent path `killed` would make the job write `kill` to the step - and listens again afterwards', () => {
+    writeFile(state.workDir, `p/${slugA}/ios-simulator`, `${udidOne}\n`);
+    const program = [
+      `source ${scriptPath}`,
+      `work=${state.workDir}; slug=${slugA}; job=box1-aaaaaa; proj="$work/p/$slug"; jd="$proj/jobs/$job"; tree="$proj/tree"; mkdir -p "$jd" "$tree"; killed=0; ios_device_step_started=1`,
+      "trap 'killed=1' TERM INT HUP",
+      'run_step() { kill -TERM $$; sleep 0.3; echo "killed-during-step=$killed"; step_code=0; }',
+      'shutdown_job_simulator',
+      'echo "killed-after=$killed"',
+      'kill -TERM $$; sleep 0.3; echo "killed-after-restore=$killed"',
+    ].join('\n');
+    const run = spawnSync('bash', ['-c', program], { encoding: 'utf8', env: getRunEnvironment(sims.environment), timeout: 30_000 });
+    assert.match(run.stdout, /^killed-during-step=0$/m, run.stderr);
+    assert.match(run.stdout, /^killed-after=0$/m);
+    assert.match(run.stdout, /^killed-after-restore=1$/m, 'a TERM after the step is the job\'s again');
+  });
+
+  it('the step itself is deaf to TERM (it runs where nothing can set that flag): `ios-device-shutdown` shuts the device down although it is sent TERM at once', async () => {
+    addFakeDevice(sims, udidOne, 'charness-app', 'Booted');
+    const startedFile = path.join(root, 'step-started');
+    const step = spawn('bash', [scriptPath, 'ios-device-shutdown', state.workDir, slugA, udidOne], { env: getRunEnvironment({ ...sims.environment, FAKE_SHUTDOWN_SLEEP: '2', FAKE_SHUTDOWN_STARTED_FILE: startedFile }), stdio: 'ignore' });
+    try {
+      await waitUntil('the shutdown to begin', () => fs.existsSync(startedFile), 30_000);
+      step.kill('SIGTERM');
+      await new Promise((resolve) => step.on('close', resolve));
+      assert.equal(readFakeDevices(sims)[udidOne].state, 'Shutdown');
+    } finally {
+      step.kill('SIGKILL');
+    }
+  });
+});
+
+describe('a job that was given no number for its copy still knows its own device', { skip: rsyncSkip }, () => {
+  it('with every number taken there is no TMPDIR and no port block, but REMOTE_RUN_IOS_SIMULATOR_UDID is set - the guard and the tests would otherwise fall back to whichever device is booted', () => {
+    for (let number = 0; number < 100; number += 1) writeFile(state.workDir, `p/app-${number.toString().padStart(10, '0')}/index`, `${number}\n`);
+    const spec = iosJob(slugA, 'box1-aaaaaa', {
+      command: `printf '%s\\n' "UDID=\${REMOTE_RUN_IOS_SIMULATOR_UDID-unset}" "PORTS=\${REMOTE_RUN_PORT_BASE-unset}" > '${seenFile()}'`,
+    });
+    const outcome = runJob(state.workDir, spec, sims.environment);
+    assert.equal(outcome.exit, '0', outcome.log);
+    const seen = fs.readFileSync(seenFile(), 'utf8');
+    assert.match(seen, new RegExp(`^UDID=${udidOne}$`, 'm'));
+    assert.match(seen, /^PORTS=unset$/m);
+    assert.match(outcome.log, /all 100 numbers of project copies are taken/);
+  });
+});
+
 describe('the retired list is appended to under the lock that rewrites it', () => {
   it('a device is put on the list only once nobody holds the index lock: a rewrite in progress cannot drop the line', async () => {
     writeFile(state.workDir, `p/${slugA}/ios-simulator`, `${udidOne}\n`);

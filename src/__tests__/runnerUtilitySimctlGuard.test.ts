@@ -1,6 +1,6 @@
 /**
- * @description `runnerUtility/simctlGuard.ts`: the `xcrun` in `<root>/bin` that keeps `simctl shutdown | erase | delete all` on a job's own Simulator device (jobs run side by side on
- * a Mac, and `all` would reach the others'). The guard text is run for real under `sh` in front of a stand-in for `/usr/bin/xcrun` (its path is the one variable of the text), so what
+ * @description `runnerUtility/simctlGuard.ts`: the `xcrun` in `<root>/bin` that keeps `simctl shutdown | erase | delete all` and every `simctl <command> booted` on a job's own Simulator device (jobs run
+ * side by side on a Mac, and `all` would reach the others', `booted` may name another job's). The guard text is run for real under `sh` in front of a stand-in for `/usr/bin/xcrun` (its path is the one variable of the text), so what
  * the real tool would have been given is read off the stand-in: the arguments intact (spaces, order), `--set` kept, a device id in place of `all`, nothing at all when the job has no
  * device; everything else passed through. The rules for writing it (a Mac only, ours only, refreshed when the text changed, removed where it has no use) are pinned beside.
  *
@@ -66,7 +66,7 @@ describe('`simctl <shutdown|erase|delete> all` on a job with a Simulator device 
       const run = runGuard(['simctl', subcommand, 'all'], { [simulatorUdidVariable]: ownUdid });
       assert.deepEqual(run.realCalls, [['simctl', subcommand, ownUdid]]);
       assert.equal(run.status, 0);
-      assert.match(run.stderr, new RegExp(`charness-runner: .xcrun simctl ${subcommand} all. would reach the simulators of other jobs on this machine; it is run on this job's own simulator \\(${ownUdid}\\) only`));
+      assert.match(run.stderr, new RegExp(`charness-runner: .xcrun simctl ${subcommand} all. can reach the simulators of other jobs on this machine; it is run on this job's own simulator \\(${ownUdid}\\) only`));
     });
   }
 
@@ -97,12 +97,45 @@ describe('`simctl <shutdown|erase|delete> all` on a job with no device of its ow
   });
 });
 
+describe('`booted` names whichever device is booted - with two jobs up, maybe the other one\'s', () => {
+  const targetedSubcommands = ['install', 'launch', 'openurl', 'io', 'terminate', 'uninstall', 'get_app_container', 'status_bar', 'privacy', 'shutdown', 'erase', 'delete'];
+
+  for (const subcommand of targetedSubcommands) {
+    it(`${subcommand} booted becomes ${subcommand} on the job's own device when it has one - the other arguments intact - with a line saying so`, () => {
+      const run = runGuard(['simctl', subcommand, 'booted', 'an arg', '--flag'], { [simulatorUdidVariable]: ownUdid });
+      assert.deepEqual(run.realCalls, [['simctl', subcommand, ownUdid, 'an arg', '--flag']]);
+      assert.equal(run.status, 0);
+      assert.match(run.stderr, new RegExp(`charness-runner: .xcrun simctl ${subcommand} booted. can reach the simulators of other jobs on this machine; it is run on this job's own simulator \\(${ownUdid}\\) only`));
+    });
+  }
+
+  it('options of the subcommand and `--set` before it are kept where they were', () => {
+    assert.deepEqual(runGuard(['simctl', '--set', '/a b', 'launch', '--console', 'booted', 'com.example.app'], { [simulatorUdidVariable]: ownUdid }).realCalls, [['simctl', '--set', '/a b', 'launch', '--console', ownUdid, 'com.example.app']]);
+  });
+
+  for (const subcommand of ['shutdown', 'erase', 'delete']) {
+    it(`${subcommand} booted with no device of the job's own is not run (a shutdown of whichever device is up could be another job's) - status 0, and a line says why`, () => {
+      const run = runGuard(['simctl', subcommand, 'booted']);
+      assert.deepEqual(run.realCalls, []);
+      assert.equal(run.status, 0);
+      assert.match(run.stderr, new RegExp(`xcrun simctl ${subcommand} booted. was not run: other jobs on this machine use their own simulators, and this job has none of its own \\(${simulatorUdidVariable} is not set\\)`));
+    });
+  }
+
+  it('the other subcommands with `booted` are left as they are when the job has no device of its own (it shares the simulators that are there)', () => {
+    const run = runGuard(['simctl', 'install', 'booted', 'App.app']);
+    assert.deepEqual(run.realCalls, [['simctl', 'install', 'booted', 'App.app']]);
+    assert.equal(run.stderr, '');
+  });
+});
+
 describe('everything else goes to the real xcrun, the arguments intact', () => {
   const cases: Array<[string, string[]]> = [
     ['delete unavailable (the daily cleanup)', ['simctl', 'delete', 'unavailable']],
     ['boot <udid>', ['simctl', 'boot', ownUdid]],
     ['shutdown <udid> (a job\'s own device)', ['simctl', 'shutdown', ownUdid]],
-    ['shutdown booted', ['simctl', 'shutdown', 'booted']],
+    ['list devices booted (booted is a filter there, not a target)', ['simctl', 'list', 'devices', 'booted']],
+    ['a bundle id named booted after the device id', ['simctl', 'launch', ownUdid, 'booted']],
     ['list devices available', ['simctl', 'list', 'devices', 'available']],
     ['create with a name that has a space', ['simctl', 'create', 'my phone', 'com.apple.CoreSimulator.SimDeviceType.iPhone-16']],
     ['--set before a subcommand that is not guarded', ['simctl', '--set', '/x y', 'list']],
@@ -175,7 +208,7 @@ describe('writing the guard into the runner\'s bin', () => {
   });
 
   it('says in one line what it does, or — for a foreign xcrun — that it does not; nothing where there is no guard', () => {
-    assert.match(formatGuardLine('installed', binDirPaths) ?? '', /xcrun runs `xcrun simctl shutdown\|erase\|delete all` on a job's own simulator only$/);
+    assert.match(formatGuardLine('installed', binDirPaths) ?? '', /xcrun runs `xcrun simctl shutdown\|erase\|delete all` and `xcrun simctl <command> booted` on a job's own simulator only$/);
     assert.equal(formatGuardLine('current', binDirPaths), formatGuardLine('installed', binDirPaths));
     assert.match(formatGuardLine('foreign', binDirPaths) ?? '', /is not charness-runner's/);
     assert.equal(formatGuardLine('removed', binDirPaths), null);

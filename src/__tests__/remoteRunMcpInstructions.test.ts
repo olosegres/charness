@@ -159,10 +159,10 @@ describe('the instructions built for a platform', () => {
     }
   });
 
-  it('the bullet tells an agent how a job lives beside others — its own ports, its own simulator, never `simctl shutdown all` — in one sentence, with the names of the two variables, on every platform', () => {
+  it('the bullet tells an agent how a job lives beside others — its own ports, its own simulator, never `simctl shutdown all` or `booted` — in one sentence, with the names of the two variables, on every platform', () => {
     for (const platform of ['telegram', 'jira', null] as const) {
       const bullet = buildMcpServerInstructions(platform, offeredWith, true).split('\n').find((line) => line.includes('charness remote-run runners')) ?? '';
-      assert.match(bullet, /Beside other jobs: ports from `\$REMOTE_RUN_PORT_BASE`, simulator `\$REMOTE_RUN_IOS_SIMULATOR_UDID`, never `simctl shutdown all`\./, `${platform ?? 'neutral'}`);
+      assert.match(bullet, /Bind ports from `\$REMOTE_RUN_PORT_BASE`, simulator `\$REMOTE_RUN_IOS_SIMULATOR_UDID`, never `simctl shutdown all` or `booted`\./, `${platform ?? 'neutral'}`);
       assert.equal(bullet.split('REMOTE_RUN_PORT_BASE').length - 1, 1, 'once');
     }
   });
@@ -174,7 +174,7 @@ describe('the instructions built for a platform', () => {
     ];
     const text = buildMcpServerInstructions('telegram', { ...offeredWithout, remoteRunRunnerLines: typicalLines }, true);
     assert.deepEqual(text.split('\n').filter((line) => line.startsWith('  – ')), typicalLines.map((line) => `  – ${line}`), 'none of them is reduced to a count');
-    // The sentence on jobs side by side (128 characters, the rule that keeps one job from stopping another's simulator) took the room of two runner lines: four used to fit whole, two do. The runner lines are a snapshot -
+    // The sentence on jobs side by side (126 characters, the rule that keeps one job from stopping another's simulator) took the room of two runner lines: four used to fit whole, two do. The runner lines are a snapshot -
     // `charness remote-run runners` has them all, live - and the rule is not; a third runner makes it one shown and "… and 2 more".
     assert.ok(text.length <= claudeCodeInstructionsMaxLength, `${text.length} of ${claudeCodeInstructionsMaxLength}`);
     const withThird = buildMcpServerInstructions('telegram', { ...offeredWithout, remoteRunRunnerLines: [...typicalLines, 'ci2 — Ubuntu 24.04, android, docker'] }, true);
@@ -196,9 +196,9 @@ describe('the instructions built for a platform', () => {
     }
   });
 
-  it('the bundled manager skill mentions remote-run for one thing only — cleaning the runner copy when the last task of a folder is done — and nothing about running jobs there (that is the bullet\'s, and only while a runner exists); the one other sentence is a brief for workers that run tests on a runner: the two variables and never `simctl shutdown all`, without a command of the tool', () => {
+  it('the bundled manager skill mentions remote-run for one thing only — cleaning the runner copy when the last task of a folder is done — and nothing about running jobs there (that is the bullet\'s, and only while a runner exists); the one other sentence is a brief for workers that run tests on a runner: the two variables, never `simctl shutdown all` and never `booted`, without a command of the tool', () => {
     const skill = fs.readFileSync(path.resolve(__dirname, '..', '..', 'agent-plugin', 'skills', 'charness-manager', 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
-    assert.match(skill, /A worker that runs tests on a runner shares it with other jobs: its test scripts bind ports from `\$REMOTE_RUN_PORT_BASE`, use the simulator `\$REMOTE_RUN_IOS_SIMULATOR_UDID` and never run `simctl shutdown all`/);
+    assert.match(skill, /A worker that runs tests on a runner shares it with other jobs: its test scripts bind ports from `\$REMOTE_RUN_PORT_BASE`, use the simulator `\$REMOTE_RUN_IOS_SIMULATOR_UDID` and never run `simctl shutdown all` or name `booted`/);
     assert.equal(skill.split('remote-run').length - 1, 2, 'the name of the tool and the clean command: both in the one sentence');
     assert.match(skill, /which ran on a runner \(`charness remote-run`\)\? Run `charness remote-run clean` in that folder BEFORE you remove the folder/);
     assert.ok(!/remote-run (--bg|--needs|wait|runners)/.test(skill));

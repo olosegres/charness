@@ -472,11 +472,180 @@ describe('a job that waits for a stashed one is also the safety net', () => {
     assert.equal(isStashed('box1-bbbbbb'), false);
   });
 
-  it('a job that is not stashed does not ask Pueue anything extra while it waits', () => {
+  it('a job that is not stashed asks Pueue only whether it has lost the task - once before it waits, once after - and enqueues nothing while it waits', () => {
     submit('box1-aaaaaa');
     const callsBefore = readCalls().length;
     runSourced('stash_recheck_sec=1; cmd_wait "$work" "$slug" "$job"', 'box1-aaaaaa');
-    assert.deepEqual(readCalls().slice(callsBefore).filter((call) => call.startsWith('enqueue') || call.startsWith('status --json')), []);
+    const calls = readCalls().slice(callsBefore);
+    assert.deepEqual(calls.filter((call) => call.startsWith('enqueue')), []);
+    assert.ok(calls.filter((call) => call.startsWith('status --json')).length <= 2, calls.join(' | '));
+  });
+
+  it('a job that runs (it has a process) is not asked about at all', () => {
+    submit('box1-aaaaaa');
+    markRunning('box1-aaaaaa');
+    const callsBefore = readCalls().length;
+    runScript(['result', workDir, slug, 'box1-aaaaaa']);
+    runSourced('stash_recheck_sec=1; cmd_wait "$work" "$slug" "$job"', 'box1-aaaaaa');
+    assert.deepEqual(readCalls().slice(callsBefore).filter((call) => call.startsWith('status --json')), []);
+  });
+});
+
+describe('a job that Pueue has lost, found by whoever looks at it', () => {
+  const readExit = (jobId: string, slugName = slug): string | null => {
+    const file = path.join(jobFolder(jobId, slugName), 'exit');
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : null;
+  };
+  /** Pueue forgot the task of job `jobId` (a reset), and a job of another project got its number: `strangerState` is what that task is doing. */
+  function stageNumberTakenByAnother(jobId: string, strangerState: string): string {
+    const lostNumber = readTaskId(jobId);
+    fs.writeFileSync(path.join(pueueDir, 'tasks', lostNumber), `rr-box1-zzzzzz\n${strangerState}\n`);
+    return lostNumber;
+  }
+
+  it('a project with ONE lost queued job and nothing stashed: `probe` ends it (137) - it was "queued" for ever in `/runners` and in the way of its copy - and counts it no more', () => {
+    submit('box1-aaaaaa');
+    fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')));
+    const probe = runScript(['probe', workDir]);
+    assert.equal(probe.status, 0, probe.stderr);
+    assert.equal(readExit('box1-aaaaaa'), '137');
+    assert.match(probe.stdout, /^jobs_queued=0$/m);
+  });
+
+  it('its copy is no longer «busy: queued»: `clean` refused it for as long as the lost job counted as waiting, and removes it once `probe` has ended the job and its result is fetched', () => {
+    submit('box1-aaaaaa');
+    fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')));
+    assert.match(runScript(['clean', workDir, slug]).stdout, /^busy=app-aaaaaaaaaa kind=queued job=box1-aaaaaa$/m);
+    runScript(['probe', workDir]);
+    assert.equal(runScript(['fetched', workDir, '-', 'box1-aaaaaa']).status, 0);
+    assert.match(runScript(['clean', workDir, slug]).stdout, /^removed=app-aaaaaaaaaa /m);
+  });
+
+  it('`prepare` of any job does the same', () => {
+    submit('box1-aaaaaa');
+    fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')));
+    const prepared = runScript(['prepare', workDir, otherSlug, 'box1-dddddd', 'default=1']);
+    assert.equal(prepared.status, 0, prepared.stderr);
+    assert.equal(readExit('box1-aaaaaa'), '137');
+  });
+
+  it('a job that Pueue still holds, queued behind nothing, is left alone by `probe` (it only asks, it ends nothing)', () => {
+    submit('box1-aaaaaa');
+    runScript(['probe', workDir]);
+    assert.equal(readExit('box1-aaaaaa'), null);
+    assert.equal(readTaskState(readTaskId('box1-aaaaaa')), 'Queued');
+  });
+
+  it('`wait` on a lost job answers `done` at once with 137 - not after the exit-file wait with "state unknown" - and `result` shows the result', () => {
+    submit('box1-aaaaaa');
+    fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')));
+    const started = Date.now();
+    const waited = runScript(['wait', workDir, slug, 'box1-aaaaaa']);
+    assert.match(waited.stdout, /^done$/m, waited.stderr);
+    assert.ok(Date.now() - started < 4_000, 'no wait for the exit file');
+    assert.equal(readExit('box1-aaaaaa'), '137');
+    assert.match(runScript(['result', workDir, slug, 'box1-aaaaaa']).stdout, /^exit=137$/m);
+  });
+
+  it('`result` alone judges it too (a view of a lost job must not show it as queued for ever)', () => {
+    submit('box1-aaaaaa');
+    fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')));
+    assert.match(runScript(['result', workDir, slug, 'box1-aaaaaa']).stdout, /^exit=137$/m);
+  });
+
+  it('`wait` on a lost job whose number another job holds now does not follow that other job: it is ended first (a `pueue wait` on the number would follow the stranger for as long as it lives)', () => {
+    submit('box1-aaaaaa');
+    stageNumberTakenByAnother('box1-aaaaaa', 'Stashed');
+    const started = Date.now();
+    const waited = runScript(['wait', workDir, slug, 'box1-aaaaaa']);
+    assert.match(waited.stdout, /^done$/m, waited.stderr);
+    assert.ok(Date.now() - started < 10_000, 'it did not wait for the stranger');
+    assert.equal(readExit('box1-aaaaaa'), '137');
+  });
+
+  it('a Pueue that does not answer (or a label query that fails) leaves the job as it is: `result` shows no result, nothing is ended', () => {
+    submit('box1-aaaaaa');
+    fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')));
+    assert.match(runScript(['result', workDir, slug, 'box1-aaaaaa'], { FAKE_PQ_DOWN: '1' }).stdout, /^exit=$/m);
+    assert.match(runScript(['result', workDir, slug, 'box1-aaaaaa'], { FAKE_PQ_LABEL_DOWN: '1' }).stdout, /^exit=$/m);
+    assert.equal(readExit('box1-aaaaaa'), null);
+  });
+});
+
+describe('a kill never acts on a Pueue number that was not confirmed to be the job\'s own', () => {
+  const readExit = (jobId: string): string | null => {
+    const file = path.join(jobFolder(jobId), 'exit');
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : null;
+  };
+  const callsOn = (verb: string, task: string): string[] => readCalls().filter((call) => call === `${verb} ${task}`);
+  /** Job A has no process; Pueue lost its task (a reset) and handed the number to another project's job, in `strangerState`. */
+  function stageLostJobWithNumberTaken(strangerState: string): string {
+    submit('box1-aaaaaa');
+    const number = readTaskId('box1-aaaaaa');
+    fs.writeFileSync(path.join(pueueDir, 'tasks', number), `rr-box1-zzzzzz\n${strangerState}\n`);
+    return number;
+  }
+
+  it('a lost job whose number now carries ANOTHER job\'s running task: `kill` ends the lost job (137) and neither kills nor removes the stranger\'s task', () => {
+    const number = stageLostJobWithNumberTaken('Running');
+    const killed = runScript(['kill', workDir, slug, 'box1-aaaaaa']);
+    assert.equal(killed.stdout.trim(), 'killed', killed.stderr);
+    assert.equal(readExit('box1-aaaaaa'), '137');
+    assert.deepEqual(callsOn('kill', number), [], 'no pueue kill on a number that is not ours');
+    assert.deepEqual(callsOn('remove', number), [], 'no pueue remove either');
+    assert.equal(readTaskState(number), 'Running', 'the stranger\'s task is as it was');
+  });
+
+  it('the same for a stranger\'s queued task: it is not removed from under its owner', () => {
+    const number = stageLostJobWithNumberTaken('Queued');
+    runScript(['kill', workDir, slug, 'box1-aaaaaa']);
+    assert.deepEqual(callsOn('remove', number), []);
+    assert.equal(readTaskState(number), 'Queued');
+  });
+
+  it('a kill for a time limit (`timeout`) of a lost job is recorded as 124', () => {
+    stageLostJobWithNumberTaken('Running');
+    runScript(['kill', workDir, slug, 'box1-aaaaaa', 'timeout']);
+    assert.equal(readExit('box1-aaaaaa'), '124');
+  });
+
+  it('a lost job that a stashed one waits behind: the kill lets that one go', () => {
+    submit('box1-aaaaaa');
+    submit('box1-bbbbbb');
+    fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')));
+    runScript(['kill', workDir, slug, 'box1-aaaaaa']);
+    assert.equal(readExit('box1-aaaaaa'), '137');
+    assert.equal(readTaskState(readTaskId('box1-bbbbbb')), 'Queued');
+  });
+
+  it('a Pueue that does not answer: the kill fails and says why, kills nothing, and marks nothing - an unconfirmed number is never acted on', () => {
+    submit('box1-aaaaaa');
+    const number = readTaskId('box1-aaaaaa');
+    const killed = runScript(['kill', workDir, slug, 'box1-aaaaaa'], { FAKE_PQ_DOWN: '1' });
+    assert.notEqual(killed.status, 0);
+    assert.match(killed.stderr, /Pueue did not answer/);
+    assert.deepEqual(callsOn('remove', number), []);
+    assert.equal(fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'killed')), false);
+    assert.equal(readExit('box1-aaaaaa'), null);
+  });
+
+  it('a job whose process is gone (SIGKILLed, no result) and whose number is another job\'s now: `kill` does not `pueue kill` the number', () => {
+    submit('box1-aaaaaa');
+    const number = readTaskId('box1-aaaaaa');
+    writeFile(jobFolder('box1-aaaaaa'), 'pid', '99999999\n');
+    fs.writeFileSync(path.join(pueueDir, 'tasks', number), 'rr-box1-zzzzzz\nRunning\n');
+    runScript(['kill', workDir, slug, 'box1-aaaaaa']);
+    assert.deepEqual(callsOn('kill', number), []);
+    assert.equal(readTaskState(number), 'Running');
+  });
+
+  it('...and does when the task under the number IS the job\'s own (the check does not just switch the kill off)', () => {
+    submit('box1-aaaaaa');
+    const number = readTaskId('box1-aaaaaa');
+    writeFile(jobFolder('box1-aaaaaa'), 'pid', '99999999\n');
+    fs.writeFileSync(path.join(pueueDir, 'tasks', number), 'rr-box1-aaaaaa\nRunning\n');
+    runScript(['kill', workDir, slug, 'box1-aaaaaa']);
+    assert.ok(callsOn('kill', number).length >= 1, 'its own task is killed');
   });
 });
 

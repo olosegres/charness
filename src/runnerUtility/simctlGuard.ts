@@ -7,12 +7,13 @@ import type { RunnerHomePaths } from './runnerHome';
 /**
  * @description Jobs of different projects run side by side on one Mac, and each iOS job has a Simulator device of its own (`REMOTE_RUN_IOS_SIMULATOR_UDID`, made by
  * `runner.sh ios-device`). Agents and test tools habitually clear the field with `xcrun simctl shutdown all` (Detox, a freshness gate that refuses two booted devices,
- * a script's cleanup) — which would stop the devices of every other job under way. So `<root>/bin/xcrun`, first on a job's PATH (`execEnv.ts`: the folders of a job
- * and of the login session's agent), is a guard in front of the real `/usr/bin/xcrun`:
+ * a script's cleanup) — which would stop the devices of every other job under way — or name the device `booted`, which with two simulators up may be the other job's.
+ * So `<root>/bin/xcrun`, first on a job's PATH (`execEnv.ts`: the folders of a job and of the login session's agent), is a guard in front of the real `/usr/bin/xcrun`:
  *
- *   `xcrun simctl [--set <path>] shutdown | erase | delete all`   →  the same command on the job's own device, with a line on stderr saying so;
- *                                                                    with no device of its own (the variable is not set) → nothing is run, exit 0, the same line
- *   everything else (`delete unavailable`, `boot <udid>`, `list`, any other tool of `xcrun`)  →  `exec /usr/bin/xcrun "$@"`, the arguments intact
+ *   `xcrun simctl [--set <path>] shutdown | erase | delete all`, and any `simctl <subcommand> booted …`  →  the same command on the job's own device, with a line on
+ *                                                                    stderr saying so; with no device of its own (the variable is not set) → for `shutdown | erase | delete`
+ *                                                                    nothing is run, exit 0, the same line (any other `<subcommand> booted` is left as it is)
+ *   everything else (`delete unavailable`, `boot <udid>`, `list devices booted`, any other tool of `xcrun`)  →  `exec /usr/bin/xcrun "$@"`, the arguments intact
  *
  * It is a guard against a habit, not a wall: `/usr/bin/xcrun`, `killall Simulator` and `killall com.apple.CoreSimulator.CoreSimulatorService` pass it (the agents'
  * instructions say not to). Written at every link start and on `check` (like the `corepack` wrapper of `packageManagerShims.ts`): rewritten when this version's text
@@ -26,7 +27,7 @@ const guardMode = 0o755;
 export const xcrunGuardMarker = '# Written by charness-runner: xcrun guard.';
 /** The variable `runner.sh` sets for a job that has a Simulator device of its own. */
 export const simulatorUdidVariable = 'REMOTE_RUN_IOS_SIMULATOR_UDID';
-/** The subcommands of `simctl` that take `all`. */
+/** The subcommands of `simctl` that take `all` (and, with no device of the job's own, are not run on `booted` either). */
 const guardedSubcommands: readonly string[] = ['shutdown', 'erase', 'delete'];
 
 /** What `ensureXcrunGuard` did: made or refreshed, was current already, took our own away, found nothing to do, or found an `xcrun` that is not ours and left it. */
@@ -61,8 +62,8 @@ export function renderXcrunGuard(realXcrun: string): string {
   return [
     '#!/bin/sh',
     xcrunGuardMarker,
-    '# Jobs run side by side on this machine, each with a Simulator device of its own: `xcrun simctl shutdown|erase|delete all` would reach the devices of the other jobs.',
-    '# It is run on this job\'s own device instead (or not at all when the job has none). Everything else goes to the real xcrun unchanged.',
+    '# Jobs run side by side on this machine, each with a Simulator device of its own: `xcrun simctl shutdown|erase|delete all` would reach the devices of the other jobs, and `booted` may name another job\'s.',
+    '# It is run on this job\'s own device instead (or, for shutdown|erase|delete, not at all when the job has none). Everything else goes to the real xcrun unchanged.',
     '# A guard against the habit, not a wall: /usr/bin/xcrun, `killall Simulator` and `killall com.apple.CoreSimulator.CoreSimulatorService` pass it.',
     `REAL=${shellSingleQuote(realXcrun)}`,
     '[ "$1" = simctl ] || exec "$REAL" "$@"',
@@ -79,13 +80,17 @@ export function renderXcrunGuard(realXcrun: string): string {
     '  case $argument in -*) continue;; esac',
     '  if [ "$target_position" -eq 0 ]; then target=$argument; target_position=$position; fi',
     'done',
-    `case $subcommand in ${guardedSubcommands.join('|')}) ;; *) exec "$REAL" "$@";; esac`,
-    '[ "$target" = all ] || exec "$REAL" "$@"',
+    'case $target in',
+    `  all) case $subcommand in ${guardedSubcommands.join('|')}) ;; *) exec "$REAL" "$@";; esac;;`,
+    '  booted) ;;',
+    '  *) exec "$REAL" "$@";;',
+    'esac',
     `if [ -z "${udid}" ]; then`,
-    '  echo "charness-runner: \\`xcrun simctl $subcommand all\\` was not run: other jobs on this machine use their own simulators, and this job has none of its own (' + simulatorUdidVariable + ' is not set)" >&2',
+    `  case $subcommand in ${guardedSubcommands.join('|')}) ;; *) exec "$REAL" "$@";; esac`,
+    '  echo "charness-runner: \\`xcrun simctl $subcommand $target\\` was not run: other jobs on this machine use their own simulators, and this job has none of its own (' + simulatorUdidVariable + ' is not set)" >&2',
     '  exit 0',
     'fi',
-    `echo "charness-runner: \\\`xcrun simctl $subcommand all\\\` would reach the simulators of other jobs on this machine; it is run on this job's own simulator (${udid}) only" >&2`,
+    `echo "charness-runner: \\\`xcrun simctl $subcommand $target\\\` can reach the simulators of other jobs on this machine; it is run on this job's own simulator (${udid}) only" >&2`,
     'count=$#; index=0',
     'while [ "$index" -lt "$count" ]; do',
     '  index=$((index + 1))',
@@ -126,7 +131,7 @@ export function ensureXcrunGuard(paths: RunnerHomePaths, deps: GuardDeps): Guard
 
 /** @description One line for the link's log: what keeps `simctl shutdown all` away from the other jobs' simulators; nothing where the guard is not in place. */
 export function formatGuardLine(outcome: GuardOutcome, paths: RunnerHomePaths): string | null {
-  if (outcome === 'installed' || outcome === 'current') return `  simulators: ${path.join(paths.binDir, guardName)} runs \`xcrun simctl shutdown|erase|delete all\` on a job's own simulator only`;
+  if (outcome === 'installed' || outcome === 'current') return `  simulators: ${path.join(paths.binDir, guardName)} runs \`xcrun simctl shutdown|erase|delete all\` and \`xcrun simctl <command> booted\` on a job's own simulator only`;
   if (outcome === 'foreign') return `  simulators: ${path.join(paths.binDir, guardName)} is not charness-runner's: jobs can shut down each other's simulators with \`simctl shutdown all\``;
   return null;
 }

@@ -588,7 +588,9 @@ describe('a job that had to be SIGKILLed is an ended job', () => {
     // A queued one: no process yet, Pueue removes the task (stubbed here), and the record is written at once.
     const queuedDir = path.join(workDir, 'p', slug, 'jobs', 'box1-queued');
     writeFile(queuedDir, 'task-id', '2\n');
-    const result = spawnSync('bash', ['-c', `source ${scriptPath}; set_paths ${workDir} ${slug} box1-queued; kill_grace_sec=1; pq() { return 0; }; kill_job timeout`], { encoding: 'utf8', timeout: 60_000 });
+    // Pueue answers the question about the task's label (the number is acted on only when it is the job's own) and removes it.
+    const queuedStatus = '{"tasks":{"2":{"id":2,"label":"rr-box1-queued","command":"x"}},"groups":{}}';
+    const result = spawnSync('bash', ['-c', `source ${scriptPath}; set_paths ${workDir} ${slug} box1-queued; kill_grace_sec=1; pq() { if [ "$1" = status ]; then printf '%s' '${queuedStatus}'; fi; return 0; }; kill_job timeout`], { encoding: 'utf8', timeout: 60_000 });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.readFileSync(path.join(queuedDir, 'exit'), 'utf8').trim(), '124');
     assert.equal(fs.existsSync(path.join(queuedDir, 'killed')), false);
@@ -752,7 +754,8 @@ describe('the number of a task Pueue has forgotten can belong to another job', (
   it('a job killed while queued is marked as having lost its task, because Pueue may give the number to the next job', () => {
     const queuedDir = path.join(workDir, 'p', slug, 'jobs', jobId);
     writeFile(queuedDir, 'task-id', '7\n');
-    const outcome = runWithStub('return 0', `set_paths ${workDir} ${slug} ${jobId}; kill_grace_sec=1; kill_job`);
+    const status = `{"tasks":{"7":{"id":7,"label":"rr-${jobId}","command":"x"}},"groups":{}}`;
+    const outcome = runWithStub(`if [ "$1" = status ]; then printf '%s' '${status}'; fi; return 0`, `set_paths ${workDir} ${slug} ${jobId}; kill_grace_sec=1; kill_job`);
     assert.equal(outcome.status, 0);
     assert.equal(fs.existsSync(path.join(queuedDir, 'task-removed')), true);
     assert.equal(fs.readFileSync(path.join(queuedDir, 'exit'), 'utf8').trim(), '137');

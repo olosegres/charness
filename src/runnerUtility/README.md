@@ -24,7 +24,7 @@ charness-runner run  (through bin/charness-runner, a sh loop: exit 75 = restart 
 the id of the installed package), `status.json` (link state, written by `run`, read by `status`), `keys/` (the client key, the built-in
 server's host key — both from `generateEd25519KeyPair`, which reads every key back), `app.<id>/` + `current` (installed copies of the
 hub's package; `current` is a symlink replaced atomically; the previous copy is kept), `bin/` (`charness-runner` launcher, `pueue`,
-`pueued`, a built `rsync`, Corepack's `yarn` / `pnpm` shims, the `corepack` wrapper and, on a Mac, the `xcrun` guard of `simctlGuard.ts`: `simctl shutdown|erase|delete all` runs on the job's own Simulator device only), `node/` (the runner's OWN Node.js, `v<version>/bin/node`; or the root-owned
+`pueued`, a built `rsync`, Corepack's `yarn` / `pnpm` shims, the `corepack` wrapper and, on a Mac, the `xcrun` guard of `simctlGuard.ts`: `simctl shutdown|erase|delete all` and `simctl <command> booted` run on the job's own Simulator device only), `node/` (the runner's OWN Node.js, `v<version>/bin/node`; or the root-owned
 `/usr/local/lib/charness-runner/node` the admin line installs into), `npm/` and `corepack/` (what a job's `npm i -g` and Corepack write: `NPM_CONFIG_PREFIX`,
 `COREPACK_HOME`), `env` (the operator's `KEY=VALUE` lines, read again for every job), `work/` (phase 1's work dir), `pueue/`
 (a private Pueue: own directories and unix socket; its daemon is started by `run` if it is not answering — a link restart never touches

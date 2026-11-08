@@ -1413,3 +1413,117 @@ describe('`clean`: the owner of a task removes its project copy on request', () 
     assert.match(result.stdout, /^removed=task-aaaaaaaaaa /);
   });
 });
+
+describe('the TMPDIR of a project copy (`<work>/t/<n>`) is part of the disk upkeep', () => {
+  const tmpDirOf = (index: number): string => path.join(workDir, 't', `${index}`);
+  const exists = (index: number, relative: string): boolean => fs.existsSync(path.join(tmpDirOf(index), relative));
+
+  /** A copy that holds number `index`, and in its TMPDIR: an old and a fresh file at the top, an old and a fresh one deeper (a Metro cache), an old empty folder, a fresh empty one. */
+  function makeCopyWithTmpdir(copySlug: string, index: number, sizeGib = 1): string {
+    const copyDir = makeCopy(copySlug, sizeGib, hourMs);
+    writeFile(copyDir, 'index', `${index}\n`);
+    stageTmpdirFiles(index);
+    return copyDir;
+  }
+
+  function stageTmpdirFiles(index: number): void {
+    const dir = tmpDirOf(index);
+    for (const relative of ['old.bin', 'fresh.bin', 'metro-cache/deep/old.bin', 'metro-cache/fresh.bin']) writeFile(dir, relative);
+    for (const relative of ['old.bin', 'metro-cache/deep/old.bin']) setAge(path.join(dir, relative), 10 * dayMs);
+    fs.mkdirSync(path.join(dir, 'old-empty'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'fresh-empty'), { recursive: true });
+    setAge(path.join(dir, 'old-empty'), 10 * dayMs);
+  }
+
+  async function waitFor(condition: () => boolean, what: string): Promise<void> {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      if (condition()) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`${what} did not happen`);
+  }
+
+  it('`sweep-tmpdirs` removes the files not modified for three days - however deep - and the old empty folders, and keeps what is newer', () => {
+    makeCopyWithTmpdir('idle-aaaaaaaaaa', 3);
+    const swept = runScript(['sweep-tmpdirs', workDir]);
+    assert.equal(swept.status, 0, swept.stderr);
+    assert.equal(exists(3, 'old.bin'), false);
+    assert.equal(exists(3, 'metro-cache/deep/old.bin'), false);
+    assert.equal(exists(3, 'old-empty'), false);
+    assert.equal(exists(3, 'fresh.bin'), true);
+    assert.equal(exists(3, 'metro-cache/fresh.bin'), true);
+    assert.equal(exists(3, 'fresh-empty'), true, 'a folder made today stays');
+  });
+
+  it('a copy that is in use is not touched: a job that runs (or waits, or whose results nobody fetched) may need every file', () => {
+    const copyDir = makeCopyWithTmpdir('busy-bbbbbbbbbb', 4);
+    writeJob(copyDir, 'box1-runnin', { 'task-id': '5\n', pid: `${startRunnerStandIn()}\n` });
+    const idleDir = makeCopyWithTmpdir('idle-cccccccccc', 5);
+    assert.ok(fs.existsSync(idleDir));
+    assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+    assert.equal(exists(4, 'old.bin'), true, 'the running job\'s copy');
+    assert.equal(exists(5, 'old.bin'), false, 'the idle one next to it');
+  });
+
+  it('a TMPDIR that no copy holds the number of (its copy was removed while its number could not be had) is swept as well', () => {
+    stageTmpdirFiles(9);
+    assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+    assert.equal(exists(9, 'old.bin'), false);
+    assert.equal(exists(9, 'fresh.bin'), true);
+  });
+
+  it('only numbered folders are looked at: the folders a removal set aside (`t/.gone-…`) and anything else in `t` are left to their own rules', () => {
+    writeFile(path.join(workDir, 't'), 'not-a-number/old.bin');
+    setAge(path.join(workDir, 't', 'not-a-number', 'old.bin'), 10 * dayMs);
+    const goneFolder = `.gone-${startRunnerStandIn()}-1-1`;
+    writeFile(path.join(workDir, 't'), `${goneFolder}/old.bin`);
+    setAge(path.join(workDir, 't', goneFolder, 'old.bin'), 10 * dayMs);
+    assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+    assert.ok(fs.existsSync(path.join(workDir, 't', 'not-a-number', 'old.bin')));
+    assert.ok(fs.existsSync(path.join(workDir, 't', goneFolder, 'old.bin')), 'being removed by a live process: not ours to sweep');
+  });
+
+  it('a prune on a SHORT disk sweeps the TMPDIRs before it removes a copy for space; a prune on a disk that is fine leaves them to the detached sweep', () => {
+    const copyDir = makeCopyWithTmpdir('busy-dddddddddd', 6, 30);
+    writeJob(copyDir, 'box1-runnin', { 'task-id': '5\n', pid: `${startRunnerStandIn()}\n` });
+    stageTmpdirFiles(7);
+    assert.equal(runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '0' }).status, 0);
+    assert.equal(exists(7, 'old.bin'), true, 'no short disk, no sweep from the prune');
+    assert.equal(runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '90' }).status, 0);
+    assert.equal(exists(7, 'old.bin'), false, 'a disk that is short gives up the stale files first');
+    assert.equal(exists(6, 'old.bin'), true, 'but not those of a copy in use (which is not removed either)');
+  });
+
+  it('`prepare` starts the sweep detached - once per interval: the next one inside it leaves the stamp alone and starts nothing', async () => {
+    makeCopyWithTmpdir('idle-eeeeeeeeee', 8);
+    const first = runScript(['prepare', workDir, slug, jobId, 'default=1']);
+    assert.equal(first.status, 0, first.stderr);
+    await waitFor(() => !exists(8, 'old.bin'), 'the detached sweep');
+    assert.equal(exists(8, 'fresh.bin'), true);
+    const stamp = path.join(workDir, 'tmpdir-sweep.at');
+    assert.ok(fs.existsSync(stamp));
+    stageTmpdirFiles(8);
+    assert.equal(runScript(['prepare', workDir, slug, 'box1-second', 'default=1']).status, 0);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.equal(exists(8, 'old.bin'), true, 'inside the interval nothing is started');
+    setAge(stamp, 7 * hourMs);
+    assert.equal(runScript(['prepare', workDir, slug, 'box1-third0', 'default=1']).status, 0);
+    await waitFor(() => !exists(8, 'old.bin'), 'the sweep once the interval is over');
+  });
+
+  it('the size of a copy includes its TMPDIR - the disk prune and the probe see where a copy in daily use piles up - and is measured again when the copy was used', () => {
+    const copyDir = makeCopyWithTmpdir('piled-ffffffffff', 2, 7);
+    writeFile(tmpDirOf(2), 'fake-kb', `${2 * kibPerGib}`);
+    assert.equal(runScript(['measure-copies', workDir]).status, 0);
+    assert.equal(fs.readFileSync(path.join(copyDir, 'size-kb'), 'utf8').trim(), `${9 * kibPerGib}`, '7 GB of copy and 2 GB of TMPDIR');
+    assert.match(runScript(['probe', workDir]).stdout, new RegExp(`^copies_size_mb=${9 * 1024}$`, 'm'));
+  });
+
+  it('a copy without a number has no TMPDIR to add', () => {
+    const copyDir = makeCopy('plain-gggggggggg', 3, hourMs);
+    writeFile(tmpDirOf(2), 'fake-kb', `${5 * kibPerGib}`);
+    assert.equal(runScript(['measure-copies', workDir]).status, 0);
+    assert.equal(fs.readFileSync(path.join(copyDir, 'size-kb'), 'utf8').trim(), `${3 * kibPerGib}`);
+  });
+});
