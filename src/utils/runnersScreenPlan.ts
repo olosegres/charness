@@ -14,12 +14,14 @@
  */
 
 import type { Translate } from '../i18n';
+import { getJobsAtOnce, jobsAtOnceChoices, pairingJobsAtOnceChoices } from '../remoteRun/runnersConfig';
 import { checkIsDiskLow, formatGigabytes, formatOlderSimulators, jobToolNone, jobToolUnknown, runnerCapabilities, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner, RunnerServiceKind } from '../runners/hubRegistry';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { getCurrentServiceKind } from '../runners/runnerServiceKind';
 import type { LinkConcern } from '../runners/linkConcern';
 import type { RunnerJobsStop } from '../runners/runnerRemoval';
+import type { RunnerGroupsOutcome } from '../runners/runnerGroups';
 
 /** Telegram refuses callback data over 64 BYTES. */
 export const maxCallbackDataBytes = 64;
@@ -39,12 +41,18 @@ export const runnersAddressOtherCallback = 'rnr_adother';
 /** Matches `rnr_pg_<page>` (0-based): a view change that acts on nothing, so it carries no revision. */
 export const runnersPageCallbackRe = /^rnr_pg_(\d+)$/;
 
-/** What a button next to a runner does. `remove` asks; `removeYes` / `removeNo` answer the question. */
-export type RunnerAction = 'pause' | 'resume' | 'remove' | 'removeYes' | 'removeNo';
+/** What a button next to a runner does. `remove` asks; `removeYes` / `removeNo` answer the question; `jobsPick` opens the «jobs at once» picker. */
+export type RunnerAction = 'pause' | 'resume' | 'remove' | 'removeYes' | 'removeNo' | 'jobsPick';
 
-const actionCodes: Record<RunnerAction, string> = { pause: 'p', resume: 'r', remove: 'x', removeYes: 'xy', removeNo: 'xn' };
-/** Matches `rnr_<rev>_<index>_<action code>`. */
-export const runnerActionCallbackRe = /^rnr_(\d+)_(\d+)_(p|r|x|xy|xn)$/;
+const actionCodes: Record<RunnerAction, string> = { pause: 'p', resume: 'r', remove: 'x', removeYes: 'xy', removeNo: 'xn', jobsPick: 'j' };
+/** The code of the button that sets «jobs at once» to a number: `j` and the digit. */
+const jobsSetCodePrefix = 'j';
+/** Matches `rnr_<rev>_<index>_<action code>`; `j` opens the picker, `j<n>` sets the number. */
+export const runnerActionCallbackRe = /^rnr_(\d+)_(\d+)_(p|r|x|xy|xn|j[1-8]?)$/;
+/** The info button that stands as the label of the pairing message's «jobs at once» row. */
+export const runnersPairingJobsInfoCallback = 'rnr_pjinfo';
+/** Matches `rnr_pj_<pairId>_<n>`: a number chosen on the pairing message of code `pairId` (12 hex digits). 7 + 12 + 1 + 1 = 21 bytes. */
+export const runnersPairingJobsCallbackRe = /^rnr_pj_([0-9a-f]{12})_([1-8])$/;
 
 export type RunnersCallback =
   | { kind: 'pair' }
@@ -52,7 +60,10 @@ export type RunnersCallback =
   | { kind: 'addressUse' }
   | { kind: 'addressOther' }
   | { kind: 'page'; page: number }
-  | { kind: 'runner'; revision: number; index: number; action: RunnerAction };
+  | { kind: 'runner'; revision: number; index: number; action: RunnerAction }
+  | { kind: 'runnerJobs'; revision: number; index: number; jobsAtOnce: number }
+  | { kind: 'pairingJobs'; pairId: string; jobsAtOnce: number }
+  | { kind: 'pairingJobsInfo' };
 
 export function buildRunnersPageCallback(page: number): string {
   return `${runnersCallbackPrefix}pg_${page}`;
@@ -60,6 +71,16 @@ export function buildRunnersPageCallback(page: number): string {
 
 export function buildRunnerActionCallback(revision: number, index: number, action: RunnerAction): string {
   return `${runnersCallbackPrefix}${revision}_${index}_${actionCodes[action]}`;
+}
+
+/** @description The button of the picker that sets the runner at `index` to run `jobsAtOnce` jobs at once. */
+export function buildRunnerJobsCallback(revision: number, index: number, jobsAtOnce: number): string {
+  return `${runnersCallbackPrefix}${revision}_${index}_${jobsSetCodePrefix}${jobsAtOnce}`;
+}
+
+/** @description The button of the pairing message of code `pairId` that picks `jobsAtOnce` for the runner it will make. */
+export function buildPairingJobsCallback(pairId: string, jobsAtOnce: number): string {
+  return `${runnersCallbackPrefix}pj_${pairId}_${jobsAtOnce}`;
 }
 
 /** @description Read a button's callback data; `null` when it is not one of this screen's. */
@@ -70,10 +91,17 @@ export function parseRunnersCallback(data: string): RunnersCallback | null {
   if (data === runnersAddressOtherCallback) return { kind: 'addressOther' };
   const pageMatch = runnersPageCallbackRe.exec(data);
   if (pageMatch !== null) return { kind: 'page', page: Number(pageMatch[1]) };
+  if (data === runnersPairingJobsInfoCallback) return { kind: 'pairingJobsInfo' };
+  const pairingJobsMatch = runnersPairingJobsCallbackRe.exec(data);
+  if (pairingJobsMatch !== null) return { kind: 'pairingJobs', pairId: pairingJobsMatch[1], jobsAtOnce: Number(pairingJobsMatch[2]) };
   const match = runnerActionCallbackRe.exec(data);
   if (match === null) return null;
+  const revision = Number(match[1]);
+  const index = Number(match[2]);
+  const jobsAtOnceCode = match[3].startsWith(jobsSetCodePrefix) ? match[3].slice(jobsSetCodePrefix.length) : '';
+  if (jobsAtOnceCode !== '') return { kind: 'runnerJobs', revision, index, jobsAtOnce: Number(jobsAtOnceCode) };
   const action = (Object.keys(actionCodes) as RunnerAction[]).find((candidate) => actionCodes[candidate] === match[3]);
-  return action === undefined ? null : { kind: 'runner', revision: Number(match[1]), index: Number(match[2]), action };
+  return action === undefined ? null : { kind: 'runner', revision, index, action };
 }
 
 export interface ScreenButton {
@@ -226,7 +254,7 @@ function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: For
   if (entry.isOnline && entry.isLidClosed !== true) {
     lines.push(
       `  ${t('runners.hardwareLine', { cpu: describeCpu(probe, t, true), ramTotal: formatGigabytes(probe.ramTotalMb), ramFree: formatGigabytes(probe.ramFreeMb), disk: formatGigabytes(probe.diskFreeMb) })}${describeLowDisk(probe, t)}`,
-      `  ${t('runners.jobsLine', { running: probe.jobsRunning, queued: probe.jobsQueued, projects: probe.jobsProjects })}${probe.pueueVersion === null ? ` · ${t('runners.pueueMissing')}` : ''}`,
+      `  ${t('runners.jobsLine', { running: probe.jobsRunning, queued: probe.jobsQueued, projects: probe.jobsProjects })} · ${t('runners.jobsAtOnceNote', { count: getJobsAtOnce(runner) })}${probe.pueueVersion === null ? ` · ${t('runners.pueueMissing')}` : ''}`,
       ...describeProjectCopies(probe, t),
       `  ${describeCapabilities(probe, t)}`,
       ...describeOlderSimulators(probe, t),
@@ -269,7 +297,8 @@ function buildOpenPairingsSection(expiries: readonly number[], t: Translate, for
 
 /**
  * @description The list screen, page `page` (0-based; a page past the end is the last): the machines on it, a button to pair another, a
- * Pause/Resume and a Remove per machine on the page, the page buttons when there is more than one page, Refresh.
+ * Pause/Resume and a Remove per machine on the page, and under them the «jobs at once» button that opens its picker, the page buttons when
+ * there is more than one page, Refresh.
  */
 export function buildRunnersScreen(model: RunnersScreenModel, t: Translate, formatTime: FormatTime, page = 0): RunnersListScreen {
   const title = t('runners.title');
@@ -297,6 +326,8 @@ export function buildRunnersScreen(model: RunnersScreenModel, t: Translate, form
         ? { text: t('runners.resumeButton', { name }), data: buildRunnerActionCallback(model.revision, index, 'resume') }
         : { text: t('runners.pauseButton', { name }), data: buildRunnerActionCallback(model.revision, index, 'pause') },
       { text: t('runners.removeButton', { name }), data: buildRunnerActionCallback(model.revision, index, 'remove') },
+    ], [
+      { text: t('runners.jobsAtOnceButton', { name, count: getJobsAtOnce(entry.runner) }), data: buildRunnerActionCallback(model.revision, index, 'jobsPick') },
     ]);
   });
   if (pageCount > 1) {
@@ -329,6 +360,70 @@ export function buildRemovalOutcomeText(runnerName: string, jobs: RunnerJobsStop
  */
 export function buildServiceRemovalText(runnerName: string, commands: readonly string[], t: Translate): string {
   return t('runners.removedServiceText', { name: runnerName, commands: commands.join('\n') });
+}
+
+/** An iOS end-to-end job (Xcode build + Simulator + Metro + Detox) peaks at about this much memory... */
+const gigabytesPerJob = 12;
+/** ...and keeps about this many cores busy. */
+const coresPerJob = 4;
+/** The picker never recommends more than this: past it the machine's disk and the builds' shared caches are the limit, not its cores. */
+const maxRecommendedJobsAtOnce = 4;
+const megabytesPerGigabyte = 1024;
+
+/**
+ * @description How many jobs at once a machine of this size is good for: the smaller of its memory and its cores counted in the size of one heavy job
+ * ({@link gigabytesPerJob} GB, {@link coresPerJob} cores), at least 1 and at most {@link maxRecommendedJobsAtOnce}. `null` when the runner did not report its cores or its memory — no guess.
+ */
+export function getRecommendedJobsAtOnce(probe: RunnerProbe): number | null {
+  if (probe.cpuCores === null || probe.ramTotalMb === null) return null;
+  const byMemory = Math.floor(probe.ramTotalMb / megabytesPerGigabyte / gigabytesPerJob);
+  const byCores = Math.floor(probe.cpuCores / coresPerJob);
+  return Math.min(Math.max(Math.min(byMemory, byCores), 1), maxRecommendedJobsAtOnce);
+}
+
+/** The picker's line about what the machine's size suggests; nothing when the machine was never probed or did not report its cores or memory. */
+function describeRecommendedJobsAtOnce(probe: RunnerProbe | null, t: Translate): string[] {
+  if (probe === null || probe.cpuCores === null) return [];
+  const count = getRecommendedJobsAtOnce(probe);
+  return count === null ? [] : [t('runners.jobsAtOnceRecommended', { cores: probe.cpuCores, ram: formatGigabytes(probe.ramTotalMb), count })];
+}
+
+/**
+ * @description The picker a «jobs at once» button turns the screen into: how many jobs the runner may run at once, what it is now, what its hardware suggests
+ * (when it has said what it is), and one button per number — the current one marked, and always present even when it is a number the picker does not offer (an entry
+ * edited by hand) — then Back, which is the list again. A tap on a number sets it and draws the list: the picker is one-shot.
+ */
+export function buildJobsAtOncePicker(entry: RunnerScreenEntry, revision: number, index: number, t: Translate): RunnersScreen {
+  const current = getJobsAtOnce(entry.runner);
+  const numbers = [...new Set([...jobsAtOnceChoices, current])].sort((first, second) => first - second);
+  return {
+    text: [t('runners.jobsAtOncePickerText', { name: entry.runner.name, count: current }), ...describeRecommendedJobsAtOnce(entry.probe, t)].join(sectionSeparator),
+    rows: [
+      numbers.map((count) => ({ text: count === current ? `${count} ✓` : count.toString(), data: buildRunnerJobsCallback(revision, index, count) })),
+      [{ text: t('runners.jobsAtOnceBackButton'), data: runnersRefreshCallback }],
+    ],
+  };
+}
+
+/**
+ * @description The keyboard of the pairing message: a label button of its own (it explains itself when tapped — five buttons in one row would cut the label short on a phone) and under it the
+ * numbers a new machine may start with, the chosen one marked.
+ */
+export function buildPairingJobsAtOnceRows(pairId: string, current: number, t: Translate): ScreenButton[][] {
+  return [
+    [{ text: t('runners.pairingJobsAtOnceLabel'), data: runnersPairingJobsInfoCallback }],
+    pairingJobsAtOnceChoices.map((count) => ({ text: count === current ? `${count} ✓` : count.toString(), data: buildPairingJobsCallback(pairId, count) })),
+  ];
+}
+
+/** @description What a tap that set «jobs at once» says: the number was told to the machine, or it is saved and the machine will take it at its next job (it is offline, or did not answer in time). */
+export function buildJobsAtOnceOutcomeToast(runnerName: string, jobsAtOnce: number, outcome: RunnerGroupsOutcome, t: Translate): string {
+  const keyByOutcome: Record<RunnerGroupsOutcome, 'runners.jobsAtOnceAppliedToast' | 'runners.jobsAtOnceOfflineToast' | 'runners.jobsAtOnceFailedToast'> = {
+    applied: 'runners.jobsAtOnceAppliedToast',
+    offline: 'runners.jobsAtOnceOfflineToast',
+    failed: 'runners.jobsAtOnceFailedToast',
+  };
+  return t(keyByOutcome[outcome], { name: runnerName, count: jobsAtOnce });
 }
 
 /** @description The question a Remove button turns the screen into. */
@@ -371,9 +466,9 @@ export function buildPairingIntro(pairingLifetimeMinutes: number, account: strin
   return t('runners.pairingIntro', { minutes: pairingLifetimeMinutes, account });
 }
 
-/** @description What the pairing message becomes once the code was used. */
-export function buildPairedText(runnerName: string, pairedAtMs: number, t: Translate, formatTime: FormatTime): string {
-  return t('runners.pairedText', { name: runnerName, time: formatTime(pairedAtMs) });
+/** @description What the pairing message becomes once the code was used: it says how many jobs the runner will run at once, and where that is changed. */
+export function buildPairedText(runnerName: string, pairedAtMs: number, jobsAtOnce: number, t: Translate, formatTime: FormatTime): string {
+  return `${t('runners.pairedText', { name: runnerName, time: formatTime(pairedAtMs) })}\n${t('runners.pairedJobsAtOnceNote', { count: jobsAtOnce })}`;
 }
 
 /** @description What the pairing message becomes once the code expired unused. */

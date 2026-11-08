@@ -1,5 +1,6 @@
 import { runnerServiceKinds, type RunnerServiceKind } from '../runners/hubRegistry';
 import { serviceKindLabels } from '../runners/runnersList';
+import { defaultPueueGroup } from './runnersConfig';
 
 /**
  * @description What a runner says about itself (`runner.sh probe`), parsed, and the short block `remote-run runners` prints for it.
@@ -268,11 +269,13 @@ function formatRunnerProgram(probe: RunnerProbe): string[] {
 
 /** @description The lines under a runner's heading: hardware, jobs and groups, capabilities, and for a paired runner its program and service. */
 export function formatRunnerDetails(probe: RunnerProbe, groupLimits: Readonly<Record<string, number>>): string[] {
-  const groups = Object.entries(groupLimits).map(([groupName, parallel]) => `${groupName} ${parallel}`).join(', ');
+  const limits = Object.entries(groupLimits);
+  // A runner whose only group is the default one (every paired runner) is told as «jobs at once»: that is what the one number means to the operator.
+  const groups = limits.length === 1 && limits[0][0] === defaultPueueGroup ? `jobs at once: ${limits[0][1]}` : limits.length === 0 ? '' : `groups: ${limits.map(([groupName, parallel]) => `${groupName} ${parallel}`).join(', ')}`;
   const jobs = `jobs: ${probe.jobsRunning} running, ${probe.jobsQueued} queued, ${probe.jobsProjects} ${probe.jobsProjects === 1 ? 'project' : 'projects'}`;
   return [
     `  ${formatCpu(probe)} · RAM ${formatGigabytes(probe.ramTotalMb)}, ${formatGigabytes(probe.ramFreeMb)} free · disk ${formatGigabytes(probe.diskFreeMb)} free (work dir)${formatLowDisk(probe)}${formatCopies(probe)}`,
-    `  ${jobs}${groups === '' ? '' : ` · groups: ${groups}`}${probe.pueueVersion === null ? ' · Pueue: MISSING (install it, see docs/remote-run.md)' : ''}`,
+    `  ${jobs}${groups === '' ? '' : ` · ${groups}`}${probe.pueueVersion === null ? ' · Pueue: MISSING (install it, see docs/remote-run.md)' : ''}`,
     `  can: ${formatCapabilities(probe).join(' · ')}`,
     ...formatOlderSimulatorsLine(probe),
     ...formatJobTools(probe),

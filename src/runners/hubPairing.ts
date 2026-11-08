@@ -1,5 +1,5 @@
 import * as os from 'os';
-import { loadRunnersConfigAt } from '../remoteRun/runnersConfig';
+import { getJobsAtOnce, loadRunnersConfigAt } from '../remoteRun/runnersConfig';
 import { assertManagedBlockIntact } from './authorizedKeys';
 import type { RedeemReply, RedeemRequest } from './gateProtocol';
 import { getHandMadeRunnersPath, type HubContext } from './hubPaths';
@@ -58,6 +58,8 @@ export interface CreatePairingParams {
   lifetimeMs?: number;
   /** The account the runner logs in as (default: the account this process runs as). */
   sshUser?: string;
+  /** How many jobs the runner may run at once once it has paired (default: left out, which reads as 1). */
+  jobsAtOnce?: number;
 }
 
 export interface CreatedPairing {
@@ -123,6 +125,7 @@ export function createPairing(ctx: HubContext, params: CreatePairingParams): Pro
       port: params.port,
       label: params.label,
       messageRef: params.messageRef ?? null,
+      ...(params.jobsAtOnce === undefined ? {} : { jobsAtOnce: params.jobsAtOnce }),
     };
     const payload: PairCodePayload = {
       host: params.host,
@@ -251,6 +254,7 @@ export function redeemPairing(ctx: HubContext, pairId: string, request: RedeemRe
       host: pairing.host,
       port: pairing.port,
       isPaused: false,
+      ...(pairing.jobsAtOnce === undefined ? {} : { jobsAtOnce: pairing.jobsAtOnce }),
     };
     return {
       result: buildRedeemReply(runner, readOrCreateHubKeyLocked(ctx.dir).publicKey, packageId),
@@ -287,5 +291,40 @@ export function setPairedRunnerPaused(ctx: HubContext, nameOrId: string, isPause
     const updated: PairedRunner = { ...runner, isPaused };
     if (runner.isPaused === isPaused) return { result: updated };
     return { result: updated, paired: { rev: state.paired.rev + 1, runners: state.paired.runners.map((candidate) => (candidate.id === runner.id ? updated : candidate)) } };
+  });
+}
+
+/**
+ * @description Set how many jobs a paired runner runs at once (the caller has checked the number against `jobsAtOnceSchema`; the registry write refuses anything else). Nothing is written
+ * when the runner already runs that many. `null` when there is no such runner. The runner itself is told by the caller (`applyRunnerGroups`).
+ */
+export function setPairedRunnerJobsAtOnce(ctx: HubContext, nameOrId: string, jobsAtOnce: number): Promise<PairedRunner | null> {
+  return runTransaction(ctx, Date.now(), (state) => {
+    const runner = findPairedRunner(state.paired.runners, nameOrId);
+    if (runner === undefined) return { result: null };
+    if (getJobsAtOnce(runner) === jobsAtOnce) return { result: runner };
+    const updated: PairedRunner = { ...runner, jobsAtOnce };
+    return { result: updated, paired: { rev: state.paired.rev + 1, runners: state.paired.runners.map((candidate) => (candidate.id === runner.id ? updated : candidate)) } };
+  });
+}
+
+/** @name PairingJobsAtOnceChange @description Where a number chosen on a pairing message landed: on the code that is still out, or on the runner the code has become. */
+export type PairingJobsAtOnceChange = { kind: 'pending' } | { kind: 'paired'; runner: PairedRunner };
+
+/**
+ * @description Set how many jobs the runner of pairing `pairId` runs at once — the choice on the pairing message. While the code is open it is kept on the pending entry (and
+ * copied into the runner when the code is used); once the code was used, the runner it made is changed. `null` when the pairing is neither: the code expired unused.
+ */
+export function setPairingJobsAtOnce(ctx: HubContext, pairId: string, jobsAtOnce: number, nowMs: number): Promise<PairingJobsAtOnceChange | null> {
+  return runTransaction(ctx, nowMs, (state): TransactionOutcome<PairingJobsAtOnceChange | null> => {
+    const runner = state.paired.runners.find((candidate) => candidate.pairId === pairId);
+    if (runner !== undefined) {
+      if (getJobsAtOnce(runner) === jobsAtOnce) return { result: { kind: 'paired', runner } };
+      const updated: PairedRunner = { ...runner, jobsAtOnce };
+      return { result: { kind: 'paired', runner: updated }, paired: { rev: state.paired.rev + 1, runners: state.paired.runners.map((candidate) => (candidate.id === runner.id ? updated : candidate)) } };
+    }
+    const pairing = state.pending.pending.find((candidate) => candidate.pairId === pairId);
+    if (pairing === undefined || pairing.expiresAtMs <= nowMs) return { result: null };
+    return { result: { kind: 'pending' }, pending: { pending: state.pending.pending.map((candidate) => (candidate.pairId === pairId ? { ...candidate, jobsAtOnce } : candidate)) } };
   });
 }

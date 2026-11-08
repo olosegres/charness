@@ -20,6 +20,7 @@
 # Subcommands (the contract is in src/remoteRun/README.md):
 #   probe        key=value lines: OS, CPU, RAM, disk, jobs, capabilities (paused / service / iOS boot check of a paired runner); `probe <work> prune`: a view of the runners that may start the background prune of a short disk
 #   prepare      layout for a job, Pueue daemon + groups, prune
+#   apply-groups Pueue daemon + groups only (`apply-groups <work> <name=parallel,…>`): a changed «jobs at once» takes effect now, not at the next job's prepare
 #   lease        add the job to Pueue, stream its log, kill it when the caller's heartbeat stops (foreground run)
 #   submit       add the job to Pueue and return (--bg)
 #   job          the Pueue task itself: lock → apply the staged tree → deps → command → result files
@@ -815,15 +816,17 @@ ensure_pueued() {
   return 1
 }
 
-# groups = "name=parallel,name=parallel"
+# groups = "name=parallel,name=parallel". Fails (after trying every pair) when Pueue refused a limit; `prepare` goes on regardless, `apply-groups` says so.
 apply_groups() {
-  printf '%s\n' "$1" | tr ',' '\n' | while IFS= read -r pair; do
+  local pair name parallel failed=0
+  while IFS= read -r pair; do
     name=${pair%%=*}
     parallel=${pair#*=}
     [ -n "$name" ] || continue
     [ "$name" = default ] || pq group add "$name" > /dev/null 2>&1
-    pq parallel -g "$name" "$parallel" > /dev/null 2>&1
-  done
+    pq parallel -g "$name" "$parallel" > /dev/null 2>&1 || failed=1
+  done <<< "$(printf '%s\n' "$1" | tr ',' '\n')"
+  return "$failed"
 }
 
 # ─────────────────────────── prepare / prune ───────────────────────────
@@ -853,6 +856,15 @@ cmd_prepare() {
   check_disk_is_short "$work" && start_detached_run "$work" measure-copies
   refuse_when_disk_is_short
   echo "work=$(cd "$work" && pwd -P)"
+}
+
+# `apply-groups <work> <groups>`: the same Pueue steps as `prepare`, nothing else. Pueue's `parallel` is a gate for STARTS: a lowered limit never stops a task that runs, queued
+# tasks start once fewer than the new limit run.
+cmd_apply_groups() {
+  work=$1
+  mkdir -p "$work" 2> /dev/null
+  ensure_pueued || die "Pueue daemon is not reachable and could not be started (check PUEUE_BIN / the pueue settings of this runner)"
+  apply_groups "${2:-}" || die "Pueue refused a parallel limit (${2:-})"
 }
 
 # Has the job in folder $1 ended? It wrote its exit file; or it never got a Pueue task (its submit failed half-way); or its process is
@@ -2397,6 +2409,7 @@ main() {
   case $subcommand in
     probe) cmd_probe "$@" ;;
     prepare) cmd_prepare "$@" ;;
+    apply-groups) cmd_apply_groups "$@" ;;
     lease) cmd_lease "$@" ;;
     submit) cmd_submit "$@" ;;
     job) cmd_job "$@" ;;

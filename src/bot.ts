@@ -446,6 +446,7 @@ import { scanHostKey } from './runners/hubAddress';
 import { listPublicAddressCandidates } from './runners/hubAddressCandidates';
 import { createHubContext } from './runners/hubPaths';
 import { sweepExpiredPairings } from './runners/hubPairing';
+import { applyRunnerGroups } from './runners/runnerGroups';
 import { probeRunnersOverview, readRunnersOverview } from './runners/runnersOverview';
 import { getRemoteRunCacheDir } from './remoteRun/ssh';
 import { createClaudeAccounts, type ClaudeProfileApplyOutcome } from './connectors/telegram/commands/claudeAccounts';
@@ -7943,6 +7944,7 @@ const { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressT
   getGeneralKey: () => getOperatorGeneralKey(),
   pinMessage: (key, messageId) => pinMessageQuiet(key, messageId, { disableNotification: false }),
   sweepExpiredCodes: async (nowMs) => { await sweepExpiredPairings(runnersHub, nowMs); },
+  applyGroups: (runner) => applyRunnerGroups(runnersHub, runner, runnersCacheDir),
   readRunnerHost: createRunnerHostReader(() => getInstanceSettingsPath(), (line) => console.error(line)),
   saveRunnerHost: (address) => saveInstanceSettingsChange(getInstanceSettingsPath(), { runnerHost: address }),
   getBotLabel: () => (bot.botInfo?.username === undefined ? os.hostname() : `@${bot.botInfo.username}`),

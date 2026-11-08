@@ -13,7 +13,7 @@ import path from 'path';
 import { extractManagedBlock } from '../runners/authorizedKeys';
 import { decodePairCode } from '../runners/pairCode';
 import { createHubContext, getHandMadeRunnersPath, getHubFilePaths, getRunnerHostAlias } from '../runners/hubPaths';
-import { cancelPairing, checkIsPairingOpen, createPairing, describeRunnerIdentity, pickFreeRunnerName, redeemPairing, removePairedRunner, sanitizeRunnerName, setPairedRunnerPaused, sweepExpiredPairings } from '../runners/hubPairing';
+import { cancelPairing, checkIsPairingOpen, createPairing, describeRunnerIdentity, pickFreeRunnerName, redeemPairing, removePairedRunner, sanitizeRunnerName, setPairedRunnerJobsAtOnce, setPairedRunnerPaused, setPairingJobsAtOnce, sweepExpiredPairings } from '../runners/hubPairing';
 import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { AuthorizedKeysBlockError, authorizedKeysBlockStart } from '../runners/authorizedKeys';
 import { HubDerivedFilesError, HubRegistryError, readClosedCodes, readPairedFile, readPendingFile, writePendingFile } from '../runners/hubRegistry';
@@ -338,6 +338,83 @@ describe('removing and pausing', () => {
     assert.equal(readPairedFile(fixture.ctx.dir).rev, before + 1);
     assert.equal((await setPairedRunnerPaused(fixture.ctx, 'mac', false))?.isPaused, false);
     assert.equal(await setPairedRunnerPaused(fixture.ctx, 'nobody', true), null);
+  });
+});
+
+describe('how many jobs at once', () => {
+  beforeEach(() => {
+    fixture = createHubFixture();
+  });
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  async function redeemWith(jobsAtOnce: number | undefined, suggestedName = 'mac'): Promise<{ pairId: string; runnerId: string }> {
+    const pairing = await createPairing(fixture.ctx, { host: 'host.example', port: 2222, hostKey: hubHostKey, label: '@ExampleBot', nowMs: startMs, sshUser: 'hubuser', ...(jobsAtOnce === undefined ? {} : { jobsAtOnce }) });
+    const reply = await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture({ suggestedName }).request, startMs);
+    if (!reply.ok) throw new Error(reply.reason);
+    return { pairId: pairing.pairId, runnerId: reply.runnerId };
+  }
+
+  it('a code made without a number makes a runner without one (it reads as 1); a code made with a number hands it to the runner it makes', async () => {
+    await redeemWith(undefined, 'mac');
+    await redeemWith(3, 'box');
+    const [mac, box] = readPairedFile(fixture.ctx.dir).runners;
+    assert.equal(mac.jobsAtOnce, undefined);
+    assert.equal(box.jobsAtOnce, 3);
+  });
+
+  it('the number chosen while the code is open is kept on the pending entry and moves into the runner when the code is used', async () => {
+    const pairing = await createTestPairing();
+    assert.equal(readPendingFile(fixture.ctx.dir).pending[0].jobsAtOnce, undefined);
+    assert.deepEqual(await setPairingJobsAtOnce(fixture.ctx, pairing.pairId, 3, startMs), { kind: 'pending' });
+    assert.equal(readPendingFile(fixture.ctx.dir).pending[0].jobsAtOnce, 3);
+    assert.deepEqual(await setPairingJobsAtOnce(fixture.ctx, pairing.pairId, 2, startMs), { kind: 'pending' }, 'the last choice stands');
+    const reply = await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture({ suggestedName: 'mac' }).request, startMs);
+    assert.ok(reply.ok);
+    assert.equal(readPairedFile(fixture.ctx.dir).runners[0].jobsAtOnce, 2);
+    assert.deepEqual(readPendingFile(fixture.ctx.dir).pending, []);
+  });
+
+  it('a number chosen after the code was used changes the runner it made, found by the code; the revision moves', async () => {
+    const { pairId } = await redeemWith(undefined);
+    const before = readPairedFile(fixture.ctx.dir).rev;
+    const change = await setPairingJobsAtOnce(fixture.ctx, pairId, 4, startMs);
+    assert.equal(change?.kind, 'paired');
+    assert.equal(change?.kind === 'paired' ? change.runner.jobsAtOnce : null, 4);
+    const paired = readPairedFile(fixture.ctx.dir);
+    assert.equal(paired.runners[0].jobsAtOnce, 4);
+    assert.equal(paired.rev, before + 1);
+  });
+
+  it('a code that expired unused, or is unknown, takes no choice and says so with null; nothing is written', async () => {
+    const pairing = await createTestPairing();
+    assert.equal(await setPairingJobsAtOnce(fixture.ctx, pairing.pairId, 2, startMs + pairingLifetimeMs), null, 'expired');
+    assert.equal(await setPairingJobsAtOnce(fixture.ctx, '0123456789ab', 2, startMs), null, 'unknown');
+    assert.equal(readPendingFile(fixture.ctx.dir).pending[0].jobsAtOnce, undefined);
+  });
+
+  it('sets a runner by name or id; the revision moves only when the number changes (an entry that never said is 1 already); an unknown runner is null', async () => {
+    const { runnerId } = await redeemWith(undefined);
+    const before = readPairedFile(fixture.ctx.dir).rev;
+    assert.equal((await setPairedRunnerJobsAtOnce(fixture.ctx, 'mac', 1))?.name, 'mac');
+    assert.equal(readPairedFile(fixture.ctx.dir).rev, before, '1 is what an entry without a number already is');
+    assert.equal((await setPairedRunnerJobsAtOnce(fixture.ctx, 'mac', 2))?.jobsAtOnce, 2);
+    assert.equal(readPairedFile(fixture.ctx.dir).rev, before + 1);
+    await setPairedRunnerJobsAtOnce(fixture.ctx, runnerId, 2);
+    assert.equal(readPairedFile(fixture.ctx.dir).rev, before + 1, 'the same number again changes nothing');
+    assert.equal((await setPairedRunnerJobsAtOnce(fixture.ctx, runnerId, 6))?.jobsAtOnce, 6);
+    assert.equal(readPairedFile(fixture.ctx.dir).runners[0].jobsAtOnce, 6);
+    assert.equal(await setPairedRunnerJobsAtOnce(fixture.ctx, 'nobody', 2), null);
+  });
+
+  it('a number outside 1..8 never reaches the registry: the write refuses it, and the file stays as it was', async () => {
+    await redeemWith(2);
+    for (const bad of [0, 9, -1, 1.5]) {
+      await assert.rejects(() => setPairedRunnerJobsAtOnce(fixture.ctx, 'mac', bad), `${bad}`);
+    }
+    assert.equal(readPairedFile(fixture.ctx.dir).runners[0].jobsAtOnce, 2);
+    await assert.rejects(() => createPairing(fixture.ctx, { host: 'host.example', port: 2222, hostKey: hubHostKey, label: '@ExampleBot', nowMs: startMs, jobsAtOnce: 9 }));
   });
 });
 

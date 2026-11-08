@@ -9,10 +9,13 @@
  *   nothing is created on disk for an instance that has no runner
  *   → General's empty list (Pair / Refresh) → Pair asks for an address (an address that answers nothing is refused with the reason and
  *     asked again) → the right one is kept in settings.json and the pairing follows as ONE message — the explanation, then the line — HTML
- *     with the line in a <pre>, no keyboard
+ *     with the line in a <pre>, under it the row that picks how many jobs the new machine runs at once (1 ticked; 2 is chosen before the line is used)
  *   → the line run on the runner machine WITHOUT its `sudo`, by the account itself (its last word names that account), pairs it: the message turns
- *     into «Runner “…” paired …» and its line is gone, the key line of the machine is in authorized_keys and the temporary one is not
+ *     into «Runner “…” paired …» naming the 2 jobs at once, its line and keyboard are gone, the registry entry holds the 2 the key line of the machine is in authorized_keys and the temporary one is not
  *   → the utility holds the link: /runners lists the machine online, and the live probe adds its hardware, jobs and capabilities
+ *   → «Jobs at once» (the machine's button on the list) opens the picker with the hardware the live probe reported and a suggestion; picking
+ *     2 tells the runner NOW — its private Pueue's default group runs two jobs in parallel (read back from Pueue itself), the registry holds 2, the
+ *     list says «2 at once» — and a picker of an older revision sets nothing
  *   → Pause marks it (a toast, the list says paused, Resume instead of Pause), Resume undoes it; a keyboard of an older revision only
  *     says the list changed and removes nothing
  *   → Remove asks first; Cancel keeps it; with a background job running on the machine, Remove for sure takes it out of the registry
@@ -151,7 +154,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
 
   interface PairedFileView {
     rev: number;
-    runners: Array<{ id: string; name: string; isPaused: boolean }>;
+    runners: Array<{ id: string; name: string; isPaused: boolean; jobsAtOnce?: number }>;
   }
 
   function readPaired(): PairedFileView {
@@ -400,14 +403,14 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     return `${withoutSudo.slice(0, withoutSudo.lastIndexOf(' ') + 1)}${os.userInfo().username}`;
   }
 
-  it('the right address is kept in settings.json and the pairing follows as ONE message — the explanation, then the line — HTML with the line in a <pre>, no keyboard', async () => {
+  it('the right address is kept in settings.json and the pairing follows as ONE message — the explanation, then the line — HTML with the line in a <pre>, under it the row that picks how many jobs the new machine runs at once', async () => {
     await general.sendAndAwaitReply(`127.0.0.1:${link.sshPort}`, 'Pair a runner — valid 10 minutes, single use;');
     assert.deepEqual(readSettingsRunnerHost(), { host: '127.0.0.1', port: link.sshPort });
     const pairingMessage = await general.waitForMessage('the pairing message', (message) => message.text.startsWith('Pair a runner'));
     assert.ok(pairingMessage.text.includes('The last word, «runner», is the account that runs the agents\' code'), pairingMessage.text);
     assert.ok(pairingMessage.text.includes('No admin rights? Run the line in that account\'s own terminal without «sudo»:'), pairingMessage.text);
     assert.ok(!general.listMessages().some((message) => message.text.startsWith('② Without admin rights')), 'there is no second message');
-    assert.equal(pairingMessage.reply_markup, undefined);
+    assert.deepEqual(general.getKeyboardLabels(pairingMessage), [['Jobs at once:'], ['1 ✓', '2', '3', '4']]);
     const adminLine = readPairingLine(pairingMessage);
     assert.match(adminLine, /^sudo sh -c '.*"cr2\.\$u,\$h,\$p,[0-9a-f]+,\$y,\$z,\$k".*' sh runner$/s);
     firstPairingLine = toOwnAccountLine(adminLine);
@@ -424,6 +427,12 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     ], 'the instance keeps its own record of the message');
     assert.deepEqual([pending.label, pending.host, pending.port], ['@fake_charness_bot', '127.0.0.1', link.sshPort]);
     assert.match(readAuthorizedKeys(), /charness-pairing:/);
+    assert.deepEqual(general.getKeyboardData(pairingMessage), [['rnr_pjinfo'], [1, 2, 3, 4].map((count) => `rnr_pj_${pending.pairId}_${count}`)]);
+    // The operator wants two side by side on this machine: chosen while the code is open, kept for the machine that will use it.
+    assert.equal(await general.tapAndAwaitAnswer(pairingMessage, `rnr_pj_${pending.pairId}_2`), 'The new machine will run 2 at once.');
+    await waitUntil(() => readJson<{ pending: Array<{ jobsAtOnce?: number }> }>(path.join(getRegistryDir(), 'pending.json')).pending[0]?.jobsAtOnce === 2, 'the choice to be kept on the open code', 10_000);
+    await waitUntil(() => general.getKeyboardLabels(pairingMessage)[1]?.join(' ') === '1 2 ✓ 3 4', 'the tick to move to 2', 10_000);
+    assert.equal(pairingMessage.text.includes('cr2.') || pairingMessage.text.includes('sh -c'), true, 'the line is still in the message: only the keyboard changed');
   });
 
   it('the line run on the runner machine without its sudo, by the account itself, pairs it: the message turns into «paired» and loses its line; authorized_keys holds the machine\'s key, not the temporary one', async () => {
@@ -433,13 +442,15 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.equal(result.status, 0, result.output);
     assert.match(result.output, /Paired with /);
     assert.match(result.output, /Keep it running:/, 'the account\'s way installs no service: the help for keeping it running is printed');
-    await general.waitForMessageText('the pairing message to read paired', pairingMessage, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u.test(text));
+    await general.waitForMessageText('the pairing message to read paired', pairingMessage, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.\nJobs at once: 2 — change it in \/runners\.$/u.test(text));
     assert.ok(!pairingMessage.text.includes('cr2.') && !pairingMessage.text.includes('sh -c'), 'the line is gone from the message');
+    assert.equal(pairingMessage.reply_markup, undefined, 'the keyboard goes with the line');
     assert.notEqual(pairingMessage.isDeleted, true, 'the message stays and says what became of the code');
     await waitUntil(() => readPairingStore().length === 0, 'the settled message to leave the instance\'s record', 10_000);
     const { runners } = readPaired();
     assert.equal(runners.length, 1);
     [{ id: runnerId, name: runnerName }] = runners;
+    assert.equal(runners[0].jobsAtOnce, 2, 'the choice made on the message is the runner\'s');
     assert.ok(pairingMessage.text.includes(`“${runnerName}”`), pairingMessage.text);
     assert.match(readAuthorizedKeys(), new RegExp(`charness-runner:${runnerId}`));
     assert.doesNotMatch(readAuthorizedKeys(), /charness-pairing:/);
@@ -452,9 +463,36 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     // runner is done and its socket is published — a list asked in between says «offline» and is not refreshed for 90 seconds.
     await waitUntil(async () => (await getRunnerLinkStatus(getRegistryDir(), runnerId)).isOnline, 'the hub to see the link (its socket accepts)', linkTimeoutMs);
     const list = await general.sendAndAwaitReply('/runners', `${runnerName} — online`);
-    assert.deepEqual(general.getKeyboardData(list), [['rnr_pair'], [`rnr_${readPaired().rev}_0_p`, `rnr_${readPaired().rev}_0_x`], ['rnr_refresh']]);
+    assert.deepEqual(general.getKeyboardData(list), [['rnr_pair'], [`rnr_${readPaired().rev}_0_p`, `rnr_${readPaired().rev}_0_x`], [`rnr_${readPaired().rev}_0_j`], ['rnr_refresh']]);
     await general.waitForMessageText('the live data on the list', list, (text) => text.includes('jobs: 0 running, 0 queued') && text.includes('can: ') && !text.includes('Checking the machines'));
     assert.match(list.text, /RAM \d/);
+    assert.match(list.text, /jobs: 0 running, 0 queued · projects: 0 · 2 at once/, 'the number chosen on the pairing message');
+  });
+
+  it('«Jobs at once» opens the picker with the machine\'s hardware, and picking a number tells the runner NOW — its Pueue runs that many in parallel — saves it, redraws the list; a picker of an older revision sets nothing', async () => {
+    const list = general.listMessages().find((message) => message.text.includes(`${runnerName} — online`));
+    assert.ok(list);
+    const revision = readPaired().rev;
+    const readPueueDefaultParallel = (): number => (JSON.parse(runRunnerPueue(['status', '--json'])) as { groups: Record<string, { parallel_tasks: number }> }).groups.default.parallel_tasks;
+    assert.notEqual(readPueueDefaultParallel(), 3, 'before the pick Pueue does not run 3: nobody has told it yet');
+    assert.equal(await general.tapAndAwaitAnswer(list, `rnr_${revision}_0_j`), '');
+    await general.waitForMessageText('the picker', list, (text) => text.startsWith(`How many jobs may ${runnerName} run at once? Now 2.`));
+    assert.match(list.text, /Suggested for \d+ cores and [\d.]+ GB: [1-4]\.$/, 'the suggestion is made from what the live probe reported');
+    assert.deepEqual(general.getKeyboardLabels(list), [['1', '2 ✓', '3', '4', '6', '8'], ['‹ Back']]);
+
+    // A picker of an older revision only says the list changed, draws the list, and sets nothing.
+    assert.equal(await general.tapAndAwaitAnswer(list, `rnr_${revision - 1}_0_j3`), staleListToast);
+    assert.equal(readPaired().runners[0].jobsAtOnce, 2, 'nothing was set');
+    await general.waitForMessageText('the list after the stale tap', list, (text) => text.startsWith('Runners — machines'));
+
+    await general.tapAndAwaitAnswer(list, `rnr_${readPaired().rev}_0_j`);
+    await general.waitForMessageText('the picker for the real pick', list, (text) => text.startsWith(`How many jobs may ${runnerName} run at once?`));
+    assert.equal(await general.tapAndAwaitAnswer(list, `rnr_${readPaired().rev}_0_j3`), `${runnerName}: 3 at once`, 'the machine was told (it is online): the toast says it applied');
+    assert.equal(readPaired().runners[0].jobsAtOnce, 3);
+    await general.waitForMessageText('the list with the new number', list, (text) => text.startsWith('Runners — machines') && text.includes('3 at once'));
+    assert.deepEqual(general.getKeyboardLabels(list)[2], [`${runnerName}: Jobs at once — 3`]);
+    // The load-bearing part: Pueue itself on the runner machine holds the number (told over the link by `runner.sh apply-groups`, not left to a job's `prepare`).
+    assert.equal(readPueueDefaultParallel(), 3);
   });
 
   it('Pause marks the machine and the list says so; a keyboard of an older revision only says the list changed; Resume undoes it', async () => {
@@ -556,7 +594,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.equal(readPaired().runners.length, 1, 'the second machine is paired');
 
     await startCharness();
-    await general.waitForMessageText('the pairing message to read paired', third, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u.test(text));
+    await general.waitForMessageText('the pairing message to read paired', third, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.\nJobs at once: 1 — change it in \/runners\.$/u.test(text));
     assert.ok(!third.text.includes('cr2.'), 'the line is gone');
     await waitUntil(() => readPairingStore().length === 0, 'the settled message to leave the instance\'s record', 10_000);
   });

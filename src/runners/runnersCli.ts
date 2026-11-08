@@ -1,11 +1,13 @@
 import * as os from 'os';
 import type { CliIo } from '../remoteRun/output';
+import { getJobsAtOnce, jobsAtOnceSchema, maxJobsAtOnce } from '../remoteRun/runnersConfig';
 import { getRemoteRunCacheDir } from '../remoteRun/ssh';
 import { buildAdminBootstrapLine, checkIsAccountName, defaultRunnerAccount } from './bootstrapLine';
 import { ensureGateWrapper } from './gateWrapper';
 import { checkHubAddress, parseHubAddress, scanHostKey, type HostKeyScanner } from './hubAddress';
 import { createHubContext, type HubContext } from './hubPaths';
-import { createPairing, findPairedRunner, setPairedRunnerPaused, sweepExpiredPairings } from './hubPairing';
+import { createPairing, findPairedRunner, setPairedRunnerJobsAtOnce, setPairedRunnerPaused, sweepExpiredPairings } from './hubPairing';
+import { applyRunnerGroups, type RunnerGroupsOutcome } from './runnerGroups';
 import { formatLifetime, readPairingLifetimeMs } from './pairingTiming';
 import { HubRegistryError, readClosedCodes, readPairedFile, readPendingFile } from './hubRegistry';
 import { removeRunnerAndEndItsWork } from './runnerRemoval';
@@ -14,7 +16,7 @@ import { formatListTimestamp, formatRunnerList, serviceKindLabels } from './runn
 import { formatServiceRemovalNote, formatServiceRemovalUnknownNote, readServiceRemovalForRunner } from './serviceRemoval';
 
 /**
- * @description `charness runners [ls | pair | remove <name> | service-removal <name> | pause <name> | resume <name>]` — the headless twin of `/runners`, for an
+ * @description `charness runners [ls | pair | remove <name> | service-removal <name> | pause <name> | resume <name> | jobs-at-once <name> <n>]` — the headless twin of `/runners`, for an
  * instance without Telegram (a Jira-only one) and for the flow tests. It works on the registry of the OS user
  * (`~/.config/charness/runners/`), loads no env file and never touches `DATA_DIR`.
  */
@@ -29,11 +31,12 @@ const waitPollMs = 1000;
 export const runnersUsage = `Usage:
   charness runners [ls]                       the machines paired as runners: online or not, OS, how they are kept running
                                               (as each machine last reported it; one whose report is older than its link is asked first)
-  charness runners pair --host <host[:port]> [--label <text>] [--account <name>] [--wait]
+  charness runners pair --host <host[:port]> [--label <text>] [--account <name>] [--jobs-at-once <n>] [--wait]
                                               make two pairing lines (valid 10 minutes, single use, the first one used wins) to run on
                                               the runner machine: one for an ADMIN account there (it pairs <name>, default "runner", and
                                               installs its always-on service), one for the runner account itself;
                                               <host[:port]> is the address the runner dials to reach this machine's sshd;
+                                              --jobs-at-once <n> (1-8, default 1) is how many jobs the new runner runs side by side;
                                               --wait blocks until a line is used or the code expires (a line pasted for a machine that
                                               was already paired ends it too, with exit 0: nothing new was paired)
   charness runners remove <name>              detach a runner: its key is deleted and its link cut (a machine that runs as an always-on
@@ -41,6 +44,9 @@ export const runnersUsage = `Usage:
   charness runners service-removal <name>     the admin's commands that remove a runner's always-on service on its machine
   charness runners pause <name>               keep a runner attached but send it no jobs
   charness runners resume <name>
+  charness runners jobs-at-once <name> <n>    how many jobs a runner runs at once (1-8; default 1): told to the runner now when it is online, else
+                                              at its next job. A job that runs is never stopped by a lower number: it only keeps the next ones waiting.
+                                              Jobs side by side must use the ports and the simulator the runner gives them (docs/remote-run.md)
 `;
 
 /** @description What the CLI needs from outside; tests replace the scanner, the clock and the wait. */
@@ -51,6 +57,8 @@ export interface RunnersCliDeps {
   /** Asks the machines whose report is older than their link what they are like now (default: the `/runners` screen's own probe; a test's own). */
   refreshStale: typeof refreshStaleSnapshots;
   scanHostKey: HostKeyScanner;
+  /** Tells a runner its jobs-at-once limit now (default: over its link, `runners/runnerGroups.ts`; a test's own). */
+  applyGroups: typeof applyRunnerGroups;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   sshUser?: string;
@@ -62,6 +70,7 @@ export function createRunnersCliDeps(io: Pick<CliIo, 'homeDir' | 'env'>): Runner
     cacheDir: getRemoteRunCacheDir(io.env, io.homeDir),
     refreshStale: refreshStaleSnapshots,
     scanHostKey,
+    applyGroups: applyRunnerGroups,
     now: Date.now,
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
   };
@@ -71,21 +80,36 @@ interface PairOptions {
   host: string | null;
   label: string | null;
   account: string;
+  jobsAtOnce: number | null;
   isWaiting: boolean;
 }
 
+/** Plain digits only: `Number()` would also take «1e1», «0x2», «  3» and the empty string. */
+const plainCountPattern = /^\d{1,3}$/;
+
+/** `text` as a number of jobs at once (a plain integer in 1..{@link maxJobsAtOnce}), or `null`. */
+function parseJobsAtOnce(text: string): number | null {
+  const parsed = jobsAtOnceSchema.safeParse(plainCountPattern.test(text) ? Number(text) : Number.NaN);
+  return parsed.success ? parsed.data : null;
+}
+
+const jobsAtOnceRangeProblem = `the number of jobs at once must be a whole number from 1 to ${maxJobsAtOnce}`;
+
 function parsePairOptions(args: readonly string[]): PairOptions | string {
-  const options: PairOptions = { host: null, label: null, account: defaultRunnerAccount, isWaiting: false };
+  const options: PairOptions = { host: null, label: null, account: defaultRunnerAccount, jobsAtOnce: null, isWaiting: false };
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === '--wait') {
       options.isWaiting = true;
-    } else if (argument === '--host' || argument === '--label' || argument === '--account') {
+    } else if (argument === '--host' || argument === '--label' || argument === '--account' || argument === '--jobs-at-once') {
       const value = args[index + 1];
       if (value === undefined) return `${argument} needs a value`;
       if (argument === '--host') options.host = value;
       else if (argument === '--label') options.label = value;
-      else if (checkIsAccountName(value)) options.account = value;
+      else if (argument === '--jobs-at-once') {
+        options.jobsAtOnce = parseJobsAtOnce(value);
+        if (options.jobsAtOnce === null) return `--jobs-at-once: ${jobsAtOnceRangeProblem}`;
+      } else if (checkIsAccountName(value)) options.account = value;
       else return '--account must be a plain account name (letters, digits, ".", "_", "-")';
       index += 1;
     } else {
@@ -121,6 +145,7 @@ async function runPairCommand(args: readonly string[], io: CliIo, deps: RunnersC
     nowMs: deps.now(),
     lifetimeMs: readPairingLifetimeMs(io.env),
     sshUser: deps.sshUser,
+    ...(options.jobsAtOnce === null ? {} : { jobsAtOnce: options.jobsAtOnce }),
   });
   io.stdout(
     `Pair a runner — valid ${formatLifetime(readPairingLifetimeMs(io.env))}, single use.\n\n` +
@@ -205,6 +230,35 @@ async function runRemoveCommand(name: string, io: CliIo, deps: RunnersCliDeps): 
   return 0;
 }
 
+/** What the operator is told about the number being on the runner: the three outcomes of {@link applyRunnerGroups}. */
+const jobsAtOnceOutcomeNotes: Record<RunnerGroupsOutcome, string> = {
+  applied: 'told to the runner now',
+  offline: 'the runner is offline: it takes the number at its next job',
+  failed: 'the runner did not take it now (see above): it takes the number at its next job',
+};
+
+async function runJobsAtOnceCommand(args: readonly string[], io: CliIo, deps: RunnersCliDeps): Promise<number> {
+  const [name, count, ...extra] = args;
+  if (name === undefined || count === undefined || extra.length > 0) {
+    io.stderr(`runners: jobs-at-once needs a runner name and a number\n\n${runnersUsage}`);
+    return usageExitCode;
+  }
+  const jobsAtOnce = parseJobsAtOnce(count);
+  if (jobsAtOnce === null) {
+    io.stderr(`runners: ${jobsAtOnceRangeProblem}\n`);
+    return usageExitCode;
+  }
+  const runner = findPairedRunner(readPairedFile(deps.ctx.dir).runners, name);
+  const updated = runner === undefined ? null : await setPairedRunnerJobsAtOnce(deps.ctx, runner.id, jobsAtOnce);
+  if (updated === null) {
+    io.stderr(`runners: no runner named "${name}"\n`);
+    return failedExitCode;
+  }
+  const outcome = await deps.applyGroups(deps.ctx, updated, deps.cacheDir);
+  io.stdout(`Runner "${updated.name}" runs ${getJobsAtOnce(updated)} job${getJobsAtOnce(updated) === 1 ? '' : 's'} at once (${jobsAtOnceOutcomeNotes[outcome]}). A job that runs is never stopped by a lower number.\n`);
+  return 0;
+}
+
 async function runPauseCommand(name: string, isPaused: boolean, io: CliIo, deps: RunnersCliDeps): Promise<number> {
   const runner = findPairedRunner(readPairedFile(deps.ctx.dir).runners, name);
   const updated = runner === undefined ? null : await setPairedRunnerPaused(deps.ctx, runner.id, isPaused);
@@ -225,6 +279,8 @@ export async function runRunnersCli(argv: readonly string[], io: CliIo, deps: Ru
         return await runListCommand(io, deps);
       case 'pair':
         return await runPairCommand(args, io, deps);
+      case 'jobs-at-once':
+        return await runJobsAtOnceCommand(args, io, deps);
       case 'service-removal':
       case 'remove':
       case 'pause':

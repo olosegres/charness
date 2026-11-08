@@ -146,6 +146,15 @@ describe('what a paired runner adds to the probe', () => {
     assert.equal(handMade.split('\n').length, 4);
   });
 
+  it('`runners` tells a runner whose only group is the default one as «jobs at once: N», any other set of groups as «groups: …», and none as nothing', () => {
+    const jobsLineOf = (groupLimits: Record<string, number>): string => formatRunnerBlock({ name: 'mac', status: 'online', probe: parseProbeOutput(pairedProbeText), groupLimits, isPausedByHub: false }).split('\n')[2];
+    assert.match(jobsLineOf({ default: 2 }), / · jobs at once: 2$/);
+    assert.doesNotMatch(jobsLineOf({ default: 2 }), /groups:/);
+    assert.match(jobsLineOf({ default: 3, emulator: 1 }), / · groups: default 3, emulator 1$/);
+    assert.match(jobsLineOf({ emulator: 1 }), / · groups: emulator 1$/, 'a runner with only another group is not told «jobs at once»');
+    assert.doesNotMatch(jobsLineOf({}), /jobs at once|groups:/);
+  });
+
   it('the heading says who paused it — the hub, the runner itself, or both — online or as it was when last seen', () => {
     const probeOf = (text: string) => parseProbeOutput(`${linuxProbeText}\n${text}`);
     const onlinePausedBoth: RunnerReport = { name: 'mac', status: 'online', probe: probeOf('paused=yes'), groupLimits: {}, isPausedByHub: true };

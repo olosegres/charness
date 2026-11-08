@@ -1,4 +1,5 @@
 import { lidClosedNote } from '../remoteRun/probe';
+import { getJobsAtOnce } from '../remoteRun/runnersConfig';
 import type { PendingPairing, RunnerServiceKind } from './hubRegistry';
 import { formatLinkConcernNote } from './linkConcern';
 import { getCurrentServiceKind } from './runnerServiceKind';
@@ -6,7 +7,7 @@ import type { OverviewEntry } from './runnersOverview';
 
 /**
  * @description The text of `charness runners ls`: one line per paired runner (name, online or offline since when, paused, OS, how it
- * is kept running, version) and a line for each pairing code still open. Pure: the entries — the same ones the `/runners` screen is built
+ * is kept running, version, how many jobs it runs at once) and a line for each pairing code still open. Pure: the entries — the same ones the `/runners` screen is built
  * from, with the probe — are read by the caller, and how a runner is kept running is the one rule of `getCurrentServiceKind`.
  */
 
@@ -42,6 +43,7 @@ export function formatRunnerListLine(entry: OverviewEntry): string {
     `${runner.os} (${runner.arch})`,
     serviceKindLabels[getCurrentServiceKind(runner, probe)],
     `charness ${runner.version}`,
+    `${getJobsAtOnce(runner)} at once`,
     `paired ${formatListTimestamp(runner.pairedAtMs)}`,
   ];
   const notes = [...(entry.isOnline && entry.isReportDoubtful === true ? [describeDoubtfulReport(entry)] : []), ...(entry.linkConcern == null ? [] : [formatLinkConcernNote(entry.linkConcern, formatListTimestamp)])];

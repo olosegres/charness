@@ -17,19 +17,26 @@ import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { TELEGRAM_HARD_LIMIT } from '../connectors/telegram/messageSplit';
 import { hubHostKeySchema, hubHostSchema, hubSshUserSchema } from '../runners/hubIds';
 import { createPairCodePayload } from './runnersTestKit';
+import { maxJobsAtOnce } from '../remoteRun/runnersConfig';
 import {
   buildRunnersPageCallback,
   buildAddressStep,
   buildClosedText,
   buildExpiredText,
+  buildJobsAtOnceOutcomeToast,
+  buildJobsAtOncePicker,
   buildPairedText,
   buildPairingIntro,
+  buildPairingJobsAtOnceRows,
+  buildPairingJobsCallback,
+  buildRunnerJobsCallback,
   buildRemovalOutcomeText,
   buildServiceRemovalText,
   buildRemoveConfirmation,
   buildRunnerActionCallback,
   buildRunnersScreen,
   clipReportedText,
+  getRecommendedJobsAtOnce,
   maxCallbackDataBytes,
   maxReportedTextChars,
   maxScreenTextChars,
@@ -38,6 +45,7 @@ import {
   runnersAddressOtherCallback,
   runnersAddressUseCallback,
   runnersPairCallback,
+  runnersPairingJobsInfoCallback,
   runnersRefreshCallback,
   type RunnerAction,
   type RunnerScreenEntry,
@@ -165,7 +173,7 @@ describe('runnersScreenPlan: the list', () => {
         [
           'mac — online · macOS 15.1 (arm64) · always on (system service)',
           '  Apple M2 Pro, 12 cores, load 1.2 · RAM 32 GB, 20 GB free · disk 210 GB free',
-          '  jobs: 1 running, 0 queued · projects: 1',
+          '  jobs: 1 running, 0 queued · projects: 1 · 1 at once',
           "  can: android (HVF, emulator) · playwright (chromium) · ios: no — needs the runner user's login session · docker: no",
         ].join('\n'),
       ].join('\n\n'),
@@ -347,7 +355,7 @@ describe('runnersScreenPlan: the list', () => {
     const probe: RunnerProbe = { ...parseProbeOutput(probeText), pueueVersion: null, cpuCores: null, cpuThreads: 16, load: null };
     const { text } = buildRunnersScreen({ revision, entries: [createEntry({ probe })], openPairingExpiries: [], isChecking: false }, t, formatTime);
     assert.ok(text.includes('  Apple M2 Pro, 16 threads · RAM'), text);
-    assert.ok(text.includes('projects: 1 · Pueue is missing on this runner'), text);
+    assert.ok(text.includes('projects: 1 · 1 at once · Pueue is missing on this runner'), text);
   });
 
   it('no machines: the empty text and only the pair and refresh buttons', () => {
@@ -365,21 +373,29 @@ describe('runnersScreenPlan: the list', () => {
     assert.equal(several.text.split('\n').filter((line) => line.includes('pairing code')).length, 1);
   });
 
-  it('every machine gets Pause (Resume when paused) and Remove, carrying the revision and its position', () => {
-    const entries = [createEntry(), createEntry({ runner: createRunner({ id: 'ba9876543210', name: 'box1', isPaused: true }) })];
+  it('every machine gets Pause (Resume when paused) and Remove, and under them its «jobs at once» button, carrying the revision and its position', () => {
+    const entries = [createEntry(), createEntry({ runner: createRunner({ id: 'ba9876543210', name: 'box1', isPaused: true, jobsAtOnce: 3 }) })];
     const screen = buildRunnersScreen({ revision, entries, openPairingExpiries: [], isChecking: false }, t, formatTime);
     assert.deepEqual(screen.rows.map((row) => row.map((button) => button.text)), [
       ['＋ Pair a new runner'],
       ['mac: Pause', 'mac: Remove'],
+      ['mac: Jobs at once — 1'],
       ['box1: Resume', 'box1: Remove'],
+      ['box1: Jobs at once — 3'],
       ['↻ Refresh'],
     ]);
-    assert.deepEqual(screen.rows.slice(1, 3).map((row) => row.map((button) => button.data)), [['rnr_7_0_p', 'rnr_7_0_x'], ['rnr_7_1_r', 'rnr_7_1_x']]);
+    assert.deepEqual(screen.rows.slice(1, 5).map((row) => row.map((button) => button.data)), [['rnr_7_0_p', 'rnr_7_0_x'], ['rnr_7_0_j'], ['rnr_7_1_r', 'rnr_7_1_x'], ['rnr_7_1_j']]);
+  });
+
+  it('the jobs line says how many jobs the machine runs at once — 1 for an entry that never said, the registry\'s number otherwise', () => {
+    const jobsLineOf = (runner: PairedRunner): string => buildRunnersScreen({ revision, entries: [createEntry({ runner })], openPairingExpiries: [], isChecking: false }, t, formatTime).text.split('\n').find((line) => line.includes('jobs: '))?? '';
+    assert.equal(jobsLineOf(createRunner()), '  jobs: 1 running, 0 queued · projects: 1 · 1 at once');
+    assert.equal(jobsLineOf(createRunner({ jobsAtOnce: 2 })), '  jobs: 1 running, 0 queued · projects: 1 · 2 at once');
   });
 });
 
 describe('runnersScreenPlan: callback data', () => {
-  const actions: RunnerAction[] = ['pause', 'resume', 'remove', 'removeYes', 'removeNo'];
+  const actions: RunnerAction[] = ['pause', 'resume', 'remove', 'removeYes', 'removeNo', 'jobsPick'];
 
   it('reads back exactly what it built, for every action', () => {
     for (const action of actions) {
@@ -392,15 +408,31 @@ describe('runnersScreenPlan: callback data', () => {
     assert.deepEqual(parseRunnersCallback(runnersAddressOtherCallback), { kind: 'addressOther' });
   });
 
+  it('reads back a number set in the picker and a number chosen on a pairing message, for every number a runner may have', () => {
+    for (let count = 1; count <= maxJobsAtOnce; count += 1) {
+      assert.deepEqual(parseRunnersCallback(buildRunnerJobsCallback(revision, 3, count)), { kind: 'runnerJobs', revision, index: 3, jobsAtOnce: count });
+      assert.deepEqual(parseRunnersCallback(buildPairingJobsCallback('0123456789ab', count)), { kind: 'pairingJobs', pairId: '0123456789ab', jobsAtOnce: count });
+    }
+    assert.deepEqual(parseRunnersCallback(runnersPairingJobsInfoCallback), { kind: 'pairingJobsInfo' });
+    assert.equal(buildRunnerJobsCallback(revision, 3, 6), 'rnr_7_3_j6');
+    assert.equal(buildPairingJobsCallback('0123456789ab', 3), 'rnr_pj_0123456789ab_3');
+  });
+
   it('stays within Telegram\'s 64 bytes at the largest revision and position it could carry', () => {
     const hugeRevision = Number.MAX_SAFE_INTEGER;
     for (const action of actions) {
       assert.ok(Buffer.byteLength(buildRunnerActionCallback(hugeRevision, 99, action)) <= maxCallbackDataBytes, action);
     }
     assert.ok(Buffer.byteLength(buildRunnersPageCallback(Number.MAX_SAFE_INTEGER)) <= maxCallbackDataBytes);
+    assert.ok(Buffer.byteLength(buildRunnerJobsCallback(hugeRevision, 99, maxJobsAtOnce)) <= maxCallbackDataBytes);
+    assert.ok(Buffer.byteLength(buildPairingJobsCallback('0123456789ab', maxJobsAtOnce)) <= maxCallbackDataBytes);
   });
 
   it('refuses data that is not one of its own', () => {
+    // A number past the most a runner may have (0, 9, 10) and a pairing id that is not 12 hex digits are not buttons of this screen either.
+    for (const data of ['rnr_7_0_j0', 'rnr_7_0_j9', 'rnr_7_0_j10', 'rnr_pj_0123456789ab_0', 'rnr_pj_0123456789ab_9', 'rnr_pj_0123456789a_2', 'rnr_pj_0123456789AB_2', 'rnr_pj_0123456789ab_', 'rnr_pjinfo_1']) {
+      assert.equal(parseRunnersCallback(data), null, data);
+    }
     for (const data of ['rnr_', 'rnr_x', 'rnr_7_0', 'rnr_7_0_z', 'rnr_7_-1_p', 'rnr_a_0_p', 'rnr_7_0_p_extra', 'rnr_pg_', 'rnr_pg_x', 'rnr_pg_-1', 'rnr_pg_1_2', 'fbk_add', 'tka_5', '']) {
       assert.equal(parseRunnersCallback(data), null, data);
     }
@@ -413,6 +445,8 @@ describe('runnersScreenPlan: callback data', () => {
       buildRemoveConfirmation('box-3', 1_000_000, 3, t),
       buildAddressStep('203.0.113.5:22', t),
       buildAddressStep(null, t),
+      buildJobsAtOncePicker(entries[3], 1_000_000, 3, t),
+      { text: '', rows: buildPairingJobsAtOnceRows('0123456789ab', 1, t) },
     ];
     for (const screen of screens) {
       for (const button of screen.rows.flat()) assert.ok(Buffer.byteLength(button.data) <= maxCallbackDataBytes, button.data);
@@ -518,7 +552,8 @@ describe('runnersScreenPlan: the other screens and texts', () => {
   });
 
   it('what the pairing message becomes: paired (with the name and the time) or expired', () => {
-    assert.equal(buildPairedText('mac', 42, t, formatTime), 'Runner “mac” paired T42.');
+    assert.equal(buildPairedText('mac', 42, 1, t, formatTime), 'Runner “mac” paired T42.\nJobs at once: 1 — change it in /runners.');
+    assert.equal(buildPairedText('mac', 42, 3, t, formatTime), 'Runner “mac” paired T42.\nJobs at once: 3 — change it in /runners.');
     assert.equal(buildExpiredText(t), 'Pairing code expired.');
     assert.equal(buildClosedText(t), 'This line was used on a machine that was already paired — nothing new was paired.');
   });
@@ -637,5 +672,117 @@ describe('what a removal came to', () => {
       assert.doesNotMatch(stopped, wordsOfHours, `${locale}: jobs stopped from the hub name no delay`);
     }
     assert.match(buildRemovalOutcomeText('mac', 'offline', t), /refused for 12 h\./);
+  });
+});
+
+describe('runnersScreenPlan: how many jobs a runner runs at once', () => {
+  const probeOf = (cores: number | null, ramMb: number | null): RunnerProbe => parseProbeOutput([
+    probeText,
+    ...(cores === null ? ['cpu_cores='] : [`cpu_cores=${cores}`]),
+    ...(ramMb === null ? ['ram_total_mb='] : [`ram_total_mb=${ramMb}`]),
+  ].join('\n'));
+
+  it('recommends the smaller of memory/12 GB and cores/4, at least 1 and at most 4: the 10-core 32 GB Mac gets 2, a 8-core 16 GB machine 1, a big server 4', () => {
+    assert.equal(getRecommendedJobsAtOnce(probeOf(10, 32 * 1024)), 2);
+    assert.equal(getRecommendedJobsAtOnce(probeOf(8, 16 * 1024)), 1);
+    assert.equal(getRecommendedJobsAtOnce(probeOf(2, 4 * 1024)), 1, 'a small machine is never recommended 0');
+    assert.equal(getRecommendedJobsAtOnce(probeOf(64, 512 * 1024)), 4, 'capped');
+    assert.equal(getRecommendedJobsAtOnce(probeOf(32, 24 * 1024)), 2, 'memory is the limit');
+    assert.equal(getRecommendedJobsAtOnce(probeOf(8, 128 * 1024)), 2, 'cores are the limit');
+  });
+
+  it('recommends nothing when the runner did not report its cores or its memory', () => {
+    assert.equal(getRecommendedJobsAtOnce(probeOf(null, 32 * 1024)), null);
+    assert.equal(getRecommendedJobsAtOnce(probeOf(10, null)), null);
+  });
+
+  it('the picker names the machine, its number now and the recommendation for its hardware, and offers 1 2 3 4 6 8 with the current one marked, then Back', () => {
+    const picker = buildJobsAtOncePicker(createEntry({ runner: createRunner({ jobsAtOnce: 2 }), probe: probeOf(10, 32 * 1024) }), revision, 4, t);
+    assert.equal(
+      picker.text,
+      'How many jobs may mac run at once? Now 2.\n\nA job that is running is never stopped: a lower number only keeps the next ones waiting. Jobs side by side must use the ports and the simulator the runner gives them (docs/remote-run.md, «Jobs beside each other»).\n\nSuggested for 10 cores and 32 GB: 2.',
+    );
+    assert.deepEqual(picker.rows.map((row) => row.map((button) => button.text)), [['1', '2 ✓', '3', '4', '6', '8'], ['‹ Back']]);
+    assert.deepEqual(picker.rows[0].map((button) => button.data), ['rnr_7_4_j1', 'rnr_7_4_j2', 'rnr_7_4_j3', 'rnr_7_4_j4', 'rnr_7_4_j6', 'rnr_7_4_j8']);
+    assert.equal(picker.rows[1][0].data, runnersRefreshCallback, 'Back is the list again');
+  });
+
+  it('an entry that never said has 1 marked; a number the picker does not offer (an entry edited by hand) is added so the current one is always on a button', () => {
+    const fresh = buildJobsAtOncePicker(createEntry(), revision, 0, t);
+    assert.ok(fresh.text.startsWith('How many jobs may mac run at once? Now 1.'));
+    assert.deepEqual(fresh.rows[0].map((button) => button.text), ['1 ✓', '2', '3', '4', '6', '8']);
+    const odd = buildJobsAtOncePicker(createEntry({ runner: createRunner({ jobsAtOnce: 5 }) }), revision, 0, t);
+    assert.deepEqual(odd.rows[0].map((button) => button.text), ['1', '2', '3', '4', '5 ✓', '6', '8']);
+  });
+
+  it('a runner that was never probed, or did not report its size, has no recommendation line', () => {
+    assert.ok(!buildJobsAtOncePicker(createEntry({ probe: null }), revision, 0, t).text.includes('Suggested'));
+    assert.ok(!buildJobsAtOncePicker(createEntry({ probe: probeOf(null, 32 * 1024) }), revision, 0, t).text.includes('Suggested'));
+    assert.ok(buildJobsAtOncePicker(createEntry({ probe: probeOf(12, 32 * 1024) }), revision, 0, t).text.includes('Suggested for 12 cores and 32 GB: 2.'));
+  });
+
+  it('the pairing message keyboard is a label button, and under it 1 2 3 4 with the chosen one marked, each carrying the pairing code', () => {
+    const rows = buildPairingJobsAtOnceRows('0123456789ab', 3, t);
+    assert.deepEqual(rows.map((row) => row.map((button) => button.text)), [['Jobs at once:'], ['1', '2', '3 ✓', '4']]);
+    assert.deepEqual(rows.map((row) => row.map((button) => button.data)), [[runnersPairingJobsInfoCallback], ['rnr_pj_0123456789ab_1', 'rnr_pj_0123456789ab_2', 'rnr_pj_0123456789ab_3', 'rnr_pj_0123456789ab_4']]);
+  });
+
+  it('what a tap says: told to the runner, or saved for its next job — and the three outcomes read differently', () => {
+    assert.equal(buildJobsAtOnceOutcomeToast('mac', 2, 'applied', t), 'mac: 2 at once');
+    assert.equal(buildJobsAtOnceOutcomeToast('mac', 2, 'offline', t), 'mac: 2 at once — it is offline and takes this at its next job');
+    assert.equal(buildJobsAtOnceOutcomeToast('mac', 2, 'failed', t), 'mac: 2 at once is saved, but the machine did not take it now — it does at its next job');
+  });
+
+  it('in every language the picker, the toasts, the row label and the paired note carry their numbers and names, are translated, and leave no placeholder behind', () => {
+    const entry = createEntry({ runner: createRunner({ jobsAtOnce: 2 }), probe: probeOf(10, 32 * 1024) });
+    const english = {
+      picker: buildJobsAtOncePicker(entry, revision, 0, t).text,
+      row: buildPairingJobsAtOnceRows('0123456789ab', 2, t)[0][0].text,
+      paired: buildPairedText('mac', 42, 2, t, formatTime),
+      toasts: (['applied', 'offline', 'failed'] as const).map((outcome) => buildJobsAtOnceOutcomeToast('mac', 2, outcome, t)),
+      help: t('runners.pairingJobsAtOnceHelpToast'),
+      chosen: t('runners.pairingJobsAtOnceChosenToast', { count: 2 }),
+      back: t('runners.jobsAtOnceBackButton'),
+      button: t('runners.jobsAtOnceButton', { name: 'mac', count: 2 }),
+      note: t('runners.jobsAtOnceNote', { count: 2 }),
+    };
+    for (const locale of localeCodes) {
+      runWithLocale(locale, () => {
+        const picker = buildJobsAtOncePicker(entry, revision, 0, t);
+        const texts = {
+          picker: picker.text,
+          row: buildPairingJobsAtOnceRows('0123456789ab', 2, t)[0][0].text,
+          paired: buildPairedText('mac', 42, 2, t, formatTime),
+          help: t('runners.pairingJobsAtOnceHelpToast'),
+          chosen: t('runners.pairingJobsAtOnceChosenToast', { count: 2 }),
+          back: t('runners.jobsAtOnceBackButton'),
+          button: t('runners.jobsAtOnceButton', { name: 'mac', count: 2 }),
+          note: t('runners.jobsAtOnceNote', { count: 2 }),
+        };
+        const toasts = (['applied', 'offline', 'failed'] as const).map((outcome) => buildJobsAtOnceOutcomeToast('mac', 2, outcome, t));
+        for (const [what, text] of [...Object.entries(texts), ...toasts.map((toast, index) => [`toast ${index}`, toast] as const)]) {
+          assert.doesNotMatch(text, /\{[a-z]+\}/, `${locale} ${what}: no placeholder is left unfilled`);
+        }
+        assert.ok(texts.picker.includes('mac') && texts.picker.includes('2') && texts.picker.includes('10') && texts.picker.includes('32'), `${locale}: the picker names the machine and the figures`);
+        assert.ok(toasts.every((toast) => toast.includes('mac') && toast.includes('2')), `${locale}: every toast names the machine and the number`);
+        assert.ok(texts.button.includes('mac') && texts.button.includes('2'), `${locale}: the button`);
+        assert.ok(texts.note.includes('2') && texts.chosen.includes('2') && texts.paired.includes('mac') && texts.paired.includes('2'), `${locale}: the numbers`);
+        // The picker text carries a docs reference the person is sent to, and the callback answers stay inside Telegram's 200 characters.
+        assert.ok(texts.picker.includes('docs/remote-run.md'), `${locale}: the docs`);
+        assert.ok([...toasts, texts.help, texts.chosen].every((toast) => toast.length <= 200), `${locale}: a callback answer holds 200 characters`);
+        assert.ok(texts.row.length <= 40, `${locale}: the label fits a full-width button`);
+        if (locale !== 'en') {
+          assert.notEqual(texts.picker, english.picker, `${locale}: picker translated`);
+          assert.notEqual(texts.row, english.row, `${locale}: row label translated`);
+          assert.notEqual(texts.paired, english.paired, `${locale}: paired note translated`);
+          assert.notEqual(texts.help, english.help, `${locale}: help translated`);
+          assert.notEqual(texts.chosen, english.chosen, `${locale}: chosen translated`);
+          assert.notEqual(texts.back, english.back, `${locale}: back translated`);
+          assert.notEqual(texts.button, english.button, `${locale}: button translated`);
+          assert.notEqual(texts.note, english.note, `${locale}: note translated`);
+          toasts.forEach((toast, index) => assert.notEqual(toast, english.toasts[index], `${locale}: toast ${index} translated`));
+        }
+      });
+    }
   });
 });

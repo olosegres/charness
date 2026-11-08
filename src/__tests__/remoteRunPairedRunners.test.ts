@@ -19,7 +19,7 @@ import type { RunnerClient } from '../remoteRun/runnerClient';
 import { probeRunner } from '../remoteRun/runners';
 import { getRunnerSummaryLines } from '../remoteRun/runnerSummary';
 import { loadRunnersCatalog } from '../remoteRun/runnersCatalog';
-import { getRunnersConfigPath, resetRunnersConfigCache } from '../remoteRun/runnersConfig';
+import { formatGroupLimits, getRunnersConfigPath, resetRunnersConfigCache } from '../remoteRun/runnersConfig';
 import { buildRsyncSshCommand, buildSshArgs } from '../remoteRun/ssh';
 import { createHubContext, getHubFilePaths, getRunnerLinkPaths } from '../runners/hubPaths';
 import { writeLinkState } from '../runners/linkControl';
@@ -150,6 +150,34 @@ describe('a registry entry with disk upkeep settings', () => {
     writePaired([createPairedRunner({ minFreeGb: 25, copyMaxIdleDays: 2 })]);
     const runner = loadPairedRunners(homeDir).config?.runners[0];
     assert.deepEqual([runner?.minFreeGb, runner?.copyMaxIdleDays], [25, 2]);
+  });
+});
+
+describe('how many jobs a paired runner runs at once', () => {
+  const hub = { hubDir: '/home/user/.config/charness/runners', nodePath: '/usr/bin/node', cliPath: '/opt/charness/dist/cli.js' };
+
+  it('is the parallel limit of its Pueue default group: 1 for an entry that never said, the entry\'s number otherwise — and it is what `prepare` is sent', () => {
+    assert.deepEqual(buildPairedRunnerConfig(createPairedRunner(), hub).groups, { default: 1 });
+    assert.deepEqual(buildPairedRunnerConfig(createPairedRunner({ jobsAtOnce: 2 }), hub).groups, { default: 2 });
+    assert.equal(formatGroupLimits(buildPairedRunnerConfig(createPairedRunner({ jobsAtOnce: 4 }), hub).groups), 'default=4');
+  });
+
+  it('survives a round trip through paired.json, and a number past the most a runner may run is refused with the field named and no value', () => {
+    writePaired([createPairedRunner({ jobsAtOnce: 3 })]);
+    assert.deepEqual(loadPairedRunners(homeDir).config?.runners[0].groups, { default: 3 });
+    const filePath = getHubFilePaths(createHubContext({ homeDir }).dir).paired;
+    const file = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    file.runners[0].jobsAtOnce = 9;
+    fs.writeFileSync(filePath, JSON.stringify(file));
+    resetPairedRunnersCache();
+    const load = loadPairedRunners(homeDir);
+    assert.equal(load.status, 'invalid');
+    assert.ok(load.errors?.some((error) => error.includes('jobsAtOnce') && !error.includes('9')), (load.errors ?? []).join('\n'));
+  });
+
+  it('a hand-made runner keeps its own groups, unbounded: the registry\'s maximum is for paired runners only', () => {
+    writeRunnersJson({ runners: [{ name: 'box1', ssh: 'runner@box1.example', workDir: '/home/runner/work', groups: { default: 12 } }] });
+    assert.deepEqual(loadRunnersCatalog(homeDir).config?.runners[0].groups, { default: 12 });
   });
 });
 

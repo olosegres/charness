@@ -33,9 +33,12 @@ import { ensureGateWrapper } from '../runners/gateWrapper';
 import type { HostKeyScanner, HubAddress } from '../runners/hubAddress';
 import { cancelPairing, createPairing, redeemPairing, sweepExpiredPairings } from '../runners/hubPairing';
 import { readClosedCodes, readPairedFile, readPendingFile, recordClosedCode } from '../runners/hubRegistry';
+import { pairingLifetimeMs } from '../runners/pairingTiming';
+import { removeRunnerAndEndItsWork } from '../runners/runnerRemoval';
 import { writeLinkState } from '../runners/linkControl';
 import type { LinkSourceChange } from '../runners/linkConcern';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
+import type { RunnerGroupsOutcome } from '../runners/runnerGroups';
 import { readRunnersOverview, type RunnersOverview } from '../runners/runnersOverview';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { TELEGRAM_HARD_LIMIT } from '../connectors/telegram/messageSplit';
@@ -72,6 +75,11 @@ let sweepGate: Promise<void> | null = null;
 let editHook: ((messageId: number, text: string) => Promise<boolean> | null) | null = null;
 /** Makes a send of the texts it returns true for fail (Telegram refused it): the bot gets no message id back. */
 let sendFailsFor: ((text: string) => boolean) | null = null;
+/** What the module told the runners to apply (the entry as the registry held it), and how the runner answers. */
+let appliedGroups: Array<{ name: string; jobsAtOnce: number | undefined }> = [];
+let applyOutcome: RunnerGroupsOutcome = 'applied';
+/** The keyboard edits the module made (the harness ids are no messages of the fake Bot API, so they are recorded rather than sent). */
+let keyboardEdits: Array<{ messageId: number; keyboard: object | null }> = [];
 let clockMs = Date.now();
 let savedAddress: HubAddress | null = null;
 let candidates: string[] = [];
@@ -102,6 +110,14 @@ function buildPorts(): Parameters<typeof createRunners>[0] {
     },
     editThreadMessage: async (key, messageId, text, extra) => (await editWithHooks(key, messageId, text, extra)) === 'edited',
     editThreadMessageDetailed: editWithHooks,
+    editThreadKeyboard: async (_key, messageId, keyboard) => {
+      keyboardEdits.push({ messageId, keyboard });
+      return true;
+    },
+    applyGroups: async (runner) => {
+      appliedGroups.push({ name: runner.name, jobsAtOnce: runner.jobsAtOnce });
+      return applyOutcome;
+    },
     hub: hubFixture.ctx,
     pairingMessagesPath,
     linkNoticesPath,
@@ -204,6 +220,9 @@ describe('/runners over its ports', () => {
     onlineRunnerNames = new Set();
     probeCalls.length = 0;
     probeGates.length = 0;
+    appliedGroups = [];
+    applyOutcome = 'applied';
+    keyboardEdits = [];
     feature = createRunners(buildPorts());
     feature.registerRunnersCommands();
     feature.registerRunnersCallbacks();
@@ -214,9 +233,9 @@ describe('/runners over its ports', () => {
     hubFixture.cleanup();
   });
 
-  it('registers /runners and its buttons: the four plain ones, then the page and the per-runner patterns', () => {
+  it('registers /runners and its buttons: the plain ones, then the page, the per-runner and the pairing-message patterns', () => {
     assert.deepEqual(harness.registeredCommandNames, ['runners']);
-    assert.deepEqual(harness.registeredActionPatterns, ['rnr_pair', 'rnr_refresh', 'rnr_aduse', 'rnr_adother', String(/^rnr_pg_(\d+)$/), String(/^rnr_(\d+)_(\d+)_(p|r|x|xy|xn)$/)]);
+    assert.deepEqual(harness.registeredActionPatterns, ['rnr_pair', 'rnr_refresh', 'rnr_aduse', 'rnr_adother', 'rnr_pjinfo', String(/^rnr_pg_(\d+)$/), String(/^rnr_(\d+)_(\d+)_(p|r|x|xy|xn|j[1-8]?)$/), String(/^rnr_pj_([0-9a-f]{12})_([1-8])$/)]);
   });
 
   describe('the list', () => {
@@ -243,13 +262,13 @@ describe('/runners over its ports', () => {
       assert.ok(screen?.text.includes('mac — online'), screen?.text);
       assert.ok(screen?.text.includes('box1 — offline, never connected'), screen?.text);
       assert.ok(screen?.text.endsWith('⏳ Checking the machines…'), 'the first draw says it is checking');
-      assert.deepEqual(harness.getKeyboardLabels(screen), [['＋ Pair a new runner'], ['mac: Pause', 'mac: Remove'], ['box1: Pause', 'box1: Remove'], ['↻ Refresh']]);
+      assert.deepEqual(harness.getKeyboardLabels(screen), [['＋ Pair a new runner'], ['mac: Pause', 'mac: Remove'], ['mac: Jobs at once — 1'], ['box1: Pause', 'box1: Remove'], ['box1: Jobs at once — 1'], ['↻ Refresh']]);
 
       await waitUntilAsync('the live redraw', () => harness.edits.length > 0);
       const redrawn = harness.edits.at(-1);
       assert.equal(redrawn?.messageId, screen?.messageId);
       assert.ok(redrawn?.text.includes('  AMD Ryzen 7 9700X, 8 cores, load 0.4 · RAM 64 GB, 40 GB free · disk 500 GB free'), redrawn?.text);
-      assert.ok(redrawn?.text.includes('jobs: 2 running, 1 queued · projects: 2'), redrawn?.text);
+      assert.ok(redrawn?.text.includes('jobs: 2 running, 1 queued · projects: 2 · 1 at once'), redrawn?.text);
       assert.ok(redrawn?.text.includes('can: android (KVM, emulator) · docker · ios: no — Linux · playwright: no'), redrawn?.text);
       assert.ok(!redrawn?.text.includes('Checking the machines'), 'the note is gone');
       assert.equal(probeCalls.length, 1);
@@ -411,7 +430,10 @@ describe('/runners over its ports', () => {
       const [message] = sent;
       /** The words of an HTML pairing message with the markup taken off: what must go out if Telegram refuses the markup. */
       const decodeHtml = (html: string): string => html.replace(/<\/?pre>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-      assert.deepEqual(message.extra, { parse_mode: 'HTML' });
+      assert.deepEqual(Object.keys(message.extra ?? {}).sort(), ['parse_mode', 'reply_markup']);
+      assert.equal((message.extra as { parse_mode?: string }).parse_mode, 'HTML');
+      assert.deepEqual(harness.getKeyboardLabels(message), [['Jobs at once:'], ['1 ✓', '2', '3', '4']], 'the row that picks how many jobs the new machine runs at once, 1 chosen');
+      assert.deepEqual(harness.getKeyboardData(message), [['rnr_pjinfo'], [1, 2, 3, 4].map((count) => `rnr_pj_${readPendingFile(hubFixture.ctx.dir).pending[0].pairId}_${count}`)]);
       assert.deepEqual(message.options, { isSecret: true, plainFallbackText: decodeHtml(message.text) }, 'a secret, with its plain twin for a refusal of the markup');
       assert.doesNotMatch(String(message.options?.plainFallbackText), /<\/?pre>|&(lt|gt|amp);/, 'the twin shows no tag and no entity');
       assert.ok(message.text.length <= 4096, `a pairing message must fit one Telegram message, is ${message.text.length}`);
@@ -537,7 +559,7 @@ describe('/runners over its ports', () => {
       await redeemPairing(hubFixture.ctx, offer.pairId, createRedeemFixture({ suggestedName: 'Mac Mini' }).request, clockMs);
       await feature.watchPairingsOnce();
       assert.deepEqual(harness.edits.map((edit) => edit.messageId), [offer.messageId], 'one edit, of the message');
-      assert.match(harness.edits[0].text, /^Runner “mac-mini” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u);
+      assert.match(harness.edits[0].text, /^Runner “mac-mini” paired \d{1,2} \S+ \d{2}:\d{2}\.\nJobs at once: 1 — change it in \/runners\.$/u);
       assert.equal(harness.edits[0].extra, undefined, 'plain text: no parse mode, no keyboard');
       assert.ok(!harness.edits[0].text.includes('cr2.'), 'the line is gone');
       assert.deepEqual(harness.deletedMessageIds, [], 'nothing is deleted: the message stays and says what became of the code');
@@ -963,6 +985,202 @@ describe('/runners over its ports', () => {
       fs.writeFileSync(path.join(hubFixture.ctx.dir, 'paired.json'), '{ not json');
       await harness.runCommand('runners');
       assert.equal(harness.replies.at(-1)?.text, '⚠️ The runners registry cannot be read: paired.json is not valid JSON; fix or remove it by hand (nothing was changed)');
+    });
+  });
+
+  describe('jobs at once', () => {
+    const pickerTextStart = 'How many jobs may mac run at once? Now ';
+
+    /** The list is drawn and the machine has a snapshot (so the picker can suggest a number for its size); returns the list message and the revision its buttons carry. */
+    async function openList(): Promise<{ messageId: number; revision: number }> {
+      await pairMachine('mac');
+      writeProbeSnapshot('mac', defaultProbeText, clockMs);
+      await harness.runCommand('runners');
+      const screen = harness.replies.at(-1);
+      return { messageId: screen?.messageId ?? 0, revision: readPairedFile(hubFixture.ctx.dir).rev };
+    }
+
+    it('the list has the button of each runner and, for a machine online, how many it runs at once', async () => {
+      const { messageId } = await openList();
+      const screen = harness.replies.find((reply) => reply.messageId === messageId);
+      assert.deepEqual(harness.getKeyboardLabels(screen).at(2), ['mac: Jobs at once — 1']);
+      onlineRunnerNames = new Set(['mac']);
+      await harness.tapButton(messageId, 'rnr_refresh');
+      assert.ok(harness.edits.at(-1)?.text.includes('· 1 at once'), harness.edits.at(-1)?.text);
+    });
+
+    it('the button turns the list into the picker (answered at once): the number now, what the machine\'s size suggests, 1 2 3 4 6 8 with the current marked, and Back', async () => {
+      const { messageId, revision } = await openList();
+      await harness.tapButton(messageId, `rnr_${revision}_0_j`);
+      const picker = harness.edits.at(-1);
+      assert.equal(picker?.messageId, messageId, 'the same message');
+      assert.ok(picker?.text.startsWith(`${pickerTextStart}1.`), picker?.text);
+      assert.ok(picker?.text.endsWith('Suggested for 8 cores and 64 GB: 2.'), picker?.text);
+      assert.deepEqual(harness.getKeyboardLabels(picker), [['1 ✓', '2', '3', '4', '6', '8'], ['‹ Back']]);
+      assert.deepEqual(harness.getKeyboardData(picker), [[1, 2, 3, 4, 6, 8].map((count) => `rnr_${revision}_0_j${count}`), ['rnr_refresh']]);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '', 'the tap is answered at once, with no text');
+      assert.deepEqual(appliedGroups, [], 'opening the picker changes nothing and tells the runner nothing');
+    });
+
+    it('a machine that was never probed gets the picker without a suggestion', async () => {
+      await pairMachine('mac');
+      await harness.runCommand('runners');
+      const screen = harness.replies.at(-1);
+      await harness.tapButton(screen?.messageId ?? 0, `rnr_${readPairedFile(hubFixture.ctx.dir).rev}_0_j`);
+      assert.ok(harness.edits.at(-1)?.text.startsWith(pickerTextStart));
+      assert.ok(!harness.edits.at(-1)?.text.includes('Suggested'), harness.edits.at(-1)?.text);
+    });
+
+    it('Back draws the list again, nothing changed', async () => {
+      const { messageId, revision } = await openList();
+      await harness.tapButton(messageId, `rnr_${revision}_0_j`);
+      await harness.tapButton(messageId, 'rnr_refresh');
+      assert.ok(harness.edits.at(-1)?.text.startsWith('Runners — machines'), harness.edits.at(-1)?.text);
+      assert.equal(readPairedFile(hubFixture.ctx.dir).runners[0].jobsAtOnce, undefined);
+    });
+
+    it('a live check that finishes while the picker stands does not draw the list over it', async () => {
+      await pairMachine('mac');
+      onlineRunnerNames = new Set(['mac']);
+      let openProbe: () => void = () => {};
+      probeGates.push(new Promise<void>((resolve) => { openProbe = resolve; }));
+      await harness.runCommand('runners');
+      const screen = harness.replies.at(-1);
+      await harness.tapButton(screen?.messageId ?? 0, `rnr_${readPairedFile(hubFixture.ctx.dir).rev}_0_j`);
+      const editsWithPicker = harness.edits.length;
+      assert.ok(harness.edits.at(-1)?.text.startsWith(pickerTextStart));
+      openProbe();
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+      assert.equal(harness.edits.length, editsWithPicker, 'the picker stands');
+    });
+
+    it('a number sets the runner\'s entry, tells the machine now, says so on the tap, and draws the list with the new number', async () => {
+      const { messageId, revision } = await openList();
+      await harness.tapButton(messageId, `rnr_${revision}_0_j2`);
+      assert.equal(readPairedFile(hubFixture.ctx.dir).runners[0].jobsAtOnce, 2);
+      assert.deepEqual(appliedGroups, [{ name: 'mac', jobsAtOnce: 2 }], 'the machine is told what the registry now holds');
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'mac: 2 at once');
+      const list = harness.edits.at(-1);
+      assert.ok(list?.text.startsWith('Runners — machines'), 'the list again, not the picker');
+      assert.deepEqual(harness.getKeyboardLabels(list).at(2), ['mac: Jobs at once — 2']);
+      assert.equal(readPairedFile(hubFixture.ctx.dir).rev, revision + 1);
+    });
+
+    it('a machine that is offline keeps the number for its next job and the tap says so; one that did not take it says that — the number is saved either way', async () => {
+      const { messageId, revision } = await openList();
+      applyOutcome = 'offline';
+      await harness.tapButton(messageId, `rnr_${revision}_0_j3`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'mac: 3 at once — it is offline and takes this at its next job');
+      applyOutcome = 'failed';
+      await harness.tapButton(messageId, `rnr_${readPairedFile(hubFixture.ctx.dir).rev}_0_j4`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'mac: 4 at once is saved, but the machine did not take it now — it does at its next job');
+      assert.equal(readPairedFile(hubFixture.ctx.dir).runners[0].jobsAtOnce, 4);
+    });
+
+    it('the same number again changes nothing in the registry (the revision stays) but is told to the machine again — a way to put right a machine that missed it', async () => {
+      const { messageId, revision } = await openList();
+      await harness.tapButton(messageId, `rnr_${revision}_0_j1`);
+      assert.equal(readPairedFile(hubFixture.ctx.dir).rev, revision);
+      assert.deepEqual(appliedGroups, [{ name: 'mac', jobsAtOnce: undefined }]);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'mac: 1 at once');
+    });
+
+    it('a picker of an older revision, or of a position that is gone, only says the list changed: nothing is set, nothing is told to a machine', async () => {
+      const { messageId, revision } = await openList();
+      await pairMachine('box1');
+      await harness.tapButton(messageId, `rnr_${revision}_0_j2`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'The list changed — here it is again.');
+      await harness.tapButton(messageId, `rnr_${revision}_0_j`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'The list changed — here it is again.');
+      await harness.tapButton(messageId, `rnr_${readPairedFile(hubFixture.ctx.dir).rev}_7_j2`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'The list changed — here it is again.');
+      assert.deepEqual(readPairedFile(hubFixture.ctx.dir).runners.map((runner) => runner.jobsAtOnce), [undefined, undefined]);
+      assert.deepEqual(appliedGroups, []);
+    });
+
+    it('a runner removed between the list and the tap is not set: the tap says the list changed', async () => {
+      const { messageId, revision } = await openList();
+      await removeRunnerAndEndItsWork(hubFixture.ctx, 'mac', clockMs);
+      await harness.tapButton(messageId, `rnr_${revision}_0_j2`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'The list changed — here it is again.');
+      assert.deepEqual(appliedGroups, []);
+    });
+
+    it('a tap from a topic other than General is refused and sets nothing', async () => {
+      const { messageId, revision } = await openList();
+      harness.isGeneral = false;
+      await harness.tapButton(messageId, `rnr_${revision}_0_j3`);
+      assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '⚠️ Runners are managed in General — open /runners there.');
+      assert.equal(readPairedFile(hubFixture.ctx.dir).runners[0].jobsAtOnce, undefined);
+      assert.deepEqual(appliedGroups, []);
+    });
+
+    describe('on the pairing message', () => {
+      async function offerPairing(): Promise<{ messageId: number; pairId: string }> {
+        savedAddress = { host: 'host.example', port: 22 };
+        scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
+        await harness.tapButton(900, 'rnr_pair');
+        const message = harness.replies.at(-1);
+        const [pending] = readPendingFile(hubFixture.ctx.dir).pending.slice(-1);
+        assert.ok(message?.messageId !== null && message?.messageId !== undefined);
+        return { messageId: message.messageId, pairId: pending.pairId };
+      }
+
+      it('a number chosen while the code is open is kept for the machine to come: the tick moves, the machine pairs with it, and the settled message names it', async () => {
+        const offer = await offerPairing();
+        await harness.tapButton(offer.messageId, `rnr_pj_${offer.pairId}_3`);
+        assert.equal(readPendingFile(hubFixture.ctx.dir).pending[0].jobsAtOnce, 3);
+        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'The new machine will run 3 at once.');
+        assert.equal(keyboardEdits.at(-1)?.messageId, offer.messageId);
+        const markup = keyboardEdits.at(-1)?.keyboard as { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+        assert.deepEqual(markup.inline_keyboard.map((row) => row.map((button) => button.text)), [['Jobs at once:'], ['1', '2', '3 ✓', '4']]);
+        assert.equal(harness.edits.length, 0, 'the message text is not edited: the line stays');
+        assert.deepEqual(appliedGroups, [], 'no machine yet: nothing to tell');
+
+        await redeemPairing(hubFixture.ctx, offer.pairId, createRedeemFixture({ suggestedName: 'Mac Mini' }).request, clockMs);
+        assert.equal(readPairedFile(hubFixture.ctx.dir).runners[0].jobsAtOnce, 3);
+        await feature.watchPairingsOnce();
+        assert.match(harness.edits.at(-1)?.text ?? '', /\nJobs at once: 3 — change it in \/runners\.$/);
+      });
+
+      it('a number chosen after the code was used (before the message turned into «paired») changes the runner it made, tells it, and says so', async () => {
+        const offer = await offerPairing();
+        await redeemPairing(hubFixture.ctx, offer.pairId, createRedeemFixture({ suggestedName: 'Mac Mini' }).request, clockMs);
+        await harness.tapButton(offer.messageId, `rnr_pj_${offer.pairId}_4`);
+        assert.equal(readPairedFile(hubFixture.ctx.dir).runners[0].jobsAtOnce, 4);
+        assert.deepEqual(appliedGroups, [{ name: 'mac-mini', jobsAtOnce: 4 }]);
+        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'mac-mini: 4 at once');
+        assert.equal(keyboardEdits.length, 0, 'the message is turned into «paired» by the watcher, not edited here');
+        await feature.watchPairingsOnce();
+        assert.match(harness.edits.at(-1)?.text ?? '', /\nJobs at once: 4 — change it in \/runners\.$/);
+      });
+
+      it('a code that ran out takes no choice: the tap says it expired, nothing is written', async () => {
+        const offer = await offerPairing();
+        clockMs += pairingLifetimeMs + 1;
+        await harness.tapButton(offer.messageId, `rnr_pj_${offer.pairId}_2`);
+        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Pairing code expired.');
+        assert.equal(readPendingFile(hubFixture.ctx.dir).pending[0].jobsAtOnce, undefined);
+        assert.equal(keyboardEdits.length, 0);
+      });
+
+      it('a code nobody made takes no choice either (a keyboard of another hub)', async () => {
+        await harness.tapButton(900, 'rnr_pj_0123456789ab_2');
+        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'Pairing code expired.');
+      });
+
+      it('the label button explains the row', async () => {
+        await harness.tapButton(900, 'rnr_pjinfo');
+        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), 'How many jobs the new machine runs side by side. It can be changed later in /runners.');
+      });
+
+      it('a tap from a topic other than General is refused and chooses nothing', async () => {
+        const offer = await offerPairing();
+        harness.isGeneral = false;
+        await harness.tapButton(offer.messageId, `rnr_pj_${offer.pairId}_2`);
+        assert.equal(harness.fakeTelegram.callbackAnswers.at(-1), '⚠️ Runners are managed in General — open /runners there.');
+        assert.equal(readPendingFile(hubFixture.ctx.dir).pending[0].jobsAtOnce, undefined);
+      });
     });
   });
 

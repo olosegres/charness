@@ -14,6 +14,7 @@ import { parseProbeOutput } from '../remoteRun/probe';
 import { extractManagedBlock } from '../runners/authorizedKeys';
 import { getHubFilePaths } from '../runners/hubPaths';
 import { cancelPairing, redeemPairing } from '../runners/hubPairing';
+import type { RunnerGroupsOutcome } from '../runners/runnerGroups';
 import { pairingLifetimeMs } from '../runners/pairingTiming';
 import { readPairedFile, readPendingFile, type PairedRunner } from '../runners/hubRegistry';
 import { getCurrentServiceKind } from '../runners/runnerServiceKind';
@@ -28,6 +29,9 @@ const hubHostKey = generateEd25519KeyPair('hub-host').publicKey;
 
 let fixture: HubFixture;
 let nowMs = startMs;
+/** What the runner stand-in was told to apply (the runner's name and the number its registry entry held), and how it answers. */
+let appliedGroups: Array<{ name: string; jobsAtOnce: number | undefined }> = [];
+let applyOutcome: RunnerGroupsOutcome = 'applied';
 
 interface CliRun {
   code: number;
@@ -41,6 +45,10 @@ function createDeps(overrides: Partial<RunnersCliDeps> = {}): RunnersCliDeps {
     cacheDir: path.join(fixture.root, 'cache'),
     refreshStale: refreshStaleSnapshots,
     scanHostKey: async () => hubHostKey,
+    applyGroups: async (_ctx, runner) => {
+      appliedGroups.push({ name: runner.name, jobsAtOnce: runner.jobsAtOnce });
+      return applyOutcome;
+    },
     now: () => nowMs,
     sleep: async () => undefined,
     sshUser: 'hubuser',
@@ -68,6 +76,8 @@ describe('charness runners', () => {
   beforeEach(() => {
     fixture = createHubFixture();
     nowMs = startMs;
+    appliedGroups = [];
+    applyOutcome = 'applied';
   });
   afterEach(() => {
     fixture.cleanup();
@@ -209,7 +219,7 @@ describe('charness runners', () => {
     await runCli(['pair', '--host', 'host.example']);
     const run = await runCli(['ls']);
     assert.equal(run.code, 0);
-    assert.match(run.stdout, /^mac-mini — offline, never connected · macOS 15\.1 \(arm64\) · run by hand · charness 3\.7\.0 · paired /m);
+    assert.match(run.stdout, /^mac-mini — offline, never connected · macOS 15\.1 \(arm64\) · run by hand · charness 3\.7\.0 · 1 at once · paired /m);
     assert.match(run.stdout, /Pairing code open until .* \(host\.example:22\)/);
   });
 
@@ -220,7 +230,7 @@ describe('charness runners', () => {
     fs.mkdirSync(deps.cacheDir, { recursive: true });
     fs.writeFileSync(path.join(deps.cacheDir, `${name}.probe.json`), JSON.stringify({ seenAtMs: nowMs, text: 'os_name=macOS\nservice=user-service' }));
     const run = await runCli(['ls'], deps);
-    assert.match(run.stdout, /^mac-mini — offline since [\d-]+ [\d:]+ · macOS 15\.1 \(arm64\) · user service · charness 3\.7\.0 · paired /m, 'the snapshot speaks; the link, which is down, still decides online or not');
+    assert.match(run.stdout, /^mac-mini — offline since [\d-]+ [\d:]+ · macOS 15\.1 \(arm64\) · user service · charness 3\.7\.0 · 1 at once · paired /m, 'the snapshot speaks; the link, which is down, still decides online or not');
     assert.doesNotMatch(run.stdout, /run by hand/);
   });
 
@@ -233,7 +243,7 @@ describe('charness runners', () => {
     };
     const run = await runCli(['ls'], createDeps({ refreshStale }));
     assert.deepEqual(asked, ['mac-mini'], 'asked once, by the very overview ls read');
-    assert.match(run.stdout, /^mac-mini — online · macOS 15\.1 \(arm64\) · system service · charness 3\.7\.0 · paired /m);
+    assert.match(run.stdout, /^mac-mini — online · macOS 15\.1 \(arm64\) · system service · charness 3\.7\.0 · 1 at once · paired /m);
     assert.doesNotMatch(run.stdout, /run by hand/);
   });
 
@@ -330,6 +340,82 @@ describe('charness runners', () => {
     });
   });
 
+  it('`pair --jobs-at-once <n>` makes a code whose runner will run n jobs at once; without it the runner has none recorded (it reads as 1)', async () => {
+    await runCli(['pair', '--host', 'host.example', '--jobs-at-once', '3']);
+    assert.equal(readPendingFile(fixture.ctx.dir).pending[0].jobsAtOnce, 3);
+    const pairing = readPendingFile(fixture.ctx.dir).pending[0];
+    const reply = await redeemPairing(fixture.ctx, pairing.pairId, createRedeemFixture({ suggestedName: 'mac' }).request, nowMs);
+    assert.ok(reply.ok);
+    assert.equal(readPairedFile(fixture.ctx.dir).runners[0].jobsAtOnce, 3);
+    await runCli(['pair', '--host', 'host.example']);
+    assert.equal(readPendingFile(fixture.ctx.dir).pending[0].jobsAtOnce, undefined);
+  });
+
+  it('`pair --jobs-at-once` refuses a missing value and anything but a whole number from 1 to 8 — a usage error that names the range, and no code is made', async () => {
+    for (const bad of ['0', '9', '-1', '2.5', 'two', '', '08x']) {
+      const run = await runCli(['pair', '--host', 'host.example', '--jobs-at-once', bad]);
+      assert.equal(run.code, 2, bad);
+      assert.match(run.stderr, /--jobs-at-once: the number of jobs at once must be a whole number from 1 to 8/, bad);
+    }
+    const missing = await runCli(['pair', '--host', 'host.example', '--jobs-at-once']);
+    assert.equal(missing.code, 2);
+    assert.match(missing.stderr, /--jobs-at-once needs a value/);
+    assert.deepEqual(readPendingFile(fixture.ctx.dir).pending, []);
+  });
+
+  it('`jobs-at-once <name> <n>` sets the number, tells the runner now, says so — and `ls` shows it', async () => {
+    const name = await pairMachine('Mac');
+    assert.match((await runCli(['ls'])).stdout, / · charness 3\.7\.0 · 1 at once · paired /, 'an entry that never said runs 1');
+    const run = await runCli(['jobs-at-once', name, '2']);
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal(run.stdout, `Runner "${name}" runs 2 jobs at once (told to the runner now). A job that runs is never stopped by a lower number.\n`);
+    assert.equal(readPairedFile(fixture.ctx.dir).runners[0].jobsAtOnce, 2);
+    assert.deepEqual(appliedGroups, [{ name, jobsAtOnce: 2 }], 'the runner is told what the registry now holds');
+    assert.match((await runCli(['ls'])).stdout, / · 2 at once · paired /);
+    const back = await runCli(['jobs-at-once', name, '1']);
+    assert.match(back.stdout, /runs 1 job at once/);
+    assert.equal(readPairedFile(fixture.ctx.dir).runners[0].jobsAtOnce, 1);
+  });
+
+  it('`jobs-at-once` says what became of the call to the runner: it is offline (takes the number at its next job), or it did not take it now', async () => {
+    const name = await pairMachine('Mac');
+    applyOutcome = 'offline';
+    const offline = await runCli(['jobs-at-once', name, '3']);
+    assert.equal(offline.code, 0);
+    assert.match(offline.stdout, /runs 3 jobs at once \(the runner is offline: it takes the number at its next job\)/);
+    applyOutcome = 'failed';
+    const failed = await runCli(['jobs-at-once', name, '4']);
+    assert.equal(failed.code, 0, 'the number is saved; only telling the runner failed');
+    assert.match(failed.stdout, /runs 4 jobs at once \(the runner did not take it now \(see above\): it takes the number at its next job\)/);
+    assert.equal(readPairedFile(fixture.ctx.dir).runners[0].jobsAtOnce, 4);
+  });
+
+  it('`jobs-at-once` of an unknown runner fails, a bad number or a wrong count of words is a usage error — and nothing is changed or applied', async () => {
+    const name = await pairMachine('Mac');
+    const unknown = await runCli(['jobs-at-once', 'nobody', '2']);
+    assert.equal(unknown.code, 1);
+    assert.match(unknown.stderr, /no runner named "nobody"/);
+    for (const bad of ['0', '9', 'x', '1.5']) {
+      const run = await runCli(['jobs-at-once', name, bad]);
+      assert.equal(run.code, 2, bad);
+      assert.match(run.stderr, /must be a whole number from 1 to 8/, bad);
+    }
+    for (const args of [[], [name], [name, '2', 'extra']]) {
+      const run = await runCli(['jobs-at-once', ...args]);
+      assert.equal(run.code, 2, args.join(' '));
+      assert.match(run.stderr, /jobs-at-once needs a runner name and a number/);
+    }
+    assert.equal(readPairedFile(fixture.ctx.dir).runners[0].jobsAtOnce, undefined);
+    assert.deepEqual(appliedGroups, []);
+  });
+
+  it('the usage names the option, the command, and the rule that a lower number never stops a job', async () => {
+    const usage = (await runCli(['help'])).stdout;
+    assert.match(usage, /--jobs-at-once <n>\] \[--wait\]/);
+    assert.match(usage, /charness runners jobs-at-once <name> <n>/);
+    assert.match(usage, /A job that runs is never stopped by a lower number/);
+  });
+
   it('remove, pause and resume of an unknown runner fail; a wrong number of names is a usage error', async () => {
     for (const command of ['remove', 'pause', 'resume']) {
       const unknown = await runCli([command, 'nobody']);
@@ -379,7 +465,8 @@ describe('runner list text', () => {
   };
 
   it('says online, or since when it is offline, and what is paused', () => {
-    assert.match(formatRunnerListLine({ runner, isOnline: true, lastSeenMs: startMs, probe: null }), /^box1 — online · paused · Ubuntu 24\.04 \(x86_64\) · system service · charness 3\.7\.0 · paired \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    assert.match(formatRunnerListLine({ runner, isOnline: true, lastSeenMs: startMs, probe: null }), /^box1 — online · paused · Ubuntu 24\.04 \(x86_64\) · system service · charness 3\.7\.0 · 1 at once · paired \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    assert.match(formatRunnerListLine({ runner: { ...runner, isPaused: false, jobsAtOnce: 4 }, isOnline: true, lastSeenMs: startMs, probe: null }), / · charness 3\.7\.0 · 4 at once · paired /);
     assert.match(formatRunnerListLine({ runner: { ...runner, isPaused: false }, isOnline: false, lastSeenMs: startMs, probe: null }), /^box1 — offline since \d{4}-\d{2}-\d{2} \d{2}:\d{2} · Ubuntu/);
     assert.match(formatRunnerListLine({ runner: { ...runner, isPaused: false }, isOnline: false, lastSeenMs: null, probe: null }), /^box1 — offline, never connected · Ubuntu/);
   });

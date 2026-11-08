@@ -28,6 +28,22 @@ const groupNamePattern = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 /** The group every runner has; its parallel limit may be set, it never needs `group add`. */
 export const defaultPueueGroup = 'default';
 
+/** The most jobs a PAIRED runner may run at once (the registry's `jobsAtOnce`). A hand-made runner's `groups.default` keeps its own, unbounded, positive integer. */
+export const maxJobsAtOnce = 8;
+/** A runner runs one job at a time until the operator says otherwise: a job written for an exclusive machine keeps working. */
+export const defaultJobsAtOnce = 1;
+/** The numbers the `/runners` picker of a paired runner offers. */
+export const jobsAtOnceChoices: readonly number[] = [1, 2, 3, 4, 6, 8];
+/** The numbers the pairing message offers: no hardware is known before the machine has paired, so the choice is short. */
+export const pairingJobsAtOnceChoices: readonly number[] = [1, 2, 3, 4];
+/** How many jobs a paired runner runs at once: the Pueue `default` group's parallel limit. */
+export const jobsAtOnceSchema = z.number().int().min(1).max(maxJobsAtOnce);
+
+/** @description A paired runner's `jobsAtOnce` with the default applied: what Pueue's `default` group is told. */
+export function getJobsAtOnce(runner: { jobsAtOnce?: number }): number {
+  return runner.jobsAtOnce ?? defaultJobsAtOnce;
+}
+
 /** @description A runner's work folder: an absolute path on the runner, or one the runner's shell expands from `~`. */
 export const runnerWorkDirSchema = z.string().min(1).refine((workDir) => workDir.startsWith('/') || workDir === '~' || workDir.startsWith('~/'), 'must be an absolute path on the runner or start with ~/');
 

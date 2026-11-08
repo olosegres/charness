@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import { z } from 'zod';
 import { writeJsonFileAtomically, writeTextFileAtomically } from '../configDirFile';
-import { runnerDiskSettingsShape, runnerNamePattern, runnerWorkDirSchema } from '../remoteRun/runnersConfig';
+import { jobsAtOnceSchema, runnerDiskSettingsShape, runnerNamePattern, runnerWorkDirSchema } from '../remoteRun/runnersConfig';
 import { buildRunnerKeyLine, buildTempKeyLine, writeManagedBlock } from './authorizedKeys';
 import { hubHostSchema, hubIdSchema, hubPortSchema } from './hubIds';
 import { getHubFilePaths, getRunnerHostAlias, type HubContext } from './hubPaths';
@@ -58,6 +58,8 @@ const pairedRunnerSchema = z.strictObject({
   port: hubPortSchema,
   /** Set from the hub: the runner stays attached, but no job is sent to it. */
   isPaused: z.boolean(),
+  /** How many jobs the runner runs at once (the Pueue `default` group's limit); absent = 1. Set from the hub (`/runners`, `charness runners jobs-at-once`) or when pairing. */
+  jobsAtOnce: jobsAtOnceSchema.optional(),
   /** The runner's disk upkeep, when the operator replaced the defaults by editing this entry (`minFreeGb`, `copyMaxIdleDays`: see `runnersConfig.ts`). */
   ...runnerDiskSettingsShape,
 });
@@ -80,6 +82,8 @@ const pendingPairingSchema = z.strictObject({
   label: z.string().min(1).max(maxTextLength),
   /** The message the offering instance edits when the code is used or expires (opaque to the hub); `null` for the CLI. */
   messageRef: z.string().max(maxTextLength).nullable(),
+  /** How many jobs the runner will run at once, chosen on the pairing message; copied into the paired entry when the code is used. Absent = 1. */
+  jobsAtOnce: jobsAtOnceSchema.optional(),
 });
 
 const pendingFileSchema = z.strictObject({ pending: z.array(pendingPairingSchema) });

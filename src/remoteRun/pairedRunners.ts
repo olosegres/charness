@@ -3,7 +3,7 @@ import { createConfigFileLoader, type ConfigFileLoad } from '../configDirFile';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { createHubContext, getHubFilePaths, getRunnerHostAlias, getRunnerLinkPaths } from '../runners/hubPaths';
 import { pairedFileSchema, type PairedFile, type PairedRunner } from '../runners/hubRegistry';
-import type { PairedRunnerLink, RunnerConfig } from './runnersConfig';
+import { defaultPueueGroup, getJobsAtOnce, type PairedRunnerLink, type RunnerConfig } from './runnersConfig';
 import { checkIsPlainShellWord, checkIsSshPathQuotable, escapeSshTokens, quoteSshOptionPath } from './ssh';
 
 /**
@@ -94,6 +94,7 @@ export function buildPairedRunnerConfig(runner: PairedRunner, hub: PairedHubEnvi
     sshOptions: buildPairedSshOptions({ runnerId: runner.id, nodePath: hub.nodePath, cliPath: hub.cliPath, hubDir: hub.hubDir }),
     workDir: runner.workDir,
     pueue: getPairedRunnerPueue(runner.workDir),
+    groups: { [defaultPueueGroup]: getJobsAtOnce(runner) },
     minFreeGb: runner.minFreeGb,
     copyMaxIdleDays: runner.copyMaxIdleDays,
     paired: link,

@@ -23,21 +23,29 @@ import { buildAdminBootstrapLine, defaultRunnerAccount } from '../../../runners/
 import { checkHubAddress, parseHubAddress, type HostKeyScanner, type HubAddress, type HubAddressCheck } from '../../../runners/hubAddress';
 import { findProposedHubAddress, formatHubAddress } from '../../../runners/hubAddressCandidates';
 import type { HubContext } from '../../../runners/hubPaths';
+import { defaultJobsAtOnce, getJobsAtOnce } from '../../../remoteRun/runnersConfig';
 import {
   cancelPairing,
   createPairing,
+  setPairedRunnerJobsAtOnce,
   setPairedRunnerPaused,
+  setPairingJobsAtOnce,
+  type PairingJobsAtOnceChange,
 } from '../../../runners/hubPairing';
-import { HubRegistryError, readClosedCodes, readPairedFile, readPendingFile } from '../../../runners/hubRegistry';
+import { HubRegistryError, readClosedCodes, readPairedFile, readPendingFile, type PairedFile, type PairedRunner } from '../../../runners/hubRegistry';
 import { pairingLifetimeMinutes } from '../../../runners/pairingTiming';
 import { getLinkConcern } from '../../../runners/linkConcern';
 import { readLinkState } from '../../../runners/linkControl';
+import type { RunnerGroupsOutcome } from '../../../runners/runnerGroups';
 import { removeRunnerAndEndItsWork } from '../../../runners/runnerRemoval';
 import { readServiceRemovalForRunner } from '../../../runners/serviceRemoval';
 import type { RunnersOverview } from '../../../runners/runnersOverview';
 import {
   buildAddressStep,
   buildClosedText,
+  buildJobsAtOnceOutcomeToast,
+  buildJobsAtOncePicker,
+  buildPairingJobsAtOnceRows,
   buildExpiredText,
   buildPairedText,
   buildPairingIntro,
@@ -52,6 +60,8 @@ import {
   runnersAddressUseCallback,
   runnersPageCallbackRe,
   runnersPairCallback,
+  runnersPairingJobsCallbackRe,
+  runnersPairingJobsInfoCallback,
   runnersRefreshCallback,
   type FormatTime,
   type RunnersCallback,
@@ -98,6 +108,8 @@ export interface RunnersPorts extends Pick<BotCore, 'bot' | 'command' | 'replyTo
   pinMessage: (key: SessionKey, messageId: number) => Promise<boolean>;
   /** Drop the expired pairing codes (and their key lines) from the shared hub registry. */
   sweepExpiredCodes: (nowMs: number) => Promise<void>;
+  /** Tell a paired runner NOW how many jobs it may run at once (`runners/runnerGroups.ts`); best effort, the outcome is said on the tap. */
+  applyGroups: (runner: PairedRunner) => Promise<RunnerGroupsOutcome>;
   /** The registry, the links and the last snapshots — no ssh. */
   readOverview: (nowMs: number) => Promise<RunnersOverview>;
   /** The same with the machines that are online asked what they are like right now. */
@@ -124,8 +136,13 @@ export const formatRunnersTime: FormatTime = (epochMs) => {
   return `${read('day')} ${read('month')} ${read('hour')}:${read('minute')}`;
 };
 
-function buildKeyboard(screen: RunnersScreen): ReturnType<typeof Markup.inlineKeyboard> {
+function buildKeyboard(screen: Pick<RunnersScreen, 'rows'>): ReturnType<typeof Markup.inlineKeyboard> {
   return Markup.inlineKeyboard(screen.rows.map((row) => row.map((button) => Markup.button.callback(button.text, button.data))));
+}
+
+/** The keyboard under a pairing message: the number of jobs at once the new machine will run, `current` marked. */
+function buildPairingKeyboard(pairId: string, current: number): ReturnType<typeof Markup.inlineKeyboard> {
+  return buildKeyboard({ rows: buildPairingJobsAtOnceRows(pairId, current, t) });
 }
 
 /**
@@ -270,11 +287,13 @@ export function createRunners(ports: RunnersPorts) {
   }
 
   /**
-   * Post the message that carries a pairing line (a secret: the trace keeps only its length) and remember it so it can turn into «paired» / «expired».
+   * Post the message that carries a pairing line (a secret: the trace keeps only its length) with the row that picks how many jobs the new machine runs at once,
+   * and remember it so it can turn into «paired» / «expired».
    * If Telegram refuses the markup the message goes out as `message.plain`, never with the tags shown.
    */
   async function postPairingLine(key: SessionKey, pairId: string, message: { html: string; plain: string }): Promise<boolean> {
-    const messageId = await replyToThread(key, message.html, { parse_mode: 'HTML' }, { isSecret: true, plainFallbackText: message.plain });
+    const keyboard = buildPairingKeyboard(pairId, defaultJobsAtOnce);
+    const messageId = await replyToThread(key, message.html, { parse_mode: 'HTML', reply_markup: keyboard.reply_markup }, { isSecret: true, plainFallbackText: message.plain });
     if (messageId === null) return false;
     try {
       addPairingMessage(ports.pairingMessagesPath, { pairId, key: keyToString(key), messageId, offeredAtMs: now() });
@@ -382,21 +401,32 @@ export function createRunners(ports: RunnersPorts) {
     return true;
   }
 
-  async function handleRunnerAction(ctx: Context, key: SessionKey, messageId: number | null, callback: Extract<RunnersCallback, { kind: 'runner' }>): Promise<void> {
-    let paired: ReturnType<typeof readPairedFile>;
+  /**
+   * The runner a button's revision and place name. `null` after the screen has been told so: the registry could not be read, or the list changed since the keyboard
+   * was drawn (the tap is answered «the list changed» and the list drawn again) — never a neighbour that moved up.
+   */
+  async function readRunnerOfCallback(ctx: Context, key: SessionKey, messageId: number | null, callback: { revision: number; index: number }): Promise<{ paired: PairedFile; runner: PairedRunner } | null> {
+    let paired: PairedFile;
     try {
       paired = readPairedFile(hub.dir);
     } catch (error) {
       await answerCallbackQuerySafely(ctx);
       await reportRegistryError(key, error);
-      return;
+      return null;
     }
     const runner = paired.rev === callback.revision ? paired.runners[callback.index] : undefined;
     if (runner === undefined) {
       await answerCallbackQuerySafely(ctx, t('runners.staleToast'));
       if (messageId !== null) await redrawList(key, messageId);
-      return;
+      return null;
     }
+    return { paired, runner };
+  }
+
+  async function handleRunnerAction(ctx: Context, key: SessionKey, messageId: number | null, callback: Extract<RunnersCallback, { kind: 'runner' }>): Promise<void> {
+    const found = await readRunnerOfCallback(ctx, key, messageId, callback);
+    if (found === null) return;
+    const { paired, runner } = found;
     switch (callback.action) {
       case 'remove': {
         await answerCallbackQuerySafely(ctx);
@@ -406,6 +436,28 @@ export function createRunners(ports: RunnersPorts) {
         const listClaim = readClaim(key, messageId);
         claimMessage(key, messageId, 'question', listClaim?.page ?? 0);
         await editThreadMessage(key, messageId, question.text, buildKeyboard(question));
+        return;
+      }
+      case 'jobsPick': {
+        await answerCallbackQuerySafely(ctx);
+        if (messageId === null) return;
+        let overview: RunnersOverview;
+        try {
+          overview = await ports.readOverview(now());
+        } catch (error) {
+          await reportRegistryError(key, error);
+          return;
+        }
+        const entry = overview.entries.find((candidate) => candidate.runner.id === runner.id);
+        if (entry === undefined) {
+          await redrawList(key, messageId);
+          return;
+        }
+        const picker = buildJobsAtOncePicker(entry, paired.rev, callback.index, t);
+        // Claimed first, like the removal question: a live check that finishes while this edit is queued must not draw the list over the picker.
+        const listClaim = readClaim(key, messageId);
+        claimMessage(key, messageId, 'question', listClaim?.page ?? 0);
+        await editThreadMessage(key, messageId, picker.text, buildKeyboard(picker));
         return;
       }
       case 'removeNo':
@@ -439,6 +491,53 @@ export function createRunners(ports: RunnersPorts) {
     }
     if (messageId === null) await showScreen(key);
     else await redrawList(key, messageId);
+  }
+
+  /** A number picked in the «jobs at once» picker: kept in the registry, told to the runner now when it is online, said on the tap, and the list drawn again. */
+  async function handleRunnerJobs(ctx: Context, key: SessionKey, messageId: number | null, callback: Extract<RunnersCallback, { kind: 'runnerJobs' }>): Promise<void> {
+    const found = await readRunnerOfCallback(ctx, key, messageId, callback);
+    if (found === null) return;
+    try {
+      const updated = await setPairedRunnerJobsAtOnce(hub, found.runner.id, callback.jobsAtOnce);
+      if (updated === null) {
+        await answerCallbackQuerySafely(ctx, t('runners.staleToast'));
+      } else {
+        const outcome = await ports.applyGroups(updated);
+        await answerCallbackQuerySafely(ctx, buildJobsAtOnceOutcomeToast(updated.name, getJobsAtOnce(updated), outcome, t));
+      }
+    } catch (error) {
+      await answerCallbackQuerySafely(ctx);
+      await reportRegistryError(key, error);
+      return;
+    }
+    if (messageId === null) await showScreen(key);
+    else await redrawList(key, messageId);
+  }
+
+  /**
+   * A number picked on a pairing message. While the code is open it is kept for the machine to come (the ✓ moves); once the code was used it changes the runner it made
+   * and is told to it; an expired code is only said so (the watcher turns the message into «expired»).
+   */
+  async function handlePairingJobs(ctx: Context, key: SessionKey, messageId: number | null, callback: Extract<RunnersCallback, { kind: 'pairingJobs' }>): Promise<void> {
+    let change: PairingJobsAtOnceChange | null;
+    try {
+      change = await setPairingJobsAtOnce(hub, callback.pairId, callback.jobsAtOnce, now());
+    } catch (error) {
+      await answerCallbackQuerySafely(ctx);
+      await reportRegistryError(key, error);
+      return;
+    }
+    if (change === null) {
+      await answerCallbackQuerySafely(ctx, t('runners.expiredText'));
+      return;
+    }
+    if (change.kind === 'paired') {
+      const outcome = await ports.applyGroups(change.runner);
+      await answerCallbackQuerySafely(ctx, buildJobsAtOnceOutcomeToast(change.runner.name, getJobsAtOnce(change.runner), outcome, t));
+      return;
+    }
+    await answerCallbackQuerySafely(ctx, t('runners.pairingJobsAtOnceChosenToast', { count: callback.jobsAtOnce }));
+    if (messageId !== null) await editThreadKeyboard(key, messageId, buildPairingKeyboard(callback.pairId, callback.jobsAtOnce).reply_markup, logTag);
   }
 
   async function handleCallback(ctx: Context, callback: RunnersCallback): Promise<void> {
@@ -481,6 +580,15 @@ export function createRunners(ports: RunnersPorts) {
           return;
         case 'runner':
           await handleRunnerAction(ctx, key, messageId, callback);
+          return;
+        case 'runnerJobs':
+          await handleRunnerJobs(ctx, key, messageId, callback);
+          return;
+        case 'pairingJobs':
+          await handlePairingJobs(ctx, key, messageId, callback);
+          return;
+        case 'pairingJobsInfo':
+          await answerCallbackQuerySafely(ctx, t('runners.pairingJobsAtOnceHelpToast'));
       }
     });
   }
@@ -531,7 +639,7 @@ export function createRunners(ports: RunnersPorts) {
       if (runner === undefined && isOpen) continue;
       const key = keyFromString(message.key);
       // A message that is no longer there (the operator deleted it by hand) is settled all the same: there is nothing to edit and retrying would only fail for a day.
-      const isSettled = await withThreadLocale(key, async () => (await editThreadMessageDetailed(key, message.messageId, runner !== undefined ? buildPairedText(runner.name, runner.pairedAtMs, t, formatRunnersTime) : checkIsClosed(message.pairId) ? buildClosedText(t) : buildExpiredText(t))) !== 'failed');
+      const isSettled = await withThreadLocale(key, async () => (await editThreadMessageDetailed(key, message.messageId, runner !== undefined ? buildPairedText(runner.name, runner.pairedAtMs, getJobsAtOnce(runner), t, formatRunnersTime) : checkIsClosed(message.pairId) ? buildClosedText(t) : buildExpiredText(t))) !== 'failed');
       if (isSettled) {
         settledMessageIds.add(messageId);
         settleRetries.delete(messageId);
@@ -633,13 +741,13 @@ export function createRunners(ports: RunnersPorts) {
   }
 
   function registerRunnersCallbacks(): void {
-    for (const data of [runnersPairCallback, runnersRefreshCallback, runnersAddressUseCallback, runnersAddressOtherCallback]) {
+    for (const data of [runnersPairCallback, runnersRefreshCallback, runnersAddressUseCallback, runnersAddressOtherCallback, runnersPairingJobsInfoCallback]) {
       bot.action(data, (ctx) => {
         const callback = parseRunnersCallback(data);
         return callback === null ? Promise.resolve() : handleCallback(ctx, callback);
       });
     }
-    for (const pattern of [runnersPageCallbackRe, runnerActionCallbackRe]) {
+    for (const pattern of [runnersPageCallbackRe, runnerActionCallbackRe, runnersPairingJobsCallbackRe]) {
       bot.action(pattern, (ctx) => {
         const callback = parseRunnersCallback(ctx.match[0]);
         return callback === null ? Promise.resolve() : handleCallback(ctx, callback);
