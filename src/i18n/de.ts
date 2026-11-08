@@ -464,6 +464,7 @@ export const deDict: Record<string, string> = {
   'compact.done': '✅ Kontext komprimiert.',
   'compact.done_tokens': '✅ Kontext komprimiert: {pre} → {post} Tokens.',
   'compact.summaryHeader': '📄 Zusammenfassung der Komprimierung:',
+  'compact.instructionGapsHeader': '💡 Fehler des Agenten, die bessere Anweisungen verhindern könnten (Vorschläge; ohne Sie wird nichts geändert):',
   'compact.start_agent_first': 'Keine aktive Session. Starte zuerst einen Agent (/claude oder /opencode).',
   'compact.unsupported_backend': 'Kontext-Komprimierung wird für {label} nicht unterstützt.',
   'compact.model_unresolved': '⚠️ Komprimieren nicht möglich: für diese Session ist kein Modell ermittelt. Wähle eines mit /model und versuche es erneut.',

@@ -22,9 +22,15 @@ import {
   compactionSummaryGuidance,
   compactionSkillsGuidance,
   compactionChecklistGuidance,
+  compactionGapsGuidance,
+  compactionGapsStartMarker,
+  compactionGapsEndMarker,
+  compactionNoGapsLine,
   compactionResumeGuidance,
-  stripCompactionClosingMarkers,
+  stripCompactionSectionMarkers,
+  extractCompactionInstructionGaps,
   checkShouldPostCompactionSummary,
+  checkShouldPostInstructionGaps,
   checkShouldAnnounceCompactionStart,
   buildIdleCompactionNoticeParts,
   formatTokenCount,
@@ -401,12 +407,38 @@ test('compactionChecklistGuidance: a skills-first numbered next-steps list that 
   assert.match(compactionChecklistGuidance, /closing section between two marker lines, the checklist is the last part of that section, right before its end marker/);
 });
 
-test('compactionResumeGuidance: the skills sentence, then the checklist — the one text every compaction path carries', () => {
-  assert.equal(compactionResumeGuidance, `${compactionSkillsGuidance} ${compactionChecklistGuidance}`);
+test('compactionGapsGuidance: asks for the agent mistakes (repeated ones above all) an instruction change could prevent, with the change and where it goes', () => {
+  assert.match(compactionGapsGuidance, /mistakes the agent made in this session, especially REPEATED ones/);
+  assert.match(compactionGapsGuidance, /standing instructions \(rules, skills, CLAUDE\.md \/ AGENTS\.md\) could prevent/);
+  assert.match(compactionGapsGuidance, /the concrete instruction change that would prevent it and where that change would go/);
+});
+
+test('compactionGapsGuidance: pins its own markers, the none line, the position and the language', () => {
+  assert.ok(compactionGapsGuidance.includes(`a line containing only ${compactionGapsStartMarker} and a line containing only ${compactionGapsEndMarker}`), 'the exact marker lines');
+  assert.ok(compactionGapsGuidance.includes(`write only the single line ${compactionNoGapsLine} between those two marker lines`), 'the one-line answer for "none"');
+  assert.match(compactionGapsGuidance, /placed before the numbered checklist and before any closing section/);
+  assert.match(compactionGapsGuidance, /in the language the user used in this conversation/);
+});
+
+test('compactionGapsGuidance: the continuing session only PROPOSES — it never writes instructions on its own', () => {
+  assert.match(compactionGapsGuidance, /must only PROPOSE these changes to the user and wait for approval: it must never write or change instructions on its own/);
+});
+
+test('compactionGapsGuidance: its markers are distinct from the closing section\'s, so the two sections never collide', () => {
+  assert.notEqual(compactionGapsStartMarker, compactionClosingStartMarker);
+  assert.notEqual(compactionGapsEndMarker, compactionClosingEndMarker);
+  assert.ok(!compactionGapsGuidance.includes(compactionClosingStartMarker) && !compactionGapsGuidance.includes(compactionClosingEndMarker));
+});
+
+test('compactionResumeGuidance: the skills sentence, the agent-mistakes section, then the checklist — the one text every compaction path carries', () => {
+  assert.equal(compactionResumeGuidance, `${compactionSkillsGuidance} ${compactionGapsGuidance} ${compactionChecklistGuidance}`);
   assert.ok(compactionResumeGuidance.endsWith(compactionChecklistGuidance), 'the checklist closes the guidance');
   // The `PreCompact` hook matches it as a fixed string in the raw JSON on stdin: one line, nothing JSON would escape.
   assert.equal(JSON.stringify(compactionResumeGuidance), `"${compactionResumeGuidance}"`);
   assert.match(compactionResumeGuidance, /^[\x20-\x7e]+$/);
+  // The new section is part of that text, ahead of the checklist, which stays the last thing it says.
+  assert.ok(compactionResumeGuidance.includes(compactionGapsGuidance));
+  assert.ok(compactionResumeGuidance.indexOf(compactionGapsGuidance) < compactionResumeGuidance.indexOf(compactionChecklistGuidance));
 });
 
 test('compactionSummaryGuidance: is maximally-complete + session-specific (D3)', () => {
@@ -438,9 +470,9 @@ test('formatTokenCount leaves a short count untouched — no leading separator',
   assert.equal(formatTokenCount(1000), '1\u202F000');
 });
 
-// ── stripCompactionClosingMarkers (the summary posted to the topic) ──
+// ── stripCompactionSectionMarkers (the summary posted to the topic) ──
 
-test('stripCompactionClosingMarkers drops the marker LINES and keeps every line of prose', () => {
+test('stripCompactionSectionMarkers drops the marker LINES and keeps every line of prose', () => {
   const summary = [
     '## Objective',
     'Ship the compaction notice.',
@@ -449,7 +481,7 @@ test('stripCompactionClosingMarkers drops the marker LINES and keeps every line 
     compactionClosingEndMarker,
   ].join('\n');
 
-  const posted = stripCompactionClosingMarkers(summary);
+  const posted = stripCompactionSectionMarkers(summary);
 
   assert.ok(!posted.includes(compactionClosingStartMarker), 'the start marker is machine scaffolding');
   assert.ok(!posted.includes(compactionClosingEndMarker), 'the end marker is machine scaffolding');
@@ -464,22 +496,142 @@ test('stripCompactionClosingMarkers drops the marker LINES and keeps every line 
   );
 });
 
-test('stripCompactionClosingMarkers returns a marker-free summary unchanged', () => {
+test('stripCompactionSectionMarkers returns a marker-free summary unchanged', () => {
   const summary = '## Goals\n- keep going\n\n## State\n- green';
-  assert.equal(stripCompactionClosingMarkers(summary), summary);
+  assert.equal(stripCompactionSectionMarkers(summary), summary);
 });
 
-test('stripCompactionClosingMarkers keeps prose the model put on the marker line', () => {
+test('stripCompactionSectionMarkers keeps prose the model put on the marker line', () => {
   // The markers are an INSTRUCTION to a model, so a run of them sharing a line with
   // real prose is a shape that will happen. Dropping the whole line there would lose
   // the operator's recap; only the scaffolding may go. Load-bearing in the other
   // direction too: the prose must not come back with a stray marker fragment.
   const summary = `Objective: ship it.\n${compactionClosingStartMarker} we were mid-refactor\n${compactionClosingEndMarker}`;
 
-  const posted = stripCompactionClosingMarkers(summary);
+  const posted = stripCompactionSectionMarkers(summary);
 
   assert.equal(posted, 'Objective: ship it.\nwe were mid-refactor');
   assert.ok(!posted.includes('<<<'), `no marker fragment may survive: "${posted}"`);
+});
+
+test('stripCompactionSectionMarkers drops the agent-mistakes markers too and keeps the section\'s text', () => {
+  const summary = [
+    '## Objective',
+    'Ship it.',
+    compactionGapsStartMarker,
+    '1. Mistake: committed without tests. Change: add a rule to CLAUDE.md.',
+    compactionGapsEndMarker,
+    compactionClosingStartMarker,
+    'Next: run the suite.',
+    compactionClosingEndMarker,
+  ].join('\n');
+
+  assert.equal(
+    stripCompactionSectionMarkers(summary),
+    '## Objective\nShip it.\n1. Mistake: committed without tests. Change: add a rule to CLAUDE.md.\nNext: run the suite.',
+  );
+});
+
+test('stripCompactionSectionMarkers drops the «no mistakes» line of an empty section too — it is scaffolding, not content', () => {
+  for (const noneLine of [compactionNoGapsLine, `${compactionNoGapsLine}.`]) {
+    const summary = ['## Objective', compactionGapsStartMarker, noneLine, compactionGapsEndMarker, 'Next: run the suite.'].join('\n');
+    assert.equal(stripCompactionSectionMarkers(summary), '## Objective\nNext: run the suite.');
+  }
+  // A line that merely mentions it in prose is content and stays.
+  const prose = `The agent answered ${compactionNoGapsLine} to the question.`;
+  assert.equal(stripCompactionSectionMarkers(prose), prose);
+});
+
+// ── extractCompactionInstructionGaps (the section the bot posts even when the summary is hidden) ──
+
+const gapsText = '1. Mistake (repeated): pushed without asking. Change: add "never push without permission" to CLAUDE.md.\n2. Mistake: skipped the lint step. Change: a lint line in the commit skill.';
+
+test('extractCompactionInstructionGaps: lifts the text between the marker lines, trimmed', () => {
+  const summary = ['## Goals', '- ship', compactionGapsStartMarker, '', gapsText, '', compactionGapsEndMarker, '1. load these skills: commit'].join('\n');
+  assert.equal(extractCompactionInstructionGaps(summary), gapsText);
+});
+
+test('extractCompactionInstructionGaps: no markers, or an unfinished section, is null', () => {
+  assert.equal(extractCompactionInstructionGaps('## Goals\n- ship'), null);
+  assert.equal(extractCompactionInstructionGaps(`text\n${compactionGapsStartMarker}\n${gapsText}`), null, 'a stream that has not reached the end marker');
+  assert.equal(extractCompactionInstructionGaps(`${gapsText}\n${compactionGapsEndMarker}`), null, 'an end marker with no start');
+});
+
+test('extractCompactionInstructionGaps: an empty section, or the none line, is null — nothing is posted for "no mistakes"', () => {
+  for (const body of ['', '   ', compactionNoGapsLine, `${compactionNoGapsLine}.`, `  ${compactionNoGapsLine.toLowerCase()}  `]) {
+    assert.equal(extractCompactionInstructionGaps(`${compactionGapsStartMarker}\n${body}\n${compactionGapsEndMarker}`), null, `body "${body}"`);
+  }
+  // A real section that merely mentions the none line in passing is still a section.
+  assert.equal(
+    extractCompactionInstructionGaps(`${compactionGapsStartMarker}\nNot ${compactionNoGapsLine}: ${gapsText}\n${compactionGapsEndMarker}`),
+    `Not ${compactionNoGapsLine}: ${gapsText}`,
+  );
+});
+
+test('extractCompactionInstructionGaps: a marker counts only ALONE on its line — the instruction quoted in prose is not a section', () => {
+  const quoted = `The summary must sit between a line containing only ${compactionGapsStartMarker} and a line containing only ${compactionGapsEndMarker}.`;
+  assert.equal(extractCompactionInstructionGaps(quoted), null);
+  assert.equal(extractCompactionInstructionGaps(`${compactionGapsStartMarker} ${gapsText}\n${compactionGapsEndMarker}`), null);
+  // An end marker mentioned in prose is no end: the section it would close is still unfinished.
+  assert.equal(extractCompactionInstructionGaps(`${compactionGapsStartMarker}\n${gapsText}\nthe section ends at ${compactionGapsEndMarker}, as asked`), null);
+});
+
+test('extractCompactionInstructionGaps: the LAST pair wins, and CRLF lines and indented markers still match', () => {
+  const summary = [compactionGapsStartMarker, 'first try', compactionGapsEndMarker, 'prose', `  ${compactionGapsStartMarker}  `, gapsText, `${compactionGapsEndMarker}  `].join('\r\n');
+  assert.equal(extractCompactionInstructionGaps(summary), gapsText);
+});
+
+test('extractCompactionInstructionGaps: ignores the closing section\'s markers', () => {
+  const summary = [compactionClosingStartMarker, 'Next: run it.', compactionClosingEndMarker].join('\n');
+  assert.equal(extractCompactionInstructionGaps(summary), null);
+});
+
+// ── checkShouldPostInstructionGaps (the section is shown even in hide mode) ──
+
+test('checkShouldPostInstructionGaps: the bot\'s own compaction with the summary HIDDEN → the section alone is posted', () => {
+  assert.equal(
+    checkShouldPostInstructionGaps({ isSummaryEnabled: false, streamsOwnSummary: false, isBotIssued: true, route: 'adapterCompact' }),
+    true,
+  );
+});
+
+test('checkShouldPostInstructionGaps: the bot\'s own compaction with the summary SHOWN → no (the full summary carries it, never twice)', () => {
+  assert.equal(
+    checkShouldPostInstructionGaps({ isSummaryEnabled: true, streamsOwnSummary: false, isBotIssued: true, route: 'adapterCompact' }),
+    false,
+  );
+});
+
+test('checkShouldPostInstructionGaps: a compaction the CLI ran by itself → yes in BOTH modes (nobody posts its summary)', () => {
+  for (const isSummaryEnabled of [true, false]) {
+    assert.equal(
+      checkShouldPostInstructionGaps({ isSummaryEnabled, streamsOwnSummary: false, isBotIssued: false, route: 'adapterCompact' }),
+      true,
+      `summary enabled: ${isSummaryEnabled}`,
+    );
+  }
+});
+
+test('checkShouldPostInstructionGaps: a backend that streams its own summary → no from this rule (its stream is the one channel)', () => {
+  for (const isSummaryEnabled of [true, false]) {
+    for (const isBotIssued of [true, false]) {
+      assert.equal(
+        checkShouldPostInstructionGaps({ isSummaryEnabled, streamsOwnSummary: true, isBotIssued, route: 'adapterCompact' }),
+        false,
+        `summary enabled: ${isSummaryEnabled}, bot issued: ${isBotIssued}`,
+      );
+    }
+  }
+});
+
+test('checkShouldPostInstructionGaps: a route the bot does not await → no summary of ours to read', () => {
+  for (const route of ['forwardToAgent', 'notSupported'] as const) {
+    assert.equal(
+      checkShouldPostInstructionGaps({ isSummaryEnabled: false, streamsOwnSummary: false, isBotIssued: true, route }),
+      false,
+      `route ${route}`,
+    );
+  }
 });
 
 // ── checkShouldPostCompactionSummary (the whole gate, one rule) ──
@@ -554,7 +706,7 @@ test('buildIdleCompactionNoticeParts: the notice is the short line alone, with o
   // The operator asked for an idle compaction to end in one short line: the notice
   // used to grow the summary's "Where we stopped" block whenever the summary was off.
   for (const summary of [null, '## Goals\n- finish the refactor']) {
-    const parts = buildIdleCompactionNoticeParts({ noticeText: '🧹 Auto compacted on idle.', summary, questionText: null });
+    const parts = buildIdleCompactionNoticeParts({ noticeText: '🧹 Auto compacted on idle.', summary, instructionGaps: null, questionText: null });
     assert.equal(parts.notice, '🧹 Auto compacted on idle.');
     assert.equal(parts.summary, summary);
   }
@@ -567,6 +719,7 @@ test('buildIdleCompactionNoticeParts: the re-asked question is its OWN part, nev
   const parts = buildIdleCompactionNoticeParts({
     noticeText: '🧹 Auto compacted on idle.',
     summary: 'a very long summary',
+    instructionGaps: null,
     questionText: reAskText,
   });
 
@@ -579,6 +732,7 @@ test('buildIdleCompactionNoticeParts: a FAILED compaction yields the question on
   const parts = buildIdleCompactionNoticeParts({
     noticeText: null,
     summary: null,
+    instructionGaps: null,
     questionText: reAskText,
   });
 
@@ -591,9 +745,24 @@ test('buildIdleCompactionNoticeParts: nothing to say → every part null (the ca
   const parts = buildIdleCompactionNoticeParts({
     noticeText: null,
     summary: null,
+    instructionGaps: null,
     questionText: null,
   });
-  assert.deepEqual(parts, { notice: null, summary: null, question: null });
+  assert.deepEqual(parts, { notice: null, summary: null, instructionGaps: null, question: null });
+});
+
+test('buildIdleCompactionNoticeParts: the agent-mistakes section is its OWN part, between the notice and the question', () => {
+  const parts = buildIdleCompactionNoticeParts({
+    noticeText: '🧹 Auto compacted on idle.',
+    summary: null,
+    instructionGaps: gapsText,
+    questionText: reAskText,
+  });
+  assert.equal(parts.instructionGaps, gapsText);
+  assert.equal(parts.summary, null, 'the full summary is hidden — only the section is posted');
+  assert.ok(!(parts.notice ?? '').includes('Mistake'), 'the section must not be glued into the notice');
+  assert.ok(!(parts.question ?? '').includes('Mistake'), 'the section must not be glued into the question');
+  assert.equal(buildIdleCompactionNoticeParts({ noticeText: null, summary: null, instructionGaps: '', questionText: null }).instructionGaps, null, 'an empty section is no part');
 });
 
 test('getPendingWorkRecheckDelayMs: the next idle window, or just past the pending-work hold if that ends first', () => {

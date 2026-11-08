@@ -23,6 +23,7 @@ import {
   fakeClaudeAlwaysUsageLimitFileName,
   fakeClaudeApiErrorDelayFileName,
   fakeClaudeApiErrorOnceFileName,
+  fakeClaudeCompactionSummaryFileName,
   fakeClaudeNextOutputWhileAskedFileName,
   fakeClaudeOutputWhileAskedFileName,
   fakeOutputWhileAskedPollMs,
@@ -131,7 +132,7 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *  - `compact`     — asks the bot to compact the conversation (`compact_conversation`, as the agent does when a
  *    person asks it to), then answers `final`; the bot compacts when the turn ends;
  *  - `overflow`    — the CLI's own overflow compaction: a `compact_boundary` frame (trigger `auto`) that nobody
- *    asked for, then `final`;
+ *    asked for, then `final` (a turn with no request, a Telegram message, honours it too and just ends);
  *  - `fetch-attachment` — calls `jira_get_attachment` for each id of a `[fetch:<id>,<id>]` token in the request's
  *    text, logs every outcome to `tool-calls.jsonl`, then answers `final`;
  *  - `run-tool`    — runs `e2e-tool` BY NAME on its own PATH and logs what it printed, then answers `final`;
@@ -200,7 +201,9 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * A `/compact` user turn is answered like the real CLI's: a `compact_status`
  * success, a `compact_boundary` with token counts and a `result` whose `usage`
  * is all zero with the summary call under `modelUsage` — logged to
- * `compactions.jsonl` with the session it compacted.
+ * `compactions.jsonl` with the session it compacted. While a flow keeps the `fakeClaudeCompactionSummaryFileName` file
+ * in the state dir, every compaction (that turn, and the overflow mode's own) also leaves its content in the
+ * transcript as the `isCompactSummary` message the bot reads the summary from.
  *
  * Paths come from the environment its launcher script sets:
  * `FAKE_CLAUDE_LOG_DIR` (launches, violations, answers, turns) and
@@ -886,11 +889,30 @@ async function askUserQuestion(variant: FakeAskVariant = 'one'): Promise<string>
   return questions.map((question) => answers[question.question] ?? fakeAskNoAnswerOutcome).join(fakeAskTwoOutcomeSeparator);
 }
 
+/**
+ * What the real CLI does at the end of every compaction: it leaves the summary in the transcript as a message flagged
+ * `isCompactSummary`. The fake does it when a flow gave it a summary ({@link fakeClaudeCompactionSummaryFileName}).
+ */
+function recordCompactionSummary(sessionId: string): void {
+  const summaryPath = path.join(getStateDir(), fakeClaudeCompactionSummaryFileName);
+  if (!fs.existsSync(summaryPath)) return;
+  const transcriptPath = getTranscriptPath(sessionId);
+  fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+  fs.appendFileSync(transcriptPath, `${JSON.stringify({ type: 'user', isCompactSummary: true, sessionId, message: { role: 'user', content: fs.readFileSync(summaryPath, 'utf8') } })}\n`);
+}
+
+/** The CLI's own compaction at a context overflow: nobody asked for it, and no `/compact` turn is running. */
+function emitOverflowCompaction(sessionId: string): void {
+  recordCompactionSummary(sessionId);
+  writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 190_000, post_tokens: 9_000 }, session_id: sessionId });
+}
+
 /** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. `instruction` is what followed `/compact` (the bot's summary guidance), recorded for the flows. */
 function runCompactionTurn(sessionId: string, instruction: string): void {
   writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: launchApiKeySource, tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'system', subtype: 'status', status: 'compacting', session_id: sessionId });
   writeStdout({ type: 'system', subtype: 'status', compact_result: 'success', session_id: sessionId });
+  recordCompactionSummary(sessionId);
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 25_600, post_tokens: 2_800 }, session_id: sessionId });
   appendJsonLine(fakeClaudeLogFileNames.compactions, { sessionId, pid: process.pid, instruction });
   // The real CLI's compaction result: an all-zero `usage`, the summary call only under `modelUsage`.
@@ -943,10 +965,11 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     await runTodoTokens(getBotMcpServer(argv), content, noRequestIssueKey);
     await waitTurnWork(content);
     await runLateToolCall(argv, sessionId, content, noRequestIssueKey);
-    // A turn without a request honours two modes, by the token in ITS OWN text: `ask` (a question needs no request
-    // to be put to the user) and `usage-limit-once` (a limit needs none to stop the turn; the bot's later "continue"
-    // nudge carries no token, so it is answered — the "once").
+    // A turn without a request honours three modes, by the token in ITS OWN text: `ask` (a question needs no request
+    // to be put to the user), `usage-limit-once` (a limit needs none to stop the turn; the bot's later "continue"
+    // nudge carries no token, so it is answered — the "once") and `overflow` (the CLI's own compaction needs none).
     const noRequestMode = modeRe.exec(content)?.[1];
+    if (noRequestMode === 'overflow') emitOverflowCompaction(sessionId);
     if (noRequestMode === 'usage-limit-once') {
       endTurnOnUsageLimit(sessionId, limitResetsRe.exec(content)?.[1] ?? 'in 1h');
       return;
@@ -1035,10 +1058,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   if (state.mode === 'compact' && server) {
     logToolCall(compactToolName, { reason: 'a person asked' }, await callBotTool(server, compactToolName, { reason: 'a person asked' }));
   }
-  if (state.mode === 'overflow') {
-    // The CLI's own compaction at a context overflow: nobody asked for it, and no `/compact` turn is running.
-    writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 190_000, post_tokens: 9_000 }, session_id: sessionId });
-  }
+  if (state.mode === 'overflow') emitOverflowCompaction(sessionId);
   if (state.mode === 'fetch-attachment' && server) {
     for (const attachmentId of (fetchIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean)) {
       logToolCall(attachmentToolName, { attachmentId }, await callBotTool(server, attachmentToolName, { attachmentId }));

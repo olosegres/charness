@@ -220,6 +220,20 @@ test('compaction completion keys exist in every locale and keep both token place
   }
 });
 
+test('compact.instructionGapsHeader exists in every locale, is translated and carries the lightbulb that marks a proposal', () => {
+  // The header of the agent-mistakes section the bot posts even when the compaction summary is hidden: a locale that fell
+  // back to the English text would head a section the person reads in the wrong language.
+  assert.ok(checkKeyInAllLangs('compact.instructionGapsHeader'), 'compact.instructionGapsHeader missing in some locale');
+  for (const locale of localeCodes) {
+    const out = runWithLocale(locale, () => t('compact.instructionGapsHeader'));
+    assert.ok(out.startsWith('💡'), `expected the lightbulb in ${locale}: "${out}"`);
+    assert.ok(!out.includes('{'), `unexpected placeholder in ${locale}: "${out}"`);
+    if (locale !== defaultLocale) {
+      assert.notEqual(out, enDict['compact.instructionGapsHeader'], `${locale} still carries the English text`);
+    }
+  }
+});
+
 test('compact-summary setting keys exist in every locale and substitute {state}', () => {
   for (const code of [
     'compactSummary.on',

@@ -9,7 +9,7 @@
  * default prompt: the loaded skills were not named and no next-steps checklist
  * closed the summary, so the continuing session silently stopped following those
  * skills. The hook adds the resume guidance (`compactionResumeGuidance`: the skills
- * to load again, then that checklist). Claude Code runs `PreCompact` hooks before
+ * to load again, the agent-mistakes section the bot posts to the topic, then that checklist). Claude Code runs `PreCompact` hooks before
  * EVERY compaction (`trigger` `auto` and `manual`) and appends a hook's stdout to
  * that compaction's custom instructions — measured on v2.1.289: an
  * overflow-triggered compaction's summary opened with the line the hook printed.

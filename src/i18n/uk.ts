@@ -470,6 +470,7 @@ export const ukDict: Record<string, string> = {
   'compact.done': '✅ Контекст стиснуто.',
   'compact.done_tokens': '✅ Контекст стиснуто: {pre} → {post} токенів.',
   'compact.summaryHeader': '📄 Підсумок після стиснення:',
+  'compact.instructionGapsHeader': '💡 Помилки агента, яких можна було б уникнути, оновивши інструкції (пропозиції; без вашого рішення нічого не змінюється):',
   'compact.start_agent_first': 'Немає активної сесії. Спершу запусти агента (/claude чи /opencode).',
   'compact.unsupported_backend': 'Стиснення контексту не підтримується для {label}.',
   'compact.model_unresolved': '⚠️ Не можу стиснути: для цієї сесії не визначено модель. Вибери її через /model і спробуй знову.',

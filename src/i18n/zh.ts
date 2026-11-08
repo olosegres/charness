@@ -464,6 +464,7 @@ export const zhDict: Record<string, string> = {
   'compact.done': '✅ 上下文已压缩。',
   'compact.done_tokens': '✅ 上下文已压缩：{pre} → {post} tokens。',
   'compact.summaryHeader': '📄 压缩摘要：',
+  'compact.instructionGapsHeader': '💡 更完善的指令本可避免的智能体错误（仅为建议，未经你同意不会修改任何内容）：',
   'compact.start_agent_first': '没有活跃会话。请先启动代理（/claude 或 /opencode）。',
   'compact.unsupported_backend': '{label} 不支持压缩上下文。',
   'compact.model_unresolved': '⚠️ 无法压缩：此会话未解析出模型。请用 /model 选择一个后重试。',

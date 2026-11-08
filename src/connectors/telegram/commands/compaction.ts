@@ -14,8 +14,10 @@ import {
   compactionResumeGuidance,
   compactionClosingStartMarker,
   compactionClosingEndMarker,
-  stripCompactionClosingMarkers,
+  stripCompactionSectionMarkers,
+  extractCompactionInstructionGaps,
   checkShouldPostCompactionSummary,
+  checkShouldPostInstructionGaps,
   checkShouldAnnounceCompactionStart,
   buildIdleCompactionNoticeParts,
   formatTokenCount,
@@ -88,6 +90,11 @@ interface ThreadCompactionResult {
    * streams its own, the route never produced one, or it could not be read).
    */
   summary?: string | null;
+  /**
+   * The agent-mistakes section of the summary, to post ALONE (the full summary is not posted, so it would otherwise stay
+   * hidden), or `null` when there is none to post (nothing to report, or the full summary carries it).
+   */
+  instructionGaps?: string | null;
   /**
    * Context token counts the backend reported for the compaction, `null` when it
    * reports none (see {@link CompactionResult}). Both present ⇒ the completion
@@ -313,18 +320,18 @@ export function createCompaction(ports: CompactionPorts) {
       const compaction = await adapter.compactContext(key, instruction);
       if (!compaction.ok) return { ok: false, error: compaction.error };
 
-      const isWithSummary = checkShouldPostCompactionSummary({
-        isEnabled: getState().checkIsCompactSummaryEnabled(key),
-        streamsOwnSummary: Boolean(adapter.streamsCompactionSummary),
-        route,
-      });
-      // A transcript / HTTP read, made only when the summary will be posted.
-      const summary = isWithSummary && adapter.getLatestCompactionSummary
+      const isSummaryEnabled = getState().checkIsCompactSummaryEnabled(key);
+      const streamsOwnSummary = Boolean(adapter.streamsCompactionSummary);
+      const isWithSummary = checkShouldPostCompactionSummary({ isEnabled: isSummaryEnabled, streamsOwnSummary, route });
+      const isWithInstructionGaps = checkShouldPostInstructionGaps({ isSummaryEnabled, streamsOwnSummary, isBotIssued: true, route });
+      // A transcript / HTTP read, made only when something of the summary will be posted.
+      const summary = (isWithSummary || isWithInstructionGaps) && adapter.getLatestCompactionSummary
         ? await adapter.getLatestCompactionSummary(key).catch(() => null)
         : null;
       return {
         ok: true,
-        summary: summary ? stripCompactionClosingMarkers(summary) : null,
+        summary: isWithSummary && summary ? stripCompactionSectionMarkers(summary) : null,
+        instructionGaps: isWithInstructionGaps && summary ? extractCompactionInstructionGaps(summary) : null,
         preTokens: compaction.preTokens,
         postTokens: compaction.postTokens,
       };
@@ -392,6 +399,7 @@ export function createCompaction(ports: CompactionPorts) {
         : t('compact.done'),
     );
     if (result.summary) await postCompactionSummary(key, result.summary);
+    if (result.instructionGaps) await postCompactionInstructionGaps(key, result.instructionGaps);
   }
 
   /**
@@ -408,8 +416,69 @@ export function createCompaction(ports: CompactionPorts) {
    * the `threadsCompacting` guard exists to prevent.
    */
   async function postCompactionSummary(key: SessionKey, summary: string): Promise<void> {
-    const chunks = splitMessage(`${t('compact.summaryHeader')}\n\n${summary}`, MAX_MESSAGE_LEN);
-    for (const chunk of chunks) await replyToThread(key, chunk);
+    await postHeadedPlainText(key, t('compact.summaryHeader'), summary);
+  }
+
+  /**
+   * @description Post the AGENT-MISTAKES section of a compaction summary as a message of its own — the part of the
+   * summary the person sees even in `/compact_summary` hide mode ({@link checkShouldPostInstructionGaps}). The agent only
+   * proposes these instruction changes; the header says so, so the message reads as a proposal and never as something
+   * already changed. Same plain-text, split-never-truncated send as {@link postCompactionSummary}.
+   */
+  async function postCompactionInstructionGaps(key: SessionKey, instructionGaps: string): Promise<void> {
+    await postHeadedPlainText(key, t('compact.instructionGapsHeader'), instructionGaps);
+  }
+
+  async function postHeadedPlainText(key: SessionKey, header: string, body: string): Promise<void> {
+    for (const chunk of splitMessage(`${header}\n\n${body}`, MAX_MESSAGE_LEN)) await replyToThread(key, chunk);
+  }
+
+  /**
+   * @description A compaction the bot did NOT issue finished — the CLI's own, at a context overflow (json-stream's
+   * `contextCompacted` event): post its agent-mistakes section. Nobody posts such a compaction's summary, in show mode
+   * no more than in hide mode, so the section is read out of the transcript and posted whatever `/compact_summary` says.
+   * A compaction the bot issued is left to its caller (it is in {@link threadsCompacting} when its completion is
+   * announced), which posts what the setting asks for.
+   */
+  async function postOwnCompactionInstructionGaps(key: SessionKey): Promise<void> {
+    if (!checkIsTelegramKey(key) || threadsCompacting.has(keyToString(key))) return;
+    const adapter = getThreadAdapter(key);
+    if (!checkShouldPostInstructionGaps({
+      isSummaryEnabled: getState().checkIsCompactSummaryEnabled(key),
+      streamsOwnSummary: Boolean(adapter.streamsCompactionSummary),
+      isBotIssued: false,
+      route: getThreadCompactRoute(key),
+    })) return;
+    const summary = adapter.getLatestCompactionSummary ? await adapter.getLatestCompactionSummary(key).catch(() => null) : null;
+    const instructionGaps = summary ? extractCompactionInstructionGaps(summary) : null;
+    if (instructionGaps) await withThreadLocale(key, () => postCompactionInstructionGaps(key, instructionGaps));
+  }
+
+  /**
+   * The compaction summary a backend that streams its own (OpenCode) is writing while `/compact_summary` is OFF, per
+   * thread: its text so far, and whether its agent-mistakes section has gone out. The stream is that backend's one channel
+   * for EVERY compaction — the bot's own and the server's at an overflow — so the section is taken out of it here.
+   */
+  const streamedSummaries = new Map<string, { text: string; isInstructionGapsPosted: boolean }>();
+
+  /**
+   * @description One tail of a backend's streamed compaction summary that the topic does not get (hide mode): collect it,
+   * and post the agent-mistakes section the moment its end marker has arrived. Called with the tails in order; the first
+   * tail of a summary (`isContinuation` false) starts it afresh. The section goes out once per summary.
+   */
+  function noteStreamedCompactionSummaryTail(key: SessionKey, tail: string, isContinuation: boolean): void {
+    if (!checkIsTelegramKey(key)) return;
+    const kStr = keyToString(key);
+    const previous = isContinuation ? streamedSummaries.get(kStr) : undefined;
+    const summary = { text: `${previous?.text ?? ''}${tail}`, isInstructionGapsPosted: previous?.isInstructionGapsPosted ?? false };
+    streamedSummaries.set(kStr, summary);
+    if (summary.isInstructionGapsPosted) return;
+    const instructionGaps = extractCompactionInstructionGaps(summary.text);
+    if (instructionGaps === null) return;
+    summary.isInstructionGapsPosted = true;
+    summary.text = '';
+    void withThreadLocale(key, () => postCompactionInstructionGaps(key, instructionGaps))
+      .catch((error) => console.warn(`[compact] ${kStr} the agent-mistakes section was not posted:`, error instanceof Error ? error.message : error));
   }
 
   const threadCompactionStates = new Map<string, ThreadCompactionState>();
@@ -567,6 +636,7 @@ export function createCompaction(ports: CompactionPorts) {
     const compactionState = threadCompactionStates.get(kStr);
     if (compactionState?.idleTimer) clearTimeout(compactionState.idleTimer);
     threadCompactionStates.delete(kStr);
+    streamedSummaries.delete(kStr);
     // Drop the persisted instants too, so the NEXT session in this topic starts with
     // no history and therefore gets the FULL idle window — which is why the fresh-start
     // path needs no special case (do not "fix" it by adding one).
@@ -724,7 +794,7 @@ export function createCompaction(ports: CompactionPorts) {
       // The compaction failed but the question is already rejected — re-ask it so
       // the user isn't left without the pending decision (no notice: nothing was
       // compacted).
-      await postIdleCompactionResult(key, { noticeText: null, summary: null }, reAsked);
+      await postIdleCompactionResult(key, { noticeText: null, summary: null, instructionGaps: null }, reAsked);
       return;
     }
     await postIdleCompactionResult(
@@ -732,6 +802,7 @@ export function createCompaction(ports: CompactionPorts) {
       {
         noticeText: t('compactOnIdle.notice'),
         summary: result.summary ?? null,
+        instructionGaps: result.instructionGaps ?? null,
       },
       reAsked,
     );
@@ -1024,7 +1095,7 @@ export function createCompaction(ports: CompactionPorts) {
   /**
    * @description Post the idle-compaction outcome (D1/D2) as SEPARATE messages in
    * the §1.4 order: the short notice → the full summary (when `/compact_summary` is
-   * on) → the RE-ASKED question with its option buttons, LAST.
+   * on) or else the agent-mistakes section alone → the RE-ASKED question with its option buttons, LAST.
    *
    * The three used to be one joined message. They are split because the re-asked
    * question carries inline buttons the operator must be able to reach: glued behind
@@ -1040,7 +1111,7 @@ export function createCompaction(ports: CompactionPorts) {
    */
   async function postIdleCompactionResult(
     key: SessionKey,
-    parts: { noticeText: string | null; summary: string | null },
+    parts: { noticeText: string | null; summary: string | null; instructionGaps: string | null },
     reAsked: ReAskedQuestion | null,
   ): Promise<void> {
     const questionText = reAsked ? buildReAskedQuestionText(reAsked.question) : null;
@@ -1050,6 +1121,7 @@ export function createCompaction(ports: CompactionPorts) {
     const plan = buildIdleCompactionNoticeParts({ ...parts, questionText });
     if (plan.notice) await replyToThread(key, plan.notice);
     if (plan.summary) await postCompactionSummary(key, plan.summary);
+    if (plan.instructionGaps) await postCompactionInstructionGaps(key, plan.instructionGaps);
     if (!reAsked) return;
     // From here the re-ask is decided: a record taken meanwhile (a number typed) is not posted, and whoever puts it back finishes it.
     reAsked.hasIdleResultRun = true;
@@ -1483,6 +1555,8 @@ export function createCompaction(ports: CompactionPorts) {
     noteThreadActivity,
     noteThreadUserActivity,
     markThreadTurnProducedOutput,
+    postOwnCompactionInstructionGaps,
+    noteStreamedCompactionSummaryTail,
     clearThreadCompaction,
     rearmThreadIdleTimer,
     armDeferredCompaction,

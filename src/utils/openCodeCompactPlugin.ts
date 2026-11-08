@@ -1,8 +1,8 @@
 /**
  * @description The OpenCode plugin the bot installs so that a compaction OpenCode
  * runs ON ITS OWN when the context overflows also gets the resume guidance — the
- * skills to load again and the next-steps checklist that ends the summary
- * (`compactionResumeGuidance`).
+ * skills to load again, the agent-mistakes section the bot posts to the topic and the
+ * next-steps checklist that ends the summary (`compactionResumeGuidance`).
  *
  * WHY this exists: the resume guidance rides the bot's per-invocation
  * `instruction` (`POST /session/:id/summarize`), which an overflow compaction

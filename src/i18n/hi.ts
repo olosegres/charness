@@ -464,6 +464,7 @@ export const hiDict: Record<string, string> = {
   'compact.done': '✅ संदर्भ संक्षिप्त कर दिया गया।',
   'compact.done_tokens': '✅ संदर्भ संक्षिप्त कर दिया गया: {pre} → {post} टोकन।',
   'compact.summaryHeader': '📄 संक्षेपण का सारांश:',
+  'compact.instructionGapsHeader': '💡 एजेंट की वे गलतियाँ जिन्हें बेहतर निर्देश रोक सकते थे (सुझाव; आपकी सहमति के बिना कुछ नहीं बदलता):',
   'compact.start_agent_first': 'कोई सक्रिय सत्र नहीं। पहले एक एजेंट शुरू करें (/claude या /opencode)।',
   'compact.unsupported_backend': '{label} के लिए संदर्भ संक्षेपण समर्थित नहीं।',
   'compact.model_unresolved': '⚠️ संक्षिप्त नहीं कर सकते: इस सत्र के लिए कोई मॉडल तय नहीं है। /model से एक चुनें और फिर प्रयास करें।',

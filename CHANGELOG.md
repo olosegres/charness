@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**Every compaction now asks the agent which of its own mistakes — repeated ones above all — better instructions could have prevented, and the bot shows that list in the topic even when the compaction summary is hidden.**
+Before, the lessons of a long session stayed buried in the summary (which `/compact_summary` hides by default) or were lost with it: the same mistake came back in the next session because nobody had changed the rule, skill or `CLAUDE.md` / `AGENTS.md` that would have stopped it.
+Now:
+  - **The summary gets one more section.** The agent lists the mistakes it made in the session that a change to its standing instructions could prevent — repeated ones first — each with the concrete change and where it would go, in the language of the conversation, or says there were none. It only *proposes*: the continuing session never writes or changes instructions on its own, it waits for your word.
+  - **It is posted as its own message** («💡 Agent mistakes that better instructions could prevent …») after `/compact`, the idle compaction, the agent's own `compact_conversation`, and the compaction the agent CLI or OpenCode runs by itself at a context overflow — with the summary hidden. With the summary shown the section is inside it and is not posted twice; when there was nothing to report, nothing is posted. The idle compaction's order is notice → section → a re-asked question, which stays last.
+  - The Claude `PreCompact` hook and the OpenCode compaction plugin carry the new text, so the compactions the CLI and the server start themselves ask for the section too (an OpenCode folder instance that loaded the older plugin is recreated when idle, as before).
+  - Not covered: the deprecated tmux Claude backend (its terminal runs the compaction itself; the bot never gets the summary to read).
+
 **A runner can now run several jobs at once — you set how many in `/runners` — and the jobs do not step on each other's ports, caches or iOS simulators.**
 Before, a runner ran one job at a time: a Mac used only as a runner ran one iOS test run while five more waited, and nothing made two jobs safe to run side by side (the fixed Metro and Detox ports, one shared cache folder, and the habitual `xcrun simctl shutdown all`, which stops every simulator on the machine).
 Now:

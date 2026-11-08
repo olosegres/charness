@@ -317,15 +317,39 @@ export const compactionChecklistGuidance =
   'End the summary with a numbered checklist (1., 2., 3., one short item per line) of what the continuing session does next, as the very LAST thing in it. Item 1 is \'load these skills\' followed by the exact name of every skill that was loaded (invoked) in this session, never translated or shortened; if none was loaded, leave that item out. The other items are the next steps this summary already records, in order: invent no new steps. If you are also asked to write a closing section between two marker lines, the checklist is the last part of that section, right before its end marker.';
 
 /**
+ * FIXED (English, locale-independent) sentinel markers the agent-mistakes section is wrapped in, and the one line
+ * the section holds when there were none. Sentinels for the same reason as {@link compactionClosingStartMarker}:
+ * the backends write very different summary formats, so exact marker lines are the one backend-agnostic way to lift
+ * the section out of a summary ({@link extractCompactionInstructionGaps}). The guidance below pins these exact strings.
+ */
+export const compactionGapsStartMarker = '<<<INSTRUCTION_GAPS>>>';
+export const compactionGapsEndMarker = '<<<END_INSTRUCTION_GAPS>>>';
+export const compactionNoGapsLine = 'NO_INSTRUCTION_GAPS';
+
+/**
+ * @description The agent-mistakes guidance: the summary gets a section of this session's mistakes — the repeated ones
+ * above all — that a change to the agent's standing instructions could have prevented, each with the concrete change and
+ * where it goes. The BOT lifts the section out of the summary and posts it to the topic even when the full summary is
+ * hidden ({@link checkShouldPostInstructionGaps}), so the person sees what to fix in the instructions without opening a
+ * summary. It is written in the language the conversation was held in (the hook and the plugin that carry this text are
+ * shared by every topic, so no locale can be baked in), PROPOSES and never edits (the person decides), and sits before the
+ * checklist and any closing section, which stay last. Travels with {@link compactionSkillsGuidance} and
+ * {@link compactionChecklistGuidance} as {@link compactionResumeGuidance}, so ONE line of printable ASCII with no double
+ * quote or backslash, for the `PreCompact` hook's fixed-string match.
+ */
+export const compactionGapsGuidance =
+  `List the mistakes the agent made in this session, especially REPEATED ones, that a change to its standing instructions (rules, skills, CLAUDE.md / AGENTS.md) could prevent: for each, the mistake, then the concrete instruction change that would prevent it and where that change would go. Put that list in its own section wrapped EXACTLY between a line containing only ${compactionGapsStartMarker} and a line containing only ${compactionGapsEndMarker}, placed before the numbered checklist and before any closing section, and write it in the language the user used in this conversation. If there were no such mistakes, write only the single line ${compactionNoGapsLine} between those two marker lines. The continuing session must only PROPOSE these changes to the user and wait for approval: it must never write or change instructions on its own.`;
+
+/**
  * @description What the continuing session needs from EVERY compaction summary — the
- * loaded skills and the next-steps checklist — as the one text each path carries:
+ * loaded skills, the agent-mistakes section and the next-steps checklist — as the one text each path carries:
  * a bot-issued compaction in its instruction ({@link buildCompactionInstruction}),
  * and each backend's own overflow compaction through a bot-installed hook — Claude's
  * `PreCompact` hook (`claudeCompactHook.ts`, which also matches on this exact text to
  * skip a compaction that already carries it) and OpenCode's compaction plugin
- * (`openCodeCompactPlugin.ts`).
+ * (`openCodeCompactPlugin.ts`). The checklist stays LAST: the gaps section comes before it.
  */
-export const compactionResumeGuidance = `${compactionSkillsGuidance} ${compactionChecklistGuidance}`;
+export const compactionResumeGuidance = `${compactionSkillsGuidance} ${compactionGapsGuidance} ${compactionChecklistGuidance}`;
 
 /**
  * @description Compose the per-invocation compaction instruction the bot passes
@@ -334,7 +358,7 @@ export const compactionResumeGuidance = `${compactionSkillsGuidance} ${compactio
  * own prompt — OpenCode bakes it in the fork (`bakesSummaryGuidance: true`) so
  * re-sending it would duplicate the text, whereas the Claude backends have no
  * bot-controlled prompt and must receive it every time. The resume guidance
- * ({@link compactionResumeGuidance}: the loaded skills and the next-steps checklist)
+ * ({@link compactionResumeGuidance}: the loaded skills, the agent-mistakes section and the next-steps checklist)
  * is skipped the same way when the backend's own compaction prompt already gets it
  * (`bakesResumeGuidance`: an OpenCode server running the bot's compaction plugin,
  * which cannot see this instruction and so cannot skip a duplicate itself). The F2 closing-section directive
@@ -388,7 +412,7 @@ export function formatTokenCount(count: number): string {
  * generate very different summary formats (OpenCode's `## Goals/…` template vs
  * Claude Code's freeform numbered recap), so a heading match is unreliable while
  * exact markers are backend-agnostic. They are stripped before a summary is
- * posted ({@link stripCompactionClosingMarkers}). The per-locale instruction pins
+ * posted ({@link stripCompactionSectionMarkers}). The per-locale instruction pins
  * these exact strings, so changing them means changing the instruction wording in
  * lockstep.
  */
@@ -396,9 +420,20 @@ export const compactionClosingStartMarker = '<<<WHERE_WE_STOPPED>>>';
 export const compactionClosingEndMarker = '<<<END_WHERE_WE_STOPPED>>>';
 
 /**
- * @description Remove the sentinel marker LINES from a summary that is about to be
- * posted to the topic, keeping every line of prose — including the closing section
- * the markers wrap, which is genuine content.
+ * The regexp alternatives of the machine scaffolding a summary may carry: the markers of the closing section and of the
+ * agent-mistakes section, and the line that second section holds when there were no mistakes.
+ */
+const compactionScaffoldingPattern = [
+  compactionClosingStartMarker,
+  compactionClosingEndMarker,
+  compactionGapsStartMarker,
+  compactionGapsEndMarker,
+].map(escapeRegExpLiteral).concat(`${escapeRegExpLiteral(compactionNoGapsLine)}\\.?`).join('|');
+
+/**
+ * @description Remove the sentinel marker LINES (the closing section's and the agent-mistakes section's, and the «no
+ * mistakes» line) from a summary that is about to be posted to the topic, keeping every line of prose — including the
+ * sections the markers wrap, which are genuine content.
  *
  * The markers are machine scaffolding and mean nothing to a reader. A marker sitting ALONE on its
  * line takes the whole line with it (its own newline included), so the summary is
@@ -406,12 +441,38 @@ export const compactionClosingEndMarker = '<<<END_WHERE_WE_STOPPED>>>';
  * AHEAD of real prose on one line loses only the marker, never the prose. A summary
  * with no markers comes back unchanged apart from trimming.
  */
-export function stripCompactionClosingMarkers(summaryText: string): string {
+export function stripCompactionSectionMarkers(summaryText: string): string {
   const markerLine = new RegExp(
-    `^[ \\t]*(?:${escapeRegExpLiteral(compactionClosingStartMarker)}|${escapeRegExpLiteral(compactionClosingEndMarker)})[ \\t]*\\r?\\n?`,
+    `^[ \\t]*(?:${compactionScaffoldingPattern})[ \\t]*\\r?\\n?`,
     'gm',
   );
   return summaryText.replace(markerLine, '').trim();
+}
+
+/**
+ * @description The agent-mistakes section of a compaction summary — the text between the LAST pair of
+ * {@link compactionGapsStartMarker} / {@link compactionGapsEndMarker} lines, trimmed — or `null` when the summary has no
+ * complete section, the section is empty, or it holds only {@link compactionNoGapsLine} (the agent found nothing, so
+ * nothing is posted). A marker counts only ALONE on its line, as the guidance asks: a summary that quotes the
+ * instruction in prose must not be mistaken for the section. The last pair wins: a model that restates its section
+ * after a first attempt means the later one. An unfinished stream (a start marker with no end yet) is `null`, so the
+ * caller can call this on a growing text and post once the end marker arrives.
+ */
+export function extractCompactionInstructionGaps(summaryText: string): string | null {
+  const lines = summaryText.split(/\r?\n/);
+  let endIndex = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index].trim() === compactionGapsEndMarker) { endIndex = index; break; }
+  }
+  if (endIndex < 0) return null;
+  let startIndex = -1;
+  for (let index = endIndex - 1; index >= 0; index -= 1) {
+    if (lines[index].trim() === compactionGapsStartMarker) { startIndex = index; break; }
+  }
+  if (startIndex < 0) return null;
+  const section = lines.slice(startIndex + 1, endIndex).join('\n').trim();
+  if (!section || section.replace(/[.\s]+$/, '').toUpperCase() === compactionNoGapsLine) return null;
+  return section;
 }
 
 /** Escape every RegExp metacharacter in `literal` so it matches itself. */
@@ -444,6 +505,34 @@ export function checkShouldPostCompactionSummary(input: {
 }
 
 /**
+ * @description Should the bot post the AGENT-MISTAKES section ({@link compactionGapsGuidance}) of a compaction summary
+ * into the topic as a message of its own — the part of the summary that is shown even when the full summary is hidden?
+ *
+ * No when:
+ *  - the route is not a real, awaited compaction (the same reason as {@link checkShouldPostCompactionSummary}: the bot
+ *    has no summary to read);
+ *  - the backend STREAMS its own summary (`streamsOwnSummary`): the section is inside the stream, shown whole when
+ *    `/compact_summary` is on, and taken out of it by the bot when it is off — the stream is that backend's one channel,
+ *    so reading the summary again here would post it twice;
+ *  - the compaction is the bot's own AND the full summary is posted ({@link checkShouldPostCompactionSummary}): the
+ *    section is inside it, so a second message would repeat it.
+ *
+ * Otherwise yes — including a compaction the bot did not issue (the CLI's own, at a context overflow): nobody posts
+ * its summary, whatever `/compact_summary` says, so the section is the one part the person sees.
+ */
+export function checkShouldPostInstructionGaps(input: {
+  isSummaryEnabled: boolean;
+  streamsOwnSummary: boolean;
+  /** Whether the bot issued this compaction (`/compact`, the agent's `compact_conversation`, the idle one). */
+  isBotIssued: boolean;
+  route: CompactCommandRoute;
+}): boolean {
+  if (input.route !== 'adapterCompact') return false;
+  if (input.streamsOwnSummary) return false;
+  return !(input.isBotIssued && input.isSummaryEnabled);
+}
+
+/**
  * @description Should the bot announce that a compaction is STARTING (the notice
  * that goes out BEFORE the wait, for the triggers the operator is present for)?
  *
@@ -471,13 +560,15 @@ export interface IdleCompactionNoticeParts {
   notice: string | null;
   /** The full summary, posted as its own message(s). */
   summary: string | null;
+  /** The agent-mistakes section alone, posted when the full summary is not ({@link checkShouldPostInstructionGaps}). */
+  instructionGaps: string | null;
   /** The re-asked pending question — always LAST, so its buttons stay reachable. */
   question: string | null;
 }
 
 /**
  * @description Compose an idle-compaction report as SEPARATE parts in the §1.4
- * order: notice → summary → re-asked question.
+ * order: notice → summary → agent-mistakes section → re-asked question.
  *
  * Splitting what used to be one joined message is the point: the re-asked
  * question carries inline option buttons, and gluing it behind a full summary
@@ -493,12 +584,14 @@ export function buildIdleCompactionNoticeParts(input: {
   /** The idle notice text, or `null` when the compaction FAILED (nothing to announce). */
   noticeText: string | null;
   summary: string | null;
+  instructionGaps: string | null;
   /** The re-asked question's rendered text, or `null` when none was pending. */
   questionText: string | null;
 }): IdleCompactionNoticeParts {
   return {
     notice: input.noticeText && input.noticeText.length > 0 ? input.noticeText : null,
     summary: input.summary && input.summary.length > 0 ? input.summary : null,
+    instructionGaps: input.instructionGaps && input.instructionGaps.length > 0 ? input.instructionGaps : null,
     question: input.questionText && input.questionText.length > 0 ? input.questionText : null,
   };
 }

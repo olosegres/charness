@@ -21,6 +21,7 @@ import {
 } from '../utils/claudeCompactHook';
 import {
   compactionChecklistGuidance,
+  compactionGapsGuidance,
   compactionResumeGuidance,
   compactionSkillsGuidance,
   compactionSummaryGuidance,
@@ -73,6 +74,22 @@ test('PreCompact hook: an instruction that carries only the skills sentence stil
     hook_event_name: 'PreCompact',
     trigger: 'manual',
     custom_instructions: compactionSkillsGuidance,
+  });
+  assert.equal(output, `${getHookCompactionInstruction()}\n`);
+});
+
+test('PreCompact hook: an overflow compaction is asked for the agent-mistakes section, ahead of the checklist that ends the summary', () => {
+  const output = runHook(hookCommand, { hook_event_name: 'PreCompact', trigger: 'auto', custom_instructions: null });
+  assert.ok(output.includes(compactionGapsGuidance), 'the hook asks for the section the bot posts even when the summary is hidden');
+  assert.ok(output.indexOf(compactionGapsGuidance) < output.indexOf(compactionChecklistGuidance), 'the checklist is still the last part');
+});
+
+test('PreCompact hook: an instruction from before the agent-mistakes section (skills + checklist only) still gets the whole text', () => {
+  // The marker is the whole current resume guidance: a compaction carrying the older text lacks the section.
+  const output = runHook(hookCommand, {
+    hook_event_name: 'PreCompact',
+    trigger: 'manual',
+    custom_instructions: `${compactionSkillsGuidance} ${compactionChecklistGuidance}`,
   });
   assert.equal(output, `${getHookCompactionInstruction()}\n`);
 });

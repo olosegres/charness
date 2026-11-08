@@ -112,12 +112,23 @@ topic's override. Execution always goes through
 counted as a turn (a manual compaction used to push the idle stamp back and be compacted again one window
 later). EVERY compaction summary ends with a numbered «what to do next» checklist — item 1 «load these skills» with their exact names
 (left out when none was loaded), then the next steps the summary already records, none invented. ONE text asks for it
-(`compactionResumeGuidance` in `utils/compactOnIdle.ts`: the skills sentence + `compactionChecklistGuidance`) and every path carries that
+(`compactionResumeGuidance` in `utils/compactOnIdle.ts`: the skills sentence + `compactionGapsGuidance` + `compactionChecklistGuidance`) and every path carries that
 constant: `getCompactionInstruction` here (manual `/compact`, the agent's `compact_conversation`, the idle compaction), the Claude
 `PreCompact` hook and the OpenCode plugin (the CLI's / server's own overflow compactions). Only the idle compaction also asks for the
 closing section (`compact.closingSectionInstruction`, wrapped in the `<<<WHERE_WE_STOPPED>>>` markers), whose LAST part, right before the
 end marker, is that checklist; elsewhere the checklist ends the summary. The section text is the same English in all 12 locales but for
 the reply language (`i18n.test.ts` pins that).
+`compactionGapsGuidance` asks for one more section, wrapped in its own `<<<INSTRUCTION_GAPS>>>` markers (one `NO_INSTRUCTION_GAPS` line
+when empty): the agent's mistakes in the session, repeated ones above all, that a change of its standing instructions could prevent, each
+with the proposed change and where it goes — a PROPOSAL, the agent never edits instructions itself, and it is written in the conversation's
+language (the hook and the plugin are shared by all topics, so no locale is baked in). The bot posts that section on its own, EVEN WITH
+`/compact_summary` OFF (`checkShouldPostInstructionGaps` is the one rule; `extractCompactionInstructionGaps` lifts it out by its marker
+lines; the markers and the none line are stripped from a full summary): from `runThreadCompaction` for the bot's own compactions (the
+`/compact` seam, `compact_conversation`, the idle compaction — notice → section → the re-asked question), from `postOwnCompactionInstructionGaps`
+when json-stream reports the CLI's OWN overflow compaction (`contextCompacted`; nobody posts that summary, so also with the setting ON), and,
+for a backend that streams its own summary (OpenCode), by `noteStreamedCompactionSummaryTail` from the tails `handleAgentOutput` drops in hide
+mode (its one channel for every compaction; with the setting ON the stream shows the section inside the summary). Not covered: the deprecated
+tmux Claude backend (frozen; its TUI runs the compaction and the bot has no completion to read a summary after).
 `bot.ts` calls the returned hooks from the prompt path (`noteThreadActivity`, `noteThreadUserActivity`),
 the output path (`markThreadTurnProducedOutput`) and the session lifecycle (`rearmThreadIdleTimer`,
 `clearThreadCompaction`), and reads `threadsCompacting` (the typing loop, the request probe) and

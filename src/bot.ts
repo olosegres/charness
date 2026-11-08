@@ -6156,6 +6156,8 @@ const {
   noteThreadActivity,
   noteThreadUserActivity,
   markThreadTurnProducedOutput,
+  postOwnCompactionInstructionGaps,
+  noteStreamedCompactionSummaryTail,
   clearThreadCompaction,
   rearmThreadIdleTimer,
   armDeferredCompaction,
@@ -11450,8 +11452,12 @@ function handleAgentOutput(key: SessionKey, output: string, meta?: OutboundHints
   noteThreadActivity(key);
 
   // A backend's own streamed compaction summary (OpenCode) obeys `/compact_summary`, like the
-  // summary the bot posts for the other backends: off → the compaction ends in its short notices.
-  if (meta?.isCompactionSummary && !state.checkIsCompactSummaryEnabled(key)) return;
+  // summary the bot posts for the other backends: off → the compaction ends in its short notices — plus the summary's
+  // agent-mistakes section, which is shown in hide mode too and is taken out of the stream here.
+  if (meta?.isCompactionSummary && !state.checkIsCompactSummaryEnabled(key)) {
+    noteStreamedCompactionSummaryTail(key, output, meta.isContinuation === true);
+    return;
+  }
 
   // Answers-only view (S9): the agent's text — sub-agent chunks and progress
   // bursts included — never reaches the topic; a native question still does (it
@@ -14762,7 +14768,11 @@ export async function startBot(): Promise<void> {
       void todoReminderEngine?.noteAdapterTurnEnd(key).catch((e) => console.warn(`[todos] the turn end of ${keyToString(key)} was not noted:`, e instanceof Error ? e.message : e));
       handleAgentTurnEnded(key);
     }),
-    onContextCompacted: (key, trigger) => dispatchAdapterEvent(key, 'contextCompacted', () => noteConversationContextReset(key, `compaction (${trigger ?? 'bot'})`)),
+    onContextCompacted: (key, trigger) => dispatchAdapterEvent(key, 'contextCompacted', () => {
+      noteConversationContextReset(key, `compaction (${trigger ?? 'bot'})`);
+      // The CLI's own overflow compaction: nobody else posts its agent-mistakes section (a bot-issued one is its caller's).
+      void postOwnCompactionInstructionGaps(key).catch((e) => console.warn(`[compact] ${keyToString(key)} the agent-mistakes section of the CLI's own compaction was not posted:`, e instanceof Error ? e.message : e));
+    }),
     onConversationLost: (key) => dispatchAdapterEvent(key, 'conversationLost', () => withThreadLocale(key, () => handleConversationLost(key)), () => { dropLostConversationWatermark(key); noteConversationContextReset(key, 'its transcript was lost'); }),
     onError: (key, error) => dispatchAdapterEvent(key, 'error', () => withThreadLocale(key, () => handleAgentError(key, error)), () => {
       console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);

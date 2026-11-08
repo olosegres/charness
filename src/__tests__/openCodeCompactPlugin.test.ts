@@ -28,7 +28,7 @@ import {
   resolveOpenCodeGlobalPluginDir,
 } from '../utils/openCodeCompactPlugin';
 import { resetLegacyNameState } from '../legacyNames';
-import { compactionChecklistGuidance, compactionResumeGuidance } from '../utils/compactOnIdle';
+import { compactionChecklistGuidance, compactionGapsGuidance, compactionResumeGuidance } from '../utils/compactOnIdle';
 
 type CompactingHook = (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => Promise<void>;
 
@@ -56,6 +56,12 @@ test('getOpenCodeCompactPluginContext: carries the resume guidance (skills + the
   assert.ok(context.endsWith(compactionResumeGuidance));
   assert.ok(context.endsWith(compactionChecklistGuidance));
   assert.match(context, /inside the summary, never after a closing section/);
+});
+
+test('getOpenCodeCompactPluginContext: the OpenCode server\'s own overflow compaction is asked for the agent-mistakes section too, ahead of the checklist', () => {
+  const context = getOpenCodeCompactPluginContext();
+  assert.ok(context.includes(compactionGapsGuidance));
+  assert.ok(context.indexOf(compactionGapsGuidance) < context.indexOf(compactionChecklistGuidance));
 });
 
 test('resolveOpenCodeGlobalPluginDir: follows XDG_CONFIG_HOME like OpenCode', () => {
