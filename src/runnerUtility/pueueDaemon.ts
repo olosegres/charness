@@ -102,6 +102,59 @@ export async function inspectPueue(paths: RunnerHomePaths, runner: CommandRunner
   return activeJobs === 0 ? { kind: 'idle' } : { kind: 'busy', activeJobs };
 }
 
+/** One task of `pueue status --json`: its id, its status word (`Running`, `Paused`, `Queued`, `Locked`, `Done`, …) and the group it belongs to. */
+export interface PueueTask {
+  id: string;
+  status: string;
+  group: string;
+}
+
+/** What `pueue status --json` shows: the tasks, and the groups Pueue has paused (a paused group starts none of its queued tasks). */
+export interface PueueSnapshot {
+  tasks: PueueTask[];
+  pausedGroups: string[];
+}
+
+/** @description The tasks and paused groups of `pueue status --json`, or `null` when the text is not that. */
+export function parsePueueStatus(statusJson: string): PueueSnapshot | null {
+  try {
+    const parsed: { tasks?: Record<string, { status?: object | string; group?: string }>; groups?: Record<string, { status?: string }> } = JSON.parse(statusJson);
+    if (parsed.tasks === undefined) return null;
+    const tasks = Object.entries(parsed.tasks).map(([id, task]) => ({
+      id,
+      status: typeof task.status === 'string' ? task.status : (Object.keys(task.status ?? {})[0] ?? 'Unknown'),
+      group: task.group ?? 'default',
+    }));
+    const pausedGroups = Object.entries(parsed.groups ?? {}).filter(([, group]) => group.status === 'Paused').map(([name]) => name);
+    return { tasks, pausedGroups };
+  } catch {
+    return null;
+  }
+}
+
+/** What a look at the queue found: no daemon to ask, an answer that could not be had or read (`unknown`, with the reason), or the tasks. */
+export type PueueView =
+  | { kind: 'absent' }
+  | { kind: 'unknown'; reason: string }
+  | ({ kind: 'tasks' } & PueueSnapshot);
+
+/** What the pueue client says when there is no daemon: it never started here (no secret file), or it is not running (no socket, a socket nobody listens on). */
+const noDaemonPattern = /Did you start|Connection refused|No such file or directory/i;
+
+/**
+ * @description Look at the queue the way a decision about a job's Node needs it: unlike {@link inspectPueue}, only a client that says there is NO daemon counts as `absent`.
+ * An answer that timed out, a failure of any other kind and a reply that cannot be read are `unknown` — a daemon that is busy with a heavy build is not a free queue.
+ */
+export async function readPueueView(paths: RunnerHomePaths, runner: CommandRunner = runCommand): Promise<PueueView> {
+  const result = await runner(path.join(paths.binDir, 'pueue'), ['--config', paths.pueueConfig, 'status', '--json'], { timeoutMs: probeTimeoutMs });
+  if (!result.ok) {
+    if (!result.isTimedOut && result.exitCode !== null && noDaemonPattern.test(result.stderr)) return { kind: 'absent' };
+    return { kind: 'unknown', reason: result.isTimedOut ? `it did not answer within ${probeTimeoutMs / 1000} s` : `it failed (exit ${result.exitCode ?? 'none'})` };
+  }
+  const snapshot = parsePueueStatus(result.stdout);
+  return snapshot === null ? { kind: 'unknown', reason: 'its answer could not be read' } : { kind: 'tasks', ...snapshot };
+}
+
 /** @description Ask a daemon that no service manager owns to shut down, and wait for it to go. Pueue kills the jobs it runs when it stops: only for an IDLE one. */
 export async function shutDownPueue(paths: RunnerHomePaths, runner: CommandRunner = runCommand): Promise<boolean> {
   await runner(path.join(paths.binDir, 'pueue'), ['--config', paths.pueueConfig, 'shutdown'], { timeoutMs: probeTimeoutMs });

@@ -34,7 +34,7 @@ import { readExecEnv } from './execEnv';
 import { createRunnerServers } from './runnerServers';
 import { createStepRunner, stepLabels, type RunStep } from './progress';
 import { createNodeMoveDeps } from './managedNode';
-import { checkIsLinkIdle, createIdleRestart, createPueueBusyCheck, ensureLauncherForRunningNode, restartHint, runNodeUpkeep, startNodeUpkeepSchedule } from './nodeUpkeep';
+import { checkIsLinkIdle, createIdleRestart, createPueueActivityCheck, ensureLauncherForRunningNode, restartHint, runNodeUpkeep, startNodeUpkeepSchedule } from './nodeUpkeep';
 import { readNodeUpkeepIntervalMs } from './nodeUpkeepTiming';
 import { createShimDeps, ensurePackageManagerShims, formatShimLine, type ShimOutcome } from './packageManagerShims';
 import { createToolDeps, ensurePueue, ensureRsync, findPueue, findRsync, type ToolDeps, type ToolInstallOutcome } from './toolInstall';
@@ -435,7 +435,7 @@ function startNodeUpkeep(paths: RunnerHomePaths, appDir: string, io: CommandIo, 
     say: (line: string): void => { io.stdout(`${line}\n`); },
     now: Date.now,
     getAppId: () => readCurrentAppName(paths),
-    checkIsPueueBusy: createPueueBusyCheck(paths),
+    getPueueActivity: createPueueActivityCheck(paths),
     intervalMs,
     environment: process.env,
   };
@@ -486,10 +486,20 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   const controller = new AbortController();
   /** Set when the link leaves because the runner's Node changed (see {@link startNodeUpkeep}); the launcher then starts itself again. */
   const leave: { code: number | null } = { code: null };
-  const checkIsPueueBusy = createPueueBusyCheck(paths);
+  const getPueueActivity = createPueueActivityCheck(paths);
+  // Why the restart still waits, said once per reason (the check is made every few seconds).
+  let lastBlockerLine = '';
+  const reportBlocker = (description: string, isGivingUp: boolean): void => {
+    const line = isGivingUp
+      ? `Pueue has ${description} that has not moved for a day: the link leaves for the new Node.js without waiting for it (the old Node.js's folder is kept for a week)`
+      : `the link will start again on the new Node.js when Pueue is done with ${description}`;
+    if (line === lastBlockerLine) return;
+    lastBlockerLine = line;
+    io.stderr(`charness-runner: ${line}\n`);
+  };
   // The link leaves only when nothing is under way that this would cut: a command over it, an update of the program being installed (the loop owns that), a Pueue task.
   const nodeRestart = createIdleRestart({
-    checkIsIdle: () => checkIsLinkIdle({ getActiveExecCount: () => servers.getActiveExecCount(), isUpdating: () => loopRef.current?.isUpdating() ?? false, checkIsPueueBusy }),
+    checkIsIdle: (waitedMs) => checkIsLinkIdle({ getActiveExecCount: () => servers.getActiveExecCount(), isUpdating: () => loopRef.current?.isUpdating() ?? false, getPueueActivity, waitedMs, onBlocked: reportBlocker }),
     pollMs: idleRestartPollMs,
     leave: () => {
       leave.code = nodeMovedExitCode;

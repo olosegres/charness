@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { writeJsonFileAtomically } from '../configDirFile';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { checkLauncherIsFor, ensureLauncher, readLauncherNodePath } from './launcher';
-import { inspectPueue, pueueUnfinishedStatuses } from './pueueDaemon';
+import { readPueueView, type PueueView } from './pueueDaemon';
 import { checkIsManagedNode, describeNode, ensureOwnNode, getInstalledVersion, getOwnInstallFolder, testKeepNodeEnvName, type NodeMoveDeps } from './managedNode';
 import type { RunnerHomePaths } from './runnerHome';
 
@@ -16,7 +16,7 @@ import type { RunnerHomePaths } from './runnerHome';
  *   restart   a Node that is newer or new is used by the launcher's NEXT start; the link leaves for that (exit {@link nodeMovedExitCode}) only when
  *             no command runs over it ({@link createIdleRestart}), as it does for an update of its program
  *   prune     the folder of a version is removed only {@link nodeVersionGraceMs} after it stopped being the runner's Node (the moment is recorded) AND only while
- *             Pueue has no running or queued task: a job keeps the PATH it was queued with, and a process started through that PATH cannot be told from outside
+ *             Pueue has no unfinished task: a job keeps the PATH it was queued with, and a process started through that PATH cannot be told from outside
  *             (macOS `ps` shows `node`, not where it lives). The work folders a killed install left are removed too
  *   failure   an attempt that failed (no network, a full disk, a download that does not run here) is written down with the app copy it happened under;
  *             the next attempt is made {@link nodeMoveRetryMs} after the failure or after the next update of the program ({@link getNextLookDelayMs}) — never
@@ -91,14 +91,15 @@ function readLastCurrentMs(paths: Pick<RunnerHomePaths, 'nodeCurrent'>): Record<
 export interface PruneDeps {
   now: () => number;
   log: (line: string) => void;
-  /** Does Pueue have a task that is running, paused, queued or locked — or can that not be told? A job queued with the old PATH must not lose its Node. */
-  checkIsPueueBusy: () => Promise<boolean>;
+  /** What Pueue is doing: a job queued with the old PATH must not lose its Node, so anything unfinished — or an answer that could not be had — keeps the old versions. */
+  getPueueActivity: () => Promise<PueueActivity>;
 }
 
 /**
  * @description Look after the version folders of `paths.ownNodeDir`. `current` are the folders (real paths) that are the runner's Node right now: they are stamped with the
  * time of this look, and so is a folder seen for the first time (its grace starts then). A folder that is not current is removed only when its stamp is
- * {@link nodeVersionGraceMs} old — and then only if Pueue has no running or queued task. The work folders of installs that were killed (older than an hour: a fresh
+ * {@link nodeVersionGraceMs} old — and then only if Pueue has no unfinished task (a stuck one keeps it too, and the log names it). A stamp from the future (a clock that was
+ * wrong) counts as now. The work folders of installs that were killed (older than an hour: a fresh
  * one is an install in progress) go always. Returns the names removed.
  */
 export async function pruneOwnNodes(paths: Pick<RunnerHomePaths, 'ownNodeDir' | 'nodeCurrent'>, current: readonly string[], deps: PruneDeps): Promise<string[]> {
@@ -122,10 +123,11 @@ export async function pruneOwnNodes(paths: Pick<RunnerHomePaths, 'ownNodeDir' | 
   const previous = readLastCurrentMs(paths);
   const stamps: Record<string, number> = {};
   const versions = names.filter((name) => installFolderPattern.test(name));
-  for (const name of versions) stamps[name] = current.includes(path.join(ownDir, name)) ? nowMs : (previous[name] ?? nowMs);
+  for (const name of versions) stamps[name] = current.includes(path.join(ownDir, name)) ? nowMs : Math.min(previous[name] ?? nowMs, nowMs);
   const expired = versions.filter((name) => !current.includes(path.join(ownDir, name)) && nowMs - stamps[name] >= nodeVersionGraceMs);
-  if (expired.length > 0 && await deps.checkIsPueueBusy()) {
-    deps.log(`keeps ${expired.map((name) => name.slice(1)).join(', ')}: Node.js version(s) the runner left more than ${nodeVersionGraceMs / 86_400_000} days ago, while Pueue still has a running or queued task`);
+  const activity: PueueActivity = expired.length > 0 ? await deps.getPueueActivity() : { kind: 'idle' };
+  if (activity.kind !== 'idle') {
+    deps.log(`keeps ${expired.map((name) => name.slice(1)).join(', ')}: Node.js version(s) the runner left more than ${nodeVersionGraceMs / 86_400_000} days ago, while Pueue has ${activity.description}`);
   } else {
     for (const name of expired) {
       fs.rmSync(path.join(ownDir, name), { recursive: true, force: true });
@@ -138,12 +140,42 @@ export async function pruneOwnNodes(paths: Pick<RunnerHomePaths, 'ownNodeDir' | 
   return removed;
 }
 
-/** @description The check "does Pueue have a task that is not over?" for {@link PruneDeps} and {@link checkIsLinkIdle}: no daemon answering means no task; an answer that cannot be read counts as busy. */
-export function createPueueBusyCheck(paths: RunnerHomePaths, runner: CommandRunner = runCommand): () => Promise<boolean> {
-  return async () => {
-    const state = await inspectPueue(paths, runner, pueueUnfinishedStatuses);
-    return state.kind === 'busy' || state.kind === 'unreadable';
-  };
+/** What Pueue is doing, as far as a restart or a removal of a Node must care. */
+export type PueueActivity =
+  /** Nothing unfinished — or there is no daemon to have any. */
+  | { kind: 'idle' }
+  /** A task is running, one will start by itself (queued in a group that runs), or Pueue could not be asked. */
+  | { kind: 'busy'; description: string }
+  /** Only tasks that will not move by themselves: paused, locked, or queued in a paused group (Pueue pauses a group that still had queued tasks when its daemon restarted). */
+  | { kind: 'stuck'; description: string };
+
+/** How many tasks a description names before it says "and N more". */
+const namedTaskCount = 3;
+
+function describeTasks(kind: string, tasks: ReadonlyArray<{ id: string; status: string; group: string }>): string {
+  const named = tasks.slice(0, namedTaskCount).map((task) => `task ${task.id} (${task.status}, group ${task.group})`).join(', ');
+  return `${kind}: ${named}${tasks.length > namedTaskCount ? ` and ${tasks.length - namedTaskCount} more` : ''}`;
+}
+
+/**
+ * @description What a look at the queue means for a restart or a removal. A running task is busy; so is a queued one in a group that runs (it starts the moment a slot frees)
+ * and a queue that could not be asked (a timed out or unreadable answer is not "free"); a paused or locked task, and a queued one in a paused group, are `stuck` — they
+ * wait for a person — and are told apart so that a restart does not wait for them for ever. No daemon is idle. A finished task is nothing.
+ */
+export function classifyPueueView(view: PueueView): PueueActivity {
+  if (view.kind === 'absent') return { kind: 'idle' };
+  if (view.kind === 'unknown') return { kind: 'busy', description: `no answer from Pueue (${view.reason})` };
+  const isStuckQueued = (task: { status: string; group: string }): boolean => task.status === 'Queued' && view.pausedGroups.includes(task.group);
+  const moving = view.tasks.filter((task) => task.status === 'Running' || (task.status === 'Queued' && !isStuckQueued(task)));
+  if (moving.length > 0) return { kind: 'busy', description: describeTasks('a running or queued task', moving) };
+  const stuck = view.tasks.filter((task) => task.status === 'Paused' || task.status === 'Locked' || isStuckQueued(task));
+  if (stuck.length > 0) return { kind: 'stuck', description: describeTasks('a task that waits for a person', stuck) };
+  return { kind: 'idle' };
+}
+
+/** @description The check "what is Pueue doing?" for {@link PruneDeps} and {@link checkIsLinkIdle} ({@link classifyPueueView} of what `pueue status --json` says). */
+export function createPueueActivityCheck(paths: RunnerHomePaths, runner: CommandRunner = runCommand): () => Promise<PueueActivity> {
+  return async () => classifyPueueView(await readPueueView(paths, runner));
 }
 
 /**
@@ -184,7 +216,7 @@ export interface NodeUpkeepDeps {
   now: () => number;
   /** The app copy that runs (`app.<id>`); `null` when it cannot be read. */
   getAppId: () => string | null;
-  checkIsPueueBusy: () => Promise<boolean>;
+  getPueueActivity: () => Promise<PueueActivity>;
   /** How often a look is made when nothing failed ({@link nodeUpkeepIntervalMs}, or a flow's shorter one). */
   intervalMs: number;
   environment: NodeJS.ProcessEnv;
@@ -231,7 +263,12 @@ export async function runNodeUpkeep(deps: NodeUpkeepDeps): Promise<NodeUpkeepRes
   // Current right now: the Node this link runs on, the one the launcher names (after the rewrite above) and the new one — each stamped, so it is the OLD ones that age.
   const current = [getOwnInstallFolder(move.currentNodePath, paths), outcome.kind === 'installed' ? getOwnInstallFolder(outcome.nodePath, paths) : null, ...getLauncherInstallFolder(paths)]
     .filter((folder): folder is string => folder !== null);
-  await pruneOwnNodes(paths, current, { now: deps.now, log: (line) => { deps.log(line); }, checkIsPueueBusy: deps.checkIsPueueBusy });
+  // The Node is in place and the launcher names it: whatever goes wrong while old versions are looked after (a full disk for the record, a folder that cannot be removed) must not take the restart away.
+  try {
+    await pruneOwnNodes(paths, current, { now: deps.now, log: (line) => { deps.log(line); }, getPueueActivity: deps.getPueueActivity });
+  } catch (error) {
+    deps.log(`could not look after the old Node.js versions (${error instanceof Error ? error.message : 'unknown error'}); the restart for the new Node does not wait for that`);
+  }
   return { step, nextLookInMs: deps.intervalMs };
 }
 
@@ -254,31 +291,48 @@ export function startNodeUpkeepSchedule(look: () => Promise<number>, setTimer: (
   void run();
 }
 
+/** How long a restart for a new Node waits for Pueue tasks that only wait for a person (paused, locked, queued in a paused group): the old Node's folder is kept a week anyway. */
+export const stuckPueueWaitMs = 24 * 60 * 60 * 1000;
+
 export interface LinkIdleChecks {
   getActiveExecCount: () => number;
   /** Is an update of the program being installed? */
   isUpdating: () => boolean;
-  checkIsPueueBusy: () => Promise<boolean>;
+  getPueueActivity: () => Promise<PueueActivity>;
+  /** How long the restart has been waiting. */
+  waitedMs: number;
+  /** Told why the restart still waits (`isGivingUp` false), or that it stops waiting for a stuck task (`true`). */
+  onBlocked?: (description: string, isGivingUp: boolean) => void;
 }
 
 /**
  * @description Is nothing under way that a restart of the link would cut or strand — no command over it, no update of the program being installed (its download
- * and `npm ci` would be orphaned), and no Pueue task running or queued (a job queued with the old PATH keeps its Node)? The cheap questions come first.
+ * and `npm ci` would be orphaned), and no Pueue task running or queued (a job queued with the old PATH keeps its Node)? A task that only waits for a person (paused,
+ * locked, queued in a paused group) is waited for {@link stuckPueueWaitMs} and then left behind, with a word. The cheap questions come first, and they are asked AGAIN
+ * after Pueue has answered: a command or an update that began during that wait must not be cut.
  */
 export async function checkIsLinkIdle(checks: LinkIdleChecks): Promise<boolean> {
-  if (checks.getActiveExecCount() !== 0 || checks.isUpdating()) return false;
-  return !(await checks.checkIsPueueBusy());
+  const isQuiet = (): boolean => checks.getActiveExecCount() === 0 && !checks.isUpdating();
+  if (!isQuiet()) return false;
+  const activity = await checks.getPueueActivity();
+  if (!isQuiet()) return false;
+  if (activity.kind === 'idle') return true;
+  const isGivingUp = activity.kind === 'stuck' && checks.waitedMs >= stuckPueueWaitMs;
+  checks.onBlocked?.(activity.description, isGivingUp);
+  return isGivingUp;
 }
 
 export interface IdleRestartDeps {
-  /** True when nothing a restart would cut is under way ({@link checkIsLinkIdle}). A check that fails counts as not idle. */
-  checkIsIdle: () => Promise<boolean>;
+  /** True when nothing a restart would cut is under way ({@link checkIsLinkIdle}); it is told how long the restart has waited. A check that fails counts as not idle. */
+  checkIsIdle: (waitedMs: number) => Promise<boolean>;
   /** Ends the link so that the launcher starts again; called once. */
   leave: () => void;
   /** How long to wait before looking again while something is under way (Pueue tasks end without an event for the link). */
   pollMs: number;
   /** A timer for the next look (default: `setTimeout`, unref'd); a test's own. */
   setTimer?: (callback: () => void, ms: number) => { clear: () => void };
+  /** The clock (default `Date.now`); a test's own. */
+  now?: () => number;
 }
 
 export interface IdleRestart {
@@ -299,6 +353,8 @@ function setUnrefTimer(callback: () => void, ms: number): { clear: () => void } 
 /** @description The hand-over of a wanted restart to the moment nothing is under way (the way an update of the program waits for idleness). Looks again on a change and every `pollMs`. */
 export function createIdleRestart(deps: IdleRestartDeps): IdleRestart {
   const setTimer = deps.setTimer ?? setUnrefTimer;
+  const now = deps.now ?? Date.now;
+  let requestedAtMs = 0;
   let isRequested = false;
   let hasLeft = false;
   let isChecking = false;
@@ -313,12 +369,13 @@ export function createIdleRestart(deps: IdleRestartDeps): IdleRestart {
     isChecking = true;
     try {
       let isIdle = false;
+      // A change that arrived while the check ran may have made its answer stale — whatever the answer was, the check is made again (an "idle" that began before a command did is not idle).
       do {
         isLookAgainWanted = false;
         timer?.clear();
         timer = null;
-        isIdle = await deps.checkIsIdle().catch(() => false);
-      } while (!isIdle && isLookAgainWanted);
+        isIdle = await deps.checkIsIdle(now() - requestedAtMs).catch(() => false);
+      } while (isLookAgainWanted);
       if (isIdle) {
         hasLeft = true;
         deps.leave();
@@ -331,6 +388,7 @@ export function createIdleRestart(deps: IdleRestartDeps): IdleRestart {
   };
   return {
     request: () => {
+      if (!isRequested) requestedAtMs = now();
       isRequested = true;
       void look();
     },

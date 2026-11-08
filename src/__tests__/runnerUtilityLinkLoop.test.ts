@@ -583,7 +583,7 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
     });
     loopRef.current = loop;
     gateRef.current = createIdleRestart({
-      checkIsIdle: () => checkIsLinkIdle({ getActiveExecCount: () => state.busy, isUpdating: () => loopRef.current?.isUpdating() ?? false, checkIsPueueBusy: async () => false }),
+      checkIsIdle: (waitedMs) => checkIsLinkIdle({ getActiveExecCount: () => state.busy, isUpdating: () => loopRef.current?.isUpdating() ?? false, getPueueActivity: async () => ({ kind: 'idle' }), waitedMs }),
       leave: () => { leaves += 1; },
       pollMs: 100,
     });

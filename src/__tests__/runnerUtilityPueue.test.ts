@@ -12,7 +12,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
-import { countActivePueueTasks, inspectPueue, pueueUnfinishedStatuses, shutDownPueue, stopAllPueueJobs } from '../runnerUtility/pueueDaemon';
+import { countActivePueueTasks, inspectPueue, parsePueueStatus, pueueUnfinishedStatuses, readPueueView, shutDownPueue, stopAllPueueJobs } from '../runnerUtility/pueueDaemon';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 
 let paths: RunnerHomePaths;
@@ -127,5 +127,50 @@ describe('asking the daemon', () => {
       return runner(file, args, { timeoutMs: 1 });
     };
     assert.equal(await stopAllPueueJobs(paths, stubborn, 200), false);
+  });
+});
+
+describe('reading the tasks and the paused groups (what a restart or a removal of a Node decides on)', () => {
+  /** The shape Pueue 4.0.4 prints: a task's status is a word or an object with its details; a group has a status. */
+  const snapshot = JSON.stringify({
+    tasks: {
+      3: { id: 3, status: { Running: { start: '2026-11-08T00:00:00Z' } }, group: 'builds' },
+      4: { id: 4, status: { Queued: { enqueued_at: '2026-11-08T00:00:00Z' } }, group: 'default' },
+      5: { id: 5, status: 'Stashed' },
+    },
+    groups: { default: { status: 'Paused', parallel_tasks: 1 }, builds: { status: 'Running', parallel_tasks: 1 } },
+  });
+
+  it('reads each task\'s id, status word and group (a task without a group is in `default`), and which groups are paused', () => {
+    assert.deepEqual(parsePueueStatus(snapshot), {
+      tasks: [{ id: '3', status: 'Running', group: 'builds' }, { id: '4', status: 'Queued', group: 'default' }, { id: '5', status: 'Stashed', group: 'default' }],
+      pausedGroups: ['default'],
+    });
+    assert.deepEqual(parsePueueStatus(JSON.stringify({ tasks: {} })), { tasks: [], pausedGroups: [] });
+    assert.equal(parsePueueStatus('not json'), null);
+    assert.equal(parsePueueStatus('{}'), null);
+  });
+
+  function createRunner(answer: Partial<CommandResult>): CommandRunner {
+    return async () => ({ ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false, ...answer });
+  }
+
+  it('says there is NO daemon only when the client says so — in the words it really uses when it never started and when it stopped', async () => {
+    const neverStarted = 'Error: \n   0: I/O error at path "/x/data/shared_secret" while opening secret file. Did you start the daemon at least once?:\n      No such file or directory (os error 2)';
+    const stopped = 'Error: \n   0: Failed to initialize client.\n   2: I/O error at path "/x/run/pueue.socket" while connecting to daemon. Did you start it?:\n      No such file or directory (os error 2)';
+    const refused = 'Error: \n  0: Connection refused (os error 111)';
+    for (const stderr of [neverStarted, stopped, refused]) assert.deepEqual(await readPueueView(paths, createRunner({ ok: false, exitCode: 1, stderr })), { kind: 'absent' });
+  });
+
+  it('a probe that timed out, one that failed for another reason, and a reply that is no status are UNKNOWN — with the reason — never "no daemon"', async () => {
+    assert.deepEqual(await readPueueView(paths, createRunner({ ok: false, exitCode: null, isTimedOut: true, stderr: 'Did you start it?' })), { kind: 'unknown', reason: 'it did not answer within 5 s' }, 'even when its words look like "no daemon": it was cut off');
+    assert.deepEqual(await readPueueView(paths, createRunner({ ok: false, exitCode: 101, stderr: 'thread panicked' })), { kind: 'unknown', reason: 'it failed (exit 101)' });
+    assert.deepEqual(await readPueueView(paths, createRunner({ stdout: 'not json' })), { kind: 'unknown', reason: 'its answer could not be read' });
+  });
+
+  it('returns the tasks of an answer', async () => {
+    const view = await readPueueView(paths, createRunner({ stdout: snapshot }));
+    assert.equal(view.kind, 'tasks');
+    assert.deepEqual(view.kind === 'tasks' ? view.pausedGroups : null, ['default']);
   });
 });

@@ -21,17 +21,20 @@ import {
   checkIsAttemptDue,
   checkIsLinkIdle,
   createIdleRestart,
-  createPueueBusyCheck,
+  classifyPueueView,
+  createPueueActivityCheck,
   ensureLauncherForRunningNode,
   getNextLookDelayMs,
   nodeMoveRetryMs,
   nodeVersionGraceMs,
+  stuckPueueWaitMs,
   pruneOwnNodes,
   readNodeFailure,
   restartHint,
   runNodeUpkeep,
   startNodeUpkeepSchedule,
   type NodeUpkeepDeps,
+  type PueueActivity,
 } from '../runnerUtility/nodeUpkeep';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 
@@ -68,6 +71,9 @@ interface Harness {
   setPueueBusy: (value: boolean) => void;
 }
 
+const busyActivity: PueueActivity = { kind: 'busy', description: 'a running or queued task: task 3 (Running, group default)' };
+const idleActivity: PueueActivity = { kind: 'idle' };
+
 /** The upkeep over a script that answers `answer` (and counts its runs; an attempt takes `attemptTakesMs`), a clock and an app copy the test moves, and a Pueue the test says is busy. */
 function createHarness(answer: Partial<CommandResult>, overrides: { currentNodePath?: string; currentNodeVersion?: string; environment?: NodeJS.ProcessEnv; attemptTakesMs?: number; intervalMs?: number } = {}): Harness {
   let runs = 0;
@@ -98,7 +104,7 @@ function createHarness(answer: Partial<CommandResult>, overrides: { currentNodeP
       say: (line) => { said.push(line); },
       now: () => nowValue,
       getAppId: () => appId,
-      checkIsPueueBusy: async () => isPueueBusy,
+      getPueueActivity: async () => (isPueueBusy ? busyActivity : idleActivity),
       intervalMs: overrides.intervalMs ?? dayMs,
       environment: overrides.environment ?? {},
     },
@@ -276,6 +282,18 @@ describe('a Node put in place', () => {
     assert.deepEqual(harness.said, []);
   });
 
+  it('a look whose pruning FAILS (the record of stamps cannot be written) still asks for the restart — the Node is in place and the launcher names it — and says what failed', async () => {
+    const installed = writeNode('v24.22.2');
+    ensureLauncher(paths, systemNode);
+    // A folder where the record file should be: writing it fails.
+    fs.mkdirSync(paths.nodeCurrent, { recursive: true });
+    const harness = createHarness({ stdout: `${installed}\n` });
+    const result = await runNodeUpkeep(harness.deps);
+    assert.equal(result.step, 'restart');
+    assert.equal(fs.readFileSync(paths.launcher, 'utf8').includes(`NODE='${installed}'`), true);
+    assert.match(harness.logs.join('\n'), /could not look after the old Node\.js versions \(.+\); the restart for the new Node does not wait for that/);
+  });
+
   it('asks for nothing from a link that runs on the shared Node, and for no change when it already has the newest release of its line', async () => {
     const shared = path.join(root, 'shared', 'v22.99.0', 'bin', 'node');
     fs.mkdirSync(path.dirname(shared), { recursive: true });
@@ -326,13 +344,13 @@ describe('the launcher at the start of a link', () => {
 describe('removing old versions', () => {
   interface PruneRun { removed: string[]; logs: string[]; pueueAsked: number }
 
-  async function prune(options: { current?: string[]; nowMs: number; isPueueBusy?: boolean }): Promise<PruneRun> {
+  async function prune(options: { current?: string[]; nowMs: number; isPueueBusy?: boolean; activity?: PueueActivity }): Promise<PruneRun> {
     const logs: string[] = [];
     let pueueAsked = 0;
     const removed = await pruneOwnNodes(paths, options.current ?? [], {
       now: () => options.nowMs,
       log: (line) => { logs.push(line); },
-      checkIsPueueBusy: async () => { pueueAsked += 1; return options.isPueueBusy ?? false; },
+      getPueueActivity: async () => { pueueAsked += 1; return options.activity ?? (options.isPueueBusy === true ? busyActivity : idleActivity); },
     });
     return { removed, logs, pueueAsked };
   }
@@ -374,10 +392,31 @@ describe('removing old versions', () => {
     const busy = await prune({ current: [folderOf(current)], nowMs: t0 + 8 * dayMs, isPueueBusy: true });
     assert.deepEqual(busy.removed, []);
     assert.equal(busy.pueueAsked, 1);
-    assert.match(busy.logs.join('\n'), /keeps 22\.20\.0: Node\.js version\(s\) the runner left more than 7 days ago, while Pueue still has a running or queued task/);
+    assert.match(busy.logs.join('\n'), /keeps 22\.20\.0: Node\.js version\(s\) the runner left more than 7 days ago, while Pueue has a running or queued task: task 3 \(Running, group default\)/);
     assert.equal(fs.existsSync(folderOf(old)), true);
     const idle = await prune({ current: [folderOf(current)], nowMs: t0 + 8 * dayMs + 1, isPueueBusy: false });
     assert.deepEqual(idle.removed, ['v22.20.0']);
+  });
+
+  it('keeps the versions while a Pueue task is STUCK, as for any unfinished one — and the log names the task', async () => {
+    const current = writeNode('v22.23.4');
+    writeNode('v22.20.0');
+    const t0 = 20 * dayMs;
+    await prune({ current: [folderOf(current)], nowMs: t0 });
+    const stuck = await prune({ current: [folderOf(current)], nowMs: t0 + 8 * dayMs, activity: { kind: 'stuck', description: 'a task that waits for a person: task 4 (Paused, group default)' } });
+    assert.deepEqual(stuck.removed, []);
+    assert.match(stuck.logs.join('\n'), /keeps 22\.20\.0: .* while Pueue has a task that waits for a person: task 4 \(Paused, group default\)/);
+  });
+
+  it('a stamp from the FUTURE (the clock was wrong ahead, then corrected) counts as now — the week is counted from the look that saw it, not from a year ahead', async () => {
+    const current = writeNode('v22.23.4');
+    writeNode('v22.20.0');
+    const t0 = 100 * dayMs;
+    fs.mkdirSync(path.dirname(paths.nodeCurrent), { recursive: true });
+    fs.writeFileSync(paths.nodeCurrent, JSON.stringify({ lastCurrentMs: { 'v22.20.0': t0 + 365 * dayMs, 'v22.23.4': t0 + 365 * dayMs } }));
+    assert.deepEqual((await prune({ current: [folderOf(current)], nowMs: t0 })).removed, []);
+    assert.equal(readStamps()['v22.20.0'], t0, 'clamped to the time of this look');
+    assert.deepEqual((await prune({ current: [folderOf(current)], nowMs: t0 + 7 * dayMs })).removed, ['v22.20.0']);
   });
 
   it('does not look at processes at all: a process started through the PATH (`env node …` — on macOS `ps` shows just `node`) on a version the runner left a day ago keeps it', async (context) => {
@@ -443,35 +482,106 @@ describe('removing old versions', () => {
 });
 
 describe('Pueue as the idle restart and the pruning see it', () => {
-  function createRunner(answer: Partial<CommandResult>): CommandRunner {
-    return async () => ({ ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false, ...answer });
-  }
-  const tasks = (statuses: Array<string | object>): string => JSON.stringify({ tasks: Object.fromEntries(statuses.map((status, index) => [String(index), { status }])) });
+  const task = (status: string, group = 'default', id = '0') => ({ id, status, group });
+  const view = (tasks: Array<{ id: string; status: string; group: string }>, pausedGroups: string[] = []) => ({ kind: 'tasks' as const, tasks, pausedGroups });
 
-  it('is busy for a running, paused, queued or locked task — a queued one too: it starts the moment a slot frees —, idle for finished ones or none, and idle when no daemon answers', async () => {
-    for (const status of [{ Running: { start: 1 } }, 'Queued', 'Paused', 'Locked']) {
-      assert.equal(await createPueueBusyCheck(paths, createRunner({ stdout: tasks([status]) }))(), true, JSON.stringify(status));
-    }
-    assert.equal(await createPueueBusyCheck(paths, createRunner({ stdout: tasks([{ Done: { result: 'Success' } }, 'Stashed']) }))(), false, 'a finished task and one that waits for a person');
-    assert.equal(await createPueueBusyCheck(paths, createRunner({ stdout: tasks([]) }))(), false);
-    assert.equal(await createPueueBusyCheck(paths, createRunner({ ok: false, exitCode: 1 }))(), false, 'no daemon: no task');
+  it('a running task is busy; so is a queued one in a group that runs (it starts the moment a slot frees) — and the task is NAMED', () => {
+    const running = classifyPueueView(view([task('Running', 'default', '7')]));
+    assert.equal(running.kind, 'busy');
+    assert.match(running.kind === 'busy' ? running.description : '', /task 7 \(Running, group default\)/);
+    assert.equal(classifyPueueView(view([task('Queued')])).kind, 'busy');
+    assert.equal(classifyPueueView(view([task('Queued', 'builds')], ['other'])).kind, 'busy', 'its group is not the paused one');
   });
 
-  it('is busy when its answer cannot be read — an unknown is not "nothing is running"', async () => {
-    assert.equal(await createPueueBusyCheck(paths, createRunner({ stdout: 'not json' }))(), true);
+  it('a paused or locked task, and a queued one in a PAUSED group, only wait for a person: they are stuck, not busy — and named', () => {
+    for (const stuck of [task('Paused', 'default', '4'), task('Locked', 'default', '4'), task('Queued', 'default', '4')]) {
+      const activity = classifyPueueView(view([stuck], stuck.status === 'Queued' ? ['default'] : []));
+      assert.equal(activity.kind, 'stuck', stuck.status);
+      assert.match(activity.kind === 'stuck' ? activity.description : '', /a task that waits for a person: task 4 \(/);
+    }
+  });
+
+  it('a task that moves beats one that is stuck; finished tasks and an empty queue are idle; no daemon is idle', () => {
+    assert.equal(classifyPueueView(view([task('Paused', 'default', '1'), task('Running', 'default', '2')])).kind, 'busy');
+    assert.equal(classifyPueueView(view([task('Done'), task('Stashed')])).kind, 'idle');
+    assert.equal(classifyPueueView(view([])).kind, 'idle');
+    assert.equal(classifyPueueView({ kind: 'absent' }).kind, 'idle');
+  });
+
+  it('names at most three tasks and counts the rest', () => {
+    const many = classifyPueueView(view([task('Running', 'g', '1'), task('Running', 'g', '2'), task('Running', 'g', '3'), task('Running', 'g', '4'), task('Running', 'g', '5')]));
+    assert.match(many.kind === 'busy' ? many.description : '', /task 1 .*task 2 .*task 3 .* and 2 more$/);
+  });
+
+  it('an answer that could not be had or read is BUSY — not "free": a daemon that is slow under a heavy build still has its tasks', () => {
+    const unknown = classifyPueueView({ kind: 'unknown', reason: 'it did not answer within 5 s' });
+    assert.equal(unknown.kind, 'busy');
+    assert.match(unknown.kind === 'busy' ? unknown.description : '', /no answer from Pueue \(it did not answer within 5 s\)/);
+  });
+
+  describe('as asked of the real client (the activity check)', () => {
+    function createRunner(answer: Partial<CommandResult>): CommandRunner {
+      return async () => ({ ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false, ...answer });
+    }
+    const status = (tasks: Record<string, object>, groups: Record<string, object> = {}): string => JSON.stringify({ tasks, groups });
+
+    it('a probe that TIMED OUT is busy, as is any failure that is not "there is no daemon" and a reply that is no JSON', async () => {
+      assert.equal((await createPueueActivityCheck(paths, createRunner({ ok: false, exitCode: null, isTimedOut: true }))()).kind, 'busy');
+      assert.equal((await createPueueActivityCheck(paths, createRunner({ ok: false, exitCode: 101, stderr: 'thread panicked' }))()).kind, 'busy');
+      assert.equal((await createPueueActivityCheck(paths, createRunner({ stdout: 'not json' }))()).kind, 'busy');
+    });
+
+    it('no daemon — in the words the client really uses — is idle', async () => {
+      const neverStarted = 'Error: \n   0: I/O error at path "/x/data/shared_secret" while opening secret file. Did you start the daemon at least once?:\n      No such file or directory (os error 2)';
+      const stopped = 'Error: \n   0: Failed to initialize client.\n   2: I/O error at path "/x/run/pueue.socket" while connecting to daemon. Did you start it?:\n      No such file or directory (os error 2)';
+      for (const stderr of [neverStarted, stopped]) assert.equal((await createPueueActivityCheck(paths, createRunner({ ok: false, exitCode: 1, stderr }))()).kind, 'idle');
+    });
+
+    it('reads tasks and paused groups from the real shape of `pueue status --json`: a paused group makes its queued tasks stuck, a running group makes them busy', async () => {
+      const queued = { Queued: { enqueued_at: '2026-11-08T00:00:00Z' } };
+      const pausedGroup = status({ 1: { status: queued, group: 'default' } }, { default: { status: 'Paused', parallel_tasks: 1 } });
+      assert.equal((await createPueueActivityCheck(paths, createRunner({ stdout: pausedGroup }))()).kind, 'stuck');
+      const runningGroup = status({ 1: { status: queued, group: 'default' } }, { default: { status: 'Running', parallel_tasks: 1 } });
+      assert.equal((await createPueueActivityCheck(paths, createRunner({ stdout: runningGroup }))()).kind, 'busy');
+      const running = status({ 1: { status: { Running: { start: '2026-11-08T00:00:00Z' } }, group: 'default' } });
+      assert.equal((await createPueueActivityCheck(paths, createRunner({ stdout: running }))()).kind, 'busy');
+    });
   });
 });
 
 describe('leaving only when nothing is under way', () => {
+  const baseChecks = { getActiveExecCount: (): number => 0, isUpdating: (): boolean => false, waitedMs: 0 };
+
   it('asks the cheap questions first: a command over the link or an update being installed is busy without asking Pueue', async () => {
     let pueueAsked = 0;
-    const checkIsPueueBusy = async (): Promise<boolean> => { pueueAsked += 1; return false; };
-    assert.equal(await checkIsLinkIdle({ getActiveExecCount: () => 1, isUpdating: () => false, checkIsPueueBusy }), false);
-    assert.equal(await checkIsLinkIdle({ getActiveExecCount: () => 0, isUpdating: () => true, checkIsPueueBusy }), false);
+    const getPueueActivity = async (): Promise<PueueActivity> => { pueueAsked += 1; return idleActivity; };
+    assert.equal(await checkIsLinkIdle({ ...baseChecks, getActiveExecCount: () => 1, getPueueActivity }), false);
+    assert.equal(await checkIsLinkIdle({ ...baseChecks, isUpdating: () => true, getPueueActivity }), false);
     assert.equal(pueueAsked, 0);
-    assert.equal(await checkIsLinkIdle({ getActiveExecCount: () => 0, isUpdating: () => false, checkIsPueueBusy }), true);
+    assert.equal(await checkIsLinkIdle({ ...baseChecks, getPueueActivity }), true);
     assert.equal(pueueAsked, 1);
-    assert.equal(await checkIsLinkIdle({ getActiveExecCount: () => 0, isUpdating: () => false, checkIsPueueBusy: async () => true }), false, 'a Pueue task running or queued');
+    assert.equal(await checkIsLinkIdle({ ...baseChecks, getPueueActivity: async () => busyActivity }), false, 'a Pueue task running or queued');
+  });
+
+  it('asks them AGAIN after Pueue has answered: a command, or an update, that began during the wait for Pueue is not cut', async () => {
+    const state = { execs: 0, updating: false };
+    const idleAfter = (change: () => void) => async (): Promise<PueueActivity> => { change(); return idleActivity; };
+    assert.equal(await checkIsLinkIdle({ ...baseChecks, getActiveExecCount: () => state.execs, isUpdating: () => state.updating, getPueueActivity: idleAfter(() => { state.execs = 1; }) }), false, 'an ssh command began');
+    state.execs = 0;
+    assert.equal(await checkIsLinkIdle({ ...baseChecks, getActiveExecCount: () => state.execs, isUpdating: () => state.updating, getPueueActivity: idleAfter(() => { state.updating = true; }) }), false, 'an update began (the version poll starts it without telling the gate)');
+    state.updating = false;
+    assert.equal(await checkIsLinkIdle({ ...baseChecks, getActiveExecCount: () => state.execs, isUpdating: () => state.updating, getPueueActivity: idleAfter(() => undefined) }), true);
+  });
+
+  it('waits for a task that only waits for a person for a day, says why, and then leaves without it — and never gives up on a task that moves', async () => {
+    const blocked: Array<[string, boolean]> = [];
+    const onBlocked = (description: string, isGivingUp: boolean): void => { blocked.push([description, isGivingUp]); };
+    const stuck: PueueActivity = { kind: 'stuck', description: 'a task that waits for a person: task 4 (Paused, group default)' };
+    assert.equal(await checkIsLinkIdle({ ...baseChecks, getPueueActivity: async () => stuck, waitedMs: stuckPueueWaitMs - 1, onBlocked }), false);
+    assert.equal(await checkIsLinkIdle({ ...baseChecks, getPueueActivity: async () => stuck, waitedMs: stuckPueueWaitMs, onBlocked }), true);
+    assert.deepEqual(blocked, [[stuck.description, false], [stuck.description, true]]);
+    assert.equal(stuckPueueWaitMs, dayMs);
+    assert.equal(await checkIsLinkIdle({ ...baseChecks, getPueueActivity: async () => busyActivity, waitedMs: 30 * dayMs, onBlocked }), false, 'a running task: however long');
   });
 
   /** A timer the test fires itself. */
@@ -548,6 +658,55 @@ describe('leaving only when nothing is under way', () => {
     await settle();
     assert.equal(leaves, 0);
     assert.equal(timers.pending(), 1);
+  });
+
+  it('a change that arrives while a check is under way is looked at again EVEN WHEN that check answered idle — the answer began before the change', async () => {
+    let leaves = 0;
+    let calls = 0;
+    const firstCheck: { answer: ((isIdle: boolean) => void) | null } = { answer: null };
+    const restart = createIdleRestart({
+      checkIsIdle: () => {
+        calls += 1;
+        return calls === 1 ? new Promise<boolean>((resolve) => { firstCheck.answer = resolve; }) : Promise.resolve(false);
+      },
+      leave: () => { leaves += 1; },
+      pollMs: 1_000_000,
+      setTimer: createManualTimers().setTimer,
+    });
+    restart.request();
+    await settle();
+    restart.notifyChange();
+    firstCheck.answer?.(true);
+    await settle();
+    await settle();
+    assert.equal(calls, 2, 'the check was made again');
+    assert.equal(leaves, 0, 'and the stale "idle" did not make the link leave');
+  });
+
+  it('tells the check how long the restart has waited since it was asked for — and a stuck Pueue task is left behind after a day', async () => {
+    let nowMs = 5_000_000;
+    let leaves = 0;
+    const waited: number[] = [];
+    const timers = createManualTimers();
+    const stuck: PueueActivity = { kind: 'stuck', description: 'a task that waits for a person: task 4 (Paused, group default)' };
+    const restart = createIdleRestart({
+      checkIsIdle: (waitedMs) => { waited.push(waitedMs); return checkIsLinkIdle({ ...baseChecks, getPueueActivity: async () => stuck, waitedMs }); },
+      leave: () => { leaves += 1; },
+      pollMs: 15_000,
+      setTimer: timers.setTimer,
+      now: () => nowMs,
+    });
+    restart.request();
+    await settle();
+    nowMs += 15_000;
+    timers.fire();
+    await settle();
+    assert.deepEqual(waited, [0, 15_000]);
+    assert.equal(leaves, 0, 'a paused task: the restart waits');
+    nowMs += stuckPueueWaitMs;
+    timers.fire();
+    await settle();
+    assert.equal(leaves, 1, 'a day on, it leaves without the task');
   });
 
   it('a change that arrives while a check is under way is looked at again, not lost', async () => {
