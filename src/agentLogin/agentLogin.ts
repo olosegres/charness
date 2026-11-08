@@ -193,6 +193,20 @@ export interface AgentLoginPorts {
    * verifies and stores it for that profile only, and returns the line to post. Absent: a pasted key is refused.
    */
   onClaudeProfileApiKey?: (key: SessionKey, profile: ClaudeLoginProfile, apiKey: string) => Promise<string>;
+  /**
+   * Whether the `/limits_autoswitch` list names Claude accounts but not this one: a successful sign-in then tells the operator to
+   * add it there (`fallbackChain.ts` `checkIsClaudeProfileMissingFromChain`). Absent: no note.
+   */
+  checkIsProfileMissingFromLimitsList?: (profileName: string) => boolean;
+}
+
+/**
+ * @description `text` (a sign-in confirmation), with — when the account is missing from the `/limits_autoswitch` list — one more
+ * line in prose (never a button) saying to add it there so topics and agents use it. The one place that line is made: the
+ * subscription and Console sign-ins here and the pasted API key (`claudeAccounts.ts`) all end in it.
+ */
+export function appendLimitsListNote(text: string, profileName: string, isMissingFromLimitsList: boolean): string {
+  return isMissingFromLimitsList ? `${text}\n${t('account.limitsListHint', { name: profileName })}` : text;
 }
 
 /**
@@ -200,7 +214,7 @@ export interface AgentLoginPorts {
  * thread, per sign-in kind) are state of the returned instance, not of the module.
  */
 export function createAgentLogin(ports: AgentLoginPorts) {
-  const { replyToThread, deleteThreadMessage, clearAuthNotice, execFileAsync, onClaudeProfileAuthStatus, onClaudeProfileApiKey } = ports;
+  const { replyToThread, deleteThreadMessage, clearAuthNotice, execFileAsync, onClaudeProfileAuthStatus, onClaudeProfileApiKey, checkIsProfileMissingFromLimitsList } = ports;
 
   /** Per-thread in-flight `claude auth login` flows, keyed by `keyToString(key)`. */
   const pendingAuthLogins = new Map<string, PendingAuthLogin>();
@@ -427,12 +441,15 @@ export function createAgentLogin(ports: AgentLoginPorts) {
     }
   }
 
-  /** The confirmation of a profile sign-in: the email and plan, or — billed to the API — the email and Console organization. */
+  /**
+   * The confirmation of a profile sign-in: the email and plan, or — billed to the API — the email and Console organization, and
+   * the note to add the account to the `/limits_autoswitch` list when the list names Claude accounts but not this one.
+   */
   function formatProfileLoginSuccess(profile: ClaudeLoginProfile, status: ClaudeAuthStatus | null): string {
-    if (status?.billing === 'api') {
-      return t('account.login_success_api', { name: profile.name, email: status.email ?? '?', org: status.orgName ?? '?' });
-    }
-    return t('account.login_success', { name: profile.name, email: status?.email ?? '?', plan: status?.subscriptionType ?? '?' });
+    const confirmation = status?.billing === 'api'
+      ? t('account.login_success_api', { name: profile.name, email: status.email ?? '?', org: status.orgName ?? '?' })
+      : t('account.login_success', { name: profile.name, email: status?.email ?? '?', plan: status?.subscriptionType ?? '?' });
+    return appendLimitsListNote(confirmation, profile.name, checkIsProfileMissingFromLimitsList?.(profile.name) === true);
   }
 
   /** Per-thread in-flight `opencode auth login` OAuth flows, keyed by `keyToString(key)`. */

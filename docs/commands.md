@@ -205,7 +205,8 @@ so one account's usage limit does not stop every topic.
   names it) and is never `recommended`. A list with no Claude entry (empty, or OpenCode
   only) restricts nothing: every signed-in subscription account is open, an account billed
   to API credits is not. Among the open accounts, an account billed to API credits goes
-  **first** while it is signed in, not limited and its credit is not marked used up (the
+  **first** while it is signed in, not limited, its credit is not marked used up and the
+  expiry day you gave (`charness claude-profiles credit … --expires`) has not passed (the
   bonus credit is spent before any subscription; several of them keep the list's order);
   then a **new** agent goes to the usable
   subscription whose weekly limit resets soonest, so what would burn soonest is spent
@@ -221,10 +222,12 @@ so one account's usage limit does not stop every topic.
   100 % on a window the model drains; the 90 % ceiling does not apply to it. One that
   broke off on a usage limit — or on «Credit balance is too low» — passes
   `isStoppedByLimit` too: the bot re-reads that account's usage (an account billed
-  to API credits has none: it is marked as having used up its credit, like a topic's
-  refusal, and the daily recheck lifts the mark when the credit is back) and leaves it
-  out whatever the figures say, and the worker resumes the same session at once on
-  the answer. With nothing usable `recommended` is `null` and
+  to API credits has none: the bot checks it with one tiny request on the account's own
+  key — the credit is marked used up only if the API really refuses for the balance, and
+  the daily recheck lifts that mark when the credit is back; if the API answers instead,
+  or the key cannot be read, or the check gives no answer, the account is only kept off
+  agents for an hour) and leaves it out whatever the figures say, and the worker resumes
+  the same session at once on the answer. With nothing usable `recommended` is `null` and
   `nextAvailable` names the account and the instant that frees up first, for a
   one-off resume (an account a limit just stopped, whose figures show no blocker
   yet, frees up at its five-hour reset); when no account names a time, the manager

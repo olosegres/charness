@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createAgentLogin, type AgentLoginPorts, type ClaudeLoginProfile } from '../agentLogin/agentLogin';
+import { appendLimitsListNote, createAgentLogin, type AgentLoginPorts, type ClaudeLoginProfile } from '../agentLogin/agentLogin';
 import type { ClaudeAuthStatus } from '../utils/claudeProfiles';
 import type { SessionKey } from '../sessionKey';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
@@ -233,6 +233,35 @@ describe('agentLogin: the sign-in drivers', () => {
       status: { loggedIn: true, email: 'work@example.com', subscriptionType: 'team', orgName: 'Example Org', authMethod: null, apiKeySource: null, billing: null },
     }]);
     assert.equal(recorded.clearedAuthNoticeKeys.length, 0, 'a profile sign-in is not the ~/.claude login: the logged-out notice stays');
+  });
+
+  it('a profile sign-in confirmation tells the operator to add the account to the /limits_autoswitch list when the list names Claude accounts but not this one', async () => {
+    const profileDir = path.join(workDir, 'claude-profiles', 'fresh');
+    fs.mkdirSync(profileDir, { recursive: true });
+    const signIn = async (isMissingFromList: boolean): Promise<string> => {
+      const recorded = createRecordedPorts('{"loggedIn":true,"email":"fresh@example.com","subscriptionType":"max"}');
+      const asked: string[] = [];
+      const login = createAgentLogin({ ...recorded.ports, checkIsProfileMissingFromLimitsList: (name) => { asked.push(name); return isMissingFromList; } });
+      await login.startClaudeAuthLogin(key, { name: 'fresh', configDir: profileDir });
+      await waitUntil('the sign-in link', () => recorded.replies.some((reply) => reply.includes(claudeLoginUrl)));
+      await login.submitClaudeAuthLoginCode(key, pastedCode, secretMessageId);
+      await waitUntil('the sign-in outcome', () => recorded.replies.some((reply) => reply.includes('fresh@example.com')));
+      assert.deepEqual(asked, ['fresh'], 'the list is asked about THIS account, once');
+      return recorded.replies.at(-1) ?? '';
+    };
+    assert.equal(
+      await signIn(true),
+      '✅ Profile fresh signed in: fresh@example.com (max).\n💡 Account fresh is not in the /limits_autoswitch list yet — add it there so topics and agents use it.',
+    );
+    assert.equal(await signIn(false), '✅ Profile fresh signed in: fresh@example.com (max).', 'a list that holds the account (or names none): nothing added');
+  });
+
+  it('the Console sign-in of an API account carries the same note, and the note is prose: no button, only the account\'s name', () => {
+    assert.equal(
+      appendLimitsListNote('✅ API account console signed in.', 'console', true),
+      '✅ API account console signed in.\n💡 Account console is not in the /limits_autoswitch list yet — add it there so topics and agents use it.',
+    );
+    assert.equal(appendLimitsListNote('✅ API account console signed in.', 'console', false), '✅ API account console signed in.');
   });
 
   it('a subscription sign-in runs `claude auth login --claudeai`', async () => {

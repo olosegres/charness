@@ -459,6 +459,8 @@ export interface ClaudeLaunchPickOptions {
   isStoppedByLimit?: boolean;
   /** What the operator's `/limits` list says about the accounts agents may use; absent / `null` = the list names no Claude account (every signed-in subscription account is open). */
   chainScope?: ClaudeLaunchChainScope | null;
+  /** API accounts whose credit has run out by the operator's own expiry day: not sent a NEW agent first (the credit module is out of this file's reach, the caller works it out). */
+  expiredApiNames?: ReadonlySet<string>;
 }
 
 /**
@@ -662,10 +664,16 @@ function getClaudeNextAvailable(
 /**
  * Whether a NEW agent may start on the account billed to API credits `profile` now: the operator's `/limits` list holds it as an
  * enabled rung (without such a list an API account is never picked: it would look inexhaustible and spend money unasked), it is
- * signed in, not marked limited and its credits are not marked used up. No window to read: the balance is its only limit.
+ * signed in, not marked limited, its credits not marked used up and not past the expiry day the operator gave. No window to read:
+ * the balance is its only limit.
  */
-function checkIsClaudeApiProfileLaunchable(profile: ClaudeProfileUsageView, chainScope: ClaudeLaunchChainScope | null, nowMs: number): boolean {
-  return chainScope !== null && chainScope.enabledNames.has(profile.name) && checkIsClaudeProfileEligible(profile, [], nowMs);
+function checkIsClaudeApiProfileLaunchable(
+  profile: ClaudeProfileUsageView,
+  chainScope: ClaudeLaunchChainScope | null,
+  expiredApiNames: ReadonlySet<string>,
+  nowMs: number,
+): boolean {
+  return chainScope !== null && chainScope.enabledNames.has(profile.name) && !expiredApiNames.has(profile.name) && checkIsClaudeProfileEligible(profile, [], nowMs);
 }
 
 /**
@@ -676,7 +684,8 @@ function checkIsClaudeApiProfileLaunchable(profile: ClaudeProfileUsageView, chai
  * A list with no Claude rung restricts nothing.
  *
  * NEW agent (no `currentProfile`): first an account billed to API credits the list holds (the operator's choice: spend the
- * bonus credit before any subscription), as long as it is signed in, not marked limited and its credits are not marked used up;
+ * bonus credit before any subscription), as long as it is signed in, not marked limited, its credits are not marked used up and
+ * the expiry day the operator gave (`expiredApiNames`) has not passed;
  * then, of the USABLE subscription accounts — signed in, not marked limited, not out of API credits, every weekly window the
  * model drains below 100 % and the five-hour window below {@link claudeLaunchSessionCeilingPercent} — the one whose weekly
  * window resets soonest ({@link sortClaudeProfilesByLaunchRank}): spend first what burns first, and move to a farther reset only
@@ -699,6 +708,7 @@ export function getClaudeLaunchPick(input: ClaudeLaunchPickOptions & {
   nowMs: number;
 }): ClaudeLaunchPick {
   const chainScope = input.chainScope ?? null;
+  const expiredApiNames = input.expiredApiNames ?? new Set<string>();
   const current = input.currentProfile ? input.profiles.find((profile) => profile.name === input.currentProfile) : undefined;
   const isStopped = current !== undefined && input.isStoppedByLimit === true;
   if (current && !isStopped
@@ -710,7 +720,7 @@ export function getClaudeLaunchPick(input: ClaudeLaunchPickOptions & {
   const allowed = input.profiles.filter((profile) => profile.name !== movedFrom && getClaudeChainExclusion(profile.name, chainScope) === null);
   const chainOrder = chainScope === null ? [] : [...chainScope.enabledNames];
   const apiFirst = allowed
-    .filter((profile) => profile.billing === 'api' && checkIsClaudeApiProfileLaunchable(profile, chainScope, input.nowMs))
+    .filter((profile) => profile.billing === 'api' && checkIsClaudeApiProfileLaunchable(profile, chainScope, expiredApiNames, input.nowMs))
     .sort((a, b) => chainOrder.indexOf(a.name) - chainOrder.indexOf(b.name));
   const subscriptions = sortClaudeProfilesByLaunchRank(
     allowed.filter((profile) => profile.billing !== 'api' && checkIsClaudeProfileLaunchable(profile, input.model, input.nowMs)),

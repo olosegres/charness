@@ -1240,8 +1240,15 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
         const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'claude_profiles');
         assert.ok(tool, `claude_profiles is offered to a ${scope.kind} scope`);
         assert.match(tool.description ?? '', /CLAUDE_CONFIG_DIR/);
-        assert.match(tool.description ?? '', /\/limits auto-switch list/, 'the description says the pick follows the operator\'s list');
-        assert.doesNotMatch(tool.description ?? '', /NEVER picked|unless the operator asked/, 'the old «never an API account unless asked» rule is gone');
+        const description = tool.description ?? '';
+        // The opening is what an agent reads: the list rule comes first, then the order it implies (API credit, then the soonest weekly reset).
+        assert.match(
+          description,
+          /^The Claude account profiles[^]*?`recommended` follows the operator's \/limits auto-switch list: once it names a Claude account, only accounts with an enabled rung there are offered[^]*?A NEW agent \(omit `currentProfile`\) goes to an `api`-billed account of the list first while its credit lasts[^]*?, then to the usable subscription whose weekly limit resets SOONEST/,
+          'the list rule, then API first, then the soonest weekly reset — in that order',
+        );
+        assert.ok(description.indexOf('/limits auto-switch list') < description.indexOf('A NEW agent'), 'the list is introduced before any "list" wording and before the new-agent rule');
+        assert.doesNotMatch(description, /NEVER picked|unless the operator asked|goes to the usable account whose weekly/, 'the old «never an API account unless asked» opening is gone');
         assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ['currentProfile', 'isStoppedByLimit', 'model']);
         assert.equal((tool.inputSchema.properties?.currentProfile as { maxLength?: number } | undefined)?.maxLength, claudeProfileNameMaxLength, 'a profile name is never longer than the registry allows');
         const [verdict, ...rest] = (await callProfiles(client, { model: 'fable' })).split('\n');

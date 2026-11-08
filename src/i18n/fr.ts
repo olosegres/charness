@@ -995,6 +995,7 @@ export const frDict: Record<string, string> = {
   'account.apiKeyRejected': '❌ L\'API a refusé cette clé (révoquée, mal saisie ou pas une clé d\'API) : elle n\'a pas été enregistrée. Lance /accounts login {name} pour réessayer.',
   'account.apiKeySaved': '✅ Clé d\'API enregistrée pour le compte {name} (l\'API l\'a acceptée). Elle est gardée dans le répertoire propre de ce compte et utilisée par ses sessions seulement ; chaque requête est facturée.',
   'account.apiKeySavedUnverified': '✅ Clé d\'API enregistrée pour le compte {name}, mais l\'API était injoignable pour la vérifier — la première requête le dira. Seules les sessions de ce compte l\'utilisent ; chaque requête est facturée.',
+  'account.limitsListHint': '💡 Le compte {name} n\'est pas encore dans la liste de /limits_autoswitch — ajoutez-le pour que les sujets et les agents l\'utilisent.',
   'account.apiKeyNoDirectory': '⚠️ Une clé d\'API n\'est enregistrée que pour un compte API ajouté ({name} n\'en est pas un). Ajoute-en un avec /accounts add <nom> api.',
   'account.pickedApi': '💳 Ce compte est facturé à la requête sur les crédits API de la Claude Console.',
   'account.pickedApiGeneral': '💳 Ce compte est facturé à la requête sur les crédits API de la Claude Console — chaque sujet qui suit le défaut coûte désormais de l\'argent.',

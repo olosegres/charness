@@ -39,6 +39,7 @@ import {
   formatFallbackEntryLabel,
   getFallbackChainRevision,
   getFallbackEntryAvailability,
+  checkIsClaudeProfileMissingFromChain,
   getClaudeLaunchChainScope,
   getFallbackSwitchTapDecision,
   listOpenCodeModelsOfProvider,
@@ -523,6 +524,14 @@ test('the list tells agents which Claude accounts are open: those with an enable
   assert.deepEqual(scope && [[...scope.enabledNames], [...scope.disabledNames]], [['partly', 'on'], ['off']], 'one enabled rung of the account keeps it in (the list\'s order); an OpenCode rung is no Claude account');
   const allOff = getClaudeLaunchChainScope([{ ...claude('off'), disabled: true }, { ...claude('off', 'opus'), disabled: true }]);
   assert.deepEqual(allOff && [[...allOff.enabledNames], [...allOff.disabledNames]], [[], ['off']], 'a list that names Claude accounts only switched off restricts to nobody');
+});
+
+test('an account is «missing from the list» only when the list names Claude accounts and not it at all — the sign-in confirmation then says to add it', () => {
+  assert.equal(checkIsClaudeProfileMissingFromChain([], 'work'), false, 'an empty list restricts nothing');
+  assert.equal(checkIsClaudeProfileMissingFromChain([openCode('openai', 'gpt-5')], 'work'), false, 'a list of OpenCode rungs names no Claude account');
+  assert.equal(checkIsClaudeProfileMissingFromChain([claude('default')], 'work'), true, 'the list names another Claude account');
+  assert.equal(checkIsClaudeProfileMissingFromChain([claude('default'), claude('work', 'opus')], 'work'), false, 'listed (any model)');
+  assert.equal(checkIsClaudeProfileMissingFromChain([claude('default'), { ...claude('work'), disabled: true }], 'work'), false, 'switched off on purpose is not «missing»');
 });
 
 test('the confirmation buttons of the new-backend question bake the list revision (toggle also its index) and round-trip', () => {

@@ -13,7 +13,7 @@ import { keyToString } from '../../../sessionKey';
 import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import type { ClaudeConfigDirApplyResult } from '../../../adapters/claudeConfigDir';
-import type { ClaudeLoginProfile } from '../../../agentLogin/agentLogin';
+import { appendLimitsListNote, type ClaudeLoginProfile } from '../../../agentLogin/agentLogin';
 import { getRunningModelOfProvider, listOpenCodeModelsOfProvider, parseOpenCodeModelLabel, type FallbackChainEntry } from '../../../utils/fallbackChain';
 import type { BackendFamily } from '../../../utils/backendSwitchPlan';
 import { chatGptProviderId } from '../../../utils/openCodeUsage';
@@ -136,6 +136,8 @@ export interface ClaudeAccountsPorts
   verifyAnthropicApiKey: (apiKey: string) => Promise<AnthropicApiKeyCheck>;
   /** One profile as the usage screens render it: its record plus the operator's credit figure — the very view `/limits` renders (`bot.ts`). */
   getProfileUsageView: (name: string) => ClaudeProfileUsageView;
+  /** Whether the `/limits_autoswitch` list names Claude accounts but not this one (`checkIsClaudeProfileMissingFromChain`): a stored API key then says to add it. */
+  checkIsProfileMissingFromLimitsList: (profileName: string) => boolean;
 }
 
 /** Screens whose provider snapshot is kept (the newest); an older keyboard is refused as expired. */
@@ -151,7 +153,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     bot, command, getState, replyToThread, editThreadMessage, deleteThreadMessage, authoriseContext, withThreadLocale, checkIsGeneral,
     getDataDir, getInstanceTimezone, refreshClaudeUsage, readClaudeAuthStatus, startClaudeProfileLogin, applyClaudeProfile,
     applyClaudeProfileEverywhere, switchTopicByOperator, detectOpenCodeProviders, listOpenCodeModels, getTopicRun, disconnectOpenCodeProvider, startOpenCodeConnect, applyAutoSwitch, getHomeClaudeDir,
-    verifyAnthropicApiKey, getProfileUsageView,
+    verifyAnthropicApiKey, getProfileUsageView, checkIsProfileMissingFromLimitsList,
   } = ports;
   const answerWithWholeText = createWholeTextAnswerer(replyToThread);
 
@@ -305,7 +307,11 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     getState().liftClaudeProfileCreditExhaustion(profile.name);
     if (status?.loggedIn) await applyClaudeProfileEverywhere();
     console.log(`[account] ${profile.name}: an API key was stored (${check === 'valid' ? 'accepted by the API' : 'not verified'})`);
-    return t(check === 'valid' ? 'account.apiKeySaved' : 'account.apiKeySavedUnverified', { name: profile.name });
+    return appendLimitsListNote(
+      t(check === 'valid' ? 'account.apiKeySaved' : 'account.apiKeySavedUnverified', { name: profile.name }),
+      profile.name,
+      checkIsProfileMissingFromLimitsList(profile.name),
+    );
   }
 
   function formatRow(row: AccountPickerRow): string {

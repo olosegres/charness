@@ -994,6 +994,7 @@ export const hiDict: Record<string, string> = {
   'account.apiKeyRejected': '❌ API ने वह कुंजी अस्वीकार कर दी (रद्द, गलत टाइप, या API कुंजी नहीं), इसलिए वह सहेजी नहीं गई। दोबारा कोशिश के लिए /accounts login {name} चलाएँ।',
   'account.apiKeySaved': '✅ खाते {name} के लिए API कुंजी सहेजी गई (API ने स्वीकार की)। यह उस खाते की अपनी डायरेक्टरी में रहती है और सिर्फ़ उसके सत्र इसका इस्तेमाल करते हैं; हर अनुरोध का बिल बनता है।',
   'account.apiKeySavedUnverified': '✅ खाते {name} के लिए API कुंजी सहेजी गई, पर जाँचने के लिए API तक पहुँच नहीं हुई — पहला अनुरोध बताएगा। सिर्फ़ उस खाते के सत्र इसका इस्तेमाल करते हैं; हर अनुरोध का बिल बनता है।',
+  'account.limitsListHint': '💡 खाता {name} अभी /limits_autoswitch की सूची में नहीं है — उसे वहाँ जोड़ें, ताकि टॉपिक और एजेंट उसका इस्तेमाल करें।',
   'account.apiKeyNoDirectory': '⚠️ API कुंजी सिर्फ़ जोड़े गए API खाते के लिए सहेजी जाती है ({name} ऐसा नहीं है)। /accounts add <name> api से एक जोड़ें।',
   'account.pickedApi': '💳 इस खाते का बिल हर अनुरोध पर Claude Console के API क्रेडिट से बनता है।',
   'account.pickedApiGeneral': '💳 इस खाते का बिल हर अनुरोध पर Claude Console के API क्रेडिट से बनता है — डिफ़ॉल्ट का पालन करने वाला हर टॉपिक अब पैसे खर्च करता है।',

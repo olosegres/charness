@@ -989,6 +989,7 @@ export const jaDict: Record<string, string> = {
   'account.apiKeyRejected': '❌ API がそのキーを拒否しました（失効、入力ミス、または API キーではない）。保存していません。/accounts login {name} で再試行してください。',
   'account.apiKeySaved': '✅ アカウント {name} の API キーを保存しました（API が受け付けました）。そのアカウント専用のディレクトリに保管され、そのセッションだけが使います。リクエストごとに課金されます。',
   'account.apiKeySavedUnverified': '✅ アカウント {name} の API キーを保存しましたが、確認のために API に接続できませんでした — 最初のリクエストで分かります。そのアカウントのセッションだけが使います。リクエストごとに課金されます。',
+  'account.limitsListHint': '💡 アカウント {name} はまだ /limits_autoswitch のリストにありません — トピックとエージェントが使えるように、そこへ追加してください。',
   'account.apiKeyNoDirectory': '⚠️ API キーは追加済みの API アカウントにだけ保存されます（{name} は該当しません）。/accounts add <name> api で追加してください。',
   'account.pickedApi': '💳 このアカウントはリクエストごとに Claude Console の API クレジットに課金されます。',
   'account.pickedApiGeneral': '💳 このアカウントはリクエストごとに Claude Console の API クレジットに課金されます — デフォルトに従うすべてのトピックで費用が発生します。',

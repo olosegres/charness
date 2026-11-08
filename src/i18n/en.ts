@@ -1039,6 +1039,7 @@ export const enDict: Record<string, string> = {
   'account.apiKeyRejected': '❌ The API refused that key (revoked, mistyped, or not an API key), so it was not stored. Run /accounts login {name} to try again.',
   'account.apiKeySaved': '✅ API key stored for account {name} (the API accepted it). It is kept in that account\'s own directory and used by its sessions only; every request is billed.',
   'account.apiKeySavedUnverified': '✅ API key stored for account {name}, but the API could not be reached to check it — the first request will tell. It is used by that account\'s sessions only; every request is billed.',
+  'account.limitsListHint': '💡 Account {name} is not in the /limits_autoswitch list yet — add it there so topics and agents use it.',
   'account.apiKeyNoDirectory': '⚠️ An API key is stored only for an added API account ({name} is not one). Add one with /accounts add <name> api.',
   'account.pickedApi': '💳 This account is billed per request to the Claude Console API credits.',
   'account.pickedApiGeneral': '💳 This account is billed per request to the Claude Console API credits — every topic that follows the default now costs money.',

@@ -995,6 +995,7 @@ export const deDict: Record<string, string> = {
   'account.apiKeyRejected': '❌ Die API hat den Schlüssel abgelehnt (widerrufen, vertippt oder kein API-Schlüssel), er wurde nicht gespeichert. /accounts login {name} versucht es erneut.',
   'account.apiKeySaved': '✅ API-Schlüssel für das Konto {name} gespeichert (die API hat ihn akzeptiert). Er liegt im eigenen Verzeichnis des Kontos und wird nur von dessen Sitzungen genutzt; jede Anfrage wird abgerechnet.',
   'account.apiKeySavedUnverified': '✅ API-Schlüssel für das Konto {name} gespeichert, die API war zur Prüfung aber nicht erreichbar — die erste Anfrage zeigt es. Er wird nur von den Sitzungen dieses Kontos genutzt; jede Anfrage wird abgerechnet.',
+  'account.limitsListHint': '💡 Das Konto {name} steht noch nicht in der Liste von /limits_autoswitch — füge es dort hinzu, damit Themen und Agenten es nutzen.',
   'account.apiKeyNoDirectory': '⚠️ Ein API-Schlüssel wird nur für ein hinzugefügtes API-Konto gespeichert ({name} ist keins). Lege eins an mit /accounts add <name> api.',
   'account.pickedApi': '💳 Dieses Konto wird pro Anfrage über das API-Guthaben der Claude Console abgerechnet.',
   'account.pickedApiGeneral': '💳 Dieses Konto wird pro Anfrage über das API-Guthaben der Claude Console abgerechnet — jedes Thema, das dem Standard folgt, kostet jetzt Geld.',

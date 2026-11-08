@@ -996,6 +996,7 @@ export const ptDict: Record<string, string> = {
   'account.apiKeyRejected': '❌ A API recusou essa chave (revogada, digitada errado ou não é uma chave de API), então ela não foi salva. Use /accounts login {name} para tentar de novo.',
   'account.apiKeySaved': '✅ Chave de API salva para a conta {name} (a API a aceitou). Ela fica no diretório próprio dessa conta e só as sessões dela a usam; cada requisição é cobrada.',
   'account.apiKeySavedUnverified': '✅ Chave de API salva para a conta {name}, mas não foi possível falar com a API para verificá-la — a primeira requisição dirá. Só as sessões dessa conta a usam; cada requisição é cobrada.',
+  'account.limitsListHint': '💡 A conta {name} ainda não está na lista de /limits_autoswitch — adicione-a lá para que os tópicos e os agentes a usem.',
   'account.apiKeyNoDirectory': '⚠️ Uma chave de API só é salva para uma conta de API adicionada ({name} não é uma). Adicione uma com /accounts add <nome> api.',
   'account.pickedApi': '💳 Esta conta é cobrada por requisição dos créditos de API do Claude Console.',
   'account.pickedApiGeneral': '💳 Esta conta é cobrada por requisição dos créditos de API do Claude Console — todo tópico que segue o padrão agora custa dinheiro.',

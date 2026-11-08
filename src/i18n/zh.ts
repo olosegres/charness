@@ -989,6 +989,7 @@ export const zhDict: Record<string, string> = {
   'account.apiKeyRejected': '❌ API 拒绝了该密钥（已吊销、输错或不是 API 密钥），因此没有保存。运行 /accounts login {name} 重试。',
   'account.apiKeySaved': '✅ 已为账号 {name} 保存 API 密钥（API 已接受）。它保存在该账号自己的目录中，只供该账号的会话使用；每个请求都会计费。',
   'account.apiKeySavedUnverified': '✅ 已为账号 {name} 保存 API 密钥，但无法连接 API 进行检查 — 第一个请求会给出结果。它只供该账号的会话使用；每个请求都会计费。',
+  'account.limitsListHint': '💡 账号 {name} 还不在 /limits_autoswitch 列表中 — 请把它加进去，话题和代理才会使用它。',
   'account.apiKeyNoDirectory': '⚠️ API 密钥只为已添加的 API 账号保存（{name} 不是）。用 /accounts add <name> api 添加一个。',
   'account.pickedApi': '💳 此账号按请求从 Claude Console 的 API 额度中扣费。',
   'account.pickedApiGeneral': '💳 此账号按请求从 Claude Console 的 API 额度中扣费 — 现在所有跟随默认账号的话题都会产生费用。',

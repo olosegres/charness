@@ -1848,22 +1848,23 @@ function registerClaudeProfilesTool(server: ToolRegistrar, listClaudeProfiles: N
       description:
         'The Claude account profiles signed in on this host, each with its usage windows — session (5 h), weekly ' +
         '(all models) and weekly Fable — as percent used + reset instant, and `recommended`: the account a process of ' +
-        'the model you pass should run on. A NEW agent (omit `currentProfile`) goes to the usable account whose weekly ' +
-        'limit resets SOONEST — what burns soonest is spent first; an account whose five-hour window is at 90 % or more ' +
-        'is skipped until it resets. A session you RESUME (pass `currentProfile`, the profile it last ran on) stays on ' +
-        'it unless that account is signed out, limited, out of the list or at 100 % on a window the model drains; when it broke off on a ' +
-        'usage limit pass `isStoppedByLimit: true` and resume the SAME session at once on the answer. The session ' +
-        'window and the shared weekly window bound every model, Fable included; Fable also drains its own weekly ' +
-        'window; signed-out and limited accounts are skipped. `recommended` follows the operator\'s /limits auto-switch list: ' +
-        'once it names a Claude account, only accounts with an enabled rung there are offered (the others show `chainExclusion`, ' +
-        'also for a session you resume) — take the one `recommended` names, an `api`-billed one included (a Claude Console ' +
-        'balance, no windows): it comes FIRST while its credit lasts. Its entry also carries the bot\'s own estimate of its API ' +
-        'credit — `spentUsd` through the bot in the current credit period, `remainingEstimateUsd` and `expiresOn` when the ' +
-        'operator gave a Console figure (null otherwise; `expiresOn` stays null after a renewal), `probablyUsedUp` after a refusal ' +
-        'for the balance (the bot cannot be sure; it rechecks daily) and `renewedAt` once it saw the credit come back — never the ' +
-        'Console balance. A run stopped by "Credit balance is too low" is reported like a usage limit (`currentProfile` + ' +
-        '`isStoppedByLimit: true`). ' +
-        '`recommended: null` means nothing is usable now: ' +
+        'the model you pass should run on. `recommended` follows the operator\'s /limits auto-switch list: once it names a ' +
+        'Claude account, only accounts with an enabled rung there are offered (the others carry `chainExclusion`, also for a ' +
+        'session you resume). A NEW agent (omit `currentProfile`) goes to an `api`-billed account of the list first while its ' +
+        'credit lasts (a Claude Console balance, no windows), then to the usable subscription whose weekly limit resets ' +
+        'SOONEST — what burns soonest is spent first; an account whose five-hour window is at 90 % or more is skipped until ' +
+        'it resets. Take the account `recommended` names; no need to ask the operator. A session you RESUME (pass ' +
+        '`currentProfile`, the profile it last ran on) stays on it unless that account is signed out, limited, out of the ' +
+        'list or at 100 % on a window the model drains; when it broke off on a usage limit — or on "Credit balance is too ' +
+        'low" — pass `isStoppedByLimit: true` and resume the SAME session at once on the answer (for an `api` account the bot ' +
+        'first checks the balance with one tiny request: it marks the credit used up only if the API refuses for it, else it ' +
+        'keeps the account off agents for an hour). The session window and the shared weekly window bound every model, Fable ' +
+        'included; Fable also drains its own weekly window; signed-out and limited accounts are skipped. An `api` entry ' +
+        'also carries the bot\'s own estimate of its API credit — `spentUsd` through the bot in the current credit period, ' +
+        '`remainingEstimateUsd` and `expiresOn` when the operator gave a Console figure (null otherwise; `expiresOn` stays null ' +
+        'after a renewal), `probablyUsedUp` after a refusal for the balance (the bot cannot be sure; it rechecks daily) and ' +
+        '`renewedAt` once it saw the credit come back — never the Console balance; past a given `expiresOn` it is not put ' +
+        'first. `recommended: null` means nothing is usable now: ' +
         '`nextAvailable` names the account and instant that frees up first — schedule ONE resume at that time instead ' +
         'of retrying; when `nextAvailable` is null too, tell the user and retry once in about 30 minutes. Call it BEFORE launching or resuming a child `claude` and start the child with ' +
         'CLAUDE_CONFIG_DIR=<configDir> in its environment — configDir null means the default profile: set nothing. ' +

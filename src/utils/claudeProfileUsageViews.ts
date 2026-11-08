@@ -10,7 +10,7 @@
 
 import type { ClaudeProfileRecord } from '../state';
 import { resolveClaudeProfileDir } from './claudeProfiles';
-import { checkIsClaudeApiCreditMarkCurrent, getClaudeApiCreditEstimate, type ClaudeApiCreditAnchor, type ClaudeApiCreditAnchors } from './claudeApiCredit';
+import { checkIsClaudeApiCreditMarkCurrent, getClaudeApiCreditEstimate, type ClaudeApiCreditAnchor, type ClaudeApiCreditAnchors, type ClaudeApiCreditEstimate } from './claudeApiCredit';
 import { buildClaudeProfilesReport, type ClaudeLaunchPickOptions, type ClaudeProfileReportEntry, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './claudeUsage';
 
 /** @description One profile's view: its record's usage, marks and spend, plus the operator's credit figure (what `/accounts` and `/limits` render). */
@@ -65,9 +65,9 @@ export function buildClaudeProfileUsageViews(input: {
   return [...(isDefaultRemoved ? [] : [toView('default', input.records.default)]), ...added.map(([name, record]) => toView(name, record))];
 }
 
-/** The credit fields of a report entry: the bot's estimate for an API account, empty for any other. */
-function getClaudeProfileReportCredit(profile: ClaudeProfileUsageView, nowMs: number): Pick<ClaudeProfileReportEntry, 'spentUsd' | 'remainingEstimateUsd' | 'expiresOn' | 'probablyUsedUp' | 'renewedAt'> {
-  const estimate = profile.billing === 'api'
+/** What the bot can tell of an API account's credit now; `null` for any other account and when it knows nothing worth a line. */
+function getClaudeProfileCreditEstimate(profile: ClaudeProfileUsageView, nowMs: number): ClaudeApiCreditEstimate | null {
+  return profile.billing === 'api'
     ? getClaudeApiCreditEstimate({
       anchor: profile.creditAnchor,
       renewedAt: profile.creditRenewedAt,
@@ -78,6 +78,11 @@ function getClaudeProfileReportCredit(profile: ClaudeProfileUsageView, nowMs: nu
       nowMs,
     })
     : null;
+}
+
+/** The credit fields of a report entry: the bot's estimate for an API account, empty for any other. */
+function getClaudeProfileReportCredit(profile: ClaudeProfileUsageView, nowMs: number): Pick<ClaudeProfileReportEntry, 'spentUsd' | 'remainingEstimateUsd' | 'expiresOn' | 'probablyUsedUp' | 'renewedAt'> {
+  const estimate = getClaudeProfileCreditEstimate(profile, nowMs);
   return {
     // Nothing counted yet (no figure, no renewal, no turn) is no count, not a count of zero.
     spentUsd: estimate && estimate.basis !== 'none' ? estimate.spentUsd : null,
@@ -87,6 +92,15 @@ function getClaudeProfileReportCredit(profile: ClaudeProfileUsageView, nowMs: nu
     probablyUsedUp: estimate?.isProbablyUsedUp ?? false,
     renewedAt: estimate?.renewedAt ?? null,
   };
+}
+
+/**
+ * The API accounts whose credit has run out by the operator's own expiry day (`status: 'expired'`): the launch pick leaves them
+ * out of its API-first step — the report would show `remainingEstimateUsd: 0` next to them. `claudeUsage.ts` cannot load the
+ * credit module, so this is worked out here and handed to the pick.
+ */
+function listExpiredApiProfileNames(views: readonly ClaudeProfileUsageView[], nowMs: number): Set<string> {
+  return new Set(views.filter((view) => getClaudeProfileCreditEstimate(view, nowMs)?.status === 'expired').map((view) => view.name));
 }
 
 /**
@@ -115,20 +129,6 @@ export function buildClaudeProfilesCreditReport(
   nowMs: number,
   options: ClaudeLaunchPickOptions = {},
 ): ClaudeProfilesReport {
-  return addClaudeApiCreditToReport(buildClaudeProfilesReport(views, model, nowMs, options), views, nowMs);
-}
-
-/**
- * @description The API account a resumed agent's stop means the used-up credit of: the stop (`isStoppedByLimit`) came from an
- * account billed to API credits, which has no window to hit — its limit is the balance — and is not marked yet. `null` for any
- * other stop, or without one. The bot marks it (`creditExhaustedAt`) so the next pick moves on instead of sending every new
- * worker to the refused balance; the daily credit recheck ends a mark that turns out wrong.
- */
-export function getApiProfileStoppedByAgent(
-  views: readonly ClaudeProfileUsageView[],
-  query: { currentProfile: string | null; isStoppedByLimit: boolean },
-): string | null {
-  if (!query.isStoppedByLimit || query.currentProfile === null) return null;
-  const stopped = views.find((view) => view.name === query.currentProfile);
-  return stopped !== undefined && stopped.billing === 'api' && stopped.creditExhaustedAt === null ? stopped.name : null;
+  const expiredApiNames = listExpiredApiProfileNames(views, nowMs);
+  return addClaudeApiCreditToReport(buildClaudeProfilesReport(views, model, nowMs, { ...options, expiredApiNames }), views, nowMs);
 }

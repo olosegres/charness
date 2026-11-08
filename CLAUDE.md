@@ -158,7 +158,7 @@ per-backend controls are optional methods the bot checks before calling.
   An account billed to API credits (`billing: 'api'`; its key is in its own directory or read by its `apiKeyHelper`,
   never `ANTHROPIC_API_KEY`) spends money only where the operator put it: never in the implicit chain (no list), drafted
   last and 🚫 (the operator's «✅ Use» includes it — then topics AND agents use it); «Credit balance is too low» marks it
-  `creditExhaustedAt` and arms no reset wait (`handleBalanceExhausted`); an agent's `isStoppedByLimit` on it marks it too.
+  `creditExhaustedAt` and arms no reset wait (`handleBalanceExhausted`); an agent's `isStoppedByLimit` on it is VERIFIED, never believed (`utils/claudeApiAgentStop.ts`: one probe on its key marks it used up only if the API refuses for the balance, else it is held off agents for an hour via `limitedUntil`).
 - **Usage limits / fallback chain** (`/limits_autoswitch`, hidden aliases `/fallback` and `/auto_continue_limits`, `utils/fallbackChain.ts`, `commands/fallbackChain.ts`): ONE instance-wide
   priority list of `{claude, profile, model|null}` / `{opencode, providerId, modelId}` rungs in `state.json`
   (`fallbackChain`), drafted from what is detected (`detectFallbackOptions`: profile views + the OpenCode catalog

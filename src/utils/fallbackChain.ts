@@ -19,7 +19,7 @@
  */
 
 import { checkIsValidClaudeProfileName, defaultClaudeProfileName } from './claudeProfiles';
-import { buildClaudeProfilesReport, formatClaudeUsageResetAt, getClaudeUsageBucket, getRelevantClaudeUsageKinds, type ClaudeLaunchChainScope, type ClaudeProfileUsageView } from './claudeUsage';
+import { buildClaudeProfilesReport, formatClaudeUsageResetAt, getClaudeChainExclusion, getClaudeUsageBucket, getRelevantClaudeUsageKinds, type ClaudeLaunchChainScope, type ClaudeProfileUsageView } from './claudeUsage';
 
 /**
  * One rung of the chain. A Claude entry with `model: null` keeps the topic's own model. `disabled: true`
@@ -206,6 +206,16 @@ export function getClaudeLaunchChainScope(chain: readonly FallbackChainEntry[]):
   }
   if (listedNames.size === 0) return null;
   return { enabledNames, disabledNames: new Set([...listedNames].filter((name) => !enabledNames.has(name))) };
+}
+
+/**
+ * @description Whether the list names Claude accounts but not `name` at all — the case where agents and topics are never
+ * pointed at the account until the operator adds it (`getClaudeLaunchChainScope`). An account the list holds only with
+ * switched-off rungs is not it (the operator switched it off on purpose), nor is any account when the list names no Claude
+ * account. The sign-in confirmations of a profile use it to tell the operator the one step that is left.
+ */
+export function checkIsClaudeProfileMissingFromChain(chain: readonly FallbackChainEntry[], name: string): boolean {
+  return getClaudeChainExclusion(name, getClaudeLaunchChainScope(chain)) === 'notListed';
 }
 
 /** Flip the rung at `index` between included and excluded (a NEW chain). */

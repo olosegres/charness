@@ -462,6 +462,7 @@ import { getAdapterSwitchSessionIds } from './utils/adapterSwitchSessionIds';
 import {
   buildFallbackSwitchCallbackData,
   buildOpenCodeModelLabel,
+  checkIsClaudeProfileMissingFromChain,
   decideFallbackSwitch,
   formatFallbackEntryLabel,
   getClaudeLaunchChainScope,
@@ -488,7 +489,8 @@ import { createSelfUpdate } from './connectors/telegram/commands/selfUpdate';
 import { createStt } from './connectors/telegram/commands/stt';
 import type { ClaudeRateLimitEvent, ClaudeTurnCostReport } from './adapters/claudeConfigDir';
 import { addClaudeApiSpend, computeClaudeTurnCostUsd, formatUsd, getClaudeTurnCostOutcome } from './utils/claudeApiSpend';
-import { buildClaudeProfilesCreditReport, buildClaudeProfileUsageView, buildClaudeProfileUsageViews, getApiProfileStoppedByAgent } from './utils/claudeProfileUsageViews';
+import { buildClaudeProfilesCreditReport, buildClaudeProfileUsageView, buildClaudeProfileUsageViews } from './utils/claudeProfileUsageViews';
+import { getApiProfileStoppedByAgent, verifyClaudeApiAgentStop, type ClaudeApiAgentStopPorts } from './utils/claudeApiAgentStop';
 import { addClaudeApiCreditSpend, getClaudeApiCreditPeriod, listProfilesWithSupersededCreditEvidence, readClaudeApiCreditAnchors, type ClaudeApiCreditAnchors } from './utils/claudeApiCredit';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs, probeClaudeApiCredit, startClaudeApiCreditRechecks, type ClaudeApiCreditRecheckPorts } from './utils/claudeApiCreditRecheck';
 import { formatClaudeApiSpendWords } from './utils/claudeProfileUsageLines';
@@ -2837,6 +2839,7 @@ const {
   execFileAsync,
   onClaudeProfileAuthStatus: (key, profile, status) => claudeProfileAuthStatusSink?.(key, profile, status) ?? Promise.resolve(),
   onClaudeProfileApiKey: (key, profile, apiKey) => claudeProfileApiKeySink?.(key, profile, apiKey) ?? Promise.resolve(t('account.apiKeyNoDirectory', { name: profile.name })),
+  checkIsProfileMissingFromLimitsList: (name) => checkIsClaudeProfileMissingFromChain(state.getFallbackChain(), name),
 });
 
 /**
@@ -8095,6 +8098,22 @@ const claudeApiCreditRecheckPorts: ClaudeApiCreditRecheckPorts = {
   warn: (line) => console.warn(line),
 };
 
+/**
+ * What the check of an agent's stop report on an API account (`utils/claudeApiAgentStop.ts`) reads and does in the bot: the same
+ * key, attempt record and probe as the daily recheck above, a probe with a timeout of its own, and — instead of an unverified
+ * used-up mark — a mark only on a refusal for the balance, an hour off agents otherwise.
+ */
+const claudeApiAgentStopPorts: ClaudeApiAgentStopPorts = {
+  nowMs: () => Date.now(),
+  readApiKey: (name) => claudeApiCreditRecheckPorts.readApiKey(name),
+  probe: (apiKey, timeoutMs) => probeClaudeApiCredit(apiKey, { timeoutMs }),
+  markRechecked: (name, atIso) => state.setClaudeProfileCreditRechecked(name, atIso),
+  markUsedUp: (name, atIso) => state.setClaudeProfileCreditExhausted(name, atIso),
+  holdOff: (name, untilIso) => state.setClaudeProfileLimitedUntil(name, untilIso),
+  log: (line) => console.log(line),
+  warn: (line) => console.warn(line),
+};
+
 /** The profile that owns a config directory (`null` = default); `null` for a directory outside the profiles root. */
 function resolveClaudeProfileNameForDir(configDir: string | null): string | null {
   if (configDir === null) return defaultClaudeProfileName;
@@ -8798,15 +8817,23 @@ async function takeFallbackSwitchOffer(key: SessionKey, episodeId: number, index
  * was stopped on is re-read at once), then the launch pick — a new agent, or the session's own account when it is warm.
  * Only the accounts the operator's `/limits` list holds with an enabled rung are named once it lists any Claude account (an
  * account billed to API credits among them goes first, `getClaudeLaunchPick`). A resumed session reported stopped on an API
- * account is a used-up balance (it has no other limit): the account is marked so, like a topic's refusal, and the daily
- * credit recheck lifts the mark when the credit is back — otherwise every NEW worker would be sent to the same refused
- * balance. The refresh is waited for only up to `claudeLaunchRefreshBudgetMs`; past it the cached figures are answered (an agent
- * that waits on a silent tool call is dropped by its own client after 300 s).
+ * account is CHECKED, not believed (`verifyClaudeApiAgentStop`): one probe on its key marks the credit used up only if the API
+ * refuses for the balance; otherwise the account is just kept off agents for an hour. The check runs beside the usage refresh
+ * with a timeout of its own, so the answer is held for the longer of the two, never their sum. The refresh is waited for only
+ * up to `claudeLaunchRefreshBudgetMs`; past it the cached figures are answered (an agent that waits on a silent tool call is
+ * dropped by its own client after 300 s).
  */
 async function listClaudeProfilesForAgent(query: ClaudeProfilesQuery): Promise<ClaudeProfilesReport> {
-  await refreshClaudeUsageForLaunch(claudeUsageRefresher, { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, maxAgeMs: claudeUsageOnDemandMaxAgeMs });
-  const stoppedApiProfile = getApiProfileStoppedByAgent(getClaudeProfileUsageViews(), query);
-  if (stoppedApiProfile !== null) state.setClaudeProfileCreditExhausted(stoppedApiProfile, new Date().toISOString());
+  const stoppedApiProfile = getApiProfileStoppedByAgent(getClaudeProfileUsageViews(), query, Date.now());
+  await Promise.all([
+    refreshClaudeUsageForLaunch(claudeUsageRefresher, { currentProfile: query.currentProfile, isStoppedByLimit: query.isStoppedByLimit, maxAgeMs: claudeUsageOnDemandMaxAgeMs }),
+    stoppedApiProfile === null
+      ? Promise.resolve()
+      : verifyClaudeApiAgentStop(stoppedApiProfile, claudeApiAgentStopPorts).then(
+        () => undefined,
+        (e) => console.warn(`[credit] ${stoppedApiProfile}: checking an agent's stop report failed:`, e instanceof Error ? e.message : e),
+      ),
+  ]);
   return buildClaudeProfilesCreditReport(
     getClaudeProfileUsageViews(),
     query.model,
@@ -8876,6 +8903,7 @@ const {
   applyAutoSwitch,
   verifyAnthropicApiKey: (apiKey) => verifyAnthropicApiKey(apiKey),
   getProfileUsageView: getClaudeProfileUsageView,
+  checkIsProfileMissingFromLimitsList: (name) => checkIsClaudeProfileMissingFromChain(state.getFallbackChain(), name),
 });
 claudeProfileAuthStatusSink = recordClaudeProfileAuthStatus;
 claudeProfileApiKeySink = storeClaudeProfileApiKey;

@@ -65,6 +65,8 @@ const startedConnects: Array<{ key: SessionKey; providerId: string }> = [];
 const startedLogins: Array<{ key: SessionKey; profile: ClaudeLoginProfile }> = [];
 /** What the stand-in API answers for a pasted key, and the keys it was asked about. */
 let apiKeyCheck: AnthropicApiKeyCheck = 'valid';
+/** Whether the stand-in `/limits_autoswitch` list names Claude accounts but not the one that was just signed in. */
+let isMissingFromLimitsList = false;
 const checkedApiKeys: string[] = [];
 /** What the stand-in `claude auth status` answers per config dir (`null` key = the default profile). */
 const statusByDir = new Map<string | null, ClaudeAuthStatus | null>();
@@ -130,6 +132,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
         checkedApiKeys.push(apiKey);
         return apiKeyCheck;
       },
+      checkIsProfileMissingFromLimitsList: () => isMissingFromLimitsList,
     });
     accounts.registerClaudeAccountCommands();
     accounts.registerClaudeAccountCallbacks();
@@ -826,6 +829,19 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.equal(record?.billing, 'api');
     assert.ok(!JSON.stringify(harness.state.getAllClaudeProfileInfos()).includes(apiKey), 'never in state');
     assert.equal(applyEverywhereCalls, callsBefore + 1);
+
+    // The list names Claude accounts but not this one: the confirmation ends with the one step left (prose, no button) — also for an unverified key.
+    assert.doesNotMatch(stored, /limits_autoswitch/, 'a list that holds the account (or names none) adds nothing');
+    isMissingFromLimitsList = true;
+    try {
+      const storedOutsideList = await accounts.onClaudeProfileApiKey(harness.key, { name: 'console', configDir: dir, billing: 'api' }, apiKey);
+      assert.match(storedOutsideList, /API key stored for account console \(the API accepted it\)[^\n]*\n💡 Account console is not in the \/limits_autoswitch list yet — add it there so topics and agents use it\.$/);
+      apiKeyCheck = 'unknown';
+      assert.match(await accounts.onClaudeProfileApiKey(harness.key, { name: 'console', configDir: dir, billing: 'api' }, apiKey), /could not be reached[^\n]*\n💡 Account console is not in the \/limits_autoswitch list/);
+    } finally {
+      isMissingFromLimitsList = false;
+      apiKeyCheck = 'valid';
+    }
 
     // A key for a name that is not an added account (here: `default`, which is ~/.claude) is refused.
     assert.match(await accounts.onClaudeProfileApiKey(harness.key, { name: 'default', configDir: null, billing: 'api' }, apiKey), /only for an added API account/);

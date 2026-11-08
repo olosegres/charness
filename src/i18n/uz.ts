@@ -995,6 +995,7 @@ export const uzDict: Record<string, string> = {
   'account.apiKeyRejected': '❌ API bu kalitni rad etdi (bekor qilingan, xato yozilgan yoki API kaliti emas), shuning uchun saqlanmadi. Qayta urinish: /accounts login {name}.',
   'account.apiKeySaved': '✅ {name} hisobi uchun API kaliti saqlandi (API qabul qildi). U hisobning o\'z papkasida saqlanadi va faqat uning sessiyalari ishlatadi; har bir so\'rov uchun to\'lov olinadi.',
   'account.apiKeySavedUnverified': '✅ {name} hisobi uchun API kaliti saqlandi, lekin tekshirish uchun API\'ga ulanib bo\'lmadi — birinchi so\'rov ko\'rsatadi. Uni faqat shu hisob sessiyalari ishlatadi; har bir so\'rov uchun to\'lov olinadi.',
+  'account.limitsListHint': '💡 {name} hisobi hali /limits_autoswitch ro\'yxatida yo\'q — mavzular va agentlar foydalanishi uchun uni o\'sha yerga qo\'shing.',
   'account.apiKeyNoDirectory': '⚠️ API kaliti faqat qo\'shilgan API hisobi uchun saqlanadi ({name} unday emas). Qo\'shish: /accounts add <nom> api.',
   'account.pickedApi': '💳 Bu hisob har bir so\'rov uchun Claude Console API kreditidan to\'laydi.',
   'account.pickedApiGeneral': '💳 Bu hisob har bir so\'rov uchun Claude Console API kreditidan to\'laydi — standartga ergashadigan har bir mavzu endi pul sarflaydi.',

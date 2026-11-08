@@ -995,6 +995,7 @@ export const esDict: Record<string, string> = {
   'account.apiKeyRejected': '❌ La API rechazó esa clave (revocada, mal escrita o no es una clave de API), así que no se guardó. Usa /accounts login {name} para reintentar.',
   'account.apiKeySaved': '✅ Clave de API guardada para la cuenta {name} (la API la aceptó). Se guarda en el directorio propio de esa cuenta y solo la usan sus sesiones; cada petición se cobra.',
   'account.apiKeySavedUnverified': '✅ Clave de API guardada para la cuenta {name}, pero no se pudo contactar con la API para comprobarla: lo dirá la primera petición. Solo la usan las sesiones de esa cuenta; cada petición se cobra.',
+  'account.limitsListHint': '💡 La cuenta {name} aún no está en la lista de /limits_autoswitch: añádela allí para que los temas y los agentes la usen.',
   'account.apiKeyNoDirectory': '⚠️ Una clave de API solo se guarda para una cuenta de API añadida ({name} no lo es). Añade una con /accounts add <nombre> api.',
   'account.pickedApi': '💳 Esta cuenta se cobra por petición del crédito de API de Claude Console.',
   'account.pickedApiGeneral': '💳 Esta cuenta se cobra por petición del crédito de API de Claude Console: cada tema que sigue el predeterminado ahora cuesta dinero.',

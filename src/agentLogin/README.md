@@ -25,6 +25,9 @@ owned by the bot and relays it through the topic. `bot.ts` wires the ports (`rep
   message tells the operator to open it as the other account, the confirmation names the account (email, plan),
   and the parsed status goes to the bot through the optional `onClaudeProfileAuthStatus` port. Only the
   `default` profile (no directory of its own) retires the pinned logged-out notice — it IS the `~/.claude` login.
+  When the `/limits_autoswitch` list names Claude accounts but not this one (the optional
+  `checkIsProfileMissingFromLimitsList` port), the confirmation ends with one prose line saying to add it there —
+  workers and topics are only pointed at accounts in the list (`appendLimitsListNote`, also used by the stored-key reply).
 - **An API account** (`{ billing: 'api' }`, billed to a Claude Console organization's API credits) signs in with
   `claude auth login --console` (`buildClaudeAuthLoginArgs`) — the subcommand always CREATES an API key and keeps it
   in the profile's own `.claude.json`; it never takes the keyless Console sign-in, which lives outside

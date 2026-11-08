@@ -21,7 +21,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyAgentApiError } from '../apiErrorRetry';
 import { buildClaudeProfilesReport, getClaudeLaunchPick, type ClaudeProfileUsageView, type ClaudeUsageSnapshot } from '../utils/claudeUsage';
-import { addClaudeApiCreditToReport, buildClaudeProfileUsageView, buildClaudeProfilesCreditReport, getApiProfileStoppedByAgent } from '../utils/claudeProfileUsageViews';
+import { addClaudeApiCreditToReport, buildClaudeProfileUsageView, buildClaudeProfilesCreditReport } from '../utils/claudeProfileUsageViews';
+import { claudeApiAgentStopHoldMs, claudeApiAgentStopProbeTimeoutMs, getApiProfileStoppedByAgent, verifyClaudeApiAgentStop, type ClaudeApiAgentStopPorts } from '../utils/claudeApiAgentStop';
+import { probeClaudeApiCredit, type ClaudeApiCreditProbeOutcome } from '../utils/claudeApiCreditRecheck';
 import { pickClaudeLimitSwitchCandidates } from '../utils/claudeLimitSwitch';
 import {
   getClaudeLaunchChainScope,
@@ -32,7 +34,7 @@ import {
   type FallbackChainEntry,
   type FallbackDetection,
 } from '../utils/fallbackChain';
-import { createClaudeUsageRefresher } from '../utils/claudeUsageRefresher';
+import { claudeLaunchRefreshBudgetMs, createClaudeUsageRefresher } from '../utils/claudeUsageRefresher';
 import { buildLimitsBoardRows, formatLimitsUsageBlock } from '../utils/limitsBoardPlan';
 import { formatClaudeProfileUsageLines } from '../utils/claudeProfileUsageLines';
 import { formatThreadStatusAccountLines } from '../utils/threadStatusReport';
@@ -152,18 +154,126 @@ describe('ranking: an API account is picked for a new agent only when the /limit
     assert.equal(getClaudeLaunchPick({ profiles: views, model: null, nowMs, chainScope: included }).pick, 'console');
   });
 
-  it('a stop reported for an API account marks its balance used up once; any other stop, or none, marks nothing', () => {
-    const views = [buildView('default'), apiView()];
-    assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'console', isStoppedByLimit: true }), 'console');
-    assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'console', isStoppedByLimit: false }), null, 'a plain resume is no stop');
-    assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'default', isStoppedByLimit: true }), null, 'a subscription has windows and its own limit handling');
-    assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: null, isStoppedByLimit: true }), null);
-    assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'gone', isStoppedByLimit: true }), null, 'an unknown account is nothing to mark');
-    assert.equal(getApiProfileStoppedByAgent([buildView('default'), apiView({ creditExhaustedAt: inHours(-1) })], { currentProfile: 'console', isStoppedByLimit: true }), null, 'already marked');
-    // The marked account is then skipped by a NEW worker too — the point of the mark.
-    const marked = [buildView('default'), apiView({ creditExhaustedAt: new Date(nowMs).toISOString() })];
-    const chainScope = getClaudeLaunchChainScope([claudeRung('console'), claudeRung('default')]);
-    assert.equal(getClaudeLaunchPick({ profiles: marked, model: null, nowMs, chainScope }).pick, 'default');
+  it('an API account whose credit ran out by the expiry day the operator gave is not put first; with the day still ahead it is', () => {
+    const chainScope = getClaudeLaunchChainScope([claudeRung('default'), claudeRung('console')]);
+    const views = (expiresOn: string): ClaudeProfileUsageView[] => [
+      buildView('default', { usage: buildUsage(10) }),
+      apiView({ creditAnchor: { remainingUsd: 50, grantUsd: 100, anchoredAt: inHours(-24 * 30), expiresOn } }),
+    ];
+    const expired = buildClaudeProfilesCreditReport(views('2026-10-20'), null, nowMs, { chainScope });
+    assert.equal(expired.recommended, 'default', 'the day the operator gave is over: the subscription');
+    assert.equal(expired.pickReason, 'soonestWeeklyReset');
+    assert.deepEqual(expired.profiles.map((entry) => [entry.name, entry.remainingEstimateUsd, entry.isRecommended]), [['default', null, true], ['console', 0, false]]);
+    assert.equal(buildClaudeProfilesCreditReport(views('2026-10-31'), null, nowMs, { chainScope }).recommended, 'console', 'the day is still ahead: first');
+    assert.equal(buildClaudeProfilesCreditReport(views('2026-10-23'), null, nowMs, { chainScope }).recommended, 'console', 'the expiry day itself still counts');
+    // The pick itself takes the set from its caller (the credit module is out of its reach).
+    assert.equal(getClaudeLaunchPick({ profiles: views('2026-10-31'), model: null, nowMs, chainScope, expiredApiNames: new Set(['console']) }).pick, 'default');
+  });
+
+  describe('an agent\'s stop report on an API account is checked, never believed', () => {
+    const stopQuery = { currentProfile: 'console', isStoppedByLimit: true };
+
+    it('only a reported stop on an unmarked, not yet held API account is checked', () => {
+      const views = [buildView('default'), apiView()];
+      assert.equal(getApiProfileStoppedByAgent(views, stopQuery, nowMs), 'console');
+      assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'console', isStoppedByLimit: false }, nowMs), null, 'a plain resume is no stop');
+      assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'default', isStoppedByLimit: true }, nowMs), null, 'a subscription has windows and its own limit handling');
+      assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: null, isStoppedByLimit: true }, nowMs), null);
+      assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'gone', isStoppedByLimit: true }, nowMs), null, 'an unknown account is nothing to check');
+      assert.equal(getApiProfileStoppedByAgent([buildView('default'), apiView({ creditExhaustedAt: inHours(-1) })], stopQuery, nowMs), null, 'already marked used up');
+      assert.equal(getApiProfileStoppedByAgent([buildView('default'), apiView({ limitedUntil: inHours(1) })], stopQuery, nowMs), null, 'already held off by an earlier report: no second probe');
+      assert.equal(getApiProfileStoppedByAgent([buildView('default'), apiView({ limitedUntil: inHours(-1) })], stopQuery, nowMs), 'console', 'a hold that has run out checks again');
+    });
+
+    /** Fake ports: records the order of everything the check does and answers the probe with `outcome`. */
+    function buildStopHarness(options: { outcome: ClaudeApiCreditProbeOutcome; apiKey?: string | null }) {
+      const events: string[] = [];
+      const probeTimeouts: number[] = [];
+      const logs: string[] = [];
+      const warnings: string[] = [];
+      const ports: ClaudeApiAgentStopPorts = {
+        nowMs: () => nowMs,
+        readApiKey: () => (options.apiKey === undefined ? 'sk-ant-api03-test-key' : options.apiKey),
+        probe: async (_apiKey, timeoutMs) => {
+          events.push('probe');
+          probeTimeouts.push(timeoutMs);
+          return options.outcome;
+        },
+        markRechecked: (name, atIso) => events.push(`rechecked ${name} ${atIso}`),
+        markUsedUp: (name, atIso) => events.push(`usedUp ${name} ${atIso}`),
+        holdOff: (name, untilIso) => events.push(`holdOff ${name} ${untilIso}`),
+        log: (line) => logs.push(line),
+        warn: (line) => warnings.push(line),
+      };
+      return { ports, events, probeTimeouts, logs, warnings };
+    }
+    const nowIso = new Date(nowMs).toISOString();
+    const heldUntilIso = new Date(nowMs + claudeApiAgentStopHoldMs).toISOString();
+
+    it('a refusal for the balance marks the credit used up — after the attempt is recorded, with one log line', async () => {
+      const harness = buildStopHarness({ outcome: { kind: 'stillUsedUp' } });
+      assert.equal(await verifyClaudeApiAgentStop('console', harness.ports), 'markedUsedUp');
+      assert.deepEqual(harness.events, [`rechecked console ${nowIso}`, 'probe', `usedUp console ${nowIso}`]);
+      assert.equal(harness.logs.length, 1);
+      assert.match(harness.logs[0], /^\[credit\] console: an agent reported a stop and the API refuses the account for its balance — marked used up$/);
+    });
+
+    it('the API answering the account (the stop was something else) only holds it off agents for an hour — no used-up mark', async () => {
+      const harness = buildStopHarness({ outcome: { kind: 'renewed' } });
+      assert.equal(await verifyClaudeApiAgentStop('console', harness.ports), 'heldOff');
+      assert.deepEqual(harness.events, [`rechecked console ${nowIso}`, 'probe', `holdOff console ${heldUntilIso}`]);
+      assert.equal(claudeApiAgentStopHoldMs, 3_600_000);
+      assert.match(harness.logs.join('\n'), /the API answers the account — the balance is not the cause; kept off agents for 1 h/);
+    });
+
+    it('a check without a conclusion, or without a key the bot can read, holds the account off for the hour and marks nothing', async () => {
+      const inconclusive = buildStopHarness({ outcome: { kind: 'inconclusive', reason: 'timeout' } });
+      assert.equal(await verifyClaudeApiAgentStop('console', inconclusive.ports), 'heldOff');
+      assert.deepEqual(inconclusive.events, [`rechecked console ${nowIso}`, 'probe', `holdOff console ${heldUntilIso}`]);
+      assert.match(inconclusive.logs.join('\n'), /no answer about the balance \(timeout\)/);
+
+      const keyless = buildStopHarness({ outcome: { kind: 'stillUsedUp' }, apiKey: null });
+      assert.equal(await verifyClaudeApiAgentStop('console', keyless.ports), 'heldOff');
+      assert.deepEqual(keyless.events, [`rechecked console ${nowIso}`, `holdOff console ${heldUntilIso}`], 'no key, no request, no mark: it can never be lifted by a recheck either');
+      assert.match(keyless.logs.join('\n'), /can read no API key for the account/);
+
+      const modelGone = buildStopHarness({ outcome: { kind: 'modelNotFound' } });
+      assert.equal(await verifyClaudeApiAgentStop('console', modelGone.ports), 'heldOff');
+      assert.equal(modelGone.warnings.length, 1, 'a probe whose model is gone is a warning, not a log line');
+      assert.ok(!modelGone.events.some((event) => event.startsWith('usedUp')));
+    });
+
+    it('the probe has a timeout of its own, shorter than the 10 s the answer may take', async () => {
+      const harness = buildStopHarness({ outcome: { kind: 'stillUsedUp' } });
+      await verifyClaudeApiAgentStop('console', harness.ports);
+      assert.deepEqual(harness.probeTimeouts, [claudeApiAgentStopProbeTimeoutMs]);
+      assert.ok(claudeApiAgentStopProbeTimeoutMs < claudeLaunchRefreshBudgetMs, `${claudeApiAgentStopProbeTimeoutMs} ms must fit inside ${claudeLaunchRefreshBudgetMs} ms`);
+    });
+
+    it('through the real probe: a per-minute rate limit (the stop that was misread as a balance) is NOT a used-up credit; the balance refusal is', async () => {
+      const respond = (status: number, body: string) => async () => ({ status, text: async () => body });
+      const run = async (fetchImpl: ReturnType<typeof respond>) => {
+        const harness = buildStopHarness({ outcome: { kind: 'renewed' } });
+        harness.ports.probe = (apiKey, timeoutMs) => probeClaudeApiCredit(apiKey, { fetchImpl, timeoutMs });
+        return { result: await verifyClaudeApiAgentStop('console', harness.ports), events: harness.events };
+      };
+      const rateLimited = await run(respond(429, '{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your organization\'s rate limit of 30,000 input tokens per minute."}}'));
+      assert.equal(rateLimited.result, 'heldOff');
+      assert.ok(!rateLimited.events.some((event) => event.startsWith('usedUp')), 'a rate limit never marks the credit used up');
+      const overloaded = await run(respond(529, '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'));
+      assert.equal(overloaded.result, 'heldOff');
+      const refused = await run(respond(400, '{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}'));
+      assert.equal(refused.result, 'markedUsedUp');
+    });
+
+    it('the held-off account is skipped by the next NEW worker and comes back first once the hour is over', () => {
+      const chainScope = getClaudeLaunchChainScope([claudeRung('console'), claudeRung('default')]);
+      const held = [buildView('default'), apiView({ limitedUntil: heldUntilIso })];
+      assert.equal(getClaudeLaunchPick({ profiles: held, model: null, nowMs, chainScope }).pick, 'default', 'inside the hour: the subscription');
+      assert.equal(getClaudeLaunchPick({ profiles: held, model: null, nowMs: nowMs + claudeApiAgentStopHoldMs + 1, chainScope }).pick, 'console', 'after it: the API account again');
+      const used = [buildView('default'), apiView({ creditExhaustedAt: nowIso })];
+      assert.equal(getClaudeLaunchPick({ profiles: used, model: null, nowMs, chainScope }).pick, 'default', 'marked used up: the subscription');
+    });
   });
 
   it('the within-Claude switch never offers an API account, whatever figures it carries', () => {
