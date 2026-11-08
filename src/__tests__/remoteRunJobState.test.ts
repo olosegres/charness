@@ -44,6 +44,21 @@ describe('parsePueueStatus', () => {
     ]);
   });
 
+  it('a STASHED task (a job that waits for the earlier job of its project, `runner.sh` «adding the job to Pueue») is queued - in the shape Pueue 4 really prints it - and so is the job that has it', () => {
+    const stashedJson = JSON.stringify({
+      tasks: {
+        0: { id: 0, label: 'rr-box1-aaaaaa', status: { Stashed: { enqueue_at: null } } },
+        1: { id: 1, label: 'rr-box1-bbbbbb', status: { Queued: { enqueued_at: '2026-11-08T19:25:53.439011846+04:00' } } },
+        2: { id: 2, label: 'rr-box1-cccccc', status: { Paused: { start: 'x' } } },
+      },
+    });
+    const tasks = parsePueueStatus(stashedJson);
+    assert.deepEqual(tasks.map((entry) => [entry.id, entry.state]), [[0, 'queued'], [1, 'queued'], [2, 'other']]);
+    // Not started, no result: the job is "queued" for `ls` and `status`, never "unknown".
+    assert.deepEqual(describeJobOutcome(facts({ taskId: 0 }), tasks[0]), { state: 'queued' });
+    assert.equal(describeJobState(describeJobOutcome(facts({ taskId: 0 }), tasks[0])), 'queued');
+  });
+
   it('refuses a reply that is not Pueue\'s task list, with a message that quotes nothing of it', () => {
     assert.throws(() => parsePueueStatus('not json'), /did not return JSON/);
     assert.throws(() => parsePueueStatus('{"tasks": 5}'), /not its task list/);

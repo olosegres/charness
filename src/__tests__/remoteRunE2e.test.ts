@@ -505,7 +505,9 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       await waitUntil('A to hold the project lock', 60_000, () => fs.existsSync(path.join(project.runnerDirectory, 'queue-a-started')));
       writeProjectFile(project, 'src/a.txt', 'version B\n');
       const jobB = readJobId(await run(['--bg', `sh -c 'cat src/a.txt; mkdir -p test-results; echo B > test-results/b-result.txt'`]));
-      await waitUntil('B to queue behind A', 60_000, () => fs.readFileSync(path.join(project.runnerDirectory, 'jobs', jobB, 'log'), 'utf8').includes(`waiting for job ${jobA}`));
+      // B takes no Pueue slot while A holds the project: it is stashed (the runner's mark in its folder) and every view calls it queued.
+      await waitUntil('B to be queued behind A', 60_000, () => fs.existsSync(path.join(project.runnerDirectory, 'jobs', jobB, 'stashed')));
+      assert.match((await run(['ls'])).stdout, new RegExp(`^${jobB} +queued\\b`, 'm'), 'B is listed as queued, not unknown');
       openGate(project, 'gate-queue');
       const waitedA = await run(['wait', jobA]);
       const waitedB = await run(['wait', jobB]);
@@ -516,7 +518,7 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.equal(logA.split('version A').length - 1, 2, `A saw its own tree before and after B was submitted:\n${logA}`);
       assert.ok(!logA.includes('version B'), logA);
       assert.match(logB.stdout, /version B/);
-      assert.match(logB.stderr, new RegExp(`remote-run: waiting for job ${jobA} of this project`), 'B queued behind A (an own line, so on stderr)');
+      assert.doesNotMatch(logB.stderr, /remote-run: waiting for job/, 'B started only after A had ended: it never waited for the project lock');
       assert.equal(readProjectFile(project, 'test-results/a-result.txt'), 'A\n');
       assert.equal(readProjectFile(project, 'test-results/b-result.txt'), 'B\n');
       assert.ok(fs.existsSync(path.join(project.runnerDirectory, 'jobs', jobA, 'artifacts', 'test-results', 'a-result.txt')), 'A\'s files are still on the runner after B ran');

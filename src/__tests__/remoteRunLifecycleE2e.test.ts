@@ -269,13 +269,12 @@ describe('charness remote-run against a loopback runner — what ends a job', { 
       const section = "sh -c 'echo start >> ../lock-sections; sleep 2; echo end >> ../lock-sections'";
       const first = readJobId(await run(['--bg', section]));
       const second = readJobId(await run(['--bg', section]));
+      // Both wait for the holder's project without a Pueue slot: stashed (the runner's mark in the job's folder).
       for (const waiting of [first, second]) {
-        await waitUntil(`${waiting} to wait for the lock`, 60_000, () => {
-          const log = path.join(project.runnerDirectory, 'jobs', waiting, 'log');
-          return fs.existsSync(log) && fs.readFileSync(log, 'utf8').includes(`waiting for job ${holder}`);
-        });
+        await waitUntil(`${waiting} to be stashed behind the holder`, 60_000, () => fs.existsSync(path.join(project.runnerDirectory, 'jobs', waiting, 'stashed')));
       }
-      // The holder ignores SIGTERM: after the grace time it is SIGKILLed and cannot give the lock back — both waiters see a dead holder.
+      // The holder ignores SIGTERM: after the grace time it is SIGKILLed. It cannot give the lock back, nor enqueue its successor — the `kill` that SIGKILLed it does: the first job goes, finds a dead holder's lock and takes it,
+      // and the second is enqueued by the first one's end.
       assert.equal((await run(['kill', holder])).exitCode, 0);
       await expectNothingLeft(holderPid, holderChild, 30_000);
       assert.equal((await run(['wait', first])).exitCode, 0);

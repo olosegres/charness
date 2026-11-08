@@ -21,7 +21,7 @@ export interface PueueTask {
 const doneSchema = z.looseObject({ result: z.union([z.string(), z.record(z.string(), z.union([z.number(), z.string()]))]) });
 const statusSchema = z.union([
   z.string(),
-  z.looseObject({ Running: z.looseObject({}).optional(), Done: doneSchema.optional(), Paused: z.looseObject({}).optional(), Queued: z.looseObject({}).optional() }),
+  z.looseObject({ Running: z.looseObject({}).optional(), Done: doneSchema.optional(), Paused: z.looseObject({}).optional(), Queued: z.looseObject({}).optional(), Stashed: z.looseObject({}).optional() }),
 ]);
 const pueueStatusSchema = z.looseObject({
   tasks: z.record(z.string(), z.looseObject({ id: z.number(), label: z.string().nullable().optional(), status: statusSchema })),
@@ -55,7 +55,8 @@ export function parsePueueStatus(jsonText: string): PueueTask[] {
     } else if (status.Done !== undefined) {
       tasks.push({ id: task.id, label, state: 'done', result: readPueueResult(status.Done.result) });
     } else {
-      tasks.push({ id: task.id, label, state: status.Queued !== undefined ? 'queued' : 'other', result: null });
+      // A stashed task waits for its project's earlier job (`runner.sh`, «adding the job to Pueue»): to the caller it is queued like any other.
+      tasks.push({ id: task.id, label, state: status.Queued !== undefined || status.Stashed !== undefined ? 'queued' : 'other', result: null });
     }
   }
   return tasks;

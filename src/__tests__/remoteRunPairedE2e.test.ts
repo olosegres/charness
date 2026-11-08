@@ -246,6 +246,42 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
     assert.equal(result.stdout, 'version A\n');
   });
 
+  it('jobs at once: the number the hub sets reaches the machine - with 2, jobs of two projects run side by side; with 1 the second waits for the first', async () => {
+    const second = createProject(cliLayout, 'app2', { '.gitignore': 'out/\n', '.remote-run': 'pull: out\n', 'package.json': '{ "name": "app2" }\n', 'src/a.txt': 'version A\n' });
+    const runIn = (target: FlowProject, args: string[]): ReturnType<typeof runCli> => runCli(cliLayout, args, { cwd: target.root, env: flowEnv, timeoutMs: ordinaryRunTimeoutMs });
+    const submitGated = async (target: FlowProject, name: string): Promise<string> => {
+      const submitted = await runIn(target, ['--bg', createGatedCommand(`${name}.gate`, { before: `touch ../${name}.started`, after: `touch ../${name}.ended` })]);
+      assert.equal(submitted.exitCode, 0, submitted.stderr);
+      return submitted.stdout.trim();
+    };
+    const hasStarted = (target: FlowProject, name: string): boolean => fs.existsSync(path.join(target.runnerDirectory, `${name}.started`));
+    const finish = async (jobs: Array<[FlowProject, string, string]>): Promise<void> => {
+      for (const [target, name] of jobs) openGate(target, `${name}.gate`);
+      for (const [target, , jobId] of jobs) assert.equal((await runIn(target, ['wait', jobId])).exitCode, 0);
+    };
+
+    // The same short cache folder as the CLI's other calls: the hub's own, under this layout's long HOME, makes ssh's control socket path too long.
+    const hubEnv = { XDG_CACHE_HOME: cliLayout.cacheDir };
+    const two = runHubCli(layout, ['runners', 'jobs-at-once', runnerName, '2'], hubEnv);
+    assert.equal(two.status, 0, two.stderr);
+    assert.match(two.stdout, /runs 2 jobs at once \(told to the runner now\)/);
+    const first = await submitGated(project, 'par-a');
+    const other = await submitGated(second, 'par-b');
+    await waitUntil(() => hasStarted(project, 'par-a') && hasStarted(second, 'par-b'), 'both jobs to run at the same time', ordinaryRunTimeoutMs);
+    await finish([[project, 'par-a', first], [second, 'par-b', other]]);
+
+    assert.equal(runHubCli(layout, ['runners', 'jobs-at-once', runnerName, '1'], hubEnv).status, 0);
+    const third = await submitGated(project, 'par-c');
+    const fourth = await submitGated(second, 'par-d');
+    await waitUntil(() => hasStarted(project, 'par-c'), 'the first job to run', ordinaryRunTimeoutMs);
+    await new Promise((resolve) => { setTimeout(resolve, 4 * pollMs); });
+    assert.equal(hasStarted(second, 'par-d'), false, 'with one at a time the second job waits for the first');
+    openGate(project, 'par-c.gate');
+    await waitUntil(() => hasStarted(second, 'par-d'), 'the second job to run after the first', ordinaryRunTimeoutMs);
+    await finish([[second, 'par-d', fourth]]);
+    assert.equal((await runIn(project, ['wait', third])).exitCode, 0);
+  });
+
   it('a runner paused from the hub is never picked — and the message says who paused it and how to resume', async () => {
     assert.equal(runHubCli(layout, ['runners', 'pause', runnerName]).status, 0);
     try {

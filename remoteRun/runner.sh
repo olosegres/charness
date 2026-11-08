@@ -123,6 +123,10 @@ port_base_start=20000
 port_block_size=100
 index_lock_wait_sec=30
 index_lock_max_age_min=2
+# Scheduling: a job whose project has another job under way is kept out of Pueue's queue (stashed) so that it takes no slot (see «adding the job to Pueue»). The per-project mutex `p/<slug>/sched.lock` is held for a few Pueue
+# calls; one that cannot be had in sched_lock_wait_sec is believed stale after sched_lock_max_age_min.
+sched_lock_wait_sec=30
+sched_lock_max_age_min=2
 # A job's own Simulator device is named for its project; its steps are each bounded (a watchdog: there is no `timeout(1)` on a Mac).
 ios_device_prefix=charness-
 ios_device_list_sec=30
@@ -807,6 +811,7 @@ cmd_probe() {
   # never does: that prune has no copy to keep, and the project about to be used is typically the least recently used one — the very one it would take before the job's own `prepare` arrives.
   probe_may_prune=${2:-}
   mkdir -p "$work" 2> /dev/null
+  enqueue_idle_stashed "$work"
   read_runner_state
   echo "os=$(uname -s)"
   echo "arch=$(uname -m)"
@@ -873,6 +878,7 @@ cmd_prepare() {
     die "Pueue daemon is not reachable and could not be started (check PUEUE_BIN / the pueue settings of this runner)"
   fi
   apply_groups "$groups"
+  enqueue_idle_stashed "$work"
   # The caller may hang up while this removes copies for minutes (its call has a time limit): writing a report line to a closed pipe is no reason to die half-way (SIGPIPE would end the removal after
   # the copy it is at). Only here: elsewhere a closed pipe still ends a pipeline early, as it should.
   trap '' PIPE
@@ -1697,18 +1703,106 @@ quote_word() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
+# The scheduling mutex of the project copy in folder $1: `<copy>/sched.lock`, made and broken by the project lock's helpers like the index lock (no job, a short age limit), waited for sched_lock_wait_sec at most. Fails when it
+# could not be had: a caller then goes on without the scheduling it was to do (a job is queued the old way; an enqueue is left to the next `prepare` or `probe`).
+acquire_sched_lock() {
+  local lock="$1/sched.lock" jobs_dir= job= lock_max_age_min=$sched_lock_max_age_min
+  local waited_since=$SECONDS
+  while ! create_lock_file "$lock"; do
+    check_lock_is_stale && break_stale_lock && continue
+    [ $((SECONDS - waited_since)) -ge "$sched_lock_wait_sec" ] && return 1
+    nap 0.2
+  done
+  rm -f "$lock".breaking.* 2> /dev/null
+  return 0
+}
+
+release_sched_lock() {
+  local holder_pid holder_job
+  read_lock_holder "$1/sched.lock"
+  [ "$holder_pid" = "$$" ] && rm -f "$1/sched.lock"
+  return 0
+}
+
+# Is any job of the project copy in folder $1 under way - it has a Pueue task, no result, and no process that has died? `active` counts only the jobs Pueue may run (not the stashed ones: those wait for the others), `any` all.
+check_project_has_unended_job() {
+  local job_dir
+  for job_dir in "$1"/jobs/*/; do
+    [ -d "$job_dir" ] || continue
+    check_job_dir_ended "$job_dir" && continue
+    [ "$2" = active ] && [ -f "$job_dir/stashed" ] && continue
+    return 0
+  done
+  return 1
+}
+
+# Enqueue (`pueue enqueue`) the oldest stashed job of the project copy in folder $1 - if no other job of the copy is under way: its predecessor ended (`finish_job`), or died before it could say so (the next `prepare` or `probe`,
+# `enqueue_idle_stashed`). A stashed job that has a result already (it was killed) only loses its mark; one whose Pueue task is not its own any more (Pueue numbered it again) is dropped too. Under the scheduling mutex, so
+# that a job being added at the same moment is either seen here (stashed before this looks) or sees its predecessor ended (and is queued as usual): none is left stashed with nobody to enqueue it.
+enqueue_idle_stashed_of_project() {
+  local project_dir=$1 marker job_dir task stashed_marks
+  acquire_sched_lock "$project_dir" || return 0
+  stashed_marks=$(ls -1tr "$project_dir"/jobs/*/stashed 2> /dev/null)
+  # Pueue is asked only when something is stashed, and a Pueue that does not answer judges nothing: a mark is dropped only for a job Pueue itself says is not its own.
+  if [ -n "$stashed_marks" ] && ! check_project_has_unended_job "$project_dir" active && pq status > /dev/null 2>&1; then
+    while IFS= read -r marker; do
+      [ -f "$marker" ] || continue
+      job_dir=$(dirname "$marker")
+      task=$(read_file "$job_dir/task-id")
+      case $task in '' | *[!0-9]*) rm -f "$marker"; continue ;; esac
+      if [ -f "$job_dir/exit" ] || ! check_task_belongs_to_job "$task" "$(basename "$job_dir")"; then
+        rm -f "$marker"
+        continue
+      fi
+      pq enqueue "$task" > /dev/null 2>&1 && rm -f "$marker"
+      break
+    done <<< "$stashed_marks"
+  fi
+  release_sched_lock "$project_dir"
+  return 0
+}
+
+# The safety net of the scheduling: every project copy of work dir $1 that has a stashed job gets `enqueue_idle_stashed_of_project` - a job that was SIGKILLed never ran its `finish_job`, so its successor would wait for ever.
+# Run by `prepare` and by `probe` (both are asked often); costs a look at the marks when nothing is stashed.
+enqueue_idle_stashed() {
+  local marker project_dir seen=" "
+  for marker in "$1"/p/*/jobs/*/stashed; do
+    [ -f "$marker" ] || continue
+    project_dir=$(dirname "$(dirname "$(dirname "$marker")")")
+    case $seen in *" $project_dir "*) continue ;; esac
+    seen="$seen$project_dir "
+    enqueue_idle_stashed_of_project "$project_dir"
+  done
+  return 0
+}
+
+# Add the job to Pueue. A job whose project copy has another job under way is added STASHED (`$jd/stashed`): Pueue starts tasks in order of their numbers, and a second job of a project that is started because a slot
+# is free would sit in `waiting-lock` holding that slot, while a job of another project waits for it - a limit of 2 would often be 1. A stashed job takes no slot and is enqueued when its predecessor ends (`finish_job`),
+# at the latest by the next `prepare` / `probe`. Not `pueue add --after`: a task runs only if what it follows ended well, and a red test must not fail the project's next job. The project lock stays what keeps two jobs of a copy
+# apart; this only decides who may take a slot. Without the scheduling mutex the job is queued as before.
 add_job() {
   local group=$1
   local script_path
   script_path=$(get_script_path)
   local command_line
   command_line="exec bash $(quote_word "$script_path") job $(quote_word "$work") $(quote_word "$slug") $(quote_word "$job")"
-  local task
+  local task stash_option= is_stashed=0 holds_sched_lock=0
   # The job's time limit counts from here (a foreground run's own timer does too): a job that waited its whole limit in the queue is
   # over when it starts (cmd_job), not given the limit again.
   date +%s > "$jd/queued-at"
-  task=$(pq add --print-task-id -g "$group" -l "rr-$job" -w "$proj" -- "$command_line") || return 1
+  acquire_sched_lock "$proj" && holds_sched_lock=1
+  if [ "$holds_sched_lock" -eq 1 ] && check_project_has_unended_job "$proj" any; then
+    is_stashed=1
+    stash_option=--stashed
+  fi
+  if ! task=$(pq add --print-task-id $stash_option -g "$group" -l "rr-$job" -w "$proj" -- "$command_line"); then
+    [ "$holds_sched_lock" -eq 1 ] && release_sched_lock "$proj"
+    return 1
+  fi
   printf '%s\n' "$task" > "$jd/task-id"
+  [ "$is_stashed" -eq 1 ] && : > "$jd/stashed"
+  [ "$holds_sched_lock" -eq 1 ] && release_sched_lock "$proj"
+  return 0
 }
 
 cmd_submit() {
@@ -1752,6 +1846,8 @@ kill_job() {
     # job, so nothing may act on it any more (`prune_work` skips such a job's task; waiting is decided by the exit file below).
     touch "$jd/task-removed"
     finish_killed_job
+    # A job of the same project that waits stashed behind this one may go now (it is a no-op while another job of the project is under way).
+    enqueue_idle_stashed_of_project "$proj"
     return 0
   fi
   signal_job_group TERM || pq kill "$task" > /dev/null 2>&1
@@ -1770,6 +1866,8 @@ kill_job() {
   done
   hard_kill_job "$task"
   sleep 1
+  # Its own `finish_job` did not run: the next stashed job of the project is enqueued here (the job's own watchdog, which is killed with it, leaves it to the next `prepare` / `probe`).
+  enqueue_idle_stashed_of_project "$proj"
   return 0
 }
 
@@ -1794,6 +1892,7 @@ hard_kill_job() {
 # of the project takes over its lock at once, and prune removes it after 3 days like any other.
 finish_killed_job() {
   [ -f "$jd/exit" ] && return 0
+  rm -f "$jd/stashed"
   local code=137
   [ -f "$jd/timeout" ] && code=124
   rm -rf "$stage"
@@ -2679,6 +2778,8 @@ finish_job() {
     release_lock
     record_job_end "$code" done
   fi
+  # Its result is written and its lock is given back: the next job of the project may take a slot now. Last, so that a job added at this moment either was stashed before this looks or finds this one ended.
+  enqueue_idle_stashed_of_project "$proj"
   exit "$code"
 }
 
