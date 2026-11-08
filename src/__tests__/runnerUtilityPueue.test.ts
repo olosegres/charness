@@ -13,9 +13,6 @@ import os from 'os';
 import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
 import { countActivePueueTasks, inspectPueue, parsePueueStatus, readPueueView, shutDownPueue, stopAllPueueJobs, summarizePueueView } from '../runnerUtility/pueueDaemon';
-
-/** Every status of a task that is not over: it runs, is paused, waits in the queue or is locked. */
-const pueueUnfinishedStatuses: readonly string[] = ['Running', 'Paused', 'Queued', 'Locked'];
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 
 let paths: RunnerHomePaths;
@@ -33,10 +30,8 @@ describe('counting the jobs that hold a process', () => {
     assert.equal(countActivePueueTasks(JSON.stringify({ tasks: {} })), 0);
   });
 
-  it('with the unfinished statuses it also counts the QUEUED and the locked — they start the moment a slot frees — and still not the finished or the stashed', () => {
-    assert.equal(countActivePueueTasks(tasks({ Running: {} }, { Queued: {} }, { Done: {} }, { Paused: {} }), pueueUnfinishedStatuses), 3);
-    assert.equal(countActivePueueTasks(tasks({ Queued: {} }, 'Stashed', { Locked: {} }, { Done: {} }), pueueUnfinishedStatuses), 2);
-    assert.equal(countActivePueueTasks(tasks({ Done: {} }, 'Stashed'), pueueUnfinishedStatuses), 0);
+  it('does not count the LOCKED, the stashed or the finished either: only a task with a process Pueue would kill', () => {
+    assert.equal(countActivePueueTasks(tasks({ Locked: {} }, 'Stashed', { Done: {} })), 0);
   });
 
   it('is null for text that is not Pueue\'s status', () => {
@@ -98,10 +93,10 @@ describe('asking the daemon', () => {
     assert.deepEqual(await inspectPueue(paths, runner), { kind: 'unreadable' });
   });
 
-  it('a queue that holds only queued jobs is idle for most callers and busy for one that counts the queued ones', async () => {
+  it('a queue that holds only queued jobs holds nothing Pueue would kill: it is idle for both ways of asking', async () => {
     statusJson = tasks({ Queued: {} }, { Done: {} });
     assert.deepEqual(await inspectPueue(paths, runner), { kind: 'idle' });
-    assert.deepEqual(summarizePueueView(await readPueueView(paths, runner), pueueUnfinishedStatuses), { kind: 'busy', activeJobs: 1 });
+    assert.deepEqual(summarizePueueView(await readPueueView(paths, runner)), { kind: 'idle' });
   });
 
   it('shutting down waits until the daemon no longer answers', async () => {
@@ -155,9 +150,8 @@ describe('reading the tasks and the paused groups (what a restart or a removal o
   });
 
   it('the counter and the reader are ONE parser: they agree on the same text, a status in either shape', () => {
-    const unfinished = ['Running', 'Queued'];
-    assert.equal(countActivePueueTasks(snapshot, unfinished), parsePueueStatus(snapshot)?.tasks.filter((task) => unfinished.includes(task.status)).length);
-    assert.equal(countActivePueueTasks(snapshot, unfinished), 2);
+    assert.equal(countActivePueueTasks(snapshot), parsePueueStatus(snapshot)?.tasks.filter((task) => task.status === 'Running' || task.status === 'Paused').length);
+    assert.equal(countActivePueueTasks(snapshot), 1);
     assert.equal(countActivePueueTasks('{}'), null, 'and both refuse what is not a status');
   });
 
@@ -172,10 +166,10 @@ describe('reading the tasks and the paused groups (what a restart or a removal o
     for (const stderr of [neverStarted, stopped, refused]) assert.deepEqual(await readPueueView(paths, createRunner({ ok: false, exitCode: 1, stderr })), { kind: 'absent' });
   });
 
-  it('a probe that timed out, one that failed for another reason, and a reply that is no status are UNKNOWN — with the reason — never "no daemon"', async () => {
-    assert.deepEqual(await readPueueView(paths, createRunner({ ok: false, exitCode: null, isTimedOut: true, stderr: 'Did you start it?' })), { kind: 'unknown', reason: 'it did not answer within 5 s' }, 'even when its words look like "no daemon": it was cut off');
-    assert.deepEqual(await readPueueView(paths, createRunner({ ok: false, exitCode: 101, stderr: 'thread panicked' })), { kind: 'unknown', reason: 'it failed (exit 101)' });
-    assert.deepEqual(await readPueueView(paths, createRunner({ stdout: 'not json' })), { kind: 'unknown', reason: 'its answer could not be read' });
+  it('a probe that timed out and one that failed for another reason are UNANSWERED — with the reason — and a reply that is no status is UNREADABLE: never "no daemon"', async () => {
+    assert.deepEqual(await readPueueView(paths, createRunner({ ok: false, exitCode: null, isTimedOut: true, stderr: 'Did you start it?' })), { kind: 'unanswered', reason: 'it did not answer within 5 s' }, 'even when its words look like "no daemon": it was cut off');
+    assert.deepEqual(await readPueueView(paths, createRunner({ ok: false, exitCode: 101, stderr: 'thread panicked' })), { kind: 'unanswered', reason: 'it failed (exit 101)' });
+    assert.deepEqual(await readPueueView(paths, createRunner({ stdout: 'not json' })), { kind: 'unreadable' });
   });
 
   it('returns the tasks of an answer', async () => {

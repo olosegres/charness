@@ -513,9 +513,12 @@ describe('Pueue as the idle restart and the pruning see it', () => {
   });
 
   it('an answer that could not be had or read is BUSY — not "free": a daemon that is slow under a heavy build still has its tasks', () => {
-    const unknown = classifyPueueView({ kind: 'unknown', reason: 'it did not answer within 5 s' });
-    assert.equal(unknown.kind, 'busy');
-    assert.match(unknown.kind === 'busy' ? unknown.description : '', /no answer from Pueue \(it did not answer within 5 s\)/);
+    const unanswered = classifyPueueView({ kind: 'unanswered', reason: 'it did not answer within 5 s' });
+    assert.equal(unanswered.kind, 'busy');
+    assert.match(unanswered.kind === 'busy' ? unanswered.description : '', /no answer from Pueue \(it did not answer within 5 s\)/);
+    const unreadable = classifyPueueView({ kind: 'unreadable' });
+    assert.equal(unreadable.kind, 'busy');
+    assert.match(unreadable.kind === 'busy' ? unreadable.description : '', /an answer from Pueue that cannot be read/);
   });
 
   describe('as asked of the real client (the activity check)', () => {

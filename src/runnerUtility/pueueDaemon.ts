@@ -72,15 +72,18 @@ export type PueueState =
   | { kind: 'absent' }
   | { kind: 'idle' }
   | { kind: 'busy'; activeJobs: number }
-  | { kind: 'unreadable' };
+  /** The daemon answered, and the answer is not a status. */
+  | { kind: 'unreadable' }
+  /** No answer came (it timed out, the client failed): the daemon may be busy with a heavy job — {@link summarizePueueView} only; {@link inspectPueue} calls this `absent`. */
+  | { kind: 'unanswered'; reason: string };
 
 /** The statuses of a task that holds a process: it runs, or it is paused with its process kept. */
-export const pueueProcessStatuses: readonly string[] = ['Running', 'Paused'];
+const pueueProcessStatuses: readonly string[] = ['Running', 'Paused'];
 
-/** @description The tasks of `pueue status --json` whose status is one of `statuses` (default: those that hold a process, `Running` and `Paused`), or `null` when the text is not that. */
-export function countActivePueueTasks(statusJson: string, statuses: readonly string[] = pueueProcessStatuses): number | null {
+/** @description The tasks of `pueue status --json` that hold a process (`Running` and `Paused`: Pueue kills them when it stops), or `null` when the text is not that. */
+export function countActivePueueTasks(statusJson: string): number | null {
   const snapshot = parsePueueStatus(statusJson);
-  return snapshot === null ? null : snapshot.tasks.filter((task) => statuses.includes(task.status)).length;
+  return snapshot === null ? null : snapshot.tasks.filter((task) => pueueProcessStatuses.includes(task.status)).length;
 }
 
 /**
@@ -126,10 +129,11 @@ export function parsePueueStatus(statusJson: string): PueueSnapshot | null {
   }
 }
 
-/** What a look at the queue found: no daemon to ask, an answer that could not be had or read (`unknown`, with the reason), or the tasks. */
+/** What a look at the queue found: no daemon to ask, no answer (`unanswered`, with the reason: a timeout, a failure), an answer that is not a status (`unreadable`), or the tasks. */
 export type PueueView =
   | { kind: 'absent' }
-  | { kind: 'unknown'; reason: string }
+  | { kind: 'unanswered'; reason: string }
+  | { kind: 'unreadable' }
   | ({ kind: 'tasks' } & PueueSnapshot);
 
 /** What the pueue client says when there is no daemon: it never started here (no secret file), or it is not running (no socket, a socket nobody listens on). */
@@ -137,26 +141,27 @@ const noDaemonPattern = /Did you start|Connection refused|No such file or direct
 
 /**
  * @description Look at the queue the way a decision about a job's Node needs it: unlike {@link inspectPueue}, only a client that says there is NO daemon counts as `absent`.
- * An answer that timed out, a failure of any other kind and a reply that cannot be read are `unknown` — a daemon that is busy with a heavy build is not a free queue.
+ * An answer that timed out and a failure of any other kind are `unanswered`, a reply that is not a status is `unreadable` — a daemon that is busy with a heavy build is not a free queue.
  */
 export async function readPueueView(paths: RunnerHomePaths, runner: CommandRunner = runCommand): Promise<PueueView> {
   const result = await runner(path.join(paths.binDir, 'pueue'), ['--config', paths.pueueConfig, 'status', '--json'], { timeoutMs: probeTimeoutMs });
   if (!result.ok) {
     if (!result.isTimedOut && result.exitCode !== null && noDaemonPattern.test(result.stderr)) return { kind: 'absent' };
-    return { kind: 'unknown', reason: result.isTimedOut ? `it did not answer within ${probeTimeoutMs / 1000} s` : `it failed (exit ${result.exitCode ?? 'none'})` };
+    return { kind: 'unanswered', reason: result.isTimedOut ? `it did not answer within ${probeTimeoutMs / 1000} s` : `it failed (exit ${result.exitCode ?? 'none'})` };
   }
   const snapshot = parsePueueStatus(result.stdout);
-  return snapshot === null ? { kind: 'unknown', reason: 'its answer could not be read' } : { kind: 'tasks', ...snapshot };
+  return snapshot === null ? { kind: 'unreadable' } : { kind: 'tasks', ...snapshot };
 }
 
 /**
- * @description A look at the queue ({@link readPueueView}) as a {@link PueueState}: for a caller that decides whether replacing a service would cut a job. A queue that could not be
- * asked (`unknown`) is `unreadable` — it cannot be told apart from one with running jobs — and never `absent`.
+ * @description A look at the queue ({@link readPueueView}) as a {@link PueueState}: for a caller that decides whether replacing a service would cut a job. A queue that did not
+ * answer is `unanswered` (with the reason) and one whose answer is not a status is `unreadable` — neither can be told apart from a queue with running jobs, and neither is `absent`.
  */
-export function summarizePueueView(view: PueueView, statuses: readonly string[] = pueueProcessStatuses): PueueState {
+export function summarizePueueView(view: PueueView): PueueState {
   if (view.kind === 'absent') return { kind: 'absent' };
-  if (view.kind === 'unknown') return { kind: 'unreadable' };
-  const activeJobs = view.tasks.filter((task) => statuses.includes(task.status)).length;
+  if (view.kind === 'unanswered') return { kind: 'unanswered', reason: view.reason };
+  if (view.kind === 'unreadable') return { kind: 'unreadable' };
+  const activeJobs = view.tasks.filter((task) => pueueProcessStatuses.includes(task.status)).length;
   return activeJobs === 0 ? { kind: 'idle' } : { kind: 'busy', activeJobs };
 }
 
@@ -184,7 +189,8 @@ function describeTasks(kind: string, tasks: ReadonlyArray<{ id: string; status: 
  */
 export function classifyPueueView(view: PueueView): PueueActivity {
   if (view.kind === 'absent') return { kind: 'idle' };
-  if (view.kind === 'unknown') return { kind: 'busy', description: `no answer from Pueue (${view.reason})` };
+  if (view.kind === 'unanswered') return { kind: 'busy', description: `no answer from Pueue (${view.reason})` };
+  if (view.kind === 'unreadable') return { kind: 'busy', description: 'an answer from Pueue that cannot be read' };
   const isStuckQueued = (task: { status: string; group: string }): boolean => task.status === 'Queued' && view.pausedGroups.includes(task.group);
   const moving = view.tasks.filter((task) => task.status === 'Running' || (task.status === 'Queued' && !isStuckQueued(task)));
   if (moving.length > 0) return { kind: 'busy', description: describeTasks('a running or queued task', moving) };

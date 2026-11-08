@@ -155,6 +155,8 @@ async function prepareManagedStart(paths: RunnerHomePaths, deps: ServiceDeps, ki
     // would be cut with it. A runner that is working is left alone; the install is asked for again when its jobs are done (or killed).
     const queue = summarizePueueView(await readPueueView(paths, deps.runner));
     if (queue.kind === 'busy') return refuse(`The Pueue queue of this runner is running ${queue.activeJobs} job(s): replacing the service now would cut them. Let them finish (\`charness remote-run ls\` shows them) or stop them (\`charness remote-run kill <id>\`), then install the service again.`);
+    // A Pueue that did NOT answer is most likely a busy one (a heavy build keeps it from answering in time): the remedy is to wait for the jobs, never to stop the daemon.
+    if (queue.kind === 'unanswered') return refuse(`Pueue did not answer (${queue.reason}): it may be busy with a heavy job, so replacing the service now could cut it. Let the jobs finish (\`charness remote-run ls\` shows them) and install the service again — do not kill the daemon, that would cut them too.`);
     if (queue.kind === 'unreadable') return refuse('A Pueue daemon answers but its state cannot be read, so it cannot be told apart from one with running jobs: replacing the service now could cut them. Stop the daemon by hand and install the service again.');
   }
   if (!hadService) {
@@ -164,6 +166,7 @@ async function prepareManagedStart(paths: RunnerHomePaths, deps: ServiceDeps, ki
     }
     const queue = summarizePueueView(await readPueueView(paths, deps.runner));
     if (queue.kind === 'busy') return refuse(`The Pueue queue of this runner is running ${queue.activeJobs} job(s), and a service cannot take the queue over without stopping them. Install the service when they have finished (\`pueue --config ${paths.pueueConfig} status\`).`);
+    if (queue.kind === 'unanswered') return refuse(`Pueue did not answer (${queue.reason}): it may be busy with a heavy job, and a service cannot take the queue over without stopping them. Install the service when its jobs have finished (\`pueue --config ${paths.pueueConfig} status\` shows them once it answers) — do not kill the daemon, that would cut them.`);
     if (queue.kind === 'unreadable') return refuse('A Pueue daemon answers but its state cannot be read, so it cannot be told apart from one with running jobs. Stop it by hand and install the service again.');
     if (queue.kind === 'idle' && !(await shutDownPueue(paths, deps.runner))) return refuse('An idle Pueue daemon is running and did not shut down; stop it by hand and install the service again.');
   }

@@ -455,15 +455,27 @@ describe('installing and removing the services', () => {
     assert.ok(!commandLines().some((line) => line.startsWith('systemctl')));
   });
 
-  it('a Pueue that does not ANSWER in time is not a free queue: a service is neither taken over nor replaced under jobs that may be running — and a failure in other words is the same', async () => {
+  it('a Pueue that does not ANSWER in time is not a free queue: a service is neither taken over nor replaced under jobs that may be running — the refusal gives the reason and says to WAIT for the jobs, never to stop the daemon', async () => {
     pair();
-    for (const answer of [{ ok: false, exitCode: null, isTimedOut: true }, { ok: false, exitCode: 101, stderr: 'thread panicked' }] as const) {
+    const timedOut = { ok: false, exitCode: null, isTimedOut: true } as const;
+    const failed = { ok: false, exitCode: 101, stderr: 'thread panicked' } as const;
+    for (const [answer, reason] of [[timedOut, 'it did not answer within 5 s'], [failed, 'it failed \\(exit 101\\)']] as const) {
       calls = [];
       const result = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': answer }) }));
       assert.equal(result.ok, false);
-      assert.match(result.lines.join('\n'), /cannot be read/);
+      const text = result.lines.join('\n');
+      assert.match(text, new RegExp(`^Pueue did not answer \\(${reason}\\): it may be busy with a heavy job, and a service cannot take the queue over without stopping them\\. Install the service when its jobs have finished`));
+      assert.match(text, /do not kill the daemon, that would cut them/);
+      assert.doesNotMatch(text, /answers but|cannot be read|Stop (it|the daemon) by hand/i, 'it did not answer, and stopping it by hand is the one thing that cuts the jobs');
       assert.ok(!commandLines().some((line) => line.includes('shutdown') || line.startsWith('systemctl')), 'nothing was stopped, nothing was started');
     }
+  });
+
+  it('only an answer that CAME and cannot be read is told to be stopped by hand: the daemon answered, and nothing says what it holds', async () => {
+    pair();
+    const result = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { ok: true, stdout: 'not json' } }) }));
+    assert.equal(result.ok, false);
+    assert.match(result.lines.join('\n'), /answers but its state cannot be read, so it cannot be told apart from one with running jobs\. Stop it by hand and install the service again\./);
   });
 
   it('shuts an IDLE unmanaged daemon down first, so the managed one can take the socket', async () => {
@@ -506,7 +518,9 @@ describe('installing and removing the services', () => {
     calls = [];
     const timedOut = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { ok: false, exitCode: null, isTimedOut: true } }) }));
     assert.equal(timedOut.ok, false);
-    assert.match(timedOut.lines.join('\n'), /cannot be told apart from one with running jobs: replacing the service now could cut them/);
+    const timedOutText = timedOut.lines.join('\n');
+    assert.match(timedOutText, /^Pueue did not answer \(it did not answer within 5 s\): it may be busy with a heavy job, so replacing the service now could cut it\. Let the jobs finish \(`charness remote-run ls` shows them\) and install the service again — do not kill the daemon, that would cut them too\.$/);
+    assert.doesNotMatch(timedOutText, /answers but|cannot be read|Stop (it|the daemon) by hand/i);
     assert.ok(!commandLines().some((line) => line.startsWith('systemctl') || line.includes('enable --now')), 'nothing of the service was touched');
   });
 
@@ -759,6 +773,21 @@ describe('installing and removing the services', () => {
         const busy = await runSystemStep('prepare', createDeps({ ...asAccount, runner: recordingRunner({ 'status --json': { ok: true, stdout: JSON.stringify({ tasks: { 0: { status: { Running: {} } } } }) } }) }));
         assert.equal(busy.ok, false);
         assert.match(busy.ok ? '' : busy.lines.join('\n'), /running 1 job\(s\): replacing the service now would cut them/);
+        assert.equal(fs.readFileSync(agentFile, 'utf8'), 'the definition of the earlier install');
+        assert.equal(readServiceKind(runnerPaths), 'system-service');
+      });
+
+      it('a re-install is refused while Pueue does not ANSWER — the admin step gets the reason and is told to wait for the jobs, not to stop the daemon — and nothing is rewritten', async () => {
+        pair();
+        await runSystemStep('prepare', createDeps(asAccount));
+        const serviceNames = getServiceNames(runnerPaths.root);
+        const agentFile = path.join(home, 'Library', 'LaunchAgents', `${serviceNames.launchdGui}.plist`);
+        fs.writeFileSync(agentFile, 'the definition of the earlier install');
+        const unanswered = await runSystemStep('prepare', createDeps({ ...asAccount, runner: recordingRunner({ 'status --json': { ok: false, exitCode: null, isTimedOut: true } }) }));
+        assert.equal(unanswered.ok, false);
+        const text = unanswered.ok ? '' : unanswered.lines.join('\n');
+        assert.match(text, /^Pueue did not answer \(it did not answer within 5 s\): it may be busy with a heavy job, so replacing the service now could cut it\. Let the jobs finish/);
+        assert.doesNotMatch(text, /Stop (it|the daemon) by hand/i);
         assert.equal(fs.readFileSync(agentFile, 'utf8'), 'the definition of the earlier install');
         assert.equal(readServiceKind(runnerPaths), 'system-service');
       });

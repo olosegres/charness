@@ -181,7 +181,9 @@ stopped, their files and the record removed: nothing half-installed):
 2. no foreground `charness-runner run` is linked (two links for one runner fight for the hub's socket) — install refuses and says to stop it;
 3. a Pueue daemon that NO service owns is dealt with explicitly: while it runs jobs (Running or Paused) it is left alone and the install is
    refused — Pueue kills the jobs it runs when it stops — and an idle one is shut down so the managed one can take the socket. A
-   re-install (the record exists) leaves the service's own daemon alone;
+   re-install (the record exists) leaves the service's own daemon alone. A daemon that did NOT answer within the time (`unanswered`, from
+   `summarizePueueView`) is refused with its reason and «let the jobs finish» (`charness remote-run ls`) — never «stop the daemon», which would
+   cut the build that kept it from answering; «stop it by hand» is only for an answer that came back and is not a status (`unreadable`);
 4. Pueue's private configuration is written, and the service record (`~/.charness-runner/service`) is written — so the queue starts WITH
    its configuration, and the link, seeing the record, waits for the service's queue instead of starting a daemon of its own;
 5. for a LaunchDaemon (installed by root) the queue's folders and the record are handed to the account.

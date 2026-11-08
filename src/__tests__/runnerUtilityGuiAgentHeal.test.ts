@@ -252,7 +252,7 @@ describe('healGuiAgent: an older definition', () => {
   });
 
   it('a queue that did not ANSWER in time counts as busy — a heavy build keeps Pueue from answering — and the agent is neither replaced nor booted out', async () => {
-    queue = { kind: 'unknown', reason: 'it did not answer within 5 s' };
+    queue = { kind: 'unanswered', reason: 'it did not answer within 5 s' };
     const outcome = await healGuiAgent(paths, createDeps());
     assert.deepEqual(outcome, { kind: 'waiting-for-idle' });
     assert.notEqual(readDefinition(), expectedDefinition(), 'the loaded agent\'s file is as it was');
@@ -279,7 +279,7 @@ describe('healGuiAgent: an older definition', () => {
   });
 
   it('a queue whose state cannot be read counts as busy: it cannot be told apart from one with a running job', async () => {
-    queue = { kind: 'unknown', reason: 'its answer could not be read' };
+    queue = { kind: 'unreadable' };
     assert.deepEqual(await healGuiAgent(paths, createDeps()), { kind: 'waiting-for-idle' });
   });
 
