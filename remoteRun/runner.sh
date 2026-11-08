@@ -2105,15 +2105,31 @@ check_is_protected_path() {
   return 1
 }
 
-# After a job that SUCCEEDED: remove from the copy what the project's `clean-after-success:` names (a build's intermediates, tens of GB on a Mac, which the next job rebuilds anyway). Off unless the project says
-# so. A pattern names a file or a folder (a folder goes whole — unless it HOLDS a `.git`, `node_modules` or `Pods` anywhere below it: then it is kept whole, and the log says so), inside the copy only: the walk starts from the
-# patterns' fixed prefixes, a root with a symlink on its way is skipped, a root inside `.git`, `node_modules` or `Pods` is dropped and those folders are pruned from the walk, the walk is NUL-separated (a name with a newline
-# in it is one name, never two lines) and a path is removed only if it is what `find` listed, and a symlink goes as the link. Read-only folders are handled like the prune does. The lock is still held, so no other job
-# of the project sees the tree half-cleaned. Says how many paths went, which were kept and which would not go, in the job's log.
-clean_after_success() {
-  [ -s "$jd/clean-after-success.ere" ] || return 0
+# Does folder $1 hold a `node_modules` or a `Pods` anywhere below it — the dependencies, which their step (keyed on the lockfile, not on the folder) would not put back? 0 = it does · 1 = it does not · 2 = `find` could not tell
+# (an error, a `find` without `-quit`): the caller treats that as «holds», so a doubt keeps the folder. A `.git` is not asked about: the copy holds none below a walk root except what a build tool checked out (Xcode's Swift
+# packages), which the next build fetches again.
+check_folder_holds_dependencies() {
+  local found
+  found=$(find "$1" \( -name node_modules -o -name Pods \) -print -quit 2> /dev/null) || return 2
+  [ -n "$found" ]
+}
+
+# Does pattern $1 name a folder that was kept (the array `kept_folders` of the caller) and holds path $2? A pattern that names a folder names everything below it too, so for $2 it is «kept with it»; any other pattern still applies.
+check_pattern_names_kept_folder_above() {
+  local kept_folder
+  [ "${#kept_folders[@]}" -gt 0 ] || return 1
+  for kept_folder in "${kept_folders[@]}"; do
+    if [[ $2 == "$kept_folder"/* ]] && [[ $kept_folder =~ $1 ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The walk and the removals of `clean_after_success`; adds the paths it removed to its caller's `removed`.
+remove_paths_named_by_clean_after_success() {
   read_job_patterns "$jd/clean-after-success.ere" "$jd/clean-after-success.roots" || return 0
-  local walk_roots=() root pattern candidate relative
+  local walk_roots=() kept_folders=() root pattern candidate relative holds_code
   for root in "${job_roots[@]}"; do
     check_is_protected_path "$root" || walk_roots+=("$root")
   done
@@ -2121,33 +2137,49 @@ clean_after_success() {
   # The matches are listed first and removed after: a folder removed while `find` is still walking it would only make `find` complain.
   local listing="$jd/clean-after-success.list"
   (cd "$tree" && find "${walk_roots[@]}" \( -name .git -o -name node_modules -o -name Pods \) -prune -o -print0 2> /dev/null) > "$listing"
-  local removed=0 failed=0 kept_folder=
   while IFS= read -r -d '' candidate; do
     relative=${candidate#./}
     # Gone already: below a folder that was just removed (the listing has its contents too — a pattern names a folder with everything below it).
     [ -e "$tree/$relative" ] || [ -L "$tree/$relative" ] || continue
     [ "$relative" != . ] && check_relative_path "$relative" || continue
-    # Below a folder that was kept (the listing runs through a folder before its contents): kept with it.
-    if [ -n "$kept_folder" ] && [[ $relative == "$kept_folder"/* ]]; then
-      continue
-    fi
     for pattern in "${job_patterns[@]}"; do
-      if [[ $relative =~ $pattern ]]; then
-        if [ -d "$tree/$relative" ] && [ ! -L "$tree/$relative" ] && [ -n "$(find "$tree/$relative" \( -name .git -o -name node_modules -o -name Pods \) -prune -print 2> /dev/null | head -n 1)" ]; then
-          kept_folder=$relative
-          say "clean-after-success: kept $relative (it holds a .git, node_modules or Pods, which are never removed)"
-        elif remove_path_even_if_read_only "$tree/$relative"; then
+      [[ $relative =~ $pattern ]] || continue
+      check_pattern_names_kept_folder_above "$pattern" "$relative" && continue
+      holds_code=1
+      if [ -d "$tree/$relative" ] && [ ! -L "$tree/$relative" ]; then
+        check_folder_holds_dependencies "$tree/$relative"
+        holds_code=$?
+      fi
+      if [ "$holds_code" -eq 1 ]; then
+        if remove_path_even_if_read_only "$tree/$relative"; then
           removed=$((removed + 1))
         else
-          failed=$((failed + 1))
           say "clean-after-success: could not remove $relative"
         fi
-        break
+      else
+        kept_folders+=("$relative")
+        if [ "$holds_code" -eq 0 ]; then
+          say "clean-after-success: kept $relative (it holds a node_modules or Pods below it, which are never removed)"
+        else
+          say "clean-after-success: kept $relative (it could not be searched for a node_modules or Pods below it)"
+        fi
       fi
+      break
     done
   done < "$listing"
   rm -f "$listing"
-  [ "$removed" -gt 0 ] && say "clean-after-success: removed $removed path$([ "$removed" -eq 1 ] || echo s) of the copy"
+}
+
+# After a job that SUCCEEDED: remove from the copy what the project's `clean-after-success:` names (a build's intermediates, tens of GB on a Mac, which the next job rebuilds anyway). Off unless the project says
+# so. A pattern names a file or a folder (a folder goes whole — unless it HOLDS a `node_modules` or `Pods` anywhere below it, like `ios` over `ios/Pods`: then it is kept whole, the other patterns still apply inside it, and the log
+# says so), inside the copy only: the walk starts from the patterns' fixed prefixes, a root with a symlink on its way is skipped, a root inside `.git`, `node_modules` or `Pods` is dropped and those folders are pruned from the
+# walk, the walk is NUL-separated (a name with a newline in it is one name, never two lines) and a path is removed only if `find` listed it, and a symlink goes as the link. Read-only folders are handled like the prune does.
+# The lock is still held, so no other job of the project sees the tree half-cleaned. Always says in the job's log how many paths went (0 included), and which were kept or would not go.
+clean_after_success() {
+  [ -s "$jd/clean-after-success.ere" ] || return 0
+  local removed=0
+  remove_paths_named_by_clean_after_success
+  say "clean-after-success: removed $removed path$([ "$removed" -eq 1 ] || echo s) of the copy"
   return 0
 }
 

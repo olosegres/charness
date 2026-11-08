@@ -545,11 +545,13 @@ paths are refused, and so is a pattern made of wildcards alone — it would name
 never entered; read-only folders (CocoaPods leaves them) are removed like the prune does; the files the job's `pull:` names are collected first, so a path in both lists still comes back; it happens before the next
 job of the project may start. The job's result is recorded **before** the removal starts, so a `kill`, a lost connection or a `wait` meets a job that has ended with its exit 0 — the removal (minutes, for tens of GB)
 finishes behind it, **with the project's lock held**: the next job of the project, and `clean`, wait for it (`clean` says the lock is held). A foreground run shows one line saying the removal is under way, and ends with the
-result; **how many paths went, which were kept and which would not go are in the job's log on the runner** (`charness remote-run logs <job id>`), not in the run's output. **`.git`, `node_modules` and `Pods` are never
-removed:** a pattern with such a folder in its path is refused, the walk does not enter them — the dependencies step runs again only when the lockfile changes, not when its folder is gone, so a pattern like `**/build`
-would otherwise empty the `build` folders of every installed package for good — and **a folder a pattern names that holds one of them anywhere below it is kept whole**, with a `kept <path>` line in the job's log: `vendor/*`
-keeps a git submodule, and `ios` is kept for its `ios/Pods`. Name the build folder (`ios/build/Intermediates.noindex`), not its parent. (A build folder that happens to hold a folder called exactly `node_modules` or
-`Pods` is kept the same way.) Nothing of this is shared between projects: there is no shared DerivedData, and a path outside the project is never touched.
+result; **how many paths went (`removed 0 paths` when none did) and which were kept or would not go are in the job's log on the runner** (`charness remote-run logs <job id>`), not in the run's output. **`.git`, `node_modules`
+and `Pods` are never entered:** a pattern with such a folder in its path is refused, and the walk skips them — the dependencies step runs again only when the lockfile changes, not when its folder is gone, so a pattern like
+`**/build` would otherwise empty the `build` folders of every installed package for good. For the same reason **a folder a pattern names that holds a `node_modules` or a `Pods` anywhere below it is kept whole**, with a
+`kept <path>` line in the job's log: `ios` is kept for its `ios/Pods`, and `packages/*` keeps every package that has its own `node_modules`. The other patterns still apply inside a kept folder: with `ios` and
+`ios/build/Intermediates.noindex` the intermediates go and the rest of `ios` stays. Name the build folder, not its parent. (A build folder that happens to hold a folder called exactly `node_modules` or `Pods` is kept the same
+way.) A `.git` below a named folder does not keep it: the copy holds none there but what a build tool checked out (Xcode's Swift packages in a derived-data folder), which the next build fetches again — `ios/build` goes whole.
+Nothing of this is shared between projects: there is no shared DerivedData, and a path outside the project is never touched.
 
 ## Queue, limits, cleanup
 

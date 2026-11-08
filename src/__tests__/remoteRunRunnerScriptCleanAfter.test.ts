@@ -121,13 +121,13 @@ describe('clean_after_success', () => {
     assert.deepEqual(listTree(), ['ios/build/Intermediates.noindex/a.o']);
   });
 
-  it('a pattern that names nothing in the copy removes nothing and says nothing', () => {
+  it('a pattern that names nothing in the copy removes nothing and SAYS so — «removed 0 paths» — so a wrong path is told from a removal that never ran', () => {
     const { tree } = getPaths();
     writeFile(tree, 'src/keep.ts');
     writeCleanFiles(['ios/build/Intermediates.noindex', '**/DerivedData']);
     const outcome = cleanAfterSuccess();
     assert.equal(outcome.status, 0, outcome.stderr);
-    assert.equal(outcome.stdout, '');
+    assert.equal(outcome.stdout.trim(), 'remote-run: clean-after-success: removed 0 paths of the copy');
     assert.deepEqual(listTree(), ['src/keep.ts']);
   });
 
@@ -164,7 +164,7 @@ describe('clean_after_success', () => {
     writeCleanFiles(['.git/hooks', '.git/objects', 'vendor/lib/.git/hooks']);
     const outcome = cleanAfterSuccess();
     assert.equal(outcome.status, 0, outcome.stderr);
-    assert.equal(outcome.stdout, '');
+    assert.equal(outcome.stdout.trim(), 'remote-run: clean-after-success: removed 0 paths of the copy');
     assert.deepEqual(listTree(), ['.git/hooks/pre-commit', '.git/objects/ab/cdef', 'src/keep.ts', 'vendor/lib/.git/hooks/pre-push']);
   });
 
@@ -193,21 +193,19 @@ describe('clean_after_success', () => {
     writeCleanFiles(['node_modules/pkg/build', 'ios/Pods/build']);
     const outcome = cleanAfterSuccess();
     assert.equal(outcome.status, 0, outcome.stderr);
-    assert.equal(outcome.stdout, '');
+    assert.equal(outcome.stdout.trim(), 'remote-run: clean-after-success: removed 0 paths of the copy');
     assert.deepEqual(listTree(), ['ios/Pods/build/y.xcconfig', 'node_modules/pkg/build/index.js']);
   });
 
-  it('a folder a pattern names goes whole — unless it HOLDS a `.git`, `node_modules` or `Pods` below it: then it is kept whole (and the log says so), with everything in it', () => {
+  it('a folder a pattern names goes whole — unless it HOLDS a `node_modules` or `Pods` below it (`ios` over `ios/Pods`, `packages/*` over per-package dependencies): then it is kept whole, and the log says so', () => {
     const { tree } = getPaths();
-    writeFile(tree, 'vendor/lib/.git/HEAD');
-    writeFile(tree, 'vendor/lib/src.c');
-    writeFile(tree, 'vendor/other/x.c');
     writeFile(tree, 'ios/Pods/Pod.h');
     writeFile(tree, 'ios/App.xcodeproj/project.pbxproj');
     writeFile(tree, 'packages/x/node_modules/m/index.js');
     writeFile(tree, 'packages/x/src.ts');
     writeFile(tree, 'packages/y/y.ts');
-    writeCleanFiles(['vendor/*', 'ios', 'packages/*']);
+    writeFile(tree, 'tools/gen/g.ts');
+    writeCleanFiles(['ios', 'packages/*', 'tools/*']);
     const outcome = cleanAfterSuccess();
     assert.equal(outcome.status, 0, outcome.stderr);
     assert.deepEqual(listTree(), [
@@ -215,13 +213,67 @@ describe('clean_after_success', () => {
       'ios/Pods/Pod.h',
       'packages/x/node_modules/m/index.js',
       'packages/x/src.ts',
-      'vendor/lib/.git/HEAD',
-      'vendor/lib/src.c',
+      'tools/',
     ]);
-    for (const kept of ['vendor/lib', 'ios', 'packages/x']) {
-      assert.match(outcome.stdout, new RegExp(`^remote-run: clean-after-success: kept ${kept} \\(it holds a \\.git, node_modules or Pods`, 'm'), kept);
+    for (const kept of ['ios', 'packages/x']) {
+      assert.match(outcome.stdout, new RegExp(`^remote-run: clean-after-success: kept ${kept} \\(it holds a node_modules or Pods below it`, 'm'), kept);
     }
-    assert.match(outcome.stdout, /^remote-run: clean-after-success: removed 2 paths of the copy$/m, 'vendor/other and packages/y went');
+    assert.match(outcome.stdout, /^remote-run: clean-after-success: removed 2 paths of the copy$/m, 'packages/y and tools/gen went');
+  });
+
+  it('a `.git` below a named folder does NOT keep it: a build tool\'s checkouts (Xcode\'s Swift packages in a derived-data folder) are re-fetched by the next build, so `build` goes whole', () => {
+    const { tree } = getPaths();
+    writeFile(tree, 'build/SourcePackages/checkouts/p/.git/HEAD');
+    writeFile(tree, 'build/SourcePackages/checkouts/p/Package.swift');
+    writeFile(tree, 'build/Products/app.txt');
+    writeFile(tree, 'src/keep.ts');
+    writeCleanFiles(['build']);
+    const outcome = cleanAfterSuccess();
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.deepEqual(listTree(), ['src/keep.ts']);
+    assert.equal(outcome.stdout.trim(), 'remote-run: clean-after-success: removed 1 path of the copy');
+  });
+
+  it('a pattern that names something INSIDE a kept folder still applies there — only the patterns that name the kept folder itself are «kept with it»', () => {
+    const { tree } = getPaths();
+    writeFile(tree, 'ios/Pods/x');
+    writeFile(tree, 'ios/App.swift');
+    writeFile(tree, 'ios/build/Intermediates.noindex/o.o');
+    writeFile(tree, 'ios/build/Products/app.txt');
+    writeCleanFiles(['ios', 'ios/build/Intermediates.noindex']);
+    const outcome = cleanAfterSuccess();
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.deepEqual(listTree().filter((entry) => !entry.endsWith('/')), ['ios/App.swift', 'ios/Pods/x', 'ios/build/Products/app.txt']);
+    assert.ok(!fs.existsSync(path.join(tree, 'ios/build/Intermediates.noindex')), 'the intermediates the second pattern names are gone');
+    assert.match(outcome.stdout, /^remote-run: clean-after-success: kept ios \(/m);
+    assert.match(outcome.stdout, /^remote-run: clean-after-success: removed 1 path of the copy$/m);
+  });
+
+  it('a keep inside a keep does not end the outer one: `ios` and `ios/vendor` are both kept, and a third pattern still reaches `ios/build/Intermediates.noindex` whatever order the folders are listed in', () => {
+    const { tree } = getPaths();
+    writeFile(tree, 'ios/Pods/x');
+    writeFile(tree, 'ios/vendor/node_modules/m');
+    writeFile(tree, 'ios/vendor/v.c');
+    writeFile(tree, 'ios/build/Intermediates.noindex/o.o');
+    writeFile(tree, 'ios/App.swift');
+    writeCleanFiles(['ios', 'ios/vendor', 'ios/build/Intermediates.noindex']);
+    const outcome = cleanAfterSuccess();
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.deepEqual(listTree().filter((entry) => !entry.endsWith('/')), ['ios/App.swift', 'ios/Pods/x', 'ios/vendor/node_modules/m', 'ios/vendor/v.c']);
+    assert.match(outcome.stdout, /^remote-run: clean-after-success: kept ios \(/m);
+    assert.match(outcome.stdout, /^remote-run: clean-after-success: kept ios\/vendor \(/m);
+    assert.match(outcome.stdout, /^remote-run: clean-after-success: removed 1 path of the copy$/m);
+  });
+
+  it('a `find` that cannot answer the question — an error, or one without `-quit` — keeps the folder: a doubt is never a removal', () => {
+    const { tree } = getPaths();
+    writeFile(tree, 'build/Products/app.txt');
+    writeCleanFiles(['build']);
+    // A `find` that fails when it is asked with `-quit` (the look below a matched folder) and works for the walk.
+    const outcome = cleanAfterSuccess('find() { case "$*" in *-quit*) return 2 ;; esac; command find "$@"; }');
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.deepEqual(listTree(), ['build/Products/app.txt']);
+    assert.match(outcome.stdout, /^remote-run: clean-after-success: kept build \(it could not be searched for a node_modules or Pods below it\)$/m);
   });
 
   it('a link that a pattern names goes as the link — what it points at is never touched — and a link to a folder is not walked into', () => {
@@ -253,7 +305,7 @@ describe('clean_after_success', () => {
     writeCleanFiles(['Intermediates.noindex', 'linked/Intermediates.noindex']);
     const outcome = cleanAfterSuccess();
     assert.equal(outcome.status, 0, outcome.stderr);
-    assert.equal(outcome.stdout, '');
+    assert.equal(outcome.stdout.trim(), 'remote-run: clean-after-success: removed 0 paths of the copy');
     assert.deepEqual(listTree(), ['Intermediates.noindex', 'linked']);
     assert.ok(fs.existsSync(path.join(outside, 'data/o.o')));
     assert.ok(fs.existsSync(path.join(outside, 'Intermediates.noindex/precious.txt')));
@@ -294,7 +346,7 @@ describe('clean_after_success', () => {
     writeCleanFiles(['outside'], [path.relative(tree, outside), outside]);
     const outcome = cleanAfterSuccess();
     assert.equal(outcome.status, 0, outcome.stderr);
-    assert.equal(outcome.stdout, '');
+    assert.equal(outcome.stdout.trim(), 'remote-run: clean-after-success: removed 0 paths of the copy');
     assert.ok(fs.existsSync(path.join(outside, 'o.o')));
     assert.deepEqual(listTree(), ['src/keep.ts']);
   });
