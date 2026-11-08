@@ -45,6 +45,8 @@ informed. You never write product code and never review a diff yourself.
   "based on your findings, implement it".
 - Name the skills the worker must load, never their content, and never restate project rules. Name every resource
   another live process holds (a checkout, a port, a device).
+- A worker that runs tests on a runner shares it with other jobs: its test scripts bind ports from `$REMOTE_RUN_PORT_BASE`, use
+  the simulator `$REMOTE_RUN_IOS_SIMULATOR_UDID` and never run `simctl shutdown all`; the tool's `--help` has the rest.
 - Role skills such as `developer`, `task-review`, `review`, `commit`: name them when the project offers them.
   Otherwise state the role in words — builder: implement, test, self-review, commit each scope, no push;
   reviewer: read the commit range against the plan or the user's asks and report findings, change nothing.

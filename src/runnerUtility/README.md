@@ -24,7 +24,7 @@ charness-runner run  (through bin/charness-runner, a sh loop: exit 75 = restart 
 the id of the installed package), `status.json` (link state, written by `run`, read by `status`), `keys/` (the client key, the built-in
 server's host key — both from `generateEd25519KeyPair`, which reads every key back), `app.<id>/` + `current` (installed copies of the
 hub's package; `current` is a symlink replaced atomically; the previous copy is kept), `bin/` (`charness-runner` launcher, `pueue`,
-`pueued`, a built `rsync`, Corepack's `yarn` / `pnpm` shims and the `corepack` wrapper), `node/` (the runner's OWN Node.js, `v<version>/bin/node`; or the root-owned
+`pueued`, a built `rsync`, Corepack's `yarn` / `pnpm` shims, the `corepack` wrapper and, on a Mac, the `xcrun` guard of `simctlGuard.ts`: `simctl shutdown|erase|delete all` runs on the job's own Simulator device only), `node/` (the runner's OWN Node.js, `v<version>/bin/node`; or the root-owned
 `/usr/local/lib/charness-runner/node` the admin line installs into), `npm/` and `corepack/` (what a job's `npm i -g` and Corepack write: `NPM_CONFIG_PREFIX`,
 `COREPACK_HOME`), `env` (the operator's `KEY=VALUE` lines, read again for every job), `work/` (phase 1's work dir), `pueue/`
 (a private Pueue: own directories and unix socket; its daemon is started by `run` if it is not answering — a link restart never touches
@@ -211,7 +211,7 @@ not work at all (CoreSimulator cannot be reached), «no iOS simulator runtime an
 worked and came back empty, «the Simulator device could not be created». On an always-on Mac the check is the login session's agent's (below), not the
 daemon's link (which would only write «needs the runner user's login session» over it). The previous record is DELETED when the link starts, and a paired Mac with Xcode and no record answers «ios: no
 — the iOS Simulator is being checked» until the new one is written (`runner.sh`), so an answer given by another account or kind of service is
-never offered meanwhile. A record that cannot be written is logged by `run`, and the Mac then stays «being checked».
+never offered meanwhile. A record that cannot be written is logged by `run`, and the Mac then stays «being checked». A `pass` also names the `deviceTypeId` and `runtimeId` it booted: a job's own Simulator device (`runner.sh ios-device`, `charness-<project>`, one per project copy) is made of that pair, which is known to work on this Mac. The `xcrun` guard (`simctlGuard.ts`, written into `<root>/bin` at every link start and on `check`, Darwin only, over a file of ours only) keeps `simctl shutdown|erase|delete all` of one job from reaching the devices of the others.
 
 ## Keeping the machine awake (`keepAwake.ts`)
 

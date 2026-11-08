@@ -61,6 +61,13 @@ export const remoteRunUsage = `Usage:
                               myapp-0a1b2c3d4e). The copy is shared by every task run from the folder: clean when the LAST of them is closed.
                               Frees its disk; its jobs' logs and result files go with it. Refused (exit 125) while a job of it runs or waits,
                               an exec runs in it, a job is being submitted, or a job that ended under an hour ago was not fetched (wait / fetch it).
+Jobs beside each other: a runner may run several jobs at once (the operator sets how many: /runners, \`charness runners jobs-at-once\`), so a job of
+  another project can be running next to yours. Every step of a job gets, besides your -e lines:
+    REMOTE_RUN_PORT_BASE            the first of the 100 ports the job owns: bind from it (+0 … +99), never a fixed 8081 / 8080
+    TMPDIR                          a folder of this project's copy alone (caches such as Metro's are not shared with other projects)
+    REMOTE_RUN_IOS_SIMULATOR_UDID   with --needs ios on a Mac: the job's own booted Simulator (Detox: device { id }); unset when the runner could not make one
+  \`exec\` has none of them. Never \`xcrun simctl shutdown|erase|delete all\` (the runner turns it into your own device, or nothing), \`killall Simulator\` or
+  \`lsof -ti tcp:<port> | xargs kill\` on a port that is not yours: stop what you started, by its pid. docs/remote-run.md, «Jobs beside each other».
 Exit codes: the command's own; 125 remote-run failed, 124 timeout, 130/143/129 interrupted (SIGINT/SIGTERM/SIGHUP), 141 stdout closed (| head), 137 job killed, 2 bad usage.
 Setup: docs/remote-run.md
 `;

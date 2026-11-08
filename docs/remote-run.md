@@ -409,11 +409,12 @@ One file per OS user, shared by every charness instance of that user (a Telegram
 | `sshOptions` | Optional extra `ssh` arguments (`-i`, `-p`, `-J`, …), put before charness's own. |
 | `workDir` | Where the runner keeps project copies, job logs and result files: an absolute path on the runner, or `~/…`. Created when missing. |
 | `pueue` | Optional `bin` / `config` when Pueue is not on the runner's `PATH` or uses a non-default config. |
-| `groups` | Optional Pueue groups and how many jobs each runs at once (`default` always exists). A job joins one with `--group`; two jobs of one *project* never run at the same time whatever the groups say. |
+| `groups` | Optional Pueue groups and how many jobs each runs at once (`default` always exists; its number is the runner's «jobs at once», see [Jobs beside each other](#jobs-beside-each-other)). A job joins one with `--group`; two jobs of one *project* never run at the same time whatever the groups say. |
 | `minFreeGb` | Optional. The free space the runner keeps on its work disk, in GB; the default is the smaller of 60 GB and 15 % of the disk. `0` turns the free-space upkeep (and the refusal of a submit on a full disk) off; unused copies still go after `copyMaxIdleDays`. See [Queue, limits, cleanup](#queue-limits-cleanup). |
 | `copyMaxIdleDays` | Optional. Days a project copy may stay unused before it is removed (default 3). |
 
-A paired runner takes the same two fields from its entry in the hub's `paired.json` (edit it by hand; `charness runners` has no command for them).
+A paired runner takes `minFreeGb` and `copyMaxIdleDays` from its entry in the hub's `paired.json` (edit it by hand; `charness runners` has no command for them). How many jobs it runs at once is the entry's
+`jobsAtOnce` (1–8, 1 when absent), which `/runners` and `charness runners jobs-at-once` set; it is the parallel limit of the runner's `default` group, and a paired runner has no other group.
 
 The file is checked strictly: an unknown key or a bad value is an error that names the field (never a value). It is read on every
 call, so an edit applies at once; agents learn that runners exist when the first one is listed (see [Agents](#agents)).
@@ -469,7 +470,7 @@ and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn 
     …
   ```
 
-  An offline runner shows its last snapshot. `--needs android|ios|docker|playwright` picks the first runner (in file order) that
+  A paired runner (it has only the `default` group) reads `jobs at once: N` where this example reads `groups: …`. An offline runner shows its last snapshot. `--needs android|ios|docker|playwright` picks the first runner (in file order) that
   answers and has that capability; `--runner <name>` picks one. None fits → exit 125 with this view and why.
 
 - **Paired runners** ([attached](#pair-a-runner) with `/runners` or `charness runners pair`, no `runners.json` entry) are listed after the hand-made ones. A paused
@@ -559,10 +560,11 @@ Nothing of this is shared between projects: there is no shared DerivedData, and 
 
 ## Queue, limits, cleanup
 
-Two runs of one project queue on the runner: each runs against the tree **as it was when it was submitted**, one after the other.
-(A queued run holds one of its Pueue group's slots while it waits.) A queued foreground run prints «waiting for job <id> of this
-project» and keeps waiting, bounded by its `--timeout`. Other projects run in parallel up to the group limits. Job records, logs and
-result files on the runner are removed after 3 days.
+Two runs of one project queue on the runner: each runs against the tree **as it was when it was submitted**, one after the other. A run that waits for an earlier run of its project
+**takes no slot** of its Pueue group while it waits (it is held out of the queue and shows as `queued`), so a job of another project that could run is not kept back behind it; it is let into the queue when the run before
+it ends, oldest first, one at a time. A foreground run that waits this way keeps waiting, bounded by its `--timeout`. Other projects run in parallel up to the group limit
+([Jobs beside each other](#jobs-beside-each-other)). A job whose Pueue task has been lost (the queue was reset when the runner was removed or unpaired) is ended as killed (137) the next time anything looks, and does not hold its project.
+Job records, logs and result files on the runner are removed after 3 days.
 
 **The runner's disk keeps itself free.** A project copy is a whole checkout with its build output (an iOS build alone is tens of GB), so copies of finished
 tasks pile up. On every submit (and, when the disk is short, when `runners` / `/runners` look at it) the runner removes a project copy that was not used for 3 days (`copyMaxIdleDays`), and while the
@@ -599,14 +601,42 @@ disk meanwhile eats the space a removal frees.
 `kill` sends SIGTERM to the job's whole process group and SIGKILL after 10 s. A process that leaves the group on purpose (`setsid`,
 as a Gradle daemon or the adb server do) survives by design — it is the runner's long-lived helper, not the job's.
 
+## Jobs beside each other
+
+A runner runs **one job at a time** until its operator says otherwise. For a paired runner that is **Jobs at once** in [`/runners`](commands.md#runners) (a button under each machine: 1 2 3 4 6 8, with a suggestion made from the cores and memory the machine reports — a
+Mac with 10 cores and 32 GB: 2; an iOS end-to-end job peaks at about 12 GB and four cores), a row on the pairing message (1–4, for a machine that is not paired yet), `charness runners jobs-at-once <name> <n>` and
+`charness runners pair … --jobs-at-once <n>`; for a hand-made runner it is `groups.default` of its `runners.json` entry. The number is told to the machine at once when it is online (else at its next job) and applies to jobs that START: **a lower number
+never stops a job that runs** — it only keeps the next ones waiting until fewer than the new number run. `runners` / `/runners` show it (`jobs at once: 2`, «2 at once»).
+
+Two jobs of ONE project never run together (they share one copy). Jobs of different projects do, and what they would otherwise share without knowing is given out **per project copy**, once, and kept for as long as the copy lives (an app built for a port stays installed):
+
+| What a step of the job gets | Meaning |
+|---|---|
+| `REMOTE_RUN_PORT_BASE` | The first of the 100 ports the job owns (`base` … `base + 99`; between 20000 and 29999). Bind a Metro, a Detox server or a stub from there — never a fixed 8081 or 8080: another job may hold it. |
+| `TMPDIR` | A folder of this copy alone, `<work dir>/t/<n>` (short on purpose: a unix socket path is capped at 104 bytes on a Mac). Metro's and Jest's caches land here, so one project's `expo start -c` does not wipe another's. Removed with the copy. A job's own `-e TMPDIR=…` wins; `REMOTE_RUN_*` can not be overridden. |
+| `REMOTE_RUN_IOS_SIMULATOR_UDID` | Only for `--needs ios` on a paired Mac whose iOS check passed: the copy's own Simulator device `charness-<project>`, **booted** before the command (made of the device type and runtime the check booted, kept from job to job so the app installed on it is reused, shut down when the job ends — also after a kill or a timeout — and never erased). Use it as the target (Detox: `device: { id }`). Unset, with a line in the job's log saying why, when the runner could not make one: the job then runs on the simulators that are there. |
+
+All three reach the dependencies step and the command, in the daemon and, on an always-on Mac, through the login session's agent. **`exec` gets none of them**: it takes no lock and may run beside a job of its own copy. The numbers are at most 100 copies per runner; a copy that gets none (all taken) runs
+without a port block and a `TMPDIR` of its own, and its log says so. A removed copy gives its number back at once and takes its `TMPDIR` with it; the device it had is deleted by the next iOS job (only a device named `charness-…`, never one the operator made).
+
+**The `xcrun` guard.** `~/.charness-runner/bin/xcrun`, first on every job's `PATH` on a paired Mac, turns `xcrun simctl [--set <path>] shutdown | erase | delete all` into the same command on the job's own device (a line on stderr says so), or — when the job has no device — into nothing (exit 0, the same line);
+`delete unavailable`, `boot <udid>`, `list` and every other `xcrun` command go to `/usr/bin/xcrun` unchanged. Test tools and agents habitually clear the field with `shutdown all`, which would stop the simulators of every other job. **It is a guard against that habit, not a wall**, and it does not cover:
+`/usr/bin/xcrun …` by its full path, `killall Simulator`, `killall com.apple.CoreSimulator.CoreSimulatorService` (every simulator of the account goes), `xcrun --sdk … simctl …` (options before `simctl`), or anything that talks to CoreSimulator directly. A hand-made runner has no guard and no device of its own.
+
+**Kill only what you started, by its pid.** A job's cleanup, a test's `afterAll` and an agent's `pkill -f node` or `lsof -ti tcp:8081 | xargs kill` reach other projects' jobs the same way `shutdown all` does. Record the pid of the Metro or the emulator you started and stop that;
+never stop by name, and never by a port that is not in your block.
+
+Not isolated by the runner: an Android emulator (one AVD and one adb server per runner — keep a runner that runs emulator jobs at 1) and Docker containers and the ports they publish (name them uniquely and publish from your block).
+The CocoaPods cache of a Mac is shared and unlocked: two `pod install`s that fetch the same new pod at once can clash (the second fails loudly; submit it again).
+
 ## Agents
 
 While `runners.json` lists at least one runner or one is paired, the bot MCP's instructions (Telegram topics and tracker conversations alike) carry
 one bullet: what remote-run is for, `runners` first, `--bg` plus `wait` in the background for anything longer than the tool
-timeout, and `clean` for the runner copy of a folder whose last task is closed (never the copies of others) — with one line under it per runner: its name, its OS and what it could do when it was last probed (`mac — macOS 15.1, android,
+timeout, one sentence on jobs side by side (the two variables of a job's ports and its own simulator, never `simctl shutdown all`: [Jobs beside each other](#jobs-beside-each-other)), and `clean` for the runner copy of a folder whose last task is closed (never the copies of others) — with one line under it per runner: its name, its OS and what it could do when it was last probed (`mac — macOS 15.1, android,
 playwright`; `(paused)` after the name of a runner that is held back; a runner nobody has probed yet shows only its name and, if paired,
 the OS it reported). Claude Code cuts a server's instructions at 4,096 characters, so the list gets the room that is left after the rest of the
-text — every runner when it fits, else the first ones and «… and N more» (the bullet itself always stays; `runners` is the full list). The lines are a snapshot taken at connect — `charness remote-run runners` has the live state. Nobody without a runner
+text — every runner when it fits (with the sentence on jobs side by side, two typical lines do), else the first ones and «… and N more» (the bullet itself always stays; `runners` is the full list). The lines are a snapshot taken at connect — `charness remote-run runners` has the live state. Nobody without a runner
 sees any change. A running agent reads the instructions at connect, so it sees the bullet and the list after its next session start or
 idle cycle.
 
@@ -624,6 +654,7 @@ of which project each job came from — and the runner lines above see the probe
 - A paired runner says **offline (the runner is not connected)**: on that machine, `charness-runner status` shows the link state and the last
   error. Nothing holds the link until you run `charness-runner run` or `service install`; after a reboot a terminal `run` is gone, a service
   is not. «removed by …» means the charness host removed it (`/runners`): pair again with a new line.
+- A job stays **queued** with free slots: it waits for an earlier job of its project (it takes no slot while it waits, [above](#queue-limits-cleanup)) — `ls` shows both. If the earlier job is gone for good the next `prepare`, `probe` or `wait` lets it in; a job whose Pueue task was lost is ended as killed.
 - **Pueue: MISSING** on a hand-made runner: install it as above or set `pueue.bin` (a paired runner installs its own).
 - A job «lost the connection» message: the runner stops the job by itself when its heartbeat lease (45 s) runs out; `ls` shows it.
 - Where the files live: the runner's `workDir` (`~/.charness-runner/work/` on a paired one); the main machine keeps ssh control sockets and

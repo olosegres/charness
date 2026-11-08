@@ -75,6 +75,14 @@ describe('runRemoteRunCli', () => {
     assert.match(remoteRunUsage, /125 remote-run failed, 124 timeout, 130\/143\/129 interrupted/);
   });
 
+  it('the usage tells an agent how a job lives beside others: the three variables of a step, that `exec` has none, and what never to do to the others (`simctl … all`, `killall Simulator`, killing by port) - and where the rest is', () => {
+    const section = remoteRunUsage.slice(remoteRunUsage.indexOf('Jobs beside each other:'), remoteRunUsage.indexOf('Exit codes:'));
+    assert.ok(section.length > 0, 'a section of its own, before the exit codes');
+    for (const word of ['REMOTE_RUN_PORT_BASE', 'TMPDIR', 'REMOTE_RUN_IOS_SIMULATOR_UDID', '`exec` has none of them', 'xcrun simctl shutdown|erase|delete all', 'killall Simulator', 'by its pid', 'docs/remote-run.md, «Jobs beside each other»', 'jobs-at-once']) {
+      assert.ok(section.includes(word), word);
+    }
+  });
+
   it('the usage says an iOS build or a Simulator test always carries --needs ios (an always-on Mac refuses it without a login session, and runs it there with one)', () => {
     assert.match(remoteRunUsage, /An iOS build or a Simulator test always carries --needs ios: an\s+always-on Mac runs such a job in its login session and refuses it with the reason when there is none/);
   });
