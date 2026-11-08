@@ -34,8 +34,10 @@ jobs:
           set -euo pipefail
           base=https://github.com/Nukesor/pueue/releases/download/v4.0.4
           mkdir -p "$HOME/.local/bin"
-          curl -fsSL -m 180 --connect-timeout 60 -o "$HOME/.local/bin/pueue" "$base/pueue-x86_64-unknown-linux-musl"
-          curl -fsSL -m 180 --connect-timeout 60 -o "$HOME/.local/bin/pueued" "$base/pueued-x86_64-unknown-linux-musl"
+          # github.com answers a release download with a 502/503/504 now and then: retry those (the checksums below still decide whether the file is the right one).
+          download() { curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -m 180 --connect-timeout 60 -o "$2" "$1"; }
+          download "$base/pueue-x86_64-unknown-linux-musl" "$HOME/.local/bin/pueue"
+          download "$base/pueued-x86_64-unknown-linux-musl" "$HOME/.local/bin/pueued"
           echo "c1b10d7e4e62211075ddd0e1dc3e8cbfc5a43d662cb3be7402a28504e23fcb51  $HOME/.local/bin/pueue" | sha256sum -c -
           echo "5afeff6adbafb909e8d54e2caff158e6966c2adffa2c09e60fd631cc51b60390  $HOME/.local/bin/pueued" | sha256sum -c -
           chmod +x "$HOME/.local/bin/pueue" "$HOME/.local/bin/pueued"
