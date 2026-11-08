@@ -1,10 +1,10 @@
 import type { ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
-import { interruptSignals, killGraceSeconds, planInterrupt, type InterruptSignal } from './exitCodes';
+import { interruptSignals, killGraceSeconds, planInterrupt, simulatorShutdownGraceSeconds, type InterruptSignal } from './exitCodes';
 
-/** A `kill` call waits for the runner's grace time, then its own SIGKILL and the call itself. */
+/** A `kill` call waits for the runner's grace time, the Simulator shutdown a job may be in the middle of, then its own SIGKILL and the call itself. */
 const killCallMarginSeconds = 30;
-export const killCallTimeoutMs = (killGraceSeconds + killCallMarginSeconds) * 1000;
+export const killCallTimeoutMs = (killGraceSeconds + simulatorShutdownGraceSeconds + killCallMarginSeconds) * 1000;
 
 const stdoutClosedEvent = 'stdoutClosed';
 const stdoutClosedEvents = new EventEmitter();

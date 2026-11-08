@@ -8,7 +8,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { planInterrupt, remoteRunExitCodes } from '../remoteRun/exitCodes';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { killGraceSeconds, planInterrupt, remoteRunExitCodes, simulatorShutdownGraceSeconds } from '../remoteRun/exitCodes';
+import { killCallTimeoutMs } from '../remoteRun/interrupts';
 import { getHeartbeatIntervalMs, readRemoteRunLeaseMs, remoteRunLeaseMinMs, remoteRunLeaseMs } from '../remoteRun/leaseTiming';
 import { testTimingsEnvName } from '../testTimings';
 
@@ -48,5 +51,20 @@ describe('planInterrupt', () => {
 
   it('the codes remote-run reports itself are the documented ones', () => {
     assert.deepEqual(remoteRunExitCodes, { usage: 2, timedOut: 124, failed: 125, hangup: 129, interrupted: 130, killed: 137, brokenPipe: 141, terminated: 143 });
+  });
+});
+
+describe('the hub\'s kill call against the runner\'s kill', () => {
+  const script = fs.readFileSync(path.resolve(__dirname, '..', '..', 'remoteRun', 'runner.sh'), 'utf8');
+  const readRunnerSeconds = (name: string): number => Number(new RegExp(`^${name}=(\\d+)$`, 'm').exec(script)?.[1]);
+
+  it('the numbers the hub keeps are the runner script\'s own: the grace after SIGTERM, and what a job shutting its Simulator down is given on top', () => {
+    assert.equal(killGraceSeconds, readRunnerSeconds('kill_grace_sec'));
+    assert.equal(simulatorShutdownGraceSeconds, readRunnerSeconds('ios_device_shutdown_sec') + readRunnerSeconds('simulator_shutdown_slack_sec'));
+  });
+
+  it('a kill call is given longer than the runner\'s worst case - the grace, the Simulator shutdown with its slack, and the second the runner sleeps after a hard kill - so a slow shutdown is not reported as a failed kill', () => {
+    const runnerWorstCaseSeconds = readRunnerSeconds('kill_grace_sec') + readRunnerSeconds('ios_device_shutdown_sec') + readRunnerSeconds('simulator_shutdown_slack_sec') + 1;
+    assert.ok(killCallTimeoutMs / 1000 > runnerWorstCaseSeconds, `${killCallTimeoutMs / 1000} s against ${runnerWorstCaseSeconds} s`);
   });
 });

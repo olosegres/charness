@@ -290,6 +290,40 @@ describe('a `kill` of a job that has a device', { skip: rsyncSkip }, () => {
   });
 });
 
+describe('a second `kill` while the device is being shut down', () => {
+  it('does not TERM the shutdown step: it waits like the first (a lease watcher\'s kill, an agent\'s retry) - the device is shut down and the job ends with 137', async () => {
+    const spec = iosJob(slugA, 'box1-aaaaaa', { command: `touch '${root}/started'; sleep 120` });
+    const child = startJob(state.workDir, spec, { ...sims.environment, FAKE_SHUTDOWN_SLEEP: '6' });
+    const running: Array<ReturnType<typeof spawn>> = [];
+    try {
+      await waitUntil('the command to start', () => fs.existsSync(path.join(root, 'started')), 60_000);
+      const killCall = (): Promise<string> => new Promise((resolve) => {
+        const call = spawn('bash', [scriptPath, 'kill', state.workDir, slugA, spec.jobId], { env: getRunEnvironment(sims.environment), stdio: ['ignore', 'pipe', 'ignore'] });
+        running.push(call);
+        let output = '';
+        call.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+        call.on('close', () => resolve(output.trim()));
+      });
+      const first = killCall();
+      await waitUntil('the job to be shutting its device down', () => fs.readFileSync(path.join(state.workDir, 'p', slugA, 'jobs', spec.jobId, 'phase'), 'utf8').trim() === 'simulator-off', 60_000);
+      const second = await killCall();
+      assert.equal(second, 'killed');
+      assert.equal(await first, 'killed');
+      assert.equal(await waitForJobExit(state.workDir, spec, 60_000), '137');
+      assert.equal(readFakeDevices(sims)[udidOne].state, 'Shutdown', 'the shutdown was not cut off by the second kill');
+    } finally {
+      for (const call of running) call.kill('SIGKILL');
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          /* gone */
+        }
+      }
+    }
+  });
+});
+
 describe('the retired list is appended to under the lock that rewrites it', () => {
   it('a device is put on the list only once nobody holds the index lock: a rewrite in progress cannot drop the line', async () => {
     writeFile(state.workDir, `p/${slugA}/ios-simulator`, `${udidOne}\n`);

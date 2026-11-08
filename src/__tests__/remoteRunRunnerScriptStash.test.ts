@@ -26,6 +26,8 @@ mkdir -p "$dir/tasks"
 case $1 in
   status)
     [ -z "\${FAKE_PQ_DOWN:-}" ] || exit 1
+    # A label query that fails while the plain status answers: Pueue busy, a socket hiccup.
+    if [ "$2" = --json ] && [ -n "$3" ] && [ -n "\${FAKE_PQ_LABEL_DOWN:-}" ]; then exit 1; fi
     if [ "$2" = --json ]; then
       printf '{"tasks":{'
       first=1
@@ -33,13 +35,19 @@ case $1 in
         [ -e "$file" ] || continue
         id=$(basename "$file")
         label=$(sed -n 1p "$file")
+        state=$(sed -n 2p "$file")
         case $3 in label=*) [ "label=$label" = "$3" ] || continue ;; esac
         [ $first -eq 1 ] || printf ','
         first=0
-        printf '"%s": {"id": %s, "label": "%s"}' "$id" "$id" "$label"
+        printf '"%s": {"id": %s, "label": "%s", "status": {"%s": {}}}' "$id" "$id" "$label" "$state"
       done
       printf '}}\\n'
     fi
+    ;;
+  wait)
+    # Blocks while the task is stashed, like the real one (bounded, so a test that forgets cannot hang).
+    waited=0
+    while [ "$(sed -n 2p "$dir/tasks/$2" 2> /dev/null)" = Stashed ] && [ $waited -lt 200 ]; do sleep 0.1; waited=$((waited+1)); done
     ;;
   add)
     shift
@@ -259,12 +267,13 @@ describe('enqueueing the stashed job of a project', () => {
     assert.equal(readTaskState(readTaskId('box1-cccccc')), 'Queued');
   });
 
-  it('a stashed job whose Pueue task is not its own (Pueue numbered it again, or lost it) loses its mark and is passed over - nothing else of Pueue\'s is enqueued by mistake', () => {
+  it('a stashed job whose Pueue task is gone (Pueue was reset, or lost it) is ENDED as lost - not only unmarked: it must stop counting as under way - and the next one is enqueued; nothing else of Pueue\'s is enqueued by mistake', () => {
     stageThree();
     endJob('box1-aaaaaa');
     fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-bbbbbb')));
     enqueueFor('box1-aaaaaa');
     assert.equal(isStashed('box1-bbbbbb'), false);
+    assert.equal(fs.readFileSync(path.join(jobFolder('box1-bbbbbb'), 'exit'), 'utf8').trim(), '137');
     assert.equal(readTaskState(readTaskId('box1-cccccc')), 'Queued');
     assert.deepEqual(readCalls().filter((call) => call.startsWith('enqueue')), [`enqueue ${readTaskId('box1-cccccc')}`]);
   });
@@ -342,6 +351,132 @@ describe('the safety net: `prepare` and `probe`', () => {
     runScript(['probe', workDir]);
     assert.equal(readTaskState(readTaskId('box1-bbbbbb')), 'Queued');
     assert.equal(readTaskState(readTaskId('box1-cccccc')), 'Stashed');
+  });
+});
+
+describe('a job that Pueue has lost does not stall its project', () => {
+  const readExit = (jobId: string, slugName = slug): string | null => {
+    const file = path.join(jobFolder(jobId, slugName), 'exit');
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : null;
+  };
+  /** A is queued and B waits stashed behind it; then Pueue forgets A (`pueue reset` of a hub removal or an unpair, a lost state file). */
+  function stageLostQueuedJob(): void {
+    submit('box1-aaaaaa');
+    submit('box1-bbbbbb');
+    fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')));
+  }
+
+  it('the next `probe` ends the lost job (it did not run: 137, killed, and a line in its log) and enqueues the stashed one behind it', () => {
+    stageLostQueuedJob();
+    const probe = runScript(['probe', workDir]);
+    assert.equal(probe.status, 0, probe.stderr);
+    assert.equal(readExit('box1-aaaaaa'), '137');
+    assert.ok(fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'killed')), 'it reads as killed, not as a failed run');
+    assert.match(fs.readFileSync(path.join(jobFolder('box1-aaaaaa'), 'log'), 'utf8'), /remote-run: the Pueue task of this job is gone .* it did not run/);
+    assert.equal(readTaskState(readTaskId('box1-bbbbbb')), 'Queued');
+    assert.equal(isStashed('box1-bbbbbb'), false);
+  });
+
+  it('a job submitted behind a lost one is not stashed behind it for ever: the lost one is ended first, and the new job is queued as usual', () => {
+    submit('box1-aaaaaa');
+    fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')));
+    submit('box1-bbbbbb');
+    assert.equal(readExit('box1-aaaaaa'), '137');
+    assert.equal(isStashed('box1-bbbbbb'), false);
+    assert.equal(readTaskState(readTaskId('box1-bbbbbb')), 'Queued');
+  });
+
+  it('a task that Pueue has finished (Done) while its job never recorded a process did not run either: it is ended as lost', () => {
+    stageLostQueuedJob();
+    fs.writeFileSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')), `rr-box1-aaaaaa\nDone\n`);
+    runScript(['probe', workDir]);
+    assert.equal(readExit('box1-aaaaaa'), '137');
+    assert.equal(readTaskState(readTaskId('box1-bbbbbb')), 'Queued');
+  });
+
+  it('a job that is under way is NOT judged lost: a queued one Pueue still holds, a running one with a process', () => {
+    submit('box1-aaaaaa');
+    submit('box1-bbbbbb', otherSlug);
+    markRunning('box1-bbbbbb', otherSlug);
+    submit('box1-cccccc');
+    runScript(['probe', workDir]);
+    assert.equal(readExit('box1-aaaaaa'), null);
+    assert.equal(readExit('box1-bbbbbb', otherSlug), null);
+    assert.equal(isStashed('box1-cccccc'), true, 'still waiting behind the queued one');
+  });
+
+  it('a label query that fails while Pueue otherwise answers judges nothing: the lost-looking job is not ended, and the stash mark stays', () => {
+    stageLostQueuedJob();
+    runScript(['probe', workDir], { FAKE_PQ_LABEL_DOWN: '1' });
+    assert.equal(readExit('box1-aaaaaa'), null);
+    assert.equal(isStashed('box1-bbbbbb'), true);
+    assert.equal(readTaskState(readTaskId('box1-bbbbbb')), 'Stashed');
+    runScript(['probe', workDir]);
+    assert.equal(readExit('box1-aaaaaa'), '137', 'the next look, with Pueue answering, does');
+    assert.equal(readTaskState(readTaskId('box1-bbbbbb')), 'Queued');
+  });
+
+  it('a stashed job whose label query failed keeps its mark (it is not "not ours")', () => {
+    submit('box1-aaaaaa');
+    submit('box1-bbbbbb');
+    endJob('box1-aaaaaa');
+    runSourced('enqueue_idle_stashed_of_project "$proj"', 'box1-aaaaaa', { FAKE_PQ_LABEL_DOWN: '1' });
+    assert.equal(isStashed('box1-bbbbbb'), true);
+    assert.equal(readExit('box1-bbbbbb'), null);
+  });
+});
+
+describe('a job that is removing paths after it succeeded is still under way', () => {
+  it('a job with a result and the phase `cleaning` (its process alive: it holds the project lock) makes the next job stashed - not queued to sit in the lock wait', () => {
+    submit('box1-aaaaaa');
+    endJob('box1-aaaaaa');
+    markRunning('box1-aaaaaa');
+    writeFile(jobFolder('box1-aaaaaa'), 'phase', 'cleaning\n');
+    submit('box1-bbbbbb');
+    assert.equal(isStashed('box1-bbbbbb'), true);
+  });
+
+  it('and it is not enqueued behind it either, until the cleaning is over (phase done)', () => {
+    submit('box1-aaaaaa');
+    endJob('box1-aaaaaa');
+    markRunning('box1-aaaaaa');
+    writeFile(jobFolder('box1-aaaaaa'), 'phase', 'cleaning\n');
+    submit('box1-bbbbbb');
+    runScript(['probe', workDir]);
+    assert.equal(isStashed('box1-bbbbbb'), true);
+    writeFile(jobFolder('box1-aaaaaa'), 'phase', 'done\n');
+    runScript(['probe', workDir]);
+    assert.equal(isStashed('box1-bbbbbb'), false);
+  });
+
+  it('a cleaning job whose process died is not under way (it would block the project for ever): the next job is queued as usual', () => {
+    submit('box1-aaaaaa');
+    endJob('box1-aaaaaa');
+    writeFile(jobFolder('box1-aaaaaa'), 'pid', '99999999\n');
+    writeFile(jobFolder('box1-aaaaaa'), 'phase', 'cleaning\n');
+    submit('box1-bbbbbb');
+    assert.equal(isStashed('box1-bbbbbb'), false);
+  });
+});
+
+describe('a job that waits for a stashed one is also the safety net', () => {
+  it('`wait` on a stashed job whose predecessor ended without enqueueing it (a watchdog\'s SIGKILL takes the job and the watchdog together) enqueues it by itself within its re-check', () => {
+    submit('box1-aaaaaa');
+    markRunning('box1-aaaaaa');
+    submit('box1-bbbbbb');
+    // A is gone for good: a result written by the hard kill, no one to enqueue its successor.
+    endJob('box1-aaaaaa');
+    const waited = runSourced('stash_recheck_sec=1; cmd_wait "$work" "$slug" "$job"', 'box1-bbbbbb');
+    assert.match(waited.stdout, /^done$/m, waited.stderr);
+    assert.equal(readTaskState(readTaskId('box1-bbbbbb')), 'Queued');
+    assert.equal(isStashed('box1-bbbbbb'), false);
+  });
+
+  it('a job that is not stashed does not ask Pueue anything extra while it waits', () => {
+    submit('box1-aaaaaa');
+    const callsBefore = readCalls().length;
+    runSourced('stash_recheck_sec=1; cmd_wait "$work" "$slug" "$job"', 'box1-aaaaaa');
+    assert.deepEqual(readCalls().slice(callsBefore).filter((call) => call.startsWith('enqueue') || call.startsWith('status --json')), []);
   });
 });
 

@@ -45,6 +45,12 @@ export interface InterruptPlan {
 /** How long the runner gives a job after SIGTERM before it kills it (`kill_grace_sec` in `remoteRun/runner.sh`: the two are one number). */
 export const killGraceSeconds = 10;
 
+/**
+ * What a job that is shutting its iOS Simulator device down at the end of a kill is given ON TOP of the grace before the runner SIGKILLs its group: the step's bound plus the login session's agent's pick-up
+ * (`ios_device_shutdown_sec` + `simulator_shutdown_slack_sec` in `remoteRun/runner.sh`: the sum is one number, pinned by `remoteRunLease.test.ts`). A `kill` call waits for it.
+ */
+export const simulatorShutdownGraceSeconds = 70;
+
 /** @description What to do when the local remote-run gets `signal`: kill the whole remote job, then exit with the shell's code for it. */
 export function planInterrupt(signal: InterruptSignal): InterruptPlan {
   const exitCodeBySignal: Record<InterruptSignal, number> = {

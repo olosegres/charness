@@ -53,7 +53,19 @@ function runScript(args: string[]): Run {
 function stopPueueSync(): void {
   for (const child of children) child.kill('SIGKILL');
   children.clear();
-  if (pueueConfig !== '' && fs.existsSync(path.join(root, 'pueue', 'run', 'pueue.pid'))) spawnSync(pueueBin, ['-c', pueueConfig, 'shutdown'], { stdio: 'ignore', timeout: 15_000 });
+  const pidFile = path.join(root, 'pueue', 'run', 'pueue.pid');
+  if (pueueConfig !== '' && fs.existsSync(pidFile)) {
+    const daemonPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+    spawnSync(pueueBin, ['-c', pueueConfig, 'shutdown'], { stdio: 'ignore', timeout: 15_000 });
+    // A daemon that did not go with the polite shutdown (a test left it busy) is ended by the pid it recorded.
+    if (Number.isInteger(daemonPid) && daemonPid > 1) {
+      try {
+        process.kill(daemonPid, 'SIGKILL');
+      } catch {
+        /* gone */
+      }
+    }
+  }
   for (const pidFile of findJobPidFiles()) {
     const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
     if (Number.isInteger(pid) && pid > 1) {
@@ -96,6 +108,19 @@ async function waitUntil(description: string, check: () => boolean, limitMs = st
   }
 }
 
+/** A promise that is given `limitMs`: a `wait` that never returns is a failed test, not a hung one. */
+async function awaitBounded<T>(promise: Promise<T>, limitMs: number, description: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out waiting for ${description}`)), limitMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Watch for `holdMs` that `check` stays true: the way to observe that something did NOT happen. */
 async function expectToStayTrue(description: string, check: () => boolean): Promise<void> {
   const until = Date.now() + holdMs;
@@ -113,7 +138,7 @@ function createGatedCommand(name: string): string {
 }
 
 /** Everything the hub's calls do for a background job: `prepare` (with the runner's limit), the staged files, `submit`. The job's name is its mark name. */
-function submitJob(slug: string, jobId: string, options: { command?: string } = {}): void {
+function submitJob(slug: string, jobId: string, options: { command?: string; timeoutSec?: number } = {}): void {
   const prepared = runScript(['prepare', workDir, slug, jobId, `default=${currentLimit}`]);
   assert.equal(prepared.status, 0, prepared.stderr);
   const folder = jobFolder(slug, jobId);
@@ -123,7 +148,7 @@ function submitJob(slug: string, jobId: string, options: { command?: string } = 
   fs.writeFileSync(path.join(folder, 'manifest'), 'a.txt\n');
   fs.writeFileSync(path.join(folder, 'subfolder'), '');
   fs.writeFileSync(path.join(folder, 'cmd'), options.command ?? createGatedCommand(jobId));
-  fs.writeFileSync(path.join(folder, 'timeout-sec'), '300');
+  fs.writeFileSync(path.join(folder, 'timeout-sec'), `${options.timeoutSec ?? 300}`);
   const result = runScript(['submit', workDir, slug, jobId, 'default']);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), 'queued');
@@ -310,7 +335,7 @@ describe('jobs side by side on one runner, against a real Pueue', { skip: skipRe
       });
       await expectToStayTrue('the wait does not return while the job is stashed', () => !hasStarted('wt-p-2') && readExit('wt-p', 'wt-p-2') === null);
       release('wt-p-1');
-      const done = await waiting;
+      const done = await awaitBounded(waiting, 60_000, '`wait` to return');
       assert.equal(done.stdout.trim(), 'done');
       assert.equal(readExit('wt-p', 'wt-p-2'), '0');
     });
@@ -347,6 +372,49 @@ describe('jobs side by side on one runner, against a real Pueue', { skip: skipRe
       release('pp-q-1');
       await waitUntil('the stashed job to start', () => hasStarted('pp-p-2'));
       await waitUntil('both to end', () => readExit('pp-p', 'pp-p-2') !== null && readExit('pp-q', 'pp-q-1') !== null);
+    });
+
+    it('a predecessor SIGKILLed by its OWN watchdog (a time limit, a command that ignores TERM) takes the watchdog with it: the `wait` on the stashed job runs the safety net itself - no probe, no prepare needed', async () => {
+      setLimit(2);
+      submitJob('wd-p', 'wd-p-1', { timeoutSec: 4, command: `trap '' TERM; ${createGatedCommand('wd-p-1')}` });
+      submitJob('wd-p', 'wd-p-2');
+      release('wd-p-2');
+      await waitUntil('the first to start', () => hasStarted('wd-p-1'));
+      assert.equal(readPueueState('wd-p-2'), 'Stashed');
+      const waiting = new Promise<Run>((resolve) => {
+        const child = spawn('bash', [scriptPath, 'wait', workDir, 'wd-p', 'wd-p-2'], { env: getEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] });
+        children.add(child);
+        let stdout = '';
+        child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+        child.on('close', (status) => resolve({ status, stdout, stderr: '' }));
+      });
+      // The limit runs out, TERM is ignored, the watchdog SIGKILLs the job's group after the grace - itself included.
+      await waitUntil('the first job to be over (124)', () => readExit('wd-p', 'wd-p-1') === '124', 60_000);
+      const done = await awaitBounded(waiting, 60_000, '`wait` on the stashed job to return');
+      assert.equal(done.stdout.trim(), 'done');
+      assert.equal(readExit('wd-p', 'wd-p-2'), '0', 'the stashed job ran');
+    });
+
+    it('a Pueue that was reset (a hub removal, an unpair) leaves jobs whose tasks are gone - queued and stashed ones: they are ended as lost, and a job submitted afterwards runs instead of waiting for them for ever', async () => {
+      setLimit(1);
+      submitJob('rs-x', 'rs-x-1');
+      await waitUntil('the first job to start', () => hasStarted('rs-x-1'));
+      submitJob('rs-p', 'rs-p-1');
+      submitJob('rs-p', 'rs-p-2');
+      assert.equal(readPueueState('rs-p-1'), 'Queued');
+      assert.equal(readPueueState('rs-p-2'), 'Stashed');
+      const reset = runScript(['pueue', workDir, 'reset', '--force']);
+      assert.equal(reset.status, 0, reset.stderr);
+      await waitUntil('Pueue to have forgotten the queued tasks', () => readPueueState('rs-p-1') === null && readPueueState('rs-p-2') === null);
+      await waitUntil('the running job to be gone with the reset', () => hasJobEnded('rs-x', 'rs-x-1'));
+      setLimit(1);
+      submitJob('rs-p', 'rs-p-3');
+      release('rs-p-3');
+      await waitUntil('the new job to start', () => hasStarted('rs-p-3'));
+      await waitUntil('it to end', () => readExit('rs-p', 'rs-p-3') !== null);
+      assert.equal(readExit('rs-p', 'rs-p-3'), '0');
+      assert.deepEqual([readExit('rs-p', 'rs-p-1'), readExit('rs-p', 'rs-p-2')], ['137', '137'], 'the lost jobs are over, as killed ones');
+      assert.equal(hasStarted('rs-p-1') || hasStarted('rs-p-2'), false, 'neither ever ran');
     });
 
     it('`kill` of a stashed job removes it from Pueue like a queued one - it ends with 137 and never starts - and the job behind it is not let go while the first is under way', async () => {

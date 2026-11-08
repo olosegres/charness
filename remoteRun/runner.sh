@@ -127,6 +127,8 @@ index_lock_max_age_min=2
 # calls; one that cannot be had in sched_lock_wait_sec is believed stale after sched_lock_max_age_min.
 sched_lock_wait_sec=30
 sched_lock_max_age_min=2
+# A caller that waits for a stashed job looks this often (seconds) whether its predecessor ended without enqueueing it (a job SIGKILLed with its own watchdog); see `wait_for_task`.
+stash_recheck_sec=5
 # A job's own Simulator device is named for its project; its steps are each bounded (a watchdog: there is no `timeout(1)` on a Mac).
 ios_device_prefix=charness-
 ios_device_list_sec=30
@@ -1725,10 +1727,15 @@ release_sched_lock() {
 }
 
 # Is any job of the project copy in folder $1 under way - it has a Pueue task, no result, and no process that has died? `active` counts only the jobs Pueue may run (not the stashed ones: those wait for the others), `any` all.
+# A job that succeeded and is removing paths from the copy (phase `cleaning`, process alive) has its result already but still holds the project lock: it counts too, or a job submitted meanwhile would take a slot to sit in
+# the lock wait. One whose process died in that phase does not (it would stall the project for ever).
 check_project_has_unended_job() {
   local job_dir
   for job_dir in "$1"/jobs/*/; do
     [ -d "$job_dir" ] || continue
+    if [ "$(read_file "$job_dir/phase")" = cleaning ] && check_runner_pid_alive "$(read_file "$job_dir/pid")"; then
+      return 0
+    fi
     check_job_dir_ended "$job_dir" && continue
     [ "$2" = active ] && [ -f "$job_dir/stashed" ] && continue
     return 0
@@ -1736,27 +1743,83 @@ check_project_has_unended_job() {
   return 1
 }
 
+# Ask Pueue about the task $1 of job $2: sets job_task_state to `present` (it holds a task with that number and the job's label), `done` (that task has finished) or `absent`. Fails - and sets nothing - when Pueue does not answer
+# or answers with something that is not its task list: only an ANSWER may say that a task is gone.
+read_job_task_state() {
+  local reply
+  job_task_state=
+  reply=$(pq status --json "label=rr-$2" < /dev/null 2> /dev/null) || return 1
+  case $reply in
+    *'"tasks"'*) ;;
+    *) return 1 ;;
+  esac
+  if ! printf '%s\n' "$reply" | grep -Eq "\"$1\": ?\{ ?\"id\": ?$1[,}]"; then
+    job_task_state=absent
+  elif printf '%s\n' "$reply" | grep -Eq '"status": ?\{ ?"Done"'; then
+    job_task_state=done
+  else
+    job_task_state=present
+  fi
+  return 0
+}
+
+# End the job in folder $2 of project copy $1 as one that never ran: its Pueue task is gone (the queue was reset by a hub removal or an unpair, a state file was lost). It reads as killed (137) with a line in its log, and its
+# stash mark goes, so that it stops counting as under way and no later job of the project waits for it for ever.
+end_lost_job() {
+  printf 'remote-run: the Pueue task of this job is gone (the queue was reset, or Pueue lost it), so it did not run\n' >> "$2/log"
+  touch "$2/task-removed" "$2/killed"
+  ( jd=$2; proj=$1; stage="$1/stage/$(basename "$2")"; finish_killed_job )
+}
+
+# End every job of the project copy in folder $1 that waits for a Pueue task Pueue does not have: a job with a task number, no result and no process (it never started) whose task is absent from Pueue's answer, or is
+# done there. A Pueue that does not answer ends nothing. The scheduling mutex must be held.
+end_lost_jobs_of_project() {
+  local job_dir task
+  for job_dir in "$1"/jobs/*/; do
+    [ -d "$job_dir" ] || continue
+    job_dir=${job_dir%/}
+    check_job_dir_ended "$job_dir" && continue
+    [ -f "$job_dir/pid" ] && continue
+    task=$(read_file "$job_dir/task-id")
+    case $task in '' | *[!0-9]*) continue ;; esac
+    read_job_task_state "$task" "$(basename "$job_dir")" || return 0
+    case $job_task_state in
+      absent | done) end_lost_job "$1" "$job_dir" ;;
+    esac
+  done
+  return 0
+}
+
 # Enqueue (`pueue enqueue`) the oldest stashed job of the project copy in folder $1 - if no other job of the copy is under way: its predecessor ended (`finish_job`), or died before it could say so (the next `prepare` or `probe`,
-# `enqueue_idle_stashed`). A stashed job that has a result already (it was killed) only loses its mark; one whose Pueue task is not its own any more (Pueue numbered it again) is dropped too. Under the scheduling mutex, so
-# that a job being added at the same moment is either seen here (stashed before this looks) or sees its predecessor ended (and is queued as usual): none is left stashed with nobody to enqueue it.
+# `enqueue_idle_stashed`; a `wait` on the stashed job). Jobs whose Pueue task is gone are ended first (`end_lost_jobs_of_project`). A stashed job that has a result already (it was killed) only loses its mark. Under the scheduling
+# mutex, so that a job being added at the same moment is either seen here (stashed before this looks) or sees its predecessor ended (and is queued as usual): none is left stashed with nobody to enqueue it. Pueue is asked only
+# when something is stashed, and a Pueue that does not answer judges nothing: marks stay.
 enqueue_idle_stashed_of_project() {
   local project_dir=$1 marker job_dir task stashed_marks
   acquire_sched_lock "$project_dir" || return 0
   stashed_marks=$(ls -1tr "$project_dir"/jobs/*/stashed 2> /dev/null)
-  # Pueue is asked only when something is stashed, and a Pueue that does not answer judges nothing: a mark is dropped only for a job Pueue itself says is not its own.
-  if [ -n "$stashed_marks" ] && ! check_project_has_unended_job "$project_dir" active && pq status > /dev/null 2>&1; then
-    while IFS= read -r marker; do
-      [ -f "$marker" ] || continue
-      job_dir=$(dirname "$marker")
-      task=$(read_file "$job_dir/task-id")
-      case $task in '' | *[!0-9]*) rm -f "$marker"; continue ;; esac
-      if [ -f "$job_dir/exit" ] || ! check_task_belongs_to_job "$task" "$(basename "$job_dir")"; then
-        rm -f "$marker"
-        continue
-      fi
-      pq enqueue "$task" > /dev/null 2>&1 && rm -f "$marker"
-      break
-    done <<< "$stashed_marks"
+  if [ -n "$stashed_marks" ] && pq status < /dev/null > /dev/null 2>&1; then
+    end_lost_jobs_of_project "$project_dir"
+    stashed_marks=$(ls -1tr "$project_dir"/jobs/*/stashed 2> /dev/null)
+    if [ -n "$stashed_marks" ] && ! check_project_has_unended_job "$project_dir" active; then
+      while IFS= read -r marker; do
+        [ -f "$marker" ] || continue
+        job_dir=$(dirname "$marker")
+        task=$(read_file "$job_dir/task-id")
+        case $task in '' | *[!0-9]*) rm -f "$marker"; continue ;; esac
+        if [ -f "$job_dir/exit" ]; then
+          rm -f "$marker"
+          continue
+        fi
+        read_job_task_state "$task" "$(basename "$job_dir")" || break
+        if [ "$job_task_state" != present ]; then
+          rm -f "$marker"
+          continue
+        fi
+        pq enqueue "$task" < /dev/null > /dev/null 2>&1 && rm -f "$marker"
+        break
+      done <<< "$stashed_marks"
+    fi
   fi
   release_sched_lock "$project_dir"
   return 0
@@ -1792,8 +1855,12 @@ add_job() {
   date +%s > "$jd/queued-at"
   acquire_sched_lock "$proj" && holds_sched_lock=1
   if [ "$holds_sched_lock" -eq 1 ] && check_project_has_unended_job "$proj" any; then
-    is_stashed=1
-    stash_option=--stashed
+    # A job Pueue has lost (its queue was reset) is over, not under way: ended first, or this job would wait for it for ever.
+    pq status < /dev/null > /dev/null 2>&1 && end_lost_jobs_of_project "$proj"
+    if check_project_has_unended_job "$proj" any; then
+      is_stashed=1
+      stash_option=--stashed
+    fi
   fi
   if ! task=$(pq add --print-task-id $stash_option -g "$group" -l "rr-$job" -w "$proj" -- "$command_line"); then
     [ "$holds_sched_lock" -eq 1 ] && release_sched_lock "$proj"
@@ -1850,18 +1917,18 @@ kill_job() {
     enqueue_idle_stashed_of_project "$proj"
     return 0
   fi
-  signal_job_group TERM || pq kill "$task" > /dev/null 2>&1
+  # A job that is already shutting its Simulator device down is past its command: there is nothing left to stop, and a TERM to its group would reach the shutdown step (a second kill - the lease watcher's after the caller's,
+  # an agent's retry - must not leave the device booted).
+  if [ "$(read_file "$jd/phase")" != simulator-off ]; then
+    signal_job_group TERM || pq kill "$task" > /dev/null 2>&1
+  fi
   local started=$SECONDS grace_sec=$kill_grace_sec
   while :; do
     check_job_ended && return 0
-    if [ $((SECONDS - started)) -ge "$grace_sec" ]; then
-      # A job that is shutting its Simulator device down is given what that step is bounded by (and the agent's pick-up of it) before the group is SIGKILLed, which would leave the device booted.
-      if [ "$grace_sec" -eq "$kill_grace_sec" ] && [ "$(read_file "$jd/phase")" = simulator-off ]; then
-        grace_sec=$((kill_grace_sec + ios_device_shutdown_sec + simulator_shutdown_slack_sec))
-        continue
-      fi
-      break
-    fi
+    # A job that is shutting its Simulator device down is given what that step is bounded by (and the agent's pick-up of it) before the group is SIGKILLed, which would leave the device booted. The hub's kill call
+    # waits for the same number (`simulatorShutdownGraceSeconds` in exitCodes.ts).
+    [ "$(read_file "$jd/phase")" = simulator-off ] && grace_sec=$((kill_grace_sec + ios_device_shutdown_sec + simulator_shutdown_slack_sec))
+    [ $((SECONDS - started)) -ge "$grace_sec" ] && break
     sleep 0.2
   done
   hard_kill_job "$task"
@@ -1962,12 +2029,17 @@ wait_for_task() {
   pq wait "$1" < /dev/null > /dev/null 2>&1 &
   local waiter_pid=$!
   set +m
+  local looks=0
   while kill -0 "$waiter_pid" 2> /dev/null; do
     if [ -f "$jd/exit" ]; then
       # The group, or the process alone when it did not get a group of its own: a group id that is not a live group is harmless.
       kill -- "-$waiter_pid" > /dev/null 2>&1 || kill "$waiter_pid" > /dev/null 2>&1
       break
     fi
+    # A job that waits stashed is enqueued by the job before it when that one ends; one SIGKILLed together with its own watchdog never does, and nobody else may look (the safety net of `prepare` / `probe` needs a caller).
+    # Whoever waits for the stashed job looks itself: cheap (a listing; Pueue is asked only when a mark is there).
+    looks=$((looks + 1))
+    if [ -f "$jd/stashed" ] && [ $((looks % (stash_recheck_sec * 5))) -eq 0 ]; then enqueue_idle_stashed_of_project "$proj"; fi
     sleep 0.2
   done
   { wait "$waiter_pid"; } 2> /dev/null
