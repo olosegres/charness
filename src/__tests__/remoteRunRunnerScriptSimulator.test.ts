@@ -236,11 +236,23 @@ describe('the device is shut down when the job ends any way', { skip: rsyncSkip 
     assert.ok(readFakeCalls(sims).includes(`simctl shutdown ${udidOne}`));
   });
 
-  it('after a timeout (124): the device is shut down before the job is over', () => {
-    const outcome = runJob(state.workDir, iosJob(slugA, 'box1-aaaaaa', { command: 'sleep 120', timeoutSec: 8 }), sims.environment, 60_000);
-    assert.equal(outcome.exit, '124', outcome.log);
-    assert.equal(runningDevice().state, 'Shutdown');
-    assert.ok(readFakeCalls(sims).includes(`simctl shutdown ${udidOne}`));
+  it('after a timeout (124): the device is shut down before the job is over', async () => {
+    // Started the way Pueue starts a task - a process group of its own - so that the watchdog's group TERM reaches the command (under a plain `spawnSync` the job is no group leader, nothing ends `sleep`, and the run lasts as long as the command).
+    const spec = iosJob(slugA, 'box1-aaaaaa', { command: `touch '${root}/started'; sleep 120`, timeoutSec: 3 });
+    const child = startJob(state.workDir, spec, sims.environment);
+    try {
+      assert.equal(await waitForJobExit(state.workDir, spec, 40_000), '124');
+      await waitUntil('the device to be shut down', () => runningDevice().state === 'Shutdown', 20_000);
+      assert.ok(readFakeCalls(sims).includes(`simctl shutdown ${udidOne}`));
+    } finally {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          /* gone */
+        }
+      }
+    }
   });
 
   it('after a kill (137): the group gets TERM, the job ends its way, and the device is shut down', async () => {
@@ -470,6 +482,14 @@ describe('`ios-device` and `ios-device-shutdown` as steps', () => {
     addFakeDevice(sims, udidOne, `charness-${slugA}`, 'Shutdown');
     const done = runSubcommand(['ios-device-shutdown', state.workDir, slugA, udidOne]);
     assert.equal(done.status, 0, done.stdout);
+  });
+
+  it('the step leaves nothing behind that holds its output: the watchdog of the bounded `simctl` call is ended although the step ignores TERM - a caller that reads the step\'s pipe is not kept waiting for the limit (60 s)', () => {
+    addFakeDevice(sims, udidOne, `charness-${slugA}`, 'Booted');
+    const startedAt = Date.now();
+    const done = runSubcommand(['ios-device-shutdown', state.workDir, slugA, udidOne]);
+    assert.equal(done.status, 0, done.stdout);
+    assert.ok(Date.now() - startedAt < 15_000, `it took ${(Date.now() - startedAt) / 1000} s: something still held the pipe`);
   });
 
   it('every simctl call is bounded: a boot that never finishes is cut at its limit and told, not waited for', () => {

@@ -1453,7 +1453,9 @@ run_bounded() {
   local command_code
   wait "$command_pid" 2> /dev/null
   command_code=$?
-  kill "$watchdog_pid" > /dev/null 2>&1
+  # KILL, not TERM: a caller that ignores TERM (the Simulator shutdown step does, `cmd_ios_device_shutdown`) hands that to the watchdog, whose subshell would then sleep out the whole limit - holding the caller's pipes, and
+  # firing a `kill -9` at a pid that may be another process's by then.
+  kill -9 "$watchdog_pid" > /dev/null 2>&1
   return "$command_code"
 }
 
