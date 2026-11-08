@@ -18,6 +18,7 @@ import { decideUpdate, updateRetryDelayMs } from '../runnerUtility/appUpdate';
 import { checkArchiveHasId, checkIsPackageId, getPackageIdOfArchive } from '../runnerUtility/packageId';
 import { HubConnectionError } from '../runnerUtility/hubClient';
 import { computeBackoffMs, createLinkLoop, removalConfirmMs, removedRetryMs } from '../runnerUtility/linkLoop';
+import { checkIsLinkIdle, createIdleRestart } from '../runnerUtility/nodeUpkeep';
 import { createLidWatcher, type LidWatcher } from '../runnerUtility/lidState';
 import { readRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
@@ -395,7 +396,7 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
     return { acceptLinkStream: () => undefined, getActiveExecCount: () => state.busy };
   }
 
-  function startLoop(options: { servers: RunnerServers; update?: Parameters<typeof createLinkLoop>[0]['update']; versionPollMs?: number; now?: () => number; stopJobs?: () => Promise<void>; lid?: LidWatcher; lidPollMs?: number }) {
+  function startLoop(options: { servers: RunnerServers; update?: Parameters<typeof createLinkLoop>[0]['update']; versionPollMs?: number; now?: () => number; stopJobs?: () => Promise<void>; lid?: LidWatcher; lidPollMs?: number; onUpdateSettled?: () => void }) {
     const config = createConfig();
     const abort = new AbortController();
     aborts.push(abort);
@@ -405,6 +406,7 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
       keys: { client: clientKey, server: generateEd25519KeyPair('s') },
       servers: options.servers,
       update: options.update,
+      onUpdateSettled: options.onUpdateSettled,
       stopJobs: options.stopJobs,
       lid: options.lid,
       lidPollMs: options.lidPollMs,
@@ -530,6 +532,77 @@ describe('the link loop against a hub (an ssh server that speaks the gate\'s wor
     if (updateGate.release === null) throw new Error('the update never started');
     updateGate.release();
     assert.equal(await finished, 75, 'the runner asks the launcher for a restart once the update is installed');
+  });
+
+  it('says it is updating from the moment the download starts to the moment the update has settled — and tells whoever waits when it has', async () => {
+    hub.currentPackageId.value = newerPackageId;
+    let settled = 0;
+    const updateGate: { release: (() => void) | null } = { release: null };
+    const { loop, finished } = startLoop({
+      servers: createFakeServers({ busy: 0 }),
+      onUpdateSettled: () => { settled += 1; },
+      update: () => new Promise((resolve) => { updateGate.release = () => resolve({ ok: true, packageId: newerPackageId }); }),
+    });
+    assert.equal(loop.isUpdating(), false, 'before anything');
+    await waitUntil(() => updateGate.release !== null, 'the update to start');
+    assert.equal(loop.isUpdating(), true, 'while it downloads and installs');
+    assert.equal(settled, 0);
+    updateGate.release?.();
+    assert.equal(await finished, 75);
+    assert.equal(loop.isUpdating(), false, 'once it has settled');
+    assert.equal(settled, 1);
+  });
+
+  it('a failed update has settled too: nothing is updating, and whoever waited is told', async () => {
+    hub.currentPackageId.value = newerPackageId;
+    let settled = 0;
+    const { loop } = startLoop({
+      servers: createFakeServers({ busy: 0 }),
+      onUpdateSettled: () => { settled += 1; },
+      update: async () => ({ ok: false, reason: 'the registry was unreachable' }),
+    });
+    await waitUntil(() => settled === 1, 'the failed update to settle');
+    assert.equal(loop.isUpdating(), false);
+  });
+
+  it('a restart for a new Node does NOT cut an update that is being installed — it waits for the update to settle and is honoured then (the last command ending starts the update first, and the restart asks the loop)', async () => {
+    hub.currentPackageId.value = newerPackageId;
+    const state = { busy: 1 };
+    let updateCalls = 0;
+    let leaves = 0;
+    const updateGate: { release: (() => void) | null } = { release: null };
+    const gateRef: { current: ReturnType<typeof createIdleRestart> | null } = { current: null };
+    const loopRef: { current: ReturnType<typeof createLinkLoop> | null } = { current: null };
+    const { loop } = startLoop({
+      servers: createFakeServers(state),
+      onUpdateSettled: () => { gateRef.current?.notifyChange(); },
+      update: () => new Promise((resolve) => {
+        updateCalls += 1;
+        updateGate.release = () => resolve({ ok: false, reason: 'the registry was unreachable' });
+      }),
+    });
+    loopRef.current = loop;
+    gateRef.current = createIdleRestart({
+      checkIsIdle: () => checkIsLinkIdle({ getActiveExecCount: () => state.busy, isUpdating: () => loopRef.current?.isUpdating() ?? false, checkIsPueueBusy: async () => false }),
+      leave: () => { leaves += 1; },
+      pollMs: 100,
+    });
+    await waitUntil(() => hub.linkChannels.length === 1, 'the link', 15_000);
+    gateRef.current.request();
+    await new Promise((resolve) => { setTimeout(resolve, 200); });
+    assert.equal(leaves, 0, 'a command runs');
+
+    // The last command ends: the loop's own notification first (it starts the update), then the restart's, as `runLink` orders them.
+    state.busy = 0;
+    loop.notifyActiveCountChange();
+    gateRef.current.notifyChange();
+    await waitUntil(() => updateCalls === 1, 'the update to start');
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+    assert.equal(leaves, 0, 'the update is being installed: leaving now would orphan its download and `npm ci`');
+
+    updateGate.release?.();
+    await waitUntil(() => leaves === 1, 'the restart to be honoured once the update has settled');
+    assert.equal(updateCalls, 1);
   });
 
   it('a link that stays healthy learns of a new package by asking, and updates when idle', async () => {

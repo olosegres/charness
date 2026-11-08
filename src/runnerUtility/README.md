@@ -80,11 +80,15 @@ the queue), `logs/`, `build/`.
   account (the plain line; and the upkeep below). **The upkeep** (`runNodeUpkeep`, started by `runLink` once the link is UP, and every `nodeUpkeepIntervalMs`): a link whose
   `process.execPath` is in neither base (a runner paired on a system or Homebrew Node) asks `ensureOwnNode` for a Node in `paths.ownNodeDir`; a link on an own Node asks for the
   newest release of ITS major; the shared Node is left to the next admin line. A Node in place that the link does not run on gets the launcher rewritten (`ensureLauncher`) and
-  `createIdleRestart` makes the link leave with `nodeMovedExitCode` (76) only when no command runs over it: the launcher of this version starts itself again, an older one exits
-  and the service manager starts the new file (a terminal run is started again by hand, which the log says). A failed look is written to `node-failure.json` with the app copy it
-  happened under and not repeated until a day has passed or the app copy changed (`checkIsAttemptDue`) — never a download at every start. `pruneOwnNodes` removes the version
-  folders that are not the running Node, the launcher's, the new one, nor an executable of any running process (`/proc/*/exe`, `ps -axo comm=`), and the `.install.*` folders an
-  hour old. `ensureLauncherForRunningNode` keeps the launcher from being rewritten back for an old Node by a link that an old launcher process restarted. A self-update runs as the
+  `createIdleRestart` makes the link leave with `nodeMovedExitCode` (76) only when `checkIsLinkIdle` says nothing is under way — no command over the link, no update being installed
+  (`LinkLoopHandle.isUpdating`, so the loop owns that: leaving then would orphan the download and `npm ci`; `onUpdateSettled` makes the gate look again), no Pueue task running or queued
+  (`createPueueBusyCheck`; it polls, since a task ends without an event for the link): the launcher of this version starts itself again, an older one exits
+  and the service manager starts the new file (a terminal run is started again by hand, which the log says). An update that ends the run (75) while a new Node waits returns 76 instead. A failed look is written to `node-failure.json` with the app copy it
+  happened under and not repeated until a day has passed or the app copy changed (`checkIsAttemptDue`) — never a download at every start. The looks are scheduled by the END of the one
+  before (`startNodeUpkeepSchedule`, `getNextLookDelayMs`): a failure is written when its attempt ends, so a timer set when the look began would find the retry not yet due and the retry would
+  come a day late; a failure pending makes the next look due at failedAt + 24 h. `pruneOwnNodes` stamps what is current (the running Node, the launcher's, the new one) in `node-current.json`
+  and removes another version folder a week (`nodeVersionGraceMs`) after its stamp — a version seen for the first time starts its week then — and only while Pueue has no running or
+  queued task; it looks at no process (macOS `ps` shows `node`, not where it lives, and a Pueue job keeps the PATH it was queued with). The `.install.*` folders an hour old go always. `ensureLauncherForRunningNode` keeps the launcher from being rewritten back for an old Node by a link that an old launcher process restarted. A self-update runs as the
   account, so the copy is the account's own — root only ever runs the shared one. The login session's agent (macOS) follows at its next restart. A job's environment takes
   `NPM_CONFIG_PREFIX` / `COREPACK_HOME` out when the operator's `env` line for them is empty. Test seams (flows only): `CHARNESS_TEST_RUNNER_KEEP_NODE=1` skips the upkeep,
   `CHARNESS_TEST_RUNNER_NODE_DIST` names a `file://` mirror of nodejs.org, `CHARNESS_TEST_TIMINGS` `runnerNodeUpkeepMs` shortens the daily look.

@@ -67,6 +67,8 @@ export interface LinkLoopDeps {
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   connect?: typeof connectToHub;
   update?: typeof updateFromHub;
+  /** Called when an update of the program, started by this loop, has settled (installed or failed): whoever waited for it may look again. */
+  onUpdateSettled?: () => void;
   log?: (line: string) => void;
 }
 
@@ -75,6 +77,8 @@ export interface LinkLoopHandle {
   run: (signal: AbortSignal) => Promise<number>;
   /** The built-in server calls this whenever the number of running commands changes. */
   notifyActiveCountChange: () => void;
+  /** Is an update of the program being downloaded or installed right now? Leaving then would orphan its `npm ci` and have the whole update done again. */
+  isUpdating: () => boolean;
 }
 
 function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
@@ -114,6 +118,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
   let stateSinceMs = now();
   let lastError: string | null = null;
   let failedUpdate: { packageId: string; atMs: number } | null = null;
+  let updatesInProgress = 0;
   let pendingUpdateId: string | null = null;
   let onIdleUpdate: (() => void) | null = null;
 
@@ -132,10 +137,16 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
 
   const tryUpdate = async (hubPackageId: string, signal: AbortSignal): Promise<UpdateOutcome | null> => {
     log(`updating to the hub's package ${hubPackageId}`);
-    const outcome = await update({ paths: deps.paths, config: { ...deps.config, packageId: installedPackageId }, clientPrivateKey: deps.keys.client.privateKey });
-    if (outcome.ok) installedPackageId = outcome.packageId;
-    else failedUpdate = { packageId: hubPackageId, atMs: now() };
-    return signal.aborted ? null : outcome;
+    updatesInProgress += 1;
+    try {
+      const outcome = await update({ paths: deps.paths, config: { ...deps.config, packageId: installedPackageId }, clientPrivateKey: deps.keys.client.privateKey });
+      if (outcome.ok) installedPackageId = outcome.packageId;
+      else failedUpdate = { packageId: hubPackageId, atMs: now() };
+      return signal.aborted ? null : outcome;
+    } finally {
+      updatesInProgress -= 1;
+      deps.onUpdateSettled?.();
+    }
   };
 
   const runOnce = async (signal: AbortSignal): Promise<AttemptResult> => {
@@ -280,6 +291,7 @@ export function createLinkLoop(deps: LinkLoopDeps): LinkLoopHandle {
     notifyActiveCountChange: () => {
       if (deps.servers.getActiveExecCount() === 0) onIdleUpdate?.();
     },
+    isUpdating: () => updatesInProgress > 0,
     run: async (signal) => {
       let failures = 0;
       let firstRefusalAtMs: number | null = null;

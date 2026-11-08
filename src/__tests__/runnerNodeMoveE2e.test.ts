@@ -9,8 +9,10 @@
  *   a day later → the link is UP first, THEN the verified build is installed in `~/.charness-runner/node`, the launcher is rewritten, and the link — when no
  *   command runs — leaves and comes back RUNNING ON IT; the log names the Node it left; the failure record is gone
  *   a job over the link sees that Node first on its PATH and an npm prefix and a Corepack home inside the account's state folder
- *   a newer release of the same line appears → the runner moves up to it (not to a newer major), and the release it left is removed once nothing uses it
+ *   a newer release of the same line appears → the runner moves up to it (not to a newer major); the release it left is kept for a week (the moment it stopped
+ *   being the runner's Node is on record) and removed after it
  *   a command is held over the link while an even newer release is put in place → the link does NOT leave until the command ends
+ *   a Pueue task runs while the next release is put in place → the link does NOT leave until the task is over (a job keeps the PATH it was queued with)
  *
  * Needs sshd, ssh, ssh-keyscan, rsync, Pueue, tar and the built CLI (`yarn build`): a local run without them is SKIPPED with the reason, CI fails without.
  * No registry and no network is used. Test case: N/A — Charness has no Jira tracker.
@@ -19,6 +21,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, type ChildProcess } from 'node:child_process';
+import { countActivePueueTasks, pueueUnfinishedStatuses } from '../runnerUtility/pueueDaemon';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getRunnerLinkStatus } from '../runners/linkControl';
@@ -52,6 +55,9 @@ const moveTimeoutMs = 150_000;
 /** The linked runner asks the hub for its package every 2 s and a Mac looks at its lid every second (as in every flow); it looks after its Node every 3 s instead of every day. */
 const flowTimings = JSON.stringify({ runnerVersionPollMs: 2000, runnerLidPollMs: 1000, runnerNodeUpkeepMs: 3000 });
 const heldCommandSeconds = 25;
+const pueueTaskSeconds = 25;
+const dayMs = 24 * 60 * 60 * 1000;
+const finalRelease = 'v22.102.0';
 const newerRelease = 'v22.100.0';
 const newestRelease = 'v22.101.0';
 const futureMajorRelease = 'v24.99.0';
@@ -156,7 +162,7 @@ describe('a runner on a system Node moves to its own, and keeps up with its line
     const movedAt = runnerOutput.indexOf('this runner now has its own Node.js');
     assert.ok(servingAt >= 0 && movedAt > servingAt, 'the runner was serving the hub before it put the Node in place');
     assert.match(runnerOutput, new RegExp(`this runner now has its own Node\\.js 22\\.99\\.0 at ${ownNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} and leaves Node\\.js \\S+ at ${process.execPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: jobs will run the new one`));
-    assert.match(runnerOutput, /no command runs over the link: leaving for the launcher's new start/);
+    assert.match(runnerOutput, /nothing is under way \(no command over the link, no update, no Pueue task\): leaving for the launcher's new start/);
     assert.equal(readNodeFailure(paths), null, 'the failure of the day before is forgotten');
   });
 
@@ -181,11 +187,19 @@ describe('a runner on a system Node moves to its own, and keeps up with its line
     await startMovingRunner(newerMirror);
     await waitForLinkOn(ownNodeOf(newerRelease));
     assert.equal(checkLauncherIsFor(paths, ownNodeOf(newerRelease)), true);
-    assert.match(runnerOutput, /a newer release of this runner's own Node\.js is in place: Node\.js 22\.100\.0 at \S+, replacing Node\.js \S+ at \S+\/v22\.99\.0\/bin\/node; the link starts again on it when no command runs/);
-    // The restarted link looks again at its start: nothing runs on the old release any more, so it goes. The newer MAJOR was never fetched.
-    await waitUntil(() => !fs.existsSync(ownFolderOf(mirrorRelease)), `${mirrorRelease} to be removed`, moveTimeoutMs);
-    assert.deepEqual(fs.readdirSync(paths.ownNodeDir), [newerRelease]);
-    await waitUntil(() => /removed Node\.js 22\.99\.0, which no process uses any more/.test(runnerOutput), 'the log to say the old release was removed', linkTimeoutMs);
+    assert.match(runnerOutput, /a newer release of this runner's own Node\.js is in place: Node\.js 22\.100\.0 at \S+, replacing Node\.js \S+ at \S+\/v22\.99\.0\/bin\/node; the link starts again on it when no command, app update or Pueue task is under way/);
+    // The release it left stays for a week: the moment it stopped being the runner's Node is on record, and nothing can be told of the jobs that may still use it.
+    await waitUntil(() => fs.existsSync(paths.nodeCurrent) && mirrorRelease in readJson<{ lastCurrentMs: Record<string, number> }>(paths.nodeCurrent).lastCurrentMs, 'the record of when each version was current', moveTimeoutMs);
+    assert.equal(fs.existsSync(ownFolderOf(mirrorRelease)), true, 'the release the link left is still there');
+    assert.deepEqual(fs.readdirSync(paths.ownNodeDir).filter((name) => name.startsWith('v')).sort(), [newerRelease, mirrorRelease], 'and the newer MAJOR was never fetched');
+    // A week later (the record says it was eight days ago) the next look removes it: Pueue has nothing running or queued.
+    await waitUntil(() => {
+      const record = readJson<{ lastCurrentMs: Record<string, number> }>(paths.nodeCurrent);
+      if (fs.existsSync(ownFolderOf(mirrorRelease))) fs.writeFileSync(paths.nodeCurrent, JSON.stringify({ lastCurrentMs: { ...record.lastCurrentMs, [mirrorRelease]: Date.now() - 8 * dayMs } }));
+      return !fs.existsSync(ownFolderOf(mirrorRelease));
+    }, `${mirrorRelease} to be removed`, moveTimeoutMs);
+    await waitUntil(() => /removed Node\.js 22\.99\.0, which the runner left more than 7 days ago/.test(runnerOutput), 'the log to say the old release was removed', linkTimeoutMs);
+    assert.deepEqual(fs.readdirSync(paths.ownNodeDir).filter((name) => name.startsWith('v')), [newerRelease]);
   });
 
   it('while a command runs over the link, an even newer release is put in place and the launcher rewritten, but the link does NOT leave — it does when the command ends', async () => {
@@ -208,7 +222,7 @@ describe('a runner on a system Node moves to its own, and keeps up with its line
       assert.equal(checkLauncherIsFor(paths, ownNodeOf(newestRelease)), true, 'the launcher already names it');
       const pidBefore = readStatus()?.pid;
       await new Promise((resolve) => { setTimeout(resolve, 3000); });
-      assert.doesNotMatch(runnerOutput, /no command runs over the link: leaving/, 'a command is running: the link stays');
+      assert.doesNotMatch(runnerOutput, /nothing is under way .*: leaving/, 'a command is running: the link stays');
       assert.equal(readStatus()?.pid, pidBefore);
       assert.equal(readLauncherNodePath(paths), ownNodeOf(newestRelease));
     } finally {
@@ -216,6 +230,35 @@ describe('a runner on a system Node moves to its own, and keeps up with its line
     }
     await heldEnded;
     await waitForLinkOn(ownNodeOf(newestRelease));
-    assert.match(runnerOutput, /no command runs over the link: leaving for the launcher's new start/);
+    assert.match(runnerOutput, /leaving for the launcher's new start/);
+  });
+
+  it('while a Pueue task runs, the next release is put in place and the launcher rewritten, but the link does NOT leave — it does when the task is over', async () => {
+    await stopMovingRunner();
+    const without = writeMirrorWith('p-without', [{ version: newestRelease, lts: 'Jod' }]);
+    const withFinal = writeMirrorWith('p-with', [{ version: finalRelease, lts: 'Jod' }, { version: newestRelease, lts: 'Jod' }]);
+    const mirrorLink = path.join(layout.root, 'pueue-mirror-link');
+    fs.symlinkSync(without, mirrorLink);
+    await startMovingRunner(mirrorLink);
+    await waitForLinkOn(ownNodeOf(newestRelease));
+    const pueue = path.join(paths.binDir, 'pueue');
+    const readPueueTasks = (): number | null => countActivePueueTasks(spawnSync(pueue, ['--config', paths.pueueConfig, 'status', '--json'], { encoding: 'utf8' }).stdout, pueueUnfinishedStatuses);
+    await waitUntil(() => readPueueTasks() !== null, 'the runner\'s Pueue to answer', linkTimeoutMs);
+    // No command runs over the link — only a job the queue holds, which keeps the PATH it was queued with.
+    assert.equal(spawnSync(pueue, ['--config', paths.pueueConfig, 'add', '--', 'sleep', String(pueueTaskSeconds)], { encoding: 'utf8' }).status, 0);
+    const switched = path.join(layout.root, 'pueue-mirror-link.next');
+    fs.symlinkSync(withFinal, switched);
+    fs.renameSync(switched, mirrorLink);
+    await waitUntil(() => /a newer release of this runner's own Node\.js is in place: Node\.js 22\.102\.0/.test(runnerOutput), 'the newer release to be put in place', moveTimeoutMs);
+    assert.equal(checkLauncherIsFor(paths, ownNodeOf(finalRelease)), true, 'the launcher already names it');
+    const pidBefore = readStatus()?.pid;
+    await new Promise((resolve) => { setTimeout(resolve, 3000); });
+    // The task must still be there at the moment we look, or the check proves nothing.
+    assert.equal(readPueueTasks(), 1, 'the Pueue task is still running or queued');
+    assert.doesNotMatch(runnerOutput, /nothing is under way \(no command over the link, no update, no Pueue task\): leaving/, 'a Pueue task is under way: the link stays');
+    assert.equal(readStatus()?.pid, pidBefore);
+    await waitForLinkOn(ownNodeOf(finalRelease));
+    assert.match(runnerOutput, /nothing is under way \(no command over the link, no update, no Pueue task\): leaving for the launcher's new start/);
+    assert.equal(readPueueTasks(), 0, 'the task was over by then');
   });
 });

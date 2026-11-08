@@ -12,6 +12,7 @@ import * as path from 'path';
  *   bin/          the `charness-runner` launcher, pueue, pueued, rsync when built, the Corepack shims of `yarn` / `pnpm` and the `corepack` wrapper (`packageManagerShims.ts`)
  *   node/         the runner's OWN Node.js, when it is not the shared one under `/usr/local/lib/charness-runner/node`: `v<version>/bin/node` (`managedNode.ts`, `remoteRun/ensureNode.sh`)
  *   node-failure.json  why the last attempt to give the runner a Node of its own (or a newer one) failed, when, and under which app copy; the next attempt waits for a day or the next update (`nodeUpkeep.ts`)
+ *   node-current.json  when each Node version folder was last the runner's Node (or first seen): a version is removed a week after it stopped being current (`nodeUpkeep.ts`)
  *   npm/          the jobs' global npm prefix (`npm i -g`; its `bin/` is on a job's PATH), so no job writes into the Node's own folder
  *   corepack/     the jobs' `COREPACK_HOME`: the package managers Corepack downloads
  *   env           the operator's KEY=VALUE lines, added to every job's environment
@@ -56,6 +57,8 @@ export interface RunnerHomePaths {
   ownNodeDir: string;
   /** Why the last attempt to give the runner a Node of its own failed (`nodeUpkeep.ts`); absent = nothing is wrong. */
   nodeFailure: string;
+  /** When each Node version folder was last the runner's Node (`nodeUpkeep.ts`): what its removal waits a week for. */
+  nodeCurrent: string;
   /** A job's global npm prefix (`NPM_CONFIG_PREFIX`): `npm i -g` writes here, never into the Node's folder. */
   npmPrefix: string;
   /** A job's `COREPACK_HOME`: where Corepack keeps the package managers it downloads. */
@@ -91,6 +94,7 @@ export function getRunnerHomePaths(homeDir: string = os.homedir()): RunnerHomePa
     binDir: path.join(root, 'bin'),
     ownNodeDir: path.join(root, ownNodeDirName),
     nodeFailure: path.join(root, 'node-failure.json'),
+    nodeCurrent: path.join(root, 'node-current.json'),
     npmPrefix: path.join(root, 'npm'),
     corepackHome: path.join(root, 'corepack'),
     launcher: path.join(root, 'bin', 'charness-runner'),

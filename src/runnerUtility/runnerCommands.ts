@@ -34,7 +34,7 @@ import { readExecEnv } from './execEnv';
 import { createRunnerServers } from './runnerServers';
 import { createStepRunner, stepLabels, type RunStep } from './progress';
 import { createNodeMoveDeps } from './managedNode';
-import { createIdleRestart, ensureLauncherForRunningNode, listRunningExecutables, restartHint, runNodeUpkeep } from './nodeUpkeep';
+import { checkIsLinkIdle, createIdleRestart, createPueueBusyCheck, ensureLauncherForRunningNode, restartHint, runNodeUpkeep, startNodeUpkeepSchedule } from './nodeUpkeep';
 import { readNodeUpkeepIntervalMs } from './nodeUpkeepTiming';
 import { createShimDeps, ensurePackageManagerShims, formatShimLine, type ShimOutcome } from './packageManagerShims';
 import { createToolDeps, ensurePueue, ensureRsync, findPueue, findRsync, type ToolDeps, type ToolInstallOutcome } from './toolInstall';
@@ -58,6 +58,8 @@ function getStepRunner(io: CommandIo): RunStep {
 
 const envFileTemplate = '# KEY=VALUE lines, added to the environment of every job that runs on this machine (read again for each job).\n';
 const shutdownGraceMs = 3000;
+/** While a restart for a new Node waits for Pueue (a task ends without an event for the link), the link looks again this often. */
+const idleRestartPollMs = 15 * 1000;
 /** How long `run` waits for the service-managed Pueue to answer. */
 const pueueServiceWaitMs = 20 * 1000;
 /** How often the link looks at Xcode: a new version is checked again (`iosCheck.ts`). */
@@ -420,11 +422,12 @@ export async function runGuiAgentCommand(io: CommandIo, homeDir: string = os.hom
 }
 
 /**
- * Look after the runner's Node.js once the link is up and then every `nodeUpkeepIntervalMs` (`nodeUpkeepTiming.ts`): a move off a system Node, a newer
- * release of the own one, the removal of what no process uses. In the background — the runner is on the hub while a download runs — and when it
- * has put a Node in place that this link does not run on, the link leaves for the launcher's new start only when no command runs over it.
+ * Look after the runner's Node.js once the link is up and then when the look before it says (`nodeUpkeep.ts`; a day later, or a day after a failure): a move
+ * off a system Node, a newer release of the own one, the removal of old versions. In the background — the runner is on the hub while a download runs — and when
+ * it has put a Node in place that this link does not run on, the link leaves for the launcher's new start only when nothing is under way (`checkIsLinkIdle`).
  */
 function startNodeUpkeep(paths: RunnerHomePaths, appDir: string, io: CommandIo, restart: { request: () => void }): void {
+  const intervalMs = readNodeUpkeepIntervalMs(process.env);
   const deps = {
     paths,
     move: createNodeMoveDeps(appDir, runCommand),
@@ -432,23 +435,20 @@ function startNodeUpkeep(paths: RunnerHomePaths, appDir: string, io: CommandIo, 
     say: (line: string): void => { io.stdout(`${line}\n`); },
     now: Date.now,
     getAppId: () => readCurrentAppName(paths),
-    listRunningExecutables: () => listRunningExecutables(),
+    checkIsPueueBusy: createPueueBusyCheck(paths),
+    intervalMs,
     environment: process.env,
   };
-  let isRunning = false;
-  const look = async (): Promise<void> => {
-    if (isRunning) return;
-    isRunning = true;
+  startNodeUpkeepSchedule(async () => {
     try {
-      if ((await runNodeUpkeep(deps)) === 'restart') restart.request();
+      const result = await runNodeUpkeep(deps);
+      if (result.step === 'restart') restart.request();
+      return result.nextLookInMs;
     } catch (error) {
       deps.log(`looking after this runner's Node.js failed (${error instanceof Error ? error.message : 'unknown error'})`);
-    } finally {
-      isRunning = false;
+      return intervalMs;
     }
-  };
-  void look();
-  setInterval(() => { void look(); }, readNodeUpkeepIntervalMs(process.env)).unref();
+  });
 }
 
 /** @description `charness-runner run`: ensure the tools and Pueue, then hold the link until stopped. Returns the exit code (75 = restart onto an update). */
@@ -486,11 +486,14 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   const controller = new AbortController();
   /** Set when the link leaves because the runner's Node changed (see {@link startNodeUpkeep}); the launcher then starts itself again. */
   const leave: { code: number | null } = { code: null };
+  const checkIsPueueBusy = createPueueBusyCheck(paths);
+  // The link leaves only when nothing is under way that this would cut: a command over it, an update of the program being installed (the loop owns that), a Pueue task.
   const nodeRestart = createIdleRestart({
-    getActiveCount: () => servers.getActiveExecCount(),
+    checkIsIdle: () => checkIsLinkIdle({ getActiveExecCount: () => servers.getActiveExecCount(), isUpdating: () => loopRef.current?.isUpdating() ?? false, checkIsPueueBusy }),
+    pollMs: idleRestartPollMs,
     leave: () => {
       leave.code = nodeMovedExitCode;
-      io.stdout(`charness-runner: no command runs over the link: leaving for the launcher's new start (${restartHint})\n`);
+      io.stdout(`charness-runner: nothing is under way (no command over the link, no update, no Pueue task): leaving for the launcher's new start (${restartHint})\n`);
       controller.abort();
     },
   });
@@ -501,7 +504,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     cwd: paths.workDir,
     onActiveCountChange: () => {
       loopRef.current?.notifyActiveCountChange();
-      nodeRestart.notifyActiveCountChange();
+      nodeRestart.notifyChange();
     },
   });
   loopRef.current = createLinkLoop({
@@ -513,6 +516,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     lid: checkCanReadLid(process.platform, process.env) ? createLidWatcher({ readRegistry: createIoregReader(), log: (line) => io.stderr(`charness-runner: ${line}\n`) }) : undefined,
     log: (line) => io.stderr(`charness-runner: ${line}\n`),
     stopJobs: async () => { await stopAllPueueJobs(paths); },
+    onUpdateSettled: () => { nodeRestart.notifyChange(); },
   });
   const stop = (): void => {
     controller.abort();
@@ -527,7 +531,9 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   startNodeUpkeep(paths, appDir, io, nodeRestart);
   try {
     const code = await loopRef.current.run(controller.signal);
-    return leave.code ?? code;
+    if (leave.code !== null) return leave.code;
+    // An update of the program ended the run (75) while a new Node waits for the launcher's next start: 76 takes the launcher through its rewritten file, 75 would restart it on the old Node.
+    return code === restartExitCode && nodeRestart.isRequested() ? nodeMovedExitCode : code;
   } finally {
     keepAwake.stop();
   }

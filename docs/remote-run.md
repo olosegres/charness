@@ -166,13 +166,15 @@ for `~/.charness-runner/bin`, where the shims below live.
 
 *A runner paired on a system or Homebrew Node moves itself.* Once its link is up (the runner is on the hub while it downloads), the account fetches the
 newest LTS build into `~/.charness-runner/node` (a self-update runs as the account, not root, so that copy is the account's own — root only ever runs the
-one the admin line installed), rewrites its launcher, and the link leaves for the launcher's new start **only when no command runs over it**: a service
+one the admin line installed), rewrites its launcher, and the link leaves for the launcher's new start **only when nothing is under way** — no command over
+the link, no update of the program being installed, no Pueue task running or queued: a service
 manager starts the launcher again by itself; **started from a terminal, start `charness-runner run` again**. The log names the Node it leaves, with its
 path and version. If the move cannot be made — no network, a full disk, no `curl` or `wget`, a download that does not run here — the runner stays on the Node
-it has, says «could not get a Node.js of its own or a newer one: …», writes the failure down (`~/.charness-runner/node-failure.json`), and tries again after
-**24 hours or the next update of the program**, not at every start. A Node an own install is on moves up to the newest release **of its line** (the same major;
-a new major would change what every job runs) when its link starts and then daily; the folders of versions that no process uses any more, and what a killed
-install left, are removed. The root-owned Node an admin line installed is refreshed only by the next admin line.
+it has, says «could not get a Node.js of its own or a newer one: …», writes the failure down (`~/.charness-runner/node-failure.json`), and tries again
+**24 hours after the failure or after the next update of the program**, not at every start. A Node an own install is on moves up to the newest release **of its line** (the same major;
+a new major would change what every job runs) when its link starts and then daily; the folder of a version it has left is removed **a week after it stopped being the runner's Node** (the
+moment is recorded in `~/.charness-runner/node-current.json`) and only while Pueue has no running or queued task — a job keeps the `PATH` it
+was queued with, and a process started through it cannot be told from outside — and so is what a killed install left. The root-owned Node an admin line installed is refreshed only by the next admin line.
 
 *What changes for the jobs of a runner that moves.* They get that Node's `node` and `npm` — a Homebrew Node 25 becomes Node 24, the newest LTS line that ships
 Corepack (25 and later do not) —, they no longer find a command that was installed globally into the OLD Node (an nvm Node's `eas` or `firebase`, say: install it
