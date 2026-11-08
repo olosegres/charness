@@ -33,10 +33,10 @@ import assert from 'node:assert/strict';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { testNodeModulesEnvName } from '../runnerUtility/appInstall';
+import { npmInstallArgs } from '../runnerUtility/appInstall';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { getServiceNames } from '../runnerUtility/serviceUnits';
-import { installAdminStandIns, readStandInCalls, readStandInIsolation, type AdminStandIns } from './runnerAdminLineE2e/adminLineStandIns';
+import { installAdminStandIns, readNpmStandInCalls, readStandInCalls, readStandInIsolation, renderNpmStandIn, type AdminStandIns } from './runnerAdminLineE2e/adminLineStandIns';
 import { mirrorRelease, writeNodeMirror } from './nodeMirrorKit';
 import {
   createExtraMachine,
@@ -66,13 +66,17 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
   let bossHome = '';
   /** Where the line's Node install puts the runner's Node in this flow (the real one is `/usr/local/lib/charness-runner/node`, which a flow cannot write). */
   let sharedNodeBase = '';
+  /** Where the stand-in npm of the installed Node records its runs. */
+  let npmRecordPath = '';
 
   before(async () => {
     assert.deepEqual(missingTools, [], 'CI installs everything this flow needs');
     layout = await createRunnerLinkLayout();
     sharedNodeBase = path.join(layout.root, 'shared-node');
     // The mirror of nodejs.org holds a copy of the Node running this flow: the runner is paired and its service installed on a Node that was DOWNLOADED, not found.
-    const distDir = writeNodeMirror(path.join(layout.root, 'node-dist'), path.join(layout.root, 'node-stage'), { nodeFrom: process.execPath });
+    // …and a stand-in `npm` beside its `node` (no registry here), a `#!/usr/bin/env node` script like the real one: the install of the runner program starts it for real.
+    npmRecordPath = path.join(layout.root, 'npm-calls.jsonl');
+    const distDir = writeNodeMirror(path.join(layout.root, 'node-dist'), path.join(layout.root, 'node-stage'), { nodeFrom: process.execPath, npmScript: renderNpmStandIn(path.join(repoRoot, 'node_modules'), npmRecordPath) });
     placeRootNodeInstallerWrapper(layout, { base: sharedNodeBase, distDir });
     runnerHome = createExtraMachine(layout, 'acct-runner');
     failingHome = createExtraMachine(layout, 'acct-runner2');
@@ -100,7 +104,6 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
         PATH: [standIns.binDir, ...(process.env.PATH ?? '').split(path.delimiter).filter((folder) => folder !== path.dirname(process.execPath))].join(path.delimiter),
         TMPDIR: path.join(layout.root, 'tmp'),
         LANG: 'C.UTF-8',
-        [testNodeModulesEnvName]: path.join(repoRoot, 'node_modules'),
       },
     });
   }
@@ -205,6 +208,14 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.match(result.stderr, new RegExp(`^charness-runner: installing Node\\.js ${mirrorRelease.replace(/\./g, '\\.')} for the runner into \\S+/shared-node/${mirrorRelease.replace(/\./g, '\\.')} \\(the official build from nodejs\\.org, checksum checked\\)$`, 'm'));
     assert.ok(calls[pairingRun].startsWith(`${asRunner} ${managedNode} `), `the pairing ran under ${managedNode}: ${calls[pairingRun]}`);
     assert.ok(fs.readFileSync(paths.launcher, 'utf8').includes(`NODE='${managedNode}'`) || fs.readFileSync(`${paths.launcher}.real`, 'utf8').includes(`NODE='${managedNode}'`), 'the launcher starts the runner\'s own Node');
+    // The install of the runner program started npm for real — the one beside that Node, a `#!/usr/bin/env node` script, on a machine whose PATH (the line's, and the one
+    // a real `sudo -u` hands the account) holds no Node. It ran under the runner's own Node, which the install put first on the PATH npm got.
+    const npmCalls = readNpmStandInCalls(npmRecordPath);
+    assert.equal(npmCalls.length, 1, 'npm ran once, for the one pairing');
+    assert.deepEqual(npmCalls[0].args, [...npmInstallArgs], 'as `npm ci`, the lock\'s exact versions');
+    assert.equal(npmCalls[0].node, managedNode, 'under the Node the line installed — `env` found that one');
+    assert.ok(npmCalls[0].path.startsWith(`${path.dirname(managedNode)}${path.delimiter}`), `the runner's Node is the first folder of npm's PATH: ${npmCalls[0].path}`);
+    assert.equal(fs.realpathSync(path.dirname(npmCalls[0].cwd)), fs.realpathSync(paths.root), 'in a new app folder of the account\'s state folder');
     const lingering = indexOf('loginctl enable-linger runner');
     const managerAwaited = indexOf(`${asRunner} env XDG_RUNTIME_DIR=/run/user/${standardAccountUid} systemctl --user is-system-running`);
     const installRun = indexOf(`${asRunner} env XDG_RUNTIME_DIR=/run/user/${standardAccountUid} ${paths.launcher} service install`);

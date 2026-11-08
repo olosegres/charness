@@ -14,6 +14,7 @@ import path from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { createAppId, installAppFromDirectory, installDependencies, nodeMovedExitCode, npmInstallArgs, removeOldApps, restartExitCode, switchCurrentApp, testNodeModulesEnvName } from '../runnerUtility/appInstall';
 import { ensureLauncher, readLauncherNodePath, renderLauncher } from '../runnerUtility/launcher';
+import { getEnvironmentWithNode } from '../runnerUtility/nodeOnPath';
 import { readRunnerConfig, readRunnerStatus, RunnerConfigError, writeRunnerConfig, writeRunnerStatus, type RunnerConfig } from '../runnerUtility/runnerConfig';
 import { getAppDirPath, getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { ensureRunnerKeys, readRunnerKeys } from '../runnerUtility/runnerKeys';
@@ -80,9 +81,30 @@ describe('installed copies', () => {
     const record = path.join(home, 'npm.args');
     const fakeNpm = path.join(home, 'npm');
     fs.writeFileSync(fakeNpm, `#!/bin/sh\necho "$@" > "${record}"\npwd >> "${record}"\nmkdir node_modules\n`, { mode: 0o755 });
-    await installDependencies(appDir, {}, fakeNpm);
+    await installDependencies(appDir, { PATH: process.env.PATH }, fakeNpm);
     assert.deepEqual(fs.readFileSync(record, 'utf8').split('\n').filter((line) => line !== ''), ['ci --omit=dev --ignore-scripts --no-audit --no-fund --no-progress', fs.realpathSync(appDir)], 'in the app folder, with these arguments');
     assert.ok(fs.existsSync(path.join(appDir, 'node_modules')), 'and the fake npm did its work there');
+  });
+
+  it('finds the runner\'s own `node` for npm: npm is a `#!/usr/bin/env node` script, and a PATH without Node (what `sudo` hands the account, what a service starts with) must not stop the install', async () => {
+    const appDir = path.join(home, 'app');
+    fs.mkdirSync(appDir);
+    const pathWithoutNode = path.join(home, 'no-node-here');
+    fs.mkdirSync(pathWithoutNode);
+    const record = path.join(home, 'npm.path');
+    const npmOfNodeScript = path.join(home, 'npm');
+    fs.writeFileSync(npmOfNodeScript, `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(record)}, process.env.PATH);\nrequire('fs').mkdirSync('node_modules');\n`, { mode: 0o755 });
+    await installDependencies(appDir, { PATH: pathWithoutNode }, npmOfNodeScript);
+    assert.ok(fs.existsSync(path.join(appDir, 'node_modules')), 'npm ran: `env` found a node');
+    assert.equal(fs.readFileSync(record, 'utf8'), `${path.dirname(process.execPath)}${path.delimiter}${pathWithoutNode}`, 'the Node that runs the install is the first on the PATH npm gets');
+  });
+
+  it('puts the folder of the Node first on a PATH and changes nothing else: the other folders keep their order, the other variables stay, the given environment is not touched', () => {
+    const given: NodeJS.ProcessEnv = { PATH: '/usr/bin:/bin', HOME: '/home/user' };
+    assert.deepEqual(getEnvironmentWithNode(given, '/opt/node/bin'), { PATH: '/opt/node/bin:/usr/bin:/bin', HOME: '/home/user' });
+    assert.deepEqual(given, { PATH: '/usr/bin:/bin', HOME: '/home/user' });
+    assert.deepEqual(getEnvironmentWithNode({}, '/opt/node/bin'), { PATH: '/opt/node/bin' }, 'no PATH at all: the Node\'s folder alone, no empty entry (it would mean the current folder)');
+    assert.deepEqual(getEnvironmentWithNode({ PATH: '' }, '/opt/node/bin'), { PATH: '/opt/node/bin' });
   });
 
   it('a failing install says so with npm\'s last words — a lock that does not match package.json is refused by `npm ci`, and the app is not installed', async () => {
@@ -90,9 +112,9 @@ describe('installed copies', () => {
     fs.mkdirSync(appDir);
     const fakeNpm = path.join(home, 'npm');
     fs.writeFileSync(fakeNpm, '#!/bin/sh\necho "npm error npm ci can only install packages when your package.json and package-lock.json are in sync" >&2\nexit 1\n', { mode: 0o755 });
-    await assert.rejects(installDependencies(appDir, {}, fakeNpm), /^Error: npm ci failed: npm error npm ci can only install packages when your package\.json and package-lock\.json are in sync$/);
+    await assert.rejects(installDependencies(appDir, { PATH: process.env.PATH }, fakeNpm), /^Error: npm ci failed: npm error npm ci can only install packages when your package\.json and package-lock\.json are in sync$/);
     const missingNpm = path.join(home, 'no-such-npm');
-    await assert.rejects(installDependencies(appDir, {}, missingNpm), /npm ci failed \(spawn .*no-such-npm ENOENT\)/);
+    await assert.rejects(installDependencies(appDir, { PATH: process.env.PATH }, missingNpm), /npm ci failed \(spawn .*no-such-npm ENOENT\)/);
   });
 
   it('copies the package into a new app folder and installs into it; every install gets a folder of its own', async () => {

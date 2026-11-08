@@ -54,6 +54,8 @@ export interface MirrorOptions {
   nodeScript?: string;
   /** A file to copy into the archive as `bin/node` instead (a real Node binary, for a flow that runs on it). */
   nodeFrom?: string;
+  /** The text of the archive's `bin/npm` (a stand-in; a real Node build holds one beside its `node`). Absent: the archive has none. */
+  npmScript?: string;
   /** Lie in `SHASUMS256.txt` about the archive's hash. */
   isChecksumWrong?: boolean;
   /** Leave the machine's build out of the list. */
@@ -73,6 +75,7 @@ export function writeNodeMirror(distDir: string, stageDir: string, options: Mirr
   if (options.nodeFrom === undefined) fs.writeFileSync(path.join(stage, 'bin', 'node'), options.nodeScript ?? nodeThatRuns, { mode: 0o755 });
   else fs.copyFileSync(options.nodeFrom, path.join(stage, 'bin', 'node'));
   fs.chmodSync(path.join(stage, 'bin', 'node'), 0o755);
+  if (options.npmScript !== undefined) fs.writeFileSync(path.join(stage, 'bin', 'npm'), options.npmScript, { mode: 0o755 });
   fs.writeFileSync(path.join(stage, 'lib', 'other.txt'), 'x');
   fs.chmodSync(path.join(stage, 'lib', 'other.txt'), options.isWithOpenFile === true ? 0o666 : 0o644);
   fs.chmodSync(path.join(stage, 'lib'), options.isWithOpenFile === true ? 0o777 : 0o755);

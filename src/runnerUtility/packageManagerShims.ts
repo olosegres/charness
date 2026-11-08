@@ -4,6 +4,7 @@ import { writeTextFileAtomically } from '../configDirFile';
 import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { shellSingleQuote } from '../utils/tmuxExec';
 import { getJobPathDirectories } from './execEnv';
+import { getEnvironmentWithNode } from './nodeOnPath';
 import type { RunnerHomePaths } from './runnerHome';
 
 /**
@@ -151,8 +152,7 @@ async function enableCorepackShims(paths: RunnerHomePaths, deps: ShimDeps, manag
   if (!deps.checkIsExecutable(corepackPath)) return reportMissing(`the Node that runs the link (${deps.nodeDir}) has no Corepack — install ${managers.join(' and ')} for it (\`npm install -g ${managers.join(' ')}\`)`);
   fs.mkdirSync(paths.binDir, { recursive: true, mode: 0o700 });
   // Corepack's own launcher finds `node` through PATH.
-  const environment = { ...deps.environment, PATH: [deps.nodeDir, deps.environment.PATH ?? ''].filter((part) => part !== '').join(path.delimiter) };
-  const result = await deps.runner(corepackPath, ['enable', '--install-directory', paths.binDir, ...managers], { env: environment, timeoutMs: corepackDeadlineMs });
+  const result = await deps.runner(corepackPath, ['enable', '--install-directory', paths.binDir, ...managers], { env: getEnvironmentWithNode(deps.environment, deps.nodeDir), timeoutMs: corepackDeadlineMs });
   if (!result.ok) {
     const lastLine = result.stderr.trim().split('\n').pop() ?? '';
     return reportMissing(`\`corepack enable\` failed: ${result.isTimedOut ? 'no answer in time' : lastLine === '' ? `exit ${result.exitCode ?? 'none'}` : lastLine}`);

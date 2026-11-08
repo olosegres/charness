@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**Pairing a runner with the `sudo` line no longer stops at «npm ci failed: env: 'node': No such file or directory» on a machine that has no Node.js of its own.**
+Before, the line downloaded the package and found the runner's Node.js, then failed at «installing the runner program (npm)»: npm is a `#!/usr/bin/env node` script, and the PATH of the account the line works as (what `sudo -u` hands it) holds no `node` — the runner's Node lives in its own folder, on nobody's PATH. The same would have stopped the plain line on a machine with no Node, and the update of a running always-on runner (a systemd user service starts with the manager's default PATH).
+Now the install of the runner program starts npm with the folder of the Node that runs the utility first on its PATH, whatever PATH it was started in; the Corepack step of the link already did the same and shares the one helper.
+
 **An agent starting a worker now follows your `/limits` list: the accounts in it are the ones it uses — an API-credit account first, the subscriptions after it — and the ones not in it are never offered.**
 Before, `claude_profiles` (and `charness claude-profiles`) never pointed a new worker at an account billed to API credits, so the bonus credit sat unused while the subscriptions burned, and it ignored which accounts you had put into `/limits_autoswitch` (only an account whose every entry was switched off was skipped).
 Now:

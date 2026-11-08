@@ -13,11 +13,14 @@
  *   systemctl records the call; `--user is-system-running` says «running»; `daemon-reload` fails while the file `fail-reload` exists
  *
  * Every call of a stand-in is appended to `calls.log` as one line (the long pairing script is cut short), in order.
+ *
+ * Not a program of the PATH but of the runner's Node: {@link renderNpmStandIn}, the `npm` that sits beside the `node` the line installs.
  */
 
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { z } from 'zod';
 
 export interface StandInAccount {
   name: string;
@@ -134,6 +137,45 @@ export function readStandInCalls(standIns: AdminStandIns): string[] {
 export function readStandInIsolation(standIns: AdminStandIns): string[] {
   try {
     return fs.readFileSync(standIns.isolationLogPath, 'utf8').split('\n').filter((line) => line !== '');
+  } catch {
+    return [];
+  }
+}
+
+const npmStandInCallSchema = z.strictObject({
+  args: z.array(z.string()),
+  cwd: z.string(),
+  /** The PATH npm was started with. */
+  path: z.string(),
+  /** The `node` that ran the stand-in: the one `#!/usr/bin/env node` found. */
+  node: z.string(),
+});
+
+/** @name NpmStandInCall @description One run of the stand-in npm, as it recorded it. */
+export type NpmStandInCall = z.infer<typeof npmStandInCallSchema>;
+
+/**
+ * @description The text of a stand-in `npm` for the Node the line installs (the mirror's `bin/npm`; there is no registry in a flow). Like the real one it is a
+ * `#!/usr/bin/env node` script, so it only starts where `env` finds a `node` on the PATH it is given — the point of using it: the utility's own install runs it
+ * for real, instead of the shortcut that links `node_modules` without starting npm. It serves `npm ci` by linking `modulesDir` as the app's `node_modules` and
+ * records every run (its arguments, folder, PATH and Node) as a line of JSON in `recordPath`.
+ */
+export function renderNpmStandIn(modulesDir: string, recordPath: string): string {
+  return [
+    '#!/usr/bin/env node',
+    'const fs = require("fs");',
+    'const path = require("path");',
+    `fs.appendFileSync(${JSON.stringify(recordPath)}, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), path: process.env.PATH, node: process.execPath }) + "\\n");`,
+    'if (process.argv[2] !== "ci") { process.stderr.write("stand-in npm: only `ci` is served\\n"); process.exit(2); }',
+    `fs.symlinkSync(${JSON.stringify(modulesDir)}, path.join(process.cwd(), "node_modules"), "dir");`,
+    '',
+  ].join('\n');
+}
+
+/** @description The runs of the stand-in npm recorded so far, in order. */
+export function readNpmStandInCalls(recordPath: string): NpmStandInCall[] {
+  try {
+    return fs.readFileSync(recordPath, 'utf8').split('\n').filter((line) => line !== '').map((line) => npmStandInCallSchema.parse(JSON.parse(line)));
   } catch {
     return [];
   }

@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { getEnvironmentWithNode } from './nodeOnPath';
 import { getAppDirPath, type RunnerHomePaths } from './runnerHome';
 
 /**
@@ -53,6 +54,9 @@ export const npmInstallArgs: readonly string[] = ['ci', '--omit=dev', '--ignore-
 /**
  * Install the production dependencies of the package in `appDir` as its lock records them ({@link npmInstallArgs}). Asynchronous, so the step line can
  * show that something is happening while npm works (it takes a minute). Rejects with npm's last words. `npmCommand`: the `npm` to run (a test's own).
+ *
+ * npm is a `#!/usr/bin/env node` script, so it runs with the folder of THIS Node first on its PATH (`nodeOnPath.ts`): under `sudo -u <account>`, in a systemd
+ * user service (the update of a running link) and on a machine without any Node there is no other `node` for `env` to find.
  */
 export function installDependencies(appDir: string, env: NodeJS.ProcessEnv = process.env, npmCommand: string = findNpm()): Promise<void> {
   const linked = env[testNodeModulesEnvName];
@@ -61,7 +65,7 @@ export function installDependencies(appDir: string, env: NodeJS.ProcessEnv = pro
     return Promise.resolve();
   }
   return new Promise<void>((resolve, reject) => {
-    const child = spawn(npmCommand, [...npmInstallArgs], { cwd: appDir, env, stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn(npmCommand, [...npmInstallArgs], { cwd: appDir, env: getEnvironmentWithNode(env, path.dirname(process.execPath)), stdio: ['ignore', 'ignore', 'pipe'] });
     let keptStderr = '';
     let isTimedOut = false;
     child.stderr.setEncoding('utf8');
