@@ -569,8 +569,8 @@ submitted. A copy's «last use» is its last activity: a submit, an `exec` (star
 files of a finished job go with its copy. If the disk is still short after that, the submit fails at once (exit 125) instead of a build failing half-way with «No space left on
 device»: `runner mac: only 8 GB free on the work disk, the runner needs 60 GB; biggest project copies: app-1a2b3c 41 GB, …; free space with `charness remote-run clean <slug>` …`.
 `runners` (and the bot's `/runners`) shows the free space, a **LOW** mark under the target, and how many project copies the runner keeps and what they take (sizes are measured in the
-background — by a view of the runners, and by a submit only when the disk is short, since a refusal names the biggest copies — and a copy again only after it was used and its job has ended, so a figure can lag: `~` / «so far»
-while some are not measured yet).
+background — by a view of the runners, and by a submit only when the disk is short, since a refusal names the biggest copies; the probe a run makes first starts none — and a copy again only after it was used and its job has ended,
+so a figure can lag: `~` / «so far» while some are not measured yet; a copy in use that has no figure at all is measured once anyway, so that a refusal can name it).
 
 If a submit has to remove copies first it can take minutes: when the runner's last probe found its disk short, the submit says so before it starts, and a preparation that runs past 15 minutes
 says to submit again (the runner carries on with the removal as far as it can, and the next submit continues where it stopped). Prunes do not pile up: a submit whose disk is short waits for the one

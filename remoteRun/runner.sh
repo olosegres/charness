@@ -37,7 +37,7 @@
 #   clean        remove ONE project copy on request (`clean <work> <slug>`): refused while a job of it runs or waits, an exec runs in it, a job is being submitted, or a job ended lately whose results nobody fetched; says what it freed
 #   simctl-cleanup  `xcrun simctl delete unavailable` on a Mac, bounded; started detached by the probe of a view of the runners at most once a day, never called by hand
 #   fetched      mark a finished job's results as fetched (`fetched <work> - <job>`): `wait`, `fetch` and a foreground run say so once they have the files, and `clean` then does not keep the copy for them
-#   measure-copies  write down how big each project copy is (p/<slug>/size-kb); `probe` and `prepare` start it detached, it is never called by hand
+#   measure-copies  write down how big each project copy is (p/<slug>/size-kb); the probe of a view of the runners starts it detached, and `prepare` when the disk is short; it is never called by hand
 #   sync-tree    the apply step alone (tests)
 
 # The script's own tools (sort, sed, grep) run in the C locale: byte-wise and the same everywhere. The user's commands do NOT — see job_locale.
@@ -521,7 +521,8 @@ probe_disk_target() {
 }
 
 # copies_count= / copies_size_mb= / copies_unmeasured= : the project copies, their size from the figures `measure-copies` wrote down (an out-of-date one still counts; the number of copies
-# with no figure, or used since their figure was written, is copies_unmeasured). Asking never waits for a `du`: a missing figure starts the measuring detached.
+# with no figure, or used since their figure was written, is copies_unmeasured). Asking never waits for a `du`: a missing figure starts the measuring detached — for a VIEW of the runners only (`probe <work> prune`): the probe a
+# run or an `exec` makes first comes right before its `prepare`, and a walk over the copy about to be built would compete with the build.
 probe_copies() {
   local count=0 total_kb=0 unmeasured=0 copy_dir size_file size_kb
   for copy_dir in "$work"/p/*/; do
@@ -540,7 +541,7 @@ probe_copies() {
   echo "copies_count=$count"
   echo "copies_size_mb=$(kb_to_mb "$total_kb")"
   echo "copies_unmeasured=$unmeasured"
-  [ "$unmeasured" -gt 0 ] && start_detached_run "$work" measure-copies
+  [ "$unmeasured" -gt 0 ] && [ "$probe_may_prune" = prune ] && start_detached_run "$work" measure-copies
   return 0
 }
 
@@ -1149,15 +1150,15 @@ set_freed_kb_since() {
   fi
 }
 
-# Remove copy $2 for reason $3 (idle | space | clean) and say so on stdout, one line the submit shows: `removed=<slug> freed_kb=<n> why=<reason>`; a copy that would not go: `stuck=<slug>`; one that
-# an earlier prune took, or that turned out in use, is not said anything of. freed_kb is the change of the disk's free space across the removal (empty when df said nothing).
-# Sets last_freed_kb. Returns remove_project_copy's code.
 # Print the report of a removal of project copy $2 (under work dir $1) that freed space since $3 KiB were free there: `removed=<slug> freed_kb=<n> why=<reason $4>`.
 report_removed_since() {
   set_freed_kb_since "$1" "$3"
   printf 'removed=%s freed_kb=%s why=%s\n' "$2" "$last_freed_kb" "$4"
 }
 
+# Remove copy $2 for reason $3 (idle | space | clean) and say so on stdout, one line the submit shows: `removed=<slug> freed_kb=<n> why=<reason>`; a copy that would not go: `stuck=<slug>`; one that
+# an earlier prune took, or that turned out in use, is not said anything of. freed_kb is the change of the disk's free space across the removal (empty when df said nothing).
+# Sets last_freed_kb. Returns remove_project_copy's code.
 remove_and_report_copy() {
   local work_dir=$1 copy_slug=$2 reason=$3
   local before_kb removal_code
@@ -1301,8 +1302,11 @@ cmd_measure_copies() {
   for copy_dir in "$work_dir"/p/*/; do
     [ -d "$copy_dir" ] || continue
     copy_slug=$(basename "$copy_dir")
-    # A copy in use is measured after its job ends: its figure would be wrong as soon as the build writes, and the walk would compete with the build for the disk.
-    check_copy_is_busy "$work_dir" "$copy_slug" && continue
+    # A copy in use is measured after its job ends: its figure would be wrong as soon as the build writes, and the walk would compete with the build for the disk. Unless it has no figure at all: a refusal on a short disk
+    # names the copies it can by their figures, and the copies left then are the ones in use — one walk each, ever, keeps that promise.
+    if check_copy_is_busy "$work_dir" "$copy_slug" && read_copy_size_kb "$work_dir" "$copy_slug" written > /dev/null; then
+      continue
+    fi
     read_copy_size_kb "$work_dir" "$copy_slug" current > /dev/null
   done
 }
@@ -1365,12 +1369,6 @@ cmd_simctl_cleanup() {
   return 0
 }
 
-# `clean <work> <slug>`: remove ONE project copy because its owner is done with it (the last task of its project folder was closed), with the removal machinery of the prune — the copy-removal lock, the busy check (asked
-# again of the moved-aside folder), the rename + `chmod` + `rm`. What differs from the prune: the copy is named, not guessed; and a job that ENDED lately keeps the copy only while nobody has fetched its results (the
-# `fetched` mark of `wait` / `fetch` / a foreground run): the prune keeps it for result_keep_min whatever. A job that runs or waits, an `exec`, a job still being submitted and a held project lock refuse it — then nothing
-# is removed. A folder an earlier removal left (`p/.trash-<slug>-<pid>`: cut off, or past its caller's time limit) is finished first, so «clean again» sees it through (when no copy is left and every leftover is being removed by a live process, the answer is `removing=` AT ONCE: that remover holds the copy-removal lock to the end of its `rm`, and waiting for it would only keep the caller silent). The answer is some lines on stdout (the exit status
-# is 0 whenever the script could answer): `removed=<slug> freed_kb=<n> why=clean` (the copy, the leftover, or both: one line each) · `absent=<slug>` (no such copy, or a prune took it first) · `removing=<slug>` (a leftover
-# whose remover still lives) · `busy=<slug> kind=<kind> job=<id|->` · `stuck=<slug>` (it would not go). Its jobs' logs and result files go with it.
 # The moved-aside folders of project copy $2 under work dir $1 (`p/.trash-<slug>-<pid>`), one per line.
 list_trash_of_slug() {
   local leftover
@@ -1379,6 +1377,12 @@ list_trash_of_slug() {
   done
 }
 
+# `clean <work> <slug>`: remove ONE project copy because its owner is done with it (the last task of its project folder was closed), with the removal machinery of the prune — the copy-removal lock, the busy check (asked
+# again of the moved-aside folder), the rename + `chmod` + `rm`. What differs from the prune: the copy is named, not guessed; and a job that ENDED lately keeps the copy only while nobody has fetched its results (the
+# `fetched` mark of `wait` / `fetch` / a foreground run): the prune keeps it for result_keep_min whatever. A job that runs or waits, an `exec`, a job still being submitted and a held project lock refuse it — then nothing
+# is removed. A folder an earlier removal left (`p/.trash-<slug>-<pid>`: cut off, or past its caller's time limit) is finished first, so «clean again» sees it through (when no copy is left and every leftover is being removed by a live process, the answer is `removing=` AT ONCE: that remover holds the copy-removal lock to the end of its `rm`, and waiting for it would only keep the caller silent). The answer is some lines on stdout (the exit status
+# is 0 whenever the script could answer): `removed=<slug> freed_kb=<n> why=clean` (the copy, the leftover, or both: one line each) · `absent=<slug>` (no such copy, or a prune took it first) · `removing=<slug>` (a leftover
+# whose remover still lives) · `busy=<slug> kind=<kind> job=<id|->` · `stuck=<slug>` (it would not go). Its jobs' logs and result files go with it.
 cmd_clean() {
   local work_dir=$1 clean_slug=${2:-}
   check_name "$clean_slug"

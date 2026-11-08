@@ -425,17 +425,23 @@ describe('sizes of the project copies (`measure-copies`) and what `probe` says o
     assert.equal(fs.readFileSync(sizeFile('untouched-xxxxxxxxxx'), 'utf8').trim(), '5', 'a figure a day old is still right for a copy nobody used since: no `du` over millions of files for it');
   });
 
-  it('leaves a copy that is IN USE alone — its figure would be wrong as soon as the build writes, and the walk would compete with the build — and measures it once nothing uses it', () => {
+  it('leaves a copy that is IN USE alone once it has a figure — it would be wrong as soon as the build writes, and the walk would compete with the build — walks one with NO figure once anyway, and measures the first again when nothing uses it', () => {
     const busyDir = makeCopy('busy-ffffffffff', 5, hourMs);
+    writeFile(busyDir, 'size-kb', '1');
+    setAge(sizeFile('busy-ffffffffff'), 2 * hourMs);
     const execPid = startRunnerStandIn();
     writeFile(busyDir, `exec.${execPid}`, `${execPid}\n`);
+    const newDir = makeCopy('new-jjjjjjjjjj', 9, hourMs);
+    const newPid = startRunnerStandIn();
+    writeFile(newDir, `exec.${newPid}`, `${newPid}\n`);
     makeCopy('idle-gggggggggg', 3, hourMs);
     assert.equal(runScript(['measure-copies', workDir]).status, 0);
-    assert.equal(fs.existsSync(sizeFile('busy-ffffffffff')), false, 'a copy an `exec` runs in is not measured');
-    assert.equal(fs.readFileSync(sizeFile('idle-gggggggggg'), 'utf8').trim(), `${3 * kibPerGib}`, 'the idle one is');
+    assert.equal(fs.readFileSync(sizeFile('busy-ffffffffff'), 'utf8').trim(), '1', 'a copy an `exec` runs in keeps the figure it has');
+    assert.equal(fs.readFileSync(sizeFile('new-jjjjjjjjjj'), 'utf8').trim(), `${9 * kibPerGib}`, 'one in use that never had a figure is walked once — a refusal on a short disk names the copies it can');
+    assert.equal(fs.readFileSync(sizeFile('idle-gggggggggg'), 'utf8').trim(), `${3 * kibPerGib}`, 'the idle one is measured');
     fs.rmSync(path.join(busyDir, `exec.${execPid}`));
     assert.equal(runScript(['measure-copies', workDir]).status, 0);
-    assert.equal(fs.readFileSync(sizeFile('busy-ffffffffff'), 'utf8').trim(), `${5 * kibPerGib}`, 'after the exec: measured');
+    assert.equal(fs.readFileSync(sizeFile('busy-ffffffffff'), 'utf8').trim(), `${5 * kibPerGib}`, 'after the exec: measured again');
   });
 
   /** The detached `measure-copies` that a call started has ended (its pid is gone). */
@@ -462,6 +468,12 @@ describe('sizes of the project copies (`measure-copies`) and what `probe` says o
     const refused = runScript(['prepare', workDir, slug, 'box1-second', 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '60' });
     assert.equal(refused.status, diskTooLowRunnerExitCode, refused.stderr);
     assert.equal(fs.existsSync(path.join(workDir, 'tmp', 'measure-copies.pid')), true, 'the refusal started the measuring');
+    assert.match(refused.stderr, /their sizes are still being measured/, 'the copies in use have no figure yet');
+    await waitForDetachedMeasuringToEnd();
+    assert.equal(fs.readFileSync(sizeFile('busy-iiiiiiiiii'), 'utf8').trim(), `${45 * kibPerGib}`, 'the measuring walked the copy in use that had no figure — once');
+    const refusedAgain = runScript(['prepare', workDir, slug, 'box1-third0', 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '60' });
+    assert.equal(refusedAgain.status, diskTooLowRunnerExitCode, refusedAgain.stderr);
+    assert.match(refusedAgain.stderr, /biggest project copies: busy-iiiiiiiiii 45 GB/, 'and the next refusal names it');
     await waitForDetachedMeasuringToEnd();
   });
 
@@ -469,13 +481,25 @@ describe('sizes of the project copies (`measure-copies`) and what `probe` says o
     makeCopy('known-yyyyyyyyyy', 7, hourMs);
     writeFile(path.join(workDir, 'p', 'known-yyyyyyyyyy'), 'size-kb', `${7 * kibPerGib}`);
     makeCopy('unknown-zzzzzzzzzz', 3, hourMs);
-    const result = runScript(['probe', workDir]);
+    const result = runScript(['probe', workDir, 'prune']);
     assert.equal(result.status, 0, result.stderr);
     const probe = parseProbeOutput(result.stdout);
     assert.deepEqual(probe.copies, { count: 2, sizeMb: 7 * 1024, unmeasuredCount: 1 });
     assert.equal(probe.diskMinFreeMb, 15 * 1024, 'the default target of a 100 GB disk: 15 %');
     await waitFor(() => fs.existsSync(sizeFile('unknown-zzzzzzzzzz')), 'the detached measuring');
     assert.equal(fs.readFileSync(sizeFile('unknown-zzzzzzzzzz'), 'utf8').trim(), `${3 * kibPerGib}`);
+  });
+
+  it('the probe a run or an `exec` makes first (no `prune`) counts the copies the same, but starts NO measuring: the copy about to be built is not walked as its build begins', () => {
+    makeCopy('known-kkkkkkkkkk', 7, hourMs);
+    writeFile(path.join(workDir, 'p', 'known-kkkkkkkkkk'), 'size-kb', `${7 * kibPerGib}`);
+    setAge(sizeFile('known-kkkkkkkkkk'), 2 * hourMs);
+    makeCopy('unknown-llllllllll', 3, hourMs);
+    const result = runScript(['probe', workDir]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(parseProbeOutput(result.stdout).copies, { count: 2, sizeMb: 7 * 1024, unmeasuredCount: 2 }, 'both are unmeasured: one has no figure, the other was used after its figure');
+    assert.equal(fs.existsSync(path.join(workDir, 'tmp', 'measure-copies.pid')), false, 'and nothing was started');
+    assert.equal(fs.existsSync(sizeFile('unknown-llllllllll')), false);
   });
 
   it('probe of a VIEW (`probe <work> prune`) on a disk short of free space starts the prune detached instead of making the probe wait for it', async () => {
@@ -973,7 +997,7 @@ describe('a pid that went to a stranger pins nothing (after a crash or a reboot 
   it('a pid file of a detached run that names a stranger does not stop the next one from starting', async () => {
     writeFile(workDir, 'tmp/measure-copies.pid', `${startStrangerProcess()}\n`);
     makeCopy('unmeasured-aaaaaaaaaa', 3, hourMs);
-    assert.equal(runScript(['probe', workDir]).status, 0);
+    assert.equal(runScript(['probe', workDir, 'prune']).status, 0);
     const sizeFile = path.join(workDir, 'p', 'unmeasured-aaaaaaaaaa', 'size-kb');
     const deadline = Date.now() + 20_000;
     while (!fs.existsSync(sizeFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
