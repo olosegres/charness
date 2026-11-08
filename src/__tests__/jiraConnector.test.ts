@@ -891,7 +891,9 @@ describe('bot.ts wires the Jira connector (J5)', () => {
   it('C6: a fresh session start, every completed compaction and a re-spawn onto a lost conversation reset the conversation\'s context — an idle stop, a resume or a restart does not', () => {
     const start = botSource.slice(botSource.indexOf('async function startAgentSession('), botSource.indexOf('async function startAgentSession(') + 3000);
     assert.match(start, /clearThreadContextMarker\(key\);\n(?:\s*\/\/[^\n]*\n)*\s*noteConversationContextReset\(key, 'fresh session'\);/, 'at the start, right after the preamble marker');
-    assert.match(startBody, /onContextCompacted: \(key, trigger\) => dispatchAdapterEvent\(key, 'contextCompacted', \(\) => noteConversationContextReset\(key, `compaction \(\$\{trigger \?\? 'bot'\}\)`\)\),/);
+    // The reset is the FIRST thing a completed compaction does; the Telegram-only post of the CLI's own compaction's agent-mistakes
+    // section rides after it, behind its own platform guard (`postOwnCompactionInstructionGaps`).
+    assert.match(startBody, /onContextCompacted: \(key, trigger\) => dispatchAdapterEvent\(key, 'contextCompacted', \(\) => \{\n\s*noteConversationContextReset\(key, `compaction \(\$\{trigger \?\? 'bot'\}\)`\);/);
     assert.match(botSource, /onContextReset: \(key, reason\) => jiraConnector\.onContextReset\(key, reason\),/);
     assert.match(startBody, /onConversationLost: \(key\) => dispatchAdapterEvent\(key, 'conversationLost', \(\) => withThreadLocale\(key, \(\) => handleConversationLost\(key\)\), \(\) => \{ dropLostConversationWatermark\(key\); noteConversationContextReset\(key, 'its transcript was lost'\); \}\),/);
     assert.equal((botSource.match(/noteConversationContextReset\(key, /g) ?? []).length, 3, 'only the start, the compaction and a live re-spawn that began a new conversation reset');
