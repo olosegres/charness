@@ -35,10 +35,11 @@ A runner is attached in one of two ways:
 1. In Telegram, in General, send `/runners` and tap **＋ Pair a new runner** ([`/runners`](commands.md#runners)). The first time the
    bot asks which address runners dial and proposes the public address it finds, after checking that the address answers with this
    machine's own ssh key. Without Telegram (a Jira-only instance): `charness runners pair --host host.example[:port]`.
-2. The bot posts **two lines for one code** (two messages — together they are longer than a Telegram message), valid 10 minutes and good
-   once, whichever is used first. Either fetches charness's own package from the charness host over ssh (so the versions never differ),
+2. The bot posts **ONE line** in one message, with the words that explain it, valid 10 minutes and good once. It works two ways, by who runs it:
+   as an admin with `sudo` (the line as posted), or — without admin rights — in the terminal of the runner account itself, **without the leading
+   `sudo`** (below). Either way it fetches charness's own package from the charness host over ssh (so the versions never differ),
    checks the machine and pairs it, saying each step as it goes (checking the account, downloading the package, installing the runner program, checking the machine, pairing, getting Pueue, finding rsync, installing the service — one line each; on a terminal the line's dots cycle while the step runs). The first message then turns into «Runner “name” paired …» — or «Pairing code expired.» after 10 minutes, or «This line was used on a machine that was already paired — nothing new was paired.» when the line was pasted for a machine that is already paired (a retry, below) — and the second message is deleted (if Telegram will not, it points at the first).
-   - **From an admin account of the runner machine** (the first message), `sudo sh -c '…' sh runner` — one paste does everything:
+   - **From an admin account of the runner machine**, the line as posted, `sudo sh -c '…' sh runner` — one paste does everything:
      it checks the account named by the **last word of the line** (`runner` unless you change it) — it must exist, must not be `root`
      or an admin (the account runs the agents' code), and is never created by the line. Then, still as root, it downloads charness's
      package into a folder of its own in `/tmp` (root-owned, readable by the account, removed when the line ends), has the account **pair
@@ -53,7 +54,7 @@ A runner is attached in one of two ways:
    - **What the admin line trusts.** Pasting it **runs code from this charness host as root on this machine**: the line is text
      the charness host made, and the program root runs from it is the one in the charness host's own install — so whoever can change that
      install (its user, and the agents that run as that user) controls what runs as root here, and what it installs stays after the paste.
-     The plain line trusts the charness host only with the runner account. Paste the admin line only for a charness host you would let run
+     The line run without `sudo` by the runner account itself trusts the charness host only with that account. Paste it with `sudo` only for a charness host you would let run
      code as root on this machine. **Each paste gives that host root on this machine once, at that moment** — one `sudo`, one run: no root
      process stays afterwards (the daemons run as the runner account), and pasting a line again gives the same root again.
    - **Do not paste the admin line again on a machine whose runner account has already run jobs — recreate the account instead — unless your
@@ -80,20 +81,23 @@ A runner is attached in one of two ways:
      taking owners from the archive and takes group and world write away. A second pairing reuses what is there and downloads an archive again only for a
      newer release; with nodejs.org out of reach it uses the newest install it finds and says so; with none, the line stops and says what to check. The
      launcher and the daemons' `PATH` carry this Node, so a runner depends on no package manager and no home. **A root-owned install is refreshed only by
-     the next admin line.** The plain line (the second message) does the same as the account itself, into `~/.charness-runner/node`. A runner paired
+     the next admin line.** The line run by the account itself (without `sudo`) does the same as that account, into `~/.charness-runner/node`. A runner paired
      before this (on a system Node) moves to its own once its link is up, without the admin (see «A runner's Node» below).
    - **Homes the runner account can read.** macOS makes every home `750` with group `staff`, and a standard account is in `staff`, so by default
      the agents' jobs — and the npm packages they install — can read the source code, keys and tokens of the people who use the machine. **Both
-     lines** end with a warning naming the homes the runner account can read (the admin line asks as that account, not with root's rights) and the
+     ways** end with a warning naming the homes the runner account can read (the admin line asks as that account, not with root's rights) and the
      one-line fix for each: `sudo chmod 700 /Users/<name>`.
    - **Retry.** If the service step fails, the account stays paired and the line says so: **paste a fresh admin line** (from `/runners`)
      after fixing what it printed. A line pasted for an account that is already paired pairs nothing twice, closes its own code on the
      charness host and only installs the service. That is no failure: its Telegram messages read «This line was used on a machine that was already paired — nothing new was paired.», and `charness runners pair --wait` prints the same and exits 0.
-   - **As the runner account itself** (the second message), no admin rights: it pairs and prints how to keep the runner running (the table
-     below).
+   - **As the runner account itself**, no admin rights: **log in as that account, take the line from the message and drop its leading `sudo`**
+     — the last word must be that account's own name (change `runner` to it; the line pairs the account it runs as and refuses another, so a
+     main account with a leftover `runner` at the end is never paired by mistake). It then uses a private copy in the account's own `$TMPDIR`,
+     installs the runner its own Node in `~/.charness-runner/node`, pairs, and prints how to keep the runner running (the table below). It judges
+     nothing about the account (it is the one you chose to be in) and installs no service.
 3. The runner appears in `/runners` (and in `charness remote-run runners`) with its OS, CPU, memory, disk, load, jobs and what it can
    do. Anyone you give a line to can attach a machine until the code is used or expires — treat them like a password. Without Telegram,
-   `charness runners pair --host … [--account <name>]` prints both lines.
+   `charness runners pair --host … [--account <name>]` prints the line and says the same in words.
 
 **Keep it running.** The pairing is permanent; the link has to be up for jobs to arrive.
 

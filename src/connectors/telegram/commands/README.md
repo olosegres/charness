@@ -232,12 +232,12 @@ runners (`src/runners/` is the hub, `utils/runnersScreenPlan.ts` the pure text a
 - **Pairing.** No saved `runnerHost` → the address step (a proposal from `listAddressCandidates` that `findProposedHubAddress` proved to answer with this
   machine's own ssh key; the keyboard's «Use» resolves against a per-message snapshot) and, after «Enter another address», the next General message
   (`handleRunnersAddressText`, called by the text handler before the startup buffer; `cancelRunnersAddressWait` ends the wait for any slash command) is the
-  address, checked by `checkHubAddress`. A pairing is offered as TWO messages for one code (the admin line, then the plain one: `buildAdminBootstrapLine` alone is ~3.7 KB,
-  two lines would not fit Telegram's 4096), each HTML with its line in a `<pre>` (tap to copy) sent with the `isSecret` option of `replyToThread`
-  (`markOutboundTextSecret` keeps the text out of the output trace — length only). The admin message goes first and a failure to send it offers nothing; a failure
-  to send the second only logs (the admin line works on its own).
+  address, checked by `checkHubAddress`. A pairing is offered as ONE message (`buildPairingIntro` — the lifetime, the trust it gives, which word of the line is the account and
+  what it must be, and how to pair without admin rights — then `buildAdminBootstrapLine`, ~3.5 KB: together they must fit Telegram's 4096, which
+  `runnersScreenPlan.test.ts` checks in every language), HTML with the line in a `<pre>` (tap to copy) sent with the `isSecret` option of `replyToThread`
+  (`markOutboundTextSecret` keeps the text out of the output trace — length only). A failure to send it offers nothing and is told.
 - **Settling the pairing messages.** The place of every message that offers a code is this INSTANCE's own record (`runnerPairingMessages.ts`,
-  `DATA_DIR/runner-pairing-messages.json`; one entry per MESSAGE — a code has two — named by `getPairingMessageId`) — not the shared hub registry, which is every charness's of the OS user and holds credentials only. `startRunnersWatcher`
+  `DATA_DIR/runner-pairing-messages.json`; one entry per MESSAGE, named by `getPairingMessageId`) — not the shared hub registry, which is every charness's of the OS user and holds credentials only. `startRunnersWatcher`
   (every 5 s, one look at boot) edits each message to «paired» (a runner carries its code's id) or «expired» (the code is neither open nor a runner) and
   drops its entry ONLY after Telegram accepted the edit: a failed edit is tried again (5 s, doubling to 5 min; a restart tries at once), and one whose edits have
   been FAILING for a day (counted from the first failed attempt, which the entry records — a bot restarted after a long stop still tries a message of any age) is

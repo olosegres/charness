@@ -5,7 +5,7 @@
 #
 #   ensureNode.sh root <account> [<base> [<homes> [<dist> [<major>]]]]   the ADMIN pairing line, as ROOT, from its root-owned copy of the package (never
 #                                                                         from the account's folder), BEFORE anything is started under Node
-#   ensureNode.sh own <base> [<dist> [<major>]]                          as the runner account itself: the plain line, a runner that moves off a system
+#   ensureNode.sh own <base> [<dist> [<major>]]                          as the runner account itself: the pairing line run without sudo, a runner that moves off a system
 #                                                                         Node, and an own install that looks for a newer release of its line
 #
 # Prints the real path of the `node` binary on stdout, or says why there is none on stderr (exit 1). Everything meant for a person goes to stderr.

@@ -83,7 +83,7 @@ escape a backslash in `command="…"`).
    --bootstrap <folder> <code>`. The unpacked package has no `node_modules`: the runner's `pair` step reaches its install step on Node
    built-ins only. The ADMIN line, `sudo sh -c '<script>' sh <account>`, keeps one rule: **root never executes, reads through or writes
    into anything the runner account can change.** As root it checks the account (exists; not root; not in the admin groups of
-   `runnerUtility/adminCheck.ts`, and a failing `id -Gn` is a refusal; the OS is macOS or Linux), makes the SAME download as the plain line into
+   `runnerUtility/adminCheck.ts`, and a failing `id -Gn` is a refusal; the OS is macOS or Linux), makes its download (the fetch steps are shared with the no-sudo way) into
    a root-owned folder in `/tmp` (readable by the account, `--no-same-owner`; the key files in it stay 0600), has the account pair itself from
    that copy, and runs `rootServiceCli.js install <account> --bootstrap … <code>` from the same copy (Node built-ins only: the copy has no
    dependencies; `runnerUtility/adminService.ts`). That ONE program has the account pair itself (`sudo -u <account> -H node …/runnerCli.js pair …
@@ -91,16 +91,23 @@ escape a backslash in `command="…"`).
    terminal: a session of its own, `/dev/null` for input, its output piped through the root step with the control characters stripped
    (`runnerUtility/isolatedCommand.ts`) — the account runs the agents' code, and code it can change must not get the admin's terminal. The
    script also INSTALLS the runner's own Node, which root and the service run under — by the package's own `remoteRun/ensureNode.sh`, run as root from the root-owned copy right after the download (kept out of the pasted line: a Telegram message holds 4096 characters): the newest LTS official nodejs.org build from 22.12 up to 24 (the last line with Corepack), SHA-256 checked, unpacked by root into `/usr/local/lib/charness-runner/node/v<version>` without the archive's owners — the base judged before root writes into it, an install judged before root runs it; never one inside a home folder, judged by its real path (`readlink -f`, or by hand where it is missing), never one the account can WRITE or whose folder it can write (`sudo -u <account> test -w`: root must never run what the account can change; the root step asks the same again). The plain line runs the same script as the account, into `~/.charness-runner/node`.
-   The root step warns last about the homes of other users that the account can read (`sudo chmod 700 <home>`). The script is built from the same fetch steps
-   as the plain line (`renderFetchSteps`), the account is the line's LAST word (editable by hand; `charness runners pair --account`), and
-   a second paste for an account that is already paired only installs the service. A pairing is offered in TWO Telegram messages — the
-   admin line alone is ~3.7 KB, two lines would not fit one message — which `connectors/telegram/runnerPairingMessages.ts` follows one
-   entry per message.
+   The root step warns last about the homes of other users that the account can read (`sudo chmod 700 <home>`). The account is the line's LAST word (editable by hand; `charness runners pair --account`), and
+   a second paste for an account that is already paired only installs the service.
+
+   **ONE line, two ways** (`renderScript`): by who runs it. As root (`sudo …`, the line as offered) it is everything above. Run by a NON-root user — the
+   same line without its leading `sudo`, in the terminal of the runner account itself, for a person without admin rights — it pairs THAT account: the last word
+   must equal `id -un` (it refuses «you are not <word>: run the line as <word> or with sudo» before anything is fetched, so a main account with a leftover
+   `runner` at the end is never paired by mistake; nothing else judges the account), the copy is made in the account's own `$TMPDIR` and stays private (700),
+   `ensureNode.sh own` installs the runner's Node in `~/.charness-runner/node`, and `runnerCli.js pair --bootstrap …` runs under it — no service (the pairing
+   prints the «keep it running» help). The shell variables `r` (1 = root) and `b` (the folder of the copy) carry the difference; the pairing code is in the script
+   ONCE. A Telegram message holds 4096 characters, so ONE message carries the line (~3.5 KB) and its explanation (`runners.pairingIntro`, ≤ ~470 characters in
+   every language; `runnersScreenPlan.test.ts` checks every locale with a long address) — which is why the script's values are written where they are used and its
+   messages are short. `connectors/telegram/runnerPairingMessages.ts` follows the message.
 
    **What the admin line trusts.** Pasting it runs code from this charness host as root on the runner machine: the line is
    hub-generated text run under `sudo`, and the program root runs from it is `rootServiceCli.js` out of the hub's own install (packed into
-   `package/`), both owned by the hub's OS user — and its agents; what it installs outlasts the paste. The plain line trusts the hub only with the
-   runner account. The Telegram message (`runners.pairingAdminIntro`, all locales) and the CLI's text (`charness runners pair`) say it, and
+   `package/`), both owned by the hub's OS user — and its agents; what it installs outlasts the paste. The same line run without `sudo` by the runner account trusts the hub only with
+   that account. The Telegram message (`runners.pairingIntro`, all locales) and the CLI's text (`charness runners pair`) say it, and
    `docs/remote-run.md` does too. The code is in `sudo`'s log: a refused line
    leaves it open on purpose (fix the account, paste again); an already-paired account's line closes its own code with `cancel` — which is no failure: the messages and `--wait` say the line did its job.
 3. The runner calls `redeem` with its own new public key and host key (`gateProtocol.ts`). `redeemPairing` (one critical section):

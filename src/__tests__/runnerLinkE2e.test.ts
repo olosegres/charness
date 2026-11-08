@@ -321,7 +321,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
   it('refuses a pasted line that reaches a server with another host key, and spends nothing', async () => {
     const impostor = await startImpostorSshd(layout);
     const line = makePairingLine(layout);
-    const redirected = line.replace(`p="${layout.sshPort}"`, `p="${impostor.port}"`);
+    const redirected = line.replace(` -p ${layout.sshPort} `, ` -p ${impostor.port} `);
     assert.notEqual(redirected, line, 'the line names the hub\'s port');
     const result = runPairingLine(layout, redirected);
     assert.notEqual(result.status, 0);

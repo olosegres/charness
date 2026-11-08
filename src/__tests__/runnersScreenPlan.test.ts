@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { localeCodes, runWithLocale, t } from '../i18n';
 import { parseProbeOutput, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner } from '../runners/hubRegistry';
-import { buildAdminBootstrapLine, buildBootstrapLine, defaultRunnerAccount } from '../runners/bootstrapLine';
+import { buildAdminBootstrapLine, defaultRunnerAccount } from '../runners/bootstrapLine';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { createPairCodePayload } from './runnersTestKit';
 import {
@@ -21,13 +21,12 @@ import {
   buildClosedText,
   buildExpiredText,
   buildPairedText,
-  buildPairingMessageParts,
+  buildPairingIntro,
   buildRemovalOutcomeText,
   buildServiceRemovalText,
   buildRemoveConfirmation,
   buildRunnerActionCallback,
   buildRunnersScreen,
-  buildSeeFirstMessageText,
   clipReportedText,
   maxCallbackDataBytes,
   maxReportedTextChars,
@@ -442,47 +441,32 @@ describe('runnersScreenPlan: the other screens and texts', () => {
     assert.deepEqual(without.rows.map((row) => row.map((button) => button.data)), [[runnersAddressOtherCallback]]);
   });
 
-  it('the pairing is two messages: the admin line\'s intro (lifetime, the account that is the last word), the plain line\'s intro and the outro (what the account must be, who can use a line)', () => {
-    const parts = buildPairingMessageParts(10, 'runner', t);
+  it('the pairing is ONE message: its explanation says the lifetime, where to paste the line and what it does as root, which word is the account and what it must be, and how to pair without sudo', () => {
     assert.equal(
-      parts.adminIntro,
-      'Pair a runner — valid 10 minutes, single use.\n\n① From an admin account of the runner machine: pairs «runner» (the last word — change it if needed) and keeps it running. Runs code from this charness host as root on that machine:',
+      buildPairingIntro(10, 'runner', t),
+      "Pair a runner — valid 10 minutes, single use; keep the line private.\n\nPaste it in an admin account's terminal on the runner machine: it runs code from this charness host there as root. The last word, «runner», is the account that runs the agents' code: make it an existing standard (non-admin) account, not your main one. No admin rights? Run the line in that account's own terminal without «sudo»:",
     );
-    assert.equal(parts.alternativeIntro, '② Without admin rights: run this one in the terminal of the runner account itself:');
-    assert.equal(
-      parts.alternativeOutro,
-      "The account must be an existing standard user, not your main account — it runs the agents' code. Anyone with either line can attach a machine to this charness until one of them is used or expires.",
-    );
-    assert.ok(buildPairingMessageParts(10, 'ci-runner', t).adminIntro.includes('«ci-runner»'), 'the account is named as given');
+    assert.ok(buildPairingIntro(10, 'ci-runner', t).includes('«ci-runner»'), 'the account is named as given');
   });
 
-  it('the pointer a second pairing message becomes when Telegram will not delete it is told in every language — its own words, no placeholder, a short line', () => {
-    const english = buildSeeFirstMessageText(t);
-    for (const locale of localeCodes) {
-      const text = runWithLocale(locale, () => buildSeeFirstMessageText(t));
-      assert.ok(text.length > 10 && text.length < 120, `${locale}: «${text}»`);
-      assert.doesNotMatch(text, /\{[a-z]+\}/, `${locale}: no placeholder is left`);
-      if (locale !== 'en') assert.notEqual(text, english, `${locale}: translated, not the English fallback`);
-    }
-  });
-
-  it('in every language each pairing message — its text and its line — fits a Telegram message (4096 characters) with room for a long address', () => {
+  it('in every language the pairing message — its text and its line — fits a Telegram message (4096 characters) with room for a long address', () => {
     // A 29-character host and a 15-character hub account: longer than a typical address.
     const payload = createPairCodePayload({ host: 'a-quite-long-name.example.com', user: 'a-hub-user-name' });
-    const adminLine = buildAdminBootstrapLine(payload);
-    const plainLine = buildBootstrapLine(payload);
+    const line = buildAdminBootstrapLine(payload);
     const roomToSpare = 100;
+    const english = buildPairingIntro(10, defaultRunnerAccount, t);
     for (const locale of localeCodes) {
       runWithLocale(locale, () => {
-        const parts = buildPairingMessageParts(10, defaultRunnerAccount, t);
-        const adminLength = `${parts.adminIntro}\n\n${adminLine}`.length;
-        const plainLength = `${parts.alternativeIntro}\n\n${plainLine}\n\n${parts.alternativeOutro}`.length;
-        assert.ok(adminLength < 4096 - roomToSpare, `${locale}: the admin message is ${adminLength} characters`);
-        assert.ok(plainLength < 4096 - roomToSpare, `${locale}: the plain message is ${plainLength} characters`);
-        assert.ok(parts.adminIntro.includes(`${defaultRunnerAccount}`), `${locale}: the account is named`);
-        // The admin line gives the charness host root on that machine for the paste: the message says so in every language (the plain line does not).
-        assert.ok(parts.adminIntro.includes('root') && parts.adminIntro.includes('charness'), `${locale}: the admin intro names the trust it gives`);
-        assert.ok(!parts.alternativeIntro.includes('root'), `${locale}: the plain line gives no such trust`);
+        const intro = buildPairingIntro(10, defaultRunnerAccount, t);
+        const length = `${intro}\n\n${line}`.length;
+        assert.ok(length < 4096 - roomToSpare, `${locale}: the message is ${length} characters`);
+        assert.doesNotMatch(intro, /\{[a-z]+\}/, `${locale}: no placeholder is left`);
+        if (locale !== 'en') assert.notEqual(intro, english, `${locale}: translated, not the English fallback`);
+        assert.ok(intro.includes(defaultRunnerAccount), `${locale}: the account is named`);
+        // The line gives the charness host root on that machine for the paste, and the person without admin rights needs the word to drop: both are said in every language.
+        assert.ok(intro.includes('root') && intro.includes('charness'), `${locale}: the intro names the trust it gives`);
+        assert.ok(intro.includes('sudo'), `${locale}: and the way without sudo`);
+        assert.ok(intro.includes('10'), `${locale}: and the lifetime`);
       });
     }
   });
@@ -491,7 +475,6 @@ describe('runnersScreenPlan: the other screens and texts', () => {
     assert.equal(buildPairedText('mac', 42, t, formatTime), 'Runner “mac” paired T42.');
     assert.equal(buildExpiredText(t), 'Pairing code expired.');
     assert.equal(buildClosedText(t), 'This line was used on a machine that was already paired — nothing new was paired.');
-    assert.equal(buildSeeFirstMessageText(t), 'The code of this line is settled — see the message above for the result.');
   });
 });
 

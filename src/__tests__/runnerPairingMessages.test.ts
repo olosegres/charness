@@ -1,6 +1,6 @@
 /**
  * @description `connectors/telegram/runnerPairingMessages.ts`: the instance's own record of the pairing messages it has sent and not yet
- * settled — a round trip through its file, an entry per MESSAGE (a code is offered in two), a missing file is empty, a file that does not validate reads as empty and
+ * settled — a round trip through its file, an entry per MESSAGE (a code is offered in one; a record of the older version, which offered it in two, holds two), a missing file is empty, a file that does not validate reads as empty and
  * says why (the next write replaces it), and the record is bounded.
  *
  * Test case: N/A — Charness has no Jira tracker.
@@ -34,7 +34,7 @@ describe('runnerPairingMessages', () => {
     assert.deepEqual(readPairingMessages(filePath), { messages: [], problem: null });
   });
 
-  it('what is written is read back, the file is owner-only, the two messages of one code are both kept and the same message again replaces itself', () => {
+  it('what is written is read back, the file is owner-only, the messages of one code (an older version made two) are all kept and the same message again replaces itself', () => {
     addPairingMessage(filePath, createMessage());
     addPairingMessage(filePath, createMessage({ messageId: 43 }));
     addPairingMessage(filePath, createMessage({ pairId: 'ba9876543210', messageId: 44 }));
@@ -42,6 +42,15 @@ describe('runnerPairingMessages', () => {
     addPairingMessage(filePath, createMessage({ messageId: 42, offeredAtMs: 2_000 }));
     assert.deepEqual(readPairingMessages(filePath).messages.map((message) => [message.pairId, message.messageId, message.offeredAtMs]), [['0123456789ab', 43, 1_000], ['ba9876543210', 44, 1_000], ['0123456789ab', 42, 2_000]]);
     assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+  });
+
+  it('a record written by the version that offered a code in two messages (a `role` on each) still validates and is read as it was written', () => {
+    const olderRecord = [createMessage({ role: 'first' }), createMessage({ messageId: 43, role: 'second' })];
+    fs.writeFileSync(filePath, JSON.stringify({ messages: olderRecord }));
+    assert.deepEqual(readPairingMessages(filePath), { messages: olderRecord, problem: null });
+    assert.equal(readPairingMessages(filePath).messages.length, 2);
+    fs.writeFileSync(filePath, JSON.stringify({ messages: [{ ...createMessage(), role: 'third' }] }));
+    assert.equal(readPairingMessages(filePath).problem, `${filePath} is invalid`, 'but only the two roles that existed');
   });
 
   it('removing takes out the named messages only — one message of a code can go while the other stays — and nothing named is no change', () => {

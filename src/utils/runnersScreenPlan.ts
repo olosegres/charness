@@ -362,26 +362,13 @@ export function buildAddressStep(proposedAddress: string | null, t: Translate): 
   };
 }
 
-/** @name PairingMessageParts @description The text around the two lines of a pairing: each line sits between its intro and (for the second) the outro. */
-export interface PairingMessageParts {
-  /** Above the admin line: the lifetime, and which word of the line is the account. */
-  adminIntro: string;
-  /** Above the plain line (no admin rights). */
-  alternativeIntro: string;
-  /** Below the plain line: what the account must be, and who can use a line. */
-  alternativeOutro: string;
-}
-
 /**
- * @description The pairing's text parts. A pairing is offered in TWO messages — the admin line first, the plain line second — because the
- * two lines together are longer than a Telegram message; `account` is the one the admin line pairs unless its last word is changed.
+ * @description The text above the pairing line — the ONE message a pairing is offered in: the lifetime, where to paste the line and what it does as root, which
+ * word is the account (`account`, the one the line pairs unless its last word is changed) and what it must be, and how to pair without admin rights (the same line
+ * from that account itself, without `sudo`). The line with this text must fit one Telegram message (4096 characters), in every language.
  */
-export function buildPairingMessageParts(pairingLifetimeMinutes: number, account: string, t: Translate): PairingMessageParts {
-  return {
-    adminIntro: t('runners.pairingAdminIntro', { minutes: pairingLifetimeMinutes, account }),
-    alternativeIntro: t('runners.pairingAlternativeIntro'),
-    alternativeOutro: t('runners.pairingAlternativeOutro'),
-  };
+export function buildPairingIntro(pairingLifetimeMinutes: number, account: string, t: Translate): string {
+  return t('runners.pairingIntro', { minutes: pairingLifetimeMinutes, account });
 }
 
 /** @description What the pairing message becomes once the code was used. */
@@ -392,11 +379,6 @@ export function buildPairedText(runnerName: string, pairedAtMs: number, t: Trans
 /** @description What the pairing message becomes once the code expired unused. */
 export function buildExpiredText(t: Translate): string {
   return t('runners.expiredText');
-}
-
-/** @description What the SECOND pairing message becomes when Telegram will not delete it once the code is settled: a pointer at the first, which shows the result. */
-export function buildSeeFirstMessageText(t: Translate): string {
-  return t('runners.pairingSettledSeeAboveText');
 }
 
 /** @description What the pairing message becomes once its code was CLOSED unused: the line was pasted for a machine that was already paired, so it only installed the service. */

@@ -145,7 +145,7 @@ export function formatServiceFollowsNote(): string {
 export interface PairingOptions {
   /** An admin's line installs the service right after this pairing (`pairArgs.ts`): no help about keeping it running is printed. */
   isServiceFollowing: boolean;
-  /** The homes of other users this account can read (the plain line says so, with the fix); a test's own. Default: look at `/Users` and `/home` as this account. */
+  /** The homes of other users this account can read (the pairing the account runs itself says so, with the fix); a test's own. Default: look at `/Users` and `/home` as this account. */
   scanReadableHomes?: () => Promise<string[]>;
 }
 

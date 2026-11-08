@@ -78,7 +78,7 @@ the queue), `logs/`, `build/`.
   `serviceCommon.ts`) also keeps the Node root requires — unpacked without the archive's owners, no group/world write, real path outside every home, the account can run it and can
   write neither it nor any folder above it (`sudo -u <account> test` only) — judged BEFORE root writes anything (the deepest existing part of the base, then its real path, which
   every later step uses) and before root runs any Node of an install (also a reused one, and one found offline: an unfit one is skipped, never run); `own <base>` mode runs as the
-  account (the plain line; and the upkeep below). **The upkeep** (`runNodeUpkeep`, started by `runLink` once the link is UP, and every `nodeUpkeepIntervalMs`): a link whose
+  account (the line run without `sudo`; and the upkeep below). **The upkeep** (`runNodeUpkeep`, started by `runLink` once the link is UP, and every `nodeUpkeepIntervalMs`): a link whose
   `process.execPath` is in neither base (a runner paired on a system or Homebrew Node) asks `ensureOwnNode` for a Node in `paths.ownNodeDir`; a link on an own Node asks for the
   newest release of ITS major; the shared Node is left to the next admin line. A Node in place that the link does not run on gets the launcher rewritten (`ensureLauncher`) and
   `createIdleRestart` makes the link leave with `nodeMovedExitCode` (76) only when `checkIsLinkIdle` says nothing is under way — no command over the link, no update being installed
@@ -157,13 +157,13 @@ from the hub (`charness runners service-removal <name>`, `charness runners remov
 `service uninstall` and `unpair` on the runner print only a pointer to them (`systemServiceRemovalPointer`) and, once the daemons are gone, forget the
 service's record. The agents run as this account and can change what this program prints, so a command it printed could be anything.
 
-**What the admin line trusts.** Pasting it runs code from the charness host as root on this machine (see `src/runners/README.md`); the plain
-line trusts the host only with the runner account. A Mac's launcher and the daemons' `PATH` carry the Node the line INSTALLED for the runner: the package's
+**What the admin line trusts.** Pasting it with `sudo` runs code from the charness host as root on this machine (see `src/runners/README.md`); the same line run
+without `sudo` by the runner account trusts the host only with that account. A Mac's launcher and the daemons' `PATH` carry the Node the line INSTALLED for the runner: the package's
 `remoteRun/ensureNode.sh` (run as root from the root-owned copy) puts the official build in `/usr/local/lib/charness-runner/node/v<version>` — a Node root owns, whose
 REAL path is outside every home, that the account can run and cannot write (nor a folder above it), ≥ 22.12 — and refuses with the way out when it cannot be made so; the
 root step asks the same again before it runs anything (`findPathAccountCanWrite`, `findHomeContaining`), and `service install` as the account refuses a Node in ANOTHER user's home. **Homes the account can read**
 (`homeFolders.ts`): the admin line's root step asks AS the account (`sudo -u <account> -H test -r <home> -a -x <home>`) about every folder under `/Users` and
-`/home` but its own and says last which it can read, with `sudo chmod 700 <home>` for each; the plain line's pairing does the same as the account
+`/home` but its own and says last which it can read, with `sudo chmod 700 <home>` for each; the pairing of the line run by the account itself does the same as the account
 itself (and warns about a Node in another user's home). What the account's own program prints is not the admin's source for this. The daemons log through the account's own shell
 (`serviceUnits.ts`): launchd is given `/dev/null` for output and no working directory, because it may open them as root before it switches to
 `UserName` and the account could have swapped the logs folder for a link; `sh`, already the account, makes the logs folder, enters the home and
@@ -370,10 +370,10 @@ file modes changed or whose sshd setting was edited refuses the key the same way
 `src/__tests__/runnerUtility*.test.ts` (env, home/launcher/config/keys, tools, machine report and admin check, the servers driven
 the way the hub drives them, the link loop's backoff / removed state / update decision) and the process-level flow
 `runnerAdminLineE2e.test.ts` (stand-ins for `sudo` / `id` / `getent` / `loginctl` / `systemctl` in `runnerAdminLineE2e/`; root is `fakeroot`): the
-admin line's refusals (no sudo; a missing, admin or root account; an edited name) before anything is fetched or runs as the account, then
+admin line's refusals (no sudo, where the last word names another account than the one running the line; a missing, admin or root account; an edited name) before anything is fetched or runs as the account, then
 pair-as-account from root's own copy → the root step (no dependencies) → the account's service, with the code unspent until then, a trap
 in the account's launcher that fails the flow if ROOT ever starts it, a used line refused, and a failing service manager followed by a fresh
-line that only installs the service. The line's Node install is the REAL script there (`placeRootNodeInstallerWrapper` gives it the flow's own shared folder and a local mirror of
+line that only installs the service. The Node the line installs carries a stand-in `npm` (a `#!/usr/bin/env node` script, `renderNpmStandIn`) and the line's PATH holds no Node, so the install of the runner program really starts npm — the flow is red without `nodeOnPath.ts` — instead of linking `node_modules` by the test seam. The line's Node install is the REAL script there (`placeRootNodeInstallerWrapper` gives it the flow's own shared folder and a local mirror of
 nodejs.org — a copy of the Node running the flow — as its test seams): the machine has no Node on the line's PATH, and the pairing, the root step and the launcher run on the
 downloaded one; the retry finds it already there. `runnerNodeMoveE2e.test.ts`: a runner paired on a system Node moves to its own (a mirror with a wrong checksum moves nothing, says why and waits a day; the link is up first;
 a day later: the launcher names the Node, the link comes back running on it and the failure record is gone; a job sees it first on its PATH and the npm / Corepack folders in `~/.charness-runner`;

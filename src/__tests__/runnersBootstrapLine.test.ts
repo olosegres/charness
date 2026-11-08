@@ -2,9 +2,10 @@
  * @description `runners/bootstrapLine.ts`: the `sh` lines the operator pastes on the runner machine. They are run here by a real `sh`
  * with a stand-in `ssh` that serves a package: the key and the pinned host key reach ssh as files, ssh is called with strict host key
  * checking and nothing else to log in with, the package is unpacked, the runner utility is handed the code — and the temp folder is gone.
- * The ADMIN line (`sudo sh -c '<checks>' sh '<script>' <account>`) is run the same way with stand-ins for `id`, `uname` and `sudo` (a
- * second real account is not available to a test): the checks refuse a missing, root or admin account BEFORE anything is paired, the
- * pairing runs through `sudo -u <account> -H`, and the account's launcher installs the service only after a pairing that succeeded.
+ * The line is ONE script with two ways, chosen by who runs it (stand-ins for `id`, `uname` and `sudo` — a second real account is not available to a
+ * test): without root (the line minus its `sudo`, in the runner account's own terminal) it pairs THAT account from a private copy, and the last word
+ * must be the account's own name; as root (`sudo sh -c '<script>' sh <account>`) the checks refuse a missing, root or admin account BEFORE anything is
+ * fetched, the root step runs from a root-made copy, and the account is paired and its service installed by that step only.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -16,7 +17,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { gzipSync } from 'zlib';
-import { buildAdminBootstrapLine, buildBootstrapLine, checkIsAccountName, defaultRunnerAccount } from '../runners/bootstrapLine';
+import { buildAdminBootstrapLine, checkIsAccountName, defaultRunnerAccount } from '../runners/bootstrapLine';
 import { checkIsAdminAccount, linuxAdminGroups, macAdminGroup } from '../runnerUtility/adminCheck';
 import { formatGateAnswerHead } from '../runners/gateProtocol';
 import { encodePairCode } from '../runners/pairCode';
@@ -98,17 +99,26 @@ function createLineEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return { ...process.env, PATH: `${path.join(workDir, 'bin')}:${process.env.PATH}`, TMPDIR: path.join(workDir, 'tmp'), STUB_WORK_DIR: workDir, STUB_NODE: process.execPath, ...extra };
 }
 
+/** The name the stand-in `id` gives the user who runs a line without root: the account the line is meant for (the last word is `runner` unless the test says otherwise). */
+const ownAccountName = 'runner';
+
+/** The line as the runner account itself pastes it, in its own terminal: the same line without its leading `sudo`. */
+function buildOwnAccountLine(payload = createPairCodePayload(), account: string = ownAccountName): string {
+  return buildAdminBootstrapLine(payload, account).replace(/^sudo /, '');
+}
+
 function runLine(payload = createPairCodePayload()): ReturnType<typeof spawnSync> {
-  return spawnSync('sh', ['-c', buildBootstrapLine(payload)], {
+  return spawnSync('sh', ['-c', buildOwnAccountLine(payload)], {
     encoding: 'utf8',
     env: createLineEnv(),
   });
 }
 
-describe('bootstrap line', () => {
+describe('the line without sudo, in the runner account\'s own terminal', () => {
   beforeEach(() => {
     workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bl-'));
     fs.mkdirSync(path.join(workDir, 'tmp'));
+    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 1000, userName: ownAccountName, os: 'Linux', accounts: {} });
   });
   afterEach(() => {
     fs.rmSync(workDir, { recursive: true, force: true });
@@ -116,18 +126,18 @@ describe('bootstrap line', () => {
 
   it('is one line of `sh -c` with the code in it, and the script is valid sh', () => {
     const payload = createPairCodePayload();
-    const line = buildBootstrapLine(payload);
-    assert.ok(line.startsWith("sh -c '") && line.endsWith("'"));
+    const line = buildOwnAccountLine(payload);
+    assert.ok(line.startsWith("sh -c '") && line.endsWith(`' sh ${ownAccountName}`), 'the account it runs as is its last word');
     assert.ok(!line.includes('\n'));
     assert.ok(line.includes(encodePairCode(payload)));
-    const script = line.slice("sh -c '".length, -1);
+    const script = line.slice("sh -c '".length, -`' sh ${ownAccountName}`.length);
     assert.ok(!script.includes("'"));
     assert.equal(spawnSync('sh', ['-n', '-c', script]).status, 0);
   });
 
   it('carries no value that could end its quoting', () => {
-    const line = buildBootstrapLine(createPairCodePayload());
-    const script = line.slice("sh -c '".length, -1);
+    const line = buildOwnAccountLine();
+    const script = line.slice("sh -c '".length, -`' sh ${ownAccountName}`.length);
     assert.ok(!/[`\\]/.test(script.replace(/\\"/g, '').replace(/\\n/g, '')), 'no backtick and no stray backslash');
   });
 
@@ -135,7 +145,7 @@ describe('bootstrap line', () => {
     const payload = createPairCodePayload({ host: 'hub.example', port: 2222, user: 'hubuser' });
     installStubSsh(path.join(workDir, 'bin'));
     createBootstrapAnswer();
-    const result = spawnSync('sh', ['-c', buildBootstrapLine(payload)], {
+    const result = spawnSync('sh', ['-c', buildOwnAccountLine(payload)], {
       encoding: 'utf8',
       env: createLineEnv(),
     });
@@ -164,14 +174,14 @@ describe('bootstrap line', () => {
     assert.match(String(result.stdout), /--package-id 0123456789abcdef /, 'the id the hub announced travels on');
   });
 
-  it('says what it is doing before the long step, on stdout: «downloading the package from the hub», and only then the runner utility takes over', () => {
+  it('says what it is doing before the long step, on stdout: «checking the account», «downloading the package from the hub», and only then the runner utility takes over', () => {
     installStubSsh(path.join(workDir, 'bin'));
     createBootstrapAnswer();
     const result = runLine();
     assert.equal(result.status, 0, String(result.stderr));
     const lines = String(result.stdout).split('\n');
-    assert.equal(lines[0], 'charness-runner: downloading the package from the hub');
-    assert.ok(lines.findIndex((line) => line.startsWith('RUNNER_CLI ')) > 0, 'the runner utility starts after the step line');
+    assert.deepEqual(lines.slice(0, 2), ['charness-runner: checking the account runner', 'charness-runner: downloading the package from the hub']);
+    assert.ok(lines.findIndex((line) => line.startsWith('RUNNER_CLI ')) > 1, 'the runner utility starts after the step lines');
   });
 
   it('names the download step also when the hub then refuses it: the step on stdout, the refusal on stderr', () => {
@@ -179,7 +189,7 @@ describe('bootstrap line', () => {
     fs.writeFileSync(path.join(workDir, 'bin', 'ssh'), '#!/bin/sh\necho "Permission denied" >&2\nexit 255\n', { mode: 0o755 });
     const result = runLine();
     assert.notEqual(result.status, 0);
-    assert.equal(String(result.stdout), 'charness-runner: downloading the package from the hub\n');
+    assert.equal(String(result.stdout), 'charness-runner: checking the account runner\ncharness-runner: downloading the package from the hub\n');
     assert.match(String(result.stderr), /charness-runner: the hub refused or did not answer/);
   });
 
@@ -196,7 +206,7 @@ describe('bootstrap line', () => {
   it('leaves nothing behind in the temp folder, not even the key', () => {
     installStubSsh(path.join(workDir, 'bin'));
     createBootstrapAnswer();
-    const result = spawnSync('sh', ['-c', buildBootstrapLine(createPairCodePayload())], {
+    const result = spawnSync('sh', ['-c', buildOwnAccountLine()], {
       encoding: 'utf8',
       env: createLineEnv(),
     });
@@ -207,7 +217,7 @@ describe('bootstrap line', () => {
   it('stops with a clear line when ssh cannot fetch the package — an expired or used line is a refused key, not an empty answer — and still cleans up', () => {
     installStubSsh(path.join(workDir, 'bin'));
     fs.writeFileSync(path.join(workDir, 'bin', 'ssh'), '#!/bin/sh\necho "Permission denied" >&2\nexit 255\n', { mode: 0o755 });
-    const result = spawnSync('sh', ['-c', buildBootstrapLine(createPairCodePayload())], {
+    const result = spawnSync('sh', ['-c', buildOwnAccountLine()], {
       encoding: 'utf8',
       env: createLineEnv(),
     });
@@ -227,7 +237,7 @@ describe('bootstrap line', () => {
       const resolved = spawnSync('sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
       if (resolved.startsWith('/')) fs.symlinkSync(resolved, path.join(toolsBin, tool));
     }
-    const result = spawnSync('/bin/sh', ['-c', buildBootstrapLine(createPairCodePayload())], {
+    const result = spawnSync('/bin/sh', ['-c', buildOwnAccountLine()], {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${path.join(workDir, 'bin')}:${toolsBin}`, TMPDIR: path.join(workDir, 'tmp'), HOME: path.join(workDir, 'machine-home'), STUB_WORK_DIR: workDir, STUB_NODE: process.execPath },
     });
@@ -239,7 +249,7 @@ describe('bootstrap line', () => {
   it('stops before the pairing when the Node cannot be installed — the script\'s own words on stderr, nothing run under a missing Node — and cleans up', () => {
     installStubSsh(path.join(workDir, 'bin'));
     createBootstrapAnswer();
-    const result = spawnSync('sh', ['-c', buildBootstrapLine(createPairCodePayload())], { encoding: 'utf8', env: createLineEnv({ STUB_ENSURE_NODE_FAILS: '1' }) });
+    const result = spawnSync('sh', ['-c', buildOwnAccountLine()], { encoding: 'utf8', env: createLineEnv({ STUB_ENSURE_NODE_FAILS: '1' }) });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /^charness-runner: could not download Node\.js \(stand-in\)$/m);
     assert.ok(!result.stdout.includes('RUNNER_CLI'), 'the pairing never started');
@@ -247,10 +257,50 @@ describe('bootstrap line', () => {
   });
 
   it('asks nothing of the machine\'s Node: no `node` is named in the line before the Node install, and the version check of the old line is gone', () => {
-    const { script } = { script: /^sh -c '(.*)'$/.exec(buildBootstrapLine(createPairCodePayload()))?.[1] ?? '' };
+    const script = /^sh -c '(.*)' sh runner$/.exec(buildOwnAccountLine())?.[1] ?? '';
     assert.ok(!/(^|[ ;])node /.test(script), 'the pairing is started by the path the script printed, not by a `node` of the PATH');
     assert.ok(!script.includes('process.versions'), 'and no version of a system Node is judged by the line');
-    assert.match(script, /; n=\$\(sh "\$d\/pkg\/remoteRun\/ensureNode\.sh" own "\$HOME\/\.charness-runner\/node"\); "\$n" "\$d\/pkg\/dist\/runnerUtility\/runnerCli\.js" pair --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" cr1\./);
+    assert.match(script, /; set -- --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" cr1\./);
+    assert.match(script, /else n=\$\(sh "\$d\/pkg\/remoteRun\/ensureNode\.sh" own "\$HOME\/\.charness-runner\/node"\); "\$n" "\$d\/pkg\/dist\/runnerUtility\/runnerCli\.js" pair "\$@"; fi$/);
+  });
+
+  it('pairs the account it runs as and nothing else: the pairing program runs from a PRIVATE copy in the account\'s own $TMPDIR, no root step runs, nothing is asked of sudo', () => {
+    installStubSsh(path.join(workDir, 'bin'));
+    createBootstrapAnswer();
+    const result = runLine();
+    assert.equal(result.status, 0, String(result.stderr));
+    const output = String(result.stdout);
+    assert.doesNotMatch(output, /ROOT_SERVICE/, 'the service step is root\'s: this way installs none');
+    const pairedFrom = /^RUNNER_CLI_FROM (.*)$/m.exec(output)?.[1] ?? '';
+    assert.ok(pairedFrom.startsWith(`${path.join(workDir, 'tmp')}${path.sep}charness-runner.`), `the copy is made in the account's own TMPDIR: ${pairedFrom}`);
+    assert.match(output, /^MODES folder=700 package=700 key=600$/m, 'and stays private: nobody else can read the account\'s copy');
+    assert.deepEqual(readAccountRuns(), [], 'no sudo');
+    assert.equal(fs.existsSync(pairedFrom), false, 'and the copy is gone when the line ends');
+  });
+
+  it('refuses when its last word is not the account it runs as — before anything is fetched: a main account with a leftover «runner» at the end must not be paired by mistake, and the code stays unspent', () => {
+    installStubSsh(path.join(workDir, 'bin'));
+    createBootstrapAnswer();
+    const result = spawnSync('sh', ['-c', buildOwnAccountLine(createPairCodePayload(), 'someoneelse')], { encoding: 'utf8', env: createLineEnv() });
+    assert.notEqual(result.status, 0);
+    assert.match(String(result.stderr), /^charness-runner: you are not someoneelse: run the line as someoneelse or with sudo$/m);
+    assert.equal(String(result.stdout), 'charness-runner: checking the account someoneelse\n');
+    assert.ok(!fs.existsSync(path.join(workDir, 'ssh.args')), 'the hub was not asked for the package');
+    assert.deepEqual(readAccountRuns(), []);
+    assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), [], 'and no copy was made');
+  });
+
+  it('judges the name before anything else in this way too — an edited last word that is no account name runs nothing', () => {
+    installStubSsh(path.join(workDir, 'bin'));
+    createBootstrapAnswer();
+    const line = buildOwnAccountLine();
+    const marker = path.join(workDir, 'pwned');
+    for (const edited of ['-n', 'a b', 'x;y', '$(touch pwned)']) {
+      const result = spawnSync('sh', ['-c', `${line.slice(0, line.length - ' runner'.length)} '${edited}'`], { encoding: 'utf8', cwd: workDir, env: createLineEnv() });
+      assert.notEqual(result.status, 0, JSON.stringify(edited));
+      assert.match(String(result.stderr), /is not an account name/, JSON.stringify(edited));
+    }
+    assert.ok(!fs.existsSync(marker) && !fs.existsSync(path.join(workDir, 'ssh.args')));
   });
 });
 
@@ -269,7 +319,7 @@ const stubUserLine = 'sudo-stub';
  * account. Every `sudo` call is logged to `stub.log` with the program it starts and that program's first argument — so the pairing and any
  * other call as the account are told apart by what they run, not by how many there are.
  */
-function installAdminStubs(binDir: string, options: { runnerUid: number; os: string; accounts: Record<string, StubAccount> }): void {
+function installAdminStubs(binDir: string, options: { runnerUid: number; userName?: string; os: string; accounts: Record<string, StubAccount> }): void {
   fs.mkdirSync(binDir, { recursive: true });
   const accountsDir = path.join(workDir, 'accounts');
   fs.mkdirSync(accountsDir, { recursive: true });
@@ -280,6 +330,8 @@ function installAdminStubs(binDir: string, options: { runnerUid: number; os: str
   fs.writeFileSync(path.join(binDir, 'id'), [
     '#!/bin/sh',
     `if [ "$1" = -u ] && [ -z "$2" ]; then echo ${options.runnerUid}; exit 0; fi`,
+    // The name of the account that runs the line (what a line without root compares its last word with).
+    `if [ "$1" = -un ]; then echo ${options.userName ?? 'root'}; exit 0; fi`,
     `f="${accountsDir}/$2"`,
     '[ -f "$f" ] || { echo "id: $2: no such user" >&2; exit 1; }',
     'read uid groups < "$f"',
@@ -347,25 +399,26 @@ describe('admin bootstrap line: how it is built', () => {
     assert.equal(spawnSync('sh', ['-n', '-c', parts.script]).status, 0, 'valid sh');
   });
 
-  it('the root copy is made BY ROOT in a folder of its own that the account can read, without taking owners from the archive; the plain line has none of that', () => {
-    const payload = createPairCodePayload();
-    const { script } = splitAdminLine(buildAdminBootstrapLine(payload));
-    assert.ok(script.includes('d=$(mktemp -d "/tmp/charness-runner.XXXXXXXX")'), 'not the admin\'s own private $TMPDIR, which the account could not enter');
-    assert.ok(script.includes('chmod 755 "$d"'));
-    assert.ok(script.includes('umask 022; tail -c'), 'the archive and the package are readable — after the key files were made private');
+  it('the root copy is made BY ROOT in a folder of its own that the account can read, without taking owners from the archive; the account\'s own copy is private', () => {
+    const { script } = splitAdminLine(buildAdminBootstrapLine(createPairCodePayload()));
+    const [asRoot, asAccount] = script.split(/; else /);
+    assert.ok(asRoot.includes('b=/tmp;'), 'not the admin\'s own private $TMPDIR, which the account could not enter');
+    assert.ok(asAccount.includes('b=${TMPDIR:-/tmp};'), 'while the account\'s own copy is made in its own');
+    assert.ok(script.includes('[ "$r" = 0 ] || { chmod 755 "$d"; umask 022; }'), 'readable for the account only in root\'s way, and only after the key files were made private');
     assert.ok(script.includes('tar --no-same-owner -xzf'), 'root\'s copy stays root\'s');
-    const plain = /^sh -c '(.*)'$/.exec(buildBootstrapLine(payload))?.[1] ?? '';
-    for (const forAccountOnly of ['chmod 755', 'umask 022', '--no-same-owner', '"/tmp/charness-runner']) assert.ok(!plain.includes(forAccountOnly), forAccountOnly);
-    assert.ok(plain.includes('${TMPDIR:-/tmp}/charness-runner.'));
   });
 
   it('runs the root step from that copy — never from the account\'s folder — and hands it the pairing: the shell has no `sudo -u` of its own, so nothing of the account\'s runs outside the root step\'s terminal-less runner', () => {
     const { script } = splitAdminLine(buildAdminBootstrapLine(createPairCodePayload()));
-    assert.match(script, /; n=\$\(sh "\$d\/pkg\/remoteRun\/ensureNode\.sh" root "\$a"\); "\$n" "\$d\/pkg\/dist\/runnerUtility\/rootServiceCli\.js" install "\$a" --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" cr1\./);
+    assert.match(script, /; set -- --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" cr1\./);
     assert.ok(!script.includes('sudo -u'), 'no step of the account\'s is run by the line, with the admin\'s terminal attached — the Node install, in the package\'s script, asks the account nothing but `test`');
-    assert.ok(!script.includes('runnerCli.js'), 'the account\'s pairing program is started by the root step');
-    assert.ok(!script.includes('.charness-runner'), 'root is never pointed at the account\'s state folder or launcher');
-    assert.ok(!script.includes('service install'), 'and never asked to run the account\'s `service install`');
+    // The two ways end in two programs: root's step for the account named, the account's own pairing for the account that runs the line.
+    const [, finalSteps] = script.split('; if [ "$r" = 1 ]; then ');
+    const [rootStep, accountStep] = finalSteps.split('; else ');
+    assert.equal(rootStep, 'n=$(sh "$d/pkg/remoteRun/ensureNode.sh" root "$a"); "$n" "$d/pkg/dist/runnerUtility/rootServiceCli.js" install "$a" "$@"');
+    assert.ok(!rootStep.includes('runnerCli.js') && !rootStep.includes('.charness-runner') && !rootStep.includes('service install'), 'root is never pointed at the account\'s state folder or launcher, nor asked to run the account\'s program');
+    assert.ok(accountStep.startsWith('n=$(sh "$d/pkg/remoteRun/ensureNode.sh" own "$HOME/.charness-runner/node"); "$n" "$d/pkg/dist/runnerUtility/runnerCli.js" pair "$@"'));
+    assert.ok(!accountStep.includes('rootServiceCli') && !accountStep.includes('sudo'), 'and the account\'s way has no root step and asks nothing of sudo');
   });
 
   it('carries no value that could end its quoting, and the account is checked before it is written', () => {
@@ -466,11 +519,12 @@ describe('admin bootstrap line: the checks as root, the root-owned copy, the swi
     assert.deepEqual(readAccountRuns(), [], 'nothing ran as the account');
   });
 
-  it('refuses to run without root, before anything is fetched', () => {
-    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 1000, os: 'Linux', accounts: { runner: standardAccount } });
+  it('run by another user without sudo it is the account\'s way and refuses an account that is not the one it runs as — before anything is fetched', () => {
+    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 1000, userName: 'alice', os: 'Linux', accounts: { runner: standardAccount } });
     const result = runAdminLine();
     assert.notEqual(result.status, 0);
-    assert.match(String(result.stderr), /run this line with sudo/);
+    assert.match(String(result.stderr), /you are not runner: run the line as runner or with sudo/);
+    assert.doesNotMatch(String(result.stdout), /ROOT_SERVICE/);
     assertNothingFetched();
   });
 

@@ -8,10 +8,10 @@
  *   boot → the command is in the menu and General's /help names it → a topic is sent to General and a tap from there is refused,
  *   nothing is created on disk for an instance that has no runner
  *   → General's empty list (Pair / Refresh) → Pair asks for an address (an address that answers nothing is refused with the reason and
- *     asked again) → the right one is kept in settings.json and the pairing follows as TWO messages — the admin line, then the plain one —
- *     each HTML with its line in a <pre>, no keyboard, both for one code
- *   → the plain line run on the runner machine pairs it: the FIRST message turns into «Runner “…” paired …» and its line is gone, the SECOND
- *     is deleted (the result is not said twice), the key line of the machine is in authorized_keys and the temporary one is not
+ *     asked again) → the right one is kept in settings.json and the pairing follows as ONE message — the explanation, then the line — HTML
+ *     with the line in a <pre>, no keyboard
+ *   → the line run on the runner machine WITHOUT its `sudo`, by the account itself (its last word names that account), pairs it: the message turns
+ *     into «Runner “…” paired …» and its line is gone, the key line of the machine is in authorized_keys and the temporary one is not
  *   → the utility holds the link: /runners lists the machine online, and the live probe adds its hardware, jobs and capabilities
  *   → Pause marks it (a toast, the list says paused, Resume instead of Pause), Resume undoes it; a keyboard of an older revision only
  *     says the list changed and removes nothing
@@ -19,13 +19,11 @@
  *     and of authorized_keys, empties the list, the machine's key is refused by sshd, the utility reports it was removed and the job is
  *     killed (the cleanup is the runner utility's: this step is red until it exists)
  *   → a second pairing needs no address (it was kept); across a restart of the bot the message is found again from the instance's own
- *     record and turns into «Pairing code expired.» when its code runs out — while Telegram refuses to delete the second message, which
- *     then points at the first — and the expired code is gone from authorized_keys; the first line, already used, and the expired one
- *     are refused on the runner machine
- *   → a pairing whose FIRST message the person deleted by hand: when its code runs out the code still settles (Telegram answers «message to
- *     edit not found», which is settled, not retried), the second message is deleted and the instance's record is empty
- *   → a third code is used on a second machine while the bot is STOPPED: the restarted bot turns its first message into «paired» and
- *     deletes the second
+ *     record and turns into «Pairing code expired.» when its code runs out, and the expired code is gone from authorized_keys; the first
+ *     line, already used, and the expired one are refused on the runner machine
+ *   → a pairing whose message the person deleted by hand: when its code runs out the code still settles (Telegram answers «message to
+ *     edit not found», which is settled, not retried) and the instance's record is empty
+ *   → a third code is used on a second machine while the bot is STOPPED: the restarted bot turns its message into «paired"
  *   → a runner's link that changes address (its status file says so) is said once in General and pinned — not at the next looks, not after a
  *     restart — and the note stays on the list
  *   → thirty seeded machines (a registry written by hand, a snapshot each) make a list of several pages: Next / Previous edit the SAME
@@ -42,6 +40,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import { getRunnerLinkStatus, writeLinkState } from '../runners/linkControl';
 import * as path from 'node:path';
 import { testNodeModulesEnvName } from '../runnerUtility/appInstall';
@@ -388,52 +387,54 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     return readSettings().runnerHost;
   }
 
-  /** The code in a pairing line (the same in both lines of one pairing). */
+  /** The code in a pairing line. */
   function readLineCode(line: string): string {
     return /cr1\.[A-Za-z0-9_-]+/.exec(line)?.[0] ?? '';
   }
 
-  it('the right address is kept in settings.json and the pairing follows as two messages — the admin line, then the plain one — each HTML with its line in a <pre>, no keyboard', async () => {
-    await general.sendAndAwaitReply(`127.0.0.1:${link.sshPort}`, 'Pair a runner — valid 10 minutes, single use.');
+  /** The line as the runner account pastes it in its own terminal: without its `sudo`, and with the account that runs this flow as the last word (the line pairs the account it runs as). */
+  function toOwnAccountLine(line: string): string {
+    const withoutSudo = line.replace(/^sudo /, '');
+    return `${withoutSudo.slice(0, withoutSudo.lastIndexOf(' ') + 1)}${os.userInfo().username}`;
+  }
+
+  it('the right address is kept in settings.json and the pairing follows as ONE message — the explanation, then the line — HTML with the line in a <pre>, no keyboard', async () => {
+    await general.sendAndAwaitReply(`127.0.0.1:${link.sshPort}`, 'Pair a runner — valid 10 minutes, single use;');
     assert.deepEqual(readSettingsRunnerHost(), { host: '127.0.0.1', port: link.sshPort });
-    const pairingMessage = await general.waitForMessage('the admin pairing message', (message) => message.text.startsWith('Pair a runner'));
-    const plainMessage = await general.waitForMessage('the plain pairing message', (message) => message.text.startsWith('② Without admin rights') && message.message_id > pairingMessage.message_id);
-    assert.ok(pairingMessage.text.includes('① From an admin account of the runner machine: pairs «runner» (the last word'), pairingMessage.text);
-    assert.ok(plainMessage.text.endsWith('Anyone with either line can attach a machine to this charness until one of them is used or expires.'));
+    const pairingMessage = await general.waitForMessage('the pairing message', (message) => message.text.startsWith('Pair a runner'));
+    assert.ok(pairingMessage.text.includes('The last word, «runner», is the account that runs the agents\' code'), pairingMessage.text);
+    assert.ok(pairingMessage.text.includes('No admin rights? Run the line in that account\'s own terminal without «sudo»:'), pairingMessage.text);
+    assert.ok(!general.listMessages().some((message) => message.text.startsWith('② Without admin rights')), 'there is no second message');
     assert.equal(pairingMessage.reply_markup, undefined);
-    assert.equal(plainMessage.reply_markup, undefined);
     const adminLine = readPairingLine(pairingMessage);
     assert.match(adminLine, /^sudo sh -c '.*cr1\.[A-Za-z0-9_-]+.*' sh runner$/s);
-    firstPairingLine = readPairingLine(plainMessage);
-    assert.match(firstPairingLine, /^sh -c '.*cr1\.[A-Za-z0-9_-]+.*'$/s);
-    assert.equal(readLineCode(adminLine), readLineCode(firstPairingLine), 'one code behind both lines');
-    for (const message of [pairingMessage, plainMessage]) {
-      const sendCall = fakeTelegram.listCalls('sendMessage').find((call) => call.payload.text === message.text);
-      assert.equal(sendCall?.payload.parse_mode, 'HTML');
-    }
+    firstPairingLine = toOwnAccountLine(adminLine);
+    assert.match(firstPairingLine, new RegExp(`^sh -c '.*cr1\\.[A-Za-z0-9_-]+.*' sh ${os.userInfo().username}$`, 's'));
+    assert.equal(readLineCode(adminLine), readLineCode(firstPairingLine), 'the same code, the other way of running it');
+    const sendCall = fakeTelegram.listCalls('sendMessage').find((call) => call.payload.text === pairingMessage.text);
+    assert.equal(sendCall?.payload.parse_mode, 'HTML');
     const [pending] = readJson<{ pending: Array<{ pairId: string; messageRef: string | null; label: string; host: string; port: number }> }>(path.join(getRegistryDir(), 'pending.json')).pending;
     assert.equal(pending.messageRef, null, 'the shared registry carries credentials only');
     // The instance writes its record after the send has been answered, so a message can be on the fake Bot API a moment before its record is.
-    await waitUntil(() => readPairingStore().length === 2, 'the instance to record the two messages it sent', 10_000);
+    await waitUntil(() => readPairingStore().length === 1, 'the instance to record the message it sent', 10_000);
     assert.deepEqual(readPairingStore().map((message) => [message.pairId, message.key, message.messageId]), [
       [pending.pairId, `${group.id}:${generalTopicThreadId}`, pairingMessage.message_id],
-      [pending.pairId, `${group.id}:${generalTopicThreadId}`, plainMessage.message_id],
-    ], 'the instance keeps its own record of both messages');
+    ], 'the instance keeps its own record of the message');
     assert.deepEqual([pending.label, pending.host, pending.port], ['@fake_charness_bot', '127.0.0.1', link.sshPort]);
     assert.match(readAuthorizedKeys(), /charness-pairing:/);
   });
 
-  it('the line run on the runner machine pairs it: the first message turns into «paired» and loses its line, the second is deleted; authorized_keys holds the machine\'s key, not the temporary one', async () => {
+  it('the line run on the runner machine without its sudo, by the account itself, pairs it: the message turns into «paired» and loses its line; authorized_keys holds the machine\'s key, not the temporary one', async () => {
     const pairingMessage = general.listMessages().find((message) => message.text.startsWith('Pair a runner'));
-    const plainMessage = general.listMessages().find((message) => message.text.startsWith('② Without admin rights'));
-    assert.ok(pairingMessage && plainMessage, 'both pairing messages are still there');
+    assert.ok(pairingMessage, 'the pairing message is still there');
     const result = await runPairingLineAsync(firstPairingLine);
     assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Paired with /);
+    assert.match(result.output, /Keep it running:/, 'the account\'s way installs no service: the help for keeping it running is printed');
     await general.waitForMessageText('the pairing message to read paired', pairingMessage, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u.test(text));
     assert.ok(!pairingMessage.text.includes('cr1.') && !pairingMessage.text.includes('sh -c'), 'the line is gone from the message');
-    await waitUntil(() => plainMessage.isDeleted === true, 'the second pairing message to be deleted — «paired» is said once', 10_000);
-    assert.ok(!general.listMessages().some((message) => message.message_id === plainMessage.message_id), 'and it is no longer in the topic');
-    await waitUntil(() => readPairingStore().length === 0, 'the settled messages to leave the instance\'s record', 10_000);
+    assert.notEqual(pairingMessage.isDeleted, true, 'the message stays and says what became of the code');
+    await waitUntil(() => readPairingStore().length === 0, 'the settled message to leave the instance\'s record', 10_000);
     const { runners } = readPaired();
     assert.equal(runners.length, 1);
     [{ id: runnerId, name: runnerName }] = runners;
@@ -504,24 +505,18 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     await waitUntil(() => !checkIsRunnerJobRunning(), 'the removed machine to kill its running job', linkTimeoutMs);
   });
 
-  it('a second pairing needs no address; after a restart of the bot the message is found again from its own record and turns to «expired», the second message — Telegram will not delete it — points at the first; the expired code and the used one are refused', async () => {
+  it('a second pairing needs no address; after a restart of the bot the message is found again from its own record and turns to «expired»; the expired code and the used one are refused', async () => {
     const list = await general.sendAndAwaitReply('/runners', 'No runners yet.');
     await general.tapAndAwaitAnswer(list, 'rnr_pair');
     const second = await general.waitForMessage('the second pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
-    const secondPlain = await general.waitForMessage('the second pairing\'s plain message', (message) => message.text.startsWith('② Without admin rights') && message.message_id > second.message_id);
-    secondPairingLine = readPairingLine(secondPlain);
+    secondPairingLine = toOwnAccountLine(readPairingLine(second));
     assert.notEqual(secondPairingLine, firstPairingLine);
     assert.deepEqual(readSettingsRunnerHost(), { host: '127.0.0.1', port: link.sshPort }, 'the address was kept');
 
     await getCharness().stop();
     await startCharness();
-    // Telegram will not delete the second message (it is older than 48 hours, say): it must not keep its live line either.
-    fakeTelegram.isMessageDeletionRefused = true;
     expireOpenPairings();
     await general.waitForMessageText('the pairing message to read expired', second, (text) => text === 'Pairing code expired.');
-    await general.waitForMessageText('the plain pairing message to point at the first', secondPlain, (text) => text === 'The code of this line is settled — see the message above for the result.');
-    assert.notEqual(secondPlain.isDeleted, true, 'the delete was refused: the message stayed, with the pointer');
-    fakeTelegram.isMessageDeletionRefused = false;
     assert.equal(readJson<{ pending: unknown[] }>(path.join(getRegistryDir(), 'pending.json')).pending.length, 0, 'the expired code is swept');
     assert.doesNotMatch(readAuthorizedKeys(), /charness-pairing:/);
 
@@ -532,41 +527,36 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.equal(readPaired().runners.length, 0, 'neither paired a machine');
   });
 
-  it('a pairing message the person deleted by hand: the code still settles when it runs out — the second message is deleted, the instance\'s record empties, nothing is retried', async () => {
+  it('a pairing message the person deleted by hand: the code still settles when it runs out — the instance\'s record empties, nothing is retried', async () => {
     const list = await general.sendAndAwaitReply('/runners', 'No runners yet.');
     await general.tapAndAwaitAnswer(list, 'rnr_pair');
     const fourth = await general.waitForMessage('the fourth pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
-    const fourthPlain = await general.waitForMessage('the fourth pairing\'s plain message', (message) => message.text.startsWith('② Without admin rights') && message.message_id > fourth.message_id);
-    // The bot records a message just after Telegram has it: the record is read once both are in it.
-    await waitUntil(() => readPairingStore().length === 2, 'both messages to be followed', 10_000);
-    // The person deletes the admin message by hand (the fake Bot API then answers «message to edit not found» to an edit of it, like Telegram).
+    // The bot records a message just after Telegram has it: the record is read once it is in it.
+    await waitUntil(() => readPairingStore().length === 1, 'the message to be followed', 10_000);
+    // The person deletes the message by hand (the fake Bot API then answers «message to edit not found» to an edit of it, like Telegram).
     fourth.isDeleted = true;
     expireOpenPairings();
-    await waitUntil(() => fourthPlain.isDeleted === true, 'the second pairing message to be deleted', 10_000);
-    await waitUntil(() => readPairingStore().length === 0, 'both messages to leave the instance\'s record, though the first could not be edited', 10_000);
+    await waitUntil(() => readPairingStore().length === 0, 'the message to leave the instance\'s record, though it could not be edited', 10_000);
     assert.equal(readJson<{ pending: unknown[] }>(path.join(getRegistryDir(), 'pending.json')).pending.length, 0, 'the expired code is swept');
     assert.equal(readPaired().runners.length, 0, 'nothing was paired');
   });
 
-  it('a code used while the bot is stopped: the restarted bot turns its first message into «paired» and deletes the second', async () => {
+  it('a code used while the bot is stopped: the restarted bot turns its message into «paired»', async () => {
     const list = await general.sendAndAwaitReply('/runners', 'No runners yet.');
     await general.tapAndAwaitAnswer(list, 'rnr_pair');
     const third = await general.waitForMessage('the third pairing message', (message) => message.text.startsWith('Pair a runner') && message.message_id > list.message_id);
-    const thirdPlain = await general.waitForMessage('the third pairing\'s plain message', (message) => message.text.startsWith('② Without admin rights') && message.message_id > third.message_id);
-    thirdPairingLine = readPairingLine(thirdPlain);
+    thirdPairingLine = toOwnAccountLine(readPairingLine(third));
 
     await getCharness().stop();
     const result = await runPairingLineAsync(thirdPairingLine, createSecondMachine());
     assert.equal(result.status, 0, result.output);
-    assert.ok(third.text.startsWith('Pair a runner') && thirdPlain.text.startsWith('② Without admin rights'), 'nobody edited the messages while the bot was down');
-    assert.notEqual(thirdPlain.isDeleted, true, 'nor deleted the second one');
+    assert.ok(third.text.startsWith('Pair a runner'), 'nobody edited the message while the bot was down');
     assert.equal(readPaired().runners.length, 1, 'the second machine is paired');
 
     await startCharness();
     await general.waitForMessageText('the pairing message to read paired', third, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u.test(text));
     assert.ok(!third.text.includes('cr1.'), 'the line is gone');
-    await waitUntil(() => thirdPlain.isDeleted === true, 'the second pairing message to be deleted', 10_000);
-    await waitUntil(() => readPairingStore().length === 0, 'the settled messages to leave the instance\'s record', 10_000);
+    await waitUntil(() => readPairingStore().length === 0, 'the settled message to leave the instance\'s record', 10_000);
   });
 
   it('a link that changes address is said ONCE in General, pinned — also across a restart of the bot — and its note stays on the list and in `ls`', async () => {
@@ -671,6 +661,6 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
       assert.ok(!consoleLog.includes(code), 'not in the console log');
       assert.ok(!`${earlierOutput}${getCharness().output}`.includes(code), 'not in the bot\'s output');
     }
-    assert.ok(!trace.includes('Anyone with either line') && !trace.includes('From an admin account'), 'not even the text around it');
+    assert.ok(!trace.includes('keep the line private') && !trace.includes('Paste it in an admin account'), 'not even the text around it');
   });
 });

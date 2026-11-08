@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**Pairing a runner now posts ONE line, with the words that say which word of it to change — and the same line pairs the runner account when that account runs it itself, without `sudo`.**
+Before, `/runners` → ＋ Pair a new runner (and `charness runners pair`) posted two huge lines: the `sudo` line for an admin account and a second, plain line for the runner account itself, each with its own text; the second message was deleted when the code was used.
+Now:
+  - One message: the `sudo` line under a short explanation — that it runs code from this charness host as root on that machine, that its last word is the account the runner and the agents' code run as (an existing standard, non-admin account, not your main one — change it if needed) and that, without admin rights, you run the same line in that account's own terminal without the leading `sudo`. The message is in all twelve languages and `charness runners pair` says the same in words. It turns into «paired» / «expired» as before; there is no second message to delete.
+  - Run without `sudo`, the line pairs only the account it runs as: it uses a private copy in that account's own temporary folder, gives the runner its own Node.js in `~/.charness-runner/node`, installs no service and prints how to keep it running — what the old plain line did. Its last word must be that account's name: run from another account it stops before downloading anything with «you are not runner: run the line as runner or with sudo», so a main account with a leftover `runner` at the end is never paired by mistake.
+  - A message of the older kind that is still open when this version starts is followed and settled all the same.
+
 **Pairing a runner with the `sudo` line no longer stops at «npm ci failed: env: 'node': No such file or directory» on a machine that has no Node.js of its own.**
 Before, the line downloaded the package and found the runner's Node.js, then failed at «installing the runner program (npm)»: npm is a `#!/usr/bin/env node` script, and the PATH of the account the line works as (what `sudo -u` hands it) holds no `node` — the runner's Node lives in its own folder, on nobody's PATH. The same would have stopped the plain line on a machine with no Node, and the update of a running always-on runner (a systemd user service starts with the manager's default PATH).
 Now the install of the runner program starts npm with the folder of the Node that runs the utility first on its PATH, whatever PATH it was started in; the Corepack step of the link already did the same and shares the one helper.

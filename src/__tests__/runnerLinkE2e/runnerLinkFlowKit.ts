@@ -242,22 +242,23 @@ export function runHubCli(layout: RunnerLinkLayout, args: string[], extraEnv: No
   return spawnSync(process.execPath, [getHubCliPath(layout), ...args], { encoding: 'utf8', env: createEnv(layout.hubHome, layout, extraEnv), timeout: 60_000 });
 }
 
-/** @description Make a pairing line on the hub; returns the `sh -c '…'` line. */
-export function makePairingLine(layout: RunnerLinkLayout, extraEnv: NodeJS.ProcessEnv = {}): string {
-  const result = runHubCli(layout, ['runners', 'pair', '--host', `127.0.0.1:${layout.sshPort}`, '--label', '@ExampleBot'], extraEnv);
-  const line = result.stdout.split('\n').find((candidate) => candidate.startsWith("sh -c '"));
+/**
+ * @description Make a pairing on the hub; returns its ONE line, `sudo sh -c '…' sh <account>`: pasted as it is by an admin account it pairs `account` and installs its
+ * service, and without its `sudo`, in the terminal of `account` itself, it pairs that account only.
+ */
+export function makeAdminPairingLine(layout: RunnerLinkLayout, account: string, extraEnv: NodeJS.ProcessEnv = {}): string {
+  const result = runHubCli(layout, ['runners', 'pair', '--host', `127.0.0.1:${layout.sshPort}`, '--label', '@ExampleBot', '--account', account], extraEnv);
+  const line = result.stdout.split('\n').find((candidate) => candidate.startsWith("sudo sh -c '"));
   if (result.status !== 0 || line === undefined) throw new Error(`runners pair failed: ${result.stderr}${result.stdout}`);
   return line;
 }
 
-/** @description Make a pairing on the hub; returns both lines of it: the one for an ADMIN account (`sudo sh -c …`, `account` as its last word) and the plain one. */
-export function makePairingLines(layout: RunnerLinkLayout, account: string): { adminLine: string; plainLine: string } {
-  const result = runHubCli(layout, ['runners', 'pair', '--host', `127.0.0.1:${layout.sshPort}`, '--label', '@ExampleBot', '--account', account]);
-  const lines = result.stdout.split('\n');
-  const adminLine = lines.find((candidate) => candidate.startsWith("sudo sh -c '"));
-  const plainLine = lines.find((candidate) => candidate.startsWith("sh -c '"));
-  if (result.status !== 0 || adminLine === undefined || plainLine === undefined) throw new Error(`runners pair failed: ${result.stderr}${result.stdout}`);
-  return { adminLine, plainLine };
+/**
+ * @description Make a pairing on the hub; returns the line as the account that RUNS the flow pastes it in its own terminal: without its `sudo`, its last word naming
+ * that account (the line pairs the account it runs as and refuses any other).
+ */
+export function makePairingLine(layout: RunnerLinkLayout, extraEnv: NodeJS.ProcessEnv = {}): string {
+  return makeAdminPairingLine(layout, os.userInfo().username, extraEnv).replace(/^sudo /, '');
 }
 
 /** @description Run the pasted line on a runner machine (the flow's first one unless `home` names another). */

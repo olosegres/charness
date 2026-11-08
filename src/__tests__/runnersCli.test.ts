@@ -79,31 +79,27 @@ describe('charness runners', () => {
     assert.match(run.stdout, /No runners paired yet/);
   });
 
-  it('pair prints the admin line first and the plain one second — both for the same one code — writes the gate, and registers a code that is good for 10 minutes', async () => {
+  it('pair prints ONE line — the one that works with sudo for an admin account and without it for the runner account itself — with the words that say which word to change, writes the gate, and registers a code that is good for 10 minutes', async () => {
     const run = await runCli(['pair', '--host', 'host.example:2222', '--label', '@ExampleBot']);
     assert.equal(run.code, 0, run.stderr);
     assert.match(run.stdout, /valid 10 minutes, single use/);
-    const lines = run.stdout.split('\n').filter((line) => line.startsWith("sh -c '"));
-    assert.equal(lines.length, 1, 'one plain line');
-    const adminLines = run.stdout.split('\n').filter((line) => line.startsWith("sudo sh -c '"));
-    assert.equal(adminLines.length, 1, 'one admin line');
-    assert.ok(run.stdout.indexOf(adminLines[0]) < run.stdout.indexOf(lines[0]), 'the admin line comes first');
-    assert.ok(adminLines[0].endsWith(' runner'), 'the account is the last word, «runner» by default');
-    const code = (line: string): string => /cr1\.[A-Za-z0-9_-]+/.exec(line)?.[0] ?? '';
-    assert.ok(code(lines[0]) !== '' && code(lines[0]) === code(adminLines[0]), 'one code behind both lines');
-    // The CLI is the other place the admin line is offered (the one agents use): it says what the line does to the machine, as the Telegram message does.
-    assert.equal(adminLineTrustSentence, 'It runs code from this charness host as root on that machine');
     const textLines = run.stdout.split('\n');
-    const adminIntro = textLines[textLines.indexOf(adminLines[0]) - 2];
-    assert.match(adminIntro, /^1\) From an admin account of the runner machine: it pairs "runner" .* and keeps it running\. It runs code from this charness host as root on that machine:$/);
-    const plainIntro = textLines[textLines.indexOf(lines[0]) - 2];
-    assert.match(plainIntro, /^2\) Without admin rights: /);
-    assert.doesNotMatch(plainIntro, /root/, 'the plain line gives the host no such power');
+    const lines = textLines.filter((line) => line.includes("sh -c '"));
+    assert.equal(lines.length, 1, 'one line, not two');
+    const [line] = lines;
+    assert.ok(line.startsWith("sudo sh -c '") && line.endsWith(' runner'), 'the account is the last word, «runner» by default');
+    // The CLI is the other place the line is offered (the one agents use): it says what the line does to the machine, as the Telegram message does.
+    assert.equal(adminLineTrustSentence, 'It runs code from this charness host as root on that machine');
+    assert.match(textLines[textLines.indexOf(line) - 2], /^From an admin account of the runner machine; it pairs "runner" and keeps it running\. It runs code from this charness host as root on that machine:$/);
+    // …and, below it, which word to change and how to pair without admin rights.
+    const below = textLines.slice(textLines.indexOf(line) + 1).join('\n');
+    assert.match(below, /The last word, "runner", is the account the runner and the agents' code run as: change it if the account is named otherwise\. It must be an existing standard \(non-admin\) account, not your main one\./);
+    assert.match(below, /Without admin rights: run the same line in the terminal of that account itself, without the leading "sudo"/);
+    assert.match(below, /Anyone with the line can attach a machine to this charness until it is used or expires\./);
     const pending = readPendingFile(fixture.ctx.dir).pending;
     assert.equal(pending.length, 1);
     assert.deepEqual({ host: pending[0].host, port: pending[0].port, label: pending[0].label, expiresAtMs: pending[0].expiresAtMs }, { host: 'host.example', port: 2222, label: '@ExampleBot', expiresAtMs: startMs + pairingLifetimeMs });
-    assert.ok(lines[0].includes('u="hubuser"'), 'the runner logs in as the hub\'s account');
-    assert.ok(lines[0].includes('h="host.example"') && lines[0].includes('p="2222"'));
+    assert.ok(line.includes('-p 2222') && line.includes('hubuser@host.example'), 'the runner logs in as the hub\'s account, at the address given');
     assert.match(fs.readFileSync(getHubFilePaths(fixture.ctx.dir).gate, 'utf8'), /runner-gate "\$@"/);
     assert.equal(extractManagedBlock(fs.readFileSync(fixture.ctx.authorizedKeysPath, 'utf8')).length, 1);
   });
@@ -112,7 +108,8 @@ describe('charness runners', () => {
     const run = await runCli(['pair', '--host', 'host.example', '--account', 'ci.runner-2']);
     assert.equal(run.code, 0, run.stderr);
     assert.ok(run.stdout.split('\n').some((line) => line.startsWith("sudo sh -c '") && line.endsWith(" ci.runner-2")));
-    assert.match(run.stdout, /pairs "ci\.runner-2"/);
+    assert.match(run.stdout, /it pairs "ci\.runner-2"/);
+    assert.match(run.stdout, /The last word, "ci\.runner-2", is the account/);
     const before = readPendingFile(fixture.ctx.dir).pending.length;
     for (const bad of ['-n', 'a b', 'x;y', '$(id)', '']) {
       const refused = await runCli(['pair', '--host', 'host.example', '--account', bad]);

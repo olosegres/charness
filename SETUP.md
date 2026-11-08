@@ -391,9 +391,10 @@ had run locally. Without a runner nothing changes for anyone, and agents are not
 **Pair it (the normal way).** Needs this machine's ordinary `sshd` (key login on) with an address the runner can reach — nothing else is
 opened or changed, no root, no VPN — and on the runner machine `ssh`, `tar`, `curl` or `wget`, and a way to reach nodejs.org (no Node.js needed: the pairing installs the runner its own). In General send `/runners` → **＋ Pair a new
 runner**; the first time the bot asks which address runners dial (the `runnerHost` row of the [instance settings](#instance-settings-settingsjson)) and
-proposes the public address it finds. It posts two lines (valid 10 minutes, single use, one code): the first from an admin account of the
-runner machine — it pairs a standard user there (`runner` unless you change the last word of the line) and installs its always-on service
-in one go — the second as the account that will run the jobs, with `charness-runner service install` afterwards to keep it running. An
+proposes the public address it finds. It posts ONE line (valid 10 minutes, single use) with the words that explain it: pasted in an admin account's terminal
+on the runner machine it pairs a standard user there (`runner` unless you change the last word of the line) and installs its always-on service
+in one go; without admin rights, the same line run from the terminal of that account itself (without its leading `sudo`, its last word being that
+account's name) pairs it only, with `charness-runner service install` afterwards to keep it running. An
 instance without Telegram uses `charness runners pair --host host.example`. The steps, the services (a Mac that stays on while logged out), removing and the safety
 model: [docs/remote-run.md](docs/remote-run.md#pair-a-runner).
 

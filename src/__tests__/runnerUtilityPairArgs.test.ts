@@ -20,7 +20,7 @@ describe('pair arguments: --service-follows', () => {
     assert.deepEqual(splitServiceFollowsFlag(['--service-follows', 'cr1.code']), { rest: ['cr1.code'], isServiceFollowing: true });
   });
 
-  it('is absent unless given: the plain line\'s arguments come back untouched', () => {
+  it('is absent unless given: the arguments of a pairing without a service come back untouched', () => {
     const plain = ['--bootstrap', '/tmp/pkg', '--archive', '/tmp/a.tgz', '--package-id', 'abc', 'cr1.code'];
     assert.deepEqual(splitServiceFollowsFlag(plain), { rest: plain, isServiceFollowing: false });
     assert.deepEqual(splitServiceFollowsFlag([]), { rest: [], isServiceFollowing: false });

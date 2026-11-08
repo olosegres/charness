@@ -169,7 +169,7 @@ The paired-runner flows (`runnerLinkE2e.test.ts`, `remoteRunPairedE2e.test.ts`, 
 host» (its `AuthorizedKeysFile` pointed at a temp `.ssh`) and `charness-runner` in a temp `HOME`, so they never touch the real `~/.ssh`;
 `runnerServiceTakeoverE2e.test.ts` needs only real Pueue (the service manager is a recording stand-in). `runnerAdminLineE2e.test.ts` (the admin pairing line) also needs
 `fakeroot`: root, a second account and the service manager are stand-ins in `runnerAdminLineE2e/` (`sudo` runs the line under `fakeroot`, `sudo -u <account> -H` hands a
-command to the real user with the stand-in account's `HOME`, and plants a trap in the account's launcher that fails the flow if root ever starts it); everything else — the line's own `sh`, the download, the pairing, the root step, the service install — is real. Same tools, same local skip and CI failure.
+command to the real user with the stand-in account's `HOME`, and plants a trap in the account's launcher that fails the flow if root ever starts it); everything else — the line's own `sh`, the download, the pairing, the install of the runner program (a stand-in `npm` that is a `#!/usr/bin/env node` script, run for real on a PATH without Node), the root step, the service install — is real. Same tools, same local skip and CI failure.
 
 Node applies `--test-timeout` to a whole test FILE (a `describe`'s own `timeout` cannot extend it), so a file that
 hangs or leaves a process alive fails by name when its limit passes, instead of hanging the run. A long-running

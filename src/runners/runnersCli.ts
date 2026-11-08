@@ -1,7 +1,7 @@
 import * as os from 'os';
 import type { CliIo } from '../remoteRun/output';
 import { getRemoteRunCacheDir } from '../remoteRun/ssh';
-import { buildAdminBootstrapLine, buildBootstrapLine, checkIsAccountName, defaultRunnerAccount } from './bootstrapLine';
+import { buildAdminBootstrapLine, checkIsAccountName, defaultRunnerAccount } from './bootstrapLine';
 import { ensureGateWrapper } from './gateWrapper';
 import { checkHubAddress, parseHubAddress, scanHostKey, type HostKeyScanner } from './hubAddress';
 import { createHubContext, type HubContext } from './hubPaths';
@@ -124,12 +124,12 @@ async function runPairCommand(args: readonly string[], io: CliIo, deps: RunnersC
   });
   io.stdout(
     `Pair a runner — valid ${formatLifetime(readPairingLifetimeMs(io.env))}, single use.\n\n` +
-      `1) From an admin account of the runner machine: it pairs "${options.account}" (the last word of the line — change it if the account is named otherwise) and keeps it running. ${adminLineTrustSentence}:\n\n` +
+      `From an admin account of the runner machine; it pairs "${options.account}" and keeps it running. ${adminLineTrustSentence}:\n\n` +
       `${buildAdminBootstrapLine(pairing.payload, options.account)}\n\n` +
-      `2) Without admin rights: run this one in the terminal of the runner account itself:\n\n` +
-      `${buildBootstrapLine(pairing.payload)}\n\n` +
-      `The account must be an existing standard user, not your main account — it runs the agents' code.\n` +
-      `Anyone with either line can attach a machine to this charness until one of them is used or expires.\n`,
+      `The last word, "${options.account}", is the account the runner and the agents' code run as: change it if the account is named otherwise. It must be an existing standard ` +
+      `(non-admin) account, not your main one.\n` +
+      `Without admin rights: run the same line in the terminal of that account itself, without the leading "sudo" — it then pairs that account only, and the always-on service is yours to set up.\n` +
+      `Anyone with the line can attach a machine to this charness until it is used or expires.\n`,
   );
   return options.isWaiting ? waitForPairing(pairing.pairId, io, deps) : 0;
 }

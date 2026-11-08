@@ -14,7 +14,7 @@ import type { RunnerHomePaths } from './runnerHome';
  *   the admin line      as ROOT, into `sharedNodeBase` (`serviceCommon.ts`) — a folder only root can write, because root runs that Node (the root step, the pairing
  *                       it starts as the account) and must never run what the account, who runs the agents' code, can change. It is refreshed only by the next
  *                       admin line.
- *   the plain line      as the account, into `~/.charness-runner/node` (`paths.ownNodeDir`): nobody else is involved
+ *   the no-sudo line    as the account, into `~/.charness-runner/node` (`paths.ownNodeDir`): nobody else is involved
  *   an older runner     (paired on a system Node) moves itself once its link is up (`nodeUpkeep.ts`), as the account, into `paths.ownNodeDir` — root is not there
  *                       then, and the Node of a link that runs as the account only needs to be the account's. Root never runs that copy: the root steps of an
  *                       admin line use the shared one the line installed.

@@ -8,7 +8,7 @@
  * root-owned copy, which has no `node_modules` (so the step must need none) — with the account's own `service install`. In order, on the
  * state the step before left:
  *
- *   no sudo → refused; an account that does not exist, an admin account, root, a name edited into something that is no account name →
+ *   no sudo → the account's own way, which refuses the last word when it names another account than the one running the line; an account that does not exist, an admin account, root, a name edited into something that is no account name →
  *   each refused BEFORE anything is fetched or runs as that account, nothing is paired, nothing is written to any account, and the code
  *   stays unspent
  *   → the same code, with a standard account: paired AS that account, from the copy root made (its HOME holds the runner's state), the pairing
@@ -44,7 +44,7 @@ import {
   destroyRunnerLinkLayout,
   getMissingTools,
   isCi,
-  makePairingLines,
+  makeAdminPairingLine,
   placeRootNodeInstallerWrapper,
   readJson,
   type RunnerLinkLayout,
@@ -87,7 +87,7 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
       { name: 'boss', uid: adminAccountUid, groups: ['boss', 'users', 'sudo'], homeDir: bossHome },
       { name: 'rootish', uid: 0, groups: ['root'], homeDir: bossHome },
     ]);
-    ({ adminLine } = makePairingLines(layout, 'runner'));
+    adminLine = makeAdminPairingLine(layout, 'runner');
   });
   after(async () => {
     await destroyRunnerLinkLayout(layout);
@@ -138,9 +138,9 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     for (const home of [runnerHome, failingHome, bossHome]) assertNothingPairedIn(home);
   }
 
-  it('refuses to run without sudo, before anything else', () => {
-    // Pasted without its leading `sudo`, in a shell whose `id` says what a normal user is.
-    assertRefusedBeforeAnything(pasteLine(adminLine.replace(/^sudo /, '')), /run this line with sudo/);
+  it('without sudo it is the account\'s own way — and refuses an account that is not the one it runs as, before anything else', () => {
+    // Pasted without its leading `sudo` by a user who is not `runner` (the flow\'s own user): the line pairs the account it runs as and finds it is another.
+    assertRefusedBeforeAnything(pasteLine(adminLine.replace(/^sudo /, '')), /you are not runner: run the line as runner or with sudo/);
   });
 
   it('stops on an account that does not exist — names it, creates nothing, pairs nothing', () => {
@@ -165,7 +165,7 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
     assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
     assert.match(result.stdout, new RegExp(`Paired with charness @ExampleBot \\(127\\.0\\.0\\.1:${layout.sshPort}\\) as runner “`));
     assert.match(result.stdout, /Keeping it running: the always-on service for this account is installed next, by the same line\./);
-    assert.doesNotMatch(result.stdout, /Keep it running:/, 'the commands of the plain line\'s help would be wrong here');
+    assert.doesNotMatch(result.stdout, /Keep it running:/, 'the commands of the help for the account\'s own way would be wrong here');
     // Each step is told as it happens (stdout is a pipe here: one plain line per step) — the shell's own first, then the runner utility's, the root step's last.
     const stepPositions = ['checking the account runner', 'downloading the package from the hub', 'installing the runner program', 'checking this machine', 'pairing with the hub', 'getting Pueue', 'finding rsync', 'installing the always-on service for runner']
       .map((step) => result.stdout.indexOf(`charness-runner: ${step}`));
@@ -257,7 +257,7 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
 
   it('a service manager that fails leaves the account paired, exits with a failure and says what to do — a fresh line then pairs nothing twice and installs the service', () => {
     fs.writeFileSync(standIns.failReloadFlag, '');
-    const { adminLine: secondLine } = makePairingLines(layout, 'runner2');
+    const secondLine = makeAdminPairingLine(layout, 'runner2');
     const result = pasteLine(secondLine);
     assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
     assert.match(result.stdout, /Paired with charness @ExampleBot/, 'the pairing itself went through');
@@ -274,7 +274,7 @@ describe('the admin pairing line (process level)', { skip: skipReason }, () => {
 
     // The service manager is mended; a FRESH admin line is the retry.
     fs.rmSync(standIns.failReloadFlag, { force: true });
-    const { adminLine: retryLine } = makePairingLines(layout, 'runner2');
+    const retryLine = makeAdminPairingLine(layout, 'runner2');
     assert.equal(countOpenCodes(), 1, 'the retry\'s code is open until the line closes it');
     const retried = pasteLine(retryLine);
     assert.equal(retried.status, 0, `${retried.stderr}\n${retried.stdout}`);

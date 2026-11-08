@@ -5,9 +5,8 @@ import { hubIdSchema } from '../../runners/hubIds';
 
 /**
  * @description The pairing messages this INSTANCE has sent and not yet settled — the one record of "which message offers which code"
- * (`DATA_DIR/runner-pairing-messages.json`). One code is offered in TWO messages (the admin line and the plain one: together they would
- * not fit one Telegram message), so an entry is one MESSAGE, found by {@link getPairingMessageId}, and a code has two entries; when the code
- * is settled the FIRST message is edited to the result and the SECOND is deleted (or, if Telegram will not delete it, edited to a pointer at the first). It is the instance's own: the hub registry is shared by every charness of the OS user and
+ * (`DATA_DIR/runner-pairing-messages.json`). A code is offered in ONE message; an entry is one MESSAGE, found by {@link getPairingMessageId} (a record written
+ * by a version that offered a code in two messages has two entries for it, and both are edited to the result like any other). It is the instance's own: the hub registry is shared by every charness of the OS user and
  * holds the credentials only, so a message of this bot is never adopted by another bot, and a credential swept or spent (while this bot
  * was down, or by another instance) does not take the way back to its message with it. An entry stays until the message was edited to
  * what became of its code (paired / expired) and Telegram accepted the edit — or until edits of it have been FAILING for a day: the
@@ -25,10 +24,7 @@ const pairingMessageSchema = z.strictObject({
   key: z.string().regex(telegramKeyPattern),
   messageId: z.number().int().positive(),
   offeredAtMs: z.number().int().nonnegative(),
-  /**
-   * Which of the code's two lines this message carries: the `first` (the admin line) shows what became of the code; the `second` (the plain
-   * line) is deleted once the code is settled. Absent in a record written before the roles existed: the lower message id of a code is its first.
-   */
+  /** Retired: written by the versions that offered a code in two messages (the `second` was deleted at settle). No longer written or read; kept so that such a record still validates. */
   role: z.enum(['first', 'second']).optional(),
   /** When an edit of this message first failed; absent while none has. */
   firstFailedAtMs: z.number().int().nonnegative().optional(),
@@ -66,21 +62,12 @@ export function writePairingMessages(filePath: string, messages: readonly Pairin
   writeJsonFileAtomically(filePath, { messages: messages.slice(-maxEntries) }, fileMode);
 }
 
-/**
- * @description Is `message` the SECOND line of its code — the one that is deleted when the code is settled, while the first shows the result? By its
- * `role`; for an entry without one (an older record), the later of the code's messages in the record.
- */
-export function checkIsSecondLine(message: PairingMessage, record: readonly PairingMessage[]): boolean {
-  if (message.role !== undefined) return message.role === 'second';
-  return record.some((other) => other.pairId === message.pairId && other.key === message.key && other.messageId < message.messageId);
-}
-
-/** @description What names one message of the record: its code and its Telegram message id (a conversation holds both messages of a code). */
+/** @description What names one message of the record: its code and its Telegram message id. */
 export function getPairingMessageId(message: Pick<PairingMessage, 'pairId' | 'messageId'>): string {
   return `${message.pairId}:${message.messageId}`;
 }
 
-/** @description Add `message` (an older entry for the same message is replaced; the code's other message stays). */
+/** @description Add `message` (an older entry for the same message is replaced). */
 export function addPairingMessage(filePath: string, message: PairingMessage): void {
   const { messages } = readPairingMessages(filePath);
   writePairingMessages(filePath, [...messages.filter((candidate) => getPairingMessageId(candidate) !== getPairingMessageId(message)), message]);

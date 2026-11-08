@@ -140,7 +140,7 @@ afterEach(() => {
   fs.rmSync(workDir, { recursive: true, force: true });
 });
 
-describe('the runner\'s own Node (own mode: the plain line, a runner that moves off a system Node)', () => {
+describe('the runner\'s own Node (own mode: the line run without sudo, a runner that moves off a system Node)', () => {
   it('downloads the build for this machine that nodejs.org\'s list names, checks it against the release\'s SHASUMS256.txt, and prints the real path of its `node`', () => {
     writeMirror();
     const result = runOwn(ownBase());
