@@ -358,6 +358,8 @@ describe('a submit on a disk that stays short', () => {
     const lines = result.stderr.trim().split('\n');
     assert.equal(lines.length, 1, 'one line, so the CLI shows it whole');
     assert.match(lines[0], /^remote-run-runner: only 28 GB free on the work disk, the runner needs 60 GB; biggest project copies: big-qqqqqqqqqq 41 GB, mid-rrrrrrrrrr 30 GB, tiny-ssssssssss 1 GB; free space with `charness remote-run clean <slug>`/);
+    assert.match(lines[0], /on the copies of project folders whose last task is closed \(`charness remote-run runners` shows what they take\)/, 'a copy is a folder\'s, shared by its tasks: an agent that read «your own finished tasks» would clean one a sibling task still uses');
+    assert.doesNotMatch(lines[0], /your own finished tasks/);
     assert.deepEqual(listCopies(), ['big-qqqqqqqqqq', 'mid-rrrrrrrrrr', 'tiny-ssssssssss'], 'the new project left no empty copy behind');
     assert.equal(result.stdout.includes('work='), false);
   });

@@ -175,7 +175,7 @@ describe('stageJob and what the runner says to prepare', () => {
   }
 
   it('a runner short of disk refuses the job: its own words are the error (exit 125), and what its prune removed first is said before', async () => {
-    const refusal = 'only 8 GB free on the work disk, the runner needs 60 GB; biggest project copies: app-1 41 GB, app-2 30 GB; free space with `charness remote-run clean <slug>` on the copies of your own finished tasks';
+    const refusal = 'only 8 GB free on the work disk, the runner needs 60 GB; biggest project copies: app-1 41 GB, app-2 30 GB; free space with `charness remote-run clean <slug>` on the copies of project folders whose last task is closed';
     const { error, said } = await stageWithPrepareAnswer(preparedAnswer({
       exitCode: diskTooLowRunnerExitCode,
       stdout: 'removed=old-1 freed_kb=31457280 why=space\n',

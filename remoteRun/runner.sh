@@ -1214,7 +1214,7 @@ refuse_when_disk_is_short() {
   done < <(printf '%s' "$sizes" | sort -rn | head -n "$refusal_copy_count")
   local advice="there is no project copy here to free: the disk is full of other files"
   if [ "$copies" -gt 0 ]; then
-    advice="free space with \`charness remote-run clean <slug>\` on the copies of your own finished tasks (\`charness remote-run runners\` shows what they take)"
+    advice="free space with \`charness remote-run clean <slug>\` on the copies of project folders whose last task is closed (\`charness remote-run runners\` shows what they take)"
     local also_unmeasured=
     [ "$unmeasured" -gt 0 ] && also_unmeasured=" (and $unmeasured not measured yet)"
     [ -n "$listing" ] && advice="biggest project copies: $listing$also_unmeasured; $advice"
