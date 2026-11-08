@@ -38,7 +38,8 @@ import type { LinkSourceChange } from '../runners/linkConcern';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { readRunnersOverview, type RunnersOverview } from '../runners/runnersOverview';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
-import { maxScreenTextChars, telegramMessageLimit } from '../utils/runnersScreenPlan';
+import { TELEGRAM_HARD_LIMIT } from '../connectors/telegram/messageSplit';
+import { maxScreenTextChars } from '../utils/runnersScreenPlan';
 import { createCommandHarness, harnessGroup, harnessThreadId, type CommandHarness, type RecordedSend } from './commandModuleHarness';
 import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 
@@ -453,7 +454,7 @@ describe('/runners over its ports', () => {
       assert.match(failure.text, /^⚠️ Could not make a pairing line: the line and its explanation take \d{4,} characters and a Telegram message holds 4096 \(/);
       assert.ok(failure.text.endsWith('charness runners pair --host host.example:22'), failure.text);
       assert.ok(!failure.text.includes('cr2.') && !failure.text.includes('sudo sh -c'), 'and shows no line');
-      assert.ok(Number(/take (\d+) characters/.exec(failure.text)?.[1]) > telegramMessageLimit, 'the length it names is over the limit');
+      assert.ok(Number(/take (\d+) characters/.exec(failure.text)?.[1]) > TELEGRAM_HARD_LIMIT, 'the length it names is over the limit');
       assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0, 'the code is closed, not left open for ten minutes');
       assert.equal(readClosedCodes(hubFixture.ctx.dir).codes.length, 1, 'with a trace that it was closed');
       assert.equal(readPairingMessages(pairingMessagesPath).messages.length, 0, 'no message is followed');

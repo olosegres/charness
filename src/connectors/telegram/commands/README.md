@@ -236,7 +236,7 @@ runners (`src/runners/` is the hub, `utils/runnersScreenPlan.ts` the pure text a
   what it must be, and how to pair without admin rights — then `buildAdminBootstrapLine`, ~2.8 KB with an ed25519 host key: together they must fit Telegram's 4096, which
   `runnersScreenPlan.test.ts` checks in every language), HTML with the line in a `<pre>` (tap to copy) sent with the `isSecret` option of `replyToThread`
   (`markOutboundTextSecret` keeps the text out of the output trace — length only). A failure to send it offers nothing and is told, and a message that cannot fit
-  (`telegramMessageLimit`: a very large RSA host key with the longest host names) is not even tried: the code is closed at once (`closeUnofferedPairing` →
+  (`TELEGRAM_HARD_LIMIT`: an RSA host key of 4096 bits with a long host name or hub account, or any RSA host key larger than 4096 bits) is not even tried: the code is closed at once (`closeUnofferedPairing` →
   `cancelPairing`) and the failure names the length and `charness runners pair --host <address>` (`runners.pairLineTooLongReasonText`).
 - **Settling the pairing messages.** The place of every message that offers a code is this INSTANCE's own record (`runnerPairingMessages.ts`,
   `DATA_DIR/runner-pairing-messages.json`; one entry per MESSAGE, named by `getPairingMessageId`) — not the shared hub registry, which is every charness's of the OS user and holds credentials only. `startRunnersWatcher`

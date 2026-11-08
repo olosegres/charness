@@ -14,6 +14,7 @@ import { parseProbeOutput, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner } from '../runners/hubRegistry';
 import { buildAdminBootstrapLine, defaultRunnerAccount } from '../runners/bootstrapLine';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
+import { TELEGRAM_HARD_LIMIT } from '../connectors/telegram/messageSplit';
 import { hubHostKeySchema, hubHostSchema, hubSshUserSchema } from '../runners/hubIds';
 import { createPairCodePayload } from './runnersTestKit';
 import {
@@ -38,7 +39,6 @@ import {
   runnersAddressUseCallback,
   runnersPairCallback,
   runnersRefreshCallback,
-  telegramMessageLimit,
   type RunnerAction,
   type RunnerScreenEntry,
 } from '../utils/runnersScreenPlan';
@@ -503,17 +503,17 @@ describe('runnersScreenPlan: the other screens and texts', () => {
     it('in every language, with every host-key type up to RSA 3072, at the LONGEST host and hub account the registry accepts', () => {
       for (const kind of hostKeyKinds.filter((candidate) => candidate.blobBytes <= 407)) {
         const { length, locale } = measureLongestMessage(longestHost, longestUser, kind);
-        assert.ok(length <= telegramMessageLimit, `${kind.label}: ${length} characters in ${locale}`);
+        assert.ok(length <= TELEGRAM_HARD_LIMIT, `${kind.label}: ${length} characters in ${locale}`);
       }
     });
 
     it('in every language, with EVERY host-key type — RSA 4096 too — at an ordinary host and hub account', () => {
       for (const kind of hostKeyKinds) {
         const { length, locale } = measureLongestMessage(typicalHost, typicalUser, kind);
-        assert.ok(length <= telegramMessageLimit, `${kind.label}: ${length} characters in ${locale}`);
+        assert.ok(length <= TELEGRAM_HARD_LIMIT, `${kind.label}: ${length} characters in ${locale}`);
       }
     });
-    // What cannot fit (RSA 4096 and more at the longest names, RSA 8192 anywhere) is not offered: the check is made when the line is offered, and the code closed
+    // What cannot fit (an RSA 4096 key with a long host name or hub account, any RSA key larger than 4096 bits) is not offered: the check is made when the line is offered, and the code closed
     // (`runnersCommand.test.ts`).
   });
 

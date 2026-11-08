@@ -102,11 +102,11 @@ describe('the probe fits its 20 s however many of its questions hang', () => {
     fs.writeFileSync(target, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   }
 
-  /** `probe_slow` of a Mac whose tools are the fakes in `fakeBin`, run as a sourced function; returns its lines and how long it took. */
   /**
-   * The probe as a Mac runner runs it, on a PATH built by the case (`fakeBin` first, then `basePath`). The bash that asks must add nothing to that PATH: a
-   * non-interactive `bash -c` still reads `~/.bashrc` — which puts the user's own `node` and `yarn` first — when its stdin is a socket (Node's pipe) and `SHLVL` is
-   * 0 or unset (a run started by a service, a cron job, `nohup … &`), and the `BASH_ENV` file always. So: no rc file, no `BASH_ENV`, no stdin.
+   * `probe_slow` of a Mac whose tools are the fakes in `fakeBin`, run as a sourced function; returns its lines and how long it took. It runs on a PATH built by the
+   * case (`fakeBin` first, then `basePath`), and the bash that asks must add nothing to that PATH: a non-interactive `bash -c` still reads `~/.bashrc` — which puts
+   * the user's own `node` and `yarn` first — when its stdin is a socket (Node's pipe) and `SHLVL` is 0 or unset (a run started by a service, a cron job,
+   * `nohup … &`), and the `BASH_ENV` file always. So: no rc file, no `BASH_ENV`, no stdin.
    */
   function probeSlowOfAMac(basePath: string = process.env.PATH ?? ''): { lines: Record<string, string>; elapsedSec: number } {
     const { BASH_ENV: ignoredBashEnv, ...inheritedEnv } = process.env;

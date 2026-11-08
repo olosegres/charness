@@ -120,11 +120,12 @@ export function readPayloadOfLine(line: string): PairCodePayload {
   return decoded.payload;
 }
 
-/** A pair-code payload with real keys. */
+/** A pair-code payload with real keys — the temporary one made as production makes it (`createPairing`), with the comment `charness-pairing-<id>` its private key carries and a line therefore holds. */
 export function createPairCodePayload(overrides: Partial<PairCodePayload> = {}): PairCodePayload {
-  const temporary = generateEd25519KeyPair('temporary');
+  const pairId = overrides.pairId ?? 'abcdef012345';
+  const temporary = generateEd25519KeyPair(`charness-pairing-${pairId}`);
   const hubHost = generateEd25519KeyPair('hub-host');
-  return { host: 'host.example', port: 22, user: 'hubuser', hostKey: hubHost.publicKey, privateKey: temporary.privateKey, pairId: 'abcdef012345', ...overrides };
+  return { host: 'host.example', port: 22, user: 'hubuser', hostKey: hubHost.publicKey, privateKey: temporary.privateKey, pairId, ...overrides };
 }
 
 export interface Collector {

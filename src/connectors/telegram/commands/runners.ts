@@ -53,11 +53,11 @@ import {
   runnersPageCallbackRe,
   runnersPairCallback,
   runnersRefreshCallback,
-  telegramMessageLimit,
   type FormatTime,
   type RunnersCallback,
   type RunnersScreen,
 } from '../../../utils/runnersScreenPlan';
+import { TELEGRAM_HARD_LIMIT } from '../messageSplit';
 import { addPairingMessage, getPairingMessageId, markPairingMessageFailed, readPairingMessages, removePairingMessages } from '../runnerPairingMessages';
 import type { BotCore } from './botCore';
 import { answerCallbackQuerySafely } from './callbackToast';
@@ -297,7 +297,7 @@ export function createRunners(ports: RunnersPorts) {
   /**
    * Make a code and post the one message that carries it: the line (it works for an admin account with its `sudo`, and for the runner account itself without it) under
    * its explanation. The message shows what became of the code — «paired», «expired», or that the line was used on a machine that was already paired.
-   * A code whose message cannot be sent — too long for Telegram (a very long host name, a big RSA host key: the line holds the host key once), or refused by it — is
+   * A code whose message cannot be sent — too long for Telegram (an RSA host key of 4096 bits with a long host name or hub account, or an RSA key larger than 4096 bits: the line holds the host key once), or refused by it — is
    * CLOSED at once and the failure says so (for a message too long, where to make the line instead): no credential is left open for ten minutes with nobody holding its line.
    */
   async function offerPairing(key: SessionKey, address: HubAddress, knownCheck: Extract<HubAddressCheck, { ok: true }> | null): Promise<void> {
@@ -311,9 +311,9 @@ export function createRunners(ports: RunnersPorts) {
       const pairing = await createPairing(hub, { host: address.host, port: address.port, hostKey: check.hostKey, label: ports.getBotLabel(), nowMs: now() });
       const intro = buildPairingIntro(pairingLifetimeMinutes, defaultRunnerAccount, t);
       const message = renderPairingMessage(intro, buildAdminBootstrapLine(pairing.payload, defaultRunnerAccount));
-      if (message.plain.length > telegramMessageLimit) {
+      if (message.plain.length > TELEGRAM_HARD_LIMIT) {
         await closeUnofferedPairing(pairing.pairId);
-        const reason = t('runners.pairLineTooLongReasonText', { length: message.plain.length, limit: telegramMessageLimit, address: formatHubAddress(address) });
+        const reason = t('runners.pairLineTooLongReasonText', { length: message.plain.length, limit: TELEGRAM_HARD_LIMIT, address: formatHubAddress(address) });
         await replyToThread(key, t('runners.pairFailedText', { reason }));
         return;
       }

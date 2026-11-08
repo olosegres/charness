@@ -107,7 +107,7 @@ escape a backslash in `command="…"`).
    ONCE (the shell joins them into the code). A Telegram message holds 4096 characters, so ONE message carries the line (~2.8 KB with an ed25519 host key, ~3.1 KB with RSA 2048) and its explanation
    (`runners.pairingIntro`, ≤ ~470 characters in every language) — which is why the line holds each value once and its messages are short.
    `runnersScreenPlan.test.ts` measures every locale with every host-key type at the longest host name (253) and hub account (64) the registry accepts: all fit up to
-   RSA 3072, and RSA 4096 fits at ordinary names. What cannot fit (RSA 4096 and more with the longest names) is caught when the line is offered
+   RSA 3072, and RSA 4096 fits at ordinary names (it goes over once host and hub account pass about 180 characters together). What cannot fit (an RSA host key of 4096 bits with a long host name or hub account, or any RSA host key larger than 4096 bits) is caught when the line is offered
    (`offerPairing`): the code is closed (`cancelPairing`) and the answer names the length and `charness runners pair --host <address>`; a send Telegram refuses closes
    its code the same way. `connectors/telegram/runnerPairingMessages.ts` follows the message.
 
