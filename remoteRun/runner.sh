@@ -131,6 +131,8 @@ ios_device_boot_sec=60
 ios_device_bootstatus_sec=180
 ios_device_delete_sec=60
 ios_device_shutdown_sec=60
+# A `kill` that has given a job its grace (kill_grace_sec) before it SIGKILLs the group waits on for a job that is shutting its Simulator device down: what that step is bounded by, and this much more for the login session's agent to pick it up.
+simulator_shutdown_slack_sec=10
 
 # ─────────────────────────── helpers ───────────────────────────
 
@@ -916,6 +918,7 @@ prune_work() {
   local work_dir=$1
   local keep_slug=${2:-}
   local when_busy=${3:-wait}
+  remove_finished_tmpdir_removals "$work_dir"
   [ -d "$work_dir/p" ] || return 0
   find "$work_dir/p" -mindepth 3 -maxdepth 3 -path '*/jobs/*' -type d -mtime +"$job_keep_days" 2> /dev/null | while IFS= read -r old_job; do
     check_job_dir_ended "$old_job" || continue
@@ -1164,8 +1167,8 @@ remove_path_even_if_read_only() {
 remove_project_copy() {
   local source="$1/p/$2" trash="$1/p/.trash-$2-$$"
   [ -e "$trash" ] && return 1
-  # The index lock is held from the rename to the end of the copy's TMPDIR: the copy's number is free the moment it leaves p/<slug>, and a copy that is given it must not meet the old TMPDIR being removed under it.
-  # A lock that cannot be had leaves the TMPDIR to the next copy that gets the number (it starts with an empty one); the Simulator device is retired either way.
+  # The index lock is held from the rename of the copy to the rename of its TMPDIR - an instant, not the removal: the copy's number is free the moment it leaves p/<slug>, and a copy that is given it must not meet the old
+  # TMPDIR. The TMPDIR is removed after the lock is given back. A lock that cannot be had leaves the TMPDIR to the next copy that gets the number (it starts with an empty one); the Simulator device is retired either way.
   local is_index_lock_held=0
   acquire_index_lock "$1" && is_index_lock_held=1
   if ! mv "$source" "$trash" 2> /dev/null; then
@@ -1182,23 +1185,28 @@ remove_project_copy() {
     [ "$is_index_lock_held" -eq 1 ] && release_index_lock "$1"
     return 3
   fi
-  retire_copy_simulator "$1" "$trash"
+  local set_aside=
   if [ "$is_index_lock_held" -eq 1 ]; then
-    release_copy_tmpdir "$1" "$trash"
+    retire_copy_simulator "$1" "$trash" held
+    set_aside_copy_tmpdir "$1" "$trash"
+    set_aside=$tmpdir_set_aside
     release_index_lock "$1"
+  else
+    retire_copy_simulator "$1" "$trash" unlocked
   fi
+  [ -z "$set_aside" ] || remove_path_even_if_read_only "$set_aside"
   remove_path_even_if_read_only "$trash" || return 1
 }
 
-# Remove the TMPDIR (`<work>/t/<k>`) of the copy moved aside to folder $2, by the number it held. The index lock of work dir $1 must be held.
-release_copy_tmpdir() {
+# Set the TMPDIR of the copy moved aside to folder $2 aside, by the number it held (`set_aside_tmpdir`: sets tmpdir_set_aside). The index lock of work dir $1 must be held.
+set_aside_copy_tmpdir() {
   local recorded
+  tmpdir_set_aside=
   recorded=$(read_file "$2/index")
   case $recorded in
     '' | *[!0-9]*) return 0 ;;
   esac
-  remove_path_even_if_read_only "$1/t/$((10#$recorded))"
-  return 0
+  set_aside_tmpdir "$1" "$((10#$recorded))"
 }
 
 # last_freed_kb = how much the disk under $1 has gained since it had $2 KiB free (0 when it did not grow; empty when df said nothing).
@@ -1406,23 +1414,29 @@ run_bounded() {
 # `xcrun simctl delete unavailable`: the simulators whose runtime is gone (an Xcode that was updated or an old runtime that was removed leave them behind: 17 MB each, but their apps' data is 2-10 GB). Nothing else is deleted — no
 # erase, no device of an installed runtime, no runtime. It is asked ONLY when `simctl list runtimes available` shows at least one runtime in this very session: a CoreSimulator that sees no runtime (the System session of a
 # LaunchDaemon, a half-started service) calls EVERY device «unavailable», and the call would delete them all with their app data. Both calls are bounded (a watchdog); what they said is in `$work/simctl-cleanup.log`.
+# Sets simctl_runtime_list_code (the exit code of `xcrun simctl list runtimes available`, bounded) and simctl_runtime_count (the runtimes it lists); what simctl said is appended to file $2 when given. A CoreSimulator that sees
+# no runtime (the System session of a LaunchDaemon, a service that has only just started, an Xcode or a runtime being installed) calls EVERY device «unavailable»: nothing may be judged gone, deleted or made on its word.
+count_visible_simulator_runtimes() {
+  local work_dir=$1 log=${2:-}
+  local runtimes_file="$work_dir/tmp/simctl-runtimes.$$"
+  mkdir -p "$work_dir/tmp"
+  : > "$runtimes_file"
+  run_bounded "$simctl_list_sec" xcrun simctl list runtimes available >> "$runtimes_file" 2>&1
+  simctl_runtime_list_code=$?
+  [ -z "$log" ] || cat "$runtimes_file" >> "$log"
+  simctl_runtime_count=$(grep -c '^[A-Za-z][A-Za-z]* [0-9]' "$runtimes_file")
+  rm -f "$runtimes_file"
+}
+
 cmd_simctl_cleanup() {
   local work_dir=$1
   local log="$work_dir/simctl-cleanup.log"
   touch "$work_dir/simctl-cleanup.at"
   command -v xcrun > /dev/null 2>&1 || return 0
   echo "$(date '+%Y-%m-%d %H:%M:%S') xcrun simctl list runtimes available" > "$log"
-  local runtimes_file="$work_dir/tmp/simctl-runtimes.$$"
-  mkdir -p "$work_dir/tmp"
-  : > "$runtimes_file"
-  run_bounded "$simctl_list_sec" xcrun simctl list runtimes available >> "$runtimes_file" 2>&1
-  local list_code=$?
-  cat "$runtimes_file" >> "$log"
-  local runtime_count
-  runtime_count=$(grep -c '^[A-Za-z][A-Za-z]* [0-9]' "$runtimes_file")
-  rm -f "$runtimes_file"
-  if [ "$list_code" -ne 0 ] || [ "${runtime_count:-0}" -eq 0 ]; then
-    echo "refused: this session sees no Simulator runtime (simctl exit $list_code), so every device would read «unavailable» — nothing was deleted" >> "$log"
+  count_visible_simulator_runtimes "$work_dir" "$log"
+  if [ "$simctl_runtime_list_code" -ne 0 ] || [ "${simctl_runtime_count:-0}" -eq 0 ]; then
+    echo "refused: this session sees no Simulator runtime (simctl exit $simctl_runtime_list_code), so every device would read «unavailable» — nothing was deleted" >> "$log"
     return 0
   fi
   echo "$(date '+%Y-%m-%d %H:%M:%S') xcrun simctl delete unavailable" >> "$log"
@@ -1444,10 +1458,14 @@ check_is_udid() {
 # The Simulator device of the project copy in folder $2 goes onto the retired list of work dir $1 when the copy goes (`<work>/ios-devices-retired`, one UDID per line, no UDID twice). The device itself is deleted
 # by the next `ios-device` step, which runs in the session that can see it: an always-on Mac's daemon is not that session.
 retire_copy_simulator() {
-  local retired_file="$1/ios-devices-retired" udid
+  local retired_file="$1/ios-devices-retired" udid mode=${3:-take} is_taken=0
   udid=$(read_file "$2/ios-simulator")
   check_is_udid "$udid" || return 0
+  # The list is rewritten under the index lock (`delete_retired_simulators`), so it is appended to under it too: a line added between that rewrite's read and its `mv` would be lost, and the device with its app data never deleted.
+  # $3: `take` (the default: take the lock for the append), `held` (the caller holds it), `unlocked` (the caller could not get it: appended without — rare, and a lost line costs a device left behind, not a failure).
+  [ "$mode" = take ] && acquire_index_lock "$1" && is_taken=1
   grep -qxF "$udid" "$retired_file" 2> /dev/null || printf '%s\n' "$udid" >> "$retired_file"
+  [ "$is_taken" -eq 1 ] && release_index_lock "$1"
   return 0
 }
 
@@ -1530,6 +1548,13 @@ cmd_ios_device() {
   if check_is_udid "$udid" && grep -qF "($udid)" "$available_file"; then
     say "using the simulator $device_name ($udid) of this project's copy"
   else
+    # The device is not listed as available - or there is none yet. A session that sees no runtime lists nothing as available: that is no word for a device being gone, and none for making one.
+    count_visible_simulator_runtimes "$work"
+    if [ "$simctl_runtime_list_code" -ne 0 ] || [ "${simctl_runtime_count:-0}" -eq 0 ]; then
+      say "no simulator of its own: this session sees no Simulator runtime, so no device can be told gone or made (CoreSimulator may still be starting)"
+      rm -f "$available_file"
+      return 1
+    fi
     if [ -n "$udid" ]; then
       say "the simulator of this project's copy ($udid) is gone or unavailable: making a new one"
       retire_copy_simulator "$work" "$proj"
@@ -1730,9 +1755,17 @@ kill_job() {
     return 0
   fi
   signal_job_group TERM || pq kill "$task" > /dev/null 2>&1
-  local started=$SECONDS
-  while [ $((SECONDS - started)) -lt "$kill_grace_sec" ]; do
+  local started=$SECONDS grace_sec=$kill_grace_sec
+  while :; do
     check_job_ended && return 0
+    if [ $((SECONDS - started)) -ge "$grace_sec" ]; then
+      # A job that is shutting its Simulator device down is given what that step is bounded by (and the agent's pick-up of it) before the group is SIGKILLed, which would leave the device booted.
+      if [ "$grace_sec" -eq "$kill_grace_sec" ] && [ "$(read_file "$jd/phase")" = simulator-off ]; then
+        grace_sec=$((kill_grace_sec + ios_device_shutdown_sec + simulator_shutdown_slack_sec))
+        continue
+      fi
+      break
+    fi
     sleep 0.2
   done
   hard_kill_job "$task"
@@ -2024,6 +2057,7 @@ lock_held=0
 # The copy's number (empty: none was given) and its Simulator device (empty: none), set by cmd_job; `$jd/runner-env` is written from them.
 copy_index=
 ios_udid=
+tmpdir_set_aside=
 # 1 once the job has started the step that makes its Simulator device: whatever state that step left it in, the job shuts the device down at its end.
 ios_device_step_started=0
 
@@ -2277,15 +2311,42 @@ ensure_copy_index() {
     say "no port block and no TMPDIR of its own for this job: all $max_copy_indexes numbers of project copies are taken"
     return 0
   fi
-  rm -rf "$work/t/$candidate"
+  # What an earlier copy of this number left in its TMPDIR is set aside (an instant rename) under the lock and removed after it: a TMPDIR can hold hundreds of thousands of files, and a lock held for their removal would keep every
+  # other copy from being given a number meanwhile.
+  set_aside_tmpdir "$work" "$candidate"
+  local aside_dir=$tmpdir_set_aside
   if ! { printf '%s\n' "$candidate" > "$proj/index.tmp.$$" && mv "$proj/index.tmp.$$" "$proj/index"; } 2> /dev/null; then
     rm -f "$proj/index.tmp.$$"
     release_index_lock "$work"
+    [ -z "$aside_dir" ] || remove_path_even_if_read_only "$aside_dir"
     say "no port block and no TMPDIR of its own for this job: the number of this project's copy could not be written down"
     return 0
   fi
   release_index_lock "$work"
+  [ -z "$aside_dir" ] || remove_path_even_if_read_only "$aside_dir"
   copy_index=$candidate
+}
+
+# Set the TMPDIR `<work>/t/$2` aside by one rename, to `t/.gone-<pid>-<number>-<random>`; sets tmpdir_set_aside to the new path (empty when there was none, or the rename failed — then the next copy of the number wipes it).
+# The caller removes the folder AFTER it has given the index lock back; a caller that is cut off leaves it for the prune (`remove_finished_tmpdir_removals`). The index lock of work dir $1 must be held.
+set_aside_tmpdir() {
+  tmpdir_set_aside=
+  [ -d "$1/t/$2" ] || return 0
+  local aside_dir="$1/t/.gone-$$-$2-$RANDOM"
+  mv "$1/t/$2" "$aside_dir" 2> /dev/null && tmpdir_set_aside=$aside_dir
+  return 0
+}
+
+# Remove the TMPDIRs that a removal set aside and was cut off before it had removed (`t/.gone-<pid>-…`): those whose process is gone. One whose process lives is being removed by it.
+remove_finished_tmpdir_removals() {
+  local gone_dir rest
+  for gone_dir in "$1"/t/.gone-*; do
+    [ -e "$gone_dir" ] || continue
+    rest=${gone_dir##*/.gone-}
+    check_runner_pid_alive "${rest%%-*}" && continue
+    remove_path_even_if_read_only "$gone_dir"
+  done
+  return 0
 }
 
 # `$jd/runner-env`: the variables the runner gives every step of this job, one `NAME=VALUE` per line — TMPDIR (made here), REMOTE_RUN_PORT_BASE (the job owns this port and the 99 after it) and, once the job's own Simulator
@@ -2563,14 +2624,17 @@ prepare_job_simulator() {
   fi
 }
 
-# At the end of the job, before its lock goes (also after a kill or a timeout): the job's Simulator device is shut down, as a step, bounded — it frees the memory the next job needs. A kill that is followed by a hard
-# kill of the job's group after the grace time cuts this short, which only leaves the device booted. `killed` is clear for the step: a job that was killed still shuts its device down.
+# At the end of the job, before its lock goes (also after a kill or a timeout): the job's Simulator device is shut down, as a step, bounded — it frees the memory the next job needs. It is the first thing `finish_job` does after
+# the watchdog is stopped, so a kill finds the job here soonest, and `kill_job` gives a job in this phase the time the step is bounded by before it SIGKILLs the group. A command that ignores the TERM for the whole grace is
+# SIGKILLed before the job gets here, and its device stays booted. `killed` is clear for the step: a job that was killed still shuts its device down.
 shutdown_job_simulator() {
   [ "$ios_device_step_started" -eq 1 ] || return 0
   ios_device_step_started=0
   local udid was_killed=$killed
   udid=$(read_file "$proj/ios-simulator")
   check_is_udid "$udid" || return 0
+  # The phase tells a `kill` that is about to SIGKILL the group that this step is under way (`kill_job` waits for it).
+  set_phase simulator-off
   killed=0
   run_step "$tree" "bash $(quote_word "$(get_script_path)") ios-device-shutdown $(quote_word "$work") $(quote_word "$slug") $(quote_word "$udid")"
   killed=$was_killed
@@ -2597,9 +2661,9 @@ finish_job() {
     say "job killed"
   fi
   stop_watchdog
+  shutdown_job_simulator
   set_phase collecting
   collect_artifacts
-  shutdown_job_simulator
   if [ "$code" -eq 0 ] && [ -s "$jd/clean-after-success.ere" ]; then
     # Only a job that succeeded (its final code, after a timeout or a kill have had their say), and only after its results are collected: nothing a `pull:` names is lost to this. Its result is final already, so it is written
     # BEFORE the removal (minutes, for tens of GB): a `kill`, a lost lease or the hub's cut meanwhile finds the job ended and cannot turn one that worked into 137, and a caller waiting for the result does not wait for the removal.

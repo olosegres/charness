@@ -12,7 +12,7 @@
 
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -35,7 +35,7 @@ import {
   type JobSpec,
   type RunnerState,
 } from './remoteRunRunnerJobKit';
-import { scriptPath, writeFile } from './remoteRunRunnerScriptKit';
+import { scriptPath, startRunnerStandIn, stopRunnerStandIns, writeFile } from './remoteRunRunnerScriptKit';
 
 const isCi = process.env.CI === 'true' || process.env.CI === '1';
 const rsyncSkip = !checkIsRsyncAvailable() && !isCi ? 'rsync is not installed here (CI installs it)' : false;
@@ -54,6 +54,7 @@ beforeEach(() => {
   sims = createFakeSimulators(root);
 });
 afterEach(() => {
+  stopRunnerStandIns();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -260,6 +261,87 @@ describe('the device is shut down when the job ends any way', { skip: rsyncSkip 
         }
       }
     }
+  });
+});
+
+describe('a `kill` of a job that has a device', { skip: rsyncSkip }, () => {
+  const killGraceSec = 10;
+
+  it('waits for the device to be shut down past the grace after which the group is SIGKILLed: a command that is slow to die and a shutdown that takes longer than the grace still end with a shut-down device and 137', async () => {
+    const spec = iosJob(slugA, 'box1-aaaaaa', { command: `touch '${root}/started'; trap '' TERM; sleep 4` });
+    const child = startJob(state.workDir, spec, { ...sims.environment, FAKE_SHUTDOWN_SLEEP: `${killGraceSec + 3}` });
+    try {
+      await waitUntil('the command to start', () => fs.existsSync(path.join(root, 'started')), 60_000);
+      assert.equal(readFakeDevices(sims)[udidOne].state, 'Booted');
+      const killed = spawnSync('bash', [scriptPath, 'kill', state.workDir, slugA, spec.jobId], { encoding: 'utf8', env: getRunEnvironment(sims.environment), timeout: 120_000 });
+      assert.equal(killed.stdout.trim(), 'killed', killed.stderr);
+      assert.equal(await waitForJobExit(state.workDir, spec, 90_000), '137');
+      assert.equal(readFakeDevices(sims)[udidOne].state, 'Shutdown', 'the shutdown was not cut off by the hard kill');
+      assert.ok(readFakeCalls(sims).includes(`simctl shutdown ${udidOne}`));
+    } finally {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          /* gone */
+        }
+      }
+    }
+  });
+});
+
+describe('the retired list is appended to under the lock that rewrites it', () => {
+  it('a device is put on the list only once nobody holds the index lock: a rewrite in progress cannot drop the line', async () => {
+    writeFile(state.workDir, `p/${slugA}/ios-simulator`, `${udidOne}\n`);
+    const holderPid = startRunnerStandIn();
+    writeFile(state.workDir, 'tmp/index.lock', `${holderPid}\nsome-job\n`);
+    const retiring = new Promise<string>((resolve) => {
+      const child = spawn('bash', ['-c', `source ${scriptPath}; index_lock_wait_sec=30; retire_copy_simulator ${state.workDir} ${state.workDir}/p/${slugA}; echo retired`], { env: getRunEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] });
+      let output = '';
+      child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+      child.on('close', () => resolve(output));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.deepEqual(readRetired(), [], 'the lock is held: nothing is appended behind the holder\'s back');
+    fs.rmSync(path.join(state.workDir, 'tmp', 'index.lock'));
+    assert.match(await retiring, /^retired$/m);
+    assert.deepEqual(readRetired(), [udidOne]);
+    assert.equal(fs.existsSync(path.join(state.workDir, 'tmp', 'index.lock')), false, 'the lock is given back');
+  });
+
+  it('a caller that already holds the lock (the removal of a copy) is not made to wait for it a second time: a `clean` that retires a device is quick', () => {
+    const outcome = runJob(state.workDir, iosJob(slugA, 'box1-aaaaaa', { needsIos: false, command: 'true' }), sims.environment);
+    assert.equal(outcome.exit, '0', outcome.log);
+    writeFile(state.workDir, `p/${slugA}/ios-simulator`, `${udidOne}\n`);
+    fs.utimesSync(path.join(outcome.jobDir, 'exit'), new Date(0), new Date(0));
+    const startedAt = Date.now();
+    const cleaned = spawnSync('bash', [scriptPath, 'clean', state.workDir, slugA], { encoding: 'utf8', env: getRunEnvironment(sims.environment), timeout: 60_000 });
+    assert.match(cleaned.stdout, /^removed=/m, cleaned.stdout);
+    assert.deepEqual(readRetired(), [udidOne]);
+    assert.ok(Date.now() - startedAt < 10_000, `${Date.now() - startedAt} ms`);
+  });
+});
+
+describe('a CoreSimulator that sees no runtime', { skip: rsyncSkip }, () => {
+  it('does not make a job\'s device "gone": the recorded device is neither retired nor replaced, the job runs without one, and says why', () => {
+    runJob(state.workDir, iosJob(slugA, 'box1-aaaaaa'), sims.environment);
+    const callsBefore = readFakeCalls(sims).length;
+    const outcome = runJob(state.workDir, iosJob(slugA, 'box1-bbbbbb'), { ...sims.environment, FAKE_NO_RUNTIMES: '1' });
+    assert.equal(outcome.exit, '0', outcome.log);
+    assert.equal(readSeenUdid(), 'unset');
+    assert.equal(readRecordedUdid(slugA), udidOne, 'the record stays');
+    assert.deepEqual(readRetired(), [], 'nothing is retired, so nothing is deleted later');
+    assert.deepEqual(Object.keys(readFakeDevices(sims)), [udidOne], 'no second device was made');
+    assert.ok(readFakeCalls(sims).slice(callsBefore).every((call) => !/^simctl (create|delete)\b/.test(call)));
+    assert.ok(outcome.log.includes('remote-run: no simulator of its own: this session sees no Simulator runtime, so no device can be told gone or made'), outcome.log);
+  });
+
+  it('a session that sees its runtimes judges the device as before (the earlier case of an unavailable device is the test above)', () => {
+    runJob(state.workDir, iosJob(slugA, 'box1-aaaaaa'), sims.environment);
+    addFakeDevice(sims, udidOne, `charness-${slugA}`, 'Shutdown', false);
+    const outcome = runJob(state.workDir, iosJob(slugA, 'box1-bbbbbb'), sims.environment);
+    assert.equal(readSeenUdid(), udidTwo, outcome.log);
+    assert.deepEqual(readRetired(), [udidOne]);
   });
 });
 

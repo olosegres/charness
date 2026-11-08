@@ -139,6 +139,11 @@ shift
 read_device() { { IFS= read -r name; IFS= read -r state; IFS= read -r availability; } < "$sim/dev/$1"; }
 case $command in
   list)
+    if [ "$1" = runtimes ]; then
+      echo "== Runtimes =="
+      [ -n "\${FAKE_NO_RUNTIMES:-}" ] || echo "iOS 18.2 (18.2 - 22C150) - com.apple.CoreSimulator.SimRuntime.iOS-18-2"
+      exit 0
+    fi
     [ "$1" = devices ] || exit 0
     echo "== Devices =="
     echo "-- iOS 18.2 --"
@@ -147,6 +152,8 @@ case $command in
       udid=$(basename "$file")
       read_device "$udid"
       if [ "$2" = available ] && [ "$availability" != yes ]; then continue; fi
+      # A CoreSimulator that sees no runtime calls every device unavailable.
+      if [ "$2" = available ] && [ -n "\${FAKE_NO_RUNTIMES:-}" ]; then continue; fi
       echo "    $name ($udid) ($state)"
     done
     ;;
@@ -179,6 +186,7 @@ case $command in
       exit 0
     fi
     [ -f "$sim/dev/$1" ] || { echo "Invalid device: $1" >&2; exit 164; }
+    [ -z "\${FAKE_SHUTDOWN_SLEEP:-}" ] || sleep "$FAKE_SHUTDOWN_SLEEP"
     read_device "$1"
     if [ "$state" = Shutdown ]; then
       printf 'An error was encountered processing the command (domain=com.apple.CoreSimulator.SimError, code=405):\\nUnable to shutdown device in current state: Shutdown\\n' >&2

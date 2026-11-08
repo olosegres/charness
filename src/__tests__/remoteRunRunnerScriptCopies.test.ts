@@ -272,6 +272,86 @@ describe('a copy that goes', { skip: rsyncSkip }, () => {
   });
 });
 
+/**
+ * A TMPDIR is where Metro's and Jest's caches land: hundreds of thousands of files, several GB, minutes to remove. A stand-in `rm` that takes FAKE_RM_DELAY seconds over a folder that sits directly in `<work>/t/`
+ * (and leaves a marker when it starts) stands for that. Everything else it removes at once.
+ */
+function installSlowRm(): { binDir: string; startedMarker: string } {
+  const binDir = path.join(root, 'slow-rm-bin');
+  const startedMarker = path.join(root, 'slow-rm-started');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(binDir, 'rm'),
+    `#!/bin/bash\ntarget=\${@: -1}\ncase "$(dirname "$target")" in */t) if [ -n "\${FAKE_RM_DELAY:-}" ]; then : > '${startedMarker}'; sleep "$FAKE_RM_DELAY"; fi ;; esac\nexec /bin/rm "$@"\n`,
+    { mode: 0o755 },
+  );
+  return { binDir, startedMarker };
+}
+
+describe('a TMPDIR that takes long to remove does not hold the numbers back', { skip: rsyncSkip }, () => {
+  const slowDelaySec = 8;
+
+  it('a copy that goes: its number is free and handed out again while its TMPDIR is still being removed - the new copy gets it at once, and what the remover is still removing is NOT the new copy\'s TMPDIR', async () => {
+    const runOnce = (name: string, jobId: string): void => {
+      const outcome = runJob(state.workDir, { slug: name, jobId, command: 'true' });
+      assert.equal(outcome.exit, '0', outcome.log);
+    };
+    runOnce('app-aaaaaaaaaa', 'box1-aaaaaa');
+    writeFile(state.workDir, 't/0/cache/big', 'x');
+    fs.utimesSync(path.join(state.workDir, 'p', 'app-aaaaaaaaaa', 'jobs', 'box1-aaaaaa', 'exit'), new Date(0), new Date(0));
+    const { binDir, startedMarker } = installSlowRm();
+    const cleaning = new Promise<string>((resolve) => {
+      const child = spawn('bash', [scriptPath, 'clean', state.workDir, 'app-aaaaaaaaaa'], { env: getRunEnvironment({ PATH: `${binDir}:${process.env.PATH ?? ''}`, FAKE_RM_DELAY: `${slowDelaySec}` }), stdio: ['ignore', 'pipe', 'ignore'] });
+      let output = '';
+      child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+      child.on('close', () => resolve(output));
+    });
+    await waitUntil('the removal of the TMPDIR to start', () => fs.existsSync(startedMarker));
+    const startedAt = Date.now();
+    // The number was freed with the copy: a new copy is given it now, with a wait of 3 s at most for the lock - a lock held for the whole removal would leave it with none.
+    const next = allocate('app-cccccccccc', {}, 'index_lock_wait_sec=3');
+    assert.equal(next.index, '0', next.said);
+    assert.ok(Date.now() - startedAt < slowDelaySec * 1000 - 2000, `${Date.now() - startedAt} ms: it did not wait for the removal`);
+    writeFile(state.workDir, 't/0/started-by-the-new-copy', 'mine');
+    assert.match(await cleaning, /^removed=app-aaaaaaaaaa /m);
+    assert.equal(fs.readFileSync(path.join(state.workDir, 't', '0', 'started-by-the-new-copy'), 'utf8'), 'mine', 'the remover took the old TMPDIR only');
+    assert.deepEqual(fs.readdirSync(path.join(state.workDir, 't')).filter((name) => name.startsWith('.gone-')), [], 'what was set aside is removed');
+  });
+
+  it('a number handed out for a TMPDIR an earlier copy left behind wipes it AFTER the lock is given back: the next allocation is not kept waiting', async () => {
+    writeFile(state.workDir, 't/0/cache/leftover', 'x');
+    const { binDir, startedMarker } = installSlowRm();
+    const first = new Promise<string>((resolve) => {
+      const child = spawn('bash', ['-c', `source ${scriptPath}; work=${state.workDir}; slug=app-aaaaaaaaaa; proj="$work/p/$slug"; job=; mkdir -p "$proj"; ensure_copy_index; echo "index=$copy_index"`], {
+        env: getRunEnvironment({ PATH: `${binDir}:${process.env.PATH ?? ''}`, FAKE_RM_DELAY: `${slowDelaySec}` }),
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      let output = '';
+      child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+      child.on('close', () => resolve(output));
+    });
+    await waitUntil('the wipe of the leftover to start', () => fs.existsSync(startedMarker));
+    const startedAt = Date.now();
+    const second = allocate('app-bbbbbbbbbb', {}, 'index_lock_wait_sec=3');
+    assert.equal(second.index, '1', second.said);
+    assert.ok(Date.now() - startedAt < slowDelaySec * 1000 - 2000, `${Date.now() - startedAt} ms`);
+    assert.match(await first, /^index=0$/m);
+    assert.equal(fs.existsSync(path.join(state.workDir, 't', '0', 'cache')), false, 'the leftover is gone from the new copy\'s TMPDIR');
+  });
+
+  it('a removal that was cut off leaves its set-aside folder (`t/.gone-<pid>-<k>-…`): the prune finishes it once that process is gone, and leaves one whose process lives', () => {
+    const livePid = startRunnerStandIn();
+    writeFile(state.workDir, 't/.gone-99999999-3-1/cache/file', 'x');
+    writeFile(state.workDir, `t/.gone-${livePid}-4-2/cache/file`, 'y');
+    writeFile(state.workDir, 't/7/mine', 'a live copy\'s TMPDIR');
+    const pruned = runScript(['prune', state.workDir]);
+    assert.equal(pruned.status, 0, pruned.stderr);
+    assert.equal(fs.existsSync(path.join(state.workDir, 't', '.gone-99999999-3-1')), false, 'its remover is gone: finished');
+    assert.equal(fs.existsSync(path.join(state.workDir, 't', `.gone-${livePid}-4-2`)), true, 'its remover lives: it is at it');
+    assert.equal(fs.existsSync(path.join(state.workDir, 't', '7', 'mine')), true, 'a TMPDIR in use is not touched');
+  });
+});
+
 describe('two jobs of different projects that start at the same moment', { skip: rsyncSkip }, () => {
   it('both run, and each gets a number of its own', async () => {
     const first: JobSpec = { slug: 'app-aaaaaaaaaa', jobId: 'box1-aaaaaa', command: 'true' };
