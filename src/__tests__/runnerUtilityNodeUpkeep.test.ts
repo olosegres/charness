@@ -21,9 +21,8 @@ import {
   checkIsAttemptDue,
   checkIsLinkIdle,
   createIdleRestart,
-  classifyPueueView,
-  createPueueActivityCheck,
   ensureLauncherForRunningNode,
+  formatBlockerLine,
   getNextLookDelayMs,
   nodeMoveRetryMs,
   nodeVersionGraceMs,
@@ -34,8 +33,8 @@ import {
   runNodeUpkeep,
   startNodeUpkeepSchedule,
   type NodeUpkeepDeps,
-  type PueueActivity,
 } from '../runnerUtility/nodeUpkeep';
+import { classifyPueueView, createPueueActivityCheck, type PueueActivity } from '../runnerUtility/pueueDaemon';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 
 const systemNode = '/opt/homebrew/bin/node';
@@ -561,6 +560,14 @@ describe('leaving only when nothing is under way', () => {
     assert.equal(await checkIsLinkIdle({ ...baseChecks, getPueueActivity }), true);
     assert.equal(pueueAsked, 1);
     assert.equal(await checkIsLinkIdle({ ...baseChecks, getPueueActivity: async () => busyActivity }), false, 'a Pueue task running or queued');
+  });
+
+  it('words the day as what the code does: the RESTART has waited a day (from its request), not "the task has not moved for a day"', () => {
+    const description = 'a task that waits for a person: task 4 (Paused, group default)';
+    assert.equal(formatBlockerLine(description, false), `the link will start again on the new Node.js when Pueue is done with ${description}`);
+    const giveUp = formatBlockerLine(description, true);
+    assert.match(giveUp, /^the restart has waited a day for Pueue: the link leaves for the new Node\.js without waiting for a task that waits for a person: task 4 \(Paused, group default\) any longer \(the old Node\.js's folder is kept for a week\)$/);
+    assert.doesNotMatch(giveUp, /not moved/);
   });
 
   it('asks them AGAIN after Pueue has answered: a command, or an update, that began during the wait for Pueue is not cut', async () => {

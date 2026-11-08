@@ -24,7 +24,7 @@ import {
   type GuiAgentFacts,
   type GuiAgentHealDeps,
 } from '../runnerUtility/guiAgentHeal';
-import type { PueueState } from '../runnerUtility/pueueDaemon';
+import { readPueueView, type PueueView } from '../runnerUtility/pueueDaemon';
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 import { getGuiAgentFile } from '../runnerUtility/serviceCommon';
 import { getServiceNames, planGuiAgentJob, renderLaunchdPlist } from '../runnerUtility/serviceUnits';
@@ -79,9 +79,12 @@ let paths: RunnerHomePaths = getRunnerHomePaths('/nonexistent');
 let names = getServiceNames(paths.root);
 let calls: string[] = [];
 let world: LaunchctlWorld = { session: 'present', loginProcesses: 'none', isLoaded: false, bootstrapFails: false, bootoutLeavesLoaded: false };
-let queue: PueueState = { kind: 'idle' };
+/** What the queue shows (`readPueueView`): no tasks; running ones; no answer; no daemon. */
+const idleQueue: PueueView = { kind: 'tasks', tasks: [], pausedGroups: [] };
+const runningQueue = (jobs: number): PueueView => ({ kind: 'tasks', tasks: Array.from({ length: jobs }, (_, index) => ({ id: String(index), status: 'Running', group: 'default' })), pausedGroups: [] });
+let queue: PueueView = idleQueue;
 /** Answers of the queue, one per look, before `queue` takes over: a job that turns up between the looks of one swap. */
-let queueAnswers: PueueState[] = [];
+let queueAnswers: PueueView[] = [];
 let serviceKind: string | null = 'system-service';
 let logLines: string[] = [];
 
@@ -148,7 +151,7 @@ beforeEach(() => {
   names = getServiceNames(paths.root);
   calls = [];
   world = { session: 'present', loginProcesses: 'none', isLoaded: false, bootstrapFails: false, bootoutLeavesLoaded: false };
-  queue = { kind: 'idle' };
+  queue = idleQueue;
   queueAnswers = [];
   serviceKind = 'system-service';
   logLines = [];
@@ -221,7 +224,7 @@ describe('healGuiAgent: an older definition', () => {
   });
 
   it('leaves the loaded agent AND its file alone while a job runs — replacing it would cut the steps the job runs through it — and says it waits', async () => {
-    queue = { kind: 'busy', activeJobs: 1 };
+    queue = runningQueue(1);
     const outcome = await healGuiAgent(paths, createDeps());
     assert.deepEqual(outcome, { kind: 'waiting-for-idle' });
     assert.notEqual(readDefinition(), expectedDefinition());
@@ -230,7 +233,7 @@ describe('healGuiAgent: an older definition', () => {
 
   it('a job that turns up AFTER the first look but before the old agent is stopped stops the swap: the old definition is put back and nothing is booted out', async () => {
     const oldText = readDefinition();
-    queueAnswers = [{ kind: 'idle' }, { kind: 'busy', activeJobs: 1 }];
+    queueAnswers = [idleQueue, runningQueue(1)];
     assert.deepEqual(await healGuiAgent(paths, createDeps()), { kind: 'waiting-for-idle' });
     assert.equal(readDefinition(), oldText, 'the next look sees the difference again and tries again');
     assert.ok(!calls.some((call) => /bootstrap|bootout/.test(call)), calls.join('\n'));
@@ -248,8 +251,35 @@ describe('healGuiAgent: an older definition', () => {
     assert.ok(queueLooks[1] < order.indexOf('launchctl bootout') && queueLooks[0] < queueLooks[1], order.join(' > '));
   });
 
+  it('a queue that did not ANSWER in time counts as busy — a heavy build keeps Pueue from answering — and the agent is neither replaced nor booted out', async () => {
+    queue = { kind: 'unknown', reason: 'it did not answer within 5 s' };
+    const outcome = await healGuiAgent(paths, createDeps());
+    assert.deepEqual(outcome, { kind: 'waiting-for-idle' });
+    assert.notEqual(readDefinition(), expectedDefinition(), 'the loaded agent\'s file is as it was');
+    assert.ok(!calls.some((call) => /bootstrap|bootout/.test(call)), calls.join('\n'));
+  });
+
+  it('the same through the REAL reader: a `pueue status` that times out is not "no daemon" — the swap waits, nothing is booted out — and the second look, right before the stop, is held to the same', async () => {
+    const timedOut: CommandRunner = async () => ({ ok: false, exitCode: null, stdout: '', stderr: '', isTimedOut: true });
+    const deps = { ...createDeps(), readQueue: () => readPueueView(paths, timedOut) };
+    assert.deepEqual(await healGuiAgent(paths, deps), { kind: 'waiting-for-idle' });
+    assert.ok(!calls.some((call) => /bootstrap|bootout/.test(call)), calls.join('\n'));
+    // The first look found the queue free; the second, right before the stop, times out.
+    const answers: PueueView[] = [idleQueue];
+    const secondTimesOut = { ...createDeps(), readQueue: async () => answers.shift() ?? await readPueueView(paths, timedOut) };
+    assert.deepEqual(await healGuiAgent(paths, secondTimesOut), { kind: 'waiting-for-idle' });
+    assert.ok(!calls.some((call) => /bootstrap|bootout/.test(call)), calls.join('\n'));
+  });
+
+  it('a task that waits in the queue or is paused keeps the agent where it is, too — a queued job starts the moment the old agent is gone', async () => {
+    queue = { kind: 'tasks', tasks: [{ id: '1', status: 'Queued', group: 'default' }], pausedGroups: [] };
+    assert.deepEqual(await healGuiAgent(paths, createDeps()), { kind: 'waiting-for-idle' });
+    queue = { kind: 'tasks', tasks: [{ id: '2', status: 'Paused', group: 'default' }], pausedGroups: [] };
+    assert.deepEqual(await healGuiAgent(paths, createDeps()), { kind: 'waiting-for-idle' });
+  });
+
   it('a queue whose state cannot be read counts as busy: it cannot be told apart from one with a running job', async () => {
-    queue = { kind: 'unreadable' };
+    queue = { kind: 'unknown', reason: 'its answer could not be read' };
     assert.deepEqual(await healGuiAgent(paths, createDeps()), { kind: 'waiting-for-idle' });
   });
 
@@ -260,7 +290,7 @@ describe('healGuiAgent: an older definition', () => {
 
   it('an agent that is not loaded (the old file only) is written over and loaded without a look at the queue', async () => {
     world.isLoaded = false;
-    queue = { kind: 'busy', activeJobs: 2 };
+    queue = runningQueue(2);
     assert.deepEqual(await healGuiAgent(paths, createDeps()), { kind: 'loaded', wasReplaced: false });
     assert.equal(readDefinition(), expectedDefinition());
   });

@@ -378,7 +378,8 @@ describe('pairing an account that is already paired', () => {
 describe('the service command', () => {
   it('the account\'s side of the always-on install answers in one JSON line the admin step reads — its exit code says whether it may go on', async () => {
     // No Pueue daemon answers on this account's queue.
-    const noQueue: CommandRunner = async () => ({ ok: false, exitCode: 1, stdout: '', stderr: '', isTimedOut: false });
+    // In the words the pueue client really uses when there is no daemon (`readPueueView` takes nothing else for "no daemon": a failure in other words is "no answer", which counts as busy).
+    const noQueue: CommandRunner = async () => ({ ok: false, exitCode: 1, stdout: '', stderr: 'Error: \n   0: I/O error at path "/x/run/pueue.socket" while connecting to daemon. Did you start it?:\n      No such file or directory (os error 2)', isTimedOut: false });
     const asAccount = { ...createServiceDeps([]), runner: noQueue, platform: 'darwin' as const, uid: 501, homeDir: home };
     assert.equal(await runService(['system-step', 'prepare'], io, asAccount), 1);
     assert.deepEqual(JSON.parse(output.trim()), { ok: false, lines: ['This account is not paired yet: run the line from /runners on this machine first, then install the service.'] });

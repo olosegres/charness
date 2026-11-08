@@ -3,7 +3,7 @@ import * as path from 'path';
 import { getCaughtErrnoCode, writeTextFileAtomically } from '../configDirFile';
 import { getOutputTail, type CommandResult, type CommandRunner } from '../selfUpdate/commandRunner';
 import { stripControlCharacters } from '../utils/stripControlCharacters';
-import type { PueueState } from './pueueDaemon';
+import { classifyPueueView, type PueueView } from './pueueDaemon';
 import type { RunnerHomePaths } from './runnerHome';
 import { bootOutAndWaitUntilGone, commandTimeoutMs, getGuiAgentFile, restorePreviousDefinitions, writeDefinition } from './serviceCommon';
 import { getServiceNames, planGuiAgentJob, renderLaunchdPlist } from './serviceUnits';
@@ -107,8 +107,8 @@ export interface GuiAgentHealDeps {
   nodeDir: string;
   /** `system-service` when an admin's line installed the always-on service (`readServiceKind`); asked at every look, an admin may install it while the link runs. */
   getServiceKind: () => string | null;
-  /** What Pueue holds: asked with the queued jobs counted (they start the moment the old agent is gone), and asked again right before the old agent is stopped. */
-  readQueue: () => Promise<PueueState>;
+  /** What Pueue holds ({@link readPueueView}: a queue that did not answer is `unknown`, which counts as busy): asked with the queued jobs counted (they start the moment the old agent is gone), and asked again right before the old agent is stopped. */
+  readQueue: () => Promise<PueueView>;
 }
 
 function readFileOrNull(filePath: string): string | null {
@@ -190,8 +190,9 @@ async function lookAtSession(deps: GuiAgentHealDeps, label: string): Promise<{ h
   return { failure: `launchd says ${domain} does not exist (${launchdWord}), and whether the account is logged in could not be confirmed (${evidence.reason})` };
 }
 
-function checkIsQueueBusy(queue: PueueState): boolean {
-  return queue.kind === 'busy' || queue.kind === 'unreadable';
+/** Anything unfinished — a running job, a paused or queued one — and a queue that could not be asked at all (a heavy build can keep Pueue from answering in time) keep the agent where it is. */
+function checkIsQueueBusy(queue: PueueView): boolean {
+  return classifyPueueView(queue).kind !== 'idle';
 }
 
 /** Why the agent is not loaded, and at which step: `bootout` — the old agent is still there — or `bootstrap` — the stop worked and the new definition was refused. */
@@ -227,7 +228,7 @@ export async function healGuiAgent(paths: RunnerHomePaths, deps: GuiAgentHealDep
   const session = await lookAtSession(deps, names.launchdGui);
   // Nothing was written yet: the way out is the login only when a current definition is there to load.
   if ('failure' in session) return { kind: 'failed', reason: session.failure, cure: isDefinitionCurrent ? 'login' : 'admin' };
-  const queueAtPlan = !isDefinitionCurrent && session.isLoaded ? await deps.readQueue() : { kind: 'idle' as const };
+  const queueAtPlan: PueueView = !isDefinitionCurrent && session.isLoaded ? await deps.readQueue() : { kind: 'absent' };
   const plan = planGuiAgentHeal({ isAlwaysOnService: true, isDefinitionCurrent, hasSession: session.hasSession, isLoaded: session.isLoaded, isQueueBusy: checkIsQueueBusy(queueAtPlan) });
   if (plan === 'none') return { kind: 'in-place' };
   if (plan === 'wait-for-idle') return { kind: 'waiting-for-idle' };

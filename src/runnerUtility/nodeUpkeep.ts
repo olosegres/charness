@@ -2,9 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
 import { writeJsonFileAtomically } from '../configDirFile';
-import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { checkLauncherIsFor, ensureLauncher, readLauncherNodePath } from './launcher';
-import { readPueueView, type PueueView } from './pueueDaemon';
+import type { PueueActivity } from './pueueDaemon';
 import { checkIsManagedNode, describeNode, ensureOwnNode, getInstalledVersion, getOwnInstallFolder, testKeepNodeEnvName, type NodeMoveDeps } from './managedNode';
 import type { RunnerHomePaths } from './runnerHome';
 
@@ -140,44 +139,6 @@ export async function pruneOwnNodes(paths: Pick<RunnerHomePaths, 'ownNodeDir' | 
   return removed;
 }
 
-/** What Pueue is doing, as far as a restart or a removal of a Node must care. */
-export type PueueActivity =
-  /** Nothing unfinished — or there is no daemon to have any. */
-  | { kind: 'idle' }
-  /** A task is running, one will start by itself (queued in a group that runs), or Pueue could not be asked. */
-  | { kind: 'busy'; description: string }
-  /** Only tasks that will not move by themselves: paused, locked, or queued in a paused group (Pueue pauses a group that still had queued tasks when its daemon restarted). */
-  | { kind: 'stuck'; description: string };
-
-/** How many tasks a description names before it says "and N more". */
-const namedTaskCount = 3;
-
-function describeTasks(kind: string, tasks: ReadonlyArray<{ id: string; status: string; group: string }>): string {
-  const named = tasks.slice(0, namedTaskCount).map((task) => `task ${task.id} (${task.status}, group ${task.group})`).join(', ');
-  return `${kind}: ${named}${tasks.length > namedTaskCount ? ` and ${tasks.length - namedTaskCount} more` : ''}`;
-}
-
-/**
- * @description What a look at the queue means for a restart or a removal. A running task is busy; so is a queued one in a group that runs (it starts the moment a slot frees)
- * and a queue that could not be asked (a timed out or unreadable answer is not "free"); a paused or locked task, and a queued one in a paused group, are `stuck` — they
- * wait for a person — and are told apart so that a restart does not wait for them for ever. No daemon is idle. A finished task is nothing.
- */
-export function classifyPueueView(view: PueueView): PueueActivity {
-  if (view.kind === 'absent') return { kind: 'idle' };
-  if (view.kind === 'unknown') return { kind: 'busy', description: `no answer from Pueue (${view.reason})` };
-  const isStuckQueued = (task: { status: string; group: string }): boolean => task.status === 'Queued' && view.pausedGroups.includes(task.group);
-  const moving = view.tasks.filter((task) => task.status === 'Running' || (task.status === 'Queued' && !isStuckQueued(task)));
-  if (moving.length > 0) return { kind: 'busy', description: describeTasks('a running or queued task', moving) };
-  const stuck = view.tasks.filter((task) => task.status === 'Paused' || task.status === 'Locked' || isStuckQueued(task));
-  if (stuck.length > 0) return { kind: 'stuck', description: describeTasks('a task that waits for a person', stuck) };
-  return { kind: 'idle' };
-}
-
-/** @description The check "what is Pueue doing?" for {@link PruneDeps} and {@link checkIsLinkIdle} ({@link classifyPueueView} of what `pueue status --json` says). */
-export function createPueueActivityCheck(paths: RunnerHomePaths, runner: CommandRunner = runCommand): () => Promise<PueueActivity> {
-  return async () => classifyPueueView(await readPueueView(paths, runner));
-}
-
 /**
  * @description Make the launcher start `runningNodePath`, the Node that runs this link — except when the launcher already names one of the runner's own Nodes
  * while the link runs on another: that is a launcher process that was started before the runner moved (an update of the program restarts the app through the
@@ -291,8 +252,15 @@ export function startNodeUpkeepSchedule(look: () => Promise<number>, setTimer: (
   void run();
 }
 
-/** How long a restart for a new Node waits for Pueue tasks that only wait for a person (paused, locked, queued in a paused group): the old Node's folder is kept a week anyway. */
+/** How long a restart for a new Node waits for Pueue tasks that only wait for a person (paused, locked, queued in a paused group) IN ALL, from the restart's request: the old Node's folder is kept a week anyway. */
 export const stuckPueueWaitMs = 24 * 60 * 60 * 1000;
+
+/** @description The log line for what a restart for a new Node waits on (`isGivingUp` false), or stops waiting on after {@link stuckPueueWaitMs} in all (true): the day is the restart's own, not the task's. */
+export function formatBlockerLine(description: string, isGivingUp: boolean): string {
+  return isGivingUp
+    ? `the restart has waited a day for Pueue: the link leaves for the new Node.js without waiting for ${description} any longer (the old Node.js's folder is kept for a week)`
+    : `the link will start again on the new Node.js when Pueue is done with ${description}`;
+}
 
 export interface LinkIdleChecks {
   getActiveExecCount: () => number;
@@ -308,7 +276,7 @@ export interface LinkIdleChecks {
 /**
  * @description Is nothing under way that a restart of the link would cut or strand — no command over it, no update of the program being installed (its download
  * and `npm ci` would be orphaned), and no Pueue task running or queued (a job queued with the old PATH keeps its Node)? A task that only waits for a person (paused,
- * locked, queued in a paused group) is waited for {@link stuckPueueWaitMs} and then left behind, with a word. The cheap questions come first, and they are asked AGAIN
+ * locked, queued in a paused group) is waited for {@link stuckPueueWaitMs} IN ALL — counted from the restart's request, not from when the task became stuck — and then left behind, with a word. The cheap questions come first, and they are asked AGAIN
  * after Pueue has answered: a command or an update that began during that wait must not be cut.
  */
 export async function checkIsLinkIdle(checks: LinkIdleChecks): Promise<boolean> {

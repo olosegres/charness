@@ -184,6 +184,8 @@ let calls: Call[] = [];
 
 /** What the machine says unless a test says otherwise: no Pueue daemon answers, and no launchd job is loaded. */
 const unansweredCommands = ['status --json', 'launchctl print'];
+/** What the pueue client really prints when there is no daemon to ask (`readPueueView` takes only this for "no daemon"; a failure in other words is "no answer"). */
+const noDaemonStderr = 'Error: \n   0: Failed to initialize client.\n   2: I/O error at path "/x/run/pueue.socket" while connecting to daemon. Did you start it?:\n      No such file or directory (os error 2)';
 
 function recordingRunner(answers: Record<string, Partial<CommandResult>> = {}): CommandRunner {
   return async (file, args) => {
@@ -191,7 +193,7 @@ function recordingRunner(answers: Record<string, Partial<CommandResult>> = {}): 
     const key = `${file} ${args.join(' ')}`;
     const answer = Object.entries(answers).find(([fragment]) => key.includes(fragment))?.[1];
     const ok = answer?.ok ?? !unansweredCommands.some((fragment) => key.includes(fragment));
-    return { ok, exitCode: ok ? 0 : 1, stdout: '', stderr: '', isTimedOut: false, ...answer };
+    return { ok, exitCode: ok ? 0 : 1, stdout: '', stderr: !ok && key.includes('status --json') ? noDaemonStderr : '', isTimedOut: false, ...answer };
   };
 }
 
@@ -453,13 +455,24 @@ describe('installing and removing the services', () => {
     assert.ok(!commandLines().some((line) => line.startsWith('systemctl')));
   });
 
+  it('a Pueue that does not ANSWER in time is not a free queue: a service is neither taken over nor replaced under jobs that may be running — and a failure in other words is the same', async () => {
+    pair();
+    for (const answer of [{ ok: false, exitCode: null, isTimedOut: true }, { ok: false, exitCode: 101, stderr: 'thread panicked' }] as const) {
+      calls = [];
+      const result = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': answer }) }));
+      assert.equal(result.ok, false);
+      assert.match(result.lines.join('\n'), /cannot be read/);
+      assert.ok(!commandLines().some((line) => line.includes('shutdown') || line.startsWith('systemctl')), 'nothing was stopped, nothing was started');
+    }
+  });
+
   it('shuts an IDLE unmanaged daemon down first, so the managed one can take the socket', async () => {
     pair();
     let isDaemonUp = true;
     const runner: CommandRunner = async (file, args) => {
       const command = `${file} ${args.join(' ')}`;
       calls.push({ file, args });
-      if (command.includes('status --json')) return { ok: isDaemonUp, exitCode: isDaemonUp ? 0 : 1, stdout: isDaemonUp ? JSON.stringify({ tasks: { 0: { status: { Done: {} } } } }) : '', stderr: '', isTimedOut: false };
+      if (command.includes('status --json')) return { ok: isDaemonUp, exitCode: isDaemonUp ? 0 : 1, stdout: isDaemonUp ? JSON.stringify({ tasks: { 0: { status: { Done: {} } } } }) : '', stderr: isDaemonUp ? '' : noDaemonStderr, isTimedOut: false };
       if (command.includes(' shutdown')) isDaemonUp = false;
       if (command.endsWith(' status')) return { ok: isDaemonUp, exitCode: isDaemonUp ? 0 : 1, stdout: '', stderr: '', isTimedOut: false };
       return { ok: true, exitCode: 0, stdout: '', stderr: '', isTimedOut: false };
@@ -488,6 +501,13 @@ describe('installing and removing the services', () => {
     const unreadable = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { ok: true, stdout: 'not json' } }) }));
     assert.equal(unreadable.ok, false);
     assert.match(unreadable.lines.join('\n'), /cannot be read, so it cannot be told apart from one with running jobs: replacing the service now could cut them/);
+
+    // A Pueue that does not answer in time is no free queue either: replacing the loaded service would cut what may be running.
+    calls = [];
+    const timedOut = await installService({ isSystem: false, userName: null }, createDeps({ runner: recordingRunner({ 'status --json': { ok: false, exitCode: null, isTimedOut: true } }) }));
+    assert.equal(timedOut.ok, false);
+    assert.match(timedOut.lines.join('\n'), /cannot be told apart from one with running jobs: replacing the service now could cut them/);
+    assert.ok(!commandLines().some((line) => line.startsWith('systemctl') || line.includes('enable --now')), 'nothing of the service was touched');
   });
 
   it('refuses when Pueue is not installed yet: a unit that cannot start would only restart in a loop', async () => {

@@ -11,7 +11,7 @@ import { connectToHub, HubConnectionError, requestGateJson, type HubEndpoint } f
 import { recoverPairing } from './pairingRecovery';
 import { createLinkLoop } from './linkLoop';
 import { collectMachineReport, createMachineProbe, formatMachineReport, type MachineReport } from './machineReport';
-import { ensurePueueDaemon, inspectPueue, pueueUnfinishedStatuses, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
+import { createPueueActivityCheck, ensurePueueDaemon, readPueueView, stopAllPueueJobs, waitForPueueDaemon } from './pueueDaemon';
 import { createGuiAgentDeps, runGuiAgent } from './guiAgent';
 import { checkCanReadLid, createIoregReader, createLidWatcher } from './lidState';
 import { createGuiAgentHealer, guiAgentHealIntervalMs, writeGuiAgentInstallFailure } from './guiAgentHeal';
@@ -34,7 +34,7 @@ import { readExecEnv } from './execEnv';
 import { createRunnerServers } from './runnerServers';
 import { createStepRunner, stepLabels, type RunStep } from './progress';
 import { createNodeMoveDeps } from './managedNode';
-import { checkIsLinkIdle, createIdleRestart, createPueueActivityCheck, ensureLauncherForRunningNode, restartHint, runNodeUpkeep, startNodeUpkeepSchedule } from './nodeUpkeep';
+import { checkIsLinkIdle, createIdleRestart, ensureLauncherForRunningNode, formatBlockerLine, restartHint, runNodeUpkeep, startNodeUpkeepSchedule } from './nodeUpkeep';
 import { readNodeUpkeepIntervalMs } from './nodeUpkeepTiming';
 import { createShimDeps, ensurePackageManagerShims, formatShimLine, type ShimOutcome } from './packageManagerShims';
 import { createToolDeps, ensurePueue, ensureRsync, findPueue, findRsync, type ToolDeps, type ToolInstallOutcome } from './toolInstall';
@@ -357,7 +357,7 @@ function startGuiAgentHealing(paths: RunnerHomePaths, io: CommandIo): void {
     nodeDir: path.dirname(process.execPath),
     getServiceKind: () => readServiceKind(paths),
     // Queued jobs count as work here: they start the moment the old agent is gone.
-    readQueue: () => inspectPueue(paths, undefined, pueueUnfinishedStatuses),
+    readQueue: () => readPueueView(paths),
   }, (line) => { io.stderr(`charness-runner: ${line}\n`); });
   void healer.look();
   setInterval(() => { void healer.look(); }, guiAgentHealIntervalMs).unref();
@@ -490,9 +490,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   // Why the restart still waits, said once per reason (the check is made every few seconds).
   let lastBlockerLine = '';
   const reportBlocker = (description: string, isGivingUp: boolean): void => {
-    const line = isGivingUp
-      ? `Pueue has ${description} that has not moved for a day: the link leaves for the new Node.js without waiting for it (the old Node.js's folder is kept for a week)`
-      : `the link will start again on the new Node.js when Pueue is done with ${description}`;
+    const line = formatBlockerLine(description, isGivingUp);
     if (line === lastBlockerLine) return;
     lastBlockerLine = line;
     io.stderr(`charness-runner: ${line}\n`);

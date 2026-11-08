@@ -83,7 +83,7 @@ the queue), `logs/`, `build/`.
   `createIdleRestart` makes the link leave with `nodeMovedExitCode` (76) only when `checkIsLinkIdle` says nothing is under way — no command over the link, no update being installed
   (`LinkLoopHandle.isUpdating`, so the loop owns that: leaving then would orphan the download and `npm ci`; `onUpdateSettled` makes the gate look again), no Pueue task running or queued
   (`createPueueActivityCheck` over `readPueueView`: only a client that says there is NO daemon is `idle` — a timeout, any other failure and an unreadable answer are `busy`; a Paused or Locked task, or a Queued one in a
-  PAUSED group, is `stuck`, which the restart waits for `stuckPueueWaitMs` (a day) and then leaves behind, naming it; the exec count and the update flag are read again after Pueue answered, and a change that
+  PAUSED group, is `stuck`, which the restart waits for at most `stuckPueueWaitMs` (a day) IN ALL — counted from the request, not from when the task became stuck — and then leaves behind, naming it; the exec count and the update flag are read again after Pueue answered, and a change that
   arrives during a check makes it run again whatever it answered; it polls, since a task ends without an event for the link): the launcher of this version starts itself again, an older one exits
   and the service manager starts the new file (a terminal run is started again by hand, which the log says). An update that ends the run (75) while a new Node waits returns 76 instead. A failed look is written to `node-failure.json` with the app copy it
   happened under and not repeated until a day has passed or the app copy changed (`checkIsAttemptDue`) — never a download at every start. The looks are scheduled by the END of the one
@@ -289,7 +289,7 @@ login). `prepare` also refuses a RE-install while Pueue runs a job (the bootouts
   a missing or different definition is written (the same text `service system-step prepare` renders) and, when the account has a login session, loaded into it; a current one the
   session does not have loaded is loaded; no session → the file stays, launchd loads it at the next login, and `runners` keeps saying a login is needed. A LOADED older agent is
   replaced (`bootout`, wait, `bootstrap`) only while Pueue holds no job that runs, is paused OR WAITS in its queue (a queued job starts the moment the old agent is gone), or whose
-  state cannot be read: its steps are the jobs', so a busy queue leaves the file AND the agent alone and the next look tries again. The queue is looked at twice — to decide, and
+  state cannot be read or that does not answer in time (`readQueue` is `readPueueView`, classified by `classifyPueueView`: a timeout is never "no daemon"; `inspectPueue`, where any failure is `absent`, is for stopping and clearing the queue only): its steps are the jobs', so a busy queue leaves the file AND the agent alone and the next look tries again. The queue is looked at twice — to decide, and
   right before the old agent is stopped, after the new file is written: a job that turned up between puts the old definition back (the next look sees the difference again) and
   stops nothing. What is left is the second or so between the stop and the new agent's first heartbeat: a job that STARTS then is refused («needs a login») or runs in the
   daemon, as without a session — never cut in the middle of a step, because no step runs through the old agent.

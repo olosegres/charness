@@ -5,7 +5,7 @@ import { runCommand, type CommandRunner } from '../selfUpdate/commandRunner';
 import { writeGuiAgentInstallFailure } from './guiAgentHeal';
 import { describeForeignNode, findForeignHome } from './homeFolders';
 import { checkIsRunnerLinkProcess } from './localLinkStop';
-import { ensurePueueConfig, inspectPueue, shutDownPueue } from './pueueDaemon';
+import { ensurePueueConfig, readPueueView, shutDownPueue, summarizePueueView } from './pueueDaemon';
 import { readRunnerConfig, readRunnerStatus } from './runnerConfig';
 import { getRunnerHomePaths, type RunnerHomePaths } from './runnerHome';
 import {
@@ -153,7 +153,7 @@ async function prepareManagedStart(paths: RunnerHomePaths, deps: ServiceDeps, ki
   if (hadService) {
     // Replacing a loaded service boots its jobs out (`launchctl bootout` / `systemctl`): the queue's running jobs, and the login session's agent's steps,
     // would be cut with it. A runner that is working is left alone; the install is asked for again when its jobs are done (or killed).
-    const queue = await inspectPueue(paths, deps.runner);
+    const queue = summarizePueueView(await readPueueView(paths, deps.runner));
     if (queue.kind === 'busy') return refuse(`The Pueue queue of this runner is running ${queue.activeJobs} job(s): replacing the service now would cut them. Let them finish (\`charness remote-run ls\` shows them) or stop them (\`charness remote-run kill <id>\`), then install the service again.`);
     if (queue.kind === 'unreadable') return refuse('A Pueue daemon answers but its state cannot be read, so it cannot be told apart from one with running jobs: replacing the service now could cut them. Stop the daemon by hand and install the service again.');
   }
@@ -162,7 +162,7 @@ async function prepareManagedStart(paths: RunnerHomePaths, deps: ServiceDeps, ki
     if (status !== null && deps.checkIsRunnerLink(status.pid)) {
       return refuse(`A foreground \`charness-runner run\` is linked (pid ${status.pid}). Stop it (Ctrl-C in its terminal) and install the service again — the service takes over the link and the queue.`);
     }
-    const queue = await inspectPueue(paths, deps.runner);
+    const queue = summarizePueueView(await readPueueView(paths, deps.runner));
     if (queue.kind === 'busy') return refuse(`The Pueue queue of this runner is running ${queue.activeJobs} job(s), and a service cannot take the queue over without stopping them. Install the service when they have finished (\`pueue --config ${paths.pueueConfig} status\`).`);
     if (queue.kind === 'unreadable') return refuse('A Pueue daemon answers but its state cannot be read, so it cannot be told apart from one with running jobs. Stop it by hand and install the service again.');
     if (queue.kind === 'idle' && !(await shutDownPueue(paths, deps.runner))) return refuse('An idle Pueue daemon is running and did not shut down; stop it by hand and install the service again.');

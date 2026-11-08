@@ -21,7 +21,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, type ChildProcess } from 'node:child_process';
-import { countActivePueueTasks, pueueUnfinishedStatuses } from '../runnerUtility/pueueDaemon';
+import { parsePueueStatus } from '../runnerUtility/pueueDaemon';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getRunnerLinkStatus } from '../runners/linkControl';
@@ -242,7 +242,8 @@ describe('a runner on a system Node moves to its own, and keeps up with its line
     await startMovingRunner(mirrorLink);
     await waitForLinkOn(ownNodeOf(newestRelease));
     const pueue = path.join(paths.binDir, 'pueue');
-    const readPueueTasks = (): number | null => countActivePueueTasks(spawnSync(pueue, ['--config', paths.pueueConfig, 'status', '--json'], { encoding: 'utf8' }).stdout, pueueUnfinishedStatuses);
+    // The tasks that are not over (a finished one stays in the list until it is cleaned).
+    const readPueueTasks = (): number | null => parsePueueStatus(spawnSync(pueue, ['--config', paths.pueueConfig, 'status', '--json'], { encoding: 'utf8' }).stdout)?.tasks.filter((task) => task.status !== 'Done').length ?? null;
     await waitUntil(() => readPueueTasks() !== null, 'the runner\'s Pueue to answer', linkTimeoutMs);
     // No command runs over the link — only a job the queue holds, which keeps the PATH it was queued with.
     assert.equal(spawnSync(pueue, ['--config', paths.pueueConfig, 'add', '--', 'sleep', String(pueueTaskSeconds)], { encoding: 'utf8' }).status, 0);

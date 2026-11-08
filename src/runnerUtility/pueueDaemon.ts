@@ -76,28 +76,22 @@ export type PueueState =
 
 /** The statuses of a task that holds a process: it runs, or it is paused with its process kept. */
 export const pueueProcessStatuses: readonly string[] = ['Running', 'Paused'];
-/** Every status of a task that is not over and will not wait for a person: also one that is queued (it starts the moment a slot frees) or locked. */
-export const pueueUnfinishedStatuses: readonly string[] = ['Running', 'Paused', 'Queued', 'Locked'];
 
 /** @description The tasks of `pueue status --json` whose status is one of `statuses` (default: those that hold a process, `Running` and `Paused`), or `null` when the text is not that. */
 export function countActivePueueTasks(statusJson: string, statuses: readonly string[] = pueueProcessStatuses): number | null {
-  try {
-    const parsed: { tasks?: Record<string, { status?: object | string }> } = JSON.parse(statusJson);
-    if (parsed.tasks === undefined) return null;
-    return Object.values(parsed.tasks).filter((task) => {
-      const taskStatuses = typeof task.status === 'string' ? [task.status] : Object.keys(task.status ?? {});
-      return taskStatuses.some((status) => statuses.includes(status));
-    }).length;
-  } catch {
-    return null;
-  }
+  const snapshot = parsePueueStatus(statusJson);
+  return snapshot === null ? null : snapshot.tasks.filter((task) => statuses.includes(task.status)).length;
 }
 
-/** @description Is a daemon answering on the runner's socket, and does it hold running jobs? `statuses` says what counts as a job ({@link pueueProcessStatuses} unless the caller also waits for the queued ones). */
-export async function inspectPueue(paths: RunnerHomePaths, runner: CommandRunner = runCommand, statuses: readonly string[] = pueueProcessStatuses): Promise<PueueState> {
+/**
+ * @description Is a daemon answering on the runner's socket, and does it hold running jobs? ANY failure of the question — also a timeout — is `absent`: right for stopping and
+ * clearing the queue ({@link stopAllPueueJobs}, where a daemon that does not answer is waited for no longer), WRONG for deciding whether a job would be cut. For that, ask
+ * {@link readPueueView}, which tells "no daemon" from "no answer".
+ */
+export async function inspectPueue(paths: RunnerHomePaths, runner: CommandRunner = runCommand): Promise<PueueState> {
   const result = await runner(path.join(paths.binDir, 'pueue'), ['--config', paths.pueueConfig, 'status', '--json'], { timeoutMs: probeTimeoutMs });
   if (!result.ok) return { kind: 'absent' };
-  const activeJobs = countActivePueueTasks(result.stdout, statuses);
+  const activeJobs = countActivePueueTasks(result.stdout);
   if (activeJobs === null) return { kind: 'unreadable' };
   return activeJobs === 0 ? { kind: 'idle' } : { kind: 'busy', activeJobs };
 }
@@ -153,6 +147,55 @@ export async function readPueueView(paths: RunnerHomePaths, runner: CommandRunne
   }
   const snapshot = parsePueueStatus(result.stdout);
   return snapshot === null ? { kind: 'unknown', reason: 'its answer could not be read' } : { kind: 'tasks', ...snapshot };
+}
+
+/**
+ * @description A look at the queue ({@link readPueueView}) as a {@link PueueState}: for a caller that decides whether replacing a service would cut a job. A queue that could not be
+ * asked (`unknown`) is `unreadable` — it cannot be told apart from one with running jobs — and never `absent`.
+ */
+export function summarizePueueView(view: PueueView, statuses: readonly string[] = pueueProcessStatuses): PueueState {
+  if (view.kind === 'absent') return { kind: 'absent' };
+  if (view.kind === 'unknown') return { kind: 'unreadable' };
+  const activeJobs = view.tasks.filter((task) => statuses.includes(task.status)).length;
+  return activeJobs === 0 ? { kind: 'idle' } : { kind: 'busy', activeJobs };
+}
+
+/** What Pueue is doing, as far as a restart or a removal of a Node must care. */
+export type PueueActivity =
+  /** Nothing unfinished — or there is no daemon to have any. */
+  | { kind: 'idle' }
+  /** A task is running, one will start by itself (queued in a group that runs), or Pueue could not be asked. */
+  | { kind: 'busy'; description: string }
+  /** Only tasks that will not move by themselves: paused, locked, or queued in a paused group (Pueue pauses a group that still had queued tasks when its daemon restarted). */
+  | { kind: 'stuck'; description: string };
+
+/** How many tasks a description names before it says "and N more". */
+const namedTaskCount = 3;
+
+function describeTasks(kind: string, tasks: ReadonlyArray<{ id: string; status: string; group: string }>): string {
+  const named = tasks.slice(0, namedTaskCount).map((task) => `task ${task.id} (${task.status}, group ${task.group})`).join(', ');
+  return `${kind}: ${named}${tasks.length > namedTaskCount ? ` and ${tasks.length - namedTaskCount} more` : ''}`;
+}
+
+/**
+ * @description What a look at the queue means for a restart or a removal. A running task is busy; so is a queued one in a group that runs (it starts the moment a slot frees)
+ * and a queue that could not be asked (a timed out or unreadable answer is not "free"); a paused or locked task, and a queued one in a paused group, are `stuck` — they
+ * wait for a person — and are told apart so that a restart does not wait for them for ever. No daemon is idle. A finished task is nothing.
+ */
+export function classifyPueueView(view: PueueView): PueueActivity {
+  if (view.kind === 'absent') return { kind: 'idle' };
+  if (view.kind === 'unknown') return { kind: 'busy', description: `no answer from Pueue (${view.reason})` };
+  const isStuckQueued = (task: { status: string; group: string }): boolean => task.status === 'Queued' && view.pausedGroups.includes(task.group);
+  const moving = view.tasks.filter((task) => task.status === 'Running' || (task.status === 'Queued' && !isStuckQueued(task)));
+  if (moving.length > 0) return { kind: 'busy', description: describeTasks('a running or queued task', moving) };
+  const stuck = view.tasks.filter((task) => task.status === 'Paused' || task.status === 'Locked' || isStuckQueued(task));
+  if (stuck.length > 0) return { kind: 'stuck', description: describeTasks('a task that waits for a person', stuck) };
+  return { kind: 'idle' };
+}
+
+/** @description The check "what is Pueue doing?" for {@link PruneDeps} and {@link checkIsLinkIdle} ({@link classifyPueueView} of what `pueue status --json` says). */
+export function createPueueActivityCheck(paths: RunnerHomePaths, runner: CommandRunner = runCommand): () => Promise<PueueActivity> {
+  return async () => classifyPueueView(await readPueueView(paths, runner));
 }
 
 /** @description Ask a daemon that no service manager owns to shut down, and wait for it to go. Pueue kills the jobs it runs when it stops: only for an IDLE one. */

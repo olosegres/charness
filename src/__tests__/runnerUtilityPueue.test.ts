@@ -12,7 +12,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { CommandResult, CommandRunner } from '../selfUpdate/commandRunner';
-import { countActivePueueTasks, inspectPueue, parsePueueStatus, pueueUnfinishedStatuses, readPueueView, shutDownPueue, stopAllPueueJobs } from '../runnerUtility/pueueDaemon';
+import { countActivePueueTasks, inspectPueue, parsePueueStatus, readPueueView, shutDownPueue, stopAllPueueJobs, summarizePueueView } from '../runnerUtility/pueueDaemon';
+
+/** Every status of a task that is not over: it runs, is paused, waits in the queue or is locked. */
+const pueueUnfinishedStatuses: readonly string[] = ['Running', 'Paused', 'Queued', 'Locked'];
 import { getRunnerHomePaths, type RunnerHomePaths } from '../runnerUtility/runnerHome';
 
 let paths: RunnerHomePaths;
@@ -98,7 +101,7 @@ describe('asking the daemon', () => {
   it('a queue that holds only queued jobs is idle for most callers and busy for one that counts the queued ones', async () => {
     statusJson = tasks({ Queued: {} }, { Done: {} });
     assert.deepEqual(await inspectPueue(paths, runner), { kind: 'idle' });
-    assert.deepEqual(await inspectPueue(paths, runner, pueueUnfinishedStatuses), { kind: 'busy', activeJobs: 1 });
+    assert.deepEqual(summarizePueueView(await readPueueView(paths, runner), pueueUnfinishedStatuses), { kind: 'busy', activeJobs: 1 });
   });
 
   it('shutting down waits until the daemon no longer answers', async () => {
@@ -149,6 +152,13 @@ describe('reading the tasks and the paused groups (what a restart or a removal o
     assert.deepEqual(parsePueueStatus(JSON.stringify({ tasks: {} })), { tasks: [], pausedGroups: [] });
     assert.equal(parsePueueStatus('not json'), null);
     assert.equal(parsePueueStatus('{}'), null);
+  });
+
+  it('the counter and the reader are ONE parser: they agree on the same text, a status in either shape', () => {
+    const unfinished = ['Running', 'Queued'];
+    assert.equal(countActivePueueTasks(snapshot, unfinished), parsePueueStatus(snapshot)?.tasks.filter((task) => unfinished.includes(task.status)).length);
+    assert.equal(countActivePueueTasks(snapshot, unfinished), 2);
+    assert.equal(countActivePueueTasks('{}'), null, 'and both refuse what is not a status');
   });
 
   function createRunner(answer: Partial<CommandResult>): CommandRunner {
