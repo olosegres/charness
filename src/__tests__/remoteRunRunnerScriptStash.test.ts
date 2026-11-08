@@ -26,6 +26,8 @@ mkdir -p "$dir/tasks"
 case $1 in
   status)
     [ -z "\${FAKE_PQ_DOWN:-}" ] || exit 1
+    # FAKE_PQ_DOWN_FILE: Pueue does not answer for as long as that file exists (a daemon that restarts, then is back).
+    [ ! -e "\${FAKE_PQ_DOWN_FILE:-/nonexistent}" ] || exit 1
     # A label query that fails while the plain status answers: Pueue busy, a socket hiccup.
     if [ "$2" = --json ] && [ -n "$3" ] && [ -n "\${FAKE_PQ_LABEL_DOWN:-}" ]; then exit 1; fi
     if [ "$2" = --json ]; then
@@ -45,9 +47,9 @@ case $1 in
     fi
     ;;
   wait)
-    # Blocks while the task is stashed, like the real one (bounded, so a test that forgets cannot hang).
+    # Blocks while the task is stashed, like the real one (bounded, so a test that forgets cannot hang); with FAKE_PQ_WAIT_BLOCKS, while the task exists at all (a queued job that waits for a slot).
     waited=0
-    while [ "$(sed -n 2p "$dir/tasks/$2" 2> /dev/null)" = Stashed ] && [ $waited -lt 200 ]; do sleep 0.1; waited=$((waited+1)); done
+    while { [ "$(sed -n 2p "$dir/tasks/$2" 2> /dev/null)" = Stashed ] || { [ -n "\${FAKE_PQ_WAIT_BLOCKS:-}" ] && [ -f "$dir/tasks/$2" ]; }; } && [ $waited -lt 300 ]; do sleep 0.1; waited=$((waited+1)); done
     ;;
   add)
     shift
@@ -134,6 +136,14 @@ function submit(jobId: string, slugName = slug): Run {
   const submitted = runScript(['submit', workDir, slugName, jobId, 'default']);
   assert.equal(submitted.status, 0, submitted.stderr);
   return submitted;
+}
+
+async function waitUntil(check: () => boolean, what: string, limitMs = 15_000): Promise<void> {
+  const deadline = Date.now() + limitMs;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }
 
 const isStashed = (jobId: string, slugName = slug): boolean => fs.existsSync(path.join(jobFolder(jobId, slugName), 'stashed'));
@@ -680,6 +690,35 @@ describe('killing', () => {
     submit('box1-cccccc');
     runScript(['kill', workDir, slug, 'box1-bbbbbb']);
     assert.equal(readTaskState(readTaskId('box1-cccccc')), 'Stashed');
+  });
+});
+
+describe('the lease watcher\'s kill of a queued job that Pueue cannot answer about', () => {
+  // A foreground run is interrupted (or its caller dies) while pueued does not answer: the hub's `kill` call is refused («Pueue did not answer»), and the lease's watcher is the only one left to stop the job.
+  it('is tried again until Pueue answers: the queued job ends as killed (137), its task is removed - it never starts - and the lease ends with it', async () => {
+    const downFile = path.join(root, 'pueue-down');
+    createJobFolder('box1-aaaaaa');
+    const lease = spawn('bash', [scriptPath, 'lease', workDir, slug, 'box1-aaaaaa', 'default', '2000'], { env: getEnvironment({ FAKE_PQ_WAIT_BLOCKS: '1', FAKE_PQ_DOWN_FILE: downFile }), stdio: ['pipe', 'ignore', 'ignore'] });
+    const leaseEnded = new Promise<void>((resolve) => { lease.on('close', () => resolve()); });
+    try {
+      lease.stdin.write('h');
+      await waitUntil(() => fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'task-id')), 'the job to be queued');
+      writeFile(root, 'pueue-down', '');
+      lease.stdin.end();
+      await waitUntil(() => fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'kill-pending')), 'the watcher to meet the refusal and keep its kill pending');
+      assert.equal(fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'exit')), false, 'nothing is ended while Pueue does not answer');
+      const task = readTaskId('box1-aaaaaa');
+      assert.equal(readTaskState(task), 'Queued');
+      fs.rmSync(downFile);
+      await waitUntil(() => fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'exit')), 'the retry to end the job', 30_000);
+      assert.equal(fs.readFileSync(path.join(jobFolder('box1-aaaaaa'), 'exit'), 'utf8').trim(), '137');
+      assert.equal(readTaskState(task), null, 'its task was removed: it never starts');
+      assert.equal(fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'pid')), false);
+      await Promise.race([leaseEnded, new Promise((_resolve, reject) => setTimeout(() => reject(new Error('the lease did not end')), 30_000))]);
+      assert.equal(fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'kill-pending')), false, 'the marker goes with the retry');
+    } finally {
+      lease.kill('SIGKILL');
+    }
   });
 });
 

@@ -17,8 +17,12 @@ const connectTimeoutSeconds = 15;
 const serverAliveIntervalSeconds = 15;
 const serverAliveCountMax = 3;
 const controlPersistSeconds = 60;
-/** The longest a unix socket path may be: `sun_path` is 104 bytes on macOS (108 on Linux) and a NUL ends it, so the shortest of the systems we run on allows 103 characters - used on both (a Linux hub with a folder that would still fit there only loses the shared connection). */
-const unixSocketPathLimit = 103;
+/**
+ * The longest a unix socket path may be, in BYTES (`sun_path` counts bytes, not characters): 104 on macOS, a NUL ending it, so 103; 108 on Linux, so 107. ssh runs on the hub, so it is the platform of this process that
+ * counts. Only macOS is told apart: the other BSDs share its size and would be allowed a little more than they can use.
+ */
+const unixSocketPathLimitDarwin = 103;
+const unixSocketPathLimitOther = 107;
 /** `%C` in a ControlPath expands to a 40-character hash. */
 const controlPathHashLength = 40;
 /**
@@ -69,9 +73,11 @@ export function quoteSshOptionPath(value: string): string {
  * option — then ours. The shared connection is an optimisation: a cache path that is too long for a unix socket, or holds a character that
  * cannot be quoted, turns it off instead of failing the call.
  */
-export function buildSshArgs(runner: Pick<RunnerConfig, 'sshOptions'>, cacheDir: string): string[] {
+export function buildSshArgs(runner: Pick<RunnerConfig, 'sshOptions'>, cacheDir: string, platform: NodeJS.Platform = process.platform): string[] {
   const controlDirectory = path.join(cacheDir, 'ssh');
-  const isControlPathUsable = controlDirectory.length + 1 + controlPathHashLength + sshTemporarySuffixLength <= unixSocketPathLimit && checkIsSshPathQuotable(controlDirectory);
+  const unixSocketPathLimit = platform === 'darwin' ? unixSocketPathLimitDarwin : unixSocketPathLimitOther;
+  const controlPathBytes = Buffer.byteLength(controlDirectory) + 1 + controlPathHashLength + sshTemporarySuffixLength;
+  const isControlPathUsable = controlPathBytes <= unixSocketPathLimit && checkIsSshPathQuotable(controlDirectory);
   return [
     ...(runner.sshOptions ?? []),
     '-o', 'BatchMode=yes',

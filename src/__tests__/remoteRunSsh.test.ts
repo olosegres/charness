@@ -54,26 +54,51 @@ describe('buildSshArgs', () => {
   });
 
   describe('the length of the ControlPath', () => {
-    /** A cache dir whose `ssh` folder (the ControlPath's directory) is exactly `length` characters long. */
+    /** A cache dir whose `ssh` folder (the ControlPath's directory) is exactly `length` bytes long (ASCII). */
     const getCacheDirWithControlDirectoryLength = (length: number): string => `/${'x'.repeat(length - '/ssh'.length - 1)}`;
-    const longestUsableControlDirectory = 45;
+    // ssh binds `<ControlPath>.<16 characters>` first: the folder + / + the 40-character hash + 17 must fit sun_path - 104 bytes on macOS, 108 on Linux, a NUL at the end of each.
+    const longestUsableControlDirectory = { darwin: 45, linux: 49 } as const;
 
-    it('ssh binds `<ControlPath>.<16 characters>` first: a folder of 45 characters (45 + / + 40 + 17 = 103, macOS\'s sun_path less its NUL) still multiplexes', () => {
-      const cache = getCacheDirWithControlDirectoryLength(longestUsableControlDirectory);
-      assert.equal(`${cache}/ssh`.length, longestUsableControlDirectory);
-      assert.ok(buildSshArgs({}, cache).includes('ControlMaster=auto'));
+    for (const platform of ['darwin', 'linux'] as const) {
+      const longest = longestUsableControlDirectory[platform];
+
+      it(`${platform}: a folder of ${longest} bytes (${longest} + / + 40 + 17 = ${longest + 58}) still multiplexes`, () => {
+        const cache = getCacheDirWithControlDirectoryLength(longest);
+        assert.equal(`${cache}/ssh`.length, longest);
+        assert.ok(buildSshArgs({}, cache, platform).includes('ControlMaster=auto'));
+      });
+
+      it(`${platform}: one byte more turns the multiplexing off - the call then goes on over a connection of its own instead of failing at the temporary socket (255)`, () => {
+        const cache = getCacheDirWithControlDirectoryLength(longest + 1);
+        const args = buildSshArgs({}, cache, platform);
+        assert.ok(args.includes('ControlMaster=no'));
+        assert.ok(!args.join(' ').includes('ControlPath'));
+      });
+    }
+
+    it('a folder that fits on Linux and not on macOS (46 to 49 bytes) multiplexes on Linux and not on a Mac - it never failed on Linux, so nothing is taken from it', () => {
+      const cache = getCacheDirWithControlDirectoryLength(48);
+      assert.ok(buildSshArgs({}, cache, 'linux').includes('ControlMaster=auto'));
+      assert.ok(buildSshArgs({}, cache, 'darwin').includes('ControlMaster=no'));
     });
 
-    it('one character more turns the multiplexing off - the call then goes on over a connection of its own instead of failing at the temporary socket (255)', () => {
-      const cache = getCacheDirWithControlDirectoryLength(longestUsableControlDirectory + 1);
-      assert.equal(`${cache}/ssh`.length, longestUsableControlDirectory + 1);
-      const args = buildSshArgs({}, cache);
-      assert.ok(args.includes('ControlMaster=no'));
-      assert.ok(!args.join(' ').includes('ControlPath'));
+    it('the folders that used to pass at 50 to 59 bytes (and failed every ssh call to a runner on either system) are off now', () => {
+      for (const platform of ['darwin', 'linux'] as const) {
+        for (const length of [50, 55, 59]) assert.ok(buildSshArgs({}, getCacheDirWithControlDirectoryLength(length), platform).includes('ControlMaster=no'), `${platform} ${length}`);
+      }
     });
 
-    it('the folders that used to pass at 50 to 59 characters (and failed every ssh call to a runner) are off now', () => {
-      for (const length of [50, 55, 59]) assert.ok(buildSshArgs({}, getCacheDirWithControlDirectoryLength(length)).includes('ControlMaster=no'), `${length}`);
+    it('the unit is bytes: a folder of 45 CHARACTERS with a two-byte one among them is 46 bytes, over the macOS limit', () => {
+      const cache = `/${'x'.repeat(45 - '/ssh'.length - 1 - 1)}é`;
+      assert.equal(`${cache}/ssh`.length, 45, 'as characters it fits');
+      assert.equal(Buffer.byteLength(`${cache}/ssh`), 46);
+      assert.ok(buildSshArgs({}, cache, 'darwin').includes('ControlMaster=no'));
+      assert.ok(buildSshArgs({}, cache, 'linux').includes('ControlMaster=auto'), 'and 46 bytes is within what Linux allows');
+    });
+
+    it('the platform of the process is the default', () => {
+      const cache = getCacheDirWithControlDirectoryLength(48);
+      assert.deepEqual(buildSshArgs({}, cache), buildSshArgs({}, cache, process.platform));
     });
   });
 

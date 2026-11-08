@@ -5,8 +5,8 @@ import { readJobOutcome } from './jobQuery';
 import { getHeartbeatIntervalMs } from './leaseTiming';
 import { createExitMarkerFilter, createJobOutputRouter, sayOwn, type CliIo } from './output';
 import { RemoteRunError } from './remoteRunError';
-import { describeRunnerRefusal, type RunnerClient } from './runnerClient';
-import { checkIsConnectionLost } from './ssh';
+import { describeRunnerRefusal, describeSshFailure, type RunnerClient } from './runnerClient';
+import { checkIsConnectionLost, type SshRunResult } from './ssh';
 import type { StagedJob } from './submit';
 import type { JobOutcome } from './jobState';
 
@@ -29,6 +29,15 @@ export function describeInterruptCause(signal: InterruptSignal, stoppedThing: st
 
 /** The reason `runner.sh kill` takes for a kill that is the caller's time limit running out. */
 const killReasonTimeout = 'timeout';
+
+/**
+ * @description The line for a `kill` call that did not kill (the runner refused it - «Pueue did not answer…» for a queued job - or the connection was gone): what it said, and that the lease ends the job itself - the runner's
+ * watcher takes over once this side's lease is gone and tries again until Pueue answers.
+ */
+export function describeFailedKill(jobId: string, runnerName: string, result: SshRunResult): string {
+  const reason = describeRunnerRefusal(result.stderr, describeSshFailure(result));
+  return `killing job ${jobId} on ${runnerName} failed (${reason}) — the runner stops it itself now that this lease is gone, and keeps trying until it can`;
+}
 
 /** After a kill or an interrupt the lease session ends by itself (the runner's grace time, and as long again); this long before the ssh process is cut. */
 const streamEndGraceMs = 2 * killGraceSeconds * 1000;
@@ -83,7 +92,8 @@ export async function followForeground(params: {
     killing ??= (async () => {
       clearInterval(heartbeatTimer);
       // A kill because the limit ran out is recorded as the limit (124), as the runner's own watchdog records it when it gets there first.
-      await client.call('kill', [staged.slug, staged.jobId, ...(isTimedOut ? [killReasonTimeout] : [])], { timeoutMs: killCallTimeoutMs });
+      const killed = await client.call('kill', [staged.slug, staged.jobId, ...(isTimedOut ? [killReasonTimeout] : [])], { timeoutMs: killCallTimeoutMs });
+      if (killed.exitCode !== 0) sayOwn(io, describeFailedKill(staged.jobId, client.runner.name, killed));
       setTimeout(() => child.kill('SIGKILL'), streamEndGraceMs).unref();
     })();
     return killing;

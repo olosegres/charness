@@ -180,6 +180,16 @@ describe('the variables a job\'s steps get', { skip: rsyncSkip }, () => {
     assert.equal(fs.readFileSync(path.join(outcome.jobDir, 'runner-env'), 'utf8'), '');
   });
 
+  it('a TMPDIR that cannot be made (a full disk, a file where the folder goes) costs the job only that: it keeps its port block - two jobs must not fall back to the same default ports because of a disk - and its log says what is missing', () => {
+    // `t` is a file: `mkdir -p t/0` fails the way it does on a disk with no room.
+    writeFile(state.workDir, 't', 'not a folder');
+    const outcome = runJob(state.workDir, job('app-aaaaaaaaaa', 'box1-aaaaaa'), { TMPDIR: '/machine/tmp' });
+    assert.equal(outcome.exit, '0', outcome.log);
+    assert.deepEqual(readSeen(), { TMPDIR: '/machine/tmp', PORT: '20000', UDID: 'unset', OTHER: 'unset' });
+    assert.match(outcome.log, /remote-run: no TMPDIR of its own for this job: .*\/t\/0 cannot be made/);
+    assert.equal(fs.readFileSync(path.join(outcome.jobDir, 'runner-env'), 'utf8'), 'REMOTE_RUN_PORT_BASE=20000\n');
+  });
+
   it('`exec` gets none of them: it takes no lock and may run beside a job of its own copy', async () => {
     runJob(state.workDir, job('app-aaaaaaaaaa', 'box1-aaaaaa'));
     const execSeen = path.join(root, 'exec-seen');

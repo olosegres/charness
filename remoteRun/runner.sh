@@ -124,6 +124,8 @@ max_copy_indexes=100
 # it that were not modified for tmpdir_keep_days go while no job of the copy runs (`sweep_idle_tmpdirs`), looked at every tmpdir_sweep_interval_hours at most.
 tmpdir_keep_days=3
 tmpdir_sweep_interval_hours=6
+# A prune on a short disk sweeps them at once, not more often than this (minutes): the walk finds nothing new a minute after the last one, and a Mac whose disk stays short for days must not pay it on every submit.
+tmpdir_short_disk_sweep_interval_min=30
 port_base_start=20000
 port_block_size=100
 index_lock_wait_sec=30
@@ -134,6 +136,8 @@ sched_lock_wait_sec=30
 sched_lock_max_age_min=2
 # A caller that waits for a stashed job looks this often (seconds) whether its predecessor ended without enqueueing it (a job SIGKILLed with its own watchdog); see `wait_for_task`.
 stash_recheck_sec=5
+# The lease watcher's kill of a queued job that Pueue could not answer about is tried again this often (seconds) until Pueue answers; see `kill_job_until_answered`.
+kill_retry_sec=5
 # A job's own Simulator device is named for its project; its steps are each bounded (a watchdog: there is no `timeout(1)` on a Mac).
 ios_device_prefix=charness-
 ios_device_list_sec=30
@@ -974,8 +978,8 @@ prune_work() {
   begin_copy_removal "$work_dir" "$when_busy" || return 0
   remove_leftover_trash "$work_dir"
   prune_idle_copies "$work_dir" "$keep_slug"
-  # A short disk gives up the stale files of the TMPDIRs before it gives up a copy.
-  check_disk_is_short "$work_dir" && sweep_idle_tmpdirs "$work_dir"
+  # A short disk gives up the stale files of the TMPDIRs before it gives up a copy (at most every tmpdir_short_disk_sweep_interval_min minutes: see there).
+  check_disk_is_short "$work_dir" && take_tmpdir_sweep_turn "$work_dir" "$tmpdir_short_disk_sweep_interval_min" && sweep_idle_tmpdirs "$work_dir"
   prune_copies_for_space "$work_dir" "$keep_slug"
   end_copy_removal "$work_dir"
 }
@@ -2006,6 +2010,22 @@ kill_job() {
   return 0
 }
 
+# The lease watcher's kill (the caller is gone): a kill Pueue could not answer (`kill_job` returns 2: nothing was done) is tried again every kill_retry_sec until it answers or the job has its result - a queued job
+# whose only kill was dropped would start when Pueue is back and run its whole limit with nobody watching. `$jd/kill-pending` is there meanwhile (`cmd_lease` lets the watcher finish).
+kill_job_until_answered() {
+  local kill_code
+  while :; do
+    kill_job "$@"
+    kill_code=$?
+    [ "$kill_code" -eq 2 ] || break
+    : > "$jd/kill-pending"
+    [ -f "$jd/exit" ] && break
+    nap "$kill_retry_sec"
+  done
+  rm -f "$jd/kill-pending"
+  return "$kill_code"
+}
+
 # SIGKILL of the whole group; Pueue's own kill follows only so that its task list agrees. Without a verifiable group, Pueue's kill
 # is all there is. A job that is SIGKILLed cannot write its own result, so the result is recorded FIRST: when the caller is the job's own
 # watchdog the group-wide SIGKILL takes the watchdog down with the job.
@@ -2294,13 +2314,18 @@ cmd_lease() {
   stream_log 0 &
   local streamer_pid=$!
   (
-    watch_lease "$lease_sec" || kill_job
+    watch_lease "$lease_sec" || kill_job_until_answered
   ) &
   local watcher_pid=$!
   local task
   task=$(read_file "$jd/task-id")
   wait_for_task "$task"
-  kill "$watcher_pid" > /dev/null 2>&1
+  # The watcher goes with the job - except one that is still retrying a kill Pueue could not answer: it is let finish, or the queued job it is about to stop would start when Pueue is back and run unwatched.
+  if [ -f "$jd/kill-pending" ]; then
+    wait "$watcher_pid" 2> /dev/null
+  else
+    kill "$watcher_pid" > /dev/null 2>&1
+  fi
   wait_for_exit_file
   touch "$jd/drain-stop"
   wait "$streamer_pid" 2> /dev/null
@@ -2632,6 +2657,8 @@ sweep_idle_tmpdirs() {
     if [ -n "$owner_slug" ] && check_copy_is_busy "$work_dir" "$owner_slug"; then
       continue
     fi
+    # A killed `pod install`, or any extractor of a read-only archive, leaves read-only folders (CocoaPods' xcframeworks): their files could not be removed. `chmod` leaves the times alone, so the ages hold.
+    find "$tmp_dir" -mindepth 1 -type d -mtime +"$tmpdir_keep_days" ! -perm -u+w -exec chmod u+w {} + 2> /dev/null
     find "$tmp_dir" -mindepth 1 \( -type f -o -type l \) -mtime +"$tmpdir_keep_days" -exec rm -f {} + 2> /dev/null
     find "$tmp_dir" -mindepth 1 -depth -type d -empty -mtime +"$tmpdir_keep_days" -exec rmdir {} + 2> /dev/null
   done
@@ -2642,20 +2669,24 @@ cmd_sweep_tmpdirs() {
   sweep_idle_tmpdirs "$1"
 }
 
-# `prepare` sweeps the TMPDIRs of idle copies detached, unless it ran in the last tmpdir_sweep_interval_hours (the stamp `$work/tmpdir-sweep.at`, touched BEFORE the start so that two prepares at once start one run): a walk
-# over a TMPDIR of hundreds of thousands of files is not something a submit waits for.
-start_tmpdir_sweep_if_due() {
+# Is it time to sweep the TMPDIRs of work dir $1 - the stamp `$1/tmpdir-sweep.at` is missing, or older than $2 minutes? When it is, the stamp is touched BEFORE the sweep starts, so that two callers at once start one.
+take_tmpdir_sweep_turn() {
   local stamp="$1/tmpdir-sweep.at"
-  [ -d "$1/t" ] || return 0
-  if [ -f "$stamp" ] && [ -z "$(find "$stamp" -maxdepth 0 -mmin +"$((tmpdir_sweep_interval_hours * 60))" 2> /dev/null)" ]; then
-    return 0
+  if [ -f "$stamp" ] && [ -z "$(find "$stamp" -maxdepth 0 -mmin +"$2" 2> /dev/null)" ]; then
+    return 1
   fi
   touch "$stamp"
+}
+
+# `prepare` sweeps the TMPDIRs of idle copies detached, unless it ran in the last tmpdir_sweep_interval_hours: a walk over a TMPDIR of hundreds of thousands of files is not something a submit waits for.
+start_tmpdir_sweep_if_due() {
+  [ -d "$1/t" ] || return 0
+  take_tmpdir_sweep_turn "$1" "$((tmpdir_sweep_interval_hours * 60))" || return 0
   start_detached_run "$1" sweep-tmpdirs
 }
 
 # `$jd/runner-env`: the variables the runner gives every step of this job, one `NAME=VALUE` per line — TMPDIR (made here), REMOTE_RUN_PORT_BASE (the job owns this port and the 99 after it) and, once the job's own Simulator
-# device is booted, REMOTE_RUN_IOS_SIMULATOR_UDID. Without a number for the copy there are no TMPDIR and no port block, but the device's id is still given. `exec` gets none of them: it takes no lock and may run beside a job of its own copy.
+# device is booted, REMOTE_RUN_IOS_SIMULATOR_UDID. Without a number for the copy there are no TMPDIR and no port block (a TMPDIR that cannot be made leaves only the port block), but the device's id is still given. `exec` gets none of them: it takes no lock and may run beside a job of its own copy.
 write_runner_env() {
   : > "$jd/runner-env"
   local tmp_dir=
@@ -2667,10 +2698,9 @@ write_runner_env() {
     fi
   fi
   {
-    if [ -n "$tmp_dir" ]; then
-      printf 'TMPDIR=%s\n' "$tmp_dir"
-      printf 'REMOTE_RUN_PORT_BASE=%s\n' "$((port_base_start + port_block_size * copy_index))"
-    fi
+    [ -z "$tmp_dir" ] || printf 'TMPDIR=%s\n' "$tmp_dir"
+    # The port block does not depend on the folder: a full disk (where `mkdir` fails) is no reason for two jobs to fall back to the same default ports.
+    [ -z "$copy_index" ] || printf 'REMOTE_RUN_PORT_BASE=%s\n' "$((port_base_start + port_block_size * copy_index))"
     # The device does not depend on the copy's number: a job that was given none (the index lock was not had, all numbers are taken) still knows its own device, or the guard and the tests would fall back to whichever is booted.
     [ -z "$ios_udid" ] || printf 'REMOTE_RUN_IOS_SIMULATOR_UDID=%s\n' "$ios_udid"
   } > "$jd/runner-env"

@@ -1456,6 +1456,30 @@ describe('the TMPDIR of a project copy (`<work>/t/<n>`) is part of the disk upke
     assert.equal(exists(3, 'fresh-empty'), true, 'a folder made today stays');
   });
 
+  it('a stale tree with READ-ONLY folders (a killed `pod install`, any extractor of a read-only archive) is swept too - the folders are made writable first - and a fresh read-only folder is left as it is', () => {
+    makeCopyWithTmpdir('idle-hhhhhhhhhh', 3);
+    const staleFile = path.join(tmpDirOf(3), 'Pods', 'Core.xcframework', 'Headers', 'a.h');
+    writeFile(path.join(tmpDirOf(3), 'Pods'), 'Core.xcframework/Headers/a.h');
+    writeFile(path.join(tmpDirOf(3), 'Pods'), 'Core.xcframework/Info.plist');
+    writeFile(path.join(tmpDirOf(3), 'fresh-ro'), 'keep.txt');
+    for (const target of [staleFile, path.join(tmpDirOf(3), 'Pods', 'Core.xcframework', 'Info.plist')]) setAge(target, 10 * dayMs);
+    for (const folder of ['Pods/Core.xcframework/Headers', 'Pods/Core.xcframework', 'Pods']) {
+      setAge(path.join(tmpDirOf(3), folder), 10 * dayMs);
+      fs.chmodSync(path.join(tmpDirOf(3), folder), 0o555);
+    }
+    fs.chmodSync(path.join(tmpDirOf(3), 'fresh-ro'), 0o555);
+    try {
+      assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+      assert.equal(exists(3, 'Pods/Core.xcframework/Headers/a.h'), false, 'the old file inside the read-only folder is gone');
+      assert.equal(exists(3, 'Pods/Core.xcframework/Info.plist'), false);
+      // The folders themselves stay for now: removing a file made their modification time fresh, and an empty folder goes by age too (three days later).
+      assert.equal(exists(3, 'fresh-ro/keep.txt'), true, 'a fresh folder is not touched');
+      assert.equal(fs.statSync(path.join(tmpDirOf(3), 'fresh-ro')).mode & 0o200, 0, 'its mode is as it was');
+    } finally {
+      fs.chmodSync(path.join(tmpDirOf(3), 'fresh-ro'), 0o755);
+    }
+  });
+
   it('a copy that is in use is not touched: a job that runs (or waits, or whose results nobody fetched) may need every file', () => {
     const copyDir = makeCopyWithTmpdir('busy-bbbbbbbbbb', 4);
     writeJob(copyDir, 'box1-runnin', { 'task-id': '5\n', pid: `${startRunnerStandIn()}\n` });
@@ -1493,6 +1517,22 @@ describe('the TMPDIR of a project copy (`<work>/t/<n>`) is part of the disk upke
     assert.equal(runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '90' }).status, 0);
     assert.equal(exists(7, 'old.bin'), false, 'a disk that is short gives up the stale files first');
     assert.equal(exists(6, 'old.bin'), true, 'but not those of a copy in use (which is not removed either)');
+  });
+
+  it('the sweep of a SHORT disk is not run on every submit: it takes the stamp\'s turn (30 minutes), so a disk that stays short for days does not make each `prepare` walk every TMPDIR again', () => {
+    makeCopyWithTmpdir('busy-iiiiiiiiii', 6, 30);
+    const stamp = path.join(workDir, 'tmpdir-sweep.at');
+    writeJob(path.join(workDir, 'p', 'busy-iiiiiiiiii'), 'box1-runnin', { 'task-id': '5\n', pid: `${startRunnerStandIn()}\n` });
+    stageTmpdirFiles(7);
+    assert.equal(runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '90' }).status, 0);
+    assert.equal(exists(7, 'old.bin'), false, 'the first prune on a short disk sweeps');
+    assert.ok(fs.existsSync(stamp), 'and takes the turn');
+    stageTmpdirFiles(7);
+    assert.equal(runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '90' }).status, 0);
+    assert.equal(exists(7, 'old.bin'), true, 'the second, minutes later, leaves the walk alone');
+    setAge(stamp, 31 * 60 * 1000);
+    assert.equal(runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '90' }).status, 0);
+    assert.equal(exists(7, 'old.bin'), false, 'a turn that has come round sweeps again');
   });
 
   it('`prepare` starts the sweep detached - once per interval: the next one inside it leaves the stamp alone and starts nothing', async () => {
