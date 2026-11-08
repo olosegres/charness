@@ -10,7 +10,7 @@ import type { RunnerHomePaths } from './runnerHome';
  * A bounded check (create a device → boot it → wait for the boot to finish → delete it) runs when the link starts and whenever Xcode
  * changes, and its result is written to `ios-check.json`, one line, for `runner.sh probe` to turn into the `ios` capability:
  *
- *   pass     the Simulator boots here → `ios`
+ *   pass     the Simulator boots here → `ios` (the record names the device type and runtime that booted: `runner.sh` makes a job's own device of them)
  *   fail     it does not → «ios: no — needs the runner user's login session» (on an always-on Mac the check is the login session's agent's: `guiAgent.ts`)
  *   skipped  not macOS, or no Xcode → nothing to say
  *
@@ -34,6 +34,9 @@ const iosCheckSchema = z.strictObject({
   /** `16.2 (16C5032a)`: what Xcode was when this was checked; a different one means check again. */
   xcode: z.string().nullable(),
   reason: z.string().nullable(),
+  /** On a `pass` only: the device type and runtime the check booted. A job's own Simulator device (`runner.sh ios-device`) is made of the same pair, which is known to work on this Mac. */
+  deviceTypeId: z.string().optional(),
+  runtimeId: z.string().optional(),
 });
 
 /** @name IosCheckRecord @description `ios-check.json`. */
@@ -126,7 +129,13 @@ function describeSimctlFailure(stepName: string, result: Awaited<ReturnType<Comm
 /** @description Run the boot check: create → boot → bootstatus → delete. Never throws; the device is deleted whatever happened. */
 export async function runIosBootCheck(deps: IosCheckDeps): Promise<IosCheckRecord> {
   const xcode = await readXcodeVersion(deps);
-  const record = (status: IosCheckRecord['status'], reason: string | null): IosCheckRecord => ({ status, checkedAtMs: deps.now(), xcode, reason });
+  const record = (status: IosCheckRecord['status'], reason: string | null, choice?: SimulatorChoice): IosCheckRecord => ({
+    status,
+    checkedAtMs: deps.now(),
+    xcode,
+    reason,
+    ...(choice === undefined ? {} : { deviceTypeId: choice.deviceTypeId, runtimeId: choice.runtimeId }),
+  });
   if (deps.platform !== 'darwin') return record('skipped', 'not macOS');
   if (xcode === null) return record('skipped', 'no Xcode');
   const deadline = deps.now() + iosCheckBudgetMs;
@@ -146,7 +155,7 @@ export async function runIosBootCheck(deps: IosCheckDeps): Promise<IosCheckRecor
     const boot = await step(['boot', udid]);
     if (!boot.ok) return record('fail', `${iosBootFailureReasonPrefix} boot: ${boot.stderr.trim().split('\n').slice(-1)[0]}`);
     const status = await step(['bootstatus', udid, '-b']);
-    return status.ok ? record('pass', null) : record('fail', `${iosBootFailureReasonPrefix} finish booting: ${status.stderr.trim().split('\n').slice(-1)[0]}`);
+    return status.ok ? record('pass', null, choice) : record('fail', `${iosBootFailureReasonPrefix} finish booting: ${status.stderr.trim().split('\n').slice(-1)[0]}`);
   } finally {
     await step(['shutdown', udid]);
     await step(['delete', udid]);

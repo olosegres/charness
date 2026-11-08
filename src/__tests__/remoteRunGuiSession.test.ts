@@ -557,3 +557,67 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     assert.equal(run.stdout.trim(), 'code=126', run.stderr);
   });
 });
+
+describe('the runner\'s variables in a step run through the agent', () => {
+  const runnerEnvText = 'TMPDIR=/runner/tmp\nREMOTE_RUN_PORT_BASE=20100\nREMOTE_RUN_IOS_SIMULATOR_UDID=00000000-0000-0000-0000-000000000001\n';
+  const treeDir = (): string => path.join(workDir, 'p', slug, 'tree');
+
+  it('the file the agent reads has the runner\'s TMPDIR first, then the job\'s own lines (a last line without a newline too), then the runner\'s REMOTE_RUN_* — the order its later-wins rule turns into who may take what back', async () => {
+    fs.writeFileSync(path.join(jobDir, 'env'), 'TMPDIR=/job/own\nREMOTE_RUN_PORT_BASE=7\nOTHER=mine');
+    fs.writeFileSync(path.join(jobDir, 'runner-env'), runnerEnvText);
+    const run = await runSourced('{ print_runner_env_lines tmpdir; print_job_env_lines; print_runner_env_lines vars; }');
+    assert.equal(
+      run.stdout,
+      'TMPDIR=/runner/tmp\nTMPDIR=/job/own\nREMOTE_RUN_PORT_BASE=7\nOTHER=mine\nREMOTE_RUN_PORT_BASE=20100\nREMOTE_RUN_IOS_SIMULATOR_UDID=00000000-0000-0000-0000-000000000001\n',
+    );
+  });
+
+  it('a step in the login session sees the runner\'s variables, with the job\'s TMPDIR over the runner\'s and the runner\'s ports over the job\'s — as a step in the daemon does', async () => {
+    markNeedsIos();
+    startAgent();
+    fs.writeFileSync(path.join(jobDir, 'env'), 'TMPDIR=/job/own\nREMOTE_RUN_PORT_BASE=7\nOTHER=mine\n');
+    fs.writeFileSync(path.join(jobDir, 'runner-env'), runnerEnvText);
+    const printing = 'echo "$TMPDIR $REMOTE_RUN_PORT_BASE $REMOTE_RUN_IOS_SIMULATOR_UDID $OTHER"';
+    const throughAgent = await runSourced(`run_step ${treeDir()} '${printing}'; echo "code=$step_code"`);
+    assert.equal(throughAgent.stdout.trim(), 'code=0', throughAgent.stderr);
+    assert.equal(fs.readFileSync(path.join(jobDir, 'log'), 'utf8'), '/job/own 20100 00000000-0000-0000-0000-000000000001 mine\n');
+    fs.writeFileSync(path.join(jobDir, 'log'), '');
+    // The same lines in the daemon: no agent, no request.
+    fs.rmSync(path.join(jobDir, 'needs-ios'), { force: true });
+    fs.writeFileSync(path.join(stateDir, 'service'), 'user-service\n');
+    const inProcess = await runSourced(`run_step ${treeDir()} '${printing}' >> ${path.join(jobDir, 'log')}; echo "code=$step_code"`);
+    assert.equal(inProcess.stdout.trim(), 'code=0', inProcess.stderr);
+    assert.equal(fs.readFileSync(path.join(jobDir, 'log'), 'utf8'), '/job/own 20100 00000000-0000-0000-0000-000000000001 mine\n');
+  });
+
+  it('steps of two jobs run at the same time through the one agent and each gets ITS job\'s variables — neither waits for the other, none sees the other\'s', async () => {
+    markNeedsIos();
+    startAgent();
+    const secondJob = 'box1-bbbbbb';
+    const secondJobDir = path.join(workDir, 'p', slug, 'jobs', secondJob);
+    fs.mkdirSync(secondJobDir, { recursive: true });
+    fs.writeFileSync(path.join(secondJobDir, 'log'), '');
+    fs.writeFileSync(path.join(secondJobDir, 'needs-ios'), '');
+    fs.writeFileSync(path.join(jobDir, 'runner-env'), 'TMPDIR=/runner/tmp/0\nREMOTE_RUN_PORT_BASE=20000\n');
+    fs.writeFileSync(path.join(secondJobDir, 'runner-env'), 'TMPDIR=/runner/tmp/1\nREMOTE_RUN_PORT_BASE=20100\n');
+    /** A step that waits (bounded) for the OTHER job's step to have started before it says what it sees: serial steps would deadlock until the bound. */
+    const meeting = (mine: string, theirs: string): string => `touch '${root}/in-${mine}'; waited=0; while [ ! -f '${root}/in-${theirs}' ] && [ $waited -lt 150 ]; do sleep 0.1; waited=$((waited+1)); done; echo "${mine} $TMPDIR $REMOTE_RUN_PORT_BASE met=$([ -f '${root}/in-${theirs}' ] && echo yes || echo no)"`;
+    const runAs = (jobName: string, jobFolder: string, body: string): Promise<SourcedRun> => new Promise((resolve) => {
+      const program = [`source ${scriptPath}`, `work=${workDir}; slug=${slug}; job=${jobName}; jd=${jobFolder}; killed=0; job_locale=C.UTF-8`, body].join('\n');
+      const child = spawn('bash', ['-c', program], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      child.on('close', (status) => resolve({ stdout, stderr, status }));
+    });
+    const [first, second] = await Promise.all([
+      runAs(jobId, jobDir, `run_step ${treeDir()} '${meeting('A', 'B')}'; echo "code=$step_code"`),
+      runAs(secondJob, secondJobDir, `run_step ${treeDir()} '${meeting('B', 'A')}'; echo "code=$step_code"`),
+    ]);
+    assert.equal(first.stdout.trim(), 'code=0', first.stderr);
+    assert.equal(second.stdout.trim(), 'code=0', second.stderr);
+    assert.equal(fs.readFileSync(path.join(jobDir, 'log'), 'utf8'), 'A /runner/tmp/0 20000 met=yes\n');
+    assert.equal(fs.readFileSync(path.join(secondJobDir, 'log'), 'utf8'), 'B /runner/tmp/1 20100 met=yes\n');
+  });
+});

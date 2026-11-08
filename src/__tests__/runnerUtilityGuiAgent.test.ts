@@ -126,6 +126,13 @@ describe('parseJobEnvLines', () => {
   it('takes NAME=VALUE lines as runner.sh exports them: everything after the first = is the value, quotes included; bad lines are skipped', () => {
     assert.deepEqual(parseJobEnvLines('A=1\nB=x=y\nC="q"\nD=\n1BAD=x\nno pair\n\n'), { A: '1', B: 'x=y', C: '"q"', D: '' });
   });
+
+  it('a later line takes an earlier one\'s place: the contract `runner.sh` writes `request/env` by (the runner\'s TMPDIR first, the job\'s lines, the runner\'s REMOTE_RUN_* last)', () => {
+    assert.deepEqual(
+      parseJobEnvLines('TMPDIR=/runner/tmp\nTMPDIR=/job/own\nREMOTE_RUN_PORT_BASE=7\nOTHER=mine\nREMOTE_RUN_PORT_BASE=20100\n'),
+      { TMPDIR: '/job/own', REMOTE_RUN_PORT_BASE: '20100', OTHER: 'mine' },
+    );
+  });
 });
 
 describe('a step of a job', () => {

@@ -37,6 +37,7 @@ import { createNodeMoveDeps } from './managedNode';
 import { checkIsLinkIdle, createIdleRestart, ensureLauncherForRunningNode, formatBlockerLine, restartHint, runNodeUpkeep, startNodeUpkeepSchedule } from './nodeUpkeep';
 import { readNodeUpkeepIntervalMs } from './nodeUpkeepTiming';
 import { createShimDeps, ensurePackageManagerShims, formatShimLine, type ShimOutcome } from './packageManagerShims';
+import { createGuardDeps, ensureXcrunGuard, formatGuardLine, type GuardDeps } from './simctlGuard';
 import { createToolDeps, ensurePueue, ensureRsync, findPueue, findRsync, type ToolDeps, type ToolInstallOutcome } from './toolInstall';
 
 /**
@@ -108,13 +109,32 @@ async function prepareJobPackageManagers(paths: RunnerHomePaths, io: CommandIo):
   if (outcomes.some((outcome) => outcome.kind === 'missing')) io.stderr('charness-runner: a job that calls a missing package manager ends with exit 127 — `charness remote-run runners` shows what jobs run with.\n');
 }
 
+/**
+ * @description Put the `xcrun` guard in the job PATH (`ensureXcrunGuard`: a Mac only) and say so. A failure to write it is told, never fatal — the link goes up
+ * anyway, and jobs then share the simulators as they always did.
+ */
+export function prepareJobSimulatorGuard(paths: RunnerHomePaths, io: CommandIo, deps: GuardDeps = createGuardDeps()): void {
+  try {
+    const line = formatGuardLine(ensureXcrunGuard(paths, deps), paths);
+    if (line !== null) io.stdout(`${line}\n`);
+  } catch (error) {
+    io.stderr(`charness-runner: the xcrun guard for jobs could not be written (${error instanceof Error ? error.message : 'unknown error'})\n`);
+  }
+}
+
+/** @description What the job PATH is made to offer at every link start and on `check`: the package managers and the `xcrun` guard. */
+async function prepareJobPath(paths: RunnerHomePaths, io: CommandIo): Promise<void> {
+  await prepareJobPackageManagers(paths, io);
+  prepareJobSimulatorGuard(paths, io);
+}
+
 async function installTools(paths: RunnerHomePaths, deps: ToolDeps, io: CommandIo): Promise<void> {
   const runStep = getStepRunner(io);
   const pueue = await runStep(stepLabels.getPueue, () => ensurePueue(paths, deps), (outcome) => !outcome.ok);
   const rsync = await runStep(stepLabels.findRsync, () => ensureRsync(paths, deps), (outcome) => !outcome.ok);
   io.stdout(`${formatToolLine(rsync, pueue)}\n`);
   for (const outcome of [pueue, rsync]) if (!outcome.ok) io.stderr(`charness-runner: ${outcome.reason}\n`);
-  await prepareJobPackageManagers(paths, io);
+  await prepareJobPath(paths, io);
 }
 
 /** @description The «Keep it running» part of the pairing text: the terminal, a service without admin, and — on a Mac — the admin line that makes it always on. */
@@ -474,7 +494,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   startGuiAgentHealing(paths, io);
   const toolDeps = createToolDeps();
   if (!(await findPueue(paths, toolDeps))) await ensurePueue(paths, toolDeps);
-  await prepareJobPackageManagers(paths, io);
+  await prepareJobPath(paths, io);
   // A service that manages Pueue owns the daemon: starting a second one here would only fight it for the socket.
   const isPueueRunning = readServiceKind(paths) === null ? await ensurePueueDaemon(paths) : await waitForPueueDaemon(paths, pueueServiceWaitMs);
   if (!isPueueRunning) io.stderr('charness-runner: Pueue is not running; jobs cannot be queued until it is (the link goes up anyway).\n');

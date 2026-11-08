@@ -9,7 +9,8 @@
 # files there and reports them — nothing else in this script knows about pairing. A hand-made runner has none of them:
 #   <state>/paused          exists → paused=yes (written by `charness-runner pause`; the main box never sends a job to a paused runner)
 #   <state>/service         one word: user-service | system-service (no file = run by hand: service=foreground)
-#   <state>/ios-check.json  the runner's iOS Simulator boot check (one JSON line): "status": "pass"|"fail"|"skipped" and "reason": "…"|null
+#   <state>/ios-check.json  the runner's iOS Simulator boot check (one JSON line): "status": "pass"|"fail"|"skipped" and "reason": "…"|null; a pass also names the "deviceTypeId" and "runtimeId" it booted
+#                           (what a job's own Simulator device is made of)
 #   <state>/gui/            the login session's agent of an always-on Mac (service=system-service): agent.json is its heartbeat, requests/<id>/ the steps
 #                           it runs for a job that needs iOS (`needs-ios` in the job folder) — see «the login session» below
 # <state> counts only when it holds config.json and keys/ (a work dir that merely is called «work» is not one).
@@ -39,6 +40,8 @@
 #   simctl-cleanup  `xcrun simctl delete unavailable` on a Mac, bounded; started detached by the probe of a view of the runners at most once a day, never called by hand
 #   fetched      mark a finished job's results as fetched (`fetched <work> - <job>`): `wait`, `fetch` and a foreground run say so once they have the files, and `clean` then does not keep the copy for them
 #   measure-copies  write down how big each project copy is (p/<slug>/size-kb); the probe of a view of the runners starts it detached, and `prepare` when the disk is short; it is never called by hand
+#   ios-device   `ios-device <work> <slug>`: a job's own Simulator device (create or reuse `charness-<slug>`, boot it); run BY the job as a step, never called by hand
+#   ios-device-shutdown  `ios-device-shutdown <work> <slug> <udid>`: shut that device down (the step at the end of a job); never called by hand
 #   sync-tree    the apply step alone (tests)
 
 # The script's own tools (sort, sed, grep) run in the C locale: byte-wise and the same everywhere. The user's commands do NOT — see job_locale.
@@ -111,6 +114,23 @@ failed_step_error_lines=8
 gui_agent_stale_sec=20
 # What makes a line of a tool's output an error line.
 error_line_pattern='error|fatal|fail|exception|cannot|couldn|not found|no such|denied'
+# Jobs of different projects run side by side, so what they would share without knowing is given out per PROJECT COPY: each copy gets, once, a number k from 0 to max_copy_indexes - 1 (`p/<slug>/index`) and from it
+# a block of port_block_size ports from port_base_start + k * port_block_size (below Linux's ephemeral range, 32768+, and macOS's, 49152+), its own TMPDIR (`<work>/t/<k>`, short on purpose: macOS caps a
+# unix-socket path at 104 bytes) and — for a job that needs iOS — its own Simulator device. The numbers are handed out under `tmp/index.lock` (a short hold; one that cannot be had in index_lock_wait_sec is
+# said and the job runs without the three).
+max_copy_indexes=100
+port_base_start=20000
+port_block_size=100
+index_lock_wait_sec=30
+index_lock_max_age_min=2
+# A job's own Simulator device is named for its project; its steps are each bounded (a watchdog: there is no `timeout(1)` on a Mac).
+ios_device_prefix=charness-
+ios_device_list_sec=30
+ios_device_create_sec=60
+ios_device_boot_sec=60
+ios_device_bootstatus_sec=180
+ios_device_delete_sec=60
+ios_device_shutdown_sec=60
 
 # ─────────────────────────── helpers ───────────────────────────
 
@@ -358,7 +378,8 @@ gui_run_step() {
   printf '%s' "$jd/log" > "$request/log"
   printf '%s' "$$" > "$request/owner"
   gui_process_start "$$" > "$request/owner-start"
-  if [ -s "$jd/env" ]; then cp "$jd/env" "$request/env"; else : > "$request/env"; fi
+  # The agent applies the lines in order, a later one over an earlier (`parseJobEnvLines`): the runner's TMPDIR first (the job's own -e takes it back), the job's lines, then the runner's REMOTE_RUN_* (the job cannot).
+  { print_runner_env_lines tmpdir; print_job_env_lines; print_runner_env_lines vars; } > "$request/env"
   : > "$request/go"
   local looks=0
   while [ ! -f "$request/exit" ]; do
@@ -706,11 +727,14 @@ probe_slow() {
 }
 
 # The state folder of the charness-runner this work dir belongs to (sets runner_state; empty for a hand-made runner), and what it says
-# about the machine: sets ios_boot_status (ok | failed | unchecked, empty off a Mac or without a check) and ios_boot_detail.
+# about the machine: sets ios_boot_status (ok | failed | unchecked, empty off a Mac or without a check) and ios_boot_detail; for a check that
+# passed also ios_device_type and ios_runtime (the device type and runtime it booted: what a job's own Simulator device is made of).
 read_runner_state() {
   runner_state=
   ios_boot_status=
   ios_boot_detail=
+  ios_device_type=
+  ios_runtime=
   local candidate
   candidate=$(dirname "$work")
   [ "$(basename "$work")" = work ] && [ -f "$candidate/config.json" ] && [ -d "$candidate/keys" ] || return 0
@@ -719,6 +743,8 @@ read_runner_state() {
   [ -f "$check" ] || return 0
   if grep -q '"status"[[:space:]]*:[[:space:]]*"pass"' "$check"; then
     ios_boot_status=ok
+    ios_device_type=$(sed -n 's/.*"deviceTypeId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$check" | head -n 1)
+    ios_runtime=$(sed -n 's/.*"runtimeId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$check" | head -n 1)
   elif grep -q '"status"[[:space:]]*:[[:space:]]*"fail"' "$check"; then
     ios_boot_status=failed
   else
@@ -1103,6 +1129,8 @@ finish_trash_removal() {
   local leftover=$1
   check_runner_pid_alive "${leftover##*-}" && return 1
   check_copy_dir_is_busy "$leftover" && return 2
+  # The remover that was cut off may not have got to retire the copy's Simulator device. Its TMPDIR is not touched here: its number may be another copy's by now (that copy starts with an empty one).
+  retire_copy_simulator "$(dirname "$(dirname "$leftover")")" "$leftover"
   remove_path_even_if_read_only "$leftover" || return 3
 }
 
@@ -1136,7 +1164,12 @@ remove_path_even_if_read_only() {
 remove_project_copy() {
   local source="$1/p/$2" trash="$1/p/.trash-$2-$$"
   [ -e "$trash" ] && return 1
+  # The index lock is held from the rename to the end of the copy's TMPDIR: the copy's number is free the moment it leaves p/<slug>, and a copy that is given it must not meet the old TMPDIR being removed under it.
+  # A lock that cannot be had leaves the TMPDIR to the next copy that gets the number (it starts with an empty one); the Simulator device is retired either way.
+  local is_index_lock_held=0
+  acquire_index_lock "$1" && is_index_lock_held=1
   if ! mv "$source" "$trash" 2> /dev/null; then
+    [ "$is_index_lock_held" -eq 1 ] && release_index_lock "$1"
     [ -e "$source" ] && return 1
     return 2
   fi
@@ -1146,9 +1179,26 @@ remove_project_copy() {
       # A `prepare` can make the folder between the test and the `mv`, which then moves the copy INTO it: out again, to where the next prune looks for trash (and where its markers are seen).
       [ -e "$source/${trash##*/}" ] && mv "$source/${trash##*/}" "$trash" 2> /dev/null
     fi
+    [ "$is_index_lock_held" -eq 1 ] && release_index_lock "$1"
     return 3
   fi
+  retire_copy_simulator "$1" "$trash"
+  if [ "$is_index_lock_held" -eq 1 ]; then
+    release_copy_tmpdir "$1" "$trash"
+    release_index_lock "$1"
+  fi
   remove_path_even_if_read_only "$trash" || return 1
+}
+
+# Remove the TMPDIR (`<work>/t/<k>`) of the copy moved aside to folder $2, by the number it held. The index lock of work dir $1 must be held.
+release_copy_tmpdir() {
+  local recorded
+  recorded=$(read_file "$2/index")
+  case $recorded in
+    '' | *[!0-9]*) return 0 ;;
+  esac
+  remove_path_even_if_read_only "$1/t/$((10#$recorded))"
+  return 0
 }
 
 # last_freed_kb = how much the disk under $1 has gained since it had $2 KiB free (0 when it did not grow; empty when df said nothing).
@@ -1379,6 +1429,164 @@ cmd_simctl_cleanup() {
   run_bounded "$simctl_cleanup_sec" xcrun simctl delete unavailable >> "$log" 2>&1
   echo "exit $?" >> "$log"
   return 0
+}
+
+# ─────────────────────────── a job's own Simulator device ───────────────────────────
+
+# Is $1 the shape of a Simulator device's UDID (8-4-4-4-12 hex digits)? Whatever comes from a file or from simctl is checked before it names a device.
+check_is_udid() {
+  case $1 in
+    [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) return 0 ;;
+  esac
+  return 1
+}
+
+# The Simulator device of the project copy in folder $2 goes onto the retired list of work dir $1 when the copy goes (`<work>/ios-devices-retired`, one UDID per line, no UDID twice). The device itself is deleted
+# by the next `ios-device` step, which runs in the session that can see it: an always-on Mac's daemon is not that session.
+retire_copy_simulator() {
+  local retired_file="$1/ios-devices-retired" udid
+  udid=$(read_file "$2/ios-simulator")
+  check_is_udid "$udid" || return 0
+  grep -qxF "$udid" "$retired_file" 2> /dev/null || printf '%s\n' "$udid" >> "$retired_file"
+  return 0
+}
+
+# Delete the devices of the retired list ($1 = work dir) that this runner made: the device must be listed, and its name must start with ios_device_prefix — a device of the operator's is never touched, whatever the
+# list says. A line whose device is gone, or is not ours, is dropped; one whose deletion failed stays for the next time. Silent when simctl cannot list devices (the list stays as it is).
+delete_retired_simulators() {
+  local work_dir=$1
+  local retired_file="$work_dir/ios-devices-retired"
+  [ -s "$retired_file" ] || return 0
+  local all_file="$work_dir/tmp/ios-devices-all.$$" done_file="$work_dir/tmp/ios-devices-done.$$"
+  mkdir -p "$work_dir/tmp" 2> /dev/null
+  : > "$done_file"
+  if ! run_bounded "$ios_device_list_sec" xcrun simctl list devices > "$all_file" 2>&1; then
+    rm -f "$all_file" "$done_file"
+    return 0
+  fi
+  local udid device_name
+  while IFS= read -r udid || [ -n "$udid" ]; do
+    if ! check_is_udid "$udid"; then
+      printf '%s\n' "$udid" >> "$done_file"
+      continue
+    fi
+    device_name=$(sed -n "s/^[[:space:]]*\(.*\) ($udid).*/\1/p" "$all_file" | head -n 1)
+    case $device_name in
+      '') printf '%s\n' "$udid" >> "$done_file" ;;
+      "$ios_device_prefix"*)
+        if run_bounded "$ios_device_delete_sec" xcrun simctl delete "$udid" > /dev/null 2>&1; then
+          say "deleted the simulator $device_name ($udid) of a project copy that was removed"
+          printf '%s\n' "$udid" >> "$done_file"
+        else
+          say "the simulator $device_name ($udid) of a removed project copy could not be deleted now; it is tried again at the next job that needs iOS"
+        fi
+        ;;
+      *) printf '%s\n' "$udid" >> "$done_file" ;;
+    esac
+  done < "$retired_file"
+  # The list is rewritten under the index lock, from what it holds NOW: a copy removed meanwhile appends to it under the same lock.
+  if [ -s "$done_file" ] && acquire_index_lock "$work_dir"; then
+    { grep -vxF -f "$done_file" "$retired_file" || true; } > "$retired_file.tmp.$$"
+    mv "$retired_file.tmp.$$" "$retired_file"
+    release_index_lock "$work_dir"
+  fi
+  rm -f "$all_file" "$done_file" "$retired_file.tmp.$$"
+  return 0
+}
+
+# The last line of file $1 that is a UDID, or nothing.
+read_last_udid_line() {
+  local line found=
+  while IFS= read -r line || [ -n "$line" ]; do
+    check_is_udid "$line" && found=$line
+  done < "$1"
+  printf '%s' "$found"
+}
+
+# `ios-device <work> <slug>`: the project copy's own Simulator device, ready — run BY the job as a step before its command (so on an always-on Mac in the login session, like every iOS step). The retired devices go first;
+# then the device recorded in `p/<slug>/ios-simulator` is kept if `simctl list devices available` still has it, else (never made, or its runtime is gone) a new `charness-<slug>` is made of the device type and runtime the
+# runner's last passing iOS check used, and recorded; it is booted and waited for. Exit 0: the recorded device is booted. Anything else says why on stdout (the job's log) and exits 1: the job then runs without
+# REMOTE_RUN_IOS_SIMULATOR_UDID — a booted device nobody names is no harm, and the `xcrun` guard still protects the others.
+cmd_ios_device() {
+  set_paths "$1" "$2" ""
+  read_runner_state
+  if [ "$ios_boot_status" != ok ] || [ -z "$ios_device_type" ]; then
+    say "no simulator of its own: the runner's iOS check has not passed with a device type"
+    return 1
+  fi
+  if ! command -v xcrun > /dev/null 2>&1; then
+    say "no simulator of its own: xcrun is not on the PATH of this step"
+    return 1
+  fi
+  mkdir -p "$work/tmp" 2> /dev/null
+  delete_retired_simulators "$work"
+  local device_name="$ios_device_prefix$slug" udid available_file="$work/tmp/ios-available.$$" output_file="$work/tmp/ios-step.$$"
+  udid=$(read_file "$proj/ios-simulator")
+  if ! run_bounded "$ios_device_list_sec" xcrun simctl list devices available > "$available_file" 2>&1; then
+    say "no simulator of its own: simctl cannot list the simulators ($(tail -n 1 "$available_file" | cut -c1-200))"
+    rm -f "$available_file"
+    return 1
+  fi
+  if check_is_udid "$udid" && grep -qF "($udid)" "$available_file"; then
+    say "using the simulator $device_name ($udid) of this project's copy"
+  else
+    if [ -n "$udid" ]; then
+      say "the simulator of this project's copy ($udid) is gone or unavailable: making a new one"
+      retire_copy_simulator "$work" "$proj"
+      rm -f "$proj/ios-simulator"
+    fi
+    if ! run_bounded "$ios_device_create_sec" xcrun simctl create "$device_name" "$ios_device_type" ${ios_runtime:+"$ios_runtime"} > "$output_file" 2>&1; then
+      say "no simulator of its own: simctl create $device_name failed ($(tail -n 1 "$output_file" | cut -c1-200))"
+      rm -f "$available_file" "$output_file"
+      return 1
+    fi
+    udid=$(read_last_udid_line "$output_file")
+    if [ -z "$udid" ]; then
+      say "no simulator of its own: simctl create $device_name answered with no device id"
+      rm -f "$available_file" "$output_file"
+      return 1
+    fi
+    if ! { printf '%s\n' "$udid" > "$proj/ios-simulator.tmp.$$" && mv "$proj/ios-simulator.tmp.$$" "$proj/ios-simulator"; } 2> /dev/null; then
+      say "no simulator of its own: the device $udid could not be written down"
+      rm -f "$available_file" "$output_file" "$proj/ios-simulator.tmp.$$"
+      return 1
+    fi
+    say "made the simulator $device_name ($udid) for this project's copy"
+  fi
+  # Booting a device that is booted already is an error of simctl's, and no failure here.
+  if ! run_bounded "$ios_device_boot_sec" xcrun simctl boot "$udid" > "$output_file" 2>&1 && ! grep -q 'current state: Booted' "$output_file"; then
+    say "no simulator of its own: simctl boot $udid failed ($(tail -n 1 "$output_file" | cut -c1-200))"
+    rm -f "$available_file" "$output_file"
+    return 1
+  fi
+  if ! run_bounded "$ios_device_bootstatus_sec" xcrun simctl bootstatus "$udid" > "$output_file" 2>&1; then
+    say "no simulator of its own: $udid did not finish booting in ${ios_device_bootstatus_sec}s"
+    rm -f "$available_file" "$output_file"
+    return 1
+  fi
+  rm -f "$available_file" "$output_file"
+  say "the simulator $device_name ($udid) is booted"
+}
+
+# `ios-device-shutdown <work> <slug> <udid>`: shut that device down — the step at the end of a job (frees its memory for the next one; never `erase`: the app installed on it is what the next job reuses). Bounded.
+# A device that is shut down already is no failure.
+cmd_ios_device_shutdown() {
+  set_paths "$1" "$2" ""
+  local udid=${3:-}
+  if ! check_is_udid "$udid"; then
+    say "not shutting a simulator down: $udid is no device id"
+    return 1
+  fi
+  mkdir -p "$work/tmp" 2> /dev/null
+  local output_file="$work/tmp/ios-shutdown.$$"
+  if run_bounded "$ios_device_shutdown_sec" xcrun simctl shutdown "$udid" > "$output_file" 2>&1 || grep -q 'current state: Shutdown' "$output_file"; then
+    say "shut the simulator $udid down"
+    rm -f "$output_file"
+    return 0
+  fi
+  say "the simulator $udid could not be shut down ($(tail -n 1 "$output_file" | cut -c1-200))"
+  rm -f "$output_file"
+  return 1
 }
 
 # The moved-aside folders of project copy $2 under work dir $1 (`p/.trash-<slug>-<pid>`), one per line.
@@ -1813,6 +2021,11 @@ cmd_lease() {
 # ─────────────────────────── the job (the Pueue task) ───────────────────────────
 
 lock_held=0
+# The copy's number (empty: none was given) and its Simulator device (empty: none), set by cmd_job; `$jd/runner-env` is written from them.
+copy_index=
+ios_udid=
+# 1 once the job has started the step that makes its Simulator device: whatever state that step left it in, the job shuts the device down at its end.
+ios_device_step_started=0
 
 # The project lock is a FILE made with the shell's own exclusive create (`set -C`, noclobber: open(O_EXCL)) — never with `mkdir`. The uutils
 # coreutils that current Ubuntu ships as /usr/bin/mkdir let several simultaneous `mkdir` of one path ALL succeed (measured here: 265 races
@@ -2001,6 +2214,123 @@ describe_failed_step() {
   done
 }
 
+# ─────────────────────────── what a copy is given: a number, a port block, a TMPDIR, a Simulator ───────────────────────────
+
+# The index lock: `tmp/index.lock`, made and broken by the project lock's helpers like the prune lock (`acquire_prune_lock`) — here with no job, a short age limit (it is held for a moment: a holder that has been
+# at it for minutes is gone whatever its pid says), and a wait of index_lock_wait_sec at most. Fails when it could not be had.
+acquire_index_lock() {
+  local lock="$1/tmp/index.lock" jobs_dir= job= lock_max_age_min=$index_lock_max_age_min
+  local waited_since=$SECONDS
+  mkdir -p "$1/tmp" 2> /dev/null
+  while ! create_lock_file "$lock"; do
+    check_lock_is_stale && break_stale_lock && continue
+    [ $((SECONDS - waited_since)) -ge "$index_lock_wait_sec" ] && return 1
+    nap 0.2
+  done
+  rm -f "$lock".breaking.* 2> /dev/null
+  return 0
+}
+
+# Give the index lock back — only if it is still this process's own.
+release_index_lock() {
+  local holder_pid holder_job
+  read_lock_holder "$1/tmp/index.lock"
+  [ "$holder_pid" = "$$" ] && rm -f "$1/tmp/index.lock"
+  return 0
+}
+
+# Sets copy_index: the number of this job's project copy (`p/<slug>/index`), given once — the lowest below max_copy_indexes that no other copy under p/ holds (a copy moved aside to `p/.trash-*` is not under p/*:
+# its number is free) — and kept as long as the copy lives, so the port block, the TMPDIR and the Simulator device are the same for every job of the copy (an app built for a Metro port stays installed). A new copy
+# starts with an empty TMPDIR. Empty when none could be given (every number taken, or the lock not had): said, and the job runs without a port block and a TMPDIR of its own. The caller holds the project lock.
+ensure_copy_index() {
+  copy_index=
+  local recorded
+  recorded=$(read_file "$proj/index")
+  case $recorded in
+    '' | *[!0-9]*) ;;
+    *)
+      if [ "$((10#$recorded))" -lt "$max_copy_indexes" ]; then
+        copy_index=$((10#$recorded))
+        return 0
+      fi
+      ;;
+  esac
+  if ! acquire_index_lock "$work"; then
+    say "no port block and no TMPDIR of its own for this job: the number of this project's copy could not be given (the lock is held)"
+    return 0
+  fi
+  local taken=" " index_file other_index candidate=0
+  for index_file in "$work"/p/*/index; do
+    [ -f "$index_file" ] || continue
+    other_index=$(read_file "$index_file")
+    case $other_index in '' | *[!0-9]*) continue ;; esac
+    taken="$taken$((10#$other_index)) "
+  done
+  while [ "$candidate" -lt "$max_copy_indexes" ]; do
+    case $taken in
+      *" $candidate "*) candidate=$((candidate + 1)) ;;
+      *) break ;;
+    esac
+  done
+  if [ "$candidate" -ge "$max_copy_indexes" ]; then
+    release_index_lock "$work"
+    say "no port block and no TMPDIR of its own for this job: all $max_copy_indexes numbers of project copies are taken"
+    return 0
+  fi
+  rm -rf "$work/t/$candidate"
+  if ! { printf '%s\n' "$candidate" > "$proj/index.tmp.$$" && mv "$proj/index.tmp.$$" "$proj/index"; } 2> /dev/null; then
+    rm -f "$proj/index.tmp.$$"
+    release_index_lock "$work"
+    say "no port block and no TMPDIR of its own for this job: the number of this project's copy could not be written down"
+    return 0
+  fi
+  release_index_lock "$work"
+  copy_index=$candidate
+}
+
+# `$jd/runner-env`: the variables the runner gives every step of this job, one `NAME=VALUE` per line — TMPDIR (made here), REMOTE_RUN_PORT_BASE (the job owns this port and the 99 after it) and, once the job's own Simulator
+# device is booted, REMOTE_RUN_IOS_SIMULATOR_UDID. Empty when the copy has no number. `exec` gets none of them: it takes no lock and may run beside a job of its own copy.
+write_runner_env() {
+  : > "$jd/runner-env"
+  [ -n "$copy_index" ] || return 0
+  local tmp_dir="$work/t/$copy_index"
+  if ! mkdir -p "$tmp_dir" 2> /dev/null; then
+    say "no TMPDIR of its own for this job: $tmp_dir cannot be made"
+    return 0
+  fi
+  {
+    printf 'TMPDIR=%s\n' "$tmp_dir"
+    printf 'REMOTE_RUN_PORT_BASE=%s\n' "$((port_base_start + port_block_size * copy_index))"
+    [ -z "$ios_udid" ] || printf 'REMOTE_RUN_IOS_SIMULATOR_UDID=%s\n' "$ios_udid"
+  } > "$jd/runner-env"
+}
+
+# The job's own -e lines, one per line (also a last line without a newline).
+print_job_env_lines() {
+  local env_line
+  [ -s "$jd/env" ] || return 0
+  while IFS= read -r env_line || [ -n "$env_line" ]; do printf '%s\n' "$env_line"; done < "$jd/env"
+}
+
+# The lines of `$jd/runner-env` of one kind: `tmpdir` (TMPDIR, which the job's own -e may take back: it comes BEFORE them) or `vars` (REMOTE_RUN_*, which it may not: AFTER them).
+print_runner_env_lines() {
+  local env_line
+  [ -s "$jd/runner-env" ] || return 0
+  while IFS= read -r env_line || [ -n "$env_line" ]; do
+    case $env_line in
+      TMPDIR=*) [ "$1" = tmpdir ] && printf '%s\n' "$env_line" ;;
+      REMOTE_RUN_*) [ "$1" = vars ] && printf '%s\n' "$env_line" ;;
+    esac
+  done < "$jd/runner-env"
+  return 0
+}
+
+# Export the runner's lines of one kind (see print_runner_env_lines) in the step that is being set up.
+export_runner_env_lines() {
+  local env_line
+  while IFS= read -r env_line; do export "$env_line"; done < <(print_runner_env_lines "$1")
+}
+
 # bash -c <command> in <directory>, with the job's -e variables, output into the log; sets step_code. Runs as a child so a
 # SIGTERM to the job (the `killed` flag) does not abandon it half-way.
 run_step() {
@@ -2014,9 +2344,11 @@ run_step() {
     cd "$directory" || exit 126
     LC_ALL=$job_locale
     export LC_ALL
+    export_runner_env_lines tmpdir
     if [ -s "$jd/env" ]; then
       while IFS= read -r env_line; do export "$env_line"; done < "$jd/env"
     fi
+    export_runner_env_lines vars
     exec bash -c "$command_text"
   ) < /dev/null &
   local step_pid=$!
@@ -2206,6 +2538,44 @@ clean_after_success() {
   return 0
 }
 
+# The job's own Simulator device (`needs-ios` jobs only): made or reused and booted by a step (`cmd_ios_device`), its UDID handed on as REMOTE_RUN_IOS_SIMULATOR_UDID through `runner-env`. Sets ios_udid; empty when the job
+# has none — a runner without a passing iOS check that names a device type (a hand-made one, a Mac whose check failed), or a step that failed: said in the log, and the job runs on, without the variable.
+prepare_job_simulator() {
+  ios_udid=
+  [ -f "$jd/needs-ios" ] || return 0
+  read_runner_state
+  if [ -z "$runner_state" ] || [ "$ios_boot_status" != ok ] || [ -z "$ios_device_type" ]; then
+    say "no simulator of its own for this job: this runner has no passing iOS check that names a device type, so REMOTE_RUN_IOS_SIMULATOR_UDID is not set and the job shares the simulators that are there"
+    return 0
+  fi
+  set_phase simulator
+  say "preparing the simulator of this project's copy ($ios_device_prefix$slug)"
+  ios_device_step_started=1
+  run_step "$tree" "bash $(quote_word "$(get_script_path)") ios-device $(quote_word "$work") $(quote_word "$slug")"
+  if [ "$step_code" -ne 0 ]; then
+    say "the simulator of this project's copy could not be prepared (exit $step_code, see above): REMOTE_RUN_IOS_SIMULATOR_UDID is not set for this job"
+    return 0
+  fi
+  ios_udid=$(read_file "$proj/ios-simulator")
+  if ! check_is_udid "$ios_udid"; then
+    ios_udid=
+    say "the simulator step left no usable device id: REMOTE_RUN_IOS_SIMULATOR_UDID is not set for this job"
+  fi
+}
+
+# At the end of the job, before its lock goes (also after a kill or a timeout): the job's Simulator device is shut down, as a step, bounded — it frees the memory the next job needs. A kill that is followed by a hard
+# kill of the job's group after the grace time cuts this short, which only leaves the device booted. `killed` is clear for the step: a job that was killed still shuts its device down.
+shutdown_job_simulator() {
+  [ "$ios_device_step_started" -eq 1 ] || return 0
+  ios_device_step_started=0
+  local udid was_killed=$killed
+  udid=$(read_file "$proj/ios-simulator")
+  check_is_udid "$udid" || return 0
+  killed=0
+  run_step "$tree" "bash $(quote_word "$(get_script_path)") ios-device-shutdown $(quote_word "$work") $(quote_word "$slug") $(quote_word "$udid")"
+  killed=$was_killed
+}
+
 # The job's result, final: its stage goes, the phase it leaves is $2, its finish time and its exit code $1 are written (the exit file last: it is what `wait`, `status` and `kill` read as «over»).
 record_job_end() {
   rm -rf "$stage"
@@ -2229,6 +2599,7 @@ finish_job() {
   stop_watchdog
   set_phase collecting
   collect_artifacts
+  shutdown_job_simulator
   if [ "$code" -eq 0 ] && [ -s "$jd/clean-after-success.ere" ]; then
     # Only a job that succeeded (its final code, after a timeout or a kill have had their say), and only after its results are collected: nothing a `pull:` names is lost to this. Its result is final already, so it is written
     # BEFORE the removal (minutes, for tens of GB): a `kill`, a lost lease or the hub's cut meanwhile finds the job ended and cannot turn one that worked into 137, and a caller waiting for the result does not wait for the removal.
@@ -2285,6 +2656,9 @@ cmd_job() {
   set_phase waiting-lock
   acquire_lock || finish_job 137
 
+  ensure_copy_index
+  write_runner_env
+
   set_phase syncing
   sync_tree || { say "applying the files failed"; finish_job 125; }
 
@@ -2311,6 +2685,11 @@ cmd_job() {
     fi
     printf '%s\n' "$install_key" > "$proj/deps.hash"
   fi
+  [ "$killed" -eq 1 ] && finish_job 137
+
+  # The Simulator device comes after the dependencies (the project's own install may use the system's), and its UDID is the one variable written after them.
+  prepare_job_simulator
+  write_runner_env
   [ "$killed" -eq 1 ] && finish_job 137
 
   touch "$jd/start-marker"
@@ -2428,6 +2807,8 @@ main() {
     clean) cmd_clean "$@" ;;
     simctl-cleanup) cmd_simctl_cleanup "$@" ;;
     fetched) cmd_fetched "$@" ;;
+    ios-device) cmd_ios_device "$@" ;;
+    ios-device-shutdown) cmd_ios_device_shutdown "$@" ;;
     sync-tree) cmd_sync_tree "$@" ;;
     *) die "unknown subcommand: $subcommand" ;;
   esac

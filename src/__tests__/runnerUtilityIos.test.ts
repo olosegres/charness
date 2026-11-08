@@ -116,7 +116,11 @@ describe('choosing a simulator', () => {
 describe('the boot check', () => {
   it('passes when the Simulator boots: create, boot, bootstatus, then shutdown and delete', async () => {
     const record = await runIosBootCheck(createDeps({ runner: createRunner() }));
-    assert.deepEqual(record, { status: 'pass', checkedAtMs: 1_000, xcode: '16.2 (16C5032a)', reason: null });
+    const createCall = calls.find((line) => line.startsWith('xcrun simctl create'));
+    const [, , , , deviceTypeId, runtimeId] = (createCall ?? '').split(' ');
+    assert.ok(deviceTypeId !== undefined && runtimeId !== undefined, createCall);
+    // A job's own Simulator device is made of the pair the check booted: it is recorded with the pass, and with nothing else.
+    assert.deepEqual(record, { status: 'pass', checkedAtMs: 1_000, xcode: '16.2 (16C5032a)', reason: null, deviceTypeId, runtimeId });
     const steps = calls.filter((line) => line.startsWith('xcrun')).map((line) => line.split(' ').slice(2, 3).join(''));
     assert.deepEqual(steps, ['list', 'list', 'create', 'boot', 'bootstatus', 'shutdown', 'delete']);
     assert.ok(calls.includes('xcrun simctl bootstatus udid-1 -b'));
@@ -126,6 +130,7 @@ describe('the boot check', () => {
   it('fails — the Simulator needs the user\'s login session — when it cannot boot, and still deletes the device it made', async () => {
     const record = await runIosBootCheck(createDeps({ runner: createRunner({ boot: { ok: false, exitCode: 1, stderr: 'Unable to boot device in current state: Shutdown\nbootstrap failed' } }) }));
     assert.equal(record.status, 'fail');
+    assert.ok(!('deviceTypeId' in record) && !('runtimeId' in record), 'only a pass names the pair');
     assert.match(record.reason ?? '', /did not boot: bootstrap failed/);
     assert.ok(calls.includes('xcrun simctl shutdown udid-1') && calls.includes('xcrun simctl delete udid-1'), 'cleanup runs on a failure');
     assert.ok(!calls.some((line) => line.includes('bootstatus')), 'no bootstatus after a boot that failed');
@@ -198,6 +203,12 @@ describe('when the check runs again', () => {
       assert.equal(text.trim().split('\n').length, 1);
       assert.match(text, /"status":"pass"/);
       assert.deepEqual(readIosCheck(paths), pass);
+      // The pair a pass names is on the same line, for `runner.sh` to read with `sed`; a record without it (an older runner utility's) still reads.
+      writeIosCheck(paths, { ...pass, deviceTypeId: 'com.apple.CoreSimulator.SimDeviceType.iPhone-16', runtimeId: 'com.apple.CoreSimulator.SimRuntime.iOS-18-2' });
+      const withPair = fs.readFileSync(paths.iosCheck, 'utf8');
+      assert.equal(withPair.trim().split('\n').length, 1);
+      assert.match(withPair, /"deviceTypeId":"com\.apple\.CoreSimulator\.SimDeviceType\.iPhone-16","runtimeId":"com\.apple\.CoreSimulator\.SimRuntime\.iOS-18-2"/);
+      assert.equal(readIosCheck(paths)?.deviceTypeId, 'com.apple.CoreSimulator.SimDeviceType.iPhone-16');
       fs.writeFileSync(paths.iosCheck, '{broken');
       assert.equal(readIosCheck(paths), null);
     });
