@@ -86,7 +86,8 @@ low_disk_exit_code=28
 # Set by the free-space prune (prune_copies_for_space) for the refusal that may follow it, and by the last removal for its report.
 prune_stopped_without_gain=0
 last_freed_kb=
-# Set by probe_slow: 1 only when the probe has just said `cap_ios=yes` AND the simctl step answered — a Mac whose Simulator is usable in the session the probe runs in. Nothing is deleted among the simulators otherwise.
+# Set by probe_slow: 1 only when the probe has just said `cap_ios=yes` AND the simctl step answered. Nothing is deleted among the simulators otherwise. The cleanup then runs where the probe runs — on an always-on Mac with
+# a live login agent that is still the service's own session, not the agent's; `cmd_simctl_cleanup` guards that session with its look at the runtimes.
 probe_may_clean_simulators=0
 # `xcrun simctl delete unavailable` (the simulators of runtimes that are gone) is tried at most this often, and given this long; the look at the runtimes before it is given simctl_list_sec.
 simctl_cleanup_interval_hours=24
@@ -1814,7 +1815,8 @@ check_lock_is_stale() {
   if [ -n "$holder_pid" ] && ! check_runner_pid_alive "$holder_pid"; then
     return 0
   fi
-  if [ -n "$holder_job" ] && [ -f "$jobs_dir/$holder_job/exit" ]; then
+  # The holder's job has ended — except while it removes paths from the copy after a job that worked (`finish_job` writes the result BEFORE that and keeps the lock to the end of the removal; a holder that dies meanwhile is caught by the pid test above).
+  if [ -n "$holder_job" ] && [ -f "$jobs_dir/$holder_job/exit" ] && [ "$(read_file "$jobs_dir/$holder_job/phase")" != cleaning ]; then
     return 0
   fi
   if [ "$lock_max_age_min" -gt 0 ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +"$lock_max_age_min" 2> /dev/null)" ]; then
@@ -2104,9 +2106,10 @@ check_is_protected_path() {
 }
 
 # After a job that SUCCEEDED: remove from the copy what the project's `clean-after-success:` names (a build's intermediates, tens of GB on a Mac, which the next job rebuilds anyway). Off unless the project says
-# so. A pattern names a file or a folder (a folder goes whole), inside the copy only: the walk starts from the patterns' fixed prefixes, a root with a symlink on its way is skipped, a root inside `.git`, `node_modules` or `Pods`
-# is dropped and those folders are pruned from the walk, the walk is NUL-separated (a name with a newline in it is one name, never two lines) and a path is removed only if it is what `find` listed, and a symlink goes
-# as the link. Read-only folders are handled like the prune does. The lock is still held, so no other job of the project sees the tree half-cleaned. Says how many paths went (and which would not) in the job's log.
+# so. A pattern names a file or a folder (a folder goes whole — unless it HOLDS a `.git`, `node_modules` or `Pods` anywhere below it: then it is kept whole, and the log says so), inside the copy only: the walk starts from the
+# patterns' fixed prefixes, a root with a symlink on its way is skipped, a root inside `.git`, `node_modules` or `Pods` is dropped and those folders are pruned from the walk, the walk is NUL-separated (a name with a newline
+# in it is one name, never two lines) and a path is removed only if it is what `find` listed, and a symlink goes as the link. Read-only folders are handled like the prune does. The lock is still held, so no other job
+# of the project sees the tree half-cleaned. Says how many paths went, which were kept and which would not go, in the job's log.
 clean_after_success() {
   [ -s "$jd/clean-after-success.ere" ] || return 0
   read_job_patterns "$jd/clean-after-success.ere" "$jd/clean-after-success.roots" || return 0
@@ -2118,15 +2121,22 @@ clean_after_success() {
   # The matches are listed first and removed after: a folder removed while `find` is still walking it would only make `find` complain.
   local listing="$jd/clean-after-success.list"
   (cd "$tree" && find "${walk_roots[@]}" \( -name .git -o -name node_modules -o -name Pods \) -prune -o -print0 2> /dev/null) > "$listing"
-  local removed=0 failed=0
+  local removed=0 failed=0 kept_folder=
   while IFS= read -r -d '' candidate; do
     relative=${candidate#./}
     # Gone already: below a folder that was just removed (the listing has its contents too — a pattern names a folder with everything below it).
     [ -e "$tree/$relative" ] || [ -L "$tree/$relative" ] || continue
     [ "$relative" != . ] && check_relative_path "$relative" || continue
+    # Below a folder that was kept (the listing runs through a folder before its contents): kept with it.
+    if [ -n "$kept_folder" ] && [[ $relative == "$kept_folder"/* ]]; then
+      continue
+    fi
     for pattern in "${job_patterns[@]}"; do
       if [[ $relative =~ $pattern ]]; then
-        if remove_path_even_if_read_only "$tree/$relative"; then
+        if [ -d "$tree/$relative" ] && [ ! -L "$tree/$relative" ] && [ -n "$(find "$tree/$relative" \( -name .git -o -name node_modules -o -name Pods \) -prune -print 2> /dev/null | head -n 1)" ]; then
+          kept_folder=$relative
+          say "clean-after-success: kept $relative (it holds a .git, node_modules or Pods, which are never removed)"
+        elif remove_path_even_if_read_only "$tree/$relative"; then
           removed=$((removed + 1))
         else
           failed=$((failed + 1))
@@ -2144,6 +2154,7 @@ clean_after_success() {
 # The job's result, final: its stage goes, the phase it leaves is $2, its finish time and its exit code $1 are written (the exit file last: it is what `wait`, `status` and `kill` read as «over»).
 record_job_end() {
   rm -rf "$stage"
+  # The phase BEFORE the exit file: a reader that finds the result must find `cleaning` with it (`check_lock_is_stale` takes an `exit` for «the holder is gone» only when the phase is not `cleaning`).
   set_phase "$2"
   date +%s > "$jd/finished-at"
   # The copy's mark of use means its last ACTIVITY: a job that queued and ran for hours must not leave its copy looking as old as its submit (the first one a short disk would remove, results and all).
@@ -2167,6 +2178,8 @@ finish_job() {
     # Only a job that succeeded (its final code, after a timeout or a kill have had their say), and only after its results are collected: nothing a `pull:` names is lost to this. Its result is final already, so it is written
     # BEFORE the removal (minutes, for tens of GB): a `kill`, a lost lease or the hub's cut meanwhile finds the job ended and cannot turn one that worked into 137, and a caller waiting for the result does not wait for the removal.
     # The project lock stays held until the removal is over, so no other job of the project (and no `clean`) sees the tree half-cleaned.
+    # Said BEFORE the result is written, so a foreground run (which streams the log until the result appears) shows it; the count that follows the removal is in the job's log on the runner.
+    say "clean-after-success: removing what the project names from the copy now (the result is final; the count follows in the job's log)"
     record_job_end "$code" cleaning
     clean_after_success
     touch "$proj/used"

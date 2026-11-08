@@ -109,9 +109,11 @@ never `node_modules` or a build folder; `.` when a pattern starts with a wildcar
 root with a symlink on its way is skipped), then — only for a job whose FINAL code is 0 (not a failure, a timeout or a kill) and only when the project's `.remote-run` has `clean-after-success:` —
 removes from the copy what those patterns name (`clean_after_success`: the same two files as `pull.*`, `clean-after-success.ere`/`.roots`, read by the one `read_job_patterns`; after the files above were collected, so
 a path in both lists is kept first and then removed; the job's result (`exit`) is written BEFORE the removal, so a `kill`, a lost lease or a waiting caller meets an ended job, and the lock stays held until the removal is
-over; the walk is NUL-separated and a path is removed only if `find` listed it as such; a folder goes whole, a link as the link, a root that is a link or leaves the copy is skipped, a read-only tree is made
-writable first as the prune does — `remove_path_even_if_read_only`, the one removal both use; says «removed N paths» or «could not remove X» in the job's log; `.git`, `node_modules` and `Pods` are never entered, nor a root
-inside one — `check_is_protected_path`, and `projectConfig.ts` refuses such a pattern, and one made of wildcards alone), releases the lock. Two jobs of one project therefore queue and each runs the tree as it was when IT
+over — which is why `check_lock_is_stale` does not take an `exit` for «the holder is gone» while the holder's phase is `cleaning` (a second job of the project waits in `waiting-lock`, `clean` answers `lock`; a holder that
+dies meanwhile is caught by the pid test); a line saying the removal is under way is `say`d before the result (a foreground run streams the log only up to the result), the counts after it are in the job's log only; the walk is
+NUL-separated and a path is removed only if `find` listed it as such; a folder goes whole — unless it holds a `.git`, `node_modules` or `Pods` below it, then it is kept whole with a `kept` line — a link as the link, a root
+that is a link or leaves the copy is skipped, a read-only tree is made writable first as the prune does — `remove_path_even_if_read_only`, the one removal both use; says «removed N paths» or «could not remove X» in the job's
+log; `.git`, `node_modules` and `Pods` are never entered, nor a root inside one — `check_is_protected_path`, and `projectConfig.ts` refuses such a pattern, and one made of wildcards alone), releases the lock. Two jobs of one project therefore queue and each runs the tree as it was when IT
 was submitted. The dependencies step runs on the lockfile's key, not on its folder, which is why `node_modules` and `Pods` are out of reach: what was removed there would not come back.
 
 **Time limit** (`--timeout`, default 3 h, both modes) counts from the moment the job is queued (`queued-at`, written when it is handed to Pueue):

@@ -471,6 +471,7 @@ describe('charness remote-run against a loopback runner — what ends a job', { 
     it('a job that succeeds leaves the copy without the folder the project named (also what an earlier, failed job left in it) — the rest stays for the next job', async () => {
       const succeeded = await runHere([buildCommand]);
       assert.equal(succeeded.exitCode, 0, succeeded.stderr);
+      assert.match(succeeded.stderr, /remote-run: clean-after-success: removing what the project names from the copy now/, 'the run says the removal is under way (on stderr, as the runner\'s own lines are); the count, after the result, is in the job\'s log');
       // The job's result is recorded BEFORE the removal starts (a run does not wait for it), so the folder goes a moment after the run has returned.
       await waitUntil('the named folder to be removed', 20_000, () => (fs.existsSync(getRunnerPath('build/Intermediates.noindex')) ? null : true));
       assert.ok(fs.existsSync(getRunnerPath('build/Products/app.txt')), 'the products are not named, so they stay');

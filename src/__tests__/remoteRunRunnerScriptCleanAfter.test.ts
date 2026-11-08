@@ -27,14 +27,16 @@ const slowRemovalSec = 5;
 let workRoot = '';
 let workDir = '';
 
-function getPaths(): { project: string; tree: string; stage: string; jobDir: string } {
+const secondJobId = 'box1-bbbbbb';
+
+function getPaths(id: string = jobId): { project: string; tree: string; stage: string; jobDir: string } {
   const project = path.join(workDir, 'p', slug);
-  return { project, tree: path.join(project, 'tree'), stage: path.join(project, 'stage', jobId), jobDir: path.join(project, 'jobs', jobId) };
+  return { project, tree: path.join(project, 'tree'), stage: path.join(project, 'stage', id), jobDir: path.join(project, 'jobs', id) };
 }
 
 /** The job files the main box writes for `clean-after-success: <patterns>` (`submit.ts`). */
-function writeCleanFiles(patterns: readonly string[], roots: readonly string[] = getPathPatternSearchRoots(patterns)): void {
-  const { jobDir } = getPaths();
+function writeCleanFiles(patterns: readonly string[], roots: readonly string[] = getPathPatternSearchRoots(patterns), id: string = jobId): void {
+  const { jobDir } = getPaths(id);
   writeFile(jobDir, 'clean-after-success.ere', compilePathPatterns(patterns).map((expression) => `${expression}\n`).join(''));
   writeFile(jobDir, 'clean-after-success.roots', roots.map((root) => `${root}\n`).join(''));
 }
@@ -82,7 +84,7 @@ describe('clean_after_success', () => {
 
   it('removes what the patterns name — a folder whole, a glob for several — and leaves everything else of the copy', () => {
     const { tree } = getPaths();
-    writeFile(tree, 'ios/build/Intermediates.noindex/Pods/a/b.o');
+    writeFile(tree, 'ios/build/Intermediates.noindex/Pods.build/a/b.o');
     writeFile(tree, 'ios/build/Products/app.txt');
     writeFile(tree, 'projects/one/ios/build/Debug-iphonesimulator/Intermediates.noindex/x.o');
     writeFile(tree, 'projects/two/ios/build/Intermediates.noindex/y.o');
@@ -131,9 +133,9 @@ describe('clean_after_success', () => {
 
   it('read-only folders go the way the prune removes them: the tree is made writable first, and a read-only parent is the last resort', () => {
     const { tree } = getPaths();
-    writeFile(tree, 'ios/build/Intermediates.noindex/Pods/xcframework/a.h');
+    writeFile(tree, 'ios/build/Intermediates.noindex/Pods.build/xcframework/a.h');
     writeFile(tree, 'ios/build/Products/app.txt');
-    fs.chmodSync(path.join(tree, 'ios/build/Intermediates.noindex/Pods/xcframework'), 0o555);
+    fs.chmodSync(path.join(tree, 'ios/build/Intermediates.noindex/Pods.build/xcframework'), 0o555);
     fs.chmodSync(path.join(tree, 'ios/build/Intermediates.noindex'), 0o555);
     fs.chmodSync(path.join(tree, 'ios/build'), 0o555);
     writeCleanFiles(['ios/build/Intermediates.noindex']);
@@ -193,6 +195,33 @@ describe('clean_after_success', () => {
     assert.equal(outcome.status, 0, outcome.stderr);
     assert.equal(outcome.stdout, '');
     assert.deepEqual(listTree(), ['ios/Pods/build/y.xcconfig', 'node_modules/pkg/build/index.js']);
+  });
+
+  it('a folder a pattern names goes whole — unless it HOLDS a `.git`, `node_modules` or `Pods` below it: then it is kept whole (and the log says so), with everything in it', () => {
+    const { tree } = getPaths();
+    writeFile(tree, 'vendor/lib/.git/HEAD');
+    writeFile(tree, 'vendor/lib/src.c');
+    writeFile(tree, 'vendor/other/x.c');
+    writeFile(tree, 'ios/Pods/Pod.h');
+    writeFile(tree, 'ios/App.xcodeproj/project.pbxproj');
+    writeFile(tree, 'packages/x/node_modules/m/index.js');
+    writeFile(tree, 'packages/x/src.ts');
+    writeFile(tree, 'packages/y/y.ts');
+    writeCleanFiles(['vendor/*', 'ios', 'packages/*']);
+    const outcome = cleanAfterSuccess();
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.deepEqual(listTree(), [
+      'ios/App.xcodeproj/project.pbxproj',
+      'ios/Pods/Pod.h',
+      'packages/x/node_modules/m/index.js',
+      'packages/x/src.ts',
+      'vendor/lib/.git/HEAD',
+      'vendor/lib/src.c',
+    ]);
+    for (const kept of ['vendor/lib', 'ios', 'packages/x']) {
+      assert.match(outcome.stdout, new RegExp(`^remote-run: clean-after-success: kept ${kept} \\(it holds a \\.git, node_modules or Pods`, 'm'), kept);
+    }
+    assert.match(outcome.stdout, /^remote-run: clean-after-success: removed 2 paths of the copy$/m, 'vendor/other and packages/y went');
   });
 
   it('a link that a pattern names goes as the link — what it points at is never touched — and a link to a folder is not walked into', () => {
@@ -288,8 +317,8 @@ describe('a job that ends (runner.sh job)', () => {
   const buildCommand = 'mkdir -p build/Intermediates.noindex build/Products && echo object > build/Intermediates.noindex/o.o && echo app > build/Products/app.txt';
 
   /** A job folder as `prepare` + `submit` leave it, ready for `runner.sh job` to run directly (as Pueue would). */
-  function prepareJob(options: { command: string; timeoutSec?: number; clean?: readonly string[]; pull?: readonly string[] }): void {
-    const paths = getPaths();
+  function prepareJob(options: { command: string; timeoutSec?: number; clean?: readonly string[]; pull?: readonly string[] }, id: string = jobId): void {
+    const paths = getPaths(id);
     fs.mkdirSync(paths.stage, { recursive: true });
     writeFile(paths.stage, 'a.txt');
     writeFile(paths.jobDir, 'manifest', 'a.txt\n');
@@ -302,7 +331,7 @@ describe('a job that ends (runner.sh job)', () => {
       writeFile(paths.jobDir, 'pull.ere', compilePathPatterns(options.pull).map((expression) => `${expression}\n`).join(''));
       writeFile(paths.jobDir, 'pull.roots', getPathPatternSearchRoots(options.pull).map((root) => `${root}\n`).join(''));
     }
-    if (options.clean !== undefined) writeCleanFiles(options.clean);
+    if (options.clean !== undefined) writeCleanFiles(options.clean, getPathPatternSearchRoots(options.clean), id);
   }
 
   interface StartedJob {
@@ -313,8 +342,8 @@ describe('a job that ends (runner.sh job)', () => {
   }
 
   /** `runner.sh job` as Pueue starts it: a process group of its own. */
-  function startJob(env: NodeJS.ProcessEnv = {}): StartedJob {
-    const child = spawn('bash', [scriptPath, 'job', workDir, slug, jobId], { detached: true, stdio: 'ignore', env: { ...process.env, PUEUE_BIN: '/nonexistent/pueue', ...env } });
+  function startJob(env: NodeJS.ProcessEnv = {}, id: string = jobId): StartedJob {
+    const child = spawn('bash', [scriptPath, 'job', workDir, slug, id], { detached: true, stdio: 'ignore', env: { ...process.env, PUEUE_BIN: '/nonexistent/pueue', ...env } });
     const ended = new Promise<void>((resolve) => child.once('close', () => resolve()));
     const stop = (): void => {
       if (child.pid === undefined) return;
@@ -340,8 +369,8 @@ describe('a job that ends (runner.sh job)', () => {
     }
   }
 
-  function readJobFile(name: string): string {
-    const filePath = path.join(getPaths().jobDir, name);
+  function readJobFile(name: string, id: string = jobId): string {
+    const filePath = path.join(getPaths(id).jobDir, name);
     return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8').trim() : '';
   }
 
@@ -351,6 +380,11 @@ describe('a job that ends (runner.sh job)', () => {
       if (Date.now() - startedAt > jobGiveUpMs) throw new Error(`${description} did not happen`);
       await new Promise((resolve) => setTimeout(resolve, jobPollMs));
     }
+  }
+
+  /** The job is in its removal and its result is written: the state `check_lock_is_stale` and `clean` have to respect. */
+  function isRemovalUnderWay(): boolean {
+    return readJobFile('phase') === 'cleaning' && readJobFile('exit') === '0';
   }
 
   /** A folder with a `rm` in front of the real one that takes its time over anything in an `Intermediates.noindex`: a removal that is still going when the test looks. */
@@ -381,8 +415,10 @@ describe('a job that ends (runner.sh job)', () => {
     prepareJob({ command: buildCommand, clean: ['build/Intermediates.noindex'] });
     const job = startJob({ PATH: `${installSlowRm()}:${process.env.PATH}` });
     try {
-      await waitFor('the job to reach the removal', () => readJobFile('phase') === 'cleaning');
+      await waitFor('the job to reach the removal', () => isRemovalUnderWay());
       assert.equal(readJobFile('exit'), '0', 'the result is written already');
+      assert.match(readJobLog(), /^remote-run: clean-after-success: removing what the project names from the copy now/m, 'and the log said what is about to go BEFORE that — a foreground run streams the log only up to the result');
+      assert.ok(!readJobLog().includes('clean-after-success: removed'), 'while the count is for after the removal');
       assert.ok(fs.existsSync(path.join(getPaths().project, 'lock')), 'and the project lock is still held');
       const killed = spawnSync('bash', [scriptPath, 'kill', workDir, slug, jobId], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, PUEUE_BIN: '/nonexistent/pueue' } });
       assert.equal(killed.stdout.trim(), 'already-ended 0', killed.stderr);
@@ -393,6 +429,51 @@ describe('a job that ends (runner.sh job)', () => {
       assert.equal(readJobFile('exit'), '0');
       assert.equal(readJobFile('phase'), 'done');
       assert.equal(fs.existsSync(path.join(getPaths().project, 'lock')), false, 'and only then was the lock released');
+    } finally {
+      job.stop();
+    }
+  });
+
+  it('a second job of the project that is waiting for the lock WAITS through the removal — the result being written does not make the lock stale — and builds on the cleaned tree afterwards', { skip: rsyncSkip }, async () => {
+    prepareJob({ command: buildCommand, clean: ['build/Intermediates.noindex'] });
+    prepareJob({ command: 'mkdir -p build/Intermediates.noindex && echo fresh > build/Intermediates.noindex/fresh.o' }, secondJobId);
+    const first = startJob({ PATH: `${installSlowRm()}:${process.env.PATH}` });
+    let second: StartedJob | null = null;
+    try {
+      await waitFor('the first job to reach the removal', () => isRemovalUnderWay());
+      second = startJob({}, secondJobId);
+      await waitFor('the second job to queue behind the lock', () => readJobFile('phase', secondJobId) === 'waiting-lock');
+      // Several polls of the lock (once a second) while the removal is still under way: the second job must not break the lock and start its build on the tree being emptied.
+      const watchUntil = Date.now() + (slowRemovalSec - 2) * 1000;
+      while (Date.now() < watchUntil) {
+        assert.equal(readJobFile('phase', secondJobId), 'waiting-lock', 'the second job is still behind the lock');
+        assert.equal(readJobFile('phase'), 'cleaning', 'while the first is removing');
+        await new Promise((resolve) => setTimeout(resolve, jobPollMs));
+      }
+      await first.ended;
+      await second.ended;
+      assert.equal(readJobFile('exit', secondJobId), '0');
+      assert.equal(fs.readFileSync(path.join(getPaths().tree, 'build/Intermediates.noindex/fresh.o'), 'utf8'), 'fresh\n', 'what the second job built after the removal is there — the removal did not take it');
+      assert.ok(!fs.existsSync(path.join(getPaths().tree, 'build/Intermediates.noindex/o.o')), 'and the first job\'s intermediates are gone');
+    } finally {
+      first.stop();
+      second?.stop();
+    }
+  });
+
+  it('`clean` while the removal goes on — the results already fetched, so only the lock speaks — is refused with the lock: the copy is not taken from under the removal', { skip: rsyncSkip }, async () => {
+    prepareJob({ command: buildCommand, clean: ['build/Intermediates.noindex'] });
+    const job = startJob({ PATH: `${installSlowRm()}:${process.env.PATH}` });
+    try {
+      await waitFor('the job to reach the removal', () => isRemovalUnderWay());
+      const env = { ...process.env, PUEUE_BIN: '/nonexistent/pueue' };
+      assert.equal(spawnSync('bash', [scriptPath, 'fetched', workDir, '-', jobId], { env, timeout: 60_000 }).status, 0);
+      const cleaned = spawnSync('bash', [scriptPath, 'clean', workDir, slug], { encoding: 'utf8', env, timeout: 60_000 });
+      assert.match(cleaned.stdout, new RegExp(`^busy=${slug} kind=lock job=${jobId}$`, 'm'), `${cleaned.stdout}${cleaned.stderr}`);
+      assert.ok(fs.existsSync(getPaths().tree), 'the copy is still there');
+      await job.ended;
+      assert.equal(readJobFile('phase'), 'done');
+      assert.deepEqual(listTree().filter((entry) => entry.startsWith('build/')), ['build/Products/app.txt']);
     } finally {
       job.stop();
     }
