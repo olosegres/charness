@@ -86,8 +86,7 @@ low_disk_exit_code=28
 # Set by the free-space prune (prune_copies_for_space) for the refusal that may follow it, and by the last removal for its report.
 prune_stopped_without_gain=0
 last_freed_kb=
-# Set by probe_slow: 1 only when the probe has just said `cap_ios=yes` AND the simctl step answered. Nothing is deleted among the simulators otherwise. The cleanup then runs where the probe runs — on an always-on Mac with
-# a live login agent that is still the service's own session, not the agent's; `cmd_simctl_cleanup` guards that session with its look at the runtimes.
+# Set by probe_slow: 1 only when the probe has just said `cap_ios=yes` AND the simctl step answered. Nothing is deleted among the simulators otherwise — and never on an always-on Mac (see `start_simctl_cleanup_if_due`).
 probe_may_clean_simulators=0
 # `xcrun simctl delete unavailable` (the simulators of runtimes that are gone) is tried at most this often, and given this long; the look at the runtimes before it is given simctl_list_sec.
 simctl_cleanup_interval_hours=24
@@ -553,15 +552,7 @@ start_probe_step() {
   local name=$1
   local limit=$2
   shift 2
-  (
-    "$@" > "$probe_dir/$name.out" 2> /dev/null < /dev/null &
-    local command_pid=$!
-    ( sleep "$limit"; kill -9 "$command_pid" ) > /dev/null 2>&1 &
-    local watchdog_pid=$!
-    wait "$command_pid" 2> /dev/null
-    echo "$?" > "$probe_dir/$name.status"
-    kill "$watchdog_pid" > /dev/null 2>&1
-  ) &
+  ( run_bounded "$limit" "$@" > "$probe_dir/$name.out" 2> /dev/null; echo "$?" > "$probe_dir/$name.status" ) &
 }
 
 probe_step_status() {
@@ -857,8 +848,8 @@ cmd_prepare() {
   trap - PIPE
   # A prune that ran at the same moment may have taken the folder this job was just given (its copy looked unused): say so, never answer with a folder that is gone.
   [ -d "$jd" ] || die "the project copy was being removed while this job was prepared — submit again"
-  # Before the refusal, so that the next submit has sizes to name.
-  start_detached_run "$work" measure-copies
+  # Only a refusal needs fresh sizes (it names the biggest copies; the walk is started before it, so that the next submit has them): a submit that goes on does not start a walk over its neighbours' trees.
+  check_disk_is_short "$work" && start_detached_run "$work" measure-copies
   refuse_when_disk_is_short
   echo "work=$(cd "$work" && pwd -P)"
 }
@@ -1161,6 +1152,12 @@ set_freed_kb_since() {
 # Remove copy $2 for reason $3 (idle | space | clean) and say so on stdout, one line the submit shows: `removed=<slug> freed_kb=<n> why=<reason>`; a copy that would not go: `stuck=<slug>`; one that
 # an earlier prune took, or that turned out in use, is not said anything of. freed_kb is the change of the disk's free space across the removal (empty when df said nothing).
 # Sets last_freed_kb. Returns remove_project_copy's code.
+# Print the report of a removal of project copy $2 (under work dir $1) that freed space since $3 KiB were free there: `removed=<slug> freed_kb=<n> why=<reason $4>`.
+report_removed_since() {
+  set_freed_kb_since "$1" "$3"
+  printf 'removed=%s freed_kb=%s why=%s\n' "$2" "$last_freed_kb" "$4"
+}
+
 remove_and_report_copy() {
   local work_dir=$1 copy_slug=$2 reason=$3
   local before_kb removal_code
@@ -1169,10 +1166,7 @@ remove_and_report_copy() {
   remove_project_copy "$work_dir" "$copy_slug"
   removal_code=$?
   case $removal_code in
-    0)
-      set_freed_kb_since "$work_dir" "$before_kb"
-      printf 'removed=%s freed_kb=%s why=%s\n' "$copy_slug" "$last_freed_kb" "$reason"
-      ;;
+    0) report_removed_since "$work_dir" "$copy_slug" "$before_kb" "$reason" ;;
     1) printf 'stuck=%s\n' "$copy_slug" ;;
   esac
   return "$removal_code"
@@ -1303,16 +1297,22 @@ start_detached_run() {
 
 # Write down the size of every project copy whose figure is missing, or was written before the copy was last used (`du` of a copy of tens of GB takes long: this runs detached).
 cmd_measure_copies() {
-  local work_dir=$1 copy_dir
+  local work_dir=$1 copy_dir copy_slug
   for copy_dir in "$work_dir"/p/*/; do
     [ -d "$copy_dir" ] || continue
-    read_copy_size_kb "$work_dir" "$(basename "$copy_dir")" current > /dev/null
+    copy_slug=$(basename "$copy_dir")
+    # A copy in use is measured after its job ends: its figure would be wrong as soon as the build writes, and the walk would compete with the build for the disk.
+    check_copy_is_busy "$work_dir" "$copy_slug" && continue
+    read_copy_size_kb "$work_dir" "$copy_slug" current > /dev/null
   done
 }
 
 # A probe of a VIEW of the runners on a Mac whose iOS works starts `simctl-cleanup` detached, unless it ran in the last simctl_cleanup_interval_hours (the stamp `$work/simctl-cleanup.at`). The stamp is touched HERE, before the start,
 # so two views a second apart (the CLI and the bot's /runners) cannot both pass the check; the run touches it again when it starts, and a run that hangs or dies is not started again at every probe.
 start_simctl_cleanup_if_due() {
+  # An always-on Mac does all its iOS work in the login session's agent, and the cleanup would run in the service's own session — whose CoreSimulator is not known to see the same devices and runtimes. Not there until it goes
+  # through the agent.
+  gui_session_expected && return 0
   local stamp="$work/simctl-cleanup.at"
   if [ -f "$stamp" ] && [ -z "$(find "$stamp" -maxdepth 0 -mmin +"$((simctl_cleanup_interval_hours * 60))" 2> /dev/null)" ]; then
     return 0
@@ -1321,11 +1321,12 @@ start_simctl_cleanup_if_due() {
   start_detached_run "$work" simctl-cleanup
 }
 
-# Run "$@" with its output appended to file $2 and at most $1 seconds to finish (a watchdog, as the probe's steps: no `timeout(1)` on a Mac). Returns its exit code (137 when the watchdog killed it).
-run_bounded_to_file() {
-  local limit_sec=$1 output_file=$2
-  shift 2
-  "$@" >> "$output_file" 2>&1 < /dev/null &
+# Run "$@" with at most $1 seconds to finish (a watchdog: there is no `timeout(1)` on a Mac), its stdin from /dev/null; its stdout and stderr are the call's own (redirect the call). Returns its exit code (137 when the
+# watchdog killed it). The probe's steps and the simulator cleanup are both bounded by it.
+run_bounded() {
+  local limit_sec=$1
+  shift
+  "$@" < /dev/null &
   local command_pid=$!
   ( sleep "$limit_sec"; kill -9 "$command_pid" ) > /dev/null 2>&1 &
   local watchdog_pid=$!
@@ -1348,7 +1349,7 @@ cmd_simctl_cleanup() {
   local runtimes_file="$work_dir/tmp/simctl-runtimes.$$"
   mkdir -p "$work_dir/tmp"
   : > "$runtimes_file"
-  run_bounded_to_file "$simctl_list_sec" "$runtimes_file" xcrun simctl list runtimes available
+  run_bounded "$simctl_list_sec" xcrun simctl list runtimes available >> "$runtimes_file" 2>&1
   local list_code=$?
   cat "$runtimes_file" >> "$log"
   local runtime_count
@@ -1359,7 +1360,7 @@ cmd_simctl_cleanup() {
     return 0
   fi
   echo "$(date '+%Y-%m-%d %H:%M:%S') xcrun simctl delete unavailable" >> "$log"
-  run_bounded_to_file "$simctl_cleanup_sec" "$log" xcrun simctl delete unavailable
+  run_bounded "$simctl_cleanup_sec" xcrun simctl delete unavailable >> "$log" 2>&1
   echo "exit $?" >> "$log"
   return 0
 }
@@ -1370,6 +1371,14 @@ cmd_simctl_cleanup() {
 # is removed. A folder an earlier removal left (`p/.trash-<slug>-<pid>`: cut off, or past its caller's time limit) is finished first, so «clean again» sees it through (when no copy is left and every leftover is being removed by a live process, the answer is `removing=` AT ONCE: that remover holds the copy-removal lock to the end of its `rm`, and waiting for it would only keep the caller silent). The answer is some lines on stdout (the exit status
 # is 0 whenever the script could answer): `removed=<slug> freed_kb=<n> why=clean` (the copy, the leftover, or both: one line each) · `absent=<slug>` (no such copy, or a prune took it first) · `removing=<slug>` (a leftover
 # whose remover still lives) · `busy=<slug> kind=<kind> job=<id|->` · `stuck=<slug>` (it would not go). Its jobs' logs and result files go with it.
+# The moved-aside folders of project copy $2 under work dir $1 (`p/.trash-<slug>-<pid>`), one per line.
+list_trash_of_slug() {
+  local leftover
+  for leftover in "$1"/p/.trash-"$2"-*; do
+    [ -e "$leftover" ] && check_is_trash_of_slug "$leftover" "$2" && printf '%s\n' "$leftover"
+  done
+}
+
 cmd_clean() {
   local work_dir=$1 clean_slug=${2:-}
   check_name "$clean_slug"
@@ -1377,11 +1386,10 @@ cmd_clean() {
   trap '' PIPE
   local clean_ignores_fetched=1
   local leftover is_trash_left=0 is_a_remover_gone=0
-  for leftover in "$work_dir"/p/.trash-"$clean_slug"-*; do
-    [ -e "$leftover" ] && check_is_trash_of_slug "$leftover" "$clean_slug" || continue
+  while IFS= read -r leftover; do
     is_trash_left=1
     check_runner_pid_alive "${leftover##*-}" || is_a_remover_gone=1
-  done
+  done < <(list_trash_of_slug "$work_dir" "$clean_slug")
   if [ ! -d "$work_dir/p/$clean_slug" ] && [ "$is_trash_left" -eq 0 ]; then
     printf 'absent=%s\n' "$clean_slug"
     return 0
@@ -1394,20 +1402,19 @@ cmd_clean() {
   fi
   begin_copy_removal "$work_dir" always
   local before_kb trash_code is_answered=0
-  for leftover in "$work_dir"/p/.trash-"$clean_slug"-*; do
-    [ -e "$leftover" ] && check_is_trash_of_slug "$leftover" "$clean_slug" || continue
+  while IFS= read -r leftover; do
     read_disk_kb "$work_dir"
     before_kb=$disk_free_kb
     finish_trash_removal "$leftover"
     trash_code=$?
     is_answered=1
     case $trash_code in
-      0) set_freed_kb_since "$work_dir" "$before_kb"; printf 'removed=%s freed_kb=%s why=clean\n' "$clean_slug" "$last_freed_kb" ;;
+      0) report_removed_since "$work_dir" "$clean_slug" "$before_kb" clean ;;
       1) printf 'removing=%s\n' "$clean_slug" ;;
       2) printf 'busy=%s kind=%s job=%s\n' "$clean_slug" "$copy_busy_kind" "$copy_busy_job" ;;
       3) printf 'stuck=%s\n' "$clean_slug" ;;
     esac
-  done
+  done < <(list_trash_of_slug "$work_dir" "$clean_slug")
   local removal_code=0
   if [ ! -d "$work_dir/p/$clean_slug" ]; then
     removal_code=-1

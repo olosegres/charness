@@ -352,7 +352,8 @@ describe('a submit on a disk that stays short', () => {
     writeJob(secondDir, 'box1-busy01', { 'task-id': '3\n' });
     makeCopy('tiny-ssssssssss', 1, 2 * hourMs);
     writeJob(path.join(workDir, 'p', 'tiny-ssssssssss'), 'box1-busy02', { 'task-id': '4\n' });
-    assert.equal(runScript(['measure-copies', workDir]).status, 0, 'the sizes the refusal names were written down by the detached measuring of an earlier call');
+    // The figures an earlier measuring wrote while these copies were idle (the measuring leaves a copy that is in use alone, so it cannot take them now).
+    for (const [copyDir, sizeGib] of [[busyDir, 41], [secondDir, 30], [path.join(workDir, 'p', 'tiny-ssssssssss'), 1]] as const) writeFile(copyDir, 'size-kb', `${sizeGib * kibPerGib}`);
     const result = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '60' });
     assert.equal(result.status, diskTooLowRunnerExitCode, result.stderr);
     const lines = result.stderr.trim().split('\n');
@@ -422,6 +423,46 @@ describe('sizes of the project copies (`measure-copies`) and what `probe` says o
     assert.equal(fs.readFileSync(sizeFile('missing-vvvvvvvvvv'), 'utf8').trim(), `${7 * kibPerGib}`);
     assert.equal(fs.readFileSync(sizeFile('used-since-wwwwwwwwww'), 'utf8').trim(), `${3 * kibPerGib}`, 'used after its figure: measured again');
     assert.equal(fs.readFileSync(sizeFile('untouched-xxxxxxxxxx'), 'utf8').trim(), '5', 'a figure a day old is still right for a copy nobody used since: no `du` over millions of files for it');
+  });
+
+  it('leaves a copy that is IN USE alone — its figure would be wrong as soon as the build writes, and the walk would compete with the build — and measures it once nothing uses it', () => {
+    const busyDir = makeCopy('busy-ffffffffff', 5, hourMs);
+    const execPid = startRunnerStandIn();
+    writeFile(busyDir, `exec.${execPid}`, `${execPid}\n`);
+    makeCopy('idle-gggggggggg', 3, hourMs);
+    assert.equal(runScript(['measure-copies', workDir]).status, 0);
+    assert.equal(fs.existsSync(sizeFile('busy-ffffffffff')), false, 'a copy an `exec` runs in is not measured');
+    assert.equal(fs.readFileSync(sizeFile('idle-gggggggggg'), 'utf8').trim(), `${3 * kibPerGib}`, 'the idle one is');
+    fs.rmSync(path.join(busyDir, `exec.${execPid}`));
+    assert.equal(runScript(['measure-copies', workDir]).status, 0);
+    assert.equal(fs.readFileSync(sizeFile('busy-ffffffffff'), 'utf8').trim(), `${5 * kibPerGib}`, 'after the exec: measured');
+  });
+
+  /** The detached `measure-copies` that a call started has ended (its pid is gone). */
+  async function waitForDetachedMeasuringToEnd(): Promise<void> {
+    const pidFile = path.join(workDir, 'tmp', 'measure-copies.pid');
+    const detachedPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+    await waitFor(() => {
+      try {
+        process.kill(detachedPid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    }, 'the detached measuring to end');
+  }
+
+  it('a submit that goes on (the disk is fine) starts no measuring of the other copies; one that is refused for a short disk does — the refusal names the biggest copies for the next submit', async () => {
+    makeCopy('neighbour-hhhhhhhhhh', 10, 5 * hourMs);
+    const prepared = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '10' });
+    assert.equal(prepared.status, 0, prepared.stderr);
+    assert.equal(fs.existsSync(path.join(workDir, 'tmp', 'measure-copies.pid')), false, 'no walk over the neighbour\'s tree for a submit that is not refused');
+    const busyDir = makeCopy('busy-iiiiiiiiii', 45, 2 * hourMs);
+    writeJob(busyDir, 'box1-busy03', { 'task-id': '5\n' });
+    const refused = runScript(['prepare', workDir, slug, 'box1-second', 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '60' });
+    assert.equal(refused.status, diskTooLowRunnerExitCode, refused.stderr);
+    assert.equal(fs.existsSync(path.join(workDir, 'tmp', 'measure-copies.pid')), true, 'the refusal started the measuring');
+    await waitForDetachedMeasuringToEnd();
   });
 
   it('probe counts the copies and sums their written figures at once, and starts the measuring of the missing ones detached', async () => {

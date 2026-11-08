@@ -561,7 +561,7 @@ project» and keeps waiting, bounded by its `--timeout`. Other projects run in p
 result files on the runner are removed after 3 days.
 
 **The runner's disk keeps itself free.** A project copy is a whole checkout with its build output (an iOS build alone is tens of GB), so copies of finished
-tasks pile up. On every submit (and when `runners` probes it) the runner removes a project copy that was not used for 3 days (`copyMaxIdleDays`), and while the
+tasks pile up. On every submit (and, when the disk is short, when `runners` / `/runners` look at it) the runner removes a project copy that was not used for 3 days (`copyMaxIdleDays`), and while the
 disk of its work dir has less free space than it keeps (the smaller of 60 GB and 15 % of the disk; `minFreeGb`) it removes the least recently used copies one by
 one until it has. Never removed: a copy whose project lock is held by a live job, a copy an `exec` is running in, a copy with a queued, running or just-submitted job (a first
 upload of a big project counts as long as files keep arriving), a copy whose job ended within the last hour (its result files are about to be fetched), and the copy of the job being
@@ -569,7 +569,8 @@ submitted. A copy's «last use» is its last activity: a submit, an `exec` (star
 files of a finished job go with its copy. If the disk is still short after that, the submit fails at once (exit 125) instead of a build failing half-way with «No space left on
 device»: `runner mac: only 8 GB free on the work disk, the runner needs 60 GB; biggest project copies: app-1a2b3c 41 GB, …; free space with `charness remote-run clean <slug>` …`.
 `runners` (and the bot's `/runners`) shows the free space, a **LOW** mark under the target, and how many project copies the runner keeps and what they take (sizes are measured in the
-background, and a copy again only after it was used, so a figure can lag: `~` / «so far» while some are not measured yet).
+background — by a view of the runners, and by a submit only when the disk is short, since a refusal names the biggest copies — and a copy again only after it was used and its job has ended, so a figure can lag: `~` / «so far»
+while some are not measured yet).
 
 If a submit has to remove copies first it can take minutes: when the runner's last probe found its disk short, the submit says so before it starts, and a preparation that runs past 15 minutes
 says to submit again (the runner carries on with the removal as far as it can, and the next submit continues where it stopped). Prunes do not pile up: a submit whose disk is short waits for the one
@@ -578,13 +579,13 @@ runners — `runners` and the bot's `/runners` — starts that background prune:
 is not taken before the job's own submit, which keeps its copy, arrives.
 
 **Simulators on a Mac.** Xcode leaves behind the simulators whose runtime is gone (an updated Xcode, a removed runtime): each is small, but their apps' data runs to GB. On a Mac **whose iOS works** (`ios: yes` — not
-while the account has no login session, nor after a failed Simulator check) a view of the runners (`runners`, the bot's `/runners`) runs `xcrun simctl delete unavailable` on the runner, **at most once in 24 hours**, in the
+while the account has no login session, nor after a failed Simulator check) **and whose runner is not an always-on service** a view of the runners (`runners`, the bot's `/runners`) runs `xcrun simctl delete unavailable` on the runner, **at most once in 24 hours**, in the
 background and bounded to 120 s, so a run or an `exec` never waits for it. It asks first for the runtimes the session sees (`simctl list runtimes available`) and **refuses when it sees none** — a CoreSimulator that sees no
 runtime calls every device «unavailable» and the call would delete them all; the refusal and what simctl said are in `simctl-cleanup.log` in the runner's work dir. That is **all** the runner ever deletes among the simulators:
 no erase of a simulator, no device of a runtime that is installed, no runtime. The simulators of **older runtimes** (an `iOS 26.4` while `iOS 26.5` is installed — same platform and major) are only **listed**, with their
-device count, under the runner in `runners` and `/runners`; they are the operator's to remove (Xcode ▸ Settings ▸ Platforms). Both act on the simulators the runner's probe sees, in the session the probe runs in: on an
-always-on Mac every login session has its own CoreSimulator service (see «A known limit» above), and whether the System session's `simctl` sees the same set as the account's login session has not been verified — which is why the
-cleanup is only started where iOS is known to work, and refuses where no runtime is visible.
+device count, under the runner in `runners` and `/runners`; they are the operator's to remove (Xcode ▸ Settings ▸ Platforms). The cleanup runs in the session the probe runs in. On an always-on Mac that is the service's own session, while every iOS job step goes through the login session's agent, and every
+login session has its own CoreSimulator service (see «A known limit» above) — whether the service's `simctl` sees the same devices and runtimes has not been verified. So **on an always-on Mac the cleanup does not run at all**
+(the older-runtime list is still shown); it runs on a Mac whose runner is the user's own service or started by hand, where the probe runs in the login session — and even there it refuses where no runtime is visible.
 
 **A Mac's disk may not give the space back.** On APFS, `df` leaves out *purgeable* space, and with Time Machine local snapshots a removed project copy frees nothing until the snapshots are thinned
 (`tmutil listlocalsnapshots /` lists them, `tmutil thinlocalsnapshots /` thins them; or turn Time Machine's local snapshots off on that Mac). When two removals in a row give next to nothing back from copies

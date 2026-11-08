@@ -297,6 +297,14 @@ describe('where the cleanup is NOT allowed to start: iOS is not known to work in
     expectNothingStarted(probe(['prune']), 'no');
   });
 
+  it('an always-on Mac whose login agent is ALIVE (iOS is «yes») still does not start it: the cleanup would run in the service\'s own session, while every iOS step of that Mac goes through the agent', () => {
+    writeStateFolder({ service: 'system-service', iosCheck: 'pass' });
+    writeFile(workRoot, 'gui/agent.json', JSON.stringify({ pid: process.pid, beatAtMs: Date.now() }));
+    const answer = probe(['prune']);
+    expectNothingStarted(answer, 'yes');
+    assert.deepEqual(parseProbeOutput(answer.stdout).olderSimulators, [{ runtime: 'iOS 26.4', deviceCount: 2 }], 'the older-runtime list is still shown');
+  });
+
   it('a simctl that does not answer the probe\'s list is no ground to delete anything: iOS is «yes» without a count, nothing is started', () => {
     const answer = probe(['prune'], { XCRUN_FAIL_DEVICES: '1' });
     expectNothingStarted(answer, 'yes');
