@@ -12,6 +12,10 @@ Now:
   - A paired runner now tells Pueue its limit (1 when never set) at every job: a limit you set by hand with `pueue parallel` on a paired runner is replaced by the runner's number in `/runners`.
   - Killing a job that is shutting its simulator down waits for the shutdown (up to about 70 s) instead of cutting it off, so `remote-run kill` may take that long on an iOS job; the call waits for it. A Pueue `Stashed` task is read as queued, not unknown.
 
+**A runner whose hub keeps its cache in a folder of 46–59 characters no longer fails every ssh call to it.**
+Before, `remote-run` kept its ssh control sockets in `<cache>/ssh/<40-character hash>` and allowed that path up to 100 characters, but ssh first binds the master's socket as that path plus a dot and 16 random characters, and a bind that does not fit ends the call with 255 before the command runs: a cache folder of 46–59 characters (the default `~/.cache/charness/remote-run/ssh` with a 13-character user name on Linux, an 8-character one on macOS, or a test's temporary folder) ended every call with ssh's 255 (read as a lost connection), and the runner link flows timed out without naming the cause.
+Now the temporary name is counted (the longest `<cache>/ssh` is 45 characters, macOS's 103-character socket path less the hash and the suffix), and a longer folder turns the shared connection off — every call opens its own — instead of failing.
+
 **Pairing a runner now posts ONE line, with the words that say which word of it to change — and the same line pairs the runner account when that account runs it itself, without `sudo`.**
 Before, `/runners` → ＋ Pair a new runner (and `charness runners pair`) posted two huge lines: the `sudo` line for an admin account and a second, plain line for the runner account itself, each with its own text; the second message was deleted when the code was used.
 Now:

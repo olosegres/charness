@@ -53,6 +53,30 @@ describe('buildSshArgs', () => {
     assert.ok(!args.includes('ControlPath'));
   });
 
+  describe('the length of the ControlPath', () => {
+    /** A cache dir whose `ssh` folder (the ControlPath's directory) is exactly `length` characters long. */
+    const getCacheDirWithControlDirectoryLength = (length: number): string => `/${'x'.repeat(length - '/ssh'.length - 1)}`;
+    const longestUsableControlDirectory = 45;
+
+    it('ssh binds `<ControlPath>.<16 characters>` first: a folder of 45 characters (45 + / + 40 + 17 = 103, macOS\'s sun_path less its NUL) still multiplexes', () => {
+      const cache = getCacheDirWithControlDirectoryLength(longestUsableControlDirectory);
+      assert.equal(`${cache}/ssh`.length, longestUsableControlDirectory);
+      assert.ok(buildSshArgs({}, cache).includes('ControlMaster=auto'));
+    });
+
+    it('one character more turns the multiplexing off - the call then goes on over a connection of its own instead of failing at the temporary socket (255)', () => {
+      const cache = getCacheDirWithControlDirectoryLength(longestUsableControlDirectory + 1);
+      assert.equal(`${cache}/ssh`.length, longestUsableControlDirectory + 1);
+      const args = buildSshArgs({}, cache);
+      assert.ok(args.includes('ControlMaster=no'));
+      assert.ok(!args.join(' ').includes('ControlPath'));
+    });
+
+    it('the folders that used to pass at 50 to 59 characters (and failed every ssh call to a runner) are off now', () => {
+      for (const length of [50, 55, 59]) assert.ok(buildSshArgs({}, getCacheDirWithControlDirectoryLength(length)).includes('ControlMaster=no'), `${length}`);
+    });
+  });
+
   it('a cache path with whitespace is double-quoted, so ssh reads the ControlPath as one word (unquoted it is «extra arguments at end of line»)', () => {
     const spacedCache = '/home/my user/.cache/charness/remote-run';
     const args = buildSshArgs({}, spacedCache);

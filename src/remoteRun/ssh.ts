@@ -17,10 +17,15 @@ const connectTimeoutSeconds = 15;
 const serverAliveIntervalSeconds = 15;
 const serverAliveCountMax = 3;
 const controlPersistSeconds = 60;
-/** The longest a unix socket path may be (sun_path, with a margin); ssh refuses a longer ControlPath. */
-const unixSocketPathLimit = 100;
+/** The longest a unix socket path may be: `sun_path` is 104 bytes on macOS (108 on Linux) and a NUL ends it, so the shortest of the systems we run on allows 103 characters - used on both (a Linux hub with a folder that would still fit there only loses the shared connection). */
+const unixSocketPathLimit = 103;
 /** `%C` in a ControlPath expands to a 40-character hash. */
 const controlPathHashLength = 40;
+/**
+ * ssh binds the master's socket first as `<ControlPath>.<16 random characters>` and renames it into place (`muxserver_listen` in OpenSSH's mux.c: «temporary control path»), so it is that longer name which has to fit - a
+ * bind that fails with ENAMETOOLONG ends the call with 255 (it is not the «disabling multiplexing» case), and the command never runs.
+ */
+const sshTemporarySuffixLength = 1 + 16;
 const cacheDirectoryMode = 0o700;
 
 /** @description Where remote-run keeps its local cache (ssh control sockets, the last probe of each runner): `${XDG_CACHE_HOME:-~/.cache}/charness/remote-run`. */
@@ -66,7 +71,7 @@ export function quoteSshOptionPath(value: string): string {
  */
 export function buildSshArgs(runner: Pick<RunnerConfig, 'sshOptions'>, cacheDir: string): string[] {
   const controlDirectory = path.join(cacheDir, 'ssh');
-  const isControlPathUsable = controlDirectory.length + 1 + controlPathHashLength <= unixSocketPathLimit && checkIsSshPathQuotable(controlDirectory);
+  const isControlPathUsable = controlDirectory.length + 1 + controlPathHashLength + sshTemporarySuffixLength <= unixSocketPathLimit && checkIsSshPathQuotable(controlDirectory);
   return [
     ...(runner.sshOptions ?? []),
     '-o', 'BatchMode=yes',
