@@ -714,8 +714,8 @@ function checkIsClaudeApiProfileLaunchable(
  * A list with no Claude rung restricts nothing.
  *
  * NEW agent (no `currentProfile`): first an account billed to API credits the list holds (the operator's choice: spend the
- * bonus credit before any subscription), as long as it is signed in, not marked limited, its credits are not marked used up and
- * the expiry day the operator gave (`expiredApiNames`) has not passed;
+ * bonus credit before any subscription), as long as it is signed in, not marked limited, not held off agents (`agentHoldUntil`),
+ * its credits are not marked used up and the expiry day the operator gave (`expiredApiNames`) has not passed;
  * then, of the USABLE subscription accounts — signed in, not marked limited, not out of API credits, every weekly window the
  * model drains below 100 % and the five-hour window below {@link claudeLaunchSessionCeilingPercent} — the one whose weekly
  * window resets soonest ({@link sortClaudeProfilesByLaunchRank}): spend first what burns first, and move to a farther reset only
@@ -723,8 +723,9 @@ function checkIsClaudeApiProfileLaunchable(
  * several API accounts among themselves: it was written for a topic's fallback, the agents' order is "API credit, then what
  * burns soonest".
  *
- * WARM session (`currentProfile` known): it stays on that account unless the account is signed out, marked limited, out
- * of API credits, at 100 % on a window the model drains, or no longer allowed by the list — the ceiling does not apply, and an
+ * WARM session (`currentProfile` known): it stays on that account unless the account is signed out, marked limited, held off
+ * agents (`agentHoldUntil`), out of API credits, at 100 % on a window the model drains, or no longer allowed by the list — the
+ * ceiling does not apply, and an
  * API-billed account the session already works on is kept (the spend was approved) while the list does not take it out.
  * `isStoppedByLimit` takes `currentProfile` out of the answer whatever the figures say (they may lag the limit); the rest
  * follows the new-agent rule, and the reason says the session moved (`movedFromLimited`, or `movedFromUnavailable` when the
