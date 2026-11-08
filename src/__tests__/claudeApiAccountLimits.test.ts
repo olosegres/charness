@@ -181,12 +181,13 @@ describe('ranking: an API account is picked for a new agent only when the /limit
       assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: null, isStoppedByLimit: true }, nowMs), null);
       assert.equal(getApiProfileStoppedByAgent(views, { currentProfile: 'gone', isStoppedByLimit: true }, nowMs), null, 'an unknown account is nothing to check');
       assert.equal(getApiProfileStoppedByAgent([buildView('default'), apiView({ creditExhaustedAt: inHours(-1) })], stopQuery, nowMs), null, 'already marked used up');
-      assert.equal(getApiProfileStoppedByAgent([buildView('default'), apiView({ limitedUntil: inHours(1) })], stopQuery, nowMs), null, 'already held off by an earlier report: no second probe');
-      assert.equal(getApiProfileStoppedByAgent([buildView('default'), apiView({ limitedUntil: inHours(-1) })], stopQuery, nowMs), 'console', 'a hold that has run out checks again');
+      assert.equal(getApiProfileStoppedByAgent([buildView('default'), apiView({ agentHoldUntil: inHours(1) })], stopQuery, nowMs), null, 'already held off by an earlier report: no second probe');
+      assert.equal(getApiProfileStoppedByAgent([buildView('default'), apiView({ agentHoldUntil: inHours(-1) })], stopQuery, nowMs), 'console', 'a hold that has run out checks again');
+      assert.equal(getApiProfileStoppedByAgent([buildView('default'), apiView({ limitedUntil: inHours(1) })], stopQuery, nowMs), 'console', 'the topics\' limit mark is not the agents\' hold');
     });
 
     /** Fake ports: records the order of everything the check does and answers the probe with `outcome`. */
-    function buildStopHarness(options: { outcome: ClaudeApiCreditProbeOutcome; apiKey?: string | null }) {
+    function buildStopHarness(options: { outcome: ClaudeApiCreditProbeOutcome; apiKey?: string | null; isRenewalAwaited?: boolean }) {
       const events: string[] = [];
       const probeTimeouts: number[] = [];
       const logs: string[] = [];
@@ -202,6 +203,8 @@ describe('ranking: an API account is picked for a new agent only when the /limit
         markRechecked: (name, atIso) => events.push(`rechecked ${name} ${atIso}`),
         markUsedUp: (name, atIso) => events.push(`usedUp ${name} ${atIso}`),
         holdOff: (name, untilIso) => events.push(`holdOff ${name} ${untilIso}`),
+        checkIsRenewalAwaited: () => options.isRenewalAwaited === true,
+        onRenewed: (name, atIso) => events.push(`renewed ${name} ${atIso}`),
         log: (line) => logs.push(line),
         warn: (line) => warnings.push(line),
       };
@@ -224,6 +227,22 @@ describe('ranking: an API account is picked for a new agent only when the /limit
       assert.deepEqual(harness.events, [`rechecked console ${nowIso}`, 'probe', `holdOff console ${heldUntilIso}`]);
       assert.equal(claudeApiAgentStopHoldMs, 3_600_000);
       assert.match(harness.logs.join('\n'), /the API answers the account — the balance is not the cause; kept off agents for 1 h/);
+    });
+
+    it('the API answering an account whose renewal was still awaited records the renewal — a never-refused account has none to record', async () => {
+      const awaiting = buildStopHarness({ outcome: { kind: 'renewed' }, isRenewalAwaited: true });
+      assert.equal(await verifyClaudeApiAgentStop('console', awaiting.ports), 'heldOff');
+      assert.deepEqual(awaiting.events, [`rechecked console ${nowIso}`, 'probe', `holdOff console ${heldUntilIso}`, `renewed console ${nowIso}`]);
+      assert.match(awaiting.logs.join('\n'), /the credit is back: renewal recorded/);
+      assert.equal(awaiting.logs.length, 1, 'still one log line');
+      const never = buildStopHarness({ outcome: { kind: 'renewed' }, isRenewalAwaited: false });
+      await verifyClaudeApiAgentStop('console', never.ports);
+      assert.ok(!never.events.some((event) => event.startsWith('renewed')), 'no refusal behind it, no spend counter reset');
+      for (const outcome of [{ kind: 'stillUsedUp' }, { kind: 'inconclusive', reason: 'timeout' }, { kind: 'modelNotFound' }] as const) {
+        const other = buildStopHarness({ outcome, isRenewalAwaited: true });
+        await verifyClaudeApiAgentStop('console', other.ports);
+        assert.ok(!other.events.some((event) => event.startsWith('renewed')), `${outcome.kind}: the credit is not proven back`);
+      }
     });
 
     it('a check without a conclusion, or without a key the bot can read, holds the account off for the hour and marks nothing', async () => {
@@ -268,11 +287,43 @@ describe('ranking: an API account is picked for a new agent only when the /limit
 
     it('the held-off account is skipped by the next NEW worker and comes back first once the hour is over', () => {
       const chainScope = getClaudeLaunchChainScope([claudeRung('console'), claudeRung('default')]);
-      const held = [buildView('default'), apiView({ limitedUntil: heldUntilIso })];
+      const held = [buildView('default'), apiView({ agentHoldUntil: heldUntilIso })];
       assert.equal(getClaudeLaunchPick({ profiles: held, model: null, nowMs, chainScope }).pick, 'default', 'inside the hour: the subscription');
       assert.equal(getClaudeLaunchPick({ profiles: held, model: null, nowMs: nowMs + claudeApiAgentStopHoldMs + 1, chainScope }).pick, 'console', 'after it: the API account again');
+      assert.deepEqual(
+        getClaudeLaunchPick({ profiles: held, model: null, nowMs, chainScope, currentProfile: 'console' }),
+        { pick: 'default', reason: 'movedFromUnavailable', nextAvailable: null },
+        'a resumed worker on the held account moves too',
+      );
       const used = [buildView('default'), apiView({ creditExhaustedAt: nowIso })];
       assert.equal(getClaudeLaunchPick({ profiles: used, model: null, nowMs, chainScope }).pick, 'default', 'marked used up: the subscription');
+    });
+
+    it('with no subscription usable, nextAvailable names the end of the hold', () => {
+      const chainScope = getClaudeLaunchChainScope([claudeRung('console'), claudeRung('default')]);
+      const profiles = [buildView('default', { loggedIn: false }), apiView({ agentHoldUntil: heldUntilIso })];
+      assert.deepEqual(getClaudeLaunchPick({ profiles, model: null, nowMs, chainScope }), { pick: null, reason: 'none', nextAvailable: { profile: 'console', at: heldUntilIso } });
+      const unlisted = getClaudeLaunchChainScope([claudeRung('default')]);
+      assert.equal(getClaudeLaunchPick({ profiles, model: null, nowMs, chainScope: unlisted }).nextAvailable, null, 'an account the list leaves out is not a «next»');
+      assert.equal(getClaudeLaunchPick({ profiles: [profiles[0], apiView({ agentHoldUntil: heldUntilIso, creditExhaustedAt: nowIso })], model: null, nowMs, chainScope }).nextAvailable, null, 'a used-up credit has no known time');
+    });
+
+    it('the hold is the agents\' ONLY: the topics\' fallback still sees the account as available and its limit mark is untouched', () => {
+      const held = apiView({ agentHoldUntil: heldUntilIso });
+      assert.equal(held.limitedUntil, null);
+      const detection = buildDetection([buildView('default', { limitedUntil: inHours(5) }), held]);
+      assert.deepEqual(getFallbackEntryAvailability(claudeRung('console'), detection, nowMs), { status: 'available' }, 'a held account is still an available rung for a topic');
+      assert.deepEqual(pickFallbackCandidates({ chain: [claudeRung('default'), claudeRung('console')], current: claudeRung('default'), detection, nowMs }), [claudeRung('console')]);
+      const report = buildClaudeProfilesCreditReport(detection.claudeProfiles, null, nowMs, { chainScope: getClaudeLaunchChainScope([claudeRung('default'), claudeRung('console')]) });
+      assert.equal(report.profiles.find((entry) => entry.name === 'console')?.isEligible, true, 'the report\'s strict eligibility (what the chain reads) ignores the hold');
+      assert.equal(report.profiles.find((entry) => entry.name === 'console')?.limitedUntil, null);
+    });
+
+    it('the hold is read from the profile record into the view', () => {
+      const view = buildClaudeProfileUsageView({ dataDir: '/home/user/.charness', name: 'console', record: { createdAt: '2026-10-01T00:00:00.000Z', billing: 'api', agentHoldUntil: heldUntilIso } });
+      assert.equal(view.agentHoldUntil, heldUntilIso);
+      assert.equal(view.limitedUntil, null);
+      assert.equal(buildClaudeProfileUsageView({ dataDir: '/home/user/.charness', name: 'console', record: { createdAt: '2026-10-01T00:00:00.000Z', billing: 'api' } }).agentHoldUntil, undefined);
     });
   });
 

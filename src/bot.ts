@@ -8101,7 +8101,7 @@ const claudeApiCreditRecheckPorts: ClaudeApiCreditRecheckPorts = {
 /**
  * What the check of an agent's stop report on an API account (`utils/claudeApiAgentStop.ts`) reads and does in the bot: the same
  * key, attempt record and probe as the daily recheck above, a probe with a timeout of its own, and — instead of an unverified
- * used-up mark — a mark only on a refusal for the balance, an hour off agents otherwise.
+ * used-up mark — a mark only on a refusal for the balance, an hour off AGENTS (their own field, never the topics' limit mark) otherwise.
  */
 const claudeApiAgentStopPorts: ClaudeApiAgentStopPorts = {
   nowMs: () => Date.now(),
@@ -8109,7 +8109,9 @@ const claudeApiAgentStopPorts: ClaudeApiAgentStopPorts = {
   probe: (apiKey, timeoutMs) => probeClaudeApiCredit(apiKey, { timeoutMs }),
   markRechecked: (name, atIso) => state.setClaudeProfileCreditRechecked(name, atIso),
   markUsedUp: (name, atIso) => state.setClaudeProfileCreditExhausted(name, atIso),
-  holdOff: (name, untilIso) => state.setClaudeProfileLimitedUntil(name, untilIso),
+  holdOff: (name, untilIso) => state.setClaudeProfileAgentHoldUntil(name, untilIso),
+  checkIsRenewalAwaited: (name) => state.getClaudeProfileInfo(name)?.creditUnconfirmedSince !== undefined,
+  onRenewed: (name, atIso) => claudeApiCreditRecheckPorts.onRenewed(name, atIso),
   log: (line) => console.log(line),
   warn: (line) => console.warn(line),
 };

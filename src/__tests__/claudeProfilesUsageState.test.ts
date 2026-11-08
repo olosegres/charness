@@ -64,6 +64,24 @@ describe('StateStore: Claude profile usage and the hidden default record', () =>
     assert.equal(store.getClaudeProfileRecord('work')?.limitedUntil, undefined);
   });
 
+  it('the agents\' hold is a field of its own: set and cleared apart from the topics\' limit mark, ignored for an unregistered name, and it survives a reload', async () => {
+    store.setClaudeProfileAgentHoldUntil('work', '2026-10-12T14:00:00.000Z');
+    store.setClaudeProfileAgentHoldUntil('ghost', '2026-10-12T14:00:00.000Z');
+    await store.flush();
+    const work = store.getClaudeProfileRecord('work');
+    assert.equal(work?.agentHoldUntil, '2026-10-12T14:00:00.000Z');
+    assert.equal(work?.limitedUntil, undefined, 'the topics\' limit mark is not touched');
+    assert.equal(store.getClaudeProfileInfo('ghost'), undefined);
+    const reloaded = new StateStore(dataDir);
+    await reloaded.init();
+    assert.equal(reloaded.getClaudeProfileRecord('work')?.agentHoldUntil, '2026-10-12T14:00:00.000Z');
+    store.setClaudeProfileLimitedUntil('work', '2026-10-12T13:00:00.000Z');
+    store.setClaudeProfileLimitedUntil('work', null);
+    assert.equal(store.getClaudeProfileRecord('work')?.agentHoldUntil, '2026-10-12T14:00:00.000Z', 'clearing the limit mark leaves the hold');
+    store.setClaudeProfileAgentHoldUntil('work', null);
+    assert.equal(store.getClaudeProfileRecord('work')?.agentHoldUntil, undefined);
+  });
+
   it('a status upsert for default lands on the same hidden record, and everything survives a reload', async () => {
     await store.upsertClaudeProfileRecord('default', { loggedIn: true, email: 'me@example.com', subscriptionType: 'max' });
     await store.flush();

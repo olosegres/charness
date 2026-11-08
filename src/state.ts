@@ -215,6 +215,12 @@ export interface ClaudeProfileRecord {
    */
   limitedUntil?: string;
   /**
+   * An API account only: until this instant `claude_profiles` does not point AGENTS at it (a worker's stop report the bot could
+   * not prove a used-up balance for, `utils/claudeApiAgentStop.ts`). Deliberately not `limitedUntil`: that mark is the topics' —
+   * the fallback chain, the unconfirmed-limit probe and the status screens read it — and an unproven report must not move a topic.
+   */
+  agentHoldUntil?: string;
+  /**
    * ISO instant the account's prepaid API credit balance was found used up («Credit balance is too low» — normally an
    * account billed to API credits, but set on whichever account the refusal came from). No window resets it: it holds until the operator acts — picks the account again or signs it
    * in again — or a billed turn on it goes through (the balance is back), and keeps the account out of the fallback chain and
@@ -2317,6 +2323,15 @@ export class StateStore {
     if (!record) return;
     if (limitedUntil === null) delete record.limitedUntil;
     else record.limitedUntil = limitedUntil;
+    this.scheduleSave();
+  }
+
+  /** The agents-only hold (`null` clears it; see {@link ClaudeProfileRecord.agentHoldUntil}); same record rules as the usage. Debounced. */
+  setClaudeProfileAgentHoldUntil(name: string, agentHoldUntil: string | null): void {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record) return;
+    if (agentHoldUntil === null) delete record.agentHoldUntil;
+    else record.agentHoldUntil = agentHoldUntil;
     this.scheduleSave();
   }
 

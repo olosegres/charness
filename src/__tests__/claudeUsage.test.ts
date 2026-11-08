@@ -444,7 +444,7 @@ describe('the launch pick (getClaudeLaunchPick)', () => {
 
     it('never names an account that does not come back on its own, or whose blocker has no reset', () => {
       const signedOut = view('out', undefined, { loggedIn: false });
-      const api = view('console', undefined, { billing: 'api', subscriptionType: null, limitedUntil: hours(3) });
+      const api = view('console', undefined, { billing: 'api', subscriptionType: null, creditExhaustedAt: hours(-2) });
       const credits = view('credits', undefined, { creditExhaustedAt: hours(-1) });
       const switchedOff = view('off', usage({ session: 100, weekly: 0, weeklyResetsAt: days(1), sessionResetsAt: hours(1) }));
       const noReset = view('noReset', usage({ session: 100, weekly: 0, weeklyResetsAt: days(1), sessionResetsAt: null }));

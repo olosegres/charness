@@ -9,8 +9,10 @@
  *   • refused for the balance → the credit IS used up: `creditExhaustedAt` is marked (the daily recheck lifts it when the
  *     credit is back — the probe worked, so the key is one the recheck can read);
  *   • answered, no key the bot can read, the probe's model gone, or no conclusion → the stop was something else (or cannot
- *     be told): the account is only kept off agents for {@link claudeApiAgentStopHoldMs} (`limitedUntil`), which expires by
- *     itself — nothing here can leave an account out for good.
+ *     be told): the account is only kept off AGENTS for {@link claudeApiAgentStopHoldMs} (`agentHoldUntil`, a field of its own —
+ *     `limitedUntil` is the topics' mark and an unproven report must not move a topic), which expires by itself — nothing here
+ *     can leave an account out for good. An answer (2xx) on an account whose renewal is still awaited
+ *     (`creditUnconfirmedSince`) also records the renewal, as the daily recheck would.
  *
  * The attempt is recorded (`creditRecheckedAt`) BEFORE the request, like the daily recheck, and ONE log line says what the
  * report led to. The probe has a timeout of its own, shorter than the answer's budget, and runs beside the usage refresh.
@@ -23,7 +25,7 @@ import { claudeApiCreditProbeModel, type ClaudeApiCreditProbeOutcome } from './c
 
 const hourMs = 3_600_000;
 
-/** How long an account an agent reported stopped stays off agents when the probe did not prove the balance used up. */
+/** How long an account an agent reported stopped stays off AGENTS when the probe did not prove the balance used up. */
 export const claudeApiAgentStopHoldMs = hourMs;
 
 /** The probe's own timeout: shorter than the 10 s the `claude_profiles` answer may take, so the answer is never held past it. */
@@ -32,7 +34,7 @@ export const claudeApiAgentStopProbeTimeoutMs = 6_000;
 /**
  * @description The API account an agent's stop report is about, `null` when there is nothing to check: no stop reported, the
  * account is unknown or not billed to API credits (a subscription has windows and its own limit handling), or it is already out
- * (marked used up, or held off by an earlier report — a repeated report must not probe again).
+ * of the agents' reach (marked used up, or held off by an earlier report — a repeated report must not probe again).
  */
 export function getApiProfileStoppedByAgent(
   views: readonly ClaudeProfileUsageView[],
@@ -42,7 +44,7 @@ export function getApiProfileStoppedByAgent(
   if (!query.isStoppedByLimit || query.currentProfile === null) return null;
   const stopped = views.find((view) => view.name === query.currentProfile);
   if (stopped === undefined || stopped.billing !== 'api' || stopped.creditExhaustedAt !== null) return null;
-  const heldUntilMs = stopped.limitedUntil === null ? Number.NaN : Date.parse(stopped.limitedUntil);
+  const heldUntilMs = stopped.agentHoldUntil ? Date.parse(stopped.agentHoldUntil) : Number.NaN;
   return Number.isFinite(heldUntilMs) && heldUntilMs > nowMs ? null : stopped.name;
 }
 
@@ -56,8 +58,12 @@ export interface ClaudeApiAgentStopPorts {
   markRechecked: (name: string, atIso: string) => void;
   /** The API refused for the balance: mark `name`'s credit used up at `atIso`. */
   markUsedUp: (name: string, atIso: string) => void;
-  /** Keep `name` off agents until `untilIso`. */
+  /** Keep `name` off AGENTS until `untilIso` (its own field — never the topics' limit mark). */
   holdOff: (name: string, untilIso: string) => void;
+  /** Whether `name` carries a refusal the operator acted on that nothing has confirmed yet (`creditUnconfirmedSince`): the credit's renewal is still awaited. */
+  checkIsRenewalAwaited: (name: string) => boolean;
+  /** The API answered an account whose renewal was awaited: record the renewal at `atIso` (the daily recheck's `onRenewed`). */
+  onRenewed: (name: string, atIso: string) => void;
   log: (line: string) => void;
   /** A line that must not be missed: the probe cannot work until someone updates its model. */
   warn: (line: string) => void;
@@ -88,7 +94,11 @@ export async function verifyClaudeApiAgentStop(name: string, ports: ClaudeApiAge
   if (outcome.kind === 'noKey') {
     ports.log(`[credit] ${name}: an agent reported a stop; the bot can read no API key for the account to check its balance — ${held}`);
   } else if (outcome.kind === 'renewed') {
-    ports.log(`[credit] ${name}: an agent reported a stop but the API answers the account — the balance is not the cause; ${held}`);
+    // The probe proved the credit is back: an account still waiting for its renewal records it now, or the attempt above
+    // would push the daily recheck (which would have recorded it) a day further. A never-refused account has no renewal to record.
+    const isRenewalRecorded = ports.checkIsRenewalAwaited(name);
+    if (isRenewalRecorded) ports.onRenewed(name, new Date(nowMs).toISOString());
+    ports.log(`[credit] ${name}: an agent reported a stop but the API answers the account — the balance is not the cause${isRenewalRecorded ? ' (the credit is back: renewal recorded)' : ''}; ${held}`);
   } else if (outcome.kind === 'modelNotFound') {
     ports.warn(`[credit] ${name}: an agent reported a stop; the check's model "${claudeApiCreditProbeModel}" was not found by the API (404) — update claudeApiCreditProbeModel; ${held}`);
   } else {

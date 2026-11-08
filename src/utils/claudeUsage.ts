@@ -347,6 +347,8 @@ export interface ClaudeProfileUsageView {
   limitedUntil: string | null;
   /** How the account pays; `null` when never recorded (a subscription account added before billing was). */
   billing: ClaudeProfileBilling | null;
+  /** Until when agents are not pointed at it (a worker's stop report not proven by the API, `claudeApiAgentStop.ts`); absent = no hold. Read by the agent pick ONLY — topics read `limitedUntil`. */
+  agentHoldUntil?: string | null;
   /** When its prepaid API credits were found used up; `null` while they are not (or the operator acted since). */
   creditExhaustedAt: string | null;
   /** What an account billed to API credits spent through the bot; absent before its first counted turn. */
@@ -635,22 +637,43 @@ function getSessionResetMs(profile: ClaudeProfileUsageView, nowMs: number): numb
 }
 
 /**
- * The subscription account that frees up first, when nothing is usable now; `null` when no account names a time. The
- * account a limit just stopped (`stoppedName`) may show no blocker at all — its figures lag the limit — and is then
- * taken to free up when its five-hour window resets, so a single account is never left without a time to come back.
+ * The instant the API-billed account `profile` the list holds becomes usable for a new agent: the later of its limited mark and
+ * its agents-only hold (`agentHoldUntil`). `nowMs` when nothing blocks it; `null` for an account that never comes back at a
+ * known time — not held by the list, past its expiry day, or with no hold or mark ahead to name.
  */
-function getClaudeNextAvailable(
-  profiles: readonly ClaudeProfileUsageView[],
-  model: string | null,
-  nowMs: number,
+function getClaudeApiProfileFreeAtMs(
+  profile: ClaudeProfileUsageView,
   chainScope: ClaudeLaunchChainScope | null,
-  stoppedName: string | null,
-): ClaudeNextAvailable | null {
+  expiredApiNames: ReadonlySet<string>,
+  nowMs: number,
+): number | null {
+  if (chainScope === null || !chainScope.enabledNames.has(profile.name) || expiredApiNames.has(profile.name)) return null;
+  const aheadMs = [profile.limitedUntil, profile.agentHoldUntil]
+    .map((instant) => (instant ? Date.parse(instant) : Number.NaN))
+    .filter((instantMs) => Number.isFinite(instantMs) && instantMs > nowMs);
+  return aheadMs.length === 0 ? nowMs : Math.max(...aheadMs);
+}
+
+/**
+ * The account that frees up first, when nothing is usable now; `null` when no account names a time. The account a limit just
+ * stopped (`stoppedName`) may show no blocker at all — its figures lag the limit — and is then taken to free up when its
+ * five-hour window resets, so a single account is never left without a time to come back. An API-billed account the list holds
+ * is named only at the end of a hold or limited mark it carries.
+ */
+function getClaudeNextAvailable(input: {
+  profiles: readonly ClaudeProfileUsageView[];
+  model: string | null;
+  nowMs: number;
+  chainScope: ClaudeLaunchChainScope | null;
+  expiredApiNames: ReadonlySet<string>;
+  stoppedName: string | null;
+}): ClaudeNextAvailable | null {
+  const { model, nowMs, chainScope, expiredApiNames, stoppedName } = input;
   let next: { profile: string; atMs: number } | null = null;
-  for (const profile of profiles) {
-    // These never come back at a known time: kept off agents by the /limits list, signed out, API-billed, out of credits.
-    if (getClaudeChainExclusion(profile.name, chainScope) !== null || profile.loggedIn === false || profile.billing === 'api' || profile.creditExhaustedAt !== null) continue;
-    let freeAtMs = getClaudeProfileFreeAtMs(profile, model, nowMs);
+  for (const profile of input.profiles) {
+    // These never come back at a known time: kept off agents by the /limits list, signed out, out of credits.
+    if (getClaudeChainExclusion(profile.name, chainScope) !== null || profile.loggedIn === false || profile.creditExhaustedAt !== null) continue;
+    let freeAtMs = profile.billing === 'api' ? getClaudeApiProfileFreeAtMs(profile, chainScope, expiredApiNames, nowMs) : getClaudeProfileFreeAtMs(profile, model, nowMs);
     // The limit stopped this account, yet its figures show no blocker, so nothing says WHICH limit it was (a weekly window
     // the usage endpoint has not caught up with, or the five-hour one). The five-hour reset is a guess — the earliest it
     // could be free. A wrong guess just hits the limit again on the resume and asks again: at most about one try per five hours.
@@ -661,11 +684,17 @@ function getClaudeNextAvailable(
   return next === null ? null : { profile: next.profile, at: new Date(next.atMs).toISOString() };
 }
 
+/** Whether `profile` is held off agents at `nowMs` (`agentHoldUntil` ahead). Never read by the topics' fallback. */
+function checkIsClaudeProfileHeldFromAgents(profile: ClaudeProfileUsageView, nowMs: number): boolean {
+  const heldUntilMs = profile.agentHoldUntil ? Date.parse(profile.agentHoldUntil) : Number.NaN;
+  return Number.isFinite(heldUntilMs) && heldUntilMs > nowMs;
+}
+
 /**
  * Whether a NEW agent may start on the account billed to API credits `profile` now: the operator's `/limits` list holds it as an
  * enabled rung (without such a list an API account is never picked: it would look inexhaustible and spend money unasked), it is
- * signed in, not marked limited, its credits not marked used up and not past the expiry day the operator gave. No window to read:
- * the balance is its only limit.
+ * signed in, not marked limited, not held off agents (`agentHoldUntil`), its credits not marked used up and not past the expiry
+ * day the operator gave. No window to read: the balance is its only limit.
  */
 function checkIsClaudeApiProfileLaunchable(
   profile: ClaudeProfileUsageView,
@@ -673,7 +702,8 @@ function checkIsClaudeApiProfileLaunchable(
   expiredApiNames: ReadonlySet<string>,
   nowMs: number,
 ): boolean {
-  return chainScope !== null && chainScope.enabledNames.has(profile.name) && !expiredApiNames.has(profile.name) && checkIsClaudeProfileEligible(profile, [], nowMs);
+  return chainScope !== null && chainScope.enabledNames.has(profile.name) && !expiredApiNames.has(profile.name)
+    && !checkIsClaudeProfileHeldFromAgents(profile, nowMs) && checkIsClaudeProfileEligible(profile, [], nowMs);
 }
 
 /**
@@ -713,6 +743,7 @@ export function getClaudeLaunchPick(input: ClaudeLaunchPickOptions & {
   const isStopped = current !== undefined && input.isStoppedByLimit === true;
   if (current && !isStopped
     && getClaudeChainExclusion(current.name, chainScope) === null
+    && !checkIsClaudeProfileHeldFromAgents(current, input.nowMs)
     && checkIsClaudeProfileEligible(current, getRelevantClaudeBucketsAsOf(current, input.model, input.nowMs), input.nowMs)) {
     return { pick: current.name, reason: 'warm', nextAvailable: null };
   }
@@ -732,7 +763,11 @@ export function getClaudeLaunchPick(input: ClaudeLaunchPickOptions & {
     const reason = movedFrom !== null ? (isStopped ? 'movedFromLimited' : 'movedFromUnavailable') : first.billing === 'api' ? 'apiCreditFirst' : 'soonestWeeklyReset';
     return { pick: first.name, reason, nextAvailable: null };
   }
-  return { pick: null, reason: 'none', nextAvailable: getClaudeNextAvailable(input.profiles, input.model, input.nowMs, chainScope, isStopped ? movedFrom : null) };
+  return {
+    pick: null,
+    reason: 'none',
+    nextAvailable: getClaudeNextAvailable({ profiles: input.profiles, model: input.model, nowMs: input.nowMs, chainScope, expiredApiNames, stoppedName: isStopped ? movedFrom : null }),
+  };
 }
 
 /**

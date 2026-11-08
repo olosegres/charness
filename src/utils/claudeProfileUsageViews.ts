@@ -31,6 +31,7 @@ export function buildClaudeProfileUsageView(input: {
     subscriptionType: record?.subscriptionType ?? null,
     usage: record?.usage,
     limitedUntil: record?.limitedUntil ?? null,
+    ...(record?.agentHoldUntil ? { agentHoldUntil: record.agentHoldUntil } : {}),
     billing: record?.billing ?? null,
     // A figure the operator gave after the refusal ends the mark (the bot clears the stored one when it reads the figures; a
     // reader of `state.json` alone, the command line, must see the same).

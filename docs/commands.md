@@ -226,8 +226,9 @@ so one account's usage limit does not stop every topic.
   key — the credit is marked used up only if the API really refuses for the balance, and
   the daily recheck lifts that mark when the credit is back; if the API answers instead,
   or the key cannot be read, or the check gives no answer, the account is only kept off
-  agents for an hour) and leaves it out whatever the figures say, and the worker resumes
-  the same session at once on the answer. With nothing usable `recommended` is `null` and
+  agents for an hour — topics are not affected — and an answer from an account whose
+  credit renewal was still awaited records the renewal) and leaves it out whatever the
+  figures say, and the worker resumes the same session at once on the answer. With nothing usable `recommended` is `null` and
   `nextAvailable` names the account and the instant that frees up first, for a
   one-off resume (an account a limit just stopped, whose figures show no blocker
   yet, frees up at its five-hour reset); when no account names a time, the manager
