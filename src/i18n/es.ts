@@ -1248,5 +1248,6 @@ export const esDict: Record<string, string> = {
   'runners.expiredText': 'El código de vinculación caducó.',
   'runners.closedText': 'Esta línea se usó en una máquina que ya estaba vinculada — no se vinculó nada nuevo.',
   'runners.pairFailedText': '⚠️ No se pudo crear la línea de vinculación: {reason}',
+  'runners.pairLineTooLongReasonText': 'la línea y su explicación ocupan {length} caracteres y un mensaje de Telegram admite {limit} (lo causa un nombre de host largo o una clave de host RSA larga) — crea la línea en su lugar en un terminal de esta máquina: charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ No se puede leer el registro de runners: {reason}',
 };

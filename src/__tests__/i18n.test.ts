@@ -1389,6 +1389,7 @@ test('the /runners keys exist in every locale and keep their placeholders', () =
     'runners.pairedText': ['{name}', '{time}'],
     'runners.closedText': [],
     'runners.pairFailedText': ['{reason}'],
+    'runners.pairLineTooLongReasonText': ['{length}', '{limit}', '{address}'],
     'runners.registryErrorText': ['{reason}'],
   };
   for (const [code, placeholders] of Object.entries(placeholdersByKey)) {

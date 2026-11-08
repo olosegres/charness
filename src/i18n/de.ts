@@ -1248,5 +1248,6 @@ export const deDict: Record<string, string> = {
   'runners.expiredText': 'Der Kopplungscode ist abgelaufen.',
   'runners.closedText': 'Diese Zeile wurde auf einer bereits gekoppelten Maschine verwendet — es wurde nichts Neues gekoppelt.',
   'runners.pairFailedText': '⚠️ Die Kopplungszeile konnte nicht erstellt werden: {reason}',
+  'runners.pairLineTooLongReasonText': 'die Zeile samt Erklärung braucht {length} Zeichen, eine Telegram-Nachricht fasst {limit} (ein langer Hostname oder ein langer RSA-Hostschlüssel verursacht das) — erzeuge die Zeile stattdessen in einem Terminal auf diesem Rechner: charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ Das Runner-Register ist nicht lesbar: {reason}',
 };

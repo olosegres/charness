@@ -14,6 +14,7 @@ import { parseProbeOutput, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner } from '../runners/hubRegistry';
 import { buildAdminBootstrapLine, defaultRunnerAccount } from '../runners/bootstrapLine';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
+import { hubHostKeySchema, hubHostSchema, hubSshUserSchema } from '../runners/hubIds';
 import { createPairCodePayload } from './runnersTestKit';
 import {
   buildRunnersPageCallback,
@@ -37,6 +38,7 @@ import {
   runnersAddressUseCallback,
   runnersPairCallback,
   runnersRefreshCallback,
+  telegramMessageLimit,
   type RunnerAction,
   type RunnerScreenEntry,
 } from '../utils/runnersScreenPlan';
@@ -449,17 +451,11 @@ describe('runnersScreenPlan: the other screens and texts', () => {
     assert.ok(buildPairingIntro(10, 'ci-runner', t).includes('«ci-runner»'), 'the account is named as given');
   });
 
-  it('in every language the pairing message — its text and its line — fits a Telegram message (4096 characters) with room for a long address', () => {
-    // A 29-character host and a 15-character hub account: longer than a typical address.
-    const payload = createPairCodePayload({ host: 'a-quite-long-name.example.com', user: 'a-hub-user-name' });
-    const line = buildAdminBootstrapLine(payload);
-    const roomToSpare = 100;
+  it('in every language the pairing text says what the person needs: the lifetime, the account, the trust it gives as root and the way without sudo', () => {
     const english = buildPairingIntro(10, defaultRunnerAccount, t);
     for (const locale of localeCodes) {
       runWithLocale(locale, () => {
         const intro = buildPairingIntro(10, defaultRunnerAccount, t);
-        const length = `${intro}\n\n${line}`.length;
-        assert.ok(length < 4096 - roomToSpare, `${locale}: the message is ${length} characters`);
         assert.doesNotMatch(intro, /\{[a-z]+\}/, `${locale}: no placeholder is left`);
         if (locale !== 'en') assert.notEqual(intro, english, `${locale}: translated, not the English fallback`);
         assert.ok(intro.includes(defaultRunnerAccount), `${locale}: the account is named`);
@@ -469,6 +465,56 @@ describe('runnersScreenPlan: the other screens and texts', () => {
         assert.ok(intro.includes('10'), `${locale}: and the lifetime`);
       });
     }
+  });
+
+  describe('the pairing message fits one Telegram message', () => {
+    /** Every host-key type `hubIds.ts` accepts, with the size in bytes of the key as ssh sends it (what a real sshd offers: 2048-, 3072-, 4096- and 8192-bit RSA). */
+    const hostKeyKinds: ReadonlyArray<{ label: string; type: string; blobBytes: number }> = [
+      { label: 'ed25519', type: 'ssh-ed25519', blobBytes: 51 },
+      { label: 'ecdsa-nistp256', type: 'ecdsa-sha2-nistp256', blobBytes: 104 },
+      { label: 'ecdsa-nistp384', type: 'ecdsa-sha2-nistp384', blobBytes: 136 },
+      { label: 'ecdsa-nistp521', type: 'ecdsa-sha2-nistp521', blobBytes: 172 },
+      { label: 'rsa-2048', type: 'ssh-rsa', blobBytes: 279 },
+      { label: 'rsa-3072', type: 'ssh-rsa', blobBytes: 407 },
+      { label: 'rsa-4096', type: 'ssh-rsa', blobBytes: 535 },
+    ];
+    /** The longest host name (253 characters), IPv6 address and hub account (64) the registry accepts, and the highest port: if `hubIds.ts` allows more, this test says so. */
+    const longestHost = 'h'.repeat(253);
+    const longestUser = 'u'.repeat(64);
+    const typicalHost = 'host.example';
+    const typicalUser = 'hubuser';
+
+    function measureLongestMessage(host: string, user: string, kind: { type: string; blobBytes: number }): { length: number; locale: string } {
+      const hostKey = `${kind.type} ${Buffer.alloc(kind.blobBytes, 7).toString('base64')}`;
+      const line = buildAdminBootstrapLine(createPairCodePayload({ host, user, hostKey, port: 65535 }));
+      const lengths = localeCodes.map((locale) => ({ locale, length: runWithLocale(locale, () => `${buildPairingIntro(10, defaultRunnerAccount, t)}\n\n${line}`.length) }));
+      return lengths.reduce((longest, candidate) => (candidate.length > longest.length ? candidate : longest));
+    }
+
+    it('the limits this test measures at are the registry\'s own', () => {
+      assert.equal(hubHostSchema.safeParse(longestHost).success, true);
+      assert.equal(hubHostSchema.safeParse(`${longestHost}h`).success, false, 'a longer host name would be accepted: measure at it');
+      assert.equal(hubSshUserSchema.safeParse(longestUser).success, true);
+      assert.equal(hubSshUserSchema.safeParse(`${longestUser}u`).success, false, 'a longer hub account would be accepted: measure at it');
+      assert.equal(hubHostSchema.safeParse('2001:0db8:85a3:0000:0000:8a2e:0370:7334').success, true);
+      for (const kind of hostKeyKinds) assert.equal(hubHostKeySchema.safeParse(`${kind.type} ${Buffer.alloc(kind.blobBytes, 7).toString('base64')}`).success, true, kind.label);
+    });
+
+    it('in every language, with every host-key type up to RSA 3072, at the LONGEST host and hub account the registry accepts', () => {
+      for (const kind of hostKeyKinds.filter((candidate) => candidate.blobBytes <= 407)) {
+        const { length, locale } = measureLongestMessage(longestHost, longestUser, kind);
+        assert.ok(length <= telegramMessageLimit, `${kind.label}: ${length} characters in ${locale}`);
+      }
+    });
+
+    it('in every language, with EVERY host-key type — RSA 4096 too — at an ordinary host and hub account', () => {
+      for (const kind of hostKeyKinds) {
+        const { length, locale } = measureLongestMessage(typicalHost, typicalUser, kind);
+        assert.ok(length <= telegramMessageLimit, `${kind.label}: ${length} characters in ${locale}`);
+      }
+    });
+    // What cannot fit (RSA 4096 and more at the longest names, RSA 8192 anywhere) is not offered: the check is made when the line is offered, and the code closed
+    // (`runnersCommand.test.ts`).
   });
 
   it('what the pairing message becomes: paired (with the name and the time) or expired', () => {

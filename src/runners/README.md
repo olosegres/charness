@@ -76,9 +76,12 @@ escape a backslash in `command="…"`).
 ## Pairing
 
 1. `createPairing` (under the lock): a temporary ed25519 key, its `pending.json` entry, its `authorized_keys` line (expires in 10 min),
-   and the **pair code** `cr1.<base64url JSON>` (`pairCode.ts`: host, port, account, the hub's ssh host key to pin, the temporary
-   PRIVATE key, the pair id). The code is a secret until used or expired: never logged; decode errors name fields, never values.
-2. `bootstrapLine.ts` renders the lines for the operator, both of one code. The PLAIN `sh -c '…'` line (run as the runner account): it writes
+   and the **pair code** `cr2.<user>,<host>,<port>,<id>,<host key type>,<host key>,<private key body>` (`pairCode.ts`: the account, the host,
+   the port, the pair id, the hub's ssh host key to pin, the temporary PRIVATE key). The code is a secret until used or expired: never logged; decode errors name
+   fields, never values. The pasted line does not carry the code: it holds these values ONCE, as shell variables it needs itself before there is any program to
+   decode a code, and the shell joins them into the code it hands the utility (`"cr2.$u,$h,$p,<id>,$y,$z,$k"`; `joinPairCodeFields` is the one place that knows
+   the order, and a test runs the line and compares). Version 1 (`cr1.<base64url JSON>`) is still read, never written.
+2. `bootstrapLine.ts` renders the ONE line for the operator. As the runner account (the line without its `sudo`) it writes
    the key and a `known_hosts` line to a private temp folder, runs `ssh … bootstrap > package.tgz`, unpacks it and starts `runnerCli.js pair
    --bootstrap <folder> <code>`. The unpacked package has no `node_modules`: the runner's `pair` step reaches its install step on Node
    built-ins only. The ADMIN line, `sudo sh -c '<script>' sh <account>`, keeps one rule: **root never executes, reads through or writes
@@ -97,12 +100,16 @@ escape a backslash in `command="…"`).
    **ONE line, two ways** (`renderScript`): by who runs it. As root (`sudo …`, the line as offered) it is everything above. Run by a NON-root user — the
    same line without its leading `sudo`, in the terminal of the runner account itself, for a person without admin rights — it pairs THAT account: the last word
    must equal `id -un` (it refuses «you are not <word>: run the line as <word> or with sudo» before anything is fetched, so a main account with a leftover
-   `runner` at the end is never paired by mistake; nothing else judges the account), the copy is made in the account's own `$TMPDIR` and stays private (700),
+   `runner` at the end is never paired by mistake; nothing else judges the account — in particular not the characters of its name, which only root's way restricts to
+   plain letters, digits, `.`, `_` and `-` because there the name goes to `id`, `sudo -u` and the root step: an account a directory service names `user@realm` pairs itself), the copy is made in the account's own `$TMPDIR` and stays private (700),
    `ensureNode.sh own` installs the runner's Node in `~/.charness-runner/node`, and `runnerCli.js pair --bootstrap …` runs under it — no service (the pairing
-   prints the «keep it running» help). The shell variables `r` (1 = root) and `b` (the folder of the copy) carry the difference; the pairing code is in the script
-   ONCE. A Telegram message holds 4096 characters, so ONE message carries the line (~3.5 KB) and its explanation (`runners.pairingIntro`, ≤ ~470 characters in
-   every language; `runnersScreenPlan.test.ts` checks every locale with a long address) — which is why the script's values are written where they are used and its
-   messages are short. `connectors/telegram/runnerPairingMessages.ts` follows the message.
+   prints the «keep it running» help). The shell variables `r` (1 = root) and `b` (the folder of the copy) carry the difference; every value of the pairing is in the script
+   ONCE (the shell joins them into the code). A Telegram message holds 4096 characters, so ONE message carries the line (~2.8 KB with an ed25519 host key, ~3.1 KB with RSA 2048) and its explanation
+   (`runners.pairingIntro`, ≤ ~470 characters in every language) — which is why the line holds each value once and its messages are short.
+   `runnersScreenPlan.test.ts` measures every locale with every host-key type at the longest host name (253) and hub account (64) the registry accepts: all fit up to
+   RSA 3072, and RSA 4096 fits at ordinary names. What cannot fit (RSA 4096 and more with the longest names) is caught when the line is offered
+   (`offerPairing`): the code is closed (`cancelPairing`) and the answer names the length and `charness runners pair --host <address>`; a send Telegram refuses closes
+   its code the same way. `connectors/telegram/runnerPairingMessages.ts` follows the message.
 
    **What the admin line trusts.** Pasting it runs code from this charness host as root on the runner machine: the line is
    hub-generated text run under `sudo`, and the program root runs from it is `rootServiceCli.js` out of the hub's own install (packed into

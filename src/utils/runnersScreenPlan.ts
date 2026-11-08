@@ -23,6 +23,8 @@ import type { RunnerJobsStop } from '../runners/runnerRemoval';
 
 /** Telegram refuses callback data over 64 BYTES. */
 export const maxCallbackDataBytes = 64;
+/** The most characters Telegram accepts in one message. */
+export const telegramMessageLimit = 4096;
 /** The most characters a screen's text may have: Telegram's limit is 4096, the rest is the margin for the title, notes and the page line. */
 export const maxScreenTextChars = 3600;
 /** The longest a string a machine reported about itself (CPU model, a capability's detail, its OS name) is shown. */

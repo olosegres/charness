@@ -99,7 +99,7 @@ describe('charness runners', () => {
     const pending = readPendingFile(fixture.ctx.dir).pending;
     assert.equal(pending.length, 1);
     assert.deepEqual({ host: pending[0].host, port: pending[0].port, label: pending[0].label, expiresAtMs: pending[0].expiresAtMs }, { host: 'host.example', port: 2222, label: '@ExampleBot', expiresAtMs: startMs + pairingLifetimeMs });
-    assert.ok(line.includes('-p 2222') && line.includes('hubuser@host.example'), 'the runner logs in as the hub\'s account, at the address given');
+    assert.ok(line.includes('u="hubuser"') && line.includes('h="host.example"') && line.includes('p="2222"'), 'the runner logs in as the hub\'s account, at the address given');
     assert.match(fs.readFileSync(getHubFilePaths(fixture.ctx.dir).gate, 'utf8'), /runner-gate "\$@"/);
     assert.equal(extractManagedBlock(fs.readFileSync(fixture.ctx.authorizedKeysPath, 'utf8')).length, 1);
   });

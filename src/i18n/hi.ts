@@ -1247,5 +1247,6 @@ export const hiDict: Record<string, string> = {
   'runners.expiredText': 'पेयरिंग कोड समाप्त हो गया।',
   'runners.closedText': 'यह लाइन ऐसी मशीन पर इस्तेमाल हुई जो पहले से जुड़ी थी — कुछ नया नहीं जोड़ा गया।',
   'runners.pairFailedText': '⚠️ पेयरिंग लाइन नहीं बन सकी: {reason}',
+  'runners.pairLineTooLongReasonText': 'लाइन और उसके विवरण में {length} अक्षर हैं, जबकि Telegram संदेश में {limit} तक आते हैं (लंबा होस्ट नाम या लंबी RSA होस्ट कुंजी इसका कारण होती है) — इसके बजाय इस मशीन के टर्मिनल में लाइन बनाएँ: charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ रनर रजिस्ट्री पढ़ी नहीं जा सकती: {reason}',
 };

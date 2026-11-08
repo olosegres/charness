@@ -41,6 +41,7 @@ import { getServiceNames, planGuiAgentJob, renderLaunchdPlist } from '../runnerU
 import type { RunnerConfig, RunnerStatus } from '../runnerUtility/runnerConfig';
 import { getFreePort } from './e2e/isolatedCharness';
 import { createLaunchctlStandIn } from './runnerLinkE2e/launchctlStandIn';
+import { readCodeOfLine } from './runnersTestKit';
 import {
   createExtraMachine,
   createRunnerLinkLayout,
@@ -321,7 +322,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
   it('refuses a pasted line that reaches a server with another host key, and spends nothing', async () => {
     const impostor = await startImpostorSshd(layout);
     const line = makePairingLine(layout);
-    const redirected = line.replace(` -p ${layout.sshPort} `, ` -p ${impostor.port} `);
+    const redirected = line.replace(`p="${layout.sshPort}"`, `p="${impostor.port}"`);
     assert.notEqual(redirected, line, 'the line names the hub\'s port');
     const result = runPairingLine(layout, redirected);
     assert.notEqual(result.status, 0);
@@ -499,7 +500,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     const paths = getRunnerHomePaths(home);
     await installRunnerApp(layout, home);
     const line = makePairingLine(layout);
-    const code = /cr1\.[A-Za-z0-9_-]+/.exec(line)?.[0] ?? '';
+    const code = readCodeOfLine(line);
     const decoded = decodePairCode(code);
     assert.ok(decoded.ok);
     if (!decoded.ok) return;

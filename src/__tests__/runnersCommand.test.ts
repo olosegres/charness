@@ -32,18 +32,20 @@ import { parseProbeOutput } from '../remoteRun/probe';
 import { ensureGateWrapper } from '../runners/gateWrapper';
 import type { HostKeyScanner, HubAddress } from '../runners/hubAddress';
 import { cancelPairing, createPairing, redeemPairing, sweepExpiredPairings } from '../runners/hubPairing';
-import { readPairedFile, readPendingFile, recordClosedCode } from '../runners/hubRegistry';
+import { readClosedCodes, readPairedFile, readPendingFile, recordClosedCode } from '../runners/hubRegistry';
 import { writeLinkState } from '../runners/linkControl';
 import type { LinkSourceChange } from '../runners/linkConcern';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { readRunnersOverview, type RunnersOverview } from '../runners/runnersOverview';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
-import { maxScreenTextChars } from '../utils/runnersScreenPlan';
+import { maxScreenTextChars, telegramMessageLimit } from '../utils/runnersScreenPlan';
 import { createCommandHarness, harnessGroup, harnessThreadId, type CommandHarness, type RecordedSend } from './commandModuleHarness';
 import { createHubFixture, createRedeemFixture, type HubFixture } from './runnersTestKit';
 
 const ownKey = generateEd25519KeyPair('own').publicKey;
 const strangerKey = generateEd25519KeyPair('stranger').publicKey;
+/** The host key of a hub whose sshd offers an 8192-bit RSA key only: its line cannot fit one Telegram message, whatever the address. */
+const hugeRsaHostKey = `ssh-rsa ${Buffer.alloc(1047, 7).toString('base64')}`;
 const minute = 60 * 1000;
 const defaultProbeText = [
   'os=Linux', 'os_name=Ubuntu', 'os_version=24.04', 'arch=x86_64', 'cpu_model=AMD Ryzen 7 9700X', 'cpu_cores=8', 'cpu_threads=16', 'load=0.4',
@@ -412,7 +414,7 @@ describe('/runners over its ports', () => {
       assert.deepEqual(message.options, { isSecret: true, plainFallbackText: decodeHtml(message.text) }, 'a secret, with its plain twin for a refusal of the markup');
       assert.doesNotMatch(String(message.options?.plainFallbackText), /<\/?pre>|&(lt|gt|amp);/, 'the twin shows no tag and no entity');
       assert.ok(message.text.length <= 4096, `a pairing message must fit one Telegram message, is ${message.text.length}`);
-      assert.ok(message.text.includes('cr1.'), 'the line carries the code');
+      assert.ok(message.text.includes('"cr2.$u,$h,$p,'), 'the line puts the code together');
       assert.ok(!message.text.slice(message.text.indexOf('<pre>') + 5, message.text.indexOf('</pre>')).match(/[<>]/), 'the line is HTML-escaped inside the <pre>');
       assert.match(message.text, /^Pair a runner — valid 10 minutes, single use; keep the line private\.\n\nPaste it in an admin account's terminal on the runner machine: it runs code from this charness host there as root\. The last word, «runner», is the account that runs the agents' code: make it an existing standard \(non-admin\) account, not your main one\. No admin rights\? Run the line in that account's own terminal without «sudo»:\n\n<pre>sudo sh -c '/);
       assert.ok(message.text.endsWith(' runner</pre>'), 'the account is the last word of the line, and nothing follows the line');
@@ -424,7 +426,7 @@ describe('/runners over its ports', () => {
       assert.ok(fs.existsSync(path.join(hubFixture.ctx.dir, 'gate')), 'the gate wrapper the key line runs is in place');
     });
 
-    it('when the message cannot be sent nothing is offered, nothing is recorded and the failure is told', async () => {
+    it('when the message cannot be sent nothing is offered, nothing is recorded, the failure is told — and the code is CLOSED, so no credential stays open with nobody holding its line', async () => {
       savedAddress = { host: 'host.example', port: 22 };
       scanAnswers = { 'host.example:22': ownKey, '127.0.0.1:22': ownKey };
       await harness.runCommand('runners');
@@ -433,6 +435,28 @@ describe('/runners over its ports', () => {
       await harness.tapButton(listMessageId, 'rnr_pair');
       assert.equal(readPairingMessages(pairingMessagesPath).messages.length, 0, 'nothing was recorded');
       assert.equal(harness.replies.at(-1)?.text, '⚠️ Could not make a pairing line: the message could not be sent');
+      assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0, 'the code is not left open');
+      assert.equal(readClosedCodes(hubFixture.ctx.dir).codes.length, 1, 'it is closed, with a trace');
+    });
+
+    it('a line that cannot fit one Telegram message is not offered: the code is closed at once, nothing is sent or recorded, and the failure says how long it is and where to make the line instead', async () => {
+      savedAddress = { host: 'host.example', port: 22 };
+      scanAnswers = { 'host.example:22': hugeRsaHostKey, '127.0.0.1:22': hugeRsaHostKey };
+      isLengthChecked = true;
+      await harness.runCommand('runners');
+      const listMessageId = findReply(() => true).messageId ?? 0;
+      const repliesBefore = harness.replies.length;
+      await harness.tapButton(listMessageId, 'rnr_pair');
+      const sent = harness.replies.slice(repliesBefore);
+      assert.equal(sent.length, 1, 'one message: the failure, not the line');
+      const [failure] = sent;
+      assert.match(failure.text, /^⚠️ Could not make a pairing line: the line and its explanation take \d{4,} characters and a Telegram message holds 4096 \(/);
+      assert.ok(failure.text.endsWith('charness runners pair --host host.example:22'), failure.text);
+      assert.ok(!failure.text.includes('cr2.') && !failure.text.includes('sudo sh -c'), 'and shows no line');
+      assert.ok(Number(/take (\d+) characters/.exec(failure.text)?.[1]) > telegramMessageLimit, 'the length it names is over the limit');
+      assert.equal(readPendingFile(hubFixture.ctx.dir).pending.length, 0, 'the code is closed, not left open for ten minutes');
+      assert.equal(readClosedCodes(hubFixture.ctx.dir).codes.length, 1, 'with a trace that it was closed');
+      assert.equal(readPairingMessages(pairingMessagesPath).messages.length, 0, 'no message is followed');
     });
 
     it('a saved address that stopped answering with this machine\'s key is refused with the reason, no code is made, and the next message may name another', async () => {
@@ -514,7 +538,7 @@ describe('/runners over its ports', () => {
       assert.deepEqual(harness.edits.map((edit) => edit.messageId), [offer.messageId], 'one edit, of the message');
       assert.match(harness.edits[0].text, /^Runner “mac-mini” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u);
       assert.equal(harness.edits[0].extra, undefined, 'plain text: no parse mode, no keyboard');
-      assert.ok(!harness.edits[0].text.includes('cr1.'), 'the line is gone');
+      assert.ok(!harness.edits[0].text.includes('cr2.'), 'the line is gone');
       assert.deepEqual(harness.deletedMessageIds, [], 'nothing is deleted: the message stays and says what became of the code');
       assert.deepEqual(readRecordedPairIds(), []);
       await feature.watchPairingsOnce();

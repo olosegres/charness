@@ -1242,5 +1242,6 @@ export const zhDict: Record<string, string> = {
   'runners.expiredText': '配对码已过期。',
   'runners.closedText': '这条命令用在了一台已配对的机器上 — 没有新增配对。',
   'runners.pairFailedText': '⚠️ 无法生成配对命令：{reason}',
+  'runners.pairLineTooLongReasonText': '这行命令加上说明共 {length} 个字符，而 Telegram 消息最多 {limit} 个（主机名很长或 RSA 主机密钥很长时会这样）— 请改在这台机器的终端里生成：charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ 无法读取 runner 登记表：{reason}',
 };

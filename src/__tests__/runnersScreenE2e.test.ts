@@ -29,7 +29,7 @@
  *   → thirty seeded machines (a registry written by hand, a snapshot each) make a list of several pages: Next / Previous edit the SAME
  *     message, every page fits Telegram's limit (the fake Bot API refuses a longer text, as the real one does), and a button on a later
  *     page pauses and removes the machine it names — by its place in the whole list and the revision — and nothing else
- *   → the pairing code is nowhere in the output trace, the console log or the bot's output: the trace keeps the messages' length only
+ *   → the pairing code and the private key in the line are nowhere in the output trace, the console log or the bot's output: the trace keeps the messages' length only
  *
  * Needs sshd, ssh, ssh-keyscan, rsync, Pueue, tar and the built CLI (`yarn build`): a local run without them is SKIPPED with the reason,
  * CI fails without. Nothing leaves the machine: the Bot API and the sshd are on loopback. Everything the test starts is stopped in
@@ -47,6 +47,7 @@ import { testNodeModulesEnvName } from '../runnerUtility/appInstall';
 import { readLastProbe } from '../remoteRun/runners';
 import { getRemoteRunCacheDir } from '../remoteRun/ssh';
 import type { RunnerStatus } from '../runnerUtility/runnerConfig';
+import { getPairCodeFields } from '../runners/pairCode';
 import { generateEd25519KeyPair } from '../runners/sshKeys';
 import { maxScreenTextChars } from '../utils/runnersScreenPlan';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
@@ -79,6 +80,7 @@ import {
   waitUntil,
   type RunnerLinkLayout,
 } from './runnerLinkE2e/runnerLinkFlowKit';
+import { readCodeOfLine, readPayloadOfLine } from './runnersTestKit';
 
 const missingTools = getMissingTools();
 const skipReason = missingTools.length > 0 && !isCi ? `missing: ${missingTools.join(', ')}` : false;
@@ -387,9 +389,9 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     return readSettings().runnerHost;
   }
 
-  /** The code in a pairing line. */
+  /** The code a pairing line puts together (the line holds its values once, as shell variables). */
   function readLineCode(line: string): string {
-    return /cr1\.[A-Za-z0-9_-]+/.exec(line)?.[0] ?? '';
+    return readCodeOfLine(line);
   }
 
   /** The line as the runner account pastes it in its own terminal: without its `sudo`, and with the account that runs this flow as the last word (the line pairs the account it runs as). */
@@ -407,9 +409,9 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.ok(!general.listMessages().some((message) => message.text.startsWith('② Without admin rights')), 'there is no second message');
     assert.equal(pairingMessage.reply_markup, undefined);
     const adminLine = readPairingLine(pairingMessage);
-    assert.match(adminLine, /^sudo sh -c '.*cr1\.[A-Za-z0-9_-]+.*' sh runner$/s);
+    assert.match(adminLine, /^sudo sh -c '.*"cr2\.\$u,\$h,\$p,[0-9a-f]+,\$y,\$z,\$k".*' sh runner$/s);
     firstPairingLine = toOwnAccountLine(adminLine);
-    assert.match(firstPairingLine, new RegExp(`^sh -c '.*cr1\\.[A-Za-z0-9_-]+.*' sh ${os.userInfo().username}$`, 's'));
+    assert.match(firstPairingLine, new RegExp(`^sh -c '.*"cr2\\.\\$u,\\$h,\\$p,[0-9a-f]+,\\$y,\\$z,\\$k".*' sh ${os.userInfo().username}$`, 's'));
     assert.equal(readLineCode(adminLine), readLineCode(firstPairingLine), 'the same code, the other way of running it');
     const sendCall = fakeTelegram.listCalls('sendMessage').find((call) => call.payload.text === pairingMessage.text);
     assert.equal(sendCall?.payload.parse_mode, 'HTML');
@@ -432,7 +434,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     assert.match(result.output, /Paired with /);
     assert.match(result.output, /Keep it running:/, 'the account\'s way installs no service: the help for keeping it running is printed');
     await general.waitForMessageText('the pairing message to read paired', pairingMessage, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u.test(text));
-    assert.ok(!pairingMessage.text.includes('cr1.') && !pairingMessage.text.includes('sh -c'), 'the line is gone from the message');
+    assert.ok(!pairingMessage.text.includes('cr2.') && !pairingMessage.text.includes('sh -c'), 'the line is gone from the message');
     assert.notEqual(pairingMessage.isDeleted, true, 'the message stays and says what became of the code');
     await waitUntil(() => readPairingStore().length === 0, 'the settled message to leave the instance\'s record', 10_000);
     const { runners } = readPaired();
@@ -555,7 +557,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
 
     await startCharness();
     await general.waitForMessageText('the pairing message to read paired', third, (text) => /^Runner “[a-z0-9-]+” paired \d{1,2} \S+ \d{2}:\d{2}\.$/u.test(text));
-    assert.ok(!third.text.includes('cr1.'), 'the line is gone');
+    assert.ok(!third.text.includes('cr2.'), 'the line is gone');
     await waitUntil(() => readPairingStore().length === 0, 'the settled message to leave the instance\'s record', 10_000);
   });
 
@@ -650,8 +652,10 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
 
   it('the pairing code is nowhere in the output trace, the console log or the bot\'s own output — the trace keeps only the length of the message', async () => {
     await getCharness().stop();
-    const codes = [firstPairingLine, secondPairingLine, thirdPairingLine].map(readLineCode);
-    assert.ok(codes.every((code) => code.length > 100), 'the codes were read from the lines');
+    // What is secret in a line: the code it puts together, and the private key in it (the line holds the key's body once, as a variable).
+    const lines = [firstPairingLine, secondPairingLine, thirdPairingLine];
+    const codes = [...lines.map(readLineCode), ...lines.map((line) => getPairCodeFields(readPayloadOfLine(line)).privateKeyBody)];
+    assert.ok(codes.every((code) => code.length > 100), 'the codes and keys were read from the lines');
     const trace = readOutputTrace();
     assert.ok(trace.length > 0, 'the trace is on and has recorded the run');
     assert.ok(trace.includes(secretTracePreview), 'the secret sends are in the trace, withheld');

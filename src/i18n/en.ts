@@ -1292,5 +1292,6 @@ export const enDict: Record<string, string> = {
   'runners.expiredText': 'Pairing code expired.',
   'runners.closedText': 'This line was used on a machine that was already paired — nothing new was paired.',
   'runners.pairFailedText': '⚠️ Could not make a pairing line: {reason}',
+  'runners.pairLineTooLongReasonText': 'the line and its explanation take {length} characters and a Telegram message holds {limit} (a long host name or a long RSA host key does this) — make the line in a terminal on this machine instead: charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ The runners registry cannot be read: {reason}',
 };

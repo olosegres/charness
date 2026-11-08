@@ -233,9 +233,11 @@ runners (`src/runners/` is the hub, `utils/runnersScreenPlan.ts` the pure text a
   machine's own ssh key; the keyboard's «Use» resolves against a per-message snapshot) and, after «Enter another address», the next General message
   (`handleRunnersAddressText`, called by the text handler before the startup buffer; `cancelRunnersAddressWait` ends the wait for any slash command) is the
   address, checked by `checkHubAddress`. A pairing is offered as ONE message (`buildPairingIntro` — the lifetime, the trust it gives, which word of the line is the account and
-  what it must be, and how to pair without admin rights — then `buildAdminBootstrapLine`, ~3.5 KB: together they must fit Telegram's 4096, which
+  what it must be, and how to pair without admin rights — then `buildAdminBootstrapLine`, ~2.8 KB with an ed25519 host key: together they must fit Telegram's 4096, which
   `runnersScreenPlan.test.ts` checks in every language), HTML with the line in a `<pre>` (tap to copy) sent with the `isSecret` option of `replyToThread`
-  (`markOutboundTextSecret` keeps the text out of the output trace — length only). A failure to send it offers nothing and is told.
+  (`markOutboundTextSecret` keeps the text out of the output trace — length only). A failure to send it offers nothing and is told, and a message that cannot fit
+  (`telegramMessageLimit`: a very large RSA host key with the longest host names) is not even tried: the code is closed at once (`closeUnofferedPairing` →
+  `cancelPairing`) and the failure names the length and `charness runners pair --host <address>` (`runners.pairLineTooLongReasonText`).
 - **Settling the pairing messages.** The place of every message that offers a code is this INSTANCE's own record (`runnerPairingMessages.ts`,
   `DATA_DIR/runner-pairing-messages.json`; one entry per MESSAGE, named by `getPairingMessageId`) — not the shared hub registry, which is every charness's of the OS user and holds credentials only. `startRunnersWatcher`
   (every 5 s, one look at boot) edits each message to «paired» (a runner carries its code's id) or «expired» (the code is neither open nor a runner) and

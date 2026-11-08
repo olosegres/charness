@@ -1242,5 +1242,6 @@ export const jaDict: Record<string, string> = {
   'runners.expiredText': 'ペアリングコードの期限が切れました。',
   'runners.closedText': 'この行はすでにペアリング済みのマシンで使われました — 新しくペアリングされたものはありません。',
   'runners.pairFailedText': '⚠️ ペアリング行を作成できませんでした: {reason}',
+  'runners.pairLineTooLongReasonText': '行と説明で {length} 文字になり、Telegram のメッセージは {limit} 文字までです（長いホスト名や長い RSA ホスト鍵が原因です）。代わりにこのマシンのターミナルで行を作ってください: charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ ランナーのレジストリを読み取れません: {reason}',
 };

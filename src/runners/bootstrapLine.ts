@@ -2,7 +2,7 @@ import { linuxAdminGroups, macAdminGroup } from '../runnerUtility/adminCheck';
 import { gateMarker, maxGateNoiseBytes } from './gateProtocol';
 import { ensureNodeScriptRelativePath } from '../runnerUtility/managedNode';
 import { ownNodeDirName, runnerStateDirName } from '../runnerUtility/runnerHome';
-import { encodePairCode, type PairCodePayload } from './pairCode';
+import { getPairCodeFields, joinPairCodeFields, privateKeyFooter, privateKeyHeader, type PairCodeFields, type PairCodePayload } from './pairCode';
 
 /**
  * @description THE line the operator runs on the runner machine: `sudo sh -c '<script>' sh <account>` (see {@link buildAdminBootstrapLine}). It is plain
@@ -17,7 +17,10 @@ import { encodePairCode, type PairCodePayload } from './pairCode';
  * Node's built-ins only.
  *
  * Every value in the line passed a strict pattern (`pairCode.ts`) that has no quote, space, `$`, backtick or backslash; the line itself is wrapped in single
- * quotes and so holds none. The same script serves two ways of running it, chosen by who runs it — ONE line, so the Telegram message holds one (together two
+ * quotes and so holds none. Each value is in the line ONCE, as a shell variable (`u h p y z k`: account, host, port, host key type and key, private key body)
+ * that the script itself needs before any program exists to read a code; the pairing code it hands the utility is JOINED from those variables by the shell
+ * (`pairCode.ts`: `"cr2.$u,$h,$p,<id>,$y,$z,$k"`) instead of being carried in the line a second time — a copy as base64 once cost the line more than a third of its
+ * length, and a Telegram message holds 4096 characters. The same script serves two ways of running it, chosen by who runs it — ONE line, so the Telegram message holds one (together two
  * would not fit 4096 characters) and the operator changes one word, not a whole line:
  *
  *   as ROOT (`sudo …`, the way it is offered) it does everything for the account named by its last word. The runner account runs the agents' code, so ROOT
@@ -53,8 +56,6 @@ import { encodePairCode, type PairCodePayload } from './pairCode';
 
 const hubHostAlias = 'hub';
 const privateKeyFoldWidth = 70;
-const privateKeyHeader = '-----BEGIN OPENSSH PRIVATE KEY-----';
-const privateKeyFooter = '-----END OPENSSH PRIVATE KEY-----';
 const connectTimeoutSeconds = 20;
 /** The marker line of a `bootstrap` answer as an extended regular expression: the marker, the request, optional `key=value` fields. */
 const bootstrapMarkerPattern = `^${gateMarker} bootstrap( [a-z]+=[A-Za-z0-9._:@/-]*)*$`;
@@ -76,10 +77,6 @@ const rootServiceCliInPackage = 'dist/runnerUtility/rootServiceCli.js';
 /** Where the admin line's root-owned copy is made: a folder the account can read, which `$TMPDIR` (the admin's own, private) is not. */
 const adminCopyBase = '/tmp';
 
-function getPrivateKeyBody(privateKey: string): string {
-  return privateKey.replace(privateKeyHeader, '').replace(privateKeyFooter, '').replace(/\s+/g, '');
-}
-
 /** @description The account the admin line pairs unless the operator changes its last word. */
 export const defaultRunnerAccount = 'runner';
 /** The characters of an account name the admin line lets through (a character class body): none is special to a shell, and a name never starts with `-`. */
@@ -97,23 +94,29 @@ export function checkIsAccountName(name: string): boolean {
  * are extracted readable — and `0` for a non-root user's own copy, which stays private. `$b` is the folder the copy is made in. The copy never takes the owner from the archive, so root's copy
  * stays root's.
  */
-function renderFetchSteps(payload: PairCodePayload): string[] {
+function renderFetchSteps(fields: PairCodeFields): string[] {
   const sshOptions = [
     '-T', '-F /dev/null', '-i "$d/key"',
     '-o BatchMode=yes', '-o IdentitiesOnly=yes', '-o IdentityAgent=none',
     '-o StrictHostKeyChecking=yes', '-o UserKnownHostsFile="$d/kh"', '-o GlobalKnownHostsFile=/dev/null',
     `-o HostKeyAlias=${hubHostAlias}`, `-o ConnectTimeout=${connectTimeoutSeconds}`,
-    `-p ${payload.port}`,
+    '-p "$p"',
   ].join(' ');
   return [
     'umask 077',
     'd=$(mktemp -d "$b/charness-runner.XXXXXXXX")',
     'trap "rm -rf \\"$d\\"" EXIT',
     'trap "exit 1" INT TERM',
-    `{ printf "%s\\n" "${privateKeyHeader}"; printf "%s" "${getPrivateKeyBody(payload.privateKey)}" | fold -w ${privateKeyFoldWidth}; printf "\\n%s\\n" "${privateKeyFooter}"; } > "$d/key"`,
-    `printf "%s %s\\n" ${hubHostAlias} "${payload.hostKey}" > "$d/kh"`,
+    `u="${fields.user}"`,
+    `h="${fields.host}"`,
+    `p="${fields.port}"`,
+    `y="${fields.hostKeyType}"`,
+    `z="${fields.hostKeyBlob}"`,
+    `k="${fields.privateKeyBody}"`,
+    `{ printf "%s\\n" "${privateKeyHeader}"; printf "%s" "$k" | fold -w ${privateKeyFoldWidth}; printf "\\n%s\\n" "${privateKeyFooter}"; } > "$d/key"`,
+    `printf "%s %s %s\\n" ${hubHostAlias} "$y" "$z" > "$d/kh"`,
     's "downloading the package from the hub"',
-    `ssh ${sshOptions} ${payload.user}@${payload.host} bootstrap > "$d/answer" || f "the hub refused or did not answer: expired or used line? see the ssh message above"`,
+    `ssh ${sshOptions} "$u@$h" bootstrap > "$d/answer" || f "the hub refused or did not answer: expired or used line? see the ssh message above"`,
     `hit=$(head -c ${maxGateNoiseBytes} "$d/answer" | LC_ALL=C grep -a -b -o -E -e "${bootstrapMarkerPattern}" | head -n 1)`,
     '[ -n "$hit" ] || f "no package from the hub: expired or used line?"',
     'o=${hit%%:*}; t=${hit#*:}',
@@ -123,9 +126,13 @@ function renderFetchSteps(payload: PairCodePayload): string[] {
     'tar --no-same-owner -xzf "$d/package.tgz" -C "$d/pkg"',
   ];
 }
-/** The arguments of a pairing from the unpacked package, for the pairing `code`: the folder, the archive and the id the hub announced for it. */
-function renderPairArguments(code: string): string {
-  return `--bootstrap "$d/pkg" --archive "$d/package.tgz" --package-id "\${t##*id=}" ${code}`;
+/**
+ * The arguments of a pairing from the unpacked package: the folder, the archive, the id the hub announced for it and the pairing code, which the SHELL puts
+ * together from the variables the script already holds (`pairCode.ts`: it is not carried a second time in the line).
+ */
+function renderPairArguments(fields: PairCodeFields): string {
+  const code = joinPairCodeFields({ ...fields, user: '$u', host: '$h', port: '$p', hostKeyType: '$y', hostKeyBlob: '$z', privateKeyBody: '$k' });
+  return `--bootstrap "$d/pkg" --archive "$d/package.tgz" --package-id "\${t##*id=}" "${code}"`;
 }
 
 function checkScriptHasNoQuote(script: string, what: string): string {
@@ -137,18 +144,22 @@ function checkScriptHasNoQuote(script: string, what: string): string {
  * The script (see the head of the file for its two ways). `$1` is the account. Messages are plain ASCII with no apostrophe (the whole line sits in single
  * quotes) and short: the line plus its text must fit one Telegram message.
  */
-function renderScript(payload: PairCodePayload): string {
-  // Root's way: another account is named, and root checks it before anything is fetched or runs as it.
+function renderScript(fields: PairCodeFields): string {
+  const notAccountName = 'f "$a is not an account name"';
+  // Root's way: another account is named, and root checks it before anything is fetched or runs as it — also that the name is a plain one, because the name goes
+  // to `id`, to `sudo -u` and to the root step.
   const asRootChecks = [
     'r=1',
     `b=${adminCopyBase}`,
+    `case $a in *[!${accountNameChars}]*) ${notAccountName};; esac`,
     'i=$(id -u "$a" 2>/dev/null) || f "no account $a here: create a standard user or fix the last word"',
     '[ "$i" != 0 ] || f "$a is root: use a standard user"',
     `case $(uname -s) in Darwin) g="${macAdminGroup}";; Linux) g="${linuxAdminGroups.join(' ')}";; *) f "only macOS and Linux";; esac`,
     'gs=$(id -Gn "$a") || f "no groups for $a"',
     'for x in $gs; do case " $g " in *" $x "*) f "$a is an admin: the agents code runs with its rights";; esac; done',
   ];
-  // The account's own way: nobody else is involved, so the only question is whether it IS the account named.
+  // The account's own way: nobody else is involved, so the only question is whether it IS the account named. The name is only compared (quoted) and told: an
+  // account named by a directory service (`user@realm`) is its own business, and the old line, which asked nothing, paired it.
   const asAccountChecks = [
     'r=0',
     'b=${TMPDIR:-/tmp}',
@@ -159,16 +170,16 @@ function renderScript(payload: PairCodePayload): string {
     failFunction,
     'a=$1',
     's "checking the account $a"',
-    `case $a in ""|-*|*[!${accountNameChars}]*) f "$a is not an account name";; esac`,
+    `case $a in ""|-*) ${notAccountName};; esac`,
     `if [ "$(id -u)" = 0 ]; then ${asRootChecks.join('; ')}; else ${asAccountChecks.join('; ')}; fi`,
   ];
   const nodeScript = `"$d/pkg/${ensureNodeScriptRelativePath}"`;
   const asRootStep = `n=$(sh ${nodeScript} root "$a"); "$n" "$d/pkg/${rootServiceCliInPackage}" install "$a" "$@"`;
   const asAccountStep = `n=$(sh ${nodeScript} own ${ownNodeBaseInShell}); "$n" "$d/pkg/${runnerCliInPackage}" pair "$@"`;
   const steps = [
-    ...renderFetchSteps(payload),
+    ...renderFetchSteps(fields),
     // The account is saved in `$a`: the pairing's arguments are the one list both steps are handed.
-    `set -- ${renderPairArguments(encodePairCode(payload))}`,
+    `set -- ${renderPairArguments(fields)}`,
     `if [ "$r" = 1 ]; then ${asRootStep}; else ${asAccountStep}; fi`,
   ];
   return checkScriptHasNoQuote(['set -eu', ...checks, ...steps].join('; '), 'pairing');
@@ -181,5 +192,5 @@ function renderScript(payload: PairCodePayload): string {
  */
 export function buildAdminBootstrapLine(payload: PairCodePayload, account: string = defaultRunnerAccount): string {
   if (!checkIsAccountName(account)) throw new Error('the runner account must be a plain account name');
-  return `sudo sh -c '${renderScript(payload)}' sh ${account}`;
+  return `sudo sh -c '${renderScript(getPairCodeFields(payload))}' sh ${account}`;
 }

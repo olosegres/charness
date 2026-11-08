@@ -24,6 +24,7 @@ import { checkHubAddress, parseHubAddress, type HostKeyScanner, type HubAddress,
 import { findProposedHubAddress, formatHubAddress } from '../../../runners/hubAddressCandidates';
 import type { HubContext } from '../../../runners/hubPaths';
 import {
+  cancelPairing,
   createPairing,
   setPairedRunnerPaused,
 } from '../../../runners/hubPairing';
@@ -52,6 +53,7 @@ import {
   runnersPageCallbackRe,
   runnersPairCallback,
   runnersRefreshCallback,
+  telegramMessageLimit,
   type FormatTime,
   type RunnersCallback,
   type RunnersScreen,
@@ -283,9 +285,20 @@ export function createRunners(ports: RunnersPorts) {
     return true;
   }
 
+  /** Close the code of a line nobody was given, so its credential does not stay open until it runs out; a registry that cannot be written is said, the code then runs out by itself. */
+  async function closeUnofferedPairing(pairId: string): Promise<void> {
+    try {
+      await cancelPairing(hub, pairId, now());
+    } catch (error) {
+      console.warn(`[${logTag}] the code of a line that was not offered could not be closed (${describeCaughtError(error)}); it runs out by itself`);
+    }
+  }
+
   /**
    * Make a code and post the one message that carries it: the line (it works for an admin account with its `sudo`, and for the runner account itself without it) under
    * its explanation. The message shows what became of the code — «paired», «expired», or that the line was used on a machine that was already paired.
+   * A code whose message cannot be sent — too long for Telegram (a very long host name, a big RSA host key: the line holds the host key once), or refused by it — is
+   * CLOSED at once and the failure says so (for a message too long, where to make the line instead): no credential is left open for ten minutes with nobody holding its line.
    */
   async function offerPairing(key: SessionKey, address: HubAddress, knownCheck: Extract<HubAddressCheck, { ok: true }> | null): Promise<void> {
     const check = knownCheck ?? (await checkHubAddress(address, ports.scanHostKey));
@@ -297,7 +310,15 @@ export function createRunners(ports: RunnersPorts) {
       ports.ensureGateWrapper();
       const pairing = await createPairing(hub, { host: address.host, port: address.port, hostKey: check.hostKey, label: ports.getBotLabel(), nowMs: now() });
       const intro = buildPairingIntro(pairingLifetimeMinutes, defaultRunnerAccount, t);
-      if (!(await postPairingLine(key, pairing.pairId, renderPairingMessage(intro, buildAdminBootstrapLine(pairing.payload, defaultRunnerAccount))))) {
+      const message = renderPairingMessage(intro, buildAdminBootstrapLine(pairing.payload, defaultRunnerAccount));
+      if (message.plain.length > telegramMessageLimit) {
+        await closeUnofferedPairing(pairing.pairId);
+        const reason = t('runners.pairLineTooLongReasonText', { length: message.plain.length, limit: telegramMessageLimit, address: formatHubAddress(address) });
+        await replyToThread(key, t('runners.pairFailedText', { reason }));
+        return;
+      }
+      if (!(await postPairingLine(key, pairing.pairId, message))) {
+        await closeUnofferedPairing(pairing.pairId);
         await replyToThread(key, t('runners.pairFailedText', { reason: 'the message could not be sent' }));
       }
     } catch (error) {

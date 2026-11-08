@@ -1252,5 +1252,6 @@ export const ruDict: Record<string, string> = {
   'runners.expiredText': 'Код подключения истёк.',
   'runners.closedText': 'Эта строка использована на машине, которая уже была подключена, — ничего нового не подключено.',
   'runners.pairFailedText': '⚠️ Не удалось создать строку подключения: {reason}',
+  'runners.pairLineTooLongReasonText': 'строка с пояснением занимает {length} символов, а сообщение в Telegram вмещает {limit} (так бывает с длинным именем хоста или длинным RSA-ключом хоста) — создайте строку в терминале на этой машине: charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ Реестр раннеров не читается: {reason}',
 };

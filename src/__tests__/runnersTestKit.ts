@@ -6,7 +6,7 @@ import { injectStreamIntoSshServer } from '../runnerUtility/injectStream';
 import type { RedeemRequest } from '../runners/gateProtocol';
 import { createHubContext, type HubContext } from '../runners/hubPaths';
 import { generateEd25519KeyPair, type SshKeyPair } from '../runners/sshKeys';
-import type { PairCodePayload } from '../runners/pairCode';
+import { decodePairCode, joinPairCodeFields, type PairCodePayload } from '../runners/pairCode';
 import { ensureNodeScriptRelativePath } from '../runnerUtility/managedNode';
 
 /**
@@ -96,6 +96,28 @@ export function createRedeemFixture(overrides: Partial<RedeemRequest> = {}): Red
     clientKey,
     serverKey,
   };
+}
+
+/**
+ * The pairing code a pasted line makes: the line holds the connection values once, as shell variables (`u="hubuser"; h="…"`), and its shell joins them into the
+ * code — this does the same joining from the text of the line.
+ */
+export function readCodeOfLine(line: string): string {
+  const read = (variable: string): string => {
+    const value = new RegExp(`; ${variable}="([^"]*)"`).exec(line)?.[1];
+    if (value === undefined) throw new Error(`the line holds no ${variable}="…"`);
+    return value;
+  };
+  const pairId = /"cr2\.\$u,\$h,\$p,([0-9a-f]+),/.exec(line)?.[1];
+  if (pairId === undefined) throw new Error('the line puts no pairing code together');
+  return joinPairCodeFields({ user: read('u'), host: read('h'), port: read('p'), pairId, hostKeyType: read('y'), hostKeyBlob: read('z'), privateKeyBody: read('k') });
+}
+
+/** @description The payload of the pairing a pasted line holds ({@link readCodeOfLine}). */
+export function readPayloadOfLine(line: string): PairCodePayload {
+  const decoded = decodePairCode(readCodeOfLine(line));
+  if (!decoded.ok) throw new Error(decoded.error);
+  return decoded.payload;
 }
 
 /** A pair-code payload with real keys. */

@@ -1249,5 +1249,6 @@ export const ptDict: Record<string, string> = {
   'runners.expiredText': 'O código de emparelhamento expirou.',
   'runners.closedText': 'Esta linha foi usada numa máquina que já estava emparelhada — nada de novo foi emparelhado.',
   'runners.pairFailedText': '⚠️ Não foi possível criar a linha de emparelhamento: {reason}',
+  'runners.pairLineTooLongReasonText': 'a linha e a sua explicação ocupam {length} caracteres e uma mensagem do Telegram comporta {limit} (um nome de host longo ou uma chave de host RSA longa causa isso) — gere a linha, em vez disso, num terminal desta máquina: charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ O registro de runners não pode ser lido: {reason}',
 };

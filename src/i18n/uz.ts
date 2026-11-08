@@ -1248,5 +1248,6 @@ export const uzDict: Record<string, string> = {
   'runners.expiredText': 'Ulash kodining muddati tugadi.',
   'runners.closedText': 'Bu qator allaqachon ulangan mashinada ishlatildi — yangi hech narsa ulanmadi.',
   'runners.pairFailedText': '⚠️ Ulash qatorini yaratib bo‘lmadi: {reason}',
+  'runners.pairLineTooLongReasonText': 'qator va uning izohi {length} belgi, Telegram xabariga esa {limit} belgi sig‘adi (uzun host nomi yoki uzun RSA host kaliti shunday qiladi) — qatorni o‘rniga shu mashinadagi terminalda yarating: charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ Runnerlar reyestrini o‘qib bo‘lmadi: {reason}',
 };

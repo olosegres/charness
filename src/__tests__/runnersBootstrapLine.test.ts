@@ -18,11 +18,11 @@ import os from 'os';
 import path from 'path';
 import { gzipSync } from 'zlib';
 import { buildAdminBootstrapLine, checkIsAccountName, defaultRunnerAccount } from '../runners/bootstrapLine';
+import { decodePairCode, encodePairCode, getPairCodeFields } from '../runners/pairCode';
 import { checkIsAdminAccount, linuxAdminGroups, macAdminGroup } from '../runnerUtility/adminCheck';
 import { formatGateAnswerHead } from '../runners/gateProtocol';
-import { encodePairCode } from '../runners/pairCode';
 import { createTarArchive } from '../runners/tarArchive';
-import { createPairCodePayload } from './runnersTestKit';
+import { createPairCodePayload, readCodeOfLine } from './runnersTestKit';
 
 let workDir = '';
 
@@ -124,15 +124,26 @@ describe('the line without sudo, in the runner account\'s own terminal', () => {
     fs.rmSync(workDir, { recursive: true, force: true });
   });
 
-  it('is one line of `sh -c` with the code in it, and the script is valid sh', () => {
+  it('is one line of `sh -c` that puts the pairing code together, and the script is valid sh', () => {
     const payload = createPairCodePayload();
     const line = buildOwnAccountLine(payload);
     assert.ok(line.startsWith("sh -c '") && line.endsWith(`' sh ${ownAccountName}`), 'the account it runs as is its last word');
     assert.ok(!line.includes('\n'));
-    assert.ok(line.includes(encodePairCode(payload)));
+    assert.ok(line.includes(`"cr2.$u,$h,$p,${payload.pairId},$y,$z,$k"`), 'the shell joins its variables into the code');
+    assert.equal(readCodeOfLine(line), encodePairCode(payload), 'the code the variables make is the code the hub makes');
     const script = line.slice("sh -c '".length, -`' sh ${ownAccountName}`.length);
     assert.ok(!script.includes("'"));
     assert.equal(spawnSync('sh', ['-n', '-c', script]).status, 0);
+  });
+
+  it('holds every value of the pairing ONCE — the code is not carried a second time inside the line, which is what keeps the line, with its explanation, within one Telegram message', () => {
+    const payload = createPairCodePayload({ host: 'hub.example', user: 'hubuser' });
+    const { hostKeyBlob, privateKeyBody } = getPairCodeFields(payload);
+    const line = buildOwnAccountLine(payload);
+    for (const [label, value] of [['the private key', privateKeyBody], ['the host key', hostKeyBlob], ['the host', 'hub.example'], ['the hub account', 'hubuser'], ['the id of the pairing', payload.pairId]]) {
+      assert.equal(line.split(value).length, 2, `${label} is in the line once`);
+    }
+    assert.ok(!line.includes(encodePairCode(payload)) && !line.includes('cr1.'), 'and no copy of them is written out as a code');
   });
 
   it('carries no value that could end its quoting', () => {
@@ -150,7 +161,9 @@ describe('the line without sudo, in the runner account\'s own terminal', () => {
       env: createLineEnv(),
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, new RegExp(`^RUNNER_CLI pair --bootstrap \\S+/pkg --archive \\S+/package\\.tgz --package-id 0123456789abcdef ${encodePairCode(payload).replace(/\./g, '\\.')}$`, 'm'));
+    const handedCode = /^RUNNER_CLI pair --bootstrap \S+\/pkg --archive \S+\/package\.tgz --package-id 0123456789abcdef (\S+)$/m.exec(result.stdout)?.[1];
+    assert.equal(handedCode, encodePairCode(payload), 'the runner utility is handed EXACTLY the code the hub makes, put together by the shell');
+    assert.deepEqual(decodePairCode(handedCode ?? ''), { ok: true, payload }, 'and it decodes to the pairing');
 
     const sshArgs = fs.readFileSync(path.join(workDir, 'ssh.args'), 'utf8');
     for (const expected of ['-T', '-F /dev/null', 'BatchMode=yes', 'IdentitiesOnly=yes', 'IdentityAgent=none', 'StrictHostKeyChecking=yes', 'GlobalKnownHostsFile=/dev/null', 'HostKeyAlias=hub', '-p 2222', 'hubuser@hub.example bootstrap']) {
@@ -260,7 +273,7 @@ describe('the line without sudo, in the runner account\'s own terminal', () => {
     const script = /^sh -c '(.*)' sh runner$/.exec(buildOwnAccountLine())?.[1] ?? '';
     assert.ok(!/(^|[ ;])node /.test(script), 'the pairing is started by the path the script printed, not by a `node` of the PATH');
     assert.ok(!script.includes('process.versions'), 'and no version of a system Node is judged by the line');
-    assert.match(script, /; set -- --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" cr1\./);
+    assert.match(script, /; set -- --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" "cr2\.\$u,\$h,\$p,[0-9a-f]+,\$y,\$z,\$k"/);
     assert.match(script, /else n=\$\(sh "\$d\/pkg\/remoteRun\/ensureNode\.sh" own "\$HOME\/\.charness-runner\/node"\); "\$n" "\$d\/pkg\/dist\/runnerUtility\/runnerCli\.js" pair "\$@"; fi$/);
   });
 
@@ -290,17 +303,37 @@ describe('the line without sudo, in the runner account\'s own terminal', () => {
     assert.deepEqual(fs.readdirSync(path.join(workDir, 'tmp')), [], 'and no copy was made');
   });
 
-  it('judges the name before anything else in this way too — an edited last word that is no account name runs nothing', () => {
+  it('an empty or dash-led last word is refused before anything else; any other is only compared with the account that runs the line — and nothing in it is executed', () => {
     installStubSsh(path.join(workDir, 'bin'));
     createBootstrapAnswer();
     const line = buildOwnAccountLine();
+    const withLastWord = (word: string): string => `${line.slice(0, line.length - ' runner'.length)} '${word}'`;
     const marker = path.join(workDir, 'pwned');
-    for (const edited of ['-n', 'a b', 'x;y', '$(touch pwned)']) {
-      const result = spawnSync('sh', ['-c', `${line.slice(0, line.length - ' runner'.length)} '${edited}'`], { encoding: 'utf8', cwd: workDir, env: createLineEnv() });
+    for (const edited of ['', '-n']) {
+      const result = spawnSync('sh', ['-c', withLastWord(edited)], { encoding: 'utf8', cwd: workDir, env: createLineEnv() });
       assert.notEqual(result.status, 0, JSON.stringify(edited));
       assert.match(String(result.stderr), /is not an account name/, JSON.stringify(edited));
     }
-    assert.ok(!fs.existsSync(marker) && !fs.existsSync(path.join(workDir, 'ssh.args')));
+    for (const edited of ['x;y', '$(touch pwned)', 'a b', 'runner;touch pwned']) {
+      const result = spawnSync('sh', ['-c', withLastWord(edited)], { encoding: 'utf8', cwd: workDir, env: createLineEnv() });
+      assert.notEqual(result.status, 0, JSON.stringify(edited));
+      assert.match(String(result.stderr), /you are not .*: run the line as .* or with sudo/, JSON.stringify(edited));
+    }
+    assert.ok(!fs.existsSync(marker), 'nothing in the name was executed');
+    assert.ok(!fs.existsSync(path.join(workDir, 'ssh.args')), 'and nothing was fetched');
+  });
+
+  it('an account whose name is not a plain one — a directory service names it «user@realm» — pairs itself by its own line: the name is only compared with who runs the line', () => {
+    const accountName = 'svc-runner@corp.example';
+    installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 1000, userName: accountName, os: 'Linux', accounts: {} });
+    installStubSsh(path.join(workDir, 'bin'));
+    createBootstrapAnswer();
+    const line = buildOwnAccountLine();
+    const result = spawnSync('sh', ['-c', `${line.slice(0, line.length - ' runner'.length)} ${accountName}`], { encoding: 'utf8', env: createLineEnv() });
+    assert.equal(result.status, 0, String(result.stderr));
+    assert.match(String(result.stdout), /^charness-runner: checking the account svc-runner@corp\.example$/m);
+    assert.match(String(result.stdout), /^RUNNER_CLI pair --bootstrap /m, 'the pairing ran');
+    assert.doesNotMatch(String(result.stdout), /ROOT_SERVICE/);
   });
 });
 
@@ -395,7 +428,7 @@ describe('admin bootstrap line: how it is built', () => {
     assert.equal(parts.account, defaultRunnerAccount);
     assert.equal(defaultRunnerAccount, 'runner');
     assert.equal(splitAdminLine(buildAdminBootstrapLine(payload, 'ci.runner-2')).account, 'ci.runner-2');
-    assert.equal(parts.script.split(encodePairCode(payload)).length, 2, 'the code is in the script once');
+    assert.equal(readCodeOfLine(line), encodePairCode(payload), 'the shell makes the code the hub makes, from variables the script holds once');
     assert.equal(spawnSync('sh', ['-n', '-c', parts.script]).status, 0, 'valid sh');
   });
 
@@ -410,7 +443,7 @@ describe('admin bootstrap line: how it is built', () => {
 
   it('runs the root step from that copy — never from the account\'s folder — and hands it the pairing: the shell has no `sudo -u` of its own, so nothing of the account\'s runs outside the root step\'s terminal-less runner', () => {
     const { script } = splitAdminLine(buildAdminBootstrapLine(createPairCodePayload()));
-    assert.match(script, /; set -- --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" cr1\./);
+    assert.match(script, /; set -- --bootstrap "\$d\/pkg" --archive "\$d\/package\.tgz" --package-id "\$\{t##\*id=\}" "cr2\.\$u,\$h,\$p,[0-9a-f]+,\$y,\$z,\$k"/);
     assert.ok(!script.includes('sudo -u'), 'no step of the account\'s is run by the line, with the admin\'s terminal attached — the Node install, in the package\'s script, asks the account nothing but `test`');
     // The two ways end in two programs: root's step for the account named, the account's own pairing for the account that runs the line.
     const [, finalSteps] = script.split('; if [ "$r" = 1 ]; then ');
@@ -453,7 +486,9 @@ describe('admin bootstrap line: the checks as root, the root-owned copy, the swi
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
     const result = runAdminLine();
     assert.equal(result.status, 0, String(result.stderr));
-    assert.match(String(result.stdout), /^ROOT_SERVICE install runner --bootstrap \S+\/pkg --archive \S+\/package\.tgz --package-id 0123456789abcdef cr1\./m, 'one program does the pairing and then the service: it is handed the pairing');
+    const handedCode = /^ROOT_SERVICE install runner --bootstrap \S+\/pkg --archive \S+\/package\.tgz --package-id 0123456789abcdef (\S+)$/m.exec(String(result.stdout))?.[1];
+    assert.ok(handedCode?.startsWith('cr2.'), 'one program does the pairing and then the service: it is handed the pairing');
+    assert.equal(decodePairCode(handedCode ?? '').ok, true, 'a code that decodes');
     const pairedFrom = readPrinted(result, 'ROOT_SERVICE_FROM');
     assert.match(pairedFrom, /^\/tmp\/charness-runner\.[A-Za-z0-9]{8}\/pkg$/, 'a folder of root\'s own in /tmp');
     assert.ok(!pairedFrom.startsWith(path.join(workDir, 'homes')), 'nothing runs from the account\'s home');
@@ -549,7 +584,7 @@ describe('admin bootstrap line: the checks as root, the root-owned copy, the swi
     installAdminStubs(path.join(workDir, 'bin'), { runnerUid: 0, os: 'Linux', accounts: { runner: standardAccount } });
     const line = buildAdminBootstrapLine(createPairCodePayload());
     const marker = path.join(workDir, 'pwned');
-    for (const edited of ['', '-n', 'a b', 'x;y', '$(touch pwned)', 'runner;touch pwned']) {
+    for (const edited of ['', '-n', 'a b', 'x;y', '$(touch pwned)', 'runner;touch pwned', 'svc-runner@corp.example']) {
       const result = spawnSync('sh', ['-c', `${line.slice(0, line.length - ' runner'.length).replace(/^sudo /, '')} '${edited}'`], {
         encoding: 'utf8',
         cwd: workDir,

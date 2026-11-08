@@ -1248,5 +1248,6 @@ export const kaDict: Record<string, string> = {
   'runners.expiredText': 'დაწყვილების კოდს ვადა გაუვიდა.',
   'runners.closedText': 'ეს სტრიქონი უკვე დაწყვილებულ მანქანაზე გამოიყენეს — ახალი არაფერი დაწყვილებულა.',
   'runners.pairFailedText': '⚠️ დაწყვილების სტრიქონის შექმნა ვერ მოხერხდა: {reason}',
+  'runners.pairLineTooLongReasonText': 'სტრიქონი განმარტებასთან ერთად {length} სიმბოლოა, Telegram-ის შეტყობინებაში კი {limit} ეტევა (გრძელი ჰოსტის სახელი ან გრძელი RSA ჰოსტის გასაღები იწვევს ამას) — სტრიქონი ამის ნაცვლად ამ მანქანის ტერმინალში შექმენით: charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ რანერების რეესტრის წაკითხვა შეუძლებელია: {reason}',
 };

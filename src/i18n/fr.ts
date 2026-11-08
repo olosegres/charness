@@ -1248,5 +1248,6 @@ export const frDict: Record<string, string> = {
   'runners.expiredText': 'Le code d’association a expiré.',
   'runners.closedText': 'Cette ligne a été utilisée sur une machine déjà associée — rien de nouveau n’a été associé.',
   'runners.pairFailedText': '⚠️ Impossible de créer la ligne d’association : {reason}',
+  'runners.pairLineTooLongReasonText': 'la ligne et son explication font {length} caractères et un message Telegram en contient au plus {limit} (un long nom d’hôte ou une longue clé d’hôte RSA en est la cause) — créez plutôt la ligne dans un terminal sur cette machine : charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ Le registre des runners est illisible : {reason}',
 };

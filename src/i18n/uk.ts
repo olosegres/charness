@@ -1254,5 +1254,6 @@ export const ukDict: Record<string, string> = {
   'runners.expiredText': 'Код підключення сплив.',
   'runners.closedText': 'Цей рядок використано на машині, яка вже була підключена, — нічого нового не підключено.',
   'runners.pairFailedText': '⚠️ Не вдалося створити рядок підключення: {reason}',
+  'runners.pairLineTooLongReasonText': 'рядок із поясненням займає {length} символів, а повідомлення в Telegram вміщає {limit} (так буває з довгою назвою хоста або довгим RSA-ключем хоста) — створіть рядок у терміналі на цій машині: charness runners pair --host {address}',
   'runners.registryErrorText': '⚠️ Реєстр раннерів не читається: {reason}',
 };
