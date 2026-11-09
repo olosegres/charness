@@ -1693,6 +1693,9 @@ describe('the Xcode build data of a copy that nobody used for a day (`ios/build`
   function makeCopyWithBuildData(copySlug: string, usedAgoMs: number): string {
     const copyDir = makeCopy(copySlug, 8, usedAgoMs);
     for (const relative of [...buildData, ...notBuildData]) writeFile(path.join(copyDir, 'tree'), relative);
+    // What the fake `du` says of the build folders: 3 GiB and 2 GiB of the copy's 8.
+    writeFile(path.join(copyDir, 'tree'), 'projects/x/ios/build/fake-kb', `${3 * kibPerGib}`);
+    writeFile(path.join(copyDir, 'tree'), 'ios/DerivedData/fake-kb', `${2 * kibPerGib}`);
     writeFile(copyDir, 'manifest', 'projects/x/ios/Podfile\nprojects/x/ios/Source.swift\n');
     writeFile(copyDir, 'size-kb', `${8 * kibPerGib}`);
     return copyDir;
@@ -1712,9 +1715,10 @@ describe('the Xcode build data of a copy that nobody used for a day (`ios/build`
     const swept = runScript(['sweep-tmpdirs', workDir]);
     assert.equal(swept.status, 0, swept.stderr);
     expectTrimmed('idle-aaaaaaaaaa');
-    assert.equal(fs.readFileSync(path.join(copyDir, 'build-data-trimmed'), 'utf8').split('\n')[0].split(' ').sort().join(' '), 'ios/DerivedData projects/x/ios/build', 'what went is written down for the next job');
-    assert.equal(fs.existsSync(path.join(copyDir, 'size-kb')), false, 'the measured size is not true any more');
+    assert.equal(fs.readFileSync(path.join(copyDir, 'build-data-trimmed'), 'utf8').trim().split(', ').sort().join(', '), 'ios/DerivedData, projects/x/ios/build', 'what went is written down for the next job');
+    assert.equal(fs.readFileSync(path.join(copyDir, 'size-kb'), 'utf8').trim(), `${3 * kibPerGib}`, 'the measured size goes down by what was taken out of it: 8 - 3 - 2 GiB');
     assert.equal(fs.existsSync(path.join(copyDir, 'lock')), false, 'the lock it took is given back');
+    assert.deepEqual(fs.readdirSync(copyDir).filter((name) => name.startsWith('build-trash')), [], 'and nothing is left of what was removed');
     assert.equal(fs.existsSync(path.join(copyDir, 'used')), true);
     assert.ok(Date.now() - fs.statSync(path.join(copyDir, 'used')).mtimeMs > 24 * hourMs, 'a trim is no use of the copy: it is still as idle as it was');
   });
@@ -1812,5 +1816,109 @@ describe('the Xcode build data of a copy that nobody used for a day (`ios/build`
     while (exists('idle-pppppppppp', buildData[0]) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
     expectTrimmed('idle-pppppppppp');
     assert.ok(fs.existsSync(path.join(workDir, 'p', slug, 'tree')), 'and the copy of the submit itself is not what was trimmed');
+  });
+  it('the measured size is LOWERED by what the trim took, never dropped: a figure smaller than that goes to 0, a copy that had none is left with none (a short-disk prune reads that as «cannot tell»)', () => {
+    makeCopyWithBuildData('small-qqqqqqqqqq', 30 * hourMs);
+    writeFile(path.join(workDir, 'p', 'small-qqqqqqqqqq'), 'size-kb', `${4 * kibPerGib}`);
+    const unmeasured = makeCopyWithBuildData('unmeasured-rrrrrrrrrr', 30 * hourMs);
+    fs.rmSync(path.join(unmeasured, 'size-kb'));
+    assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+    assert.equal(fs.readFileSync(path.join(workDir, 'p', 'small-qqqqqqqqqq', 'size-kb'), 'utf8').trim(), '0');
+    assert.equal(fs.existsSync(path.join(unmeasured, 'size-kb')), false, 'no figure is made up');
+    expectTrimmed('unmeasured-rrrrrrrrrr');
+  });
+
+  it('a short-disk prune over copies that were just trimmed still STOPS when removing them gives nothing back: the figures it judges by are lowered, not dropped (a copy without one can never be a verdict)', () => {
+    // Three copies idle for a day, measured at 30 GiB each, 8 GiB of it build data; the free figure of the disk does not follow removals (APFS snapshots).
+    for (const [name, usedAgoHours] of [['oldest-ssssssssss', 40], ['middle-tttttttttt', 38], ['newest-uuuuuuuuuu', 36]] as const) {
+      const copyDir = makeCopyWithBuildData(name, usedAgoHours * hourMs);
+      writeFile(copyDir, 'fake-kb', '0');
+      writeFile(copyDir, 'size-kb', `${30 * kibPerGib}`);
+      writeFile(path.join(copyDir, 'tree'), 'projects/x/ios/build/fake-kb', `${8 * kibPerGib}`);
+    }
+    const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '95', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(parseRemovals(result.stdout), ['oldest-ssssssssss', 'middle-tttttttttt'], 'two removals that gave nothing back, and the prune stopped');
+    assert.match(result.stdout, /^stopped=middle-tttttttttt freed_kb=0 size_kb=\d+$/m);
+    assert.deepEqual(listCopies(), ['newest-uuuuuuuuuu']);
+    // The trim had run before them, on all three: what was left of the newest shows it.
+    assert.equal(exists('newest-uuuuuuuuuu', 'projects/x/ios/build'), false);
+  });
+
+  describe('the copy\'s lock is held for the renames alone', () => {
+    /**
+     * A `rm` that sleeps for 3 s when it is asked to remove a build trash, after leaving a marker (the removal of tens of GB takes minutes), and that writes down, when it is asked to remove a copy's lock, what was already
+     * there beside it: the note for the next job and the lowered figure — what a job that takes the lock the moment it is free would meet.
+     */
+    function slowTrashRemoval(): { markerFile: string; lockReleaseFile: string } {
+      const markerFile = path.join(workRoot, 'trash-removal-started');
+      const lockReleaseFile = path.join(workRoot, 'state-at-lock-release');
+      writeExecutable(path.join(fakeBinDir, 'rm'), [
+        '#!/bin/bash',
+        'for argument; do',
+        '  case "$argument" in',
+        `    *build-trash.*) : > '${markerFile}'; sleep 3 ;;`,
+        `    */lock) printf 'note=%s size=%s\\n' "$([ -e "$(dirname "$argument")/build-data-trimmed" ] && echo yes || echo no)" "$(cat "$(dirname "$argument")/size-kb" 2> /dev/null)" >> '${lockReleaseFile}' ;;`,
+        '  esac',
+        'done',
+        'exec /bin/rm "$@"',
+        '',
+      ].join('\n'));
+      return { markerFile, lockReleaseFile };
+    }
+
+    it('the folders are renamed out of the tree, the note and the figure are written and the lock is given back BEFORE the removal starts: a job, a seed or a `clean` is not kept waiting for it, and an `exec` finds no folder half deleted', async () => {
+      const copyDir = makeCopyWithBuildData('slow-vvvvvvvvvv', 30 * hourMs);
+      const { markerFile, lockReleaseFile } = slowTrashRemoval();
+      const sweep = spawn('bash', [scriptPath, 'sweep-tmpdirs', workDir], { env: getEnv(), stdio: 'ignore' });
+      liveProcesses.push(sweep);
+      const ended = new Promise<void>((resolve) => sweep.on('close', () => resolve()));
+      const deadline = Date.now() + 20_000;
+      while (!fs.existsSync(markerFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.ok(fs.existsSync(markerFile), 'the removal of the trash started');
+      // The removal is under way (it sleeps): everything else is already settled.
+      assert.equal(fs.existsSync(path.join(copyDir, 'lock')), false, 'the lock is already given back');
+      expectTrimmed('slow-vvvvvvvvvv');
+      assert.equal(fs.readFileSync(path.join(copyDir, 'size-kb'), 'utf8').trim(), `${3 * kibPerGib}`);
+      assert.ok(fs.existsSync(path.join(copyDir, 'build-data-trimmed')), 'the note is there before anyone can take the lock');
+      const trash = fs.readdirSync(copyDir).filter((name) => name.startsWith('build-trash.'));
+      assert.equal(trash.length, 1, 'the folders wait in a trash of the copy, outside its tree');
+      await ended;
+      assert.deepEqual(fs.readdirSync(copyDir).filter((name) => name.startsWith('build-trash')), [], 'and are removed after');
+      assert.equal(fs.readFileSync(lockReleaseFile, 'utf8').trim(), `note=yes size=${3 * kibPerGib}`, 'when the lock was given back the note and the figure were already written: a job that takes the lock then meets them, never a stale note after a rebuild');
+    });
+
+    it('a trash that a sweep was cut off in the middle of removing is removed by the next one — unless its process is still alive, which is at it', () => {
+      const copyDir = makeCopy('leftover-wwwwwwwwww', 1, hourMs);
+      const deadPid = getDeadPid();
+      const alivePid = startRunnerStandIn();
+      for (const pid of [deadPid, alivePid]) writeFile(copyDir, `build-trash.${pid}/0/Products/app.txt`);
+      fs.chmodSync(path.join(copyDir, `build-trash.${deadPid}`, '0'), 0o555);
+      assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+      assert.equal(fs.existsSync(path.join(copyDir, `build-trash.${deadPid}`)), false, 'a process that is gone');
+      assert.equal(fs.existsSync(path.join(copyDir, `build-trash.${alivePid}`)), true, 'a live one is removing it');
+    });
+  });
+
+  it('never leaves the copy: a build folder that is a symlink (`ios/build` -> somewhere), an app folder that is a symlink to a folder holding `ios/build`, are not followed and not touched; a folder with a SPACE in its path is trimmed like any', () => {
+    const copyDir = makeCopy('links-xxxxxxxxxx', 5, 30 * hourMs);
+    const outside = path.join(workRoot, 'outside');
+    writeFile(outside, 'keep/derived.txt', 'not the runner\'s');
+    writeFile(outside, 'ios/build/Products/inner.txt', 'not the runner\'s either');
+    const treeDir = path.join(copyDir, 'tree');
+    fs.mkdirSync(path.join(treeDir, 'projects', 'x', 'ios'), { recursive: true });
+    fs.symlinkSync(path.join(outside, 'keep'), path.join(treeDir, 'projects', 'x', 'ios', 'build'));
+    fs.symlinkSync(outside, path.join(treeDir, 'projects', 'linked'));
+    writeFile(treeDir, 'projects/my app/ios/build/Products/a.txt');
+    writeFile(treeDir, 'projects/my app/ios/Podfile');
+    writeFile(copyDir, 'manifest', 'projects/my app/ios/Podfile\n');
+    assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+    assert.equal(fs.readFileSync(path.join(outside, 'keep', 'derived.txt'), 'utf8'), 'not the runner\'s', 'the folder a build link points to is untouched');
+    assert.equal(fs.readFileSync(path.join(outside, 'ios', 'build', 'Products', 'inner.txt'), 'utf8'), 'not the runner\'s either', 'and so is one an app folder link leads to');
+    assert.ok(fs.lstatSync(path.join(treeDir, 'projects', 'x', 'ios', 'build')).isSymbolicLink(), 'the links stay as they are');
+    assert.ok(fs.lstatSync(path.join(treeDir, 'projects', 'linked')).isSymbolicLink());
+    assert.equal(fs.existsSync(path.join(treeDir, 'projects', 'my app', 'ios', 'build')), false, 'the folder with a space in its path is trimmed');
+    assert.equal(fs.existsSync(path.join(treeDir, 'projects', 'my app', 'ios', 'Podfile')), true, 'and its sources stay');
+    assert.equal(fs.readFileSync(path.join(copyDir, 'build-data-trimmed'), 'utf8').trim(), 'projects/my app/ios/build');
   });
 });

@@ -1405,7 +1405,7 @@ read_copy_size_kb() {
           case $tmp_kb in '' | *[!0-9]*) ;; *) size_kb=$((size_kb + tmp_kb)) ;; esac
           ;;
       esac
-      { printf '%s\n' "$size_kb" > "$size_file.tmp.$$" && mv "$size_file.tmp.$$" "$size_file"; } 2> /dev/null
+      write_copy_size_kb "$size_file" "$size_kb"
       ;;
   esac
   printf '%s\n' "$size_kb"
@@ -2952,29 +2952,85 @@ check_manifest_lists_files_in() {
   awk -v prefix="$2/" 'index($0, prefix) == 1 { found = 1; exit } END { if (found) exit 0; exit 1 }' "$1/manifest"
 }
 
-# Remove the Xcode build data from the tree of the copy in folder $1 — it is idle (the caller looked), and not busy. Taken under the copy's project lock, tried once: a job that holds it is in the copy, and one that comes while this runs
-# waits for it (a `prepare` touches `used` before its job asks for the lock, so the idle test is made again under the lock). A folder with a file the manifest lists in it is left whole. What went is written down for the next job's log
-# (`build-data-trimmed`), and the copy's measured size (`size-kb`) is not true any more: it goes, and `measure-copies` writes a new one.
+# Write the measured size of a copy into its figure file $1 (KiB $2), atomically: the one write both `measure-copies` and a trim make.
+write_copy_size_kb() {
+  { printf '%s\n' "$2" > "$1.tmp.$$" && mv "$1.tmp.$$" "$1"; } 2> /dev/null
+}
+
+# The figure of copy folder $1 (`size-kb`) goes down by $2 KiB (not below 0) — what a trim took out of it. A copy with no figure, or with a damaged one, is left as it is: a missing figure stays missing (a short-disk prune reads it as
+# «cannot tell», and an invented one would let it judge). The figure matters to the free-space prune's no-progress guard (it needs the copies' sizes), and to the biggest copies a refusal names.
+lower_copy_size_kb() {
+  local size_file="$1/size-kb" size_kb
+  [ -f "$size_file" ] || return 0
+  size_kb=$(read_file "$size_file")
+  case $size_kb in '' | *[!0-9]*) return 0 ;; esac
+  if [ "$size_kb" -gt "$2" ]; then size_kb=$((size_kb - $2)); else size_kb=0; fi
+  write_copy_size_kb "$size_file" "$size_kb"
+}
+
+# Rename folder $1 to path $2, a name that does not exist yet, on the same filesystem: instant, whatever the folder holds. A folder without write permission cannot move to another parent (the rename rewrites its `..`) and a read-only
+# parent cannot give it up: they are made writable first, as every removal here does.
+move_folder_aside() {
+  chmod u+w "$1" 2> /dev/null
+  mv "$1" "$2" 2> /dev/null && return 0
+  chmod u+w "$(dirname "$1")" 2> /dev/null
+  mv "$1" "$2" 2> /dev/null
+}
+
+# Remove the Xcode build data from the tree of the copy in folder $1 — it is idle (the caller looked), and not busy. A folder with a file the manifest lists in it is left whole. Under the copy's project lock, tried once, nothing is done
+# but RENAMES: the lock is what a seed from this copy (`seed_new_copy`), a job of it and a `clean` ask for, and a removal of tens of GB takes minutes; an `exec` takes no lock, and must not meet a folder that is being deleted. So the idle test
+# is made again under the lock (a `prepare` touches `used` before its job asks for it), each build folder is renamed out of the tree — to `build-trash.<pid>` in the copy's own folder, NOT in `tree/`: a seed carries whole `ios` folders and walks the
+# tree — the note for the next job's log (`build-data-trimmed`) and the lowered figure (`size-kb`) are written, and only then the lock is given back and the trash removed. The sizes are read before the lock: they are a walk of the same folders.
+# A trash a sweep left (`build-trash.<pid>` of a process that is gone) is removed by the next one (`remove_leftover_build_trash`).
 trim_copy_build_data() {
-  local copy_dir=$1 folders relative trimmed=
+  local copy_dir=$1 folders relative candidates= candidate folder_kb removed_kb=0 trimmed= trash_dir="$1/build-trash.$$" trash_count=0
   [ -d "$copy_dir/tree" ] || return 0
   folders=$(list_build_data_folders "$copy_dir/tree")
   [ -n "$folders" ] || return 0
-  try_take_lock "$copy_dir/lock" "$copy_dir/jobs" 0 || return 0
-  if [ -z "$(find "$copy_dir/used" -maxdepth 0 -mmin +"$((build_data_keep_hours * 60))" 2> /dev/null)" ] || check_copy_has_live_exec "$copy_dir"; then
-    release_own_lock "$copy_dir/lock"
-    return 0
-  fi
   while IFS= read -r relative; do
     relative=${relative#./}
     [ -n "$relative" ] && check_relative_path "$relative" || continue
+    [ -d "$copy_dir/tree/$relative" ] && [ ! -L "$copy_dir/tree/$relative" ] || continue
     check_manifest_lists_files_in "$copy_dir" "$relative" && continue
-    remove_path_even_if_read_only "$copy_dir/tree/$relative" && trimmed="$trimmed$relative "
+    folder_kb=$(du -sk "$copy_dir/tree/$relative" 2> /dev/null | awk '{ print $1 }')
+    case $folder_kb in '' | *[!0-9]*) folder_kb=0 ;; esac
+    candidates="$candidates$folder_kb $relative"$'\n'
   done <<< "$folders"
+  [ -n "$candidates" ] || return 0
+  try_take_lock "$copy_dir/lock" "$copy_dir/jobs" 0 || return 0
+  if [ -z "$(find "$copy_dir/used" -maxdepth 0 -mmin +"$((build_data_keep_hours * 60))" 2> /dev/null)" ] || check_copy_has_live_exec "$copy_dir" || ! mkdir -p "$trash_dir" 2> /dev/null; then
+    release_own_lock "$copy_dir/lock"
+    return 0
+  fi
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    folder_kb=${candidate%% *}
+    relative=${candidate#* }
+    if move_folder_aside "$copy_dir/tree/$relative" "$trash_dir/$trash_count"; then
+      trash_count=$((trash_count + 1))
+      removed_kb=$((removed_kb + folder_kb))
+      trimmed="$trimmed${trimmed:+, }$relative"
+    fi
+  done <<< "$candidates"
+  if [ -n "$trimmed" ]; then
+    printf '%s\n' "$trimmed" > "$copy_dir/build-data-trimmed"
+    lower_copy_size_kb "$copy_dir" "$removed_kb"
+  fi
   release_own_lock "$copy_dir/lock"
-  [ -n "$trimmed" ] || return 0
-  printf '%s\n' "${trimmed% }" > "$copy_dir/build-data-trimmed"
-  rm -f "$copy_dir/size-kb"
+  remove_path_even_if_read_only "$trash_dir"
+}
+
+# Remove the trash of build data (`p/<slug>/build-trash.<pid>`) that a trim was cut off in the middle of removing: those whose process is gone. One whose process lives is being removed by it.
+remove_leftover_build_trash() {
+  local trash_dir trash_pid
+  for trash_dir in "$1"/p/*/build-trash.*; do
+    [ -e "$trash_dir" ] || continue
+    trash_pid=${trash_dir##*.}
+    case $trash_pid in '' | *[!0-9]*) continue ;; esac
+    check_runner_pid_alive "$trash_pid" && continue
+    remove_path_even_if_read_only "$trash_dir"
+  done
+  return 0
 }
 
 # The Xcode build data of every copy that nobody used for build_data_keep_hours and that is not in use (`check_copy_is_busy`: a lock, an exec, a job that waits or runs or just ended or is being submitted).
@@ -2991,6 +3047,7 @@ trim_idle_build_data() {
 # What the sweep of idle copies does: the stale files of their TMPDIRs, and the Xcode build data of the copies that nobody used for a day.
 sweep_idle_copies() {
   sweep_idle_tmpdirs "$1"
+  remove_leftover_build_trash "$1"
   trim_idle_build_data "$1"
 }
 

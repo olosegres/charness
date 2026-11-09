@@ -14,7 +14,7 @@
 
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -400,6 +400,29 @@ describe('which sibling is taken', { skip: rsyncSkip }, () => {
       assert.match(outcome.log, /not seeded from another copy of this project: they are all busy right now/);
       assert.equal(countInstallRuns(), 1);
     });
+  });
+});
+
+describe('a trim of the sibling\'s Xcode build data that is under way does not keep a new copy from seeding from it', { skip: rsyncSkip }, () => {
+  it('the sibling idle for a day — the likeliest source, and what a `prepare` of the new copy starts a sweep for — is trimmed by renames under its lock; its removal of the build data (slow here) runs without it, so the first job of the new copy takes the lock and seeds', async () => {
+    createSiblingCopy(siblingSlug, { key: 'key', usedAgoMs: 30 * hourMs });
+    const markerFile = path.join(root, 'trash-removal-started');
+    // A `rm` that takes 3 s over the build trash, after leaving a marker: the removal of tens of GB takes minutes.
+    const slowRmDir = createToolStubs({ rm: `for argument; do\n  case "$argument" in *build-trash.*) : > '${markerFile}'; sleep 3 ;; esac\ndone\nexec ${getRealTool('rm')} "$@"` });
+    const sweep = spawn('bash', [scriptPath, 'sweep-tmpdirs', state.workDir], { env: getRunEnvironment({ PATH: `${slowRmDir}:${process.env.PATH ?? ''}` }), stdio: 'ignore' });
+    const ended = new Promise<void>((resolve) => sweep.on('close', () => resolve()));
+    try {
+      await waitUntil('the sweep to be removing the sibling\'s build trash', () => fs.existsSync(markerFile));
+      assert.equal(readTreeFile(siblingSlug, 'projects/x/ios/build/Products/app.txt'), null, 'the sibling\'s build data is out of its tree already');
+      const outcome = runNewCopyJob();
+      assert.match(outcome.log, /remote-run: seeded from the copy overview-aaaaaaaaaa of this project: 3 folders cloned; its dependencies are the same, so the dependencies step is skipped/);
+      assert.equal(countInstallRuns(), 0, 'the new copy did not have to install: the sibling was not busy');
+      assert.equal(readTreeFile(newSlug, 'node_modules/pkg/index.js'), `root of ${siblingSlug}`);
+      assert.equal(fs.existsSync(path.join(copyDir(newSlug), 'projects')), false, 'no folder of the trash came along');
+    } finally {
+      await ended;
+    }
+    assert.deepEqual(fs.readdirSync(copyDir(siblingSlug)).filter((name) => name.startsWith('build-trash')), [], 'the sweep removed its trash');
   });
 });
 
