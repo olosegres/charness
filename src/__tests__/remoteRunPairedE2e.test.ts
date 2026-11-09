@@ -353,8 +353,10 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
       assert.match(job.stdout, /^busy-ok$/m, 'a busy runner takes a job: it is picked from its last snapshot, not waited for as an offline one');
       assert.ok(!job.stderr.includes('waiting for a runner'), job.stderr);
 
+      // The recovery is judged under the ORDINARY deadline (20 s), not the 2 s one that makes the runner busy above: how long an ordinary probe takes depends on the machine (on a CI runner at a load of 26 it took more than 2 s),
+      // and the case proves that a probe that finishes in time ends the busy state, not how fast the box is.
       fs.writeFileSync(runnerPaths.envFile, browsersLine(), { mode: 0o600 });
-      assert.match((await runCli(cliLayout, ['runners'], { cwd: project.root, env: busyEnv, timeoutMs: ordinaryRunTimeoutMs })).stdout, new RegExp(`^${runnerName} — online · `, 'm'), 'once its probe fits the deadline it is plainly online again');
+      assert.match((await run(['runners'])).stdout, new RegExp(`^${runnerName} — online · `, 'm'), 'once its probe fits the deadline it is plainly online again');
     });
 
     /**
