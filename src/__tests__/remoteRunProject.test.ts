@@ -13,7 +13,7 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { getHookDirectories, getProjectContext, planProjectSend, readProjectConfig } from '../remoteRun/project';
+import { getHookDirectories, getProjectContext, planProjectSend, readProjectConfig, readProjectRootCommit } from '../remoteRun/project';
 import { RemoteRunError } from '../remoteRun/remoteRunError';
 
 let workRoot = '';
@@ -226,5 +226,45 @@ describe('getProjectContext', () => {
     assert.deepEqual(readProjectConfig(repository).pull, []);
     writeFile(repository, '.remote-run', 'colour: red\n');
     assert.throws(() => readProjectConfig(repository), /\.remote-run line 1: unknown key "colour"/);
+  });
+});
+
+describe('readProjectRootCommit', () => {
+  beforeEach(() => {
+    workRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-run-root-commit-')));
+  });
+  afterEach(() => {
+    fs.rmSync(workRoot, { recursive: true, force: true });
+  });
+
+  function commitFile(repository: string, relativePath: string, content: string): void {
+    writeFile(repository, relativePath, content);
+    git(repository, 'add', '-A');
+    git(repository, 'commit', '-q', '-m', `add ${relativePath}`);
+  }
+
+  it('is the same for a clone and a worktree of one repository whatever their folders are called, and different for another repository', async () => {
+    const original = createRepository('overview');
+    commitFile(original, 'a.txt', 'first');
+    commitFile(original, 'b.txt', 'second');
+    const clone = path.join(workRoot, 'overview-lingua');
+    git(workRoot, 'clone', '-q', original, clone);
+    const worktree = path.join(workRoot, 'task-worktree');
+    git(original, 'worktree', 'add', '-q', '-b', 'task', worktree);
+    commitFile(worktree, 'c.txt', 'on a branch');
+    const another = createRepository('overview-other');
+    commitFile(another, 'a.txt', 'a repository of its own');
+    const originalRoot = await readProjectRootCommit(original);
+    assert.match(originalRoot ?? '', /^[0-9a-f]{40}$/);
+    assert.equal(await readProjectRootCommit(clone), originalRoot);
+    assert.equal(await readProjectRootCommit(worktree), originalRoot);
+    assert.notEqual(await readProjectRootCommit(another), originalRoot);
+  });
+
+  it('is null when git cannot say: a repository with no commit yet, a folder that is not one', async () => {
+    assert.equal(await readProjectRootCommit(createRepository('empty')), null);
+    const notRepository = path.join(workRoot, 'plain');
+    fs.mkdirSync(notRepository);
+    assert.equal(await readProjectRootCommit(notRepository), null);
   });
 });

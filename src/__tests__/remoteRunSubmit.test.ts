@@ -14,12 +14,13 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { RemoteRunOptions } from '../remoteRun/cliArgs';
+import { getProjectKey } from '../remoteRun/jobId';
 import { getProjectContext } from '../remoteRun/project';
 import { RemoteRunError } from '../remoteRun/remoteRunError';
 import { diskTooLowRunnerExitCode } from '../remoteRun/pruneReport';
 import { prepareCallTimeoutMs, type RunnerClient } from '../remoteRun/runnerClient';
 import type { SshRunResult } from '../remoteRun/ssh';
-import { stageJob } from '../remoteRun/submit';
+import { getJobOwner, stageJob } from '../remoteRun/submit';
 import { remoteRunExitCodes } from '../remoteRun/exitCodes';
 
 const reachedRunnerMessage = 'the runner was reached';
@@ -158,6 +159,62 @@ describe('stageJob and what the project asks the runner to clean after the job',
     assert.equal(fs.readFileSync(path.join(asked.metaDirectory, 'clean-after-success.ere'), 'utf8'), '^ios/build/Intermediates\\.noindex(/.*)?$\n^projects/[^/]*/ios/build/(.*/)?Intermediates\\.noindex(/.*)?$\n');
     assert.equal(fs.readFileSync(path.join(asked.metaDirectory, 'clean-after-success.roots'), 'utf8'), 'ios/build/Intermediates.noindex\nprojects\n');
     assert.equal(fs.readFileSync(path.join(asked.metaDirectory, 'pull.roots'), 'utf8'), 'test-results\n', 'and `pull:` is its own list');
+  });
+});
+
+describe('stageJob and the repository the runner matches copies on', () => {
+  beforeEach(() => {
+    workRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'remote-run-submit-')));
+  });
+  afterEach(() => {
+    fs.rmSync(workRoot, { recursive: true, force: true });
+  });
+
+  /** Stage the project at `projectRoot` against a runner that answers `prepare`; the job's files and the arguments `prepare` got come back. */
+  async function stageAndReadPrepare(projectRoot: string, extraFiles: Record<string, string> = {}): Promise<{ metaFiles: string[]; metaDirectory: string; prepareArgs: readonly string[] }> {
+    for (const [name, content] of Object.entries(extraFiles)) fs.writeFileSync(path.join(projectRoot, name), content);
+    const { client } = createRecordingClient();
+    let prepareArgs: readonly string[] = [];
+    const answering: RunnerClient = {
+      ...client,
+      call: async (subcommand, args) => {
+        assert.equal(subcommand, 'prepare');
+        prepareArgs = args;
+        return { exitCode: 1, stdout: '', stderr: 'stop here', isTimedOut: false };
+      },
+    };
+    const metaDirectory = fs.mkdtempSync(path.join(workRoot, 'meta-'));
+    await assert.rejects(stageJob({ client: answering, project: getProjectContext(projectRoot), command: 'true', options: { ...withGitOptions, isWithGit: false }, metaDirectory, say: () => undefined }));
+    return { metaFiles: fs.readdirSync(metaDirectory), metaDirectory, prepareArgs };
+  }
+
+  it('the job carries the key of its repository — the same for a clone in a folder of another name — and `prepare` is told it with the install key, so its prune can keep the copy this job is seeded from', async () => {
+    const original = path.join(workRoot, 'overview');
+    fs.mkdirSync(original);
+    git(original, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(original, 'yarn.lock'), '# lock\n');
+    git(original, 'add', '-A');
+    git(original, 'commit', '-q', '-m', 'init');
+    const clone = path.join(workRoot, 'overview-lingua');
+    git(workRoot, 'clone', '-q', original, clone);
+    const rootCommit = execFileSync('git', ['-C', original, 'rev-list', '--max-parents=0', 'HEAD'], { encoding: 'utf8' }).trim();
+    const first = await stageAndReadPrepare(original);
+    const second = await stageAndReadPrepare(clone);
+    const expectedKey = getProjectKey(getJobOwner(), rootCommit);
+    for (const staged of [first, second]) {
+      assert.equal(fs.readFileSync(path.join(staged.metaDirectory, 'project-key'), 'utf8'), expectedKey);
+      assert.equal(staged.prepareArgs[3], expectedKey, 'the 4th argument of prepare');
+      assert.equal(staged.prepareArgs[4], fs.readFileSync(path.join(staged.metaDirectory, 'install-key'), 'utf8'), 'the 5th: the install key the job carries');
+    }
+  });
+
+  it('a repository with no commit has no key: no file, and `prepare` gets an empty word (nothing is seeded from, or kept for, it)', async () => {
+    const project = path.join(workRoot, 'project');
+    fs.mkdirSync(project);
+    git(project, 'init', '-q', '-b', 'main');
+    const staged = await stageAndReadPrepare(project, { 'yarn.lock': '# lock\n' });
+    assert.ok(!staged.metaFiles.includes('project-key'), staged.metaFiles.join(', '));
+    assert.equal(staged.prepareArgs[3], '');
   });
 });
 

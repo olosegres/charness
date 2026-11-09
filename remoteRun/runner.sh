@@ -20,7 +20,7 @@
 #
 # Subcommands (the contract is in src/remoteRun/README.md):
 #   probe        key=value lines: OS, CPU, RAM, disk, jobs, capabilities (paused / service / iOS boot check of a paired runner); `probe <work> prune`: a view of the runners that may start the background prune of a short disk
-#   prepare      layout for a job, Pueue daemon + groups, prune
+#   prepare      layout for a job, Pueue daemon + groups, prune (`prepare <work> <slug> <job> <groups> [<project-key> <install-key>]`: the repository and the install key of the job, so that the prune keeps the copy the job's first run is seeded from)
 #   apply-groups Pueue daemon + groups only (`apply-groups <work> <name=parallel,…>`): a changed «jobs at once» takes effect now, not at the next job's prepare
 #   lease        add the job to Pueue, stream its log, kill it when the caller's heartbeat stops (foreground run)
 #   submit       add the job to Pueue and return (--bg)
@@ -129,6 +129,8 @@ tmpdir_short_disk_sweep_interval_min=30
 # A NEW project copy (its first job) is seeded from a sibling copy of the same project (`seed_new_copy`) instead of installing its dependencies from scratch. The folders to carry are looked for down to this depth below the copy's root
 # (the root's `node_modules`, each workspace's, `ios/Pods`)...
 seed_find_depth=5
+# The Mac's own cp, by its path: the one that knows `-c` (clonefile).
+darwin_cp=/bin/cp
 # ...and inside a cloned `node_modules` the build output a package left in itself does not come along; it sits at most this deep (`@scope/pkg/android/build` is 4).
 seed_clean_depth=4
 port_base_start=20000
@@ -882,7 +884,7 @@ apply_groups() {
 
 cmd_prepare() {
   set_paths "$1" "$2" "$3"
-  local groups=${4:-}
+  local groups=${4:-} project_key=${5:-} install_key=${6:-} seed_slug=
   # Ids are 30 random bits, made on the caller's side: a clash would make two jobs share one folder.
   if [ -e "$jd/meta.json" ] || [ -e "$jd/task-id" ]; then
     die "job id already in use: $job"
@@ -898,7 +900,12 @@ cmd_prepare() {
   # The caller may hang up while this removes copies for minutes (its call has a time limit): writing a report line to a closed pipe is no reason to die half-way (SIGPIPE would end the removal after
   # the copy it is at). Only here: elsewhere a closed pipe still ends a pipeline early, as it should.
   trap '' PIPE
-  prune_work "$work" "$slug"
+  # A NEW copy is seeded from its best sibling by its first job (`seed_new_copy`): the prune of this submit must not take that copy first. The repository and the install key are the main box's words for what the job will say.
+  if [ ! -f "$proj/manifest" ]; then
+    seed_slug=$(list_seed_siblings "$slug" "$install_key" "$project_key")
+    seed_slug=${seed_slug%%$'\n'*}
+  fi
+  prune_work "$work" "$slug" wait "$seed_slug"
   trap - PIPE
   start_tmpdir_sweep_if_due "$work"
   # A prune that ran at the same moment may have taken the folder this job was just given (its copy looked unused): say so, never answer with a folder that is gone.
@@ -955,12 +962,13 @@ check_task_belongs_to_job() {
   read_job_task_state "$1" "$2" && [ "$job_task_state" != absent ]
 }
 
-# Remove: jobs older than the keep time (and their Pueue tasks), leftover stage dirs, project copies unused for long. $3 = `skip`: when another prune is at the copy-removal step,
+# Remove: jobs older than the keep time (and their Pueue tasks), leftover stage dirs, project copies unused for long. $4 = the copy a new copy's first job is going to be seeded from: removed last. $3 = `skip`: when another prune is at the copy-removal step,
 # leave that step to it (the probe's detached prune); otherwise wait for it, bounded (a submit's: it needs the disk's free figure AFTER the other one is done).
 prune_work() {
   local work_dir=$1
   local keep_slug=${2:-}
   local when_busy=${3:-wait}
+  local seed_slug=${4:-}
   remove_finished_tmpdir_removals "$work_dir"
   [ -d "$work_dir/p" ] || return 0
   find "$work_dir/p" -mindepth 3 -maxdepth 3 -path '*/jobs/*' -type d -mtime +"$job_keep_days" 2> /dev/null | while IFS= read -r old_job; do
@@ -985,7 +993,7 @@ prune_work() {
   prune_idle_copies "$work_dir" "$keep_slug"
   # A short disk gives up the stale files of the TMPDIRs before it gives up a copy (at most every tmpdir_short_disk_sweep_interval_min minutes: see there).
   check_disk_is_short "$work_dir" && take_tmpdir_sweep_turn "$work_dir" "$tmpdir_short_disk_sweep_interval_min" && sweep_idle_tmpdirs "$work_dir"
-  prune_copies_for_space "$work_dir" "$keep_slug"
+  prune_copies_for_space "$work_dir" "$keep_slug" "$seed_slug"
   end_copy_removal "$work_dir"
 }
 
@@ -1054,6 +1062,20 @@ check_runner_pid_alive() {
   return 1
 }
 
+# Is an `exec` running in the copy in folder $1? `exec` takes no lock and leaves no job folder: its marker is `exec.<pid>`, written by `cmd_exec`. The marker of a pid that is gone, or that a reboot gave to a process that is not
+# the script's, is cleared.
+check_copy_has_live_exec() {
+  local marker marker_pid
+  for marker in "$1"/exec.*; do
+    [ -e "$marker" ] || continue
+    marker_pid=${marker##*/exec.}
+    case $marker_pid in '' | *[!0-9]*) continue ;; esac
+    check_runner_pid_alive "$marker_pid" && return 0
+    rm -f "$marker"
+  done
+  return 1
+}
+
 # Is the project copy in folder $1 in use — never to be removed? Its lock is held by a live job; or an `exec` runs in it (`exec.<pid>`: exec takes no lock and leaves no job folder, so it writes this
 # marker, and a marker of a process that is gone is cleared); or a job of it waits or runs; or a job ended less than result_keep_min ago (its result files are about to be fetched); or a job of
 # it is being submitted (no task yet, no exit, and its job folder or its stage folder touched less than pending_submit_grace_min ago: a long upload only moves files in the stage folder).
@@ -1062,17 +1084,10 @@ check_copy_dir_is_busy() {
   local copy_dir=$1
   copy_busy_kind=
   copy_busy_job=-
-  local marker marker_pid
-  for marker in "$copy_dir"/exec.*; do
-    [ -e "$marker" ] || continue
-    marker_pid=${marker##*/exec.}
-    case $marker_pid in '' | *[!0-9]*) continue ;; esac
-    if check_runner_pid_alive "$marker_pid"; then
-      copy_busy_kind=exec
-      return 0
-    fi
-    rm -f "$marker"
-  done
+  if check_copy_has_live_exec "$copy_dir"; then
+    copy_busy_kind=exec
+    return 0
+  fi
   local job_dir job_name
   for job_dir in "$copy_dir"/jobs/*/; do
     [ -d "$job_dir" ] || continue
@@ -1127,13 +1142,28 @@ check_copy_is_busy() {
 # proof of the break (a named holder is gone for good) covers a holder that is gone; a lock broken for its AGE has a live holder, so there a holder that ends at that very moment can have its lock replaced by a
 # new one that is then removed: two prunes at once for a few milliseconds after a two-hour hold, which `remove_and_report_copy` tolerates (a copy that is already gone is code 2).
 acquire_prune_lock() {
-  local lock="$1/tmp/prune.lock" jobs_dir= job= lock_max_age_min=$prune_lock_max_age_min
+  try_take_lock "$1/tmp/prune.lock" "" "$prune_lock_max_age_min"
+}
+
+# Take the lock file $1 once, never waiting: made with the project lock's own helpers — the exclusive create, a stale holder's lock (`check_lock_is_stale`, over its job folders $2 and the age limit $3 in minutes, 0 = none) broken by the
+# generation-numbered right to break it, then the create again. Succeeds when this process holds the lock; fails when a holder lives or another process is breaking a stale one (it looks again soon). The prune lock and the lock of a copy
+# that a seed reads from (`seed_new_copy`) are taken this way.
+try_take_lock() {
+  local lock=$1 jobs_dir=$2 lock_max_age_min=$3 job=
   while ! create_lock_file "$lock"; do
     check_lock_is_stale && break_stale_lock && continue
     return 1
   done
   # The rights to break the lock name holders that are gone and can never hold it again: nothing needs them any more.
   rm -f "$lock".breaking.* 2> /dev/null
+  return 0
+}
+
+# Give the lock file $1 back — only if it is still this process's own (a lock that was broken as stale and taken by another is not ours to remove).
+release_own_lock() {
+  local holder_pid holder_job
+  read_lock_holder "$1"
+  [ "$holder_pid" = "$$" ] && rm -f "$1"
   return 0
 }
 
@@ -1155,10 +1185,7 @@ begin_copy_removal() {
 
 # Give the lock back — only if it is still this process's own (a prune that went on after its wait never had it).
 end_copy_removal() {
-  local holder_pid holder_job
-  read_lock_holder "$1/tmp/prune.lock"
-  [ "$holder_pid" = "$$" ] && rm -f "$1/tmp/prune.lock"
-  return 0
+  release_own_lock "$1/tmp/prune.lock"
 }
 
 # A removal that was cut off (ssh dropped, the machine slept) leaves its folder under a `.trash-<slug>-<pid>` name: the next prune finishes it — unless the pid of the one that made it still lives
@@ -1307,18 +1334,28 @@ prune_idle_copies() {
 # (a job writing to the same disk meanwhile can eat the space it freed). «In a row» counts only the removals that can say anything: a copy measured at most no_progress_freed_kb, or not measured, between two
 # of them neither counts nor resets the count; a removal that freed what it should does reset it. Sets prune_stopped_without_gain for the submit's refusal.
 prune_copies_for_space() {
-  local work_dir=$1 keep_slug=$2
-  local used_file lru_slug size_kb removal_code no_gain_removals=0
+  local work_dir=$1 keep_slug=$2 seed_slug=${3:-}
+  local used_file lru_slug size_kb removal_code no_gain_removals=0 is_shared=0 is_seed_source_left=0
   prune_stopped_without_gain=0
   while IFS= read -r used_file; do
     check_disk_is_short "$work_dir" || break
     lru_slug=$(basename "$(dirname "$used_file")")
     [ "$lru_slug" = "$keep_slug" ] && continue
+    # The copy the submitted job's first run is seeded from goes last, if the others are not enough: a new copy that is cloned from it costs next to nothing, one that installs from scratch costs all of it again.
+    if [ -n "$seed_slug" ] && [ "$lru_slug" = "$seed_slug" ]; then
+      is_seed_source_left=1
+      continue
+    fi
     check_copy_is_busy "$work_dir" "$lru_slug" && continue
     size_kb=$(read_file "$work_dir/p/$lru_slug/size-kb")
+    # Asked BEFORE the removal: the marks go with the copy.
+    is_shared=0
+    check_copy_shares_blocks "$work_dir" "$lru_slug" && is_shared=1
     remove_and_report_copy "$work_dir" "$lru_slug" space
     removal_code=$?
     [ "$removal_code" -eq 0 ] || continue
+    # A copy that shares its blocks with a clone frees only what is its alone while `du` counts them all: what it gave back says nothing about whether the disk follows — like a copy that was never measured, it neither counts nor resets.
+    [ "$is_shared" -eq 0 ] || continue
     # Only a copy measured bigger than the threshold says anything about whether the disk follows: one too small or never measured leaves the count as it is (an LRU order of big, small, big, small
     # must not hide a disk that keeps every big copy's space); a removal that freed what it should resets it.
     case "$size_kb:$last_freed_kb" in
@@ -1336,6 +1373,9 @@ prune_copies_for_space() {
       break
     fi
   done < <(ls -1tr "$work_dir"/p/*/used 2> /dev/null)
+  if [ "$is_seed_source_left" -eq 1 ] && [ "$prune_stopped_without_gain" -eq 0 ] && check_disk_is_short "$work_dir" && ! check_copy_is_busy "$work_dir" "$seed_slug"; then
+    remove_and_report_copy "$work_dir" "$seed_slug" space || true
+  fi
 }
 
 # KiB project copy $2 (a slug, under work dir $1) takes, per mode $3: `written` = the figure `measure-copies` wrote into the copy (size-kb), whatever its age, and failure when there is none (never a `du`);
@@ -2536,52 +2576,50 @@ describe_failed_step() {
 # ─────────────────────────── seeding a new copy from a sibling ───────────────────────────
 
 # A copy's dependencies are most of its size (a React Native monorepo: ~13 GB of `node_modules` and `Pods`), and every new copy of a project installed them from scratch. A NEW copy (the first job of it: no manifest yet) is seeded from a
-# sibling instead: a copy of the same project (the slug without its hash) whose dependencies step finished (`deps.hash` is there) — the one with this job's own install key first, then the most recently used. On a Mac the folders are
-# CLONES (`cp -c`: clonefile(2), copy-on-write — nothing is ever shared for writing, so one copy's build cannot touch the other's files); elsewhere `cp --reflink=auto`, a plain copy where the filesystem cannot clone (ext4: it saves the install's
-# time, not the disk). Carried: every top-level `node_modules` (the root's and each workspace's, never one inside another) and every `ios/Pods` whose parent folder the new copy has; never the build output (`ios/build`, `android/build`,
-# `.cxx`, `.gradle`: absolute paths of the sibling are in them). `deps.hash` is written only when the sibling's key equals this job's — then the dependencies step is skipped; a different key still runs it, on top of what is there.
+# sibling instead: a copy of the same REPOSITORY — the job's `project-key` (the main box's hash of the user and the repository's root commit: the same in every clone and worktree whatever the folder is called, and different for
+# another project or another user whose folder shares a name), kept in the copy as `p/<slug>/project-key`; a copy or a job without one is never a source or seeded — whose dependencies step finished (`deps.hash` is there): the one with this
+# job's own install key first, then the most recently used. The folders are CLONES, copy-on-write, so nothing is ever shared for writing (one copy's build cannot touch the other's files): on a Mac `/bin/cp -cR` (clonefile(2); the system's own
+# cp, not whatever comes first on a PATH that has GNU coreutils), elsewhere `cp --reflink=always`, and where the filesystem cannot clone nothing is seeded at all — a plain copy would take MORE disk than the install it replaces when the
+# project's package manager links files into a store (hard links are only kept inside the copied set). Carried: every top-level `node_modules` (the root's and each workspace's, never one inside another) and, for every `<app>/ios/Pods`,
+# the whole `<app>/ios` when the new tree has the app folder but no `ios` (an Expo prebuild app keeps its `ios` out of git: the native project, its prebuild marker and its Pods come along) or just the `Pods` when it has an `ios` of its own;
+# never the build output (`ios/build`, `android/build`, `.cxx`, `.gradle`: absolute paths of the sibling are in them), and nothing whose parent folder the new tree lacks. `deps.hash` is written only when the sibling's key equals this job's —
+# then the dependencies step is skipped; a different key still runs it, on top of what is there.
 # The sibling is taken under its project lock, tried once and never waited for (a job that holds it may be in its dependencies step or a build): a busy sibling is passed over for the next. Seeding never fails the job: whatever goes wrong
 # removes the partial seed, says one line and leaves the install to run from scratch. The folders are cloned into `seed.tmp` of the new copy and only then moved into place, so a job cut off half-way leaves no half-made `node_modules`.
+# What was cloned shares its disk blocks with its source until a file is written: the new copy's `seeded-from` names the copy the blocks first came from (the source's own `seeded-from`, else the source), the source gets a `seed-shared`
+# mark, and the free-space prune does not read a removal of a copy that still shares as «the disk is not following» (`check_copy_shares_blocks`). The prune of a submit of a new copy leaves the sibling it would be seeded from to the last.
 
-# Take the project lock of the copy in folder $1 if it is free right now; false when a live job holds it (or another process is breaking a stale one). Never waits.
-try_take_copy_lock() {
-  local lock="$1/lock" jobs_dir="$1/jobs" job=
-  if create_lock_file "$lock" || { check_lock_is_stale && break_stale_lock && create_lock_file "$lock"; }; then
-    # The rights to break the lock name holders that are gone and can never hold it again: nothing needs them any more.
-    rm -f "$lock".breaking.* 2> /dev/null
-    return 0
+# Is the filesystem of work dir $1 one that clones files — can the seed clone at all? A Mac's `cp -c` replaces itself by a plain copy where it cannot, which the APFS volume a runner lives on never needs; elsewhere a file of 64 KiB is cloned
+# with `--reflink=always`, which fails where the filesystem has no reflink (ext4), and the seed is then not made.
+check_filesystem_clones_files() {
+  [ "$(uname -s)" = Darwin ] && return 0
+  local probe_dir="$1/tmp/clone-probe.$$" is_cloned=1
+  mkdir -p "$probe_dir" 2> /dev/null || return 1
+  head -c 65536 /dev/zero > "$probe_dir/source" 2> /dev/null && cp --reflink=always "$probe_dir/source" "$probe_dir/clone" 2> /dev/null && is_cloned=0
+  rm -rf "$probe_dir"
+  return "$is_cloned"
+}
+
+# Clone folder $1 to the path $2 (its parent exists, $2 does not): copy-on-write, or it fails. The Mac's own `cp` is asked for by its path (darwin_cp): a GNU `cp` earlier on the PATH (Homebrew coreutils) reads `-c` as
+# `--preserve=context`.
+clone_folder() {
+  if [ "$(uname -s)" = Darwin ]; then
+    "$darwin_cp" -cR "$1" "$2"
+  else
+    cp -a --reflink=always "$1" "$2"
   fi
-  return 1
 }
 
-# Give back the lock try_take_copy_lock took — only if it is still ours.
-release_copy_lock() {
-  local holder_pid holder_job
-  read_lock_holder "$1/lock"
-  [ "$holder_pid" = "$$" ] && [ -z "$holder_job" ] && rm -f "$1/lock"
-  return 0
-}
-
-# Is an `exec` running in the copy in folder $1? (It takes no lock; its marker is `exec.<pid>`.)
-check_copy_has_exec() {
-  local marker marker_pid
-  for marker in "$1"/exec.*; do
-    [ -e "$marker" ] || continue
-    marker_pid=${marker##*/exec.}
-    case $marker_pid in '' | *[!0-9]*) continue ;; esac
-    check_runner_pid_alive "$marker_pid" && return 0
-  done
-  return 1
-}
-
-# The slugs of the copies a new copy (slug $1, install key $2) may be seeded from, one per line, best first: copies of the same project whose dependencies step finished, those with the same key before the others, each group
-# the most recently used first.
+# The slugs of the copies a new copy (slug $1, install key $2, repository $3) may be seeded from, one per line, best first: copies of the same repository (their `project-key`) whose dependencies step finished, those with the same install
+# key before the others, each group the most recently used first. None for a job that has no repository key.
 list_seed_siblings() {
-  local own_slug=$1 install_key=$2 used_file sibling_slug sibling_key same_key= other_key=
+  local own_slug=$1 install_key=$2 project_key=$3 used_file sibling_slug sibling_key same_key= other_key=
+  [ -n "$project_key" ] || return 0
   while IFS= read -r used_file; do
     sibling_slug=${used_file%/used}
     sibling_slug=${sibling_slug##*/}
-    [ "$sibling_slug" != "$own_slug" ] && [ "${sibling_slug%-*}" = "${own_slug%-*}" ] || continue
+    [ "$sibling_slug" != "$own_slug" ] || continue
+    [ "$(read_file "$work/p/$sibling_slug/project-key")" = "$project_key" ] || continue
     [ -d "$work/p/$sibling_slug/tree" ] || continue
     sibling_key=$(read_file "$work/p/$sibling_slug/deps.hash")
     [ -n "$sibling_key" ] || continue
@@ -2594,18 +2632,19 @@ list_seed_siblings() {
   printf '%s%s' "$same_key" "$other_key"
 }
 
-# The folders of the copy tree $1 a seed carries, relative to it (`./node_modules`, `./projects/app/ios/Pods`), one per line: the dependencies down to seed_find_depth, the build output folders and `.git` pruned from the walk.
-list_seed_folders() {
-  (cd "$1" && find . -maxdepth "$seed_find_depth" \( -name .git -o -name .gradle -o -name .cxx -o -path '*/ios/build' -o -path '*/android/build' \) -prune -o \( -name node_modules -o -path '*/ios/Pods' \) -type d -print -prune 2> /dev/null)
+# The copy remembers which repository it is of — the job's `project-key` — for the copies that are seeded from it and for its own seed. A job that has none (a repository with no commit yet) leaves the copy with none.
+persist_project_key() {
+  local key
+  key=$(read_file "$jd/project-key")
+  case $key in
+    '' | *[!0-9a-f]*) rm -f "$proj/project-key"; return 0 ;;
+  esac
+  printf '%s\n' "$key" > "$proj/project-key"
 }
 
-# Clone folder $1 to the path $2 (its parent exists, $2 does not): on a Mac with clonefile(2), which `cp -c` replaces by a plain copy where it cannot clone (another volume); elsewhere GNU cp's reflink where the filesystem has it.
-clone_folder() {
-  if [ "$(uname -s)" = Darwin ]; then
-    cp -cR "$1" "$2"
-  else
-    cp -a --reflink=auto "$1" "$2"
-  fi
+# The folders of the copy tree $1 a seed looks at, relative to it (`./node_modules`, `./projects/app/ios/Pods`), one per line: the dependencies down to seed_find_depth, the build output folders and `.git` pruned from the walk.
+list_seed_folders() {
+  (cd "$1" && find . -maxdepth "$seed_find_depth" \( -name .git -o -name .gradle -o -name .cxx -o -path '*/ios/build' -o -path '*/android/build' \) -prune -o \( -name node_modules -o -path '*/ios/Pods' \) -type d -print -prune 2> /dev/null)
 }
 
 # In the cloned dependencies folder $1: the build output a package left in itself (Gradle's and CMake's folders hold the sibling's absolute paths) does not come along. Failing to remove one is no reason to give up the seed.
@@ -2614,7 +2653,20 @@ remove_seeded_build_output() {
   return 0
 }
 
-# Clone the dependency folders of sibling $1 into $2 (the new copy's `seed.tmp`), the sibling's lock held by the caller. Sets seed_folders (the relative paths cloned, one per line) and, on a failure, seed_failure. Fails when nothing was
+# What a seed carries for the sibling's folder $1 (relative): the folder itself — except that a `<app>/ios/Pods` is carried as the whole `<app>/ios` when the new tree has the app folder and no `ios` (an app whose `ios` git ignores).
+# Sets seed_carried (the relative path to clone).
+get_seed_carried_path() {
+  seed_carried=$1
+  case $1 in
+    */ios/Pods | ios/Pods)
+      local ios_dir=${1%/Pods}
+      [ ! -e "$tree/$ios_dir" ] && [ ! -L "$tree/$ios_dir" ] && [ -d "$tree/$(dirname "$ios_dir")" ] && seed_carried=$ios_dir
+      ;;
+  esac
+  return 0
+}
+
+# Clone the folders of sibling $1 into $2 (the new copy's `seed.tmp`), the sibling's lock held by the caller. Sets seed_folders (the relative paths cloned, one per line) and, on a failure, seed_failure. Fails when nothing was
 # carried (with seed_failure empty: the sibling has nothing the new copy can take) or a clone failed.
 clone_sibling_folders() {
   local sibling_tree="$work/p/$1/tree" seed_dir=$2 relative parent
@@ -2627,6 +2679,8 @@ clone_sibling_folders() {
   while IFS= read -r relative; do
     relative=${relative#./}
     [ -n "$relative" ] && check_relative_path "$relative" || continue
+    get_seed_carried_path "$relative"
+    relative=$seed_carried
     parent=$(dirname "$relative")
     # Not into a workspace the new revision no longer has, and never over what the new copy already holds.
     [ -d "$tree/$parent" ] && [ ! -e "$tree/$relative" ] && [ ! -L "$tree/$relative" ] || continue
@@ -2638,7 +2692,10 @@ clone_sibling_folders() {
       seed_failure="cloning $relative failed"
       return 1
     fi
-    [ "${relative##*/}" = node_modules ] && remove_seeded_build_output "$seed_dir/$relative"
+    case ${relative##*/} in
+      node_modules) remove_seeded_build_output "$seed_dir/$relative" ;;
+      ios) remove_path_even_if_read_only "$seed_dir/$relative/build" ;;
+    esac
     seed_folders="$seed_folders$relative"$'\n'
   done <<< "$(list_seed_folders "$sibling_tree")"
   [ -n "$seed_folders" ]
@@ -2646,16 +2703,23 @@ clone_sibling_folders() {
 
 # Seed the new copy of this job from a sibling (see the section's comment); $1 = the job's install key. Always returns 0 — the job goes on, with what the seed gave it or without.
 seed_new_copy() {
-  local install_key=$1 seed_dir="$proj/seed.tmp" sibling_slug sibling_dir sibling_key seed_code relative moved= tried=0 saw_sibling=0
+  local install_key=$1 seed_dir="$proj/seed.tmp" sibling_slug sibling_dir sibling_key seed_code relative moved= tried=0 saw_sibling=0 project_key siblings
   seed_folders=
   seed_failure=
+  project_key=$(read_file "$proj/project-key")
+  siblings=$(list_seed_siblings "$slug" "$install_key" "$project_key")
+  [ -n "$siblings" ] || return 0
+  if ! check_filesystem_clones_files "$work"; then
+    say "not seeded from another copy of this project: this runner's disk cannot clone files (copy-on-write), and a plain copy would take more space than installing"
+    return 0
+  fi
   while IFS= read -r sibling_slug; do
     [ -n "$sibling_slug" ] || continue
     [ "$killed" -eq 1 ] && return 0
     saw_sibling=1
     sibling_dir="$work/p/$sibling_slug"
-    check_copy_has_exec "$sibling_dir" && continue
-    try_take_copy_lock "$sibling_dir" || continue
+    check_copy_has_live_exec "$sibling_dir" && continue
+    try_take_lock "$sibling_dir/lock" "$sibling_dir/jobs" 0 || continue
     tried=1
     # The lock is the sibling's guarantee that its dependencies step is not running; its key is read again under it (a step that failed meanwhile removed it).
     sibling_key=$(read_file "$sibling_dir/deps.hash")
@@ -2665,9 +2729,9 @@ seed_new_copy() {
     else
       seed_code=1
     fi
-    release_copy_lock "$sibling_dir"
+    release_own_lock "$sibling_dir/lock"
     break
-  done <<< "$(list_seed_siblings "$slug" "$install_key")"
+  done <<< "$siblings"
   if [ "$tried" -eq 0 ]; then
     [ "$saw_sibling" -eq 0 ] || say "not seeded from another copy of this project: they are all busy right now"
     return 0
@@ -2692,15 +2756,47 @@ seed_new_copy() {
     return 0
   fi
   remove_path_even_if_read_only "$seed_dir"
+  # The blocks of what was cloned are the source's too from now on: the prune must know (`check_copy_shares_blocks`).
+  local origin
+  origin=$(read_file "$sibling_dir/seeded-from")
+  printf '%s\n' "${origin:-$sibling_slug}" > "$proj/seeded-from"
+  : > "$sibling_dir/seed-shared" 2> /dev/null
   local folder_count
   folder_count=$(printf '%s' "$seed_folders" | grep -c '')
   if [ "$sibling_key" = "$install_key" ]; then
     printf '%s\n' "$install_key" > "$proj/deps.hash"
-    say "seeded from the copy $sibling_slug of this project: $folder_count dependency folder$([ "$folder_count" -eq 1 ] || echo s) cloned; its dependencies are the same, so the dependencies step is skipped"
+    say "seeded from the copy $sibling_slug of this project: $folder_count folder$([ "$folder_count" -eq 1 ] || echo s) cloned; its dependencies are the same, so the dependencies step is skipped"
   else
-    say "seeded from the copy $sibling_slug of this project: $folder_count dependency folder$([ "$folder_count" -eq 1 ] || echo s) cloned; its dependencies differ, so the dependencies step still runs on top"
+    say "seeded from the copy $sibling_slug of this project: $folder_count folder$([ "$folder_count" -eq 1 ] || echo s) cloned; its dependencies differ, so the dependencies step still runs on top"
   fi
   return 0
+}
+
+# The group of copies whose disk blocks come from one clone: the copy the blocks first came from. A seeded copy names it (`seeded-from`); the copy it came from has `seed-shared` and is the group's own name. Nothing for a copy that took
+# part in no seed. $1 = work dir, $2 = slug.
+get_copy_seed_group() {
+  local origin
+  origin=$(read_file "$1/p/$2/seeded-from")
+  if [ -n "$origin" ]; then
+    printf '%s\n' "$origin"
+  elif [ -f "$1/p/$2/seed-shared" ]; then
+    printf '%s\n' "$2"
+  fi
+}
+
+# Does copy $2 (under work dir $1) share disk blocks with another copy that is still there — a clone of it, the one it was cloned from, or another clone of that? Removing such a copy frees only the blocks it holds alone, while `du` counts all of them,
+# so the free-space prune does not take a removal that gave little back as a sign that the disk is not following.
+check_copy_shares_blocks() {
+  local group copy_dir other_slug
+  group=$(get_copy_seed_group "$1" "$2")
+  [ -n "$group" ] || return 1
+  for copy_dir in "$1"/p/*/; do
+    [ -d "$copy_dir" ] || continue
+    other_slug=$(basename "$copy_dir")
+    [ "$other_slug" != "$2" ] || continue
+    [ "$(get_copy_seed_group "$1" "$other_slug")" = "$group" ] && return 0
+  done
+  return 1
 }
 
 # ─────────────────────────── what a copy is given: a number, a port block, a TMPDIR, a Simulator ───────────────────────────
@@ -3249,6 +3345,7 @@ cmd_job() {
 
   set_phase syncing
   sync_tree || { say "applying the files failed"; finish_job 125; }
+  persist_project_key
 
   local subfolder
   subfolder=$(read_file "$jd/subfolder")

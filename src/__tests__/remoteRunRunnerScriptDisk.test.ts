@@ -958,6 +958,112 @@ describe('a disk whose free figure does not follow the removals (APFS snapshots,
   });
 });
 
+describe('copies cloned from each other share their disk blocks: a removal that gave little back is no sign of a disk that does not follow', () => {
+  /** A copy measured at `sizeGib` whose removal gives `freedGib` back to the fake disk; `seededFrom` / `isSource` are the marks a seed leaves (`seed_new_copy`). */
+  function makeSeedCopy(copySlug: string, usedAgoMs: number, marks: { seededFrom?: string; isSource?: boolean }): void {
+    const copyDir = makeCopy(copySlug, 0, usedAgoMs);
+    writeFile(copyDir, 'size-kb', `${30 * kibPerGib}`);
+    if (marks.seededFrom !== undefined) writeFile(copyDir, 'seeded-from', `${marks.seededFrom}\n`);
+    if (marks.isSource === true) writeFile(copyDir, 'seed-shared', '');
+  }
+
+  it('removals of copies that still share blocks neither count towards «the disk is not following» nor reset it: three clones of one source go (as does the one with nothing shared), and only the last of them, which holds its blocks alone, is a verdict', () => {
+    // The source and two copies cloned from it, then one that shares nothing: on a disk whose free figure does not move, the old rule stopped after the first two.
+    makeSeedCopy('source-aaaaaaaaaa', 9 * hourMs, { isSource: true });
+    makeSeedCopy('clone-one-bbbbbbbbbb', 7 * hourMs, { seededFrom: 'source-aaaaaaaaaa' });
+    makeSeedCopy('clone-two-cccccccccc', 5 * hourMs, { seededFrom: 'source-aaaaaaaaaa' });
+    makeCopy('alone-dddddddddd', 0, 3 * hourMs);
+    writeFile(path.join(workDir, 'p', 'alone-dddddddddd'), 'size-kb', `${30 * kibPerGib}`);
+    makeCopy('newest-eeeeeeeeee', 0, 1 * hourMs);
+    writeFile(path.join(workDir, 'p', 'newest-eeeeeeeeee'), 'size-kb', `${30 * kibPerGib}`);
+    const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '95', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
+    assert.equal(result.status, 0, result.stderr);
+    // The source and the first clone share with a copy that is still there (not counted); the second clone is the last of its group (counted: 1); `alone` is the second (stop).
+    assert.deepEqual(parseRemovals(result.stdout), ['source-aaaaaaaaaa', 'clone-one-bbbbbbbbbb', 'clone-two-cccccccccc', 'alone-dddddddddd']);
+    assert.match(result.stdout, /^stopped=alone-dddddddddd freed_kb=0 size_kb=31457280$/m);
+    assert.deepEqual(listCopies(), ['newest-eeeeeeeeee']);
+  });
+
+  it('a copy whose source or sharers are all gone holds its blocks alone: it counts like any other', () => {
+    // `seeded-from` names a copy that is not there any more, and nobody else is of that group.
+    makeSeedCopy('clone-one-aaaaaaaaaa', 9 * hourMs, { seededFrom: 'gone-source-zzzzzzzzzz' });
+    makeSeedCopy('clone-two-bbbbbbbbbb', 7 * hourMs, { seededFrom: 'another-gone-yyyyyyyyyy' });
+    makeCopy('newest-cccccccccc', 0, 1 * hourMs);
+    writeFile(path.join(workDir, 'p', 'newest-cccccccccc'), 'size-kb', `${30 * kibPerGib}`);
+    const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '95', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
+    assert.deepEqual(parseRemovals(result.stdout), ['clone-one-aaaaaaaaaa', 'clone-two-bbbbbbbbbb']);
+    assert.match(result.stdout, /^stopped=clone-two-bbbbbbbbbb freed_kb=0 size_kb=31457280$/m);
+    assert.deepEqual(listCopies(), ['newest-cccccccccc']);
+  });
+});
+
+describe('the prune of a submit leaves the copy the submitted job\'s first run is seeded from to the last', () => {
+  const projectKey = 'a'.repeat(32);
+  const installKey = 'key-of-the-install';
+
+  /** A finished copy of the repository: its key and the install it finished with, `usedAgoMs` ago. */
+  function makeSiblingCopy(copySlug: string, usedAgoMs: number, options: { key?: string; hasProjectKey?: boolean } = {}): void {
+    const copyDir = makeCopy(copySlug, 30, usedAgoMs);
+    if (options.hasProjectKey !== false) writeFile(copyDir, 'project-key', `${projectKey}\n`);
+    writeFile(copyDir, 'deps.hash', `${options.key ?? installKey}\n`);
+  }
+
+  it('on a short disk the oldest copy goes first — except the one this new copy would be cloned from: the others go instead', () => {
+    makeSiblingCopy('overview-aaaaaaaaaa', 9 * hourMs);
+    makeCopy('other-project-bbbbbbbbbb', 30, 5 * hourMs);
+    makeCopy('another-cccccccccc', 30, 3 * hourMs);
+    // 90 GB used of 100, 50 wanted free: two copies must go.
+    const result = runScript(['prepare', workDir, slug, jobId, 'default=1', projectKey, installKey], { REMOTE_RUN_MIN_FREE_GB: '50' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(parseRemovals(result.stdout), ['other-project-bbbbbbbbbb', 'another-cccccccccc']);
+    assert.ok(listCopies().includes('overview-aaaaaaaaaa'), 'the source of the seed is still there');
+  });
+
+  it('it is the one the job would pick: the sibling with its install key, not a more recently used one with another key', () => {
+    makeSiblingCopy('with-key-aaaaaaaaaa', 9 * hourMs);
+    makeSiblingCopy('other-key-bbbbbbbbbb', 5 * hourMs, { key: 'another-install' });
+    makeCopy('unrelated-cccccccccc', 30, 3 * hourMs);
+    const result = runScript(['prepare', workDir, slug, jobId, 'default=1', projectKey, installKey], { REMOTE_RUN_MIN_FREE_GB: '50' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(parseRemovals(result.stdout), ['other-key-bbbbbbbbbb', 'unrelated-cccccccccc']);
+    assert.deepEqual(listCopies(), [slug, 'with-key-aaaaaaaaaa']);
+  });
+
+  it('if the others are not enough it goes too, after them (the job is not refused for it)', () => {
+    makeSiblingCopy('overview-aaaaaaaaaa', 9 * hourMs);
+    makeCopy('unrelated-bbbbbbbbbb', 30, 5 * hourMs);
+    // 60 GB used, 80 wanted free: the unrelated copy goes (free 70), and the source after it (free 100).
+    const result = runScript(['prepare', workDir, slug, jobId, 'default=1', projectKey, installKey], { REMOTE_RUN_MIN_FREE_GB: '80' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(parseRemovals(result.stdout), ['unrelated-bbbbbbbbbb', 'overview-aaaaaaaaaa'], 'last, not first');
+  });
+
+  it('a job with no repository key, or a copy that has run before, protects nothing: the oldest copy goes first, as before', () => {
+    makeSiblingCopy('overview-aaaaaaaaaa', 9 * hourMs);
+    makeCopy('unrelated-bbbbbbbbbb', 30, 5 * hourMs);
+    makeCopy('another-cccccccccc', 30, 3 * hourMs);
+    const withoutKey = runScript(['prepare', workDir, slug, jobId, 'default=1', '', installKey], { REMOTE_RUN_MIN_FREE_GB: '50' });
+    assert.equal(withoutKey.status, 0, withoutKey.stderr);
+    assert.deepEqual(parseRemovals(withoutKey.stdout), ['overview-aaaaaaaaaa', 'unrelated-bbbbbbbbbb']);
+    // A copy of its own already (a manifest: a job applied its stage): not seeded again, so no sibling is kept for it.
+    makeSiblingCopy('overview-aaaaaaaaaa', 9 * hourMs);
+    makeCopy('unrelated-bbbbbbbbbb', 30, 5 * hourMs);
+    writeFile(path.join(workDir, 'p', slug), 'manifest', 'a.txt\n');
+    const hasRun = runScript(['prepare', workDir, slug, 'box1-bbbbbb', 'default=1', projectKey, installKey], { REMOTE_RUN_MIN_FREE_GB: '50' });
+    assert.equal(hasRun.status, 0, hasRun.stderr);
+    assert.deepEqual(parseRemovals(hasRun.stdout)[0], 'overview-aaaaaaaaaa');
+  });
+
+  it('a copy of another repository, or one with no key, is not the source: it is removed in its turn', () => {
+    makeSiblingCopy('other-repo-aaaaaaaaaa', 9 * hourMs, { hasProjectKey: false });
+    makeCopy('unrelated-bbbbbbbbbb', 30, 5 * hourMs);
+    makeCopy('another-cccccccccc', 30, 3 * hourMs);
+    const result = runScript(['prepare', workDir, slug, jobId, 'default=1', projectKey, installKey], { REMOTE_RUN_MIN_FREE_GB: '50' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(parseRemovals(result.stdout)[0], 'other-repo-aaaaaaaaaa');
+  });
+});
+
 describe('the probe that picks a runner for a run or an `exec` never prunes (only a view of the runners does)', () => {
   it('on a short disk it starts no prune, and nothing is removed; the probe of a view does start it', () => {
     makeCopy('oldest-aaaaaaaaaa', 45, 5 * hourMs);

@@ -257,6 +257,15 @@ export function createProject(layout: ProjectFlowLayout, name: string, files: Re
   return { root, runnerDirectory: path.join(layout.workDir, 'p', slug) };
 }
 
+/** @description A checkout of `source`'s repository in a folder of another name (`git clone`): the same root commit, so the same repository to the runner, and a copy of its own (the slug is of the folder). */
+export function createProjectClone(layout: ProjectFlowLayout, source: FlowProject, name: string): FlowProject {
+  fs.mkdirSync(path.dirname(path.join(layout.projectsDir, name)), { recursive: true });
+  execFileSync('git', ['clone', '-q', source.root, path.join(layout.projectsDir, name)], { stdio: 'ignore' });
+  const root = fs.realpathSync(path.join(layout.projectsDir, name));
+  const slug = getProjectSlug(root, { hostname: os.hostname(), uid: os.userInfo().uid });
+  return { root, runnerDirectory: path.join(layout.workDir, 'p', slug) };
+}
+
 export function writeProjectFile(project: FlowProject, relativePath: string, content: string): void {
   const target = path.join(project.root, relativePath);
   fs.mkdirSync(path.dirname(target), { recursive: true });

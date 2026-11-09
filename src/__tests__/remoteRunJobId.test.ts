@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createJobId, getJobLabel, getProjectSlug, parseJobId } from '../remoteRun/jobId';
+import { createJobId, getJobLabel, getProjectKey, getProjectSlug, parseJobId } from '../remoteRun/jobId';
 
 describe('job ids', () => {
   it('are the runner name, a dash and six base32 characters', () => {
@@ -60,5 +60,27 @@ describe('getProjectSlug', () => {
       assert.match(slug, /^[A-Za-z0-9_][A-Za-z0-9._-]*-[0-9a-f]{10}$/, root);
       assert.ok(slug.length <= 52, root);
     }
+  });
+});
+
+describe('getProjectKey', () => {
+  const owner = 'main-box:1001';
+  const rootCommit = '0123456789abcdef0123456789abcdef01234567';
+
+  it('is 32 hex characters, stable, and does not depend on any folder name — the repository\'s first commit is all there is to it', () => {
+    const key = getProjectKey(owner, rootCommit);
+    assert.match(key, /^[0-9a-f]{32}$/);
+    assert.equal(getProjectKey(owner, rootCommit), key);
+  });
+
+  it('differs for another repository and for another user or host: a copy of one user is never a source for another\'s', () => {
+    const key = getProjectKey(owner, rootCommit);
+    assert.notEqual(getProjectKey(owner, 'fedcba9876543210fedcba9876543210fedcba98'), key);
+    assert.notEqual(getProjectKey('main-box:1002', rootCommit), key);
+    assert.notEqual(getProjectKey('other-box:1001', rootCommit), key);
+  });
+
+  it('its two parts cannot run into each other: an owner that ends where a commit begins is another key', () => {
+    assert.notEqual(getProjectKey('a:1', '2bc'), getProjectKey('a:12', 'bc'));
   });
 });

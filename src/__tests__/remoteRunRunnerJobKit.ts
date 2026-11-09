@@ -42,6 +42,8 @@ export interface JobSpec {
   installCommand?: string;
   /** The key the dependencies step runs on (`key` when absent). */
   installKey?: string;
+  /** The repository's key (`project-key` of the job: what a new copy is seeded by); no file when absent. */
+  projectKey?: string;
   /** Files (paths relative to the project) the job stages besides `a.txt`: the new copy's folders, so that the places a seed fills have a parent. */
   stagedFiles?: string[];
   needsIos?: boolean;
@@ -77,6 +79,7 @@ export function prepareJobFolder(workDir: string, spec: JobSpec): JobPaths {
     writeFile(paths.jobDir, 'install-command', spec.installCommand);
     writeFile(paths.jobDir, 'install-key', spec.installKey ?? 'key');
   }
+  if (spec.projectKey !== undefined) writeFile(paths.jobDir, 'project-key', `${spec.projectKey}\n`);
   if (spec.needsIos === true) writeFile(paths.jobDir, 'needs-ios', '');
   fs.writeFileSync(path.join(paths.projectDir, 'used'), '');
   return paths;

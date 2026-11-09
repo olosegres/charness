@@ -4,12 +4,12 @@ import * as path from 'path';
 import type { RemoteRunOptions } from './cliArgs';
 import { defaultTimeoutSeconds } from './cliArgs';
 import { computeDepsKey, hashContent, planDepsStep } from './depsPlan';
-import { createJobId } from './jobId';
+import { createJobId, getProjectKey } from './jobId';
 import type { JobMeta } from './jobMeta';
 import { writeLocalJobRecord } from './jobRecords';
 import { recordHeldBackFiles } from './heldBackNotice';
 import { compilePathPatterns, createPathMatcher, getPathPatternSearchRoots } from './pathPatterns';
-import { planProjectSend, type ProjectContext } from './project';
+import { planProjectSend, readProjectRootCommit, type ProjectContext } from './project';
 import { RemoteRunError } from './remoteRunError';
 import { describePrepareTimeout, diskTooLowRunnerExitCode, formatPrunedCopyLine, formatPruneHeadsUp, formatRemovalStopLine, parsePrunedCopies, parseRemovalStop } from './pruneReport';
 import { runRsync } from './rsync';
@@ -90,6 +90,10 @@ export async function stageJob(params: {
     ? null
     : computeDepsKey(deps.command, deps.keyFiles.map((file) => ({ path: file, contentHash: hashKeyFile(path.join(project.root, file)) })));
 
+  // Which copies on the runner are of this repository (a worktree or another checkout has another folder name, so the slug cannot say): none without a root commit.
+  const rootCommit = await readProjectRootCommit(project.root);
+  const projectKey = rootCommit === null ? null : getProjectKey(getJobOwner(), rootCommit);
+
   const jobId = createJobId(runner.name);
   const timeoutSeconds = options.timeoutSeconds ?? defaultTimeoutSeconds;
   const meta: JobMeta = {
@@ -122,6 +126,8 @@ export async function stageJob(params: {
     'clean-after-success.roots': getPathPatternSearchRoots(project.config.cleanAfterSuccess).map((root) => `${root}\n`).join(''),
     'meta.json': `${JSON.stringify(meta)}\n`,
     ...(deps === null || depsKey === null ? {} : { 'install-command': deps.command, 'install-key': depsKey }),
+    // The copy this job applies to remembers it (`p/<slug>/project-key`): a NEW copy is seeded from a copy of the same repository only.
+    ...(projectKey === null ? {} : { 'project-key': projectKey }),
     // An always-on Mac runs such a job in the account's login session, or refuses it with the reason (`runner.sh`, «the login session»).
     ...(options.needs === 'ios' ? { 'needs-ios': '' } : {}),
   });
@@ -130,7 +136,8 @@ export async function stageJob(params: {
   // about to happen; what it removed is said afterwards, also when it then refuses the job.
   const headsUp = formatPruneHeadsUp(runner.name, readLastProbe(client.cacheDir, runner.name, runner.paired?.pairedAtMs)?.probe ?? null);
   if (headsUp !== null) params.say(headsUp);
-  const preparing = await client.call('prepare', [project.slug, jobId, formatGroupLimits(runner.groups)], { timeoutMs: prepareCallTimeoutMs });
+  // The repository and the install key go to `prepare` too: its prune must not remove the copy this job's first run would be seeded from (`runner.sh`, «seeding a new copy»).
+  const preparing = await client.call('prepare', [project.slug, jobId, formatGroupLimits(runner.groups), projectKey ?? '', depsKey ?? ''], { timeoutMs: prepareCallTimeoutMs });
   for (const removed of parsePrunedCopies(preparing.stdout)) params.say(formatPrunedCopyLine(runner.name, removed));
   const removalStop = parseRemovalStop(preparing.stdout);
   if (removalStop !== null) params.say(formatRemovalStopLine(runner.name, removalStop));

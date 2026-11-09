@@ -509,12 +509,15 @@ The project is the git working tree the command runs in (anything else is refuse
 - **Dependencies**: the install step runs on the runner only when its key changed since the last successful install in that copy (or
   the last one failed). By lockfile: `yarn.lock` → `yarn install --immutable`, `pnpm-lock.yaml` → `pnpm install --frozen-lockfile`,
   `package-lock.json` → `npm ci`; no lockfile, no step. The key is the lockfile, every `package.json`, `.yarnrc.yml` and `patches/`.
-  **A new copy does not install from scratch when a sibling is there.** A project copy belongs to a project folder, so each checkout or worktree of a project is a copy of its own — and a React Native monorepo's
-  `node_modules` and `Pods` are ~13 GB. The first job of a new copy takes them from another copy of the same project (the same folder name, any location) whose install finished: the one with the same key first, then the most recently
-  used. On a Mac they are **clones** (copy-on-write: they take no disk until a file changes, and a change in one copy never shows in the other); on Linux a reflink where the filesystem has them, otherwise a plain copy (it saves
-  the install's time, not the disk). Carried: every top-level `node_modules` (the root's and each workspace's) and every `ios/Pods`; never `ios/build`, `android/build`, `.cxx` or `.gradle`. With the same key the install step is skipped
-  (the log says `seeded from the copy … the dependencies step is skipped`); with another key it still runs, on top of what was carried, and only changes the difference. A sibling a job holds (its install or a build may be running) or an `exec`
-  runs in is passed over, never waited for, and a seed that fails for any reason is removed and the install runs as before — it never fails the job. Only the first job of a copy is seeded.
+  **A new copy does not install from scratch when a sibling is there.** A project copy belongs to a project folder, so each checkout or worktree of a repository is a copy of its own — and a React Native monorepo's `node_modules` and `Pods`
+  are ~13 GB. The first job of a new copy takes them from another copy of the **same repository** — told by its first commit, so a checkout or worktree in a folder of any other name counts, and another project (or another user) whose folder happens
+  to share a name does not — whose install finished: the one with the same key first, then the most recently used. They are **clones**: on a Mac copy-on-write (they take no disk until a file changes, and a change in one copy never
+  shows in the other), on Linux a reflink — and **only where the disk has them** (btrfs, XFS with reflinks; not ext4): where it cannot clone, nothing is seeded, because a plain copy would cost more disk than the install when the project links its
+  packages into a store. Carried: every top-level `node_modules` (the root's and each workspace's) and, for an app that has `ios/Pods`, the whole `ios` folder when the new copy has none of its own (an Expo prebuild app keeps `ios` out of git:
+  its native project, its prebuild marker and its Pods come along) or just its `Pods` when it has; never `ios/build`, `android/build`, `.cxx` or `.gradle`. With the same key the install step is skipped (the log says `seeded from the copy … the
+  dependencies step is skipped`); with another key it still runs, on top of what was carried, and only changes the difference. A sibling a job holds (its install or a build may be running) or an `exec` runs in is passed over, never waited for,
+  and a seed that fails for any reason is removed and the install runs as before — it never fails the job. Only the first job of a copy is seeded. A repository with no commit yet is never seeded. The sizes `runners` shows count a clone at full
+  size (`du` cannot see that blocks are shared): only the free space on the disk shows what was really saved.
 - **Back**: the paths `pull:` lists. After a job, only the matching files the job **created or changed** come back — an untouched
   snapshot never overwrites your edit, and a previous job's leftovers never return. They land at the same paths in the project, so
   updated snapshots show in `git diff`. A foreground run fetches at its end (also on failure); `--bg` jobs by `wait` / `fetch`. The
@@ -575,7 +578,7 @@ Job records, logs and result files on the runner are removed after 3 days.
 **The runner's disk keeps itself free.** A project copy is a whole checkout with its build output (an iOS build alone is tens of GB), so copies of finished
 tasks pile up. On every submit (and, when the disk is short, when `runners` / `/runners` look at it) the runner removes a project copy that was not used for 3 days (`copyMaxIdleDays`), and while the
 disk of its work dir has less free space than it keeps (the smaller of 60 GB and 15 % of the disk; `minFreeGb`) it removes the least recently used copies one by
-one until it has. Never removed: a copy whose project lock is held by a live job, a copy an `exec` is running in, a copy with a queued, running or just-submitted job (a first
+one until it has. When a submit creates a new copy and the disk is short, the copy it would be seeded from is removed last, not first. Never removed: a copy whose project lock is held by a live job, a copy an `exec` is running in, a copy with a queued, running or just-submitted job (a first
 upload of a big project counts as long as files keep arriving), a copy whose job ended within the last hour (its result files are about to be fetched), and the copy of the job being
 submitted. A copy's «last use» is its last activity: a submit, an `exec` (start and end) or the end of one of its jobs. Each removal is one line of the submit's output (`runner mac: removed the project copy app-1a2b3c (freed 41 GB, the disk was short of free space)`); the result
 files of a finished job go with its copy. If the disk is still short after that, the submit fails at once (exit 125) instead of a build failing half-way with «No space left on

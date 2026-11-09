@@ -2,6 +2,7 @@ import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createRepositoryIdentityReader, runGitInFolder } from '../todos/projects';
 import { RemoteRunError } from './remoteRunError';
 import { getProjectSlug } from './jobId';
 import { parseProjectConfig, projectConfigName, type ProjectConfig, createEmptyProjectConfig } from './projectConfig';
@@ -44,6 +45,15 @@ export function getProjectContext(cwd: string): ProjectContext {
   const relative = path.relative(root, fs.realpathSync(cwd));
   const subfolder = relative === '' ? '' : relative.split(path.sep).join('/');
   return { root, subfolder, config: readProjectConfig(root), slug: getProjectSlug(root, { hostname: os.hostname(), uid: os.userInfo().uid }) };
+}
+
+/**
+ * @description The first root commit of the project's repository — the same in every clone and worktree, whatever its folder is called — or `null` when git cannot say (no commit yet, git missing, a history too long for its
+ * walk). The one helper the todo registry groups topics by (`todos/projects.ts`); a failed read only means the runner will not seed this project's new copies from another copy, so nothing is reported.
+ */
+export async function readProjectRootCommit(root: string): Promise<string | null> {
+  const reader = createRepositoryIdentityReader({ runGit: runGitInFolder, logWarning: () => undefined });
+  return (await reader.read(root))?.rootCommit ?? null;
 }
 
 /** @description `.remote-run` of the project, or the empty config when there is none; a bad file is an error naming its lines. */
