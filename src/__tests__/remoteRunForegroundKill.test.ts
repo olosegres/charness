@@ -1,7 +1,7 @@
 /**
  * @description A foreground run that is interrupted kills its job over a `kill` call (`foreground.ts`). A call that does not kill - the runner refuses it («Pueue did not answer…» for a queued job it could not look up)
  * or the connection is gone - is SAID, with what the runner answered, and that the runner's own lease watcher stops the job now that the lease is gone: the run used to swallow the result and leave the user
- * thinking the job was stopped. The run is driven with a fake ssh child and a fake runner client; the runner's side of the retry is `remoteRunRunnerScriptStash.test.ts`.
+ * thinking the job was stopped. The run is driven with a fake ssh child and a fake runner client; the runner's side of the retry is `remoteRunRunnerScriptStashWaiting.test.ts`.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */

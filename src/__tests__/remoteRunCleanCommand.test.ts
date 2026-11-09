@@ -2,7 +2,7 @@
  * @description `charness remote-run clean` through the real CLI entry (`runRemoteRunCli`) with a fake `ssh` on the PATH that records every remote command line and answers a canned text per runner: the copy of the
  * project this is run in (no word) or the named one is asked for on EVERY runner, in parallel; each runner has its line on stdout in the order of the catalog; the exit code is 125 only when a copy is still there
  * although it was asked to go (in use, would not go, timed out, failed) and 0 for «nothing to clean» and for a runner that could not be reached; a paired runner whose link is down, or whose Mac has the lid shut, is
- * not called at all. The script side of `clean` is proven against the real script in `remoteRunRunnerScriptDisk.test.ts`.
+ * not called at all. The script side of `clean` is proven against the real script in `remoteRunRunnerScriptDiskCopies.test.ts`.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */

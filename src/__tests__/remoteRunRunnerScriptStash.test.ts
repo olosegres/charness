@@ -1,176 +1,21 @@
 /**
  * @description `remoteRun/runner.sh`, a job whose project has another job under way takes no Pueue slot («adding the job to Pueue»): `add_job` stashes it (`pueue add --stashed`, a `stashed` mark in its folder) while the project
  * copy has a job without a result; `finish_job` (and a kill that removes a queued job) enqueues the OLDEST stashed job when nothing else of the copy is under way; `prepare` and `probe` do the same for a predecessor that died before it
- * could (the safety net); a killed stashed job is removed from Pueue and loses its mark; a Pueue that does not answer judges nothing; the scheduling mutex is only an ordering device (without it a job is queued as before). Driven against a stand-in
- * for Pueue that keeps its task list in files and records every call; the real Pueue is `remoteRunSchedulingE2e.test.ts`.
+ * could (the safety net — the probe starts it detached and its answer never waits for it); a Pueue that does not answer judges nothing; the scheduling mutex is only an ordering device (without it a job is queued as before). Driven against
+ * a stand-in for Pueue that keeps its task list in files and records every call (`remoteRunRunnerScriptStashKit.ts`); the real Pueue is `remoteRunSchedulingE2e.test.ts`. A job that waits for a stashed one is itself the safety net, and a job Pueue lost is found by whoever looks at it. The cases about killing, the lease watcher's retry of a kill and waiting for a job are `remoteRunRunnerScriptStashWaiting.test.ts`.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
 
-import { afterEach, beforeEach, describe, it } from 'node:test';
+
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
-import { scriptPath, startRunnerStandIn, stopDetachedRuns, stopRunnerStandIns, writeFile, removeTestRoot } from './remoteRunRunnerScriptKit';
+import { killDetachedRuns, startRunnerStandIn, writeFile } from './remoteRunRunnerScriptKit';
+import { slug, otherSlug, root, workDir, pueueDir, Run, runScript, runSourced, probeAndSettle, jobFolder, createJobFolder, submit, waitUntil, isStashed, readTaskId, readCalls, readTaskState, endJob, markRunning, useStashHarness } from './remoteRunRunnerScriptStashKit';
 
-const slug = 'app-aaaaaaaaaa';
-const otherSlug = 'app-bbbbbbbbbb';
-
-/** A task list in files: `add` numbers a task (stashed with `--stashed`), `enqueue` queues it, `remove` takes it away, `status --json label=…` lists the matching task; every call is a line of calls.log. */
-const fakePueue = `#!/bin/bash
-dir=\${FAKE_PQ:?}
-printf '%s\\n' "$*" >> "$dir/calls.log"
-mkdir -p "$dir/tasks"
-case $1 in
-  status)
-    # FAKE_PQ_STATUS_SLOW_SEC: Pueue answers, but only after that long (a daemon starved of CPU on a machine with load 129).
-    [ -z "\${FAKE_PQ_STATUS_SLOW_SEC:-}" ] || sleep "$FAKE_PQ_STATUS_SLOW_SEC"
-    [ -z "\${FAKE_PQ_DOWN:-}" ] || exit 1
-    # FAKE_PQ_DOWN_FILE: Pueue does not answer for as long as that file exists (a daemon that restarts, then is back).
-    [ ! -e "\${FAKE_PQ_DOWN_FILE:-/nonexistent}" ] || exit 1
-    # A label query that fails while the plain status answers: Pueue busy, a socket hiccup.
-    if [ "$2" = --json ] && [ -n "$3" ] && [ -n "\${FAKE_PQ_LABEL_DOWN:-}" ]; then exit 1; fi
-    if [ "$2" = --json ]; then
-      printf '{"tasks":{'
-      first=1
-      for file in "$dir"/tasks/*; do
-        [ -e "$file" ] || continue
-        id=$(basename "$file")
-        label=$(sed -n 1p "$file")
-        state=$(sed -n 2p "$file")
-        case $3 in label=*) [ "label=$label" = "$3" ] || continue ;; esac
-        [ $first -eq 1 ] || printf ','
-        first=0
-        printf '"%s": {"id": %s, "label": "%s", "status": {"%s": {}}}' "$id" "$id" "$label" "$state"
-      done
-      printf '}}\\n'
-    fi
-    ;;
-  wait)
-    # Blocks while the task is stashed, like the real one (bounded, so a test that forgets cannot hang); with FAKE_PQ_WAIT_BLOCKS, while the task exists at all (a queued job that waits for a slot).
-    waited=0
-    while { [ "$(sed -n 2p "$dir/tasks/$2" 2> /dev/null)" = Stashed ] || { [ -n "\${FAKE_PQ_WAIT_BLOCKS:-}" ] && [ -f "$dir/tasks/$2" ]; }; } && [ $waited -lt 300 ]; do sleep 0.1; waited=$((waited+1)); done
-    ;;
-  add)
-    shift
-    state=Queued
-    label=
-    while [ $# -gt 0 ]; do
-      case $1 in
-        --stashed) state=Stashed ;;
-        -l) label=$2; shift ;;
-        -g | -w) shift ;;
-        --) break ;;
-      esac
-      shift
-    done
-    id=$(( $(cat "$dir/counter" 2> /dev/null || echo 0) + 1 ))
-    echo "$id" > "$dir/counter"
-    printf '%s\\n%s\\n' "$label" "$state" > "$dir/tasks/$id"
-    echo "$id"
-    ;;
-  enqueue)
-    [ -f "$dir/tasks/$2" ] || exit 1
-    printf '%s\\nQueued\\n' "$(sed -n 1p "$dir/tasks/$2")" > "$dir/tasks/$2"
-    ;;
-  remove)
-    [ -f "$dir/tasks/$2" ] || exit 1
-    rm -f "$dir/tasks/$2"
-    ;;
-esac
-exit 0
-`;
-
-let root = '';
-let workDir = '';
-let pueueDir = '';
-
-beforeEach(() => {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'stash-')));
-  workDir = path.join(root, 'work');
-  pueueDir = path.join(root, 'pq');
-  fs.mkdirSync(workDir, { recursive: true });
-  fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
-  fs.mkdirSync(pueueDir, { recursive: true });
-  fs.writeFileSync(path.join(root, 'bin', 'pueue'), fakePueue, { mode: 0o755 });
-});
-afterEach(() => {
-  stopRunnerStandIns();
-  removeTestRoot(root);
-});
-
-function getEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return { ...process.env, PUEUE_BIN: path.join(root, 'bin', 'pueue'), FAKE_PQ: pueueDir, ...extra };
-}
-
-interface Run {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-function runScript(args: string[], extra: NodeJS.ProcessEnv = {}): Run {
-  const result = spawnSync('bash', [scriptPath, ...args], { encoding: 'utf8', env: getEnvironment(extra), timeout: 60_000 });
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
-}
-
-/** The script's functions `source`d in a process of their own, with the globals of one job set the way the script has them. */
-function runSourced(body: string, jobId: string, extra: NodeJS.ProcessEnv = {}): Run {
-  const program = [`source ${scriptPath}`, `work=${workDir}; slug=${slug}; job=${jobId}; proj="$work/p/$slug"; jobs_dir="$proj/jobs"; jd="$jobs_dir/$job"; killed=0`, body].join('\n');
-  const result = spawnSync('bash', ['-c', program], { encoding: 'utf8', env: getEnvironment(extra), timeout: 60_000 });
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
-}
-
-/**
- * A `probe` as a runner is asked it, and what it started: the scheduling safety net runs DETACHED (`settle-queue`, so the answer never waits for the scheduling mutex or Pueue), so a case that is about what the net
- * DID waits for that run to end before it looks.
- */
-function probeAndSettle(extra: NodeJS.ProcessEnv = {}): Run {
-  const answered = runScript(['probe', workDir], extra);
-  stopDetachedRuns(root);
-  return answered;
-}
-
-const jobFolder = (jobId: string, slugName = slug): string => path.join(workDir, 'p', slugName, 'jobs', jobId);
-
-function createJobFolder(jobId: string, slugName = slug): string {
-  const folder = jobFolder(jobId, slugName);
-  fs.mkdirSync(folder, { recursive: true });
-  fs.writeFileSync(path.join(folder, 'log'), '');
-  return folder;
-}
-
-/** Submit a job as `prepare` leaves it: through the script's own `submit`. */
-function submit(jobId: string, slugName = slug): Run {
-  createJobFolder(jobId, slugName);
-  const submitted = runScript(['submit', workDir, slugName, jobId, 'default']);
-  assert.equal(submitted.status, 0, submitted.stderr);
-  return submitted;
-}
-
-async function waitUntil(check: () => boolean, what: string, limitMs = 15_000): Promise<void> {
-  const deadline = Date.now() + limitMs;
-  while (!check()) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-}
-
-const isStashed = (jobId: string, slugName = slug): boolean => fs.existsSync(path.join(jobFolder(jobId, slugName), 'stashed'));
-const readTaskId = (jobId: string, slugName = slug): string => fs.readFileSync(path.join(jobFolder(jobId, slugName), 'task-id'), 'utf8').trim();
-const readCalls = (): string[] => (fs.existsSync(path.join(pueueDir, 'calls.log')) ? fs.readFileSync(path.join(pueueDir, 'calls.log'), 'utf8').split('\n').filter((line) => line !== '') : []);
-const readTaskState = (taskId: string): string | null => {
-  const file = path.join(pueueDir, 'tasks', taskId);
-  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n')[1] : null;
-};
-/** The job has ended: a result is written, as `record_job_end` does. */
-const endJob = (jobId: string, slugName = slug): void => writeFile(jobFolder(jobId, slugName), 'exit', '0\n');
-/** The job runs: it has recorded a live process. */
-function markRunning(jobId: string, slugName = slug): void {
-  writeFile(jobFolder(jobId, slugName), 'pid', `${startRunnerStandIn()}\n`);
-}
+useStashHarness();
 
 describe('adding a job', () => {
   it('a job of a project with nothing under way is queued as usual: no --stashed, no mark', () => {
@@ -378,7 +223,7 @@ describe('the safety net: `prepare` and `probe`', () => {
 
 describe('the probe\'s answer never waits for the scheduling safety net', () => {
   /** A job that is being queued: it has its task number and no process yet — what a probe sees while a submit is under way, and what the safety net then looks at. */
-  const slowPueueSec = 8;
+  const slowPueueSec = 6;
   const answerBoundMs = 4_000;
 
   it('a job that is starting while Pueue answers `status` slowly (a daemon starved of CPU on a loaded Mac): the probe still answers at once, counting the job as queued — it used to wait for Pueue, 25.8 s against 0.4 s measured, past the caller\'s 20 s', () => {
@@ -390,6 +235,7 @@ describe('the probe\'s answer never waits for the scheduling safety net', () => 
     assert.ok(tookMs < answerBoundMs, `the probe took ${tookMs} ms: it waited for Pueue (${slowPueueSec} s)`);
     assert.match(probe.stdout, /^jobs_queued=1$/m, 'the starting job is counted');
     assert.match(probe.stdout, /^pueue=/m);
+    killDetachedRuns(root);
   });
 
   it('the scheduling mutex held by a live process (a submit under way): the probe still answers at once, and the net is left to run on its own', () => {
@@ -401,6 +247,7 @@ describe('the probe\'s answer never waits for the scheduling safety net', () => 
     assert.equal(probe.status, 0, probe.stderr);
     assert.ok(tookMs < answerBoundMs, `the probe took ${tookMs} ms: it waited for the scheduling mutex`);
     assert.match(probe.stdout, /^jobs_queued=1$/m);
+    killDetachedRuns(root);
   });
 
   it('the net still runs — in the background, one at a time: the lost job is ended after the answer, and a probe while it is still going starts no second', async () => {
@@ -534,37 +381,6 @@ describe('a job that is removing paths after it succeeded is still under way', (
   });
 });
 
-describe('a job that waits for a stashed one is also the safety net', () => {
-  it('`wait` on a stashed job whose predecessor ended without enqueueing it (a watchdog\'s SIGKILL takes the job and the watchdog together) enqueues it by itself within its re-check', () => {
-    submit('box1-aaaaaa');
-    markRunning('box1-aaaaaa');
-    submit('box1-bbbbbb');
-    // A is gone for good: a result written by the hard kill, no one to enqueue its successor.
-    endJob('box1-aaaaaa');
-    const waited = runSourced('stash_recheck_sec=1; cmd_wait "$work" "$slug" "$job"', 'box1-bbbbbb');
-    assert.match(waited.stdout, /^done$/m, waited.stderr);
-    assert.equal(readTaskState(readTaskId('box1-bbbbbb')), 'Queued');
-    assert.equal(isStashed('box1-bbbbbb'), false);
-  });
-
-  it('a job that is not stashed asks Pueue only whether it has lost the task - once before it waits, once after - and enqueues nothing while it waits', () => {
-    submit('box1-aaaaaa');
-    const callsBefore = readCalls().length;
-    runSourced('stash_recheck_sec=1; cmd_wait "$work" "$slug" "$job"', 'box1-aaaaaa');
-    const calls = readCalls().slice(callsBefore);
-    assert.deepEqual(calls.filter((call) => call.startsWith('enqueue')), []);
-    assert.ok(calls.filter((call) => call.startsWith('status --json')).length <= 2, calls.join(' | '));
-  });
-
-  it('a job that runs (it has a process) is not asked about at all', () => {
-    submit('box1-aaaaaa');
-    markRunning('box1-aaaaaa');
-    const callsBefore = readCalls().length;
-    runScript(['result', workDir, slug, 'box1-aaaaaa']);
-    runSourced('stash_recheck_sec=1; cmd_wait "$work" "$slug" "$job"', 'box1-aaaaaa');
-    assert.deepEqual(readCalls().slice(callsBefore).filter((call) => call.startsWith('status --json')), []);
-  });
-});
 
 describe('a job that Pueue has lost, found by whoever looks at it', () => {
   const readExit = (jobId: string, slugName = slug): string | null => {
@@ -647,167 +463,35 @@ describe('a job that Pueue has lost, found by whoever looks at it', () => {
   });
 });
 
-describe('a kill never acts on a Pueue number that was not confirmed to be the job\'s own', () => {
-  const readExit = (jobId: string): string | null => {
-    const file = path.join(jobFolder(jobId), 'exit');
-    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : null;
-  };
-  const callsOn = (verb: string, task: string): string[] => readCalls().filter((call) => call === `${verb} ${task}`);
-  /** Job A has no process; Pueue lost its task (a reset) and handed the number to another project's job, in `strangerState`. */
-  function stageLostJobWithNumberTaken(strangerState: string): string {
-    submit('box1-aaaaaa');
-    const number = readTaskId('box1-aaaaaa');
-    fs.writeFileSync(path.join(pueueDir, 'tasks', number), `rr-box1-zzzzzz\n${strangerState}\n`);
-    return number;
-  }
 
-  it('a lost job whose number now carries ANOTHER job\'s running task: `kill` ends the lost job (137) and neither kills nor removes the stranger\'s task', () => {
-    const number = stageLostJobWithNumberTaken('Running');
-    const killed = runScript(['kill', workDir, slug, 'box1-aaaaaa']);
-    assert.equal(killed.stdout.trim(), 'killed', killed.stderr);
-    assert.equal(readExit('box1-aaaaaa'), '137');
-    assert.deepEqual(callsOn('kill', number), [], 'no pueue kill on a number that is not ours');
-    assert.deepEqual(callsOn('remove', number), [], 'no pueue remove either');
-    assert.equal(readTaskState(number), 'Running', 'the stranger\'s task is as it was');
-  });
-
-  it('the same for a stranger\'s queued task: it is not removed from under its owner', () => {
-    const number = stageLostJobWithNumberTaken('Queued');
-    runScript(['kill', workDir, slug, 'box1-aaaaaa']);
-    assert.deepEqual(callsOn('remove', number), []);
-    assert.equal(readTaskState(number), 'Queued');
-  });
-
-  it('a kill for a time limit (`timeout`) of a lost job is recorded as 124', () => {
-    stageLostJobWithNumberTaken('Running');
-    runScript(['kill', workDir, slug, 'box1-aaaaaa', 'timeout']);
-    assert.equal(readExit('box1-aaaaaa'), '124');
-  });
-
-  it('a lost job that a stashed one waits behind: the kill lets that one go', () => {
-    submit('box1-aaaaaa');
-    submit('box1-bbbbbb');
-    fs.rmSync(path.join(pueueDir, 'tasks', readTaskId('box1-aaaaaa')));
-    runScript(['kill', workDir, slug, 'box1-aaaaaa']);
-    assert.equal(readExit('box1-aaaaaa'), '137');
-    assert.equal(readTaskState(readTaskId('box1-bbbbbb')), 'Queued');
-  });
-
-  it('a Pueue that does not answer: the kill fails and says why, kills nothing, and marks nothing - an unconfirmed number is never acted on', () => {
-    submit('box1-aaaaaa');
-    const number = readTaskId('box1-aaaaaa');
-    const killed = runScript(['kill', workDir, slug, 'box1-aaaaaa'], { FAKE_PQ_DOWN: '1' });
-    assert.notEqual(killed.status, 0);
-    assert.match(killed.stderr, /Pueue did not answer/);
-    assert.deepEqual(callsOn('remove', number), []);
-    assert.equal(fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'killed')), false);
-    assert.equal(readExit('box1-aaaaaa'), null);
-  });
-
-  it('a job whose process is gone (SIGKILLed, no result) and whose number is another job\'s now: `kill` does not `pueue kill` the number', () => {
-    submit('box1-aaaaaa');
-    const number = readTaskId('box1-aaaaaa');
-    writeFile(jobFolder('box1-aaaaaa'), 'pid', '99999999\n');
-    fs.writeFileSync(path.join(pueueDir, 'tasks', number), 'rr-box1-zzzzzz\nRunning\n');
-    runScript(['kill', workDir, slug, 'box1-aaaaaa']);
-    assert.deepEqual(callsOn('kill', number), []);
-    assert.equal(readTaskState(number), 'Running');
-  });
-
-  it('...and does when the task under the number IS the job\'s own (the check does not just switch the kill off)', () => {
-    submit('box1-aaaaaa');
-    const number = readTaskId('box1-aaaaaa');
-    writeFile(jobFolder('box1-aaaaaa'), 'pid', '99999999\n');
-    fs.writeFileSync(path.join(pueueDir, 'tasks', number), 'rr-box1-aaaaaa\nRunning\n');
-    runScript(['kill', workDir, slug, 'box1-aaaaaa']);
-    assert.ok(callsOn('kill', number).length >= 1, 'its own task is killed');
-  });
-});
-
-describe('killing', () => {
-  it('a stashed job is removed from Pueue like a queued one: its task is gone, it ends with 137, its mark is gone - and the job under way is left alone', () => {
+describe('a job that waits for a stashed one is also the safety net', () => {
+  it('`wait` on a stashed job whose predecessor ended without enqueueing it (a watchdog\'s SIGKILL takes the job and the watchdog together) enqueues it by itself within its re-check', () => {
     submit('box1-aaaaaa');
     markRunning('box1-aaaaaa');
     submit('box1-bbbbbb');
-    const task = readTaskId('box1-bbbbbb');
-    const killed = runScript(['kill', workDir, slug, 'box1-bbbbbb']);
-    assert.equal(killed.stdout.trim(), 'killed', killed.stderr);
-    assert.equal(readTaskState(task), null);
-    assert.equal(fs.readFileSync(path.join(jobFolder('box1-bbbbbb'), 'exit'), 'utf8').trim(), '137');
-    assert.equal(isStashed('box1-bbbbbb'), false);
-    assert.ok(fs.existsSync(path.join(jobFolder('box1-bbbbbb'), 'task-removed')));
-    assert.equal(fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'exit')), false);
-  });
-
-  it('killing a job that is only queued, with a stashed one behind it, lets that one go (nothing else of the project is under way)', () => {
-    submit('box1-aaaaaa');
-    submit('box1-bbbbbb');
-    const killed = runScript(['kill', workDir, slug, 'box1-aaaaaa']);
-    assert.equal(killed.stdout.trim(), 'killed', killed.stderr);
+    // A is gone for good: a result written by the hard kill, no one to enqueue its successor.
+    endJob('box1-aaaaaa');
+    const waited = runSourced('stash_recheck_sec=1; cmd_wait "$work" "$slug" "$job"', 'box1-bbbbbb');
+    assert.match(waited.stdout, /^done$/m, waited.stderr);
     assert.equal(readTaskState(readTaskId('box1-bbbbbb')), 'Queued');
     assert.equal(isStashed('box1-bbbbbb'), false);
   });
 
-  it('killing a stashed job behind a live one does not let the one behind IT go', () => {
+  it('a job that is not stashed asks Pueue only whether it has lost the task - once before it waits, once after - and enqueues nothing while it waits', () => {
+    submit('box1-aaaaaa');
+    const callsBefore = readCalls().length;
+    runSourced('stash_recheck_sec=1; cmd_wait "$work" "$slug" "$job"', 'box1-aaaaaa');
+    const calls = readCalls().slice(callsBefore);
+    assert.deepEqual(calls.filter((call) => call.startsWith('enqueue')), []);
+    assert.ok(calls.filter((call) => call.startsWith('status --json')).length <= 2, calls.join(' | '));
+  });
+
+  it('a job that runs (it has a process) is not asked about at all', () => {
     submit('box1-aaaaaa');
     markRunning('box1-aaaaaa');
-    submit('box1-bbbbbb');
-    submit('box1-cccccc');
-    runScript(['kill', workDir, slug, 'box1-bbbbbb']);
-    assert.equal(readTaskState(readTaskId('box1-cccccc')), 'Stashed');
-  });
-});
-
-describe('the lease watcher\'s kill of a queued job that Pueue cannot answer about', () => {
-  // A foreground run is interrupted (or its caller dies) while pueued does not answer: the hub's `kill` call is refused («Pueue did not answer»), and the lease's watcher is the only one left to stop the job.
-  it('is tried again until Pueue answers: the queued job ends as killed (137), its task is removed - it never starts - and the lease ends with it', async () => {
-    const downFile = path.join(root, 'pueue-down');
-    createJobFolder('box1-aaaaaa');
-    const lease = spawn('bash', [scriptPath, 'lease', workDir, slug, 'box1-aaaaaa', 'default', '2000'], { env: getEnvironment({ FAKE_PQ_WAIT_BLOCKS: '1', FAKE_PQ_DOWN_FILE: downFile }), stdio: ['pipe', 'ignore', 'ignore'] });
-    const leaseEnded = new Promise<void>((resolve) => { lease.on('close', () => resolve()); });
-    try {
-      lease.stdin.write('h');
-      await waitUntil(() => fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'task-id')), 'the job to be queued');
-      writeFile(root, 'pueue-down', '');
-      lease.stdin.end();
-      await waitUntil(() => fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'kill-pending')), 'the watcher to meet the refusal and keep its kill pending');
-      assert.equal(fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'exit')), false, 'nothing is ended while Pueue does not answer');
-      const task = readTaskId('box1-aaaaaa');
-      assert.equal(readTaskState(task), 'Queued');
-      fs.rmSync(downFile);
-      await waitUntil(() => fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'exit')), 'the retry to end the job', 30_000);
-      assert.equal(fs.readFileSync(path.join(jobFolder('box1-aaaaaa'), 'exit'), 'utf8').trim(), '137');
-      assert.equal(readTaskState(task), null, 'its task was removed: it never starts');
-      assert.equal(fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'pid')), false);
-      await Promise.race([leaseEnded, new Promise((_resolve, reject) => setTimeout(() => reject(new Error('the lease did not end')), 30_000))]);
-      assert.equal(fs.existsSync(path.join(jobFolder('box1-aaaaaa'), 'kill-pending')), false, 'the marker goes with the retry');
-    } finally {
-      lease.kill('SIGKILL');
-    }
-  });
-});
-
-describe('waiting for a job', () => {
-  it('a job that is stashed still has its task number, so `result` shows it as submitted and not started (the hub reads Pueue\'s `Stashed` as queued)', () => {
-    submit('box1-aaaaaa');
-    submit('box1-bbbbbb');
-    const facts = runScript(['result', workDir, slug, 'box1-bbbbbb']);
-    assert.match(facts.stdout, new RegExp(`^task=${readTaskId('box1-bbbbbb')}$`, 'm'));
-    assert.match(facts.stdout, /^has_pid=0$/m);
-    assert.match(facts.stdout, /^exit=$/m);
-  });
-
-  it('two jobs added at the same moment behind a running one are both stashed, and each is enqueued in its turn', async () => {
-    submit('box1-aaaaaa');
-    markRunning('box1-aaaaaa');
-    createJobFolder('box1-bbbbbb');
-    createJobFolder('box1-cccccc');
-    await Promise.all(['box1-bbbbbb', 'box1-cccccc'].map((jobId) => new Promise<void>((resolve) => {
-      const child = spawn('bash', [scriptPath, 'submit', workDir, slug, jobId, 'default'], { env: getEnvironment(), stdio: 'ignore' });
-      child.on('close', () => resolve());
-    })));
-    assert.equal(isStashed('box1-bbbbbb'), true);
-    assert.equal(isStashed('box1-cccccc'), true);
-    assert.notEqual(readTaskId('box1-bbbbbb'), readTaskId('box1-cccccc'));
+    const callsBefore = readCalls().length;
+    runScript(['result', workDir, slug, 'box1-aaaaaa']);
+    runSourced('stash_recheck_sec=1; cmd_wait "$work" "$slug" "$job"', 'box1-aaaaaa');
+    assert.deepEqual(readCalls().slice(callsBefore).filter((call) => call.startsWith('status --json')), []);
   });
 });

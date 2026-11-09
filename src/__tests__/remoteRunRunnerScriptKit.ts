@@ -1,6 +1,6 @@
 /**
  * @description What the unit tests of `remoteRun/runner.sh` share (`remoteRunRunnerScript.test.ts`, `remoteRunRunnerScriptProbe.test.ts`, `remoteRunRunnerLock.test.ts`, `remoteRunRunnerScriptDisk.test.ts`,
- * `remoteRunGuiSession.test.ts`): where the script is, the project and job names the tests use, a file writer, and live processes that stand for the script\'s own (or a stranger).
+ * `remoteRunRunnerScriptDiskCopies.test.ts`, the stash files, `remoteRunGuiSession.test.ts`): where the script is, the project and job names the tests use, a file writer, and live processes that stand for the script\'s own (or a stranger).
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
@@ -99,6 +99,22 @@ export function stopDetachedRuns(root: string): void {
       }
       const killedAt = Date.now();
       while (checkIsDetachedRun(pid) && Date.now() - killedAt < detachedRunGraceMs) sleepSync(detachedRunPollMs);
+    }
+  }
+}
+
+/**
+ * End the runs the script detached under `root` AT ONCE, without waiting for their walk: for a case that has seen what it needed and would otherwise stand in the teardown's wait for a run that is held on purpose
+ * (a Pueue that takes seconds to answer, a scheduling mutex nobody releases). What such a run had started (its `sleep`) is left to end by itself.
+ */
+export function killDetachedRuns(root: string): void {
+  for (const pidFile of findDetachedRunPidFiles(root)) {
+    const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+    if (!Number.isInteger(pid) || pid <= 1 || !checkIsDetachedRun(pid)) continue;
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // gone in the meantime
     }
   }
 }
