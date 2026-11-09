@@ -154,18 +154,20 @@ describe('a new project copy is seeded from a sibling copy of the same repositor
     const trigger = createProject(layout, 'sixth/trigger', { 'README.md': 'a project that only submits\n' });
     const submitted = await run(['echo', 'another project'], { cwd: trigger.root });
     assert.equal(submitted.exitCode, 0, submitted.stderr);
-    await waitUntil('the detached sweep to trim the first copy', 30_000, () => !fs.existsSync(path.join(runnerDirectory, 'tree', 'ios', 'build', 'Products')));
+    // The trim renames the build folders out of the tree first, then writes its note (`build-data-trimmed`), and removes the trash last: «Products is gone» is not the trim being over (the note was read before it was written).
+    const trimNote = path.join(runnerDirectory, 'build-data-trimmed');
+    await waitUntil('the detached sweep to finish trimming the first copy', 30_000, () => fs.existsSync(trimNote) && !fs.readdirSync(runnerDirectory).some((name) => name.startsWith('build-trash')));
     const firstTree = path.join(runnerDirectory, 'tree');
     assert.equal(fs.existsSync(path.join(firstTree, 'ios', 'build', 'Build')), false, 'all the derived data is gone');
     assert.equal(fs.readFileSync(path.join(firstTree, codegenPodspecFile), 'utf8'), codegenPodspec, 'the codegen pods\' sources are not: the next build, with its `pod install` skipped, needs them');
     assert.equal(fs.readFileSync(path.join(firstTree, 'ios', 'Podfile'), 'utf8'), podFile, 'the sources stay');
     assert.equal(fs.readFileSync(path.join(firstTree, 'ios', 'Pods', 'Pod', 'pod.h'), 'utf8'), 'pod');
     assert.equal(fs.readFileSync(path.join(firstTree, 'node_modules', 'pkg', 'index.js'), 'utf8'), seededPackageContent);
-    assert.equal(fs.readFileSync(path.join(runnerDirectory, 'build-data-trimmed'), 'utf8').trim(), 'ios/build');
+    assert.equal(fs.readFileSync(trimNote, 'utf8').trim(), 'ios/build');
     const next = await run(['echo', 'first copy after the trim']);
     assert.equal(next.exitCode, 0, next.stderr);
     assert.match(next.stderr, /remote-run: the Xcode build data of this copy \(ios\/build\) was removed after it had been idle for 24 hours: an iOS build here starts from scratch/);
-    assert.equal(fs.existsSync(path.join(runnerDirectory, 'build-data-trimmed')), false, 'said once');
+    assert.equal(fs.existsSync(trimNote), false, 'said once');
     const again = await run(['echo', 'and again']);
     assert.ok(!again.stderr.includes('Xcode build data'), again.stderr);
   });

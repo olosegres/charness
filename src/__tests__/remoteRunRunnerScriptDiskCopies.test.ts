@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { diskTooLowRunnerExitCode } from '../remoteRun/pruneReport';
 import { parseProbeOutput } from '../remoteRun/probe';
-import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, writeFile } from './remoteRunRunnerScriptKit';
+import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopDetachedRuns, writeFile } from './remoteRunRunnerScriptKit';
 import { kibPerGib, dayMs, hourMs, workRoot, workDir, fakeBinDir, writeExecutable, getEnv, runScript, setAge, makeCopy, writeJob, liveProcesses, getDeadPid, runShell, listCopies, parseRemovals, useDiskHarness } from './remoteRunRunnerScriptDiskKit';
 
 useDiskHarness();
@@ -569,6 +569,8 @@ describe('the TMPDIR of a project copy (`<work>/t/<n>`) is part of the disk upke
     const first = runScript(['prepare', workDir, slug, jobId, 'default=1']);
     assert.equal(first.status, 0, first.stderr);
     await waitFor(() => !exists(8, 'old.bin'), 'the detached sweep');
+    // The sweep is over before the files are staged again: one still walking would take the staged ones as well.
+    stopDetachedRuns(workRoot);
     assert.equal(exists(8, 'fresh.bin'), true);
     const stamp = path.join(workDir, 'tmpdir-sweep.at');
     assert.ok(fs.existsSync(stamp));
@@ -741,11 +743,14 @@ describe('the Xcode derived data of a copy that nobody used for a day (`ios/buil
   it('`prepare` starts the sweep detached, which trims: the copy of ANOTHER project, idle for a day, loses its build data a moment after a submit', async () => {
     makeCopyWithBuildData('idle-pppppppppp', 30 * hourMs);
     fs.mkdirSync(path.join(workDir, 't'), { recursive: true });
+    // The renames of the trim are slowed, as a loaded host slows them: the first build folder is gone long before the last one, and before the note.
+    writeExecutable(path.join(fakeBinDir, 'mv'), '#!/bin/bash\ncase "$*" in\n  *build-trash.*) /bin/mv "$@"; code=$?; sleep 0.6; exit $code ;;\nesac\nexec /bin/mv "$@"\n');
     const first = runScript(['prepare', workDir, slug, jobId, 'default=1']);
     assert.equal(first.status, 0, first.stderr);
-    const deadline = Date.now() + 20_000;
-    while (exists('idle-pppppppppp', buildData[0]) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+    // The trim moves the build folders out of the tree one after the other, then writes its note and removes the trash: one folder being gone is not the trim being over. Waited for the way a teardown waits for it.
+    stopDetachedRuns(workRoot);
     expectTrimmed('idle-pppppppppp');
+    assert.ok(fs.existsSync(path.join(workDir, 'p', 'idle-pppppppppp', 'build-data-trimmed')), 'and the note for the next job is written');
     assert.ok(fs.existsSync(path.join(workDir, 'p', slug, 'tree')), 'and the copy of the submit itself is not what was trimmed');
   });
   it('the measured size is LOWERED by what the trim took, never dropped: a figure smaller than that goes to 0, a copy that had none is left with none (a short-disk prune reads that as «cannot tell»)', () => {
