@@ -16,11 +16,14 @@ import type { RunnerHomePaths } from './runnerHome';
  *   else    nothing — and `runners` says so (no `systemd-inhibit` on the PATH, no D-Bus session for it, another system)
  *
  * WHY A TIMED HOLDER THAT OUTLIVES THE LINK, not one tied to the link's process (`caffeinate -w <pid>`): the link restarts itself for every update of the hub's
- * package, and a holder that died with it left the Mac with NO assertion for the moment before the new link took its own. A Mac whose user is away has its idle
- * timer long expired, so that moment is enough: measured on a real Mac (macOS 26), `pmset -g log` shows the old `caffeinate` die with `[System: No Assertions]`
- * and `Entering Sleep state due to 'Idle Sleep'` five seconds later — although the new link's `caffeinate` was already holding when the sleep began (it came
- * within the same second). An assertion cannot wake a Mac that sleeps, and a DarkWake always ends in a Maintenance Sleep with it held, so the runner then stayed offline until
- * someone pressed a key (hours; four times since 11-05). So the holder is:
+ * package, and a holder that died with it left the Mac with NO assertion for the moment before the new link took its own.
+ *   MEASURED on a real Mac (macOS 26, `pmset -g log`, four restarts since 11-05): the old `caffeinate` died with `[System: No Assertions]` and `Entering Sleep state due to 'Idle Sleep'` followed five seconds
+ *   later, every time; powerd's own ages date the new link's `caffeinate` to the same second as the old one's death; after that every dark wake (about 45 s, every ~15 min) with the assertion held ended in a
+ *   Maintenance Sleep, and the Mac came back fully only at a key press (the three I followed to it: about 1 h, 34 min and 9 h).
+ *   LIKELY, NOT PROVEN: the instant without an assertion — on a Mac whose user is away and whose idle timer is long expired — is what let the sleep start, and an assertion that arrives after it began does not stop
+ *   it. The mechanism was not isolated (no experiment was run on the Mac), and the fix has NOT been verified there yet: after the first update that installs it, `pmset -g log` must show no `No Assertions` at the
+ *   restart and no `Idle Sleep` right after it.
+ * So the holder is:
  *
  *   - timed: it ends by itself after {@link keepAwakeHoldSeconds}, whatever became of the link — a stop, a SIGKILL, a crash leave no orphan for longer than that;
  *   - renewed every {@link renewEveryMs} while the link runs, the NEW holder first and the old one released only after it holds (never an instant with none);
