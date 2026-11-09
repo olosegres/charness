@@ -47,7 +47,8 @@ export type RemoteRunCommand =
   | { kind: 'clean'; slug: string | null }
   | { kind: 'runners' };
 
-export type RemoteRunArgsParse = { ok: true; command: RemoteRunCommand } | { ok: false; error: string };
+/** `note` is a line for stderr before the command goes out (a word that the runner will read again, see `joinCommandWords`). */
+export type RemoteRunArgsParse = { ok: true; command: RemoteRunCommand; note?: string } | { ok: false; error: string };
 
 export const defaultTimeoutSeconds = 3 * 60 * 60;
 /** The longest `--timeout`: Node's timers keep delays only up to 2^31 ms (~24.8 days), a longer one fires at once and would kill the job. */
@@ -127,18 +128,42 @@ const scriptShellNames: readonly string[] = ['sh', 'bash', 'zsh', 'dash', 'ksh']
 /** `-c`, or a bundle of single-letter flags that holds a `c` (`-lc`, `-ec`, `-xc`). */
 const scriptFlagPattern = /^-[A-Za-z]*c[A-Za-z]*$/;
 
+/** The options of a shell that take a value word of their own (`-o pipefail`, `-O extglob`, `+o`, `+O`): the value is no flag, whatever it looks like. */
+const shellValueOptions: readonly string[] = ['-o', '-O', '+o', '+O'];
+
+/** What the shell on the runner reads again when the words are joined: whitespace, a quote, an operator, an expansion or an escape. */
+const shellSyntaxPattern = /[\s&|;<>()$`'"\\]/;
+
+/** The line for stderr when words after the first would be read again on the runner. */
+const rereadCommandNote = 'the words are joined with spaces and read again on the runner — pass the whole command as one quoted word';
+
+/** The index of the `-c` word of `<shell> [options] -c <script> …` (the options are `-e`, `--login`, `-o pipefail`, …), or -1 when the words are no such invocation. */
+function findScriptFlagIndex(words: readonly string[]): number {
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index];
+    if (scriptFlagPattern.test(word)) return index;
+    if (shellValueOptions.includes(word)) index += 1;
+    else if (word === '--' || !(word.startsWith('-') || word.startsWith('+'))) return -1;
+  }
+  return -1;
+}
+
 /**
  * @description The words of a command as the ONE string the runner reads with its own `bash -c`. They are joined with spaces, so a word
  * that holds a space or an operator is read again by that shell (`charness remote-run 'yarn build && yarn test'` is one word that way, on
- * purpose). The one place where the words themselves say that a word is a single one is a shell given a script: `<shell> -c <script>
+ * purpose). The one place where the words themselves say that a word is a single one is a shell given a script: `<shell> [options] -c <script>
  * [$0 $1 …]`. Joined plainly, `bash -c 'cd app && yarn e2e'` reached the runner as `bash -c cd app && yarn e2e` — a `bash -c cd` that does
  * nothing, and `yarn e2e` run in the project root (measured 2026-11-09: «Couldn't find a script named e2e:dev:ios:job», in a project
- * whose subfolder has it). So the script and the words after it are quoted, as the shell that typed them had them.
+ * whose subfolder has it). So the script and the words after it are quoted, as the shell that typed them had them. Wrappers (`nice`, `env`, `timeout`, `sudo`)
+ * and other interpreters (`python3 -c`) are not guessed at: when a word after the first would be read again, `note` says so (one line for stderr).
  */
-export function joinCommandWords(words: readonly string[]): string {
-  const [program, flag, ...script] = words;
-  const isShellWithScript = program !== undefined && flag !== undefined && script.length > 0 && scriptShellNames.includes(path.posix.basename(program)) && scriptFlagPattern.test(flag);
-  return isShellWithScript ? [program, flag, ...script.map(quoteShellWord)].join(' ') : words.join(' ');
+export function joinCommandWords(words: readonly string[]): { command: string; note: string | null } {
+  const [program] = words;
+  const flagIndex = program !== undefined && scriptShellNames.includes(path.posix.basename(program)) ? findScriptFlagIndex(words) : -1;
+  if (flagIndex !== -1 && flagIndex < words.length - 1) {
+    return { command: [...words.slice(0, flagIndex + 1), ...words.slice(flagIndex + 1).map(quoteShellWord)].join(' '), note: null };
+  }
+  return { command: words.join(' '), note: words.slice(1).some((word) => shellSyntaxPattern.test(word)) ? rereadCommandNote : null };
 }
 
 function parseExecArguments(words: readonly string[]): RemoteRunArgsParse {
@@ -160,7 +185,8 @@ function parseExecArguments(words: readonly string[]): RemoteRunArgsParse {
   }
   const commandWords = words.slice(index);
   if (commandWords.length === 0) return { ok: false, error: 'exec needs a command' };
-  return { ok: true, command: { kind: 'exec', runner, command: joinCommandWords(commandWords) } };
+  const joined = joinCommandWords(commandWords);
+  return { ok: true, command: { kind: 'exec', runner, command: joined.command }, ...(joined.note === null ? {} : { note: joined.note }) };
 }
 
 /** The value-taking options of a run, each as the code that stores the value. */
@@ -220,7 +246,7 @@ function parseOptionsBeforeSubcommand(name: string, rest: readonly string[], run
   if (!parsed.ok || parsed.command.kind !== 'exec') return parsed;
   const { runner: runnerAfter, command } = parsed.command;
   if (runner !== null && runnerAfter !== null && runner !== runnerAfter) return { ok: false, error: `--runner names two runners for exec: ${runner} before it, ${runnerAfter} after it` };
-  return { ok: true, command: { kind: 'exec', runner: runnerAfter ?? runner, command } };
+  return { ok: true, command: { kind: 'exec', runner: runnerAfter ?? runner, command }, ...(parsed.note === undefined ? {} : { note: parsed.note }) };
 }
 
 function parseRunArguments(words: readonly string[]): RemoteRunArgsParse {
@@ -258,7 +284,8 @@ function parseRunArguments(words: readonly string[]): RemoteRunArgsParse {
   const commandWords = words.slice(index);
   if (commandWords.length === 0) return { ok: false, error: 'no command given' };
   if (!isCommandAfterSeparator && subcommandNames.includes(commandWords[0])) return parseOptionsBeforeSubcommand(commandWords[0], commandWords.slice(1), options.runner, usedOptions);
-  return { ok: true, command: { kind: 'run', options, command: joinCommandWords(commandWords) } };
+  const joined = joinCommandWords(commandWords);
+  return { ok: true, command: { kind: 'run', options, command: joined.command }, ...(joined.note === null ? {} : { note: joined.note }) };
 }
 
 /** @description Parse the words after `charness remote-run`. */

@@ -447,9 +447,12 @@ run as a job of that name: `--runner box1 exec ls build/` is the `exec` of `ls b
 understood), and `--bg ls build/` is refused with the way out — put `--` before it. The words of the command are joined with spaces
 and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn test'` works. A word that holds a space or an operator is
 therefore read again on the runner: `charness remote-run yarn e2e -t 'a b'` runs `yarn e2e -t a b`, so pass a whole script as ONE quoted
-word. The one exception is a shell given a script — `bash -c`, `sh -c`, `zsh -c`, `dash -c`, `ksh -c`, also `-lc` and the like: there the script
+word. The one exception is a shell given a script — `bash -c`, `sh -c`, `zsh -c`, `dash -c`, `ksh -c`, also `-lc` and the like, with the shell's own
+options before it (`bash -e -c`, `bash --login -c`, `bash -o pipefail -c`): there the script
 (and the words after it, the shell's `$0 $1 …`) is quoted for you, so `charness remote-run bash -c 'cd app && yarn e2e'` runs the whole
-script in `app` (before this, it ran `bash -c cd app` and then `yarn e2e` in the project root).
+script in `app` (before this, it ran `bash -c cd app` and then `yarn e2e` in the project root). A wrapper (`nice`, `env`, `timeout`, `sudo`, `caffeinate`) or
+another interpreter (`python3 -c`, `node -e`) is not guessed at — quote its whole command as one word: `charness remote-run 'nice -n 19 bash -c "cd app && yarn e2e"'`.
+When a word after the first holds a space, a quote or an operator, `remote-run` prints one line on stderr before it starts, saying that the words are read again on the runner.
 
 - **Foreground (default)**: syncs the project, runs the dependencies step when needed, runs the command in the same subfolder of the
   runner's copy, streams its output live, and exits with the command's exit code. Interrupting it (Ctrl-C, SIGTERM, an agent tool's

@@ -68,6 +68,22 @@ describe('runRemoteRunCli', () => {
     assert.equal(fs.existsSync(getRunnersConfigPath(homeDir)), false);
   });
 
+  it('a command whose words the runner would read again prints ONE note on stderr before anything is looked at; a shell script that is quoted for the user prints none', async () => {
+    const wrapped = createTestIo();
+    assert.equal(await runRemoteRunCli(['exec', 'nice', '-n', '19', 'bash', '-c', 'cd a && ls'], wrapped.io), 125);
+    const note = 'remote-run: the words are joined with spaces and read again on the runner — pass the whole command as one quoted word\n';
+    assert.equal(wrapped.err[0], note);
+    assert.equal(wrapped.err.filter((text) => text === note).length, 1);
+    const quoted = createTestIo();
+    assert.equal(await runRemoteRunCli(['exec', 'bash', '-c', 'cd a && ls'], quoted.io), 125);
+    assert.ok(!quoted.err.join('').includes('read again on the runner'));
+  });
+
+  it('the usage says how the words of a command are joined, and what is quoted for the user', () => {
+    assert.match(remoteRunUsage, /The words of <command…> are joined with spaces and read again by the runner's shell: pass a whole script as ONE quoted word/);
+    assert.ok(remoteRunUsage.includes("`bash -c '<script>'` is quoted for you"));
+  });
+
   it('the usage names every command and the exit codes', () => {
     for (const word of ['runners', 'ls [--all]', 'status <id>', 'logs <id>', 'wait <id>', 'kill <id>', 'fetch <id>', 'exec', '--bg', '--needs', '--timeout', '--with-git', 'docs/remote-run.md']) {
       assert.ok(remoteRunUsage.includes(word), word);

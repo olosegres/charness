@@ -250,6 +250,18 @@ describe('a shell invocation `<shell> -c <script>`: the script is ONE word, so i
     assert.equal(parseCommandText(['bash', '-c', 'echo "$0 $1"', 'name', 'two words']), `bash -c 'echo "$0 $1"' name 'two words'`);
   });
 
+  it('the shell\'s own options before `-c` (`-e`, `--login`, `-o pipefail`, `-O extglob`) do not hide the script: they stay as they are and the script is quoted', () => {
+    assert.equal(parseCommandText(['bash', '-e', '-c', 'cd a && ls']), "bash -e -c 'cd a && ls'");
+    assert.equal(parseCommandText(['bash', '--login', '-c', 'cd a && ls']), "bash --login -c 'cd a && ls'");
+    assert.equal(parseCommandText(['bash', '-o', 'pipefail', '-c', 'cd a && ls']), "bash -o pipefail -c 'cd a && ls'");
+    assert.equal(parseCommandText(['bash', '-e', '-o', 'pipefail', '-lc', 'cd a | ls']), "bash -e -o pipefail -lc 'cd a | ls'");
+    assert.equal(parseCommandText(['bash', '-O', 'extglob', '-c', 'ls']), 'bash -O extglob -c ls');
+    assert.equal(parseCommandText(['exec', 'bash', '-o', 'pipefail', '-c', 'cd a && ls']), "bash -o pipefail -c 'cd a && ls'");
+    // The value of `-o` is no flag, whatever it looks like; a word that is no option ends the search (`bash script.sh -c x` runs the script).
+    assert.equal(parseCommandText(['bash', '-o', 'errexit', 'script.sh', '-c', 'x y']), 'bash -o errexit script.sh -c x y');
+    assert.equal(parseCommandText(['bash', '-e', '--', '-c', 'x y']), 'bash -e -- -c x y');
+  });
+
   it('a single quote inside the script survives, and a script that needs no quoting is left as it is', () => {
     const withQuote = parseCommandText(['bash', '-c', "echo 'a  b'"]);
     assert.equal(spawnSync('bash', ['-c', withQuote], { encoding: 'utf8' }).stdout, 'a  b\n');
@@ -272,6 +284,27 @@ describe('a shell invocation `<shell> -c <script>`: the script is ONE word, so i
     assert.equal(parseCommandText(['mybash', '-c', 'cd a && ls']), 'mybash -c cd a && ls');
     assert.equal(parseCommandText(['bash -c "cd a && ls"']), 'bash -c "cd a && ls"');
     assert.equal(parseCommandText(['cd a && ls']), 'cd a && ls');
+  });
+
+  it('a word after the first that the runner would read again gets ONE note for stderr; a script in the first word, a quoted shell script and a command with nothing to re-read get none', () => {
+    const rereadCommandNote = 'the words are joined with spaces and read again on the runner — pass the whole command as one quoted word';
+    const noteOf = (words: string[]): string | undefined => {
+      const parsed = parseRemoteRunArgs(words);
+      assert.ok(parsed.ok, words.join(' '));
+      return parsed.ok ? parsed.note : undefined;
+    };
+    assert.equal(noteOf(['nice', '-n', '19', 'bash', '-c', 'cd a && ls']), rereadCommandNote);
+    assert.equal(noteOf(['env', 'bash', '-c', 'cd a && ls']), rereadCommandNote);
+    assert.equal(noteOf(['timeout', '600', 'bash', '-c', 'ls | wc']), rereadCommandNote);
+    assert.equal(noteOf(['python3', '-c', 'print(1)']), rereadCommandNote);
+    assert.equal(noteOf(['yarn', 'e2e', '-t', 'a b']), rereadCommandNote);
+    assert.equal(noteOf(['exec', 'nice', 'bash', '-c', 'cd a && ls']), rereadCommandNote);
+    assert.equal(noteOf(['--runner', 'box1', 'exec', 'nice', 'bash', '-c', 'cd a && ls']), rereadCommandNote);
+    assert.equal(noteOf(['bash', '-c', 'cd a && ls']), undefined, 'quoted for you');
+    assert.equal(noteOf(['bash', '-o', 'pipefail', '-c', 'cd a && ls']), undefined, 'quoted for you');
+    assert.equal(noteOf(['yarn build && yarn test']), undefined, 'one word: the documented way');
+    assert.equal(noteOf(['yarn', 'build', '--', '--watch=false']), undefined);
+    assert.equal(noteOf(['echo', 'build/']), undefined);
   });
 
   it('run on a real shell (the runner runs the command text with `bash -c`): `cd` and the chain after it happen INSIDE the script — the job of 2026-11-09 ran `yarn …` in the project root instead', () => {

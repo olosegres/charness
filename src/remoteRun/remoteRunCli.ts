@@ -42,6 +42,8 @@ export const remoteRunUsage = `Usage:
                               run <command> on a runner, in the same folder of a copy of this git project;
                               output and exit code come back, interrupt or timeout kills the remote job.
                               --bg prints a job id and returns (long runs).
+                              The words of <command…> are joined with spaces and read again by the runner's shell: pass a whole script as ONE quoted word
+                              (\`bash -c '<script>'\` is quoted for you; a wrapper such as nice, env or timeout, or \`python3 -c\`, is not).
                               --send <path> sends a held-back secret-looking file (a pattern, relative to the project root) for this call only.
                               --needs with a paired runner that has it but is offline waits for it up to --runner-wait
                               (default 15m, 0 = fail at once). An iOS build or a Simulator test always carries --needs ios: an
@@ -121,6 +123,7 @@ export async function runRemoteRunCli(argv: readonly string[], io: CliIo = creat
     return remoteRunExitCodes.usage;
   }
   const { command } = parsed;
+  if (parsed.note !== undefined) io.stderr(`remote-run: ${parsed.note}\n`);
   if (command.kind === 'help') {
     if (argv.length === 0) {
       io.stderr(remoteRunUsage);
