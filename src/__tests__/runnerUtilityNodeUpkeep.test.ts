@@ -425,7 +425,9 @@ describe('removing old versions', () => {
     try {
       fs.copyFileSync(fs.realpathSync('/bin/sh'), oldNode);
     } catch {
+      // `skip()` only marks the case: the body goes on unless it returns.
       context.skip('this shell cannot be copied here');
+      return;
     }
     fs.chmodSync(oldNode, 0o755);
     const job = spawn('env', ['node', '-c', 'sleep 30'], { stdio: 'ignore', env: { PATH: `${path.dirname(oldNode)}:/usr/bin:/bin` } });

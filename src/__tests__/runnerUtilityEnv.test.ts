@@ -17,6 +17,15 @@ import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 
 const paths = getRunnerHomePaths('/home/runner');
 
+// The cases that need a real tool are skipped through the `skip` option, decided when the file is read: `context.skip()` called in the body only MARKS the case and the body goes on (it ran `nvm use undefined` on a CI
+// image that has nvm but no installed Node, and failed «not ok … # SKIP»).
+const npmBesideNode = path.join(path.dirname(process.execPath), 'npm');
+const realNpmSkip = fs.existsSync(npmBesideNode) ? false : 'no npm beside the Node that runs the tests';
+const nvmDir = process.env.NVM_DIR ?? path.join(os.homedir(), '.nvm');
+const nvmNodeVersionsDir = path.join(nvmDir, 'versions', 'node');
+const installedNvmNodeVersions = fs.existsSync(nvmNodeVersionsDir) ? fs.readdirSync(nvmNodeVersionsDir) : [];
+const realNvmSkip = fs.existsSync(path.join(nvmDir, 'nvm.sh')) && installedNvmNodeVersions.length > 0 ? false : 'no nvm with an installed Node here';
+
 describe('parseEnvFile', () => {
   it('reads KEY=VALUE lines, skipping blanks and comments, allowing export and one pair of quotes', () => {
     const { values, rejected } = parseEnvFile('# comment\n\nA=1\nexport B = two words \nC="quoted value"\nD=\'single\'\nE=\n');
@@ -100,10 +109,9 @@ describe('buildExecEnv', () => {
     assert.equal('NPM_CONFIG_PREFIX' in buildExecEnv(base), true, 'while the operator says nothing, it is set');
   });
 
-  it('with the REAL npm: a job gets the runner\'s own global prefix by default, and — with the empty line — npm\'s own default again', (context) => {
+  it('with the REAL npm: a job gets the runner\'s own global prefix by default, and — with the empty line — npm\'s own default again', { skip: realNpmSkip }, () => {
     const nodeDir = path.dirname(process.execPath);
-    const npm = path.join(nodeDir, 'npm');
-    if (!fs.existsSync(npm)) context.skip('no npm beside the Node that runs the tests');
+    const npm = npmBesideNode;
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'env-npm-'));
     try {
       const homePaths = getRunnerHomePaths(home);
@@ -118,15 +126,12 @@ describe('buildExecEnv', () => {
     }
   });
 
-  it('with the REAL nvm: `nvm use` refuses while NPM_CONFIG_PREFIX is set (the default job environment) and works once the operator\'s empty line took it away', (context) => {
-    const nvmDir = process.env.NVM_DIR ?? path.join(os.homedir(), '.nvm');
-    const installed = fs.existsSync(path.join(nvmDir, 'versions', 'node')) ? fs.readdirSync(path.join(nvmDir, 'versions', 'node')) : [];
-    if (!fs.existsSync(path.join(nvmDir, 'nvm.sh')) || installed.length === 0) context.skip('no nvm with an installed Node here');
+  it('with the REAL nvm: `nvm use` refuses while NPM_CONFIG_PREFIX is set (the default job environment) and works once the operator\'s empty line took it away', { skip: realNvmSkip }, () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'env-nvm-'));
     try {
       const homePaths = getRunnerHomePaths(home);
       const nvmUse = (operatorEnv: Record<string, string>): { status: number | null; output: string } => {
-        const result = spawnSync('bash', ['-c', `. "${nvmDir}/nvm.sh" >/dev/null 2>&1; nvm use ${installed[0]} 2>&1`], {
+        const result = spawnSync('bash', ['-c', `. "${nvmDir}/nvm.sh" >/dev/null 2>&1; nvm use ${installedNvmNodeVersions[0]} 2>&1`], {
           encoding: 'utf8',
           env: { ...buildExecEnv({ paths: homePaths, accountName: 'runner', environment: {}, nodeDir: '/usr/bin', operatorEnv, androidSdk: null }), HOME: home, NVM_DIR: nvmDir },
         });

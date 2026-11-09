@@ -314,7 +314,10 @@ describe('the runner\'s own Node (own mode: the line run without sudo, a runner 
   });
 
   it('refuses musl libc (Alpine): the builds of nodejs.org are glibc builds', (context) => {
-    if (platformName !== 'linux') context.skip('Linux only');
+    if (platformName !== 'linux') {
+      context.skip('Linux only');
+      return;
+    }
     writeMirror();
     fs.rmSync(path.join(workDir, 'tools', 'ldd'), { force: true });
     fs.writeFileSync(path.join(workDir, 'tools', 'ldd'), '#!/bin/sh\necho "musl libc (x86_64)" >&2\nexit 1\n', { mode: 0o755 });
@@ -512,7 +515,11 @@ describe('the Node the admin line installs (root mode)', () => {
   });
 
   it('is not given a test seam by the line: its own default places and the shared folder are what it uses', (context) => {
-    if (findHomeContaining(fs.realpathSync(os.tmpdir())) !== null) context.skip('the temp folder is inside a home here');
+    if (findHomeContaining(fs.realpathSync(os.tmpdir())) !== null) {
+      // `skip()` only marks the case: the body goes on unless it returns.
+      context.skip('the temp folder is inside a home here');
+      return;
+    }
     const source = fs.readFileSync(scriptPath, 'utf8');
     assert.ok(source.includes('default_dist=https://nodejs.org/dist'), 'the one place it downloads from');
     assert.ok(!/\$\{?(CHARNESS|TEST)_/.test(source), 'and no environment variable changes that: a seam of the root script is an argument');
