@@ -89,6 +89,14 @@ export function getOpenCodeCompactPluginContext(isWithInstructionGaps: boolean):
 const maxSessionAncestryDepth = 8;
 
 /**
+ * How long the plugin waits for the server to tell one session's parent. OpenCode does not start the compaction until the
+ * hook returns, and the lookup is a request to the server the plugin runs in — one that never settles (the server going down
+ * mid-compaction, a proxy that holds the connection) would hold the compaction for ever. A lookup that is not answered in
+ * time means ON, like one that fails: the section is asked for, as before the switch.
+ */
+export const openCodeAncestryLookupTimeoutMs = 2000;
+
+/**
  * @description The plugin module source: a v1 plugin (`default` export with `id` + `server`). Before a compaction it looks for
  * the flag the bot keeps for the session (`utils/compactMistakesFlags.ts`): present ⇒ `/compact_mistakes` is off for the
  * session's topic and the text without the agent-mistakes section goes in. The flag folder sits next to the plugin folder,
@@ -97,8 +105,8 @@ const maxSessionAncestryDepth = 8;
  * A sub-agent (Task) session has an id of its own that no flag names, so when the compacting session has none the plugin asks
  * the server for its `parentID` (`client.session.get`, which the server hands every plugin) and looks at the parent's, up to
  * {@link maxSessionAncestryDepth} levels: a topic's sub-agents follow the topic. A folder with no flag in it at all costs no
- * request. A session id that is not a plain id, a server that does not answer, or any read failure means ON: the section is
- * asked for, as before the switch.
+ * request. A session id that is not a plain id, a lookup that fails or is not answered within
+ * {@link openCodeAncestryLookupTimeoutMs}, or any read failure means ON: the section is asked for, as before the switch.
  */
 export function buildOpenCodeCompactPluginSource(input: { context: string; contextWithoutInstructionGaps: string }): string {
   return [
@@ -109,10 +117,21 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     `const context = ${JSON.stringify(input.context)};`,
     `const contextWithoutInstructionGaps = ${JSON.stringify(input.contextWithoutInstructionGaps)};`,
     `const maxAncestryDepth = ${maxSessionAncestryDepth};`,
+    `const lookupTimeoutMs = ${openCodeAncestryLookupTimeoutMs};`,
     `const offFlagDir = path.join(path.dirname(path.dirname(fileURLToPath(import.meta.url))), ${JSON.stringify(openCodeCompactMistakesOffDirName)});`,
     `const checkIsPlainID = (sessionID) => typeof sessionID === "string" && new RegExp(${JSON.stringify(flagSessionIdPattern.source)}).test(sessionID);`,
     'const checkHasAnyFlag = () => { try { return fs.readdirSync(offFlagDir).length > 0; } catch { return false; } };',
     'const checkHasFlag = (sessionID) => { try { return fs.existsSync(path.join(offFlagDir, sessionID)); } catch { return false; } };',
+    // The server's answer, or a rejection when it does not come in time (the timer is always cleared; a late answer is ignored).
+    'const lookupParentID = async (client, sessionID) => {',
+    '  let timer;',
+    '  try {',
+    '    const timeout = new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error("the parent lookup timed out")), lookupTimeoutMs); });',
+    '    return (await Promise.race([client.session.get({ path: { id: sessionID } }), timeout])).data?.parentID;',
+    '  } finally {',
+    '    clearTimeout(timer);',
+    '  }',
+    '};',
     'const checkIsMistakesOff = async (client, sessionID) => {',
     '  if (!checkHasAnyFlag()) return false;',
     '  let currentID = sessionID;',
@@ -120,7 +139,7 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     '    if (!checkIsPlainID(currentID)) return false;',
     '    if (checkHasFlag(currentID)) return true;',
     '    let parentID;',
-    '    try { parentID = (await client.session.get({ path: { id: currentID } })).data?.parentID; } catch { return false; }',
+    '    try { parentID = await lookupParentID(client, currentID); } catch { return false; }',
     '    if (!parentID) return false;',
     '    currentID = parentID;',
     '  }',

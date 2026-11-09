@@ -24,6 +24,7 @@ import {
   legacyOpenCodeCompactPluginFileName,
   legacyOpenCodeCompactPluginId,
   openCodeCompactPluginFileName,
+  openCodeAncestryLookupTimeoutMs,
   openCodeCompactPluginId,
   resolveOpenCodeGlobalPluginDir,
 } from '../utils/openCodeCompactPlugin';
@@ -204,6 +205,33 @@ test('installed plugin: an ancestor search that fails, loops or never ends means
     applyCompactMistakesOffFlag(flagDir, 'ses_level7', true);
     applyCompactMistakesOffFlag(flagDir, 'ses_level8', false);
     assert.deepEqual(await getPushedContext(boundedHook, 'ses_level0'), asked, 'the 9th is not');
+  });
+});
+
+test('installed plugin: a parent lookup that never answers is given up after its deadline and means ON — the compaction is not held for ever', async () => {
+  await withTempDir(async (dir) => {
+    const flagDir = getOpenCodeCompactMistakesOffDir(path.join(dir, 'opencode', 'plugins'));
+    applyCompactMistakesOffFlag(flagDir, 'ses_topic', false);
+    const lookedUp: string[] = [];
+    // A server that takes the request and never settles it (going down mid-compaction, a proxy that holds the connection).
+    const silentClient: SessionLookupClient = { session: { get: ({ path: { id } }) => { lookedUp.push(id); return new Promise(() => {}); } } };
+    const hook = await loadInstalledPluginHook(dir, silentClient);
+
+    // Beaten to it by the test's own, later deadline, the plugin has hung: the red outcome fails in seconds, not at the file's limit.
+    const hungMarker = ['HUNG'];
+    const startedAt = Date.now();
+    const outcome = await Promise.race([
+      getPushedContext(hook, 'ses_child'),
+      new Promise<string[]>((resolve) => setTimeout(() => resolve(hungMarker), openCodeAncestryLookupTimeoutMs + 3000)),
+    ]);
+
+    assert.notEqual(outcome, hungMarker, 'the hook returned although the server never answered');
+    assert.deepEqual(outcome, [getOpenCodeCompactPluginContext(true)], 'no answer in time: asked, as before the switch');
+    assert.ok(Date.now() - startedAt >= openCodeAncestryLookupTimeoutMs - 100, 'it waited for the deadline, not less');
+    assert.deepEqual(lookedUp, ['ses_child'], 'and gave the walk up there: one request, not one per level');
+    // A lookup that answers in time is unaffected by the deadline.
+    const lookup = createSessionLookup({ ses_child: 'ses_topic' });
+    assert.deepEqual(await getPushedContext(await loadInstalledPluginHook(dir, lookup.client), 'ses_child'), [getOpenCodeCompactPluginContext(false)]);
   });
 });
 
