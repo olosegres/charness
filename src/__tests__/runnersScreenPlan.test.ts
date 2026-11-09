@@ -186,6 +186,8 @@ describe('runnersScreenPlan: the list', () => {
     assert.equal(lineOf(['copies_count=16', 'copies_size_mb=296960', 'copies_unmeasured=0']), '  project copies: 16 · 290 GB');
     assert.equal(lineOf(['copies_count=16', 'copies_size_mb=296960', 'copies_unmeasured=3']), '  project copies: 16 · ~290 GB');
     assert.equal(lineOf(['copies_count=0', 'copies_size_mb=0', 'copies_unmeasured=0']), undefined);
+    assert.equal(lineOf(['copies_count=16', 'copies_size_mb=296960', 'copies_unmeasured=0', 'copies_cloned=5']), '  project copies: 16 · 290 GB (clones counted in full)', 'clones share disk blocks that `du` counts in full: the line says so');
+    assert.equal(lineOf(['copies_count=16', 'copies_size_mb=296960', 'copies_unmeasured=3', 'copies_cloned=5']), '  project copies: 16 · ~290 GB (clones counted in full)');
     assert.equal(lineOf([]), undefined);
     const lines = withCopies(['copies_count=2', 'copies_size_mb=2048', 'copies_unmeasured=0']);
     assert.ok(lines.indexOf('  project copies: 2 · 2 GB') === lines.findIndex((line) => line.startsWith('  jobs:')) + 1, 'right under the jobs line');
@@ -221,6 +223,23 @@ describe('runnersScreenPlan: the list', () => {
         assert.doesNotMatch(line, /\{[a-z]+\}/, `${locale}: no placeholder is left`);
       });
     }
+  });
+
+  it('in every language the project copies line of a runner with clones says they are counted in full, and leaves no placeholder behind', () => {
+    const plainLines = new Set<string>();
+    for (const locale of localeCodes) {
+      runWithLocale(locale, () => {
+        const screenOf = (extra: string): string => buildRunnersScreen({ revision, entries: [createEntry({ probe: parseProbeOutput(`${probeText}\ncopies_count=16\ncopies_size_mb=296960\ncopies_unmeasured=0${extra}`) })], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+        const line = screenOf('\ncopies_cloned=5').split('\n').find((candidate) => candidate.includes('290 GB'));
+        const plain = screenOf('').split('\n').find((candidate) => candidate.includes('290 GB'));
+        assert.ok(line !== undefined && plain !== undefined && line.includes('16'), `${locale}: ${line}`);
+        assert.doesNotMatch(line, /\{[a-z]+\}/, `${locale}: no placeholder is left`);
+        if (locale !== 'en') assert.notEqual(line, plain, `${locale}: the line with clones is not the line without`);
+        assert.ok(line.length > plain.length, `${locale}: the clones line says more`);
+        plainLines.add(line);
+      });
+    }
+    assert.equal(plainLines.size, localeCodes.length, 'each language has a line of its own');
   });
 
   it('the Node and yarn the jobs run with are one line under what it can do — a version, «none» or «gave no answer»; nothing when its script did not report them', () => {

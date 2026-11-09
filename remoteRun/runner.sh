@@ -574,10 +574,12 @@ probe_disk_target() {
 # with no figure, or used since their figure was written, is copies_unmeasured). Asking never waits for a `du`: a missing figure starts the measuring detached — for a VIEW of the runners only (`probe <work> prune`): the probe a
 # run or an `exec` makes first comes right before its `prepare`, and a walk over the copy about to be built would compete with the build.
 probe_copies() {
-  local count=0 total_kb=0 unmeasured=0 copy_dir size_file size_kb
+  local count=0 total_kb=0 unmeasured=0 cloned=0 copy_dir size_file size_kb
   for copy_dir in "$work"/p/*/; do
     [ -d "$copy_dir" ] || continue
     count=$((count + 1))
+    # `du` counts the blocks a clone shares with its source in full, so the total is more than the disk holds: the views say so when some copy is one.
+    check_copy_shares_blocks "$work" "$(basename "$copy_dir")" && cloned=$((cloned + 1))
     size_file="${copy_dir}size-kb"
     size_kb=$(read_file "$size_file")
     case $size_kb in
@@ -591,6 +593,7 @@ probe_copies() {
   echo "copies_count=$count"
   echo "copies_size_mb=$(kb_to_mb "$total_kb")"
   echo "copies_unmeasured=$unmeasured"
+  echo "copies_cloned=$cloned"
   [ "$unmeasured" -gt 0 ] && [ "$probe_may_prune" = prune ] && start_detached_run "$work" measure-copies
   return 0
 }
@@ -1424,11 +1427,12 @@ refuse_when_disk_is_short() {
   rm -rf "$jd" "$stage"
   rmdir "$proj/stage" "$jobs_dir" "$tree" 2> /dev/null
   [ -z "$(ls -A "$proj" 2> /dev/null | grep -v -x -e used -e size-kb)" ] && rm -rf "$proj"
-  local copy_dir copy_slug size_kb sizes= listing= copies=0 unmeasured=0
+  local copy_dir copy_slug size_kb sizes= listing= copies=0 unmeasured=0 has_clones=0
   for copy_dir in "$work"/p/*/; do
     [ -d "$copy_dir" ] || continue
     copies=$((copies + 1))
     copy_slug=$(basename "$copy_dir")
+    check_copy_shares_blocks "$work" "$copy_slug" && has_clones=1
     if size_kb=$(read_copy_size_kb "$work" "$copy_slug" written); then
       sizes="$sizes$size_kb $copy_slug"$'\n'
     else
@@ -1443,7 +1447,10 @@ refuse_when_disk_is_short() {
     advice="free space with \`charness remote-run clean <slug>\` on the copies of project folders whose last task is closed (\`charness remote-run runners\` shows what they take)"
     local also_unmeasured=
     [ "$unmeasured" -gt 0 ] && also_unmeasured=" (and $unmeasured not measured yet)"
-    [ -n "$listing" ] && advice="biggest project copies: $listing$also_unmeasured; $advice"
+    # A clone's figure counts the blocks it shares with its source in full (`du` cannot see them shared): removing one gives back less than it says.
+    local also_clones=
+    [ "$has_clones" -eq 1 ] && also_clones=" (clones counted in full)"
+    [ -n "$listing" ] && advice="biggest project copies: $listing$also_unmeasured$also_clones; $advice"
     [ -z "$listing" ] && advice="$copies project copies, their sizes are still being measured; $advice"
     [ "$prune_stopped_without_gain" -eq 1 ] && advice="$advice. Removing copies did not give their space back (on a Mac: APFS local snapshots or purgeable space; anywhere: jobs writing meanwhile, see docs/remote-run.md)"
   fi

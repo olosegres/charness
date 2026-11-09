@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**`runners` and `/runners` now say when the size of the project copies counts clones in full.**
+Before, a Mac whose new copies were seeded from a sibling (clones that share disk blocks with it) showed a total that was several times what the disk held — `du` cannot see the shared blocks — and a refused submit named a clone as «41 GB to free» when removing it gives back far less.
+Now the copies line of `runners` and of the bot's `/runners` (every language) adds «clones counted in full» whenever some copy shares blocks with another, and so does the list of the biggest copies in a disk-full refusal; the real saving shows only in the disk's free space.
+
 **A project copy on a runner that nobody has used for a day now loses its Xcode build data (`ios/build`), which is the biggest part of an iOS copy.**
 Before, an iOS build left ~8.5 GB per app in the runner's copy and kept it for as long as the copy lived (3 days idle, or until the disk was short), so a Mac with a handful of copies of a React Native monorepo spent ~17 GB per copy on derived data that nothing could share.
 Now a copy not used for 24 hours loses its `ios/build` and `ios/DerivedData` folders (of every app folder), and nothing else — never sources, `node_modules`, `Pods` or a copy in use. The next iOS job of that copy builds from scratch instead of incrementally, and says so in its log. It rides the sweep that already clears idle copies' `TMPDIR`s: after a submit at most every 6 hours, and on a short disk before a copy is removed.

@@ -1210,6 +1210,7 @@ export const ukDict: Record<string, string> = {
   'runners.cpuLoad': 'навантаження {load}',
   'runners.jobsLine': 'завдання: {running} виконуються, {queued} у черзі · проєктів: {projects}',
   'runners.copiesLine': 'копії проєктів: {count} · {size}',
+  'runners.copiesWithClonesLine': 'копії проєктів: {count} · {size} (клони враховані повністю)',
   'runners.oldSimulatorsLine': 'симулятори старих рантаймів (у дужках — пристрої; нічого не видаляється): {runtimes}',
   'runners.diskLowNote': 'МАЛО — раннер тримає вільними {minFree}',
   'runners.pueueMissing': 'На цьому раннері немає Pueue',

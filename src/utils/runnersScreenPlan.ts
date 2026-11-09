@@ -221,11 +221,14 @@ function buildEntryBlock(entry: RunnerScreenEntry, t: Translate, formatTime: For
   return lines.join('\n');
 }
 
-/** The project copies a runner keeps and what they take (`~` before the size while some figure is still being measured); nothing when the runner did not say or has none. */
+/**
+ * The project copies a runner keeps and what they take (`~` before the size while some figure is still being measured; the line says the clones are counted in full when some copy shares disk blocks with another — `du` cannot see
+ * them shared); nothing when the runner did not say or has none.
+ */
 function describeProjectCopies(probe: RunnerProbe, t: Translate): string[] {
   if (probe.copies === null || probe.copies.count === 0) return [];
   const size = `${probe.copies.unmeasuredCount > 0 ? '~' : ''}${formatGigabytes(probe.copies.sizeMb)}`;
-  return [`  ${t('runners.copiesLine', { count: probe.copies.count, size })}`];
+  return [`  ${t(probe.copies.clonedCount > 0 ? 'runners.copiesWithClonesLine' : 'runners.copiesLine', { count: probe.copies.count, size })}`];
 }
 
 /** ` — LOW …` for the end of the hardware line when the work disk is under what the runner wants kept free (the same test as the CLI's `runners`); nothing otherwise. */

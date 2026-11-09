@@ -1198,6 +1198,7 @@ export const zhDict: Record<string, string> = {
   'runners.cpuLoad': '负载 {load}',
   'runners.jobsLine': '任务：{running} 个运行中，{queued} 个排队 · 项目：{projects}',
   'runners.copiesLine': '项目副本：{count} · {size}',
+  'runners.copiesWithClonesLine': '项目副本：{count} · {size}（克隆按完整大小计算）',
   'runners.oldSimulatorsLine': '旧运行时的模拟器（括号内为设备数；不会删除任何内容）：{runtimes}',
   'runners.diskLowNote': '偏低 — 此 runner 保留 {minFree} 空闲',
   'runners.pueueMissing': '此 runner 上缺少 Pueue',

@@ -1204,6 +1204,7 @@ export const uzDict: Record<string, string> = {
   'runners.cpuLoad': 'yuklama {load}',
   'runners.jobsLine': 'ishlar: {running} bajarilmoqda, {queued} navbatda · loyihalar: {projects}',
   'runners.copiesLine': 'loyiha nusxalari: {count} · {size}',
+  'runners.copiesWithClonesLine': 'loyiha nusxalari: {count} · {size} (klonlar to‘liq hisoblanadi)',
   'runners.oldSimulatorsLine': 'eski runtime simulyatorlari (qavsda — qurilmalar; hech narsa o‘chirilmaydi): {runtimes}',
   'runners.diskLowNote': 'KAM — runner {minFree} bo‘sh joy saqlaydi',
   'runners.pueueMissing': 'Bu runnerda Pueue yo‘q',

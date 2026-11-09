@@ -37,8 +37,11 @@ export interface RunnerProbe {
   diskFreeMb: number | null;
   /** The free space the runner wants kept on its work disk (the smaller of 60 GB and 15 % of the disk, or its config's number); `null` when the runner did not say, `0` when it wants none. */
   diskMinFreeMb: number | null;
-  /** The project copies on the runner: how many, how much they take as last measured (measuring runs detached, so `unmeasuredCount` copies have no fresh figure yet); `null` when the runner did not say. */
-  copies: { count: number; sizeMb: number; unmeasuredCount: number } | null;
+  /**
+   * The project copies on the runner: how many, how much they take as last measured (measuring runs detached, so `unmeasuredCount` copies have no fresh figure yet), and how many of them share disk blocks with another (a copy
+   * seeded from a sibling is a clone: `du` counts what clones share in full, so `sizeMb` is more than the disk holds when `clonedCount` is not 0); `null` when the runner did not say.
+   */
+  copies: { count: number; sizeMb: number; unmeasuredCount: number; clonedCount: number } | null;
   /** The Pueue version, `null` when Pueue is missing on the runner. */
   pueueVersion: string | null;
   jobsRunning: number;
@@ -103,7 +106,7 @@ function parseCopies(fields: ReadonlyMap<string, string>): RunnerProbe['copies']
   const count = readNumber(fields.get('copies_count'));
   const sizeMb = readNumber(fields.get('copies_size_mb'));
   if (count === null || sizeMb === null) return null;
-  return { count, sizeMb, unmeasuredCount: readNumber(fields.get('copies_unmeasured')) ?? 0 };
+  return { count, sizeMb, unmeasuredCount: readNumber(fields.get('copies_unmeasured')) ?? 0, clonedCount: readNumber(fields.get('copies_cloned')) ?? 0 };
 }
 
 export type KeepAwakeMethod = 'caffeinate' | 'systemd-inhibit';
@@ -251,11 +254,11 @@ function formatLowDisk(probe: RunnerProbe): string {
   return ` — LOW, the runner wants ${formatGigabytes(probe.diskMinFreeMb)} kept free`;
 }
 
-/** ` · 16 project copies, 290 GB` (the size as last measured, "so far" while a figure is still being measured); nothing while there is no copy. */
+/** ` · 16 project copies, 290 GB` (the size as last measured, "so far" while a figure is still being measured, «clones counted in full» when some copy shares disk blocks with another: the bot's `/runners` says the same, localized: `runners.copiesWithClonesLine`); nothing while there is no copy. */
 function formatCopies(probe: RunnerProbe): string {
   if (probe.copies === null || probe.copies.count === 0) return '';
-  const { count, sizeMb, unmeasuredCount } = probe.copies;
-  return ` · ${count} project ${count === 1 ? 'copy' : 'copies'}, ${formatGigabytes(sizeMb)}${unmeasuredCount > 0 ? ' so far (measuring)' : ''}`;
+  const { count, sizeMb, unmeasuredCount, clonedCount } = probe.copies;
+  return ` · ${count} project ${count === 1 ? 'copy' : 'copies'}, ${formatGigabytes(sizeMb)}${unmeasuredCount > 0 ? ' so far (measuring)' : ''}${clonedCount > 0 ? ', clones counted in full' : ''}`;
 }
 
 /** The line of a paired runner under its capabilities: the charness it runs and how it is kept running. Nothing for a hand-made one. */

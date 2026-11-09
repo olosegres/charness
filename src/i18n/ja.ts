@@ -1198,6 +1198,7 @@ export const jaDict: Record<string, string> = {
   'runners.cpuLoad': '負荷 {load}',
   'runners.jobsLine': 'ジョブ: 実行中 {running}、待機中 {queued} · プロジェクト: {projects}',
   'runners.copiesLine': 'プロジェクトのコピー: {count} · {size}',
+  'runners.copiesWithClonesLine': 'プロジェクトのコピー: {count} · {size}（クローンは全容量で計上）',
   'runners.oldSimulatorsLine': '古いランタイムのシミュレータ（括弧内はデバイス数。何も削除しません）: {runtimes}',
   'runners.diskLowNote': '不足 — このランナーは {minFree} の空きを保ちます',
   'runners.pueueMissing': 'このランナーには Pueue がありません',

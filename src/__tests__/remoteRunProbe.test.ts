@@ -235,7 +235,7 @@ describe('the disk upkeep in the probe: what the runner wants kept free and its 
   it('are parsed; a probe from a script that does not say has none (null, never a guess)', () => {
     const probe = parseProbeOutput(lowDiskText);
     assert.equal(probe.diskMinFreeMb, 61440);
-    assert.deepEqual(probe.copies, { count: 16, sizeMb: 296960, unmeasuredCount: 0 });
+    assert.deepEqual(probe.copies, { count: 16, sizeMb: 296960, unmeasuredCount: 0, clonedCount: 0 }, 'a script that does not report clones: none');
     const silent = parseProbeOutput(linuxProbeText);
     assert.equal(silent.diskMinFreeMb, null);
     assert.equal(silent.copies, null);
@@ -244,6 +244,14 @@ describe('the disk upkeep in the probe: what the runner wants kept free and its 
   it('`runners` shows the number and total size of the copies next to the free disk — and says LOW when the disk is under what the runner wants kept free', () => {
     const lines = blockOf(lowDiskText).split('\n');
     assert.match(lines[1], /disk 9\.8 GB free \(work dir\) — LOW, the runner wants 60 GB kept free · 16 project copies, 290 GB$/);
+  });
+
+  it('copies that share disk blocks (clones of a sibling) are counted by the probe and `runners` says the total counts them in full — only then', () => {
+    const withClones = `${linuxProbeText}\ndisk_min_free_mb=61440\ncopies_count=9\ncopies_size_mb=136192\ncopies_unmeasured=0\ncopies_cloned=5`;
+    assert.equal(parseProbeOutput(withClones).copies?.clonedCount, 5);
+    assert.match(blockOf(withClones).split('\n')[1], /disk 180 GB free \(work dir\) · 9 project copies, 133 GB, clones counted in full$/);
+    assert.match(blockOf(`${withClones.replace('copies_unmeasured=0', 'copies_unmeasured=2')}`).split('\n')[1], /9 project copies, 133 GB so far \(measuring\), clones counted in full$/);
+    assert.doesNotMatch(blockOf(withClones.replace('copies_cloned=5', 'copies_cloned=0')), /clones/);
   });
 
   it('a disk at its target is not LOW; a target of 0 is none; one copy reads «copy»; a figure still being measured says so', () => {

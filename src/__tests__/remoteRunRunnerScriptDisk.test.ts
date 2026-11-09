@@ -484,7 +484,7 @@ describe('sizes of the project copies (`measure-copies`) and what `probe` says o
     const result = runScript(['probe', workDir, 'prune']);
     assert.equal(result.status, 0, result.stderr);
     const probe = parseProbeOutput(result.stdout);
-    assert.deepEqual(probe.copies, { count: 2, sizeMb: 7 * 1024, unmeasuredCount: 1 });
+    assert.deepEqual(probe.copies, { count: 2, sizeMb: 7 * 1024, unmeasuredCount: 1, clonedCount: 0 });
     assert.equal(probe.diskMinFreeMb, 15 * 1024, 'the default target of a 100 GB disk: 15 %');
     await waitFor(() => fs.existsSync(sizeFile('unknown-zzzzzzzzzz')), 'the detached measuring');
     assert.equal(fs.readFileSync(sizeFile('unknown-zzzzzzzzzz'), 'utf8').trim(), `${3 * kibPerGib}`);
@@ -497,7 +497,7 @@ describe('sizes of the project copies (`measure-copies`) and what `probe` says o
     makeCopy('unknown-llllllllll', 3, hourMs);
     const result = runScript(['probe', workDir]);
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(parseProbeOutput(result.stdout).copies, { count: 2, sizeMb: 7 * 1024, unmeasuredCount: 2 }, 'both are unmeasured: one has no figure, the other was used after its figure');
+    assert.deepEqual(parseProbeOutput(result.stdout).copies, { count: 2, sizeMb: 7 * 1024, unmeasuredCount: 2, clonedCount: 0 }, 'both are unmeasured: one has no figure, the other was used after its figure');
     assert.equal(fs.existsSync(path.join(workDir, 'tmp', 'measure-copies.pid')), false, 'and nothing was started');
     assert.equal(fs.existsSync(sizeFile('unknown-llllllllll')), false);
   });
@@ -530,7 +530,7 @@ describe('probe: a copy counts as measured while nobody used it since its figure
     writeFile(path.join(workDir, 'p', 'used-since-bbbbbbbbbb'), 'size-kb', `${6 * kibPerGib}`);
     setAge(path.join(workDir, 'p', 'used-since-bbbbbbbbbb', 'size-kb'), 2 * hourMs);
     const probe = parseProbeOutput(runScript(['probe', workDir]).stdout);
-    assert.deepEqual(probe.copies, { count: 2, sizeMb: 10 * 1024, unmeasuredCount: 1 });
+    assert.deepEqual(probe.copies, { count: 2, sizeMb: 10 * 1024, unmeasuredCount: 1, clonedCount: 0 });
   });
 });
 
@@ -955,6 +955,49 @@ describe('a disk whose free figure does not follow the removals (APFS snapshots,
     const result = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '70', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
     assert.equal(result.status, diskTooLowRunnerExitCode);
     assert.match(result.stderr, /Removing copies did not give their space back \(on a Mac: APFS local snapshots or purgeable space; anywhere: jobs writing meanwhile, see docs\/remote-run\.md\)/);
+  });
+});
+
+describe('what shows the sizes of clones says that `du` counts them in full', () => {
+  /** Copies measured at 30 GiB; `a` is the source and `b`, `c` are clones of it, `d` stands alone. */
+  function makeClonedCopies(): void {
+    for (const [name, marks] of [['a-aaaaaaaaaa', { isSource: true }], ['b-bbbbbbbbbb', { seededFrom: 'a-aaaaaaaaaa' }], ['c-cccccccccc', { seededFrom: 'a-aaaaaaaaaa' }], ['d-dddddddddd', {}]] as const) {
+      const copyDir = makeCopy(name, 30, 5 * hourMs);
+      writeFile(copyDir, 'size-kb', `${30 * kibPerGib}`);
+      if ('seededFrom' in marks) writeFile(copyDir, 'seeded-from', `${marks.seededFrom}\n`);
+      if ('isSource' in marks) writeFile(copyDir, 'seed-shared', '');
+    }
+  }
+
+  it('the probe counts the copies that share blocks with another: a clone, the copy it came from, other clones of it — not a copy that stands alone, and not one whose source and sharers are all gone', () => {
+    makeClonedCopies();
+    makeCopy('orphan-eeeeeeeeee', 30, 5 * hourMs);
+    writeFile(path.join(workDir, 'p', 'orphan-eeeeeeeeee'), 'seeded-from', 'gone-zzzzzzzzzz\n');
+    assert.equal(runScript(['measure-copies', workDir]).status, 0);
+    const copies = parseProbeOutput(runScript(['probe', workDir]).stdout).copies;
+    assert.equal(copies?.count, 5);
+    assert.equal(copies?.clonedCount, 3, 'the source and its two clones');
+  });
+
+  it('a runner with no clone says 0, as a runner that predates the seed (the field is absent) reads as none', () => {
+    makeCopy('alone-aaaaaaaaaa', 5, hourMs);
+    assert.match(runScript(['probe', workDir]).stdout, /^copies_cloned=0$/m);
+  });
+
+  it('the refusal of a submit that names the biggest copies says so when some of them are clones — and says nothing of it when none is', () => {
+    makeClonedCopies();
+    // Every copy has a job that runs: the prune may not take them, and the refusal names them.
+    const runnerPid = startRunnerStandIn();
+    for (const name of ['a-aaaaaaaaaa', 'b-bbbbbbbbbb', 'c-cccccccccc', 'd-dddddddddd']) writeJob(path.join(workDir, 'p', name), 'box1-runnin', { 'task-id': '5\n', pid: `${runnerPid}\n` });
+    assert.equal(runScript(['measure-copies', workDir]).status, 0);
+    const refused = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '90', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
+    assert.equal(refused.status, diskTooLowRunnerExitCode);
+    assert.match(refused.stderr, /biggest project copies: [^;]* \(clones counted in full\); free space with/);
+    fs.rmSync(path.join(workDir, 'p', 'b-bbbbbbbbbb'), { recursive: true });
+    fs.rmSync(path.join(workDir, 'p', 'c-cccccccccc'), { recursive: true });
+    const alone = runScript(['prepare', workDir, slug, 'box1-bbbbbb', 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '90', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
+    assert.equal(alone.status, diskTooLowRunnerExitCode);
+    assert.doesNotMatch(alone.stderr, /clones counted/);
   });
 });
 

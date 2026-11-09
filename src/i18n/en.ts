@@ -1248,6 +1248,7 @@ export const enDict: Record<string, string> = {
   'runners.cpuLoad': 'load {load}',
   'runners.jobsLine': 'jobs: {running} running, {queued} queued · projects: {projects}',
   'runners.copiesLine': 'project copies: {count} · {size}',
+  'runners.copiesWithClonesLine': 'project copies: {count} · {size} (clones counted in full)',
   'runners.oldSimulatorsLine': 'simulators of older runtimes (devices in brackets; nothing is removed): {runtimes}',
   'runners.diskLowNote': 'LOW — the runner wants {minFree} kept free',
   'runners.pueueMissing': 'Pueue is missing on this runner',

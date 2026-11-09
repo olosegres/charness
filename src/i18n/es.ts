@@ -1204,6 +1204,7 @@ export const esDict: Record<string, string> = {
   'runners.cpuLoad': 'carga {load}',
   'runners.jobsLine': 'trabajos: {running} en curso, {queued} en cola · proyectos: {projects}',
   'runners.copiesLine': 'copias de proyectos: {count} · {size}',
+  'runners.copiesWithClonesLine': 'copias de proyectos: {count} · {size} (los clones se cuentan completos)',
   'runners.oldSimulatorsLine': 'simuladores de runtimes antiguos (entre paréntesis: dispositivos; no se borra nada): {runtimes}',
   'runners.diskLowNote': 'BAJO — el runner mantiene {minFree} libres',
   'runners.pueueMissing': 'Falta Pueue en este runner',
