@@ -1,5 +1,5 @@
 /**
- * @description The agent-mistakes section of a compaction summary, through the REAL compaction module
+ * @description The self-review section of a compaction summary, through the REAL compaction module
  * (`connectors/telegram/commands/compaction.ts`) wired to ports (`commandModuleHarness.ts`: a real telegraf instance against
  * the fake Bot API, the real state store, recording topic sends) and a stub adapter whose summary the test chooses. The
  * section is shown even when `/compact_summary` hides the full summary — each way a compaction can reach the topic:
@@ -12,7 +12,7 @@
  *     running itself is left to its caller;
  *   • a backend that streams its own summary (OpenCode) with the summary hidden: the section is taken out of the tails the
  *     topic does not get, once per summary, and posted when the end marker has arrived;
- *   • `/compact_mistakes` OFF: the instruction every kind of bot-issued compaction sends no longer asks for the section, and
+ *   • `/compact_self_review` OFF: the instruction every kind of bot-issued compaction sends no longer asks for the section, and
  *     nothing of it is posted, whatever the summary holds — back ON, both work again.
  *
  * What the end-to-end flow covers instead: the same through a real bot and a fake `claude` (`compactionInstructionGapsE2e.test.ts`).
@@ -135,12 +135,12 @@ async function setSummaryVisible(isVisible: boolean): Promise<void> {
   harness.replies.length = 0;
 }
 
-describe('the agent-mistakes section of a compaction summary, through the compaction module', () => {
+describe('the self-review section of a compaction summary, through the compaction module', () => {
   before(async () => {
     harness = await createCommandHarness();
     compaction = createCompaction({
       ...harness.core,
-      compactMistakesFlagDirs: harness.compactMistakesFlagDirs,
+      compactSelfReviewFlagDirs: harness.compactSelfReviewFlagDirs,
       startTypingLoader: () => {},
       forwardPromptToAgent: async () => {},
       pendingQuestions,
@@ -176,8 +176,8 @@ describe('the agent-mistakes section of a compaction summary, through the compac
     pendingQuestions.clear();
     harness.replies.length = 0;
     await harness.state.setCompactSummaryOverride(key, false);
-    await harness.state.setCompactMistakesOverride(key, true);
-    await harness.state.setCompactMistakesGlobalDefault(true);
+    await harness.state.setCompactSelfReviewOverride(key, true);
+    await harness.state.setCompactSelfReviewGlobalDefault(true);
     await harness.state.clearCompactIdleTracking(key);
     await harness.state.setCompactIdleLatched(key, false);
     await harness.state.setAgent(key, { name: adapter.name, claudeSessionId: 'session-gaps' });
@@ -194,12 +194,12 @@ describe('the agent-mistakes section of a compaction summary, through the compac
 
       await harness.runCommand('compact');
 
-      assert.ok(adapter.lastInstruction?.includes(compactionGapsGuidance), 'the agent is asked for the section while `/compact_mistakes` is on (the default)');
+      assert.ok(adapter.lastInstruction?.includes(compactionGapsGuidance), 'the agent is asked for the section while `/compact_self_review` is on (the default)');
       const texts = getReplyTexts();
       assert.equal(texts.length, 3, `started, done, the section: ${JSON.stringify(texts)}`);
       assert.equal(texts[0], enDict['compact.started']);
       assert.equal(texts[1], enDict['compact.done_tokens'].replace('{pre}', formatTokenCount(25_600)).replace('{post}', formatTokenCount(2_800)), 'the completion line, with the token counts');
-      assert.equal(texts[2], `${enDict['compact.instructionGapsHeader']}\n\n${instructionGapsText}`);
+      assert.equal(texts[2], `${enDict['compact.selfReviewHeader']}\n\n${instructionGapsText}`);
       assert.ok(!texts.some((text) => text.includes(enDict['compact.summaryHeader'])), 'the full summary is not posted');
       assert.ok(!texts.some((text) => text.includes('finish the refactor')), 'nothing of the summary body is posted');
       assert.ok(!texts[2].includes('<<<'), 'no marker reaches the topic');
@@ -215,12 +215,12 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       assert.equal(texts.length, 3, `started, done, the full summary: ${JSON.stringify(texts)}`);
       assert.ok(texts[2].startsWith(enDict['compact.summaryHeader']));
       assert.equal(countRepliesWith(instructionGapsText), 1, 'the section is in exactly one message');
-      assert.ok(!texts.some((text) => text.startsWith(enDict['compact.instructionGapsHeader'])), 'no separate section message');
+      assert.ok(!texts.some((text) => text.startsWith(enDict['compact.selfReviewHeader'])), 'no separate section message');
       assert.ok(texts[2].includes('finish the refactor') && texts[2].includes('Next: run the suite.'), 'the summary body and the closing section are there');
       assert.ok(!texts[2].includes('<<<'), 'the markers of both sections are stripped');
       // The proposals are labelled, so they do not blur into the numbered next steps right after them.
-      assert.ok(texts[2].includes(`${enDict['compact.instructionGapsHeader']}\n${instructionGapsText}\n`), `the section sits under its header: ${texts[2]}`);
-      assert.equal(texts[2].split(enDict['compact.instructionGapsHeader']).length - 1, 1, 'one header');
+      assert.ok(texts[2].includes(`${enDict['compact.selfReviewHeader']}\n${instructionGapsText}\n`), `the section sits under its header: ${texts[2]}`);
+      assert.equal(texts[2].split(enDict['compact.selfReviewHeader']).length - 1, 1, 'one header');
     });
 
     it('a section that says there were no mistakes (the none line, or nothing) posts nothing, in either mode', async () => {
@@ -229,7 +229,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
           await setSummaryVisible(isVisible);
           adapter.summary = buildSummary(body);
           await harness.runCommand('compact');
-          assert.ok(!getReplyTexts().some((text) => text.includes(enDict['compact.instructionGapsHeader'])), `no section message and no header over an empty section (visible: ${isVisible}, body "${body}")`);
+          assert.ok(!getReplyTexts().some((text) => text.includes(enDict['compact.selfReviewHeader'])), `no section message and no header over an empty section (visible: ${isVisible}, body "${body}")`);
           // Neither as a section of its own nor inside the full summary: it is scaffolding, like the markers.
           assert.ok(!getReplyTexts().some((text) => text.includes(compactionNoGapsLine)), `the none line never reaches the topic (visible: ${isVisible})`);
           harness.replies.length = 0;
@@ -259,7 +259,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       assert.equal(texts.length, 3, `started, done, the section: ${JSON.stringify(texts)}`);
       assert.equal(texts[0], enDict['compact.started']);
       assert.ok(texts[1].startsWith('✅'));
-      assert.equal(texts[2], `${enDict['compact.instructionGapsHeader']}\n\n${instructionGapsText}`);
+      assert.equal(texts[2], `${enDict['compact.selfReviewHeader']}\n\n${instructionGapsText}`);
     });
 
     it('a backend that streams its own summary, the summary SHOWN: the stream carries it, so the bot reads and posts nothing', async () => {
@@ -282,7 +282,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       const parts = getReplyTexts().slice(2);
       assert.ok(parts.length >= 2, `split into several messages, got ${parts.length}`);
       assert.ok(parts.every((part) => part.length <= MAX_MESSAGE_LEN), 'every part fits one Telegram message');
-      assert.ok(parts[0].startsWith(enDict['compact.instructionGapsHeader']));
+      assert.ok(parts[0].startsWith(enDict['compact.selfReviewHeader']));
       const posted = parts.join('\n');
       assert.ok(posted.includes('400. Mistake 400:') && posted.includes('1. Mistake 1:'), 'nothing is cut off');
     });
@@ -304,7 +304,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       const texts = getReplyTexts();
       assert.equal(texts.length, 2, JSON.stringify(texts));
       assert.equal(texts[0], enDict['compactOnIdle.notice']);
-      assert.equal(texts[1], `${enDict['compact.instructionGapsHeader']}\n\n${instructionGapsText}`);
+      assert.equal(texts[1], `${enDict['compact.selfReviewHeader']}\n\n${instructionGapsText}`);
     });
 
     it('summary SHOWN: the notice, then the full summary only — the section is not repeated', async () => {
@@ -329,7 +329,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       const texts = getReplyTexts();
       assert.equal(texts.length, 3, JSON.stringify(texts));
       assert.equal(texts[0], enDict['compactOnIdle.notice']);
-      assert.ok(texts[1].startsWith(enDict['compact.instructionGapsHeader']));
+      assert.ok(texts[1].startsWith(enDict['compact.selfReviewHeader']));
       assert.ok(harness.getKeyboardData(harness.replies[2]).flat().some((data) => data.startsWith('reask_')), 'the re-asked question is the last message and carries its buttons');
     });
   });
@@ -346,7 +346,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       const texts = getReplyTexts();
       assert.equal(texts.length, 3, JSON.stringify(texts));
       assert.equal(texts[0], enDict['compactOnIdle.notice']);
-      assert.ok(texts[1].startsWith(enDict['compact.instructionGapsHeader']));
+      assert.ok(texts[1].startsWith(enDict['compact.selfReviewHeader']));
       assert.ok(harness.getKeyboardData(harness.replies[2]).flat().some((data) => data.startsWith('reask_')), 'the re-asked question is the last message and carries its buttons');
     });
   });
@@ -357,7 +357,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       for (const isVisible of [false, true]) {
         await setSummaryVisible(isVisible);
         await compaction.postOwnCompactionInstructionGaps(key);
-        assert.deepEqual(getReplyTexts(), [`${enDict['compact.instructionGapsHeader']}\n\n${instructionGapsText}`], `visible: ${isVisible}`);
+        assert.deepEqual(getReplyTexts(), [`${enDict['compact.selfReviewHeader']}\n\n${instructionGapsText}`], `visible: ${isVisible}`);
         harness.replies.length = 0;
       }
     });
@@ -388,9 +388,9 @@ describe('the agent-mistakes section of a compaction summary, through the compac
     });
   });
 
-  describe('`/compact_mistakes` OFF', () => {
+  describe('`/compact_self_review` OFF', () => {
     beforeEach(async () => {
-      await harness.runCommand('compact_mistakes', 'off');
+      await harness.runCommand('compact_self_review', 'off');
       harness.replies.length = 0;
     });
 
@@ -408,7 +408,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
     });
 
     it('back ON: the same compaction asks for the section again and posts it', async () => {
-      await harness.runCommand('compact_mistakes', 'on');
+      await harness.runCommand('compact_self_review', 'on');
       harness.replies.length = 0;
       adapter.summary = buildSummary(instructionGapsText);
 
@@ -423,7 +423,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       try {
         await harness.runCommand('compact');
         assert.ok(!(adapter.lastInstruction ?? '').includes(compactionGapsGuidance));
-        await harness.runCommand('compact_mistakes', 'on');
+        await harness.runCommand('compact_self_review', 'on');
         await harness.runCommand('compact');
         assert.ok(!(adapter.lastInstruction ?? '').includes(compactionGapsGuidance), 'the plugin, not the bot, asks for it: the bot\'s instruction stays without it while the plugin is loaded');
       } finally {
@@ -469,15 +469,15 @@ describe('the agent-mistakes section of a compaction summary, through the compac
     });
 
     it('a topic\'s own choice beats the default in both directions: ON in a topic under an OFF default asks and posts', async () => {
-      await harness.runCommand('compact_mistakes', 'on');
+      await harness.runCommand('compact_self_review', 'on');
       harness.isGeneral = true;
       try {
-        await harness.runCommand('compact_mistakes', 'off');
+        await harness.runCommand('compact_self_review', 'off');
       } finally {
         harness.isGeneral = false;
       }
-      assert.equal(harness.state.getCompactMistakesGlobalDefault(), false);
-      assert.equal(harness.state.checkIsCompactMistakesEnabled(key), true, 'this topic\'s override ON wins over the OFF default');
+      assert.equal(harness.state.getCompactSelfReviewGlobalDefault(), false);
+      assert.equal(harness.state.checkIsCompactSelfReviewEnabled(key), true, 'this topic\'s override ON wins over the OFF default');
       harness.replies.length = 0;
       adapter.summary = buildSummary(instructionGapsText);
 
@@ -513,7 +513,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
         assert.deepEqual(getReplyTexts(), [], 'the section is not complete yet: nothing is posted');
         assert.equal(compaction.routeStreamedCompactionSummaryTail(key, tails[2], tailHints({ isContinuation: true })), null);
         await waitUntil('the section to be posted', () => harness.replies.length === 1);
-        assert.equal(harness.replies[0].text, `${enDict['compact.instructionGapsHeader']}\n\n${instructionGapsText}`);
+        assert.equal(harness.replies[0].text, `${enDict['compact.selfReviewHeader']}\n\n${instructionGapsText}`);
 
         compaction.routeStreamedCompactionSummaryTail(key, '\n1. load these skills: commit', tailHints({ isContinuation: true }));
         await settle();
@@ -584,7 +584,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
         }
         const text = shown.join('');
         assert.ok(!text.includes('<<<'), `no marker reaches the topic: ${text}`);
-        assert.ok(text.includes(`${enDict['compact.instructionGapsHeader']}\n${instructionGapsText}\n`), `the section sits under its header: ${text}`);
+        assert.ok(text.includes(`${enDict['compact.selfReviewHeader']}\n${instructionGapsText}\n`), `the section sits under its header: ${text}`);
         assert.ok(text.includes('finish the refactor'), 'the rest of the summary is shown');
         await settle();
         assert.deepEqual(getReplyTexts(), [], 'the bot posts nothing of its own: the stream is the summary');
@@ -593,7 +593,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       it('a section that says «none» leaves no trace in what is shown', () => {
         const routed = compaction.routeStreamedCompactionSummaryTail(key, buildSummary(compactionNoGapsLine), tailHints());
         assert.ok(routed);
-        assert.ok(!routed.text.includes(compactionNoGapsLine) && !routed.text.includes(enDict['compact.instructionGapsHeader']) && !routed.text.includes('<<<'), routed.text);
+        assert.ok(!routed.text.includes(compactionNoGapsLine) && !routed.text.includes(enDict['compact.selfReviewHeader']) && !routed.text.includes('<<<'), routed.text);
       });
 
       it('a tail whose whole text is scaffolding is not shown, and the next one that is shown does not continue a message that was never started', () => {

@@ -1,5 +1,5 @@
 /**
- * @description The agent-mistakes section of a compaction summary, at PROCESS level: the BUILT charness started the way an
+ * @description The self-review section of a compaction summary, at PROCESS level: the BUILT charness started the way an
  * isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API of `telegramE2e/fakeTelegram.ts`, with the fake
  * `claude` (`jiraE2e/fakeClaude.ts`) leaving the summary a flow gives it in its transcript at every compaction, as the real
  * CLI does. One flow, in order:
@@ -12,7 +12,7 @@
  *   → the CLI's own overflow compaction (no `/compact` ran): the section is posted in BOTH modes, since nobody posts that
  *     compaction's summary
  *   → a section that says there were no mistakes: nothing is posted for it, and the none line reaches the topic nowhere
- *   → `/compact_mistakes off`: the agent is NOT asked for the section — not by `/compact`, and not by the CLI's own overflow
+ *   → `/compact_self_review off`: the agent is NOT asked for the section — not by `/compact`, and not by the CLI's own overflow
  *     compaction, whose `PreCompact` hook finds the flag the bot keeps for the session — and nothing of it is posted, even
  *     though the fake's summary still holds one (the bot's own gate); the same after the agent is stopped and started anew
  *     (a NEW session id, flagged at its start) and after the bot restarts with a flag missing (flagged again at boot, and a
@@ -63,7 +63,7 @@ import {
   compactionSkillsGuidance,
 } from '../utils/compactOnIdle';
 import { getHookCompactionInstruction } from '../utils/claudeCompactHook';
-import { getClaudeCompactMistakesOffDir } from '../utils/compactMistakesFlags';
+import { getClaudeCompactSelfReviewOffDir } from '../utils/compactSelfReviewFlags';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 111;
@@ -118,9 +118,9 @@ function listPreCompactHookRuns(): FakeClaudePreCompactHookRun[] {
   return readJsonLines<FakeClaudePreCompactHookRun>(path.join(getLayout().fakeLogDir, fakeClaudeLogFileNames.preCompactHooks));
 }
 
-/** The flag the bot keeps for a session while its topic has the section OFF — where the hook looks (`utils/compactMistakesFlags.ts`). */
+/** The flag the bot keeps for a session while its topic has the section OFF — where the hook looks (`utils/compactSelfReviewFlags.ts`). */
 function getOffFlagPath(sessionId: string): string {
-  return path.join(getClaudeCompactMistakesOffDir(getLayout().dataDir), sessionId);
+  return path.join(getClaudeCompactSelfReviewOffDir(getLayout().dataDir), sessionId);
 }
 
 /** How many agent turns have ended so far: the usage line the bot logs at each. */
@@ -148,9 +148,9 @@ function getSummarySwitchConfirmation(isVisible: boolean): string {
   return enDict['compactSummary.setThisTopic'].replace('{state}', isVisible ? enDict['compactSummary.on'] : enDict['compactSummary.off']);
 }
 
-/** The bot's confirmation of `/compact_mistakes on|off` in a topic. */
-function getMistakesSwitchConfirmation(isEnabled: boolean): string {
-  return enDict['compactMistakes.setThisTopic'].replace('{state}', isEnabled ? enDict['compactMistakes.on'] : enDict['compactMistakes.off']);
+/** The bot's confirmation of `/compact_self_review on|off` in a topic. */
+function getSelfReviewSwitchConfirmation(isEnabled: boolean): string {
+  return enDict['compactSelfReview.setThisTopic'].replace('{state}', isEnabled ? enDict['compactSelfReview.on'] : enDict['compactSelfReview.off']);
 }
 
 /** Set `/compact_summary` and wait for the bot's confirmation. */
@@ -168,7 +168,7 @@ async function waitForSendQueueToDrain(afterMessageId: number): Promise<void> {
   assert.ok(barrier.message_id > afterMessageId);
 }
 
-describe('The agent-mistakes section of a compaction summary: built charness, fake Bot API, fake claude', () => {
+describe('The self-review section of a compaction summary: built charness, fake Bot API, fake claude', () => {
   before(async () => {
     if (!fs.existsSync(builtCliPath)) throw new Error('Built CLI is missing. Run `yarn build` before `yarn test`.');
     layout = createIsolatedInstanceLayout('charness-compact-gaps-', [projectFolder], getFlowDeadlineMs());
@@ -225,14 +225,14 @@ describe('The agent-mistakes section of a compaction summary: built charness, fa
     const messageBefore = getNewestMessageId();
     fakeTelegram.pushOperatorMessage(topicThreadId, '/compact');
     await getCharness().waitFor('the compaction to reach the agent', compactionTimeoutMs, () => listCompactions().length > compactionsBefore);
-    assert.ok(listCompactions()[compactionsBefore].instruction.includes(compactionGapsGuidance), 'the agent is asked for the agent-mistakes section');
+    assert.ok(listCompactions()[compactionsBefore].instruction.includes(compactionGapsGuidance), 'the agent is asked for the self-review section');
 
-    await topic.waitForMessage('the section', (message) => message.message_id > messageBefore && message.text.includes(enDict['compact.instructionGapsHeader']));
+    await topic.waitForMessage('the section', (message) => message.message_id > messageBefore && message.text.includes(enDict['compact.selfReviewHeader']));
     const texts = listTextsAfter(messageBefore);
     assert.ok(texts.some((text) => text.startsWith('🧹')), `the start notice: ${JSON.stringify(texts)}`);
     assert.ok(texts.some((text) => text.startsWith('✅ Context compacted')), 'the completion notice');
     const sectionMessages = texts.filter((text) => text.includes(instructionGapsText));
-    assert.deepEqual(sectionMessages, [`${enDict['compact.instructionGapsHeader']}\n\n${instructionGapsText}`], 'the section is posted once, alone under its header');
+    assert.deepEqual(sectionMessages, [`${enDict['compact.selfReviewHeader']}\n\n${instructionGapsText}`], 'the section is posted once, alone under its header');
     assert.ok(!texts.some((text) => text.includes(summaryBody) || text.includes(closingText) || text.includes(enDict['compact.summaryHeader'])), 'the full summary stays hidden');
     assert.ok(!texts.some((text) => text.includes('<<<')), 'no marker reaches the topic');
     assert.ok(texts.findIndex((text) => text.startsWith('✅ Context compacted')) < texts.findIndex((text) => text.includes(instructionGapsText)), 'the section comes after the completion notice');
@@ -252,8 +252,8 @@ describe('The agent-mistakes section of a compaction summary: built charness, fa
     assert.equal(texts.filter((text) => text.includes(instructionGapsText)).length, 1, 'the section is in exactly one message');
     assert.ok(summaryMessage.text.includes(instructionGapsText), 'and that message is the full summary');
     // The proposals are labelled where they stand, so they do not read as more of the numbered next steps after them.
-    assert.ok(summaryMessage.text.includes(`${enDict['compact.instructionGapsHeader']}\n${instructionGapsText}\n`), `the section sits under its header: ${summaryMessage.text}`);
-    assert.ok(!texts.some((text) => text.startsWith(enDict['compact.instructionGapsHeader'])), 'no separate section message');
+    assert.ok(summaryMessage.text.includes(`${enDict['compact.selfReviewHeader']}\n${instructionGapsText}\n`), `the section sits under its header: ${summaryMessage.text}`);
+    assert.ok(!texts.some((text) => text.startsWith(enDict['compact.selfReviewHeader'])), 'no separate section message');
     assert.ok(!summaryMessage.text.includes('<<<'), 'the markers of both sections are stripped');
   });
 
@@ -265,10 +265,10 @@ describe('The agent-mistakes section of a compaction summary: built charness, fa
       fakeTelegram.pushOperatorMessage(topicThreadId, `${overflowLabel} [fake:overflow] hello`);
       await getCharness().waitFor(`the ${overflowLabel} prompt to reach the agent`, agentStartTimeoutMs, () => listAgentTurns(overflowLabel).length === 1);
 
-      const sectionMessage = await topic.waitForMessage(`the section of the overflow compaction (summary visible: ${isVisible})`, (message) => message.message_id > messageBefore && message.text.includes(enDict['compact.instructionGapsHeader']));
+      const sectionMessage = await topic.waitForMessage(`the section of the overflow compaction (summary visible: ${isVisible})`, (message) => message.message_id > messageBefore && message.text.includes(enDict['compact.selfReviewHeader']));
       // The CLI's own compaction asked for the section through the `PreCompact` hook of the launch, which the fake runs as the CLI does.
       assert.equal(listPreCompactHookRuns().at(-1)?.instruction, getHookCompactionInstruction(true), `the hook asks for the section (summary visible: ${isVisible})`);
-      assert.equal(sectionMessage.text, `${enDict['compact.instructionGapsHeader']}\n\n${instructionGapsText}`);
+      assert.equal(sectionMessage.text, `${enDict['compact.selfReviewHeader']}\n\n${instructionGapsText}`);
       assert.ok(!listTextsAfter(messageBefore).some((text) => text.includes(summaryBody)), `the full summary of a compaction the bot did not run is never posted (visible: ${isVisible})`);
       // The turn ends before the next step: the bot refuses `/compact` while one runs.
       await getCharness().waitFor(`the ${overflowLabel} turn to end`, agentStartTimeoutMs, () => getCharness().output.split(`${claudeJsonStreamUsageLogPrefix}${topicKey}`).length - 1 >= 2 + index + 1);
@@ -287,17 +287,17 @@ describe('The agent-mistakes section of a compaction summary: built charness, fa
       await waitForSendQueueToDrain(messageBefore);
 
       const texts = listTextsAfter(messageBefore);
-      assert.ok(!texts.some((text) => text.includes(enDict['compact.instructionGapsHeader'])), `no section message (summary visible: ${isVisible})`);
+      assert.ok(!texts.some((text) => text.includes(enDict['compact.selfReviewHeader'])), `no section message (summary visible: ${isVisible})`);
       assert.ok(!texts.some((text) => text.includes(compactionNoGapsLine)), `the none line never reaches the topic (summary visible: ${isVisible})`);
     }
   });
 
   // The fake's summary keeps its section through the steps below, whatever it is asked: a real model that is not asked
   // writes none, so what keeps the topic clean here is the bot's own gate — the part a real agent never exercises.
-  it('`/compact_mistakes off`: /compact asks for no section — the skills and the checklist stay — and nothing of the section is posted', async () => {
+  it('`/compact_self_review off`: /compact asks for no section — the skills and the checklist stay — and nothing of the section is posted', async () => {
     writeFakeSummary(instructionGapsText);
     await setSummaryVisible(false);
-    await topic.sendAndAwaitReply('/compact_mistakes off', getMistakesSwitchConfirmation(false));
+    await topic.sendAndAwaitReply('/compact_self_review off', getSelfReviewSwitchConfirmation(false));
     const compactionsBefore = listCompactions().length;
     const hookRunsBefore = listPreCompactHookRuns().length;
     const messageBefore = getNewestMessageId();
@@ -312,13 +312,13 @@ describe('The agent-mistakes section of a compaction summary: built charness, fa
     await topic.waitForMessage('the completion notice', (message) => message.message_id > messageBefore && message.text.startsWith('✅ Context compacted'));
     await waitForSendQueueToDrain(messageBefore);
     const texts = listTextsAfter(messageBefore);
-    assert.ok(!texts.some((text) => text.includes(enDict['compact.instructionGapsHeader']) || text.includes(instructionGapsText)), `the section is not posted although the summary holds one: ${JSON.stringify(texts)}`);
+    assert.ok(!texts.some((text) => text.includes(enDict['compact.selfReviewHeader']) || text.includes(instructionGapsText)), `the section is not posted although the summary holds one: ${JSON.stringify(texts)}`);
     assert.ok(!texts.some((text) => text.includes(summaryBody) || text.includes(closingText)), 'the full summary stays hidden');
     // The hook finds the bot's own instruction in the compaction and adds nothing: no second copy of the skills and the checklist.
     assert.deepEqual(listPreCompactHookRuns().slice(hookRunsBefore).map((run) => run.instruction), [''], 'the hook of the /compact turn printed nothing');
   });
 
-  it('`/compact_mistakes off`: the CLI\'s own overflow compaction is not asked for the section either — its hook finds the session\'s flag — and nothing is posted', async () => {
+  it('`/compact_self_review off`: the CLI\'s own overflow compaction is not asked for the section either — its hook finds the session\'s flag — and nothing is posted', async () => {
     const messageBefore = getNewestMessageId();
     const hookRunsBefore = listPreCompactHookRuns().length;
     const turnsBefore = countEndedTurns();
@@ -333,10 +333,10 @@ describe('The agent-mistakes section of a compaction summary: built charness, fa
     assert.equal(hookRuns[0].instruction, getHookCompactionInstruction(false), 'the hook adds the instruction WITHOUT the section request');
     assert.ok(!hookRuns[0].instruction.includes(compactionGapsGuidance));
     const texts = listTextsAfter(messageBefore);
-    assert.ok(!texts.some((text) => text.includes(enDict['compact.instructionGapsHeader']) || text.includes(instructionGapsText)), `no section is posted: ${JSON.stringify(texts)}`);
+    assert.ok(!texts.some((text) => text.includes(enDict['compact.selfReviewHeader']) || text.includes(instructionGapsText)), `no section is posted: ${JSON.stringify(texts)}`);
   });
 
-  it('`/compact_mistakes off` holds when the agent is started anew: the NEW session is flagged at its start, so its own overflow compaction is not asked for the section either', async () => {
+  it('`/compact_self_review off` holds when the agent is started anew: the NEW session is flagged at its start, so its own overflow compaction is not asked for the section either', async () => {
     const flaggedSessionId = listPreCompactHookRuns().at(-1)?.sessionId;
     assert.ok(flaggedSessionId, 'the step before compacted a session');
     await topic.sendAndAwaitReply('/quit', 'stopped');
@@ -354,10 +354,10 @@ describe('The agent-mistakes section of a compaction summary: built charness, fa
     assert.notEqual(hookRun.sessionId, flaggedSessionId, 'a stopped agent starts a new session (`/quit` releases the id)');
     assert.ok(fs.existsSync(getOffFlagPath(hookRun.sessionId)), 'the bot flagged the new session at its start');
     assert.equal(hookRun.instruction, getHookCompactionInstruction(false), 'the hook adds the instruction WITHOUT the section request');
-    assert.ok(!listTextsAfter(messageBefore).some((text) => text.includes(enDict['compact.instructionGapsHeader'])), 'no section is posted');
+    assert.ok(!listTextsAfter(messageBefore).some((text) => text.includes(enDict['compact.selfReviewHeader'])), 'no section is posted');
   });
 
-  it('`/compact_mistakes off` holds across a restart of the bot: a flag that is missing at boot is made again for the session of an OFF topic, and a flag no OFF topic owns is removed', async () => {
+  it('`/compact_self_review off` holds across a restart of the bot: a flag that is missing at boot is made again for the session of an OFF topic, and a flag no OFF topic owns is removed', async () => {
     const sessionId = listPreCompactHookRuns().at(-1)?.sessionId;
     assert.ok(sessionId);
     const flagPath = getOffFlagPath(sessionId);
@@ -374,8 +374,8 @@ describe('The agent-mistakes section of a compaction summary: built charness, fa
     assert.deepEqual(staleFlagPaths.map((staleFlagPath) => fs.existsSync(staleFlagPath)), [false, false], 'the boot removed the flags of sessions no OFF topic owns any more');
   });
 
-  it('`/compact_mistakes on` again: the flag is gone, /compact and the CLI\'s own compaction ask for the section again, and it is posted', async () => {
-    await topic.sendAndAwaitReply('/compact_mistakes on', getMistakesSwitchConfirmation(true));
+  it('`/compact_self_review on` again: the flag is gone, /compact and the CLI\'s own compaction ask for the section again, and it is posted', async () => {
+    await topic.sendAndAwaitReply('/compact_self_review on', getSelfReviewSwitchConfirmation(true));
     const compactionsBefore = listCompactions().length;
     const messageBefore = getNewestMessageId();
     fakeTelegram.pushOperatorMessage(topicThreadId, '/compact');
@@ -383,15 +383,15 @@ describe('The agent-mistakes section of a compaction summary: built charness, fa
     const compaction = listCompactions()[compactionsBefore];
     assert.ok(compaction.instruction.includes(compactionGapsGuidance), 'the agent is asked for the section again');
     assert.equal(fs.existsSync(getOffFlagPath(compaction.sessionId)), false, 'the flag is gone');
-    const sectionMessage = await topic.waitForMessage('the section', (message) => message.message_id > messageBefore && message.text.includes(enDict['compact.instructionGapsHeader']));
-    assert.equal(sectionMessage.text, `${enDict['compact.instructionGapsHeader']}\n\n${instructionGapsText}`);
+    const sectionMessage = await topic.waitForMessage('the section', (message) => message.message_id > messageBefore && message.text.includes(enDict['compact.selfReviewHeader']));
+    assert.equal(sectionMessage.text, `${enDict['compact.selfReviewHeader']}\n\n${instructionGapsText}`);
 
     const hookRunsBefore = listPreCompactHookRuns().length;
     const overflowMessageBefore = getNewestMessageId();
     const turnsBefore = countEndedTurns();
     fakeTelegram.pushOperatorMessage(topicThreadId, 'GAP-7 [fake:overflow] hello');
     await getCharness().waitFor('the GAP-7 prompt to reach the agent', agentStartTimeoutMs, () => listAgentTurns('GAP-7').length === 1);
-    await topic.waitForMessage('the section of the overflow compaction', (message) => message.message_id > overflowMessageBefore && message.text.includes(enDict['compact.instructionGapsHeader']));
+    await topic.waitForMessage('the section of the overflow compaction', (message) => message.message_id > overflowMessageBefore && message.text.includes(enDict['compact.selfReviewHeader']));
     await getCharness().waitFor('the GAP-7 turn to end', agentStartTimeoutMs, () => countEndedTurns() > turnsBefore);
     assert.equal(listPreCompactHookRuns().slice(hookRunsBefore).at(-1)?.instruction, getHookCompactionInstruction(true), 'the hook asks for the section again');
   });

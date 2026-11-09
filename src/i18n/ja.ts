@@ -94,7 +94,7 @@ export const jaDict: Record<string, string> = {
     '/quit /status /output — 制御\n' +
     '/compact — エージェントのコンテキストを圧縮\n' +
     '/compact_on_idle — アイドル後に自動圧縮（切り替え）\n' +
-    '/compact_mistakes — 圧縮の要約に入れるエージェントのミス（切り替え）\n' +
+    '/compact_self_review — 圧縮時のエージェントの自己分析（切り替え）\n' +
     '/bot_skills — エージェント向けボットのスキル（このトピックのオン / オフ）\n' +
     '/todo — エージェントが公開したタスクリストとそのプロジェクト\n' +
     '/limits — 各アカウントとプロバイダーの使用状況。タップするとこのトピックを切り替えます\n' +
@@ -465,7 +465,7 @@ export const jaDict: Record<string, string> = {
   'compact.done': '✅ コンテキストを圧縮しました。',
   'compact.done_tokens': '✅ コンテキストを圧縮しました: {pre} → {post} トークン。',
   'compact.summaryHeader': '📄 圧縮の要約:',
-  'compact.instructionGapsHeader': '💡 指示を改善すれば防げるエージェントのミス（提案のみ。あなたの承認なしには何も変更しません）：',
+  'compact.selfReviewHeader': '💡 エージェントの自己分析: 同じミスを繰り返さないために指示で直すべきこと',
   'compact.start_agent_first': 'アクティブなセッションがありません。先にエージェントを起動してください（/claude または /opencode）。',
   'compact.unsupported_backend': '{label} ではコンテキストの圧縮はサポートされていません。',
   'compact.model_unresolved': '⚠️ 圧縮できません: このセッションのモデルが解決できません。/model で選択してから再試行してください。',
@@ -475,16 +475,16 @@ export const jaDict: Record<string, string> = {
   'compactOnIdle.notice': '🧹 アイドル時に自動圧縮しました（キャッシュ活用でトークン節約）。\n/compact_on_idle — 無効化、または要約の表示。',
   'compactOnIdle.on': 'オン',
   'compactOnIdle.off': 'オフ',
-  'compactOnIdle.title': '🧹 このトピックのアイドル自動圧縮：{state}\n{summaryLine}\n{mistakesLine}\n\nセッションが約55分アイドルになると、トークン節約のためコンテキストが自動圧縮されます（プロンプトキャッシュはまだ温かい状態）。\n\nすべてのトピックを一度に切り替えるには、General トピックでこれを実行してください。',
-  'compactOnIdle.titleGeneral': '🧹 アイドル自動圧縮 — すべてのトピックの既定：{state}\n{summaryLine}\n{mistakesLine}\n\nセッションが約55分アイドルになると、トークン節約のためコンテキストが自動圧縮されます。\n\n各トピックは独自の /compact_on_idle で上書きできます。',
+  'compactOnIdle.title': '🧹 このトピックのアイドル自動圧縮：{state}\n{summaryLine}\n{selfReviewLine}\n\nセッションが約55分アイドルになると、トークン節約のためコンテキストが自動圧縮されます（プロンプトキャッシュはまだ温かい状態）。\n\nすべてのトピックを一度に切り替えるには、General トピックでこれを実行してください。',
+  'compactOnIdle.titleGeneral': '🧹 アイドル自動圧縮 — すべてのトピックの既定：{state}\n{summaryLine}\n{selfReviewLine}\n\nセッションが約55分アイドルになると、トークン節約のためコンテキストが自動圧縮されます。\n\n各トピックは独自の /compact_on_idle で上書きできます。',
   'compactOnIdle.enableButton': '有効化',
   'compactOnIdle.disableButton': '無効化',
   'compactOnIdle.summaryLine': '📄 圧縮後の要約: {state}',
   'compactOnIdle.summaryShowButton': '📄 要約を表示',
   'compactOnIdle.summaryHideButton': '要約を隠す',
-  'compactOnIdle.mistakesLine': '💡 要約中のエージェントのミス: {state}',
-  'compactOnIdle.mistakesShowButton': '💡 ミスを表示',
-  'compactOnIdle.mistakesHideButton': 'ミスを隠す',
+  'compactOnIdle.selfReviewLine': '💡 エージェントの自己分析: {state}',
+  'compactOnIdle.selfReviewShowButton': '💡 自己分析を表示',
+  'compactOnIdle.selfReviewHideButton': '自己分析を隠す',
   'compactOnIdle.setThisTopic': '✅ アイドル自動圧縮：このトピックで {state}。',
   'compactOnIdle.setGlobal': '✅ アイドル自動圧縮：すべてのトピックで {state}（トピックごとの上書きは引き続き有効）。',
   'compactOnIdle.unsupported': 'アイドル自動圧縮はアクティブなエージェントセッションに適用されます。まずバインド済みのトピックで /claude か /opencode を開始してください。',
@@ -500,17 +500,17 @@ export const jaDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ 圧縮の要約: このトピックで {state}。',
   'compactSummary.setGlobal': '✅ 圧縮の要約: すべてのトピックで {state}（トピックごとの上書きは引き続き有効）。',
   'compactSummary.unsupported': 'シェルには圧縮するコンテキストがないため、投稿する要約もありません。',
-  'compactMistakes.on': 'オン',
-  'compactMistakes.off': 'オフ',
-  'compactMistakes.title':
-    '💡 圧縮の要約にエージェントのミスを含める（このトピック）: {state}\n\n圧縮の要約は、セッション中にエージェントが犯したミス（特に繰り返したもの）のうち、ルール・スキル・CLAUDE.md / AGENTS.md を変えれば防げたものの一覧で締めくくれます。完全な要約を隠していても、ボットはこの部分をトピックに投稿します。オフ: エージェントに依頼せず（トークンも消費しません）、何も投稿しません。\n\nすべてのトピックで一括して切り替えるには、General トピックで実行してください。',
-  'compactMistakes.titleGeneral':
-    '💡 圧縮の要約にエージェントのミスを含める — すべてのトピックの既定: {state}\n\n圧縮の要約は、セッション中にエージェントが犯したミス（特に繰り返したもの）のうち、ルール・スキル・CLAUDE.md / AGENTS.md を変えれば防げたものの一覧で締めくくれます。完全な要約を隠していても、ボットはこの部分をトピックに投稿します。オフ: エージェントに依頼せず（トークンも消費しません）、何も投稿しません。\n\n各トピックは独自の /compact_mistakes で上書きできます。',
-  'compactMistakes.enableButton': '有効にする',
-  'compactMistakes.disableButton': '無効にする',
-  'compactMistakes.setThisTopic': '✅ 圧縮の要約のエージェントのミス: このトピックで {state}。',
-  'compactMistakes.setGlobal': '✅ 圧縮の要約のエージェントのミス: すべてのトピックで {state}（トピックごとの上書きは引き続き有効）。',
-  'compactMistakes.unsupported': 'シェルには圧縮するコンテキストがないため、エージェントのミスを含む要約もありません。',
+  'compactSelfReview.on': 'オン',
+  'compactSelfReview.off': 'オフ',
+  'compactSelfReview.title':
+    '💡 圧縮時のエージェントの自己分析（このトピック）: {state}\n\n圧縮の要約は、エージェントの自己分析で締めくくれます。セッション中に犯したミス（特に繰り返したもの）と、それを繰り返さないためにルール・スキル・CLAUDE.md / AGENTS.md で直すべきことです。完全な要約を隠していても、ボットはこれをトピックに投稿します。オフ: エージェントに依頼せず（トークンも消費しません）、何も投稿しません。\n\nすべてのトピックで一括して切り替えるには、General トピックで実行してください。',
+  'compactSelfReview.titleGeneral':
+    '💡 圧縮時のエージェントの自己分析 — すべてのトピックの既定: {state}\n\n圧縮の要約は、エージェントの自己分析で締めくくれます。セッション中に犯したミス（特に繰り返したもの）と、それを繰り返さないためにルール・スキル・CLAUDE.md / AGENTS.md で直すべきことです。完全な要約を隠していても、ボットはこれをトピックに投稿します。オフ: エージェントに依頼せず（トークンも消費しません）、何も投稿しません。\n\n各トピックは独自の /compact_self_review で上書きできます。',
+  'compactSelfReview.enableButton': '有効にする',
+  'compactSelfReview.disableButton': '無効にする',
+  'compactSelfReview.setThisTopic': '✅ 圧縮時のエージェントの自己分析: このトピックで {state}。',
+  'compactSelfReview.setGlobal': '✅ 圧縮時のエージェントの自己分析: すべてのトピックで {state}（トピックごとの上書きは引き続き有効）。',
+  'compactSelfReview.unsupported': 'シェルには圧縮するコンテキストがないため、エージェントの自己分析を含む要約もありません。',
 
   'botSkills.on': 'オン',
   'botSkills.off': 'オフ',

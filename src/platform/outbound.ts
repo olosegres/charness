@@ -141,7 +141,7 @@ export interface OutboundHints {
    * The core drops it unless `/compact_summary` is on for the topic — the same
    * switch that gates the summary the bot posts for the other backends — so a
    * connector only ever sees it when it is meant to be shown (the summary's
-   * agent-mistakes section is posted on its own by the core in hide mode).
+   * self-review section is posted on its own by the core in hide mode).
    */
   isCompactionSummary?: boolean;
   /**

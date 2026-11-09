@@ -28,7 +28,7 @@ import {
   compactionSkillsGuidance,
   compactionSummaryGuidance,
 } from '../utils/compactOnIdle';
-import { getClaudeCompactMistakesOffDir } from '../utils/compactMistakesFlags';
+import { getClaudeCompactSelfReviewOffDir } from '../utils/compactSelfReviewFlags';
 import { resolveDataDir } from '../state';
 
 function runHook(command: string, hookInput: unknown): string {
@@ -57,7 +57,7 @@ test('getHookCompactionInstruction: D3 then the resume guidance, no closing sect
   assert.ok(getHookCompactionInstruction(true).endsWith(compactionChecklistGuidance));
 });
 
-test('getHookCompactionInstruction: with the agent-mistakes section off it is D3 and the skills + checklist, no section request', () => {
+test('getHookCompactionInstruction: with the self-review section off it is D3 and the skills + checklist, no section request', () => {
   assert.equal(
     getHookCompactionInstruction(false),
     `${compactionSummaryGuidance}\n\n${compactionResumeGuidanceWithoutGaps}`,
@@ -97,13 +97,13 @@ test('PreCompact hook: an instruction that carries only the skills sentence stil
   assert.equal(output, `${getHookCompactionInstruction(true)}\n`);
 });
 
-test('PreCompact hook: an overflow compaction is asked for the agent-mistakes section, ahead of the checklist that ends the summary', () => {
+test('PreCompact hook: an overflow compaction is asked for the self-review section, ahead of the checklist that ends the summary', () => {
   const output = runHook(hookCommand, { hook_event_name: 'PreCompact', trigger: 'auto', custom_instructions: null });
   assert.ok(output.includes(compactionGapsGuidance), 'the hook asks for the section the bot posts even when the summary is hidden');
   assert.ok(output.indexOf(compactionGapsGuidance) < output.indexOf(compactionChecklistGuidance), 'the checklist is still the last part');
 });
 
-test('PreCompact hook: a process started BEFORE the agent-mistakes section keeps its old hook, which still skips a bot-issued instruction', () => {
+test('PreCompact hook: a process started BEFORE the self-review section keeps its old hook, which still skips a bot-issued instruction', () => {
   // A json-stream process is adopted across a hot deploy and keeps the hook command it was started with — its marker is the
   // OLD resume guidance (skills + checklist). The new text carries that as a contiguous substring, so the old hook finds it
   // and prints nothing; otherwise the model would read the skills and the checklist instructions twice.
@@ -126,7 +126,7 @@ test('PreCompact hook: a process started BEFORE the agent-mistakes section keeps
   }
 });
 
-test('PreCompact hook: a bot-issued instruction WITHOUT the agent-mistakes section (`/compact_mistakes` off) is left alone — the skills and the checklist are not asked for twice', () => {
+test('PreCompact hook: a bot-issued instruction WITHOUT the self-review section (`/compact_self_review` off) is left alone — the skills and the checklist are not asked for twice', () => {
   // The marker is what both variants of the bot's instruction share: the skills sentence and the checklist. Matching the
   // section as well would make the hook add the whole text on top of the bot's own while the section is off.
   for (const trigger of ['manual', 'auto']) {
@@ -144,7 +144,7 @@ function writeOffFlag(sessionId: string): void {
   fs.writeFileSync(path.join(offFlagDir, sessionId), '');
 }
 
-test('PreCompact hook: the flag of the compacting session (`/compact_mistakes` off) drops the agent-mistakes request — and only that session\'s', () => {
+test('PreCompact hook: the flag of the compacting session (`/compact_self_review` off) drops the self-review request — and only that session\'s', () => {
   writeOffFlag('11111111-2222-3333-4444-555555555555');
   const withFlag = runHook(hookCommand, { session_id: '11111111-2222-3333-4444-555555555555', hook_event_name: 'PreCompact', trigger: 'auto', custom_instructions: null });
   assert.equal(withFlag, `${getHookCompactionInstruction(false)}\n`);
@@ -226,7 +226,7 @@ test('prepareClaudeCompactHookFlags: writes the settings file and returns the --
       'no temp file is left behind',
     );
     // The command reads the flags from the folder under DATA_DIR the bot keeps them in.
-    const flagDir = getClaudeCompactMistakesOffDir(dataDir);
+    const flagDir = getClaudeCompactSelfReviewOffDir(dataDir);
     fs.mkdirSync(flagDir, { recursive: true });
     fs.writeFileSync(path.join(flagDir, 'sessionUnderTest'), '');
     assert.equal(
@@ -252,7 +252,7 @@ test('prepareClaudeCompactHookFlags with a relative DATA_DIR: the settings path 
     const flags = prepareClaudeCompactHookFlags(resolveDataDir());
     assert.ok(path.isAbsolute(flags[1]), `the --settings path is absolute: ${flags[1]}`);
     const command: string = JSON.parse(fs.readFileSync(flags[1], 'utf-8')).hooks.PreCompact[0].hooks[0].command;
-    const flagDir = getClaudeCompactMistakesOffDir(resolveDataDir());
+    const flagDir = getClaudeCompactSelfReviewOffDir(resolveDataDir());
     fs.mkdirSync(flagDir, { recursive: true });
     fs.writeFileSync(path.join(flagDir, 'sessionRelative'), '');
 

@@ -19,7 +19,7 @@ import { resolveDefaultDataDir } from './legacyNames';
 import { stateFileName } from './stateFile';
 import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './utils/displayVerbosity';
 import { defaultTopicView, parseTopicView } from './utils/topicView';
-import { resolveCompactMistakesEnabled, resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
+import { resolveCompactSelfReviewEnabled, resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled, resolveClaudeAutoSwitchOnLimitEnabled } from './utils/autoContinueOnLimit';
 import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection, type ClaudeProfileBilling } from './utils/claudeProfiles';
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
@@ -458,13 +458,13 @@ export interface StateV1 {
   compactSummaryEnabled?: boolean;
   compactSummaryOverrides?: Record<string, boolean>;
   /**
-   * Agent-mistakes-section toggle (`/compact_mistakes`): whether a compaction asks the agent for the section and the bot
-   * posts it. Same pair as the `compactSummary*` one, except that an absent `compactMistakesEnabled` reads ON — the section
+   * Agent self-review toggle (`/compact_self_review`): whether a compaction asks the agent for the section and the bot
+   * posts it. Same pair as the `compactSummary*` one, except that an absent `compactSelfReviewEnabled` reads ON — the section
    * shipped enabled, so nothing changes until somebody turns it off. Stored EXPLICITLY incl. `false`, so a General choice
-   * is durable; `compactMistakesOverrides` holds the topics' own choices keyed by {@link SessionKey} string.
+   * is durable; `compactSelfReviewOverrides` holds the topics' own choices keyed by {@link SessionKey} string.
    */
-  compactMistakesEnabled?: boolean;
-  compactMistakesOverrides?: Record<string, boolean>;
+  compactSelfReviewEnabled?: boolean;
+  compactSelfReviewOverrides?: Record<string, boolean>;
   /**
    * «Bot skills» switch (`/bot_skills`, `utils/botSkills.ts`): whether the skills and the manager hint the bot ships reach an
    * agent. Same pair as the `compactOnIdle*` one, except that `botSkillsEnabled` — the General value — has NO default here:
@@ -1283,7 +1283,7 @@ export class StateStore {
 
   /**
    * @description The agent session ids a thread holds, by backend: the current ones and the PARKED ones (the other backend
-   * family's, kept for a switch back). What the compaction hook and plugin flags (`utils/compactMistakesFlags.ts`) are kept
+   * family's, kept for a switch back). What the compaction hook and plugin flags (`utils/compactSelfReviewFlags.ts`) are kept
    * in step with: a parked conversation is resumed with its own id, and must find the setting of its topic as it is then.
    */
   getAgentSessionIds(key: SessionKey): AgentSessionIds {
@@ -1875,42 +1875,42 @@ export class StateStore {
     });
   }
 
-  // ── agent-mistakes-section toggle (`/compact_mistakes`) ──
+  // ── self-review-section toggle (`/compact_self_review`) ──
 
   /**
-   * @description The instance-wide default of the agent-mistakes section (driven from the General topic). ON when unset:
+   * @description The instance-wide default of the self-review section (driven from the General topic). ON when unset:
    * unlike {@link getCompactSummaryGlobalDefault}, the section was always there before the switch existed.
    */
-  getCompactMistakesGlobalDefault(): boolean {
-    return this.state.compactMistakesEnabled ?? true;
+  getCompactSelfReviewGlobalDefault(): boolean {
+    return this.state.compactSelfReviewEnabled ?? true;
   }
 
   /** @description The per-thread override of the section, or `undefined` when the thread follows the instance default. */
-  getCompactMistakesOverride(key: SessionKey): boolean | undefined {
-    return this.state.compactMistakesOverrides?.[keyToString(key)];
+  getCompactSelfReviewOverride(key: SessionKey): boolean | undefined {
+    return this.state.compactSelfReviewOverrides?.[keyToString(key)];
   }
 
   /** @description Whether a compaction of `key` asks for the section and posts it: the per-thread override, else the instance default (ON when unset). */
-  checkIsCompactMistakesEnabled(key: SessionKey): boolean {
-    return resolveCompactMistakesEnabled(this.state.compactMistakesEnabled, this.getCompactMistakesOverride(key));
+  checkIsCompactSelfReviewEnabled(key: SessionKey): boolean {
+    return resolveCompactSelfReviewEnabled(this.state.compactSelfReviewEnabled, this.getCompactSelfReviewOverride(key));
   }
 
   /**
    * @description Set the instance-wide default (from General). Stored EXPLICITLY as a boolean, `false` included, so a
    * choice is durable and distinguishable from «never set». Debounced — a preference, not crash-critical.
    */
-  async setCompactMistakesGlobalDefault(enabled: boolean): Promise<void> {
-    if (this.state.compactMistakesEnabled === enabled) return;
-    this.state.compactMistakesEnabled = enabled;
+  async setCompactSelfReviewGlobalDefault(enabled: boolean): Promise<void> {
+    if (this.state.compactSelfReviewEnabled === enabled) return;
+    this.state.compactSelfReviewEnabled = enabled;
     this.scheduleSave();
   }
 
   /** @description Set the per-thread override (from a regular topic); a present true/false wins over the instance default. */
-  async setCompactMistakesOverride(key: SessionKey, enabled: boolean): Promise<void> {
+  async setCompactSelfReviewOverride(key: SessionKey, enabled: boolean): Promise<void> {
     const k = keyToString(key);
     await this.withLock(key, async () => {
-      if (this.state.compactMistakesOverrides?.[k] === enabled) return;
-      (this.state.compactMistakesOverrides ??= {})[k] = enabled;
+      if (this.state.compactSelfReviewOverrides?.[k] === enabled) return;
+      (this.state.compactSelfReviewOverrides ??= {})[k] = enabled;
       this.scheduleSave();
     });
   }

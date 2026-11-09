@@ -94,7 +94,7 @@ export const deDict: Record<string, string> = {
     '/quit /status /output — Steuerung\n' +
     '/compact — Agent-Kontext komprimieren\n' +
     '/compact_on_idle — bei Leerlauf automatisch komprimieren (Umschalter)\n' +
-    '/compact_mistakes — Fehler des Agents in der Komprimierungs-Zusammenfassung (Umschalter)\n' +
+    '/compact_self_review — Selbstanalyse des Agents bei der Komprimierung (Umschalter)\n' +
     '/bot_skills — Skills des Bots für Agenten (ein / aus für dieses Thema)\n' +
     '/todo — die veröffentlichte Aufgabenliste des Agenten und sein Projekt\n' +
     '/limits — Verbrauch aller Konten und Provider; tippe auf eines, um dieses Thema umzustellen\n' +
@@ -465,7 +465,7 @@ export const deDict: Record<string, string> = {
   'compact.done': '✅ Kontext komprimiert.',
   'compact.done_tokens': '✅ Kontext komprimiert: {pre} → {post} Tokens.',
   'compact.summaryHeader': '📄 Zusammenfassung der Komprimierung:',
-  'compact.instructionGapsHeader': '💡 Fehler des Agenten, die bessere Anweisungen verhindern könnten (Vorschläge; ohne Sie wird nichts geändert):',
+  'compact.selfReviewHeader': '💡 Selbstanalyse des Agents: was in den Anweisungen geändert werden sollte, damit sich die Fehler nicht wiederholen',
   'compact.start_agent_first': 'Keine aktive Session. Starte zuerst einen Agent (/claude oder /opencode).',
   'compact.unsupported_backend': 'Kontext-Komprimierung wird für {label} nicht unterstützt.',
   'compact.model_unresolved': '⚠️ Komprimieren nicht möglich: für diese Session ist kein Modell ermittelt. Wähle eines mit /model und versuche es erneut.',
@@ -475,16 +475,16 @@ export const deDict: Record<string, string> = {
   'compactOnIdle.notice': '🧹 Bei Leerlauf automatisch komprimiert, um Tokens über den Cache zu sparen.\n/compact_on_idle — abschalten oder die Zusammenfassung zeigen.',
   'compactOnIdle.on': 'AN',
   'compactOnIdle.off': 'AUS',
-  'compactOnIdle.title': '🧹 Auto-Komprimierung bei Leerlauf für dieses Thema: {state}\n{summaryLine}\n{mistakesLine}\n\nWenn die Sitzung ~55 Min. untätig ist, wird ihr Kontext automatisch komprimiert, um Tokens zu sparen (der Prompt-Cache ist noch warm).\n\nUm es für ALLE Themen auf einmal umzuschalten, führe dies im General-Thema aus.',
-  'compactOnIdle.titleGeneral': '🧹 Auto-Komprimierung bei Leerlauf — Standard für ALLE Themen: {state}\n{summaryLine}\n{mistakesLine}\n\nWenn eine Sitzung ~55 Min. untätig ist, wird ihr Kontext automatisch komprimiert, um Tokens zu sparen.\n\nJedes Thema kann dies mit seinem eigenen /compact_on_idle überschreiben.',
+  'compactOnIdle.title': '🧹 Auto-Komprimierung bei Leerlauf für dieses Thema: {state}\n{summaryLine}\n{selfReviewLine}\n\nWenn die Sitzung ~55 Min. untätig ist, wird ihr Kontext automatisch komprimiert, um Tokens zu sparen (der Prompt-Cache ist noch warm).\n\nUm es für ALLE Themen auf einmal umzuschalten, führe dies im General-Thema aus.',
+  'compactOnIdle.titleGeneral': '🧹 Auto-Komprimierung bei Leerlauf — Standard für ALLE Themen: {state}\n{summaryLine}\n{selfReviewLine}\n\nWenn eine Sitzung ~55 Min. untätig ist, wird ihr Kontext automatisch komprimiert, um Tokens zu sparen.\n\nJedes Thema kann dies mit seinem eigenen /compact_on_idle überschreiben.',
   'compactOnIdle.enableButton': 'Aktivieren',
   'compactOnIdle.disableButton': 'Deaktivieren',
   'compactOnIdle.summaryLine': '📄 Zusammenfassung nach der Komprimierung: {state}',
   'compactOnIdle.summaryShowButton': '📄 Zusammenfassung zeigen',
   'compactOnIdle.summaryHideButton': 'Zusammenfassung ausblenden',
-  'compactOnIdle.mistakesLine': '💡 Agent-Fehler in der Zusammenfassung: {state}',
-  'compactOnIdle.mistakesShowButton': '💡 Fehler zeigen',
-  'compactOnIdle.mistakesHideButton': 'Fehler ausblenden',
+  'compactOnIdle.selfReviewLine': '💡 Selbstanalyse des Agents: {state}',
+  'compactOnIdle.selfReviewShowButton': '💡 Selbstanalyse zeigen',
+  'compactOnIdle.selfReviewHideButton': 'Selbstanalyse ausblenden',
   'compactOnIdle.setThisTopic': '✅ Auto-Komprimierung bei Leerlauf: {state} für dieses Thema.',
   'compactOnIdle.setGlobal': '✅ Auto-Komprimierung bei Leerlauf: {state} für ALLE Themen (themenspezifische Überschreibungen gelten weiterhin).',
   'compactOnIdle.unsupported': 'Auto-Komprimierung bei Leerlauf gilt für eine aktive Agent-Sitzung. Starte zuerst /claude oder /opencode in einem gebundenen Thema.',
@@ -500,17 +500,17 @@ export const deDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ Zusammenfassung der Komprimierung: {state} für dieses Thema.',
   'compactSummary.setGlobal': '✅ Zusammenfassung der Komprimierung: {state} für ALLE Themen (themenspezifische Überschreibungen gelten weiter).',
   'compactSummary.unsupported': 'Eine Shell hat keinen Kontext zum Komprimieren, also gibt es keine Zusammenfassung zu posten.',
-  'compactMistakes.on': 'EIN',
-  'compactMistakes.off': 'AUS',
-  'compactMistakes.title':
-    '💡 Fehler des Agents in der Komprimierungs-Zusammenfassung, in diesem Thema: {state}\n\nEine Zusammenfassung kann mit den Fehlern enden, die der Agent in der Sitzung gemacht hat (vor allem den wiederholten) und die sich mit einer Änderung seiner Regeln, Skills oder CLAUDE.md / AGENTS.md hätten vermeiden lassen. Der Bot postet diesen Teil ins Thema, auch wenn die vollständige Zusammenfassung ausgeblendet ist. Aus: Der Agent wird nicht danach gefragt (dafür werden keine Tokens verbraucht) und es wird nichts gepostet.\n\nUm das für ALLE Themen umzustellen, führe dies im Thema „General“ aus.',
-  'compactMistakes.titleGeneral':
-    '💡 Fehler des Agents in der Komprimierungs-Zusammenfassung — Standard für ALLE Themen: {state}\n\nEine Zusammenfassung kann mit den Fehlern enden, die der Agent in der Sitzung gemacht hat (vor allem den wiederholten) und die sich mit einer Änderung seiner Regeln, Skills oder CLAUDE.md / AGENTS.md hätten vermeiden lassen. Der Bot postet diesen Teil ins Thema, auch wenn die vollständige Zusammenfassung ausgeblendet ist. Aus: Der Agent wird nicht danach gefragt (dafür werden keine Tokens verbraucht) und es wird nichts gepostet.\n\nJedes Thema kann das mit seinem eigenen /compact_mistakes überschreiben.',
-  'compactMistakes.enableButton': 'Aktivieren',
-  'compactMistakes.disableButton': 'Deaktivieren',
-  'compactMistakes.setThisTopic': '✅ Fehler des Agents in der Komprimierungs-Zusammenfassung: {state} für dieses Thema.',
-  'compactMistakes.setGlobal': '✅ Fehler des Agents in der Komprimierungs-Zusammenfassung: {state} für ALLE Themen (themenspezifische Überschreibungen gelten weiter).',
-  'compactMistakes.unsupported': 'Eine Shell hat keinen Kontext zum Komprimieren, also gibt es keine Zusammenfassung mit Agent-Fehlern.',
+  'compactSelfReview.on': 'EIN',
+  'compactSelfReview.off': 'AUS',
+  'compactSelfReview.title':
+    '💡 Selbstanalyse des Agents bei der Komprimierung, in diesem Thema: {state}\n\nEine Zusammenfassung kann mit der Selbstanalyse des Agents enden: den Fehlern, die er in der Sitzung gemacht hat (vor allem den wiederholten), und was in seinen Regeln, Skills oder in CLAUDE.md / AGENTS.md geändert werden sollte, damit sie sich nicht wiederholen. Der Bot postet sie ins Thema, auch wenn die vollständige Zusammenfassung ausgeblendet ist. Aus: Der Agent wird nicht danach gefragt (dafür werden keine Tokens verbraucht) und es wird nichts gepostet.\n\nUm das für ALLE Themen umzustellen, führe dies im Thema „General“ aus.',
+  'compactSelfReview.titleGeneral':
+    '💡 Selbstanalyse des Agents bei der Komprimierung — Standard für ALLE Themen: {state}\n\nEine Zusammenfassung kann mit der Selbstanalyse des Agents enden: den Fehlern, die er in der Sitzung gemacht hat (vor allem den wiederholten), und was in seinen Regeln, Skills oder in CLAUDE.md / AGENTS.md geändert werden sollte, damit sie sich nicht wiederholen. Der Bot postet sie ins Thema, auch wenn die vollständige Zusammenfassung ausgeblendet ist. Aus: Der Agent wird nicht danach gefragt (dafür werden keine Tokens verbraucht) und es wird nichts gepostet.\n\nJedes Thema kann das mit seinem eigenen /compact_self_review überschreiben.',
+  'compactSelfReview.enableButton': 'Aktivieren',
+  'compactSelfReview.disableButton': 'Deaktivieren',
+  'compactSelfReview.setThisTopic': '✅ Selbstanalyse des Agents bei der Komprimierung: {state} für dieses Thema.',
+  'compactSelfReview.setGlobal': '✅ Selbstanalyse des Agents bei der Komprimierung: {state} für ALLE Themen (themenspezifische Überschreibungen gelten weiter).',
+  'compactSelfReview.unsupported': 'Eine Shell hat keinen Kontext zum Komprimieren, also gibt es keine Zusammenfassung mit einer Selbstanalyse des Agents.',
 
   'botSkills.on': 'EIN',
   'botSkills.off': 'AUS',

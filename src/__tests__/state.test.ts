@@ -897,56 +897,56 @@ test('compactSummary: a per-thread override beats the instance default, both way
   assert.equal(second.checkIsCompactSummaryEnabled(key1), true);
 });
 
-// ── agent-mistakes-section toggle (/compact_mistakes) ──
+// ── self-review-section toggle (/compact_self_review) ──
 
-test('compactMistakes: ON by default for the instance and for every thread — the section shipped enabled, so nothing changes until somebody turns it off', async () => {
+test('compactSelfReview: ON by default for the instance and for every thread — the section shipped enabled, so nothing changes until somebody turns it off', async () => {
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
   await store.init();
-  assert.equal(store.getCompactMistakesGlobalDefault(), true, 'unset default means ON');
-  assert.equal(store.getCompactMistakesOverride(key1), undefined, 'no thread has an override yet');
-  assert.equal(store.checkIsCompactMistakesEnabled(key1), true, 'a fresh topic is asked for the section and posts it');
+  assert.equal(store.getCompactSelfReviewGlobalDefault(), true, 'unset default means ON');
+  assert.equal(store.getCompactSelfReviewOverride(key1), undefined, 'no thread has an override yet');
+  assert.equal(store.checkIsCompactSelfReviewEnabled(key1), true, 'a fresh topic is asked for the section and posts it');
 });
 
-test('compactMistakes: a General choice is DURABLE — an explicit off is stored as false and reloads', async () => {
+test('compactSelfReview: a General choice is DURABLE — an explicit off is stored as false and reloads', async () => {
   const first = new StateStore(dataDir, { saveDebounceMs: 5 });
   await first.init();
-  await first.setCompactMistakesGlobalDefault(false);
+  await first.setCompactSelfReviewGlobalDefault(false);
   await first.flush();
 
   // The failure this pins: dropping the stored value reads back as the ON default on the next boot, so a section the
   // operator switched off for every topic would silently come back after a restart.
   const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-  assert.equal(raw.compactMistakesEnabled, false, 'off stored explicitly as false, not omitted');
+  assert.equal(raw.compactSelfReviewEnabled, false, 'off stored explicitly as false, not omitted');
   const second = new StateStore(dataDir, { saveDebounceMs: 5 });
   await second.init();
-  assert.equal(second.getCompactMistakesGlobalDefault(), false, 'off survives a reload');
-  assert.equal(second.checkIsCompactMistakesEnabled(key1), false, 'and the instance default applies to a thread');
+  assert.equal(second.getCompactSelfReviewGlobalDefault(), false, 'off survives a reload');
+  assert.equal(second.checkIsCompactSelfReviewEnabled(key1), false, 'and the instance default applies to a thread');
 
-  await second.setCompactMistakesGlobalDefault(true);
-  assert.equal(second.getCompactMistakesGlobalDefault(), true);
-  assert.equal(second.checkIsCompactMistakesEnabled(key1), true, 'switched back on');
+  await second.setCompactSelfReviewGlobalDefault(true);
+  assert.equal(second.getCompactSelfReviewGlobalDefault(), true);
+  assert.equal(second.checkIsCompactSelfReviewEnabled(key1), true, 'switched back on');
 });
 
-test('compactMistakes: a per-thread override beats the instance default, both ways, and is per-thread', async () => {
+test('compactSelfReview: a per-thread override beats the instance default, both ways, and is per-thread', async () => {
   const first = new StateStore(dataDir, { saveDebounceMs: 5 });
   await first.init();
   // An OFF override under the shipped ON default.
-  await first.setCompactMistakesOverride(key1, false);
-  assert.equal(first.checkIsCompactMistakesEnabled(key1), false, 'the override wins over the default');
-  assert.equal(first.checkIsCompactMistakesEnabled(key2), true, 'an untouched thread still follows the default');
+  await first.setCompactSelfReviewOverride(key1, false);
+  assert.equal(first.checkIsCompactSelfReviewEnabled(key1), false, 'the override wins over the default');
+  assert.equal(first.checkIsCompactSelfReviewEnabled(key2), true, 'an untouched thread still follows the default');
   await first.flush();
 
   const second = new StateStore(dataDir, { saveDebounceMs: 5 });
   await second.init();
-  assert.equal(second.getCompactMistakesOverride(key1), false, 'the override survives a reload');
-  assert.equal(second.checkIsCompactMistakesEnabled(key1), false);
-  assert.equal(second.checkIsCompactMistakesEnabled(key2), true);
+  assert.equal(second.getCompactSelfReviewOverride(key1), false, 'the override survives a reload');
+  assert.equal(second.checkIsCompactSelfReviewEnabled(key1), false);
+  assert.equal(second.checkIsCompactSelfReviewEnabled(key2), true);
 
   // The other direction: an ON override over an OFF instance default.
-  await second.setCompactMistakesGlobalDefault(false);
-  await second.setCompactMistakesOverride(key2, true);
-  assert.equal(second.checkIsCompactMistakesEnabled(key2), true, 'an explicit true override is honoured');
-  assert.equal(second.checkIsCompactMistakesEnabled(key1), false);
+  await second.setCompactSelfReviewGlobalDefault(false);
+  await second.setCompactSelfReviewOverride(key2, true);
+  assert.equal(second.checkIsCompactSelfReviewEnabled(key2), true, 'an explicit true override is honoured');
+  assert.equal(second.checkIsCompactSelfReviewEnabled(key1), false);
 });
 
 test('getAgentSessionIds / listAgentSessionIds: the ids of both backends a thread holds, the PARKED ones too, once each', async () => {

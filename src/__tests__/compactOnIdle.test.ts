@@ -321,7 +321,7 @@ test('buildCompactionInstruction: a compaction with no closing section (manual, 
   assert.ok(claude.endsWith(compactionChecklistGuidance));
 });
 
-test('getCompactionResumeGuidance: the agent-mistakes section while `/compact_mistakes` is on, the skills and the checklist alone while it is off', () => {
+test('getCompactionResumeGuidance: the self-review section while `/compact_self_review` is on, the skills and the checklist alone while it is off', () => {
   assert.equal(getCompactionResumeGuidance(true), compactionResumeGuidance);
   assert.equal(getCompactionResumeGuidance(false), compactionResumeGuidanceWithoutGaps);
   assert.ok(getCompactionResumeGuidance(true).includes(compactionGapsGuidance));
@@ -334,7 +334,7 @@ test('getCompactionResumeGuidance: the agent-mistakes section while `/compact_mi
   }
 });
 
-test('buildCompactionInstruction: with the section off the instruction asks for no agent-mistakes section but keeps D3, the skills, the checklist and the closing section', () => {
+test('buildCompactionInstruction: with the section off the instruction asks for no self-review section but keeps D3, the skills, the checklist and the closing section', () => {
   const instruction = buildCompactionInstruction({
     bakesSummaryGuidance: false,
     summaryGuidance: compactionSummaryGuidance,
@@ -461,7 +461,7 @@ test('compactionGapsGuidance: its markers are distinct from the closing section\
   assert.ok(!compactionGapsGuidance.includes(compactionClosingStartMarker) && !compactionGapsGuidance.includes(compactionClosingEndMarker));
 });
 
-test('compactionResumeGuidance: the agent-mistakes section, then the skills sentence, then the checklist — the one text every compaction path carries', () => {
+test('compactionResumeGuidance: the self-review section, then the skills sentence, then the checklist — the one text every compaction path carries', () => {
   // The older text was `${skills} ${checklist}` and a process started under it keeps a PreCompact hook that skips a
   // compaction by finding exactly that as a substring: the new sentence goes AHEAD of it, so the old text stays whole.
   assert.equal(compactionResumeGuidance, `${compactionGapsGuidance} ${compactionSkillsGuidance} ${compactionChecklistGuidance}`);
@@ -506,7 +506,7 @@ test('formatTokenCount leaves a short count untouched — no leading separator',
 
 // ── formatCompactionSummaryForTopic (the full summary posted to the topic) ──
 
-/** The label the bot puts where the agent-mistakes section starts in a summary it posts. */
+/** The label the bot puts where the self-review section starts in a summary it posts. */
 const gapsHeader = '💡 HEADER:';
 
 test('formatCompactionSummaryForTopic drops the marker LINES and keeps every line of prose', () => {
@@ -551,7 +551,7 @@ test('formatCompactionSummaryForTopic keeps prose the model put on the marker li
   assert.ok(!posted.includes('<<<'), `no marker fragment may survive: "${posted}"`);
 });
 
-test('formatCompactionSummaryForTopic labels the agent-mistakes section with the header, so it reads as proposals and not as more next steps', () => {
+test('formatCompactionSummaryForTopic labels the self-review section with the header, so it reads as proposals and not as more next steps', () => {
   const summary = [
     '## Objective',
     'Ship it.',
@@ -742,7 +742,7 @@ test('checkShouldPostInstructionGaps: a compaction a streaming backend ran by it
   }
 });
 
-test('checkShouldPostInstructionGaps: switched OFF (`/compact_mistakes`) → nothing is posted, whatever the compaction, the summary mode or the backend', () => {
+test('checkShouldPostInstructionGaps: switched OFF (`/compact_self_review`) → nothing is posted, whatever the compaction, the summary mode or the backend', () => {
   for (const isBotIssued of [true, false]) {
     for (const isSummaryEnabled of [true, false]) {
       for (const streamsOwnSummary of [true, false]) {
@@ -883,7 +883,7 @@ test('buildIdleCompactionNoticeParts: nothing to say → every part null (the ca
   assert.deepEqual(parts, { notice: null, summary: null, instructionGaps: null, question: null });
 });
 
-test('buildIdleCompactionNoticeParts: the agent-mistakes section is its OWN part, between the notice and the question', () => {
+test('buildIdleCompactionNoticeParts: the self-review section is its OWN part, between the notice and the question', () => {
   const parts = buildIdleCompactionNoticeParts({
     noticeText: '🧹 Auto compacted on idle.',
     summary: null,

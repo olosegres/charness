@@ -1,5 +1,5 @@
 /**
- * @description Coverage for the flag files that carry `/compact_mistakes` into the compactions the bot does not issue (the
+ * @description Coverage for the flag files that carry `/compact_self_review` into the compactions the bot does not issue (the
  * Claude `PreCompact` hook and the OpenCode plugin read them inside the agent's process): where they live, which session
  * ids may name one, that the flag follows the setting both ways and that a sync touches only the sessions it was given.
  */
@@ -13,18 +13,18 @@ import os from 'os';
 import path from 'path';
 
 import {
-  applyCompactMistakesOffFlag,
+  applyCompactSelfReviewOffFlag,
   checkIsFlagSessionId,
-  getClaudeCompactMistakesOffDir,
-  getCompactMistakesFlagDirs,
-  getOpenCodeCompactMistakesOffDir,
-  openCodeCompactMistakesOffDirName,
-  pruneStaleClaudeCompactMistakesFlags,
-  syncCompactMistakesFlags,
-} from '../utils/compactMistakesFlags';
+  getClaudeCompactSelfReviewOffDir,
+  getCompactSelfReviewFlagDirs,
+  getOpenCodeCompactSelfReviewOffDir,
+  openCodeCompactSelfReviewOffDirName,
+  pruneStaleClaudeCompactSelfReviewFlags,
+  syncCompactSelfReviewFlags,
+} from '../utils/compactSelfReviewFlags';
 
 function withTempDir(run: (dir: string) => void): void {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'compact-mistakes-flags-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'compact-self-review-flags-'));
   try {
     run(dir);
   } finally {
@@ -33,11 +33,11 @@ function withTempDir(run: (dir: string) => void): void {
 }
 
 test('flag folders: Claude\'s sit in DATA_DIR, OpenCode\'s beside its plugin folder — where the plugin finds them from its own location', () => {
-  assert.equal(getClaudeCompactMistakesOffDir('/data/x'), '/data/x/compact-mistakes-off');
-  assert.equal(getOpenCodeCompactMistakesOffDir('/cfg/opencode/plugins'), `/cfg/opencode/${openCodeCompactMistakesOffDirName}`);
-  assert.deepEqual(getCompactMistakesFlagDirs('/data/x', '/cfg/opencode/plugins'), {
-    claudeOffDir: '/data/x/compact-mistakes-off',
-    openCodeOffDir: `/cfg/opencode/${openCodeCompactMistakesOffDirName}`,
+  assert.equal(getClaudeCompactSelfReviewOffDir('/data/x'), '/data/x/compact-self-review-off');
+  assert.equal(getOpenCodeCompactSelfReviewOffDir('/cfg/opencode/plugins'), `/cfg/opencode/${openCodeCompactSelfReviewOffDirName}`);
+  assert.deepEqual(getCompactSelfReviewFlagDirs('/data/x', '/cfg/opencode/plugins'), {
+    claudeOffDir: '/data/x/compact-self-review-off',
+    openCodeOffDir: `/cfg/opencode/${openCodeCompactSelfReviewOffDirName}`,
   });
 });
 
@@ -46,28 +46,28 @@ test('checkIsFlagSessionId: the ids of both backends fit, anything that could le
   for (const id of ['', '..', '../x', 'a/b', 'a b', 'a.b', '$(x)', 'a;b', 'x'.repeat(129)]) assert.equal(checkIsFlagSessionId(id), false, JSON.stringify(id));
 });
 
-test('applyCompactMistakesOffFlag: the flag exists exactly while the setting is OFF, and the calls are idempotent', () => {
+test('applyCompactSelfReviewOffFlag: the flag exists exactly while the setting is OFF, and the calls are idempotent', () => {
   withTempDir((dir) => {
     const flagDir = path.join(dir, 'flags');
     const flagPath = path.join(flagDir, 'ses_1');
-    applyCompactMistakesOffFlag(flagDir, 'ses_1', true);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_1', true);
     assert.equal(fs.existsSync(flagPath), false, 'ON with no flag: nothing is created, not even the folder');
     assert.equal(fs.existsSync(flagDir), false);
 
-    applyCompactMistakesOffFlag(flagDir, 'ses_1', false);
-    applyCompactMistakesOffFlag(flagDir, 'ses_1', false);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_1', false);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_1', false);
     assert.equal(fs.readFileSync(flagPath, 'utf8'), '', 'OFF: an empty flag file');
 
-    applyCompactMistakesOffFlag(flagDir, 'ses_1', true);
-    applyCompactMistakesOffFlag(flagDir, 'ses_1', true);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_1', true);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_1', true);
     assert.equal(fs.existsSync(flagPath), false, 'ON again: the flag is gone');
   });
 });
 
-test('applyCompactMistakesOffFlag: an id that cannot name a flag writes nothing, and a failing disk is logged instead of thrown', () => {
+test('applyCompactSelfReviewOffFlag: an id that cannot name a flag writes nothing, and a failing disk is logged instead of thrown', () => {
   withTempDir((dir) => {
     const flagDir = path.join(dir, 'flags');
-    applyCompactMistakesOffFlag(flagDir, '../escape', false);
+    applyCompactSelfReviewOffFlag(flagDir, '../escape', false);
     assert.equal(fs.existsSync(path.join(dir, 'escape')), false);
     assert.equal(fs.existsSync(flagDir), false);
 
@@ -77,23 +77,23 @@ test('applyCompactMistakesOffFlag: an id that cannot name a flag writes nothing,
     const warnings: unknown[][] = [];
     console.warn = (...args: unknown[]) => { warnings.push(args); };
     try {
-      applyCompactMistakesOffFlag(path.join(blocker, 'flags'), 'ses_1', false);
+      applyCompactSelfReviewOffFlag(path.join(blocker, 'flags'), 'ses_1', false);
     } finally {
       console.warn = originalWarn;
     }
     assert.equal(warnings.length, 1, 'the failure is reported once');
-    assert.match(String(warnings[0][0]), /compact-mistakes/);
+    assert.match(String(warnings[0][0]), /compact-self-review/);
   });
 });
 
-test('syncCompactMistakesFlags: each backend\'s ids — a parked one among them — go into its own folder, and only the sessions it was given are touched', () => {
+test('syncCompactSelfReviewFlags: each backend\'s ids — a parked one among them — go into its own folder, and only the sessions it was given are touched', () => {
   withTempDir((dir) => {
     const dirs = { claudeOffDir: path.join(dir, 'claude'), openCodeOffDir: path.join(dir, 'opencode') };
     // A flag of a session this instance does not know — the OpenCode folder is shared by every instance of the account.
     fs.mkdirSync(dirs.openCodeOffDir, { recursive: true });
     fs.writeFileSync(path.join(dirs.openCodeOffDir, 'ses_foreign'), '');
 
-    syncCompactMistakesFlags([
+    syncCompactSelfReviewFlags([
       { claudeSessionIds: ['claude-off', 'claude-off-parked'], opencodeSessionIds: ['ses_off'], isEnabled: false },
       { claudeSessionIds: ['claude-on'], opencodeSessionIds: [], isEnabled: true },
       { claudeSessionIds: [], opencodeSessionIds: [], isEnabled: false },
@@ -102,7 +102,7 @@ test('syncCompactMistakesFlags: each backend\'s ids — a parked one among them 
     assert.deepEqual(fs.readdirSync(dirs.openCodeOffDir).sort(), ['ses_foreign', 'ses_off']);
 
     // The setting flips: the flag follows, for the sessions it names only.
-    syncCompactMistakesFlags([
+    syncCompactSelfReviewFlags([
       { claudeSessionIds: ['claude-off', 'claude-off-parked'], opencodeSessionIds: ['ses_off'], isEnabled: true },
       { claudeSessionIds: ['claude-on'], opencodeSessionIds: [], isEnabled: false },
     ], dirs);
@@ -111,13 +111,13 @@ test('syncCompactMistakesFlags: each backend\'s ids — a parked one among them 
   });
 });
 
-test('pruneStaleClaudeCompactMistakesFlags: a flag no OFF topic owns any more is removed — current and parked ids of an OFF topic stay, nothing that is not a session flag goes', () => {
+test('pruneStaleClaudeCompactSelfReviewFlags: a flag no OFF topic owns any more is removed — current and parked ids of an OFF topic stay, nothing that is not a session flag goes', () => {
   withTempDir((dir) => {
     const claudeOffDir = path.join(dir, 'claude');
     fs.mkdirSync(path.join(claudeOffDir, 'a-folder'), { recursive: true });
     for (const name of ['owned-current', 'owned-parked', 'left-by-new', 'topic-is-on-again', 'not.an.id']) fs.writeFileSync(path.join(claudeOffDir, name), '');
 
-    pruneStaleClaudeCompactMistakesFlags([
+    pruneStaleClaudeCompactSelfReviewFlags([
       { claudeSessionIds: ['owned-current', 'owned-parked'], opencodeSessionIds: ['ses_x'], isEnabled: false },
       { claudeSessionIds: ['topic-is-on-again'], opencodeSessionIds: [], isEnabled: true },
     ], claudeOffDir);
@@ -126,9 +126,9 @@ test('pruneStaleClaudeCompactMistakesFlags: a flag no OFF topic owns any more is
   });
 });
 
-test('pruneStaleClaudeCompactMistakesFlags: a missing folder is nothing to do (silently), an unreadable one is logged instead of thrown', () => {
+test('pruneStaleClaudeCompactSelfReviewFlags: a missing folder is nothing to do (silently), an unreadable one is logged instead of thrown', () => {
   withTempDir((dir) => {
-    pruneStaleClaudeCompactMistakesFlags([], path.join(dir, 'never-made'));
+    pruneStaleClaudeCompactSelfReviewFlags([], path.join(dir, 'never-made'));
     assert.equal(fs.existsSync(path.join(dir, 'never-made')), false, 'and it is not created');
     const blocker = path.join(dir, 'file');
     fs.writeFileSync(blocker, '');
@@ -136,11 +136,11 @@ test('pruneStaleClaudeCompactMistakesFlags: a missing folder is nothing to do (s
     const warnings: unknown[][] = [];
     console.warn = (...args: unknown[]) => { warnings.push(args); };
     try {
-      pruneStaleClaudeCompactMistakesFlags([], path.join(blocker, 'flags'));
+      pruneStaleClaudeCompactSelfReviewFlags([], path.join(blocker, 'flags'));
     } finally {
       console.warn = originalWarn;
     }
     assert.equal(warnings.length, 1, 'a folder that cannot be read is reported once');
-    assert.match(String(warnings[0][0]), /compact-mistakes/);
+    assert.match(String(warnings[0][0]), /compact-self-review/);
   });
 });

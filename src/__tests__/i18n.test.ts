@@ -220,16 +220,16 @@ test('compaction completion keys exist in every locale and keep both token place
   }
 });
 
-test('compact.instructionGapsHeader exists in every locale, is translated and carries the lightbulb that marks a proposal', () => {
-  // The header of the agent-mistakes section the bot posts even when the compaction summary is hidden: a locale that fell
+test('compact.selfReviewHeader exists in every locale, is translated and carries the lightbulb that marks a proposal', () => {
+  // The header of the self-review section the bot posts even when the compaction summary is hidden: a locale that fell
   // back to the English text would head a section the person reads in the wrong language.
-  assert.ok(checkKeyInAllLangs('compact.instructionGapsHeader'), 'compact.instructionGapsHeader missing in some locale');
+  assert.ok(checkKeyInAllLangs('compact.selfReviewHeader'), 'compact.selfReviewHeader missing in some locale');
   for (const locale of localeCodes) {
-    const out = runWithLocale(locale, () => t('compact.instructionGapsHeader'));
+    const out = runWithLocale(locale, () => t('compact.selfReviewHeader'));
     assert.ok(out.startsWith('💡'), `expected the lightbulb in ${locale}: "${out}"`);
     assert.ok(!out.includes('{'), `unexpected placeholder in ${locale}: "${out}"`);
     if (locale !== defaultLocale) {
-      assert.notEqual(out, enDict['compact.instructionGapsHeader'], `${locale} still carries the English text`);
+      assert.notEqual(out, enDict['compact.selfReviewHeader'], `${locale} still carries the English text`);
     }
   }
 });
@@ -264,16 +264,16 @@ test('compact-summary setting keys exist in every locale and substitute {state}'
   }
 });
 
-test('compact-mistakes setting keys exist in every locale, substitute {state}, are translated, and the idle picker\'s mistakes row carries the line', () => {
-  const stateKeys = ['compactMistakes.title', 'compactMistakes.titleGeneral', 'compactMistakes.setThisTopic', 'compactMistakes.setGlobal', 'compactOnIdle.mistakesLine'] as const;
+test('compact-self-review setting keys exist in every locale, substitute {state}, are translated, and the idle picker\'s self-review row carries the line', () => {
+  const stateKeys = ['compactSelfReview.title', 'compactSelfReview.titleGeneral', 'compactSelfReview.setThisTopic', 'compactSelfReview.setGlobal', 'compactOnIdle.selfReviewLine'] as const;
   for (const code of [
-    'compactMistakes.on',
-    'compactMistakes.off',
-    'compactMistakes.enableButton',
-    'compactMistakes.disableButton',
-    'compactMistakes.unsupported',
-    'compactOnIdle.mistakesShowButton',
-    'compactOnIdle.mistakesHideButton',
+    'compactSelfReview.on',
+    'compactSelfReview.off',
+    'compactSelfReview.enableButton',
+    'compactSelfReview.disableButton',
+    'compactSelfReview.unsupported',
+    'compactOnIdle.selfReviewShowButton',
+    'compactOnIdle.selfReviewHideButton',
     ...stateKeys,
   ]) {
     assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
@@ -287,11 +287,11 @@ test('compact-mistakes setting keys exist in every locale, substitute {state}, a
     }
     // The idle picker's title names both switch lines; a locale that lost the placeholder would show it literally.
     for (const code of ['compactOnIdle.title', 'compactOnIdle.titleGeneral']) {
-      const out = runWithLocale(locale, () => t(code, { state: 'ON', summaryLine: 'SUMMARY-LINE', mistakesLine: 'MISTAKES-LINE' }));
-      assert.ok(out.includes('SUMMARY-LINE\nMISTAKES-LINE'), `${code} in ${locale} shows the summary line and the mistakes line: "${out}"`);
+      const out = runWithLocale(locale, () => t(code, { state: 'ON', summaryLine: 'SUMMARY-LINE', selfReviewLine: 'SELF-REVIEW-LINE' }));
+      assert.ok(out.includes('SUMMARY-LINE\nSELF-REVIEW-LINE'), `${code} in ${locale} shows the summary line and the self-review line: "${out}"`);
     }
     const help = getKeyInLang(locale, 'help.thread_bound') ?? '';
-    assert.ok(help.includes('/compact_mistakes — '), `help.thread_bound in ${locale} does not name /compact_mistakes`);
+    assert.ok(help.includes('/compact_self_review — '), `help.thread_bound in ${locale} does not name /compact_self_review`);
   }
 });
 

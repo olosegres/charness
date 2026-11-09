@@ -94,7 +94,7 @@ export const frDict: Record<string, string> = {
     '/quit /status /output — contrôle\n' +
     '/compact — compacter le contexte de l\'agent\n' +
     '/compact_on_idle — compactage auto après inactivité (bascule)\n' +
-    '/compact_mistakes — les erreurs de l\'agent dans le résumé du compactage (bascule)\n' +
+    '/compact_self_review — l\'auto-analyse de l\'agent au compactage (bascule)\n' +
     '/bot_skills — skills du bot pour les agents (activer / désactiver pour ce sujet)\n' +
     '/todo — la liste de tâches publiée de l\'agent et son projet\n' +
     '/limits — usage de chaque compte et fournisseur ; touchez-en un pour y basculer ce sujet\n' +
@@ -465,7 +465,7 @@ export const frDict: Record<string, string> = {
   'compact.done': '✅ Contexte compacté.',
   'compact.done_tokens': '✅ Contexte compacté : {pre} → {post} tokens.',
   'compact.summaryHeader': '📄 Résumé du compactage :',
-  'compact.instructionGapsHeader': '💡 Erreurs de l’agent que de meilleures instructions éviteraient (propositions ; rien n’est modifié sans vous) :',
+  'compact.selfReviewHeader': '💡 Auto-analyse de l\'agent : que corriger dans les instructions pour ne pas répéter les erreurs',
   'compact.start_agent_first': 'Aucune session active. Démarrez d\'abord un agent (/claude ou /opencode).',
   'compact.unsupported_backend': 'Le compactage du contexte n\'est pas pris en charge pour {label}.',
   'compact.model_unresolved': '⚠️ Compactage impossible : aucun modèle n\'est résolu pour cette session. Choisissez-en un avec /model puis réessayez.',
@@ -475,16 +475,16 @@ export const frDict: Record<string, string> = {
   'compactOnIdle.notice': '🧹 Compacté automatiquement en cas d’inactivité pour économiser des tokens via le cache.\n/compact_on_idle — le désactiver ou afficher le résumé.',
   'compactOnIdle.on': 'ACTIVÉ',
   'compactOnIdle.off': 'DÉSACTIVÉ',
-  'compactOnIdle.title': '🧹 Compactage auto en cas d’inactivité pour ce sujet : {state}\n{summaryLine}\n{mistakesLine}\n\nQuand la session reste inactive ~55 min, son contexte est compacté automatiquement pour économiser des tokens (le cache de prompt est encore chaud).\n\nPour le changer pour TOUS les sujets d’un coup, lance ceci dans le sujet General.',
-  'compactOnIdle.titleGeneral': '🧹 Compactage auto en cas d’inactivité — défaut pour TOUS les sujets : {state}\n{summaryLine}\n{mistakesLine}\n\nQuand une session reste inactive ~55 min, son contexte est compacté automatiquement pour économiser des tokens.\n\nChaque sujet peut le remplacer avec son propre /compact_on_idle.',
+  'compactOnIdle.title': '🧹 Compactage auto en cas d’inactivité pour ce sujet : {state}\n{summaryLine}\n{selfReviewLine}\n\nQuand la session reste inactive ~55 min, son contexte est compacté automatiquement pour économiser des tokens (le cache de prompt est encore chaud).\n\nPour le changer pour TOUS les sujets d’un coup, lance ceci dans le sujet General.',
+  'compactOnIdle.titleGeneral': '🧹 Compactage auto en cas d’inactivité — défaut pour TOUS les sujets : {state}\n{summaryLine}\n{selfReviewLine}\n\nQuand une session reste inactive ~55 min, son contexte est compacté automatiquement pour économiser des tokens.\n\nChaque sujet peut le remplacer avec son propre /compact_on_idle.',
   'compactOnIdle.enableButton': 'Activer',
   'compactOnIdle.disableButton': 'Désactiver',
   'compactOnIdle.summaryLine': '📄 Résumé après le compactage : {state}',
   'compactOnIdle.summaryShowButton': '📄 Afficher le résumé',
   'compactOnIdle.summaryHideButton': 'Masquer le résumé',
-  'compactOnIdle.mistakesLine': '💡 Erreurs de l\'agent dans le résumé : {state}',
-  'compactOnIdle.mistakesShowButton': '💡 Afficher les erreurs',
-  'compactOnIdle.mistakesHideButton': 'Masquer les erreurs',
+  'compactOnIdle.selfReviewLine': '💡 Auto-analyse de l\'agent : {state}',
+  'compactOnIdle.selfReviewShowButton': '💡 Afficher l\'auto-analyse',
+  'compactOnIdle.selfReviewHideButton': 'Masquer l\'auto-analyse',
   'compactOnIdle.setThisTopic': '✅ Compactage auto en cas d’inactivité : {state} pour ce sujet.',
   'compactOnIdle.setGlobal': '✅ Compactage auto en cas d’inactivité : {state} pour TOUS les sujets (les remplacements par sujet s’appliquent toujours).',
   'compactOnIdle.unsupported': 'Le compactage auto en cas d’inactivité s’applique à une session d’agent active. Lance d’abord /claude ou /opencode dans un sujet lié.',
@@ -500,17 +500,17 @@ export const frDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ Résumé du compactage : {state} pour ce sujet.',
   'compactSummary.setGlobal': '✅ Résumé du compactage : {state} pour TOUS les sujets (les remplacements par sujet s\'appliquent toujours).',
   'compactSummary.unsupported': 'Un shell n\'a pas de contexte à compacter, donc il n\'y a aucun résumé à publier.',
-  'compactMistakes.on': 'ACTIVÉ',
-  'compactMistakes.off': 'DÉSACTIVÉ',
-  'compactMistakes.title':
-    '💡 Erreurs de l\'agent dans le résumé du compactage, dans ce sujet : {state}\n\nUn résumé de compactage peut se terminer par les erreurs que l\'agent a commises dans la session (surtout les répétées) et qu\'un changement de ses règles, skills ou de CLAUDE.md / AGENTS.md aurait pu éviter. Le bot publie cette partie dans le sujet même quand le résumé complet est masqué. Désactivé : l\'agent n\'est pas sollicité pour cela (aucun token dépensé) et rien n\'est publié.\n\nPour le changer pour TOUS les sujets d\'un coup, exécutez ceci dans le sujet General.',
-  'compactMistakes.titleGeneral':
-    '💡 Erreurs de l\'agent dans le résumé du compactage — défaut pour TOUS les sujets : {state}\n\nUn résumé de compactage peut se terminer par les erreurs que l\'agent a commises dans la session (surtout les répétées) et qu\'un changement de ses règles, skills ou de CLAUDE.md / AGENTS.md aurait pu éviter. Le bot publie cette partie dans le sujet même quand le résumé complet est masqué. Désactivé : l\'agent n\'est pas sollicité pour cela (aucun token dépensé) et rien n\'est publié.\n\nChaque sujet peut toujours le remplacer avec son propre /compact_mistakes.',
-  'compactMistakes.enableButton': 'Activer',
-  'compactMistakes.disableButton': 'Désactiver',
-  'compactMistakes.setThisTopic': '✅ Erreurs de l\'agent dans le résumé du compactage : {state} pour ce sujet.',
-  'compactMistakes.setGlobal': '✅ Erreurs de l\'agent dans le résumé du compactage : {state} pour TOUS les sujets (les remplacements par sujet s\'appliquent toujours).',
-  'compactMistakes.unsupported': 'Un shell n\'a pas de contexte à compacter, donc il n\'y a pas de résumé pour les erreurs de l\'agent.',
+  'compactSelfReview.on': 'ACTIVÉ',
+  'compactSelfReview.off': 'DÉSACTIVÉ',
+  'compactSelfReview.title':
+    '💡 Auto-analyse de l\'agent au compactage, dans ce sujet : {state}\n\nUn résumé de compactage peut se terminer par l\'auto-analyse de l\'agent : les erreurs qu\'il a commises dans la session (surtout les répétées) et ce qu\'il faudrait changer dans ses règles, skills ou dans CLAUDE.md / AGENTS.md pour ne pas les répéter. Le bot la publie dans le sujet même quand le résumé complet est masqué. Désactivé : l\'agent n\'est pas sollicité pour cela (aucun token dépensé) et rien n\'est publié.\n\nPour le changer pour TOUS les sujets d\'un coup, exécutez ceci dans le sujet General.',
+  'compactSelfReview.titleGeneral':
+    '💡 Auto-analyse de l\'agent au compactage — défaut pour TOUS les sujets : {state}\n\nUn résumé de compactage peut se terminer par l\'auto-analyse de l\'agent : les erreurs qu\'il a commises dans la session (surtout les répétées) et ce qu\'il faudrait changer dans ses règles, skills ou dans CLAUDE.md / AGENTS.md pour ne pas les répéter. Le bot la publie dans le sujet même quand le résumé complet est masqué. Désactivé : l\'agent n\'est pas sollicité pour cela (aucun token dépensé) et rien n\'est publié.\n\nChaque sujet peut toujours le remplacer avec son propre /compact_self_review.',
+  'compactSelfReview.enableButton': 'Activer',
+  'compactSelfReview.disableButton': 'Désactiver',
+  'compactSelfReview.setThisTopic': '✅ Auto-analyse de l\'agent au compactage : {state} pour ce sujet.',
+  'compactSelfReview.setGlobal': '✅ Auto-analyse de l\'agent au compactage : {state} pour TOUS les sujets (les remplacements par sujet s\'appliquent toujours).',
+  'compactSelfReview.unsupported': 'Un shell n\'a pas de contexte à compacter, donc il n\'y a pas de résumé pour l\'auto-analyse de l\'agent.',
 
   'botSkills.on': 'ACTIVÉ',
   'botSkills.off': 'DÉSACTIVÉ',

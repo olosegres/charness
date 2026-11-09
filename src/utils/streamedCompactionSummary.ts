@@ -1,7 +1,7 @@
 /**
  * @description The compaction summary a backend STREAMS to the bot (OpenCode) tail by tail, before it reaches the topic —
  * pure, no I/O. The bot never reads such a summary whole, so the two things it does with a summary it reads (post it
- * without the scaffolding, post its agent-mistakes section alone) are done here on the tails:
+ * without the scaffolding, post its self-review section alone) are done here on the tails:
  *
  *  - summary SHOWN (`/compact_summary` on): {@link createStreamedSummaryDisplay} takes the scaffolding out of what goes on
  *    to the topic — the marker lines, the «none» line — and puts the section's header where its first line is, however the
@@ -82,9 +82,9 @@ export interface StreamedSummaryTail {
 export interface StreamedSummaryView {
   /** `/compact_summary` is on for the topic. */
   isSummaryShown: boolean;
-  /** `/compact_mistakes` is on for the topic: while it is off nothing of a hidden summary is collected for the section. */
+  /** `/compact_self_review` is on for the topic: while it is off nothing of a hidden summary is collected for the section. */
   isInstructionGapsEnabled: boolean;
-  /** What goes where the agent-mistakes section starts in a summary that is shown. */
+  /** What goes where the self-review section starts in a summary that is shown. */
   gapsHeader: string;
 }
 
@@ -92,7 +92,7 @@ export interface StreamedSummaryView {
 export interface StreamedSummaryOutcome {
   /** The text to send on to the topic and whether it goes on from the message before; `null`: nothing to send now. */
   shown: { text: string; isContinuation: boolean } | null;
-  /** The agent-mistakes section to post on its own, once per summary; `null` when there is none to post now. */
+  /** The self-review section to post on its own, once per summary; `null` when there is none to post now. */
   instructionGaps: string | null;
 }
 

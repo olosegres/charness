@@ -181,7 +181,7 @@ describe('the question the idle compaction asked again, through the compaction m
     harness = await createCommandHarness();
     compaction = createCompaction({
       ...harness.core,
-      compactMistakesFlagDirs: harness.compactMistakesFlagDirs,
+      compactSelfReviewFlagDirs: harness.compactSelfReviewFlagDirs,
       replyToThread: async (replyKey, text, extra) => {
         if (JSON.stringify(extra ?? {}).includes('reask_')) {
           reAskSendStarted.resolve();

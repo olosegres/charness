@@ -15,7 +15,7 @@ import type { BotCore, CommandContext, RegisterCommand } from '../connectors/tel
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import type { SessionKey } from '../sessionKey';
 import { getStateStore, type StateStore } from '../state';
-import type { CompactMistakesFlagDirs } from '../utils/compactMistakesFlags';
+import type { CompactSelfReviewFlagDirs } from '../utils/compactSelfReviewFlags';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 
 export const harnessGroup = { id: -1001111111111, title: 'ExampleGroup' };
@@ -50,9 +50,9 @@ const foreignChatSpace = '-1002222222222';
 const defaultCommandMessageId = 1;
 
 export class CommandHarness {
-  /** The folder the flags of `/compact_mistakes` go to: the module under test never reaches the real DATA_DIR or OpenCode config of the machine. */
+  /** The folder the flags of `/compact_self_review` go to: the module under test never reaches the real DATA_DIR or OpenCode config of the machine. */
   private readonly flagRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'command-harness-flags-'));
-  readonly compactMistakesFlagDirs: CompactMistakesFlagDirs = {
+  readonly compactSelfReviewFlagDirs: CompactSelfReviewFlagDirs = {
     claudeOffDir: path.join(this.flagRoot, 'claude-off'),
     openCodeOffDir: path.join(this.flagRoot, 'opencode-off'),
   };

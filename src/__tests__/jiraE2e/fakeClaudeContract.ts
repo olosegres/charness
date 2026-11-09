@@ -113,7 +113,7 @@ export type FakeClaudeUsageWindows = Record<string, FakeClaudeAccountWindows>;
 /**
  * A file in the fake's state dir whose content is the SUMMARY every compaction of the fake leaves in its transcript while
  * the file exists — the `isCompactSummary` message the real CLI writes, which the bot reads for the compaction summary and
- * its agent-mistakes section. No file: a compaction writes none (every other flow's compactions are unchanged).
+ * its self-review section. No file: a compaction writes none (every other flow's compactions are unchanged).
  */
 export const fakeClaudeCompactionSummaryFileName = 'compaction-summary';
 /**

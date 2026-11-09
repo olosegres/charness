@@ -98,7 +98,7 @@ export const enDict: Record<string, string> = {
     '/quit /status /output — control\n' +
     '/compact — compact agent context\n' +
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
-    '/compact_mistakes — the agent\'s mistakes in the compaction summary (toggle)\n' +
+    '/compact_self_review — the agent\'s self-review on compaction (toggle)\n' +
     '/bot_skills — the bot\'s own skills for agents (on / off for this topic)\n' +
     '/todo — the agent\'s published todo list and the project it shares a board with\n' +
     '/limits — usage of every account and provider; tap one to switch this topic\n' +
@@ -469,7 +469,7 @@ export const enDict: Record<string, string> = {
   'compact.done': '✅ Context compacted.',
   'compact.done_tokens': '✅ Context compacted: {pre} → {post} tokens.',
   'compact.summaryHeader': '📄 Compaction summary:',
-  'compact.instructionGapsHeader': '💡 Agent mistakes that better instructions could prevent (proposals; nothing is changed without you):',
+  'compact.selfReviewHeader': '💡 Agent self-review: what to change in the instructions so the mistakes are not repeated',
   'compact.start_agent_first': 'No active session. Start an agent first (/claude or /opencode).',
   'compact.unsupported_backend': 'Context compaction is not supported for {label}.',
   'compact.model_unresolved': '⚠️ Cannot compact: no model is resolved for this session. Pick one with /model and try again.',
@@ -485,17 +485,17 @@ export const enDict: Record<string, string> = {
   'compactOnIdle.on': 'ON',
   'compactOnIdle.off': 'OFF',
   'compactOnIdle.title':
-    '🧹 Auto-compact on idle for this topic: {state}\n{summaryLine}\n{mistakesLine}\n\nWhen the session sits idle for ~55 min its context is compacted automatically to save tokens (the prompt cache is still warm).\n\nTo switch it for ALL topics at once, run this in the General topic.',
+    '🧹 Auto-compact on idle for this topic: {state}\n{summaryLine}\n{selfReviewLine}\n\nWhen the session sits idle for ~55 min its context is compacted automatically to save tokens (the prompt cache is still warm).\n\nTo switch it for ALL topics at once, run this in the General topic.',
   'compactOnIdle.titleGeneral':
-    '🧹 Auto-compact on idle — default for ALL topics: {state}\n{summaryLine}\n{mistakesLine}\n\nWhen a session sits idle for ~55 min its context is compacted automatically to save tokens.\n\nEach topic can still override this with its own /compact_on_idle.',
+    '🧹 Auto-compact on idle — default for ALL topics: {state}\n{summaryLine}\n{selfReviewLine}\n\nWhen a session sits idle for ~55 min its context is compacted automatically to save tokens.\n\nEach topic can still override this with its own /compact_on_idle.',
   'compactOnIdle.enableButton': 'Enable',
   'compactOnIdle.disableButton': 'Disable',
   'compactOnIdle.summaryLine': '📄 Summary after a compaction: {state}',
   'compactOnIdle.summaryShowButton': '📄 Show summary',
   'compactOnIdle.summaryHideButton': 'Hide summary',
-  'compactOnIdle.mistakesLine': '💡 Agent mistakes in the summary: {state}',
-  'compactOnIdle.mistakesShowButton': '💡 Show mistakes',
-  'compactOnIdle.mistakesHideButton': 'Hide mistakes',
+  'compactOnIdle.selfReviewLine': '💡 Agent self-review: {state}',
+  'compactOnIdle.selfReviewShowButton': '💡 Show self-review',
+  'compactOnIdle.selfReviewHideButton': 'Hide self-review',
   'compactOnIdle.setThisTopic': '✅ Auto-compact on idle: {state} for this topic.',
   'compactOnIdle.setGlobal': '✅ Auto-compact on idle: {state} for ALL topics (per-topic overrides still apply).',
   'compactOnIdle.unsupported': 'Auto-compact on idle applies to an active agent session. Start /claude or /opencode in a bound topic first.',
@@ -511,17 +511,17 @@ export const enDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ Compaction summary: {state} for this topic.',
   'compactSummary.setGlobal': '✅ Compaction summary: {state} for ALL topics (per-topic overrides still apply).',
   'compactSummary.unsupported': 'A shell has no context to compact, so there is no summary to post.',
-  'compactMistakes.on': 'ON',
-  'compactMistakes.off': 'OFF',
-  'compactMistakes.title':
-    '💡 Agent mistakes in the compaction summary, in this topic: {state}\n\nA compaction summary can end with the mistakes the agent made in the session — the repeated ones above all — that a change to its rules, skills or CLAUDE.md / AGENTS.md could have prevented. The bot posts that part into the topic even when the full summary is hidden. Off: the agent is not asked for it (no tokens are spent on it) and nothing is posted.\n\nTo switch it for ALL topics at once, run this in the General topic.',
-  'compactMistakes.titleGeneral':
-    '💡 Agent mistakes in the compaction summary — default for ALL topics: {state}\n\nA compaction summary can end with the mistakes the agent made in the session — the repeated ones above all — that a change to its rules, skills or CLAUDE.md / AGENTS.md could have prevented. The bot posts that part into the topic even when the full summary is hidden. Off: the agent is not asked for it (no tokens are spent on it) and nothing is posted.\n\nEach topic can still override this with its own /compact_mistakes.',
-  'compactMistakes.enableButton': 'Enable',
-  'compactMistakes.disableButton': 'Disable',
-  'compactMistakes.setThisTopic': '✅ Agent mistakes in the compaction summary: {state} for this topic.',
-  'compactMistakes.setGlobal': '✅ Agent mistakes in the compaction summary: {state} for ALL topics (per-topic overrides still apply).',
-  'compactMistakes.unsupported': 'A shell has no context to compact, so there is no summary to hold the agent\'s mistakes.',
+  'compactSelfReview.on': 'ON',
+  'compactSelfReview.off': 'OFF',
+  'compactSelfReview.title':
+    '💡 Agent self-review on compaction, in this topic: {state}\n\nA compaction summary can end with the agent\'s self-review: the mistakes it made in the session — the repeated ones above all — and what to change in its rules, skills or CLAUDE.md / AGENTS.md so they are not repeated. The bot posts it into the topic even when the full summary is hidden. Off: the agent is not asked for it (no tokens are spent on it) and nothing is posted.\n\nTo switch it for ALL topics at once, run this in the General topic.',
+  'compactSelfReview.titleGeneral':
+    '💡 Agent self-review on compaction — default for ALL topics: {state}\n\nA compaction summary can end with the agent\'s self-review: the mistakes it made in the session — the repeated ones above all — and what to change in its rules, skills or CLAUDE.md / AGENTS.md so they are not repeated. The bot posts it into the topic even when the full summary is hidden. Off: the agent is not asked for it (no tokens are spent on it) and nothing is posted.\n\nEach topic can still override this with its own /compact_self_review.',
+  'compactSelfReview.enableButton': 'Enable',
+  'compactSelfReview.disableButton': 'Disable',
+  'compactSelfReview.setThisTopic': '✅ Agent self-review on compaction: {state} for this topic.',
+  'compactSelfReview.setGlobal': '✅ Agent self-review on compaction: {state} for ALL topics (per-topic overrides still apply).',
+  'compactSelfReview.unsupported': 'A shell has no context to compact, so there is no summary to hold the agent\'s self-review.',
 
   'botSkills.on': 'ON',
   'botSkills.off': 'OFF',

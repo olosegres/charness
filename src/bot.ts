@@ -263,7 +263,7 @@ import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
 import { buildLostWorkNote, checkHasLostBackgroundWork, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { getAgentIdleMs } from './utils/compactOnIdle';
-import { getCompactMistakesFlagDirs } from './utils/compactMistakesFlags';
+import { getCompactSelfReviewFlagDirs } from './utils/compactSelfReviewFlags';
 import { resolveOpenCodeGlobalPluginDir } from './utils/openCodeCompactPlugin';
 import { createSendFilesToThread } from './utils/fileSendService';
 import { createSendMessagesToThread } from './utils/messageSendService';
@@ -5300,8 +5300,8 @@ function getPerTurnRefusal(key: SessionKey): { version: string } | null {
  */
 async function persistSessionStart(key: SessionKey, adapter: AgentAdapter): Promise<void> {
   await persistAdapterSessionIds(key, adapter, state);
-  // The session id is new or changed: the hook's and the plugin's flags for it (`/compact_mistakes`) are due.
-  syncThreadCompactMistakesFlags(key);
+  // The session id is new or changed: the hook's and the plugin's flags for it (`/compact_self_review`) are due.
+  syncThreadCompactSelfReviewFlags(key);
   if (checkIsJsonStreamBackend(adapter.name) && botMcpToolDigestReader) {
     await state.setAgentMcpToolDigest(key, botMcpToolDigestReader(key));
   }
@@ -6172,8 +6172,8 @@ const {
   restoreReAskedQuestion,
   closeSavedReAskedQuestion,
   closeReAskedQuestion,
-  syncThreadCompactMistakesFlags,
-  syncAllCompactMistakesFlags,
+  syncThreadCompactSelfReviewFlags,
+  syncAllCompactSelfReviewFlags,
   registerCompactionCommands,
   registerCompactionCallbacks,
 } = createCompaction({
@@ -6195,7 +6195,7 @@ const {
   checkIsStarting: (key) => startupPromptBuffer.checkIsStarting(keyToString(key)),
   closeOrphanQuestionMessage,
   notePersonActivity,
-  compactMistakesFlagDirs: getCompactMistakesFlagDirs(resolveDataDir(), resolveOpenCodeGlobalPluginDir(process.env)),
+  compactSelfReviewFlagDirs: getCompactSelfReviewFlagDirs(resolveDataDir(), resolveOpenCodeGlobalPluginDir(process.env)),
 });
 
 /**
@@ -9635,7 +9635,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'quit-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_mistakes', 'bot_skills', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_self_review', 'bot_skills', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update',
 ]);
 
@@ -11460,7 +11460,7 @@ function handleAgentOutput(key: SessionKey, output: string, meta?: OutboundHints
   noteThreadActivity(key);
 
   // A backend's own streamed compaction summary (OpenCode) obeys `/compact_summary`, like the summary the bot posts for the
-  // other backends: off → the compaction ends in its short notices, plus the summary's agent-mistakes section, which is
+  // other backends: off → the compaction ends in its short notices, plus the summary's self-review section, which is
   // shown in hide mode too; on → the summary is shown without the marker lines the agent was asked to write.
   if (meta?.isCompactionSummary) {
     const summaryTail = routeStreamedCompactionSummaryTail(key, output, meta);
@@ -12928,7 +12928,7 @@ export const COMMANDS_MENU = [
   { command: 'compact', description: '🧹 Compact agent context' },
   { command: 'compact_on_idle', description: '🧹 Auto-compact after idle (toggle)' },
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
-  { command: 'compact_mistakes', description: '💡 Agent mistakes in the compaction summary (toggle)' },
+  { command: 'compact_self_review', description: '💡 Agent self-review on compaction: its mistakes and what to change in its instructions' },
   { command: 'bot_skills', description: '🧰 The bot\'s own skills for agents (on/off)' },
   { command: 'task_agents', description: '🧵 How many tracker task agents work at once' },
   { command: 'runners', description: '🖥 Runners — machines for the agents\' tests and builds' },
@@ -14581,8 +14581,8 @@ export async function startBot(): Promise<void> {
   registerClaudeConfigDirReader(resolveThreadClaudeConfigDir);
   // The «Bot skills» switch (`/bot_skills`): every agent start, the OpenCode server's start and the bot MCP's instructions read it.
   setBotSkillsReader(botSkillsReader);
-  // The flags the CLI's and OpenCode's own compactions read for `/compact_mistakes` follow the saved settings from the start.
-  syncAllCompactMistakesFlags();
+  // The flags the CLI's and OpenCode's own compactions read for `/compact_self_review` follow the saved settings from the start.
+  syncAllCompactSelfReviewFlags();
   registerClaudeRateLimitSink(onClaudeRateLimitEvent);
   registerClaudeTurnCostSink(onClaudeTurnCost);
   if (ENV.testTimings.openCodeServerUpBudgetMs !== undefined) registerOpenCodeServerUpBudgetMs(ENV.testTimings.openCodeServerUpBudgetMs);
@@ -14790,8 +14790,8 @@ export async function startBot(): Promise<void> {
     }),
     onContextCompacted: (key, trigger) => dispatchAdapterEvent(key, 'contextCompacted', () => {
       noteConversationContextReset(key, `compaction (${trigger ?? 'bot'})`);
-      // The CLI's own overflow compaction: nobody else posts its agent-mistakes section (a bot-issued one is its caller's).
-      void postOwnCompactionInstructionGaps(key).catch((e) => console.warn(`[compact] ${keyToString(key)} the agent-mistakes section of the CLI's own compaction was not posted:`, e instanceof Error ? e.message : e));
+      // The CLI's own overflow compaction: nobody else posts its self-review section (a bot-issued one is its caller's).
+      void postOwnCompactionInstructionGaps(key).catch((e) => console.warn(`[compact] ${keyToString(key)} the self-review section of the CLI's own compaction was not posted:`, e instanceof Error ? e.message : e));
     }),
     onConversationLost: (key) => dispatchAdapterEvent(key, 'conversationLost', () => withThreadLocale(key, () => handleConversationLost(key)), () => { dropLostConversationWatermark(key); noteConversationContextReset(key, 'its transcript was lost'); }),
     onError: (key, error) => dispatchAdapterEvent(key, 'error', () => withThreadLocale(key, () => handleAgentError(key, error)), () => {

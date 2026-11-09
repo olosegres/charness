@@ -30,7 +30,7 @@ import {
 } from '../utils/openCodeCompactPlugin';
 import { resetLegacyNameState } from '../legacyNames';
 import { compactionChecklistGuidance, compactionGapsGuidance, compactionResumeGuidance, compactionResumeGuidanceWithoutGaps } from '../utils/compactOnIdle';
-import { getOpenCodeCompactMistakesOffDir, applyCompactMistakesOffFlag } from '../utils/compactMistakesFlags';
+import { getOpenCodeCompactSelfReviewOffDir, applyCompactSelfReviewOffFlag } from '../utils/compactSelfReviewFlags';
 
 type CompactingHook = (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => Promise<void>;
 
@@ -60,13 +60,13 @@ test('getOpenCodeCompactPluginContext: carries the resume guidance (skills + the
   assert.match(context, /inside the summary, never after a closing section/);
 });
 
-test('getOpenCodeCompactPluginContext: the OpenCode server\'s own overflow compaction is asked for the agent-mistakes section too, ahead of the checklist', () => {
+test('getOpenCodeCompactPluginContext: the OpenCode server\'s own overflow compaction is asked for the self-review section too, ahead of the checklist', () => {
   const context = getOpenCodeCompactPluginContext(true);
   assert.ok(context.includes(compactionGapsGuidance));
   assert.ok(context.indexOf(compactionGapsGuidance) < context.indexOf(compactionChecklistGuidance));
 });
 
-test('getOpenCodeCompactPluginContext: with the section off (`/compact_mistakes`) it is the skills and the checklist alone, still kept inside the summary', () => {
+test('getOpenCodeCompactPluginContext: with the section off (`/compact_self_review`) it is the skills and the checklist alone, still kept inside the summary', () => {
   const context = getOpenCodeCompactPluginContext(false);
   assert.ok(context.endsWith(compactionResumeGuidanceWithoutGaps));
   assert.ok(!context.includes(compactionGapsGuidance), 'no request for the section');
@@ -117,17 +117,17 @@ async function getPushedContext(hook: CompactingHook, sessionID: unknown): Promi
   return output.context;
 }
 
-test('installed plugin: the flag of the compacting session (`/compact_mistakes` off) drops the agent-mistakes request — and only that session\'s', async () => {
+test('installed plugin: the flag of the compacting session (`/compact_self_review` off) drops the self-review request — and only that session\'s', async () => {
   await withTempDir(async (dir) => {
     const hook = await loadInstalledPluginHook(dir);
-    const flagDir = getOpenCodeCompactMistakesOffDir(path.join(dir, 'opencode', 'plugins'));
+    const flagDir = getOpenCodeCompactSelfReviewOffDir(path.join(dir, 'opencode', 'plugins'));
     assert.deepEqual(await getPushedContext(hook, 'ses_off'), [getOpenCodeCompactPluginContext(true)], 'no flag yet: asked, as before the switch');
 
-    applyCompactMistakesOffFlag(flagDir, 'ses_off', false);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_off', false);
     assert.deepEqual(await getPushedContext(hook, 'ses_off'), [getOpenCodeCompactPluginContext(false)], 'flagged: no section request');
     assert.deepEqual(await getPushedContext(hook, 'ses_other'), [getOpenCodeCompactPluginContext(true)], 'another session is still asked');
 
-    applyCompactMistakesOffFlag(flagDir, 'ses_off', true);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_off', true);
     assert.deepEqual(await getPushedContext(hook, 'ses_off'), [getOpenCodeCompactPluginContext(true)], 'switched back on: asked again, with no reload of the plugin');
   });
 });
@@ -160,11 +160,11 @@ test('installed plugin: a sub-agent\'s session follows its topic — the flag of
   await withTempDir(async (dir) => {
     const lookup = createSessionLookup({ ses_child: 'ses_topic', ses_grandchild: 'ses_child' });
     const hook = await loadInstalledPluginHook(dir, lookup.client);
-    const flagDir = getOpenCodeCompactMistakesOffDir(path.join(dir, 'opencode', 'plugins'));
+    const flagDir = getOpenCodeCompactSelfReviewOffDir(path.join(dir, 'opencode', 'plugins'));
     assert.deepEqual(await getPushedContext(hook, 'ses_child'), [getOpenCodeCompactPluginContext(true)], 'no flag anywhere: asked, and no request made to find out');
     assert.deepEqual(lookup.calls, [], 'an empty flag folder costs no lookup');
 
-    applyCompactMistakesOffFlag(flagDir, 'ses_topic', false);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_topic', false);
     assert.deepEqual(await getPushedContext(hook, 'ses_child'), [getOpenCodeCompactPluginContext(false)], 'a child of the OFF topic\'s session is not asked');
     assert.deepEqual(await getPushedContext(hook, 'ses_grandchild'), [getOpenCodeCompactPluginContext(false)], 'nor is a grandchild');
     assert.deepEqual(await getPushedContext(hook, 'ses_stranger'), [getOpenCodeCompactPluginContext(true)], 'a session under no flagged one is asked');
@@ -173,15 +173,15 @@ test('installed plugin: a sub-agent\'s session follows its topic — the flag of
     assert.deepEqual(await getPushedContext(hook, 'ses_topic'), [getOpenCodeCompactPluginContext(false)]);
     assert.deepEqual(lookup.calls, [], 'the flagged session itself needs no lookup');
 
-    applyCompactMistakesOffFlag(flagDir, 'ses_topic', true);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_topic', true);
     assert.deepEqual(await getPushedContext(hook, 'ses_child'), [getOpenCodeCompactPluginContext(true)], 'switched back on: the child is asked again');
   });
 });
 
 test('installed plugin: an ancestor search that fails, loops or never ends means ON — and is bounded', async () => {
   await withTempDir(async (dir) => {
-    const flagDir = getOpenCodeCompactMistakesOffDir(path.join(dir, 'opencode', 'plugins'));
-    applyCompactMistakesOffFlag(flagDir, 'ses_topic', false);
+    const flagDir = getOpenCodeCompactSelfReviewOffDir(path.join(dir, 'opencode', 'plugins'));
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_topic', false);
     const asked = [getOpenCodeCompactPluginContext(true)];
 
     // No client at all (a host that hands the plugin none), and a server that does not answer.
@@ -199,19 +199,19 @@ test('installed plugin: an ancestor search that fails, loops or never ends means
     for (let level = 0; level < 12; level += 1) chain[`ses_level${level}`] = `ses_level${level + 1}`;
     const bounded = createSessionLookup(chain);
     const boundedHook = await loadInstalledPluginHook(dir, bounded.client);
-    applyCompactMistakesOffFlag(flagDir, 'ses_topic', true);
-    applyCompactMistakesOffFlag(flagDir, 'ses_level7', false);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_topic', true);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_level7', false);
     assert.deepEqual(await getPushedContext(boundedHook, 'ses_level0'), [getOpenCodeCompactPluginContext(false)], 'the 8th session up is still followed');
-    applyCompactMistakesOffFlag(flagDir, 'ses_level7', true);
-    applyCompactMistakesOffFlag(flagDir, 'ses_level8', false);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_level7', true);
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_level8', false);
     assert.deepEqual(await getPushedContext(boundedHook, 'ses_level0'), asked, 'the 9th is not');
   });
 });
 
 test('installed plugin: a parent lookup that never answers is given up after its deadline and means ON — the compaction is not held for ever', async () => {
   await withTempDir(async (dir) => {
-    const flagDir = getOpenCodeCompactMistakesOffDir(path.join(dir, 'opencode', 'plugins'));
-    applyCompactMistakesOffFlag(flagDir, 'ses_topic', false);
+    const flagDir = getOpenCodeCompactSelfReviewOffDir(path.join(dir, 'opencode', 'plugins'));
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_topic', false);
     const lookedUp: string[] = [];
     // A server that takes the request and never settles it (going down mid-compaction, a proxy that holds the connection).
     const silentClient: SessionLookupClient = { session: { get: ({ path: { id } }) => { lookedUp.push(id); return new Promise(() => {}); } } };
@@ -239,8 +239,8 @@ test('installed plugin: an ancestor id that is not a plain id never leaves the f
   await withTempDir(async (dir) => {
     const lookup = createSessionLookup({ ses_child: '../decoy' });
     const hook = await loadInstalledPluginHook(dir, lookup.client);
-    const flagDir = getOpenCodeCompactMistakesOffDir(path.join(dir, 'opencode', 'plugins'));
-    applyCompactMistakesOffFlag(flagDir, 'ses_topic', false);
+    const flagDir = getOpenCodeCompactSelfReviewOffDir(path.join(dir, 'opencode', 'plugins'));
+    applyCompactSelfReviewOffFlag(flagDir, 'ses_topic', false);
     // A decoy ONE LEVEL UP from the flag folder: were `../decoy` joined into the path, the flag would "exist".
     fs.writeFileSync(path.join(dir, 'opencode', 'decoy'), '');
     assert.deepEqual(await getPushedContext(hook, 'ses_child'), [getOpenCodeCompactPluginContext(true)]);

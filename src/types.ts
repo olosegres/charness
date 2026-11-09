@@ -1003,7 +1003,7 @@ export interface AgentAdapter extends EventEmitter {
    * message, which rides the SSE stream into the topic marked
    * `OutboundHints.isCompactionSummary` (the bot drops it unless `/compact_summary`
    * is on, and shows it without the marker lines the agent was asked to write; with the summary hidden the bot posts its
-   * agent-mistakes section alone — read after its own compaction, taken out of the tails of the server's own). The Claude
+   * self-review section alone — read after its own compaction, taken out of the tails of the server's own). The Claude
    * backends write the summary only into their on-disk transcript (an
    * `isCompactSummary: true` record) and emit no assistant text at all, so they
    * leave this unset and the bot posts the summary itself.

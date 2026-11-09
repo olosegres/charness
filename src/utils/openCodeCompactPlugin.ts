@@ -1,7 +1,7 @@
 /**
  * @description The OpenCode plugin the bot installs so that a compaction OpenCode
  * runs ON ITS OWN when the context overflows also gets the resume guidance — the
- * skills to load again, the agent-mistakes section the bot posts to the topic and the
+ * skills to load again, the self-review section the bot posts to the topic and the
  * next-steps checklist that ends the summary (`compactionResumeGuidance`).
  *
  * WHY this exists: the resume guidance rides the bot's per-invocation
@@ -48,7 +48,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { getCompactionResumeGuidance } from './compactOnIdle';
-import { flagSessionIdPattern, openCodeCompactMistakesOffDirName } from './compactMistakesFlags';
+import { flagSessionIdPattern, openCodeCompactSelfReviewOffDirName } from './compactSelfReviewFlags';
 import { formatDeprecation, warnLegacyNameOnce } from '../legacyNames';
 
 /** OpenCode requires a path plugin to export an id. */
@@ -72,7 +72,7 @@ export const legacyOpenCodeCompactPluginFileName = 'telegramcode-compaction.js';
 export const legacyOpenCodeCompactPluginId = 'telegramcode-compaction';
 
 /**
- * @description The text the plugin adds to every compaction prompt, with the agent-mistakes section (`isWithInstructionGaps`)
+ * @description The text the plugin adds to every compaction prompt, with the self-review section (`isWithInstructionGaps`)
  * or without it. OpenCode appends it AFTER the bot's per-invocation instruction, which may end with the
  * F2 closing-section directive ("write nothing after the end marker"), so the text
  * says outright that the skills list and the checklist belong inside the summary.
@@ -98,8 +98,8 @@ export const openCodeAncestryLookupTimeoutMs = 2000;
 
 /**
  * @description The plugin module source: a v1 plugin (`default` export with `id` + `server`). Before a compaction it looks for
- * the flag the bot keeps for the session (`utils/compactMistakesFlags.ts`): present ⇒ `/compact_mistakes` is off for the
- * session's topic and the text without the agent-mistakes section goes in. The flag folder sits next to the plugin folder,
+ * the flag the bot keeps for the session (`utils/compactSelfReviewFlags.ts`): present ⇒ `/compact_self_review` is off for the
+ * session's topic and the text without the self-review section goes in. The flag folder sits next to the plugin folder,
  * found from the plugin's own location — the plugin is shared by every OpenCode of the account and knows no `DATA_DIR`.
  *
  * A sub-agent (Task) session has an id of its own that no flag names, so when the compacting session has none the plugin asks
@@ -118,7 +118,7 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     `const contextWithoutInstructionGaps = ${JSON.stringify(input.contextWithoutInstructionGaps)};`,
     `const maxAncestryDepth = ${maxSessionAncestryDepth};`,
     `const lookupTimeoutMs = ${openCodeAncestryLookupTimeoutMs};`,
-    `const offFlagDir = path.join(path.dirname(path.dirname(fileURLToPath(import.meta.url))), ${JSON.stringify(openCodeCompactMistakesOffDirName)});`,
+    `const offFlagDir = path.join(path.dirname(path.dirname(fileURLToPath(import.meta.url))), ${JSON.stringify(openCodeCompactSelfReviewOffDirName)});`,
     `const checkIsPlainID = (sessionID) => typeof sessionID === "string" && new RegExp(${JSON.stringify(flagSessionIdPattern.source)}).test(sessionID);`,
     'const checkHasAnyFlag = () => { try { return fs.readdirSync(offFlagDir).length > 0; } catch { return false; } };',
     'const checkHasFlag = (sessionID) => { try { return fs.existsSync(path.join(offFlagDir, sessionID)); } catch { return false; } };',
@@ -132,7 +132,7 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     '    clearTimeout(timer);',
     '  }',
     '};',
-    'const checkIsMistakesOff = async (client, sessionID) => {',
+    'const checkIsSelfReviewOff = async (client, sessionID) => {',
     '  if (!checkHasAnyFlag()) return false;',
     '  let currentID = sessionID;',
     '  for (let depth = 0; depth < maxAncestryDepth; depth += 1) {',
@@ -149,7 +149,7 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     `  id: ${JSON.stringify(openCodeCompactPluginId)},`,
     '  server: async (pluginContext) => ({',
     '    "experimental.session.compacting": async (input, output) => {',
-    '      output.context.push((await checkIsMistakesOff(pluginContext?.client, input?.sessionID)) ? contextWithoutInstructionGaps : context);',
+    '      output.context.push((await checkIsSelfReviewOff(pluginContext?.client, input?.sessionID)) ? contextWithoutInstructionGaps : context);',
     '    },',
     '  }),',
     '};',
