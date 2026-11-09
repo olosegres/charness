@@ -14,7 +14,7 @@ import {
 import { RemoteRunError, RunnerUnreachableError } from './remoteRunError';
 import { remoteRunExitCodes } from './exitCodes';
 import { probeAllTimeoutMs } from './probeTiming';
-import { describeSshFailure, notConnectedReason, type RunnerClient } from './runnerClient';
+import { checkIsSshTimeout, describeSshFailure, notConnectedReason, type RunnerClient } from './runnerClient';
 import type { RunnerConfig, RunnersConfig } from './runnersConfig';
 
 /**
@@ -118,11 +118,12 @@ export const lidClosedReason = 'its Mac has the lid closed';
  * @name RunnerReachability
  * @description Whether a runner can be called at all right now: `offline` (a paired one whose link is down, or one whose script cannot be looked for over ssh: `reason` is the short cause), `lid-closed` (its link is up but its
  * Mac\'s lid is shut: it may be falling asleep, so it is not called), `broken` (its script could not be put there for a reason that is not a lost connection) — or `reachable`, with the script in place.
- * `isLinkUp` (of `offline`): a paired runner whose link was up when it was asked — it is THERE, so an ssh call of it that got no answer in time says «slow», not «gone».
+ * `isLinkUp` (of `offline`): a paired runner whose link was up when it was asked — it is THERE, so an ssh call of it that got no answer in time says «slow», not «gone»; `isSshTimeout`: that call failed because
+ * ssh itself ran out of patience (`checkIsSshTimeout`: its own connect / banner timeout, which is shorter than the view's deadline), not because the connection was refused or dropped.
  */
 export type RunnerReachability =
   | { kind: 'reachable' }
-  | { kind: 'offline'; reason: string; lastSeenMs: number | null; isLinkUp: boolean }
+  | { kind: 'offline'; reason: string; lastSeenMs: number | null; isLinkUp: boolean; isSshTimeout: boolean }
   | { kind: 'lid-closed'; lastSeenMs: number | null }
   | { kind: 'broken'; message: string };
 
@@ -134,13 +135,13 @@ export async function checkRunnerReachability(client: RunnerClient, signal?: Abo
   const paired = client.runner.paired;
   if (paired !== undefined) {
     const link = await getRunnerLinkStatus(paired.hubDir, paired.runnerId);
-    if (!link.isOnline) return { kind: 'offline', reason: notConnectedReason, lastSeenMs: link.lastSeenMs, isLinkUp: false };
+    if (!link.isOnline) return { kind: 'offline', reason: notConnectedReason, lastSeenMs: link.lastSeenMs, isLinkUp: false, isSshTimeout: false };
     if (link.isLidClosed) return { kind: 'lid-closed', lastSeenMs: link.lastSeenMs };
   }
   try {
     await client.ensureScript(signal);
   } catch (error) {
-    if (error instanceof RunnerUnreachableError) return { kind: 'offline', reason: error.reason, lastSeenMs: null, isLinkUp: paired !== undefined };
+    if (error instanceof RunnerUnreachableError) return { kind: 'offline', reason: error.reason, lastSeenMs: null, isLinkUp: paired !== undefined, isSshTimeout: checkIsSshTimeout(error.reason) };
     return { kind: 'broken', message: error instanceof Error ? error.message : 'could not prepare the runner' };
   }
   return { kind: 'reachable' };
@@ -176,6 +177,7 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
     return {
       name: runner.name,
       status: 'busy',
+      evidence: runner.paired === undefined ? 'ssh' : 'link',
       reason: `no answer within ${Math.round(deadlineMs / millisecondsPerSecond)} s (${stage})`,
       lastSeenAtMs: last?.seenAtMs ?? null,
       lastProbe: last?.probe ?? null,
@@ -186,8 +188,12 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
   // A paired runner is online when its link accepts a connection; asking is cheaper than an ssh call that fails through the proxy. A Mac with its lid shut is about to sleep, or has woken for a minute to do its
   // housekeeping: it takes no new job, and is not even asked (the call may hang as the machine falls asleep). Jobs it already runs are not looked at here at all — they are reached by their own id.
   const reachability = await checkRunnerReachability(client, signal);
-  if (reachability.kind === 'offline' && reachability.isLinkUp && hasDeadlinePassed()) return busy('its first call, the check of its script, was not answered');
+  // Its link is up and the call got no answer — the view's deadline fired, or ssh gave up on its own before it (its 15 s connect timeout is shorter than the deadline, and on a paired runner the ssh server is the link's own Node,
+  // whose handshake is what a loaded machine is slow at): busy. A refused or dropped connection is the runner gone.
+  if (reachability.kind === 'offline' && reachability.isLinkUp && (hasDeadlinePassed() || reachability.isSshTimeout)) return busy('its first call, the check of its script, was not answered');
   if (reachability.kind === 'offline') return offline(reachability.reason, reachability.lastSeenMs);
+  // The script was NOT there and its upload was cut off by the deadline (the first probe after every update has to upload the new one): ssh answered the check, so the runner is there.
+  if (reachability.kind === 'broken' && hasDeadlinePassed()) return busy('the upload of its script did not finish');
   if (reachability.kind === 'broken') return offline(reachability.message);
   if (reachability.kind === 'lid-closed') {
     const last = readLastProbe(client.cacheDir, runner.name, runner.paired?.pairedAtMs);
@@ -196,7 +202,7 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
   const result = await client.call('probe', options.isPruneAllowed === true ? [probePruneArgument] : [], { timeoutMs: deadlineMs, signal });
   // The script was found a moment ago, so the runner answers ssh: a probe that ran out of time is a runner that is busy. Any other failure (the connection dropped) is the runner gone.
   // `isTimedOut` also says «cut off from outside» (the user's stop ends the call the same way), so inside a view only the shared deadline counts; a probe called by hand has no other clock than the call's own.
-  const isOutOfTime = hasDeadlinePassed() || (options.hasDeadlinePassed === undefined && result.isTimedOut);
+  const isOutOfTime = hasDeadlinePassed() || (options.hasDeadlinePassed === undefined && result.isTimedOut) || checkIsSshTimeout(result.stderr);
   if (result.exitCode !== 0 && isOutOfTime) return busy('its probe did not finish');
   if (result.exitCode !== 0) return offline(describeSshFailure(result));
   writeLastProbe(client.cacheDir, runner.name, result.stdout, nowMs);

@@ -73,7 +73,7 @@ describe('checkRunnerReachability', () => {
 
   it('a hand-made runner that cannot be reached over ssh is offline with the ssh reason; any other failure putting the script there is «broken» with its message', async () => {
     const lost = createClient(handMade, async () => { throw new RunnerUnreachableError('box1', 'ssh: connection timed out'); });
-    assert.deepEqual(await checkRunnerReachability(lost.client), { kind: 'offline', reason: 'ssh: connection timed out', lastSeenMs: null, isLinkUp: false });
+    assert.deepEqual(await checkRunnerReachability(lost.client), { kind: 'offline', reason: 'ssh: connection timed out', lastSeenMs: null, isLinkUp: false, isSshTimeout: true });
     const broken = createClient(handMade, async () => { throw new RemoteRunError('could not put the runner script on "box1"'); });
     assert.deepEqual(await checkRunnerReachability(broken.client), { kind: 'broken', message: 'could not put the runner script on "box1"' });
     const odd = createClient(handMade, async () => { throw new Error(''); });
@@ -82,7 +82,7 @@ describe('checkRunnerReachability', () => {
 
   it('a paired runner whose link is down is offline («the runner is not connected») without any ssh call', async () => {
     const { client, scriptChecks } = createClient(createPaired());
-    assert.deepEqual(await checkRunnerReachability(client), { kind: 'offline', reason: notConnectedReason, lastSeenMs: null, isLinkUp: false });
+    assert.deepEqual(await checkRunnerReachability(client), { kind: 'offline', reason: notConnectedReason, lastSeenMs: null, isLinkUp: false, isSshTimeout: false });
     assert.equal(scriptChecks(), 0);
   });
 

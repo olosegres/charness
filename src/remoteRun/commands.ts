@@ -14,7 +14,7 @@ import { readLastRunnerNameOfProject, readLocalJobRecord } from './jobRecords';
 import { readJobOutcome } from './jobQuery';
 import { describeJobOutcome, parseJobFacts, parsePueueStatus } from './jobState';
 import { createJobOutputRouter, sayOwn, type CliIo } from './output';
-import { formatRunnerBlock, type RunnerCapability } from './probe';
+import { formatRunnerBlock, type RunnerCapability, type RunnerReport } from './probe';
 import { getProjectContext } from './project';
 import { RemoteRunError, RunnerUnreachableError } from './remoteRunError';
 import { checkIsCleanFailure, formatCleanLine, parseCleanAnswer, type CleanOutcome } from './cleanReport';
@@ -23,7 +23,7 @@ import { createRunnerClient, describeRunnerRefusal, describeSshFailure, prepareC
 import { checkRunnerReachability, chooseExecRunnerName, findRunnerOfJob, lidClosedReason, pickRunner, probeRunners } from './runners';
 import type { RunnersConfig } from './runnersConfig';
 import { defaultRunnerWaitSeconds } from './runnerWaitTiming';
-import { chooseRunnerWithWait, planRunnerWait } from './runnerWait';
+import { chooseRunnerWithWait, planRunnerWait, type RunnerAttempt } from './runnerWait';
 import { checkIsConnectionLost } from './ssh';
 import { getJobOwner, stageJob } from './submit';
 
@@ -80,11 +80,8 @@ export async function chooseClient(context: CommandContext, wanted: { runner: st
         ? config.runners.map((runner) => createClient(context, config, runner.name))
         : [createClient(context, config, wanted.runner)];
       const reports = await probeRunners(clients, context.now(), budgetMs === null ? context.probeDeadlineMs : Math.min(context.probeDeadlineMs, budgetMs), stop);
-      const pick = pickRunner(config, reports, wanted);
-      if (!pick.ok) return { ok: false, failure: pick, wait: planRunnerWait(config, reports, wanted) };
-      const client = clients.find((candidate) => candidate.runner.name === pick.runnerName);
-      if (client === undefined) throw new RemoteRunError('the picked runner is not among the candidates');
-      return { ok: true, choice: client };
+      // What is left of the wait bounds the script check of a busy runner as well: it must not run the command past `--runner-wait`.
+      return pickVerifiedRunner(config, clients, reports, wanted, budgetMs === null ? stop : AbortSignal.any([stop, AbortSignal.timeout(budgetMs)]));
     },
     needs: wanted.needs,
     waitSeconds: wanted.waitSeconds,
@@ -94,6 +91,39 @@ export async function chooseClient(context: CommandContext, wanted: { runner: st
     watchInterrupts: context.watchInterrupts,
     say: (line) => sayOwn(context.io, line),
   });
+}
+
+/**
+ * @description Pick the runner among the probed `reports` and make sure it can be used. A runner that answered its probe has its script in place (the check is the gate before the probe). A BUSY one did not finish
+ * its probe in time — the view only knows it is there — and its script may not be: the check was cut off, or the upload of the new version after an update was. The run path never looks for the script again
+ * (`prepare` just runs it), so it is looked for HERE, after the pick: found or uploaded, the runner is used; unreachable (the Mac that was linked a second ago has fallen asleep, a link that dropped) it is
+ * treated as offline from then on — the pick is made again without it, and a paired runner that could have done the job is waited for as for any offline one. A script that cannot be put there is the runner's
+ * own failure and says so. `signal` ends the check from outside (the user's stop, what is left of the wait).
+ */
+export async function pickVerifiedRunner(
+  config: RunnersConfig,
+  clients: readonly RunnerClient[],
+  reports: readonly RunnerReport[],
+  wanted: { runner: string | null; needs: RunnerCapability | null },
+  signal: AbortSignal,
+): Promise<RunnerAttempt<RunnerClient>> {
+  let current = reports;
+  for (;;) {
+    const pick = pickRunner(config, current, wanted);
+    if (!pick.ok) return { ok: false, failure: pick, wait: planRunnerWait(config, current, wanted) };
+    const client = clients.find((candidate) => candidate.runner.name === pick.runnerName);
+    if (client === undefined) throw new RemoteRunError('the picked runner is not among the candidates');
+    const picked = current.find((report) => report.name === pick.runnerName);
+    if (picked?.status !== 'busy') return { ok: true, choice: client };
+    try {
+      await client.ensureScript(signal);
+      return { ok: true, choice: client };
+    } catch (error) {
+      if (!(error instanceof RunnerUnreachableError)) throw error;
+      const gone: RunnerReport = { name: picked.name, status: 'offline', reason: error.reason, lastSeenAtMs: picked.lastSeenAtMs, lastProbe: picked.lastProbe, groupLimits: picked.groupLimits, isPausedByHub: picked.isPausedByHub };
+      current = current.map((report) => (report.name === picked.name ? gone : report));
+    }
+  }
 }
 
 /** The client of the runner a job id belongs to, with its script in place. */

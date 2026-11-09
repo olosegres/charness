@@ -241,7 +241,7 @@ function formatOlderSimulatorsLine(probe: RunnerProbe): string[] {
   return [`  simulators of older runtimes (devices in brackets; remote-run removes nothing of them): ${formatOlderSimulators(probe)}`];
 }
 
-/** What `runners` adds to «it kept the machine awake» of a runner that does not answer: an assertion cannot wake a machine that sleeps (shared with the bot's `/runners`, localized: `runners.keepsAwakeLastSeenNote`). */
+/** What `runners` adds to «it kept the machine awake» of a runner that does not answer: an assertion cannot wake a machine that sleeps (shared with the bot's `/runners`, localized: `runners.offlineKeptAwakeNote`). */
 const asleepNote = 'if it is asleep now, nothing can wake it from here: a key press or opening the lid does';
 
 /**
@@ -309,6 +309,9 @@ export function formatRunnerDetails(probe: RunnerProbe, groupLimits: Readonly<Re
  */
 export const lidClosedNote = 'takes no new jobs until its lid is opened (a job already running there goes on)';
 
+/** What says a busy runner is THERE: its link is up (a paired runner), or its ssh answered the check of its script (a hand-made one, which has no link). */
+export type BusyEvidence = 'link' | 'ssh';
+
 /**
  * @name RunnerReport @description What `runners` knows of one runner after probing: live; or — its link is up, but the Mac's lid is closed (`lid-closed`: the runner
  * is asked nothing, it may be falling asleep) — or `busy` (it is THERE — its link is up, or its ssh answered — but its probe did not finish in time: a Mac with load 129 under a job; the last snapshot,
@@ -317,7 +320,7 @@ export const lidClosedNote = 'takes no new jobs until its lid is opened (a job a
  */
 export type RunnerReport =
   | { name: string; status: 'online'; probe: RunnerProbe; groupLimits: Record<string, number>; isPausedByHub: boolean }
-  | { name: string; status: 'busy'; reason: string; lastSeenAtMs: number | null; lastProbe: RunnerProbe | null; groupLimits: Record<string, number>; isPausedByHub: boolean }
+  | { name: string; status: 'busy'; evidence: BusyEvidence; reason: string; lastSeenAtMs: number | null; lastProbe: RunnerProbe | null; groupLimits: Record<string, number>; isPausedByHub: boolean }
   | { name: string; status: 'lid-closed'; lastSeenAtMs: number | null; lastProbe: RunnerProbe | null; groupLimits: Record<string, number>; isPausedByHub: boolean }
   | { name: string; status: 'offline'; reason: string; lastSeenAtMs: number | null; lastProbe: RunnerProbe | null; groupLimits: Record<string, number>; isPausedByHub: boolean };
 
@@ -352,7 +355,7 @@ export function formatRunnerBlock(report: RunnerReport): string {
   }
   if (report.status === 'busy') {
     // The runner is there: «offline» would make a job's next submit wait for, or refuse, a machine that is merely busy.
-    const heading = `${report.name} — online, busy${pauseTags} · ${report.reason}; it is linked, so it is not offline`;
+    const heading = `${report.name} — online, busy${pauseTags} · ${report.reason}; ${report.evidence === 'link' ? 'it is linked' : 'its ssh answered'}, so it is not offline`;
     if (report.lastProbe === null) return `${heading} · never probed`;
     const probedAt = report.lastSeenAtMs === null ? '' : ` ${formatLastSeen(report.lastSeenAtMs)}`;
     return [`${heading} · details as last probed${probedAt}: ${formatSystem(report.lastProbe)}`, ...formatRunnerDetails(report.lastProbe, report.groupLimits)].join('\n');

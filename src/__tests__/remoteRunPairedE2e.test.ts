@@ -67,6 +67,7 @@ import {
   waitUntil,
   type RunnerLinkLayout,
 } from './runnerLinkE2e/runnerLinkFlowKit';
+import { readRunnerScript } from '../remoteRun/runnerClient';
 import { killRecordedProcess, readRecordedPid } from './recordedProcess';
 import { createIoregStandIn, type IoregStandIn } from './runnerLinkE2e/ioregStandIn';
 
@@ -354,6 +355,34 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
 
       fs.writeFileSync(runnerPaths.envFile, browsersLine(), { mode: 0o600 });
       assert.match((await runCli(cliLayout, ['runners'], { cwd: project.root, env: busyEnv, timeoutMs: ordinaryRunTimeoutMs })).stdout, new RegExp(`^${runnerName} — online · `, 'm'), 'once its probe fits the deadline it is plainly online again');
+    });
+
+    /**
+     * An `ssh` in front of the real one that makes the check «is the runner's script there?» (`test -f …`) take `delayMs` — what a loaded runner's slow handshake looks like to the hub — and leaves every
+     * other call alone.
+     */
+    function createSlowScriptCheckSsh(delayMs: number): string {
+      const binDir = path.join(layout.root, 'slow-check-bin');
+      fs.mkdirSync(binDir, { recursive: true });
+      const realSsh = spawnSync('which', ['ssh'], { encoding: 'utf8' }).stdout.trim();
+      fs.writeFileSync(path.join(binDir, 'ssh'), `#!/bin/bash\nlast="\${@: -1}"\ncase "$last" in "test -f "*) sleep ${delayMs / 1000} ;; esac\nexec ${realSsh} "$@"\n`, { mode: 0o755 });
+      return binDir;
+    }
+
+    it('the check of its script is cut off by the deadline AND the script of the new version is not there yet (an update renamed it): the runner reads busy, is picked, and the script is looked for again and uploaded — the job runs, it does not die in `prepare`', async () => {
+      const scriptOnRunner = path.join(runnerPaths.workDir, 'bin', readRunnerScript().name);
+      // A probe in time first: it puts the script there and leaves the snapshot a busy runner is picked from.
+      assert.match((await run(['runners'])).stdout, new RegExp(`^${runnerName} — online · `, 'm'));
+      assert.ok(fs.existsSync(scriptOnRunner));
+      fs.rmSync(scriptOnRunner);
+      const slowEnv = { ...busyEnv, PATH: `${createSlowScriptCheckSsh(busyDeadlineMs + 2000)}:${process.env.PATH ?? ''}` };
+      const view = await runCli(cliLayout, ['runners'], { cwd: project.root, env: slowEnv, timeoutMs: ordinaryRunTimeoutMs });
+      assert.match(view.stdout, new RegExp(`^${runnerName} — online, busy · no answer within 2 s \\(its first call, the check of its script, was not answered\\)`, 'm'), 'the check was cut off by the deadline: busy, and nobody knows whether the script is there');
+      assert.ok(!fs.existsSync(scriptOnRunner), 'a view uploads nothing: it was cut off before it could');
+      const job = await runCli(cliLayout, ['--needs', 'playwright', 'echo script-ok'], { cwd: project.root, env: slowEnv, timeoutMs: ordinaryRunTimeoutMs });
+      assert.equal(job.exitCode, 0, `${job.stderr}\n${job.stdout}`);
+      assert.match(job.stdout, /^script-ok$/m);
+      assert.ok(fs.existsSync(scriptOnRunner), 'the script was put there before the job was staged');
     });
 
     /** What `charness runners ls` of the hub says about the runner (the line only). */

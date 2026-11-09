@@ -68,6 +68,14 @@ export interface RunnerClient {
 export const notConnectedReason = 'the runner is not connected';
 
 /**
+ * @description Did ssh itself give up waiting — its `ConnectTimeout`, a banner that never came, a server that stopped answering its keepalive — as opposed to refusing, or dropping an established connection?
+ * Over a paired runner's link (ssh goes through a unix socket, so there is no TCP connect to time out) that is a machine too loaded to finish its handshake: it is THERE, only slow.
+ */
+export function checkIsSshTimeout(text: string): boolean {
+  return /timed out|timeout, server .* not responding/i.test(text);
+}
+
+/**
  * @description The first useful line of a failed ssh's stderr, for a message (never the whole text: it may quote the destination). A
  * rejected key from a process with no ssh-agent (`SSH_AUTH_SOCK` unset — a tracker agent such as Jira's starts with a minimal environment
  * that has none) says what that means and the way out: a key that is only held by an agent works for a Telegram agent and not for that one.

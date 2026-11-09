@@ -15,7 +15,7 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 import { formatRunnerBlock, parseProbeOutput, type RunnerReport } from '../remoteRun/probe';
-import { RunnerUnreachableError } from '../remoteRun/remoteRunError';
+import { RemoteRunError, RunnerUnreachableError } from '../remoteRun/remoteRunError';
 import type { RunnerClient } from '../remoteRun/runnerClient';
 import { planRunnerWait } from '../remoteRun/runnerWait';
 import { pickRunner, probeRunner, probeRunners, readLastProbe, readProbeFailure } from '../remoteRun/runners';
@@ -110,6 +110,7 @@ describe('probeRunner: busy or offline', () => {
     const [report] = await withinBound(probeRunners([createClient({ runner: handMade, probe: (signal) => hangUntilAborted(signal) })], Date.now(), deadlineMs));
     assert.ok(report.status === 'busy', JSON.stringify(report));
     assert.equal(report.reason, 'no answer within 1 s (its probe did not finish)');
+    assert.equal(report.evidence, 'ssh', 'a hand-made runner has no link: its ssh answered');
     assert.equal(report.lastSeenAtMs, seenAtMs);
     assert.equal(report.lastProbe?.osName, 'macOS');
   });
@@ -127,6 +128,7 @@ describe('probeRunner: busy or offline', () => {
     const [report] = await withinBound(probeRunners([stuck], Date.now(), deadlineMs));
     assert.ok(report.status === 'busy', JSON.stringify(report));
     assert.equal(report.reason, 'no answer within 1 s (its first call, the check of its script, was not answered)');
+    assert.equal(report.evidence, 'link');
     assert.equal(report.lastProbe?.osName, 'macOS');
   });
 
@@ -147,6 +149,46 @@ describe('probeRunner: busy or offline', () => {
     const dropped = createClient({ runner: handMade, probe: async () => ({ exitCode: 255, stdout: '', stderr: 'Connection to mac.example closed by remote host.\n', isTimedOut: false }) });
     const droppedReport = await probeRunner(dropped, Date.now(), undefined, 60_000);
     assert.ok(droppedReport.status === 'offline', 'a connection that dropped (a Mac that fell asleep) is the runner gone, not busy');
+  });
+
+  it('a paired runner whose link is up and whose ssh gives up on its own BEFORE the deadline (its 15 s connect/banner timeout is shorter than the 20 s one: on a loaded Mac the link\'s Node is slow to finish a handshake) is busy, not offline', async () => {
+    await putLinkUp();
+    storeSnapshot('mac');
+    for (const reason of ['ssh: Connection timed out during banner exchange', 'ssh: Operation timed out']) {
+      const slow = createClient({ runner: createPaired(), ensureScript: async () => { throw new RunnerUnreachableError('mac', reason); } });
+      const report = await probeRunner(slow, Date.now(), undefined, 60_000);
+      assert.ok(report.status === 'busy' && report.evidence === 'link' && report.lastProbe !== null, `${reason}: ${JSON.stringify(report)}`);
+    }
+    // The second call: the script was found, then the probe's own ssh timed out in its handshake.
+    const slowProbe = createClient({ runner: createPaired(), probe: async () => ({ exitCode: 255, stdout: '', stderr: 'Connection timed out during banner exchange\n', isTimedOut: false }) });
+    const slowProbeReport = await probeRunner(slowProbe, Date.now(), undefined, 60_000);
+    assert.ok(slowProbeReport.status === 'busy' && slowProbeReport.reason.endsWith('(its probe did not finish)'), JSON.stringify(slowProbeReport));
+  });
+
+  it('what ssh says when it is NOT a timeout stays offline even with the link up — refused, closed, reset, a host key — and so does a timeout of a hand-made runner whose script check did not answer (nothing says it is there)', async () => {
+    await putLinkUp();
+    for (const reason of ['ssh: Connection closed by remote host', 'ssh: Connection reset by peer', 'ssh: the host key is not trusted yet — connect once by hand (ssh to this runner) so it is known']) {
+      const dropped = createClient({ runner: createPaired(), ensureScript: async () => { throw new RunnerUnreachableError('mac', reason); } });
+      assert.equal((await probeRunner(dropped, Date.now(), undefined, 60_000)).status, 'offline', reason);
+    }
+    const handMadeTimeout = createClient({ runner: handMade, ensureScript: async () => { throw new RunnerUnreachableError('mac', 'ssh: connect to host mac.example port 22: Connection timed out'); } });
+    assert.equal((await probeRunner(handMadeTimeout, Date.now(), undefined, 60_000)).status, 'offline', 'a TCP connect that timed out proves nothing');
+  });
+
+  it('the script of the runner was missing and its UPLOAD was cut off by the deadline (every first probe after an update uploads the new script): busy — ssh answered the check — not «offline» with the upload\'s own reason; without the deadline it is the upload\'s failure', async () => {
+    storeSnapshot('mac');
+    const cutOff = createClient({
+      runner: handMade,
+      ensureScript: async (signal) => {
+        await hangUntilAborted(signal);
+        throw new RemoteRunError('could not put the runner script on "mac" (/w/bin) — ssh: the command ran past its deadline');
+      },
+    });
+    const [report] = await withinBound(probeRunners([cutOff], Date.now(), deadlineMs));
+    assert.ok(report.status === 'busy' && report.reason === 'no answer within 1 s (the upload of its script did not finish)' && report.evidence === 'ssh' && report.lastProbe !== null, JSON.stringify(report));
+    const refused = createClient({ runner: handMade, ensureScript: async () => { throw new RemoteRunError('could not put the runner script on "mac" (/w/bin) — Permission denied'); } });
+    const refusedReport = await probeRunner(refused, Date.now(), undefined, 60_000);
+    assert.ok(refusedReport.status === 'offline' && refusedReport.reason.includes('Permission denied'), 'an upload that failed by itself is the runner broken, as before');
   });
 
   it('only the DEADLINE makes a runner busy: a stop from the user (Ctrl-C) ends the calls in flight and the report stays offline — an interrupted view has no use for «busy»', async () => {
@@ -182,6 +224,7 @@ describe('the block `runners` prints for a busy runner', () => {
   const busy = (lastProbe: string | null, overrides: Partial<Extract<RunnerReport, { status: 'busy' }>> = {}): RunnerReport => ({
     name: 'mac',
     status: 'busy',
+    evidence: 'link',
     reason: 'no answer within 20 s (its probe did not finish)',
     lastSeenAtMs: lastProbe === null ? null : seenAtMs,
     lastProbe: lastProbe === null ? null : parseProbeOutput(lastProbe),
@@ -199,6 +242,13 @@ describe('the block `runners` prints for a busy runner', () => {
     assert.match(details.join('\n'), /can: ios \(Xcode 27\.2, 16 simulators\)/);
   });
 
+  it('says what makes it busy: a paired runner «is linked», a hand-made one — it has no link — «its ssh answered»', () => {
+    assert.match(formatRunnerBlock(busy(macProbeText)).split('\n')[0], /; it is linked, so it is not offline · /);
+    const handMadeHeading = formatRunnerBlock(busy(macProbeText, { evidence: 'ssh' })).split('\n')[0];
+    assert.match(handMadeHeading, /; its ssh answered, so it is not offline · /);
+    assert.doesNotMatch(handMadeHeading, /linked/);
+  });
+
   it('never probed: the heading alone, saying so; the pause tags stay', () => {
     assert.equal(formatRunnerBlock(busy(null)), 'mac — online, busy · no answer within 20 s (its probe did not finish); it is linked, so it is not offline · never probed');
     assert.match(formatRunnerBlock(busy(macProbeText, { isPausedByHub: true })), /^mac — online, busy · paused from the hub · /);
@@ -210,6 +260,7 @@ describe('pickRunner and the wait: a busy runner is there', () => {
   const busy = (name: string, lastProbe: string | null, overrides: Partial<Extract<RunnerReport, { status: 'busy' }>> = {}): RunnerReport => ({
     name,
     status: 'busy',
+    evidence: 'link',
     reason: 'no answer within 20 s (its probe did not finish)',
     lastSeenAtMs: seenAtMs,
     lastProbe: lastProbe === null ? null : parseProbeOutput(lastProbe),
