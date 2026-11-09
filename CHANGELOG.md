@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**A runner that is busy under a job no longer reads «offline (no answer within 20 s)» — and the next submit no longer waits for it or refuses it.**
+Before, a Mac with its iOS Simulators booting (load 129 on 10 cores) whose probe did not finish in 20 s was shown `offline`, although its link was up and a job was running on it; a new `--needs` job then waited for it as for a machine that was gone, or was refused. Measured: the probe waited, before answering, for the scheduling safety net — which waits up to 30 s for a project's scheduling mutex and asks Pueue with no limit — and a probe taken while a job was being queued behind a slow Pueue took 25.8 s against 0.4 s without it.
+Now:
+  - **The probe's answer no longer waits for housekeeping:** the scheduling safety net runs detached, one at a time (`settle-queue`), so the probe is a handful of file reads and questions each bounded at 4 s.
+  - **A runner that is there but did not finish in time is «online, busy», never «offline»:** a paired runner whose link is up, or any runner whose ssh answered, shows `online, busy · no answer within 20 s (…); it is linked, so it is not offline` with the details of its last probe marked as old — in `charness remote-run runners` and in the bot's `/runners` (every language). It is picked from that snapshot (Pueue there, not paused, the capability) and never waited for; a hand-made runner that does not answer ssh at all, a link that is down and a dropped connection stay offline. Jobs already running were never cut by the reading.
 **A Mac runner no longer falls asleep — and stays offline for hours — when its link restarts for an update.**
 Before, the sleep assertion that keeps a Mac awake was tied to the link's process, so every restart of the link (every update of the host's package) left the Mac with no assertion for a moment; a Mac nobody was using went to sleep five seconds later, and since no assertion wakes a sleeping Mac, the runner showed «offline» until someone pressed a key (measured: four times since 11-05 on one Mac, up to hours each).
 Now:

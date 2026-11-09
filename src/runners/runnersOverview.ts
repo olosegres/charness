@@ -1,5 +1,6 @@
 import { buildPairedRunnerConfig, PairedRunnerSetupError } from '../remoteRun/pairedRunners';
-import { probeAllTimeoutMs, probeRunners, readLastProbe, readProbeFailure, writeProbeFailure } from '../remoteRun/runners';
+import { probeAllTimeoutMs } from '../remoteRun/probeTiming';
+import { probeRunners, readLastProbe, readProbeFailure, writeProbeFailure } from '../remoteRun/runners';
 import { createRunnerClient } from '../remoteRun/runnerClient';
 import { ensureRemoteRunCacheDir } from '../remoteRun/ssh';
 import type { RunnerReport } from '../remoteRun/probe';
@@ -73,6 +74,8 @@ function applyReport(entry: RunnerScreenEntry, report: RunnerReport | undefined)
   if (report.status === 'online') return { ...entry, probe: report.probe };
   // Linked, but its Mac's lid is shut: it was not asked, so what is shown is the snapshot the entry already holds (a fresh one would pass for an answer).
   if (report.status === 'lid-closed') return { ...entry, isLidClosed: true, probe: entry.probe ?? report.lastProbe };
+  // Its link is up and its ssh answered, but its probe did not finish in time: it is BUSY, not gone — still online, shown as it was last probed (a job in flight must never read as «offline»).
+  if (report.status === 'busy') return { ...entry, isBusy: true };
   // It answered the socket probe but not the ssh one: it is shown as it was, offline.
   return { ...entry, isOnline: false, lastSeenMs: report.lastSeenAtMs ?? entry.lastSeenMs, probe: report.lastProbe ?? entry.probe };
 }
@@ -125,8 +128,8 @@ export async function refreshStaleSnapshots(ctx: HubContext, overview: RunnersOv
       if (answer === undefined) return entry;
       // An answer is a machine that is online AND handed back a report of its own: the probe returns an entry as it was when it could not
       // ask it (an ssh that cannot be started safely), and that is no answer either.
-      const isAnswered = answer.isOnline && answer.probe !== entry.probe;
-      if (!answer.isOnline) rememberSilence(cacheDir, entry, nowMs);
+      const isAnswered = answer.isOnline && answer.isBusy !== true && answer.probe !== entry.probe;
+      if (!answer.isOnline || answer.isBusy === true) rememberSilence(cacheDir, entry, nowMs);
       return { ...entry, probe: answer.probe, isSnapshotStale: false, isReportDoubtful: !isAnswered };
     }),
   };

@@ -311,10 +311,13 @@ export const lidClosedNote = 'takes no new jobs until its lid is opened (a job a
 
 /**
  * @name RunnerReport @description What `runners` knows of one runner after probing: live; or — its link is up, but the Mac's lid is closed (`lid-closed`: the runner
- * is asked nothing, it may be falling asleep) — or offline: the last snapshot, with why. A `lid-closed` or `offline` runner takes no new job.
+ * is asked nothing, it may be falling asleep) — or `busy` (it is THERE — its link is up, or its ssh answered — but its probe did not finish in time: a Mac with load 129 under a job; the last snapshot,
+ * with why) — or offline: the last snapshot, with why. A `lid-closed` or `offline` runner takes no new job; a `busy` one takes one as its last snapshot allows (a job in flight must never make the host think
+ * the runner is gone).
  */
 export type RunnerReport =
   | { name: string; status: 'online'; probe: RunnerProbe; groupLimits: Record<string, number>; isPausedByHub: boolean }
+  | { name: string; status: 'busy'; reason: string; lastSeenAtMs: number | null; lastProbe: RunnerProbe | null; groupLimits: Record<string, number>; isPausedByHub: boolean }
   | { name: string; status: 'lid-closed'; lastSeenAtMs: number | null; lastProbe: RunnerProbe | null; groupLimits: Record<string, number>; isPausedByHub: boolean }
   | { name: string; status: 'offline'; reason: string; lastSeenAtMs: number | null; lastProbe: RunnerProbe | null; groupLimits: Record<string, number>; isPausedByHub: boolean };
 
@@ -346,6 +349,13 @@ export function formatRunnerBlock(report: RunnerReport): string {
     const heading = `${report.name} — lid closed${pauseTags} · ${lidClosedNote}`;
     if (report.lastProbe === null) return heading;
     return [`${heading} — as last probed: ${formatSystem(report.lastProbe)}`, ...formatRunnerDetails(report.lastProbe, report.groupLimits)].join('\n');
+  }
+  if (report.status === 'busy') {
+    // The runner is there: «offline» would make a job's next submit wait for, or refuse, a machine that is merely busy.
+    const heading = `${report.name} — online, busy${pauseTags} · ${report.reason}; it is linked, so it is not offline`;
+    if (report.lastProbe === null) return `${heading} · never probed`;
+    const probedAt = report.lastSeenAtMs === null ? '' : ` ${formatLastSeen(report.lastSeenAtMs)}`;
+    return [`${heading} · details as last probed${probedAt}: ${formatSystem(report.lastProbe)}`, ...formatRunnerDetails(report.lastProbe, report.groupLimits)].join('\n');
   }
   const lastSeen = report.lastSeenAtMs === null ? 'never seen' : `last seen ${formatLastSeen(report.lastSeenAtMs)}`;
   if (report.lastProbe === null) return `${report.name} — offline (${report.reason})${pauseTags} · ${lastSeen}`;

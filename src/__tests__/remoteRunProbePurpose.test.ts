@@ -64,6 +64,7 @@ function createContext(): CommandContext {
     now: () => Date.now(),
     loadRunners: () => runnerConfig,
     runnerPollMs: 10_000,
+    probeDeadlineMs: 20_000,
     sleep: async () => undefined,
     watchInterrupts: () => () => undefined,
   };

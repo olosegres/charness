@@ -9,6 +9,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readRemoteRunLeaseMs, remoteRunLeaseMinMs, remoteRunLeaseMs } from '../remoteRun/leaseTiming';
+import { probeAllTimeoutMs, probeDeadlineMinMs, readProbeDeadlineMs } from '../remoteRun/probeTiming';
 import { readRunnerWaitPollMs, runnerWaitPollMinMs, runnerWaitPollMs } from '../remoteRun/runnerWaitTiming';
 import { lidPollMinMs, lidPollMs, readLidPollMs } from '../runnerUtility/lidPollTiming';
 import { nodeUpkeepIntervalMs, nodeUpkeepMinMs, readNodeUpkeepIntervalMs } from '../runnerUtility/nodeUpkeepTiming';
@@ -45,6 +46,7 @@ describe('the readers built on it', () => {
   const readers: Array<{ key: string; read: (env: NodeJS.ProcessEnv) => number; productionMs: number; minMs: number }> = [
     { key: 'remoteRunLeaseMs', read: readRemoteRunLeaseMs, productionMs: remoteRunLeaseMs, minMs: remoteRunLeaseMinMs },
     { key: 'remoteRunRunnerPollMs', read: readRunnerWaitPollMs, productionMs: runnerWaitPollMs, minMs: runnerWaitPollMinMs },
+    { key: 'remoteRunProbeDeadlineMs', read: readProbeDeadlineMs, productionMs: probeAllTimeoutMs, minMs: probeDeadlineMinMs },
     { key: 'pairingLifetimeMs', read: readPairingLifetimeMs, productionMs: pairingLifetimeMs, minMs: pairingLifetimeMinMs },
     { key: 'runnerVersionPollMs', read: readRunnerVersionPollMs, productionMs: runnerVersionPollMs, minMs: runnerVersionPollMinMs },
     { key: 'runnerLidPollMs', read: readLidPollMs, productionMs: lidPollMs, minMs: lidPollMinMs },

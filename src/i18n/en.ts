@@ -1231,6 +1231,7 @@ export const enDict: Record<string, string> = {
   'runners.removeButton': '{name}: Remove',
   'runners.statusOnline': 'online',
   'runners.statusLidClosed': 'lid closed — takes no new jobs',
+  'runners.statusBusy': 'online, busy — did not answer the probe in time',
   'runners.statusOffline': 'offline since {time}',
   'runners.statusNeverSeen': 'offline, never connected',
   'runners.pausedMark': 'paused',

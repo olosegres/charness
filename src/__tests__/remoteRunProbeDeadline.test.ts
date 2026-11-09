@@ -1,6 +1,6 @@
 /**
  * @description The deadline of the `runners` view (`remoteRun/runners.ts probeRunners`, `ssh.ts runSshCommand`): all runners are probed at
- * once under ONE deadline; a runner that has not answered by then is reported offline WITH the snapshot taken when it was last seen (it
+ * once under ONE deadline; a runner that has not answered by then is reported offline (nothing says it is there) or busy (its ssh answered, its probe did not finish) WITH the snapshot taken when it was last seen (it
  * once came out as «never seen»), the ssh calls still in flight are killed (they once lived on for their own 60 s, keeping the CLI alive
  * after it had printed), the others are not held back, and a runner that fails by itself before the deadline keeps its own reason.
  * The abort is proven on a real `ssh` process whose connection never completes.
@@ -95,16 +95,16 @@ describe('probeRunners under one deadline', () => {
     assert.equal(healthyReport.status, 'online');
   });
 
-  it('a runner that hangs in the probe itself (its script answered) gets the same: offline at the deadline with its snapshot', async () => {
+  it('a runner that hangs in the probe itself (its script answered, so it is THERE) is busy at the deadline, with its snapshot — not offline (`remoteRunBusyRunner.test.ts` has the rest of it)', async () => {
     storeSnapshot('slow');
     const slow = createFakeClient({ name: 'slow', probe: (signal) => hangUntilAborted(signal) });
     const [report] = await withinBound(probeRunners([slow], Date.now(), deadlineMs));
-    assert.ok(report.status === 'offline' && report.reason === 'no answer within 1 s' && report.lastSeenAtMs === lastSeenAtMs && report.lastProbe !== null, JSON.stringify(report));
+    assert.ok(report.status === 'busy' && report.reason === 'no answer within 1 s (its probe did not finish)' && report.lastSeenAtMs === lastSeenAtMs && report.lastProbe !== null, JSON.stringify(report));
   });
 
-  it('a runner never seen before is "never seen", not an invented snapshot', async () => {
+  it('a runner never seen before is busy with no snapshot — not an invented one', async () => {
     const [report] = await withinBound(probeRunners([createFakeClient({ name: 'new', probe: (signal) => hangUntilAborted(signal) })], Date.now(), deadlineMs));
-    assert.ok(report.status === 'offline' && report.lastSeenAtMs === null && report.lastProbe === null);
+    assert.ok(report.status === 'busy' && report.lastSeenAtMs === null && report.lastProbe === null);
   });
 
   it('a runner that fails by itself before the deadline keeps its own reason and its snapshot — the deadline did not fire', async () => {

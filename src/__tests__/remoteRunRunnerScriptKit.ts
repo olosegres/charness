@@ -43,12 +43,12 @@ export function stopRunnerStandIns(): void {
   for (const child of runnerStandIns.splice(0)) child.kill('SIGKILL');
 }
 
-const detachedRunPidPattern = /^(measure-copies|sweep-tmpdirs|prune|simctl-cleanup)\.pid$/;
+const detachedRunPidPattern = /^(measure-copies|sweep-tmpdirs|prune|simctl-cleanup|settle-queue)\.pid$/;
 const detachedRunSearchDepth = 5;
 const detachedRunGraceMs = 15_000;
 const detachedRunPollMs = 25;
 
-/** Where the detached runs the script starts (`start_detached_run`: measure-copies, sweep-tmpdirs, prune, simctl-cleanup) keep their pid: `<work>/tmp/<name>.pid`, wherever a test put its work dir under `root`. */
+/** Where the detached runs the script starts (`start_detached_run`: measure-copies, sweep-tmpdirs, prune, simctl-cleanup, settle-queue) keep their pid: `<work>/tmp/<name>.pid`, wherever a test put its work dir under `root`. */
 function findDetachedRunPidFiles(root: string, depth = 0): string[] {
   if (depth > detachedRunSearchDepth) return [];
   let entries: fs.Dirent[];
@@ -77,7 +77,7 @@ function sleepSync(milliseconds: number): void {
 /** Is `pid` a detached run of the script — alive AND its command line the script's own (a pid file outlives its process, and the number may be someone else's by now: that one is never waited for or killed)? */
 function checkIsDetachedRun(pid: number): boolean {
   const command = spawnSync('ps', ['-ww', '-p', `${pid}`, '-o', 'command='], { encoding: 'utf8' }).stdout;
-  return /runner(?:-[0-9a-f]{8})?\.sh\s+(?:measure-copies|sweep-tmpdirs|prune|simctl-cleanup)\b/.test(command);
+  return /runner(?:-[0-9a-f]{8})?\.sh\s+(?:measure-copies|sweep-tmpdirs|prune|simctl-cleanup|settle-queue)\b/.test(command);
 }
 
 /**

@@ -33,7 +33,8 @@ export function planRunnerWait(config: RunnersConfig, reports: readonly RunnerRe
   const needs = wanted.needs;
   if (needs === null || wanted.runner !== null) return null;
   const candidates = reports.filter((report): report is Extract<RunnerReport, { status: 'offline' | 'lid-closed' }> => {
-    if (report.status === 'online' || report.lastProbe === null) return false;
+    // A busy runner is there, not away: nothing to wait for (it is picked from its last snapshot, or the pick says why not).
+    if (report.status === 'online' || report.status === 'busy' || report.lastProbe === null) return false;
     const isPaired = config.runners.some((runner) => runner.name === report.name && runner.paired !== undefined);
     return isPaired && !checkIsRunnerPaused(report) && report.lastProbe.pueueVersion !== null && checkHasCapability(report.lastProbe, needs);
   });

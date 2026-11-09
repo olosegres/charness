@@ -30,6 +30,7 @@ import { todoReminderDefaultMinutes } from '../todos/nag';
 import { todoReminderPollMs } from '../todos/reminderEngine';
 import { claudeApiCreditRecheckIntervalMs, claudeApiCreditRecheckPollMs } from '../utils/claudeApiCreditRecheck';
 import { remoteRunLeaseMinMs, remoteRunLeaseMs } from '../remoteRun/leaseTiming';
+import { probeAllTimeoutMs, probeDeadlineMinMs } from '../remoteRun/probeTiming';
 import { lidPollMs } from '../runnerUtility/lidPollTiming';
 import { nodeUpkeepIntervalMs } from '../runnerUtility/nodeUpkeepTiming';
 import { runnerVersionPollMs } from '../runnerUtility/versionPollTiming';
@@ -59,6 +60,7 @@ const productionWindowsMs: Array<[keyof TestTimings, number]> = [
   ['runnerNodeUpkeepMs', nodeUpkeepIntervalMs],
   ['pairingLifetimeMs', pairingLifetimeMs],
   ['remoteRunRunnerPollMs', runnerWaitPollMs],
+  ['remoteRunProbeDeadlineMs', probeAllTimeoutMs],
   ['bindPickerClaimLimit', bindPickerClaimLimit],
   ['tscWatchCheckIntervalMs', tscWatchCheckIntervalMs],
   ['tscWatchStaleGraceMs', tscWatchStaleGraceMs],
@@ -73,7 +75,7 @@ const supervisorTimingKeys = ['tscWatchCheckIntervalMs', 'tscWatchStaleGraceMs']
  * cannot import this module's graph). That they read them is proven by `remoteRunLease.test.ts` and `remoteRunRunnerWait.test.ts`, and by the
  * flows, whose lease expiry and wait poll are their test windows.
  */
-const cliTimingKeys = ['remoteRunLeaseMs', 'runnerVersionPollMs', 'runnerLidPollMs', 'runnerNodeUpkeepMs', 'pairingLifetimeMs', 'remoteRunRunnerPollMs'];
+const cliTimingKeys = ['remoteRunLeaseMs', 'runnerVersionPollMs', 'runnerLidPollMs', 'runnerNodeUpkeepMs', 'pairingLifetimeMs', 'remoteRunRunnerPollMs', 'remoteRunProbeDeadlineMs'];
 /** One past the longest delay Node's timers keep: a longer one fires after 1 ms. */
 const beyondTimerMaxMs = 2_147_483_648;
 
@@ -132,6 +134,12 @@ describe('the remote-run lease window has a floor as well as a ceiling', () => {
 });
 
 describe('the remote-run runner wait poll has a floor as well as a ceiling', () => {
+  it(`remoteRunProbeDeadlineMs: ${probeDeadlineMinMs} ms is accepted, one ms less is refused naming the key — a shorter deadline would report a healthy runner as busy for the time its ssh handshake takes`, () => {
+    assert.deepEqual(parseTestTimings(JSON.stringify({ remoteRunProbeDeadlineMs: probeDeadlineMinMs })), { ok: true, timings: { remoteRunProbeDeadlineMs: probeDeadlineMinMs } });
+    const parsed = parseTestTimings(JSON.stringify({ remoteRunProbeDeadlineMs: probeDeadlineMinMs - 1 }));
+    assert.ok(!parsed.ok && parsed.errors.every((error) => error.startsWith(`${testTimingsEnvName} remoteRunProbeDeadlineMs:`)), JSON.stringify(parsed));
+  });
+
   it(`remoteRunRunnerPollMs: ${runnerWaitPollMinMs} ms is accepted, one ms less is refused naming the key — a tighter poll would probe every runner in a loop`, () => {
     assert.deepEqual(parseTestTimings(JSON.stringify({ remoteRunRunnerPollMs: runnerWaitPollMinMs })), { ok: true, timings: { remoteRunRunnerPollMs: runnerWaitPollMinMs } });
     const parsed = parseTestTimings(JSON.stringify({ remoteRunRunnerPollMs: runnerWaitPollMinMs - 1 }));

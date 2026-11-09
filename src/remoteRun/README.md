@@ -51,6 +51,12 @@ config are found from the reported work dir with the layout `runnerUtility/runne
 
 - **Online** = the link's unix socket accepts a connection (`runners/linkControl.ts`), asked before any ssh call; offline says «the runner is not
   connected» and its last seen is the link's own heartbeat (the last probe's time only when there is none).
+- **A runner that is THERE but did not finish its probe is `busy`, not offline** (`busy` report, `probeRunner`): a paired runner whose link is up (`RunnerReachability.offline.isLinkUp`: the gate's ssh keepalive was answered within about a
+  minute) that got no answer to the check of its script before the view's deadline, or any runner whose ssh answered that check and whose `probe` ran out of time, is shown `online, busy` with its last snapshot (marked as old,
+  `reason` names the stage); a hand-made runner that does not answer ssh at all, a link that is down and a call that fails by itself before the deadline stay `offline`. Only the SHARED deadline makes a runner busy
+  (`ProbeOptions.hasDeadlinePassed`, set by `probeRunners`): the user's own stop ends the calls the same way (`isTimedOut`) and must not. `pickRunner` judges a busy runner by its snapshot (`getProbeForPick`: Pueue, paused, the
+  capability), one never probed is not picked («busy and never probed, so not used») unless it is named and nothing is asked of it, and `planRunnerWait` never waits for it. The deadline is `probeTiming.ts` (`probeAllTimeoutMs`
+  20 s; the test seam `remoteRunProbeDeadlineMs` may shorten it). The bot's `/runners` keeps it online (`applyReport` → `isBusy`).
 - **A Mac whose lid is closed is never picked either** (`lid-closed` report, `probe.ts`): the runner told the hub (the `lid` request, `runners/linkControl.ts`) that its lid is
   shut with nothing keeping it awake, so `probeRunner` returns it without a probe — snapshot only — and `pickRunner` skips it like an offline one (a named one is refused with «has its
   lid closed», the message of a pick that finds nobody names it: «(lid closed, so not used: mac)»), `planRunnerWait` waits for it like for an offline paired runner
@@ -141,7 +147,8 @@ group is over (124) the moment it starts, its command never runs.
 **`.git` only with `--with-git`.** The stage carries a `.git` only then; applying a stage that has none removes the `.git` an earlier
 `--with-git` run left in the copy.
 
-**Probe.** `runners` gives the whole probe 20 s. Its slow questions (Pueue, the disk, Xcode, the simulators, Docker) are asked at once, each
+**Probe.** `runners` gives the whole probe 20 s (`probeTiming.ts`). Its answer path is bounded all through: the scheduling safety net (`enqueue_idle_stashed`) is NOT part of it — it waits for `sched.lock` up to `sched_lock_wait_sec` and asks Pueue with
+no limit, which made a probe taken while a job was being queued behind a slow Pueue take 25.8 s (0.4 s without the job) — so the probe starts it detached (`start_detached_run … settle-queue`, one at a time, nice 19) and counts the starting job as queued from the job folders. Its slow questions (Pueue, the disk, Xcode, the simulators, Docker) are asked at once, each
 bounded by 4 s, so a hung one costs 4 s in all; an Xcode that does not answer is «did not answer in time», not «not found», and a slow
 simctl keeps the Xcode version without inventing a simulator count. The same simctl answer gives `sim_older_runtimes=iOS 26.4:11,…` (`list_older_simulator_runtimes`, awk over `simctl list devices available`: a runtime
 that has a newer one of the same platform AND major, with its device count — information for `runners` and `/runners`, nothing is removed). On a Mac the probe of a VIEW of the runners (`probe <work> prune`, the same

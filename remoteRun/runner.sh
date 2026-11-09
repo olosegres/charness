@@ -42,6 +42,7 @@
 #   measure-copies  write down how big each project copy is (p/<slug>/size-kb); the probe of a view of the runners starts it detached, and `prepare` when the disk is short; it is never called by hand
 #   ios-device   `ios-device <work> <slug>`: a job's own Simulator device (create or reuse `charness-<slug>`, boot it); run BY the job as a step, never called by hand
 #   ios-device-shutdown  `ios-device-shutdown <work> <slug> <udid>`: shut that device down (the step at the end of a job); never called by hand
+#   settle-queue  `settle-queue <work>`: the scheduling safety net (`enqueue_idle_stashed`: end the jobs Pueue lost, enqueue a stashed job whose predecessor died); started detached by every `probe`, so that the probe's answer never waits for a scheduling lock or for Pueue; never called by hand
 #   sweep-tmpdirs  the sweep of idle project copies: remove the files of their TMPDIRs (`<work>/t/<n>`) that were not modified for tmpdir_keep_days, and the Xcode build data (`ios/build`) of the copies nobody used for build_data_keep_hours; `prepare` starts it detached at most every tmpdir_sweep_interval_hours; never called by hand
 #   sync-tree    the apply step alone (tests)
 
@@ -839,7 +840,10 @@ cmd_probe() {
   # never does: that prune has no copy to keep, and the project about to be used is typically the least recently used one — the very one it would take before the job's own `prepare` arrives.
   probe_may_prune=${2:-}
   mkdir -p "$work" 2> /dev/null
-  enqueue_idle_stashed "$work"
+  # The scheduling safety net is NOT part of the answer: it waits for the project's scheduling mutex (up to sched_lock_wait_sec) and asks Pueue (no limit of its own), and a probe that did both while a job was
+  # being queued — on a Mac with load 129 — outlived the caller's 20 s and read as «offline» (measured: a starting job and a Pueue that takes 25 s to answer made the probe take 25.8 s, 0.4 s without the job).
+  # It runs detached, one at a time (see `start_detached_run`).
+  start_detached_run "$work" settle-queue
   read_runner_state
   echo "os=$(uname -s)"
   echo "arch=$(uname -m)"
@@ -1481,6 +1485,11 @@ start_detached_run() {
   ( nice -n 19 bash "$(get_script_path)" "$subcommand" "$work_dir" > /dev/null 2>&1 < /dev/null & echo "$!" > "$pid_file" )
 }
 
+# The scheduling safety net, run detached by a probe (`start_detached_run`): see `enqueue_idle_stashed`.
+cmd_settle_queue() {
+  enqueue_idle_stashed "$1"
+}
+
 # Write down the size of every project copy whose figure is missing, or was written before the copy was last used (`du` of a copy of tens of GB takes long: this runs detached).
 cmd_measure_copies() {
   local work_dir=$1 copy_dir copy_slug
@@ -1918,7 +1927,7 @@ enqueue_idle_stashed_of_project() {
 
 # The safety net of the scheduling: every project copy of work dir $1 that has a stashed job, or a job waiting for a Pueue task (no process, no result: queued, or lost), gets `enqueue_idle_stashed_of_project` - a job that was
 # SIGKILLed never ran its `finish_job`, so its successor would wait for ever; a job whose task Pueue lost (a reset) would be under way for ever, in `ls`, in the queued count, and in the way of the copy's removal.
-# Run by `prepare` and by `probe` (both are asked often); costs a look at the job folders when nothing waits.
+# Run by `prepare` (inline: a job is starting) and by `probe` (detached, `settle-queue`: the answer never waits for it); both are asked often; costs a look at the job folders when nothing waits.
 enqueue_idle_stashed() {
   local job_dir project_dir seen=" "
   for job_dir in "$1"/p/*/jobs/*/; do
@@ -3707,6 +3716,7 @@ main() {
     jobs) cmd_jobs "$@" ;;
     prune) cmd_prune "$@" ;;
     measure-copies) cmd_measure_copies "$@" ;;
+    settle-queue) cmd_settle_queue "$@" ;;
     sweep-tmpdirs) cmd_sweep_tmpdirs "$@" ;;
     clean) cmd_clean "$@" ;;
     simctl-cleanup) cmd_simctl_cleanup "$@" ;;

@@ -465,8 +465,8 @@ and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn 
   copy's jobs go with it, so `fetch` what you need first. A removal that ran past its time (a very big copy) or was cut off is finished by the next `clean` of the same name. A runner that cannot be reached — offline, its Mac's lid shut, or
   a connection lost while it removed — is said so and does not fail the command: its copy stays (or is finished by the runner as far as it can) until you clean again; a copy that is not there is «nothing to clean». A command that is simply called
   `clean` goes after `--`.
-- **`runners`**: one short block per runner, all probed at once (at most 20 s; a runner that does not answer in time is shown offline
-  with its last snapshot):
+- **`runners`**: one short block per runner, all probed at once (at most 20 s; a runner that does not answer in time is shown with its last snapshot: **busy** when it is THERE, **offline**
+  when nothing says it is — see below):
 
   ```
   box1 — online · Ubuntu 24.04 (Linux 6.8, x86_64)
@@ -477,7 +477,14 @@ and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn 
     …
   ```
 
-  A paired runner (it has only the `default` group) reads `jobs at once: N` where this example reads `groups: …`. An offline runner shows its last snapshot. `--needs android|ios|docker|playwright` picks the first runner (in file order) that
+  A paired runner (it has only the `default` group) reads `jobs at once: N` where this example reads `groups: …`. An offline runner shows its last snapshot.
+  **A runner that is busy is not offline:** a paired runner whose link is up (the host's ssh keepalive was answered within the last minute), or any runner whose ssh answered the check of its script, that does not finish its probe in
+  20 s reads `mac — online, busy · no answer within 20 s (its probe did not finish); it is linked, so it is not offline · details as last probed 2026-11-09 07:00 UTC: …`, with the details of the last probe (marked as old),
+  and the bot's `/runners` says «online, busy — did not answer the probe in time». It is picked as that snapshot allows (Pueue there, not paused, the capability for `--needs`) and never waited for, so a job in flight — or a Mac
+  whose iOS Simulators are booting at load 129 — never makes the next submit wait for, or refuse, a machine that is merely busy; one never probed is not picked (nothing to judge it by) but is still not called offline.
+  Jobs already running are reached by their own id and were never cut by an offline reading. A hand-made runner that does not answer ssh at all, a link that is down and a connection that drops stay **offline**.
+  The probe itself no longer waits for what it has no need to: the scheduling safety net it used to run first (it waits up to 30 s for a project's scheduling mutex and asks Pueue with no limit of its own, and was measured at
+  25.8 s against 0.4 s when a job was being queued behind a slow Pueue) runs detached, one at a time (`settle-queue`), so the answer is a handful of file reads and questions each bounded at 4 s. `--needs android|ios|docker|playwright` picks the first runner (in file order) that
   answers and has that capability; `--runner <name>` picks one. None fits → exit 125 with this view and why.
 
 - **Paired runners** ([attached](#pair-a-runner) with `/runners` or `charness runners pair`, no `runners.json` entry) are listed after the hand-made ones. A paused

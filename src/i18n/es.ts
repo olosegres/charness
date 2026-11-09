@@ -1187,6 +1187,7 @@ export const esDict: Record<string, string> = {
   'runners.removeButton': '{name}: Quitar',
   'runners.statusOnline': 'en línea',
   'runners.statusLidClosed': 'tapa del portátil cerrada — no acepta trabajos nuevos',
+  'runners.statusBusy': 'en línea, ocupado — no respondió a la comprobación a tiempo',
   'runners.statusOffline': 'sin conexión desde {time}',
   'runners.statusNeverSeen': 'sin conexión, nunca se ha conectado',
   'runners.pausedMark': 'en pausa',

@@ -1193,6 +1193,7 @@ export const ukDict: Record<string, string> = {
   'runners.removeButton': '{name}: Видалити',
   'runners.statusOnline': 'на зв’язку',
   'runners.statusLidClosed': 'кришку ноутбука закрито — нових завдань не бере',
+  'runners.statusBusy': 'на зв’язку, зайнятий — не відповів на перевірку вчасно',
   'runners.statusOffline': 'не на зв’язку з {time}',
   'runners.statusNeverSeen': 'не на зв’язку, жодного разу не підключався',
   'runners.pausedMark': 'на паузі',

@@ -367,6 +367,35 @@ describe('runnersScreenPlan: the list', () => {
     }
   });
 
+  it('a BUSY machine (its link is up, its probe did not finish in time) says «online, busy» — never «offline» — and shows its last snapshot as an old one: no jobs, no capabilities, no load, and no «asleep» note', () => {
+    const entry = createEntry({ isBusy: true, probe: parseProbeOutput(`${probeText}\nawake=caffeinate`) });
+    const { text } = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime);
+    assert.ok(text.includes('mac — online, busy — did not answer the probe in time · macOS 15.1 (arm64) · always on (system service)\n'), text);
+    assert.ok(text.includes('  as it was then: Apple M2 Pro, 12 cores · RAM 32 GB · disk 210 GB free'), text);
+    assert.ok(!text.includes('jobs:') && !text.includes('can:') && !text.includes('load') && !text.includes('offline') && !text.includes('nothing can wake it'), text);
+  });
+
+  it('a busy machine keeps its buttons, and the entry that is not busy says «online» as before', () => {
+    const screen = buildRunnersScreen({ revision, entries: [createEntry({ isBusy: true })], openPairingExpiries: [], isChecking: false }, t, formatTime);
+    assert.deepEqual(screen.rows[1].map((button) => button.text), ['mac: Pause', 'mac: Remove']);
+    assert.ok(buildRunnersScreen({ revision, entries: [createEntry({ isBusy: false })], openPairingExpiries: [], isChecking: false }, t, formatTime).text.includes('mac — online · '));
+  });
+
+  it('in every language the busy status is its own words — not the English ones, not the plain online word', () => {
+    const english = t('runners.statusBusy');
+    for (const code of localeCodes) {
+      runWithLocale(code, () => {
+        const text = t('runners.statusBusy');
+        assert.notEqual(text, '', code);
+        assert.notEqual(text, t('runners.statusOnline'), code);
+        if (code !== 'en') assert.notEqual(text, english, code);
+        const { text: screen } = buildRunnersScreen({ revision, entries: [createEntry({ isBusy: true })], openPairingExpiries: [], isChecking: false }, t, formatTime);
+        assert.ok(screen.includes(`mac — ${text} · `), `${code}: ${screen}`);
+        assert.doesNotMatch(screen, /\{[a-zA-Z]+\}/, `${code}: no placeholder is left`);
+      });
+    }
+  });
+
   it('an offline machine shows when it was last seen and its last snapshot, marked as old — no jobs, no capabilities, no load', () => {
     const entry = createEntry({ isOnline: false, lastSeenMs: 5_000, runner: createRunner({ name: 'box1', isPaused: true, serviceKind: 'user-service' }) });
     const { text } = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime);

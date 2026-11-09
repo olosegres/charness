@@ -1186,6 +1186,7 @@ export const hiDict: Record<string, string> = {
   'runners.removeButton': '{name}: हटाएँ',
   'runners.statusOnline': 'ऑनलाइन',
   'runners.statusLidClosed': 'लैपटॉप का ढक्कन बंद — नए जॉब नहीं लेता',
+  'runners.statusBusy': 'ऑनलाइन, व्यस्त — जाँच का समय पर उत्तर नहीं दिया',
   'runners.statusOffline': '{time} से ऑफ़लाइन',
   'runners.statusNeverSeen': 'ऑफ़लाइन, कभी जुड़ा नहीं',
   'runners.pausedMark': 'रुका हुआ',

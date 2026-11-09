@@ -1187,6 +1187,7 @@ export const deDict: Record<string, string> = {
   'runners.removeButton': '{name}: Entfernen',
   'runners.statusOnline': 'online',
   'runners.statusLidClosed': 'Notebook-Deckel zu — nimmt keine neuen Jobs an',
+  'runners.statusBusy': 'online, ausgelastet — hat die Prüfung nicht rechtzeitig beantwortet',
   'runners.statusOffline': 'offline seit {time}',
   'runners.statusNeverSeen': 'offline, nie verbunden',
   'runners.pausedMark': 'pausiert',

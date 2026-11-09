@@ -49,6 +49,7 @@ function createContext(): CommandContext {
       return catalogs[Math.min(loads, catalogs.length) - 1];
     },
     runnerPollMs: 10_000,
+    probeDeadlineMs: 20_000,
     sleep: async (ms) => {
       sleeps.push(ms);
       nowMs += ms;

@@ -1188,6 +1188,7 @@ export const ptDict: Record<string, string> = {
   'runners.removeButton': '{name}: Remover',
   'runners.statusOnline': 'online',
   'runners.statusLidClosed': 'tampa do notebook fechada — não aceita novos jobs',
+  'runners.statusBusy': 'online, ocupado — não respondeu à verificação a tempo',
   'runners.statusOffline': 'offline desde {time}',
   'runners.statusNeverSeen': 'offline, nunca conectou',
   'runners.pausedMark': 'em pausa',

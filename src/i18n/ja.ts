@@ -1181,6 +1181,7 @@ export const jaDict: Record<string, string> = {
   'runners.removeButton': '{name}: 削除',
   'runners.statusOnline': 'オンライン',
   'runners.statusLidClosed': 'ノートPCのふたが閉じています — 新しいジョブは受け付けません',
+  'runners.statusBusy': 'オンライン・高負荷 — 確認に時間内に応答しませんでした',
   'runners.statusOffline': '{time} からオフライン',
   'runners.statusNeverSeen': 'オフライン（接続履歴なし）',
   'runners.pausedMark': '一時停止中',

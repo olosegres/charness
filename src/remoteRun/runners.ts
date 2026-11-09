@@ -13,6 +13,7 @@ import {
 } from './probe';
 import { RemoteRunError, RunnerUnreachableError } from './remoteRunError';
 import { remoteRunExitCodes } from './exitCodes';
+import { probeAllTimeoutMs } from './probeTiming';
 import { describeSshFailure, notConnectedReason, type RunnerClient } from './runnerClient';
 import type { RunnerConfig, RunnersConfig } from './runnersConfig';
 
@@ -30,10 +31,13 @@ import type { RunnerConfig, RunnersConfig } from './runnersConfig';
  */
 export interface ProbeOptions {
   isPruneAllowed?: boolean;
+  /**
+   * Has the shared deadline of the view fired? Set by {@link probeRunners}: only the DEADLINE makes a runner `busy` (it ran out of time), never the user's own stop (`stop`) — a view they interrupted
+   * has no use for a report. Absent (a single probe called by hand), the signal's own state is what is asked.
+   */
+  hasDeadlinePassed?: () => boolean;
 }
 
-/** The whole probing of all runners ends by then (a dead host costs its ssh connect timeout, once, in parallel with the others). */
-export const probeAllTimeoutMs = 20 * 1000;
 /** The word that lets `runner.sh probe` start the background prune of a short disk (see {@link ProbeOptions}). */
 const probePruneArgument = 'prune';
 const probeFileSuffix = '.probe.json';
@@ -114,10 +118,11 @@ export const lidClosedReason = 'its Mac has the lid closed';
  * @name RunnerReachability
  * @description Whether a runner can be called at all right now: `offline` (a paired one whose link is down, or one whose script cannot be looked for over ssh: `reason` is the short cause), `lid-closed` (its link is up but its
  * Mac\'s lid is shut: it may be falling asleep, so it is not called), `broken` (its script could not be put there for a reason that is not a lost connection) — or `reachable`, with the script in place.
+ * `isLinkUp` (of `offline`): a paired runner whose link was up when it was asked — it is THERE, so an ssh call of it that got no answer in time says «slow», not «gone».
  */
 export type RunnerReachability =
   | { kind: 'reachable' }
-  | { kind: 'offline'; reason: string; lastSeenMs: number | null }
+  | { kind: 'offline'; reason: string; lastSeenMs: number | null; isLinkUp: boolean }
   | { kind: 'lid-closed'; lastSeenMs: number | null }
   | { kind: 'broken'; message: string };
 
@@ -129,22 +134,22 @@ export async function checkRunnerReachability(client: RunnerClient, signal?: Abo
   const paired = client.runner.paired;
   if (paired !== undefined) {
     const link = await getRunnerLinkStatus(paired.hubDir, paired.runnerId);
-    if (!link.isOnline) return { kind: 'offline', reason: notConnectedReason, lastSeenMs: link.lastSeenMs };
+    if (!link.isOnline) return { kind: 'offline', reason: notConnectedReason, lastSeenMs: link.lastSeenMs, isLinkUp: false };
     if (link.isLidClosed) return { kind: 'lid-closed', lastSeenMs: link.lastSeenMs };
   }
   try {
     await client.ensureScript(signal);
   } catch (error) {
-    if (error instanceof RunnerUnreachableError) return { kind: 'offline', reason: error.reason, lastSeenMs: null };
+    if (error instanceof RunnerUnreachableError) return { kind: 'offline', reason: error.reason, lastSeenMs: null, isLinkUp: paired !== undefined };
     return { kind: 'broken', message: error instanceof Error ? error.message : 'could not prepare the runner' };
   }
   return { kind: 'reachable' };
 }
 
 /**
- * @description Probe one runner: its report is `online` with what it said, `lid-closed` (its link is up, its Mac's lid is shut: no probe is made), or
- * `offline` with why and the last snapshot taken when it was seen. `signal` is the deadline of the whole view (see {@link probeRunners}): when it fires the ssh calls in flight are killed and the
- * runner is reported offline — with the snapshot, like any other way of not answering.
+ * @description Probe one runner: its report is `online` with what it said, `lid-closed` (its link is up, its Mac's lid is shut: no probe is made), `busy` (it is there — linked, or its ssh answered —
+ * but the probe did not finish in time: the last snapshot is shown, marked as old), or `offline` with why and the last snapshot taken when it was seen. `signal` is the deadline of the whole view (see {@link probeRunners}): when it fires the ssh calls in flight are killed and the
+ * runner is reported `busy` when it was known to be there (see `probeRunner`) and offline otherwise — with the snapshot, like any other way of not answering.
  */
 export async function probeRunner(client: RunnerClient, nowMs: number = Date.now(), signal?: AbortSignal, deadlineMs: number = probeAllTimeoutMs, options: ProbeOptions = {}): Promise<RunnerReport> {
   const runner = client.runner;
@@ -163,9 +168,25 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
       isPausedByHub,
     };
   };
+  // A runner that is THERE but did not finish its probe in time is busy, never offline: its link is up (the gate's ssh keepalive was answered within the last minute), or its ssh answered the check of its script. A Mac under
+  // iOS Simulators with load 129 once read «offline (no answer within 20 s)» while it ran a job — and a runner that reads offline is waited for or refused by the next submit.
+  const hasDeadlinePassed = (): boolean => options.hasDeadlinePassed?.() ?? signal?.aborted === true;
+  const busy = (stage: string): RunnerReport => {
+    const last = readLastProbe(client.cacheDir, runner.name, runner.paired?.pairedAtMs);
+    return {
+      name: runner.name,
+      status: 'busy',
+      reason: `no answer within ${Math.round(deadlineMs / millisecondsPerSecond)} s (${stage})`,
+      lastSeenAtMs: last?.seenAtMs ?? null,
+      lastProbe: last?.probe ?? null,
+      groupLimits,
+      isPausedByHub,
+    };
+  };
   // A paired runner is online when its link accepts a connection; asking is cheaper than an ssh call that fails through the proxy. A Mac with its lid shut is about to sleep, or has woken for a minute to do its
   // housekeeping: it takes no new job, and is not even asked (the call may hang as the machine falls asleep). Jobs it already runs are not looked at here at all — they are reached by their own id.
   const reachability = await checkRunnerReachability(client, signal);
+  if (reachability.kind === 'offline' && reachability.isLinkUp && hasDeadlinePassed()) return busy('its first call, the check of its script, was not answered');
   if (reachability.kind === 'offline') return offline(reachability.reason, reachability.lastSeenMs);
   if (reachability.kind === 'broken') return offline(reachability.message);
   if (reachability.kind === 'lid-closed') {
@@ -173,6 +194,10 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
     return { name: runner.name, status: 'lid-closed', lastSeenAtMs: reachability.lastSeenMs ?? last?.seenAtMs ?? null, lastProbe: last?.probe ?? null, groupLimits, isPausedByHub };
   }
   const result = await client.call('probe', options.isPruneAllowed === true ? [probePruneArgument] : [], { timeoutMs: deadlineMs, signal });
+  // The script was found a moment ago, so the runner answers ssh: a probe that ran out of time is a runner that is busy. Any other failure (the connection dropped) is the runner gone.
+  // `isTimedOut` also says «cut off from outside» (the user's stop ends the call the same way), so inside a view only the shared deadline counts; a probe called by hand has no other clock than the call's own.
+  const isOutOfTime = hasDeadlinePassed() || (options.hasDeadlinePassed === undefined && result.isTimedOut);
+  if (result.exitCode !== 0 && isOutOfTime) return busy('its probe did not finish');
   if (result.exitCode !== 0) return offline(describeSshFailure(result));
   writeLastProbe(client.cacheDir, runner.name, result.stdout, nowMs);
   return { name: runner.name, status: 'online', probe: parseProbeOutput(result.stdout), groupLimits, isPausedByHub };
@@ -188,7 +213,7 @@ export async function probeRunners(clients: readonly RunnerClient[], nowMs: numb
   const timer = setTimeout(() => deadline.abort(), deadlineMs);
   const signal = stop === undefined ? deadline.signal : AbortSignal.any([deadline.signal, stop]);
   try {
-    return await Promise.all(clients.map((client) => probeRunner(client, nowMs, signal, deadlineMs, options)));
+    return await Promise.all(clients.map((client) => probeRunner(client, nowMs, signal, deadlineMs, { ...options, hasDeadlinePassed: () => deadline.signal.aborted })));
   } finally {
     clearTimeout(timer);
   }
@@ -201,8 +226,16 @@ export function formatRunnersView(reports: readonly RunnerReport[]): string {
   return reports.map(formatRunnerBlock).join('\n\n');
 }
 
-function checkIsUsable(report: RunnerReport): report is Extract<RunnerReport, { status: 'online' }> {
-  return report.status === 'online' && report.probe.pueueVersion !== null && !checkIsRunnerPaused(report);
+/** What is known of a runner for choosing it: what it said just now, or — it is busy, its probe did not finish — what it said when last probed (`null` = never). */
+function getProbeForPick(report: RunnerReport): RunnerProbe | null {
+  if (report.status === 'online') return report.probe;
+  return report.status === 'busy' ? report.lastProbe : null;
+}
+
+/** Is the runner there (online, or busy) with Pueue and nobody having paused it — as far as its (last) probe says? A busy one never probed has nothing to say: it is not picked for lack of it, but it is not offline. */
+function checkIsUsable(report: RunnerReport): boolean {
+  const probe = getProbeForPick(report);
+  return probe !== null && probe.pueueVersion !== null && !checkIsRunnerPaused(report);
 }
 
 /** Who paused a runner and the way back, for the message of a pick that refused it. */
@@ -217,9 +250,18 @@ function describePause(report: RunnerReport): string {
 /** « (paused, so not used: mac)» for the online runners a pick skipped only because they are paused (only those that could have done the job), else nothing. */
 function describeSkippedPaused(reports: readonly RunnerReport[], needs: RunnerCapability | null): string {
   const names = reports
-    .filter((report): report is Extract<RunnerReport, { status: 'online' }> => report.status === 'online' && report.probe.pueueVersion !== null && checkIsRunnerPaused(report) && (needs === null || checkHasCapability(report.probe, needs)))
+    .filter((report) => {
+      const probe = getProbeForPick(report);
+      return probe !== null && probe.pueueVersion !== null && checkIsRunnerPaused(report) && (needs === null || checkHasCapability(probe, needs));
+    })
     .map((report) => report.name);
   return names.length === 0 ? '' : ` (paused, so not used: ${names.join(', ')})`;
+}
+
+/** « (busy and never probed, so not used: mac)» for the busy runners nothing is known of: they are there, but cannot be judged fit for the job — said, so the view below is not read as «offline». */
+function describeSkippedBusy(reports: readonly RunnerReport[]): string {
+  const names = reports.filter((report) => report.status === 'busy' && report.lastProbe === null && !checkIsRunnerPaused(report)).map((report) => report.name);
+  return names.length === 0 ? '' : ` (busy and never probed, so not used: ${names.join(', ')})`;
 }
 
 /** « (lid closed, so not used: mac)» for the runners whose link is up and whose Mac has the lid shut, when they are all that kept the job from running (only those that could have done it), else nothing. */
@@ -243,9 +285,14 @@ export function pickRunner(config: RunnersConfig, reports: readonly RunnerReport
     }
     if (report.status === 'offline') return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" is offline (${report.reason})\n${formatRunnersView([report])}` };
     if (report.status === 'lid-closed') return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" has its lid closed (${lidClosedNote})\n${formatRunnersView([report])}` };
-    if (report.probe.pueueVersion === null) return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" has no Pueue (install it there, see docs/remote-run.md)\n${formatRunnersView([report])}` };
+    // A busy runner is judged by what it said when last probed; one never probed is taken as named (it is there, and the calls after this say what they find) unless a capability is wanted of it.
+    const probe = getProbeForPick(report);
+    if (probe !== null && probe.pueueVersion === null) return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" has no Pueue (install it there, see docs/remote-run.md)\n${formatRunnersView([report])}` };
     if (checkIsRunnerPaused(report)) return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" is paused ${describePause(report)}\n${formatRunnersView([report])}` };
-    if (wanted.needs !== null && !checkHasCapability(report.probe, wanted.needs)) {
+    if (wanted.needs !== null && probe === null) {
+      return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" is busy and was never probed, so it cannot be told to do "${wanted.needs}" — try again in a moment\n${formatRunnersView([report])}` };
+    }
+    if (wanted.needs !== null && probe !== null && !checkHasCapability(probe, wanted.needs)) {
       return { ok: false, exitCode: remoteRunExitCodes.failed, message: `runner "${wanted.runner}" cannot do "${wanted.needs}"\n${formatRunnersView([report])}` };
     }
     return { ok: true, runnerName: report.name };
@@ -253,10 +300,11 @@ export function pickRunner(config: RunnersConfig, reports: readonly RunnerReport
   for (const runner of config.runners) {
     const report = reports.find((candidate) => candidate.name === runner.name);
     if (report === undefined || !checkIsUsable(report)) continue;
-    if (wanted.needs === null || checkHasCapability(report.probe, wanted.needs)) return { ok: true, runnerName: runner.name };
+    const probe = getProbeForPick(report);
+    if (probe !== null && (wanted.needs === null || checkHasCapability(probe, wanted.needs))) return { ok: true, runnerName: runner.name };
   }
   const reason = wanted.needs === null ? 'no runner is online' : `no online runner can do "${wanted.needs}"`;
-  return { ok: false, exitCode: remoteRunExitCodes.failed, message: `${reason}${describeSkippedPaused(reports, wanted.needs)}${describeSkippedLidClosed(reports, wanted.needs)}\n${formatRunnersView(reports)}` };
+  return { ok: false, exitCode: remoteRunExitCodes.failed, message: `${reason}${describeSkippedPaused(reports, wanted.needs)}${describeSkippedBusy(reports)}${describeSkippedLidClosed(reports, wanted.needs)}\n${formatRunnersView(reports)}` };
 }
 
 /**

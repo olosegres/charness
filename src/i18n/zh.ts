@@ -1181,6 +1181,7 @@ export const zhDict: Record<string, string> = {
   'runners.removeButton': '{name}：移除',
   'runners.statusOnline': '在线',
   'runners.statusLidClosed': '已合盖 — 不接收新任务',
+  'runners.statusBusy': '在线，繁忙 — 未能及时响应检查',
   'runners.statusOffline': '自 {time} 起离线',
   'runners.statusNeverSeen': '离线，从未连接',
   'runners.pausedMark': '已暂停',

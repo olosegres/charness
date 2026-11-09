@@ -20,7 +20,7 @@ import { RemoteRunError, RunnerUnreachableError } from './remoteRunError';
 import { checkIsCleanFailure, formatCleanLine, parseCleanAnswer, type CleanOutcome } from './cleanReport';
 import { millisecondsPerMinute } from './pruneReport';
 import { createRunnerClient, describeRunnerRefusal, describeSshFailure, prepareCallTimeoutMs, type RunnerClient, type RunnerScript } from './runnerClient';
-import { checkRunnerReachability, chooseExecRunnerName, findRunnerOfJob, lidClosedReason, pickRunner, probeAllTimeoutMs, probeRunners } from './runners';
+import { checkRunnerReachability, chooseExecRunnerName, findRunnerOfJob, lidClosedReason, pickRunner, probeRunners } from './runners';
 import type { RunnersConfig } from './runnersConfig';
 import { defaultRunnerWaitSeconds } from './runnerWaitTiming';
 import { chooseRunnerWithWait, planRunnerWait } from './runnerWait';
@@ -44,6 +44,8 @@ export interface CommandContext {
   loadRunners: () => RunnersConfig;
   /** How often the wait for an offline paired runner looks again (`runnerWaitTiming.ts`). */
   runnerPollMs: number;
+  /** How long a view or a pick waits for the runners' answers in all (`probeTiming.ts`). */
+  probeDeadlineMs: number;
   /** Resolves after `ms`, or at once when `stop` aborts; a test replaces it. */
   sleep: (ms: number, stop: AbortSignal) => Promise<void>;
   /** Calls back with the signal when the user interrupts (Ctrl-C, SIGTERM, SIGHUP), until the returned function is called; a test replaces it. */
@@ -77,7 +79,7 @@ export async function chooseClient(context: CommandContext, wanted: { runner: st
       const clients = wanted.runner === null
         ? config.runners.map((runner) => createClient(context, config, runner.name))
         : [createClient(context, config, wanted.runner)];
-      const reports = await probeRunners(clients, context.now(), budgetMs === null ? probeAllTimeoutMs : Math.min(probeAllTimeoutMs, budgetMs), stop);
+      const reports = await probeRunners(clients, context.now(), budgetMs === null ? context.probeDeadlineMs : Math.min(context.probeDeadlineMs, budgetMs), stop);
       const pick = pickRunner(config, reports, wanted);
       if (!pick.ok) return { ok: false, failure: pick, wait: planRunnerWait(config, reports, wanted) };
       const client = clients.find((candidate) => candidate.runner.name === pick.runnerName);
@@ -135,7 +137,7 @@ export async function runRunCommand(command: Extract<RemoteRunCommand, { kind: '
 
 export async function runRunnersCommand(context: CommandContext): Promise<number> {
   const clients = context.config.runners.map((runner) => createRunnerClient(runner, context.cacheDir, context.script));
-  const reports = await probeRunners(clients, context.now(), undefined, undefined, { isPruneAllowed: true });
+  const reports = await probeRunners(clients, context.now(), context.probeDeadlineMs, undefined, { isPruneAllowed: true });
   context.io.stdout(`${reports.map(formatRunnerBlock).join('\n\n')}\n`);
   return 0;
 }

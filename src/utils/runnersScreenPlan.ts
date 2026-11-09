@@ -134,6 +134,8 @@ export interface RunnerScreenEntry {
   linkConcern?: LinkConcern | null;
   /** Online, but the Mac's lid is shut with nothing keeping it awake: it takes no new job (`runners/linkControl.ts`); `probe` is then the last snapshot, not a live answer. Absent = no. */
   isLidClosed?: boolean;
+  /** Online (its link is up) but its probe did not finish in time — a machine under heavy load, not a machine that is gone; `probe` is then the last snapshot, not a live answer. Absent = no. */
+  isBusy?: boolean;
 }
 
 export interface RunnersScreenModel {
@@ -245,7 +247,7 @@ function describeOlderSimulators(probe: RunnerProbe, t: Translate): string[] {
 function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: FormatTime): string[] {
   const { runner, probe } = entry;
   const status = entry.isOnline
-    ? t(entry.isLidClosed === true ? 'runners.statusLidClosed' : 'runners.statusOnline')
+    ? t(entry.isLidClosed === true ? 'runners.statusLidClosed' : entry.isBusy === true ? 'runners.statusBusy' : 'runners.statusOnline')
     : entry.lastSeenMs === null
       ? t('runners.statusNeverSeen')
       : t('runners.statusOffline', { time: formatTime(entry.lastSeenMs) });
@@ -253,8 +255,8 @@ function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: For
   const heading = [status, ...(runner.isPaused ? [t('runners.pausedMark')] : []), describeSystem(entry), t(serviceKindKeys[serviceKind])].join(' · ');
   const lines = [`${runner.name} — ${heading}`];
   if (probe === null) return lines;
-  // A Mac with its lid shut is not asked: what is shown is the last snapshot, as for a machine that is offline.
-  if (entry.isOnline && entry.isLidClosed !== true) {
+  // A Mac with its lid shut is not asked, and a busy one did not answer: what is shown is the last snapshot, as for a machine that is offline.
+  if (entry.isOnline && entry.isLidClosed !== true && entry.isBusy !== true) {
     lines.push(
       `  ${t('runners.hardwareLine', { cpu: describeCpu(probe, t, true), ramTotal: formatGigabytes(probe.ramTotalMb), ramFree: formatGigabytes(probe.ramFreeMb), disk: formatGigabytes(probe.diskFreeMb) })}${describeLowDisk(probe, t)}`,
       `  ${t('runners.jobsLine', { running: probe.jobsRunning, queued: probe.jobsQueued, projects: probe.jobsProjects })} · ${t('runners.jobsAtOnceNote', { count: getJobsAtOnce(runner) })}${probe.pueueVersion === null ? ` · ${t('runners.pueueMissing')}` : ''}`,

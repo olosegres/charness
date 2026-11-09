@@ -315,6 +315,54 @@ describe('remote-run through a paired runner (process level)', { skip: skipReaso
     assert.equal((await run(['echo free'])).exitCode, 0);
   });
 
+  describe('a runner whose probe does not finish in time (a Mac under load, a job in flight)', () => {
+    /** The deadline of the view, shortened by the test seam: no step of the probe may take the production 20 s any more (each is bounded under it), so a busy runner needs a short one. */
+    const busyDeadlineMs = 2000;
+    const busyEnv = { CHARNESS_TEST_TIMINGS: JSON.stringify({ remoteRunLeaseMs: leaseMs, remoteRunRunnerPollMs: pollMs, remoteRunProbeDeadlineMs: busyDeadlineMs }) };
+    const browsersLine = (): string => `PLAYWRIGHT_BROWSERS_PATH=${path.join(layout.root, 'browsers')}\n`;
+
+    afterEach(() => {
+      // Whatever a case did, the next one starts with the runner's ordinary environment.
+      fs.writeFileSync(runnerPaths.envFile, browsersLine(), { mode: 0o600 });
+    });
+
+    /** `yarn` on the runner's PATH that never answers `--version`: the probe asks it, and gives it its step limit (4 s) — longer than the shortened deadline. */
+    function makeProbeSlow(): void {
+      const slowBin = path.join(layout.root, 'slow-bin');
+      fs.mkdirSync(slowBin, { recursive: true });
+      fs.writeFileSync(path.join(slowBin, 'yarn'), '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
+      fs.writeFileSync(runnerPaths.envFile, `${browsersLine()}PATH=${slowBin}:${process.env.PATH ?? ''}\n`, { mode: 0o600 });
+    }
+
+    it('`runners` says «online, busy» — with the details as last probed — never «offline»; the next submit takes it from that snapshot and the job runs; a probe in time makes it plainly online again', async () => {
+      const first = await run(['runners']);
+      assert.match(first.stdout, new RegExp(`^${runnerName} — online · `, 'm'), 'a probe in time: plainly online (this also stores the snapshot)');
+      makeProbeSlow();
+      const startedAt = Date.now();
+      const view = await runCli(cliLayout, ['runners'], { cwd: project.root, env: busyEnv, timeoutMs: ordinaryRunTimeoutMs });
+      assert.equal(view.exitCode, 0, view.stderr);
+      assert.ok(Date.now() - startedAt < busyDeadlineMs + 15_000, 'the view ended with its deadline, not with the runner');
+      assert.match(view.stdout, new RegExp(`^${runnerName} — online, busy · no answer within 2 s \\(its probe did not finish\\); it is linked, so it is not offline · details as last probed `, 'm'));
+      assert.doesNotMatch(view.stdout, /— offline|offline \(/, 'the word is only in «so it is not offline»');
+      assert.match(view.stdout, /playwright \(chromium\)/, 'the details of the last probe are shown');
+      assert.match(await waitForListed('online'), new RegExp(`^${runnerName} — online`, 'm'), 'the hub\'s own list agrees: the link is up');
+
+      const job = await runCli(cliLayout, ['--needs', 'playwright', 'echo busy-ok'], { cwd: project.root, env: busyEnv, timeoutMs: ordinaryRunTimeoutMs });
+      assert.equal(job.exitCode, 0, `${job.stderr}\n${job.stdout}`);
+      assert.match(job.stdout, /^busy-ok$/m, 'a busy runner takes a job: it is picked from its last snapshot, not waited for as an offline one');
+      assert.ok(!job.stderr.includes('waiting for a runner'), job.stderr);
+
+      fs.writeFileSync(runnerPaths.envFile, browsersLine(), { mode: 0o600 });
+      assert.match((await runCli(cliLayout, ['runners'], { cwd: project.root, env: busyEnv, timeoutMs: ordinaryRunTimeoutMs })).stdout, new RegExp(`^${runnerName} — online · `, 'm'), 'once its probe fits the deadline it is plainly online again');
+    });
+
+    /** What `charness runners ls` of the hub says about the runner (the line only). */
+    async function waitForListed(state: string): Promise<string> {
+      await waitForListedState(state === 'online' ? 'online' : 'offline');
+      return runHubCli(layout, ['runners', 'ls']).stdout;
+    }
+  });
+
   describe('a runner whose Mac has its lid closed', () => {
     afterEach(async () => {
       // Whatever a case did, the next one starts with the lid open.

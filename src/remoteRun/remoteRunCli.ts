@@ -21,6 +21,7 @@ import { readRunnerScript } from './runnerClient';
 import { getRunnersConfigPath, type RunnersConfig } from './runnersConfig';
 import { loadRunnersCatalog } from './runnersCatalog';
 import { sleepUntilStopped } from './runnerWait';
+import { readProbeDeadlineMs } from './probeTiming';
 import { readRunnerWaitPollMs } from './runnerWaitTiming';
 import { ensureRemoteRunCacheDir, getRemoteRunCacheDir } from './ssh';
 
@@ -106,6 +107,7 @@ function createContext(io: CliIo): CommandContext {
     now: Date.now,
     loadRunners: () => readCurrentRunners(io.homeDir),
     runnerPollMs: readRunnerWaitPollMs(io.env),
+    probeDeadlineMs: readProbeDeadlineMs(io.env),
     sleep: sleepUntilStopped,
     watchInterrupts: addInterruptHandlerWithHardStop,
   };
