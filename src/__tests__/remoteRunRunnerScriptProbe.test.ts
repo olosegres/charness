@@ -195,6 +195,19 @@ describe('the probe fits its 20 s however many of its questions hang', () => {
     assert.equal(lines.job_node, 'none');
   });
 
+  it('only a step the watchdog cut off is `unknown`: a Node, yarn or Pueue that is there and fails at once (a crash, a missing library) counts as absent — `none` / `missing`', () => {
+    for (const exitCode of [1, 127]) {
+      for (const name of ['node', 'yarn', 'pueue']) writeFake(name, `exit ${exitCode}`);
+      const { lines } = probeSlowOfAMac();
+      assert.equal(lines.job_node, 'none', `node exiting ${exitCode}`);
+      assert.equal(lines.job_yarn, 'none', `yarn exiting ${exitCode}`);
+      assert.equal(lines.pueue, 'missing', `pueue exiting ${exitCode}`);
+    }
+    for (const name of ['node', 'yarn', 'pueue']) writeFake(name, 'exec sleep 120');
+    const { lines } = probeSlowOfAMac();
+    assert.deepEqual([lines.job_node, lines.job_yarn, lines.pueue], ['unknown', 'unknown', 'unknown'], 'the same three, cut off by the step limit');
+  });
+
   it('yarn is never asked to prompt: Corepack\'s download question is off for the version call', () => {
     writeFake('node', 'echo v24.22.2');
     writeFake('yarn', 'echo "prompt=$COREPACK_ENABLE_DOWNLOAD_PROMPT"');

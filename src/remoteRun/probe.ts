@@ -43,8 +43,8 @@ export interface RunnerProbe {
    */
   copies: { count: number; sizeMb: number; unmeasuredCount: number; clonedCount: number } | null;
   /**
-   * The Pueue version; `null` when Pueue is missing on the runner; `jobToolUnknown` when it is there but its `--version` gave no answer in time (a loaded machine) — still a runner that can run jobs,
-   * as the same word means for the `jobTools` (`checkIsPueueUnknown`).
+   * The Pueue version; `null` when Pueue is missing on the runner (not there, or failing at once); `jobToolUnknown` when it is there but its `--version` was cut off by the probe's step limit (a loaded machine) —
+   * still a runner that can run jobs, as the same word means for the `jobTools` (`checkIsPueueUnknown`).
    */
   pueueVersion: string | null;
   jobsRunning: number;
@@ -66,7 +66,7 @@ export interface RunnerProbe {
   keepsAwake: { method: KeepAwakeMethod } | { method: null; reason: string } | null;
   /**
    * The Node and yarn a job runs with (`--version` under the probe's own PATH, which is a job's): a version, `none` (not on the PATH: a job that calls
-   * it ends with exit 127) or `unknown` (there, but no answer in time). `null` when the runner's script did not report them (an older one).
+   * it ends with exit 127; or there and failing at once) or `unknown` (there, but its call was cut off by the probe's step limit). `null` when the runner's script did not report them (an older one).
    */
   jobTools: { node: string; yarn: string } | null;
   /**
@@ -224,12 +224,17 @@ function formatCapabilities(probe: RunnerProbe): string[] {
   return [...available, ...unavailable];
 }
 
+/** `Pueue: present, no answer in time` — how a tool whose `--version` was cut off by the probe's step limit (`unknown`) is told, for a job's Node and yarn and for Pueue alike. */
+function describeToolNoAnswer(name: string): string {
+  return `${name}: present, no answer in time`;
+}
+
 /** `jobs run with: Node v24.22.2 · yarn 1.22.22` — a changed Node shows here; a tool that is not there is said loudly, as the thing that makes a job end with exit 127. */
 function formatJobTools(probe: RunnerProbe): string[] {
   if (probe.jobTools === null) return [];
   const describe = (name: string, version: string): string => {
     if (version === jobToolNone) return `${name}: NONE (a job that calls it ends with exit 127 — see docs/remote-run.md)`;
-    if (version === jobToolUnknown) return `${name}: present, no answer in time`;
+    if (version === jobToolUnknown) return describeToolNoAnswer(name);
     return `${name} ${version}`;
   };
   return [`  jobs run with: ${describe('Node', probe.jobTools.node)} · ${describe('yarn', probe.jobTools.yarn)}`];
@@ -294,7 +299,7 @@ function formatRunnerProgram(probe: RunnerProbe): string[] {
 /** ` · Pueue: MISSING (install it…)` when Pueue is not there, ` · Pueue: present, no answer in time` when its version call hung (as a job's tool is told); nothing when it answered. */
 function formatPueueNote(probe: RunnerProbe): string {
   if (probe.pueueVersion === null) return ' · Pueue: MISSING (install it, see docs/remote-run.md)';
-  return checkIsPueueUnknown(probe) ? ' · Pueue: present, no answer in time' : '';
+  return checkIsPueueUnknown(probe) ? ` · ${describeToolNoAnswer('Pueue')}` : '';
 }
 
 /**

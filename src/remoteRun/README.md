@@ -154,8 +154,9 @@ group is over (124) the moment it starts, its command never runs.
 
 **Probe.** `runners` gives the whole probe 20 s (`probeTiming.ts`). Its answer path is bounded all through: the scheduling safety net (`enqueue_idle_stashed`) is NOT part of it — it waits for `sched.lock` up to `sched_lock_wait_sec` and asks Pueue with
 no limit, which made a probe taken while a job was being queued behind a slow Pueue take 25.8 s (0.4 s without the job) — so the probe starts it detached (`start_detached_run … settle-queue`, one at a time, nice 19) and counts the starting job as queued from the job folders. Its slow questions (Pueue, the disk, Xcode, the simulators, Docker) are asked at once, each
-bounded by 4 s, so a hung one costs 4 s in all; an Xcode that does not answer is «did not answer in time», not «not found», a Pueue that is there but does not answer (`pueue=unknown`, as
-`job_node` / `job_yarn` say `unknown`; `probe_pueue_version`) is «present, no answer in time», not «MISSING» — a loaded machine is slow at `--version` and stays usable — and a slow
+bounded by 4 s, so a hung one costs 4 s in all; an Xcode that does not answer is «did not answer in time», not «not found», a Pueue whose `--version` was cut off by that limit (`pueue=unknown`, as
+`job_node` / `job_yarn` say `unknown`; one helper, `probe_answered_version`, for the three) is «present, no answer in time», not «MISSING» — a loaded machine is slow at `--version` and stays usable; only a step the watchdog
+killed (137) is `unknown`, a binary that is not there or fails at once is `missing` / `none` — and a slow
 simctl keeps the Xcode version without inventing a simulator count. The same simctl answer gives `sim_older_runtimes=iOS 26.4:11,…` (`list_older_simulator_runtimes`, awk over `simctl list devices available`: a runtime
 that has a newer one of the same platform AND major, with its device count — information for `runners` and `/runners`, nothing is removed). On a Mac the probe of a VIEW of the runners (`probe <work> prune`, the same
 argument that lets a short disk start the prune) also starts `simctl-cleanup` detached (`start_simctl_cleanup_if_due`) — but only when that very probe said `cap_ios=yes` (not «no login session», not a failed or running Simulator

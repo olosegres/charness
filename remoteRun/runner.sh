@@ -621,27 +621,17 @@ probe_step_output() {
   read_file "$probe_dir/$1.out"
 }
 
-# What a tool answered to `--version` (its first line, cut short): `none` when it is not on this PATH — a job that calls it ends with exit 127 —
-# and `unknown` when it is there but did not answer in time.
-probe_tool_version() {
-  local name=$1
-  command -v "$name" > /dev/null 2>&1 || { echo none; return 0; }
-  if [ "$(probe_step_status "$name")" = 0 ]; then
-    probe_step_output "$name" | head -n 1 | cut -c1-40
-  else
-    echo unknown
-  fi
-}
-
-# The Pueue the probe asked (`probe_slow` started its `--version`): its version; `missing` when the binary is not there; `unknown` when it is there but did not answer within probe_step_sec —
-# a machine under load (a full test run) can be that slow, and `missing` would make the hub refuse a runner that has Pueue. The same words as probe_tool_version's `none` / `unknown`.
-probe_pueue_version() {
-  command -v "${PUEUE_BIN:-pueue}" > /dev/null 2>&1 || { echo missing; return 0; }
-  if [ "$(probe_step_status pueue)" = 0 ]; then
-    probe_step_output pueue | awk '{ print $NF }'
-  else
-    echo unknown
-  fi
+# What the tool of probe step $1 (the binary $2, asked for its `--version` by `probe_slow`) answered: its output as it was; `unknown` when the step was CUT OFF by probe_step_sec (137, the watchdog of
+# run_bounded) — a loaded machine is slow at it, not without the tool, and a runner must not be refused for that; the word $3 (`none` / `missing`) when the binary is not on this PATH — a job that calls it
+# ends with exit 127 — or is there and fails at once (a wrong-architecture binary, a missing library, a crash: a job that calls it fails too, and `unknown` would hide that). Each caller shapes the output of its tool.
+probe_answered_version() {
+  local step=$1 binary=$2 absent_word=$3
+  command -v "$binary" > /dev/null 2>&1 || { echo "$absent_word"; return 0; }
+  case "$(probe_step_status "$step")" in
+    0) probe_step_output "$step" ;;
+    137) echo unknown ;;
+    *) echo "$absent_word" ;;
+  esac
 }
 
 # The simulators of OLDER runtimes than the newest of the same platform and major (`iOS 26.5` next to `iOS 27.1` is not older: another major; `iOS 26.4` next to `iOS 26.5` is), from the text of
@@ -705,9 +695,9 @@ probe_slow() {
 
   echo "disk_free_mb=$(kb_to_mb "$(probe_step_output disk | awk 'NR == 2 { print $4 }')")"
   probe_disk_target "$(probe_step_output disk | awk 'NR == 2 { print $2, $4 }')"
-  echo "job_node=$(probe_tool_version node)"
-  echo "job_yarn=$(probe_tool_version yarn)"
-  echo "pueue=$(probe_pueue_version)"
+  echo "job_node=$(probe_answered_version node node none | head -n 1 | cut -c1-40)"
+  echo "job_yarn=$(probe_answered_version yarn yarn none | head -n 1 | cut -c1-40)"
+  echo "pueue=$(probe_answered_version pueue "${PUEUE_BIN:-pueue}" missing | awk '{ print $NF }')"
   if [ "$is_darwin" -eq 0 ]; then
     echo "cap_ios=no"
     echo "cap_ios_detail=$(uname -s)"

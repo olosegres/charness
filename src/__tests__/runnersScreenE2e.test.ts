@@ -16,6 +16,8 @@
  *   → a machine whose link is up but whose probe does not finish in time (the runner's `awk` is slow; the bot's probe deadline is shortened to 2 s through the test seam) is
  *     «online, busy — did not answer the probe in time», never «offline»: its keyboard is the online one and its last snapshot is shown as old, with no live jobs line; with
  *     the production window and a probe in time it is plainly online again
+ *   → a machine whose Pueue is too slow for the probe's version call is still plainly online and its line says Pueue is there but gave no answer in time — never that it is missing;
+ *     with Pueue answering again the note is gone
  *   → «Jobs at once» (the machine's button on the list) opens the picker with the hardware the live probe reported and a suggestion; picking
  *     2 tells the runner NOW — its private Pueue's default group runs two jobs in parallel (read back from Pueue itself), the registry holds 2, the
  *     list says «2 at once» — and a picker of an older revision sets nothing
@@ -534,6 +536,37 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     const again = await general.sendAndAwaitReply('/runners', `${runnerName} — online`);
     await general.waitForMessageText('the live data again', again, (text) => text.includes('jobs: 0 running, 0 queued') && !text.includes('Checking the machines'));
     assert.ok(!again.text.includes('busy'), again.text);
+  });
+
+  /**
+   * The machine's own `pueue` (a symlink in its `bin/`) swapped for a wrapper that hangs on `--version` past the probe's 4 s step limit and is the real Pueue for every other call; the swap is one rename, so a
+   * call of the link in between finds one or the other. Returns the function that puts the symlink back.
+   */
+  function makeRunnerPueueSlowToAnswerVersion(): () => void {
+    const pueuePath = path.join(getRunnerHomePaths(link.runnerHome).binDir, 'pueue');
+    const realPueue = fs.readlinkSync(pueuePath);
+    const swapPath = `${pueuePath}.swap`;
+    fs.writeFileSync(swapPath, `#!/bin/sh\nfor word in "$@"; do\n  if [ "$word" = --version ]; then exec sleep 30; fi\ndone\nexec ${realPueue} "$@"\n`, { mode: 0o755 });
+    fs.renameSync(swapPath, pueuePath);
+    return () => {
+      fs.symlinkSync(realPueue, swapPath);
+      fs.renameSync(swapPath, pueuePath);
+    };
+  }
+
+  it('a machine whose Pueue is too slow to answer its version call is still «online», and its line says Pueue is there but gave no answer — not that it is missing; with Pueue answering again the note is gone', async () => {
+    const restorePueue = makeRunnerPueueSlowToAnswerVersion();
+    try {
+      const list = await general.sendAndAwaitReply('/runners', `${runnerName} — online`);
+      await general.waitForMessageText('the slow Pueue told as there but silent', list, (text) => text.includes('2 at once · Pueue is there, but gave no answer in time') && !text.includes('Checking the machines'));
+      assert.ok(!list.text.includes('Pueue is missing'), list.text);
+      assert.ok(!list.text.includes('busy') && !list.text.includes(`${runnerName} — offline`), list.text);
+    } finally {
+      restorePueue();
+    }
+    const again = await general.sendAndAwaitReply('/runners', `${runnerName} — online`);
+    await general.waitForMessageText('the live data with Pueue answering', again, (text) => text.includes('jobs: 0 running, 0 queued') && !text.includes('Checking the machines'));
+    assert.ok(!again.text.includes('Pueue is'), again.text);
   });
 
   it('«Jobs at once» opens the picker with the machine\'s hardware, and picking a number tells the runner NOW — its Pueue runs that many in parallel — saves it, redraws the list; a picker of an older revision sets nothing', async () => {

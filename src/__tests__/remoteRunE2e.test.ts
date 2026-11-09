@@ -5,8 +5,8 @@
  * order, each step on the state the one before left (the second half — kill, time limits, `exec` — is `remoteRunLifecycleE2e.test.ts`,
  * with a runner of its own, so the two run side by side):
  *
- *   runners → the stand-in online with its capabilities; an entry on a closed port offline with its last snapshot; an unknown host key
- *     says to connect once by hand
+ *   runners → the stand-in online with its capabilities; a runner whose Pueue is too slow for the probe's version call is online, told so (not
+ *     «MISSING») and takes a job; an entry on a closed port offline with its last snapshot; an unknown host key says to connect once by hand
  *   → a passing and a failing command return their exit codes, output streams while the command runs
  *   → deletions are mirrored, the runner's own ignored files are never touched, a `.env` is held back until `send:` names it
  *   → the dependencies step runs once, again when the lockfile changes, again after a failure
@@ -77,6 +77,27 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
       assert.match(result.stdout, /\n {2}jobs: 0 running, 0 queued, 0 projects · groups: default 3, emulator 1\n/);
       assert.match(result.stdout, /\n {2}can: .*ios: no \(Linux\)/);
       assert.ok(fs.existsSync(path.join(layout.workDir, 'bin')), 'the runner script was put on the runner by remote-run itself');
+    });
+
+    it('a runner whose Pueue is too slow for the probe\'s version call (a loaded machine) is online, told that Pueue is there but did not answer — never MISSING — and a job runs on it', async () => {
+      // The runner's Pueue, wrapped: `--version` hangs past the probe's 4 s step limit (the watchdog cuts it off); every other call goes through to the real one.
+      const slowVersionPueue = path.join(layout.root, 'slow-version-pueue.sh');
+      fs.writeFileSync(slowVersionPueue, `#!/usr/bin/env bash\nfor word in "$@"; do\n  if [ "$word" = --version ]; then exec sleep 30; fi\ndone\nexec ${layout.pueueBin} "$@"\n`, { mode: 0o755 });
+      writeRunnersJson(layout, [createRunnerEntry(layout, { pueue: { bin: slowVersionPueue, config: layout.pueueConfigPath } })]);
+      try {
+        const listed = await run(['runners']);
+        assert.equal(listed.exitCode, 0, listed.stderr);
+        assert.match(listed.stdout, new RegExp(`^${runnerName} — online`, 'm'));
+        assert.match(listed.stdout, / · Pueue: present, no answer in time\n/);
+        assert.doesNotMatch(listed.stdout, /MISSING/);
+        // Before the fix the runner read «no Pueue» and this was refused with 125.
+        const ran = await run(['--runner', runnerName, 'echo', 'slow pueue']);
+        assert.equal(ran.exitCode, 0, ran.stderr);
+        assert.match(ran.stdout, /slow pueue/);
+      } finally {
+        writeRunnersJson(layout, [createRunnerEntry(layout)]);
+        fs.rmSync(slowVersionPueue, { force: true });
+      }
     });
 
     it('an entry on a closed port is offline with its last snapshot, and is skipped when a runner is picked', async () => {
