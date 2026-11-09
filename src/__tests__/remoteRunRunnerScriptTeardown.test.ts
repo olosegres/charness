@@ -12,7 +12,7 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { removeTestRoot, scriptPath, startStrangerProcess, stopDetachedRuns, stopRunnerStandIns, writeFile } from './remoteRunRunnerScriptKit';
+import { readDetachedRunPid, removeTestRoot, scriptPath, startStrangerProcess, stopDetachedRuns, stopRunnerStandIns, waitForDetachedRunToEnd, writeFile } from './remoteRunRunnerScriptKit';
 
 const duDelaySeconds = 0.6;
 
@@ -62,6 +62,33 @@ describe('the teardown of a test of the runner script', () => {
     stopDetachedRuns(root);
     assert.equal(checkIsAlive(pid), false, 'it is over');
     for (const copy of ['one-aaaaaaaaaa', 'two-bbbbbbbbbb']) assert.equal(fs.existsSync(path.join(workDir, 'p', copy, 'size-kb')), true, `${copy} was measured: it was waited for, not cut off`);
+  });
+
+  it('`waitForDetachedRunToEnd` waits for the run to END, on its own signal and with no clock: a walk longer than `stopDetachedRuns`\' grace (15 s: the `du` here sleeps 9 s a copy, two copies) is not cut off - its figures are written', async () => {
+    fs.writeFileSync(path.join(binDir, 'du'), `#!/bin/bash\nsleep 9\nexec ${spawnSync('which', ['du'], { encoding: 'utf8' }).stdout.trim()} "$@"\n`, { mode: 0o755 });
+    const pid = startMeasuring();
+    assert.equal(readDetachedRunPid(workDir, 'measure-copies'), pid);
+    assert.ok(checkIsAlive(pid));
+    const startedAt = Date.now();
+    await waitForDetachedRunToEnd(workDir, 'measure-copies');
+    assert.ok(Date.now() - startedAt > 15_000, 'it waited for the walk, past the grace after which `stopDetachedRuns` ends a run');
+    assert.equal(checkIsAlive(pid), false);
+    for (const copy of ['one-aaaaaaaaaa', 'two-bbbbbbbbbb']) assert.equal(fs.existsSync(path.join(workDir, 'p', copy, 'size-kb')), true, `${copy} was measured`);
+  });
+
+  it('`waitForDetachedRunToEnd` has nothing to wait for without a pid file, with one that holds no number, or one whose number is a stranger\'s - and `readDetachedRunPid` says none', async () => {
+    const startedAt = Date.now();
+    assert.equal(readDetachedRunPid(workDir, 'sweep-tmpdirs'), null);
+    await waitForDetachedRunToEnd(workDir, 'sweep-tmpdirs');
+    writeFile(workDir, 'tmp/sweep-tmpdirs.pid', 'not a number\n');
+    assert.equal(readDetachedRunPid(workDir, 'sweep-tmpdirs'), null);
+    await waitForDetachedRunToEnd(workDir, 'sweep-tmpdirs');
+    const strangerPid = startStrangerProcess();
+    writeFile(workDir, 'tmp/sweep-tmpdirs.pid', `${strangerPid}\n`);
+    assert.equal(readDetachedRunPid(workDir, 'sweep-tmpdirs'), strangerPid);
+    await waitForDetachedRunToEnd(workDir, 'sweep-tmpdirs');
+    assert.ok(Date.now() - startedAt < 3000, 'none of them was waited for');
+    assert.ok(checkIsAlive(strangerPid), 'and the stranger was left alone');
   });
 
   it('`removeTestRoot` removes the tree although a detached run is walking it: no ENOTEMPTY, nothing is written after it', () => {

@@ -19,8 +19,9 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { createProject, createProjectClone, createRunnerEntry, readProjectFile, waitUntil, writeProjectFile, writeRunnersJson, type FlowProject } from './remoteRunE2e/remoteRunFlowKit';
+import { createProject, createProjectClone, createRunnerEntry, readProjectFile, writeProjectFile, writeRunnersJson, type FlowProject } from './remoteRunE2e/remoteRunFlowKit';
 import { layout, project, readDepsCounter, run, setUpFlow, skipReason, tearDownFlow } from './remoteRunE2e/remoteRunFlowHarness';
+import { readDetachedRunPid, waitForDetachedRunToEnd } from './remoteRunRunnerScriptKit';
 
 const seededPackageContent = 'installed in the first copy';
 const buildOutputFile = 'node_modules/pkg/android/build/outputs/app.aar';
@@ -141,6 +142,9 @@ describe('a new project copy is seeded from a sibling copy of the same repositor
 
   it('the first copy, idle for more than a day, loses the derived data of its `ios/build` — and nothing else — a moment after a submit of another project; its next job says why an iOS build starts from scratch', async () => {
     const runnerDirectory = project.runnerDirectory;
+    // The sweeps are detached and niced: one that an earlier submit started may still be walking, and a sweep that is going keeps `prepare` from starting another (one at a time) - then nothing would trim. It is waited for first.
+    await waitForDetachedRunToEnd(layout.workDir, 'sweep-tmpdirs');
+    const earlierSweepPid = readDetachedRunPid(layout.workDir, 'sweep-tmpdirs');
     const longAgo = new Date(Date.now() - 30 * 60 * 60 * 1000);
     // Idle for 30 hours: its mark of use, and the end of its last jobs (a job that ended within the hour keeps its copy for the results).
     fs.utimesSync(path.join(runnerDirectory, 'used'), longAgo, longAgo);
@@ -154,9 +158,14 @@ describe('a new project copy is seeded from a sibling copy of the same repositor
     const trigger = createProject(layout, 'sixth/trigger', { 'README.md': 'a project that only submits\n' });
     const submitted = await run(['echo', 'another project'], { cwd: trigger.root });
     assert.equal(submitted.exitCode, 0, submitted.stderr);
-    // The trim renames the build folders out of the tree first, then writes its note (`build-data-trimmed`), and removes the trash last: «Products is gone» is not the trim being over (the note was read before it was written).
+    // The trim renames the build folders out of the tree first, then writes its note (`build-data-trimmed`), and removes the trash last: «Products is gone» is not the trim being over. And how long the sweep takes is not
+    // for the test to guess (it is `nice -n 19`: on a CI runner at a load of 27 it did not finish in 45 s): the test waits for the sweep ITSELF to end.
+    const sweepPid = readDetachedRunPid(layout.workDir, 'sweep-tmpdirs');
+    assert.ok(sweepPid !== null && sweepPid !== earlierSweepPid, 'the submit started a sweep of its own');
+    await waitForDetachedRunToEnd(layout.workDir, 'sweep-tmpdirs');
     const trimNote = path.join(runnerDirectory, 'build-data-trimmed');
-    await waitUntil('the detached sweep to finish trimming the first copy', 30_000, () => fs.existsSync(trimNote) && !fs.readdirSync(runnerDirectory).some((name) => name.startsWith('build-trash')));
+    assert.equal(fs.existsSync(trimNote), true, `the sweep is over and left no note: ${fs.readdirSync(runnerDirectory).join(', ')}`);
+    assert.deepEqual(fs.readdirSync(runnerDirectory).filter((name) => name.startsWith('build-trash')), [], 'and no trash');
     const firstTree = path.join(runnerDirectory, 'tree');
     assert.equal(fs.existsSync(path.join(firstTree, 'ios', 'build', 'Build')), false, 'all the derived data is gone');
     assert.equal(fs.readFileSync(path.join(firstTree, codegenPodspecFile), 'utf8'), codegenPodspec, 'the codegen pods\' sources are not: the next build, with its `pod install` skipped, needs them');

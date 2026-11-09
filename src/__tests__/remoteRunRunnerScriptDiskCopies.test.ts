@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { diskTooLowRunnerExitCode } from '../remoteRun/pruneReport';
 import { parseProbeOutput } from '../remoteRun/probe';
-import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopDetachedRuns, writeFile } from './remoteRunRunnerScriptKit';
+import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, waitForDetachedRunToEnd, writeFile } from './remoteRunRunnerScriptKit';
 import { kibPerGib, dayMs, hourMs, workRoot, workDir, fakeBinDir, writeExecutable, getEnv, runScript, setAge, makeCopy, writeJob, liveProcesses, getDeadPid, runShell, listCopies, parseRemovals, useDiskHarness } from './remoteRunRunnerScriptDiskKit';
 
 useDiskHarness();
@@ -570,7 +570,7 @@ describe('the TMPDIR of a project copy (`<work>/t/<n>`) is part of the disk upke
     assert.equal(first.status, 0, first.stderr);
     await waitFor(() => !exists(8, 'old.bin'), 'the detached sweep');
     // The sweep is over before the files are staged again: one still walking would take the staged ones as well.
-    stopDetachedRuns(workRoot);
+    await waitForDetachedRunToEnd(workDir, 'sweep-tmpdirs');
     assert.equal(exists(8, 'fresh.bin'), true);
     const stamp = path.join(workDir, 'tmpdir-sweep.at');
     assert.ok(fs.existsSync(stamp));
@@ -747,8 +747,9 @@ describe('the Xcode derived data of a copy that nobody used for a day (`ios/buil
     writeExecutable(path.join(fakeBinDir, 'mv'), '#!/bin/bash\ncase "$*" in\n  *build-trash.*) /bin/mv "$@"; code=$?; sleep 0.6; exit $code ;;\nesac\nexec /bin/mv "$@"\n');
     const first = runScript(['prepare', workDir, slug, jobId, 'default=1']);
     assert.equal(first.status, 0, first.stderr);
-    // The trim moves the build folders out of the tree one after the other, then writes its note and removes the trash: one folder being gone is not the trim being over. Waited for the way a teardown waits for it.
-    stopDetachedRuns(workRoot);
+    // The trim moves the build folders out of the tree one after the other, then writes its note and removes the trash: one folder being gone is not the trim being over. The sweep is waited for until it ENDS (it is niced: no clock
+    // is a safe bound on a loaded box, and `stopDetachedRuns` would cut it off after its grace).
+    await waitForDetachedRunToEnd(workDir, 'sweep-tmpdirs');
     expectTrimmed('idle-pppppppppp');
     assert.ok(fs.existsSync(path.join(workDir, 'p', 'idle-pppppppppp', 'build-data-trimmed')), 'and the note for the next job is written');
     assert.ok(fs.existsSync(path.join(workDir, 'p', slug, 'tree')), 'and the copy of the submit itself is not what was trimmed');

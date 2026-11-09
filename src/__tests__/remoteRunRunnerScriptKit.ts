@@ -103,6 +103,26 @@ export function stopDetachedRuns(root: string): void {
   }
 }
 
+/** The pid a detached run keeps in `<workDir>/tmp/<subcommand>.pid` (written by `start_detached_run` before the call that started it returns), or null when there is no such file or it holds no number. */
+export function readDetachedRunPid(workDir: string, subcommand: string): number | null {
+  try {
+    const pid = Number.parseInt(fs.readFileSync(path.join(workDir, 'tmp', `${subcommand}.pid`), 'utf8').trim(), 10);
+    return Number.isInteger(pid) && pid > 1 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Wait for the detached run `subcommand` of `workDir` to END - its own signal: the process is gone - and give it no clock. The runs are started `nice -n 19`, so on a loaded machine (a CI runner at a load of 27) one is starved
+ * for as long as the others want the CPU: any number of seconds is a guess that a slow box breaks, and `stopDetachedRuns` ends a run that is still going after its grace (which cuts a trim off half-way). A run that
+ * hangs is bounded by the test timeout of the file. A pid file that is missing, holds no number or names a process that is not the run (a stranger's, after the number was given away) is nothing to wait for.
+ */
+export async function waitForDetachedRunToEnd(workDir: string, subcommand: string): Promise<void> {
+  const pid = readDetachedRunPid(workDir, subcommand);
+  while (pid !== null && checkIsDetachedRun(pid)) await new Promise((resolve) => setTimeout(resolve, detachedRunPollMs * 4));
+}
+
 /**
  * End the runs the script detached under `root` AT ONCE, without waiting for their walk: for a case that has seen what it needed and would otherwise stand in the teardown's wait for a run that is held on purpose
  * (a Pueue that takes seconds to answer, a scheduling mutex nobody releases). What such a run had started (its `sleep`) is left to end by itself.
