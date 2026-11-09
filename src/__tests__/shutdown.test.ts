@@ -27,6 +27,28 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { gracefulShutdown, type ShutdownDeps } from '../shutdown';
 
+/**
+ * A step that never finishes until the test lets it. `gracefulShutdown` returning while one is held can only be its watchdog: the tests read that off the ORDER of events, not off how long it took — a bound on
+ * elapsed milliseconds fails on a loaded host (a process that is not scheduled for 180 ms «took» 230), whatever the code does.
+ */
+function createHeldStep(): { wait: () => Promise<void>; release: () => void } {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  return { wait: () => held, release };
+}
+
+/** The shutdown must return by itself; if it does not (the watchdog did not cut the held step) the test says so instead of waiting for the file's time limit. */
+const returnBoundMs = 5000;
+async function returns<T>(work: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`gracefulShutdown did not return within ${returnBoundMs} ms`)), returnBoundMs); });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 interface TestHandle {
   deps: ShutdownDeps;
   events: string[];
@@ -44,19 +66,16 @@ interface TestHandle {
 
 function makeDeps(overrides: Partial<ShutdownDeps> & {
   flushDelayMs?: number;
-  /** Force flush to take *longer* than the watchdog. Resolves after `flushDelayMs`. */
-  flushSlowerThanWatchdog?: boolean;
+  /** Force flush to take *longer* than the watchdog: it waits for `heldFlush.release()`. */
+  heldFlush?: { wait: () => Promise<void> };
 } = {}): TestHandle {
   const events: string[] = [];
   let recordedExit: number | null = null;
   let flushDone: () => void = () => {};
   const flushDrain = new Promise<void>((resolve) => { flushDone = resolve; });
 
-  // If the caller asked for "slower than watchdog", default the delay to
-  // a value safely above the default watchdogMs. Callers can override.
-  const effectiveDelay =
-    overrides.flushDelayMs ??
-    (overrides.flushSlowerThanWatchdog ? 200 : 0);
+  const effectiveDelay = overrides.flushDelayMs ?? 0;
+  const { heldFlush, ...shutdownOverrides } = overrides;
 
   const deps: ShutdownDeps = {
     signal: 'SIGTERM',
@@ -68,6 +87,7 @@ function makeDeps(overrides: Partial<ShutdownDeps> & {
     state: {
       flush: async () => {
         events.push('state.flush:start');
+        if (heldFlush !== undefined) await heldFlush.wait();
         if (effectiveDelay > 0) {
           await new Promise((r) => setTimeout(r, effectiveDelay));
         }
@@ -83,8 +103,9 @@ function makeDeps(overrides: Partial<ShutdownDeps> & {
     },
     cleanupTimers: () => events.push('cleanupTimers'),
     log: () => { /* silence */ },
-    watchdogMs: 50,
-    ...overrides,
+    // Far longer than any step of a test that is not about the watchdog: it is cleared when the sequence wins, and a host that does not schedule the test for a moment must not fire it mid-sequence.
+    watchdogMs: 60_000,
+    ...shutdownOverrides,
   };
 
   return {
@@ -132,39 +153,32 @@ test('state.flush is FULLY awaited before releaseLock — the historical bug', a
 });
 
 test('watchdog forces exit when state.flush is slower than the watchdog', async () => {
-  // Flush takes 200ms, watchdog fires after 50ms → watchdog wins.
-  const { deps, events, exitCode, drained } = makeDeps({
-    flushSlowerThanWatchdog: true,
-    watchdogMs: 50,
-  });
+  // The flush is held, so gracefulShutdown can only return through the watchdog (50 ms).
+  const held = createHeldStep();
+  const { deps, events, exitCode, drained } = makeDeps({ heldFlush: held, watchdogMs: 50 });
 
-  const start = Date.now();
-  await gracefulShutdown(deps);
-  const elapsed = Date.now() - start;
+  await returns(gracefulShutdown(deps));
 
-  // gracefulShutdown must return at the watchdog boundary, not wait the
-  // full flush. Allow generous slack for slow CI.
-  assert.ok(elapsed < 180, `watchdog should return promptly; got ${elapsed}ms`);
   assert.equal(exitCode(), 0, 'watchdog must still exit(0) so nodemon respawns');
   // releaseLock fires from the watchdog path so the next respawn finds a
   // free lockfile — that's the whole point of having the watchdog.
   assert.ok(events.includes('releaseLock'), `releaseLock missing; events=${JSON.stringify(events)}`);
-  // Drain the orphan flush so node:test doesn't flag a pending promise.
+  assert.ok(!events.includes('state.flush:resolved'), 'the flush was still held when the watchdog cut the shutdown');
+  // Let the orphan flush finish so node:test doesn't flag a pending promise.
+  held.release();
   await drained();
 });
 
 test('watchdog does NOT fire on a fast flush', async () => {
-  const { deps, events, exitCode, drained } = makeDeps({ flushDelayMs: 5, watchdogMs: 500 });
-  const start = Date.now();
+  // The watchdog is a minute away: the shutdown returning at all (inside the bound) means it did not wait the watchdog out.
+  const { deps, events, exitCode, drained } = makeDeps({ flushDelayMs: 5, watchdogMs: 60_000 });
 
-  await gracefulShutdown(deps);
+  await returns(gracefulShutdown(deps));
   await drained();
 
-  const elapsed = Date.now() - start;
-  // Way under the 500ms watchdog — proves the happy path didn't wait it out.
-  assert.ok(elapsed < 200, `expected fast resolution, got ${elapsed}ms`);
-  // exit only recorded once (the watchdog path is suppressed).
+  // exit only recorded once (the watchdog path is suppressed), after the flush resolved.
   assert.equal(events.filter((e) => e.startsWith('exit')).length, 1);
+  assert.ok(events.indexOf('state.flush:resolved') < events.indexOf('exit(0)'), `exit came after the flush; events=${JSON.stringify(events)}`);
   assert.equal(exitCode(), 0);
 });
 
@@ -226,16 +240,14 @@ test('a slow clearTransientFrames still hits the watchdog and forces exit', asyn
   // A frame sweep slower than the watchdog (e.g. wedged Telegram API) must NOT
   // strand the shutdown: the outer watchdog wins and we still exit(0) +
   // releaseLock, even though the flush is blocked behind the sweep at that point.
+  const held = createHeldStep();
   const { deps, events, exitCode, drained } = makeDeps({
     watchdogMs: 50,
-    clearTransientFrames: () => new Promise<void>((resolve) => setTimeout(resolve, 200)),
+    clearTransientFrames: () => held.wait(),
   });
 
-  const start = Date.now();
-  await gracefulShutdown(deps);
-  const elapsed = Date.now() - start;
+  await returns(gracefulShutdown(deps));
 
-  assert.ok(elapsed < 180, `watchdog should return promptly; got ${elapsed}ms`);
   assert.equal(exitCode(), 0, 'watchdog must still exit(0) so nodemon respawns');
   assert.ok(events.includes('releaseLock'), `releaseLock must fire; events=${JSON.stringify(events)}`);
   assert.ok(
@@ -245,6 +257,7 @@ test('a slow clearTransientFrames still hits the watchdog and forces exit', asyn
 
   // Let the orphan sweep + its trailing flush settle so node:test doesn't flag a
   // pending promise.
+  held.release();
   await drained();
 });
 
@@ -281,16 +294,14 @@ test('a hanging finalizePendingOutput still hits the watchdog and forces exit', 
   // The bot-side flush self-bounds; but even a wedged one (e.g. a hung Telegram
   // socket past its own race) must NOT strand the shutdown — the outer watchdog
   // wins and we still releaseLock + exit(0).
+  const held = createHeldStep();
   const { deps, events, exitCode, drained } = makeDeps({
     watchdogMs: 50,
-    finalizePendingOutput: () => new Promise<void>((resolve) => setTimeout(resolve, 200)),
+    finalizePendingOutput: () => held.wait(),
   });
 
-  const start = Date.now();
-  await gracefulShutdown(deps);
-  const elapsed = Date.now() - start;
+  await returns(gracefulShutdown(deps));
 
-  assert.ok(elapsed < 180, `watchdog should return promptly; got ${elapsed}ms`);
   assert.equal(exitCode(), 0, 'watchdog must still exit(0) so nodemon respawns');
   assert.ok(events.includes('releaseLock'), `releaseLock must fire; events=${JSON.stringify(events)}`);
   assert.ok(
@@ -300,6 +311,7 @@ test('a hanging finalizePendingOutput still hits the watchdog and forces exit', 
 
   // Let the orphan finalize + its trailing flush settle so node:test doesn't
   // flag a pending promise.
+  held.release();
   await drained();
 });
 
