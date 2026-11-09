@@ -89,16 +89,22 @@ describe('agent-plugin', () => {
     assert.match(text, /Never arm a schedule of your own for status lines/);
   });
 
-  test('charness-orchestration teaches the third watch signal: touch the marker right before arming and when re-arming, 2 h 30 min without a report, and what to do on that wake', () => {
+  test('charness-orchestration teaches the third watch signal: touch the marker right before arming (a resume too), 2 h 30 min without a report, keep the SAME check when the worker is fine, and what the missing-marker code means', () => {
     const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
     assert.equal(workerWatchUnreportedMinutes, 150, 'the «2 h 30 min» the skill and the topic sentence say');
     assert.ok(flat.includes(`\`touch "<run-dir>/${workerWatchArmedFileName}"\``), 'the touch before the check is armed');
     assert.match(flat, /It fails on ANY of three signals: the worker's process is gone, nothing in its run directory changed for 45 minutes, or the watch was armed 2 h 30 min ago/);
-    assert.match(flat, /The third signal counts from the age of `<run-dir>\/watch-armed`: `touch` it right before you arm the check, and again whenever you re-arm one/);
-    assert.match(flat, /A run directory without that file fails the third test at the first run — a forgotten `touch` wakes you at once\./);
+    assert.match(flat, /The third signal counts from the age of `<run-dir>\/watch-armed`: `touch` it right before you arm the check — also when you resume a worker and arm a new check on its reused run directory, where the marker of the first run is old\./);
+    assert.match(flat, /A check alerts once per failing episode and passes again when its tests do: after you looked at a worker that is fine, `touch` the marker again and KEEP the same check — it passes at its next run and watches on \(the topic reads «Worker … is working again»\); never arm a second one beside it\./);
+    assert.doesNotMatch(flat, /a check fires only once/i, 'the old reason was wrong: a check alerts once per failing episode');
+    assert.match(flat, /A run directory without that file fails at the first run with its own exit code 4 \(the topic reads «Check fired», the output «watch-armed: missing»\): `touch` it and the check passes again\./);
+    assert.ok(flat.includes('[ -e "<run-dir>/watch-armed" ] || { echo "<run-dir>/watch-armed: missing, touch it when you arm the watch"; exit 4; }'), 'the missing marker has its own code, judged before the age');
     assert.match(flat, /«… running 2 h 30 min without a report»/, 'the sentence the topic reads');
     assert.match(flat, /One check may cover several runs of one step .* The `watch-armed` marker of the third test goes in the first of them\./, 'a watch over several runs keeps one marker');
-    assert.match(flat, /running 2 h 30 min without a report → look at what it is doing now and step in, or, when it is fine, `touch` the marker and arm a new check/);
+    assert.match(flat, /running 2 h 30 min without a report → look at what it is doing now and step in, or, when it is fine, `touch` the marker and KEEP this check \(do not cancel it\)/);
+    assert.match(flat, /Then cancel the check \(`schedule_list` → `schedule_cancel`\) — unless you kept it for a worker that is fine/, 'the cancel step does not contradict keeping the check');
+    assert.match(flat, /checking the same signals \(the PID, the run directory changing, 2 h 30 min since you started waiting without a report\)/, 'a Jira conversation has no bot check behind the third signal: it polls it itself');
+    assert.doesNotMatch(flat, /checking the same two signals/);
     assert.doesNotMatch(flat, /etimes/, 'a macOS ps may lack it: the clock is the marker');
   });
 
@@ -134,7 +140,10 @@ describe('agent-plugin', () => {
     const { description } = readFrontmatter(path.join(skillsDir, 'charness-delivery-loop', 'SKILL.md'));
     assert.match(description, /^Only when this session lists NO other manager skill/);
     assert.match(description, /A general manager skill is listed → follow that one and do not load this\./);
-    assert.match(flat, /each separately released task gets its own git worktree and branch, named in its brief; the builder commits only there\. A lone task, or the tasks of one release, works on the current checkout\./);
+    assert.match(flat, /each separately released task — one that could be reviewed, merged or reverted on its own; every separate ask in the queue counts, even when the project ships one release a day — gets its own git worktree and branch, named in its brief; the builder commits only there\. A lone task, or the scopes of ONE plan or task, works on the current checkout\./, 'what «separately released» means: a daily release does not make two asks one task');
+    assert.doesNotMatch(flat, /tasks of one release/, 'the phrase that had nothing to anchor it in a loop with no batch');
+    assert.match(flat, /Any fixes in 3 → a separate reviewer reviews just those fixes \(same report path rule\), then back to 3\. Push only after a full green run with no fixes after it\./, 'fixes are covered by a full green run before the push');
+    assert.doesNotMatch(flat, /a change it makes sends you back/, 'a reviewer changes nothing, so that rule could never fire');
     assert.doesNotMatch(flat, /no worktree needed/i, 'the old same-checkout rule is gone');
     assert.match(flat, /A long run never holds the queue: .*start the next independent task — in its own worktree when it is released separately\./);
     assert.match(flat, /the absolute path of its report file outside the worktree \(e\.g\. its run directory\) — it writes nothing inside the worktree/);
@@ -171,6 +180,13 @@ describe('agent-plugin', () => {
     assert.match(flat, /echo \$! > "<run-dir>\/pid" printf '%s\\n' "<uuid>" > "<run-dir>\/session"/, 'written beside the pid, in the launch block');
     assert.match(flat, /Record the UUID \(it is in `<run-dir>\/session`\)/);
     assert.match(flat, /`<uuid>` comes only from `<run-dir>\/session` or the `session_id` of the first \(`system`\/`init`\) event of the first run's log — never from memory or a shortened prefix\./);
+  });
+
+  test('both delegate skills touch the watch-armed marker when they resume a worker: the run directory is reused, so the marker of the first run is already old', () => {
+    for (const folder of ['charness-delegate-claude', 'charness-delegate-opencode']) {
+      const flat = readSkill(folder).replace(/\s+/g, ' ');
+      assert.match(flat, /new log files \(`events-2\.jsonl`, …\), `touch "<run-dir>\/watch-armed"` \(the run directory is reused, so the marker of the first run is old\) and arm a new check/, folder);
+    }
   });
 
   test('no skill names the old charness-manager: the rename left no dangling pointer', () => {

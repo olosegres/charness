@@ -31,9 +31,10 @@ check, accounts, reaching the user) are in `charness-orchestration`; this skill 
 ## Parallel work and the queue
 
 - Reviewers and researchers run without limit alongside everything else: they only read.
-- Builders: each separately released task gets its own git worktree and branch, named in its brief; the builder
-  commits only there. A lone task, or the tasks of one release, works on the current checkout. Two tasks touching
-  the same file queue.
+- Builders: each separately released task — one that could be reviewed, merged or reverted on its own; every separate
+  ask in the queue counts, even when the project ships one release a day — gets its own git worktree and branch, named
+  in its brief; the builder commits only there. A lone task, or the scopes of ONE plan or task, works on the current
+  checkout. Two tasks touching the same file queue.
 - Serialize what shares state: builds, test runs (devices, ports, e2e lanes — through their locks) and commits
   (one at a time, path-limited). Two workers never share a file, a port, a browser profile or a device at once.
 - Every new ask joins the queue the moment it is said; start it at once when nothing it needs is taken, else tell
@@ -68,8 +69,8 @@ check, accounts, reaching the user) are in `charness-orchestration`; this skill 
       fast-forward goes back to its builder: rebase onto the base, rerun the tests the base's new commits affect.
    3. A builder fetches; if the branch or its base moved on the remote, it pulls and rebases; then it runs ALL test
       suites in full and fixes every failure.
-   4. Any fixes in 3 → a separate reviewer reviews just those fixes (same report path rule); a change it makes sends
-      you back to 3.
+   4. Any fixes in 3 → a separate reviewer reviews just those fixes (same report path rule), then back to 3. Push
+      only after a full green run with no fixes after it.
    Each loop runs up to 20 cycles while the findings are concrete local fixes, telling the user about each cycle
    past the third — even when new findings keep landing in the same area. A major finding, or the 20 cycles used
    up: stop, leave the work for inspection, report. Never propose cutting the agreed scope to escape the loop.

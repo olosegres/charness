@@ -1487,3 +1487,35 @@ test('the schedule sentences are typographically sound: German quotes are paired
   assert.equal(runWithLocale('en', () => t('schedule.workerUnreported', { name: 'N1', elapsed: 'E1' })), '⚠️ Worker "N1" has been running E1 without a report. Checking on it.');
   assert.equal(runWithLocale('ru', () => t('schedule.workerUnreported', { name: 'N1', elapsed: 'E1' })), '⚠️ Воркер «N1» работает уже E1 без отчёта. Смотрю, что с ним.');
 });
+
+test('the «Bot skills» screen texts no longer call the bot\'s skill «the manager» in any locale: it is an orchestration add-on to the session\'s own manager skill, with a fallback delivery loop beside it', () => {
+  // The word for «manager» of each locale (what the screens said before the bot's manager skill became `charness-orchestration`).
+  const managerWordByLocale: Record<Locale, RegExp> = {
+    en: /manager/i,
+    ru: /менеджер/i,
+    uk: /менеджер/i,
+    de: /manager/i,
+    es: /gestor/i,
+    fr: /gestionnaire/i,
+    pt: /gestor/i,
+    ja: /マネージャー/,
+    zh: /管理者/,
+    hi: /मैनेजर/,
+    ka: /მენეჯერ/,
+    uz: /menejer/i,
+  };
+  const botSkillsKeys = Object.keys(enDict).filter((key) => key.startsWith('botSkills.'));
+  assert.ok(botSkillsKeys.includes('botSkills.explanationText') && botSkillsKeys.includes('botSkills.openCodeTopicNote'));
+  for (const locale of localeCodes) {
+    for (const key of botSkillsKeys) {
+      const text = runWithLocale(locale, () => t(key as keyof typeof enDict));
+      assert.doesNotMatch(text, managerWordByLocale[locale], `${locale} ${key}: "${text}"`);
+    }
+  }
+  assert.equal(
+    runWithLocale('en', () => t('botSkills.explanationText')),
+    'The skills Charness gives its agents (an add-on for orchestrating workers with the bot\'s tools, a fallback delivery loop and the two worker-delegation skills) and the hint in the bot\'s instructions to load the add-on.',
+    'four skills ship, not three, and the hint loads the add-on',
+  );
+  assert.match(runWithLocale('en', () => t('botSkills.openCodeTopicNote')), /this switch only changes the hint to load the orchestration add-on, and only when the OpenCode server next restarts/);
+});

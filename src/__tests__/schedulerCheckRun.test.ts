@@ -207,19 +207,24 @@ test('the worker watch recipe: silent while the worker lives and writes; fails w
       fs.utimesSync(armedFile, armedLongAgo, armedLongAgo);
       const unreported = await watch(recipe);
       assert.equal(unreported.exitCode, 3, 'a live worker that writes, armed over 2 h 30 min ago, fails the third test');
-      assert.match(unreported.output, /watch-armed: older than 2 h 30 min, or missing/);
+      assert.match(unreported.output, /watch-armed: older than 2 h 30 min\n$/);
       assert.equal(getWorkerWatchEnd(unreported), 'unreported');
       assert.equal((await watch(`kill -0 ${workerPid}`)).exitCode, 0, 'the liveness-only check stays green on this one too');
 
-      // The agent looked, found the worker fine and re-armed: `touch` restarts the clock, and the watch is quiet again.
+      // The agent looked and found the worker fine: `touch` restarts the clock, and the SAME check passes again at its next run.
       fs.utimesSync(armedFile, writingAgain, writingAgain);
-      assert.equal((await watch(recipe)).exitCode, 0, 'a re-armed watch passes');
+      assert.equal((await watch(recipe)).exitCode, 0, 'a touched marker makes the same recipe pass: no new check is needed');
 
-      // Fail closed: a run dir without the marker (the `touch` was forgotten) fails at the first run, never silently skips the test.
+      // Fail closed, with a code of its own: a run dir without the marker (the `touch` was forgotten, or a resumed worker's
+      // run dir that never had one) fails at the first run — never silently skips the test, and never reads as 2 h 30 min.
       fs.rmSync(armedFile);
       const unmarked = await watch(recipe);
-      assert.equal(unmarked.exitCode, 3, 'no marker: the third test fails');
-      assert.match(unmarked.output, /watch-armed: older than 2 h 30 min, or missing/);
+      assert.equal(unmarked.exitCode, workerWatchExitCode.markerMissing, 'no marker: its own exit code');
+      assert.match(unmarked.output, /watch-armed: missing, touch it when you arm the watch/);
+      assert.equal(getWorkerWatchEnd(unmarked), null, 'the topic must not say «running 2 h 30 min without a report» for a worker that may have started minutes ago');
+      fs.writeFileSync(armedFile, '');
+      assert.equal((await watch(recipe)).exitCode, 0, 'the `touch` the output asks for makes the check pass again');
+      fs.rmSync(armedFile);
 
       // The order of the signals: a quiet run dir is reported before an old marker, a gone process before both.
       for (const entry of [eventsFile, runDir]) fs.utimesSync(entry, stalledAt, stalledAt);
@@ -239,6 +244,8 @@ test('the worker watch recipe names its exit codes and its window from the const
   assert.ok(workerWatchCheckCommand.includes(`exit ${workerWatchExitCode.processGone};`));
   assert.ok(workerWatchCheckCommand.includes(`exit ${workerWatchExitCode.runDirSilent};`));
   assert.ok(workerWatchCheckCommand.includes(`exit ${workerWatchExitCode.unreported};`));
+  assert.ok(workerWatchCheckCommand.includes(`exit ${workerWatchExitCode.markerMissing};`));
+  assert.ok(workerWatchCheckCommand.indexOf(`exit ${workerWatchExitCode.markerMissing};`) < workerWatchCheckCommand.indexOf(`exit ${workerWatchExitCode.unreported};`), 'the missing marker is judged before its age');
   assert.ok(workerWatchCheckCommand.includes(`-mmin -${workerWatchSilenceMinutes} `));
   assert.ok(workerWatchCheckCommand.includes(`no change for ${workerWatchSilenceMinutes} min`));
   assert.ok(workerWatchCheckCommand.includes(`find "<run-dir>/${workerWatchArmedFileName}" -mmin -${workerWatchUnreportedMinutes} `), 'the third test reads the marker\'s age, not ps');
@@ -251,7 +258,8 @@ test('getWorkerWatchEnd: only a run that exited by itself with one of the recipe
   assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.processGone })), 'finished');
   assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.runDirSilent })), 'silent');
   assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.unreported })), 'unreported');
-  assert.equal(getWorkerWatchEnd(run({ exitCode: 4 })), null, 'another code is some other check');
+  assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.markerMissing })), null, 'a missing marker says nothing about the worker');
+  assert.equal(getWorkerWatchEnd(run({ exitCode: 5 })), null, 'another code is some other check');
   assert.equal(getWorkerWatchEnd(run({ exitCode: 0 })), null, 'a pass is not an end');
   assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.processGone, isTimedOut: true })), null, 'a timed-out run says nothing about the worker');
   assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.unreported, isTimedOut: true })), null, 'nor does a timed-out run with the third code');

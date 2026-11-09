@@ -446,7 +446,7 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
   let longRunMarkerPath = '';
   let promptsBeforeLongRun = 0;
 
-  it('the third signal: a second watch is armed on a live worker that keeps writing — the agent touched the marker first, and the check passes', async () => {
+  it('the third signal: a second watch is armed on a live worker that keeps writing — the agent touched the marker first, and the check passes (a run of it finished and raised nothing)', async () => {
     promptsBeforeLongRun = countAgentPrompts();
     const startedWorker = spawn('sleep', ['3600'], { stdio: 'ignore' });
     longRunWorker = startedWorker;
@@ -463,6 +463,7 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeStatusWatchTargetFileName), JSON.stringify(target));
 
     const createsBefore = getToolCalls('schedule_create').length;
+    const armedAtMs = Date.now();
     fakeTelegram.pushOperatorMessage(topicThreadId, 'S-2 [fake:arm-status-watch] watch the long run you just launched');
     await getCharness().waitFor('the agent to arm the second watch', agentTimeoutMs, () => getToolCalls('schedule_create').length === createsBefore + 1);
     const created = getToolCalls('schedule_create')[createsBefore];
@@ -473,6 +474,12 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
     assert.equal(watch.statusWorkerRunDir, longRunRunDir, 'a worker watch: the bot may say what happened to the worker');
     assert.ok(fs.existsSync(longRunMarkerPath), 'the agent touched the marker before arming, as the skill says');
     assert.ok(Date.now() - fs.statSync(longRunMarkerPath).mtimeMs < markerFreshMs, 'and it is fresh');
+
+    // The pass is PROVEN, not assumed: a run of this watch finished with the fresh marker and raised nothing. Without it the next
+    // case would also be satisfied by a recipe that fails at once (the marker in the wrong folder, a quoting slip in `find`).
+    await getCharness().waitFor('a run of the second watch to finish', checkRunTimeoutMs, () => countFinishedRunsSince(armedAtMs) >= 1);
+    assert.ok(!topic.listMessages().some((message) => message.text.includes(unreportedAlertMark)), 'no sentence about the second worker while its marker is fresh');
+    assert.notEqual(readPersistedSchedules().find((record) => record.id === watchId)?.isCheckFailing, true, 'the finished run passed');
   });
 
   it('the watch was armed over 2 h 30 min ago and the worker is alive and writing: ONE silent sentence says it has run 2 h 30 min without a report — no command, no output, nothing pinned, the status line gone — and the agent is woken', async () => {

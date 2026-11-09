@@ -110,8 +110,10 @@ constants in the code; this README keeps what the code cannot say.
 - **Watching a detached worker.** `workerWatchCheckCommand` is the one recipe for a check on a worker an agent
   launched: it fails when the worker's PID is gone OR nothing in its run dir changed for 45 min OR the watch was armed 2 h 30 min
   ago (a `kill -0` alone never fires on a hung worker; the third test is the age of `<run-dir>/watch-armed`, a file the agent `touch`es
-  when it arms or re-arms the watch — `find -mmin`, since a macOS `ps` may lack `etimes`, and a run dir without the file fails at the
-  first run, never as a signal that silently does not exist), a normal finish fires it too, so the topic gets ONE silent sentence
+  right before it arms the watch — a resume's reused run dir too — and again when it looked and found the worker fine: the SAME check
+  then passes at its next run and watches on; `find -mmin`, since a macOS `ps` may lack `etimes`. A run dir without the file fails at the
+  first run with a code of its own, 4 — never as a signal that silently does not exist, and never as the «2 h 30 min» sentence: exit 4 is
+  not a worker end, so the topic gets the ordinary «Check fired» with the recipe's line folded under it), a normal finish fires it too, so the topic gets ONE silent sentence
   («Worker "builder S2" finished (2 h 5 min). Reading the result.» for exit 1, «… has been silent for 45 min. Checking whether it hung.»
   for exit 2, «… has been running 2 h 30 min without a report. Checking on it.» for exit 3 — `getWorkerWatchEnd` reads the recipe's own
   exit codes back, for a check with a `statusWorkerRunDir`), never the command and never

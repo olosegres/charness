@@ -57,6 +57,7 @@ import {
   type IsolatedInstanceLayout,
 } from './e2e/isolatedCharness';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
+import type { ScheduleRunRecord } from '../scheduler/runLedger';
 import type { ScheduleRecord } from '../scheduler/types';
 import { workerWatchArmedFileName } from '../scheduler/workerWatch';
 
@@ -116,6 +117,12 @@ function getToolCalls(tool: string): FakeClaudeToolCall[] {
 function readPersistedSchedules(): ScheduleRecord[] {
   const persisted: { schedules?: Record<string, ScheduleRecord> } = JSON.parse(fs.readFileSync(path.join(getLayout().dataDir, 'state.json'), 'utf8'));
   return Object.values(persisted.schedules ?? {});
+}
+
+/** The runs of one watch that have finished, from the run ledger (a fire writes its record first, `deliveredAt` once its delivery resolved). */
+function countFinishedRuns(jobId: string): number {
+  return readJsonLines<ScheduleRunRecord>(path.join(getLayout().dataDir, 'scheduler-runs.jsonl'))
+    .filter((run) => run.jobId === jobId && run.deliveredAt !== undefined).length;
 }
 
 describe('A worker watch end to end: built charness, fake Bot API, a fake orchestrating agent', () => {
@@ -230,7 +237,7 @@ describe('A worker watch end to end: built charness, fake Bot API, a fake orches
   let longRunRunDir = '';
   let longRunMarkerPath = '';
 
-  it('the third signal: the agent touches the marker and arms the same recipe on a LIVE worker that keeps writing — the check passes', async () => {
+  it('the third signal: the agent touches the marker and arms the same recipe on a LIVE worker that keeps writing — the check passes (a run of it finished and raised nothing)', async () => {
     const startedWorker = spawn('sleep', ['3600'], { stdio: 'ignore' });
     longRunWorker = startedWorker;
     await new Promise<void>((resolve, reject) => {
@@ -260,6 +267,12 @@ describe('A worker watch end to end: built charness, fake Bot API, a fake orches
     assert.match(watch.checkCommand ?? '', new RegExp(`kill -0 ${target.pid}\\b`), 'the recipe is armed on the live worker');
     assert.ok(fs.existsSync(longRunMarkerPath), 'the agent touched the marker before arming, as the skill says');
     assert.ok(Date.now() - fs.statSync(longRunMarkerPath).mtimeMs < markerFreshMs, 'and it is fresh');
+
+    // The pass is PROVEN, not assumed: a run of this watch finished with the fresh marker and raised nothing. Without it the next
+    // case would also be satisfied by a recipe that fails at once (the marker in the wrong folder, a quoting slip in `find`).
+    await getCharness().waitFor('a run of the second watch to finish', checkFireTimeoutMs, () => countFinishedRuns(watch.id) >= 1);
+    assert.ok(!topic.listMessages().some((message) => message.message_id > alertMessageId && message.text.includes(alertMark)), 'no alert of the second watch while its marker is fresh');
+    assert.notEqual(readPersistedSchedules().find((record) => record.id === watch.id)?.isCheckFailing, true, 'the finished run passed');
   });
 
   it('the watch was armed over 2 h 30 min ago and the worker is alive and writing: the run fails with the recipe\'s third exit code — one silent sentence, the recipe\'s own line under it, no command, NO pin — and the agent is woken', async () => {
@@ -277,7 +290,7 @@ describe('A worker watch end to end: built charness, fake Bot API, a fake orches
     assert.equal(alert.isSilent, true);
     assert.equal(
       alert.text,
-      `🔔 Check "${fakeWatchJobName}" fired — waking the agent.\n\nexit 3\n\n${longRunMarkerPath}: older than 2 h 30 min, or missing`,
+      `🔔 Check "${fakeWatchJobName}" fired — waking the agent.\n\nexit 3\n\n${longRunMarkerPath}: older than 2 h 30 min`,
       'the sentence, then exit 3 and the recipe\'s own line: the third signal, not the first (the process lives) and not the second (the log is fresh)',
     );
     assert.doesNotMatch(alert.text, /kill -0|\$ |find /, 'the command stays out of the topic');

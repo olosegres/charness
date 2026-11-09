@@ -14,24 +14,27 @@ export const workerWatchSilenceMinutes = 45;
 /**
  * Minutes after the watch was armed at which the recipe calls a worker «running without a report»: 2 h 30 min, the point
  * where a run far over its normal time stops being something to wait out. Counted from {@link workerWatchArmedFileName},
- * not from the worker's process: a check fires once, so a manager that looked, found the worker fine and re-armed
- * must be able to restart the clock.
+ * not from the worker's process, so an agent that looked and found the worker fine restarts the clock by touching the file
+ * again: the SAME check then passes at its next run (the topic reads «working again») and watches on.
  */
 export const workerWatchUnreportedMinutes = 150;
 
 /**
- * The file in the worker's run directory that the orchestrating agent `touch`es when it arms the watch (and again when
- * it re-arms it). Its age is the third signal's clock. A run directory without it fails that signal at the first run —
- * a forgotten `touch` shows up at once, never as a signal that silently does not exist.
+ * The file in the worker's run directory that the orchestrating agent `touch`es right before it arms the watch, on a resume
+ * too (the run directory is reused, so the first run's file is old), and again when it looked and found the worker fine. Its
+ * age is the third signal's clock. A run directory without it fails the recipe at the first run with its OWN exit code
+ * ({@link workerWatchExitCode}.markerMissing): a forgotten `touch` shows up at once, never as a signal that silently does
+ * not exist — and the topic does not call a worker started minutes ago «running 2 h 30 min without a report».
  */
 export const workerWatchArmedFileName = 'watch-armed';
 
 /**
  * The exit codes the recipe's `checkCommand` ends with. The bot reads them back (`getWorkerWatchEnd`) to say in the topic
  * whether the worker finished, went silent or has run too long without a report, so the command below and the reader
- * share these.
+ * share these. `markerMissing` is none of the three: it says nothing about the worker, so the topic gets the ordinary
+ * «Check fired» with the recipe's own line folded under it.
  */
-export const workerWatchExitCode = { processGone: 1, runDirSilent: 2, unreported: 3 } as const;
+export const workerWatchExitCode = { processGone: 1, runDirSilent: 2, unreported: 3, markerMissing: 4 } as const;
 
 const minutesPerHour = 60;
 /** The window of the third signal as the recipe's own output says it: `2 h 30 min`. */
@@ -42,14 +45,15 @@ const workerWatchUnreportedWindowText = `${Math.floor(workerWatchUnreportedMinut
  * and `<run-dir>` (an absolute path: the check runs in the topic's folder) for the agent to fill in. It fails on any of
  * THREE signals, in this order: the worker's process is gone; nothing in its run directory changed for
  * {@link workerWatchSilenceMinutes} minutes; the watch was armed {@link workerWatchUnreportedMinutes} minutes ago or
- * more (the age of `<run-dir>/`{@link workerWatchArmedFileName}). A check of `kill -0 <pid>` alone stays green while a
+ * more (the age of `<run-dir>/`{@link workerWatchArmedFileName}) — and before that third test it fails on a marker that
+ * is not there (its own exit code, a mistake of the agent that armed it). A check of `kill -0 <pid>` alone stays green while a
  * worker hangs — the reason this recipe exists. The run dir is quoted: a path with a space would otherwise read as two
  * folders and fire at once as "no change". The third test uses `find -mmin` on the marker, not `ps -o etimes=`, whose
  * `etimes` field a macOS `ps` may lack. The `charness-orchestration` skill (`agent-plugin/`) carries the command
  * verbatim (a unit test holds them equal).
  */
 export const workerWatchCheckCommand =
-  `kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit ${workerWatchExitCode.processGone}; }; [ -n "$(find "<run-dir>" -mmin -${workerWatchSilenceMinutes} -print -quit)" ] || { echo "<run-dir>: no change for ${workerWatchSilenceMinutes} min"; exit ${workerWatchExitCode.runDirSilent}; }; [ -n "$(find "<run-dir>/${workerWatchArmedFileName}" -mmin -${workerWatchUnreportedMinutes} -print -quit)" ] || { echo "<run-dir>/${workerWatchArmedFileName}: older than ${workerWatchUnreportedWindowText}, or missing"; exit ${workerWatchExitCode.unreported}; }`;
+  `kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit ${workerWatchExitCode.processGone}; }; [ -n "$(find "<run-dir>" -mmin -${workerWatchSilenceMinutes} -print -quit)" ] || { echo "<run-dir>: no change for ${workerWatchSilenceMinutes} min"; exit ${workerWatchExitCode.runDirSilent}; }; [ -e "<run-dir>/${workerWatchArmedFileName}" ] || { echo "<run-dir>/${workerWatchArmedFileName}: missing, touch it when you arm the watch"; exit ${workerWatchExitCode.markerMissing}; }; [ -n "$(find "<run-dir>/${workerWatchArmedFileName}" -mmin -${workerWatchUnreportedMinutes} -print -quit)" ] || { echo "<run-dir>/${workerWatchArmedFileName}: older than ${workerWatchUnreportedWindowText}"; exit ${workerWatchExitCode.unreported}; }`;
 /**
  * How often a worker watch runs: a hang or an exit is noticed within five minutes. The status line rides the passing runs
  * (`workerWatchStatusArguments`), so a slower tick would stretch its 15-minute rhythm (a 10-minute tick posts every 20).

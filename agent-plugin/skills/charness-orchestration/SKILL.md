@@ -26,16 +26,19 @@ Right after each launch, `touch "<run-dir>/watch-armed"`, then create ONE check 
 the check runs in the topic's folder, so a relative path or `~` points elsewhere):
 
 ```
-kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(find "<run-dir>" -mmin -45 -print -quit)" ] || { echo "<run-dir>: no change for 45 min"; exit 2; }; [ -n "$(find "<run-dir>/watch-armed" -mmin -150 -print -quit)" ] || { echo "<run-dir>/watch-armed: older than 2 h 30 min, or missing"; exit 3; }
+kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(find "<run-dir>" -mmin -45 -print -quit)" ] || { echo "<run-dir>: no change for 45 min"; exit 2; }; [ -e "<run-dir>/watch-armed" ] || { echo "<run-dir>/watch-armed: missing, touch it when you arm the watch"; exit 4; }; [ -n "$(find "<run-dir>/watch-armed" -mmin -150 -print -quit)" ] || { echo "<run-dir>/watch-armed: older than 2 h 30 min"; exit 3; }
 ```
 
 - It fails on ANY of three signals: the worker's process is gone, nothing in its run directory changed for 45
   minutes, or the watch was armed 2 h 30 min ago — the worker has run that long without a report. A check that
   only runs `kill -0 <pid>` never fires on a hung worker — never arm one.
-- The third signal counts from the age of `<run-dir>/watch-armed`: `touch` it right before you arm the check, and
-  again whenever you re-arm one (a check fires only once, so after you looked at a worker that is fine, a new check
-  needs a fresh clock). A run directory without that file fails the third test at the first run — a forgotten `touch`
-  wakes you at once.
+- The third signal counts from the age of `<run-dir>/watch-armed`: `touch` it right before you arm the check — also when
+  you resume a worker and arm a new check on its reused run directory, where the marker of the first run is old. A
+  check alerts once per failing episode and passes again when its tests do: after you looked at a worker that is fine,
+  `touch` the marker again and KEEP the same check — it passes at its next run and watches on (the topic reads «Worker
+  … is working again»); never arm a second one beside it. A run directory without that file fails at the first run with
+  its own exit code 4 (the topic reads «Check fired», the output «watch-armed: missing»): `touch` it and the check
+  passes again.
 - One check may cover several runs of one step (parallel reviewers): it fires only when ALL of them have ended —
   replace the first test with `kill -0 <a> 2>/dev/null || kill -0 <b> 2>/dev/null || { echo "workers <a> <b> exited"; exit 1; }`
   — and its silence test names every run directory: `find "<run-dir-a>" "<run-dir-b>" -mmin -45 -print -quit`. The
@@ -56,10 +59,10 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 - The first failure is ALSO the "worker finished" signal. On the wake read the worker's result first (its final
   event, its exit, the end of its log), then decide: finished → the next step of the loop; stalled → look at its
   last tool call, stop it, resume the same session; running 2 h 30 min without a report → look at what it is doing
-  now and step in, or, when it is fine, `touch` the marker and arm a new check; stopped by a usage limit → resume it
-  at once on another account (Accounts and usage limits).
-- Then cancel the check (`schedule_list` → `schedule_cancel`) — that also deletes its status line, so a finished
-  worker leaves nothing behind. A new run gets a new check.
+  now and step in, or, when it is fine, `touch` the marker and KEEP this check (do not cancel it); stopped by a usage
+  limit → resume it at once on another account (Accounts and usage limits).
+- Then cancel the check (`schedule_list` → `schedule_cancel`) — unless you kept it for a worker that is fine — which
+  also deletes its status line, so a finished worker leaves nothing behind. A new run gets a new check.
 - Never build your own watcher: no sleep loop, `CronCreate`, `ScheduleWakeup`, background job or tmux pane. They
   live in your process, which the bot stops after an idle stretch.
 
@@ -103,8 +106,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
 ## A tracker conversation (Jira)
 
 There are no `schedule_*` tools and nothing will wake you. Do not end your turn while a worker runs: wait in the
-turn with foreground polls of at most 10 minutes each, checking the same two signals (the PID, the run directory
-changing), report interim progress with `answer_request` kind `progress`, and end with kind `final`.
+turn with foreground polls of at most 10 minutes each, checking the same signals (the PID, the run directory
+changing, 2 h 30 min since you started waiting without a report), report interim progress with `answer_request` kind `progress`, and end with kind `final`.
 
 ## Closing a task that ran on a runner
 

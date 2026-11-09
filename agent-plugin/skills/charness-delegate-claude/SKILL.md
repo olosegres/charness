@@ -79,7 +79,8 @@ printf '%s\n' "<uuid>" > "<run-dir>/session"
 ## Resume
 
 - Confirm the old PID is gone, then repeat the launch with `--resume "<uuid>"` instead of `--session-id`, a new
-  brief and new log files (`events-2.jsonl`, …), and arm a new check. Never `--continue` or `--fork-session`.
+  brief and new log files (`events-2.jsonl`, …), `touch "<run-dir>/watch-armed"` (the run directory is reused, so the
+  marker of the first run is old) and arm a new check. Never `--continue` or `--fork-session`.
 - `<uuid>` comes only from `<run-dir>/session` or the `session_id` of the first (`system`/`init`) event of the first
   run's log — never from memory or a shortened prefix.
 - Keep the model, effort and flags of the first run.

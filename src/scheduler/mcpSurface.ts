@@ -170,8 +170,12 @@ const remoteRunInstruction =
   '• Heavy work (test suite, build, e2e run) → run it on a runner, not here: `charness remote-run runners` lists them and what each can do; `charness remote-run [--needs <capability>] <command>` (iOS: `--needs ios`) runs it in a copy of this project, returns output and exit code (edit files only here). Bind ports from `$REMOTE_RUN_PORT_BASE`, simulator `$REMOTE_RUN_IOS_SIMULATOR_UDID`, never `simctl shutdown all` or `booted`. Longer than your tool timeout: `charness remote-run --bg <command>`, then `charness remote-run wait <id>` in the background. Folder\'s last task closed → `charness remote-run clean`, never others\' copies; `--help`: the rest.';
 
 /**
- * Claude Code cuts a server's connect-time `instructions` that are longer than this: whatever comes last is lost, silently. The Telegram
- * text is within a few hundred characters of it before the remote-run bullet, so the runner lines are fitted to the room that is left.
+ * Claude Code cuts a server's connect-time `instructions` that are longer than this: whatever comes last is lost, silently. Measured, not
+ * assumed (commit 39455c20): a Telegram text of 4,029 characters without the remote-run bullet reached an agent with no bullet and no runner
+ * line — they began at character 3,932. The Telegram text is within a few hundred characters of it before that bullet, so the runner lines
+ * are fitted to the room that is left. Pinned in `todoRegistryMcp.test.ts` (every platform, the skills on and off, 40 runner lines of the
+ * longest kind) and `remoteRunMcpInstructions.test.ts`: any bullet that grows past it fails them, as the first, longer wording of the
+ * orchestration hint did.
  */
 export const claudeCodeInstructionsMaxLength = 4096;
 
@@ -1087,7 +1091,8 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
         `A DETACHED WORKER you launched (a \`claude -p\` / \`opencode run\` process): cron \`${workerWatchCheckCron}\`, ` +
         `\`${workerWatchStatusArguments}\`, checkCommand \`${workerWatchCheckCommand}\` with its PID and run dir (an absolute path) — it fails when ` +
         `the worker exits, OR nothing in its run dir changed for ${workerWatchSilenceMinutes} min, OR the watch was armed ${workerWatchUnreportedMinutes} min ago (\`touch <run-dir>/${workerWatchArmedFileName}\` ` +
-        'right before you arm it, and again when you re-arm it: the third test counts from that file, and a run dir without it fails at once), so the first failure is also the "worker finished" ' +
+        'right before you arm it — a resumed worker\'s reused run dir too — and again when you looked and found the worker fine: the same check then passes and watches on, ' +
+        'so do not arm a second one; a run dir without the file fails at once with exit 4), so the first failure is also the "worker finished" ' +
         'signal (the topic then reads «worker finished», «worker silent» or «running without a report», never the command). Never `kill -0` alone: it stays green ' +
         'while a worker hangs. The status arguments make the BOT post a silent status line into the topic every ' +
         `${workerWatchStatusEveryMinutes} min while the worker lives (works N min, its last action), so the topic never looks frozen — ` +

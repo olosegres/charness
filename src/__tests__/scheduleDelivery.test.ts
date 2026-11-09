@@ -983,7 +983,13 @@ const workerUnreportedRun: CheckRunResult = {
   exitCode: workerWatchExitCode.unreported,
   signal: null,
   isTimedOut: false,
-  output: `${workerRunDir}/${workerWatchArmedFileName}: older than 2 h 30 min, or missing\n`,
+  output: `${workerRunDir}/${workerWatchArmedFileName}: older than 2 h 30 min\n`,
+};
+const workerMarkerMissingRun: CheckRunResult = {
+  exitCode: workerWatchExitCode.markerMissing,
+  signal: null,
+  isTimedOut: false,
+  output: `${workerRunDir}/${workerWatchArmedFileName}: missing, touch it when you arm the watch\n`,
 };
 
 /** The announce call of a run, the way the topic would get it. */
@@ -1022,6 +1028,19 @@ test('worker watch: a worker that has run 2 h 30 min since the watch was armed w
   assert.doesNotMatch(alert.text, /kill -0|find |watch-armed/, 'neither the command nor its output');
   assert.ok(!callLog.some((entry) => entry.step === 'pin'), 'nothing is pinned');
   assert.ok(callLog.some((entry) => entry.step === 'forward'), 'the agent is woken to look at the worker');
+});
+
+test('worker watch: a missing marker (the `touch` was forgotten, or a resumed worker\'s run dir never had one) is NOT a worker end — the ordinary «Check fired» with the recipe\'s line folded under it, never «running 2 h 30 min without a report»', async () => {
+  // The worker started a minute ago: a sentence about 2 h 30 min would be false.
+  const { deps, callLog } = createHarness({ checkResult: workerMarkerMissingRun, startMs: jobCreatedAtMs + minuteMs });
+  await runWithLocale('en', () => createScheduleDelivery(deps)(makeWorkerWatch(), onTime));
+
+  const alert = getAnnounced(callLog);
+  assert.equal(alert.text, '🔔 Check "watch builder S2" fired — waking the agent.');
+  assert.equal(alert.options?.isSilent, true);
+  assert.match(String(alert.options?.foldedDetail), /exit 4\n\n\/runs\/builder-s2\/watch-armed: missing, touch it when you arm the watch/, 'the reason is the one thing the person can use');
+  assert.doesNotMatch(alert.text, /2 h 30 min|without a report/);
+  assert.ok(callLog.some((entry) => entry.step === 'forward'), 'the agent is woken: the output tells it what to touch');
 });
 
 test('worker watch: the agent\'s prompt keeps the command and the output exactly as before', async () => {

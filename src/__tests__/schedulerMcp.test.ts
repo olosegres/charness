@@ -217,8 +217,8 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     assert.ok(description.includes(`cron \`${workerWatchCheckCron}\``));
     assert.ok(!description.includes('isPinSilent'), 'nothing a check posts is pinned, so the recipe has no pin argument');
     assert.match(description, /never the command/, 'the topic reads «worker finished» / «worker silent» / «running without a report»');
-    assert.match(description, new RegExp(`the watch was armed ${workerWatchUnreportedMinutes} min ago \\(\`touch <run-dir>/${workerWatchArmedFileName}\` right before you arm it, and again when you re-arm it`), 'the third signal and the file it counts from');
-    assert.match(description, /a run dir without it fails at once/, 'a forgotten touch is not a silent gap');
+    assert.match(description, new RegExp(`the watch was armed ${workerWatchUnreportedMinutes} min ago \\(\`touch <run-dir>/${workerWatchArmedFileName}\` right before you arm it — a resumed worker's reused run dir too — and again when you looked and found the worker fine: the same check then passes and watches on, so do not arm a second one; a run dir without the file fails at once with exit 4`), 'the third signal, the file it counts from, and what to do when the worker is fine');
+    assert.match(description, /a run dir without the file fails at once with exit 4/, 'a forgotten touch is not a silent gap, and has a code of its own');
     assert.match(description, /with its PID and run dir \(an absolute path\)/);
     assert.ok(description.includes(`\`${workerWatchStatusArguments}\``), 'the status arguments: the bot posts the topic\'s status lines');
     assert.match(description, /never arm a schedule of your own for status lines/);
