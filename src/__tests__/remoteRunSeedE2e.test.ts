@@ -9,6 +9,7 @@
  *     the first copy still has everything
  *   → a third checkout with another lockfile is seeded too, and its dependencies step still runs on top of the seeded folders, once
  *   → another repository whose folder has the SAME name as the first is not seeded from it, and installs
+ *   → the first copy, idle for more than a day, loses its Xcode build data (and nothing else) a moment after a submit of another project, and its next job says so
  *
  * Needs sshd, ssh, rsync, Pueue and the built CLI (`yarn build`): a local run without them is SKIPPED with the reason, CI (`CI` is `true` or `1`) installs them and fails without. Test case: N/A — Charness has no Jira tracker.
  */
@@ -18,7 +19,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { createProject, createProjectClone, createRunnerEntry, readProjectFile, writeProjectFile, writeRunnersJson, type FlowProject } from './remoteRunE2e/remoteRunFlowKit';
+import { createProject, createProjectClone, createRunnerEntry, readProjectFile, waitUntil, writeProjectFile, writeRunnersJson, type FlowProject } from './remoteRunE2e/remoteRunFlowKit';
 import { layout, project, readDepsCounter, run, setUpFlow, skipReason, tearDownFlow } from './remoteRunE2e/remoteRunFlowHarness';
 
 const seededPackageContent = 'installed in the first copy';
@@ -125,5 +126,34 @@ describe('a new project copy is seeded from a sibling copy of the same repositor
     assert.match(result.stderr, /installing dependencies:/);
     assert.ok(!result.stderr.includes('seeded'), result.stderr);
     assert.equal(readCopyDepsCounter(sameNameOtherRepository), 1);
+  });
+
+  it('the first copy, idle for more than a day, loses its `ios/build` — and nothing else — a moment after a submit of another project; its next job says why an iOS build starts from scratch', async () => {
+    const runnerDirectory = project.runnerDirectory;
+    const longAgo = new Date(Date.now() - 30 * 60 * 60 * 1000);
+    // Idle for 30 hours: its mark of use, and the end of its last jobs (a job that ended within the hour keeps its copy for the results).
+    fs.utimesSync(path.join(runnerDirectory, 'used'), longAgo, longAgo);
+    for (const jobId of fs.readdirSync(path.join(runnerDirectory, 'jobs'))) {
+      const exitFile = path.join(runnerDirectory, 'jobs', jobId, 'exit');
+      if (fs.existsSync(exitFile)) fs.utimesSync(exitFile, longAgo, longAgo);
+    }
+    // The sweep of idle copies runs at most every 6 hours after a `prepare`: its stamp is old.
+    const stamp = path.join(layout.workDir, 'tmpdir-sweep.at');
+    if (fs.existsSync(stamp)) fs.utimesSync(stamp, longAgo, longAgo);
+    const trigger = createProject(layout, 'sixth/trigger', { 'README.md': 'a project that only submits\n' });
+    const submitted = await run(['echo', 'another project'], { cwd: trigger.root });
+    assert.equal(submitted.exitCode, 0, submitted.stderr);
+    await waitUntil('the detached sweep to trim the first copy', 30_000, () => !fs.existsSync(path.join(runnerDirectory, 'tree', 'ios', 'build')));
+    const firstTree = path.join(runnerDirectory, 'tree');
+    assert.equal(fs.readFileSync(path.join(firstTree, 'ios', 'Podfile'), 'utf8'), podFile, 'the sources stay');
+    assert.equal(fs.readFileSync(path.join(firstTree, 'ios', 'Pods', 'Pod', 'pod.h'), 'utf8'), 'pod');
+    assert.equal(fs.readFileSync(path.join(firstTree, 'node_modules', 'pkg', 'index.js'), 'utf8'), seededPackageContent);
+    assert.equal(fs.readFileSync(path.join(runnerDirectory, 'build-data-trimmed'), 'utf8').trim(), 'ios/build');
+    const next = await run(['echo', 'first copy after the trim']);
+    assert.equal(next.exitCode, 0, next.stderr);
+    assert.match(next.stderr, /remote-run: the Xcode build data of this copy \(ios\/build\) was removed after it had been idle for 24 hours: an iOS build here starts from scratch/);
+    assert.equal(fs.existsSync(path.join(runnerDirectory, 'build-data-trimmed')), false, 'said once');
+    const again = await run(['echo', 'and again']);
+    assert.ok(!again.stderr.includes('Xcode build data'), again.stderr);
   });
 });

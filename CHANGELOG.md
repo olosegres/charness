@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**A project copy on a runner that nobody has used for a day now loses its Xcode build data (`ios/build`), which is the biggest part of an iOS copy.**
+Before, an iOS build left ~8.5 GB per app in the runner's copy and kept it for as long as the copy lived (3 days idle, or until the disk was short), so a Mac with a handful of copies of a React Native monorepo spent ~17 GB per copy on derived data that nothing could share.
+Now a copy not used for 24 hours loses its `ios/build` and `ios/DerivedData` folders (of every app folder), and nothing else — never sources, `node_modules`, `Pods` or a copy in use. The next iOS job of that copy builds from scratch instead of incrementally, and says so in its log. It rides the sweep that already clears idle copies' `TMPDIR`s: after a submit at most every 6 hours, and on a short disk before a copy is removed.
+
 **A new project copy on a runner no longer installs its dependencies from scratch when another copy of the same repository is already there: it starts from a clone of that copy's `node_modules` and iOS folders.**
 Before, every checkout of a project (each folder or worktree you ran `remote-run` from) got a full copy of its own on the runner and ran the whole dependencies step — on a Mac with a React Native monorepo that was ~13 GB and minutes of install for each copy, nine copies being 133 GB.
 Now:

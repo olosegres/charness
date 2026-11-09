@@ -1673,3 +1673,144 @@ describe('the TMPDIR of a project copy (`<work>/t/<n>`) is part of the disk upke
     assert.equal(fs.readFileSync(path.join(copyDir, 'size-kb'), 'utf8').trim(), `${3 * kibPerGib}`);
   });
 });
+
+describe('the Xcode build data of a copy that nobody used for a day (`ios/build`) goes with the sweep of idle copies', () => {
+  const tree = (copySlug: string, relative: string): string => path.join(workDir, 'p', copySlug, 'tree', relative);
+  const exists = (copySlug: string, relative: string): boolean => fs.existsSync(tree(copySlug, relative));
+  const buildData = ['projects/x/ios/build/Products/app.txt', 'projects/x/ios/build/Intermediates.noindex/a.o', 'ios/DerivedData/ModuleCache/m.pcm'];
+  const notBuildData = [
+    'projects/x/ios/Podfile',
+    'projects/x/ios/Pods/Pod/pod.h',
+    'projects/x/ios/Source.swift',
+    'projects/x/android/build/out.apk',
+    'build/out.js',
+    'node_modules/pkg/ios/build/prebuilt.a',
+    'projects/x/node_modules/pkg/ios/DerivedData/prebuilt.a',
+    'ios/Pods/Pod/ios/build/inside-pods.txt',
+  ];
+
+  /** A copy with the build data of an iOS build next to what must stay: its manifest lists the sources the main box sent (the Podfile and the Swift file), its size has been measured. */
+  function makeCopyWithBuildData(copySlug: string, usedAgoMs: number): string {
+    const copyDir = makeCopy(copySlug, 8, usedAgoMs);
+    for (const relative of [...buildData, ...notBuildData]) writeFile(path.join(copyDir, 'tree'), relative);
+    writeFile(copyDir, 'manifest', 'projects/x/ios/Podfile\nprojects/x/ios/Source.swift\n');
+    writeFile(copyDir, 'size-kb', `${8 * kibPerGib}`);
+    return copyDir;
+  }
+
+  function expectTrimmed(copySlug: string): void {
+    for (const relative of buildData) assert.equal(exists(copySlug, relative), false, `${relative} is gone`);
+    for (const relative of notBuildData) assert.equal(exists(copySlug, relative), true, `${relative} stays`);
+  }
+
+  function expectUntouched(copySlug: string): void {
+    for (const relative of [...buildData, ...notBuildData]) assert.equal(exists(copySlug, relative), true, `${relative} stays`);
+  }
+
+  it('`sweep-tmpdirs` removes `ios/build` and `ios/DerivedData` of a copy idle for more than 24 hours — of every app folder — and nothing else: no sources, no Pods, no other build folder, nothing inside node_modules or Pods', () => {
+    const copyDir = makeCopyWithBuildData('idle-aaaaaaaaaa', 25 * hourMs);
+    const swept = runScript(['sweep-tmpdirs', workDir]);
+    assert.equal(swept.status, 0, swept.stderr);
+    expectTrimmed('idle-aaaaaaaaaa');
+    assert.equal(fs.readFileSync(path.join(copyDir, 'build-data-trimmed'), 'utf8').split('\n')[0].split(' ').sort().join(' '), 'ios/DerivedData projects/x/ios/build', 'what went is written down for the next job');
+    assert.equal(fs.existsSync(path.join(copyDir, 'size-kb')), false, 'the measured size is not true any more');
+    assert.equal(fs.existsSync(path.join(copyDir, 'lock')), false, 'the lock it took is given back');
+    assert.equal(fs.existsSync(path.join(copyDir, 'used')), true);
+    assert.ok(Date.now() - fs.statSync(path.join(copyDir, 'used')).mtimeMs > 24 * hourMs, 'a trim is no use of the copy: it is still as idle as it was');
+  });
+
+  it('a copy used within the day keeps its build data: the next iOS run of it is incremental', () => {
+    makeCopyWithBuildData('recent-bbbbbbbbbb', 23 * hourMs);
+    assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+    expectUntouched('recent-bbbbbbbbbb');
+  });
+
+  it('a copy in use keeps it — a lock a live job holds, a job that runs, waits or ended lately, an `exec` — however long ago its last mark of use was written', () => {
+    const locked = makeCopyWithBuildData('locked-cccccccccc', 30 * hourMs);
+    const lockHolderPid = startRunnerStandIn();
+    writeFile(locked, 'lock', `${lockHolderPid}\nsome-job\n`);
+    const running = makeCopyWithBuildData('running-dddddddddd', 30 * hourMs);
+    writeJob(running, 'box1-runnin', { 'task-id': '5\n', pid: `${startRunnerStandIn()}\n` });
+    const queued = makeCopyWithBuildData('queued-eeeeeeeeee', 30 * hourMs);
+    writeJob(queued, 'box1-queued', { 'task-id': '6\n' });
+    const execCopy = makeCopyWithBuildData('exec-ffffffffff', 30 * hourMs);
+    writeFile(execCopy, `exec.${startRunnerStandIn()}`, '');
+    const ended = makeCopyWithBuildData('ended-gggggggggg', 30 * hourMs);
+    writeJob(ended, 'box1-ended0', { exit: '0\n' });
+    makeCopyWithBuildData('idle-hhhhhhhhhh', 30 * hourMs);
+    assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+    for (const busy of ['locked-cccccccccc', 'running-dddddddddd', 'queued-eeeeeeeeee', 'exec-ffffffffff', 'ended-gggggggggg']) expectUntouched(busy);
+    expectTrimmed('idle-hhhhhhhhhh');
+    assert.equal(fs.readFileSync(path.join(locked, 'lock'), 'utf8'), `${lockHolderPid}\nsome-job\n`, 'the lock of the job is not touched');
+  });
+
+  it('under the copy\'s own lock the trim looks again: a copy used since the caller looked (a `prepare` touched it), an `exec`, a lock a job took meanwhile keep their build data', () => {
+    const touched = makeCopyWithBuildData('touched-iiiiiiiiii', hourMs);
+    assert.equal(runShell(`trim_copy_build_data '${touched}'`).status, 0);
+    expectUntouched('touched-iiiiiiiiii');
+    assert.equal(fs.existsSync(path.join(touched, 'lock')), false, 'the lock it took is given back');
+    const execCopy = makeCopyWithBuildData('exec-jjjjjjjjjj', 30 * hourMs);
+    writeFile(execCopy, `exec.${startRunnerStandIn()}`, '');
+    assert.equal(runShell(`trim_copy_build_data '${execCopy}'`).status, 0);
+    expectUntouched('exec-jjjjjjjjjj');
+    const locked = makeCopyWithBuildData('locked-kkkkkkkkkk', 30 * hourMs);
+    const holderPid = startRunnerStandIn();
+    writeFile(locked, 'lock', `${holderPid}\nsome-job\n`);
+    assert.equal(runShell(`trim_copy_build_data '${locked}'`).status, 0);
+    expectUntouched('locked-kkkkkkkkkk');
+    assert.equal(fs.readFileSync(path.join(locked, 'lock'), 'utf8'), `${holderPid}\nsome-job\n`);
+  });
+
+  it('never sources: a folder that holds a file the main box sent (the manifest lists it), and a copy with no manifest at all, are left whole', () => {
+    const tracked = makeCopyWithBuildData('tracked-llllllllll', 30 * hourMs);
+    writeFile(tracked, 'manifest', 'projects/x/ios/Podfile\nprojects/x/ios/build/generated/Tracked.swift\n');
+    writeFile(path.join(tracked, 'tree'), 'projects/x/ios/build/generated/Tracked.swift');
+    const unknown = makeCopyWithBuildData('unknown-mmmmmmmmmm', 30 * hourMs);
+    fs.rmSync(path.join(unknown, 'manifest'));
+    assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+    assert.equal(exists('tracked-llllllllll', 'projects/x/ios/build/generated/Tracked.swift'), true, 'the folder with a sent file stays whole');
+    assert.equal(exists('tracked-llllllllll', 'projects/x/ios/build/Products/app.txt'), true);
+    assert.equal(exists('tracked-llllllllll', 'ios/DerivedData/ModuleCache/m.pcm'), false, 'the other build folder of that copy goes');
+    expectUntouched('unknown-mmmmmmmmmm');
+  });
+
+  it('read-only folders in the build data (an xcframework) do not keep it', () => {
+    makeCopyWithBuildData('readonly-nnnnnnnnnn', 30 * hourMs);
+    writeFile(path.join(workDir, 'p', 'readonly-nnnnnnnnnn', 'tree'), 'projects/x/ios/build/Pods/Core.xcframework/Info.plist');
+    for (const folder of ['projects/x/ios/build/Pods/Core.xcframework', 'projects/x/ios/build/Pods', 'projects/x/ios/build']) fs.chmodSync(tree('readonly-nnnnnnnnnn', folder), 0o555);
+    assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+    assert.equal(exists('readonly-nnnnnnnnnn', 'projects/x/ios/build'), false);
+  });
+
+  it('a prune on a SHORT disk trims before it removes a copy for space — on the stamp\'s turn, not every time — and a prune on a disk that is fine leaves it to the detached sweep', () => {
+    makeCopyWithBuildData('idle-oooooooooo', 30 * hourMs);
+    const stamp = path.join(workDir, 'tmpdir-sweep.at');
+    // Only the part up to the copy removal is looked at: that step is stubbed, or the idle copy would be removed whole.
+    const prune = (minFreeGb: string): void => {
+      const result = runShell('prune_copies_for_space() { :; }; prune_work "$FAKE_WORK" "" skip', { REMOTE_RUN_MIN_FREE_GB: minFreeGb });
+      assert.equal(result.status, 0, result.stderr);
+    };
+    prune('0');
+    expectUntouched('idle-oooooooooo');
+    prune('95');
+    expectTrimmed('idle-oooooooooo');
+    assert.ok(fs.existsSync(stamp), 'and takes the turn');
+    for (const relative of buildData) writeFile(path.join(workDir, 'p', 'idle-oooooooooo', 'tree'), relative);
+    prune('95');
+    assert.equal(exists('idle-oooooooooo', buildData[0]), true, 'the second, minutes later, leaves the walk alone');
+    setAge(stamp, 31 * 60 * 1000);
+    prune('95');
+    assert.equal(exists('idle-oooooooooo', buildData[0]), false, 'a turn that has come round trims again');
+  });
+
+  it('`prepare` starts the sweep detached, which trims: the copy of ANOTHER project, idle for a day, loses its build data a moment after a submit', async () => {
+    makeCopyWithBuildData('idle-pppppppppp', 30 * hourMs);
+    fs.mkdirSync(path.join(workDir, 't'), { recursive: true });
+    const first = runScript(['prepare', workDir, slug, jobId, 'default=1']);
+    assert.equal(first.status, 0, first.stderr);
+    const deadline = Date.now() + 20_000;
+    while (exists('idle-pppppppppp', buildData[0]) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+    expectTrimmed('idle-pppppppppp');
+    assert.ok(fs.existsSync(path.join(workDir, 'p', slug, 'tree')), 'and the copy of the submit itself is not what was trimmed');
+  });
+});

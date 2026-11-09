@@ -42,7 +42,7 @@
 #   measure-copies  write down how big each project copy is (p/<slug>/size-kb); the probe of a view of the runners starts it detached, and `prepare` when the disk is short; it is never called by hand
 #   ios-device   `ios-device <work> <slug>`: a job's own Simulator device (create or reuse `charness-<slug>`, boot it); run BY the job as a step, never called by hand
 #   ios-device-shutdown  `ios-device-shutdown <work> <slug> <udid>`: shut that device down (the step at the end of a job); never called by hand
-#   sweep-tmpdirs  remove the files of the TMPDIRs of idle project copies (`<work>/t/<n>`) that were not modified for tmpdir_keep_days; `prepare` starts it detached at most every tmpdir_sweep_interval_hours; never called by hand
+#   sweep-tmpdirs  the sweep of idle project copies: remove the files of their TMPDIRs (`<work>/t/<n>`) that were not modified for tmpdir_keep_days, and the Xcode build data (`ios/build`) of the copies nobody used for build_data_keep_hours; `prepare` starts it detached at most every tmpdir_sweep_interval_hours; never called by hand
 #   sync-tree    the apply step alone (tests)
 
 # The script's own tools (sort, sed, grep) run in the C locale: byte-wise and the same everywhere. The user's commands do NOT — see job_locale.
@@ -124,6 +124,10 @@ max_copy_indexes=100
 # it that were not modified for tmpdir_keep_days go while no job of the copy runs (`sweep_idle_tmpdirs`), looked at every tmpdir_sweep_interval_hours at most.
 tmpdir_keep_days=3
 tmpdir_sweep_interval_hours=6
+# A project copy nobody has used for this many hours loses the Xcode build data inside it (`trim_idle_build_data`; it rides the sweep above): the next iOS job of that copy builds from scratch instead of incrementally, and the disk is
+# what an iOS build leaves — ~8.5 GB per app — back. The walk for it goes down to build_data_find_depth.
+build_data_keep_hours=24
+build_data_find_depth=5
 # A prune on a short disk sweeps them at once, not more often than this (minutes): the walk finds nothing new a minute after the last one, and a Mac whose disk stays short for days must not pay it on every submit.
 tmpdir_short_disk_sweep_interval_min=30
 # A NEW project copy (its first job) is seeded from a sibling copy of the same project (`seed_new_copy`) instead of installing its dependencies from scratch. The folders to carry are looked for down to this depth below the copy's root
@@ -991,8 +995,8 @@ prune_work() {
   begin_copy_removal "$work_dir" "$when_busy" || return 0
   remove_leftover_trash "$work_dir"
   prune_idle_copies "$work_dir" "$keep_slug"
-  # A short disk gives up the stale files of the TMPDIRs before it gives up a copy (at most every tmpdir_short_disk_sweep_interval_min minutes: see there).
-  check_disk_is_short "$work_dir" && take_tmpdir_sweep_turn "$work_dir" "$tmpdir_short_disk_sweep_interval_min" && sweep_idle_tmpdirs "$work_dir"
+  # A short disk gives up the stale files of the TMPDIRs, and the Xcode build data of the copies idle for a day, before it gives up a copy (at most every tmpdir_short_disk_sweep_interval_min minutes: see there).
+  check_disk_is_short "$work_dir" && take_tmpdir_sweep_turn "$work_dir" "$tmpdir_short_disk_sweep_interval_min" && sweep_idle_copies "$work_dir"
   prune_copies_for_space "$work_dir" "$keep_slug" "$seed_slug"
   end_copy_removal "$work_dir"
 }
@@ -2936,8 +2940,62 @@ sweep_idle_tmpdirs() {
   return 0
 }
 
-cmd_sweep_tmpdirs() {
+# What an iOS job builds INTO a copy, relative paths under the tree $1, one per line: Xcode's derived data — the `ios/build` that `-derivedDataPath ios/build` (the way the projects build) and `expo run:ios` write, and an `ios/DerivedData`.
+# Of any app folder of a monorepo; the walk never enters `.git`, `node_modules` or `Pods`.
+list_build_data_folders() {
+  (cd "$1" && find . -maxdepth "$build_data_find_depth" \( -name .git -o -name node_modules -o -name Pods \) -prune -o \( -path '*/ios/build' -o -path '*/ios/DerivedData' \) -type d -print -prune 2> /dev/null)
+}
+
+# Does the copy $1's manifest — every file the main box sent, tracked or not ignored — list a file inside folder $2 (relative)? Then it holds sources, never build data. A copy with no manifest has had no stage applied: nothing is known of it.
+check_manifest_lists_files_in() {
+  [ -f "$1/manifest" ] || return 0
+  awk -v prefix="$2/" 'index($0, prefix) == 1 { found = 1; exit } END { if (found) exit 0; exit 1 }' "$1/manifest"
+}
+
+# Remove the Xcode build data from the tree of the copy in folder $1 — it is idle (the caller looked), and not busy. Taken under the copy's project lock, tried once: a job that holds it is in the copy, and one that comes while this runs
+# waits for it (a `prepare` touches `used` before its job asks for the lock, so the idle test is made again under the lock). A folder with a file the manifest lists in it is left whole. What went is written down for the next job's log
+# (`build-data-trimmed`), and the copy's measured size (`size-kb`) is not true any more: it goes, and `measure-copies` writes a new one.
+trim_copy_build_data() {
+  local copy_dir=$1 folders relative trimmed=
+  [ -d "$copy_dir/tree" ] || return 0
+  folders=$(list_build_data_folders "$copy_dir/tree")
+  [ -n "$folders" ] || return 0
+  try_take_lock "$copy_dir/lock" "$copy_dir/jobs" 0 || return 0
+  if [ -z "$(find "$copy_dir/used" -maxdepth 0 -mmin +"$((build_data_keep_hours * 60))" 2> /dev/null)" ] || check_copy_has_live_exec "$copy_dir"; then
+    release_own_lock "$copy_dir/lock"
+    return 0
+  fi
+  while IFS= read -r relative; do
+    relative=${relative#./}
+    [ -n "$relative" ] && check_relative_path "$relative" || continue
+    check_manifest_lists_files_in "$copy_dir" "$relative" && continue
+    remove_path_even_if_read_only "$copy_dir/tree/$relative" && trimmed="$trimmed$relative "
+  done <<< "$folders"
+  release_own_lock "$copy_dir/lock"
+  [ -n "$trimmed" ] || return 0
+  printf '%s\n' "${trimmed% }" > "$copy_dir/build-data-trimmed"
+  rm -f "$copy_dir/size-kb"
+}
+
+# The Xcode build data of every copy that nobody used for build_data_keep_hours and that is not in use (`check_copy_is_busy`: a lock, an exec, a job that waits or runs or just ended or is being submitted).
+trim_idle_build_data() {
+  local work_dir=$1 used_file copy_slug
+  while IFS= read -r used_file; do
+    copy_slug=$(basename "$(dirname "$used_file")")
+    check_copy_is_busy "$work_dir" "$copy_slug" && continue
+    trim_copy_build_data "$work_dir/p/$copy_slug"
+  done < <(find "$work_dir/p" -mindepth 2 -maxdepth 2 -name used -type f -mmin +"$((build_data_keep_hours * 60))" 2> /dev/null)
+  return 0
+}
+
+# What the sweep of idle copies does: the stale files of their TMPDIRs, and the Xcode build data of the copies that nobody used for a day.
+sweep_idle_copies() {
   sweep_idle_tmpdirs "$1"
+  trim_idle_build_data "$1"
+}
+
+cmd_sweep_tmpdirs() {
+  sweep_idle_copies "$1"
 }
 
 # Is it time to sweep the TMPDIRs of work dir $1 - the stamp `$1/tmpdir-sweep.at` is missing, or older than $2 minutes? When it is, the stamp is touched BEFORE the sweep starts, so that two callers at once start one.
@@ -3335,6 +3393,10 @@ cmd_job() {
 
   set_phase waiting-lock
   acquire_lock || finish_job 137
+  if [ -f "$proj/build-data-trimmed" ]; then
+    say "the Xcode build data of this copy ($(read_file "$proj/build-data-trimmed")) was removed after it had been idle for $build_data_keep_hours hours: an iOS build here starts from scratch"
+    rm -f "$proj/build-data-trimmed"
+  fi
   # This job alone is working in the copy now: a seed that an earlier job was cut off in the middle of is not wanted. A copy no job has applied a stage to yet is new (the manifest is the stage's last step).
   remove_path_even_if_read_only "$proj/seed.tmp"
   local is_new_copy=0

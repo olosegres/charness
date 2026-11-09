@@ -373,3 +373,19 @@ describe('two jobs of different projects that start at the same moment', { skip:
     for (const child of children) child.kill('SIGKILL');
   });
 });
+
+describe('a copy whose Xcode build data was trimmed says so in the log of its next job', { skip: rsyncSkip }, () => {
+  it('once: the job that finds the note in the copy tells why an iOS build starts from scratch and takes the note away; the next job says nothing', () => {
+    const spec = (jobId: string): JobSpec => ({ slug: 'app-aaaaaaaaaa', jobId, command: 'true' });
+    const first = runJob(state.workDir, spec('box1-aaaaaa'));
+    assert.equal(first.exit, '0', first.log);
+    assert.ok(!first.log.includes('Xcode build data'), first.log);
+    writeFile(state.workDir, 'p/app-aaaaaaaaaa/build-data-trimmed', 'ios/DerivedData projects/x/ios/build\n');
+    const second = runJob(state.workDir, spec('box1-bbbbbb'));
+    assert.equal(second.exit, '0', second.log);
+    assert.match(second.log, /remote-run: the Xcode build data of this copy \(ios\/DerivedData projects\/x\/ios\/build\) was removed after it had been idle for 24 hours: an iOS build here starts from scratch/);
+    assert.equal(fs.existsSync(path.join(state.workDir, 'p', 'app-aaaaaaaaaa', 'build-data-trimmed')), false);
+    const third = runJob(state.workDir, spec('box1-cccccc'));
+    assert.ok(!third.log.includes('Xcode build data'), third.log);
+  });
+});
