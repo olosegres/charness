@@ -373,6 +373,17 @@ describe('a step of a job that needs iOS, run through the agent', () => {
     assert.equal(run.stdout.trim(), 'code=143', run.stderr);
   });
 
+  it('a job that has been told to stop (a TERM set `killed` before the step) writes no request: the agent starts nothing, and the step ends with 143', async () => {
+    markNeedsIos();
+    startAgent();
+    const marker = path.join(root, 'never.started');
+    const run = await runSourced(`killed=1; run_step ${workDir} 'touch ${marker}; exec sleep 300'; echo "code=$step_code requests=\${gui_step_count:-none}"`);
+    assert.equal(run.stdout.trim(), 'code=143 requests=none', run.stderr);
+    assert.deepEqual(fs.readdirSync(paths.guiRequestsDir), []);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(fs.existsSync(marker), false, 'the agent did not start the command');
+  });
+
   it('an agent that is gone under a running step (the process died: no exit file will ever come) cuts it with 125, says so — and the step\'s whole process group is GONE before the job goes on', async () => {
     markNeedsIos();
     startAgent();

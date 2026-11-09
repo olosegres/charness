@@ -209,6 +209,28 @@ describe('a TERM that reaches the job at the first instant of the shutdown step'
     assert.match(run.stdout, /^killed-after-restore=1$/m, 'a TERM after the step is the job\'s again');
   });
 
+  it('a TERM between the two lines that ignore the signals and clear `killed` does not skip the step (`run_step` starts nothing once `killed` is set): the device is shut down all the same', () => {
+    // A DEBUG trap sends the TERM to the shell right before the SECOND of the two lines runs, whichever order they stand in: with `killed` cleared first, the TERM sets it again and the step is skipped.
+    const marker = path.join(root, 'shutdown-step-ran');
+    const stepScript = path.join(root, 'step-stand-in.sh');
+    writeFile(root, 'step-stand-in.sh', `#!/bin/bash\n: > '${marker}'\n`);
+    writeFile(state.workDir, `p/${slugA}/ios-simulator`, `${udidOne}\n`);
+    const program = [
+      `source ${scriptPath}`,
+      `work=${state.workDir}; slug=${slugA}; job=box1-aaaaaa; proj="$work/p/$slug"; jd="$proj/jobs/$job"; tree="$proj/tree"; mkdir -p "$jd" "$tree"; killed=0; ios_device_step_started=1; job_locale=C.UTF-8`,
+      `get_script_path() { echo ${stepScript}; }`,
+      "trap 'killed=1' TERM INT HUP",
+      'lines_seen=0',
+      `trap 'case "$BASH_COMMAND" in killed=0 | trap*TERM*INT*HUP) lines_seen=$((lines_seen + 1)); [ "$lines_seen" -eq 2 ] && kill -TERM $$ ;; esac' DEBUG`,
+      'set -T',
+      'shutdown_job_simulator',
+      'set +T; trap - DEBUG',
+    ].join('\n');
+    const run = spawnSync('bash', ['-c', program], { encoding: 'utf8', env: getRunEnvironment(sims.environment), timeout: 30_000 });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(fs.existsSync(marker), true, `the shutdown step was skipped by a TERM at the first instant\n${run.stdout}${run.stderr}`);
+  });
+
   it('the step itself is deaf to TERM (it runs where nothing can set that flag): `ios-device-shutdown` shuts the device down although it is sent TERM at once', async () => {
     addFakeDevice(sims, udidOne, 'charness-app', 'Booted');
     const startedFile = path.join(root, 'step-started');

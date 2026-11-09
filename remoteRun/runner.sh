@@ -3227,15 +3227,16 @@ export_runner_env_lines() {
 run_step() {
   local directory=$1
   local command_text=$2
-  if gui_step_uses_agent; then
-    gui_run_step "$directory" "$command_text"
-    return 0
-  fi
   # A TERM that reached the job before this point (it sets `killed`) went to the job alone: a step that is forked now was not in the group yet, so it would run its whole course - to the watchdog's SIGKILL after its grace, with
-  # the job's Simulator device still booted. Measured under load: this fork came up to ~1.5 s after the TERM. The step is not started then; its code is that of a TERM. (A TERM in the microseconds between
-  # this check and the fork can still miss the step - the same loss as before, a window that small.)
+  # the job's Simulator device still booted. Measured in a unit case on a loaded box: this fork came up to ~1.5 s after the TERM. The step is not started then; its code is that of a TERM. (A TERM in the microseconds between
+  # this check and the fork can still miss the step - the same loss as before, a window that small.) The same on the login-session path: a request that is written with `go` starts the agent's command, and the `kill` the loop
+  # writes comes a poll later.
   if [ "$killed" -eq 1 ]; then
     step_code=143
+    return 0
+  fi
+  if gui_step_uses_agent; then
+    gui_run_step "$directory" "$command_text"
     return 0
   fi
   (
@@ -3472,9 +3473,10 @@ shutdown_job_simulator() {
   check_is_udid "$udid" || return 0
   # The phase tells a `kill` that is about to SIGKILL the group that this step is under way (`kill_job` waits for it).
   set_phase simulator-off
-  killed=0
   # A TERM that reaches the job from here on must neither set `killed` (the gui path would write `kill` to the agent, which stops the step) nor end the step's process (the daemon path: the step inherits the ignored signals).
+  # The signals are ignored FIRST and `killed` cleared after: a TERM between the two lines would set it, and `run_step` starts no step once it is set - the device would stay booted.
   trap '' TERM INT HUP
+  killed=0
   run_step "$tree" "bash $(quote_word "$(get_script_path)") ios-device-shutdown $(quote_word "$work") $(quote_word "$slug") $(quote_word "$udid")"
   trap 'killed=1' TERM INT HUP
   killed=$was_killed
