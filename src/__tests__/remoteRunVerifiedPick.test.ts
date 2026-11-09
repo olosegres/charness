@@ -146,14 +146,30 @@ describe('chooseClient with a real client over a fake ssh: the check after the p
     fs.writeFileSync(path.join(root, 'check.plan'), `${plan.check.join('\n')}\n`);
     fs.writeFileSync(path.join(root, 'upload.plan'), `${plan.upload.join('\n')}\n`);
     fs.writeFileSync(path.join(root, 'probe.txt'), snapshotText);
+    // Shell BUILTINS only: no `$(…)`, `cat` or `sed`. remote-run cuts a call off by killing the ssh process it started and waiting for THAT
+    // process to exit; a helper this script forks outlives the kill and goes on writing into `root` (measured on the former script: in 16 of
+    // 200 kills, files appeared in the folder AFTER the process's exit; the builtin-only script: 0 of 200). In the Ctrl-C test below that is the
+    // likely cause of the CI failure «ENOTEMPTY, rmdir» (the stop comes a few ms after `upload` is logged, while the script still counts its calls
+    // in a `$(next …)` subshell; the failure showed in 2 of 40 runs under load before, 0 of 100 after). A real `ssh` is one process; so is this
+    // stand-in, and `exec sleep` replaces it, so a kill ends it whole.
     const script = `#!/bin/bash
 last="\${@: -1}"
-next() { local n; n=$(cat "${root}/$1.n" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "${root}/$1.n"; sed -n "\${n}p" "${root}/$1.plan"; }
+next() {
+  local line index=0 count=0
+  answer=
+  [ -r "${root}/$1.n" ] && read -r count < "${root}/$1.n"
+  count=$((count + 1))
+  echo $count > "${root}/$1.n"
+  while IFS= read -r line; do
+    index=$((index + 1))
+    [ "$index" -eq "$count" ] && { answer=$line; break; }
+  done < "${root}/$1.plan"
+}
 case "$last" in
-  "test -f "*) echo "check" >> "${root}/calls.log"; answer=$(next check)
+  "test -f "*) echo "check" >> "${root}/calls.log"; next check
     case "$answer" in hang) exec sleep 60 ;; missing) exit 1 ;; slow) echo "Connection timed out during banner exchange" >&2; exit 255 ;; *) exit 0 ;; esac ;;
-  *"cat >"*|*"cat > "*) echo "upload" >> "${root}/calls.log"; cat > /dev/null; answer=$(next upload); [ "$answer" = hang ] && exec sleep 60; [ "$answer" = ok ] && exit 0; exit 1 ;;
-  *" probe "*) echo "probe" >> "${root}/calls.log"; cat "${root}/probe.txt"; exit 0 ;;
+  *"cat >"*|*"cat > "*) echo "upload" >> "${root}/calls.log"; read -r -d '' _input; next upload; [ "$answer" = hang ] && exec sleep 60; [ "$answer" = ok ] && exit 0; exit 1 ;;
+  *" probe "*) echo "probe" >> "${root}/calls.log"; while IFS= read -r line; do printf '%s\\n' "$line"; done < "${root}/probe.txt"; exit 0 ;;
 esac
 exit 0
 `;
