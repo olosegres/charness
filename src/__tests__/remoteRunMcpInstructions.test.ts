@@ -196,12 +196,13 @@ describe('the instructions built for a platform', () => {
     }
   });
 
-  it('the bundled manager skill mentions remote-run for one thing only — cleaning the runner copy when the last task of a folder is done — and nothing about running jobs there (that is the bullet\'s, and only while a runner exists); the one other sentence is a brief for workers that run tests on a runner: the two variables, never `simctl shutdown all` and never `booted`, without a command of the tool', () => {
-    const skill = fs.readFileSync(path.resolve(__dirname, '..', '..', 'agent-plugin', 'skills', 'charness-manager', 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+  it('the bundled orchestration skill mentions remote-run for three things only — a brief for workers that run tests on a runner (the two variables, never `simctl shutdown all`, never `booted`, no command of the tool), the read-only `runners` look a worker that waits on a runner, or an unattended batch that needs one, takes (online AND able to run the job), and cleaning the runner copy when the last task of a folder is done — and nothing about running jobs there (that is the bullet\'s, and only while a runner exists)', () => {
+    const skill = fs.readFileSync(path.resolve(__dirname, '..', '..', 'agent-plugin', 'skills', 'charness-orchestration', 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
     assert.match(skill, /A worker that runs tests on a runner shares it with other jobs: its test scripts bind ports from `\$REMOTE_RUN_PORT_BASE`, use the simulator `\$REMOTE_RUN_IOS_SIMULATOR_UDID` and never run `simctl shutdown all` or name `booted`/);
-    assert.equal(skill.split('remote-run').length - 1, 2, 'the name of the tool and the clean command: both in the one sentence');
+    assert.match(skill, /read the runner's line in `charness remote-run runners`\. It must be online AND its `can:` part must name what the job needs/);
     assert.match(skill, /which ran on a runner \(`charness remote-run`\)\? Run `charness remote-run clean` in that folder BEFORE you remove the folder/);
-    assert.ok(!/remote-run (--bg|--needs|wait|runners)/.test(skill));
+    assert.equal(skill.split('remote-run').length - 1, 3, 'the runners look, the name of the tool and the clean command: no other mention');
+    assert.ok(!/remote-run (--bg|--needs|wait)/.test(skill), 'running a job is the bullet\'s, not the skill\'s');
   });
 });
 

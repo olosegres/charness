@@ -98,11 +98,11 @@ describe('the OpenCode config folder', () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
-  test('is created in DATA_DIR with a skills link to the package\'s skills, and OpenCode finds the manager through it', () => {
+  test('is created in DATA_DIR with a skills link to the package\'s skills, and OpenCode finds the orchestration add-on through it', () => {
     const configDir = prepareOpenCodeAgentConfigDir(dataDir);
     assert.equal(configDir, getOpenCodeAgentConfigDir(dataDir));
     assert.equal(fs.readlinkSync(path.join(dataDir, 'opencode-config', 'skills')), skillsTarget);
-    assert.ok(fs.existsSync(path.join(dataDir, 'opencode-config', 'skills', 'charness-manager', 'SKILL.md')));
+    assert.ok(fs.existsSync(path.join(dataDir, 'opencode-config', 'skills', 'charness-orchestration', 'SKILL.md')));
     assert.equal(prepareOpenCodeAgentConfigDir(dataDir), configDir, 'a second boot finds it ready');
   });
 

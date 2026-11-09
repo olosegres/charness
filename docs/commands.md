@@ -648,17 +648,22 @@ Switch the skills Charness gives its agents on or off. In **General**: On / Off 
 #### Skills the bot gives its agents
 
 Every agent session the bot starts — Claude Code or OpenCode, in a topic or a
-Jira conversation — also gets three skills that ship with Charness
+Jira conversation — also gets four skills that ship with Charness
 (`agent-plugin/`):
 
-- `charness-manager` — driving a plan through detached workers with the bot's
-  own tools: one worker on the checkout at a time, an independent review, and a
-  bot check per worker that wakes the agent when the worker exits OR stops
-  writing for 45 minutes (pinned silently: a finished worker fires it too);
+- `charness-orchestration` — what the bot adds to a manager skill when an agent
+  drives detached workers: a bot check per worker that wakes the agent when the
+  worker exits OR stops writing for 45 minutes (a finished worker fires it too;
+  nothing it posts is pinned), the bot's accounts, and how to reach you. It is an
+  add-on: the delivery loop (review, parallel work, finishing) is the manager
+  skill the session already has — yours or your project's;
+- `charness-delivery-loop` — a small built-in delivery loop for a session that
+  lists no manager skill of its own (one worktree per separately released task,
+  an independent review at the finish, one worker on a shared resource at a time);
 - `charness-delegate-claude` / `charness-delegate-opencode` — launching,
   watching and resuming a detached `claude -p` / `opencode run` worker.
 
-Claude Code lists them as `charness:charness-manager`, …; OpenCode by their
+Claude Code lists them as `charness:charness-orchestration`, …; OpenCode by their
 names. Your own and your projects' skills stay as they are, and your sessions
 outside the bot do not get these. For Claude Code the bot passes
 `--plugin-dir`; for OpenCode it starts its server with `OPENCODE_CONFIG_DIR`
@@ -669,10 +674,10 @@ They can be switched off with `/bot_skills` (in General for the instance, in a t
 order, the first that is set wins: the topic's own choice, General's value, `"botSkills"` in [`settings.json`](../SETUP.md#instance-settings-settingsjson) (the way an instance without General — a
 Jira-only one — sets it), then **on**. A Jira conversation has no choice of its own: it follows the instance value. With the
 skills off a Claude conversation starts and resumes without `--plugin-dir`, and the bot MCP's instructions no longer tell its agent to
-load `charness-manager` (the worker-watch recipe stays in `schedule_create`'s description); a running agent keeps its skills until its
+load `charness-orchestration` (the worker-watch recipe stays in `schedule_create`'s description); a running agent keeps its skills until its
 next start. OpenCode has ONE server for every topic, so only the instance value counts there: the server is replaced at the bot's next
 start, once nothing works in it, by one started without (or, when turned back on, with) the folder. A topic's own choice changes the
-manager hint of its OpenCode folder only when the OpenCode server next restarts, and OpenCode topics sharing a folder share the hint
+orchestration hint of its OpenCode folder only when the OpenCode server next restarts, and OpenCode topics sharing a folder share the hint
 (it stays while any of them has the skills on).
 
 ### `/task_agents`

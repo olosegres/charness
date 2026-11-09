@@ -1,12 +1,14 @@
 ---
 name: charness-delegate-claude
-description: "In a Charness-run session, use to launch, watch, finish and resume a builder, reviewer, investigator or planner as a detached `claude -p` process instead of an in-process sub-agent: the account from claude_profiles, the role's model and effort, a full-privilege worker with deny rules, its event log, the bot watch check, resuming the same session. Load charness-manager first."
+description: "In a Charness-run session, use to launch, watch, finish and resume a builder, reviewer, investigator or planner as a detached `claude -p` process instead of an in-process sub-agent: the account from claude_profiles, the role's model and effort, a full-privilege worker with deny rules, its event log, the bot watch check, resuming the same session. Load charness-orchestration first."
 ---
 
 # Detached Claude Code worker (Charness session)
 
 A worker is `claude -p`: one turn per process, the conversation kept between runs by its session id. Load
-`charness-manager` first — it holds the delivery loop and the watch check this skill arms.
+`charness-orchestration` first — it holds the watch check this skill arms (the delivery loop is in the session's
+general manager skill, else in `charness-delivery-loop`). A general delegate skill keeps the role policy (model and
+effort per role); this one wins on the launch, the account, detaching and the watch.
 
 ## Account, model, effort
 
@@ -18,16 +20,20 @@ A worker is `claude -p`: one turn per process, the conversation kept between run
   null too, no account names a time it frees up: ask the user a native question (nothing can run, no time known) and
   `schedule_create` a one-off retry about 30 minutes ahead, with such a prompt.
 - Confirm the login under that directory: `env -u ANTHROPIC_API_KEY claude auth status --text`.
-- Role defaults, unless the user names others:
-  - builder (code, tests, debugging, live runs): `--model sonnet --effort xhigh`;
-  - investigator (a cause still unclear after a builder failed on it twice): `--model opus --effort high`;
-  - reviewer: `--model opus --effort high`; a small or mechanical diff (docs, tests only): `--effort medium`;
-  - planner and the research feeding a plan: `--model opus --effort high`, `xhigh` for a large feature.
+- The first `system`/`init` event must name the requested model; on a mismatch stop the worker and tell the user.
+
+### Role defaults — only when no general delegate skill is listed
+
+Unless the user names others:
+
+- builder (code, tests, debugging, live runs): `--model sonnet --effort xhigh`;
+- investigator (a cause still unclear after a builder failed on it twice): `--model opus --effort high`;
+- reviewer: `--model opus --effort high`; a small or mechanical diff (docs, tests only): `--effort medium`;
+- planner and the research feeding a plan: `--model opus --effort high`, `xhigh` for a large feature.
 - Never Sonnet for work on data persistence (storage, DB schema and migrations, sync, merge and conflict
   resolution, backups — anything that can lose or corrupt user data): every role runs on Opus, a builder at
   `--model opus --effort xhigh` (`max` for a deep investigation). This beats the role defaults above.
 - Never Fable for a worker: it drains the shared session and weekly limits fastest.
-- The first `system`/`init` event must name the requested model; on a mismatch stop the worker and tell the user.
 
 ## Launch
 
@@ -45,6 +51,7 @@ setsid nohup env -u ANTHROPIC_API_KEY CLAUDE_CONFIG_DIR="<configDir>" \
   --output-format stream-json --verbose --include-partial-messages \
   < "<run-dir>/brief.md" > "<run-dir>/events.jsonl" 2> "<run-dir>/stderr.log" &
 echo $! > "<run-dir>/pid"
+printf '%s\n' "<uuid>" > "<run-dir>/session"
 ```
 
 - Leave out `CLAUDE_CONFIG_DIR=…` for the default profile.
@@ -58,8 +65,8 @@ echo $! > "<run-dir>/pid"
   `--add-dir "<that folder>"` and check that the `init` event's `skills` lists every skill the brief names.
 3. Check the PID: `ps -o args= -p "$(cat "<run-dir>/pid")"` must show `claude -p … <uuid>`. If it does not (the CLI
    handed over to a new process), take it from `pgrep -f "^claude -p .*<uuid>"` and write that into the pid file.
-4. Record the UUID, the profile name you launched on, the checkout and the run directory in the plan, then arm the
-   watch check from `charness-manager` with this PID and run directory.
+4. Record the UUID (it is in `<run-dir>/session`), the profile name you launched on, the checkout and the run directory
+   in the plan, then arm the watch check from `charness-orchestration` with this PID and run directory.
 
 ## Watch and finish
 
@@ -73,6 +80,8 @@ echo $! > "<run-dir>/pid"
 
 - Confirm the old PID is gone, then repeat the launch with `--resume "<uuid>"` instead of `--session-id`, a new
   brief and new log files (`events-2.jsonl`, …), and arm a new check. Never `--continue` or `--fork-session`.
+- `<uuid>` comes only from `<run-dir>/session` or the `session_id` of the first (`system`/`init`) event of the first
+  run's log — never from memory or a shortened prefix.
 - Keep the model, effort and flags of the first run.
 - The account: call `claude_profiles` with `currentProfile` = the profile name recorded at launch; the worker stays on
   it unless it can no longer run. Launch under the `recommended` profile's `configDir`, record that name.

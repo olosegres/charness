@@ -126,7 +126,7 @@ constants in the code; this README keeps what the code cannot say.
   answer that is final (message gone, never pinned, no right to unpin) counts as released — and so does an error that is neither the
   network's nor a Bot API answer (a bug of ours: `checkIsNetworkError`), which would otherwise repeat at every run for ever. `schedule_cancel` unpins whatever is
   left and says how many could not be. The `schedule_create` description carries the full recipe; the Telegram instructions point at the
-  `charness-manager` skill (`agent-plugin/`, which carries it verbatim — `agentPluginSkills.test.ts` holds them equal)
+  `charness-orchestration` skill (`agent-plugin/`, which carries it verbatim — `agentPluginSkills.test.ts` holds them equal)
   and at that description; the tracker instructions only at the skill. With the scope's «Bot skills» switch off
   (`utils/botSkills.ts`) the pointer at the skill is dropped — a Telegram bullet keeps the recipe, a tracker bullet goes
   with it. A `dir:` scope — the OpenCode registration of a folder, made once per folder and server run — counts the folder's

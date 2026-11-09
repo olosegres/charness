@@ -1,6 +1,6 @@
 /**
  * The «Bot skills» switch — whether the skills Charness ships with its agents (`agent-plugin/`) and the hint to load the
- * manager reach them, per topic or (in General) for the instance. See `utils/botSkills.ts` for the precedence and what OFF
+ * orchestration skill reach them, per topic or (in General) for the instance. See `utils/botSkills.ts` for the precedence and what OFF
  * does, and README.md in this folder.
  */
 import { Markup, type Context } from 'telegraf';

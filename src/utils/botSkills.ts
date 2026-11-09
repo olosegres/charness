@@ -1,6 +1,6 @@
 /**
  * @description The «Bot skills» switch (`/bot_skills`): whether the skills the bot ships with its agents (`agent-plugin/`,
- * loaded by `utils/agentPlugin.ts`) and the hint to load `charness-manager` (the bot MCP instructions) reach an agent.
+ * loaded by `utils/agentPlugin.ts`) and the hint to load `charness-orchestration` (the bot MCP instructions) reach an agent.
  *
  * One value decides it, read in this order — the first that is set wins:
  *

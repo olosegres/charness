@@ -265,9 +265,9 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     assert.deepEqual([...namedInputs].sort(), ['currentProfile', 'isStoppedByLimit'], 'the skills teach the resume inputs');
   });
 
-  it('both manager skills say what to do when nothing is usable AND no account names when it frees up', () => {
+  it('the orchestration add-on and the Claude delegate skill say what to do when nothing is usable AND no account names when it frees up', () => {
     const skillsDir = path.join(__dirname, '..', '..', 'agent-plugin', 'skills');
-    for (const folder of ['charness-delegate-claude', 'charness-manager']) {
+    for (const folder of ['charness-delegate-claude', 'charness-orchestration']) {
       const text = fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');
       assert.match(text, /`nextAvailable`\s+(?:is\s+)?null\s+too/, `${folder} covers a null nextAvailable`);
       assert.match(text, /native\s+question/, `${folder} sends the user a native question`);

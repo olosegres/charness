@@ -1,6 +1,7 @@
 /**
  * @description The skills Charness gives every agent session it starts (`agent-plugin/` at the package root, a
- * Claude Code plugin named `charness`): `charness-manager` and the two worker-delegation skills, which name the
+ * Claude Code plugin named `charness`): `charness-orchestration` (an add-on to the session's own manager skill),
+ * `charness-delivery-loop` (the fallback for a session with none) and the two worker-delegation skills, which name the
  * bot's own tools. The operator's own sessions outside the bot never get them. The «Bot skills» switch
  * (`utils/botSkills.ts`, `/bot_skills`) turns them off: per conversation for Claude, for the whole instance for OpenCode.
  *

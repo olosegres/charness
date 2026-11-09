@@ -21,7 +21,7 @@ import {
 
 const pluginDir = path.resolve(__dirname, '..', '..', 'agent-plugin');
 const skillsDir = path.join(pluginDir, 'skills');
-const expectedSkillNames = ['charness-delegate-claude', 'charness-delegate-opencode', 'charness-manager'];
+const expectedSkillNames = ['charness-delegate-claude', 'charness-delegate-opencode', 'charness-delivery-loop', 'charness-orchestration'];
 /** The Agent Skills limits OpenCode applies: lowercase words joined by single hyphens, at most 64 characters. */
 const skillNamePattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const maxSkillNameLength = 64;
@@ -44,6 +44,10 @@ function readFrontmatter(skillFile: string): SkillFrontmatter {
   return { name: fields.get('name') ?? '', description: fields.get('description') ?? '' };
 }
 
+function readSkill(folder: string): string {
+  return fs.readFileSync(path.join(skillsDir, folder, 'SKILL.md'), 'utf8');
+}
+
 function listFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const entryPath = path.join(dir, entry.name);
@@ -57,7 +61,7 @@ describe('agent-plugin', () => {
     assert.equal(manifest.name, 'charness');
   });
 
-  test('it ships exactly the manager and the two delegate skills', () => {
+  test('it ships exactly the orchestration add-on, the fallback delivery loop and the two delegate skills — no skill that is itself a manager', () => {
     const folders = fs.readdirSync(skillsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
     assert.deepEqual(folders.sort(), expectedSkillNames);
   });
@@ -74,8 +78,8 @@ describe('agent-plugin', () => {
     });
   }
 
-  test('charness-manager carries the bot\'s worker watch recipe verbatim — the one the bot\'s own tool texts teach', () => {
-    const text = fs.readFileSync(path.join(skillsDir, 'charness-manager', 'SKILL.md'), 'utf8');
+  test('charness-orchestration carries the bot\'s worker watch recipe verbatim — the one the bot\'s own tool texts teach', () => {
+    const text = readSkill('charness-orchestration');
     assert.ok(text.includes(workerWatchCheckCommand), 'the checkCommand');
     assert.ok(text.includes(`cron \`${workerWatchCheckCron}\``), 'the cron');
     assert.doesNotMatch(text, /isPinSilent/, 'the pin argument is gone: nothing a check posts is pinned');
@@ -83,13 +87,79 @@ describe('agent-plugin', () => {
     assert.match(text, /Never arm a schedule of your own for status lines/);
   });
 
-  test('charness-manager cleans the runner copy when the LAST open task of a project folder is done — in that folder, before the folder goes, before the report — and leaves the copies of other tasks alone', () => {
-    const text = fs.readFileSync(path.join(skillsDir, 'charness-manager', 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+  test('charness-orchestration cleans the runner copy when the LAST open task of a project folder is done — in that folder, before the folder goes, before the report — and leaves the copies of other tasks alone', () => {
+    const text = readSkill('charness-orchestration').replace(/\s+/g, ' ');
     assert.match(text, /the LAST open task of its project folder \(the tasks of one folder share ONE copy on a runner\)/);
     assert.match(text, /Run `charness remote-run clean` in that folder BEFORE you remove the folder or worktree/);
     assert.match(text, /never delete other tasks' copies by hand\. Report one line of outcome\./);
     assert.ok(text.indexOf('charness remote-run clean') < text.indexOf('Report one line of outcome'), 'the closing step comes before the report');
     assert.equal(text.split('charness remote-run clean').length - 1, 1, 'said once: the skill is loaded text too');
+  });
+
+  test('charness-orchestration is an add-on: it holds no delivery loop, follows the session\'s own manager skill, names the fallback, and never says «instead of» another manager', () => {
+    const text = readSkill('charness-orchestration');
+    const flat = text.replace(/\s+/g, ' ');
+    const { description } = readFrontmatter(path.join(skillsDir, 'charness-orchestration', 'SKILL.md'));
+    assert.match(description, /^Adds the bot's tools to a manager skill; it holds no delivery loop\./);
+    assert.match(description, /together with this session's general manager skill/);
+    assert.match(description, /No general manager skill listed → load `charness-delivery-loop` as well\./);
+    assert.match(flat, /Follow the session's general manager skill .* for modes, the loop, review, parallel work, the queue, briefing and finishing\. None listed → load `charness-delivery-loop` too\./);
+    assert.match(flat, /this skill wins only on the mechanics below: launching, detaching, watching, waking, accounts and reaching the user/);
+    assert.doesNotMatch(text, /\bINSTEAD\b/, 'the root of the clash: the bot skill switched the general manager off');
+    for (const loopHeading of [/^## Modes/m, /^## Rules that never bend/m, /^## Delivery loop/m, /^## No plan yet/m, /^## Finally/m]) {
+      assert.doesNotMatch(text, loopHeading, 'the loop lives in the general manager skill, else in the fallback');
+    }
+    assert.doesNotMatch(flat, /same checkout/i, 'the parallel rule that mixed two released tasks\' commits is not here');
+    assert.doesNotMatch(flat, /a commit YOU make yourself/, 'bookkeeping commits are the general skill\'s policy');
+  });
+
+  test('charness-delivery-loop is the fallback: loaded only when no other manager skill is listed; separately released tasks get their own worktree; the finish merges, rebases, and keeps a reviewer\'s report outside the worktree', () => {
+    const text = readSkill('charness-delivery-loop');
+    const flat = text.replace(/\s+/g, ' ');
+    const { description } = readFrontmatter(path.join(skillsDir, 'charness-delivery-loop', 'SKILL.md'));
+    assert.match(description, /^Only when this session lists NO other manager skill/);
+    assert.match(description, /A general manager skill is listed → follow that one and do not load this\./);
+    assert.match(flat, /each separately released task gets its own git worktree and branch, named in its brief; the builder commits only there\. A lone task, or the tasks of one release, works on the current checkout\./);
+    assert.doesNotMatch(flat, /no worktree needed/i, 'the old same-checkout rule is gone');
+    assert.match(flat, /A long run never holds the queue: .*start the next independent task — in its own worktree when it is released separately\./);
+    assert.match(flat, /the absolute path of its report file outside the worktree \(e\.g\. its run directory\) — it writes nothing inside the worktree/);
+    assert.match(flat, /merge the task's branch into the base by fast-forward and remove its worktree/);
+    assert.match(flat, /A builder fetches; if the branch or its base moved on the remote, it pulls and rebases; then it runs ALL test suites in full/);
+    assert.match(flat, /Your own bookkeeping commits .* need no approval, in either mode/);
+    assert.doesNotMatch(flat, /schedule_create|claude_profiles|answer_request/, 'the bot\'s tools are the add-on\'s');
+  });
+
+  test('both delegate skills are add-ons of the orchestration skill: they load it first, leave the role policy to a general delegate skill and win only on the launch, the detaching and the watch', () => {
+    for (const folder of ['charness-delegate-claude', 'charness-delegate-opencode']) {
+      const text = readSkill(folder);
+      const flat = text.replace(/\s+/g, ' ');
+      assert.match(flat, /Load charness-orchestration first/, `${folder}: the description`);
+      assert.match(flat, /Load `charness-orchestration` first — it holds the watch check this skill arms \(the delivery loop is in the session's general manager skill, else in `charness-delivery-loop`\)\. A general delegate skill keeps the role policy/, folder);
+      assert.match(flat, /this one wins on the launch, (the account, )?detaching and the watch/, folder);
+      assert.match(flat, /arm the watch check from `charness-orchestration`/, folder);
+    }
+  });
+
+  test('charness-delegate-claude keeps its role defaults under «only when no general delegate skill is listed»; charness-delegate-opencode picks the user\'s model, else a general delegate skill\'s role defaults, else the conversation\'s own', () => {
+    const claude = readSkill('charness-delegate-claude');
+    const defaultsAt = claude.indexOf('### Role defaults — only when no general delegate skill is listed');
+    assert.ok(defaultsAt > 0, 'the heading');
+    for (const roleDefault of ['`--model sonnet --effort xhigh`', 'Never Sonnet for work on data persistence', 'Never Fable for a worker']) {
+      assert.ok(claude.indexOf(roleDefault) > defaultsAt, `${roleDefault} sits under that heading`);
+    }
+    assert.ok(claude.indexOf('The first `system`/`init` event must name the requested model') < defaultsAt, 'the model check is not a role default');
+    assert.match(readSkill('charness-delegate-opencode').replace(/\s+/g, ' '), /The model and variant the user named; otherwise the role defaults of a general delegate skill, when the session lists one; otherwise the ones this conversation runs on\./);
+  });
+
+  test('charness-delegate-claude records the session id in <run-dir>/session at launch and resumes only from it or the first run\'s init event — never from memory or a shortened prefix', () => {
+    const flat = readSkill('charness-delegate-claude').replace(/\s+/g, ' ');
+    assert.match(flat, /echo \$! > "<run-dir>\/pid" printf '%s\\n' "<uuid>" > "<run-dir>\/session"/, 'written beside the pid, in the launch block');
+    assert.match(flat, /Record the UUID \(it is in `<run-dir>\/session`\)/);
+    assert.match(flat, /`<uuid>` comes only from `<run-dir>\/session` or the `session_id` of the first \(`system`\/`init`\) event of the first run's log — never from memory or a shortened prefix\./);
+  });
+
+  test('no skill names the old charness-manager: the rename left no dangling pointer', () => {
+    for (const folder of expectedSkillNames) assert.doesNotMatch(readSkill(folder), /charness-manager/, folder);
   });
 
   test('both delegate skills name the resume log files events-2.jsonl, … — the bot reads the newest events*.jsonl for its status line, and no other name', () => {

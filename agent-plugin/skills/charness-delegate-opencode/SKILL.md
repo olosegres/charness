@@ -1,17 +1,20 @@
 ---
 name: charness-delegate-opencode
-description: "In a Charness-run session, use to launch, watch, finish and resume a builder, reviewer or researcher as a detached `opencode run` process instead of an in-process sub-agent: model and variant, deny rules, its JSON event log, the bot watch check, resuming the same session. Load charness-manager first."
+description: "In a Charness-run session, use to launch, watch, finish and resume a builder, reviewer or researcher as a detached `opencode run` process instead of an in-process sub-agent: model and variant, deny rules, its JSON event log, the bot watch check, resuming the same session. Load charness-orchestration first."
 ---
 
 # Detached OpenCode worker (Charness session)
 
 A worker is `opencode run`: it exits when its turn goes idle and keeps the session for a later run. Load
-`charness-manager` first — it holds the delivery loop and the watch check this skill arms.
+`charness-orchestration` first — it holds the watch check this skill arms (the delivery loop is in the session's
+general manager skill, else in `charness-delivery-loop`). A general delegate skill keeps the role policy (model and
+variant per role); this one wins on the launch, detaching and the watch.
 
 ## Model and variant
 
-- The model and variant the user named; otherwise the ones this conversation runs on. `opencode models` lists
-  what the configured providers offer — pick a listed model and a variant it supports.
+- The model and variant the user named; otherwise the role defaults of a general delegate skill, when the session lists
+  one; otherwise the ones this conversation runs on. `opencode models` lists what the configured providers offer — pick
+  a listed model and a variant it supports.
 
 ## Launch
 
@@ -38,7 +41,7 @@ echo $! > "<run-dir>/pid"
    `pgrep -n -f "opencode.* run .*--title <scope>"` (a launcher may run the binary as a child: two matches), and
    write that one PID into the pid file — the watch fires "worker exited" at once on a PID that is not the worker.
 4. Record the session id — the top-level `sessionID` of the first JSON event in `events.jsonl` — with the
-   checkout and run directory in the plan, then arm the watch check from `charness-manager` with this PID and
+   checkout and run directory in the plan, then arm the watch check from `charness-orchestration` with this PID and
    run directory.
 
 ## Watch and finish
