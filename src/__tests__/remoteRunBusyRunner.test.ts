@@ -175,6 +175,16 @@ describe('probeRunner: busy or offline', () => {
     assert.equal((await probeRunner(handMadeTimeout, Date.now(), undefined, 60_000)).status, 'offline', 'a TCP connect that timed out proves nothing');
   });
 
+  it('a probe that FAILS BY ITSELF with a «timed out» line of a tool it calls (pueue, xcrun) is a failed probe, offline — only ssh\'s own failure (its exit 255) counts as ssh giving up, for a paired and for a hand-made runner', async () => {
+    await putLinkUp();
+    storeSnapshot('mac');
+    for (const runner of [createPaired(), handMade]) {
+      const failing = createClient({ runner, probe: async () => ({ exitCode: 1, stdout: '', stderr: 'pueue: connection to the daemon timed out\n', isTimedOut: false }) });
+      const report = await probeRunner(failing, Date.now(), undefined, 60_000);
+      assert.equal(report.status, 'offline', `${runner.name}: ${JSON.stringify(report)}`);
+    }
+  });
+
   it('the script of the runner was missing and its UPLOAD was cut off by the deadline (every first probe after an update uploads the new script): busy — ssh answered the check — not «offline» with the upload\'s own reason; without the deadline it is the upload\'s failure', async () => {
     storeSnapshot('mac');
     const cutOff = createClient({

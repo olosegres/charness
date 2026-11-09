@@ -119,8 +119,12 @@ export async function pickVerifiedRunner(
       await client.ensureScript(signal);
       return { ok: true, choice: client };
     } catch (error) {
-      if (!(error instanceof RunnerUnreachableError)) throw error;
-      const gone: RunnerReport = { name: picked.name, status: 'offline', reason: error.reason, lastSeenAtMs: picked.lastSeenAtMs, lastProbe: picked.lastProbe, groupLimits: picked.groupLimits, isPausedByHub: picked.isPausedByHub };
+      // A cut-off from outside (the user's stop, what is left of the wait) ends the check or the upload with an error of its own that says nothing about the runner: it is left aside like an unreachable one, and the loop's own
+      // interrupt and deadline handling decides (an exit 130 «interrupted», «waited … for a runner — none did»), instead of an upload failure.
+      const isCutOff = signal.aborted;
+      if (!(error instanceof RunnerUnreachableError) && !isCutOff) throw error;
+      const reason = error instanceof RunnerUnreachableError ? error.reason : 'its script check was cut off';
+      const gone: RunnerReport = { name: picked.name, status: 'offline', reason, lastSeenAtMs: picked.lastSeenAtMs, lastProbe: picked.lastProbe, groupLimits: picked.groupLimits, isPausedByHub: picked.isPausedByHub };
       current = current.map((report) => (report.name === picked.name ? gone : report));
     }
   }

@@ -16,6 +16,7 @@ import { remoteRunExitCodes } from './exitCodes';
 import { probeAllTimeoutMs } from './probeTiming';
 import { checkIsSshTimeout, describeSshFailure, notConnectedReason, type RunnerClient } from './runnerClient';
 import type { RunnerConfig, RunnersConfig } from './runnersConfig';
+import { sshFailureExitCode } from './ssh';
 
 /**
  * @description Which runners exist right now: probe them (in parallel, bounded), remember each one's last answer so an offline runner
@@ -202,7 +203,8 @@ export async function probeRunner(client: RunnerClient, nowMs: number = Date.now
   const result = await client.call('probe', options.isPruneAllowed === true ? [probePruneArgument] : [], { timeoutMs: deadlineMs, signal });
   // The script was found a moment ago, so the runner answers ssh: a probe that ran out of time is a runner that is busy. Any other failure (the connection dropped) is the runner gone.
   // `isTimedOut` also says «cut off from outside» (the user's stop ends the call the same way), so inside a view only the shared deadline counts; a probe called by hand has no other clock than the call's own.
-  const isOutOfTime = hasDeadlinePassed() || (options.hasDeadlinePassed === undefined && result.isTimedOut) || checkIsSshTimeout(result.stderr);
+  // ssh's OWN timeout only: the stderr of a probe also holds what the runner script and the tools it calls print (`pueue`, `xcrun`), and a probe that failed by itself with a «timed out» line of theirs is a failed probe.
+  const isOutOfTime = hasDeadlinePassed() || (options.hasDeadlinePassed === undefined && result.isTimedOut) || (result.exitCode === sshFailureExitCode && checkIsSshTimeout(result.stderr));
   if (result.exitCode !== 0 && isOutOfTime) return busy('its probe did not finish');
   if (result.exitCode !== 0) return offline(describeSshFailure(result));
   writeLastProbe(client.cacheDir, runner.name, result.stdout, nowMs);

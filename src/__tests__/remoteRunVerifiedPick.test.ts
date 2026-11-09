@@ -112,6 +112,17 @@ describe('pickVerifiedRunner', () => {
     assert.ok(!attempt.ok && attempt.failure.message.startsWith('runner "mac" is offline (ssh: Connection timed out during banner exchange)') && attempt.wait === null, JSON.stringify(attempt));
   });
 
+  it('an upload cut off from outside (the user\'s stop, the end of the wait: the signal fired) does not fail the command with the upload\'s error: the runner is left aside as an unreachable one and the loop decides', async () => {
+    const stop = new AbortController();
+    const mac = createFakeClient(createPaired('mac'), async () => {
+      stop.abort();
+      throw new RemoteRunError('could not put the runner script on "mac" (/w/bin) — ssh: the command ran past its deadline');
+    });
+    const attempt = await pickVerifiedRunner(config, [mac], [busy('mac')], { runner: null, needs: 'playwright' }, stop.signal);
+    assert.ok(!attempt.ok && attempt.wait !== null && attempt.failure.message.includes('mac — offline'), JSON.stringify(attempt));
+    assert.equal(mac.checks(), 1);
+  });
+
   it('a script that cannot be put on a reachable runner fails the command with that reason — it is not an offline runner and not a job that dies in `prepare` with exit 127', async () => {
     const mac = createFakeClient(createPaired('mac'), async () => { throw new RemoteRunError('could not put the runner script on "mac" (/w/bin) — Permission denied'); });
     await assert.rejects(pickVerifiedRunner(config, [mac], [busy('mac')], { runner: null, needs: null }, noSignal), /could not put the runner script on "mac" .* Permission denied/);
@@ -127,7 +138,7 @@ describe('chooseClient with a real client over a fake ssh: the check after the p
 
   /**
    * An `ssh` that answers by the number of its call: the script check (`test -f …`) and the upload (`cat > …`) and the probe come as the script says. `plan` is one line per call of that kind, in order:
-   * `hang` (never answers: the view's deadline cuts it), `missing` / `present` (the check's answer), `slow` (ssh's own timeout, status 255), `ok` (the upload took it).
+   * `hang` (never answers: the view's deadline cuts it; also for an upload), `missing` / `present` (the check's answer), `slow` (ssh's own timeout, status 255), `ok` (the upload took it).
    */
   function installFakeSsh(plan: { check: string[]; upload: string[] }): void {
     binDir = path.join(root, 'bin');
@@ -141,7 +152,7 @@ next() { local n; n=$(cat "${root}/$1.n" 2>/dev/null || echo 0); n=$((n + 1)); e
 case "$last" in
   "test -f "*) echo "check" >> "${root}/calls.log"; answer=$(next check)
     case "$answer" in hang) exec sleep 60 ;; missing) exit 1 ;; slow) echo "Connection timed out during banner exchange" >&2; exit 255 ;; *) exit 0 ;; esac ;;
-  *"cat >"*|*"cat > "*) echo "upload" >> "${root}/calls.log"; cat > /dev/null; answer=$(next upload); [ "$answer" = ok ] && exit 0; exit 1 ;;
+  *"cat >"*|*"cat > "*) echo "upload" >> "${root}/calls.log"; cat > /dev/null; answer=$(next upload); [ "$answer" = hang ] && exec sleep 60; [ "$answer" = ok ] && exit 0; exit 1 ;;
   *" probe "*) echo "probe" >> "${root}/calls.log"; cat "${root}/probe.txt"; exit 0 ;;
 esac
 exit 0
@@ -198,6 +209,23 @@ exit 0
     const client = await chooseClient(createContext(), { runner: null, needs: 'playwright', waitSeconds: 0 });
     assert.equal(client.runner.name, 'mac');
     assert.deepEqual(readCalls(), ['check', 'check', 'upload'], 'the view\'s check was cut off; after the pick the script was looked for again, found missing and put there');
+  });
+
+  it('Ctrl-C while the NEW script of a busy runner is being uploaded: exit 130 «interrupted» — not the upload\'s own failure (the loop\'s interrupt handling decides, as it does for every other step of the look)', async () => {
+    await putLinkUp();
+    installFakeSsh({ check: ['hang', 'missing'], upload: ['hang'] });
+    const context = createContext();
+    context.watchInterrupts = (onInterrupt) => {
+      const timer = setInterval(() => {
+        if (readCalls().includes('upload')) {
+          clearInterval(timer);
+          onInterrupt('SIGINT');
+        }
+      }, 20);
+      return () => clearInterval(timer);
+    };
+    await assert.rejects(chooseClient(context, { runner: null, needs: 'playwright', waitSeconds: 0 }), (error: Error) => error instanceof RemoteRunError && error.exitCode === 130 && /interrupted while looking for a runner/.test(error.message), 'the stop is an interrupt, not an upload failure');
+    assert.deepEqual(readCalls(), ['check', 'check', 'upload']);
   });
 
   it('the Mac fell asleep with its link still up: the check after the pick times out in ssh itself — the submit goes back into the WAIT (announced once) and takes the runner when it answers, instead of failing', async () => {
