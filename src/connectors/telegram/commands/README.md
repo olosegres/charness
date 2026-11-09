@@ -131,9 +131,13 @@ WITHOUT the section. **`/compact_mistakes` OFF** removes the request from the in
 hook and the plugin run INSIDE the agent, long after the bot started it, so they cannot be handed the setting — the bot keeps ONE EMPTY FILE per agent session
 whose topic has the section OFF (`utils/compactMistakesFlags.ts`: Claude's in `DATA_DIR/compact-mistakes-off/<claudeSessionId>`, OpenCode's in
 `charness-compact-mistakes-off/<opencodeSessionId>` beside OpenCode's plugin folder, found by the plugin from its own `import.meta.url`), and the hook (stdin
-`session_id`) and the plugin (`input.sessionID`) look for it right before they add the request; no file means ON. `state.json` stays the one source:
+`session_id`) and the plugin (`input.sessionID`) look for it right before they add the request; no file means ON. A sub-agent (Task) session of OpenCode has an id of its
+own that no flag names: the plugin asks the server for its `parentID` (`client.session.get`, bounded to 8 levels, no request while the flag folder is empty) and looks at the
+parent's flag, so a topic's sub-agents follow it. `state.json` stays the one source:
 `syncThreadCompactMistakesFlags` (a setting change in a topic; `persistSessionStart` for a new or resumed session id) and `syncAllCompactMistakesFlags` (the
-General default; every boot) copy the resolved value into the files, only for the sessions of this instance's threads. The `compactMistakesFlagDirs` port names the
+General default; every boot) copy the resolved value into the files, only for the sessions of this instance's threads — the current ids AND the parked ones
+(`StateStore.getAgentSessionIds`). `syncAllCompactMistakesFlags` also prunes the Claude folder (this instance's alone) of every flag no OFF topic owns (an id a topic left
+with `/new` / `/quit`, a topic that is gone); the shared OpenCode folder is never pruned, an id this instance knows is the only thing it touches there. The `compactMistakesFlagDirs` port names the
 two folders (the tests give temp ones — a test must never reach the real `DATA_DIR` or OpenCode config). The bot posts that section on its own, EVEN WITH `/compact_summary` OFF
 (`checkShouldPostInstructionGaps` is the one rule, also false when the setting is OFF; `extractCompactionInstructionGaps` lifts it out by its marker lines): from `runThreadCompaction`
 for the bot's own compactions on EVERY backend (the `/compact` seam, `compact_conversation`, the idle compaction — notice → section → the re-asked
