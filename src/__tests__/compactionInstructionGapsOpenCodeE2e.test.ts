@@ -21,7 +21,8 @@
  *   → `/compact_mistakes off`: the flag the OpenCode plugin reads is kept for the session, so the plugin — which the fake server
  *     runs before every compaction, as the real one does, from the file in the instance's own plugin folder — asks for no
  *     section in the `/compact` and the server's own compaction; and the section is posted for neither, although the fake's
- *     summary holds one (the bot's own gate); back `on`: the flag is gone, the plugin asks again and both post the section again.
+ *     summary holds one (the bot's own gate); a sub-agent session of the topic follows it (the plugin finds the topic's flag through
+ *     the session's `parentID`); back `on`: the flag is gone, the plugin asks again and both post the section again.
  *
  * What the unit tests cover instead: the pure filter and tracker (`streamedCompactionSummary.test.ts`, `compactOnIdle.test.ts`),
  * the module over a stub adapter incl. the idle compaction's order (`compactionInstructionGaps.test.ts`), the adapter's hints
@@ -443,6 +444,10 @@ describe('The agent-mistakes section on OpenCode: built charness, fake Bot API, 
     await topic.waitForMessage('the agent\'s text', (message) => message.message_id > messageBefore && message.text.includes(`${agentWorkText} (off)`));
     await fakeOpenCode.emitCompactionSummary(sessionId, { messageId: 'msg_summary_off', chunks: cutSummary(buildSummary(instructionGapsText)) });
     assert.deepEqual(getLatestPluginContext(), [getOpenCodeCompactPluginContext(false)], 'the plugin asks for no section in the server\'s own compaction either');
+    // A sub-agent session of the topic has an id of its own, which no flag names: the plugin finds the topic's through `parentID`.
+    const childSessionId = fakeOpenCode.addChildSession(sessionId);
+    assert.deepEqual(await fakeOpenCode.runCompactionPluginFor(childSessionId), [getOpenCodeCompactPluginContext(false)], 'the sub-agent\'s own compaction is not asked for the section either');
+    assert.deepEqual(await fakeOpenCode.runCompactionPluginFor(fakeOpenCode.addChildSession(childSessionId)), [getOpenCodeCompactPluginContext(false)], 'nor is its own sub-agent\'s');
     await waitForSendQueueToDrain();
 
     const texts = listTextsAfter(messageBefore);
@@ -464,5 +469,6 @@ describe('The agent-mistakes section on OpenCode: built charness, fake Bot API, 
     await fakeOpenCode.emitCompactionSummary(getTopicSessionId(), { messageId: 'msg_summary_on_again', chunks: cutSummary(buildSummary(instructionGapsText)) });
     await topic.waitForMessage('the section of the server\'s own compaction', (message) => message.message_id > ownMessageBefore && message.text.includes(enDict['compact.instructionGapsHeader']));
     assert.deepEqual(getLatestPluginContext(), [getOpenCodeCompactPluginContext(true)], 'the plugin asks for the section in the server\'s own compaction again');
+    assert.deepEqual(await fakeOpenCode.runCompactionPluginFor(fakeOpenCode.addChildSession(getTopicSessionId())), [getOpenCodeCompactPluginContext(true)], 'and the topic\'s sub-agents are asked again');
   });
 });

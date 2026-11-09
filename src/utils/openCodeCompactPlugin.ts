@@ -82,11 +82,23 @@ export function getOpenCodeCompactPluginContext(isWithInstructionGaps: boolean):
 }
 
 /**
- * @description The plugin module source: a v1 plugin (`default` export with `id` + `server`). Before a compaction it looks
- * for the flag the bot keeps for the session (`utils/compactMistakesFlags.ts`): present ⇒ `/compact_mistakes` is off for the
+ * How many sessions up the plugin follows `parentID` from the compacting one to find the topic's session. A sub-agent's
+ * session hangs directly under it, and one that starts sub-agents of its own a level lower; the bound only keeps a broken
+ * chain (a loop) from being followed for ever.
+ */
+const maxSessionAncestryDepth = 8;
+
+/**
+ * @description The plugin module source: a v1 plugin (`default` export with `id` + `server`). Before a compaction it looks for
+ * the flag the bot keeps for the session (`utils/compactMistakesFlags.ts`): present ⇒ `/compact_mistakes` is off for the
  * session's topic and the text without the agent-mistakes section goes in. The flag folder sits next to the plugin folder,
  * found from the plugin's own location — the plugin is shared by every OpenCode of the account and knows no `DATA_DIR`.
- * A session id that is not a plain id, or any read failure, means ON: the section is asked for, as before the switch.
+ *
+ * A sub-agent (Task) session has an id of its own that no flag names, so when the compacting session has none the plugin asks
+ * the server for its `parentID` (`client.session.get`, which the server hands every plugin) and looks at the parent's, up to
+ * {@link maxSessionAncestryDepth} levels: a topic's sub-agents follow the topic. A folder with no flag in it at all costs no
+ * request. A session id that is not a plain id, a server that does not answer, or any read failure means ON: the section is
+ * asked for, as before the switch.
  */
 export function buildOpenCodeCompactPluginSource(input: { context: string; contextWithoutInstructionGaps: string }): string {
   return [
@@ -96,16 +108,29 @@ export function buildOpenCodeCompactPluginSource(input: { context: string; conte
     'import { fileURLToPath } from "node:url";',
     `const context = ${JSON.stringify(input.context)};`,
     `const contextWithoutInstructionGaps = ${JSON.stringify(input.contextWithoutInstructionGaps)};`,
+    `const maxAncestryDepth = ${maxSessionAncestryDepth};`,
     `const offFlagDir = path.join(path.dirname(path.dirname(fileURLToPath(import.meta.url))), ${JSON.stringify(openCodeCompactMistakesOffDirName)});`,
-    'const checkIsMistakesOff = (sessionID) => {',
-    `  if (typeof sessionID !== "string" || !new RegExp(${JSON.stringify(flagSessionIdPattern.source)}).test(sessionID)) return false;`,
-    '  try { return fs.existsSync(path.join(offFlagDir, sessionID)); } catch { return false; }',
+    `const checkIsPlainID = (sessionID) => typeof sessionID === "string" && new RegExp(${JSON.stringify(flagSessionIdPattern.source)}).test(sessionID);`,
+    'const checkHasAnyFlag = () => { try { return fs.readdirSync(offFlagDir).length > 0; } catch { return false; } };',
+    'const checkHasFlag = (sessionID) => { try { return fs.existsSync(path.join(offFlagDir, sessionID)); } catch { return false; } };',
+    'const checkIsMistakesOff = async (client, sessionID) => {',
+    '  if (!checkHasAnyFlag()) return false;',
+    '  let currentID = sessionID;',
+    '  for (let depth = 0; depth < maxAncestryDepth; depth += 1) {',
+    '    if (!checkIsPlainID(currentID)) return false;',
+    '    if (checkHasFlag(currentID)) return true;',
+    '    let parentID;',
+    '    try { parentID = (await client.session.get({ path: { id: currentID } })).data?.parentID; } catch { return false; }',
+    '    if (!parentID) return false;',
+    '    currentID = parentID;',
+    '  }',
+    '  return false;',
     '};',
     'export default {',
     `  id: ${JSON.stringify(openCodeCompactPluginId)},`,
-    '  server: async () => ({',
+    '  server: async (pluginContext) => ({',
     '    "experimental.session.compacting": async (input, output) => {',
-    '      output.context.push(checkIsMistakesOff(input?.sessionID) ? contextWithoutInstructionGaps : context);',
+    '      output.context.push((await checkIsMistakesOff(pluginContext?.client, input?.sessionID)) ? contextWithoutInstructionGaps : context);',
     '    },',
     '  }),',
     '};',

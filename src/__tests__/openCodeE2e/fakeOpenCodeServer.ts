@@ -98,6 +98,11 @@ export interface FakeOpenCodeOptions {
 /** What the plugin's `experimental.session.compacting` hook takes and fills, as OpenCode calls it. */
 type CompactingHook = (input: { sessionID: string }, output: { context: string[] }) => Promise<void>;
 
+/** The slice of the SDK client OpenCode hands a plugin that the bot's plugin uses: the session lookup, `parentID` included. */
+interface PluginSessionClient {
+  session: { get: (request: { path: { id: string } }) => Promise<{ data: { parentID?: string } }> };
+}
+
 /** The file name of the bot's compaction plugin in any version: a content hash after the stem. */
 const compactionPluginFileNamePattern = /^charness-compaction-[0-9a-f]{8}\.js$/;
 
@@ -113,6 +118,8 @@ export class FakeOpenCodeServer {
   readonly sessions = new Map<string, FakeOpenCodeSession>();
   /** What the bot's compaction plugin pushed into the prompt of each compaction, oldest first (only with `pluginDir`). */
   readonly pluginContexts: Array<{ sessionId: string; context: string[] }> = [];
+  /** The sub-agent (Task) sessions of {@link addChildSession}, by id → the parent's: what the session lookup a plugin gets answers with. */
+  private readonly childParents = new Map<string, string>();
   /** Per instance directory, the MCP servers registered with `POST /mcp`. */
   readonly mcpRegistrations = new Map<string, string[]>();
   private readonly server: http.Server;
@@ -282,6 +289,27 @@ export class FakeOpenCodeServer {
   }
 
   /**
+   * @description A sub-agent (Task) session of `parentSessionId` (a session of the topic, or itself a sub-agent's): it has an id of its own and `parentID` set, as the server
+   * serves it to `client.session.get`; nothing is announced on the event stream and nothing is stored for it.
+   */
+  addChildSession(parentSessionId: string): string {
+    if (!this.childParents.has(parentSessionId)) this.getSessionOrThrow(parentSessionId);
+    this.sessionCounter += 1;
+    const childId = `ses_fakechild${this.sessionCounter}`;
+    this.childParents.set(childId, parentSessionId);
+    return childId;
+  }
+
+  /**
+   * @description The server compacting `sessionId` on its own — a sub-agent's, say: the plugin's hook runs for it as it would
+   * before a compaction, and what it pushed into the prompt is returned. No summary is played out.
+   */
+  async runCompactionPluginFor(sessionId: string): Promise<string[]> {
+    await this.runCompactionPlugin(sessionId);
+    return this.pluginContexts.at(-1)?.context ?? [];
+  }
+
+  /**
    * OpenCode runs the plugins' `experimental.session.compacting` hook before EVERY compaction, manual and overflow, and
    * appends what they push to the compaction prompt: the plugin file the bot installed is imported and called the same way.
    */
@@ -290,8 +318,9 @@ export class FakeOpenCodeServer {
     if (!pluginDir) return;
     const fileName = fs.readdirSync(pluginDir).find((name) => compactionPluginFileNamePattern.test(name));
     if (!fileName) throw new Error(`no compaction plugin is installed in ${pluginDir}`);
-    const pluginModule: { default: { server: (context: object) => Promise<Record<string, CompactingHook>> } } = await import(pathToFileURL(path.join(pluginDir, fileName)).href);
-    const hooks = await pluginModule.default.server({});
+    const pluginModule: { default: { server: (context: { client: PluginSessionClient }) => Promise<Record<string, CompactingHook>> } } = await import(pathToFileURL(path.join(pluginDir, fileName)).href);
+    const client: PluginSessionClient = { session: { get: async ({ path: { id } }) => ({ data: { parentID: this.childParents.get(id) } }) } };
+    const hooks = await pluginModule.default.server({ client });
     const output = { context: [] as string[] };
     await hooks['experimental.session.compacting']({ sessionID: sessionId }, output);
     this.pluginContexts.push({ sessionId, context: output.context });

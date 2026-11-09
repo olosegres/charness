@@ -97,12 +97,15 @@ test('installOpenCodeCompactPlugin: the installed plugin pushes the guidance on 
   });
 });
 
-/** Install the plugin under `<dir>/opencode/plugins`, import it the way OpenCode does and return its compaction hook. */
-async function loadInstalledPluginHook(dir: string): Promise<CompactingHook> {
+/** The slice of the SDK client the plugin uses: the session lookup that tells a session's parent. */
+type SessionLookupClient = { session: { get: (request: { path: { id: string } }) => Promise<{ data?: { parentID?: string } }> } };
+
+/** Install the plugin under `<dir>/opencode/plugins`, import it the way OpenCode does (its context carries `client`) and return its compaction hook. */
+async function loadInstalledPluginHook(dir: string, client?: SessionLookupClient): Promise<CompactingHook> {
   const pluginDir = path.join(dir, 'opencode', 'plugins');
-  assert.equal(installOpenCodeCompactPlugin(pluginDir), 'written');
+  assert.notEqual(installOpenCodeCompactPlugin(pluginDir), 'failed');
   const mod = await import(pathToFileURL(path.join(pluginDir, openCodeCompactPluginFileName)).href);
-  const hooks = await mod.default.server({}, undefined);
+  const hooks = await mod.default.server(client ? { client } : {}, undefined);
   return hooks['experimental.session.compacting'] as CompactingHook;
 }
 
@@ -140,6 +143,79 @@ test('installed plugin: a session id that is not a plain id never leaves the fla
     const output = { context: [] as string[] };
     await (hook as unknown as (input: undefined, output: { context: string[] }) => Promise<void>)(undefined, output);
     assert.deepEqual(output.context, [getOpenCodeCompactPluginContext(true)], 'no input at all');
+  });
+});
+
+/** A session lookup over `parents` (child → parent), counting its calls. */
+function createSessionLookup(parents: Record<string, string>): { client: SessionLookupClient; calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    client: { session: { get: async ({ path: { id } }) => { calls.push(id); return { data: parents[id] ? { parentID: parents[id] } : {} }; } } },
+  };
+}
+
+test('installed plugin: a sub-agent\'s session follows its topic — the flag of an ancestor (parentID, as the server tells it) drops the section request', async () => {
+  await withTempDir(async (dir) => {
+    const lookup = createSessionLookup({ ses_child: 'ses_topic', ses_grandchild: 'ses_child' });
+    const hook = await loadInstalledPluginHook(dir, lookup.client);
+    const flagDir = getOpenCodeCompactMistakesOffDir(path.join(dir, 'opencode', 'plugins'));
+    assert.deepEqual(await getPushedContext(hook, 'ses_child'), [getOpenCodeCompactPluginContext(true)], 'no flag anywhere: asked, and no request made to find out');
+    assert.deepEqual(lookup.calls, [], 'an empty flag folder costs no lookup');
+
+    applyCompactMistakesOffFlag(flagDir, 'ses_topic', false);
+    assert.deepEqual(await getPushedContext(hook, 'ses_child'), [getOpenCodeCompactPluginContext(false)], 'a child of the OFF topic\'s session is not asked');
+    assert.deepEqual(await getPushedContext(hook, 'ses_grandchild'), [getOpenCodeCompactPluginContext(false)], 'nor is a grandchild');
+    assert.deepEqual(await getPushedContext(hook, 'ses_stranger'), [getOpenCodeCompactPluginContext(true)], 'a session under no flagged one is asked');
+
+    lookup.calls.length = 0;
+    assert.deepEqual(await getPushedContext(hook, 'ses_topic'), [getOpenCodeCompactPluginContext(false)]);
+    assert.deepEqual(lookup.calls, [], 'the flagged session itself needs no lookup');
+
+    applyCompactMistakesOffFlag(flagDir, 'ses_topic', true);
+    assert.deepEqual(await getPushedContext(hook, 'ses_child'), [getOpenCodeCompactPluginContext(true)], 'switched back on: the child is asked again');
+  });
+});
+
+test('installed plugin: an ancestor search that fails, loops or never ends means ON — and is bounded', async () => {
+  await withTempDir(async (dir) => {
+    const flagDir = getOpenCodeCompactMistakesOffDir(path.join(dir, 'opencode', 'plugins'));
+    applyCompactMistakesOffFlag(flagDir, 'ses_topic', false);
+    const asked = [getOpenCodeCompactPluginContext(true)];
+
+    // No client at all (a host that hands the plugin none), and a server that does not answer.
+    assert.deepEqual(await getPushedContext(await loadInstalledPluginHook(dir), 'ses_child'), asked, 'no client');
+    const failingClient: SessionLookupClient = { session: { get: async () => { throw new Error('server unreachable'); } } };
+    assert.deepEqual(await getPushedContext(await loadInstalledPluginHook(dir, failingClient), 'ses_child'), asked, 'a failing lookup');
+
+    // A loop that never reaches the flagged session ends after the bound instead of being followed for ever.
+    const loop = createSessionLookup({ ses_a: 'ses_b', ses_b: 'ses_a' });
+    assert.deepEqual(await getPushedContext(await loadInstalledPluginHook(dir, loop.client), 'ses_a'), asked, 'a loop');
+    assert.ok(loop.calls.length <= 8, `the loop was followed ${loop.calls.length} times`);
+
+    // The bound: the flagged session may be up to 8 sessions from the compacting one (itself included), not further.
+    const chain: Record<string, string> = {};
+    for (let level = 0; level < 12; level += 1) chain[`ses_level${level}`] = `ses_level${level + 1}`;
+    const bounded = createSessionLookup(chain);
+    const boundedHook = await loadInstalledPluginHook(dir, bounded.client);
+    applyCompactMistakesOffFlag(flagDir, 'ses_topic', true);
+    applyCompactMistakesOffFlag(flagDir, 'ses_level7', false);
+    assert.deepEqual(await getPushedContext(boundedHook, 'ses_level0'), [getOpenCodeCompactPluginContext(false)], 'the 8th session up is still followed');
+    applyCompactMistakesOffFlag(flagDir, 'ses_level7', true);
+    applyCompactMistakesOffFlag(flagDir, 'ses_level8', false);
+    assert.deepEqual(await getPushedContext(boundedHook, 'ses_level0'), asked, 'the 9th is not');
+  });
+});
+
+test('installed plugin: an ancestor id that is not a plain id never leaves the flag folder', async () => {
+  await withTempDir(async (dir) => {
+    const lookup = createSessionLookup({ ses_child: '../decoy' });
+    const hook = await loadInstalledPluginHook(dir, lookup.client);
+    const flagDir = getOpenCodeCompactMistakesOffDir(path.join(dir, 'opencode', 'plugins'));
+    applyCompactMistakesOffFlag(flagDir, 'ses_topic', false);
+    // A decoy ONE LEVEL UP from the flag folder: were `../decoy` joined into the path, the flag would "exist".
+    fs.writeFileSync(path.join(dir, 'opencode', 'decoy'), '');
+    assert.deepEqual(await getPushedContext(hook, 'ses_child'), [getOpenCodeCompactPluginContext(true)]);
   });
 });
 
