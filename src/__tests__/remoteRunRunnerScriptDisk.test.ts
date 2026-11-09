@@ -19,7 +19,7 @@ import fs from 'fs';
 import path from 'path';
 import { diskTooLowRunnerExitCode } from '../remoteRun/pruneReport';
 import { parseProbeOutput } from '../remoteRun/probe';
-import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, writeFile } from './remoteRunRunnerScriptKit';
+import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopDetachedRuns, writeFile } from './remoteRunRunnerScriptKit';
 import { kibPerGib, dayMs, hourMs, workRoot, workDir, fakeBinDir, writeExecutable, getEnv, runScript, runFunction, setAge, makeCopy, writeJob, liveProcesses, getDeadPid, runShell, listCopies, parseRemovals, useDiskHarness } from './remoteRunRunnerScriptDiskKit';
 
 useDiskHarness();
@@ -262,6 +262,8 @@ describe('a submit on a disk that stays short', () => {
     writeExecutable(path.join(fakeBinDir, 'nice'), `#!/bin/bash\necho "launched own-copy-exists=$([ -d '${path.join(workDir, 'p', slug)}' ] && echo yes || echo no)" >> '${launchLog}'\nshift 2\nexec "$@"\n`);
     const result = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '60' });
     assert.equal(result.status, diskTooLowRunnerExitCode, result.stderr);
+    // The walk is started in the background (`nice` is its first word): the call may be over before `nice` has run, on a loaded host long before. Waited for, not read at once.
+    stopDetachedRuns(workRoot);
     assert.equal(fs.readFileSync(launchLog, 'utf8').trim(), 'launched own-copy-exists=no', 'the first-ever copy of the refused submit is already gone when the walk starts');
     assert.equal(fs.existsSync(path.join(workDir, 'p', slug)), false, 'and stays gone');
   });
