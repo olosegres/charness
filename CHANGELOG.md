@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+**`charness remote-run bash -c '<script>'` (also `sh`, `zsh`, `dash`, `ksh`, `-lc`) now runs the whole script — it ran only its first word, and the rest of the line in the project root.**
+Before, the command words were joined with spaces and read again by the runner's shell, so `bash -c 'cd projects/app && yarn e2e:dev:ios:job'` reached the Mac as `bash -c cd projects/app && yarn e2e:dev:ios:job`: a `bash -c cd` that changes nothing, then `yarn …` in the project root — «Couldn't find a script named "e2e:dev:ios:job"» (measured on the Mac, jobs of 2026-11-09; the copy, its install and its workspaces were intact). Now the script of a shell's `-c`, and the words after it, are quoted. Every other command is joined with spaces as before (`remote-run 'yarn build && yarn test'` is unchanged).
 **A runner that is busy under a job no longer reads «offline (no answer within 20 s)» — and the next submit no longer waits for it or refuses it.**
 Before, a Mac with its iOS Simulators booting (load 129 on 10 cores) whose probe did not finish in 20 s was shown `offline`, although its link was up and a job was running on it; a new `--needs` job then waited for it as for a machine that was gone, or was refused. Measured: the probe waited, before answering, for the scheduling safety net — which waits up to 30 s for a project's scheduling mutex and asks Pueue with no limit — and a probe taken while a job was being queued behind a slow Pueue took 25.8 s against 0.4 s without it.
 Now:

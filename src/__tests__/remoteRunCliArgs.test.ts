@@ -2,13 +2,17 @@
  * @description `remoteRun/cliArgs.ts`: the command line — options only BEFORE the command, parsing stops at the first non-option word,
  * a subcommand name is recognised as the first word (a command that starts with one goes after `--`), a subcommand name that FOLLOWS
  * options is read as the subcommand or refused with the way out — never run as a job of that name — the command words are
- * joined with spaces, durations, and a usage error that says what was wrong.
+ * joined with spaces (except a shell's `-c <script>`, whose script stays ONE word), durations, and a usage error that says what was wrong.
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { defaultTimeoutSeconds, maxTimeoutSeconds, parseDuration, parseRemoteRunArgs, type RemoteRunCommand } from '../remoteRun/cliArgs';
 
 function parseOk(words: string[]): RemoteRunCommand {
@@ -220,5 +224,68 @@ describe('subcommands', () => {
     assert.deepEqual(parseOk(['exec', '--', 'ls']), { kind: 'exec', runner: null, command: 'ls' });
     assert.match(parseError(['exec']), /needs a command/);
     assert.match(parseError(['exec', '--nope', 'x']), /unknown option for exec/);
+  });
+});
+
+/** The command string of a `run` or an `exec` that was given these words. */
+function parseCommandText(words: string[]): string {
+  const command = parseOk(words);
+  assert.ok(command.kind === 'run' || command.kind === 'exec', `${words.join(' ')} should be a command`);
+  return command.kind === 'run' || command.kind === 'exec' ? command.command : '';
+}
+
+describe('a shell invocation `<shell> -c <script>`: the script is ONE word, so it stays one when the words are joined', () => {
+  it('bash -c, sh -c, zsh -c, dash -c, ksh -c and a shell given by path: the script and what follows it are quoted', () => {
+    assert.equal(parseCommandText(['bash', '-c', 'cd projects/app && yarn e2e -- flow.e2e.ts']), "bash -c 'cd projects/app && yarn e2e -- flow.e2e.ts'");
+    assert.equal(parseCommandText(['sh', '-c', 'cd a && ls']), "sh -c 'cd a && ls'");
+    assert.equal(parseCommandText(['zsh', '-c', 'echo $HOME']), "zsh -c 'echo $HOME'");
+    assert.equal(parseCommandText(['dash', '-c', 'a; b']), "dash -c 'a; b'");
+    assert.equal(parseCommandText(['ksh', '-c', 'a | b']), "ksh -c 'a | b'");
+    assert.equal(parseCommandText(['/bin/bash', '-c', 'cd a && ls']), "/bin/bash -c 'cd a && ls'");
+  });
+
+  it('a combined flag that holds c (-lc, -ec, -xc) is the same; the words after the script (the shell\'s $0, $1 …) are quoted one by one', () => {
+    assert.equal(parseCommandText(['bash', '-lc', 'cd a && ls']), "bash -lc 'cd a && ls'");
+    assert.equal(parseCommandText(['sh', '-ec', 'false; true']), "sh -ec 'false; true'");
+    assert.equal(parseCommandText(['bash', '-c', 'echo "$0 $1"', 'name', 'two words']), `bash -c 'echo "$0 $1"' name 'two words'`);
+  });
+
+  it('a single quote inside the script survives, and a script that needs no quoting is left as it is', () => {
+    const withQuote = parseCommandText(['bash', '-c', "echo 'a  b'"]);
+    assert.equal(spawnSync('bash', ['-c', withQuote], { encoding: 'utf8' }).stdout, 'a  b\n');
+    assert.equal(parseCommandText(['bash', '-c', 'ls']), 'bash -c ls');
+  });
+
+  it('exec reads it the same way, and options before the command are still options', () => {
+    assert.equal(parseCommandText(['exec', 'bash', '-c', 'cd a && ls']), "bash -c 'cd a && ls'");
+    assert.equal(parseCommandText(['exec', '--runner', 'box1', 'sh', '-c', 'cd a && ls']), "sh -c 'cd a && ls'");
+    const job = parseOk(['--bg', '--needs', 'ios', '--send', '.env.test', 'bash', '-c', 'cd a && ls']);
+    assert.ok(job.kind === 'run' && job.command === "bash -c 'cd a && ls'" && job.options.needs === 'ios' && job.options.isBackground);
+  });
+
+  it('everything else keeps the documented rule — the words joined with spaces', () => {
+    assert.equal(parseCommandText(['bash', 'script.sh', '-c', 'x y']), 'bash script.sh -c x y');
+    assert.equal(parseCommandText(['bash', '-c']), 'bash -c');
+    assert.equal(parseCommandText(['bash', '-n', 'script.sh']), 'bash -n script.sh');
+    assert.equal(parseCommandText(['env', 'bash', '-c', 'cd a && ls']), 'env bash -c cd a && ls');
+    assert.equal(parseCommandText(['yarn', 'e2e', '-c', 'a b']), 'yarn e2e -c a b');
+    assert.equal(parseCommandText(['mybash', '-c', 'cd a && ls']), 'mybash -c cd a && ls');
+    assert.equal(parseCommandText(['bash -c "cd a && ls"']), 'bash -c "cd a && ls"');
+    assert.equal(parseCommandText(['cd a && ls']), 'cd a && ls');
+  });
+
+  it('run on a real shell (the runner runs the command text with `bash -c`): `cd` and the chain after it happen INSIDE the script — the job of 2026-11-09 ran `yarn …` in the project root instead', () => {
+    const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'remote-run-words-')));
+    try {
+      mkdirSync(path.join(root, 'projects', 'app'), { recursive: true });
+      const commandText = parseCommandText(['bash', '-c', 'cd projects/app && pwd && echo "[$0] [$#]"']);
+      const ran = spawnSync('bash', ['-c', commandText], { cwd: root, encoding: 'utf8' });
+      assert.equal(ran.status, 0, ran.stderr);
+      assert.equal(ran.stdout, `${path.join(root, 'projects', 'app')}\n[bash] [0]\n`);
+      const withArguments = parseCommandText(['bash', '-c', 'echo "$0|$1|$2"', 'zero', 'one two', "it's"]);
+      assert.equal(spawnSync('bash', ['-c', withArguments], { cwd: root, encoding: 'utf8' }).stdout, "zero|one two|it's\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

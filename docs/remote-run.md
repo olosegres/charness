@@ -445,7 +445,11 @@ Options go **before** the command; parsing stops at the first word that is not a
 first word is a subcommand name goes after `--`: `charness remote-run -- ls build/`. A subcommand name that follows options is never
 run as a job of that name: `--runner box1 exec ls build/` is the `exec` of `ls build/` on `box1` (before `exec` only `--runner` is
 understood), and `--bg ls build/` is refused with the way out — put `--` before it. The words of the command are joined with spaces
-and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn test'` works.
+and run by `bash -c` on the runner, so `charness remote-run 'yarn build && yarn test'` works. A word that holds a space or an operator is
+therefore read again on the runner: `charness remote-run yarn e2e -t 'a b'` runs `yarn e2e -t a b`, so pass a whole script as ONE quoted
+word. The one exception is a shell given a script — `bash -c`, `sh -c`, `zsh -c`, `dash -c`, `ksh -c`, also `-lc` and the like: there the script
+(and the words after it, the shell's `$0 $1 …`) is quoted for you, so `charness remote-run bash -c 'cd app && yarn e2e'` runs the whole
+script in `app` (before this, it ran `bash -c cd app` and then `yarn e2e` in the project root).
 
 - **Foreground (default)**: syncs the project, runs the dependencies step when needed, runs the command in the same subfolder of the
   runner's copy, streams its output live, and exits with the command's exit code. Interrupting it (Ctrl-C, SIGTERM, an agent tool's

@@ -1,6 +1,8 @@
+import * as path from 'path';
 import { parseJobId } from './jobId';
 import { getPathPatternProblem } from './pathPatterns';
 import { runnerCapabilities, type RunnerCapability } from './probe';
+import { quoteShellWord } from './ssh';
 
 /**
  * @description The command line of `charness remote-run`, parsed. Options come only BEFORE the command and parsing stops at the first
@@ -119,6 +121,26 @@ function parseCleanArguments(words: readonly string[]): RemoteRunArgsParse {
   return { ok: true, command: { kind: 'clean', slug } };
 }
 
+/** The shells whose `-c` takes a script: a word after it is part of that script's own command line, not a word of ours. */
+const scriptShellNames: readonly string[] = ['sh', 'bash', 'zsh', 'dash', 'ksh'];
+
+/** `-c`, or a bundle of single-letter flags that holds a `c` (`-lc`, `-ec`, `-xc`). */
+const scriptFlagPattern = /^-[A-Za-z]*c[A-Za-z]*$/;
+
+/**
+ * @description The words of a command as the ONE string the runner reads with its own `bash -c`. They are joined with spaces, so a word
+ * that holds a space or an operator is read again by that shell (`charness remote-run 'yarn build && yarn test'` is one word that way, on
+ * purpose). The one place where the words themselves say that a word is a single one is a shell given a script: `<shell> -c <script>
+ * [$0 $1 …]`. Joined plainly, `bash -c 'cd app && yarn e2e'` reached the runner as `bash -c cd app && yarn e2e` — a `bash -c cd` that does
+ * nothing, and `yarn e2e` run in the project root (measured 2026-11-09: «Couldn't find a script named e2e:dev:ios:job», in a project
+ * whose subfolder has it). So the script and the words after it are quoted, as the shell that typed them had them.
+ */
+export function joinCommandWords(words: readonly string[]): string {
+  const [program, flag, ...script] = words;
+  const isShellWithScript = program !== undefined && flag !== undefined && script.length > 0 && scriptShellNames.includes(path.posix.basename(program)) && scriptFlagPattern.test(flag);
+  return isShellWithScript ? [program, flag, ...script.map(quoteShellWord)].join(' ') : words.join(' ');
+}
+
 function parseExecArguments(words: readonly string[]): RemoteRunArgsParse {
   let runner: string | null = null;
   let index = 0;
@@ -138,7 +160,7 @@ function parseExecArguments(words: readonly string[]): RemoteRunArgsParse {
   }
   const commandWords = words.slice(index);
   if (commandWords.length === 0) return { ok: false, error: 'exec needs a command' };
-  return { ok: true, command: { kind: 'exec', runner, command: commandWords.join(' ') } };
+  return { ok: true, command: { kind: 'exec', runner, command: joinCommandWords(commandWords) } };
 }
 
 /** The value-taking options of a run, each as the code that stores the value. */
@@ -236,7 +258,7 @@ function parseRunArguments(words: readonly string[]): RemoteRunArgsParse {
   const commandWords = words.slice(index);
   if (commandWords.length === 0) return { ok: false, error: 'no command given' };
   if (!isCommandAfterSeparator && subcommandNames.includes(commandWords[0])) return parseOptionsBeforeSubcommand(commandWords[0], commandWords.slice(1), options.runner, usedOptions);
-  return { ok: true, command: { kind: 'run', options, command: commandWords.join(' ') } };
+  return { ok: true, command: { kind: 'run', options, command: joinCommandWords(commandWords) } };
 }
 
 /** @description Parse the words after `charness remote-run`. */
