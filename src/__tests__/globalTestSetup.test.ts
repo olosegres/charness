@@ -5,6 +5,10 @@
  * Every case runs a FRESH child with the setup preloaded and a private `TMPDIR`: this test's own
  * process already has the setup loaded, and its dir cannot be observed from the inside.
  *
+ * The same for OpenCode's config home: `XDG_CONFIG_HOME` must be a private temp folder, because `ensureOpenCodeServer()` fills
+ * `$XDG_CONFIG_HOME/opencode/plugins` with the bot's compaction plugin and clears it of every other version — with the
+ * variable unset that is the real account's folder, and one suite run replaced the live bot's plugin file with the tree's own.
+ *
  * Test case: N/A - Charness has no Jira tracker.
  */
 
@@ -15,6 +19,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 import { pathToFileURL } from 'url';
+import {
+  installOpenCodeCompactPlugin,
+  openCodeCompactPluginFileName,
+  openCodeCompactPluginId,
+  resolveOpenCodeGlobalPluginDir,
+} from '../utils/openCodeCompactPlugin';
 
 const repoRoot = path.join(__dirname, '..', '..');
 const globalTestSetupUrl = pathToFileURL(path.join(__dirname, 'globalTestSetup.ts')).href;
@@ -141,4 +151,72 @@ test('globalTestSetup: a stale unwritable dir named after the pid is neither ado
     'the foreign dir is not ours to delete and must be the only one left',
   );
   assert.equal(result.isForeignDirMarkerLeft, true, 'the foreign dir must be left untouched');
+});
+
+interface ConfigHomeChildResult {
+  status: number | null;
+  stderr: string;
+  /** The `XDG_CONFIG_HOME` the child saw. */
+  configHome: string;
+  childTmpDir: string;
+  /** Whether `configHome` still exists after the child exited. */
+  isConfigHomeLeft: boolean;
+}
+
+/** A fresh child with the setup preloaded that reports its `XDG_CONFIG_HOME`; `inheritedConfigHome` is what its parent shell exports (`undefined`: nothing). */
+function runConfigHomeChild(inheritedConfigHome: string | undefined): ConfigHomeChildResult {
+  const childTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'globalTestSetup-'));
+  try {
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, TMPDIR: childTmpDir };
+    if (inheritedConfigHome === undefined) delete childEnv.XDG_CONFIG_HOME;
+    else childEnv.XDG_CONFIG_HOME = inheritedConfigHome;
+    const child = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', '--import', globalTestSetupUrl, '--eval', "process.stdout.write(process.env.XDG_CONFIG_HOME ?? '')"],
+      { cwd: repoRoot, encoding: 'utf8', timeout: setupChildTimeoutMs, env: childEnv },
+    );
+    assert.equal(child.error, undefined, child.error?.message);
+    return { status: child.status, stderr: child.stderr, configHome: child.stdout, childTmpDir, isConfigHomeLeft: fs.existsSync(child.stdout) };
+  } finally {
+    fs.rmSync(childTmpDir, { recursive: true, force: true });
+  }
+}
+
+for (const { name, inheritedConfigHome } of [
+  { name: 'the shell exports none', inheritedConfigHome: undefined },
+  { name: 'the shell exports one of its own', inheritedConfigHome: path.join(os.homedir(), '.config') },
+]) {
+  test(`globalTestSetup: XDG_CONFIG_HOME is a private temp folder when ${name}, and is removed when the process exits`, () => {
+    const result = runConfigHomeChild(inheritedConfigHome);
+
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    assert.equal(path.dirname(result.configHome), result.childTmpDir, 'the setup must have put the config home into the temp dir');
+    assert.notEqual(result.configHome, inheritedConfigHome, 'whatever the shell exports is not honoured');
+    assert.equal(result.isConfigHomeLeft, false, `${result.configHome} must not outlive the process that created it`);
+  });
+}
+
+function checkIsInside(folder: string, parent: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(folder));
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+test('globalTestSetup: this process\'s default OpenCode plugin folder is inside the temp dir, never the account\'s own ~/.config', () => {
+  const pluginDir = resolveOpenCodeGlobalPluginDir(process.env);
+  assert.ok(checkIsInside(pluginDir, os.tmpdir()), `the default plugin folder is a temp folder: ${pluginDir}`);
+  assert.ok(!checkIsInside(pluginDir, path.join(os.homedir(), '.config')), `and not under the account's own ~/.config: ${pluginDir}`);
+});
+
+test('globalTestSetup: the default plugin install goes to that private folder — a decoy older version there is replaced, nothing outside it is touched', () => {
+  // The check above comes first: were the redirect missing, this test stops before the install could reach the real folder.
+  const pluginDir = resolveOpenCodeGlobalPluginDir(process.env);
+  assert.ok(checkIsInside(pluginDir, os.tmpdir()), `the default plugin folder is a temp folder: ${pluginDir}`);
+  fs.mkdirSync(pluginDir, { recursive: true });
+  const decoyPath = path.join(pluginDir, 'charness-compaction-00000000.js');
+  fs.writeFileSync(decoyPath, `export default { id: ${JSON.stringify(openCodeCompactPluginId)}, server: async () => ({}) };\n`);
+
+  installOpenCodeCompactPlugin();
+
+  assert.equal(fs.existsSync(decoyPath), false, 'the older version in the default folder was removed');
+  assert.deepEqual(fs.readdirSync(pluginDir), [openCodeCompactPluginFileName], 'and the current one is the only file there');
 });

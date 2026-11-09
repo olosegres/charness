@@ -19,6 +19,11 @@
  *
  * The same for tmux: `TMUX_TMPDIR` points at a private folder, so the "default" tmux server of the suite (and of every
  * instance and tool it spawns) is its own, never the host's — where a live bot may run its agents.
+ *
+ * And for OpenCode's config home: `XDG_CONFIG_HOME` points at a private folder, because `ensureOpenCodeServer()` installs the
+ * bot's compaction plugin into `$XDG_CONFIG_HOME/opencode/plugins` and removes every other version of it from there — with the
+ * variable unset that is the real account's plugin folder, and a suite run would replace the live bot's plugin file with the
+ * tree's own (`globalTestSetup.test.ts` pins this).
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
@@ -38,6 +43,11 @@ import { hotReloadEnvName, openCodeProcessFileEnvName } from '../legacyNames';
 // foreign (unwritable) dir, so the first `DATA_DIR` write in the test would fail with `EACCES`.
 const testDataDir = mkdtempSync(path.join(os.tmpdir(), 'charness-test-'));
 process.env.DATA_DIR = testDataDir;
+
+// A FRESH folder for the same reason as above; a test that needs a config home of its own still sets `XDG_CONFIG_HOME` itself.
+// Unconditional, like `DATA_DIR`: the shell that runs the suite may export a real one.
+const testConfigHome = mkdtempSync(path.join(os.tmpdir(), 'charness-test-config-'));
+process.env.XDG_CONFIG_HOME = testConfigHome;
 
 // A suite run from an agent session of a live hot-mode bot inherits that supervisor's handshake: with
 // it, `installManager` would treat the test process as the live worker and persist OpenCode ownership
@@ -63,6 +73,7 @@ delete process.env.TMUX_PANE;
 // removed, a server could no longer be reached at all.
 process.on('exit', () => {
   rmSync(testDataDir, { recursive: true, force: true });
+  rmSync(testConfigHome, { recursive: true, force: true });
   const testTmuxSocketDir = path.join(testTmuxDir, `tmux-${process.getuid?.() ?? 0}`);
   const socketNames = existsSync(testTmuxSocketDir) ? readdirSync(testTmuxSocketDir) : [];
   for (const socketPath of socketNames.map((name) => path.join(testTmuxSocketDir, name))) {
