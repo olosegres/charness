@@ -802,6 +802,7 @@ export const uzDict: Record<string, string> = {
   'schedule.checkFired': '🔔 «{name}» tekshiruvi ishga tushdi — agentni uyg‘otyapman.',
   'schedule.workerFinished': '✅ «{name}» workeri tugadi ({elapsed}). Natijani o‘qiyapman.',
   'schedule.workerSilent': '⚠️ «{name}» workeri {minutes} daqiqadan beri jim. Qotib qolmaganini tekshiryapman.',
+  'schedule.workerUnreported': '⚠️ «{name}» workeri hisobotsiz {elapsed} ishlayapti. Tekshiryapman.',
   'schedule.checkRecovered': '✅ «{name}» tekshiruvi yana joyida.',
   'schedule.workerResumed': '✅ «{name}» workeri yana ishlayapti.',
   'schedule.everyMinutes': 'har {count} daqiqada',

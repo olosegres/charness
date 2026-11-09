@@ -787,6 +787,7 @@ test('scheduler fire and check keys exist in every locale, and the retired check
     'schedule.checkFired',
     'schedule.workerFinished',
     'schedule.workerSilent',
+    'schedule.workerUnreported',
     'schedule.workerResumed',
     'schedule.checkRecovered',
     'schedule.everyMinutes',
@@ -817,6 +818,7 @@ test('the check and worker sentences substitute every placeholder in every local
         ['schedule.checkFired', { name: 'N1' }],
         ['schedule.workerFinished', { name: 'N1', elapsed: 'E1' }],
         ['schedule.workerSilent', { name: 'N1', minutes: 45 }],
+        ['schedule.workerUnreported', { name: 'N1', elapsed: 'E1' }],
         ['schedule.workerResumed', { name: 'N1' }],
         ['schedule.checkRecovered', { name: 'N1' }],
         ['schedule.fired', { name: 'N1', schedule: 'S1', missedNote: '' }],
@@ -1472,7 +1474,7 @@ test('the status line of a passing check: its keys exist in every locale, keep t
 });
 
 test('the schedule sentences are typographically sound: German quotes are paired, Chinese keeps no Latin «worker», the first person of the approved wording stays', () => {
-  const quotedKeys = ['schedule.checkFired', 'schedule.workerFinished', 'schedule.workerSilent', 'schedule.workerResumed', 'schedule.checkRecovered'];
+  const quotedKeys = ['schedule.checkFired', 'schedule.workerFinished', 'schedule.workerSilent', 'schedule.workerUnreported', 'schedule.workerResumed', 'schedule.checkRecovered'];
   for (const key of quotedKeys) {
     const german = runWithLocale('de', () => t(key, { name: 'N1', elapsed: 'E1', minutes: 45 }));
     assert.ok(german.includes('„N1“'), `de ${key} pairs „…“: "${german}"`);
@@ -1482,4 +1484,6 @@ test('the schedule sentences are typographically sound: German quotes are paired
   // The topic hears one voice — the bot's and the agent's — so the wording that says what happens next is in the first person.
   assert.equal(runWithLocale('en', () => t('schedule.workerFinished', { name: 'N1', elapsed: 'E1' })), '✅ Worker "N1" finished (E1). Reading the result.');
   assert.equal(runWithLocale('ru', () => t('schedule.workerFinished', { name: 'N1', elapsed: 'E1' })), '✅ Воркер «N1» завершил работу (E1). Разбираю результат.');
+  assert.equal(runWithLocale('en', () => t('schedule.workerUnreported', { name: 'N1', elapsed: 'E1' })), '⚠️ Worker "N1" has been running E1 without a report. Checking on it.');
+  assert.equal(runWithLocale('ru', () => t('schedule.workerUnreported', { name: 'N1', elapsed: 'E1' })), '⚠️ Воркер «N1» работает уже E1 без отчёта. Смотрю, что с ним.');
 });

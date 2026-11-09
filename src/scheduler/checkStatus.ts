@@ -44,7 +44,8 @@ const checkStatusSlackShareDivisor = 5;
 /** The longest «now» part of a line: one line of a phone's width, never a paragraph. */
 export const checkStatusActivityMaxChars = 120;
 
-const msPerMinute = 60_000;
+/** Milliseconds in a minute (shared with `delivery.ts`, which turns a recipe window in minutes into an elapsed text). */
+export const msPerMinute = 60_000;
 const minutesPerHour = 60;
 
 /** A leading `watch ` of a check's name is the recipe's own prefix (`watch builder S2`), noise in the topic. */

@@ -808,6 +808,7 @@ export const ukDict: Record<string, string> = {
   'schedule.checkFired': '🔔 Спрацювала перевірка «{name}» — бужу агента.',
   'schedule.workerFinished': '✅ Воркер «{name}» завершив роботу ({elapsed}). Розбираю результат.',
   'schedule.workerSilent': '⚠️ Воркер «{name}» мовчить уже {minutes} хв. Перевіряю, чи не завис.',
+  'schedule.workerUnreported': '⚠️ Воркер «{name}» працює вже {elapsed} без звіту. Дивлюся, що з ним.',
   'schedule.checkRecovered': '✅ Перевірка «{name}» знову в порядку.',
   'schedule.workerResumed': '✅ Воркер «{name}» знову працює.',
   'schedule.everyMinutes': 'кожні {count} хв',

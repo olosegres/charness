@@ -802,6 +802,7 @@ export const zhDict: Record<string, string> = {
   'schedule.checkFired': '🔔 检查「{name}」已触发 — 正在唤醒代理。',
   'schedule.workerFinished': '✅ 工作进程「{name}」已完成（{elapsed}）。正在读取结果。',
   'schedule.workerSilent': '⚠️ 工作进程「{name}」已沉默 {minutes} 分钟。正在检查它是否卡住。',
+  'schedule.workerUnreported': '⚠️ 工作进程「{name}」已运行 {elapsed}，仍未汇报。正在查看。',
   'schedule.checkRecovered': '✅ 检查「{name}」已恢复正常。',
   'schedule.workerResumed': '✅ 工作进程「{name}」又开始工作了。',
   'schedule.everyMinutes': '每 {count} 分钟',

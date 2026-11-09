@@ -20,25 +20,31 @@ mechanics below: launching, detaching, watching, waking, accounts and reaching t
 
 ## Watch every worker with a bot check
 
-Right after each launch, create ONE check for that worker run with `schedule_create`: cron `*/5 * * * *`,
-`statusWorkerRunDir: "<run-dir>", statusEveryMinutes: 15`, a name like `watch <role> <scope>`, and this
-`checkCommand` with the real PID and run directory (`<run-dir>` is an absolute path: the check runs in the topic's
-folder, so a relative path or `~` points elsewhere):
+Right after each launch, `touch "<run-dir>/watch-armed"`, then create ONE check for that worker run with
+`schedule_create`: cron `*/5 * * * *`, `statusWorkerRunDir: "<run-dir>", statusEveryMinutes: 15`, a name like
+`watch <role> <scope>`, and this `checkCommand` with the real PID and run directory (`<run-dir>` is an absolute path:
+the check runs in the topic's folder, so a relative path or `~` points elsewhere):
 
 ```
-kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(find "<run-dir>" -mmin -45 -print -quit)" ] || { echo "<run-dir>: no change for 45 min"; exit 2; }
+kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(find "<run-dir>" -mmin -45 -print -quit)" ] || { echo "<run-dir>: no change for 45 min"; exit 2; }; [ -n "$(find "<run-dir>/watch-armed" -mmin -150 -print -quit)" ] || { echo "<run-dir>/watch-armed: older than 2 h 30 min, or missing"; exit 3; }
 ```
 
-- It fails on EITHER signal: the worker's process is gone, or nothing in its run directory changed for 45
-  minutes. A check that only runs `kill -0 <pid>` never fires on a hung worker — never arm one.
+- It fails on ANY of three signals: the worker's process is gone, nothing in its run directory changed for 45
+  minutes, or the watch was armed 2 h 30 min ago — the worker has run that long without a report. A check that
+  only runs `kill -0 <pid>` never fires on a hung worker — never arm one.
+- The third signal counts from the age of `<run-dir>/watch-armed`: `touch` it right before you arm the check, and
+  again whenever you re-arm one (a check fires only once, so after you looked at a worker that is fine, a new check
+  needs a fresh clock). A run directory without that file fails the third test at the first run — a forgotten `touch`
+  wakes you at once.
 - One check may cover several runs of one step (parallel reviewers): it fires only when ALL of them have ended —
   replace the first test with `kill -0 <a> 2>/dev/null || kill -0 <b> 2>/dev/null || { echo "workers <a> <b> exited"; exit 1; }`
-  — and its silence test names every run directory: `find "<run-dir-a>" "<run-dir-b>" -mmin -45 -print -quit`.
+  — and its silence test names every run directory: `find "<run-dir-a>" "<run-dir-b>" -mmin -45 -print -quit`. The
+  `watch-armed` marker of the third test goes in the first of them.
 - Runner availability and capability — for a worker that waits on a runner, and for the start of an unattended batch
   that needs one: read the runner's line in `charness remote-run runners`. It must be online AND its `can:` part must
   name what the job needs — a runner that is online but shows `ios: no (…)` cannot run an iOS job, so it is not free.
-- When it fires the topic gets one silent sentence («Worker "<role> <scope>" finished (2 h 5 min)» or «… silent for
-  45 min»), never the command and never a pin — a worker that simply finished fires it too. What the user must
+- When it fires the topic gets one silent sentence («Worker "<role> <scope>" finished (2 h 5 min)», «… silent for
+  45 min» or «… running 2 h 30 min without a report»), never the command and never a pin — a worker that simply finished fires it too. What the user must
   notice you ask as a question.
 - The status arguments make the BOT post a silent status line into the topic every 15 minutes while the check
   passes (`⏳ <name> · works 30 min · now: <the worker's last action>`), replacing the previous one — no wake, no
@@ -49,8 +55,9 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
   or plan path, PID, session id, run directory, and "read the result, decide, then cancel this check".
 - The first failure is ALSO the "worker finished" signal. On the wake read the worker's result first (its final
   event, its exit, the end of its log), then decide: finished → the next step of the loop; stalled → look at its
-  last tool call, stop it, resume the same session; stopped by a usage limit → resume it at once on another account
-  (Accounts and usage limits).
+  last tool call, stop it, resume the same session; running 2 h 30 min without a report → look at what it is doing
+  now and step in, or, when it is fine, `touch` the marker and arm a new check; stopped by a usage limit → resume it
+  at once on another account (Accounts and usage limits).
 - Then cancel the check (`schedule_list` → `schedule_cancel`) — that also deletes its status line, so a finished
   worker leaves nothing behind. A new run gets a new check.
 - Never build your own watcher: no sleep loop, `CronCreate`, `ScheduleWakeup`, background job or tmux pane. They

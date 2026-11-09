@@ -37,11 +37,13 @@ import {
 } from './checkStatus';
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import {
+  workerWatchArmedFileName,
   workerWatchCheckCommand,
   workerWatchCheckCron,
   workerWatchSilenceMinutes,
   workerWatchStatusArguments,
   workerWatchStatusEveryMinutes,
+  workerWatchUnreportedMinutes,
 } from './workerWatch';
 import { describePhrasedSchedule, describeSchedule, validateScheduleSpec } from './recurrence';
 import { createStrictToolInput, getUnknownKeysMessageOfUnion, runWithRefusalLogging, type StrictToolInput } from './strictToolInput';
@@ -141,9 +143,13 @@ const schedulerMcpClientIdPattern = /^[A-Za-z0-9._:-]+$/;
 const mcpServerName = 'telegram-bot-scheduler';
 const mcpServerVersion = '1.0.0';
 
-/** The skill an orchestrating agent loads in a bot session, as each CLI names it. */
+/**
+ * The skill an orchestrating agent loads in a bot session, as each CLI names it. An ADD-ON, loaded together with the
+ * session's own manager skill (which keeps the delivery policy): never «instead of» it, or the bot's skill would switch the
+ * owner's or the project's off. A session with no manager skill is sent on to the fallback by the add-on itself.
+ */
 const managerSkillInstruction =
-  'load the `charness-manager` skill (Claude Code lists it as `charness:charness-manager`) and follow it instead of any other manager skill';
+  'load `charness-orchestration` (Claude Code: `charness:charness-orchestration`) together with your manager skill — it adds the bot\'s tools';
 
 /** The instruction bullets that hold on every platform (the two platform-neutral tools). */
 const compactConversationInstruction =
@@ -284,7 +290,7 @@ Each tool's own description has the exact argument recipe.`;
  * a Telegram session has the scheduling and send-to-topic tools, so only its
  * instructions name them (Jira connector plan J2, D18); an optional tool is named
  * only where it is offered. With the bot's skills off for the session
- * (`isBotSkillsEnabled`, `/bot_skills`) the orchestration bullet no longer tells it to load `charness-manager`.
+ * (`isBotSkillsEnabled`, `/bot_skills`) the orchestration bullet no longer tells it to load `charness-orchestration`.
  */
 export function buildMcpServerInstructions(platform: PlatformId | null, offered: OptionalBotTools, isBotSkillsEnabled: boolean): string {
   const render = (remoteRunInstructionText: string | null): string => {
@@ -750,7 +756,8 @@ const scheduleCreateShape = {
         'non-zero exit or timeout tells the topic in one line (never the command) and wakes you with `prompt` plus the exit ' +
         'code and output tail; later failures stay silent until a run passes again (the topic is told). ' +
         'Keep it a quick probe, e.g. `systemctl --user is-active myapp`, `curl -fsS -m 10 http://127.0.0.1:8080/health`, ' +
-        '`test $(df --output=pcent / | tail -1 | tr -dc 0-9) -lt 90`; a detached worker: the recipe in the tool description.',
+        '`test $(df --output=pcent / | tail -1 | tr -dc 0-9) -lt 90`; a detached worker: the recipe in the tool description. ' +
+        'Use ABSOLUTE paths only: it runs in the topic\'s folder, so a relative path or `~` points elsewhere.',
     ),
   checkTimeoutSeconds: z
     .number()
@@ -1078,9 +1085,10 @@ function registerSchedulerTools(server: ToolRegistrar, deps: SchedulerMcpDeps, s
         'background loop, nohup, a sleep loop, a tmux pane, a shell crontab) — it dies with your session ' +
         'or a restart and then fails silently.\n\n' +
         `A DETACHED WORKER you launched (a \`claude -p\` / \`opencode run\` process): cron \`${workerWatchCheckCron}\`, ` +
-        `\`${workerWatchStatusArguments}\`, checkCommand \`${workerWatchCheckCommand}\` with its PID and run dir — it fails when ` +
-        `the worker exits OR nothing in its run dir changed for ${workerWatchSilenceMinutes} min, so the first failure is also the "worker finished" ` +
-        'signal (the topic then reads «worker finished» or «worker silent», never the command). Never `kill -0` alone: it stays green ' +
+        `\`${workerWatchStatusArguments}\`, checkCommand \`${workerWatchCheckCommand}\` with its PID and run dir (an absolute path) — it fails when ` +
+        `the worker exits, OR nothing in its run dir changed for ${workerWatchSilenceMinutes} min, OR the watch was armed ${workerWatchUnreportedMinutes} min ago (\`touch <run-dir>/${workerWatchArmedFileName}\` ` +
+        'right before you arm it, and again when you re-arm it: the third test counts from that file, and a run dir without it fails at once), so the first failure is also the "worker finished" ' +
+        'signal (the topic then reads «worker finished», «worker silent» or «running without a report», never the command). Never `kill -0` alone: it stays green ' +
         'while a worker hangs. The status arguments make the BOT post a silent status line into the topic every ' +
         `${workerWatchStatusEveryMinutes} min while the worker lives (works N min, its last action), so the topic never looks frozen — ` +
         'without waking you or spending tokens: never arm a schedule of your own for status lines. One check per worker run; ' +

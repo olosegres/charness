@@ -30,7 +30,7 @@ import {
 import { describeSchedule, getNextRunAt } from '../scheduler/recurrence';
 import { checkAlertOutputMaxChars, type CheckRunResult } from '../scheduler/checkRun';
 import { checkStatusCommandTimeoutSec } from '../scheduler/checkStatus';
-import { workerWatchExitCode, workerWatchSilenceMinutes } from '../scheduler/workerWatch';
+import { workerWatchArmedFileName, workerWatchExitCode, workerWatchSilenceMinutes } from '../scheduler/workerWatch';
 import { getReminderScheduleText } from '../utils/reminderScheduleText';
 import { runWithLocale } from '../i18n';
 import type { FireContext, ScheduleRecord } from '../scheduler/types';
@@ -979,6 +979,13 @@ const workerSilentRun: CheckRunResult = {
   output: `${workerRunDir}: no change for ${workerWatchSilenceMinutes} min\n`,
 };
 
+const workerUnreportedRun: CheckRunResult = {
+  exitCode: workerWatchExitCode.unreported,
+  signal: null,
+  isTimedOut: false,
+  output: `${workerRunDir}/${workerWatchArmedFileName}: older than 2 h 30 min, or missing\n`,
+};
+
 /** The announce call of a run, the way the topic would get it. */
 function getAnnounced(callLog: CallLogEntry[]): { text: string; options?: ScheduleAnnounceOptions } {
   return callLog.find((entry) => entry.step === 'announce')?.detail as { text: string; options?: ScheduleAnnounceOptions };
@@ -1003,6 +1010,20 @@ test('worker watch: a worker whose run directory went quiet is announced as sile
   assert.equal(getAnnounced(callLog).text, '⚠️ Worker "builder S2" has been silent for 45 min. Checking whether it hung.');
 });
 
+test('worker watch: a worker that has run 2 h 30 min since the watch was armed without a report is announced as such — one silent sentence, the window not the elapsed time, no command, nothing folded, no pin, the agent woken', async () => {
+  // The run is a day after the watch was created: the sentence still names the recipe's window, which is what fired.
+  const { deps, callLog } = createHarness({ checkResult: workerUnreportedRun, startMs: jobCreatedAtMs + 24 * 60 * minuteMs });
+  await runWithLocale('en', () => createScheduleDelivery(deps)(makeWorkerWatch(), onTime));
+
+  const alert = getAnnounced(callLog);
+  assert.equal(alert.text, '⚠️ Worker "builder S2" has been running 2 h 30 min without a report. Checking on it.');
+  assert.equal(alert.options?.isSilent, true);
+  assert.equal(alert.options?.foldedDetail, undefined, 'one sentence says it all');
+  assert.doesNotMatch(alert.text, /kill -0|find |watch-armed/, 'neither the command nor its output');
+  assert.ok(!callLog.some((entry) => entry.step === 'pin'), 'nothing is pinned');
+  assert.ok(callLog.some((entry) => entry.step === 'forward'), 'the agent is woken to look at the worker');
+});
+
 test('worker watch: the agent\'s prompt keeps the command and the output exactly as before', async () => {
   const { deps, forwardedTexts } = createHarness({ checkResult: workerGoneRun });
   await createScheduleDelivery(deps)(makeWorkerWatch(), onTime);
@@ -1013,20 +1034,24 @@ test('worker watch: the agent\'s prompt keeps the command and the output exactly
   assert.match(forwardedTexts[0], /worker 4242 exited/);
 });
 
-test('worker watch: a failure that is neither of the recipe\'s two signals says «fired» with the reason folded; a watch with no worker source never says «worker»', async () => {
+test('worker watch: a failure that is none of the recipe\'s three signals says «fired» with the reason folded; a watch with no worker source never says «worker»', async () => {
   const timedOut = createHarness({ checkResult: { exitCode: null, signal: 'SIGTERM', isTimedOut: true, output: '' } });
   await runWithLocale('en', () => createScheduleDelivery(timedOut.deps)(makeWorkerWatch(), onTime));
   assert.equal(getAnnounced(timedOut.callLog).text, '🔔 Check "watch builder S2" fired — waking the agent.');
   assert.equal(getAnnounced(timedOut.callLog).options?.foldedDetail, 'timeout 60s');
 
-  const customCommand = createHarness({ checkResult: { exitCode: 3, signal: null, isTimedOut: false, output: 'disk full\n' } });
+  const customCommand = createHarness({ checkResult: { exitCode: 4, signal: null, isTimedOut: false, output: 'disk full\n' } });
   await runWithLocale('en', () => createScheduleDelivery(customCommand.deps)(makeWorkerWatch(), onTime));
-  assert.equal(getAnnounced(customCommand.callLog).text, '🔔 Check "watch builder S2" fired — waking the agent.', 'exit 3 is not the recipe\'s');
+  assert.equal(getAnnounced(customCommand.callLog).text, '🔔 Check "watch builder S2" fired — waking the agent.', 'exit 4 is not the recipe\'s');
 
   const noWorkerSource = createHarness({ checkResult: workerGoneRun });
   await runWithLocale('en', () => createScheduleDelivery(noWorkerSource.deps)(makeCheck({ name: 'watch something' }), onTime));
   assert.equal(getAnnounced(noWorkerSource.callLog).text, '🔔 Check "watch something" fired — waking the agent.', 'exit 1 of a plain check proves nothing about a worker');
   assert.equal(getAnnounced(noWorkerSource.callLog).options?.foldedDetail, 'exit 1\n\nworker 4242 exited');
+
+  const noWorkerSourceUnreported = createHarness({ checkResult: workerUnreportedRun });
+  await runWithLocale('en', () => createScheduleDelivery(noWorkerSourceUnreported.deps)(makeCheck({ name: 'watch something' }), onTime));
+  assert.equal(getAnnounced(noWorkerSourceUnreported.callLog).text, '🔔 Check "watch something" fired — waking the agent.', 'exit 3 of a plain check proves nothing about a worker either');
 });
 
 test('worker watch: the sentences exist in a non-English locale too', async () => {

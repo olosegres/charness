@@ -802,6 +802,7 @@ export const esDict: Record<string, string> = {
   'schedule.checkFired': '🔔 La comprobación «{name}» se activó — despertando al agente.',
   'schedule.workerFinished': '✅ El worker «{name}» terminó ({elapsed}). Leyendo el resultado.',
   'schedule.workerSilent': '⚠️ El worker «{name}» lleva {minutes} min en silencio. Comprobando si se colgó.',
+  'schedule.workerUnreported': '⚠️ El worker «{name}» lleva {elapsed} en marcha sin informe. Lo reviso.',
   'schedule.checkRecovered': '✅ La comprobación «{name}» vuelve a estar bien.',
   'schedule.workerResumed': '✅ El worker «{name}» vuelve a trabajar.',
   'schedule.everyMinutes': 'cada {count} min',

@@ -23,7 +23,14 @@ import {
   type CheckRunResult,
 } from '../scheduler/checkRun';
 import { checkIsPidAlive } from '../utils/jsonStreamHost';
-import { getWorkerWatchEnd, workerWatchCheckCommand, workerWatchExitCode, workerWatchSilenceMinutes } from '../scheduler/workerWatch';
+import {
+  getWorkerWatchEnd,
+  workerWatchArmedFileName,
+  workerWatchCheckCommand,
+  workerWatchExitCode,
+  workerWatchSilenceMinutes,
+  workerWatchUnreportedMinutes,
+} from '../scheduler/workerWatch';
 import { spawn } from 'child_process';
 
 /**
@@ -160,6 +167,8 @@ test('buildCheckFailurePrompt: marker first, failure details, the job prompt las
 
 /** How long ago a stalled worker's run dir last changed: past the recipe's 45-minute window. */
 const stalledRunDirAgeMs = 50 * 60_000;
+/** How long ago a long run's watch was armed: past the recipe's 150-minute window. */
+const unreportedWatchAgeMs = 160 * 60_000;
 const checkTimeoutMs = 10_000;
 
 test('the worker watch recipe: silent while the worker lives and writes; fails when it stalls or exits — where kill -0 alone stays silent', async () => {
@@ -169,6 +178,9 @@ test('the worker watch recipe: silent while the worker lives and writes; fails w
     fs.mkdirSync(runDir);
     const eventsFile = path.join(runDir, 'events.jsonl');
     fs.writeFileSync(eventsFile, '{}\n');
+    // What the skill tells the orchestrator to do right before it arms the check: the third signal counts from this file.
+    const armedFile = path.join(runDir, workerWatchArmedFileName);
+    fs.writeFileSync(armedFile, '');
     const worker = spawn('sleep', ['30'], { stdio: 'ignore' });
     const workerPid = worker.pid ?? 0;
     assert.ok(workerPid > 0);
@@ -179,20 +191,45 @@ test('the worker watch recipe: silent while the worker lives and writes; fails w
       assert.equal(writing.exitCode, 0, `a live worker that writes passes: ${writing.output}`);
 
       const stalledAt = new Date(Date.now() - stalledRunDirAgeMs);
-      fs.utimesSync(eventsFile, stalledAt, stalledAt);
-      fs.utimesSync(runDir, stalledAt, stalledAt);
+      // The marker lives in the run dir, so a fresh one counts as a change there: it ages with the rest.
+      for (const entry of [eventsFile, armedFile, runDir]) fs.utimesSync(entry, stalledAt, stalledAt);
       const stalled = await watch(recipe);
       assert.equal(stalled.exitCode, 2, 'a live worker whose run dir stopped changing fails');
       assert.match(stalled.output, /no change for 45 min/);
       assert.equal(getWorkerWatchEnd(stalled), 'silent', 'the bot reads the recipe\'s own exit code back');
       const livenessOnly = await watch(`kill -0 ${workerPid}`);
       assert.equal(livenessOnly.exitCode, 0, 'the liveness-only check stays green on the same hung worker');
+
+      // A worker that keeps writing, armed 2 h 40 min ago: only the third signal is left to fail.
+      const writingAgain = new Date();
+      fs.utimesSync(eventsFile, writingAgain, writingAgain);
+      const armedLongAgo = new Date(Date.now() - unreportedWatchAgeMs);
+      fs.utimesSync(armedFile, armedLongAgo, armedLongAgo);
+      const unreported = await watch(recipe);
+      assert.equal(unreported.exitCode, 3, 'a live worker that writes, armed over 2 h 30 min ago, fails the third test');
+      assert.match(unreported.output, /watch-armed: older than 2 h 30 min, or missing/);
+      assert.equal(getWorkerWatchEnd(unreported), 'unreported');
+      assert.equal((await watch(`kill -0 ${workerPid}`)).exitCode, 0, 'the liveness-only check stays green on this one too');
+
+      // The agent looked, found the worker fine and re-armed: `touch` restarts the clock, and the watch is quiet again.
+      fs.utimesSync(armedFile, writingAgain, writingAgain);
+      assert.equal((await watch(recipe)).exitCode, 0, 'a re-armed watch passes');
+
+      // Fail closed: a run dir without the marker (the `touch` was forgotten) fails at the first run, never silently skips the test.
+      fs.rmSync(armedFile);
+      const unmarked = await watch(recipe);
+      assert.equal(unmarked.exitCode, 3, 'no marker: the third test fails');
+      assert.match(unmarked.output, /watch-armed: older than 2 h 30 min, or missing/);
+
+      // The order of the signals: a quiet run dir is reported before an old marker, a gone process before both.
+      for (const entry of [eventsFile, runDir]) fs.utimesSync(entry, stalledAt, stalledAt);
+      assert.equal((await watch(recipe)).exitCode, 2, 'silent AND unmarked: the silence is the more specific signal');
     } finally {
       worker.kill('SIGKILL');
     }
     await new Promise((resolve) => worker.once('exit', resolve));
     const exited = await watch(recipe);
-    assert.equal(exited.exitCode, 1, 'an exited worker fails — also the "worker finished" signal');
+    assert.equal(exited.exitCode, 1, 'an exited worker fails — also the "worker finished" signal, ahead of the two other signals (silent and unmarked here)');
     assert.match(exited.output, new RegExp(`worker ${workerPid} exited`));
     assert.equal(getWorkerWatchEnd(exited), 'finished');
   });
@@ -201,17 +238,23 @@ test('the worker watch recipe: silent while the worker lives and writes; fails w
 test('the worker watch recipe names its exit codes and its window from the constants the bot reads them back with', () => {
   assert.ok(workerWatchCheckCommand.includes(`exit ${workerWatchExitCode.processGone};`));
   assert.ok(workerWatchCheckCommand.includes(`exit ${workerWatchExitCode.runDirSilent};`));
+  assert.ok(workerWatchCheckCommand.includes(`exit ${workerWatchExitCode.unreported};`));
   assert.ok(workerWatchCheckCommand.includes(`-mmin -${workerWatchSilenceMinutes} `));
   assert.ok(workerWatchCheckCommand.includes(`no change for ${workerWatchSilenceMinutes} min`));
+  assert.ok(workerWatchCheckCommand.includes(`find "<run-dir>/${workerWatchArmedFileName}" -mmin -${workerWatchUnreportedMinutes} `), 'the third test reads the marker\'s age, not ps');
+  assert.ok(!workerWatchCheckCommand.includes('etimes'), 'a macOS ps may lack etimes');
+  assert.equal(workerWatchUnreportedMinutes, 150, 'the window the topic sentence and the skill call 2 h 30 min');
 });
 
-test('getWorkerWatchEnd: only a run that exited by itself with one of the recipe\'s two codes is a worker end', () => {
+test('getWorkerWatchEnd: only a run that exited by itself with one of the recipe\'s three codes is a worker end', () => {
   const run = (overrides: Partial<CheckRunResult>): CheckRunResult => ({ exitCode: 0, signal: null, isTimedOut: false, output: '', ...overrides });
   assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.processGone })), 'finished');
   assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.runDirSilent })), 'silent');
-  assert.equal(getWorkerWatchEnd(run({ exitCode: 3 })), null, 'another code is some other check');
+  assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.unreported })), 'unreported');
+  assert.equal(getWorkerWatchEnd(run({ exitCode: 4 })), null, 'another code is some other check');
   assert.equal(getWorkerWatchEnd(run({ exitCode: 0 })), null, 'a pass is not an end');
   assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.processGone, isTimedOut: true })), null, 'a timed-out run says nothing about the worker');
+  assert.equal(getWorkerWatchEnd(run({ exitCode: workerWatchExitCode.unreported, isTimedOut: true })), null, 'nor does a timed-out run with the third code');
   assert.equal(getWorkerWatchEnd(run({ exitCode: null, signal: 'SIGKILL' })), null);
   assert.equal(getWorkerWatchEnd(run({ exitCode: null, startError: 'spawn /bin/sh ENOENT' })), null);
 });

@@ -802,6 +802,7 @@ export const jaDict: Record<string, string> = {
   'schedule.checkFired': '🔔 チェック「{name}」が作動しました — エージェントを起こします。',
   'schedule.workerFinished': '✅ ワーカー「{name}」が完了しました（{elapsed}）。結果を読んでいます。',
   'schedule.workerSilent': '⚠️ ワーカー「{name}」は {minutes} 分間応答がありません。止まっていないか確認します。',
+  'schedule.workerUnreported': '⚠️ ワーカー「{name}」は報告のないまま {elapsed} 動いています。状況を確認します。',
   'schedule.checkRecovered': '✅ チェック「{name}」は正常に戻りました。',
   'schedule.workerResumed': '✅ ワーカー「{name}」が再び動いています。',
   'schedule.everyMinutes': '{count} 分ごと',

@@ -5,7 +5,7 @@ conversations, Claude Code and OpenCode. The operator's own sessions outside the
 
 | Skill | What it is for |
 |-------|----------------|
-| `charness-orchestration` | An ADD-ON to a manager skill, not a second manager: what the bot adds when an agent orchestrates detached workers — the watch check that fires when a worker exits OR stalls (`schedule_create` + `checkCommand`), ending the turn between wakes, accounts through `claude_profiles`, talking to the user through the bot's tools, a tracker conversation, cleaning runner copies. It holds no delivery loop and is loaded together with the session's general manager skill |
+| `charness-orchestration` | An ADD-ON to a manager skill, not a second manager: what the bot adds when an agent orchestrates detached workers — the watch check that fires when a worker exits, stalls OR runs 2 h 30 min without a report (`schedule_create` + `checkCommand`), ending the turn between wakes, accounts through `claude_profiles`, talking to the user through the bot's tools, a tracker conversation, cleaning runner copies. It holds no delivery loop and is loaded together with the session's general manager skill |
 | `charness-delivery-loop` | The FALLBACK manager: a small delivery loop (modes, the finish step, parallel work in worktrees, the queue, briefing). Loaded only when the session lists no other manager skill — a public user's session, or an OpenCode one, which does not read `.claude/skills` |
 | `charness-delegate-claude` | Launching, watching and resuming a detached `claude -p` worker (`summarize-events.py` reads its event log) |
 | `charness-delegate-opencode` | The same for `opencode run` |

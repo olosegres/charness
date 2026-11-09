@@ -71,7 +71,7 @@ describe('what ships', () => {
     assert.equal(checkIsShippedPath('src/bot.ts'), true);
     assert.equal(checkIsShippedPath('src/adapters/claudeCliAdapter.ts'), true);
     assert.equal(checkIsShippedPath('stt/gigaam_sidecar.py'), true);
-    assert.equal(checkIsShippedPath('agent-plugin/skills/charness-manager/SKILL.md'), true, 'a skill-only change is a release change');
+    assert.equal(checkIsShippedPath('agent-plugin/skills/charness-orchestration/SKILL.md'), true, 'a skill-only change is a release change');
     assert.equal(checkIsShippedPath('agent-plugin/.claude-plugin/plugin.json'), true);
     assert.equal(checkIsShippedPath('src/__tests__/bot.test.ts'), false);
     assert.equal(checkIsShippedPath('src/release/releasePlan.ts'), false);

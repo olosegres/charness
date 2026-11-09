@@ -815,6 +815,7 @@ export const enDict: Record<string, string> = {
   'schedule.checkFired': '🔔 Check "{name}" fired — waking the agent.',
   'schedule.workerFinished': '✅ Worker "{name}" finished ({elapsed}). Reading the result.',
   'schedule.workerSilent': '⚠️ Worker "{name}" has been silent for {minutes} min. Checking whether it hung.',
+  'schedule.workerUnreported': '⚠️ Worker "{name}" has been running {elapsed} without a report. Checking on it.',
   'schedule.checkRecovered': '✅ Check "{name}" is back to normal.',
   'schedule.workerResumed': '✅ Worker "{name}" is working again.',
   'schedule.everyMinutes': 'every {count} min',

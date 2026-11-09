@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**A worker that runs 2 h 30 min without a report now wakes its orchestrating agent — a third signal of the worker watch, beside «the process is gone» and «nothing was written for 45 min».**
+Before, a worker that kept writing to its log but ran for hours (a suite stuck in a retry loop, a build that never converges) was never reported: the watch fired only when the process ended or the run directory went quiet. Now the watch recipe (`schedule_create`'s `checkCommand`, the same one in the `charness-orchestration` skill) ends with a third test, the age of a `watch-armed` file in the run directory that the agent `touch`es when it arms the check and again when it re-arms it (a check fires once, so after the agent looked and found the worker fine, the clock restarts). At 2 h 30 min the topic gets one silent sentence — «Worker "builder S2" has been running 2 h 30 min without a report. Checking on it.» (every language; no command, never pinned) — and the agent is woken to look at what the worker is doing. The clock is a file, not `ps -o etimes=`, which a macOS `ps` may lack; a run directory without the file fails the test at the first run, so a forgotten `touch` shows at once.
+Also in this change:
+  - **The bot MCP's hint now says to load `charness-orchestration` TOGETHER WITH the session's own manager skill** (it used to say «instead of any other manager skill»); the release check now requires that skill's file in the package.
+  - **`schedule_create` says a `checkCommand` takes absolute paths only** — it runs in the topic's folder, so a relative path or `~` points elsewhere — and its description teaches the third signal and the marker.
+
 **The skills Charness gives its agents no longer switch off your own manager skill: `charness-manager` is now `charness-orchestration`, an add-on loaded together with the manager skill the session already has — and a small `charness-delivery-loop` serves a session that has none.**
 Before, the bot's manager skill told its agent to use it «instead of any other manager skill», so in a bot session your own delivery policy (the review rules, the finish step, parallel work in worktrees) was set aside and the bot's shorter copy ran the whole loop — including its rule to run parallel builders on one checkout, which let two separately released tasks mix their commits.
 Now:

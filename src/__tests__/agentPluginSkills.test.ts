@@ -14,9 +14,11 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+  workerWatchArmedFileName,
   workerWatchCheckCommand,
   workerWatchCheckCron,
   workerWatchStatusArguments,
+  workerWatchUnreportedMinutes,
 } from '../scheduler/workerWatch';
 
 const pluginDir = path.resolve(__dirname, '..', '..', 'agent-plugin');
@@ -85,6 +87,19 @@ describe('agent-plugin', () => {
     assert.doesNotMatch(text, /isPinSilent/, 'the pin argument is gone: nothing a check posts is pinned');
     assert.ok(text.includes(`\`${workerWatchStatusArguments}\``), 'the status arguments: the bot posts the topic\'s status line itself');
     assert.match(text, /Never arm a schedule of your own for status lines/);
+  });
+
+  test('charness-orchestration teaches the third watch signal: touch the marker right before arming and when re-arming, 2 h 30 min without a report, and what to do on that wake', () => {
+    const flat = readSkill('charness-orchestration').replace(/\s+/g, ' ');
+    assert.equal(workerWatchUnreportedMinutes, 150, 'the «2 h 30 min» the skill and the topic sentence say');
+    assert.ok(flat.includes(`\`touch "<run-dir>/${workerWatchArmedFileName}"\``), 'the touch before the check is armed');
+    assert.match(flat, /It fails on ANY of three signals: the worker's process is gone, nothing in its run directory changed for 45 minutes, or the watch was armed 2 h 30 min ago/);
+    assert.match(flat, /The third signal counts from the age of `<run-dir>\/watch-armed`: `touch` it right before you arm the check, and again whenever you re-arm one/);
+    assert.match(flat, /A run directory without that file fails the third test at the first run — a forgotten `touch` wakes you at once\./);
+    assert.match(flat, /«… running 2 h 30 min without a report»/, 'the sentence the topic reads');
+    assert.match(flat, /One check may cover several runs of one step .* The `watch-armed` marker of the third test goes in the first of them\./, 'a watch over several runs keeps one marker');
+    assert.match(flat, /running 2 h 30 min without a report → look at what it is doing now and step in, or, when it is fine, `touch` the marker and arm a new check/);
+    assert.doesNotMatch(flat, /etimes/, 'a macOS ps may lack it: the clock is the marker');
   });
 
   test('charness-orchestration cleans the runner copy when the LAST open task of a project folder is done — in that folder, before the folder goes, before the report — and leaves the copies of other tasks alone', () => {

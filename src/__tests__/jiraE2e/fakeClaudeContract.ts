@@ -159,7 +159,10 @@ export const fakeCancelWatchToken = '[fake:cancel-watch]';
  * {@link fakeWatchJobName}.
  */
 export const fakeStatusWatchJobName = 'watch builder S2';
-/** The file in the fake's state dir (JSON, {@link FakeStatusWatchTarget}) `arm-status-watch` reads: the worker to watch. */
+/**
+ * The file in the fake's state dir (JSON, {@link FakeStatusWatchTarget}) `arm-status-watch` reads: the worker to watch. While it
+ * exists `arm-watch` watches that worker too (a live one) instead of the gone one.
+ */
 export const fakeStatusWatchTargetFileName = 'status-watch-target.json';
 /** The worker a status watch is armed on: its process id and the run directory its event log is written in. */
 export interface FakeStatusWatchTarget {

@@ -1,6 +1,6 @@
 /**
  * @description What the «Bot skills» switch (`/bot_skills`) does to the bot MCP's instructions — the hint to load
- * `charness-manager` — per scope, over the REAL server (HTTP + the SDK client, the way an agent connects): a Telegram
+ * `charness-orchestration` — per scope, over the REAL server (HTTP + the SDK client, the way an agent connects): a Telegram
  * topic with the skills off loses the hint but keeps the worker-watch recipe (a tool fact); a tracker conversation, whose
  * bullet is the hint alone, loses the bullet; a `dir:` scope (the OpenCode registration of a folder) counts the folder's
  * OpenCode topics alone — a Claude topic bound to the same folder has its own scope — and keeps the hint while any of
@@ -39,7 +39,7 @@ const sharedFolder = '/home/user/projects/shared';
 const lonelyFolder = '/home/user/projects/lonely';
 const offered: OptionalBotTools = { isJiraAttachmentToolOffered: true, isTodoToolOffered: true, remoteRunRunnerLines: [] };
 /** The sentence the hint is made of; the bullet is gone with it on a tracker. */
-const managerSkillHint = '`charness-manager`';
+const managerSkillHint = '`charness-orchestration`';
 const orchestrationBullet = 'You orchestrate detached workers';
 const workerWatchRecipe = 'EACH worker';
 
@@ -99,9 +99,11 @@ async function readInstructions(scope: SchedulerScope): Promise<string> {
 const threadScope = (key: SessionKey): SchedulerScope => ({ kind: 'thread', threadKey: keyToString(key) });
 
 describe('the instructions built for a platform', () => {
-  it('a Telegram session with the skills on is told to load charness-manager and to watch its workers', () => {
+  it('a Telegram session with the skills on is told to load charness-orchestration TOGETHER WITH its own manager skill — never instead of it — and to watch its workers', () => {
     const instructions = buildMcpServerInstructions('telegram', offered, true);
     assert.ok(instructions.includes(managerSkillHint));
+    assert.ok(instructions.includes('load `charness-orchestration` (Claude Code: `charness:charness-orchestration`) together with your manager skill — it adds the bot\'s tools'));
+    assert.doesNotMatch(instructions, /instead of any other manager|charness-manager/i, 'the hint of the old skill is gone: it used to switch the session\'s own manager skill off');
     assert.ok(instructions.includes('Watch EACH worker with schedule_create'));
     assert.doesNotMatch(instructions, /isPinSilent/);
   });
@@ -109,7 +111,7 @@ describe('the instructions built for a platform', () => {
   it('with the skills off the hint goes and the worker-watch recipe stays — in the same bullet', () => {
     const instructions = buildMcpServerInstructions('telegram', offered, false);
     assert.ok(!instructions.includes(managerSkillHint));
-    assert.ok(!instructions.includes('charness:charness-manager'));
+    assert.ok(!instructions.includes('charness:charness-orchestration'));
     const bullet = instructions.split('\n').find((line) => line.includes(orchestrationBullet)) ?? '';
     assert.ok(bullet.includes(workerWatchRecipe), bullet);
     assert.match(bullet, /checkCommand, cron, status arguments/, 'the recipe\'s arguments are named');
@@ -123,7 +125,7 @@ describe('the instructions built for a platform', () => {
       assert.ok(withSkills.includes(orchestrationBullet) && withSkills.includes(managerSkillHint), `${platform ?? 'neutral'}`);
       const withoutSkills = buildMcpServerInstructions(platform, offered, false);
       assert.ok(!withoutSkills.includes(orchestrationBullet), `${platform ?? 'neutral'}`);
-      assert.ok(!withoutSkills.includes('charness-manager'), `${platform ?? 'neutral'}`);
+      assert.ok(!withoutSkills.includes('charness-orchestration'), `${platform ?? 'neutral'}`);
       assert.match(withoutSkills, /answer_request/, 'the rest of the instructions is untouched');
       assert.match(withoutSkills, /claude_profiles/);
     }

@@ -20,12 +20,13 @@ import {
   getCheckStatusElapsedText,
   getCheckStatusIntervalMs,
   getCheckStatusSinceMs,
+  msPerMinute,
 } from './checkStatus';
 import { checkIsCheckSchedule, checkIsReminderSchedule } from './deliveryKind';
 import { checkIsFinalRun } from './recurrence';
 import { getAnnouncedScheduleText } from './scheduleText';
 import type { CheckStatusLine, DeliveryOutcome, FireContext, ScheduleRecord } from './types';
-import { getWorkerWatchEnd, workerWatchSilenceMinutes } from './workerWatch';
+import { getWorkerWatchEnd, workerWatchSilenceMinutes, workerWatchUnreportedMinutes } from './workerWatch';
 import { postToSession, type PostToSessionDeps } from '../postToSession';
 
 /**
@@ -205,7 +206,8 @@ export interface CheckFailedAnnouncementInput {
 /**
  * @description The topic notice of a check's first failure, in one sentence and never with the command (that goes to the
  * agent's prompt only). A worker watch (a check with a status source of a worker's run directory) says what happened to
- * the worker: finished (its process is gone) or silent for {@link workerWatchSilenceMinutes} minutes. Any other check — and a
+ * the worker: finished (its process is gone), silent for {@link workerWatchSilenceMinutes} minutes, or running for
+ * {@link workerWatchUnreportedMinutes} minutes since the watch was armed without a report. Any other check — and a
  * worker watch that failed some other way, a timeout say — says it fired, with what failed and the output tail folded under
  * it, because the failure is the only thing a person can use to tell why.
  */
@@ -218,6 +220,9 @@ export function buildCheckFailedAnnouncement(input: CheckFailedAnnouncementInput
       return { text: t('schedule.workerFinished', { name, elapsed: getCheckStatusElapsedText(input.nowMs - Date.parse(job.createdAt)) }) };
     }
     if (workerEnd === 'silent') return { text: t('schedule.workerSilent', { name, minutes: workerWatchSilenceMinutes }) };
+    if (workerEnd === 'unreported') {
+      return { text: t('schedule.workerUnreported', { name, elapsed: getCheckStatusElapsedText(workerWatchUnreportedMinutes * msPerMinute) }) };
+    }
   }
   const outputTail = getOutputTail(result.output.trim(), checkAlertOutputMaxChars);
   return {

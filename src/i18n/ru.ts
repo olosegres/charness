@@ -806,6 +806,7 @@ export const ruDict: Record<string, string> = {
   'schedule.checkFired': '🔔 Сработала проверка «{name}» — бужу агента.',
   'schedule.workerFinished': '✅ Воркер «{name}» завершил работу ({elapsed}). Разбираю результат.',
   'schedule.workerSilent': '⚠️ Воркер «{name}» молчит уже {minutes} мин. Проверяю, не завис ли он.',
+  'schedule.workerUnreported': '⚠️ Воркер «{name}» работает уже {elapsed} без отчёта. Смотрю, что с ним.',
   'schedule.checkRecovered': '✅ Проверка «{name}» снова в порядке.',
   'schedule.workerResumed': '✅ Воркер «{name}» снова работает.',
   'schedule.everyMinutes': 'каждые {count} мин',

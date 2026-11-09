@@ -19,7 +19,7 @@ export const requiredPackFiles = [
   'remoteRun/runner-package-lock.json',
   'remoteRun/ensureNode.sh',
   'agent-plugin/.claude-plugin/plugin.json',
-  'agent-plugin/skills/charness-manager/SKILL.md',
+  'agent-plugin/skills/charness-orchestration/SKILL.md',
   'CHANGELOG.md',
   'README.md',
   'LICENSE',

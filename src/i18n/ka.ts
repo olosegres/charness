@@ -802,6 +802,7 @@ export const kaDict: Record<string, string> = {
   'schedule.checkFired': '🔔 შემოწმება «{name}» ამოქმედდა — ვაღვიძებ აგენტს.',
   'schedule.workerFinished': '✅ ვორკერი «{name}» დასრულდა ({elapsed}). ვკითხულობ შედეგს.',
   'schedule.workerSilent': '⚠️ ვორკერი «{name}» {minutes} წუთია ჩუმადაა. ვამოწმებ, ხომ არ გაჭედა.',
+  'schedule.workerUnreported': '⚠️ ვორკერი «{name}» ანგარიშის გარეშე მუშაობს უკვე {elapsed}. ვამოწმებ.',
   'schedule.checkRecovered': '✅ შემოწმება «{name}» ისევ რიგზეა.',
   'schedule.workerResumed': '✅ ვორკერი «{name}» ისევ მუშაობს.',
   'schedule.everyMinutes': 'ყოველ {count} წუთში',

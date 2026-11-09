@@ -108,10 +108,13 @@ constants in the code; this README keeps what the code cannot say.
 - Connect-time `instructions` and tool descriptions are cached by the client at connect: an already running
   agent sees edits only after it reconnects.
 - **Watching a detached worker.** `workerWatchCheckCommand` is the one recipe for a check on a worker an agent
-  launched: it fails when the worker's PID is gone OR nothing in its run dir changed for 45 min (a `kill -0` alone
-  never fires on a hung worker), a normal finish fires it too, so the topic gets ONE silent sentence («Worker "builder S2"
-  finished (2 h 5 min). Reading the result.» for exit 1, «… has been silent for 45 min. Checking whether it hung.» for exit 2 —
-  `getWorkerWatchEnd` reads the recipe's own exit codes back, for a check with a `statusWorkerRunDir`), never the command and never
+  launched: it fails when the worker's PID is gone OR nothing in its run dir changed for 45 min OR the watch was armed 2 h 30 min
+  ago (a `kill -0` alone never fires on a hung worker; the third test is the age of `<run-dir>/watch-armed`, a file the agent `touch`es
+  when it arms or re-arms the watch — `find -mmin`, since a macOS `ps` may lack `etimes`, and a run dir without the file fails at the
+  first run, never as a signal that silently does not exist), a normal finish fires it too, so the topic gets ONE silent sentence
+  («Worker "builder S2" finished (2 h 5 min). Reading the result.» for exit 1, «… has been silent for 45 min. Checking whether it hung.»
+  for exit 2, «… has been running 2 h 30 min without a report. Checking on it.» for exit 3 — `getWorkerWatchEnd` reads the recipe's own
+  exit codes back, for a check with a `statusWorkerRunDir`), never the command and never
   a pin; a worker watch that passes again says «Worker "builder S2" is working again.», any other check «… is back to normal».
   Any other check says «🔔 Check "<name>" fired — waking the agent.» with the failure and the output tail folded under it;
   the command and the full output go to the AGENT's prompt only. The folded message (`connectors/telegram/foldedMessage.ts`)

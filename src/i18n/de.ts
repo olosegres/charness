@@ -802,6 +802,7 @@ export const deDict: Record<string, string> = {
   'schedule.checkFired': '🔔 Prüfung „{name}“ ausgelöst — der Agent wird geweckt.',
   'schedule.workerFinished': '✅ Worker „{name}“ ist fertig ({elapsed}). Ich lese das Ergebnis.',
   'schedule.workerSilent': '⚠️ Worker „{name}“ ist seit {minutes} Min. still. Ich prüfe, ob er hängt.',
+  'schedule.workerUnreported': '⚠️ Worker „{name}“ läuft seit {elapsed} ohne Bericht. Ich sehe nach.',
   'schedule.checkRecovered': '✅ Prüfung „{name}“ ist wieder in Ordnung.',
   'schedule.workerResumed': '✅ Worker „{name}“ arbeitet wieder.',
   'schedule.everyMinutes': 'alle {count} Min.',

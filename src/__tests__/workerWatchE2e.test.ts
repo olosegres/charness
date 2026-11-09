@@ -1,8 +1,8 @@
 /**
  * @description A watch's alert from start to finish, at PROCESS level: the BUILT charness started the way an
  * isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API (`telegramE2e/fakeTelegram.ts`), with the
- * fake `claude` playing an orchestrator the way the `charness-manager` skill tells it to. The closest offline stand-in
- * for an agent really arming the two-signal watch (plan V9). One flow, in order:
+ * fake `claude` playing an orchestrator the way the `charness-orchestration` skill tells it to. The closest offline stand-in
+ * for an agent really arming the three-signal watch (plan V9). One flow, in order:
  *
  *   boot → a topic bound, a Claude session started
  *   → the agent arms a watch with `schedule_create`: the REAL worker-watch recipe (`scheduler/workerWatch.ts`) on a
@@ -14,7 +14,11 @@
  *     the fallback: the same words arrive as plain text, with no tag and no entity shown (the quotation itself, and its
  *     escaping, is proved by `telegramViewsE2e.test.ts`)
  *   → the agent handles the wake as the skill says — `schedule_list`, `schedule_cancel`; nothing was pinned, so nothing
- *     is unpinned, and the watch is gone from the persisted state.
+ *     is unpinned, and the watch is gone from the persisted state
+ *   → the THIRD signal: the agent arms the same recipe on a LIVE worker that keeps writing (a real process), after it has
+ *     `touch`ed the run directory's `watch-armed` marker as the skill says; the check passes; then the marker ages past
+ *     2 h 30 min (the test sets its mtime — time passing) and the next run fails with exit 3: the same silent sentence of an
+ *     ordinary check, the recipe's own line under it, no command, no pin, the agent woken, the watch cancelled.
  *
  * Nothing leaves the machine: the Bot API is on loopback and the agent is a fake. Everything the test starts is
  * stopped in `after`.
@@ -24,11 +28,19 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeClaudeLogFileNames, fakeGoneWorkerPid, fakeWatchJobName, type FakeClaudeToolCall } from './jiraE2e/fakeClaudeContract';
+import {
+  fakeClaudeLogFileNames,
+  fakeGoneWorkerPid,
+  fakeStatusWatchTargetFileName,
+  fakeWatchJobName,
+  type FakeClaudeToolCall,
+  type FakeStatusWatchTarget,
+} from './jiraE2e/fakeClaudeContract';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -46,6 +58,7 @@ import {
 } from './e2e/isolatedCharness';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import type { ScheduleRecord } from '../scheduler/types';
+import { workerWatchArmedFileName } from '../scheduler/workerWatch';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 151;
@@ -66,6 +79,11 @@ const agentTimeoutMs = 60 * 1000;
 const checkFireTimeoutMs = 2 * 60 * 1000;
 /** The fake's watch cron (`* * * * *`) fires every minute. */
 const watchCronIntervalMs = 60 * 1000;
+const msPerMinute = 60 * 1000;
+/** How long ago the marker of the long run is made to be: a literal, well past the recipe's 2 h 30 min, so the test does not move with the window it checks. */
+const armedLongAgoMs = 3 * 60 * msPerMinute;
+/** A marker the agent touched right before arming is this young when the test looks at it. */
+const markerFreshMs = 5 * msPerMinute;
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -73,6 +91,8 @@ let fakeTelegram: FakeTelegram;
 let topic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 let alertMessageId = 0;
+/** The live worker of the third signal's case: a real process, killed when the flow ends. */
+let longRunWorker: ChildProcess | null = null;
 
 function getLayout(): IsolatedInstanceLayout {
   if (!layout) throw new Error('the instance layout is not created yet');
@@ -85,6 +105,7 @@ function getCharness(): IsolatedCharness {
 }
 
 function removeInstanceSync(): void {
+  longRunWorker?.kill('SIGKILL');
   removeIsolatedInstanceSync(layout, charness);
 }
 
@@ -128,6 +149,7 @@ describe('A worker watch end to end: built charness, fake Bot API, a fake orches
   });
 
   after(async () => {
+    longRunWorker?.kill('SIGKILL');
     await charness?.stop();
     removeInstanceSync();
     await fakeTelegram?.stop();
@@ -203,5 +225,67 @@ describe('A worker watch end to end: built charness, fake Bot API, a fake orches
     assert.doesNotMatch(cancelled.outcome, /pinned/, cancelled.outcome);
     assert.deepEqual(fakeTelegram.pinEvents.filter((event) => event.kind === 'unpin'), [], 'no unpin: nothing was pinned');
     await getCharness().waitFor('the watch to be gone from the persisted state', replyTimeoutMs, () => readPersistedSchedules().every((record) => record.name !== fakeWatchJobName));
+  });
+
+  let longRunRunDir = '';
+  let longRunMarkerPath = '';
+
+  it('the third signal: the agent touches the marker and arms the same recipe on a LIVE worker that keeps writing — the check passes', async () => {
+    const startedWorker = spawn('sleep', ['3600'], { stdio: 'ignore' });
+    longRunWorker = startedWorker;
+    await new Promise<void>((resolve, reject) => {
+      startedWorker.once('spawn', resolve);
+      startedWorker.once('error', reject);
+    });
+    longRunRunDir = path.join(getLayout().testRoot, 'long-run');
+    longRunMarkerPath = path.join(longRunRunDir, workerWatchArmedFileName);
+    fs.mkdirSync(longRunRunDir);
+    fs.writeFileSync(path.join(longRunRunDir, 'events.jsonl'), '{}\n');
+    const target: FakeStatusWatchTarget = { pid: startedWorker.pid ?? 0, runDir: longRunRunDir };
+    assert.ok(target.pid > 0, 'the worker has a process id');
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeStatusWatchTargetFileName), JSON.stringify(target));
+    // The alert of this watch is refused its markup too, so the whole text is one plain string the assertions can compare.
+    fakeTelegram.failNextCall(
+      'sendMessage',
+      'Bad Request: can\'t parse entities: Unsupported start tag "x" at byte offset 0',
+      (payload) => payload.parse_mode === 'HTML' && String(payload.text).includes(foldedMarkup),
+    );
+    const createsBefore = getToolCalls('schedule_create').length;
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'W-2 [fake:arm-watch] watch the long run you just launched');
+    await getCharness().waitFor('the agent to arm the second watch', agentTimeoutMs, () => getToolCalls('schedule_create').length === createsBefore + 1);
+    const created = getToolCalls('schedule_create')[createsBefore];
+    assert.doesNotMatch(created.outcome, /^error:/, created.outcome);
+    await getCharness().waitFor('the second watch to be persisted', replyTimeoutMs, () => readPersistedSchedules().some((record) => record.name === fakeWatchJobName));
+    const [watch] = readPersistedSchedules().filter((record) => record.name === fakeWatchJobName);
+    assert.match(watch.checkCommand ?? '', new RegExp(`kill -0 ${target.pid}\\b`), 'the recipe is armed on the live worker');
+    assert.ok(fs.existsSync(longRunMarkerPath), 'the agent touched the marker before arming, as the skill says');
+    assert.ok(Date.now() - fs.statSync(longRunMarkerPath).mtimeMs < markerFreshMs, 'and it is fresh');
+  });
+
+  it('the watch was armed over 2 h 30 min ago and the worker is alive and writing: the run fails with the recipe\'s third exit code — one silent sentence, the recipe\'s own line under it, no command, NO pin — and the agent is woken', async () => {
+    const firstAlertId = alertMessageId;
+    const listsBefore = getToolCalls('schedule_list').length;
+    // Time passing, as the test can make it: the marker is older than the window; the worker's log is fresh (the silence signal stays quiet).
+    const armedLongAgo = new Date(Date.now() - armedLongAgoMs);
+    fs.utimesSync(longRunMarkerPath, armedLongAgo, armedLongAgo);
+    const eventsNow = new Date();
+    fs.utimesSync(path.join(longRunRunDir, 'events.jsonl'), eventsNow, eventsNow);
+
+    await getCharness().waitFor('the second check alert', checkFireTimeoutMs, () => topic.listMessages().some((message) => message.message_id > firstAlertId && message.text.includes(alertMark)));
+    const alert = topic.listMessages().find((message) => message.message_id > firstAlertId && message.text.includes(alertMark));
+    assert.ok(alert);
+    assert.equal(alert.isSilent, true);
+    assert.equal(
+      alert.text,
+      `🔔 Check "${fakeWatchJobName}" fired — waking the agent.\n\nexit 3\n\n${longRunMarkerPath}: older than 2 h 30 min, or missing`,
+      'the sentence, then exit 3 and the recipe\'s own line: the third signal, not the first (the process lives) and not the second (the log is fresh)',
+    );
+    assert.doesNotMatch(alert.text, /kill -0|\$ |find /, 'the command stays out of the topic');
+    assert.ok(longRunWorker && longRunWorker.exitCode === null && longRunWorker.signalCode === null, 'the worker is still alive: only the clock fired');
+    await getCharness().waitFor('the agent woken by the check to list its schedules', agentTimeoutMs, () => getToolCalls('schedule_list').length === listsBefore + 1);
+    assert.ok(!fakeTelegram.pinEvents.some((event) => event.messageId === alert.message_id), 'the alert has no pin event');
+    await getCharness().waitFor('the agent to cancel the second watch', agentTimeoutMs, () => getToolCalls('schedule_cancel').length === 2);
+    await getCharness().waitFor('the second watch to be gone from the persisted state', replyTimeoutMs, () => readPersistedSchedules().every((record) => record.name !== fakeWatchJobName));
+    assert.deepEqual(fakeTelegram.pinEvents.filter((event) => event.kind === 'unpin'), [], 'no unpin: nothing was pinned');
   });
 });

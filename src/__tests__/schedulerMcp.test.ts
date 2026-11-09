@@ -83,9 +83,11 @@ import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import { holdPort } from './e2e/isolatedCharness';
 import { formatLocalDateAndClock } from '../utils/localClock';
 import {
+  workerWatchArmedFileName,
   workerWatchCheckCommand,
   workerWatchCheckCron,
   workerWatchStatusArguments,
+  workerWatchUnreportedMinutes,
 } from '../scheduler/workerWatch';
 
 /** The plan's budget for the always-loaded orchestration bullet of the Telegram instructions. */
@@ -208,22 +210,25 @@ describe('the bot-MCP tool digest (lifecycle plan L4)', () => {
     }
   });
 
-  it('schedule_create teaches the worker watch: both signals, the cron, never kill -0 alone', () => {
+  it('schedule_create teaches the worker watch: all three signals, the marker to touch before arming, the cron, an absolute run dir, never kill -0 alone', () => {
     const scheduleCreate = getBotMcpToolDefinitions(createDigestDeps(), 'telegram').find((definition) => definition.name === 'schedule_create');
     const description = scheduleCreate?.description ?? '';
     assert.ok(description.includes(`checkCommand \`${workerWatchCheckCommand}\``), description);
     assert.ok(description.includes(`cron \`${workerWatchCheckCron}\``));
     assert.ok(!description.includes('isPinSilent'), 'nothing a check posts is pinned, so the recipe has no pin argument');
-    assert.match(description, /never the command/, 'the topic reads «worker finished» / «worker silent»');
+    assert.match(description, /never the command/, 'the topic reads «worker finished» / «worker silent» / «running without a report»');
+    assert.match(description, new RegExp(`the watch was armed ${workerWatchUnreportedMinutes} min ago \\(\`touch <run-dir>/${workerWatchArmedFileName}\` right before you arm it, and again when you re-arm it`), 'the third signal and the file it counts from');
+    assert.match(description, /a run dir without it fails at once/, 'a forgotten touch is not a silent gap');
+    assert.match(description, /with its PID and run dir \(an absolute path\)/);
     assert.ok(description.includes(`\`${workerWatchStatusArguments}\``), 'the status arguments: the bot posts the topic\'s status lines');
     assert.match(description, /never arm a schedule of your own for status lines/);
     assert.match(description, /Never `kill -0` alone/);
   });
 
-  it('a tracker conversation is pointed at the manager skill but gets no scheduling recipe — it has no scheduling tools', () => {
+  it('a tracker conversation is pointed at the orchestration add-on but gets no scheduling recipe — it has no scheduling tools', () => {
     for (const platform of ['jira', null] as const) {
       const instructions = buildMcpServerInstructions(platform, { isJiraAttachmentToolOffered: false, isTodoToolOffered: false, remoteRunRunnerLines: [] }, true);
-      assert.ok(instructions.includes('`charness-manager`'), `${platform ?? 'neutral'}`);
+      assert.ok(instructions.includes('`charness-orchestration`'), `${platform ?? 'neutral'}`);
       assert.ok(!instructions.includes(workerWatchCheckCommand), `${platform ?? 'neutral'}`);
       assert.doesNotMatch(instructions, /schedule_create/);
     }
@@ -1200,8 +1205,8 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
       assert.match(instructions, /NEVER build your own watcher/);
       // An orchestrating agent loads the bot's manager skill and watches each worker the schedule_create way. The
       // always-loaded bullet stays short: the recipe itself lives in the tool description, never twice in the context.
-      const orchestrationBullet = instructions.split('\n').find((line) => line.includes('`charness-manager`')) ?? '';
-      assert.ok(orchestrationBullet, 'names the bot\'s manager skill');
+      const orchestrationBullet = instructions.split('\n').find((line) => line.includes('`charness-orchestration`')) ?? '';
+      assert.ok(orchestrationBullet, 'names the bot\'s orchestration add-on');
       assert.ok(orchestrationBullet.length <= maxOrchestrationBulletLength, `${orchestrationBullet.length} characters`);
       assert.match(orchestrationBullet, /checkCommand, cron, status arguments/, 'the recipe\'s arguments are named');
       assert.doesNotMatch(orchestrationBullet, /isPinSilent/);
@@ -2495,6 +2500,19 @@ describe('scheduler MCP server end-to-end (real HTTP)', () => {
     assert.ok(pinSilentProperty && typeof pinSilentProperty === 'object' && 'description' in pinSilentProperty);
     assert.match(String(pinSilentProperty.description), /DEPRECATED, has no effect/);
     await client.close();
+  });
+
+  it('the checkCommand input says it runs in the topic\'s folder, so only ABSOLUTE paths are safe — also for a session that has the skills off', async () => {
+    const token = buildSchedulerMcpToken(secret, { kind: 'thread', threadKey: threadAKey });
+    const client = await buildClient(fixture.handle.port, token);
+    try {
+      const scheduleCreate = (await client.listTools()).tools.find((tool) => tool.name === 'schedule_create');
+      const checkCommandProperty = (scheduleCreate?.inputSchema.properties ?? {}).checkCommand;
+      assert.ok(checkCommandProperty && typeof checkCommandProperty === 'object' && 'description' in checkCommandProperty);
+      assert.match(String(checkCommandProperty.description), /Use ABSOLUTE paths only: it runs in the topic's folder, so a relative path or `~` points elsewhere\./);
+    } finally {
+      await client.close();
+    }
   });
 
   it('a cron nothing phrases is confirmed by its next run, never by the raw expression; a one-shot by its own time', async () => {

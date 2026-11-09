@@ -802,6 +802,7 @@ export const hiDict: Record<string, string> = {
   'schedule.checkFired': '🔔 जाँच «{name}» सक्रिय हुई — एजेंट को जगा रहा हूँ।',
   'schedule.workerFinished': '✅ वर्कर «{name}» पूरा हुआ ({elapsed})। नतीजा पढ़ रहा हूँ।',
   'schedule.workerSilent': '⚠️ वर्कर «{name}» {minutes} मिनट से शांत है। देख रहा हूँ कि कहीं अटक तो नहीं गया।',
+  'schedule.workerUnreported': '⚠️ वर्कर «{name}» बिना रिपोर्ट के {elapsed} से चल रहा है। देख रहा हूँ।',
   'schedule.checkRecovered': '✅ जाँच «{name}» फिर से सामान्य है।',
   'schedule.workerResumed': '✅ वर्कर «{name}» फिर से काम कर रहा है।',
   'schedule.everyMinutes': 'हर {count} मिनट',

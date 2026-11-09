@@ -6,7 +6,7 @@
  *
  *   boot → two topics bound to folders
  *   → ON is the default: a topic's session launches with the bot's skills folder and its MCP instructions carry the hint
- *     to load `charness-manager`; General's screen says ON by the built-in default, nothing is written until a tap
+ *     to load `charness-orchestration`; General's screen says ON by the built-in default, nothing is written until a tap
  *   → settings.json's `botSkills: "off"` seeds an instance whose General never chose: the next start is without, and
  *     General's screen says OFF «from settings.json»; General's own tap on «On» beats the file from then on and the screen
  *     says «set in General»
@@ -60,7 +60,7 @@ const firstFolder = 'first';
 const secondFolder = 'second';
 const launchLine = 'Launching Telegraf bot (long polling';
 /** The hint to load the manager, and the part of the bullet that stays with the skills off. */
-const managerSkillHint = '`charness-manager`';
+const managerSkillHint = '`charness-orchestration`';
 const workerWatchRecipe = 'schedule_create to watch EACH worker';
 /** What a Claude topic's confirmation says of its running agent. */
 const runningAgentNote = 'A running agent keeps its skills until its next start (after an idle stop, in a new session or on a model change).';

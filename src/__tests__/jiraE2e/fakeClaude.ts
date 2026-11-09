@@ -69,7 +69,7 @@ import {
   type FakeStatusWatchTarget,
   type McpServerConfig,
 } from './fakeClaudeContract';
-import { workerWatchCheckCommand, workerWatchStatusArguments } from '../../scheduler/workerWatch';
+import { workerWatchArmedFileName, workerWatchCheckCommand, workerWatchStatusArguments } from '../../scheduler/workerWatch';
 import { readClaudeTranscriptContent } from '../../utils/claudeTranscriptContent';
 import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost';
 
@@ -172,13 +172,14 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  *    `fakeClaudeApiErrorDelayFileName` while that exists);
  *  - while `fakeClaudeUsageWindowsFileName` exists in the state dir, every turn starts with the `rate_limit_event` frame the
  *    real CLI streams: the usage windows the file lists for the account the process runs on;
- *  - `arm-watch`   — an orchestrator watching a worker the way `charness-manager` says: `schedule_create` with the real
- *    worker-watch recipe (`scheduler/workerWatch.ts`) on a worker that is gone, cron every minute (no status
- *    arguments: for the bot an ordinary check), a prompt carrying `cancel-watch`; then ends the turn. `cancel-watch` — the check's wake: `schedule_list`,
+ *  - `arm-watch`   — an orchestrator watching a worker the way `charness-orchestration` says: `touch` the run directory's
+ *    `watch-armed` marker, then `schedule_create` with the real worker-watch recipe (`scheduler/workerWatch.ts`) on a worker that
+ *    is gone — or, while `fakeStatusWatchTargetFileName` exists in the state dir, on the live worker the TEST names there —
+ *    cron every minute (no status arguments: for the bot an ordinary check), a prompt carrying `cancel-watch`; then ends the turn. `cancel-watch` — the check's wake: `schedule_list`,
  *    then `schedule_cancel` of that watch, as the skill's "cancel the check once the wake is handled". Both log every
  *    call to `tool-calls.jsonl` and are honoured by a turn with or without a request, by the token in its text;
  *  - `arm-status-watch` — the same orchestrator on a worker the TEST started (the pid and run directory in
- *    `fakeStatusWatchTargetFileName`): the real recipe plus its status arguments, so the bot's status line rides the watch;
+ *    `fakeStatusWatchTargetFileName`), the marker touched first: the real recipe plus its status arguments, so the bot's status line rides the watch;
  *    the wake of the watch's failure is `cancel-watch`, which finds this watch too;
  *  - `usage-limit-once` — its first turn ends the way a subscription limit does: an error `result` saying the
  *    session limit is hit and when it resets (the text of a `[limit-resets:<ISO instant or clock>]` token in the
@@ -655,23 +656,45 @@ function parseRecipeArguments(recipeArguments: string): Record<string, string | 
   );
 }
 
+/**
+ * What the skill tells an orchestrator to do right before it arms a worker's watch: `touch` the marker the third signal counts
+ * from. Done as `touch` does it — the mtime is set explicitly, so a marker that already exists is refreshed too.
+ */
+function touchWatchArmedMarker(runDir: string): void {
+  const markerPath = path.join(runDir, workerWatchArmedFileName);
+  const now = new Date();
+  fs.writeFileSync(markerPath, '');
+  fs.utimesSync(markerPath, now, now);
+}
+
+/** The worker the test named for a watch (see {@link fakeStatusWatchTargetFileName}), or `null` when it named none. */
+function readWatchTarget(): FakeStatusWatchTarget | null {
+  const targetPath = path.join(getStateDir(), fakeStatusWatchTargetFileName);
+  return fs.existsSync(targetPath) ? JSON.parse(fs.readFileSync(targetPath, 'utf8')) : null;
+}
+
 /** @description `arm-watch` / `arm-status-watch` / `cancel-watch`: what an orchestrator does about one worker's watch (see the module). */
 async function runWatchMode(server: McpServerConfig, mode: 'arm-watch' | 'arm-status-watch' | 'cancel-watch', issueKey: string): Promise<void> {
   const logToolCall = (tool: string, args: Record<string, string | number | boolean>, outcome: string): void => {
     appendJsonLine(fakeClaudeLogFileNames.toolCalls, { issueKey, tool, args, outcome });
   };
   if (mode === 'arm-watch') {
+    const target = readWatchTarget();
+    const runDir = target?.runDir ?? getStateDir();
+    touchWatchArmedMarker(runDir);
     const args = {
       name: fakeWatchJobName,
       cron: '* * * * *',
-      checkCommand: workerWatchCheckCommand.replaceAll('<pid>', fakeGoneWorkerPid.toString()).replaceAll('<run-dir>', getStateDir()),
+      checkCommand: workerWatchCheckCommand.replaceAll('<pid>', (target?.pid ?? fakeGoneWorkerPid).toString()).replaceAll('<run-dir>', runDir),
       prompt: `${fakeCancelWatchToken} The worker W-1 finished or stalled: read its result, then cancel this watch.`,
     };
     logToolCall('schedule_create', args, await callBotTool(server, 'schedule_create', args));
     return;
   }
   if (mode === 'arm-status-watch') {
-    const target: FakeStatusWatchTarget = JSON.parse(fs.readFileSync(path.join(getStateDir(), fakeStatusWatchTargetFileName), 'utf8'));
+    const target = readWatchTarget();
+    if (!target) throw new Error(`arm-status-watch needs ${fakeStatusWatchTargetFileName} in the state dir`);
+    touchWatchArmedMarker(target.runDir);
     const args = {
       name: fakeStatusWatchJobName,
       cron: '* * * * *',

@@ -1,7 +1,7 @@
 /**
  * @description A worker watch's STATUS LINE from start to finish, at PROCESS level: the BUILT charness started the way an
  * isolated instance is (`scripts/run-isolated.sh`) against the fake Bot API (`telegramE2e/fakeTelegram.ts`), with the fake
- * `claude` playing an orchestrator that arms the watch the way the `charness-manager` skill tells it to — the REAL recipe
+ * `claude` playing an orchestrator that arms the watch the way the `charness-orchestration` skill tells it to — the REAL recipe
  * (`scheduler/workerWatch.ts`) with its status arguments — on a REAL worker process (`sleep`) whose event log the test
  * writes by hand. One flow, in order:
  *
@@ -17,7 +17,11 @@
  *   → the worker is killed: the line is deleted, ONE silent sentence says the worker finished (how long it ran — no command, no
  *     pin), the agent is woken (`cancel-watch`)
  *   → `schedule_cancel`: the watch is gone (nothing was pinned, nothing is unpinned), and no status line of the whole flow is
- *     left in the topic.
+ *     left in the topic
+ *   → the THIRD signal: a second worker (a live process, its log fresh) is watched the same way — the agent `touch`es the run
+ *     directory's `watch-armed` marker first, as the skill says — then the marker ages past 2 h 30 min (the test sets its
+ *     mtime: time passing): ONE silent sentence says the worker has run 2 h 30 min without a report (no command, no pin),
+ *     the agent is woken, cancels the watch, and no status line is left.
  *
  * No agent turn runs for any status line (the fake's prompt log proves it). Nothing leaves the machine: the Bot API is on
  * loopback and the agent is a fake. Everything the test starts is stopped in `after`.
@@ -61,6 +65,7 @@ import { enDict } from '../i18n/en';
 import { defaultCheckStatusEveryMinutes } from '../scheduler/checkStatus';
 import type { ScheduleRunRecord } from '../scheduler/runLedger';
 import type { ScheduleRecord } from '../scheduler/types';
+import { workerWatchArmedFileName } from '../scheduler/workerWatch';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 151;
@@ -74,6 +79,12 @@ const launchLine = 'Launching Telegraf bot (long polling';
 const shownWatchName = fakeStatusWatchJobName.replace(/^watch /, '');
 const alertMark = `Worker "${shownWatchName}" finished (`;
 const statusLinePrefix = `⏳ ${shownWatchName} · works `;
+const unreportedAlertMark = `Worker "${shownWatchName}" has been running 2 h 30 min without a report`;
+const msPerMinute = 60 * 1000;
+/** How long ago the marker of the long run is made to be: a literal, well past the recipe's 2 h 30 min, so the test does not move with the window it checks. */
+const armedLongAgoMs = 3 * 60 * msPerMinute;
+/** A marker the agent touched right before arming is this young when the test looks at it. */
+const markerFreshMs = 5 * msPerMinute;
 
 const bootTimeoutMs = 60 * 1000;
 const replyTimeoutMs = 20 * 1000;
@@ -106,6 +117,8 @@ let fakeTelegram: FakeTelegram;
 let topic: TopicDriver;
 let defaultTmuxSessionsBefore: string[] = [];
 let worker: ChildProcess | null = null;
+/** The second worker of the third signal's case, a real process too. */
+let longRunWorker: ChildProcess | null = null;
 let runDir = '';
 let alertMessageId = 0;
 let watchId = '';
@@ -135,6 +148,7 @@ function getWorkerPid(): number {
 
 function removeInstanceSync(): void {
   worker?.kill('SIGKILL');
+  longRunWorker?.kill('SIGKILL');
   removeIsolatedInstanceSync(layout, charness);
 }
 
@@ -237,6 +251,7 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
 
   after(async () => {
     worker?.kill('SIGKILL');
+    longRunWorker?.kill('SIGKILL');
     await charness?.stop();
     removeInstanceSync();
     await fakeTelegram?.stop();
@@ -425,5 +440,69 @@ describe('A worker watch status line end to end: built charness, fake Bot API, a
       fakeTelegram.listCalls('editMessageText').every((call) => !String(call.payload.text).startsWith(statusLinePrefix)),
       'a line is replaced by a new message, never edited in place (an edit would not bump the topic)',
     );
+  });
+
+  let longRunRunDir = '';
+  let longRunMarkerPath = '';
+  let promptsBeforeLongRun = 0;
+
+  it('the third signal: a second watch is armed on a live worker that keeps writing — the agent touched the marker first, and the check passes', async () => {
+    promptsBeforeLongRun = countAgentPrompts();
+    const startedWorker = spawn('sleep', ['3600'], { stdio: 'ignore' });
+    longRunWorker = startedWorker;
+    await new Promise<void>((resolve, reject) => {
+      startedWorker.once('spawn', resolve);
+      startedWorker.once('error', reject);
+    });
+    longRunRunDir = path.join(getLayout().testRoot, 'long-run');
+    longRunMarkerPath = path.join(longRunRunDir, workerWatchArmedFileName);
+    fs.mkdirSync(longRunRunDir);
+    fs.writeFileSync(path.join(longRunRunDir, 'events.jsonl'), `${workerLogLines.claudeToolCall}\n`);
+    const target: FakeStatusWatchTarget = { pid: startedWorker.pid ?? 0, runDir: longRunRunDir };
+    assert.ok(target.pid > 0, 'the worker has a process id');
+    fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeStatusWatchTargetFileName), JSON.stringify(target));
+
+    const createsBefore = getToolCalls('schedule_create').length;
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'S-2 [fake:arm-status-watch] watch the long run you just launched');
+    await getCharness().waitFor('the agent to arm the second watch', agentTimeoutMs, () => getToolCalls('schedule_create').length === createsBefore + 1);
+    const created = getToolCalls('schedule_create')[createsBefore];
+    assert.doesNotMatch(created.outcome, /^error:/, created.outcome);
+    await getCharness().waitFor('the second watch to be persisted', replyTimeoutMs, () => readPersistedSchedules().some((record) => record.name === fakeStatusWatchJobName));
+    const [watch] = readPersistedSchedules().filter((record) => record.name === fakeStatusWatchJobName);
+    watchId = watch.id;
+    assert.equal(watch.statusWorkerRunDir, longRunRunDir, 'a worker watch: the bot may say what happened to the worker');
+    assert.ok(fs.existsSync(longRunMarkerPath), 'the agent touched the marker before arming, as the skill says');
+    assert.ok(Date.now() - fs.statSync(longRunMarkerPath).mtimeMs < markerFreshMs, 'and it is fresh');
+  });
+
+  it('the watch was armed over 2 h 30 min ago and the worker is alive and writing: ONE silent sentence says it has run 2 h 30 min without a report — no command, no output, nothing pinned, the status line gone — and the agent is woken', async () => {
+    const firstAlertId = alertMessageId;
+    const listsBefore = getToolCalls('schedule_list').length;
+    // Time passing, as the test can make it: the marker is older than the window; the worker's log is fresh (the silence signal stays quiet).
+    const armedLongAgo = new Date(Date.now() - armedLongAgoMs);
+    fs.utimesSync(longRunMarkerPath, armedLongAgo, armedLongAgo);
+    const eventsNow = new Date();
+    fs.utimesSync(path.join(longRunRunDir, 'events.jsonl'), eventsNow, eventsNow);
+
+    await getCharness().waitFor('the unreported-worker sentence', checkRunTimeoutMs, () => topic.listMessages().some((message) => message.message_id > firstAlertId && message.text.includes(unreportedAlertMark)));
+    const alert = topic.listMessages().find((message) => message.message_id > firstAlertId && message.text.includes(unreportedAlertMark));
+    assert.ok(alert);
+    alertMessageId = alert.message_id;
+    assert.equal(alert.isSilent, true, 'a long run must not ring the muted operator');
+    assert.equal(alert.text, `⚠️ ${unreportedAlertMark}. Checking on it.`, 'a plain sentence: who, for how long, what happens next — no fold, no markup');
+    assert.equal(alert.parseMode, undefined, 'one sentence needs no HTML');
+    assert.doesNotMatch(alert.text, /kill -0|watch-armed|older than|\$ /, 'neither the command nor its output');
+    assert.ok(longRunWorker && longRunWorker.exitCode === null && longRunWorker.signalCode === null, 'the worker is still alive: the clock fired, not the process');
+    assert.ok(!fakeTelegram.pinEvents.some((event) => event.messageId === alert.message_id), 'no pin of any kind for the alert');
+    await getCharness().waitFor('the agent woken by the check to list its schedules', agentTimeoutMs, () => getToolCalls('schedule_list').length === listsBefore + 1);
+    assert.equal(countAgentPrompts(), promptsBeforeLongRun + 2, 'the arming prompt and the failure\'s wake: no turn ran for any status line');
+  });
+
+  it('the agent cancels the second watch: it is gone, and no status line of the whole flow is left', async () => {
+    await getCharness().waitFor('the agent to cancel the second watch', agentTimeoutMs, () => getToolCalls('schedule_cancel').length === 2);
+    await getCharness().waitFor('the second watch to be gone from the persisted state', replyTimeoutMs, () => readPersistedSchedules().every((record) => record.name !== fakeStatusWatchJobName));
+    assert.deepEqual(listVisibleStatusLines(), []);
+    for (const messageId of seenStatusMessageIds) assert.equal(fakeTelegram.getMessage(messageId)?.isDeleted, true, `status line ${messageId} was deleted`);
+    assert.ok(!fakeTelegram.pinEvents.some((event) => event.messageId === alertMessageId), 'the unreported-worker sentence was never pinned, so never unpinned');
   });
 });

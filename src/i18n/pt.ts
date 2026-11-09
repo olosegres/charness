@@ -802,6 +802,7 @@ export const ptDict: Record<string, string> = {
   'schedule.checkFired': '🔔 A verificação «{name}» disparou — a acordar o agente.',
   'schedule.workerFinished': '✅ O worker «{name}» terminou ({elapsed}). A ler o resultado.',
   'schedule.workerSilent': '⚠️ O worker «{name}» está em silêncio há {minutes} min. A verificar se travou.',
+  'schedule.workerUnreported': '⚠️ O worker «{name}» está a correr há {elapsed} sem relatório. A verificar.',
   'schedule.checkRecovered': '✅ A verificação «{name}» voltou ao normal.',
   'schedule.workerResumed': '✅ O worker «{name}» voltou a trabalhar.',
   'schedule.everyMinutes': 'a cada {count} min',

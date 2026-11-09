@@ -6,7 +6,7 @@
  *
  *   isolation checked before the boot; the seed `"botSkills": "off"` written; the boot
  *   → a conversation started with the seed off launches without `--plugin-dir` (the Jira flags unchanged), and the
- *     instructions its bot MCP gave it carry no hint to load `charness-manager` — nor the orchestration bullet that held it
+ *     instructions its bot MCP gave it carry no hint to load `charness-orchestration` — nor the orchestration bullet that held it
  *   → the seed turned on by hand: the NEXT conversation launches with `--plugin-dir` and gets the hint, no running
  *     process is restarted by the change, and the first conversation, stopped at its idle mark and resumed, now loads them
  *   → the seed back to off: the next conversation is without again; a file the bot cannot read means ON (the built-in default)
@@ -42,7 +42,7 @@ import {
 } from './jiraE2e/jiraFlowKit';
 
 /** The hint of the manager skill, and the bullet that carries it on a tracker. */
-const managerSkillHint = '`charness-manager`';
+const managerSkillHint = '`charness-orchestration`';
 const orchestrationBullet = 'You orchestrate detached workers';
 
 function getSettingsFilePath(): string {

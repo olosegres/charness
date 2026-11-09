@@ -375,7 +375,7 @@ describe('check-pack', () => {
     writeRepoFile('remoteRun/ensureNode.sh', '#!/bin/sh\n');
     // The skills the bot gives its agents; the manifest sits in a dot-folder npm must still pack.
     writeRepoFile('agent-plugin/.claude-plugin/plugin.json', '{ "name": "charness" }\n');
-    writeRepoFile('agent-plugin/skills/charness-manager/SKILL.md', '---\nname: charness-manager\ndescription: d\n---\n');
+    writeRepoFile('agent-plugin/skills/charness-orchestration/SKILL.md', '---\nname: charness-orchestration\ndescription: d\n---\n');
     writeRepoFile('LICENSE', 'MIT\n');
   }
 

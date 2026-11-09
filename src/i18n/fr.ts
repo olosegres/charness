@@ -802,6 +802,7 @@ export const frDict: Record<string, string> = {
   'schedule.checkFired': '🔔 La vérification « {name} » s’est déclenchée — je réveille l’agent.',
   'schedule.workerFinished': '✅ Le worker « {name} » est terminé ({elapsed}). Je lis le résultat.',
   'schedule.workerSilent': '⚠️ Le worker « {name} » est silencieux depuis {minutes} min. Je vérifie s’il est bloqué.',
+  'schedule.workerUnreported': '⚠️ Le worker « {name} » tourne depuis {elapsed} sans rapport. Je vais voir.',
   'schedule.checkRecovered': '✅ La vérification « {name} » est de nouveau en ordre.',
   'schedule.workerResumed': '✅ Le worker « {name} » travaille de nouveau.',
   'schedule.everyMinutes': 'toutes les {count} min',
