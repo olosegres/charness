@@ -9,10 +9,14 @@
  *   boot → a topic bound to a folder runs an OpenCode session
  *   → summary HIDDEN, `/compact`: the topic gets the start notice, the completion line and THEN the section alone under its
  *     own header — read by the bot after the compaction, so it lands in order — and nothing else of the summary
- *   → summary HIDDEN, the server compacts by itself mid-turn, twice (after the agent already streamed text, so every tail of
- *     those summaries is a continuation): the section of each is posted, once
+ *   → summary HIDDEN, the server compacts by itself mid-turn, twice (after the agent already streamed text): the section of
+ *     each summary is posted, once
+ *   → summary HIDDEN, the server's compaction starts inside the debounce of the agent's own words (they leave as two tails,
+ *     the words are not taken for the summary), and the agent goes on after the compaction with the summary's `finish` lost
+ *     (its answer is not taken for the summary either): the words and the answer reach the topic, the section is posted once
  *   → summary SHOWN, `/compact`: the stream goes to the topic whole — no marker line, no «none» line, the section under its
  *     header — and the section is in exactly one message
+ *   → summary SHOWN, the server compacts by itself and the agent goes on: the answer is a message of its own, not glued on the summary
  *   → summary SHOWN, a section that says there were no mistakes: no header and no scaffolding either.
  *
  * What the unit tests cover instead: the pure filter and tracker (`streamedCompactionSummary.test.ts`, `compactOnIdle.test.ts`),
@@ -72,6 +76,8 @@ const summaryBody = 'FAKE-SUMMARY-BODY: the refactor is half done.';
 const closingText = 'FAKE-CLOSING: next, run the suite.';
 const instructionGapsText = '1. Mistake (repeated): pushed without asking. Change: add a never-push-without-permission rule to CLAUDE.md.\n2. Mistake: skipped the lint step. Change: a lint line in the commit skill.';
 const agentWorkText = 'AGENT-WORK: still reading the parser.';
+const agentMixedText = 'AGENT-MIXED: the parser is half read. ';
+const agentAfterText = 'AGENT-AFTER: back to the parser.';
 
 let layout: IsolatedInstanceLayout | null = null;
 let charness: IsolatedCharness | null = null;
@@ -117,9 +123,14 @@ function buildSummary(sectionBody: string): string {
   ].join('\n');
 }
 
-/** The summary cut into the pieces the server streams: in the middle of both section markers and of a prose line. */
+/**
+ * The summary cut into the pieces the server streams: in the middle of both section markers and of a prose line, and at the
+ * END of a line right before a marker (the next piece opens with that line's newline and the marker line, which show nothing
+ * of their own — a newline thrown away there glues the section's header onto the line before it).
+ */
 function cutSummary(summary: string): string[] {
   const cuts = [
+    summary.indexOf(summaryBody) + summaryBody.length,
     summary.indexOf(compactionGapsStartMarker) + 7,
     summary.indexOf(instructionGapsText.slice(0, 30)) + 12,
     summary.indexOf(compactionGapsEndMarker) + 10,
@@ -141,6 +152,13 @@ function cutSummary(summary: string): string[] {
 function hasMarker(text: string): boolean {
   return text.includes('<<<') || text.includes('&lt;&lt;&lt;');
 }
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+/** Longer than the adapter's output debounce (500 ms): what the agent streams before it is a tail of its own by now. */
+const pastDebounceMs = 650;
 
 function getNewestMessageId(): number {
   return topic.listMessages().at(-1)?.message_id ?? 0;
@@ -240,13 +258,12 @@ describe('The agent-mistakes section on OpenCode: built charness, fake Bot API, 
     assert.ok(!texts.some(hasMarker), 'no marker reaches the topic');
   });
 
-  it('summary HIDDEN, the server compacts by itself mid-turn, twice: the section of each of those summaries is posted, once — their tails are all continuations', async () => {
+  it('summary HIDDEN, the server compacts by itself mid-turn, twice: the section of each of those summaries is posted, once', async () => {
     const sessionId = getTopicSessionId();
     const messageBefore = getNewestMessageId();
     for (const [index, summaryMessageId] of ['msg_summary_2', 'msg_summary_2b'].entries()) {
-      // The agent has streamed text in this turn: the summary that follows is written into the same buffer, so the bot sees
-      // every one of its tails as a continuation and only the summary message's id says it is a new summary — and a
-      // section posted for the one before must not close this one.
+      // The agent has streamed text in this turn and the summary follows: it is told from the summary before it by its
+      // message id, and a section posted for the one before must not close this one.
       fakeOpenCode.emitAssistantText(sessionId, `msg_work_${index}`, `${agentWorkText} (${index})`);
       await topic.waitForMessage('the agent\'s text', (message) => message.message_id > messageBefore && message.text.includes(`${agentWorkText} (${index})`));
       const sectionsBefore = listTextsAfter(messageBefore).filter((text) => text.includes(instructionGapsText)).length;
@@ -262,6 +279,42 @@ describe('The agent-mistakes section on OpenCode: built charness, fake Bot API, 
     assert.ok(!texts.some(hasMarker), 'no marker reaches the topic');
   });
 
+  it('summary HIDDEN, the server compacts inside the debounce of the agent\'s own words: they are not taken for the summary — they reach the topic, and the section is posted once', async () => {
+    const sessionId = getTopicSessionId();
+    const messageBefore = getNewestMessageId();
+    // No wait between the words and the summary's first piece: the bot's buffer holds both when its debounce fires.
+    fakeOpenCode.emitAssistantText(sessionId, 'msg_work_mixed', agentMixedText);
+    await fakeOpenCode.emitCompactionSummary(sessionId, { messageId: 'msg_summary_3', chunks: cutSummary(buildSummary(instructionGapsText)) });
+    await topic.waitForMessage('the agent\'s words', (message) => message.message_id > messageBefore && message.text.includes(agentMixedText));
+    await getCharness().waitFor('the section of the server\'s own compaction', replyTimeoutMs, () => listTextsAfter(messageBefore).some((text) => text.includes(instructionGapsText)));
+    await waitForSendQueueToDrain();
+
+    const texts = listTextsAfter(messageBefore);
+    assert.equal(texts.filter((text) => text.includes(instructionGapsText)).length, 1, `the section once: ${JSON.stringify(texts)}`);
+    assert.ok(texts.some((text) => text.includes(agentMixedText)), 'the agent\'s words are shown');
+    assert.ok(!texts.some((text) => text.includes(summaryBody) || text.includes(closingText)), 'the full summary stays hidden');
+    assert.ok(!texts.some(hasMarker), 'no marker reaches the topic');
+  });
+
+  it('summary HIDDEN, the agent goes on in the same turn after the compaction (the summary\'s finish is lost): its answer is not taken for the summary — it reaches the topic', async () => {
+    const sessionId = getTopicSessionId();
+    const messageBefore = getNewestMessageId();
+    await fakeOpenCode.emitCompactionSummary(sessionId, { messageId: 'msg_summary_4', chunks: cutSummary(buildSummary(instructionGapsText)) }, {
+      isFinishDropped: true,
+      beforeIdle: async () => {
+        fakeOpenCode.emitAssistantText(sessionId, 'msg_work_after', agentAfterText);
+        await sleep(pastDebounceMs);
+      },
+    });
+    await topic.waitForMessage('the agent\'s answer after the compaction', (message) => message.message_id > messageBefore && message.text.includes(agentAfterText));
+    await waitForSendQueueToDrain();
+
+    const texts = listTextsAfter(messageBefore);
+    assert.equal(texts.filter((text) => text.includes(instructionGapsText)).length, 1, `the section once: ${JSON.stringify(texts)}`);
+    assert.ok(!texts.some((text) => text.includes(summaryBody) || text.includes(closingText)), 'the full summary stays hidden');
+    assert.ok(!texts.some(hasMarker), 'no marker reaches the topic');
+  });
+
   it('summary SHOWN, /compact: the stream reaches the topic with no marker line and no none line, the section under its header, in exactly one message', async () => {
     await setSummaryVisible(true);
     const messageBefore = getNewestMessageId();
@@ -273,10 +326,34 @@ describe('The agent-mistakes section on OpenCode: built charness, fake Bot API, 
     const shown = texts.join('\n');
     assert.ok(shown.includes(summaryBody), 'the summary is shown');
     assert.ok(!hasMarker(shown), `no marker line reaches the topic: ${shown}`);
-    assert.ok(shown.includes(`${enDict['compact.instructionGapsHeader']}\n${instructionGapsText}\n`), `the section sits under its header, ahead of the checklist: ${shown}`);
+    assert.ok(shown.includes(`${summaryBody}\n${enDict['compact.instructionGapsHeader']}\n${instructionGapsText}\n`), `the section sits under its header, on lines of their own, ahead of the checklist: ${shown}`);
     assert.equal(texts.filter((text) => text.includes(instructionGapsText)).length, 1, 'the section is in exactly one message');
     assert.ok(!texts.some((text) => text.startsWith(enDict['compact.instructionGapsHeader'])), 'and that message is the summary, not a message of its own');
     assert.ok(shown.indexOf('1. load these skills: commit') > shown.indexOf(instructionGapsText), 'the checklist follows the section');
+  });
+
+  it('summary SHOWN, the server compacts by itself and the agent goes on in the same turn (the summary\'s finish is lost): the summary is shown once and clean, and the answer follows it on a line of its own', async () => {
+    const sessionId = getTopicSessionId();
+    const messageBefore = getNewestMessageId();
+    await fakeOpenCode.emitCompactionSummary(sessionId, { messageId: 'msg_summary_5', chunks: cutSummary(buildSummary(instructionGapsText)) }, {
+      isFinishDropped: true,
+      beforeIdle: async () => {
+        fakeOpenCode.emitAssistantText(sessionId, 'msg_work_after_shown', agentAfterText);
+        await sleep(pastDebounceMs);
+      },
+    });
+    await topic.waitForMessage('the agent\'s answer after the compaction', (message) => message.message_id > messageBefore && message.text.includes(agentAfterText));
+    await waitForSendQueueToDrain();
+
+    const texts = listTextsAfter(messageBefore);
+    assert.equal(texts.filter((text) => text.includes(summaryBody)).length, 1, `the summary is shown once: ${JSON.stringify(texts)}`);
+    assert.equal(texts.filter((text) => text.includes(instructionGapsText)).length, 1, 'with its section, once');
+    assert.ok(!texts.some(hasMarker), 'no marker reaches the topic');
+    // The bot joins standalone outputs queued inside one debounce into one message, a line apart; what must never happen is
+    // the answer raw-appended to the line before it, as the tail of the summary it is no part of.
+    const answerText = texts.find((text) => text.includes(agentAfterText)) ?? '';
+    const answerAt = answerText.indexOf(agentAfterText);
+    assert.ok(answerAt === 0 || answerText[answerAt - 1] === '\n', `the answer starts a line: ${JSON.stringify(answerText)}`);
   });
 
   it('summary SHOWN, a section that says there were no mistakes: no header, no none line, no marker', async () => {

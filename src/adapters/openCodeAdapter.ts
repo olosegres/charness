@@ -235,6 +235,8 @@ export interface OpenCodeSession {
   isBotCompactionInFlight: boolean;
   /** The id of the summary message the bot's own compaction wrote (learned while its call was open), kept after the call returned: the last of its text may stream later. */
   botCompactionSummaryMessageId: string | null;
+  /** The message the text in {@link currentResponseText} belongs to (the `messageID` of its deltas); `null` before the first delta. Reset alongside it. */
+  responseMessageId: string | null;
   /** {@link currentResponseText} holds that summary: its tails carry `isCompactionSummary`. Reset alongside it. */
   isResponseCompactionSummary: boolean;
   /**
@@ -2195,6 +2197,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
           compactionSummaryMessageId: null,
           isBotCompactionInFlight: false,
           botCompactionSummaryMessageId: null,
+          responseMessageId: null,
           isResponseCompactionSummary: false,
           childResponseText: '',
           childLastEmittedLength: 0,
@@ -2438,6 +2441,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // Reset accumulated response text for new message
     session.currentResponseText = '';
     session.lastEmittedLength = 0;
+    session.responseMessageId = null;
     session.isResponseCompactionSummary = false;
     // The child (sub-agent) accumulator resets with the parent's — a new turn
     // starts clean (a stale debounce firing later emits nothing: empty tail).
@@ -3472,6 +3476,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
         compactionSummaryMessageId: null,
         isBotCompactionInFlight: false,
         botCompactionSummaryMessageId: null,
+        responseMessageId: null,
         isResponseCompactionSummary: false,
         childResponseText: '',
         childLastEmittedLength: 0,
@@ -4773,7 +4778,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const text = delta || '';
     if (!text) return;
 
-    if (messageId !== undefined && messageId === session.compactionSummaryMessageId) session.isResponseCompactionSummary = true;
+    if (messageId !== undefined) this.followResponseMessage(key, session, messageId);
     session.currentResponseText += text;
 
     // Debounce: batch rapid SSE deltas before emitting
@@ -4785,6 +4790,30 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       session.outputTimer = null;
       this.emitResponseTail(key, session);
     }, sseOutputBatchMs);
+  }
+
+  /**
+   * @description Keep the buffer's text and its tails to ONE message at the edge of a compaction summary. The buffer holds
+   * whatever arrives until a turn flush, so without this a tail could carry the agent's words and the first words of a
+   * summary (tagged as the summary, and dropped with it when the summary is hidden), and the agent's answer after a summary
+   * in the same turn would be tagged as the summary too. When the deltas move from one message to another and either of the
+   * two is a summary, the pending tail is sent as it is and the buffer starts afresh: the next tail is the first of a message
+   * of its own, not a continuation of the one before. Messages that are no summary share the buffer as they always did.
+   */
+  private followResponseMessage(key: SessionKey, session: OpenCodeSession, messageId: string): void {
+    const isSummaryMessage = messageId === session.compactionSummaryMessageId;
+    const isNewMessage = session.responseMessageId !== null && messageId !== session.responseMessageId;
+    if (isNewMessage && (isSummaryMessage || session.isResponseCompactionSummary)) {
+      if (session.outputTimer) {
+        clearTimeout(session.outputTimer);
+        session.outputTimer = null;
+      }
+      this.emitResponseTail(key, session);
+      session.currentResponseText = '';
+      session.lastEmittedLength = 0;
+    }
+    session.responseMessageId = messageId;
+    session.isResponseCompactionSummary = isSummaryMessage;
   }
 
   /**
@@ -4809,10 +4838,10 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     // `isFinal` rides only the idle-triggered flush so the bot can skip the
     // possibly-429-stretched debounce for the turn's last frame.
     const meta: OutboundHints = { isContinuation, isFinal };
-    if (session.isResponseCompactionSummary && session.compactionSummaryMessageId !== null) {
+    if (session.isResponseCompactionSummary && session.responseMessageId !== null) {
       meta.isCompactionSummary = true;
-      meta.compactionSummaryMessageId = session.compactionSummaryMessageId;
-      meta.isBotIssuedCompaction = session.compactionSummaryMessageId === session.botCompactionSummaryMessageId;
+      meta.compactionSummaryMessageId = session.responseMessageId;
+      meta.isBotIssuedCompaction = session.responseMessageId === session.botCompactionSummaryMessageId;
     }
     this.emit('output', key, tail, meta);
     session.lastEmittedLength = session.currentResponseText.length;
@@ -5830,6 +5859,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
     session.currentResponseText = '';
     session.lastEmittedLength = 0;
+    session.responseMessageId = null;
     session.isResponseCompactionSummary = false;
     session.childResponseText = '';
     session.childLastEmittedLength = 0;

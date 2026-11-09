@@ -243,9 +243,13 @@ export class FakeOpenCodeServer {
    * @description A compaction summary written by the server: the busy status, the summary message announced
    * (`message.updated` with `summary: true`, before its text streams), the text in chunks, the message finished, the
    * session idle. With no `POST /summarize` open this is the server's OWN compaction (a context overflow). The stored
-   * message is what `GET /session/:id/message` returns afterwards. Resolves when the last piece and the idle are out.
+   * message is what `GET /session/:id/message` returns afterwards. `beforeIdle` runs after the summary message is finished and
+   * before the idle: the server goes on with the turn after compacting (a flow streams the agent's next words there).
+   * `isFinishDropped` loses the finishing `message.updated` of the summary message, as an event stream may (the adapter keeps
+   * a safety net for a dropped `finish`): nothing then ends the summary's text before the next message's.
+   * Resolves when the last piece and the idle are out.
    */
-  async emitCompactionSummary(sessionId: string, summary: FakeCompactionSummary): Promise<void> {
+  async emitCompactionSummary(sessionId: string, summary: FakeCompactionSummary, options: { beforeIdle?: () => Promise<void>; isFinishDropped?: boolean } = {}): Promise<void> {
     const session = this.getSessionOrThrow(sessionId);
     const gapMs = summary.chunkGapMs ?? defaultSummaryChunkGapMs;
     this.runningTurns.add(sessionId);
@@ -258,7 +262,8 @@ export class FakeOpenCodeServer {
     }
     this.storedSummaries.set(sessionId, [...(this.storedSummaries.get(sessionId) ?? []), { messageId: summary.messageId, text: summary.chunks.join('') }]);
     await new Promise<void>((resolve) => setTimeout(resolve, gapMs));
-    this.broadcast({ type: 'message.updated', properties: { info: { ...info, finish: 'stop' } } }, session.directory);
+    if (!options.isFinishDropped) this.broadcast({ type: 'message.updated', properties: { info: { ...info, finish: 'stop' } } }, session.directory);
+    await options.beforeIdle?.();
     this.emitSessionIdle(sessionId);
   }
 

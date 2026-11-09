@@ -25,6 +25,7 @@ export function createOpenCodeSessionFixture(overrides: Partial<OpenCodeSession>
     compactionSummaryMessageId: null,
     isBotCompactionInFlight: false,
     botCompactionSummaryMessageId: null,
+    responseMessageId: null,
     isResponseCompactionSummary: false,
     childResponseText: '',
     childLastEmittedLength: 0,

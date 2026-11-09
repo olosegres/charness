@@ -130,7 +130,9 @@ question; OpenCode's stream is dropped in hide mode, so the section is read afte
 from `postOwnCompactionInstructionGaps` when json-stream reports the CLI's OWN overflow compaction (`contextCompacted`; nobody posts that
 summary, so also with the setting ON), and, for the SERVER's own compaction on a backend that streams its summary (OpenCode), from the tails
 `handleAgentOutput` hands to `routeStreamedCompactionSummaryTail` (`utils/streamedCompactionSummary.ts`: a per-topic tracker keyed on the summary
-message id, `OutboundHints.compactionSummaryMessageId`; a summary the bot issued is marked `isBotIssuedCompaction` by the adapter and left to the seam).
+message id, `OutboundHints.compactionSummaryMessageId`; a summary the bot issued is marked `isBotIssuedCompaction` by the adapter and left to the seam;
+the adapter also keeps a tail to ONE message at the edge of a summary — the agent's words before it and its answer after it in the same turn are never
+tagged as the summary, so a hidden summary cannot swallow them — and the tracker keeps the newline a shown tail leaves behind for the next text).
 A summary that is SHOWN has its scaffolding taken out and the section put under `compact.instructionGapsHeader` — `formatCompactionSummaryForTopic`
 for the one the bot reads, the stream display (a fragment that could still be a marker is held back) for the one OpenCode streams — both over
 the one line parser in `compactOnIdle.ts`. Not covered: the deprecated tmux Claude backend (frozen; its TUI runs the compaction and the bot has

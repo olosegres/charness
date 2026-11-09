@@ -107,6 +107,8 @@ interface StreamedSummary {
   display: StreamedSummaryDisplay | null;
   /** Some text of this summary was sent on to the topic: a later tail may go on from it. */
   hasShown: boolean;
+  /** Blank space the display gave back with nothing else (a newline that ends a line shown in part): it goes out in front of the next text. */
+  pendingBlankSpace: string;
   /** The text collected for the section while the summary is hidden; dropped once the section is complete. */
   collectedText: string;
   /** The section is over (posted, or empty): later tails of this summary are not collected. */
@@ -123,18 +125,25 @@ export function createStreamedSummaryTracker(): StreamedSummaryTracker {
       const isSameSummary = known !== undefined && (tail.summaryId !== null ? known.summaryId === tail.summaryId : tail.isContinuation);
       const summary: StreamedSummary = isSameSummary
         ? known
-        : { summaryId: tail.summaryId, display: null, hasShown: false, collectedText: '', isSectionClosed: false };
+        : { summaryId: tail.summaryId, display: null, hasShown: false, pendingBlankSpace: '', collectedText: '', isSectionClosed: false };
       summaries.set(threadKey, summary);
 
       if (view.isSummaryShown) {
         summary.display ??= createStreamedSummaryDisplay(view.gapsHeader);
         const text = summary.display.push(tail.text);
-        // Blank space alone is nothing to send (the bot's output path drops it as well) and starts no message.
-        if (text.trim() === '') return noOutcome;
+        // Blank space alone is nothing to send (the bot's output path drops it) — but a continuation is appended verbatim, so
+        // a newline thrown away here glues the next line onto the one before it: it is kept for the next text. Space before
+        // anything of the summary was shown belongs to no message.
+        if (text.trim() === '') {
+          if (summary.hasShown) summary.pendingBlankSpace += text;
+          return noOutcome;
+        }
         // A tail that goes on from a message nothing of which was sent (its start was all scaffolding, or held back) starts one.
         const isContinuation = tail.isContinuation && summary.hasShown;
+        const shownText = `${summary.pendingBlankSpace}${text}`;
+        summary.pendingBlankSpace = '';
         summary.hasShown = true;
-        return { shown: { text, isContinuation }, instructionGaps: null };
+        return { shown: { text: shownText, isContinuation }, instructionGaps: null };
       }
 
       if (tail.isBotIssued || summary.isSectionClosed) return noOutcome;

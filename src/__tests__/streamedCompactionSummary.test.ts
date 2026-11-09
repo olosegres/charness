@@ -110,6 +110,36 @@ test('tracker, shown: a tail that leaves only blank space to show shows nothing 
   );
 });
 
+test('tracker, shown: a newline that only closes a line is not lost when the tail that carried it shows nothing else — the topic reads the summary the bot would post whole', () => {
+  // The debounce cuts a tail in the middle of a line; the next one is the newline plus a marker line. The display gives back
+  // the newline alone, and the bot appends a continuation verbatim: dropping it glues the next line onto the one before.
+  const tails = ['body line', '\n<<<INSTRUCTION_GAPS>>>\n', '1. Mistake\n'];
+  const tracker = createStreamedSummaryTracker();
+  const shown = tails.map((text, index) => tracker.push('t', tail(text, { isContinuation: index > 0 }), shownView).shown);
+  assert.deepEqual(shown[0], { text: 'body line', isContinuation: false });
+  assert.equal(shown[1], null, 'a tail that shows only a newline sends nothing of its own');
+  assert.deepEqual(shown[2], { text: `\n${gapsHeader}\n1. Mistake\n`, isContinuation: true }, 'the newline goes out in front of the next text');
+  assert.equal(
+    shown.map((outcome) => outcome?.text ?? '').join('').trim(),
+    formatCompactionSummaryForTopic(tails.join(''), gapsHeader),
+  );
+});
+
+test('tracker, shown: the blank space a dropped none line leaves behind is kept too, however the tails cut — never shown ahead of the first text of a message', () => {
+  const summary = ['body line', compactionGapsStartMarker, compactionNoGapsLine, compactionGapsEndMarker, '1. load these skills: commit'].join('\n');
+  for (const size of [1, 2, 3, 4, 5, 7, 11, 16, 32, summary.length]) {
+    const tracker = createStreamedSummaryTracker();
+    const shown = sliceEvery(summary, size)
+      .map((text, index) => tracker.push('t', tail(text, { isContinuation: index > 0 }), shownView).shown)
+      .map((outcome) => outcome?.text ?? '')
+      .join('');
+    assert.equal(shown, formatCompactionSummaryForTopic(summary, gapsHeader), `tails of ${size} characters`);
+  }
+  const leading = createStreamedSummaryTracker();
+  assert.equal(leading.push('t', tail('\n'), shownView).shown, null);
+  assert.equal(leading.push('t', tail('first\n', { isContinuation: true }), shownView).shown?.text, 'first\n', 'blank space before anything was shown is not carried into the message');
+});
+
 test('tracker, shown: a first tail that is shown keeps isContinuation false, and a bot-issued summary is shown too', () => {
   const tracker = createStreamedSummaryTracker();
   assert.deepEqual(

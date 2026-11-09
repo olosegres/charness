@@ -217,6 +217,51 @@ describe('OpenCode compaction summary output', () => {
     assert.deepEqual(metas.map((meta) => meta?.compactionSummaryMessageId), ['msg_summary', 'msg_summary', undefined]);
   });
 
+  it('agent text and the first summary delta inside ONE debounce leave as two tails: the agent\'s words are not tagged as the summary, and the summary starts its own message', () => {
+    const { adapter, outputs, metas } = createAdapterWithSession();
+
+    feedAssistantMessageUpdated(adapter, 'msg_summary', { summary: true });
+    feedTextDelta(adapter, 'Agent words. ', 'msg_work');
+    feedTextDelta(adapter, 'Summary text.', 'msg_summary');
+    feedSessionIdle(adapter);
+
+    assert.deepEqual(outputs, ['Agent words. ', 'Summary text.']);
+    assert.deepEqual(metas.map((meta) => meta?.isCompactionSummary === true), [false, true]);
+    assert.deepEqual(metas.map((meta) => meta?.compactionSummaryMessageId), [undefined, 'msg_summary']);
+    assert.deepEqual(metas.map((meta) => meta?.isContinuation), [false, false], 'the summary is a message of its own, not a continuation of the words before it');
+  });
+
+  it('the agent\'s answer after the summary in the SAME turn (no finish between) is not tagged as the summary and starts its own message', () => {
+    const { adapter, outputs, metas } = createAdapterWithSession();
+
+    feedAssistantMessageUpdated(adapter, 'msg_summary', { summary: true });
+    feedTextDelta(adapter, 'Summary text.', 'msg_summary');
+    mock.timers.tick(sseOutputBatchMs + 1);
+    feedTextDelta(adapter, 'Back to work. ', 'msg_after');
+    mock.timers.tick(sseOutputBatchMs + 1);
+    feedTextDelta(adapter, 'More of the answer.', 'msg_after');
+    feedSessionIdle(adapter);
+
+    assert.deepEqual(outputs, ['Summary text.', 'Back to work. ', 'More of the answer.']);
+    assert.deepEqual(metas.map((meta) => meta?.isCompactionSummary === true), [true, false, false], 'only the summary\'s own text is the summary');
+    assert.deepEqual(metas.map((meta) => meta?.compactionSummaryMessageId), ['msg_summary', undefined, undefined]);
+    assert.deepEqual(metas.map((meta) => meta?.isContinuation), [false, false, true], 'the answer starts its own message and goes on in it');
+  });
+
+  it('two summaries back to back in one buffer: each tail names the summary it is part of', () => {
+    const { adapter, outputs, metas } = createAdapterWithSession();
+
+    feedAssistantMessageUpdated(adapter, 'msg_summary_1', { summary: true });
+    feedTextDelta(adapter, 'First summary.', 'msg_summary_1');
+    feedAssistantMessageUpdated(adapter, 'msg_summary_2', { summary: true });
+    feedTextDelta(adapter, 'Second summary.', 'msg_summary_2');
+    feedSessionIdle(adapter);
+
+    assert.deepEqual(outputs, ['First summary.', 'Second summary.']);
+    assert.deepEqual(metas.map((meta) => meta?.compactionSummaryMessageId), ['msg_summary_1', 'msg_summary_2']);
+    assert.deepEqual(metas.map((meta) => meta?.isContinuation), [false, false]);
+  });
+
   it('a summary the server wrote by itself (an overflow) is not marked as one the bot issued', () => {
     const { adapter, metas } = createAdapterWithSession();
 
