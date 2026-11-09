@@ -69,7 +69,8 @@ function getLockHolderState(holder: LockData, own: { hostname: string; pidNamesp
  * Mirrors `state.ts`'s `resolveDataDir` — kept independent (not imported)
  * because lock acquisition runs BEFORE the bot module is loaded, and `state.ts`
  * reads `process.env.DATA_DIR` at module scope which we want to avoid coupling
- * to. Both take the home-dir default from `resolveDefaultDataDir`.
+ * to. Both take the home-dir default from `resolveDefaultDataDir`. The path is not made absolute here: the lock is read and
+ * written by this process alone (nothing hands it to an agent), and the bot never changes its working folder.
  */
 function dataDir(): string {
   return process.env.DATA_DIR || resolveDefaultDataDir();

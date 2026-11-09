@@ -516,6 +516,8 @@ export function getProcessIdentity(pid: number): ExternalProcessIdentity | null 
 }
 
 export function getDefaultOpenCodeOwnershipFilePath(baseDirectory = process.cwd()): string {
+  // Not `resolveDataDir()` (`state.ts`): the hot supervisor runs this before any state is loaded and must not import that
+  // module. The value is made absolute right below, against the base the supervisor and the worker agree on.
   const dataDirectory = process.env.DATA_DIR || resolveDefaultDataDir();
   return path.join(path.resolve(baseDirectory, dataDirectory), '.opencode-server-process');
 }
@@ -1170,6 +1172,7 @@ async function ensureOpenCodeServerUnlocked(): Promise<void> {
     // entire sub-agent run and the topic looks hung.
     OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: 'true',
     // The skills the bot gives its agents (`utils/agentPlugin.ts`) while the instance's «Bot skills» switch is on; OpenCode reads the folder once, at start.
+    // The raw DATA_DIR on purpose, not `resolveDataDir()` (`state.ts`, which the hot supervisor must not import): `getOpenCodeAgentConfigDir` makes it absolute.
     ...getOpenCodeAgentConfigEnv(process.env, process.env.DATA_DIR || resolveDefaultDataDir(), checkIsBotSkillsEnabled(null)),
   };
   // The bot's compaction plugin, so an overflow compaction (which never gets the

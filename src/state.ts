@@ -256,13 +256,13 @@ export interface ClaudeProfileRecord {
   isRemoved?: boolean;
 }
 
-/** The session id of the backend family a thread switched away from, kept for a switch back. */
 /** @name AgentSessionIds @description The agent session ids of one thread, by backend (see `StateStore.getAgentSessionIds`). */
 export interface AgentSessionIds {
   claudeSessionIds: string[];
   opencodeSessionIds: string[];
 }
 
+/** The session id of the backend family a thread switched away from, kept for a switch back. */
 export interface ParkedSession {
   /** The adapter the id belongs to. */
   adapterName: string;
