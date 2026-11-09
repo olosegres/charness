@@ -1217,6 +1217,7 @@ export const ptDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': 'sim (systemd-inhibit; com a tampa fechada ele suspende mesmo assim)',
   'runners.keepsAwakeNo': 'NÃO — {reason}; pode suspender quando ocioso',
   'runners.keepsAwakeNoReason': 'nenhum motivo informado',
+  'runners.offlineKeptAwakeNote': 'mantinha a máquina acordada quando foi visto pela última vez; se agora está dormindo, daqui não dá para acordá-la — uma tecla ou abrir a tampa resolve',
   'runners.capabilitiesLine': 'consegue: {list}',
   'runners.capabilityNo': '{name}: não',
   'runners.capabilityNoWhy': '{name}: não — {detail}',

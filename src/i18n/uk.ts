@@ -1222,6 +1222,7 @@ export const ukDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': 'так (systemd-inhibit; закрита кришка все одно присипить)',
   'runners.keepsAwakeNo': 'НІ — {reason}; у простої може заснути',
   'runners.keepsAwakeNoReason': 'причину не названо',
+  'runners.offlineKeptAwakeNote': 'не давав машині спати, коли його бачили востаннє; якщо вона зараз спить, звідси її не розбудити — допоможе натискання клавіші або відкрита кришка',
   'runners.capabilitiesLine': 'вміє: {list}',
   'runners.capabilityNo': '{name}: ні',
   'runners.capabilityNoWhy': '{name}: ні — {detail}',

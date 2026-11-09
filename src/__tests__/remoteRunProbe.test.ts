@@ -115,6 +115,18 @@ describe('how a runner keeps its machine awake', () => {
     assert.match(block('awake=no'), /\n {2}keeps awake: NO \(the machine may sleep when idle\)/);
     assert.ok(!block('').includes('keeps awake'));
   });
+
+  it('an OFFLINE runner\'s block does not promise «it keeps awake»: it says it did when last seen, and that a Mac that fell asleep anyway cannot be woken from here (no assertion wakes a sleeping Mac)', () => {
+    const offline = (text: string): string => formatRunnerBlock({ name: 'mac', status: 'offline', reason: 'the runner is not connected', lastSeenAtMs: Date.UTC(2026, 10, 9, 1, 52), lastProbe: parseProbeOutput(`${linuxProbeText}\n${text}`), groupLimits: {}, isPausedByHub: false });
+    assert.match(offline('awake=caffeinate'), /\n {2}keeps awake: it did when last seen \(caffeinate -i; a closed lid still sleeps it\) — if it is asleep now, nothing can wake it from here: a key press or opening the lid does/);
+    assert.ok(!offline('awake=caffeinate').includes('keeps awake: yes'), 'no «yes» for a runner that does not answer');
+    // A machine that said it was NOT kept awake keeps its own wording, and one that said nothing stays silent.
+    assert.match(offline('awake=no\nawake_detail=caffeinate was not found on this Mac'), /\n {2}keeps awake: NO — caffeinate was not found on this Mac \(the machine may sleep when idle\)/);
+    assert.ok(!offline('').includes('keeps awake'));
+    // An online runner is a live answer, and a runner with its lid closed says what it did say (the lid is what keeps it from being asked).
+    const lidClosed = formatRunnerBlock({ name: 'mac', status: 'lid-closed', lastSeenAtMs: Date.UTC(2026, 10, 9, 1, 52), lastProbe: parseProbeOutput(`${linuxProbeText}\nawake=caffeinate`), groupLimits: {}, isPausedByHub: false });
+    assert.match(lidClosed, /keeps awake: yes \(caffeinate -i; a closed lid still sleeps it\)/);
+  });
 });
 
 describe('what a paired runner adds to the probe', () => {

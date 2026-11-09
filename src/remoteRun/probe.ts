@@ -110,6 +110,11 @@ function parseCopies(fields: ReadonlyMap<string, string>): RunnerProbe['copies']
 }
 
 export type KeepAwakeMethod = 'caffeinate' | 'systemd-inhibit';
+/**
+ * How long one sleep-assertion holder of a runner's link lasts on its own (`runnerUtility/keepAwake.ts`): the longest a restart of the link may take without the machine
+ * being left with no assertion, and the longest a holder outlives a link that was killed. Here because `runners` and the link's own words say it.
+ */
+export const keepAwakeHoldSeconds = 5 * 60;
 const keepAwakeMethods: readonly KeepAwakeMethod[] = ['caffeinate', 'systemd-inhibit'];
 
 /** @description What a method is, in the words every place that says how a machine is kept awake uses (the link's own start line, `runners`): the command, and that a closed lid still sleeps it. */
@@ -236,10 +241,18 @@ function formatOlderSimulatorsLine(probe: RunnerProbe): string[] {
   return [`  simulators of older runtimes (devices in brackets; remote-run removes nothing of them): ${formatOlderSimulators(probe)}`];
 }
 
-/** `keeps awake: yes (caffeinate -i)` — or `NO` with why: a Mac that sleeps under a job drops the link (the thing `runners` is there to show). Nothing when the runner did not say. */
-function formatKeepsAwake(probe: RunnerProbe): string[] {
+/** What `runners` adds to «it kept the machine awake» of a runner that does not answer: an assertion cannot wake a machine that sleeps (shared with the bot's `/runners`, localized: `runners.keepsAwakeLastSeenNote`). */
+const asleepNote = 'if it is asleep now, nothing can wake it from here: a key press or opening the lid does';
+
+/**
+ * `keeps awake: yes (caffeinate -i)` — or `NO` with why: a Mac that sleeps under a job drops the link (the thing `runners` is there to show). Nothing when the runner did not say. For a runner that is
+ * `offline` the line is what it said WHEN LAST SEEN, and says so: a runner that claims to keep its machine awake and does not answer is most likely asleep (a lid closed, a sleep that began anyway), and no
+ * assertion wakes a sleeping machine — a «yes» there would read as «it will be back by itself».
+ */
+function formatKeepsAwake(probe: RunnerProbe, isLastSeen: boolean): string[] {
   if (probe.keepsAwake === null) return [];
   if (probe.keepsAwake.method === null) return [`  keeps awake: NO${probe.keepsAwake.reason === '' ? '' : ` — ${probe.keepsAwake.reason}`} (the machine may sleep when idle)`];
+  if (isLastSeen) return [`  keeps awake: it did when last seen (${describeKeepAwakeMethod(probe.keepsAwake.method)}) — ${asleepNote}`];
   return [`  keeps awake: yes (${describeKeepAwakeMethod(probe.keepsAwake.method)})`];
 }
 
@@ -270,8 +283,11 @@ function formatRunnerProgram(probe: RunnerProbe): string[] {
   return parts.length === 0 ? [] : [`  ${parts.join(' · ')}`];
 }
 
-/** @description The lines under a runner's heading: hardware, jobs and groups, capabilities, and for a paired runner its program and service. */
-export function formatRunnerDetails(probe: RunnerProbe, groupLimits: Readonly<Record<string, number>>): string[] {
+/**
+ * @description The lines under a runner's heading: hardware, jobs and groups, capabilities, and for a paired runner its program and service. `isLastSeen`: the probe is what an offline runner said when it was last
+ * seen, not a live answer — the one line that would over-promise then (it keeps its machine awake) says so.
+ */
+export function formatRunnerDetails(probe: RunnerProbe, groupLimits: Readonly<Record<string, number>>, isLastSeen: boolean = false): string[] {
   const limits = Object.entries(groupLimits);
   // A runner whose only group is the default one (every paired runner) is told as «jobs at once»: that is what the one number means to the operator.
   const groups = limits.length === 1 && limits[0][0] === defaultPueueGroup ? `jobs at once: ${limits[0][1]}` : limits.length === 0 ? '' : `groups: ${limits.map(([groupName, parallel]) => `${groupName} ${parallel}`).join(', ')}`;
@@ -282,7 +298,7 @@ export function formatRunnerDetails(probe: RunnerProbe, groupLimits: Readonly<Re
     `  can: ${formatCapabilities(probe).join(' · ')}`,
     ...formatOlderSimulatorsLine(probe),
     ...formatJobTools(probe),
-    ...formatKeepsAwake(probe),
+    ...formatKeepsAwake(probe, isLastSeen),
     ...formatRunnerProgram(probe),
   ];
 }
@@ -335,6 +351,6 @@ export function formatRunnerBlock(report: RunnerReport): string {
   if (report.lastProbe === null) return `${report.name} — offline (${report.reason})${pauseTags} · ${lastSeen}`;
   return [
     `${report.name} — offline (${report.reason})${pauseTags} · ${lastSeen} — as it was then: ${formatSystem(report.lastProbe)}`,
-    ...formatRunnerDetails(report.lastProbe, report.groupLimits),
+    ...formatRunnerDetails(report.lastProbe, report.groupLimits, true),
   ].join('\n');
 }

@@ -266,6 +266,8 @@ function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: For
     );
   } else {
     lines.push(`  ${t('runners.hardwareOldLine', { cpu: describeCpu(probe, t, false), ramTotal: formatGigabytes(probe.ramTotalMb), disk: formatGigabytes(probe.diskFreeMb) })}${describeLowDisk(probe, t)}`);
+    // A machine that does not answer and said it kept itself awake is most likely asleep — and no assertion wakes a sleeping machine: the row must not read as «it will be back by itself».
+    if (!entry.isOnline && probe.keepsAwake !== null && probe.keepsAwake.method !== null) lines.push(`  ${t('runners.offlineKeptAwakeNote')}`);
   }
   return lines;
 }

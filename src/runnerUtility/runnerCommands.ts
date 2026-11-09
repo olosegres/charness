@@ -491,6 +491,12 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     return 1;
   }
   ensureLauncherForRunningNode(paths, process.execPath);
+  // The machine is kept awake from the first moment of the link, before the tools and Pueue are looked after (which can take a while): the link this one replaces (every update restarts it) left its holder
+  // running — it lasts minutes — and this one takes over from it while it still holds, so the machine is never without an assertion (`keepAwake.ts`). Only a STOP ends the holder at once; a restart or a crash hands it over.
+  const keepAwake = await startKeepAwake(createKeepAwakeDeps(paths));
+  const leaving: { isStopRequested: boolean } = { isStopRequested: false };
+  const endKeepAwake = (): void => { if (leaving.isStopRequested) keepAwake.stop(); else keepAwake.handOver(); };
+  process.once('exit', endKeepAwake);
   startGuiAgentHealing(paths, io);
   const toolDeps = createToolDeps();
   if (!(await findPueue(paths, toolDeps))) await ensurePueue(paths, toolDeps);
@@ -547,13 +553,11 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     onUpdateSettled: () => { nodeRestart.notifyChange(); },
   });
   const stop = (): void => {
+    leaving.isStopRequested = true;
     controller.abort();
     setTimeout(() => process.exit(0), shutdownGraceMs).unref();
   };
   onStopSignals(stop);
-  // The machine is kept awake while the link runs; the holder is tied to this process (it ends with it, however it ends), and `stop` runs from `exit` too.
-  const keepAwake = await startKeepAwake(createKeepAwakeDeps(paths));
-  process.once('exit', () => { keepAwake.stop(); });
   io.stdout(`${describeKeepAwake(keepAwake.getState())}\n`);
   io.stdout(`charness-runner: serving ${config.hub.label} as “${config.name}” (Ctrl-C stops)\n`);
   startNodeUpkeep(paths, appDir, io, nodeRestart);
@@ -563,7 +567,7 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     // An update of the program ended the run (75) while a new Node waits for the launcher's next start: 76 takes the launcher through its rewritten file, 75 would restart it on the old Node.
     return code === restartExitCode && nodeRestart.isRequested() ? nodeMovedExitCode : code;
   } finally {
-    keepAwake.stop();
+    endKeepAwake();
   }
 }
 

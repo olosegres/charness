@@ -1216,6 +1216,7 @@ export const esDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': 'sí (systemd-inhibit; con la tapa cerrada se suspende igual)',
   'runners.keepsAwakeNo': 'NO — {reason}; puede suspenderse en reposo',
   'runners.keepsAwakeNoReason': 'sin motivo indicado',
+  'runners.offlineKeptAwakeNote': 'mantenía la máquina despierta cuando se vio por última vez; si ahora está dormida, desde aquí no se puede despertar: lo hace pulsar una tecla o abrir la tapa',
   'runners.capabilitiesLine': 'puede: {list}',
   'runners.capabilityNo': '{name}: no',
   'runners.capabilityNoWhy': '{name}: no — {detail}',

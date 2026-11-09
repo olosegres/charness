@@ -1220,6 +1220,7 @@ export const ruDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': 'да (systemd-inhibit; закрытая крышка всё равно усыпит)',
   'runners.keepsAwakeNo': 'НЕТ — {reason}; в простое может уснуть',
   'runners.keepsAwakeNoReason': 'причина не названа',
+  'runners.offlineKeptAwakeNote': 'не давал машине спать, когда его видели в последний раз; если она сейчас спит, отсюда её не разбудить — поможет нажатие клавиши или открытая крышка',
   'runners.capabilitiesLine': 'умеет: {list}',
   'runners.capabilityNo': '{name}: нет',
   'runners.capabilityNoWhy': '{name}: нет — {detail}',

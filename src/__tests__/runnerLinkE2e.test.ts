@@ -352,6 +352,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     const appBefore = fs.realpathSync(runnerPaths.currentApp);
     const statusBefore = await waitForLink();
     const gateBefore = readGatePid();
+    const awakeBefore = readAwakeState();
     fs.appendFileSync(path.join(layout.hubInstall, 'dist', 'runners', 'pairCode.js'), '\n// changed by the flow\n');
     await waitUntil(() => {
       const config = readJson<RunnerConfig>(runnerPaths.config);
@@ -361,6 +362,13 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal((await waitForSsh('echo updated')).trim(), 'updated');
     assert.notEqual(readGatePid(), gateBefore, 'the update restarted the link — nothing killed the old gate to make it happen');
     assert.equal(readHubPaired().rev, 1, 'an update is not a new pairing');
+    if (awakeBefore !== null && awakeBefore.method !== 'none') {
+      // The update restarts the link, and a Mac that nobody uses is idle: the old link's holder must still hold when the new link's takes over (a holder tied to the link's process died with it — the
+      // moment with no assertion in which a real Mac went to sleep, five seconds later, and stayed offline for hours).
+      await waitUntil(() => readAwakeState()?.detail !== awakeBefore.detail && readAwakeState()?.method === 'systemd-inhibit', 'the new link to write its own holder', linkTimeoutMs);
+      assert.equal(checkIsProcessAlive(Number(awakeBefore.detail)), true, 'the old link\'s holder still holds when the new link\'s does: no moment without one');
+      process.kill(Number(awakeBefore.detail), 'SIGTERM');
+    }
   });
 
   describe('an always-on Mac (a recorded `system-service`) whose login session\'s agent is not in place', () => {

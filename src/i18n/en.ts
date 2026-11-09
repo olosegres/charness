@@ -1260,6 +1260,7 @@ export const enDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': 'yes (systemd-inhibit; a closed lid still sleeps it)',
   'runners.keepsAwakeNo': 'NO — {reason}; it may sleep when idle',
   'runners.keepsAwakeNoReason': 'no reason given',
+  'runners.offlineKeptAwakeNote': 'kept awake when last seen; if it is asleep now, nothing can wake it from here — a key press or opening the lid does',
   'runners.capabilitiesLine': 'can: {list}',
   'runners.capabilityNo': '{name}: no',
   'runners.capabilityNoWhy': '{name}: no — {detail}',

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**A Mac runner no longer falls asleep — and stays offline for hours — when its link restarts for an update.**
+Before, the sleep assertion that keeps a Mac awake was tied to the link's process, so every restart of the link (every update of the host's package) left the Mac with no assertion for a moment; a Mac nobody was using went to sleep five seconds later, and since no assertion wakes a sleeping Mac, the runner showed «offline» until someone pressed a key (measured: four times since 11-05 on one Mac, up to hours each).
+Now:
+  - **The holder is a timed one that outlives the link** (`caffeinate -i -t 300` on a Mac, `systemd-inhibit … sleep 300` on Linux): the link renews it every minute — the new holder first, the old one released only after it holds — and a restart, an update or a crash leaves it running, so the next link's holder takes over while it still holds. Only a stop of the runner (Ctrl-C, a service stop, `unpair`, a removal) ends it at once; a link that is killed leaves the machine awake for at most 5 more minutes.
+  - **`runners` and `/runners` stop promising what an assertion cannot do:** a runner that does not answer shows what it said when last seen — «keeps awake: it did when last seen … — if it is asleep now, nothing can wake it from here: a key press or opening the lid does» (and the screen adds the same line in every language) — instead of «keeps awake: yes». A closed lid, the Apple menu's Sleep, the power button and a link away for over 5 minutes still sleep the Mac; the docs say so.
+
 **`runners` and `/runners` now say when the size of the project copies counts clones in full.**
 Before, a Mac whose new copies were seeded from a sibling (clones that share disk blocks with it) showed a total that was several times what the disk held — `du` cannot see the shared blocks — and a refused submit named a clone as «41 GB to free» when removing it gives back far less.
 Now the copies line of `runners` and of the bot's `/runners` (every language) adds «clones counted in full» whenever some copy shares blocks with another, and so does the list of the biggest copies in a disk-full refusal; the real saving shows only in the disk's free space.

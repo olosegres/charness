@@ -1216,6 +1216,7 @@ export const uzDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': 'ha (systemd-inhibit; qopqoq yopilsa baribir uxlaydi)',
   'runners.keepsAwakeNo': 'yo‘q — {reason}; bo‘sh turganda uxlab qolishi mumkin',
   'runners.keepsAwakeNoReason': 'sabab ko‘rsatilmagan',
+  'runners.offlineKeptAwakeNote': 'oxirgi marta ko‘rilganda mashinani uyg‘oq saqlagan; agar hozir uxlayotgan bo‘lsa, bu yerdan uni uyg‘ota olmaysiz — tugmani bosish yoki qopqoqni ochish uyg‘otadi',
   'runners.capabilitiesLine': 'qila oladi: {list}',
   'runners.capabilityNo': '{name}: yo‘q',
   'runners.capabilityNoWhy': '{name}: yo‘q — {detail}',

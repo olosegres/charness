@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { writeTextFileAtomically } from '../configDirFile';
-import type { KeepAwakeMethod } from '../remoteRun/probe';
+import { keepAwakeHoldSeconds, type KeepAwakeMethod } from '../remoteRun/probe';
 import type { RunnerHomePaths } from './runnerHome';
 
 /**
@@ -11,11 +11,24 @@ import type { RunnerHomePaths } from './runnerHome';
  * nothing here overrides it. Nothing of the machine's power settings is read or changed (never `pmset`, nothing that needs an admin), and the
  * display may still turn off:
  *
- *   macOS   `caffeinate -i -w <the link's pid>` — a child of the link that ends by itself the moment the link's process does (a stop, a removal, a crash,
- *           a SIGKILL): no orphan to keep the Mac awake after the runner is gone
- *   Linux   `systemd-inhibit --what=idle … sh -c 'while kill -0 <the link's pid> …; sleep 2; done'` — the lock is held while that loop runs, and the loop
- *           ends within two seconds of the link's process, however it ended
+ *   macOS   `caffeinate -i -t <holdSeconds>`
+ *   Linux   `systemd-inhibit --what=idle … sleep <holdSeconds>`
  *   else    nothing — and `runners` says so (no `systemd-inhibit` on the PATH, no D-Bus session for it, another system)
+ *
+ * WHY A TIMED HOLDER THAT OUTLIVES THE LINK, not one tied to the link's process (`caffeinate -w <pid>`): the link restarts itself for every update of the hub's
+ * package, and a holder that died with it left the Mac with NO assertion for the moment before the new link took its own. A Mac whose user is away has its idle
+ * timer long expired, so that moment is enough: measured on a real Mac (macOS 26), `pmset -g log` shows the old `caffeinate` die with `[System: No Assertions]`
+ * and `Entering Sleep state due to 'Idle Sleep'` five seconds later — although the new link's `caffeinate` was already holding when the sleep began (it came
+ * within the same second). An assertion cannot wake a Mac that sleeps, and a DarkWake always ends in a Maintenance Sleep with it held, so the runner then stayed offline until
+ * someone pressed a key (hours; four times since 11-05). So the holder is:
+ *
+ *   - timed: it ends by itself after {@link keepAwakeHoldSeconds}, whatever became of the link — a stop, a SIGKILL, a crash leave no orphan for longer than that;
+ *   - renewed every {@link renewEveryMs} while the link runs, the NEW holder first and the old one released only after it holds (never an instant with none);
+ *   - left running when the link leaves to come back (an update, a restart, a crash: {@link KeepAwake.handOver}), so the next link starts its own holder while this
+ *     one still holds, and ended at once only when the link is stopped ({@link KeepAwake.stop}: the operator's stop, an unpair, a removal).
+ *
+ * What is not covered, and `runners` says: a closed lid, the Apple menu's Sleep and the power button, a battery running out, and a link that stays away for longer than
+ * {@link keepAwakeHoldSeconds} (a crash loop, a machine that was busy for minutes before the new link came up).
  *
  * What was done is written to `<state>/awake` (`caffeinate 123`, `systemd-inhibit 123`, or `none <reason>`) for `runner.sh probe`, which tells whether the
  * holder is still alive. A holder that ends while the link runs is tried again every {@link retryAfterMs}.
@@ -27,25 +40,24 @@ export type KeepAwakeState = { method: KeepAwakeMethod; holderPid: number } | { 
 /** What a holder is asked to be: the command line, and which method it is. */
 export type KeepAwakePlan = { method: KeepAwakeMethod; file: string; args: string[] } | { reason: string };
 
-const holderLoopSeconds = 2;
+/** How often the link starts a new holder: at most a fifth of the lifetime, so a renewal that fails (no process slot on a loaded machine) is tried again several times before the old holder runs out. */
+export const renewEveryMs = 60 * 1000;
 /** How long a holder must stay up to count as holding: one that dies at once (no bus for `systemd-inhibit`) is a failure, not a lock. */
 export const defaultSettleMs = 500;
 export const retryAfterMs = 30 * 1000;
 const stderrTailChars = 400;
 const reasonMaxChars = 200;
-/** `sh -c <script> sh <pid>`: the lock lasts as long as the link's process does. */
-const waitForLinkScript = `while kill -0 "$1" 2> /dev/null; do sleep ${holderLoopSeconds}; done`;
 
-/** @description The holder to start for this platform, or why there is none: pure, `findExecutable` is the PATH lookup. */
-export function planKeepAwake(platform: NodeJS.Platform, linkPid: number, findExecutable: (name: string) => string | null): KeepAwakePlan {
+/** @description The holder to start for this platform, lasting `holdSeconds`, or why there is none: pure, `findExecutable` is the PATH lookup. */
+export function planKeepAwake(platform: NodeJS.Platform, holdSeconds: number, findExecutable: (name: string) => string | null): KeepAwakePlan {
   if (platform === 'darwin') {
     const file = findExecutable('caffeinate');
-    return file === null ? { reason: 'caffeinate was not found on this Mac' } : { method: 'caffeinate', file, args: ['-i', '-w', `${linkPid}`] };
+    return file === null ? { reason: 'caffeinate was not found on this Mac' } : { method: 'caffeinate', file, args: ['-i', '-t', `${holdSeconds}`] };
   }
   if (platform === 'linux') {
     const file = findExecutable('systemd-inhibit');
     if (file === null) return { reason: 'systemd-inhibit was not found (no systemd here, or not on the PATH of the runner)' };
-    return { method: 'systemd-inhibit', file, args: ['--what=idle', '--who=charness-runner', '--why=the runner link is up', '--mode=block', 'sh', '-c', waitForLinkScript, 'sh', `${linkPid}`] };
+    return { method: 'systemd-inhibit', file, args: ['--what=idle', '--who=charness-runner', '--why=the runner link is up', '--mode=block', 'sleep', `${holdSeconds}`] };
   }
   return { reason: `keeping the machine awake is not supported on ${platform}` };
 }
@@ -58,8 +70,10 @@ export function formatKeepAwakeState(state: KeepAwakeState): string {
 
 export interface KeepAwakeDeps {
   platform: NodeJS.Platform;
-  /** The pid of the link: what the holder is tied to. */
-  linkPid: number;
+  /** How long one holder lasts ({@link keepAwakeHoldSeconds}). */
+  holdSeconds: number;
+  /** How often a new holder takes over from the old one ({@link renewEveryMs}). */
+  renewMs: number;
   findExecutable: (name: string) => string | null;
   spawnHolder: (file: string, args: readonly string[]) => ChildProcess;
   settleMs: number;
@@ -70,8 +84,13 @@ export interface KeepAwakeDeps {
 
 export interface KeepAwake {
   getState: () => KeepAwakeState;
-  /** End the holder and forget the state. Idempotent, synchronous (it runs from the process's `exit` too). */
+  /** The link is stopped for good: end the holder and forget the state. Idempotent, synchronous (it runs from the process's `exit` too). */
   stop: () => void;
+  /**
+   * The link leaves but will be back (an update, a restart onto a new Node, a crash that its service restarts): no more renewals, and the holder is NOT ended — it runs
+   * out by itself, so the next link's holder takes over while it still holds. The state file stays: it names the holder that is still there. Idempotent, synchronous.
+   */
+  handOver: () => void;
 }
 
 type HolderOutcome = { kind: 'holding' } | { kind: 'ended'; detail: string };
@@ -99,8 +118,8 @@ function waitForHolderToSettle(child: ChildProcess, settleMs: number, getStderrT
 export async function startKeepAwake(deps: KeepAwakeDeps): Promise<KeepAwake> {
   let state: KeepAwakeState = { method: null, reason: 'not started' };
   let holder: ChildProcess | null = null;
-  let retryTimer: NodeJS.Timeout | null = null;
-  let isStopped = false;
+  let timer: NodeJS.Timeout | null = null;
+  let end: 'stop' | 'handOver' | null = null;
 
   const publish = (next: KeepAwakeState): void => {
     state = next;
@@ -111,19 +130,30 @@ export async function startKeepAwake(deps: KeepAwakeDeps): Promise<KeepAwake> {
     }
   };
 
-  const scheduleRetry = (): void => {
-    if (isStopped || retryTimer !== null) return;
-    retryTimer = setTimeout(() => {
-      retryTimer = null;
+  const schedule = (delayMs: number): void => {
+    if (end !== null) return;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
       void attempt();
-    }, deps.retryMs);
-    retryTimer.unref();
+    }, delayMs);
+    timer.unref();
   };
 
+  /** Let go of a holder that runs on by itself: this process must be able to leave without it. */
+  const release = (child: ChildProcess): void => {
+    child.stderr?.destroy();
+    child.unref();
+  };
+
+  /**
+   * Start a holder — the first one, a renewal, or a retry — and let it take over from the one there is only once it holds, so no instant is left without an assertion.
+   * Whatever goes wrong while a holder is still there leaves that holder and its state alone: it lasts for most of its lifetime yet, and the next try comes soon.
+   */
   const attempt = async (): Promise<void> => {
-    const plan = planKeepAwake(deps.platform, deps.linkPid, deps.findExecutable);
+    const plan = planKeepAwake(deps.platform, deps.holdSeconds, deps.findExecutable);
     if ('reason' in plan) {
-      publish({ method: null, reason: plan.reason });
+      if (holder === null) publish({ method: null, reason: plan.reason });
       return;
     }
     let stderrTail = '';
@@ -131,39 +161,47 @@ export async function startKeepAwake(deps: KeepAwakeDeps): Promise<KeepAwake> {
     try {
       child = deps.spawnHolder(plan.file, plan.args);
     } catch (error) {
-      publish({ method: null, reason: `${plan.method} could not be started (${error instanceof Error ? error.message : 'unknown error'})` });
-      scheduleRetry();
+      if (holder === null) publish({ method: null, reason: `${plan.method} could not be started (${error instanceof Error ? error.message : 'unknown error'})` });
+      schedule(deps.retryMs);
       return;
     }
     child.stderr?.on('data', (chunk: Buffer) => { stderrTail = (stderrTail + chunk.toString()).slice(-stderrTailChars); });
     const outcome = await waitForHolderToSettle(child, deps.settleMs, () => stderrTail);
-    if (isStopped) {
+    if (end === 'stop') {
       child.kill('SIGTERM');
       return;
     }
     if (outcome.kind === 'ended' || child.pid === undefined) {
-      publish({ method: null, reason: `${plan.method} ended at once (${outcome.kind === 'ended' ? outcome.detail : 'no pid'})` });
-      scheduleRetry();
+      if (holder === null) publish({ method: null, reason: `${plan.method} ended at once (${outcome.kind === 'ended' ? outcome.detail : 'no pid'})` });
+      schedule(deps.retryMs);
       return;
     }
+    if (end === 'handOver') {
+      release(child);
+      return;
+    }
+    const previous = holder;
     holder = child;
     publish({ method: plan.method, holderPid: child.pid });
+    // The old holder goes only now: the new one holds already, so the machine is never left with none.
+    previous?.kill('SIGTERM');
     child.once('exit', (code, signal) => {
       if (holder !== child) return;
       holder = null;
-      if (isStopped) return;
+      if (end !== null) return;
       publish({ method: null, reason: `the ${plan.method} process ended while the link runs (${code ?? signal ?? 'unknown'}); trying again` });
-      scheduleRetry();
+      schedule(deps.retryMs);
     });
+    schedule(deps.renewMs);
   };
 
   await attempt();
   return {
     getState: () => state,
     stop: () => {
-      if (isStopped) return;
-      isStopped = true;
-      if (retryTimer !== null) clearTimeout(retryTimer);
+      if (end !== null) return;
+      end = 'stop';
+      if (timer !== null) clearTimeout(timer);
       holder?.kill('SIGTERM');
       holder = null;
       try {
@@ -171,6 +209,13 @@ export async function startKeepAwake(deps: KeepAwakeDeps): Promise<KeepAwake> {
       } catch {
         /* already gone */
       }
+    },
+    handOver: () => {
+      if (end !== null) return;
+      end = 'handOver';
+      if (timer !== null) clearTimeout(timer);
+      if (holder !== null) release(holder);
+      holder = null;
     },
   };
 }
@@ -202,9 +247,11 @@ function checkIsExecutableFile(candidate: string): boolean {
 export function createKeepAwakeDeps(paths: RunnerHomePaths): KeepAwakeDeps {
   return {
     platform: process.platform,
-    linkPid: process.pid,
+    holdSeconds: keepAwakeHoldSeconds,
+    renewMs: renewEveryMs,
     findExecutable: (name) => findExecutableOnPath(name, `${process.env.PATH ?? ''}${path.delimiter}${systemToolFolders}`, checkIsExecutableFile),
-    spawnHolder: (file, args) => spawn(file, [...args], { stdio: ['ignore', 'ignore', 'pipe'] }),
+    // Its own process group: a service manager that ends the link's group (launchd does, once the job's main process is gone) must not take the holder with it — that is the very gap this closes.
+    spawnHolder: (file, args) => spawn(file, [...args], { stdio: ['ignore', 'ignore', 'pipe'], detached: true }),
     settleMs: defaultSettleMs,
     retryMs: retryAfterMs,
     writeState: (line) => { writeTextFileAtomically(paths.awakeFile, line, stateFileMode); },

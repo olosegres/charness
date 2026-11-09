@@ -284,6 +284,31 @@ describe('runnersScreenPlan: the list', () => {
     assert.equal(lineOf({ ...withAwake(['awake=caffeinate']), isOnline: false }), undefined, 'an offline machine shows no live state');
   });
 
+  it('an OFFLINE machine that said it kept itself awake is told as most likely asleep — «nothing can wake it from here» — instead of reading as «it will be back by itself»; one that said nothing, or that it was not kept awake, gets no such line, and an online one none', () => {
+    const withAwake = (lines: string[], overrides: Partial<RunnerScreenEntry> = {}): RunnerScreenEntry => createEntry({ probe: parseProbeOutput([probeText, ...lines].join('\n')), ...overrides });
+    const noteOf = (entry: RunnerScreenEntry): string | undefined => buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text.split('\n').find((line) => line.includes('nothing can wake it'));
+    assert.equal(noteOf(withAwake(['awake=caffeinate'], { isOnline: false, lastSeenMs: 5_000 })), '  kept awake when last seen; if it is asleep now, nothing can wake it from here — a key press or opening the lid does');
+    assert.equal(noteOf(withAwake(['awake=systemd-inhibit'], { isOnline: false, lastSeenMs: 5_000 }))?.includes('kept awake when last seen'), true);
+    assert.equal(noteOf(withAwake(['awake=no', 'awake_detail=x'], { isOnline: false, lastSeenMs: 5_000 })), undefined, 'it said it was NOT kept awake: nothing to take back');
+    assert.equal(noteOf(withAwake([], { isOnline: false, lastSeenMs: 5_000 })), undefined, 'it said nothing');
+    assert.equal(noteOf(withAwake(['awake=caffeinate'])), undefined, 'online: a live answer');
+    assert.equal(noteOf(withAwake(['awake=caffeinate'], { isLidClosed: true })), undefined, 'a lid closed is its own explanation (and the machine is linked)');
+    assert.equal(noteOf(createEntry({ isOnline: false, lastSeenMs: null, probe: null })), undefined, 'never probed');
+  });
+
+  it('in every language the offline-asleep note is its own line, translated, with no placeholder', () => {
+    const entry = createEntry({ isOnline: false, lastSeenMs: 5_000, probe: parseProbeOutput([probeText, 'awake=caffeinate'].join('\n')) });
+    const english = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+    for (const locale of localeCodes) {
+      runWithLocale(locale, () => {
+        const text = buildRunnersScreen({ revision, entries: [entry], openPairingExpiries: [], isChecking: false }, t, formatTime).text;
+        assert.doesNotMatch(text, /\{[a-zA-Z]+\}/, `${locale}: no placeholder is left`);
+        assert.ok(text.split('\n').length === english.split('\n').length, `${locale}: one extra line, like English`);
+        if (locale !== 'en') assert.ok(!text.includes('kept awake when last seen'), `${locale}: translated, not the English fallback`);
+      });
+    }
+  });
+
   it('in every language the awake line says how and leaves no placeholder behind', () => {
     const entry = createEntry({ probe: parseProbeOutput([probeText, 'awake=no', 'awake_detail=SOMETHING-REPORTED'].join('\n')) });
     const yes = createEntry({ probe: parseProbeOutput([probeText, 'awake=caffeinate'].join('\n')) });

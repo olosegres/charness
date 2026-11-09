@@ -1216,6 +1216,7 @@ export const kaDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': 'დიახ (systemd-inhibit; დახურული სახურავი მაინც დააძინებს)',
   'runners.keepsAwakeNo': 'არა — {reason}; უქმად ყოფნისას შეიძლება დაიძინოს',
   'runners.keepsAwakeNoReason': 'მიზეზი არ არის მითითებული',
+  'runners.offlineKeptAwakeNote': 'ბოლოს ნანახისას მანქანას ღვიძილში ინარჩუნებდა; თუ ახლა სძინავს, აქედან ვერ გააღვიძებ — კლავიშზე დაჭერა ან სახურავის გახსნა გააღვიძებს',
   'runners.capabilitiesLine': 'შეუძლია: {list}',
   'runners.capabilityNo': '{name}: არა',
   'runners.capabilityNoWhy': '{name}: არა — {detail}',

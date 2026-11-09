@@ -134,14 +134,21 @@ the system folders, the Android SDK where the usual installers put it, and `NPM_
 `~/.charness-runner/env`, one `KEY=VALUE` per line, read again for every job (and may change any of the above).
 
 **A runner keeps its machine awake — lid open, never asleep; lid closed, asleep as usual.** While the link runs it holds an IDLE-sleep assertion, the way
-`caffeinate -i` does: on a Mac `caffeinate -i -w <the link's pid>`, on Linux `systemd-inhibit --what=idle` around a loop that lasts as long as the link's
-process. The holder is tied to the link's process, so a stop, a removal, a crash or a SIGKILL of the runner ends it with the runner — the machine sleeps
-normally again, no orphan keeps it awake. Where there is no way (no `caffeinate` or `systemd-inhibit` on the PATH, no D-Bus for the latter, another system)
-the link says so in its log and `charness remote-run runners` / `/runners` show `keeps awake: NO — <why>` instead of `keeps awake: yes (…)`; the link comes
-up all the same. It never touches `pmset` or any admin power setting, so nothing has to be set on the Mac.
+`caffeinate -i` does: on a Mac `caffeinate -i -t 300`, on Linux `systemd-inhibit --what=idle … sleep 300`. The holder is a TIMED one that OUTLIVES the link, on
+purpose: the link restarts itself for every update of the host's package, and a holder that died with it left the Mac with no assertion for a moment — and a Mac nobody is
+using has its idle timer long expired, so it went to sleep five seconds later and stayed away (an assertion cannot wake a sleeping Mac, and its dark wakes every quarter of an hour
+end in sleep again) until someone pressed a key. So the link starts a new holder every minute and ends the old one only after the new one holds; a restart, an update or a crash
+leaves the holder running (it ends by itself after 5 minutes) and the next link starts its own while it still holds; only a STOP of the runner (`Ctrl-C`, a service stop, `unpair`, a removal) ends the holder
+at once, so the machine sleeps normally again. A SIGKILLed or crashed link therefore leaves the machine awake for at most 5 more minutes — no orphan keeps it awake longer. Where there is no way (no `caffeinate` or `systemd-inhibit`
+on the PATH, no D-Bus for the latter, another system) the link says so in its log and `charness remote-run runners` / `/runners` show `keeps awake: NO — <why>` instead of
+`keeps awake: yes (…)`; the link comes up all the same. It never touches `pmset` or any admin power setting, so nothing has to be set on the Mac.
 - **What it does not do.** Closing the lid is not idleness: a laptop whose lid is closed sleeps as it always did (and the runner goes offline until it wakes; see the next point for the minutes before that).
   The display may still turn off. The assertion is held on battery too, so a laptop left open on battery under a runner drains it — plug it in. Whether a
-  Mac with an external display and power in clamshell mode stays awake is Apple's rule, not the runner's.
+  Mac with an external display and power in clamshell mode stays awake is Apple's rule, not the runner's. Nor does it hold against **Sleep from the Apple menu, the power button, a battery running out, or a link
+  that stays away for more than 5 minutes** (a crash loop, a restart that never came up). A Mac that sleeps anyway cannot be woken from the host: it stays offline until someone uses it. So a runner that is
+  **offline** shows what it said when last seen as «keeps awake: it did when last seen (…) — if it is asleep now, nothing can wake it from here: a key press or opening the lid does», never «yes», and `/runners`
+  adds the same line under an offline machine that said it kept itself awake. Why not `caffeinate -s` (PreventSystemSleep, «valid only when system is running on AC power», `man caffeinate`): it would also keep a
+  MacBook with its lid closed awake on power, which is what the lid rule below exists to avoid, and it is unmeasured whether it keeps a dark wake from ending in sleep; the runner holds the idle assertion only.
 - **A MacBook with its lid closed takes no new job.** Measured on a Mac on power: the lid closed with no external display, it sleeps about a minute and a half
   later — and macOS wakes it in the dark for a minute or two every quarter of an hour, in which the runner reconnects and a job that lands there is cut when
   the Mac sleeps again. So a Mac runner looks at its lid every 10 seconds (`ioreg -r -k AppleClamshellState -d 4`) and tells the charness host:
@@ -156,9 +163,9 @@ up all the same. It never touches `pmset` or any admin power setting, so nothing
   there, and every command about it (`status`, `wait`, `logs`, `kill`), is not touched. Opening the lid makes the Mac available within about 10 seconds (the
   next look), and a waiting job starts. Non-Mac runners never report a lid, and neither does a hand-made one over plain ssh (it has no runner program to tell). Unverified on a
   real Mac in this form: the `ioreg` output of every macOS version (the key names are the registry's own, not documented by Apple).
-- **Only verifiable on the real Mac:** that `caffeinate -i -w` lets a closed lid sleep the machine, and that a SIGKILLed link frees the Mac to sleep again
-  (the holder ends with `-w`). On Linux both are tested with the real `systemd-inhibit` (the lock shows in `systemd-inhibit --list` and is gone, holder
-  and all, within seconds of the link being SIGKILLed).
+- **Only verifiable on the real Mac:** that `caffeinate -i` lets a closed lid sleep the machine, and that a restart of the link no longer lets an idle Mac sleep (after the first update
+  that installs this: `pmset -g log` must show no `[System: No Assertions]` at the restart, and no `Entering Sleep state due to 'Idle Sleep'` right after it). On Linux the hand-over is tested
+  with the real `systemd-inhibit` (the lock shows in `systemd-inhibit --list`, is still there when the next link's holder takes over, and is gone by itself when its time is up; a stopped link's is gone at once).
 
 **A runner's Node.** A runner runs on its own Node.js (`~/.charness-runner/node/v<version>`, or the root-owned `/usr/local/lib/charness-runner/node/v<version>`
 the admin line installs), and **so do its jobs**: a job's `PATH` starts with that Node's folder, ahead of Homebrew and the system. That Node's folder is not

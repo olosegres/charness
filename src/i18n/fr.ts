@@ -1216,6 +1216,7 @@ export const frDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': 'oui (systemd-inhibit ; un capot fermé le met quand même en veille)',
   'runners.keepsAwakeNo': 'NON — {reason} ; il peut se mettre en veille au repos',
   'runners.keepsAwakeNoReason': 'aucune raison donnée',
+  'runners.offlineKeptAwakeNote': 'gardait la machine éveillée lors de sa dernière apparition ; si elle dort maintenant, rien ne peut la réveiller d’ici — une touche ou l’ouverture du capot le fait',
   'runners.capabilitiesLine': 'sait faire : {list}',
   'runners.capabilityNo': '{name} : non',
   'runners.capabilityNoWhy': '{name} : non — {detail}',

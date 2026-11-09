@@ -215,13 +215,17 @@ never offered meanwhile. A record that cannot be written is logged by `run`, and
 
 ## Keeping the machine awake (`keepAwake.ts`)
 
-`runLink` holds an idle-sleep assertion for as long as the link runs (`startKeepAwake`): on macOS `caffeinate -i -w <the link's pid>` (a child that ends by itself
-when the link's process does — a stop, a removal, a crash, a SIGKILL — so no orphan), on Linux `systemd-inhibit --what=idle --mode=block sh -c 'while kill -0 <pid>;
-do sleep 2; done'` (the lock lasts while that loop does, within two seconds of the link). A holder that ends within 500 ms is no lock (no D-Bus for
-`systemd-inhibit`): the state is `none <reason>`; one that ends later is noted and tried again every 30 s; `stop` (end of `runLink`, and the process's `exit`)
-ends it and removes the file. The state is `<state>/awake` — `caffeinate 123`, `systemd-inhibit 123` or `none <reason>` — which `runner.sh probe` turns into `awake=` /
-`awake_detail=` (a holder that is gone is `no` whatever the file says) and `runners` shows as `keeps awake: …`. Never `pmset`, nothing that needs an admin; the
-display may still turn off; a closed lid still sleeps the machine (verify on the Mac). On an always-on Mac the daemon link holds it (the login session's agent does not).
+`runLink` holds an idle-sleep assertion for as long as the link runs (`startKeepAwake`, the first thing after the pairing check — before the tools and Pueue): a TIMED holder that
+OUTLIVES the link — on macOS `caffeinate -i -t 300`, on Linux `systemd-inhibit --what=idle --mode=block sleep 300` (`keepAwakeHoldSeconds`, in `remoteRun/probe.ts`). Not `-w <link pid>`: the
+link restarts for every update, and a holder that died with it left the Mac with NO assertion for a moment, which is enough for a Mac whose user is away (idle timer long expired) to sleep five seconds
+later — measured on a real Mac, four times since 11-05, each followed by hours of dark-wake / maintenance-sleep cycles in which the runner stayed offline. So: a **renewal** every minute starts a new
+holder and ends the old one only after the new one holds (a renewal that fails leaves the old one and is retried every 30 s); a **hand-over** (`KeepAwake.handOver`: the link left for an update, a Node move,
+a crash — anything but a stop) leaves the holder running — it is released (`unref`, its stderr destroyed, `detached` so a service manager that ends the link's process group does not take it) and ends by itself within
+5 minutes — so the next link's holder takes over while it still holds; a **stop** (`KeepAwake.stop`: `isStopRequested`, set by the link's stop signals, so Ctrl-C, a service stop, `unpair`) ends it at once and removes the file.
+A holder that ends within 500 ms is no lock (no D-Bus for `systemd-inhibit`): the state is `none <reason>`; one that ends later is noted and tried again every 30 s. The state is `<state>/awake` — `caffeinate 123`,
+`systemd-inhibit 123` or `none <reason>` — which `runner.sh probe` turns into `awake=` / `awake_detail=` (a holder that is gone is `no` whatever the file says) and `runners` shows as `keeps awake: …`
+(for an OFFLINE runner as what it said when last seen, with «nothing can wake it from here»). Never `pmset`, nothing that needs an admin; the display may still turn off; a closed lid still sleeps the machine
+(verify on the Mac). On an always-on Mac the daemon link holds it (the login session's agent does not). What it cannot hold against: the Apple menu's Sleep, the power button, an empty battery, a link away for over 5 minutes.
 A stop reaches the app twice (the launcher forwards the TERM it got, a terminal's Ctrl-C or a group kill hands the app its own, milliseconds apart): `onStopSignals`
 (`stopSignals.ts`) keeps its handlers installed and stops at the first signal only — a `once` handler let the second take the default action and kill the process
 under its own clean-up (no `finally`, no `exit` handlers: the state file stayed). The login-session agent stops the same way.

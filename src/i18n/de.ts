@@ -1216,6 +1216,7 @@ export const deDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': 'ja (systemd-inhibit; ein geschlossener Deckel schläfert ihn trotzdem ein)',
   'runners.keepsAwakeNo': 'NEIN — {reason}; im Leerlauf kann er einschlafen',
   'runners.keepsAwakeNoReason': 'kein Grund genannt',
+  'runners.offlineKeptAwakeNote': 'hielt die Maschine wach, als er zuletzt gesehen wurde; schläft sie jetzt, lässt sie sich von hier nicht wecken — ein Tastendruck oder das Öffnen des Deckels tut es',
   'runners.capabilitiesLine': 'kann: {list}',
   'runners.capabilityNo': '{name}: nein',
   'runners.capabilityNoWhy': '{name}: nein — {detail}',

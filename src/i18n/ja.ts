@@ -1210,6 +1210,7 @@ export const jaDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': 'はい（systemd-inhibit。蓋を閉じるとスリープします）',
   'runners.keepsAwakeNo': 'いいえ — {reason}。アイドル時にスリープする可能性があります',
   'runners.keepsAwakeNoReason': '理由は不明',
+  'runners.offlineKeptAwakeNote': '最後に確認したときはマシンをスリープさせない設定でした。いまスリープ中なら、ここから起こすことはできません — キーを押すか蓋を開けると復帰します',
   'runners.capabilitiesLine': '可能: {list}',
   'runners.capabilityNo': '{name}: 不可',
   'runners.capabilityNoWhy': '{name}: 不可 — {detail}',

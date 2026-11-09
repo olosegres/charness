@@ -1210,6 +1210,7 @@ export const zhDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': '是（systemd-inhibit；合上盖子仍会休眠）',
   'runners.keepsAwakeNo': '否 — {reason}；空闲时可能休眠',
   'runners.keepsAwakeNoReason': '未说明原因',
+  'runners.offlineKeptAwakeNote': '上次看到时它会让机器保持唤醒；如果现在已休眠，从这里无法唤醒——按任意键或打开盖子即可',
   'runners.capabilitiesLine': '支持：{list}',
   'runners.capabilityNo': '{name}：否',
   'runners.capabilityNoWhy': '{name}：否 — {detail}',

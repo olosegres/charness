@@ -1,9 +1,11 @@
 /**
- * @description `runnerUtility/keepAwake.ts`: while its link runs a runner holds an idle-sleep assertion — `caffeinate -i -w <link pid>` on a Mac,
- * `systemd-inhibit --what=idle` on Linux, else nothing and the state says why — tied to the link's process so that no stop, removal, crash or SIGKILL
- * leaves a holder keeping the machine awake. The command lines and the state file are pinned against stand-ins; on Linux the REAL `systemd-inhibit` is
- * run: the lock shows in its own list while a stand-in link lives, and is gone, holder and all, within seconds of that link being SIGKILLed. What
- * `caffeinate -w` does with a closed lid is for the real Mac (docs/remote-run.md).
+ * @description `runnerUtility/keepAwake.ts`: while its link runs a runner holds an idle-sleep assertion — `caffeinate -i -t <seconds>` on a Mac,
+ * `systemd-inhibit --what=idle … sleep <seconds>` on Linux, else nothing and the state says why. The holder is TIMED and OUTLIVES the link: the link restarts for every
+ * update, and a holder that died with it left the Mac with no assertion for a moment — enough for an idle Mac to sleep five seconds later (measured on a real one), after which
+ * nothing keeps it reachable. So a restart hands the holder over (the next link starts its own while it still holds), a renewal starts the new holder before the old one is
+ * released, and only a stop ends the holder at once. The command lines, the order of starting and releasing and the state file are pinned against stand-ins; on Linux the REAL
+ * `systemd-inhibit` is run: the lock shows in its own list, survives a hand-over until the next holder holds, and ends by itself when its time is up. What the real Mac's
+ * `caffeinate` does with a closed lid is for the real Mac (docs/remote-run.md).
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -16,43 +18,50 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describeKeepAwake } from '../runnerUtility/runnerCommands';
+import { keepAwakeHoldSeconds } from '../remoteRun/probe';
 import {
   createKeepAwakeDeps,
   findExecutableOnPath,
   formatKeepAwakeState,
   planKeepAwake,
+  renewEveryMs,
   startKeepAwake,
   type KeepAwakeDeps,
 } from '../runnerUtility/keepAwake';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
 import { checkIsProcessAlive } from '../runnerUtility/guiAgent';
 
-const linkPid = 4242;
+const holdSeconds = 300;
 
 describe('planKeepAwake', () => {
-  it('a Mac: `caffeinate -i -w <the link\'s pid>` — idle sleep only, never `-s`/`-d`, tied to the link — and nothing when caffeinate is not there', () => {
-    assert.deepEqual(planKeepAwake('darwin', linkPid, (name) => `/usr/bin/${name}`), { method: 'caffeinate', file: '/usr/bin/caffeinate', args: ['-i', '-w', '4242'] });
-    assert.deepEqual(planKeepAwake('darwin', linkPid, () => null), { reason: 'caffeinate was not found on this Mac' });
+  it('a Mac: `caffeinate -i -t <seconds>` — idle sleep only, never `-s`/`-d`, and NOT tied to the link (`-w`): it must outlive a restart — and nothing when caffeinate is not there', () => {
+    assert.deepEqual(planKeepAwake('darwin', holdSeconds, (name) => `/usr/bin/${name}`), { method: 'caffeinate', file: '/usr/bin/caffeinate', args: ['-i', '-t', '300'] });
+    assert.deepEqual(planKeepAwake('darwin', holdSeconds, () => null), { reason: 'caffeinate was not found on this Mac' });
   });
 
-  it('Linux: `systemd-inhibit --what=idle --mode=block` around a loop that lasts as long as the link\'s pid does — and nothing without systemd-inhibit', () => {
-    const plan = planKeepAwake('linux', linkPid, (name) => `/usr/bin/${name}`);
+  it('Linux: `systemd-inhibit --what=idle --mode=block` around a `sleep` of that many seconds — and nothing without systemd-inhibit', () => {
+    const plan = planKeepAwake('linux', holdSeconds, (name) => `/usr/bin/${name}`);
     assert.ok('method' in plan && plan.method === 'systemd-inhibit' && plan.file === '/usr/bin/systemd-inhibit');
-    assert.deepEqual('args' in plan ? plan.args.slice(0, 4) : [], ['--what=idle', '--who=charness-runner', '--why=the runner link is up', '--mode=block']);
-    assert.deepEqual('args' in plan ? plan.args.slice(4) : [], ['sh', '-c', 'while kill -0 "$1" 2> /dev/null; do sleep 2; done', 'sh', '4242']);
-    assert.match('reason' in planKeepAwake('linux', linkPid, () => null) ? (planKeepAwake('linux', linkPid, () => null) as { reason: string }).reason : '', /systemd-inhibit was not found/);
+    assert.deepEqual('args' in plan ? plan.args : [], ['--what=idle', '--who=charness-runner', '--why=the runner link is up', '--mode=block', 'sleep', '300']);
+    assert.match('reason' in planKeepAwake('linux', holdSeconds, () => null) ? (planKeepAwake('linux', holdSeconds, () => null) as { reason: string }).reason : '', /systemd-inhibit was not found/);
+  });
+
+  it('the seconds are the lifetime the link asks for, and the shared constant is five minutes', () => {
+    assert.deepEqual(planKeepAwake('darwin', 7, (name) => name), { method: 'caffeinate', file: 'caffeinate', args: ['-i', '-t', '7'] });
+    assert.equal(keepAwakeHoldSeconds, 300);
+    assert.ok(renewEveryMs * 4 <= keepAwakeHoldSeconds * 1000, 'a renewal that fails is tried again several times before the old holder runs out');
   });
 
   it('never an admin power setting: no plan names pmset, sudo or a power-management command', () => {
     for (const platform of ['darwin', 'linux'] as const) {
-      const plan = planKeepAwake(platform, linkPid, (name) => `/usr/bin/${name}`);
+      const plan = planKeepAwake(platform, holdSeconds, (name) => `/usr/bin/${name}`);
       assert.ok('args' in plan);
       assert.doesNotMatch([plan.file, ...plan.args].join(' '), /pmset|sudo|systemctl|mask|sleep\.target|hibernate/);
     }
   });
 
   it('another system has none, and says so', () => {
-    assert.deepEqual(planKeepAwake('win32', linkPid, () => '/x'), { reason: 'keeping the machine awake is not supported on win32' });
+    assert.deepEqual(planKeepAwake('win32', holdSeconds, () => '/x'), { reason: 'keeping the machine awake is not supported on win32' });
   });
 });
 
@@ -81,17 +90,26 @@ describe('findExecutableOnPath', () => {
 
 interface FakeHolder extends EventEmitter {
   pid: number | undefined;
-  stderr: EventEmitter;
+  stderr: EventEmitter & { destroy: () => void };
   killed: NodeJS.Signals[];
+  isReleased: boolean;
   kill: (signal: NodeJS.Signals) => boolean;
+  unref: () => void;
 }
+
+/** Everything the keep-awake did to the world, in the order it did it: what makes «the new holder holds BEFORE the old one goes» checkable. */
+let events: string[] = [];
 
 function createFakeHolder(pid: number | undefined = 9001): FakeHolder {
   const holder = new EventEmitter() as FakeHolder;
   holder.pid = pid;
-  holder.stderr = new EventEmitter();
+  const stderr = new EventEmitter() as FakeHolder['stderr'];
+  stderr.destroy = () => { holder.isReleased = true; };
+  holder.stderr = stderr;
   holder.killed = [];
-  holder.kill = (signal) => { holder.killed.push(signal); return true; };
+  holder.isReleased = false;
+  holder.kill = (signal) => { holder.killed.push(signal); events.push(`kill ${pid}`); return true; };
+  holder.unref = () => { events.push(`unref ${pid}`); };
   return holder;
 }
 
@@ -100,42 +118,55 @@ describe('startKeepAwake with a stand-in holder', () => {
   let removed = 0;
   let spawned: Array<{ file: string; args: readonly string[] }> = [];
   let holders: FakeHolder[] = [];
-  let behave: (holder: FakeHolder) => void = () => undefined;
+  let behave: (holder: FakeHolder, index: number) => void = () => undefined;
+  const renewMs = 50;
+  const retryMs = 40;
+  const settleMs = 30;
 
   beforeEach(() => {
     written = [];
     removed = 0;
     spawned = [];
     holders = [];
+    events = [];
     behave = () => undefined;
   });
 
   function createDeps(overrides: Partial<KeepAwakeDeps> = {}): KeepAwakeDeps {
     return {
       platform: 'darwin',
-      linkPid,
+      holdSeconds,
+      renewMs: 60_000,
       findExecutable: (name) => `/usr/bin/${name}`,
       spawnHolder: (file, args) => {
         spawned.push({ file, args });
-        const holder = createFakeHolder(9000 + holders.length + 1);
+        const index = holders.length;
+        const holder = createFakeHolder(9000 + index + 1);
         holders.push(holder);
+        events.push(`spawn ${holder.pid}`);
         // A microtask: the holder's listeners are attached in the same synchronous run that spawned it, so this is after them — and, unlike a timer, not a race with the settle time on a loaded box.
-        queueMicrotask(() => { behave(holder); });
+        queueMicrotask(() => { behave(holder, index); });
         return holder as unknown as ChildProcess;
       },
-      settleMs: 30,
-      retryMs: 40,
-      writeState: (line) => { written.push(line); },
-      removeState: () => { removed += 1; },
+      settleMs,
+      retryMs,
+      writeState: (line) => { written.push(line); events.push(`state ${line.trim()}`); },
+      removeState: () => { removed += 1; events.push('state removed'); },
       ...overrides,
     };
+  }
+
+  async function waitUntilThat(description: string, check: () => boolean, timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!check() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.ok(check(), `${description} did not happen within ${timeoutMs} ms`);
   }
 
   it('a holder that stays up: the state is the method and the holder\'s pid, written once; the command is the plan\'s', async () => {
     const keepAwake = await startKeepAwake(createDeps());
     assert.deepEqual(keepAwake.getState(), { method: 'caffeinate', holderPid: 9001 });
     assert.deepEqual(written, ['caffeinate 9001\n']);
-    assert.deepEqual(spawned, [{ file: '/usr/bin/caffeinate', args: ['-i', '-w', '4242'] }]);
+    assert.deepEqual(spawned, [{ file: '/usr/bin/caffeinate', args: ['-i', '-t', '300'] }]);
     keepAwake.stop();
   });
 
@@ -168,8 +199,7 @@ describe('startKeepAwake with a stand-in holder', () => {
     const keepAwake = await startKeepAwake(createDeps());
     holders[0].emit('exit', null, 'SIGKILL');
     assert.deepEqual(keepAwake.getState(), { method: null, reason: 'the caffeinate process ended while the link runs (SIGKILL); trying again' });
-    const deadline = Date.now() + 5000;
-    while (keepAwake.getState().method === null && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitUntilThat('the replacement holder', () => keepAwake.getState().method !== null);
     assert.deepEqual(keepAwake.getState(), { method: 'caffeinate', holderPid: 9002 });
     assert.equal(written.at(-1), 'caffeinate 9002\n');
     keepAwake.stop();
@@ -190,14 +220,88 @@ describe('startKeepAwake with a stand-in holder', () => {
     assert.equal(removed, 2);
   });
 
-  it('a stop while the first attempt is still settling ends that holder too — it never outlives the link', async () => {
+  it('a stop while the first attempt is still settling ends that holder too — it never outlives a STOPPED link', async () => {
     const pending = startKeepAwake(createDeps({ settleMs: 80 }));
     await new Promise((resolve) => setTimeout(resolve, 10));
     // The stop of a link that is going down before the assertion has settled: the handle only exists after the promise, so the process-exit path is the caller's
-    // (`process.once('exit', stop)`); here the holder is ended once it is known.
+    // (`process.once('exit', …)`); here the holder is ended once it is known.
     const keepAwake = await pending;
     keepAwake.stop();
     assert.deepEqual(holders[0].killed, ['SIGTERM']);
+  });
+
+  describe('renewal and hand-over: the machine is never left with no holder', () => {
+    it('a renewal starts the NEW holder, writes its pid, and only then ends the old one — in that order, never a moment with none', async () => {
+      const keepAwake = await startKeepAwake(createDeps({ renewMs }));
+      await waitUntilThat('the renewal', () => holders.length >= 2 && holders[0].killed.length === 1);
+      assert.deepEqual(events.slice(0, 5), ['spawn 9001', 'state caffeinate 9001', 'spawn 9002', 'state caffeinate 9002', 'kill 9001']);
+      assert.deepEqual(keepAwake.getState(), { method: 'caffeinate', holderPid: 9002 });
+      assert.deepEqual(holders[0].killed, ['SIGTERM']);
+      assert.equal(written.some((line) => line.startsWith('none')), false, 'the old holder being ended by the renewal is not «ended while the link runs»');
+      keepAwake.stop();
+    });
+
+    it('a renewal that fails (cannot be started, or ends at once) leaves the old holder and the state alone, and is tried again', async () => {
+      let failures = 2;
+      behave = (holder, index) => {
+        if (index >= 1 && failures > 0) { failures -= 1; holder.emit('exit', 1, null); }
+      };
+      const keepAwake = await startKeepAwake(createDeps({ renewMs }));
+      await waitUntilThat('the renewal that finally works', () => holders.length >= 4 && holders[0].killed.length === 1);
+      assert.deepEqual(holders.slice(0, 3).map((holder) => holder.killed.length), [1, 0, 0], 'the old holder was ended only once a new one held — not by the failed renewals');
+      assert.equal(written.some((line) => line.startsWith('none')), false, 'the failed renewals never said «not kept awake»: the old holder still held');
+      assert.deepEqual(keepAwake.getState(), { method: 'caffeinate', holderPid: 9004 });
+      keepAwake.stop();
+
+      events = [];
+      const throwing = await startKeepAwake(createDeps({ renewMs, spawnHolder: (() => { let calls = 0; return (file: string, args: readonly string[]) => { calls += 1; if (calls === 2) throw new Error('EAGAIN'); spawned.push({ file, args }); const holder = createFakeHolder(9100 + calls); holders.push(holder); return holder as unknown as ChildProcess; }; })() }));
+      await waitUntilThat('the retry after a spawn that threw', () => { const state = throwing.getState(); return state.method === 'caffeinate' && state.holderPid !== 9101; });
+      throwing.stop();
+    });
+
+    it('a hand-over does NOT end the holder or remove the state — it runs out by itself — and makes no new holder, however long the link lingers', async () => {
+      const keepAwake = await startKeepAwake(createDeps({ renewMs }));
+      keepAwake.handOver();
+      keepAwake.handOver();
+      keepAwake.stop();
+      await new Promise((resolve) => setTimeout(resolve, renewMs * 4));
+      assert.equal(holders.length, 1, 'no renewal after a hand-over');
+      assert.deepEqual(holders[0].killed, [], 'the holder is left running: that is the bridge over the restart');
+      assert.equal(removed, 0, 'the state file stays: it names the holder that is still there');
+      assert.equal(holders[0].isReleased, true, 'the link no longer waits on the holder (its stderr is let go and it is unref\'d), so it can leave');
+      assert.ok(events.includes('unref 9001'));
+    });
+
+    it('a hand-over while a renewal is still settling leaves BOTH holders running — the new one is let go too, nothing is killed', async () => {
+      const keepAwake = await startKeepAwake(createDeps({ renewMs: 10, settleMs: 80 }));
+      await waitUntilThat('the renewal to be spawned', () => holders.length === 2);
+      keepAwake.handOver();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.deepEqual(holders.map((holder) => holder.killed.length), [0, 0]);
+      assert.equal(holders[1].isReleased, true, 'the late holder is let go as well');
+      assert.equal(holders.length, 2, 'and none is started after it');
+      assert.equal(removed, 0);
+    });
+
+    it('a stop while a renewal is still settling ends BOTH holders and forgets the state', async () => {
+      const keepAwake = await startKeepAwake(createDeps({ renewMs: 10, settleMs: 80 }));
+      await waitUntilThat('the renewal to be spawned', () => holders.length === 2);
+      keepAwake.stop();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.deepEqual(holders.map((holder) => holder.killed), [['SIGTERM'], ['SIGTERM']]);
+      assert.equal(removed, 1);
+      assert.equal(holders.length, 2);
+    });
+
+    it('the next link\'s holder takes over while the old link\'s still holds: a restart is two instances, the second started before the first one\'s time is up', async () => {
+      const first = await startKeepAwake(createDeps());
+      first.handOver();
+      const second = await startKeepAwake(createDeps());
+      assert.deepEqual(holders.map((holder) => holder.killed), [[], []], 'the new link did not end the old holder: it is not its to end, and it still holds');
+      assert.deepEqual(events.filter((event) => event.startsWith('spawn') || event.startsWith('kill')), ['spawn 9001', 'spawn 9002']);
+      assert.deepEqual(second.getState(), { method: 'caffeinate', holderPid: 9002 });
+      second.stop();
+    });
   });
 });
 
@@ -208,14 +312,15 @@ const hasWorkingSystemdInhibit = process.platform === 'linux' && spawnSync('syst
 
 describe('the real systemd-inhibit', { skip: hasWorkingSystemdInhibit ? false : 'no working systemd-inhibit here' }, () => {
   let root = '';
-  let standInLink: ChildProcess | null = null;
   let decoyHolder: ChildProcess | null = null;
+  /** Holders a test left running on purpose (a hand-over leaves one): ended by the test's teardown, they would otherwise hold a lock for minutes. */
+  const leftHolders: number[] = [];
 
   beforeEach(() => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'keep-awake-')));
   });
   afterEach(() => {
-    if (standInLink !== null && standInLink.pid !== undefined && checkIsProcessAlive(standInLink.pid)) standInLink.kill('SIGKILL');
+    for (const pid of leftHolders.splice(0)) if (checkIsProcessAlive(pid)) process.kill(pid, 'SIGKILL');
     if (decoyHolder !== null && decoyHolder.pid !== undefined && checkIsProcessAlive(decoyHolder.pid)) decoyHolder.kill('SIGKILL');
     decoyHolder = null;
     fs.rmSync(root, { recursive: true, force: true });
@@ -240,36 +345,67 @@ describe('the real systemd-inhibit', { skip: hasWorkingSystemdInhibit ? false : 
     assert.ok(check(), `${description} did not happen within ${timeoutMs} ms`);
   }
 
-  it('the lock shows in systemd\'s own list while the link lives; a SIGKILLed link leaves neither the lock nor a holder — the machine would sleep again', async () => {
-    standInLink = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], { stdio: 'ignore' });
+  function createRealDeps(overrides: Partial<KeepAwakeDeps> = {}): { deps: KeepAwakeDeps; awakeFile: string } {
     const paths = getRunnerHomePaths(path.join(root, 'home'));
     fs.mkdirSync(paths.root, { recursive: true });
-    const keepAwake = await startKeepAwake({ ...createKeepAwakeDeps(paths), linkPid: standInLink.pid ?? 0 });
-    const state = keepAwake.getState();
+    return { deps: { ...createKeepAwakeDeps(paths), ...overrides }, awakeFile: paths.awakeFile };
+  }
+
+  function getHolderPid(state: ReturnType<Awaited<ReturnType<typeof startKeepAwake>>['getState']>): number {
     assert.equal(state.method, 'systemd-inhibit', JSON.stringify(state));
-    const holderPid = state.method === null ? 0 : state.holderPid;
-    assert.equal(fs.readFileSync(paths.awakeFile, 'utf8'), `systemd-inhibit ${holderPid}\n`);
+    return state.method === null ? 0 : state.holderPid;
+  }
+
+  it('the lock shows in systemd\'s own list while the link lives, and a stop removes the state file and ends the holder and its lock at once', async () => {
+    const { deps, awakeFile } = createRealDeps();
+    const keepAwake = await startKeepAwake(deps);
+    const holderPid = getHolderPid(keepAwake.getState());
+    assert.equal(fs.readFileSync(awakeFile, 'utf8'), `systemd-inhibit ${holderPid}\n`);
     assert.equal(listLocksOfHolder(holderPid).length, 1, 'systemd lists the holder\'s lock');
     assert.match(listLocksOfHolder(holderPid)[0], /charness-runner .*\bidle\b +the runner link is up +block/, 'who, what (idle), why, mode (block)');
 
-    standInLink.kill('SIGKILL');
+    keepAwake.stop();
+    assert.equal(fs.existsSync(awakeFile), false);
     await waitUntil('the lock to go', () => listLocksOfHolder(holderPid).length === 0);
     await waitUntil('the holder to be gone', () => !checkIsProcessAlive(holderPid));
-    keepAwake.stop();
   });
 
-  it('a normal stop removes the state file and the lock goes with the holder', async () => {
-    standInLink = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], { stdio: 'ignore' });
-    const paths = getRunnerHomePaths(path.join(root, 'home'));
-    fs.mkdirSync(paths.root, { recursive: true });
-    const keepAwake = await startKeepAwake({ ...createKeepAwakeDeps(paths), linkPid: standInLink.pid ?? 0 });
-    const state = keepAwake.getState();
-    assert.equal(state.method, 'systemd-inhibit');
-    const holderPid = state.method === null ? 0 : state.holderPid;
-    keepAwake.stop();
-    assert.equal(fs.existsSync(paths.awakeFile), false);
-    await waitUntil('the lock to go', () => listLocksOfHolder(holderPid).length === 0);
-    await waitUntil('the holder to be gone', () => !checkIsProcessAlive(holderPid));
+  it('a link that is gone without a stop (SIGKILL, a crash) leaves the lock for the holder\'s own time only — it ends by itself, so no orphan keeps the machine awake for long', async () => {
+    const { deps } = createRealDeps({ holdSeconds: 2 });
+    const keepAwake = await startKeepAwake(deps);
+    const holderPid = getHolderPid(keepAwake.getState());
+    leftHolders.push(holderPid);
+    keepAwake.handOver();
+    assert.equal(checkIsProcessAlive(holderPid), true, 'the holder outlives the link');
+    assert.equal(listLocksOfHolder(holderPid).length, 1, 'and its lock is listed');
+    await waitUntil('the holder to end by itself', () => !checkIsProcessAlive(holderPid));
+    assert.equal(listLocksOfHolder(holderPid).length, 0, 'with its lock');
+  });
+
+  it('a restart of the link: the old holder still holds when the next link\'s holder takes over — and with a STOP in between (what a link tied holder did) it is already gone: the gap an idle Mac sleeps in', async () => {
+    const handOver = createRealDeps();
+    const before = await startKeepAwake(handOver.deps);
+    const oldHolder = getHolderPid(before.getState());
+    leftHolders.push(oldHolder);
+    before.handOver();
+    const after = await startKeepAwake(handOver.deps);
+    const newHolder = getHolderPid(after.getState());
+    leftHolders.push(newHolder);
+    assert.notEqual(newHolder, oldHolder);
+    assert.equal(listLocksOfHolder(oldHolder).length, 1, 'the old link\'s lock is still there when the new link\'s holds: there was no moment with none');
+    assert.equal(listLocksOfHolder(newHolder).length, 1);
+    assert.equal(fs.readFileSync(handOver.awakeFile, 'utf8'), `systemd-inhibit ${newHolder}\n`, 'the state names the new holder');
+
+    // The negative control: the same restart, but the old link STOPS (ends its holder at once) — by the time the next holder holds, the first lock is gone. The check above can tell the two apart.
+    const stopped = createRealDeps();
+    const stoppedBefore = await startKeepAwake(stopped.deps);
+    const stoppedHolder = getHolderPid(stoppedBefore.getState());
+    stoppedBefore.stop();
+    const stoppedAfter = await startKeepAwake(stopped.deps);
+    leftHolders.push(getHolderPid(stoppedAfter.getState()));
+    assert.equal(listLocksOfHolder(stoppedHolder).length, 0, 'after a stop the old lock is gone by the time the next holder holds: for that stretch the machine had none');
+    after.stop();
+    stoppedAfter.stop();
   });
 
   it('a lock with the very same text held by ANOTHER process neither hides this holder\'s lock going nor fails the check — it is not ours', async () => {
@@ -277,12 +413,9 @@ describe('the real systemd-inhibit', { skip: hasWorkingSystemdInhibit ? false : 
     decoyHolder = spawn('systemd-inhibit', ['--what=idle', '--who=charness-runner', `--why=${lockReason}`, '--mode=block', 'sleep', '120'], { stdio: 'ignore' });
     const decoyPid = decoyHolder.pid ?? 0;
     await waitUntil('the decoy\'s lock to show', () => listLocksOfHolder(decoyPid).length === 1);
-    standInLink = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], { stdio: 'ignore' });
-    const paths = getRunnerHomePaths(path.join(root, 'home'));
-    fs.mkdirSync(paths.root, { recursive: true });
-    const keepAwake = await startKeepAwake({ ...createKeepAwakeDeps(paths), linkPid: standInLink.pid ?? 0 });
-    const state = keepAwake.getState();
-    const holderPid = state.method === null ? 0 : state.holderPid;
+    const { deps } = createRealDeps();
+    const keepAwake = await startKeepAwake(deps);
+    const holderPid = getHolderPid(keepAwake.getState());
     assert.notEqual(holderPid, decoyPid);
     assert.equal(listLocksOfHolder(holderPid).length, 1);
     keepAwake.stop();

@@ -1215,6 +1215,7 @@ export const hiDict: Record<string, string> = {
   'runners.keepsAwakeInhibit': 'हाँ (systemd-inhibit; ढक्कन बंद करने पर फिर भी सो जाएगा)',
   'runners.keepsAwakeNo': 'नहीं — {reason}; खाली रहने पर सो सकता है',
   'runners.keepsAwakeNoReason': 'कारण नहीं बताया गया',
+  'runners.offlineKeptAwakeNote': 'आखिरी बार देखे जाने पर यह मशीन को जागृत रखता था; अगर अब वह सो रही है, तो यहाँ से उसे जगाया नहीं जा सकता — कोई कुंजी दबाने या ढक्कन खोलने से जागेगी',
   'runners.capabilitiesLine': 'कर सकता है: {list}',
   'runners.capabilityNo': '{name}: नहीं',
   'runners.capabilityNoWhy': '{name}: नहीं — {detail}',
