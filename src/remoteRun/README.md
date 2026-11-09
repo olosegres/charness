@@ -168,6 +168,7 @@ it records it first (`finish_killed_job`: exit 137, or 124 when the limit did it
 other, and the next job of its project takes the lock over at once.
 That record is what ends the lease's wait, and the lease then ends its watcher: so the kill ignores TERM and HUP from the moment it begins (`hard_kill_job`), or a watcher
 ended between the record and its SIGKILL left a command that ignores SIGTERM running in a job that already read as killed.
+A TERM goes to the process GROUP, so it reaches only the steps already forked: one that arrives while the job is between two steps sets `killed` and nothing else. `run_step` therefore starts no step once `killed` is set (code 143) — a command forked after the TERM would run to the SIGKILL, with the job's Simulator device still booted (measured on a loaded box: the fork followed the TERM by up to 1.5 s).
 
 **A job's Pueue task number is not its identity.** Pueue gives a number it has freed to the next task added, and `pueue wait` / `pueue remove`
 act on whoever holds a number (a number nobody holds: `wait` returns 0 at once). A job killed while queued loses its task that way, so

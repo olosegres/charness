@@ -2414,6 +2414,8 @@ ios_udid=
 tmpdir_set_aside=
 # 1 once the job has started the step that makes its Simulator device: whatever state that step left it in, the job shuts the device down at its end.
 ios_device_step_started=0
+# 1 once a TERM, INT or HUP has reached the job (its trap in `cmd_job` sets it): `run_step` starts no step after that. Set here so that a step run outside `cmd_job` reads it too.
+killed=0
 
 # The project lock is a FILE made with the shell's own exclusive create (`set -C`, noclobber: open(O_EXCL)) — never with `mkdir`. The uutils
 # coreutils that current Ubuntu ships as /usr/bin/mkdir let several simultaneous `mkdir` of one path ALL succeed (measured here: 265 races
@@ -3227,6 +3229,13 @@ run_step() {
   local command_text=$2
   if gui_step_uses_agent; then
     gui_run_step "$directory" "$command_text"
+    return 0
+  fi
+  # A TERM that reached the job before this point (it sets `killed`) went to the job alone: a step that is forked now was not in the group yet, so it would run its whole course - to the watchdog's SIGKILL after its grace, with
+  # the job's Simulator device still booted. Measured under load: this fork came up to ~1.5 s after the TERM. The step is not started then; its code is that of a TERM. (A TERM in the microseconds between
+  # this check and the fork can still miss the step - the same loss as before, a window that small.)
+  if [ "$killed" -eq 1 ]; then
+    step_code=143
     return 0
   fi
   (

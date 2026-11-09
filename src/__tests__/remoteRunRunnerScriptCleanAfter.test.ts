@@ -539,7 +539,8 @@ describe('a job that ends (runner.sh job)', () => {
   });
 
   it('a job that ran out of time (124) cleans nothing', { skip: rsyncSkip }, async () => {
-    prepareJob({ command: `${buildCommand} && sleep 120`, timeoutSec: 3, clean: ['build/Intermediates.noindex'] });
+    // The limit counts from the job's start, so it must outlast the job's own start-up on a loaded box (a job told to stop before its command is forked never starts it, and then there is no build output to keep).
+    prepareJob({ command: `${buildCommand} && sleep 120`, timeoutSec: 10, clean: ['build/Intermediates.noindex'] });
     assert.equal(await runJobUntilItEnds(), '124');
     assert.deepEqual(listTree().filter((entry) => entry.startsWith('build/')), ['build/Intermediates.noindex/o.o', 'build/Products/app.txt']);
   });
