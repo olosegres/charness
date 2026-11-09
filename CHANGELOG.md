@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**A new project copy on a runner no longer installs its dependencies from scratch when another copy of the same project is already there: it starts from a clone of that copy's `node_modules` and CocoaPods folders.**
+Before, every checkout of a project (each folder or worktree you ran `remote-run` from) got a full copy of its own on the runner and ran the whole dependencies step — on a Mac with a React Native monorepo that was ~13 GB and minutes of install for each copy, nine copies being 133 GB.
+Now:
+  - **The first job of a new copy is seeded from a sibling** — a copy of the same project whose install finished: the one with the same install key first, then the most recently used. On a Mac the folders are copy-on-write clones (no disk until a file changes, and a change in one copy never shows in the other); on Linux a reflink where the filesystem has them, otherwise a plain copy (it saves the install time, not the disk).
+  - **What is carried:** every top-level `node_modules` (the root's and each workspace's) and every `ios/Pods`; never `ios/build`, `android/build`, `.cxx` or `.gradle` (their absolute paths belong to the other copy).
+  - **The dependencies step is skipped when the keys are equal**; with a different key it still runs, on top of what was carried, and only changes the difference.
+  - **A seed never fails a job:** a sibling a job is working in (its install may be running) or an `exec` runs in is passed over and never waited for; any failure removes the partial seed, says one line in the job's log, and the install runs as before. Only the first job of a copy is seeded.
+
 **Every compaction now asks the agent which of its own mistakes — repeated ones above all — better instructions could have prevented, and the bot shows that list in the topic even when the compaction summary is hidden.**
 Before, the lessons of a long session stayed buried in the summary (which `/compact_summary` hides by default) or were lost with it: the same mistake came back in the next session because nobody had changed the rule, skill or `CLAUDE.md` / `AGENTS.md` that would have stopped it.
 Now:

@@ -40,6 +40,10 @@ export interface JobSpec {
   /** The job's own `-e` lines (`NAME=VALUE`). */
   env?: string[];
   installCommand?: string;
+  /** The key the dependencies step runs on (`key` when absent). */
+  installKey?: string;
+  /** Files (paths relative to the project) the job stages besides `a.txt`: the new copy's folders, so that the places a seed fills have a parent. */
+  stagedFiles?: string[];
   needsIos?: boolean;
   timeoutSec?: number;
 }
@@ -59,9 +63,10 @@ export function prepareJobFolder(workDir: string, spec: JobSpec): JobPaths {
   const paths = getJobPaths(workDir, spec.slug, spec.jobId);
   const stage = path.join(paths.projectDir, 'stage', spec.jobId);
   fs.mkdirSync(stage, { recursive: true });
-  writeFile(stage, 'a.txt');
+  const stagedFiles = ['a.txt', ...(spec.stagedFiles ?? [])];
+  for (const stagedFile of stagedFiles) writeFile(stage, stagedFile);
   fs.mkdirSync(paths.jobDir, { recursive: true });
-  writeFile(paths.jobDir, 'manifest', 'a.txt\n');
+  writeFile(paths.jobDir, 'manifest', `${stagedFiles.join('\n')}\n`);
   writeFile(paths.jobDir, 'subfolder', '');
   writeFile(paths.jobDir, 'cmd', spec.command);
   writeFile(paths.jobDir, 'timeout-sec', `${spec.timeoutSec ?? 120}`);
@@ -70,7 +75,7 @@ export function prepareJobFolder(workDir: string, spec: JobSpec): JobPaths {
   if (spec.env !== undefined) writeFile(paths.jobDir, 'env', `${spec.env.join('\n')}\n`);
   if (spec.installCommand !== undefined) {
     writeFile(paths.jobDir, 'install-command', spec.installCommand);
-    writeFile(paths.jobDir, 'install-key', 'key');
+    writeFile(paths.jobDir, 'install-key', spec.installKey ?? 'key');
   }
   if (spec.needsIos === true) writeFile(paths.jobDir, 'needs-ios', '');
   fs.writeFileSync(path.join(paths.projectDir, 'used'), '');

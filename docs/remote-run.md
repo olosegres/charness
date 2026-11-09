@@ -509,6 +509,12 @@ The project is the git working tree the command runs in (anything else is refuse
 - **Dependencies**: the install step runs on the runner only when its key changed since the last successful install in that copy (or
   the last one failed). By lockfile: `yarn.lock` → `yarn install --immutable`, `pnpm-lock.yaml` → `pnpm install --frozen-lockfile`,
   `package-lock.json` → `npm ci`; no lockfile, no step. The key is the lockfile, every `package.json`, `.yarnrc.yml` and `patches/`.
+  **A new copy does not install from scratch when a sibling is there.** A project copy belongs to a project folder, so each checkout or worktree of a project is a copy of its own — and a React Native monorepo's
+  `node_modules` and `Pods` are ~13 GB. The first job of a new copy takes them from another copy of the same project (the same folder name, any location) whose install finished: the one with the same key first, then the most recently
+  used. On a Mac they are **clones** (copy-on-write: they take no disk until a file changes, and a change in one copy never shows in the other); on Linux a reflink where the filesystem has them, otherwise a plain copy (it saves
+  the install's time, not the disk). Carried: every top-level `node_modules` (the root's and each workspace's) and every `ios/Pods`; never `ios/build`, `android/build`, `.cxx` or `.gradle`. With the same key the install step is skipped
+  (the log says `seeded from the copy … the dependencies step is skipped`); with another key it still runs, on top of what was carried, and only changes the difference. A sibling a job holds (its install or a build may be running) or an `exec`
+  runs in is passed over, never waited for, and a seed that fails for any reason is removed and the install runs as before — it never fails the job. Only the first job of a copy is seeded.
 - **Back**: the paths `pull:` lists. After a job, only the matching files the job **created or changed** come back — an untouched
   snapshot never overwrites your edit, and a previous job's leftovers never return. They land at the same paths in the project, so
   updated snapshots show in `git diff`. A foreground run fetches at its end (also on failure); `--bg` jobs by `wait` / `fetch`. The

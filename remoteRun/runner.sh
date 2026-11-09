@@ -126,6 +126,11 @@ tmpdir_keep_days=3
 tmpdir_sweep_interval_hours=6
 # A prune on a short disk sweeps them at once, not more often than this (minutes): the walk finds nothing new a minute after the last one, and a Mac whose disk stays short for days must not pay it on every submit.
 tmpdir_short_disk_sweep_interval_min=30
+# A NEW project copy (its first job) is seeded from a sibling copy of the same project (`seed_new_copy`) instead of installing its dependencies from scratch. The folders to carry are looked for down to this depth below the copy's root
+# (the root's `node_modules`, each workspace's, `ios/Pods`)...
+seed_find_depth=5
+# ...and inside a cloned `node_modules` the build output a package left in itself does not come along; it sits at most this deep (`@scope/pkg/android/build` is 4).
+seed_clean_depth=4
 port_base_start=20000
 port_block_size=100
 index_lock_wait_sec=30
@@ -2528,6 +2533,176 @@ describe_failed_step() {
   done
 }
 
+# ─────────────────────────── seeding a new copy from a sibling ───────────────────────────
+
+# A copy's dependencies are most of its size (a React Native monorepo: ~13 GB of `node_modules` and `Pods`), and every new copy of a project installed them from scratch. A NEW copy (the first job of it: no manifest yet) is seeded from a
+# sibling instead: a copy of the same project (the slug without its hash) whose dependencies step finished (`deps.hash` is there) — the one with this job's own install key first, then the most recently used. On a Mac the folders are
+# CLONES (`cp -c`: clonefile(2), copy-on-write — nothing is ever shared for writing, so one copy's build cannot touch the other's files); elsewhere `cp --reflink=auto`, a plain copy where the filesystem cannot clone (ext4: it saves the install's
+# time, not the disk). Carried: every top-level `node_modules` (the root's and each workspace's, never one inside another) and every `ios/Pods` whose parent folder the new copy has; never the build output (`ios/build`, `android/build`,
+# `.cxx`, `.gradle`: absolute paths of the sibling are in them). `deps.hash` is written only when the sibling's key equals this job's — then the dependencies step is skipped; a different key still runs it, on top of what is there.
+# The sibling is taken under its project lock, tried once and never waited for (a job that holds it may be in its dependencies step or a build): a busy sibling is passed over for the next. Seeding never fails the job: whatever goes wrong
+# removes the partial seed, says one line and leaves the install to run from scratch. The folders are cloned into `seed.tmp` of the new copy and only then moved into place, so a job cut off half-way leaves no half-made `node_modules`.
+
+# Take the project lock of the copy in folder $1 if it is free right now; false when a live job holds it (or another process is breaking a stale one). Never waits.
+try_take_copy_lock() {
+  local lock="$1/lock" jobs_dir="$1/jobs" job=
+  if create_lock_file "$lock" || { check_lock_is_stale && break_stale_lock && create_lock_file "$lock"; }; then
+    # The rights to break the lock name holders that are gone and can never hold it again: nothing needs them any more.
+    rm -f "$lock".breaking.* 2> /dev/null
+    return 0
+  fi
+  return 1
+}
+
+# Give back the lock try_take_copy_lock took — only if it is still ours.
+release_copy_lock() {
+  local holder_pid holder_job
+  read_lock_holder "$1/lock"
+  [ "$holder_pid" = "$$" ] && [ -z "$holder_job" ] && rm -f "$1/lock"
+  return 0
+}
+
+# Is an `exec` running in the copy in folder $1? (It takes no lock; its marker is `exec.<pid>`.)
+check_copy_has_exec() {
+  local marker marker_pid
+  for marker in "$1"/exec.*; do
+    [ -e "$marker" ] || continue
+    marker_pid=${marker##*/exec.}
+    case $marker_pid in '' | *[!0-9]*) continue ;; esac
+    check_runner_pid_alive "$marker_pid" && return 0
+  done
+  return 1
+}
+
+# The slugs of the copies a new copy (slug $1, install key $2) may be seeded from, one per line, best first: copies of the same project whose dependencies step finished, those with the same key before the others, each group
+# the most recently used first.
+list_seed_siblings() {
+  local own_slug=$1 install_key=$2 used_file sibling_slug sibling_key same_key= other_key=
+  while IFS= read -r used_file; do
+    sibling_slug=${used_file%/used}
+    sibling_slug=${sibling_slug##*/}
+    [ "$sibling_slug" != "$own_slug" ] && [ "${sibling_slug%-*}" = "${own_slug%-*}" ] || continue
+    [ -d "$work/p/$sibling_slug/tree" ] || continue
+    sibling_key=$(read_file "$work/p/$sibling_slug/deps.hash")
+    [ -n "$sibling_key" ] || continue
+    if [ "$sibling_key" = "$install_key" ]; then
+      same_key="$same_key$sibling_slug"$'\n'
+    else
+      other_key="$other_key$sibling_slug"$'\n'
+    fi
+  done < <(ls -1t "$work"/p/*/used 2> /dev/null)
+  printf '%s%s' "$same_key" "$other_key"
+}
+
+# The folders of the copy tree $1 a seed carries, relative to it (`./node_modules`, `./projects/app/ios/Pods`), one per line: the dependencies down to seed_find_depth, the build output folders and `.git` pruned from the walk.
+list_seed_folders() {
+  (cd "$1" && find . -maxdepth "$seed_find_depth" \( -name .git -o -name .gradle -o -name .cxx -o -path '*/ios/build' -o -path '*/android/build' \) -prune -o \( -name node_modules -o -path '*/ios/Pods' \) -type d -print -prune 2> /dev/null)
+}
+
+# Clone folder $1 to the path $2 (its parent exists, $2 does not): on a Mac with clonefile(2), which `cp -c` replaces by a plain copy where it cannot clone (another volume); elsewhere GNU cp's reflink where the filesystem has it.
+clone_folder() {
+  if [ "$(uname -s)" = Darwin ]; then
+    cp -cR "$1" "$2"
+  else
+    cp -a --reflink=auto "$1" "$2"
+  fi
+}
+
+# In the cloned dependencies folder $1: the build output a package left in itself (Gradle's and CMake's folders hold the sibling's absolute paths) does not come along. Failing to remove one is no reason to give up the seed.
+remove_seeded_build_output() {
+  find "$1" -maxdepth "$seed_clean_depth" \( -path '*/android/build' -o -path '*/android/.cxx' -o -path '*/ios/build' -o -name .gradle \) -type d -prune -exec rm -rf {} + 2> /dev/null
+  return 0
+}
+
+# Clone the dependency folders of sibling $1 into $2 (the new copy's `seed.tmp`), the sibling's lock held by the caller. Sets seed_folders (the relative paths cloned, one per line) and, on a failure, seed_failure. Fails when nothing was
+# carried (with seed_failure empty: the sibling has nothing the new copy can take) or a clone failed.
+clone_sibling_folders() {
+  local sibling_tree="$work/p/$1/tree" seed_dir=$2 relative parent
+  seed_folders=
+  seed_failure=
+  if ! mkdir -p "$seed_dir"; then
+    seed_failure="cannot make $seed_dir"
+    return 1
+  fi
+  while IFS= read -r relative; do
+    relative=${relative#./}
+    [ -n "$relative" ] && check_relative_path "$relative" || continue
+    parent=$(dirname "$relative")
+    # Not into a workspace the new revision no longer has, and never over what the new copy already holds.
+    [ -d "$tree/$parent" ] && [ ! -e "$tree/$relative" ] && [ ! -L "$tree/$relative" ] || continue
+    if [ "$killed" -eq 1 ]; then
+      seed_failure="the job was stopped"
+      return 1
+    fi
+    if ! mkdir -p "$seed_dir/$parent" || ! clone_folder "$sibling_tree/$relative" "$seed_dir/$relative"; then
+      seed_failure="cloning $relative failed"
+      return 1
+    fi
+    [ "${relative##*/}" = node_modules ] && remove_seeded_build_output "$seed_dir/$relative"
+    seed_folders="$seed_folders$relative"$'\n'
+  done <<< "$(list_seed_folders "$sibling_tree")"
+  [ -n "$seed_folders" ]
+}
+
+# Seed the new copy of this job from a sibling (see the section's comment); $1 = the job's install key. Always returns 0 — the job goes on, with what the seed gave it or without.
+seed_new_copy() {
+  local install_key=$1 seed_dir="$proj/seed.tmp" sibling_slug sibling_dir sibling_key seed_code relative moved= tried=0 saw_sibling=0
+  seed_folders=
+  seed_failure=
+  while IFS= read -r sibling_slug; do
+    [ -n "$sibling_slug" ] || continue
+    [ "$killed" -eq 1 ] && return 0
+    saw_sibling=1
+    sibling_dir="$work/p/$sibling_slug"
+    check_copy_has_exec "$sibling_dir" && continue
+    try_take_copy_lock "$sibling_dir" || continue
+    tried=1
+    # The lock is the sibling's guarantee that its dependencies step is not running; its key is read again under it (a step that failed meanwhile removed it).
+    sibling_key=$(read_file "$sibling_dir/deps.hash")
+    if [ -n "$sibling_key" ]; then
+      clone_sibling_folders "$sibling_slug" "$seed_dir"
+      seed_code=$?
+    else
+      seed_code=1
+    fi
+    release_copy_lock "$sibling_dir"
+    break
+  done <<< "$(list_seed_siblings "$slug" "$install_key")"
+  if [ "$tried" -eq 0 ]; then
+    [ "$saw_sibling" -eq 0 ] || say "not seeded from another copy of this project: they are all busy right now"
+    return 0
+  fi
+  if [ "$seed_code" -eq 0 ]; then
+    while IFS= read -r relative; do
+      [ -n "$relative" ] || continue
+      if ! mv "$seed_dir/$relative" "$tree/$relative"; then
+        seed_failure="moving $relative into place failed"
+        seed_code=1
+        break
+      fi
+      moved="$moved$relative"$'\n'
+    done <<< "$seed_folders"
+  fi
+  if [ "$seed_code" -ne 0 ]; then
+    while IFS= read -r relative; do
+      [ -n "$relative" ] && remove_path_even_if_read_only "$tree/$relative"
+    done <<< "$moved"
+    remove_path_even_if_read_only "$seed_dir"
+    [ -n "$seed_failure" ] && say "could not seed this copy from the copy $sibling_slug ($seed_failure): the dependencies are installed from scratch"
+    return 0
+  fi
+  remove_path_even_if_read_only "$seed_dir"
+  local folder_count
+  folder_count=$(printf '%s' "$seed_folders" | grep -c '')
+  if [ "$sibling_key" = "$install_key" ]; then
+    printf '%s\n' "$install_key" > "$proj/deps.hash"
+    say "seeded from the copy $sibling_slug of this project: $folder_count dependency folder$([ "$folder_count" -eq 1 ] || echo s) cloned; its dependencies are the same, so the dependencies step is skipped"
+  else
+    say "seeded from the copy $sibling_slug of this project: $folder_count dependency folder$([ "$folder_count" -eq 1 ] || echo s) cloned; its dependencies differ, so the dependencies step still runs on top"
+  fi
+  return 0
+}
+
 # ─────────────────────────── what a copy is given: a number, a port block, a TMPDIR, a Simulator ───────────────────────────
 
 # The index lock: `tmp/index.lock`, made and broken by the project lock's helpers like the prune lock (`acquire_prune_lock`) — here with no job, a short age limit (it is held for a moment: a holder that has been
@@ -3064,6 +3239,10 @@ cmd_job() {
 
   set_phase waiting-lock
   acquire_lock || finish_job 137
+  # This job alone is working in the copy now: a seed that an earlier job was cut off in the middle of is not wanted. A copy no job has applied a stage to yet is new (the manifest is the stage's last step).
+  remove_path_even_if_read_only "$proj/seed.tmp"
+  local is_new_copy=0
+  [ -f "$proj/manifest" ] || is_new_copy=1
 
   ensure_copy_index
   write_runner_env
@@ -3079,6 +3258,12 @@ cmd_job() {
   local install_command install_key
   install_command=$(read_file "$jd/install-command")
   install_key=$(read_file "$jd/install-key")
+  if [ "$is_new_copy" -eq 1 ] && [ -n "$install_command" ]; then
+    set_phase seeding
+    seed_new_copy "$install_key"
+    set_phase syncing
+    [ "$killed" -eq 1 ] && finish_job 137
+  fi
   if [ -n "$install_command" ] && [ "$(read_file "$proj/deps.hash")" != "$install_key" ]; then
     set_phase deps
     say "installing dependencies: $install_command"
