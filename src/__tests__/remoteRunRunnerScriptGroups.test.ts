@@ -91,3 +91,40 @@ describe('runner.sh apply-groups', () => {
     assert.match(result.stdout, /^work=/m);
   });
 });
+
+describe('where the script finds the Pueue daemon (`ensure_pueued`, `pueued_bin`)', () => {
+  /** A Pueue that answers `status` only once its daemon is up, and a daemon that comes up by leaving a marker. */
+  const answeringPueue = '#!/bin/bash\n[ "$1" = status ] && [ ! -e "$FAKE_DAEMON_UP" ] && exit 1\nexit 0\n';
+  const fakeDaemon = '#!/bin/bash\n: > "$FAKE_DAEMON_UP"\n';
+
+  /** `ensure_pueued` in a process whose PATH is the system's alone — what the ssh session of a runner that has no `~/.local/bin` on it sees — with the folders named in `pathFolders` added; its code, and whether the daemon came up. */
+  function runEnsurePueued(options: { daemonBesidePueue: boolean; daemonFolderOnPath: boolean }): { code: string; isDaemonUp: boolean } {
+    const pueueFolder = path.join(root, 'pueue-folder');
+    const otherFolder = path.join(root, 'other-folder');
+    fs.mkdirSync(pueueFolder, { recursive: true });
+    fs.mkdirSync(otherFolder, { recursive: true });
+    fs.writeFileSync(path.join(pueueFolder, 'pueue'), answeringPueue, { mode: 0o755 });
+    if (options.daemonBesidePueue) fs.writeFileSync(path.join(pueueFolder, 'pueued'), fakeDaemon, { mode: 0o755 });
+    if (options.daemonFolderOnPath) fs.writeFileSync(path.join(otherFolder, 'pueued'), fakeDaemon, { mode: 0o755 });
+    const daemonUp = path.join(root, 'daemon-up');
+    const result = spawnSync('bash', ['-c', 'source "$1"; pueue_start_wait_sec=1; ensure_pueued; echo "code=$?"', 'harness', scriptPath], {
+      encoding: 'utf8',
+      env: { PATH: `/usr/bin:/bin${options.daemonFolderOnPath ? `:${otherFolder}` : ''}`, PUEUE_BIN: path.join(pueueFolder, 'pueue'), FAKE_DAEMON_UP: daemonUp },
+      timeout: 60_000,
+    });
+    return { code: /^code=(\d+)$/m.exec(result.stdout)?.[1] ?? `no answer: ${result.stderr}`, isDaemonUp: fs.existsSync(daemonUp) };
+  }
+
+  it('is the `pueued` that sits beside the `pueue` it is given — found without any help from the PATH', () => {
+    assert.deepEqual(runEnsurePueued({ daemonBesidePueue: true, daemonFolderOnPath: false }), { code: '0', isDaemonUp: true });
+  });
+
+  it('else the one on the PATH', () => {
+    assert.deepEqual(runEnsurePueued({ daemonBesidePueue: false, daemonFolderOnPath: true }), { code: '0', isDaemonUp: true });
+  });
+
+  it('and with neither the daemon cannot be started: «Pueue daemon is not reachable» — what a runner whose `pueue` is a wrapper in a folder of its own, with its PATH lacking the real folder, said', () => {
+    assert.deepEqual(runEnsurePueued({ daemonBesidePueue: false, daemonFolderOnPath: false }), { code: '1', isDaemonUp: false });
+  });
+});
+

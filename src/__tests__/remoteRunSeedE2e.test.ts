@@ -38,14 +38,19 @@ function readCopyDepsCounter(copy: FlowProject): number {
 /**
  * The tools of a runner whose disk clones: a `cp` that does `--reflink=always` as the plain copy this box's tmpfs can, first on the PATH of the jobs. A job gets the environment of the `pueue add` that queued it, so the runner's
  * `pueue` is a wrapper that puts the folder first on the PATH. A Debian bash that a job starts reads ~/.bashrc when the environment says «ssh» (SSH_CONNECTION), and a rc file may reset the PATH: the wrapper drops that sign.
+ * The runner script finds the daemon next to the `pueue` it is given (`pueued_bin`) and only else on the PATH of the ssh session — which on a CI runner has no `~/.local/bin` (where pueue is installed there), though on a box
+ * whose rc files add it the PATH lookup hides the omission: so the wrapper folder holds a `pueued` too.
  */
 function createCloningRunnerTools(): { pueueBin: string } {
   const binDir = path.join(layout.root, 'cloning-bin');
   fs.mkdirSync(binDir, { recursive: true });
   const realCp = execFileSync('which', ['cp'], { encoding: 'utf8' }).trim();
+  const pueuedBesidePueue = path.join(path.dirname(layout.pueueBin), 'pueued');
+  const realPueued = fs.existsSync(pueuedBesidePueue) ? pueuedBesidePueue : execFileSync('which', ['pueued'], { encoding: 'utf8' }).trim();
   const writeTool = (name: string, lines: string[]): void => fs.writeFileSync(path.join(binDir, name), ['#!/bin/bash', ...lines, ''].join('\n'), { mode: 0o755 });
   writeTool('cp', ['arguments=()', 'for argument; do', '  [ "$argument" = --reflink=always ] && argument=--reflink=auto', '  arguments+=("$argument")', 'done', `exec ${realCp} "\${arguments[@]}"`]);
   writeTool('pueue', ['unset SSH_CONNECTION SSH_CLIENT SSH_TTY', `export PATH="${binDir}:$PATH"`, `exec ${layout.pueueBin} "$@"`]);
+  writeTool('pueued', [`exec ${realPueued} "$@"`]);
   return { pueueBin: path.join(binDir, 'pueue') };
 }
 
