@@ -29,6 +29,7 @@ import {
   compactionSummaryGuidance,
 } from '../utils/compactOnIdle';
 import { getClaudeCompactMistakesOffDir } from '../utils/compactMistakesFlags';
+import { resolveDataDir } from '../state';
 
 function runHook(command: string, hookInput: unknown): string {
   return execFileSync('sh', ['-c', command], {
@@ -234,6 +235,39 @@ test('prepareClaudeCompactHookFlags: writes the settings file and returns the --
     );
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('prepareClaudeCompactHookFlags with a relative DATA_DIR: the settings path and the flag folder the hook reads are absolute, so the hook finds the flag from the agent\'s own folder', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'compact-hook-relative-'));
+  const botFolder = path.join(root, 'bot');
+  const agentFolder = path.join(root, 'project');
+  fs.mkdirSync(botFolder);
+  fs.mkdirSync(agentFolder);
+  const originalCwd = process.cwd();
+  const originalDataDir = process.env.DATA_DIR;
+  try {
+    process.chdir(botFolder);
+    process.env.DATA_DIR = 'data';
+    const flags = prepareClaudeCompactHookFlags(resolveDataDir());
+    assert.ok(path.isAbsolute(flags[1]), `the --settings path is absolute: ${flags[1]}`);
+    const command: string = JSON.parse(fs.readFileSync(flags[1], 'utf-8')).hooks.PreCompact[0].hooks[0].command;
+    const flagDir = getClaudeCompactMistakesOffDir(resolveDataDir());
+    fs.mkdirSync(flagDir, { recursive: true });
+    fs.writeFileSync(path.join(flagDir, 'sessionRelative'), '');
+
+    // The hook runs in the agent's project folder, not the bot's.
+    const output = execFileSync('sh', ['-c', command], {
+      cwd: agentFolder,
+      input: JSON.stringify({ session_id: 'sessionRelative', hook_event_name: 'PreCompact', trigger: 'auto', custom_instructions: null }),
+      encoding: 'utf-8',
+    });
+    assert.equal(output, `${getHookCompactionInstruction(false)}\n`, 'the flag of the session is found from the agent\'s folder');
+  } finally {
+    process.chdir(originalCwd);
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

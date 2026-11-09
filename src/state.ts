@@ -3289,9 +3289,13 @@ let singletonInFlight: Promise<StateStore> | null = null;
  * Two bots on the same host MUST set distinct `DATA_DIR` values, otherwise
  * they'd silently share `state.json` and corrupt each other. Plan §16.2
  * adds a startup `.lock` check; that lives in `bot.ts` (Этап 3), not here.
+ *
+ * ABSOLUTE, whatever the operator wrote (`DATA_DIR=./data`): paths built from it are baked into commands and arguments
+ * an agent runs from ITS project folder (the hook settings file and the flag and inbox folders its hooks read), where a
+ * path relative to the bot's own working folder names nothing.
  */
 export function resolveDataDir(): string {
-  return process.env.DATA_DIR || resolveDefaultDataDir();
+  return path.resolve(process.env.DATA_DIR || resolveDefaultDataDir());
 }
 
 /**

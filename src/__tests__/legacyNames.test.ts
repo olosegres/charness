@@ -108,6 +108,15 @@ test('default DATA_DIR: an explicit DATA_DIR always wins', () => {
   assert.deepEqual(findLegacyNameUses({ DATA_DIR: process.env.DATA_DIR }, homeDir), []);
 });
 
+test('default DATA_DIR: a relative DATA_DIR is made absolute — agents run in their own folder, where a path from the bot\'s own means nothing', () => {
+  process.env.DATA_DIR = path.join('.', 'relative-data');
+
+  assert.equal(resolveDataDir(), path.resolve('relative-data'));
+  assert.ok(path.isAbsolute(resolveDataDir()));
+  process.env.DATA_DIR = path.join(homeDir, 'already-absolute');
+  assert.equal(resolveDataDir(), path.join(homeDir, 'already-absolute'), 'an absolute one is left as it is');
+});
+
 test('global config: charness, then telegramcode, then telegram-code', () => {
   const dirs = ['charness', 'telegramcode', 'telegram-code'].map((name) => path.join(homeDir, '.config', name));
   for (const dir of dirs) {
