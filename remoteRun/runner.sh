@@ -633,6 +633,17 @@ probe_tool_version() {
   fi
 }
 
+# The Pueue the probe asked (`probe_slow` started its `--version`): its version; `missing` when the binary is not there; `unknown` when it is there but did not answer within probe_step_sec —
+# a machine under load (a full test run) can be that slow, and `missing` would make the hub refuse a runner that has Pueue. The same words as probe_tool_version's `none` / `unknown`.
+probe_pueue_version() {
+  command -v "${PUEUE_BIN:-pueue}" > /dev/null 2>&1 || { echo missing; return 0; }
+  if [ "$(probe_step_status pueue)" = 0 ]; then
+    probe_step_output pueue | awk '{ print $NF }'
+  else
+    echo unknown
+  fi
+}
+
 # The simulators of OLDER runtimes than the newest of the same platform and major (`iOS 26.5` next to `iOS 27.1` is not older: another major; `iOS 26.4` next to `iOS 26.5` is), from the text of
 # `xcrun simctl list devices available` on stdin: `iOS 26.4:11,watchOS 11.0:2` (runtime:devices), nothing when there are none. Only information: nothing here deletes anything.
 list_older_simulator_runtimes() {
@@ -696,11 +707,7 @@ probe_slow() {
   probe_disk_target "$(probe_step_output disk | awk 'NR == 2 { print $2, $4 }')"
   echo "job_node=$(probe_tool_version node)"
   echo "job_yarn=$(probe_tool_version yarn)"
-  if [ "$(probe_step_status pueue)" = 0 ]; then
-    echo "pueue=$(probe_step_output pueue | awk '{ print $NF }')"
-  else
-    echo "pueue=missing"
-  fi
+  echo "pueue=$(probe_pueue_version)"
   if [ "$is_darwin" -eq 0 ]; then
     echo "cap_ios=no"
     echo "cap_ios_detail=$(uname -s)"

@@ -1231,6 +1231,7 @@ export const ukDict: Record<string, string> = {
   'runners.oldSimulatorsLine': 'симулятори старих рантаймів (у дужках — пристрої; нічого не видаляється): {runtimes}',
   'runners.diskLowNote': 'МАЛО — раннер тримає вільними {minFree}',
   'runners.pueueMissing': 'На цьому раннері немає Pueue',
+  'runners.pueueUnknown': 'На цьому раннері Pueue є, але не відповів вчасно',
   'runners.jobToolsLine': 'завдання працюють із: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'немає (завдання, якому він потрібен, впаде)',
   'runners.jobToolUnknown': 'є, але не відповів',

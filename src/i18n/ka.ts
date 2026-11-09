@@ -1225,6 +1225,7 @@ export const kaDict: Record<string, string> = {
   'runners.oldSimulatorsLine': 'ძველი რანტაიმების სიმულატორები (ფრჩხილებში — მოწყობილობები; არაფერი იშლება): {runtimes}',
   'runners.diskLowNote': 'ცოტაა — რანერი {minFree}-ს თავისუფლად ინახავს',
   'runners.pueueMissing': 'ამ რანერზე Pueue არ არის',
+  'runners.pueueUnknown': 'ამ რანერზე Pueue არის, მაგრამ დროულად არ უპასუხა',
   'runners.jobToolsLine': 'ამოცანები ამით სრულდება: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'არ არის (მისი გამომძახებელი ამოცანა ჩავარდება)',
   'runners.jobToolUnknown': 'არის, მაგრამ არ უპასუხა',

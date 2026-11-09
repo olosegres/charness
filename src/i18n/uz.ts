@@ -1225,6 +1225,7 @@ export const uzDict: Record<string, string> = {
   'runners.oldSimulatorsLine': 'eski runtime simulyatorlari (qavsda — qurilmalar; hech narsa o‘chirilmaydi): {runtimes}',
   'runners.diskLowNote': 'KAM — runner {minFree} bo‘sh joy saqlaydi',
   'runners.pueueMissing': 'Bu runnerda Pueue yo‘q',
+  'runners.pueueUnknown': 'Bu runnerda Pueue bor, lekin o‘z vaqtida javob bermadi',
   'runners.jobToolsLine': 'ishlar shular bilan bajariladi: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'yo‘q (uni chaqiradigan ish xato bilan tugaydi)',
   'runners.jobToolUnknown': 'bor, lekin javob bermadi',

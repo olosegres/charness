@@ -1269,6 +1269,7 @@ export const enDict: Record<string, string> = {
   'runners.oldSimulatorsLine': 'simulators of older runtimes (devices in brackets; nothing is removed): {runtimes}',
   'runners.diskLowNote': 'LOW — the runner wants {minFree} kept free',
   'runners.pueueMissing': 'Pueue is missing on this runner',
+  'runners.pueueUnknown': 'Pueue is there, but gave no answer in time',
   'runners.jobToolsLine': 'jobs run with: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'none (a job that calls it fails)',
   'runners.jobToolUnknown': 'there, but gave no answer',

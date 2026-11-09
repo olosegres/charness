@@ -1224,6 +1224,7 @@ export const hiDict: Record<string, string> = {
   'runners.oldSimulatorsLine': 'पुराने रनटाइम के सिमुलेटर (कोष्ठक में डिवाइस; कुछ हटाया नहीं जाता): {runtimes}',
   'runners.diskLowNote': 'कम — रनर {minFree} खाली रखता है',
   'runners.pueueMissing': 'इस रनर पर Pueue नहीं है',
+  'runners.pueueUnknown': 'इस रनर पर Pueue है, पर समय पर जवाब नहीं दिया',
   'runners.jobToolsLine': 'जॉब इनके साथ चलते हैं: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'नहीं है (इसे बुलाने वाला जॉब विफल होगा)',
   'runners.jobToolUnknown': 'है, पर जवाब नहीं दिया',

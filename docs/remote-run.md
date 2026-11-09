@@ -691,7 +691,7 @@ of which project each job came from — and the runner lines above see the probe
   error. Nothing holds the link until you run `charness-runner run` or `service install`; after a reboot a terminal `run` is gone, a service
   is not. «removed by …» means the charness host removed it (`/runners`): pair again with a new line.
 - A job stays **queued** with free slots: it waits for an earlier job of its project (it takes no slot while it waits, [above](#queue-limits-cleanup)) — `ls` shows both. If the earlier job is gone for good the next `prepare`, `probe`, `wait` or `kill` lets it in; a job whose Pueue task was lost is ended as killed.
-- **Pueue: MISSING** on a hand-made runner: install it as above or set `pueue.bin` (a paired runner installs its own).
+- **Pueue: MISSING** on a hand-made runner: install it as above or set `pueue.bin` (a paired runner installs its own). **Pueue: present, no answer in time** is not that: Pueue is installed, its version call was too slow for the probe's 4 s (a busy machine), and the runner is used as usual.
 - A job «lost the connection» message: the runner stops the job by itself when its heartbeat lease (45 s) runs out; `ls` shows it.
 - Where the files live: the runner's `workDir` (`~/.charness-runner/work/` on a paired one); the main machine keeps ssh control sockets and
   the last probe of each runner in `~/.cache/charness/remote-run/`; the pairing registry is `~/.config/charness/runners/`.

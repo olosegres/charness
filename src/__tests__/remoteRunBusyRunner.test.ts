@@ -289,6 +289,12 @@ describe('pickRunner and the wait: a busy runner is there', () => {
     assert.ok(!lacking.ok && lacking.message.startsWith('runner "mac" cannot do "docker"'), JSON.stringify(lacking));
   });
 
+  it('is picked when its snapshot says its Pueue gave no answer in time (the load that made it busy slowed the version call too) — only a missing Pueue refuses it', () => {
+    const slowPueueText = macProbeText.replace('pueue=4.0.4', 'pueue=unknown');
+    assert.deepEqual(pickRunner(config, [busy('mac', slowPueueText), offline('box')], { runner: null, needs: 'ios' }), { ok: true, runnerName: 'mac' });
+    assert.deepEqual(pickRunner(config, [busy('mac', slowPueueText), offline('box')], { runner: 'mac', needs: 'ios' }), { ok: true, runnerName: 'mac' });
+  });
+
   it('is not picked when its snapshot says no Pueue, or it is paused — and is told so, not called offline', () => {
     const noPueue = pickRunner(config, [busy('mac', noPueueText), offline('box')], { runner: 'mac', needs: null });
     assert.ok(!noPueue.ok && noPueue.message.startsWith('runner "mac" has no Pueue'), JSON.stringify(noPueue));

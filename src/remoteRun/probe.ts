@@ -42,7 +42,10 @@ export interface RunnerProbe {
    * seeded from a sibling is a clone: `du` counts what clones share in full, so `sizeMb` is more than the disk holds when `clonedCount` is not 0); `null` when the runner did not say.
    */
   copies: { count: number; sizeMb: number; unmeasuredCount: number; clonedCount: number } | null;
-  /** The Pueue version, `null` when Pueue is missing on the runner. */
+  /**
+   * The Pueue version; `null` when Pueue is missing on the runner; `jobToolUnknown` when it is there but its `--version` gave no answer in time (a loaded machine) — still a runner that can run jobs,
+   * as the same word means for the `jobTools` (`checkIsPueueUnknown`).
+   */
   pueueVersion: string | null;
   jobsRunning: number;
   jobsQueued: number;
@@ -83,6 +86,11 @@ function readNumber(value: string | undefined): number | null {
 
 export const jobToolNone = 'none';
 export const jobToolUnknown = 'unknown';
+
+/** @description Is Pueue there but did its `--version` give no answer in time (`pueue=unknown`)? Not a missing one: the runner stays usable, and it is not told to be installed. */
+export function checkIsPueueUnknown(probe: RunnerProbe): boolean {
+  return probe.pueueVersion === jobToolUnknown;
+}
 
 /** One entry of the runner's `sim_older_runtimes=iOS 26.4:11,watchOS 11.0:2`: a platform, a version, a device count — anything else (it comes from the runner machine) is dropped. */
 const olderSimulatorPattern = /^([A-Za-z]{2,12} [0-9]+(?:\.[0-9]+){0,2}):([0-9]{1,5})$/;
@@ -283,6 +291,12 @@ function formatRunnerProgram(probe: RunnerProbe): string[] {
   return parts.length === 0 ? [] : [`  ${parts.join(' · ')}`];
 }
 
+/** ` · Pueue: MISSING (install it…)` when Pueue is not there, ` · Pueue: present, no answer in time` when its version call hung (as a job's tool is told); nothing when it answered. */
+function formatPueueNote(probe: RunnerProbe): string {
+  if (probe.pueueVersion === null) return ' · Pueue: MISSING (install it, see docs/remote-run.md)';
+  return checkIsPueueUnknown(probe) ? ' · Pueue: present, no answer in time' : '';
+}
+
 /**
  * @description The lines under a runner's heading: hardware, jobs and groups, capabilities, and for a paired runner its program and service. `isLastSeen`: the probe is what an offline runner said when it was last
  * seen, not a live answer — the one line that would over-promise then (it keeps its machine awake) says so.
@@ -294,7 +308,7 @@ export function formatRunnerDetails(probe: RunnerProbe, groupLimits: Readonly<Re
   const jobs = `jobs: ${probe.jobsRunning} running, ${probe.jobsQueued} queued, ${probe.jobsProjects} ${probe.jobsProjects === 1 ? 'project' : 'projects'}`;
   return [
     `  ${formatCpu(probe)} · RAM ${formatGigabytes(probe.ramTotalMb)}, ${formatGigabytes(probe.ramFreeMb)} free · disk ${formatGigabytes(probe.diskFreeMb)} free (work dir)${formatLowDisk(probe)}${formatCopies(probe)}`,
-    `  ${jobs}${groups === '' ? '' : ` · ${groups}`}${probe.pueueVersion === null ? ' · Pueue: MISSING (install it, see docs/remote-run.md)' : ''}`,
+    `  ${jobs}${groups === '' ? '' : ` · ${groups}`}${formatPueueNote(probe)}`,
     `  can: ${formatCapabilities(probe).join(' · ')}`,
     ...formatOlderSimulatorsLine(probe),
     ...formatJobTools(probe),

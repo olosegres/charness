@@ -1226,6 +1226,7 @@ export const ptDict: Record<string, string> = {
   'runners.oldSimulatorsLine': 'simuladores de runtimes mais antigos (dispositivos entre parênteses; nada é removido): {runtimes}',
   'runners.diskLowNote': 'BAIXO — o runner mantém {minFree} livres',
   'runners.pueueMissing': 'O Pueue não está instalado neste runner',
+  'runners.pueueUnknown': 'O Pueue está neste runner, mas não respondeu a tempo',
   'runners.jobToolsLine': 'os jobs rodam com: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'ausente (um job que o chame falha)',
   'runners.jobToolUnknown': 'presente, mas sem resposta',

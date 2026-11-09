@@ -1225,6 +1225,7 @@ export const esDict: Record<string, string> = {
   'runners.oldSimulatorsLine': 'simuladores de runtimes antiguos (entre paréntesis: dispositivos; no se borra nada): {runtimes}',
   'runners.diskLowNote': 'BAJO — el runner mantiene {minFree} libres',
   'runners.pueueMissing': 'Falta Pueue en este runner',
+  'runners.pueueUnknown': 'Pueue está en este runner, pero no respondió a tiempo',
   'runners.jobToolsLine': 'los trabajos se ejecutan con: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'no está (un trabajo que lo llame falla)',
   'runners.jobToolUnknown': 'está, pero no respondió',

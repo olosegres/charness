@@ -1219,6 +1219,7 @@ export const zhDict: Record<string, string> = {
   'runners.oldSimulatorsLine': '旧运行时的模拟器（括号内为设备数；不会删除任何内容）：{runtimes}',
   'runners.diskLowNote': '偏低 — 此 runner 保留 {minFree} 空闲',
   'runners.pueueMissing': '此 runner 上缺少 Pueue',
+  'runners.pueueUnknown': '此 runner 上有 Pueue，但未在限定时间内响应',
   'runners.jobToolsLine': '任务使用：Node {node} · yarn {yarn}',
   'runners.jobToolNone': '没有（调用它的任务会失败）',
   'runners.jobToolUnknown': '存在，但没有响应',

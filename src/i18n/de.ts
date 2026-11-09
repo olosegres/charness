@@ -1225,6 +1225,7 @@ export const deDict: Record<string, string> = {
   'runners.oldSimulatorsLine': 'Simulatoren älterer Runtimes (in Klammern: Geräte; nichts wird entfernt): {runtimes}',
   'runners.diskLowNote': 'ZU WENIG — der Runner hält {minFree} frei',
   'runners.pueueMissing': 'Auf diesem Runner fehlt Pueue',
+  'runners.pueueUnknown': 'Pueue ist auf diesem Runner vorhanden, antwortete aber nicht rechtzeitig',
   'runners.jobToolsLine': 'Jobs laufen mit: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'fehlt (ein Job, der ihn aufruft, schlägt fehl)',
   'runners.jobToolUnknown': 'vorhanden, aber ohne Antwort',

@@ -1225,6 +1225,7 @@ export const frDict: Record<string, string> = {
   'runners.oldSimulatorsLine': 'simulateurs de runtimes plus anciens (appareils entre parenthèses ; rien n’est supprimé) : {runtimes}',
   'runners.diskLowNote': 'FAIBLE — le runner garde {minFree} libres',
   'runners.pueueMissing': 'Pueue est absent sur ce runner',
+  'runners.pueueUnknown': 'Pueue est présent sur ce runner, mais n’a pas répondu à temps',
   'runners.jobToolsLine': 'les jobs tournent avec : Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'absent (un job qui l’appelle échoue)',
   'runners.jobToolUnknown': 'présent, mais sans réponse',

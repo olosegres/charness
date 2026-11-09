@@ -8,7 +8,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkHasCapability, checkIsRunnerPaused, describeKeepAwakeMethod, formatRunnerBlock, parseProbeOutput, type RunnerReport } from '../remoteRun/probe';
+import { checkHasCapability, checkIsPueueUnknown, checkIsRunnerPaused, describeKeepAwakeMethod, formatRunnerBlock, jobToolUnknown, parseProbeOutput, type RunnerReport } from '../remoteRun/probe';
 
 const linuxProbeText = [
   'os=Linux', 'arch=x86_64', 'kernel=6.8.0-45-generic', 'os_name=Ubuntu', 'os_version=24.04',
@@ -35,6 +35,14 @@ describe('parseProbeOutput', () => {
     assert.equal(checkHasCapability(probe, 'android'), true);
     assert.equal(checkHasCapability(probe, 'ios'), false);
     assert.equal(probe.capabilities.ios.detail, 'Linux');
+  });
+
+  it('"pueue=unknown" (Pueue is there, `--version` gave no answer in time) is not "no Pueue": it is kept, as the node and yarn of a job are', () => {
+    const probe = parseProbeOutput('os=Linux\npueue=unknown\n');
+    assert.equal(probe.pueueVersion, jobToolUnknown);
+    assert.equal(checkIsPueueUnknown(probe), true);
+    assert.equal(checkIsPueueUnknown(parseProbeOutput('os=Linux\npueue=4.0.4\n')), false);
+    assert.equal(checkIsPueueUnknown(parseProbeOutput('os=Linux\npueue=missing\n')), false);
   });
 
   it('a missing key is unknown, never a guess; "pueue=missing" is no Pueue', () => {
@@ -218,6 +226,12 @@ describe('formatRunnerBlock', () => {
   it('says so when Pueue is missing', () => {
     const block = formatRunnerBlock({ name: 'bare', status: 'online', probe: parseProbeOutput('os=Linux\npueue=missing\n'), groupLimits: {}, isPausedByHub: false });
     assert.match(block, /Pueue: MISSING/);
+  });
+
+  it('a Pueue that did not answer in time is said to be there, not MISSING', () => {
+    const block = formatRunnerBlock({ name: 'busy-box', status: 'online', probe: parseProbeOutput('os=Linux\npueue=unknown\n'), groupLimits: {}, isPausedByHub: false });
+    assert.match(block, /Pueue: present, no answer in time/);
+    assert.doesNotMatch(block, /MISSING/);
   });
 
   it('one project reads "1 project"; unknown numbers show as ?', () => {

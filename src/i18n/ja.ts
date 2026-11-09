@@ -1219,6 +1219,7 @@ export const jaDict: Record<string, string> = {
   'runners.oldSimulatorsLine': '古いランタイムのシミュレータ（括弧内はデバイス数。何も削除しません）: {runtimes}',
   'runners.diskLowNote': '不足 — このランナーは {minFree} の空きを保ちます',
   'runners.pueueMissing': 'このランナーには Pueue がありません',
+  'runners.pueueUnknown': 'このランナーには Pueue があるが、時間内に応答なし',
   'runners.jobToolsLine': 'ジョブの実行環境: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'なし（呼び出すジョブは失敗します）',
   'runners.jobToolUnknown': 'あるが応答なし',

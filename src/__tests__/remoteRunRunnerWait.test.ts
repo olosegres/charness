@@ -66,6 +66,11 @@ describe('what is worth waiting for', () => {
     assert.equal(planRunnerWait(config, [offline('mac', 'os=Linux\npueue=missing\ncap_android=yes\n')], { runner: null, needs: 'android' }), null);
   });
 
+  it('a runner whose Pueue did not answer in time when last seen is still waited for (only a missing one is not)', () => {
+    const plan = planRunnerWait(config, [offline('mac', 'os=Linux\npueue=unknown\ncap_android=yes\n')], { runner: null, needs: 'android' });
+    assert.deepEqual(plan?.runnerNames, ['mac']);
+  });
+
   it('a paused runner is not waited for — from the hub, or paused on the runner when it was last seen', () => {
     assert.equal(planRunnerWait(config, [offline('mac', withAndroid, { isPausedByHub: true })], { runner: null, needs: 'android' }), null);
     assert.equal(planRunnerWait(config, [offline('mac', `${withAndroid}paused=yes\n`)], { runner: null, needs: 'android' }), null);

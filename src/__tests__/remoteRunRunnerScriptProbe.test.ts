@@ -137,8 +137,17 @@ describe('the probe fits its 20 s however many of its questions hang', () => {
     assert.equal(lines.cap_ios, 'no');
     assert.equal(lines.cap_ios_detail, 'Xcode did not answer in time');
     assert.equal(lines.cap_docker, 'no');
-    assert.equal(lines.pueue, 'missing');
+    assert.equal(lines.pueue, 'unknown', 'a Pueue that is there but does not answer in time is not a missing one');
     assert.ok(Number(lines.disk_free_mb) > 0, 'the answers that did come are reported');
+  });
+
+  it('Pueue: its version when it answers, `unknown` when it is there but does not answer in time (a loaded machine), `missing` only when it is not there', () => {
+    writeFake('pueue', 'echo "pueue 4.0.4"');
+    assert.equal(probeSlowOfAMac().lines.pueue, '4.0.4');
+    writeFake('pueue', 'exec sleep 120');
+    assert.equal(probeSlowOfAMac().lines.pueue, 'unknown');
+    fs.rmSync(path.join(fakeBin, 'pueue'));
+    assert.equal(probeSlowOfAMac().lines.pueue, 'missing');
   });
 
   it('a slow simctl does not turn a working Xcode into "no Xcode", nor invent a simulator count', () => {

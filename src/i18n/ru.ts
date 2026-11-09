@@ -1229,6 +1229,7 @@ export const ruDict: Record<string, string> = {
   'runners.oldSimulatorsLine': 'симуляторы старых рантаймов (в скобках — устройства; ничего не удаляется): {runtimes}',
   'runners.diskLowNote': 'МАЛО — раннер держит свободными {minFree}',
   'runners.pueueMissing': 'На этом раннере нет Pueue',
+  'runners.pueueUnknown': 'Pueue на этом раннере есть, но не ответил вовремя',
   'runners.jobToolsLine': 'задачи работают с: Node {node} · yarn {yarn}',
   'runners.jobToolNone': 'нет (задача, которой он нужен, упадёт)',
   'runners.jobToolUnknown': 'есть, но не ответил',

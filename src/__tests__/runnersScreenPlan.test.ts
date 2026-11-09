@@ -431,6 +431,13 @@ describe('runnersScreenPlan: the list', () => {
     assert.ok(text.includes('projects: 1 · 1 at once · Pueue is missing on this runner'), text);
   });
 
+  it('a Pueue that gave no answer in time is said to be there, not missing', () => {
+    const probe: RunnerProbe = { ...parseProbeOutput(probeText.replace('pueue=4.0.4', 'pueue=unknown')) };
+    const { text } = buildRunnersScreen({ revision, entries: [createEntry({ probe })], openPairingExpiries: [], isChecking: false }, t, formatTime);
+    assert.ok(text.includes('projects: 1 · 1 at once · Pueue is there, but gave no answer'), text);
+    assert.ok(!text.includes('Pueue is missing'), text);
+  });
+
   it('no machines: the empty text and only the pair and refresh buttons', () => {
     const screen = buildRunnersScreen({ revision, entries: [], openPairingExpiries: [], isChecking: false }, t, formatTime);
     assert.equal(screen.text, 'Runners — machines your agents can send tests and builds to\n\nNo runners yet. A runner is any machine (Mac, Linux) your agents can send tests and builds to.');

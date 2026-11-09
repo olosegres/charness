@@ -27,6 +27,8 @@ const config: RunnersConfig = {
 const linuxWithAndroid = 'os=Linux\nos_name=Ubuntu\npueue=4.0.4\ncap_android=yes\ncap_android_detail=KVM, emulator\ncap_ios=no\ncap_ios_detail=Linux\ncap_docker=no\ncap_playwright=no\n';
 const macWithIos = 'os=Darwin\nos_name=macOS\npueue=4.0.4\ncap_ios=yes\ncap_ios_detail=Xcode 16.2, 5 simulators\ncap_android=no\ncap_docker=no\ncap_playwright=no\n';
 const noPueue = 'os=Linux\nos_name=Ubuntu\npueue=missing\ncap_android=yes\ncap_ios=no\ncap_docker=no\ncap_playwright=no\n';
+// Pueue is installed, but its `--version` gave no answer within the probe's step limit (a machine under load): not «no Pueue».
+const slowPueue = 'os=Linux\nos_name=Ubuntu\npueue=unknown\ncap_android=yes\ncap_ios=no\ncap_docker=no\ncap_playwright=no\n';
 
 function online(name: string, probeText: string): RunnerReport {
   return { name, status: 'online', probe: parseProbeOutput(probeText), groupLimits: {}, isPausedByHub: false };
@@ -49,6 +51,11 @@ describe('pickRunner — no name given', () => {
 
   it('a runner without Pueue is not usable, however capable', () => {
     assert.deepEqual(pickRunner(config, [online('mac', noPueue), online('box1', linuxWithAndroid), online('box2', noPueue)], { runner: null, needs: null }), { ok: true, runnerName: 'box1' });
+  });
+
+  it('a runner whose Pueue did not answer in time is still usable — only a Pueue that is not there refuses it', () => {
+    assert.deepEqual(pickRunner(config, [online('mac', slowPueue), online('box1', linuxWithAndroid)], { runner: null, needs: null }), { ok: true, runnerName: 'mac' });
+    assert.deepEqual(pickRunner(config, [online('mac', slowPueue), online('box1', linuxWithAndroid)], { runner: null, needs: 'android' }), { ok: true, runnerName: 'mac' });
   });
 
   it('nobody online: exit 125 and the view of every runner', () => {
@@ -80,6 +87,10 @@ describe('pickRunner — a runner named', () => {
   it('offline: 125 with why', () => {
     const pick = pickRunner(config, reports, { runner: 'box2', needs: null });
     assert.ok(!pick.ok && pick.exitCode === 125 && pick.message.startsWith('runner "box2" is offline (ssh: connection timed out)'));
+  });
+
+  it('a Pueue that did not answer in time: the named runner is picked', () => {
+    assert.deepEqual(pickRunner(config, [online('box3', slowPueue)], { runner: 'box3', needs: 'android' }), { ok: true, runnerName: 'box3' });
   });
 
   it('no Pueue: 125 saying to install it', () => {

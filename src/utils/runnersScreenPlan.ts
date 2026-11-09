@@ -15,7 +15,7 @@
 
 import type { Translate } from '../i18n';
 import { getJobsAtOnce, jobsAtOnceChoices, pairingJobsAtOnceChoices } from '../remoteRun/runnersConfig';
-import { checkIsDiskLow, formatGigabytes, formatOlderSimulators, jobToolNone, jobToolUnknown, runnerCapabilities, type RunnerProbe } from '../remoteRun/probe';
+import { checkIsDiskLow, checkIsPueueUnknown, formatGigabytes, formatOlderSimulators, jobToolNone, jobToolUnknown, runnerCapabilities, type RunnerProbe } from '../remoteRun/probe';
 import type { PairedRunner, RunnerServiceKind } from '../runners/hubRegistry';
 import { unconfirmedRemovalStopAfterHours } from '../runners/removalTiming';
 import { getCurrentServiceKind } from '../runners/runnerServiceKind';
@@ -203,6 +203,12 @@ function describeKeepsAwake(probe: RunnerProbe, t: Translate): string[] {
   return [`  ${t('runners.keepsAwakeLine', { how })}`];
 }
 
+/** ` · Pueue is missing on this runner` when Pueue is not there, ` · Pueue is there, but gave no answer in time` when its version call hung (a busy machine: still usable); nothing when it answered. */
+function describePueueNote(probe: RunnerProbe, t: Translate): string {
+  if (probe.pueueVersion === null) return ` · ${t('runners.pueueMissing')}`;
+  return checkIsPueueUnknown(probe) ? ` · ${t('runners.pueueUnknown')}` : '';
+}
+
 /** The Node and yarn a job runs with, one line (nothing when the runner's script did not report them): a Node that changed under a restarted link shows here. */
 function describeJobTools(probe: RunnerProbe, t: Translate): string[] {
   if (probe.jobTools === null) return [];
@@ -259,7 +265,7 @@ function buildEntryLines(entry: RunnerScreenEntry, t: Translate, formatTime: For
   if (entry.isOnline && entry.isLidClosed !== true && entry.isBusy !== true) {
     lines.push(
       `  ${t('runners.hardwareLine', { cpu: describeCpu(probe, t, true), ramTotal: formatGigabytes(probe.ramTotalMb), ramFree: formatGigabytes(probe.ramFreeMb), disk: formatGigabytes(probe.diskFreeMb) })}${describeLowDisk(probe, t)}`,
-      `  ${t('runners.jobsLine', { running: probe.jobsRunning, queued: probe.jobsQueued, projects: probe.jobsProjects })} · ${t('runners.jobsAtOnceNote', { count: getJobsAtOnce(runner) })}${probe.pueueVersion === null ? ` · ${t('runners.pueueMissing')}` : ''}`,
+      `  ${t('runners.jobsLine', { running: probe.jobsRunning, queued: probe.jobsQueued, projects: probe.jobsProjects })} · ${t('runners.jobsAtOnceNote', { count: getJobsAtOnce(runner) })}${describePueueNote(probe, t)}`,
       ...describeProjectCopies(probe, t),
       `  ${describeCapabilities(probe, t)}`,
       ...describeOlderSimulators(probe, t),
