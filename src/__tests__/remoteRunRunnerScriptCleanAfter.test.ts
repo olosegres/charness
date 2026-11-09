@@ -15,7 +15,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { compilePathPatterns, getPathPatternSearchRoots } from '../remoteRun/pathPatterns';
-import { jobId, scriptPath, slug, writeFile } from './remoteRunRunnerScriptKit';
+import { jobId, scriptPath, slug, writeFile, removeTestRoot } from './remoteRunRunnerScriptKit';
 
 const isCi = process.env.CI === 'true' || process.env.CI === '1';
 const hasRsync = spawnSync('rsync', ['--version'], { stdio: 'ignore' }).status === 0;
@@ -68,7 +68,7 @@ beforeEach(() => {
 afterEach(() => {
   // A case may leave a read-only folder behind (a failed assertion): `rm` would stop at it.
   spawnSync('chmod', ['-R', 'u+rwX', workRoot]);
-  fs.rmSync(workRoot, { recursive: true, force: true });
+  removeTestRoot(workRoot);
 });
 
 describe('clean_after_success', () => {

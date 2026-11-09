@@ -12,7 +12,7 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { scriptPath } from './remoteRunRunnerScriptKit';
+import { scriptPath, removeTestRoot } from './remoteRunRunnerScriptKit';
 
 /** Records every call; `parallel` fails for the group named in FAKE_FAIL_GROUP. */
 const fakePueue = `#!/bin/bash
@@ -44,7 +44,7 @@ beforeEach(() => {
   fs.writeFileSync(path.join(root, 'bin', 'pueue'), fakePueue, { mode: 0o755 });
 });
 afterEach(() => {
-  fs.rmSync(root, { recursive: true, force: true });
+  removeTestRoot(root);
 });
 
 describe('runner.sh apply-groups', () => {

@@ -14,7 +14,7 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile } from './remoteRunRunnerScriptKit';
+import { scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile, removeTestRoot } from './remoteRunRunnerScriptKit';
 
 let workRoot = '';
 let workDir = '';
@@ -26,7 +26,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   stopRunnerStandIns();
-  fs.rmSync(workRoot, { recursive: true, force: true });
+  removeTestRoot(workRoot);
 });
 
 describe('the project lock', () => {

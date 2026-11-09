@@ -13,7 +13,7 @@ import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { scriptPath, startRunnerStandIn, stopRunnerStandIns, writeFile } from './remoteRunRunnerScriptKit';
+import { scriptPath, startRunnerStandIn, stopRunnerStandIns, writeFile, removeTestRoot } from './remoteRunRunnerScriptKit';
 
 const slug = 'app-aaaaaaaaaa';
 const otherSlug = 'app-bbbbbbbbbb';
@@ -96,7 +96,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   stopRunnerStandIns();
-  fs.rmSync(root, { recursive: true, force: true });
+  removeTestRoot(root);
 });
 
 function getEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {

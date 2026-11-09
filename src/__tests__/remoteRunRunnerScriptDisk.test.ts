@@ -18,7 +18,7 @@ import os from 'os';
 import path from 'path';
 import { diskTooLowRunnerExitCode } from '../remoteRun/pruneReport';
 import { parseProbeOutput } from '../remoteRun/probe';
-import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile } from './remoteRunRunnerScriptKit';
+import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile, stopDetachedRuns } from './remoteRunRunnerScriptKit';
 
 const kibPerGib = 1024 * 1024;
 const dayMs = 24 * 60 * 60 * 1000;
@@ -58,8 +58,10 @@ function writeExecutable(file: string, content: string): void {
 }
 
 function removeTree(target: string): void {
+  // What the script detached (`measure-copies` of a refused `prepare`, the sweep) may still be writing into a copy.
+  stopDetachedRuns(target);
   spawnSync('chmod', ['-R', 'u+rwX', target]);
-  fs.rmSync(target, { recursive: true, force: true });
+  fs.rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 function getEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -375,6 +377,17 @@ describe('a submit on a disk that stays short', () => {
     assert.equal(fs.existsSync(path.join(ownDir, 'jobs', jobId)), false);
     assert.equal(fs.existsSync(path.join(ownDir, 'stage', jobId)), false);
     assert.ok(fs.existsSync(path.join(ownDir, 'jobs', 'box1-earlie')));
+  });
+
+  it('starts the detached walk that measures the copies only AFTER it has taken this submit\'s copy back: a walk that outlives the call and meets the folder being removed would leave a copy nothing knows (a figure and no `used`: no prune takes it)', () => {
+    writeJob(makeCopy('big-qqqqqqqqqq', 80, 2 * hourMs), 'box1-busy00', { 'task-id': '2\n' });
+    const launchLog = path.join(workRoot, 'launch-log');
+    // `nice` starts the detached run: what the submit's own folder looks like at that moment is the point.
+    writeExecutable(path.join(fakeBinDir, 'nice'), `#!/bin/bash\necho "launched own-copy-exists=$([ -d '${path.join(workDir, 'p', slug)}' ] && echo yes || echo no)" >> '${launchLog}'\nshift 2\nexec "$@"\n`);
+    const result = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '60' });
+    assert.equal(result.status, diskTooLowRunnerExitCode, result.stderr);
+    assert.equal(fs.readFileSync(launchLog, 'utf8').trim(), 'launched own-copy-exists=no', 'the first-ever copy of the refused submit is already gone when the walk starts');
+    assert.equal(fs.existsSync(path.join(workDir, 'p', slug)), false, 'and stays gone');
   });
 
   it('says when no project copy is there to free: the disk is full of other things', () => {
@@ -982,6 +995,83 @@ describe('what shows the sizes of clones says that `du` counts them in full', ()
   it('a runner with no clone says 0, as a runner that predates the seed (the field is absent) reads as none', () => {
     makeCopy('alone-aaaaaaaaaa', 5, hourMs);
     assert.match(runScript(['probe', workDir]).stdout, /^copies_cloned=0$/m);
+  });
+
+  it('two groups of clones and copies that belong to none: every member of a group of two or more counts, nothing else (a lone mark, an orphan whose origin is gone, a copy that stands alone)', () => {
+    for (const [name, marks] of [
+      ['a-aaaaaaaaaa', { isSource: true }], ['b-bbbbbbbbbb', { seededFrom: 'a-aaaaaaaaaa' }], ['c-cccccccccc', { seededFrom: 'a-aaaaaaaaaa' }],
+      ['d-dddddddddd', { isSource: true }], ['e-eeeeeeeeee', { seededFrom: 'd-dddddddddd' }],
+      ['f-ffffffffff', {}], ['g-gggggggggg', { seededFrom: 'gone-zzzzzzzzzz' }], ['h-hhhhhhhhhh', { isSource: true }],
+    ] as const) {
+      const copyDir = makeCopy(name, 1, hourMs);
+      if ('seededFrom' in marks) writeFile(copyDir, 'seeded-from', `${marks.seededFrom}\n`);
+      if ('isSource' in marks) writeFile(copyDir, 'seed-shared', '');
+    }
+    assert.equal(parseProbeOutput(runScript(['probe', workDir]).stdout).copies?.clonedCount, 5, 'a, b, c and d, e');
+  });
+
+  describe('the cost is linear in the number of copies: each copy\'s group is read once (a runner whose every copy is a clone: the owner\'s Mac)', () => {
+    const copyCount = 24;
+    /** A `cat` that logs every read of a `seeded-from` mark: one is one `get_copy_seed_group`, which is the script's own forks. */
+    function logSeedGroupReads(): string {
+      const logFile = path.join(workRoot, 'seed-group-reads');
+      writeExecutable(path.join(fakeBinDir, 'cat'), `#!/bin/bash\ncase "$*" in *seeded-from*) echo read >> '${logFile}' ;; esac\nexec /bin/cat "$@"\n`);
+      return logFile;
+    }
+    const countReads = (logFile: string): number => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split('\n').filter((line) => line !== '').length : 0);
+    function makeAllClones(): void {
+      for (let number = 0; number < copyCount; number += 1) {
+        const copyDir = makeCopy(`clone-${number.toString().padStart(2, '0')}aaaaaaaa`, 1, hourMs);
+        writeFile(copyDir, number === 0 ? 'seed-shared' : 'seeded-from', number === 0 ? '' : 'clone-00aaaaaaaa\n');
+      }
+    }
+
+    it('a probe reads each copy\'s mark once, not once per copy for each copy', () => {
+      makeAllClones();
+      const logFile = logSeedGroupReads();
+      const copies = parseProbeOutput(runScript(['probe', workDir]).stdout).copies;
+      assert.equal(copies?.clonedCount, copyCount);
+      assert.ok(countReads(logFile) <= copyCount, `${countReads(logFile)} reads for ${copyCount} copies`);
+    });
+
+    it('so does the refusal that names the biggest copies', () => {
+      makeAllClones();
+      const runnerPid = startRunnerStandIn();
+      for (let number = 0; number < copyCount; number += 1) writeJob(path.join(workDir, 'p', `clone-${number.toString().padStart(2, '0')}aaaaaaaa`), 'box1-runnin', { 'task-id': '5\n', pid: `${runnerPid}\n` });
+      assert.equal(runScript(['measure-copies', workDir]).status, 0);
+      const logFile = logSeedGroupReads();
+      const refused = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '90', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
+      assert.equal(refused.status, diskTooLowRunnerExitCode);
+      assert.match(refused.stderr, /\(clones counted in full\)/);
+      assert.ok(countReads(logFile) <= copyCount + 2 * 3, `${countReads(logFile)} reads for ${copyCount} copies`);
+    });
+  });
+
+  it('the note names only what the line names: clones that are NOT among the biggest copies listed do not make the listed ones «counted in full»', () => {
+    const runnerPid = startRunnerStandIn();
+    // Three big copies that stand alone (they are the ones listed) and a small pair of clones nobody names.
+    for (const name of ['big-one-aaaaaaaaaa', 'big-two-bbbbbbbbbb', 'big-three-cccccccccc']) writeJob(makeCopy(name, 30, 5 * hourMs), 'box1-runnin', { 'task-id': '5\n', pid: `${runnerPid}\n` });
+    for (const [name, mark] of [['small-source-dddddddddd', 'seed-shared'], ['small-clone-eeeeeeeeee', 'seeded-from']] as const) {
+      const copyDir = makeCopy(name, 1, 5 * hourMs);
+      writeFile(copyDir, mark, mark === 'seeded-from' ? 'small-source-dddddddddd\n' : '');
+      writeJob(copyDir, 'box1-runnin', { 'task-id': '5\n', pid: `${runnerPid}\n` });
+    }
+    assert.equal(runScript(['measure-copies', workDir]).status, 0);
+    const refused = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '90', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
+    assert.equal(refused.status, diskTooLowRunnerExitCode);
+    assert.match(refused.stderr, /biggest project copies: big-(one|two|three)-\w+ 30 GB, big-\w+-\w+ 30 GB, big-\w+-\w+ 30 GB; free space with/);
+    assert.doesNotMatch(refused.stderr, /clones counted/);
+  });
+
+  it('the two notes of the listing share one parenthesis: «(and 1 not measured yet; clones counted in full)»', () => {
+    const runnerPid = startRunnerStandIn();
+    makeClonedCopies();
+    for (const name of ['a-aaaaaaaaaa', 'b-bbbbbbbbbb', 'c-cccccccccc', 'd-dddddddddd']) writeJob(path.join(workDir, 'p', name), 'box1-runnin', { 'task-id': '5\n', pid: `${runnerPid}\n` });
+    // One copy with no figure: a job runs in it, so the refusal cannot measure it (it measures nothing).
+    writeJob(makeCopy('unmeasured-eeeeeeeeee', 30, 5 * hourMs), 'box1-runnin', { 'task-id': '5\n', pid: `${runnerPid}\n` });
+    const refused = runScript(['prepare', workDir, slug, jobId, 'default=1'], { REMOTE_RUN_MIN_FREE_GB: '90', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
+    assert.equal(refused.status, diskTooLowRunnerExitCode);
+    assert.match(refused.stderr, /biggest project copies: [^(;]* \(and 1 not measured yet; clones counted in full\); free space with/);
   });
 
   it('the refusal of a submit that names the biggest copies says so when some of them are clones — and says nothing of it when none is', () => {

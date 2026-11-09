@@ -14,7 +14,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { parseProbeOutput } from '../remoteRun/probe';
-import { scriptPath, writeFile } from './remoteRunRunnerScriptKit';
+import { scriptPath, writeFile, removeTestRoot } from './remoteRunRunnerScriptKit';
 
 /** What `xcrun simctl list devices available` prints: iOS 26.4 is older than iOS 26.5 (same major), iOS 27.1 is another major, a lone runtime is the newest of its major. */
 const deviceListWithOlderRuntimes = `== Devices ==
@@ -146,7 +146,7 @@ beforeEach(() => {
 afterEach(() => {
   // A held `simctl` must not outlive the test.
   fs.writeFileSync(releaseFile, '');
-  fs.rmSync(workRoot, { recursive: true, force: true });
+  removeTestRoot(workRoot);
 });
 
 describe('the older Simulator runtimes (list_older_simulator_runtimes)', () => {

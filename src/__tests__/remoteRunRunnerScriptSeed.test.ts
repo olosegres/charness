@@ -19,7 +19,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { checkIsRsyncAvailable, createRunnerState, getRunEnvironment, runJob, startJob, waitUntil, type JobOutcome, type JobSpec, type RunnerState } from './remoteRunRunnerJobKit';
-import { scriptPath, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile } from './remoteRunRunnerScriptKit';
+import { scriptPath, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile, removeTestRoot } from './remoteRunRunnerScriptKit';
 
 const isCi = process.env.CI === 'true' || process.env.CI === '1';
 const rsyncSkip = !checkIsRsyncAvailable() && !isCi ? 'rsync is not installed here (CI installs it)' : false;
@@ -41,7 +41,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   stopRunnerStandIns();
-  fs.rmSync(root, { recursive: true, force: true });
+  removeTestRoot(root);
 });
 
 const installRunsFile = (): string => path.join(root, 'install-runs');

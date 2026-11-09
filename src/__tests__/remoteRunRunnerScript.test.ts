@@ -19,7 +19,7 @@ import os from 'os';
 import path from 'path';
 import { parseJobFacts } from '../remoteRun/jobState';
 import { checkIsProcessRunning } from './e2e/isolatedCharness';
-import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile } from './remoteRunRunnerScriptKit';
+import { jobId, scriptPath, slug, startRunnerStandIn, startStrangerProcess, stopRunnerStandIns, writeFile, removeTestRoot } from './remoteRunRunnerScriptKit';
 
 const isCi = process.env.CI === 'true' || process.env.CI === '1';
 const hasRsync = spawnSync('rsync', ['--version'], { stdio: 'ignore' }).status === 0;
@@ -45,7 +45,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   stopRunnerStandIns();
-  fs.rmSync(workRoot, { recursive: true, force: true });
+  removeTestRoot(workRoot);
 });
 
 describe('the script as text', () => {

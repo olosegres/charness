@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import { checkIsProcessAlive, createGuiAgent, createGuiAgentDeps, readProcessStart, writeGuiAgentStatus, type GuiAgent } from '../runnerUtility/guiAgent';
 import { writeGuiAgentInstallFailure } from '../runnerUtility/guiAgentHeal';
 import { getRunnerHomePaths } from '../runnerUtility/runnerHome';
-import { jobId, scriptPath, slug } from './remoteRunRunnerScriptKit';
+import { jobId, scriptPath, slug, removeTestRoot } from './remoteRunRunnerScriptKit';
 
 let root = '';
 let stateDir = '';
@@ -52,7 +52,7 @@ beforeEach(() => {
 afterEach(() => {
   if (ticker !== null) clearInterval(ticker);
   agent?.stop();
-  fs.rmSync(root, { recursive: true, force: true });
+  removeTestRoot(root);
 });
 
 function markNeedsIos(): void {

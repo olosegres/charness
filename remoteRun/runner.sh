@@ -574,12 +574,13 @@ probe_disk_target() {
 # with no figure, or used since their figure was written, is copies_unmeasured). Asking never waits for a `du`: a missing figure starts the measuring detached — for a VIEW of the runners only (`probe <work> prune`): the probe a
 # run or an `exec` makes first comes right before its `prepare`, and a walk over the copy about to be built would compete with the build.
 probe_copies() {
-  local count=0 total_kb=0 unmeasured=0 cloned=0 copy_dir size_file size_kb
+  local count=0 total_kb=0 unmeasured=0 seed_groups= copy_group copy_dir size_file size_kb
   for copy_dir in "$work"/p/*/; do
     [ -d "$copy_dir" ] || continue
     count=$((count + 1))
-    # `du` counts the blocks a clone shares with its source in full, so the total is more than the disk holds: the views say so when some copy is one.
-    check_copy_shares_blocks "$work" "$(basename "$copy_dir")" && cloned=$((cloned + 1))
+    # `du` counts the blocks a clone shares with its source in full, so the total is more than the disk holds: the views say so when some copy is one (each copy's group is read once, counted after the loop).
+    copy_group=$(get_copy_seed_group "$work" "$(basename "$copy_dir")")
+    [ -z "$copy_group" ] || seed_groups="$seed_groups$copy_group"$'\n'
     size_file="${copy_dir}size-kb"
     size_kb=$(read_file "$size_file")
     case $size_kb in
@@ -593,7 +594,7 @@ probe_copies() {
   echo "copies_count=$count"
   echo "copies_size_mb=$(kb_to_mb "$total_kb")"
   echo "copies_unmeasured=$unmeasured"
-  echo "copies_cloned=$cloned"
+  echo "copies_cloned=$(count_copies_in_shared_groups "$seed_groups")"
   [ "$unmeasured" -gt 0 ] && [ "$probe_may_prune" = prune ] && start_detached_run "$work" measure-copies
   return 0
 }
@@ -917,8 +918,6 @@ cmd_prepare() {
   start_tmpdir_sweep_if_due "$work"
   # A prune that ran at the same moment may have taken the folder this job was just given (its copy looked unused): say so, never answer with a folder that is gone.
   [ -d "$jd" ] || die "the project copy was being removed while this job was prepared — submit again"
-  # Only a refusal needs fresh sizes (it names the biggest copies; the walk is started before it, so that the next submit has them): a submit that goes on does not start a walk over its neighbours' trees.
-  check_disk_is_short "$work" && start_detached_run "$work" measure-copies
   refuse_when_disk_is_short
   echo "work=$(cd "$work" && pwd -P)"
 }
@@ -1427,12 +1426,16 @@ refuse_when_disk_is_short() {
   rm -rf "$jd" "$stage"
   rmdir "$proj/stage" "$jobs_dir" "$tree" 2> /dev/null
   [ -z "$(ls -A "$proj" 2> /dev/null | grep -v -x -e used -e size-kb)" ] && rm -rf "$proj"
-  local copy_dir copy_slug size_kb sizes= listing= copies=0 unmeasured=0 has_clones=0
+  # Only a refusal needs fresh sizes (it names the biggest copies; the walk is detached, so that the next submit has them): a submit that goes on does not start a walk over its neighbours' trees. Started only now, with this submit's copy
+  # taken back: the walk outlives this call and writes `size-kb` into every copy it finds — into the folder this refusal was removing, it would leave a copy that nothing knows (no `used`: no prune ever takes it) behind.
+  start_detached_run "$work" measure-copies
+  local copy_dir copy_slug size_kb sizes= listing= copies=0 unmeasured=0 seed_groups= copy_group is_listing_cloned=0
   for copy_dir in "$work"/p/*/; do
     [ -d "$copy_dir" ] || continue
     copies=$((copies + 1))
     copy_slug=$(basename "$copy_dir")
-    check_copy_shares_blocks "$work" "$copy_slug" && has_clones=1
+    copy_group=$(get_copy_seed_group "$work" "$copy_slug")
+    [ -z "$copy_group" ] || seed_groups="$seed_groups$copy_group"$'\n'
     if size_kb=$(read_copy_size_kb "$work" "$copy_slug" written); then
       sizes="$sizes$size_kb $copy_slug"$'\n'
     else
@@ -1441,16 +1444,18 @@ refuse_when_disk_is_short() {
   done
   while read -r size_kb copy_slug; do
     listing="${listing:+$listing, }$copy_slug $(format_kb_as_gb "$size_kb")"
+    # A clone's figure counts the blocks it shares with its source in full (`du` cannot see them shared): removing one gives back less than it says. Only the copies the line NAMES are asked.
+    copy_group=$(get_copy_seed_group "$work" "$copy_slug")
+    [ -n "$copy_group" ] && check_group_is_shared "$seed_groups" "$copy_group" && is_listing_cloned=1
   done < <(printf '%s' "$sizes" | sort -rn | head -n "$refusal_copy_count")
   local advice="there is no project copy here to free: the disk is full of other files"
   if [ "$copies" -gt 0 ]; then
     advice="free space with \`charness remote-run clean <slug>\` on the copies of project folders whose last task is closed (\`charness remote-run runners\` shows what they take)"
-    local also_unmeasured=
-    [ "$unmeasured" -gt 0 ] && also_unmeasured=" (and $unmeasured not measured yet)"
-    # A clone's figure counts the blocks it shares with its source in full (`du` cannot see them shared): removing one gives back less than it says.
-    local also_clones=
-    [ "$has_clones" -eq 1 ] && also_clones=" (clones counted in full)"
-    [ -n "$listing" ] && advice="biggest project copies: $listing$also_unmeasured$also_clones; $advice"
+    local listing_notes=
+    [ "$unmeasured" -gt 0 ] && listing_notes="and $unmeasured not measured yet"
+    [ "$is_listing_cloned" -eq 1 ] && listing_notes="${listing_notes:+$listing_notes; }clones counted in full"
+    [ -n "$listing_notes" ] && listing_notes=" ($listing_notes)"
+    [ -n "$listing" ] && advice="biggest project copies: $listing$listing_notes; $advice"
     [ -z "$listing" ] && advice="$copies project copies, their sizes are still being measured; $advice"
     [ "$prune_stopped_without_gain" -eq 1 ] && advice="$advice. Removing copies did not give their space back (on a Mac: APFS local snapshots or purgeable space; anywhere: jobs writing meanwhile, see docs/remote-run.md)"
   fi
@@ -2808,6 +2813,17 @@ check_copy_shares_blocks() {
     [ "$(get_copy_seed_group "$1" "$other_slug")" = "$group" ] && return 0
   done
   return 1
+}
+
+# How many copies of a list of seed groups (one per line, the group of each copy that has one: `get_copy_seed_group`) share disk blocks with another: those whose group has two members or more. One pass over a list that the caller built while it was
+# reading the copies anyway — `check_copy_shares_blocks` per copy would walk every copy for each (a probe of 30 clones: ~2,700 forks, on the path of every run).
+count_copies_in_shared_groups() {
+  printf '%s' "$1" | sort | uniq -c | awk '$1 >= 2 { total += $1 } END { print total + 0 }'
+}
+
+# Is seed group $2 held by two copies or more in the list $1 (one group per line)?
+check_group_is_shared() {
+  [ "$(printf '%s' "$1" | grep -Fxc -- "$2")" -ge 2 ]
 }
 
 # ─────────────────────────── what a copy is given: a number, a port block, a TMPDIR, a Simulator ───────────────────────────

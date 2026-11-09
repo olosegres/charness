@@ -14,6 +14,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { removeTestRoot } from './remoteRunRunnerScriptKit';
 
 const scriptPath = path.resolve(__dirname, '..', '..', 'remoteRun', 'runner.sh');
 const isCi = process.env.CI === 'true' || process.env.CI === '1';
@@ -208,7 +209,7 @@ describe('jobs side by side on one runner, against a real Pueue', { skip: skipRe
   after(() => {
     stopPueueSync();
     process.off('exit', stopPueueSync);
-    fs.rmSync(root, { recursive: true, force: true });
+    removeTestRoot(root);
   });
 
   afterEach(async () => {
