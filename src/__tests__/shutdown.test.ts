@@ -39,9 +39,10 @@ function createHeldStep(): { wait: () => Promise<void>; release: () => void } {
 
 /** The shutdown must return by itself; if it does not (the watchdog did not cut the held step) the test says so instead of waiting for the file's time limit. */
 const returnBoundMs = 5000;
-async function returns<T>(work: Promise<T>): Promise<T> {
+async function returns<T>(work: Promise<T>, releaseHeldStep: () => void = () => {}): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`gracefulShutdown did not return within ${returnBoundMs} ms`)), returnBoundMs); });
+  // On a timeout the held step is let go, so the shutdown that was waiting on it settles and the test fails cleanly instead of leaving a promise pending.
+  const timeout = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { releaseHeldStep(); reject(new Error(`gracefulShutdown did not return within ${returnBoundMs} ms`)); }, returnBoundMs); });
   try {
     return await Promise.race([work, timeout]);
   } finally {
@@ -157,7 +158,7 @@ test('watchdog forces exit when state.flush is slower than the watchdog', async 
   const held = createHeldStep();
   const { deps, events, exitCode, drained } = makeDeps({ heldFlush: held, watchdogMs: 50 });
 
-  await returns(gracefulShutdown(deps));
+  await returns(gracefulShutdown(deps), held.release);
 
   assert.equal(exitCode(), 0, 'watchdog must still exit(0) so nodemon respawns');
   // releaseLock fires from the watchdog path so the next respawn finds a
@@ -246,7 +247,7 @@ test('a slow clearTransientFrames still hits the watchdog and forces exit', asyn
     clearTransientFrames: () => held.wait(),
   });
 
-  await returns(gracefulShutdown(deps));
+  await returns(gracefulShutdown(deps), held.release);
 
   assert.equal(exitCode(), 0, 'watchdog must still exit(0) so nodemon respawns');
   assert.ok(events.includes('releaseLock'), `releaseLock must fire; events=${JSON.stringify(events)}`);
@@ -300,7 +301,7 @@ test('a hanging finalizePendingOutput still hits the watchdog and forces exit', 
     finalizePendingOutput: () => held.wait(),
   });
 
-  await returns(gracefulShutdown(deps));
+  await returns(gracefulShutdown(deps), held.release);
 
   assert.equal(exitCode(), 0, 'watchdog must still exit(0) so nodemon respawns');
   assert.ok(events.includes('releaseLock'), `releaseLock must fire; events=${JSON.stringify(events)}`);
