@@ -98,6 +98,7 @@ export const enDict: Record<string, string> = {
     '/quit /status /output — control\n' +
     '/compact — compact agent context\n' +
     '/compact_on_idle — auto-compact after idle (toggle)\n' +
+    '/compact_mistakes — the agent\'s mistakes in the compaction summary (toggle)\n' +
     '/bot_skills — the bot\'s own skills for agents (on / off for this topic)\n' +
     '/todo — the agent\'s published todo list and the project it shares a board with\n' +
     '/limits — usage of every account and provider; tap one to switch this topic\n' +
@@ -484,14 +485,17 @@ export const enDict: Record<string, string> = {
   'compactOnIdle.on': 'ON',
   'compactOnIdle.off': 'OFF',
   'compactOnIdle.title':
-    '🧹 Auto-compact on idle for this topic: {state}\n{summaryLine}\n\nWhen the session sits idle for ~55 min its context is compacted automatically to save tokens (the prompt cache is still warm).\n\nTo switch it for ALL topics at once, run this in the General topic.',
+    '🧹 Auto-compact on idle for this topic: {state}\n{summaryLine}\n{mistakesLine}\n\nWhen the session sits idle for ~55 min its context is compacted automatically to save tokens (the prompt cache is still warm).\n\nTo switch it for ALL topics at once, run this in the General topic.',
   'compactOnIdle.titleGeneral':
-    '🧹 Auto-compact on idle — default for ALL topics: {state}\n{summaryLine}\n\nWhen a session sits idle for ~55 min its context is compacted automatically to save tokens.\n\nEach topic can still override this with its own /compact_on_idle.',
+    '🧹 Auto-compact on idle — default for ALL topics: {state}\n{summaryLine}\n{mistakesLine}\n\nWhen a session sits idle for ~55 min its context is compacted automatically to save tokens.\n\nEach topic can still override this with its own /compact_on_idle.',
   'compactOnIdle.enableButton': 'Enable',
   'compactOnIdle.disableButton': 'Disable',
   'compactOnIdle.summaryLine': '📄 Summary after a compaction: {state}',
   'compactOnIdle.summaryShowButton': '📄 Show summary',
   'compactOnIdle.summaryHideButton': 'Hide summary',
+  'compactOnIdle.mistakesLine': '💡 Agent mistakes in the summary: {state}',
+  'compactOnIdle.mistakesShowButton': '💡 Show mistakes',
+  'compactOnIdle.mistakesHideButton': 'Hide mistakes',
   'compactOnIdle.setThisTopic': '✅ Auto-compact on idle: {state} for this topic.',
   'compactOnIdle.setGlobal': '✅ Auto-compact on idle: {state} for ALL topics (per-topic overrides still apply).',
   'compactOnIdle.unsupported': 'Auto-compact on idle applies to an active agent session. Start /claude or /opencode in a bound topic first.',
@@ -507,6 +511,17 @@ export const enDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ Compaction summary: {state} for this topic.',
   'compactSummary.setGlobal': '✅ Compaction summary: {state} for ALL topics (per-topic overrides still apply).',
   'compactSummary.unsupported': 'A shell has no context to compact, so there is no summary to post.',
+  'compactMistakes.on': 'ON',
+  'compactMistakes.off': 'OFF',
+  'compactMistakes.title':
+    '💡 Agent mistakes in the compaction summary, in this topic: {state}\n\nA compaction summary can end with the mistakes the agent made in the session — the repeated ones above all — that a change to its rules, skills or CLAUDE.md / AGENTS.md could have prevented. The bot posts that part into the topic even when the full summary is hidden. Off: the agent is not asked for it (no tokens are spent on it) and nothing is posted.\n\nTo switch it for ALL topics at once, run this in the General topic.',
+  'compactMistakes.titleGeneral':
+    '💡 Agent mistakes in the compaction summary — default for ALL topics: {state}\n\nA compaction summary can end with the mistakes the agent made in the session — the repeated ones above all — that a change to its rules, skills or CLAUDE.md / AGENTS.md could have prevented. The bot posts that part into the topic even when the full summary is hidden. Off: the agent is not asked for it (no tokens are spent on it) and nothing is posted.\n\nEach topic can still override this with its own /compact_mistakes.',
+  'compactMistakes.enableButton': 'Enable',
+  'compactMistakes.disableButton': 'Disable',
+  'compactMistakes.setThisTopic': '✅ Agent mistakes in the compaction summary: {state} for this topic.',
+  'compactMistakes.setGlobal': '✅ Agent mistakes in the compaction summary: {state} for ALL topics (per-topic overrides still apply).',
+  'compactMistakes.unsupported': 'A shell has no context to compact, so there is no summary to hold the agent\'s mistakes.',
 
   'botSkills.on': 'ON',
   'botSkills.off': 'OFF',

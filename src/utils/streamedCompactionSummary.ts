@@ -82,6 +82,8 @@ export interface StreamedSummaryTail {
 export interface StreamedSummaryView {
   /** `/compact_summary` is on for the topic. */
   isSummaryShown: boolean;
+  /** `/compact_mistakes` is on for the topic: while it is off nothing of a hidden summary is collected for the section. */
+  isInstructionGapsEnabled: boolean;
   /** What goes where the agent-mistakes section starts in a summary that is shown. */
   gapsHeader: string;
 }
@@ -146,7 +148,7 @@ export function createStreamedSummaryTracker(): StreamedSummaryTracker {
         return { shown: { text: shownText, isContinuation }, instructionGaps: null };
       }
 
-      if (tail.isBotIssued || summary.isSectionClosed) return noOutcome;
+      if (!view.isInstructionGapsEnabled || tail.isBotIssued || summary.isSectionClosed) return noOutcome;
       summary.collectedText += tail.text;
       const section = parseCompactionInstructionGaps(summary.collectedText);
       if (!section.isComplete) return noOutcome;

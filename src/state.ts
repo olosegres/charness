@@ -19,7 +19,7 @@ import { resolveDefaultDataDir } from './legacyNames';
 import { stateFileName } from './stateFile';
 import { defaultDisplayVerbosityMode, normalizeDisplayVerbosityMode } from './utils/displayVerbosity';
 import { defaultTopicView, parseTopicView } from './utils/topicView';
-import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
+import { resolveCompactMistakesEnabled, resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from './utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled, resolveClaudeAutoSwitchOnLimitEnabled } from './utils/autoContinueOnLimit';
 import { defaultClaudeProfileName, resolveClaudeProfileName as resolveClaudeProfileNameFromSelection, type ClaudeProfileBilling } from './utils/claudeProfiles';
 import type { ClaudeUsageSnapshot } from './utils/claudeUsage';
@@ -451,6 +451,14 @@ export interface StateV1 {
    */
   compactSummaryEnabled?: boolean;
   compactSummaryOverrides?: Record<string, boolean>;
+  /**
+   * Agent-mistakes-section toggle (`/compact_mistakes`): whether a compaction asks the agent for the section and the bot
+   * posts it. Same pair as the `compactSummary*` one, except that an absent `compactMistakesEnabled` reads ON — the section
+   * shipped enabled, so nothing changes until somebody turns it off. Stored EXPLICITLY incl. `false`, so a General choice
+   * is durable; `compactMistakesOverrides` holds the topics' own choices keyed by {@link SessionKey} string.
+   */
+  compactMistakesEnabled?: boolean;
+  compactMistakesOverrides?: Record<string, boolean>;
   /**
    * «Bot skills» switch (`/bot_skills`, `utils/botSkills.ts`): whether the skills and the manager hint the bot ships reach an
    * agent. Same pair as the `compactOnIdle*` one, except that `botSkillsEnabled` — the General value — has NO default here:
@@ -1267,6 +1275,20 @@ export class StateStore {
     });
   }
 
+  /**
+   * @description Every thread with a persisted agent session id, with the ids it holds — what the compaction hook and plugin
+   * flags (`utils/compactMistakesFlags.ts`) are kept in step with, which they must reach for ALL threads at once when the
+   * General default changes.
+   */
+  listAgentSessionIds(): Array<{ key: SessionKey; claudeSessionId: string | null; opencodeSessionId: string | null }> {
+    const out: Array<{ key: SessionKey; claudeSessionId: string | null; opencodeSessionId: string | null }> = [];
+    for (const [keyStr, agent] of Object.entries(this.state.agents)) {
+      const key = tryKeyFromString(keyStr);
+      if (key) out.push({ key, claudeSessionId: agent.claudeSessionId ?? null, opencodeSessionId: agent.opencodeSessionId ?? null });
+    }
+    return out;
+  }
+
   getClaudeSessionId(key: SessionKey): string | null {
     return this.state.agents[keyToString(key)]?.claudeSessionId ?? null;
   }
@@ -1829,6 +1851,46 @@ export class StateStore {
     await this.withLock(key, async () => {
       if (this.state.compactSummaryOverrides?.[k] === enabled) return;
       (this.state.compactSummaryOverrides ??= {})[k] = enabled;
+      this.scheduleSave();
+    });
+  }
+
+  // ── agent-mistakes-section toggle (`/compact_mistakes`) ──
+
+  /**
+   * @description The instance-wide default of the agent-mistakes section (driven from the General topic). ON when unset:
+   * unlike {@link getCompactSummaryGlobalDefault}, the section was always there before the switch existed.
+   */
+  getCompactMistakesGlobalDefault(): boolean {
+    return this.state.compactMistakesEnabled ?? true;
+  }
+
+  /** @description The per-thread override of the section, or `undefined` when the thread follows the instance default. */
+  getCompactMistakesOverride(key: SessionKey): boolean | undefined {
+    return this.state.compactMistakesOverrides?.[keyToString(key)];
+  }
+
+  /** @description Whether a compaction of `key` asks for the section and posts it: the per-thread override, else the instance default (ON when unset). */
+  checkIsCompactMistakesEnabled(key: SessionKey): boolean {
+    return resolveCompactMistakesEnabled(this.state.compactMistakesEnabled, this.getCompactMistakesOverride(key));
+  }
+
+  /**
+   * @description Set the instance-wide default (from General). Stored EXPLICITLY as a boolean, `false` included, so a
+   * choice is durable and distinguishable from «never set». Debounced — a preference, not crash-critical.
+   */
+  async setCompactMistakesGlobalDefault(enabled: boolean): Promise<void> {
+    if (this.state.compactMistakesEnabled === enabled) return;
+    this.state.compactMistakesEnabled = enabled;
+    this.scheduleSave();
+  }
+
+  /** @description Set the per-thread override (from a regular topic); a present true/false wins over the instance default. */
+  async setCompactMistakesOverride(key: SessionKey, enabled: boolean): Promise<void> {
+    const k = keyToString(key);
+    await this.withLock(key, async () => {
+      if (this.state.compactMistakesOverrides?.[k] === enabled) return;
+      (this.state.compactMistakesOverrides ??= {})[k] = enabled;
       this.scheduleSave();
     });
   }

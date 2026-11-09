@@ -94,6 +94,7 @@ export const ptDict: Record<string, string> = {
     '/quit /status /output — controlo\n' +
     '/compact — compactar o contexto do agente\n' +
     '/compact_on_idle — compactar automaticamente após inatividade (alternar)\n' +
+    '/compact_mistakes — os erros do agente no resumo da compactação (alternar)\n' +
     '/bot_skills — skills do bot para os agentes (ligar / desligar neste tópico)\n' +
     '/todo — a lista de tarefas publicada do agente e o seu projeto\n' +
     '/limits — uso de cada conta e fornecedor; toca num para trocar este tópico\n' +
@@ -474,13 +475,16 @@ export const ptDict: Record<string, string> = {
   'compactOnIdle.notice': '🧹 Compactado automaticamente por inatividade para economizar tokens via cache.\n/compact_on_idle — desativar ou mostrar o resumo.',
   'compactOnIdle.on': 'LIGADO',
   'compactOnIdle.off': 'DESLIGADO',
-  'compactOnIdle.title': '🧹 Compactação automática por inatividade para este tópico: {state}\n{summaryLine}\n\nQuando a sessão fica inativa ~55 min, seu contexto é compactado automaticamente para economizar tokens (o cache de prompt ainda está quente).\n\nPara mudar para TODOS os tópicos de uma vez, execute isto no tópico General.',
-  'compactOnIdle.titleGeneral': '🧹 Compactação automática por inatividade — padrão para TODOS os tópicos: {state}\n{summaryLine}\n\nQuando uma sessão fica inativa ~55 min, seu contexto é compactado automaticamente para economizar tokens.\n\nCada tópico ainda pode substituir isso com seu próprio /compact_on_idle.',
+  'compactOnIdle.title': '🧹 Compactação automática por inatividade para este tópico: {state}\n{summaryLine}\n{mistakesLine}\n\nQuando a sessão fica inativa ~55 min, seu contexto é compactado automaticamente para economizar tokens (o cache de prompt ainda está quente).\n\nPara mudar para TODOS os tópicos de uma vez, execute isto no tópico General.',
+  'compactOnIdle.titleGeneral': '🧹 Compactação automática por inatividade — padrão para TODOS os tópicos: {state}\n{summaryLine}\n{mistakesLine}\n\nQuando uma sessão fica inativa ~55 min, seu contexto é compactado automaticamente para economizar tokens.\n\nCada tópico ainda pode substituir isso com seu próprio /compact_on_idle.',
   'compactOnIdle.enableButton': 'Ativar',
   'compactOnIdle.disableButton': 'Desativar',
   'compactOnIdle.summaryLine': '📄 Resumo após a compactação: {state}',
   'compactOnIdle.summaryShowButton': '📄 Mostrar resumo',
   'compactOnIdle.summaryHideButton': 'Ocultar resumo',
+  'compactOnIdle.mistakesLine': '💡 Erros do agente no resumo: {state}',
+  'compactOnIdle.mistakesShowButton': '💡 Mostrar erros',
+  'compactOnIdle.mistakesHideButton': 'Ocultar erros',
   'compactOnIdle.setThisTopic': '✅ Compactação automática por inatividade: {state} para este tópico.',
   'compactOnIdle.setGlobal': '✅ Compactação automática por inatividade: {state} para TODOS os tópicos (substituições por tópico ainda se aplicam).',
   'compactOnIdle.unsupported': 'A compactação automática por inatividade aplica-se a uma sessão de agente ativa. Inicie /claude ou /opencode em um tópico vinculado primeiro.',
@@ -496,6 +500,17 @@ export const ptDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ Resumo da compactação: {state} para este tópico.',
   'compactSummary.setGlobal': '✅ Resumo da compactação: {state} para TODOS os tópicos (as sobreposições por tópico continuam a aplicar-se).',
   'compactSummary.unsupported': 'Uma shell não tem contexto para compactar, portanto não há resumo para publicar.',
+  'compactMistakes.on': 'LIGADO',
+  'compactMistakes.off': 'DESLIGADO',
+  'compactMistakes.title':
+    '💡 Erros do agente no resumo da compactação, neste tópico: {state}\n\nUm resumo de compactação pode terminar com os erros que o agente cometeu na sessão (sobretudo os repetidos) e que uma mudança nas suas regras, skills ou no CLAUDE.md / AGENTS.md teria evitado. O bot publica essa parte no tópico mesmo com o resumo completo oculto. Desligado: o agente não é solicitado a isso (nenhum token é gasto) e nada é publicado.\n\nPara alterar em TODOS os tópicos de uma vez, execute isto no tópico General.',
+  'compactMistakes.titleGeneral':
+    '💡 Erros do agente no resumo da compactação — padrão para TODOS os tópicos: {state}\n\nUm resumo de compactação pode terminar com os erros que o agente cometeu na sessão (sobretudo os repetidos) e que uma mudança nas suas regras, skills ou no CLAUDE.md / AGENTS.md teria evitado. O bot publica essa parte no tópico mesmo com o resumo completo oculto. Desligado: o agente não é solicitado a isso (nenhum token é gasto) e nada é publicado.\n\nCada tópico ainda pode sobrepor isto com o seu próprio /compact_mistakes.',
+  'compactMistakes.enableButton': 'Ativar',
+  'compactMistakes.disableButton': 'Desativar',
+  'compactMistakes.setThisTopic': '✅ Erros do agente no resumo da compactação: {state} para este tópico.',
+  'compactMistakes.setGlobal': '✅ Erros do agente no resumo da compactação: {state} para TODOS os tópicos (as sobreposições por tópico continuam a aplicar-se).',
+  'compactMistakes.unsupported': 'Uma shell não tem contexto para compactar, portanto não há resumo com erros do agente.',
 
   'botSkills.on': 'LIGADO',
   'botSkills.off': 'DESLIGADO',

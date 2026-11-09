@@ -263,6 +263,8 @@ import { checkIsAdoptedToolListStale } from './utils/adoptedToolList';
 import { buildLostWorkNote, checkHasLostBackgroundWork, checkHasLostWork, type LostWorkRecord, formatLostWorkTopicLine, getHeldLostWorkPlan, getLostWorkFromTailRecord, getLostWorkPlan, getTailRecordWithoutPendingWork, mergeLostWorkRecords, type LostWork, type LostWorkReason } from './utils/lostWork';
 import { pendingWorkHoldDefaultMs } from './utils/jsonStreamPendingWork';
 import { getAgentIdleMs } from './utils/compactOnIdle';
+import { getCompactMistakesFlagDirs } from './utils/compactMistakesFlags';
+import { resolveOpenCodeGlobalPluginDir } from './utils/openCodeCompactPlugin';
 import { createSendFilesToThread } from './utils/fileSendService';
 import { createSendMessagesToThread } from './utils/messageSendService';
 import { createTelegramFileSendGateway } from './connectors/telegram/fileSendGateway';
@@ -5298,6 +5300,8 @@ function getPerTurnRefusal(key: SessionKey): { version: string } | null {
  */
 async function persistSessionStart(key: SessionKey, adapter: AgentAdapter): Promise<void> {
   await persistAdapterSessionIds(key, adapter, state);
+  // The session id is new or changed: the hook's and the plugin's flags for it (`/compact_mistakes`) are due.
+  syncThreadCompactMistakesFlags(key);
   if (checkIsJsonStreamBackend(adapter.name) && botMcpToolDigestReader) {
     await state.setAgentMcpToolDigest(key, botMcpToolDigestReader(key));
   }
@@ -6168,6 +6172,8 @@ const {
   restoreReAskedQuestion,
   closeSavedReAskedQuestion,
   closeReAskedQuestion,
+  syncThreadCompactMistakesFlags,
+  syncAllCompactMistakesFlags,
   registerCompactionCommands,
   registerCompactionCallbacks,
 } = createCompaction({
@@ -6189,6 +6195,7 @@ const {
   checkIsStarting: (key) => startupPromptBuffer.checkIsStarting(keyToString(key)),
   closeOrphanQuestionMessage,
   notePersonActivity,
+  compactMistakesFlagDirs: getCompactMistakesFlagDirs(resolveDataDir(), resolveOpenCodeGlobalPluginDir(process.env)),
 });
 
 /**
@@ -9628,7 +9635,7 @@ const botCommands = new Set([
   'start', 'claude', 'opencode', 'oc', 'terminal', 'agent', 'sessions', 'resume', 'cancel', 'model', 'connect',
   'disconnect', 'stop', 'stopall', 'stop-all', 'quit-all', 'status', 'c', 'y', 'n', 'enter', 'up', 'down', 'tab', 'esc', 'escape', 'interrupt', 'output', 'clear_messages',
   'bind', 'topic', 'unbind', 'where', 'ls', 'list', 'new', 'whoami', 'version', 'help', 'language', 'lang',
-  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'bot_skills', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
+  'doctor', 'mcp', 'rename_session', 'compact', 'compact_on_idle', 'compact_summary', 'compact_mistakes', 'bot_skills', 'task_agents', 'runners', 'auto_continue_limits', 'limits', 'limits_autoswitch', 'trace', 'timestamps', 'timezone', 'schedule', 'reminders', 'todo', 'thinking', 'tool_results',
   'subagent', 'claude_mode', 'effort', 'verbosity', 'quit', 'q', 'quitall', 'pair', 'account', 'accounts', 'fallback', 'stt', 'voice', 'speech', 'update',
 ]);
 
@@ -12921,6 +12928,7 @@ export const COMMANDS_MENU = [
   { command: 'compact', description: '🧹 Compact agent context' },
   { command: 'compact_on_idle', description: '🧹 Auto-compact after idle (toggle)' },
   { command: 'compact_summary', description: '📄 Post the compaction summary (toggle)' },
+  { command: 'compact_mistakes', description: '💡 Agent mistakes in the compaction summary (toggle)' },
   { command: 'bot_skills', description: '🧰 The bot\'s own skills for agents (on/off)' },
   { command: 'task_agents', description: '🧵 How many tracker task agents work at once' },
   { command: 'runners', description: '🖥 Runners — machines for the agents\' tests and builds' },
@@ -14573,6 +14581,8 @@ export async function startBot(): Promise<void> {
   registerClaudeConfigDirReader(resolveThreadClaudeConfigDir);
   // The «Bot skills» switch (`/bot_skills`): every agent start, the OpenCode server's start and the bot MCP's instructions read it.
   setBotSkillsReader(botSkillsReader);
+  // The flags the CLI's and OpenCode's own compactions read for `/compact_mistakes` follow the saved settings from the start.
+  syncAllCompactMistakesFlags();
   registerClaudeRateLimitSink(onClaudeRateLimitEvent);
   registerClaudeTurnCostSink(onClaudeTurnCost);
   if (ENV.testTimings.openCodeServerUpBudgetMs !== undefined) registerOpenCodeServerUpBudgetMs(ENV.testTimings.openCodeServerUpBudgetMs);

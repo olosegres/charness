@@ -159,7 +159,7 @@ describe('launch settings', () => {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     assert.equal(settings.apiKeyHelper, buildClaudeApiKeyHelperCommand(profileDir));
     const hook = settings.hooks.PreCompact[0].hooks[0].command;
-    assert.equal(execFileSync('sh', ['-c', hook], { input: '{"trigger":"auto"}', encoding: 'utf8' }), `${getHookCompactionInstruction()}\n`);
+    assert.equal(execFileSync('sh', ['-c', hook], { input: '{"trigger":"auto"}', encoding: 'utf8' }), `${getHookCompactionInstruction(true)}\n`);
     assert.equal(fs.statSync(settingsPath).mode & 0o777, 0o600);
     assert.ok(!fs.readFileSync(settingsPath, 'utf8').includes(apiKey), 'the settings name the key file, never the key');
     assert.equal(fs.existsSync(path.join(dataDir, claudeCompactHookSettingsFileName)), false, 'the shared file is not that launch\'s');

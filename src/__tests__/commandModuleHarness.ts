@@ -7,11 +7,15 @@
  * Matches neither the `*.test.ts` nor the `*.e2e.ts` runner globs, so it is never run as a test itself.
  */
 
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { Telegraf } from 'telegraf';
 import type { BotCore, CommandContext, RegisterCommand } from '../connectors/telegram/commands/botCore';
 import { makeTelegramKey } from '../connectors/telegram/sessionKeyCodec';
 import type { SessionKey } from '../sessionKey';
 import { getStateStore, type StateStore } from '../state';
+import type { CompactMistakesFlagDirs } from '../utils/compactMistakesFlags';
 import { FakeTelegram } from './telegramE2e/fakeTelegram';
 
 export const harnessGroup = { id: -1001111111111, title: 'ExampleGroup' };
@@ -46,6 +50,12 @@ const foreignChatSpace = '-1002222222222';
 const defaultCommandMessageId = 1;
 
 export class CommandHarness {
+  /** The folder the flags of `/compact_mistakes` go to: the module under test never reaches the real DATA_DIR or OpenCode config of the machine. */
+  private readonly flagRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'command-harness-flags-'));
+  readonly compactMistakesFlagDirs: CompactMistakesFlagDirs = {
+    claudeOffDir: path.join(this.flagRoot, 'claude-off'),
+    openCodeOffDir: path.join(this.flagRoot, 'opencode-off'),
+  };
   readonly key: SessionKey = makeTelegramKey(harnessGroup.id, harnessThreadId);
   readonly replies: RecordedSend[] = [];
   readonly edits: RecordedSend[] = [];
@@ -183,6 +193,7 @@ export class CommandHarness {
 
   async stop(): Promise<void> {
     await this.fakeTelegram.stop();
+    fs.rmSync(this.flagRoot, { recursive: true, force: true });
   }
 }
 

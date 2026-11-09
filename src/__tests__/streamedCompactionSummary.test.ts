@@ -86,8 +86,9 @@ function tail(text: string, overrides: Partial<StreamedSummaryTail> = {}): Strea
   return { text, isContinuation: false, summaryId: 'msg_s1', isBotIssued: false, ...overrides };
 }
 
-const shownView = { isSummaryShown: true, gapsHeader };
-const hiddenView = { isSummaryShown: false, gapsHeader };
+const shownView = { isSummaryShown: true, isInstructionGapsEnabled: true, gapsHeader };
+const hiddenView = { isSummaryShown: false, isInstructionGapsEnabled: true, gapsHeader };
+const hiddenNoMistakesView = { isSummaryShown: false, isInstructionGapsEnabled: false, gapsHeader };
 
 test('tracker, shown: tails go to the topic with the scaffolding out, and a continuation stays one only after something was shown', () => {
   const tracker = createStreamedSummaryTracker();
@@ -165,6 +166,16 @@ test('tracker, hidden: the section comes out once, the moment its end marker has
   assert.deepEqual(outcomes.filter((outcome) => outcome.instructionGaps !== null).map((outcome) => outcome.instructionGaps), [sectionText], 'the section once');
   const postedAt = outcomes.findIndex((outcome) => outcome.instructionGaps !== null);
   assert.ok(sliceEvery(summary, 9).slice(0, postedAt + 1).join('').includes(compactionGapsEndMarker), 'at the tail that completed the end marker line');
+});
+
+test('tracker, hidden, `/compact_mistakes` OFF: a section that does arrive is not collected and not posted — the same summary posts it with the switch ON', () => {
+  const summaryTails = [`body\n${compactionGapsStartMarker}\n1. Mistake: a.\n`, `${compactionGapsEndMarker}\n`];
+  const posted = (view: typeof hiddenView): Array<string | null> => {
+    const tracker = createStreamedSummaryTracker();
+    return summaryTails.map((text, index) => tracker.push('t', tail(text, { isContinuation: index > 0 }), view).instructionGaps);
+  };
+  assert.deepEqual(posted(hiddenView), [null, '1. Mistake: a.'], 'ON: posted once the end marker arrived');
+  assert.deepEqual(posted(hiddenNoMistakesView), [null, null], 'OFF: nothing is posted, and nothing was collected for it');
 });
 
 test('tracker, hidden: after the section is out the summary\'s later tails — and an answer that continues it — are not collected', () => {

@@ -103,8 +103,9 @@ General change (a burst of edits would queue ahead of agent output).
 ## `compaction.ts`
 
 `/compact`, `/compact_on_idle` (its buttons `coi_on` / `coi_off`, plus `coi_sum_on` / `coi_sum_off` for the
-`/compact_summary` switch on the same picker), `/compact_summary` (`csum_on` / `csum_off`; OFF by default; read
-when a compaction finishes, so unlike `/compact_on_idle` it needs no live session), the compact-on-idle
+`/compact_summary` switch and `coi_mis_on` / `coi_mis_off` for the `/compact_mistakes` switch on the same picker), `/compact_summary` (`csum_on` / `csum_off`; OFF by default; read
+when a compaction finishes, so unlike `/compact_on_idle` it needs no live session), `/compact_mistakes` (`cmis_on` / `cmis_off`; ON by default;
+read the same way; the one write path is `applyCompactMistakes`), the compact-on-idle
 watchdog with its re-ask, the full-summary post (`postCompactionSummary`) and the deferred compaction the
 `compact_conversation` MCP tool arms. In General a switch is the instance-wide default, in a regular topic that
 topic's override. Execution always goes through
@@ -112,8 +113,9 @@ topic's override. Execution always goes through
 counted as a turn (a manual compaction used to push the idle stamp back and be compacted again one window
 later). EVERY compaction summary ends with a numbered «what to do next» checklist — item 1 «load these skills» with their exact names
 (left out when none was loaded), then the next steps the summary already records, none invented. ONE text asks for it
-(`compactionResumeGuidance` in `utils/compactOnIdle.ts`: the skills sentence + `compactionGapsGuidance` + `compactionChecklistGuidance`) and every path carries that
-constant: `getCompactionInstruction` here (manual `/compact`, the agent's `compact_conversation`, the idle compaction), the Claude
+(`compactionResumeGuidance` in `utils/compactOnIdle.ts`: `compactionGapsGuidance` + the skills sentence + `compactionChecklistGuidance`; with `/compact_mistakes` OFF
+`compactionResumeGuidanceWithoutGaps`, the last two, picked by `getCompactionResumeGuidance`) and every path carries one of those two:
+`getCompactionInstruction` here (manual `/compact`, the agent's `compact_conversation`, the idle compaction), the Claude
 `PreCompact` hook and the OpenCode plugin (the CLI's / server's own overflow compactions). Only the idle compaction also asks for the
 closing section (`compact.closingSectionInstruction`, wrapped in the `<<<WHERE_WE_STOPPED>>>` markers), whose LAST part, right before the
 end marker, is that checklist; elsewhere the checklist ends the summary. The section text is the same English in all 12 locales but for
@@ -123,8 +125,17 @@ when empty): the agent's mistakes in the session, repeated ones above all, that 
 with the proposed change and where it goes — a PROPOSAL, the agent never edits instructions itself, and it is written in the conversation's
 language (the hook and the plugin are shared by all topics, so no locale is baked in). The older resume text (skills + checklist) stays a
 contiguous substring of the new one — the new sentence goes AHEAD of it — because a process started before a deploy keeps its `PreCompact` hook,
-which skips a compaction by finding exactly that. The bot posts that section on its own, EVEN WITH `/compact_summary` OFF
-(`checkShouldPostInstructionGaps` is the one rule; `extractCompactionInstructionGaps` lifts it out by its marker lines): from `runThreadCompaction`
+which skips a compaction by finding exactly that; the current hook's own marker is that same shared part, so it also leaves alone a bot-issued instruction
+WITHOUT the section. **`/compact_mistakes` OFF** removes the request from the instruction the bot sends (`runThreadCompaction` reads
+`checkIsCompactMistakesEnabled` once and uses it for both the instruction and the posting gate) and from the two prompts the agent's own process builds: the
+hook and the plugin run INSIDE the agent, long after the bot started it, so they cannot be handed the setting — the bot keeps ONE EMPTY FILE per agent session
+whose topic has the section OFF (`utils/compactMistakesFlags.ts`: Claude's in `DATA_DIR/compact-mistakes-off/<claudeSessionId>`, OpenCode's in
+`charness-compact-mistakes-off/<opencodeSessionId>` beside OpenCode's plugin folder, found by the plugin from its own `import.meta.url`), and the hook (stdin
+`session_id`) and the plugin (`input.sessionID`) look for it right before they add the request; no file means ON. `state.json` stays the one source:
+`syncThreadCompactMistakesFlags` (a setting change in a topic; `persistSessionStart` for a new or resumed session id) and `syncAllCompactMistakesFlags` (the
+General default; every boot) copy the resolved value into the files, only for the sessions of this instance's threads. The `compactMistakesFlagDirs` port names the
+two folders (the tests give temp ones — a test must never reach the real `DATA_DIR` or OpenCode config). The bot posts that section on its own, EVEN WITH `/compact_summary` OFF
+(`checkShouldPostInstructionGaps` is the one rule, also false when the setting is OFF; `extractCompactionInstructionGaps` lifts it out by its marker lines): from `runThreadCompaction`
 for the bot's own compactions on EVERY backend (the `/compact` seam, `compact_conversation`, the idle compaction — notice → section → the re-asked
 question; OpenCode's stream is dropped in hide mode, so the section is read after the compaction through `getLatestCompactionSummary`, in order),
 from `postOwnCompactionInstructionGaps` when json-stream reports the CLI's OWN overflow compaction (`contextCompacted`; nobody posts that

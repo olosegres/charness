@@ -195,6 +195,10 @@ import { claudeSessionStateEventsVariableName } from '../../utils/jsonStreamHost
  * last `--settings`) run as the real CLI runs them — what one gives the agent as `additionalContext` is logged to
  * `hooks.jsonl`.
  *
+ * Every compaction (a `/compact` turn and the overflow mode's own) runs the launch's `PreCompact` hooks first, as the real
+ * CLI does: each gets the hook input on stdin (`custom_instructions` is what followed `/compact`, null for the CLI's own),
+ * and what they print is logged to `pre-compact-hooks.jsonl` — the instruction the real CLI appends to the compaction's.
+ *
  * Like the real CLI, a user message that arrives mid-turn is NEVER read inside
  * that turn: turns run one at a time, in arrival order.
  *
@@ -299,8 +303,27 @@ function getPostToolUseHookCommands(argv: readonly string[]): string[] {
   return (settings?.hooks?.PostToolUse ?? []).flatMap((group) => (group.hooks ?? []).flatMap((hook) => (hook.type === 'command' && typeof hook.command === 'string' ? [hook.command] : [])));
 }
 
+/** The `PreCompact` command hooks of the launch's settings (no matcher: every compaction). */
+function getPreCompactHookCommands(argv: readonly string[]): string[] {
+  const settings = readLaunchSettings(argv) as { hooks?: { PreCompact?: Array<{ hooks?: Array<{ type?: string; command?: string }> }> } } | null;
+  return (settings?.hooks?.PreCompact ?? []).flatMap((group) => (group.hooks ?? []).flatMap((hook) => (hook.type === 'command' && typeof hook.command === 'string' ? [hook.command] : [])));
+}
+
 /** How long a hook command may run, as the real CLI bounds it (it waits up to a minute; the fake's are quick). */
 const hookTimeoutMs = 10_000;
+
+/**
+ * The launch's `PreCompact` hooks run before a compaction the way the real CLI runs them: the hook input on stdin, what
+ * they print appended to the compaction's instructions — logged to `pre-compact-hooks.jsonl` (one record per compaction).
+ */
+function runPreCompactHooks(argv: readonly string[], sessionId: string, trigger: 'auto' | 'manual', customInstructions: string | null): void {
+  const input = JSON.stringify({ session_id: sessionId, transcript_path: getTranscriptPath(sessionId), cwd: process.cwd(), hook_event_name: 'PreCompact', trigger, custom_instructions: customInstructions });
+  const instruction = getPreCompactHookCommands(argv)
+    .map((command) => spawnSync('/bin/sh', ['-c', command], { input, encoding: 'utf8', timeout: hookTimeoutMs }).stdout ?? '')
+    .join('')
+    .trim();
+  appendJsonLine(fakeClaudeLogFileNames.preCompactHooks, { sessionId, pid: process.pid, trigger, instruction });
+}
 
 /**
  * A tool call the way the real CLI makes it, its `PostToolUse` hooks included: each hook gets the hook input on stdin
@@ -902,15 +925,17 @@ function recordCompactionSummary(sessionId: string): void {
 }
 
 /** The CLI's own compaction at a context overflow: nobody asked for it, and no `/compact` turn is running. */
-function emitOverflowCompaction(sessionId: string): void {
+function emitOverflowCompaction(argv: readonly string[], sessionId: string): void {
+  runPreCompactHooks(argv, sessionId, 'auto', null);
   recordCompactionSummary(sessionId);
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 190_000, post_tokens: 9_000 }, session_id: sessionId });
 }
 
 /** The real CLI's answer to a `/compact` turn: status, boundary with token counts, result. `instruction` is what followed `/compact` (the bot's summary guidance), recorded for the flows. */
-function runCompactionTurn(sessionId: string, instruction: string): void {
+function runCompactionTurn(argv: readonly string[], sessionId: string, instruction: string): void {
   writeStdout({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', apiKeySource: launchApiKeySource, tools: [], mcp_servers: [], claude_code_version: getReportedClaudeCodeVersion() });
   writeStdout({ type: 'system', subtype: 'status', status: 'compacting', session_id: sessionId });
+  runPreCompactHooks(argv, sessionId, 'manual', instruction === '' ? null : instruction);
   writeStdout({ type: 'system', subtype: 'status', compact_result: 'success', session_id: sessionId });
   recordCompactionSummary(sessionId);
   writeStdout({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 25_600, post_tokens: 2_800 }, session_id: sessionId });
@@ -969,7 +994,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
     // to be put to the user), `usage-limit-once` (a limit needs none to stop the turn; the bot's later "continue"
     // nudge carries no token, so it is answered — the "once") and `overflow` (the CLI's own compaction needs none).
     const noRequestMode = modeRe.exec(content)?.[1];
-    if (noRequestMode === 'overflow') emitOverflowCompaction(sessionId);
+    if (noRequestMode === 'overflow') emitOverflowCompaction(argv, sessionId);
     if (noRequestMode === 'usage-limit-once') {
       endTurnOnUsageLimit(sessionId, limitResetsRe.exec(content)?.[1] ?? 'in 1h');
       return;
@@ -1058,7 +1083,7 @@ async function runTurn(argv: readonly string[], sessionId: string, content: stri
   if (state.mode === 'compact' && server) {
     logToolCall(compactToolName, { reason: 'a person asked' }, await callBotTool(server, compactToolName, { reason: 'a person asked' }));
   }
-  if (state.mode === 'overflow') emitOverflowCompaction(sessionId);
+  if (state.mode === 'overflow') emitOverflowCompaction(argv, sessionId);
   if (state.mode === 'fetch-attachment' && server) {
     for (const attachmentId of (fetchIdsRe.exec(content)?.[1] ?? '').split(',').filter(Boolean)) {
       logToolCall(attachmentToolName, { attachmentId }, await callBotTool(server, attachmentToolName, { attachmentId }));
@@ -1179,7 +1204,7 @@ async function main(): Promise<void> {
     const content = frame.message.content;
     // `/compact`, or `/compact <the bot's summary guidance>` (D3) — the real CLI parses either.
     if (content.trim() === compactCommandText || content.startsWith(`${compactCommandText} `)) {
-      turnChain = turnChain.then(() => runCompactionTurn(sessionId, content.trim().slice(compactCommandText.length).trim()));
+      turnChain = turnChain.then(() => runCompactionTurn(argv, sessionId, content.trim().slice(compactCommandText.length).trim()));
       return;
     }
     const promptIssueKey = issueKeyRe.exec(content)?.[1] ?? 'unknown';

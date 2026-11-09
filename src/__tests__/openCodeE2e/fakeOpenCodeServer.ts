@@ -17,7 +17,9 @@
  * A compaction can be played out ({@link FakeOpenCodeServer.setNextSummarize}, {@link FakeOpenCodeServer.emitCompactionSummary}):
  * the summary message the server stores (`message.updated` with `summary: true`, served by `GET /session/:id/message` after
  * the compaction), its text streamed in chunks far enough apart that the bot's output debounce makes each its own tail, and
- * the idle the session goes to after.
+ * the idle the session goes to after. With a `pluginDir` (the folder the bot's compaction plugin is installed in) every compaction
+ * — the bot's `/compact` and the server's own — first runs the plugin's `experimental.session.compacting` hook the way the real
+ * server does, and what it pushed into the compaction prompt is kept in {@link FakeOpenCodeServer.pluginContexts}.
  *
  * Every request is recorded; one that is none of these is answered `404` AND listed in `unhandled`, so a flow can
  * assert the bot asked for nothing the fake does not model. A prompt is recorded with its text and model, and never
@@ -35,6 +37,7 @@
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import { openCodeCompactPluginFileName } from '../../utils/openCodeCompactPlugin';
 
 /** How often the event stream sends a heartbeat (the bot's stall watchdog allows four missed 10 s beats). */
@@ -88,7 +91,15 @@ export interface FakeOpenCodeOptions {
   models: readonly string[];
   /** The server's default model, `provider/model`. */
   defaultModel: string;
+  /** Where the bot's compaction plugin is installed: set, every compaction runs its hook (see the header). */
+  pluginDir?: string;
 }
+
+/** What the plugin's `experimental.session.compacting` hook takes and fills, as OpenCode calls it. */
+type CompactingHook = (input: { sessionID: string }, output: { context: string[] }) => Promise<void>;
+
+/** The file name of the bot's compaction plugin in any version: a content hash after the stem. */
+const compactionPluginFileNamePattern = /^charness-compaction-[0-9a-f]{8}\.js$/;
 
 interface PromptBody {
   parts?: Array<{ type?: string; text?: string }>;
@@ -100,6 +111,8 @@ export class FakeOpenCodeServer {
   readonly unhandled: FakeOpenCodeRequest[] = [];
   readonly prompts: FakeOpenCodePrompt[] = [];
   readonly sessions = new Map<string, FakeOpenCodeSession>();
+  /** What the bot's compaction plugin pushed into the prompt of each compaction, oldest first (only with `pluginDir`). */
+  readonly pluginContexts: Array<{ sessionId: string; context: string[] }> = [];
   /** Per instance directory, the MCP servers registered with `POST /mcp`. */
   readonly mcpRegistrations = new Map<string, string[]>();
   private readonly server: http.Server;
@@ -251,6 +264,7 @@ export class FakeOpenCodeServer {
    */
   async emitCompactionSummary(sessionId: string, summary: FakeCompactionSummary, options: { beforeIdle?: () => Promise<void>; isFinishDropped?: boolean } = {}): Promise<void> {
     const session = this.getSessionOrThrow(sessionId);
+    await this.runCompactionPlugin(sessionId);
     const gapMs = summary.chunkGapMs ?? defaultSummaryChunkGapMs;
     this.runningTurns.add(sessionId);
     this.broadcast({ type: 'session.status', properties: { sessionID: sessionId, status: { type: 'busy' } } }, session.directory);
@@ -265,6 +279,22 @@ export class FakeOpenCodeServer {
     if (!options.isFinishDropped) this.broadcast({ type: 'message.updated', properties: { info: { ...info, finish: 'stop' } } }, session.directory);
     await options.beforeIdle?.();
     this.emitSessionIdle(sessionId);
+  }
+
+  /**
+   * OpenCode runs the plugins' `experimental.session.compacting` hook before EVERY compaction, manual and overflow, and
+   * appends what they push to the compaction prompt: the plugin file the bot installed is imported and called the same way.
+   */
+  private async runCompactionPlugin(sessionId: string): Promise<void> {
+    const { pluginDir } = this.options;
+    if (!pluginDir) return;
+    const fileName = fs.readdirSync(pluginDir).find((name) => compactionPluginFileNamePattern.test(name));
+    if (!fileName) throw new Error(`no compaction plugin is installed in ${pluginDir}`);
+    const pluginModule: { default: { server: (context: object) => Promise<Record<string, CompactingHook>> } } = await import(pathToFileURL(path.join(pluginDir, fileName)).href);
+    const hooks = await pluginModule.default.server({});
+    const output = { context: [] as string[] };
+    await hooks['experimental.session.compacting']({ sessionID: sessionId }, output);
+    this.pluginContexts.push({ sessionId, context: output.context });
   }
 
   private getSessionOrThrow(sessionId: string): FakeOpenCodeSession {

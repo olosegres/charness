@@ -897,6 +897,71 @@ test('compactSummary: a per-thread override beats the instance default, both way
   assert.equal(second.checkIsCompactSummaryEnabled(key1), true);
 });
 
+// ── agent-mistakes-section toggle (/compact_mistakes) ──
+
+test('compactMistakes: ON by default for the instance and for every thread — the section shipped enabled, so nothing changes until somebody turns it off', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  assert.equal(store.getCompactMistakesGlobalDefault(), true, 'unset default means ON');
+  assert.equal(store.getCompactMistakesOverride(key1), undefined, 'no thread has an override yet');
+  assert.equal(store.checkIsCompactMistakesEnabled(key1), true, 'a fresh topic is asked for the section and posts it');
+});
+
+test('compactMistakes: a General choice is DURABLE — an explicit off is stored as false and reloads', async () => {
+  const first = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await first.init();
+  await first.setCompactMistakesGlobalDefault(false);
+  await first.flush();
+
+  // The failure this pins: dropping the stored value reads back as the ON default on the next boot, so a section the
+  // operator switched off for every topic would silently come back after a restart.
+  const raw = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+  assert.equal(raw.compactMistakesEnabled, false, 'off stored explicitly as false, not omitted');
+  const second = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await second.init();
+  assert.equal(second.getCompactMistakesGlobalDefault(), false, 'off survives a reload');
+  assert.equal(second.checkIsCompactMistakesEnabled(key1), false, 'and the instance default applies to a thread');
+
+  await second.setCompactMistakesGlobalDefault(true);
+  assert.equal(second.getCompactMistakesGlobalDefault(), true);
+  assert.equal(second.checkIsCompactMistakesEnabled(key1), true, 'switched back on');
+});
+
+test('compactMistakes: a per-thread override beats the instance default, both ways, and is per-thread', async () => {
+  const first = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await first.init();
+  // An OFF override under the shipped ON default.
+  await first.setCompactMistakesOverride(key1, false);
+  assert.equal(first.checkIsCompactMistakesEnabled(key1), false, 'the override wins over the default');
+  assert.equal(first.checkIsCompactMistakesEnabled(key2), true, 'an untouched thread still follows the default');
+  await first.flush();
+
+  const second = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await second.init();
+  assert.equal(second.getCompactMistakesOverride(key1), false, 'the override survives a reload');
+  assert.equal(second.checkIsCompactMistakesEnabled(key1), false);
+  assert.equal(second.checkIsCompactMistakesEnabled(key2), true);
+
+  // The other direction: an ON override over an OFF instance default.
+  await second.setCompactMistakesGlobalDefault(false);
+  await second.setCompactMistakesOverride(key2, true);
+  assert.equal(second.checkIsCompactMistakesEnabled(key2), true, 'an explicit true override is honoured');
+  assert.equal(second.checkIsCompactMistakesEnabled(key1), false);
+});
+
+test('listAgentSessionIds: every thread with an agent record, with the ids of both backends it holds', async () => {
+  const store = new StateStore(dataDir, { saveDebounceMs: 5 });
+  await store.init();
+  assert.deepEqual(store.listAgentSessionIds(), []);
+  await store.setClaudeSessionId(key1, 'claude-uuid-1');
+  await store.setOpenCodeSessionId(key2, 'ses_2');
+  await store.setOpenCodeSessionId(key1, 'ses_1');
+  const byKey = new Map(store.listAgentSessionIds().map((entry) => [keyToString(entry.key), entry]));
+  assert.deepEqual(byKey.get(keyToString(key1)), { key: key1, claudeSessionId: 'claude-uuid-1', opencodeSessionId: 'ses_1' });
+  assert.deepEqual(byKey.get(keyToString(key2)), { key: key2, claudeSessionId: null, opencodeSessionId: 'ses_2' });
+  assert.equal(byKey.size, 2);
+});
+
 // ── setTransientFrames (transient status-frame ids — restart cleanup, S2) ──
 
 test('setTransientFrames: set → get round-trips the id list for a thread', async () => {

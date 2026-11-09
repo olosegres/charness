@@ -28,7 +28,8 @@ import {
   resolveOpenCodeGlobalPluginDir,
 } from '../utils/openCodeCompactPlugin';
 import { resetLegacyNameState } from '../legacyNames';
-import { compactionChecklistGuidance, compactionGapsGuidance, compactionResumeGuidance } from '../utils/compactOnIdle';
+import { compactionChecklistGuidance, compactionGapsGuidance, compactionResumeGuidance, compactionResumeGuidanceWithoutGaps } from '../utils/compactOnIdle';
+import { getOpenCodeCompactMistakesOffDir, applyCompactMistakesOffFlag } from '../utils/compactMistakesFlags';
 
 type CompactingHook = (input: { sessionID: string }, output: { context: string[]; prompt?: string }) => Promise<void>;
 
@@ -52,16 +53,23 @@ function silenceWarnings(run: () => void): void {
 }
 
 test('getOpenCodeCompactPluginContext: carries the resume guidance (skills + the checklist that ends the summary) and keeps it inside the summary', () => {
-  const context = getOpenCodeCompactPluginContext();
+  const context = getOpenCodeCompactPluginContext(true);
   assert.ok(context.endsWith(compactionResumeGuidance));
   assert.ok(context.endsWith(compactionChecklistGuidance));
   assert.match(context, /inside the summary, never after a closing section/);
 });
 
 test('getOpenCodeCompactPluginContext: the OpenCode server\'s own overflow compaction is asked for the agent-mistakes section too, ahead of the checklist', () => {
-  const context = getOpenCodeCompactPluginContext();
+  const context = getOpenCodeCompactPluginContext(true);
   assert.ok(context.includes(compactionGapsGuidance));
   assert.ok(context.indexOf(compactionGapsGuidance) < context.indexOf(compactionChecklistGuidance));
+});
+
+test('getOpenCodeCompactPluginContext: with the section off (`/compact_mistakes`) it is the skills and the checklist alone, still kept inside the summary', () => {
+  const context = getOpenCodeCompactPluginContext(false);
+  assert.ok(context.endsWith(compactionResumeGuidanceWithoutGaps));
+  assert.ok(!context.includes(compactionGapsGuidance), 'no request for the section');
+  assert.match(context, /inside the summary, never after a closing section/);
 });
 
 test('resolveOpenCodeGlobalPluginDir: follows XDG_CONFIG_HOME like OpenCode', () => {
@@ -84,8 +92,54 @@ test('installOpenCodeCompactPlugin: the installed plugin pushes the guidance on 
     const hooks = await mod.default.server({}, undefined);
     const output = { context: ['EARLIER'], prompt: undefined };
     await (hooks['experimental.session.compacting'] as CompactingHook)({ sessionID: 'ses_1' }, output);
-    assert.deepEqual(output, { context: ['EARLIER', getOpenCodeCompactPluginContext()], prompt: undefined });
+    assert.deepEqual(output, { context: ['EARLIER', getOpenCodeCompactPluginContext(true)], prompt: undefined });
     assert.ok(output.context[1].endsWith(compactionChecklistGuidance), 'the installed plugin asks for the checklist that ends the summary');
+  });
+});
+
+/** Install the plugin under `<dir>/opencode/plugins`, import it the way OpenCode does and return its compaction hook. */
+async function loadInstalledPluginHook(dir: string): Promise<CompactingHook> {
+  const pluginDir = path.join(dir, 'opencode', 'plugins');
+  assert.equal(installOpenCodeCompactPlugin(pluginDir), 'written');
+  const mod = await import(pathToFileURL(path.join(pluginDir, openCodeCompactPluginFileName)).href);
+  const hooks = await mod.default.server({}, undefined);
+  return hooks['experimental.session.compacting'] as CompactingHook;
+}
+
+/** What the plugin pushes into the compaction prompt of `sessionID`. */
+async function getPushedContext(hook: CompactingHook, sessionID: unknown): Promise<string[]> {
+  const output = { context: [] as string[] };
+  await hook({ sessionID } as { sessionID: string }, output);
+  return output.context;
+}
+
+test('installed plugin: the flag of the compacting session (`/compact_mistakes` off) drops the agent-mistakes request — and only that session\'s', async () => {
+  await withTempDir(async (dir) => {
+    const hook = await loadInstalledPluginHook(dir);
+    const flagDir = getOpenCodeCompactMistakesOffDir(path.join(dir, 'opencode', 'plugins'));
+    assert.deepEqual(await getPushedContext(hook, 'ses_off'), [getOpenCodeCompactPluginContext(true)], 'no flag yet: asked, as before the switch');
+
+    applyCompactMistakesOffFlag(flagDir, 'ses_off', false);
+    assert.deepEqual(await getPushedContext(hook, 'ses_off'), [getOpenCodeCompactPluginContext(false)], 'flagged: no section request');
+    assert.deepEqual(await getPushedContext(hook, 'ses_other'), [getOpenCodeCompactPluginContext(true)], 'another session is still asked');
+
+    applyCompactMistakesOffFlag(flagDir, 'ses_off', true);
+    assert.deepEqual(await getPushedContext(hook, 'ses_off'), [getOpenCodeCompactPluginContext(true)], 'switched back on: asked again, with no reload of the plugin');
+  });
+});
+
+test('installed plugin: a session id that is not a plain id never leaves the flag folder, and an unreadable input means ON', async () => {
+  await withTempDir(async (dir) => {
+    const hook = await loadInstalledPluginHook(dir);
+    // A decoy ONE LEVEL UP from the flag folder: were `../decoy` joined into the path, the flag would "exist".
+    const opencodeDir = path.join(dir, 'opencode');
+    fs.writeFileSync(path.join(opencodeDir, 'decoy'), '');
+    for (const hostileId of ['../decoy', 'a/../../opencode/decoy', '', undefined, 42, null]) {
+      assert.deepEqual(await getPushedContext(hook, hostileId), [getOpenCodeCompactPluginContext(true)], `session id ${JSON.stringify(hostileId)}`);
+    }
+    const output = { context: [] as string[] };
+    await (hook as unknown as (input: undefined, output: { context: string[] }) => Promise<void>)(undefined, output);
+    assert.deepEqual(output.context, [getOpenCodeCompactPluginContext(true)], 'no input at all');
   });
 });
 
@@ -168,9 +222,15 @@ const outdatedPluginUrls = [
 
 test('the plugin file name carries a hash of its content: the same text, the same name; another text, another name', () => {
   assert.match(openCodeCompactPluginFileName, /^charness-compaction-[0-9a-f]{8}\.js$/);
-  const source = buildOpenCodeCompactPluginSource(getOpenCodeCompactPluginContext());
+  const source = buildOpenCodeCompactPluginSource({
+    context: getOpenCodeCompactPluginContext(true),
+    contextWithoutInstructionGaps: getOpenCodeCompactPluginContext(false),
+  });
   assert.equal(getOpenCodeCompactPluginFileName(source), openCodeCompactPluginFileName);
-  const olderSource = buildOpenCodeCompactPluginSource('the skills-only text an earlier release carried');
+  const olderSource = buildOpenCodeCompactPluginSource({
+    context: 'the skills-only text an earlier release carried',
+    contextWithoutInstructionGaps: 'the skills-only text an earlier release carried',
+  });
   assert.notEqual(getOpenCodeCompactPluginFileName(olderSource), openCodeCompactPluginFileName);
 });
 

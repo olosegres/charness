@@ -11,7 +11,9 @@
  *   • the CLI's own overflow compaction (`postOwnCompactionInstructionGaps`): posted in both modes, a compaction the bot is
  *     running itself is left to its caller;
  *   • a backend that streams its own summary (OpenCode) with the summary hidden: the section is taken out of the tails the
- *     topic does not get, once per summary, and posted when the end marker has arrived.
+ *     topic does not get, once per summary, and posted when the end marker has arrived;
+ *   • `/compact_mistakes` OFF: the instruction every kind of bot-issued compaction sends no longer asks for the section, and
+ *     nothing of it is posted, whatever the summary holds — back ON, both work again.
  *
  * What the end-to-end flow covers instead: the same through a real bot and a fake `claude` (`compactionInstructionGapsE2e.test.ts`).
  */
@@ -29,11 +31,14 @@ import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { enDict } from '../i18n/en';
 import {
+  compactionChecklistGuidance,
   compactionClosingEndMarker,
   compactionClosingStartMarker,
   compactionGapsEndMarker,
+  compactionGapsGuidance,
   compactionGapsStartMarker,
   compactionNoGapsLine,
+  compactionSkillsGuidance,
   formatTokenCount,
 } from '../utils/compactOnIdle';
 import { createCommandHarness, type CommandHarness } from './commandModuleHarness';
@@ -76,6 +81,10 @@ class StubAdapter extends EventEmitter implements AgentAdapter {
   streamsCompactionSummary = false;
   summary: string | null = null;
   summaryReads = 0;
+  /** The instruction the last compaction was started with. */
+  lastInstruction: string | undefined;
+  /** Set by a test: the adapter then reports that its own compaction prompt already carries the resume guidance (OpenCode with the plugin). */
+  checkHasCompactionResumeHook?: (key: SessionKey) => Promise<boolean>;
 
   async startSession(): Promise<void> {}
   async resumeSession(): Promise<void> {}
@@ -86,7 +95,8 @@ class StubAdapter extends EventEmitter implements AgentAdapter {
   sendSignal(): void {}
   async getSessions(): Promise<AgentSession[]> { return []; }
   rejectQuestion(): void {}
-  async compactContext(): Promise<CompactionResult> {
+  async compactContext(_key: SessionKey, instruction?: string): Promise<CompactionResult> {
+    this.lastInstruction = instruction;
     return { ok: true, preTokens: 25_600, postTokens: 2_800 };
   }
   async getLatestCompactionSummary(): Promise<string | null> {
@@ -130,6 +140,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
     harness = await createCommandHarness();
     compaction = createCompaction({
       ...harness.core,
+      compactMistakesFlagDirs: harness.compactMistakesFlagDirs,
       startTypingLoader: () => {},
       forwardPromptToAgent: async () => {},
       pendingQuestions,
@@ -160,10 +171,13 @@ describe('the agent-mistakes section of a compaction summary, through the compac
     adapter.streamsCompactionSummary = false;
     adapter.summary = null;
     adapter.summaryReads = 0;
+    adapter.lastInstruction = undefined;
     idleFireFinished = createDeferredFlag();
     pendingQuestions.clear();
     harness.replies.length = 0;
     await harness.state.setCompactSummaryOverride(key, false);
+    await harness.state.setCompactMistakesOverride(key, true);
+    await harness.state.setCompactMistakesGlobalDefault(true);
     await harness.state.clearCompactIdleTracking(key);
     await harness.state.setCompactIdleLatched(key, false);
     await harness.state.setAgent(key, { name: adapter.name, claudeSessionId: 'session-gaps' });
@@ -180,6 +194,7 @@ describe('the agent-mistakes section of a compaction summary, through the compac
 
       await harness.runCommand('compact');
 
+      assert.ok(adapter.lastInstruction?.includes(compactionGapsGuidance), 'the agent is asked for the section while `/compact_mistakes` is on (the default)');
       const texts = getReplyTexts();
       assert.equal(texts.length, 3, `started, done, the section: ${JSON.stringify(texts)}`);
       assert.equal(texts[0], enDict['compact.started']);
@@ -370,6 +385,106 @@ describe('the agent-mistakes section of a compaction summary, through the compac
       adapter.streamsCompactionSummary = false;
       await compaction.postOwnCompactionInstructionGaps(trackerKey);
       assert.deepEqual(getReplyTexts(), []);
+    });
+  });
+
+  describe('`/compact_mistakes` OFF', () => {
+    beforeEach(async () => {
+      await harness.runCommand('compact_mistakes', 'off');
+      harness.replies.length = 0;
+    });
+
+    it('/compact and the agent\'s compact_conversation (one seam): the instruction asks for no section — the skills and the checklist stay — and nothing is posted, not even a section the summary holds', async () => {
+      adapter.summary = buildSummary(instructionGapsText);
+
+      await harness.runCommand('compact');
+
+      assert.ok(adapter.lastInstruction, 'the compaction carries an instruction');
+      assert.ok(!adapter.lastInstruction.includes(compactionGapsGuidance), 'no request for the section: no tokens are spent on it');
+      assert.ok(!adapter.lastInstruction.includes(compactionGapsStartMarker), 'and no marker of it');
+      assert.ok(adapter.lastInstruction.includes(compactionSkillsGuidance) && adapter.lastInstruction.includes(compactionChecklistGuidance), 'the skills and the checklist are still asked for');
+      assert.deepEqual(getReplyTexts().map((text) => Array.from(text)[0]), ['🧹', '✅'], 'only the notices');
+      assert.equal(adapter.summaryReads, 0, 'the summary is not even read: there is nothing of it to post');
+    });
+
+    it('back ON: the same compaction asks for the section again and posts it', async () => {
+      await harness.runCommand('compact_mistakes', 'on');
+      harness.replies.length = 0;
+      adapter.summary = buildSummary(instructionGapsText);
+
+      await harness.runCommand('compact');
+
+      assert.ok(adapter.lastInstruction?.includes(compactionGapsGuidance));
+      assert.equal(countRepliesWith(instructionGapsText), 1);
+    });
+
+    it('a backend that bakes the resume guidance into its own compaction (OpenCode with the plugin) gets none from the bot, so nothing of the section rides the instruction either', async () => {
+      adapter.checkHasCompactionResumeHook = async () => true;
+      try {
+        await harness.runCommand('compact');
+        assert.ok(!(adapter.lastInstruction ?? '').includes(compactionGapsGuidance));
+        await harness.runCommand('compact_mistakes', 'on');
+        await harness.runCommand('compact');
+        assert.ok(!(adapter.lastInstruction ?? '').includes(compactionGapsGuidance), 'the plugin, not the bot, asks for it: the bot\'s instruction stays without it while the plugin is loaded');
+      } finally {
+        delete adapter.checkHasCompactionResumeHook;
+      }
+    });
+
+    it('the summary hidden, a backend that streams its own: nothing is read and nothing is posted', async () => {
+      adapter.streamsCompactionSummary = true;
+      adapter.summary = buildSummary(instructionGapsText);
+
+      await harness.runCommand('compact');
+
+      assert.equal(adapter.summaryReads, 0);
+      assert.deepEqual(getReplyTexts().map((text) => Array.from(text)[0]), ['🧹', '✅']);
+    });
+
+    it('the idle compaction: the instruction asks for no section and the topic gets the short notice alone', async () => {
+      adapter.summary = buildSummary(instructionGapsText);
+      compaction.markThreadTurnProducedOutput(key);
+      compaction.noteThreadActivity(key);
+      await idleFireFinished.promise;
+
+      assert.ok(adapter.lastInstruction && !adapter.lastInstruction.includes(compactionGapsGuidance));
+      assert.deepEqual(getReplyTexts(), [enDict['compactOnIdle.notice']]);
+    });
+
+    it('the CLI\'s own overflow compaction posts nothing — the summary is not even read', async () => {
+      adapter.summary = buildSummary(instructionGapsText);
+      for (const isVisible of [false, true]) {
+        await setSummaryVisible(isVisible);
+        await compaction.postOwnCompactionInstructionGaps(key);
+        assert.deepEqual(getReplyTexts(), [], `visible: ${isVisible}`);
+      }
+      assert.equal(adapter.summaryReads, 0);
+    });
+
+    it('a streaming backend\'s own compaction, the summary hidden: the section that arrives is not posted', async () => {
+      const hints: OutboundHints = { isCompactionSummary: true, compactionSummaryMessageId: 'msg_off_1', isContinuation: false };
+      assert.equal(compaction.routeStreamedCompactionSummaryTail(key, buildSummary(instructionGapsText), hints), null);
+      await new Promise((resolve) => setTimeout(resolve, waitStepMs * 3));
+      assert.deepEqual(getReplyTexts(), []);
+    });
+
+    it('a topic\'s own choice beats the default in both directions: ON in a topic under an OFF default asks and posts', async () => {
+      await harness.runCommand('compact_mistakes', 'on');
+      harness.isGeneral = true;
+      try {
+        await harness.runCommand('compact_mistakes', 'off');
+      } finally {
+        harness.isGeneral = false;
+      }
+      assert.equal(harness.state.getCompactMistakesGlobalDefault(), false);
+      assert.equal(harness.state.checkIsCompactMistakesEnabled(key), true, 'this topic\'s override ON wins over the OFF default');
+      harness.replies.length = 0;
+      adapter.summary = buildSummary(instructionGapsText);
+
+      await harness.runCommand('compact');
+
+      assert.ok(adapter.lastInstruction?.includes(compactionGapsGuidance));
+      assert.equal(countRepliesWith(instructionGapsText), 1);
     });
   });
 

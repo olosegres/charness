@@ -11,7 +11,7 @@ import { type CompactCommandRoute, getCompactCommandRoute } from '../../../utils
 import {
   buildCompactionInstruction,
   compactionSummaryGuidance,
-  compactionResumeGuidance,
+  getCompactionResumeGuidance,
   compactionClosingStartMarker,
   compactionClosingEndMarker,
   formatCompactionSummaryForTopic,
@@ -29,6 +29,7 @@ import {
   getPendingWorkRecheckDelayMs,
 } from '../../../utils/compactOnIdle';
 import { createStreamedSummaryTracker } from '../../../utils/streamedCompactionSummary';
+import { syncCompactMistakesFlags, type CompactMistakesFlagDirs } from '../../../utils/compactMistakesFlags';
 import type { OutboundHints } from '../../../platform/outbound';
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from '../questionKeyboards';
 import { splitMessage, MAX_MESSAGE_LEN } from '../messageSplit';
@@ -47,8 +48,8 @@ const terminalAdapterName = 'terminal';
 
 /**
  * @description Compose the per-invocation compaction instruction for a thread's
- * backend (D3 summary guidance + the resume guidance — loaded skills and the
- * next-steps checklist — + the optional F2 closing section). The general guidance
+ * backend (D3 summary guidance + the resume guidance — the agent-mistakes section while `/compact_mistakes` is on, the loaded
+ * skills and the next-steps checklist — + the optional F2 closing section). The general guidance
  * is skipped for OpenCode (baked in its fork prompt) and appended for the Claude
  * backends; the resume guidance is skipped when the backend's own compaction
  * prompt already gets it (an OpenCode server running the bot's compaction
@@ -57,13 +58,13 @@ const terminalAdapterName = 'terminal';
 async function getCompactionInstruction(
   adapter: AgentAdapter,
   key: SessionKey,
-  opts: { withClosingSection: boolean },
+  opts: { withClosingSection: boolean; isWithInstructionGaps: boolean },
 ): Promise<string | undefined> {
   return buildCompactionInstruction({
     bakesSummaryGuidance: adapter.name === openCodeAdapterName,
     summaryGuidance: compactionSummaryGuidance,
     bakesResumeGuidance: (await adapter.checkHasCompactionResumeHook?.(key)) ?? false,
-    resumeGuidance: compactionResumeGuidance,
+    resumeGuidance: getCompactionResumeGuidance(opts.isWithInstructionGaps),
     closingSectionInstruction: opts.withClosingSection
       ? t('compact.closingSectionInstruction', {
           startMarker: compactionClosingStartMarker,
@@ -148,16 +149,18 @@ export interface ReAskedQuestion {
   isAnswerPending: boolean;
 }
 
-/** The two switches the `/compact_on_idle` picker shows: the idle compaction itself and the summary post. */
+/** The three switches the `/compact_on_idle` picker shows: the idle compaction itself, the summary post and the agent-mistakes section. */
 interface CompactOnIdlePickerState {
   isIdleEnabled: boolean;
   /** The `/compact_summary` setting — the same one, so the two pickers can never disagree. */
   isSummaryEnabled: boolean;
+  /** The `/compact_mistakes` setting — the same one, so the two pickers can never disagree. */
+  isMistakesEnabled: boolean;
 }
 
 /**
  * Build the `/compact_on_idle` picker keyboard: Enable / Disable, then Show / Hide
- * summary, ✓ on the current value of each.
+ * summary, then Show / Hide mistakes, ✓ on the current value of each.
  */
 function buildCompactOnIdleKeyboard(picker: CompactOnIdlePickerState) {
   return Markup.inlineKeyboard([
@@ -168,6 +171,10 @@ function buildCompactOnIdleKeyboard(picker: CompactOnIdlePickerState) {
     [
       Markup.button.callback(t('compactOnIdle.summaryShowButton') + (picker.isSummaryEnabled ? ' ✓' : ''), 'coi_sum_on'),
       Markup.button.callback(t('compactOnIdle.summaryHideButton') + (!picker.isSummaryEnabled ? ' ✓' : ''), 'coi_sum_off'),
+    ],
+    [
+      Markup.button.callback(t('compactOnIdle.mistakesShowButton') + (picker.isMistakesEnabled ? ' ✓' : ''), 'coi_mis_on'),
+      Markup.button.callback(t('compactOnIdle.mistakesHideButton') + (!picker.isMistakesEnabled ? ' ✓' : ''), 'coi_mis_off'),
     ],
   ]);
 }
@@ -222,6 +229,8 @@ export interface CompactionPorts
   closeOrphanQuestionMessage: (key: SessionKey, messageId: number, messageText: string | null) => Promise<boolean>;
   /** A person wrote in the topic: the bot-wide effects of that (the idle latch, the todo registry) — and the re-asked question's own end. */
   notePersonActivity: (key: SessionKey) => void;
+  /** Where the flags of `/compact_mistakes` live, for the compactions the agent's own process runs (`utils/compactMistakesFlags.ts`). */
+  compactMistakesFlagDirs: CompactMistakesFlagDirs;
 }
 
 /**
@@ -230,7 +239,7 @@ export interface CompactionPorts
  * state the typing loop and the request probe read, and the `register…()` calls.
  */
 export function createCompaction(ports: CompactionPorts) {
-  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, getThreadAdapter, deliverLabel, resumeSleepingSessionForPrompt, checkIsStarting, closeOrphanQuestionMessage, notePersonActivity, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
+  const { startTypingLoader, forwardPromptToAgent, pendingQuestions, clearPendingQuestion, closeQuestionMessage, idleWindowMs, checkIsLimitWaitArmed, suspendThreadSession, resumeSleepingSessionForCompaction, getThreadAdapter, deliverLabel, resumeSleepingSessionForPrompt, checkIsStarting, closeOrphanQuestionMessage, notePersonActivity, compactMistakesFlagDirs, bot, command, getState, replyToThread, editThreadKeyboard, authoriseContext, withThreadLocale, checkIsGeneral, wakeSleepingSession } = ports;
 
   /**
    * @description Resolve the `/compact` route for a thread's current backend — the
@@ -297,7 +306,8 @@ export function createCompaction(ports: CompactionPorts) {
     // D3: every bot-issued compaction carries the maximally-complete-summary
     // guidance (baked in the OpenCode fork, appended for the Claude backends), plus
     // the F2 closing-section directive when requested.
-    const instruction = await getCompactionInstruction(adapter, key, { withClosingSection: opts.withClosingSection });
+    const isMistakesEnabled = getState().checkIsCompactMistakesEnabled(key);
+    const instruction = await getCompactionInstruction(adapter, key, { withClosingSection: opts.withClosingSection, isWithInstructionGaps: isMistakesEnabled });
 
     const kStr = keyToString(key);
     threadsCompacting.add(kStr);
@@ -325,7 +335,7 @@ export function createCompaction(ports: CompactionPorts) {
       const isSummaryEnabled = getState().checkIsCompactSummaryEnabled(key);
       const streamsOwnSummary = Boolean(adapter.streamsCompactionSummary);
       const isWithSummary = checkShouldPostCompactionSummary({ isEnabled: isSummaryEnabled, streamsOwnSummary, route });
-      const isWithInstructionGaps = checkShouldPostInstructionGaps({ isSummaryEnabled, streamsOwnSummary, isBotIssued: true, route });
+      const isWithInstructionGaps = checkShouldPostInstructionGaps({ isEnabled: isMistakesEnabled, isSummaryEnabled, streamsOwnSummary, isBotIssued: true, route });
       // A transcript / HTTP read, made only when something of the summary will be posted.
       const summary = (isWithSummary || isWithInstructionGaps) && adapter.getLatestCompactionSummary
         ? await adapter.getLatestCompactionSummary(key).catch(() => null)
@@ -446,6 +456,7 @@ export function createCompaction(ports: CompactionPorts) {
     if (!checkIsTelegramKey(key) || threadsCompacting.has(keyToString(key))) return;
     const adapter = getThreadAdapter(key);
     if (!checkShouldPostInstructionGaps({
+      isEnabled: getState().checkIsCompactMistakesEnabled(key),
       isSummaryEnabled: getState().checkIsCompactSummaryEnabled(key),
       streamsOwnSummary: Boolean(adapter.streamsCompactionSummary),
       isBotIssued: false,
@@ -478,7 +489,7 @@ export function createCompaction(ports: CompactionPorts) {
     const outcome = streamedSummaryTracker.push(
       kStr,
       { text: tail, isContinuation, summaryId: hints.compactionSummaryMessageId ?? null, isBotIssued: hints.isBotIssuedCompaction === true },
-      { isSummaryShown: getState().checkIsCompactSummaryEnabled(key), gapsHeader: t('compact.instructionGapsHeader') },
+      { isSummaryShown: getState().checkIsCompactSummaryEnabled(key), isInstructionGapsEnabled: getState().checkIsCompactMistakesEnabled(key), gapsHeader: t('compact.instructionGapsHeader') },
     );
     if (outcome.instructionGaps !== null) {
       const instructionGaps = outcome.instructionGaps;
@@ -1363,13 +1374,21 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
-   * @description Both switches as the `/compact_on_idle` picker shows them: in General
+   * @description The switches as the `/compact_on_idle` picker shows them: in General
    * the instance-wide defaults, in a regular topic what applies to that topic.
    */
   function getCompactOnIdlePickerState(key: SessionKey, isGeneral: boolean): CompactOnIdlePickerState {
     return isGeneral
-      ? { isIdleEnabled: getState().getCompactOnIdleGlobalDefault(), isSummaryEnabled: getState().getCompactSummaryGlobalDefault() }
-      : { isIdleEnabled: getState().checkIsCompactOnIdleEnabled(key), isSummaryEnabled: getState().checkIsCompactSummaryEnabled(key) };
+      ? {
+        isIdleEnabled: getState().getCompactOnIdleGlobalDefault(),
+        isSummaryEnabled: getState().getCompactSummaryGlobalDefault(),
+        isMistakesEnabled: getState().getCompactMistakesGlobalDefault(),
+      }
+      : {
+        isIdleEnabled: getState().checkIsCompactOnIdleEnabled(key),
+        isSummaryEnabled: getState().checkIsCompactSummaryEnabled(key),
+        isMistakesEnabled: getState().checkIsCompactMistakesEnabled(key),
+      };
   }
 
   /**
@@ -1441,6 +1460,73 @@ export function createCompaction(ports: CompactionPorts) {
     if (pickerMessageId !== null) await editThreadKeyboard(key, pickerMessageId, buildCompactSummaryKeyboard(enabled).reply_markup, 'csum_cb');
   }
 
+  /**
+   * @description Make the hook and plugin flags of `key`'s agent sessions say what `/compact_mistakes` resolves to for its
+   * topic. Called when the setting changes for the topic and when a session starts, so the CLI's and OpenCode's own
+   * compactions — which read the flag inside the agent's process — follow the setting of the session they run in.
+   */
+  function syncThreadCompactMistakesFlags(key: SessionKey): void {
+    const agent = getState().getAgent(key);
+    if (!agent) return;
+    syncCompactMistakesFlags([{
+      claudeSessionId: agent.claudeSessionId ?? null,
+      opencodeSessionId: agent.opencodeSessionId ?? null,
+      isEnabled: getState().checkIsCompactMistakesEnabled(key),
+    }], compactMistakesFlagDirs);
+  }
+
+  /** @description {@link syncThreadCompactMistakesFlags} for every thread: at boot, and when the General default changes. */
+  function syncAllCompactMistakesFlags(): void {
+    syncCompactMistakesFlags(
+      getState().listAgentSessionIds().map(({ key, claudeSessionId, opencodeSessionId }) => ({
+        claudeSessionId,
+        opencodeSessionId,
+        isEnabled: getState().checkIsCompactMistakesEnabled(key),
+      })),
+      compactMistakesFlagDirs,
+    );
+  }
+
+  /**
+   * @description Apply the `/compact_mistakes` setting and RETURN the confirmation text — the single write path behind the
+   * command, its picker buttons and the mistakes row of the `/compact_on_idle` picker. Regular topic → the per-thread
+   * override; General → the instance-wide default. The flags the compactions of the agent's own process read are brought in
+   * step with it before the confirmation goes out.
+   */
+  async function applyCompactMistakes(key: SessionKey, isGeneral: boolean, enabled: boolean): Promise<string> {
+    const stateWord = enabled ? t('compactMistakes.on') : t('compactMistakes.off');
+    if (isGeneral) {
+      await getState().setCompactMistakesGlobalDefault(enabled);
+      syncAllCompactMistakesFlags();
+      return t('compactMistakes.setGlobal', { state: stateWord });
+    }
+    await getState().setCompactMistakesOverride(key, enabled);
+    syncThreadCompactMistakesFlags(key);
+    return t('compactMistakes.setThisTopic', { state: stateWord });
+  }
+
+  /** Build the `/compact_mistakes` picker keyboard (Enable / Disable, ✓ on current). */
+  function buildCompactMistakesKeyboard(isEnabled: boolean) {
+    return Markup.inlineKeyboard([
+      Markup.button.callback(t('compactMistakes.enableButton') + (isEnabled ? ' ✓' : ''), 'cmis_on'),
+      Markup.button.callback(t('compactMistakes.disableButton') + (!isEnabled ? ' ✓' : ''), 'cmis_off'),
+    ]);
+  }
+
+  /** `/compact_mistakes` picker button. A REPEATED-USE picker, so it re-renders its keyboard in place, like `csum_on` / `csum_off`. */
+  async function handleCompactMistakesCallback(ctx: Context, enabled: boolean): Promise<void> {
+    const key = await authoriseContext(ctx);
+    if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
+    const isGeneral = checkIsGeneral(key);
+    // Answered first for the reason given in `handleCompactOnIdleCallback`.
+    await ctx.answerCbQuery();
+    await withThreadLocale(key, async () => {
+      await replyToThread(key, await applyCompactMistakes(key, isGeneral, enabled));
+    });
+    const pickerMessageId = getCallbackMessageId(ctx);
+    if (pickerMessageId !== null) await editThreadKeyboard(key, pickerMessageId, buildCompactMistakesKeyboard(enabled).reply_markup, 'cmis_cb');
+  }
+
   function registerCompactionCommands(): void {
     // `/compact` — shrink the agent's context. BOT-OWNED, because "forward the text
     // and hope" only works for a backend that parses slash commands itself: OpenCode's
@@ -1477,7 +1563,7 @@ export function createCompaction(ports: CompactionPorts) {
     // → per-thread override; General → the instance-wide default. Bare → a picker:
     // Enable/Disable, plus a Show/Hide row for the `/compact_summary` setting, which
     // is what decides whether an idle compaction ends in one line or with the whole
-    // summary (✓ on current). Only meaningful for an agent topic with an active
+    // summary, and one for `/compact_mistakes` (the agent-mistakes section; ✓ on current). Only meaningful for an agent topic with an active
     // session (terminal / unbound → the "nothing to compact" reply).
     command('compact_on_idle', async (_ctx, key, parsed) => {
       const arg = parsed.args.join(' ').toLowerCase();
@@ -1500,6 +1586,9 @@ export function createCompaction(ports: CompactionPorts) {
         state: picker.isIdleEnabled ? t('compactOnIdle.on') : t('compactOnIdle.off'),
         summaryLine: t('compactOnIdle.summaryLine', {
           state: picker.isSummaryEnabled ? t('compactSummary.on') : t('compactSummary.off'),
+        }),
+        mistakesLine: t('compactOnIdle.mistakesLine', {
+          state: picker.isMistakesEnabled ? t('compactMistakes.on') : t('compactMistakes.off'),
         }),
       };
       const title = isGeneral ? t('compactOnIdle.titleGeneral', vars) : t('compactOnIdle.title', vars);
@@ -1535,6 +1624,35 @@ export function createCompaction(ports: CompactionPorts) {
         : t('compactSummary.title', { state: stateWord });
       await replyToThread(key, title, buildCompactSummaryKeyboard(isEnabled));
     });
+
+    // `/compact_mistakes` — toggle the agent-mistakes section of a compaction summary: whether the agent is asked for it
+    // (every kind of compaction, the CLI's and OpenCode's own included) and whether the bot posts it. Regular topic →
+    // per-thread override; General → the instance-wide default. ON by default. Bare → an Enable/Disable picker (✓ on
+    // current). Like `/compact_summary` it is read when a compaction runs, so it is not gated on an active session; only a
+    // raw shell, with no context to compact, is refused.
+    command('compact_mistakes', async (_ctx, key, parsed) => {
+      const arg = parsed.args.join(' ').toLowerCase();
+      const isGeneral = checkIsGeneral(key);
+
+      if (!isGeneral && getThreadCompactRoute(key) === 'notSupported') {
+        await replyToThread(key, t('compactMistakes.unsupported'));
+        return;
+      }
+
+      if (arg === 'on' || arg === 'off') {
+        await replyToThread(key, await applyCompactMistakes(key, isGeneral, arg === 'on'));
+        return;
+      }
+
+      const isEnabled = isGeneral
+        ? getState().getCompactMistakesGlobalDefault()
+        : getState().checkIsCompactMistakesEnabled(key);
+      const stateWord = isEnabled ? t('compactMistakes.on') : t('compactMistakes.off');
+      const title = isGeneral
+        ? t('compactMistakes.titleGeneral', { state: stateWord })
+        : t('compactMistakes.title', { state: stateWord });
+      await replyToThread(key, title, buildCompactMistakesKeyboard(isEnabled));
+    });
   }
 
   function registerCompactionCallbacks(): void {
@@ -1550,9 +1668,21 @@ export function createCompaction(ports: CompactionPorts) {
       await replyToThread(key, await applyCompactSummary(key, isGeneral, false));
     }));
 
+    bot.action('coi_mis_on', (ctx) => handleCompactOnIdleCallback(ctx, async (key, isGeneral) => {
+      await replyToThread(key, await applyCompactMistakes(key, isGeneral, true));
+    }));
+
+    bot.action('coi_mis_off', (ctx) => handleCompactOnIdleCallback(ctx, async (key, isGeneral) => {
+      await replyToThread(key, await applyCompactMistakes(key, isGeneral, false));
+    }));
+
     bot.action('csum_on', (ctx) => handleCompactSummaryCallback(ctx, true));
 
     bot.action('csum_off', (ctx) => handleCompactSummaryCallback(ctx, false));
+
+    bot.action('cmis_on', (ctx) => handleCompactMistakesCallback(ctx, true));
+
+    bot.action('cmis_off', (ctx) => handleCompactMistakesCallback(ctx, false));
 
     bot.action(/^reask_(\d+)$/, (ctx) => handleReAskedQuestionTap(ctx, parseInt(ctx.match[1], 10)));
   }
@@ -1563,6 +1693,8 @@ export function createCompaction(ports: CompactionPorts) {
     noteThreadUserActivity,
     markThreadTurnProducedOutput,
     postOwnCompactionInstructionGaps,
+    syncThreadCompactMistakesFlags,
+    syncAllCompactMistakesFlags,
     routeStreamedCompactionSummaryTail,
     clearThreadCompaction,
     rearmThreadIdleTimer,

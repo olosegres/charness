@@ -94,6 +94,7 @@ export const uzDict: Record<string, string> = {
     '/quit /status /output — boshqaruv\n' +
     '/compact — agent kontekstini siqish\n' +
     '/compact_on_idle — bo‘sh turgandan keyin avtosiqish (almashtirgich)\n' +
+    '/compact_mistakes — siqish xulosasidagi agent xatolari (almashtirgich)\n' +
     '/bot_skills — botning agentlar uchun skills’lari (bu mavzu uchun yoqish / o‘chirish)\n' +
     '/todo — agentning e\'lon qilingan vazifalar ro\'yxati va uning loyihasi\n' +
     '/limits — har bir hisob va provayderning sarfi; bu mavzuni almashtirish uchun birini bosing\n' +
@@ -474,13 +475,16 @@ export const uzDict: Record<string, string> = {
   'compactOnIdle.notice': '🧹 Bo‘sh turganda kesh orqali tokenlarni tejash uchun avtomatik siqildi.\n/compact_on_idle — o‘chirish yoki xulosani ko‘rsatish.',
   'compactOnIdle.on': 'YONIQ',
   'compactOnIdle.off': 'O‘CHIQ',
-  'compactOnIdle.title': '🧹 Bu mavzu uchun bo‘sh turganda avtosiqish: {state}\n{summaryLine}\n\nSeans ~55 daqiqa bo‘sh tursa, tokenlarni tejash uchun uning konteksti avtomatik siqiladi (prompt keshi hali iliq).\n\nBarcha mavzular uchun bir vaqtda o‘zgartirish uchun buni General mavzusida ishga tushiring.',
-  'compactOnIdle.titleGeneral': '🧹 Bo‘sh turganda avtosiqish — BARCHA mavzular uchun standart: {state}\n{summaryLine}\n\nSeans ~55 daqiqa bo‘sh tursa, tokenlarni tejash uchun uning konteksti avtomatik siqiladi.\n\nHar bir mavzu buni o‘zining /compact_on_idle bilan bekor qila oladi.',
+  'compactOnIdle.title': '🧹 Bu mavzu uchun bo‘sh turganda avtosiqish: {state}\n{summaryLine}\n{mistakesLine}\n\nSeans ~55 daqiqa bo‘sh tursa, tokenlarni tejash uchun uning konteksti avtomatik siqiladi (prompt keshi hali iliq).\n\nBarcha mavzular uchun bir vaqtda o‘zgartirish uchun buni General mavzusida ishga tushiring.',
+  'compactOnIdle.titleGeneral': '🧹 Bo‘sh turganda avtosiqish — BARCHA mavzular uchun standart: {state}\n{summaryLine}\n{mistakesLine}\n\nSeans ~55 daqiqa bo‘sh tursa, tokenlarni tejash uchun uning konteksti avtomatik siqiladi.\n\nHar bir mavzu buni o‘zining /compact_on_idle bilan bekor qila oladi.',
   'compactOnIdle.enableButton': 'Yoqish',
   'compactOnIdle.disableButton': 'O‘chirish',
   'compactOnIdle.summaryLine': '📄 Siqishdan keyingi xulosa: {state}',
   'compactOnIdle.summaryShowButton': '📄 Xulosani ko‘rsatish',
   'compactOnIdle.summaryHideButton': 'Xulosani yashirish',
+  'compactOnIdle.mistakesLine': '💡 Xulosadagi agent xatolari: {state}',
+  'compactOnIdle.mistakesShowButton': '💡 Xatolarni ko‘rsatish',
+  'compactOnIdle.mistakesHideButton': 'Xatolarni yashirish',
   'compactOnIdle.setThisTopic': '✅ Bo‘sh turganda avtosiqish: bu mavzu uchun {state}.',
   'compactOnIdle.setGlobal': '✅ Bo‘sh turganda avtosiqish: BARCHA mavzular uchun {state} (mavzu bo‘yicha bekor qilishlar amal qiladi).',
   'compactOnIdle.unsupported': 'Bo‘sh turganda avtosiqish faol agent seansiga taalluqli. Avval bog‘langan mavzuda /claude yoki /opencode ni ishga tushiring.',
@@ -496,6 +500,17 @@ export const uzDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ Siqish xulosasi: bu mavzu uchun {state}.',
   'compactSummary.setGlobal': '✅ Siqish xulosasi: BARCHA mavzular uchun {state} (mavzu bo‘yicha almashtirishlar kuchda qoladi).',
   'compactSummary.unsupported': 'Shellda siqiladigan kontekst yo‘q, shuning uchun joylanadigan xulosa ham yo‘q.',
+  'compactMistakes.on': 'YONIQ',
+  'compactMistakes.off': "O‘CHIQ",
+  'compactMistakes.title':
+    '💡 Siqish xulosasidagi agent xatolari, bu mavzuda: {state}\n\nSiqish xulosasi agent seansda qilgan xatolar (ayniqsa takrorlanganlari) bilan tugashi mumkin — ularning oldini uning qoidalari, skillari yoki CLAUDE.md / AGENTS.md ni o‘zgartirib olish mumkin edi. To‘liq xulosa yashirin bo‘lsa ham, bot bu qismni mavzuga joylaydi. O‘chiq: agentdan bu so‘ralmaydi (token sarflanmaydi) va hech narsa joylanmaydi.\n\nBarcha mavzular uchun birdan almashtirish uchun buni General mavzusida bajaring.',
+  'compactMistakes.titleGeneral':
+    '💡 Siqish xulosasidagi agent xatolari — BARCHA mavzular uchun standart: {state}\n\nSiqish xulosasi agent seansda qilgan xatolar (ayniqsa takrorlanganlari) bilan tugashi mumkin — ularning oldini uning qoidalari, skillari yoki CLAUDE.md / AGENTS.md ni o‘zgartirib olish mumkin edi. To‘liq xulosa yashirin bo‘lsa ham, bot bu qismni mavzuga joylaydi. O‘chiq: agentdan bu so‘ralmaydi (token sarflanmaydi) va hech narsa joylanmaydi.\n\nHar bir mavzu buni o‘zining /compact_mistakes buyrug‘i bilan almashtirishi mumkin.',
+  'compactMistakes.enableButton': 'Yoqish',
+  'compactMistakes.disableButton': "O‘chirish",
+  'compactMistakes.setThisTopic': '✅ Siqish xulosasidagi agent xatolari: bu mavzu uchun {state}.',
+  'compactMistakes.setGlobal': '✅ Siqish xulosasidagi agent xatolari: BARCHA mavzular uchun {state} (mavzu bo‘yicha almashtirishlar kuchda qoladi).',
+  'compactMistakes.unsupported': 'Shellda siqiladigan kontekst yo‘q, shuning uchun agent xatolari bor xulosa ham yo‘q.',
 
   'botSkills.on': 'YONIQ',
   'botSkills.off': 'O‘CHIQ',

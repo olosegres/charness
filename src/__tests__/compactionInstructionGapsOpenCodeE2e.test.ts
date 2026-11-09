@@ -17,7 +17,11 @@
  *   → summary SHOWN, `/compact`: the stream goes to the topic whole — no marker line, no «none» line, the section under its
  *     header — and the section is in exactly one message
  *   → summary SHOWN, the server compacts by itself and the agent goes on: the answer is a message of its own, not glued on the summary
- *   → summary SHOWN, a section that says there were no mistakes: no header and no scaffolding either.
+ *   → summary SHOWN, a section that says there were no mistakes: no header and no scaffolding either
+ *   → `/compact_mistakes off`: the flag the OpenCode plugin reads is kept for the session, so the plugin — which the fake server
+ *     runs before every compaction, as the real one does, from the file in the instance's own plugin folder — asks for no
+ *     section in the `/compact` and the server's own compaction; and the section is posted for neither, although the fake's
+ *     summary holds one (the bot's own gate); back `on`: the flag is gone, the plugin asks again and both post the section again.
  *
  * What the unit tests cover instead: the pure filter and tracker (`streamedCompactionSummary.test.ts`, `compactOnIdle.test.ts`),
  * the module over a stub adapter incl. the idle compaction's order (`compactionInstructionGaps.test.ts`), the adapter's hints
@@ -54,12 +58,17 @@ import { startCharnessOnInstance } from './e2e/fallbackFlowKit';
 import { enDict } from '../i18n/en';
 import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings';
 import {
+  compactionChecklistGuidance,
   compactionClosingEndMarker,
   compactionClosingStartMarker,
   compactionGapsEndMarker,
+  compactionGapsGuidance,
   compactionGapsStartMarker,
   compactionNoGapsLine,
+  compactionSkillsGuidance,
 } from '../utils/compactOnIdle';
+import { getOpenCodeCompactMistakesOffDir } from '../utils/compactMistakesFlags';
+import { getOpenCodeCompactPluginContext, installOpenCodeCompactPlugin } from '../utils/openCodeCompactPlugin';
 
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
@@ -173,6 +182,38 @@ function getSummarySwitchConfirmation(isVisible: boolean): string {
   return enDict['compactSummary.setThisTopic'].replace('{state}', isVisible ? enDict['compactSummary.on'] : enDict['compactSummary.off']);
 }
 
+/** The bot's confirmation of `/compact_mistakes on|off` in a topic. */
+function getMistakesSwitchConfirmation(isEnabled: boolean): string {
+  return enDict['compactMistakes.setThisTopic'].replace('{state}', isEnabled ? enDict['compactMistakes.on'] : enDict['compactMistakes.off']);
+}
+
+/**
+ * OpenCode's global plugin folder of the INSTANCE: the bot resolves it from its own HOME (`os.homedir()`), the instance's temp
+ * home. Spelled out from the layout on purpose — `resolveOpenCodeGlobalPluginDir` reads the HOME of THIS process, which is
+ * the real one, and an install there would replace the plugin of the live bot.
+ */
+function getInstancePluginDir(): string {
+  const pluginDir = path.join(getLayout().instanceHome, '.config', 'opencode', 'plugins');
+  assert.ok(pluginDir.startsWith(getLayout().testRoot + path.sep), `the plugin folder is inside the instance's own root: ${pluginDir}`);
+  return pluginDir;
+}
+
+/** The flag the bot keeps for the session while its topic has the section OFF — where the OpenCode plugin looks (`utils/compactMistakesFlags.ts`). */
+function getOffFlagPath(sessionId: string): string {
+  return path.join(getOpenCodeCompactMistakesOffDir(getInstancePluginDir()), sessionId);
+}
+
+/** What the plugin pushed into the prompt of the session's latest compaction. */
+function getLatestPluginContext(): string[] {
+  return fakeOpenCode.pluginContexts.filter((entry) => entry.sessionId === getTopicSessionId()).at(-1)?.context ?? [];
+}
+
+/** The instruction the `index`-th `/compact` of the session reached the server with. */
+function getSummarizeInstruction(index: number): string {
+  const body = fakeOpenCode.listRequests('POST', `/session/${getTopicSessionId()}/summarize`)[index]?.body as { instruction?: string } | null;
+  return body?.instruction ?? '';
+}
+
 async function setSummaryVisible(isVisible: boolean): Promise<void> {
   await topic.sendAndAwaitReply(`/compact_summary ${isVisible ? 'on' : 'off'}`, getSummarySwitchConfirmation(isVisible));
 }
@@ -182,12 +223,13 @@ async function waitForSendQueueToDrain(): Promise<void> {
   await topic.sendAndAwaitReply('/compact_summary', enDict['compactSummary.title'].split('{state}')[0]);
 }
 
-/** `/compact` with the next summarize playing `summary` out; resolves once the server has answered it. */
+/** `/compact` with the next summarize playing `summary` out; resolves once the server has the request and has run the plugin for it. */
 async function runCompact(summary: string, messageId: string): Promise<void> {
   const summarizesBefore = fakeOpenCode.listRequests('POST', `/session/${getTopicSessionId()}/summarize`).length;
+  const pluginRunsBefore = fakeOpenCode.pluginContexts.length;
   fakeOpenCode.setNextSummarize({ messageId, chunks: cutSummary(summary) });
   fakeTelegram.pushOperatorMessage(openCodeTopic.threadId, '/compact');
-  await getCharness().waitFor('the compaction to reach the server', replyTimeoutMs, () => fakeOpenCode.listRequests('POST', `/session/${getTopicSessionId()}/summarize`).length > summarizesBefore);
+  await getCharness().waitFor('the compaction to reach the server', replyTimeoutMs, () => fakeOpenCode.listRequests('POST', `/session/${getTopicSessionId()}/summarize`).length > summarizesBefore && fakeOpenCode.pluginContexts.length > pluginRunsBefore);
 }
 
 describe('The agent-mistakes section on OpenCode: built charness, fake Bot API, fake OpenCode', () => {
@@ -203,7 +245,10 @@ describe('The agent-mistakes section on OpenCode: built charness, fake Bot API, 
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     topic = new TopicDriver(fakeTelegram, getCharness, openCodeTopic.threadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
-    fakeOpenCode = new FakeOpenCodeServer({ version: fakeOpenCodeVersion, models: [openCodeModel], defaultModel: openCodeModel });
+    // The plugin the bot installs for the server (`GET /config` of the fake reports it loaded): the fake runs its hook before every compaction.
+    const pluginDir = getInstancePluginDir();
+    assert.equal(installOpenCodeCompactPlugin(pluginDir), 'written');
+    fakeOpenCode = new FakeOpenCodeServer({ version: fakeOpenCodeVersion, models: [openCodeModel], defaultModel: openCodeModel, pluginDir });
     const openCodeUrl = await fakeOpenCode.start(await getFreePort());
     writeFakeOpenCodeBinary(layout.binDir, { version: fakeOpenCodeVersion, models: [openCodeModel] });
     writeInstanceEnvFile(layout, {
@@ -243,6 +288,7 @@ describe('The agent-mistakes section on OpenCode: built charness, fake Bot API, 
   it('summary HIDDEN, /compact: the notices, then the section ALONE under its header — in that order, and nothing else of the summary', async () => {
     const messageBefore = getNewestMessageId();
     await runCompact(buildSummary(instructionGapsText), 'msg_summary_1');
+    assert.deepEqual(getLatestPluginContext(), [getOpenCodeCompactPluginContext(true)], 'the plugin asks for the section (`/compact_mistakes` is on by default)');
     await topic.waitForMessage('the section', (message) => message.message_id > messageBefore && message.text.includes(enDict['compact.instructionGapsHeader']));
     await waitForSendQueueToDrain();
 
@@ -366,5 +412,57 @@ describe('The agent-mistakes section on OpenCode: built charness, fake Bot API, 
     assert.ok(shown.includes(summaryBody), 'the summary is shown');
     assert.ok(!hasMarker(shown) && !shown.includes(compactionNoGapsLine) && !shown.includes(enDict['compact.instructionGapsHeader']), `nothing of the empty section reaches the topic: ${shown}`);
     assert.ok(shown.includes('1. load these skills: commit'), 'the rest of the summary is intact');
+  });
+
+  // The fake's summaries keep their section through the steps below, whatever they are asked: a real model that is not
+  // asked writes none, so what keeps the topic clean here is the bot's own gate — the part a real agent never exercises.
+  it('`/compact_mistakes off`: /compact asks for no section — the skills and the checklist stay — the plugin\'s flag is kept, and nothing of the section is posted', async () => {
+    await setSummaryVisible(false);
+    await topic.sendAndAwaitReply('/compact_mistakes off', getMistakesSwitchConfirmation(false));
+    assert.ok(fs.existsSync(getOffFlagPath(getTopicSessionId())), 'the bot keeps the flag the OpenCode plugin reads for this session');
+    const compactionsBefore = fakeOpenCode.listRequests('POST', `/session/${getTopicSessionId()}/summarize`).length;
+    const messageBefore = getNewestMessageId();
+    await runCompact(buildSummary(instructionGapsText), 'msg_summary_5');
+    // The server runs the plugin that is loaded (the bot then adds no resume guidance of its own): the plugin is what asks.
+    assert.deepEqual(getLatestPluginContext(), [getOpenCodeCompactPluginContext(false)], 'the plugin asks for no section — the skills and the checklist stay');
+    assert.ok(!getLatestPluginContext()[0].includes(compactionGapsGuidance) && !getLatestPluginContext()[0].includes(compactionGapsStartMarker));
+    assert.ok(getLatestPluginContext()[0].includes(compactionSkillsGuidance) && getLatestPluginContext()[0].includes(compactionChecklistGuidance));
+    assert.ok(!getSummarizeInstruction(compactionsBefore).includes(compactionGapsGuidance), 'and the bot\'s own instruction carries none');
+    await topic.waitForMessage('the completion line', (message) => message.message_id > messageBefore && message.text.startsWith('✅'));
+    await waitForSendQueueToDrain();
+
+    const texts = listTextsAfter(messageBefore);
+    assert.ok(!texts.some((text) => text.includes(enDict['compact.instructionGapsHeader']) || text.includes(instructionGapsText)), `the section is not posted although the summary holds one: ${JSON.stringify(texts)}`);
+    assert.ok(!texts.some((text) => text.includes(summaryBody) || text.includes(closingText)), 'the full summary stays hidden');
+  });
+
+  it('`/compact_mistakes off`: the server\'s own compaction posts no section either', async () => {
+    const sessionId = getTopicSessionId();
+    const messageBefore = getNewestMessageId();
+    fakeOpenCode.emitAssistantText(sessionId, 'msg_work_off', `${agentWorkText} (off)`);
+    await topic.waitForMessage('the agent\'s text', (message) => message.message_id > messageBefore && message.text.includes(`${agentWorkText} (off)`));
+    await fakeOpenCode.emitCompactionSummary(sessionId, { messageId: 'msg_summary_off', chunks: cutSummary(buildSummary(instructionGapsText)) });
+    assert.deepEqual(getLatestPluginContext(), [getOpenCodeCompactPluginContext(false)], 'the plugin asks for no section in the server\'s own compaction either');
+    await waitForSendQueueToDrain();
+
+    const texts = listTextsAfter(messageBefore);
+    assert.ok(!texts.some((text) => text.includes(enDict['compact.instructionGapsHeader']) || text.includes(instructionGapsText)), `no section is posted: ${JSON.stringify(texts)}`);
+    assert.ok(!texts.some((text) => text.includes(summaryBody) || text.includes(closingText)), 'the full summary stays hidden');
+  });
+
+  it('`/compact_mistakes on` again: the flag is gone, /compact asks for the section again, and /compact and the server\'s own compaction post it', async () => {
+    await topic.sendAndAwaitReply('/compact_mistakes on', getMistakesSwitchConfirmation(true));
+    assert.equal(fs.existsSync(getOffFlagPath(getTopicSessionId())), false, 'the flag is gone');
+    const compactionsBefore = fakeOpenCode.listRequests('POST', `/session/${getTopicSessionId()}/summarize`).length;
+    const messageBefore = getNewestMessageId();
+    await runCompact(buildSummary(instructionGapsText), 'msg_summary_6');
+    assert.deepEqual(getLatestPluginContext(), [getOpenCodeCompactPluginContext(true)], 'the plugin asks for the section again');
+    assert.ok(!getSummarizeInstruction(compactionsBefore).includes(compactionGapsGuidance), 'the plugin, not the bot, asks: the plugin is loaded');
+    await topic.waitForMessage('the section', (message) => message.message_id > messageBefore && message.text.includes(enDict['compact.instructionGapsHeader']));
+
+    const ownMessageBefore = getNewestMessageId();
+    await fakeOpenCode.emitCompactionSummary(getTopicSessionId(), { messageId: 'msg_summary_on_again', chunks: cutSummary(buildSummary(instructionGapsText)) });
+    await topic.waitForMessage('the section of the server\'s own compaction', (message) => message.message_id > ownMessageBefore && message.text.includes(enDict['compact.instructionGapsHeader']));
+    assert.deepEqual(getLatestPluginContext(), [getOpenCodeCompactPluginContext(true)], 'the plugin asks for the section in the server\'s own compaction again');
   });
 });

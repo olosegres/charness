@@ -264,6 +264,37 @@ test('compact-summary setting keys exist in every locale and substitute {state}'
   }
 });
 
+test('compact-mistakes setting keys exist in every locale, substitute {state}, are translated, and the idle picker\'s mistakes row carries the line', () => {
+  const stateKeys = ['compactMistakes.title', 'compactMistakes.titleGeneral', 'compactMistakes.setThisTopic', 'compactMistakes.setGlobal', 'compactOnIdle.mistakesLine'] as const;
+  for (const code of [
+    'compactMistakes.on',
+    'compactMistakes.off',
+    'compactMistakes.enableButton',
+    'compactMistakes.disableButton',
+    'compactMistakes.unsupported',
+    'compactOnIdle.mistakesShowButton',
+    'compactOnIdle.mistakesHideButton',
+    ...stateKeys,
+  ]) {
+    assert.ok(checkKeyInAllLangs(code), `${code} missing in some locale`);
+  }
+  for (const locale of localeCodes) {
+    for (const code of stateKeys) {
+      const out = runWithLocale(locale, () => t(code, { state: 'ON' }));
+      assert.ok(out.includes('ON'), `expected the state in ${locale} ${code}: "${out}"`);
+      assert.ok(!out.includes('{state}'), `placeholder not substituted in ${locale} ${code}: "${out}"`);
+      if (locale !== defaultLocale) assert.notEqual(out, enDict[code].replace('{state}', 'ON'), `${locale} ${code} still carries the English text`);
+    }
+    // The idle picker's title names both switch lines; a locale that lost the placeholder would show it literally.
+    for (const code of ['compactOnIdle.title', 'compactOnIdle.titleGeneral']) {
+      const out = runWithLocale(locale, () => t(code, { state: 'ON', summaryLine: 'SUMMARY-LINE', mistakesLine: 'MISTAKES-LINE' }));
+      assert.ok(out.includes('SUMMARY-LINE\nMISTAKES-LINE'), `${code} in ${locale} shows the summary line and the mistakes line: "${out}"`);
+    }
+    const help = getKeyInLang(locale, 'help.thread_bound') ?? '';
+    assert.ok(help.includes('/compact_mistakes — '), `help.thread_bound in ${locale} does not name /compact_mistakes`);
+  }
+});
+
 test('auto-continue-limits keys exist in every locale', () => {
   for (const code of [
     'autoContinueLimits.on',

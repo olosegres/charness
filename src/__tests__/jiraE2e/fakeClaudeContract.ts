@@ -250,6 +250,11 @@ export const fakeClaudeLogFileNames = {
   turns: 'turns.jsonl',
   /** One record per `PostToolUse` hook output that carried `additionalContext`: `{ issueKey, pid, sessionId, additionalContext }`. */
   hooks: 'hooks.jsonl',
+  /**
+   * One record per compaction, the CLI's own and a `/compact` turn: what the launch's `PreCompact` hooks printed for it —
+   * the instruction the real CLI appends to the compaction's — `{ sessionId, pid, trigger, instruction }`.
+   */
+  preCompactHooks: 'pre-compact-hooks.jsonl',
 } as const;
 
 /**
@@ -373,6 +378,14 @@ export function getBotMcpServer(argv: readonly string[]): McpServerConfig | null
 /** @description The conversation a session launch runs: its `--session-id`, or the `--resume` id. */
 export function getLaunchSessionId(argv: readonly string[]): string | undefined {
   return getFlagValues(argv, '--session-id')[0] ?? getFlagValues(argv, '--resume')[0];
+}
+
+/** @name FakeClaudePreCompactHookRun @description One line of the fake's `pre-compact-hooks.jsonl`: what the `PreCompact` hooks printed for a compaction. */
+export interface FakeClaudePreCompactHookRun {
+  sessionId: string;
+  pid: number;
+  trigger: 'auto' | 'manual';
+  instruction: string;
 }
 
 /** @name FakeClaudeHookContext @description One line of the fake's `hooks.jsonl`: what a `PostToolUse` hook gave the agent. */

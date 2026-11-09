@@ -172,6 +172,20 @@ export function resolveCompactSummaryEnabled(
 }
 
 /**
+ * @description Resolve whether the compaction summary asks the agent for its mistakes section and the bot posts it
+ * (`/compact_mistakes`). A per-thread override always wins; otherwise the instance-wide default applies, which is ON when
+ * unset: the section shipped enabled, so a topic keeps getting it until somebody turns it off.
+ *
+ * Read at COMPACTION time, like {@link resolveCompactSummaryEnabled}, so it is meaningful in a topic with no live session.
+ */
+export function resolveCompactMistakesEnabled(
+  globalDefault: boolean | undefined,
+  threadOverride: boolean | undefined,
+): boolean {
+  return resolveDefaultOnThreadToggle(globalDefault, threadOverride);
+}
+
+/**
  * @description Whether the session is busy for a REAL running turn, as opposed
  * to merely idle-WAITING on an unanswered interactive question. Both states make
  * `checkIsBusy` report `true`, but D1 draws them apart: a pending question at idle
@@ -331,7 +345,8 @@ export const compactionNoGapsLine = 'NO_INSTRUCTION_GAPS';
  * above all — that a change to the agent's standing instructions could have prevented, each with the concrete change and
  * where it goes. The BOT lifts the section out of the summary and posts it to the topic even when the full summary is
  * hidden ({@link checkShouldPostInstructionGaps}), so the person sees what to fix in the instructions without opening a
- * summary. It is written in the language the conversation was held in (the hook and the plugin that carry this text are
+ * summary. `/compact_mistakes` switches it off: the text then leaves every compaction's prompt ({@link compactionResumeGuidanceWithoutGaps})
+ * and nothing is posted. It is written in the language the conversation was held in (the hook and the plugin that carry this text are
  * shared by every topic, so no locale can be baked in), PROPOSES and never edits (the person decides), and sits before the
  * checklist and any closing section, which stay last. Travels with {@link compactionSkillsGuidance} and
  * {@link compactionChecklistGuidance} as {@link compactionResumeGuidance} (ahead of them), so ONE line of printable ASCII with no double
@@ -339,6 +354,14 @@ export const compactionNoGapsLine = 'NO_INSTRUCTION_GAPS';
  */
 export const compactionGapsGuidance =
   `List the mistakes the agent made in this session, especially REPEATED ones, that a change to its standing instructions (rules, skills, CLAUDE.md / AGENTS.md) could prevent: for each, the mistake, then the concrete instruction change that would prevent it and where that change would go. Put that list in its own section wrapped EXACTLY between a line containing only ${compactionGapsStartMarker} and a line containing only ${compactionGapsEndMarker}, placed before the numbered checklist and before any closing section, and write it in the language the user used in this conversation. If there were no such mistakes, write only the single line ${compactionNoGapsLine} between those two marker lines. The continuing session must only PROPOSE these changes to the user and wait for approval: it must never write or change instructions on its own.`;
+
+/**
+ * @description The resume guidance WITHOUT the agent-mistakes section: the loaded skills and the next-steps checklist.
+ * What a compaction asks for while `/compact_mistakes` is off, and the part every variant of {@link compactionResumeGuidance}
+ * carries — so the one text the `PreCompact` hook matches to skip a compaction that already holds the guidance, whichever
+ * variant the bot sent.
+ */
+export const compactionResumeGuidanceWithoutGaps = `${compactionSkillsGuidance} ${compactionChecklistGuidance}`;
 
 /**
  * @description What the continuing session needs from EVERY compaction summary — the
@@ -353,7 +376,12 @@ export const compactionGapsGuidance =
  * start), and that hook skips a compaction by finding the OLD text (`${skills} ${checklist}`); written between the two
  * sentences, the new one would break that match and the model would read the skills and the checklist twice.
  */
-export const compactionResumeGuidance = `${compactionGapsGuidance} ${compactionSkillsGuidance} ${compactionChecklistGuidance}`;
+export const compactionResumeGuidance = `${compactionGapsGuidance} ${compactionResumeGuidanceWithoutGaps}`;
+
+/** @description The resume guidance a compaction carries: with the agent-mistakes section while `/compact_mistakes` is on, without it while off. */
+export function getCompactionResumeGuidance(isWithInstructionGaps: boolean): string {
+  return isWithInstructionGaps ? compactionResumeGuidance : compactionResumeGuidanceWithoutGaps;
+}
 
 /**
  * @description Compose the per-invocation compaction instruction the bot passes
@@ -588,6 +616,7 @@ export function checkShouldPostCompactionSummary(input: {
  * hidden?
  *
  * No when:
+ *  - the section is switched off for the topic (`/compact_mistakes`);
  *  - the route is not a real, awaited compaction (the same reason as {@link checkShouldPostCompactionSummary}: the bot
  *    has no summary to read);
  *  - the compaction is the bot's own AND the full summary is shown: the section is inside it (posted by the bot, or
@@ -602,12 +631,15 @@ export function checkShouldPostCompactionSummary(input: {
  * a backend that does not stream: nobody posts that summary, whatever `/compact_summary` says.
  */
 export function checkShouldPostInstructionGaps(input: {
+  /** `/compact_mistakes`: off ⇒ the agent is not asked for the section and nothing of it is posted. */
+  isEnabled: boolean;
   isSummaryEnabled: boolean;
   streamsOwnSummary: boolean;
   /** Whether the bot issued this compaction (`/compact`, the agent's `compact_conversation`, the idle one). */
   isBotIssued: boolean;
   route: CompactCommandRoute;
 }): boolean {
+  if (!input.isEnabled) return false;
   if (input.route !== 'adapterCompact') return false;
   if (input.isBotIssued) return !input.isSummaryEnabled;
   return !input.streamsOwnSummary;

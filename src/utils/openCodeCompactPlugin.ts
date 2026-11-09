@@ -47,7 +47,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { compactionResumeGuidance } from './compactOnIdle';
+import { getCompactionResumeGuidance } from './compactOnIdle';
+import { flagSessionIdPattern, openCodeCompactMistakesOffDirName } from './compactMistakesFlags';
 import { formatDeprecation, warnLegacyNameOnce } from '../legacyNames';
 
 /** OpenCode requires a path plugin to export an id. */
@@ -71,30 +72,53 @@ export const legacyOpenCodeCompactPluginFileName = 'telegramcode-compaction.js';
 export const legacyOpenCodeCompactPluginId = 'telegramcode-compaction';
 
 /**
- * @description The text the plugin adds to every compaction prompt. OpenCode
- * appends it AFTER the bot's per-invocation instruction, which may end with the
+ * @description The text the plugin adds to every compaction prompt, with the agent-mistakes section (`isWithInstructionGaps`)
+ * or without it. OpenCode appends it AFTER the bot's per-invocation instruction, which may end with the
  * F2 closing-section directive ("write nothing after the end marker"), so the text
  * says outright that the skills list and the checklist belong inside the summary.
  */
-export function getOpenCodeCompactPluginContext(): string {
-  return `Additional instruction for the summary itself (put it inside the summary, never after a closing section the instructions above require): ${compactionResumeGuidance}`;
+export function getOpenCodeCompactPluginContext(isWithInstructionGaps: boolean): string {
+  return `Additional instruction for the summary itself (put it inside the summary, never after a closing section the instructions above require): ${getCompactionResumeGuidance(isWithInstructionGaps)}`;
 }
 
-/** @description The plugin module source: a v1 plugin (`default` export with `id` + `server`). */
-export function buildOpenCodeCompactPluginSource(context: string): string {
+/**
+ * @description The plugin module source: a v1 plugin (`default` export with `id` + `server`). Before a compaction it looks
+ * for the flag the bot keeps for the session (`utils/compactMistakesFlags.ts`): present ⇒ `/compact_mistakes` is off for the
+ * session's topic and the text without the agent-mistakes section goes in. The flag folder sits next to the plugin folder,
+ * found from the plugin's own location — the plugin is shared by every OpenCode of the account and knows no `DATA_DIR`.
+ * A session id that is not a plain id, or any read failure, means ON: the section is asked for, as before the switch.
+ */
+export function buildOpenCodeCompactPluginSource(input: { context: string; contextWithoutInstructionGaps: string }): string {
   return [
     '// Installed by Charness, which rewrites it when its content changes. Do not edit.',
-    `const context = ${JSON.stringify(context)};`,
+    'import fs from "node:fs";',
+    'import path from "node:path";',
+    'import { fileURLToPath } from "node:url";',
+    `const context = ${JSON.stringify(input.context)};`,
+    `const contextWithoutInstructionGaps = ${JSON.stringify(input.contextWithoutInstructionGaps)};`,
+    `const offFlagDir = path.join(path.dirname(path.dirname(fileURLToPath(import.meta.url))), ${JSON.stringify(openCodeCompactMistakesOffDirName)});`,
+    'const checkIsMistakesOff = (sessionID) => {',
+    `  if (typeof sessionID !== "string" || !new RegExp(${JSON.stringify(flagSessionIdPattern.source)}).test(sessionID)) return false;`,
+    '  try { return fs.existsSync(path.join(offFlagDir, sessionID)); } catch { return false; }',
+    '};',
     'export default {',
     `  id: ${JSON.stringify(openCodeCompactPluginId)},`,
     '  server: async () => ({',
-    '    "experimental.session.compacting": async (_input, output) => {',
-    '      output.context.push(context);',
+    '    "experimental.session.compacting": async (input, output) => {',
+    '      output.context.push(checkIsMistakesOff(input?.sessionID) ? contextWithoutInstructionGaps : context);',
     '    },',
     '  }),',
     '};',
     '',
   ].join('\n');
+}
+
+/** The source of the CURRENT plugin: both texts, the way the installed file holds them. */
+function buildCurrentOpenCodeCompactPluginSource(): string {
+  return buildOpenCodeCompactPluginSource({
+    context: getOpenCodeCompactPluginContext(true),
+    contextWithoutInstructionGaps: getOpenCodeCompactPluginContext(false),
+  });
 }
 
 /**
@@ -108,7 +132,7 @@ export function getOpenCodeCompactPluginFileName(source: string): string {
 }
 
 /** File name of the CURRENT plugin in OpenCode's plugin folder; also how the bot recognises it in `GET /config`. */
-export const openCodeCompactPluginFileName = getOpenCodeCompactPluginFileName(buildOpenCodeCompactPluginSource(getOpenCodeCompactPluginContext()));
+export const openCodeCompactPluginFileName = getOpenCodeCompactPluginFileName(buildCurrentOpenCodeCompactPluginSource());
 
 /** @description OpenCode's global plugin folder, resolved the way OpenCode resolves it (XDG config home). */
 export function resolveOpenCodeGlobalPluginDir(env: NodeJS.ProcessEnv): string {
@@ -229,7 +253,7 @@ export function installOpenCodeCompactPlugin(
 ): CompactPluginInstallResult {
   removeLegacyOpenCodeCompactPlugin(pluginDir);
   const pluginPath = path.join(pluginDir, openCodeCompactPluginFileName);
-  const source = buildOpenCodeCompactPluginSource(getOpenCodeCompactPluginContext());
+  const source = buildCurrentOpenCodeCompactPluginSource();
   let isCurrentFileInPlace = false;
   try {
     isCurrentFileInPlace = fs.readFileSync(pluginPath, 'utf-8') === source;

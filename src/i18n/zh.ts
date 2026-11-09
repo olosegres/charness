@@ -94,6 +94,7 @@ export const zhDict: Record<string, string> = {
     '/quit /status /output — 控制\n' +
     '/compact — 压缩代理上下文\n' +
     '/compact_on_idle — 空闲后自动压缩（开关）\n' +
+    '/compact_mistakes — 压缩摘要中的智能体错误（开关）\n' +
     '/bot_skills — 机器人提供给智能体的技能（本话题开启 / 关闭）\n' +
     '/todo — 智能体发布的任务列表及其所在项目\n' +
     '/limits — 各账号和提供方的用量；点按其中一个即可切换此话题\n' +
@@ -474,13 +475,16 @@ export const zhDict: Record<string, string> = {
   'compactOnIdle.notice': '🧹 空闲时已自动压缩，借助缓存节省 token。\n/compact_on_idle — 关闭此功能或显示摘要。',
   'compactOnIdle.on': '开',
   'compactOnIdle.off': '关',
-  'compactOnIdle.title': '🧹 本话题的空闲自动压缩：{state}\n{summaryLine}\n\n当会话空闲约 55 分钟时，会自动压缩其上下文以节省 token（此时提示缓存仍是热的）。\n\n要一次性切换所有话题，请在 General 话题中运行此命令。',
-  'compactOnIdle.titleGeneral': '🧹 空闲自动压缩——所有话题的默认值：{state}\n{summaryLine}\n\n当会话空闲约 55 分钟时，会自动压缩其上下文以节省 token。\n\n每个话题仍可用自己的 /compact_on_idle 覆盖此设置。',
+  'compactOnIdle.title': '🧹 本话题的空闲自动压缩：{state}\n{summaryLine}\n{mistakesLine}\n\n当会话空闲约 55 分钟时，会自动压缩其上下文以节省 token（此时提示缓存仍是热的）。\n\n要一次性切换所有话题，请在 General 话题中运行此命令。',
+  'compactOnIdle.titleGeneral': '🧹 空闲自动压缩——所有话题的默认值：{state}\n{summaryLine}\n{mistakesLine}\n\n当会话空闲约 55 分钟时，会自动压缩其上下文以节省 token。\n\n每个话题仍可用自己的 /compact_on_idle 覆盖此设置。',
   'compactOnIdle.enableButton': '启用',
   'compactOnIdle.disableButton': '停用',
   'compactOnIdle.summaryLine': '📄 压缩后的摘要：{state}',
   'compactOnIdle.summaryShowButton': '📄 显示摘要',
   'compactOnIdle.summaryHideButton': '隐藏摘要',
+  'compactOnIdle.mistakesLine': '💡 摘要中的智能体错误：{state}',
+  'compactOnIdle.mistakesShowButton': '💡 显示错误',
+  'compactOnIdle.mistakesHideButton': '隐藏错误',
   'compactOnIdle.setThisTopic': '✅ 空闲自动压缩：本话题 {state}。',
   'compactOnIdle.setGlobal': '✅ 空闲自动压缩：所有话题 {state}（各话题的覆盖设置仍然有效）。',
   'compactOnIdle.unsupported': '空闲自动压缩适用于活动的代理会话。请先在已绑定的话题中启动 /claude 或 /opencode。',
@@ -496,6 +500,17 @@ export const zhDict: Record<string, string> = {
   'compactSummary.setThisTopic': '✅ 压缩摘要：本话题 {state}。',
   'compactSummary.setGlobal': '✅ 压缩摘要：所有话题 {state}（各话题的覆盖设置仍然有效）。',
   'compactSummary.unsupported': 'shell 没有可压缩的上下文，因此没有摘要可发布。',
+  'compactMistakes.on': '开启',
+  'compactMistakes.off': '关闭',
+  'compactMistakes.title':
+    '💡 压缩摘要中的智能体错误，本话题：{state}\n\n压缩摘要可以以智能体在会话中犯的错误收尾（尤其是重复出现的），这些错误本可通过修改它的规则、技能或 CLAUDE.md / AGENTS.md 来避免。即使完整摘要被隐藏，机器人也会把这一部分发到话题里。关闭：不再向智能体索要这一部分（不消耗 token），也不发布任何内容。\n\n要一次性切换所有话题，请在 General 话题中运行此命令。',
+  'compactMistakes.titleGeneral':
+    '💡 压缩摘要中的智能体错误——所有话题的默认值：{state}\n\n压缩摘要可以以智能体在会话中犯的错误收尾（尤其是重复出现的），这些错误本可通过修改它的规则、技能或 CLAUDE.md / AGENTS.md 来避免。即使完整摘要被隐藏，机器人也会把这一部分发到话题里。关闭：不再向智能体索要这一部分（不消耗 token），也不发布任何内容。\n\n每个话题仍可用自己的 /compact_mistakes 覆盖此设置。',
+  'compactMistakes.enableButton': '启用',
+  'compactMistakes.disableButton': '停用',
+  'compactMistakes.setThisTopic': '✅ 压缩摘要中的智能体错误：本话题 {state}。',
+  'compactMistakes.setGlobal': '✅ 压缩摘要中的智能体错误：所有话题 {state}（各话题的覆盖设置仍然有效）。',
+  'compactMistakes.unsupported': 'shell 没有可压缩的上下文，因此没有包含智能体错误的摘要。',
 
   'botSkills.on': '开启',
   'botSkills.off': '关闭',

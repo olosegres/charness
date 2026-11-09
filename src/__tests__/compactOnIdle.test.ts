@@ -27,6 +27,8 @@ import {
   compactionGapsEndMarker,
   compactionNoGapsLine,
   compactionResumeGuidance,
+  compactionResumeGuidanceWithoutGaps,
+  getCompactionResumeGuidance,
   formatCompactionSummaryForTopic,
   parseCompactionSummaryLine,
   checkCouldBecomeCompactionScaffoldingLine,
@@ -317,6 +319,31 @@ test('buildCompactionInstruction: a compaction with no closing section (manual, 
   });
   assert.equal(claude, `${compactionSummaryGuidance}\n\n${compactionResumeGuidance}`);
   assert.ok(claude.endsWith(compactionChecklistGuidance));
+});
+
+test('getCompactionResumeGuidance: the agent-mistakes section while `/compact_mistakes` is on, the skills and the checklist alone while it is off', () => {
+  assert.equal(getCompactionResumeGuidance(true), compactionResumeGuidance);
+  assert.equal(getCompactionResumeGuidance(false), compactionResumeGuidanceWithoutGaps);
+  assert.ok(getCompactionResumeGuidance(true).includes(compactionGapsGuidance));
+  assert.ok(!getCompactionResumeGuidance(false).includes(compactionGapsGuidance));
+  assert.ok(!getCompactionResumeGuidance(false).includes(compactionGapsStartMarker), 'no marker of the section either');
+  for (const isWithInstructionGaps of [true, false]) {
+    const guidance = getCompactionResumeGuidance(isWithInstructionGaps);
+    assert.ok(guidance.includes(compactionSkillsGuidance), `skills stay (section: ${isWithInstructionGaps})`);
+    assert.ok(guidance.endsWith(compactionChecklistGuidance), `the checklist ends it (section: ${isWithInstructionGaps})`);
+  }
+});
+
+test('buildCompactionInstruction: with the section off the instruction asks for no agent-mistakes section but keeps D3, the skills, the checklist and the closing section', () => {
+  const instruction = buildCompactionInstruction({
+    bakesSummaryGuidance: false,
+    summaryGuidance: compactionSummaryGuidance,
+    bakesResumeGuidance: false,
+    resumeGuidance: getCompactionResumeGuidance(false),
+    closingSectionInstruction: 'CLOSING',
+  });
+  assert.equal(instruction, `${compactionSummaryGuidance}\n\n${compactionResumeGuidanceWithoutGaps}\n\nCLOSING`);
+  assert.ok(instruction && !instruction.includes(compactionGapsGuidance));
 });
 
 test('buildCompactionInstruction: the idle compaction asks for the checklist as the last part of the closing section', () => {
@@ -678,7 +705,7 @@ test('checkShouldPostInstructionGaps: the bot\'s own compaction with the summary
   // section itself and posts it in order — after its notice, before a re-asked question.
   for (const streamsOwnSummary of [false, true]) {
     assert.equal(
-      checkShouldPostInstructionGaps({ isSummaryEnabled: false, streamsOwnSummary, isBotIssued: true, route: 'adapterCompact' }),
+      checkShouldPostInstructionGaps({ isEnabled: true, isSummaryEnabled: false, streamsOwnSummary, isBotIssued: true, route: 'adapterCompact' }),
       true,
       `streams its own summary: ${streamsOwnSummary}`,
     );
@@ -688,7 +715,7 @@ test('checkShouldPostInstructionGaps: the bot\'s own compaction with the summary
 test('checkShouldPostInstructionGaps: the bot\'s own compaction with the summary SHOWN → no (the full summary carries it, never twice)', () => {
   for (const streamsOwnSummary of [false, true]) {
     assert.equal(
-      checkShouldPostInstructionGaps({ isSummaryEnabled: true, streamsOwnSummary, isBotIssued: true, route: 'adapterCompact' }),
+      checkShouldPostInstructionGaps({ isEnabled: true, isSummaryEnabled: true, streamsOwnSummary, isBotIssued: true, route: 'adapterCompact' }),
       false,
       `streams its own summary: ${streamsOwnSummary}`,
     );
@@ -698,7 +725,7 @@ test('checkShouldPostInstructionGaps: the bot\'s own compaction with the summary
 test('checkShouldPostInstructionGaps: a compaction the CLI ran by itself → yes in BOTH modes (nobody posts its summary)', () => {
   for (const isSummaryEnabled of [true, false]) {
     assert.equal(
-      checkShouldPostInstructionGaps({ isSummaryEnabled, streamsOwnSummary: false, isBotIssued: false, route: 'adapterCompact' }),
+      checkShouldPostInstructionGaps({ isEnabled: true, isSummaryEnabled, streamsOwnSummary: false, isBotIssued: false, route: 'adapterCompact' }),
       true,
       `summary enabled: ${isSummaryEnabled}`,
     );
@@ -708,17 +735,31 @@ test('checkShouldPostInstructionGaps: a compaction the CLI ran by itself → yes
 test('checkShouldPostInstructionGaps: a compaction a streaming backend ran by itself → no from this rule (its stream is the one channel)', () => {
   for (const isSummaryEnabled of [true, false]) {
     assert.equal(
-      checkShouldPostInstructionGaps({ isSummaryEnabled, streamsOwnSummary: true, isBotIssued: false, route: 'adapterCompact' }),
+      checkShouldPostInstructionGaps({ isEnabled: true, isSummaryEnabled, streamsOwnSummary: true, isBotIssued: false, route: 'adapterCompact' }),
       false,
       `summary enabled: ${isSummaryEnabled}`,
     );
   }
 });
 
+test('checkShouldPostInstructionGaps: switched OFF (`/compact_mistakes`) → nothing is posted, whatever the compaction, the summary mode or the backend', () => {
+  for (const isBotIssued of [true, false]) {
+    for (const isSummaryEnabled of [true, false]) {
+      for (const streamsOwnSummary of [true, false]) {
+        assert.equal(
+          checkShouldPostInstructionGaps({ isEnabled: false, isSummaryEnabled, streamsOwnSummary, isBotIssued, route: 'adapterCompact' }),
+          false,
+          `bot issued: ${isBotIssued}, summary: ${isSummaryEnabled}, streams: ${streamsOwnSummary}`,
+        );
+      }
+    }
+  }
+});
+
 test('checkShouldPostInstructionGaps: a route the bot does not await → no summary of ours to read', () => {
   for (const route of ['forwardToAgent', 'notSupported'] as const) {
     assert.equal(
-      checkShouldPostInstructionGaps({ isSummaryEnabled: false, streamsOwnSummary: false, isBotIssued: true, route }),
+      checkShouldPostInstructionGaps({ isEnabled: true, isSummaryEnabled: false, streamsOwnSummary: false, isBotIssued: true, route }),
       false,
       `route ${route}`,
     );

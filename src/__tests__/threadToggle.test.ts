@@ -19,7 +19,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
 import { resolveDefaultOnThreadToggle, resolveThreadToggle } from '../utils/threadToggle';
-import { resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from '../utils/compactOnIdle';
+import { resolveCompactMistakesEnabled, resolveCompactOnIdleEnabled, resolveCompactSummaryEnabled } from '../utils/compactOnIdle';
 import { resolveAutoContinueOnLimitEnabled } from '../utils/autoContinueOnLimit';
 import { resolveBotSkillsEnabled } from '../utils/botSkills';
 
@@ -31,6 +31,8 @@ const wrappers = {
   '/bot_skills': { resolve: resolveBotSkillsEnabled, unsetValue: true },
   // A compaction ends in one short line unless the summary is turned on.
   '/compact_summary': { resolve: resolveCompactSummaryEnabled, unsetValue: false },
+  // The agent-mistakes section shipped enabled before the switch existed.
+  '/compact_mistakes': { resolve: resolveCompactMistakesEnabled, unsetValue: true },
 };
 
 /** `[globalDefault, threadOverride, expected]` — the decision table of a default-ON toggle. */
