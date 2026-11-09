@@ -16,7 +16,7 @@ import { createGuiAgentDeps, runGuiAgent } from './guiAgent';
 import { checkCanReadLid, createIoregReader, createLidWatcher } from './lidState';
 import { createGuiAgentHealer, guiAgentHealIntervalMs, writeGuiAgentInstallFailure } from './guiAgentHeal';
 import { describeKeepAwakeMethod } from '../remoteRun/probe';
-import { createKeepAwakeDeps, startKeepAwake, type KeepAwakeState } from './keepAwake';
+import { createKeepAwakeDeps, startKeepAwake, type KeepAwake, type KeepAwakeState } from './keepAwake';
 import { createIosCheckDeps, readIosCheck, refreshIosCheck } from './iosCheck';
 import { onStopSignals } from './stopSignals';
 import { createSilencerDeps, createSilencerLook, createSimulatorSilencer, silencerPollMs } from './simulatorSilencer';
@@ -491,12 +491,27 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     return 1;
   }
   ensureLauncherForRunningNode(paths, process.execPath);
-  // The machine is kept awake from the first moment of the link, before the tools and Pueue are looked after (which can take a while): the link this one replaces (every update restarts it) left its holder
-  // running — it lasts minutes — and this one takes over from it while it still holds, so the machine is never without an assertion (`keepAwake.ts`). Only a STOP ends the holder at once; a restart or a crash hands it over.
-  const keepAwake = await startKeepAwake(createKeepAwakeDeps(paths));
+  const controller = new AbortController();
   const leaving: { isStopRequested: boolean } = { isStopRequested: false };
-  const endKeepAwake = (): void => { if (leaving.isStopRequested) keepAwake.stop(); else keepAwake.handOver(); };
+  const stop = (): void => {
+    leaving.isStopRequested = true;
+    controller.abort();
+    setTimeout(() => process.exit(0), shutdownGraceMs).unref();
+  };
+  // The stop signals are heard from here on — before the holder starts and the tools and Pueue are looked after, which can take minutes: a stop in that stretch used to take Node's default action, with no `exit` handler to end the holder.
+  onStopSignals(stop);
+  // The machine is kept awake from the first moment of the link: the link this one replaces (every update restarts it) left its holder running — it lasts minutes — and this one takes over from it while it still holds,
+  // and ends it, so the machine is never without an assertion and never has two (`keepAwake.ts`). Only a STOP ends the holder at once; a restart or a crash hands it over.
+  const keepAwakeRef: { current: KeepAwake | null } = { current: null };
+  const endKeepAwake = (): void => {
+    if (leaving.isStopRequested) keepAwakeRef.current?.stop();
+    else keepAwakeRef.current?.handOver();
+  };
   process.once('exit', endKeepAwake);
+  const keepAwake = await startKeepAwake(createKeepAwakeDeps(paths));
+  keepAwakeRef.current = keepAwake;
+  // A stop that came while the holder was still settling found no handle to end: it is ended now (the exit that follows the stop's grace time would only find it too late to matter for a holder just started).
+  if (leaving.isStopRequested) keepAwake.stop();
   startGuiAgentHealing(paths, io);
   const toolDeps = createToolDeps();
   if (!(await findPueue(paths, toolDeps))) await ensurePueue(paths, toolDeps);
@@ -509,7 +524,6 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
   if (simulatorWork.linkChecksSimulator) startIosCheck(paths, io);
   if (simulatorWork.linkSilencesSimulators) startSimulatorSilencing(io);
   const loopRef: { current: ReturnType<typeof createLinkLoop> | null } = { current: null };
-  const controller = new AbortController();
   /** Set when the link leaves because the runner's Node changed (see {@link startNodeUpkeep}); the launcher then starts itself again. */
   const leave: { code: number | null } = { code: null };
   const getPueueActivity = createPueueActivityCheck(paths);
@@ -552,12 +566,6 @@ export async function runLink(io: CommandIo, appDir: string, homeDir: string = o
     stopJobs: async () => { await stopAllPueueJobs(paths); },
     onUpdateSettled: () => { nodeRestart.notifyChange(); },
   });
-  const stop = (): void => {
-    leaving.isStopRequested = true;
-    controller.abort();
-    setTimeout(() => process.exit(0), shutdownGraceMs).unref();
-  };
-  onStopSignals(stop);
   io.stdout(`${describeKeepAwake(keepAwake.getState())}\n`);
   io.stdout(`charness-runner: serving ${config.hub.label} as “${config.name}” (Ctrl-C stops)\n`);
   startNodeUpkeep(paths, appDir, io, nodeRestart);

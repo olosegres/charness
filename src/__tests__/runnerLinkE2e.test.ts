@@ -41,6 +41,7 @@ import { getServiceNames, planGuiAgentJob, renderLaunchdPlist } from '../runnerU
 import type { RunnerConfig, RunnerStatus } from '../runnerUtility/runnerConfig';
 import { getFreePort } from './e2e/isolatedCharness';
 import { createLaunchctlStandIn } from './runnerLinkE2e/launchctlStandIn';
+import { createSystemdInhibitStandIn } from './runnerLinkE2e/systemdInhibitStandIn';
 import { readCodeOfLine } from './runnersTestKit';
 import {
   createExtraMachine,
@@ -75,9 +76,18 @@ describe('runner link (process level)', { skip: skipReason }, () => {
   /** The second machine (made by the lost-answer case) and where its state is. */
   let secondHome = '';
 
+  /** The folder of the `systemd-inhibit` stand-in: the link's sleep-assertion holder is the same process on every Linux box, with or without a D-Bus session. */
+  let inhibitBinDir = '';
+
+  /** `charness-runner run` for the main machine, with the stand-in first on its PATH. */
+  function startLinkRunner(): ChildProcess {
+    return startRunner(layout, layout.runnerHome, { PATH: `${inhibitBinDir}:${path.dirname(process.execPath)}:${process.env.PATH ?? ''}` });
+  }
+
   before(async () => {
     assert.deepEqual(missingTools, [], 'CI installs everything this flow needs');
     layout = await createRunnerLinkLayout();
+    inhibitBinDir = createSystemdInhibitStandIn(layout.root);
     runnerPaths = getRunnerHomePaths(layout.runnerHome);
   });
   after(async () => {
@@ -167,7 +177,7 @@ describe('runner link (process level)', { skip: skipReason }, () => {
   });
 
   it('holds the link: plain ssh from the hub runs commands on the machine, with a clean environment', async () => {
-    runner = startRunner(layout);
+    runner = startLinkRunner();
     await waitForLink();
     // The runner says «linked» before the hub counts it online (see `waitForHubToSeeLink`): the list is read once the hub sees the link.
     await waitForHubToSeeLink(runnerId);
@@ -183,33 +193,36 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal(sshThroughLink(layout, runnerId, 'exit 7').status, 7);
   });
 
-  it('the link keeps the machine awake while it runs: its state file names the holder process (alive), or says why there is none', async () => {
+  /**
+   * The holder cases need the holder to be a `systemd-inhibit` — the Linux method; the stand-in (`runnerLinkE2e/systemdInhibitStandIn.ts`) makes it one on every Linux box, with or without a D-Bus session, so on Linux they always
+   * RUN (the CI runner and the Linux dev box); elsewhere the holder is `caffeinate` and they are skipped with that reason, never passed without looking. A holder that is not there on Linux is a failed precondition, named as such.
+   */
+  const holderSkipReason = process.platform === 'linux' ? false : 'the link\'s holder is caffeinate off Linux: these cases run on Linux (the CI runner, the Linux dev box)';
+
+  async function readHolderPid(): Promise<number> {
     await waitUntil(() => readAwakeState() !== null, 'the link to write how it keeps the machine awake', linkTimeoutMs);
     const awake = readAwakeState();
-    assert.ok(awake !== null);
-    if (awake.method === 'none') {
-      assert.match(awake.detail, /systemd-inhibit/, 'no holder: the reason names the tool (no bus for it here, or none installed)');
-    } else {
-      assert.equal(awake.method, 'systemd-inhibit', 'Linux: the idle-sleep lock of systemd-inhibit');
-      assert.equal(checkIsProcessAlive(Number(awake.detail)), true, 'the holder is running');
-    }
+    assert.ok(awake !== null && awake.method === 'systemd-inhibit', `precondition not met: the link has no systemd-inhibit holder (${JSON.stringify(awake)}) — the stand-in is first on its PATH`);
+    return Number(awake.detail);
+  }
+
+  it('the link keeps the machine awake while it runs: its state file names the holder process, and it is alive', { skip: holderSkipReason }, async () => {
+    const holderPid = await readHolderPid();
+    assert.equal(checkIsProcessAlive(holderPid), true, 'the holder is running');
   });
 
-  it('survives a restart of the utility with no new pairing — and the machine is let go in between: the old assertion\'s holder is gone once the link has stopped', async () => {
+  it('survives a restart of the utility with no new pairing — and the machine is let go in between: the old assertion\'s holder is gone once the link has STOPPED', { skip: holderSkipReason }, async () => {
     const before = await waitForLink();
     assert.ok(runner !== null);
-    const awakeBefore = readAwakeState();
+    const holderBefore = await readHolderPid();
     await stopRunner(layout, runner);
     assert.equal(readAwakeState(), null, 'a stopped link leaves no state behind');
-    if (awakeBefore !== null && awakeBefore.method !== 'none') {
-      await waitUntil(() => !checkIsProcessAlive(Number(awakeBefore.detail)), 'the old holder to be gone (no orphan keeps the machine awake after the runner stops)', 30_000);
-    }
-    runner = startRunner(layout);
+    await waitUntil(() => !checkIsProcessAlive(holderBefore), 'the old holder to be gone (no orphan keeps the machine awake after the runner stops)', 30_000);
+    runner = startLinkRunner();
     await waitForLink(before.pid);
     assert.equal((await waitForSsh('echo again')).trim(), 'again');
     assert.equal(readHubPaired().rev, 1);
-    await waitUntil(() => readAwakeState() !== null, 'the new link to write its state', linkTimeoutMs);
-    if (awakeBefore !== null && awakeBefore.method !== 'none') assert.notEqual(readAwakeState()?.detail, awakeBefore.detail, 'a new holder for the new link');
+    assert.notEqual(await readHolderPid(), holderBefore, 'a new holder for the new link');
   });
 
   it('comes back when the gate on the hub is killed', async () => {
@@ -337,13 +350,13 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     const original = readJson<RunnerConfig>(runnerPaths.config);
     fs.writeFileSync(runnerPaths.config, JSON.stringify({ ...original, hub: { ...original.hub, port: impostor.port } }));
     fs.rmSync(runnerPaths.status, { force: true });
-    runner = startRunner(layout);
+    runner = startLinkRunner();
     await waitUntil(() => readStatus()?.state === 'error', 'the runner to refuse the impostor', linkTimeoutMs);
     assert.match(readStatus()?.lastError ?? '', /host key is not the one pinned/);
     assert.notEqual(readStatus()?.state, 'linked');
     await stopRunner(layout, runner);
     fs.writeFileSync(runnerPaths.config, JSON.stringify(original));
-    runner = startRunner(layout);
+    runner = startLinkRunner();
     await waitForLink();
   });
 
@@ -352,7 +365,6 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     const appBefore = fs.realpathSync(runnerPaths.currentApp);
     const statusBefore = await waitForLink();
     const gateBefore = readGatePid();
-    const awakeBefore = readAwakeState();
     fs.appendFileSync(path.join(layout.hubInstall, 'dist', 'runners', 'pairCode.js'), '\n// changed by the flow\n');
     await waitUntil(() => {
       const config = readJson<RunnerConfig>(runnerPaths.config);
@@ -362,13 +374,71 @@ describe('runner link (process level)', { skip: skipReason }, () => {
     assert.equal((await waitForSsh('echo updated')).trim(), 'updated');
     assert.notEqual(readGatePid(), gateBefore, 'the update restarted the link — nothing killed the old gate to make it happen');
     assert.equal(readHubPaired().rev, 1, 'an update is not a new pairing');
-    if (awakeBefore !== null && awakeBefore.method !== 'none') {
-      // The update restarts the link, and a Mac that nobody uses is idle: the old link's holder must still hold when the new link's takes over (a holder tied to the link's process died with it — the
-      // moment with no assertion in which a real Mac went to sleep, five seconds later, and stayed offline for hours).
-      await waitUntil(() => readAwakeState()?.detail !== awakeBefore.detail && readAwakeState()?.method === 'systemd-inhibit', 'the new link to write its own holder', linkTimeoutMs);
-      assert.equal(checkIsProcessAlive(Number(awakeBefore.detail)), true, 'the old link\'s holder still holds when the new link\'s does: no moment without one');
-      process.kill(Number(awakeBefore.detail), 'SIGTERM');
+  });
+
+  /**
+   * A stop that finds the link still starting — after its holder is up, while it is still looking after Pueue and the tools — used to take Node's default action (the stop handlers were installed later), which runs no
+   * `exit` handler: the holder lingered for its five minutes. The TERM goes to the link's own process (not the group) the moment its holder is on record.
+   */
+  it('a stop that arrives while the link is still STARTING ends its holder too — it does not linger for its five minutes', { skip: holderSkipReason }, async () => {
+    if (runner !== null) {
+      await stopRunner(layout, runner);
+      runner = null;
     }
+    runner = startLinkRunner();
+    const holderPid = await readHolderPid();
+    const parent = spawnSync('ps', ['-o', 'ppid=', '-p', `${holderPid}`], { encoding: 'utf8' }).stdout.trim();
+    const linkPid = Number(parent);
+    assert.ok(Number.isInteger(linkPid) && linkPid > 1, `the holder's parent is the link process (${parent})`);
+    process.kill(linkPid, 'SIGTERM');
+    await waitUntil(() => !checkIsProcessAlive(linkPid), 'the link to leave after the stop', 30_000);
+    await waitUntil(() => !checkIsProcessAlive(holderPid), 'the holder to be gone with it (a stop ends it at once, whenever it comes)', 30_000);
+    assert.equal(readAwakeState(), null, 'and the state file with it');
+    // The next cases want a running link again.
+    await stopRunner(layout, runner);
+    runner = startLinkRunner();
+    await waitForLink();
+  });
+
+  /**
+   * The update restarts the link, and a Mac that nobody uses is idle: there must be no moment with no holder (a holder tied to the link's process died with it — the moment in which a real Mac went to sleep five
+   * seconds later and stayed offline for hours) and, once the new link's holds, no second one (the new link ends the one the old link left). Sampled from before the update to after it, WHICH-FIRST: the old holder's
+   * liveness is read before the state file, so a dead old holder with the file still naming it is a real gap, never a race of the sampler — the new link writes its own holder BEFORE it ends the old one.
+   */
+  it('an update of the program leaves no moment without a holder — the new link\'s holds before the old one\'s goes — and ends up with exactly one', { skip: holderSkipReason }, async () => {
+    const before = readJson<RunnerConfig>(runnerPaths.config);
+    const appBefore = fs.realpathSync(runnerPaths.currentApp);
+    const statusBefore = await waitForLink();
+    const oldHolder = await readHolderPid();
+    let gapSamples = 0;
+    let samples = 0;
+    let isSampling = true;
+    const sampler = (async (): Promise<void> => {
+      while (isSampling) {
+        const isOldAlive = checkIsProcessAlive(oldHolder);
+        const named = readAwakeState();
+        samples += 1;
+        if (!isOldAlive && (named === null || Number(named.detail) === oldHolder)) gapSamples += 1;
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+    })();
+    fs.appendFileSync(path.join(layout.hubInstall, 'dist', 'runners', 'pairCode.js'), '\n// changed by the flow, again\n');
+    try {
+      await waitUntil(() => {
+        const config = readJson<RunnerConfig>(runnerPaths.config);
+        return config.packageId !== before.packageId && fs.realpathSync(runnerPaths.currentApp) !== appBefore;
+      }, 'the runner to install the new package', updateTimeoutMs);
+      await waitForLink(statusBefore.pid);
+      await waitUntil(() => Number(readAwakeState()?.detail) !== oldHolder && readAwakeState()?.method === 'systemd-inhibit', 'the new link to write its own holder', linkTimeoutMs);
+      await waitUntil(() => !checkIsProcessAlive(oldHolder), 'the new link to end the old link\'s holder (one holder per machine)', 30_000);
+    } finally {
+      isSampling = false;
+      await sampler;
+    }
+    assert.ok(samples > 20, `the sampler ran (${samples} samples)`);
+    assert.equal(gapSamples, 0, `${gapSamples} of ${samples} samples found the old holder gone while the state still named it (or named none): a moment with no assertion`);
+    const newHolder = Number(readAwakeState()?.detail);
+    assert.equal(checkIsProcessAlive(newHolder), true, 'the new link\'s holder holds');
   });
 
   describe('an always-on Mac (a recorded `system-service`) whose login session\'s agent is not in place', () => {

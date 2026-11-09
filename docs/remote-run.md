@@ -138,7 +138,7 @@ the system folders, the Android SDK where the usual installers put it, and `NPM_
 purpose: the link restarts itself for every update of the host's package, and a holder that died with it left the Mac with no assertion for a moment — and a Mac nobody is
 using has its idle timer long expired, so it went to sleep five seconds later and stayed away (an assertion cannot wake a sleeping Mac, and its dark wakes every quarter of an hour
 end in sleep again) until someone pressed a key. So the link starts a new holder every minute and ends the old one only after the new one holds; a restart, an update or a crash
-leaves the holder running (it ends by itself after 5 minutes) and the next link starts its own while it still holds; only a STOP of the runner (`Ctrl-C`, a service stop, `unpair`, a removal) ends the holder
+leaves the holder running (it ends by itself after 5 minutes) and the next link starts its own while it still holds and then ends the old one, so a machine has one holder (a crash loop piles none up); only a STOP of the runner (`Ctrl-C`, a service stop, `unpair`, a removal) ends the holder
 at once, so the machine sleeps normally again. A SIGKILLed or crashed link therefore leaves the machine awake for at most 5 more minutes — no orphan keeps it awake longer. Where there is no way (no `caffeinate` or `systemd-inhibit`
 on the PATH, no D-Bus for the latter, another system) the link says so in its log and `charness remote-run runners` / `/runners` show `keeps awake: NO — <why>` instead of
 `keeps awake: yes (…)`; the link comes up all the same. It never touches `pmset` or any admin power setting, so nothing has to be set on the Mac.

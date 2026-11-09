@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { writeTextFileAtomically } from '../configDirFile';
@@ -25,7 +25,8 @@ import type { RunnerHomePaths } from './runnerHome';
  *   - timed: it ends by itself after {@link keepAwakeHoldSeconds}, whatever became of the link — a stop, a SIGKILL, a crash leave no orphan for longer than that;
  *   - renewed every {@link renewEveryMs} while the link runs, the NEW holder first and the old one released only after it holds (never an instant with none);
  *   - left running when the link leaves to come back (an update, a restart, a crash: {@link KeepAwake.handOver}), so the next link starts its own holder while this
- *     one still holds, and ended at once only when the link is stopped ({@link KeepAwake.stop}: the operator's stop, an unpair, a removal).
+ *     one still holds — and ends it (the pid in `<state>/awake`, if it still is one of our holders) once its own holds: one holder per machine, so a crash loop piles nothing up;
+ *   - ended at once only when the link is stopped ({@link KeepAwake.stop}: the operator's stop, an unpair, a removal).
  *
  * What is not covered, and `runners` says: a closed lid, the Apple menu's Sleep and the power button, a battery running out, and a link that stays away for longer than
  * {@link keepAwakeHoldSeconds} (a crash loop, a machine that was busy for minutes before the new link came up).
@@ -46,6 +47,10 @@ export const renewEveryMs = 60 * 1000;
 export const defaultSettleMs = 500;
 export const retryAfterMs = 30 * 1000;
 const stderrTailChars = 400;
+/** The `--who` of the lock `systemd-inhibit` takes; also what tells a holder of this runner from any other process behind a recorded pid. */
+const holderWho = 'charness-runner';
+/** `ps` for the command line of one pid answers at once; a hung one must not hold the link's start. */
+const psTimeoutMs = 3000;
 const reasonMaxChars = 200;
 
 /** @description The holder to start for this platform, lasting `holdSeconds`, or why there is none: pure, `findExecutable` is the PATH lookup. */
@@ -57,7 +62,7 @@ export function planKeepAwake(platform: NodeJS.Platform, holdSeconds: number, fi
   if (platform === 'linux') {
     const file = findExecutable('systemd-inhibit');
     if (file === null) return { reason: 'systemd-inhibit was not found (no systemd here, or not on the PATH of the runner)' };
-    return { method: 'systemd-inhibit', file, args: ['--what=idle', '--who=charness-runner', '--why=the runner link is up', '--mode=block', 'sleep', `${holdSeconds}`] };
+    return { method: 'systemd-inhibit', file, args: ['--what=idle', `--who=${holderWho}`, '--why=the runner link is up', '--mode=block', 'sleep', `${holdSeconds}`] };
   }
   return { reason: `keeping the machine awake is not supported on ${platform}` };
 }
@@ -66,6 +71,21 @@ export function planKeepAwake(platform: NodeJS.Platform, holdSeconds: number, fi
 export function formatKeepAwakeState(state: KeepAwakeState): string {
   if (state.method !== null) return `${state.method} ${state.holderPid}\n`;
   return `none ${state.reason.replace(/\s+/g, ' ').trim().slice(0, reasonMaxChars)}\n`;
+}
+
+/** @description The holder's pid in the text of `<state>/awake` (`caffeinate 123`), `null` for `none <reason>`, a damaged pid or nothing. */
+export function parseHolderPid(stateText: string): number | null {
+  const match = /^(?:caffeinate|systemd-inhibit) ([0-9]+)\s*$/.exec(stateText);
+  const pid = match === null ? null : Number(match[1]);
+  return pid !== null && Number.isSafeInteger(pid) && pid > 1 ? pid : null;
+}
+
+/**
+ * @description Is `commandLine` (what `ps` says of a pid) a holder this runner starts — `caffeinate -i -t <seconds>` or `systemd-inhibit --what=idle --who=charness-runner … sleep <seconds>`, however it was launched (a
+ * script of the same name included)? The pid in the state file may have gone to something else by the time the next link reads it: only a process that looks like our own holder is ended.
+ */
+export function checkIsHolderCommand(commandLine: string): boolean {
+  return /(?:^|[\s/])caffeinate -i -t [0-9]+$/.test(commandLine.trim()) || new RegExp(`(?:^|[\\s/])systemd-inhibit --what=idle --who=${holderWho}(?:\\s|$)`).test(commandLine);
 }
 
 export interface KeepAwakeDeps {
@@ -80,6 +100,10 @@ export interface KeepAwakeDeps {
   retryMs: number;
   writeState: (line: string) => void;
   removeState: () => void;
+  /** The holder the state file names — the previous link's, still running when it left (a hand-over) — or `null`. Read before this link writes its own. */
+  readPredecessorPid: () => number | null;
+  /** End the previous link's holder: only if `pid` is still one of ours (a recorded pid may be anyone's by now). */
+  endPredecessor: (pid: number) => void;
 }
 
 export interface KeepAwake {
@@ -116,6 +140,8 @@ function waitForHolderToSettle(child: ChildProcess, settleMs: number, getStderrT
  * rejects: a machine that cannot be kept awake is a state `runners` shows, not a reason for the link not to come up.
  */
 export async function startKeepAwake(deps: KeepAwakeDeps): Promise<KeepAwake> {
+  // The holder the previous link left running (a hand-over leaves it for up to 5 minutes): this link ends it once its own holds — one holder per machine, so a stop ends everything and a crash loop piles nothing up.
+  let predecessorPid = deps.readPredecessorPid();
   let state: KeepAwakeState = { method: null, reason: 'not started' };
   let holder: ChildProcess | null = null;
   let timer: NodeJS.Timeout | null = null;
@@ -185,6 +211,8 @@ export async function startKeepAwake(deps: KeepAwakeDeps): Promise<KeepAwake> {
     publish({ method: plan.method, holderPid: child.pid });
     // The old holder goes only now: the new one holds already, so the machine is never left with none.
     previous?.kill('SIGTERM');
+    if (predecessorPid !== null && predecessorPid !== child.pid) deps.endPredecessor(predecessorPid);
+    predecessorPid = null;
     child.once('exit', (code, signal) => {
       if (holder !== child) return;
       holder = null;
@@ -256,5 +284,21 @@ export function createKeepAwakeDeps(paths: RunnerHomePaths): KeepAwakeDeps {
     retryMs: retryAfterMs,
     writeState: (line) => { writeTextFileAtomically(paths.awakeFile, line, stateFileMode); },
     removeState: () => { fs.rmSync(paths.awakeFile, { force: true }); },
+    readPredecessorPid: () => {
+      try {
+        return parseHolderPid(fs.readFileSync(paths.awakeFile, 'utf8'));
+      } catch {
+        return null;
+      }
+    },
+    endPredecessor: (pid) => {
+      const listing = spawnSync('ps', ['-p', `${pid}`, '-o', 'command='], { encoding: 'utf8', timeout: psTimeoutMs });
+      if (listing.status !== 0 || !checkIsHolderCommand(listing.stdout)) return;
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        /* gone in the meantime, or not ours to end */
+      }
+    },
   };
 }

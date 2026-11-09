@@ -20,9 +20,11 @@ import * as path from 'node:path';
 import { describeKeepAwake } from '../runnerUtility/runnerCommands';
 import { keepAwakeHoldSeconds } from '../remoteRun/probe';
 import {
+  checkIsHolderCommand,
   createKeepAwakeDeps,
   findExecutableOnPath,
   formatKeepAwakeState,
+  parseHolderPid,
   planKeepAwake,
   renewEveryMs,
   startKeepAwake,
@@ -119,6 +121,8 @@ describe('startKeepAwake with a stand-in holder', () => {
   let spawned: Array<{ file: string; args: readonly string[] }> = [];
   let holders: FakeHolder[] = [];
   let behave: (holder: FakeHolder, index: number) => void = () => undefined;
+  /** The holder the state file names when the link starts: the previous link's, left running by its hand-over. */
+  let predecessorPid: number | null = null;
   const renewMs = 50;
   const retryMs = 40;
   const settleMs = 30;
@@ -130,6 +134,7 @@ describe('startKeepAwake with a stand-in holder', () => {
     holders = [];
     events = [];
     behave = () => undefined;
+    predecessorPid = null;
   });
 
   function createDeps(overrides: Partial<KeepAwakeDeps> = {}): KeepAwakeDeps {
@@ -152,6 +157,8 @@ describe('startKeepAwake with a stand-in holder', () => {
       retryMs,
       writeState: (line) => { written.push(line); events.push(`state ${line.trim()}`); },
       removeState: () => { removed += 1; events.push('state removed'); },
+      readPredecessorPid: () => predecessorPid,
+      endPredecessor: (pid) => { events.push(`end predecessor ${pid}`); },
       ...overrides,
     };
   }
@@ -302,6 +309,71 @@ describe('startKeepAwake with a stand-in holder', () => {
       assert.deepEqual(second.getState(), { method: 'caffeinate', holderPid: 9002 });
       second.stop();
     });
+
+    it('the holder the previous link left is ended ONCE this link\'s holds — after its pid is written, never before — so there is one holder per machine', async () => {
+      predecessorPid = 4321;
+      const keepAwake = await startKeepAwake(createDeps({ renewMs: 20 }));
+      await waitUntilThat('a renewal to be done (its new holder holds and the first is let go)', () => holders.length >= 2 && holders[0].killed.length === 1);
+      assert.deepEqual(events.slice(0, 3), ['spawn 9001', 'state caffeinate 9001', 'end predecessor 4321'], 'the new holder holds and is on record before the old link\'s goes');
+      assert.equal(events.filter((event) => event.startsWith('end predecessor')).length, 1, 'once: a renewal does not end it again');
+      keepAwake.stop();
+    });
+
+    it('while no holder of this link holds yet (the first one failed) the previous link\'s is kept — it is the only one — and is ended when a retry holds', async () => {
+      predecessorPid = 4321;
+      behave = (holder, index) => { if (index === 0) holder.emit('exit', 1, null); };
+      const keepAwake = await startKeepAwake(createDeps());
+      assert.equal(keepAwake.getState().method, null);
+      assert.ok(!events.some((event) => event.startsWith('end predecessor')), 'nothing was ended while this link held nothing');
+      await waitUntilThat('the retry that holds', () => keepAwake.getState().method === 'caffeinate');
+      assert.ok(events.includes('end predecessor 4321'));
+      assert.ok(events.indexOf('state caffeinate 9002') < events.indexOf('end predecessor 4321'));
+      keepAwake.stop();
+    });
+
+    it('no predecessor (a first start, a stop, a state of «none»), or the very pid this link just started: nothing is ended', async () => {
+      const first = await startKeepAwake(createDeps());
+      first.stop();
+      predecessorPid = 9001;
+      holders = [];
+      const same = await startKeepAwake(createDeps());
+      same.stop();
+      assert.ok(!events.some((event) => event.startsWith('end predecessor')), JSON.stringify(events));
+    });
+
+    it('a stop right after the start still ends this link\'s own holder, and the predecessor was ended already: nothing of the previous link survives a stop', async () => {
+      predecessorPid = 4321;
+      const keepAwake = await startKeepAwake(createDeps());
+      keepAwake.stop();
+      assert.ok(events.includes('end predecessor 4321'));
+      assert.deepEqual(holders[0].killed, ['SIGTERM']);
+    });
+  });
+});
+
+describe('the previous link\'s holder, from the state file', () => {
+  it('parseHolderPid reads `<method> <pid>` and nothing else: «none», a damaged or absurd pid, another word, nothing', () => {
+    assert.equal(parseHolderPid('caffeinate 123\n'), 123);
+    assert.equal(parseHolderPid('systemd-inhibit 4567'), 4567);
+    for (const text of ['', 'none no bus\n', 'caffeinate\n', 'caffeinate 12x', 'caffeinate -5', 'caffeinate 0', 'caffeinate 1', 'sleep 123', 'caffeinate 99999999999999999999']) assert.equal(parseHolderPid(text), null, JSON.stringify(text));
+  });
+
+  it('checkIsHolderCommand knows a holder of THIS runner — however it was launched — and nothing else that a recorded pid may have become (a job\'s own caffeinate, another tool\'s lock, any process)', () => {
+    for (const command of [
+      'caffeinate -i -t 300',
+      '/usr/bin/caffeinate -i -t 7\n',
+      '/usr/bin/systemd-inhibit --what=idle --who=charness-runner --why=the runner link is up --mode=block sleep 300',
+      '/bin/sh /tmp/stand-in/bin/systemd-inhibit --what=idle --who=charness-runner --why=the runner link is up --mode=block sleep 300',
+    ]) assert.equal(checkIsHolderCommand(command), true, command);
+    for (const command of [
+      'caffeinate -i -w 4242', // what a job's own command gets (`runner.sh`)
+      'caffeinate -d -t 300',
+      'caffeinate -i -t 300 make',
+      '/usr/bin/systemd-inhibit --what=idle --who=someone-else --why=x --mode=block sleep 300',
+      'sleep 300',
+      'node /app/dist/runnerUtility/runnerCli.js run',
+      '',
+    ]) assert.equal(checkIsHolderCommand(command), false, command);
   });
 });
 
@@ -382,30 +454,78 @@ describe('the real systemd-inhibit', { skip: hasWorkingSystemdInhibit ? false : 
     assert.equal(listLocksOfHolder(holderPid).length, 0, 'with its lock');
   });
 
-  it('a restart of the link: the old holder still holds when the next link\'s holder takes over — and with a STOP in between (what a link tied holder did) it is already gone: the gap an idle Mac sleeps in', async () => {
+  /**
+   * Start a link after `previousEnd` ended the previous one's way, and say whether the previous link's lock was still listed at the very instant this link's holder was RECORDED in the state file (`writeState`, which
+   * comes before the predecessor is ended).
+   */
+  async function startNextLink(setUp: ReturnType<typeof createRealDeps>, oldHolder: number): Promise<{ isOldLockListedAtRecording: boolean | null; next: Awaited<ReturnType<typeof startKeepAwake>> }> {
+    const seen: { isOldLockListedAtRecording: boolean | null } = { isOldLockListedAtRecording: null };
+    const next = await startKeepAwake({
+      ...setUp.deps,
+      writeState: (line) => {
+        if (!line.includes(`${oldHolder}`) && seen.isOldLockListedAtRecording === null) seen.isOldLockListedAtRecording = listLocksOfHolder(oldHolder).length === 1;
+        setUp.deps.writeState(line);
+      },
+    });
+    return { isOldLockListedAtRecording: seen.isOldLockListedAtRecording, next };
+  }
+
+  it('a restart of the link: the old holder\'s lock is still listed when the next link\'s holder is recorded — and with a STOP in between (what a link tied holder did) it is already gone: the gap an idle Mac sleeps in', async () => {
     const handOver = createRealDeps();
     const before = await startKeepAwake(handOver.deps);
     const oldHolder = getHolderPid(before.getState());
     leftHolders.push(oldHolder);
     before.handOver();
-    const after = await startKeepAwake(handOver.deps);
+    const { isOldLockListedAtRecording, next: after } = await startNextLink(handOver, oldHolder);
     const newHolder = getHolderPid(after.getState());
     leftHolders.push(newHolder);
     assert.notEqual(newHolder, oldHolder);
-    assert.equal(listLocksOfHolder(oldHolder).length, 1, 'the old link\'s lock is still there when the new link\'s holds: there was no moment with none');
+    assert.equal(isOldLockListedAtRecording, true, 'the old link\'s lock was still there when the new link\'s holder went on record: there was no moment with none');
     assert.equal(listLocksOfHolder(newHolder).length, 1);
     assert.equal(fs.readFileSync(handOver.awakeFile, 'utf8'), `systemd-inhibit ${newHolder}\n`, 'the state names the new holder');
 
-    // The negative control: the same restart, but the old link STOPS (ends its holder at once) — by the time the next holder holds, the first lock is gone. The check above can tell the two apart.
+    // The negative control: the same restart, but the old link STOPS (ends its holder at once) — by the time the next holder is recorded the first lock is gone. The check above can tell the two apart.
     const stopped = createRealDeps();
     const stoppedBefore = await startKeepAwake(stopped.deps);
     const stoppedHolder = getHolderPid(stoppedBefore.getState());
     stoppedBefore.stop();
-    const stoppedAfter = await startKeepAwake(stopped.deps);
+    const { isOldLockListedAtRecording: isStoppedLockListed, next: stoppedAfter } = await startNextLink(stopped, stoppedHolder);
     leftHolders.push(getHolderPid(stoppedAfter.getState()));
-    assert.equal(listLocksOfHolder(stoppedHolder).length, 0, 'after a stop the old lock is gone by the time the next holder holds: for that stretch the machine had none');
+    assert.equal(isStoppedLockListed, false, 'after a stop the old lock is gone by the time the next holder is recorded: for that stretch the machine had none');
     after.stop();
     stoppedAfter.stop();
+  });
+
+  it('the next link ends the holder the previous one left — only once its own holds — and one the state file names that is NOT a holder (a recycled pid) is left alone', async () => {
+    const handOver = createRealDeps();
+    const previous = await startKeepAwake(handOver.deps);
+    const previousHolder = getHolderPid(previous.getState());
+    leftHolders.push(previousHolder);
+    previous.handOver();
+    assert.equal(checkIsProcessAlive(previousHolder), true);
+    const next = await startKeepAwake(handOver.deps);
+    const nextHolder = getHolderPid(next.getState());
+    leftHolders.push(nextHolder);
+    await waitUntil('the previous link\'s holder to be ended by this one', () => !checkIsProcessAlive(previousHolder));
+    assert.equal(checkIsProcessAlive(nextHolder), true, 'its own holds');
+    assert.equal(listLocksOfHolder(previousHolder).length, 0, 'and the old lock went with it');
+    next.stop();
+
+    // A state file that names a process which is not a holder: it is a recycled pid, and it is never signalled.
+    const bystander = spawn('sleep', ['120'], { stdio: 'ignore' });
+    const bystanderPid = bystander.pid ?? 0;
+    try {
+      fs.writeFileSync(handOver.awakeFile, `systemd-inhibit ${bystanderPid}\n`);
+      const third = await startKeepAwake(handOver.deps);
+      leftHolders.push(getHolderPid(third.getState()));
+      // Waited a moment: a signalled child is a zombie (still «alive» to `kill -0`) until its parent has reaped it; the child's own exit record is what says it was ended.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.ok(bystander.exitCode === null && bystander.signalCode === null, `a process that does not look like our holder is not ended (it ended: ${bystander.exitCode ?? bystander.signalCode})`);
+      assert.equal(checkIsProcessAlive(bystanderPid), true);
+      third.stop();
+    } finally {
+      bystander.kill('SIGKILL');
+    }
   });
 
   it('a lock with the very same text held by ANOTHER process neither hides this holder\'s lock going nor fails the check — it is not ours', async () => {
