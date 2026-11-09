@@ -13,6 +13,9 @@
  *   → the line run on the runner machine WITHOUT its `sudo`, by the account itself (its last word names that account), pairs it: the message turns
  *     into «Runner “…” paired …» naming the 2 jobs at once, its line and keyboard are gone, the registry entry holds the 2 the key line of the machine is in authorized_keys and the temporary one is not
  *   → the utility holds the link: /runners lists the machine online, and the live probe adds its hardware, jobs and capabilities
+ *   → a machine whose link is up but whose probe does not finish in time (the runner's `awk` is slow; the bot's probe deadline is shortened to 2 s through the test seam) is
+ *     «online, busy — did not answer the probe in time», never «offline»: its keyboard is the online one and its last snapshot is shown as old, with no live jobs line; with
+ *     the production window and a probe in time it is plainly online again
  *   → «Jobs at once» (the machine's button on the list) opens the picker with the hardware the live probe reported and a suggestion; picking
  *     2 tells the runner NOW — its private Pueue's default group runs two jobs in parallel (read back from Pueue itself), the registry holds 2, the
  *     list says «2 at once» — and a picker of an older revision sets nothing
@@ -30,7 +33,8 @@
  *   → a runner's link that changes address (its status file says so) is said once in General and pinned — not at the next looks, not after a
  *     restart — and the note stays on the list
  *   → thirty seeded machines (a registry written by hand, a snapshot each) make a list of several pages: Next / Previous edit the SAME
- *     message, every page fits Telegram's limit (the fake Bot API refuses a longer text, as the real one does), and a button on a later
+ *     message, every page fits Telegram's limit (the fake Bot API refuses a longer text, as the real one does), every offline machine whose last report said it kept itself awake
+ *     is told as most likely asleep («nothing can wake it from here»), and a button on a later
  *     page pauses and removes the machine it names — by its place in the whole list and the revision — and nothing else
  *   → the pairing code and the private key in the line are nowhere in the output trace, the console log or the bot's output: the trace keeps the messages' length only
  *
@@ -106,6 +110,11 @@ const pairingLineTimeoutMs = 180 * 1000;
 const generalOnlyText = '⚠️ Runners are managed in General — open /runners there.';
 const staleListToast = 'The list changed — here it is again.';
 const secretTracePreview = '[secret — text not recorded]';
+/** The bot's probe deadline for the step that needs a busy machine (the seam's floor is 1 s; production is 20 s), and how long each `awk` of the runner's probe takes in it: a dozen of them, one after the other, are far past it. */
+const busyProbeDeadlineMs = 2000;
+const busyProbeAwkDelaySec = 2;
+/** What `/runners` says under an offline machine whose last report said it kept itself awake. */
+const asleepNote = 'kept awake when last seen; if it is asleep now, nothing can wake it from here — a key press or opening the lid does';
 
 describe('/runners end to end: built charness, fake Bot API, loopback sshd, a runner machine', { skip: skipReason }, () => {
   let layout: IsolatedInstanceLayout | null = null;
@@ -118,6 +127,16 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
   let runner: ChildProcess | null = null;
   /** What the runs before the current one printed (a restart starts a new process with a new output). */
   let earlierOutput = '';
+
+  /** The instance's env file without its timings: a step that needs another window writes it again with the timings it wants (`rewriteInstanceEnv`) and restarts the bot. */
+  let instanceEnv: Record<string, string> = {};
+
+  function rewriteInstanceEnv(extraTimings: Parameters<typeof getTelegramFlowTestTimingsEnv>[0] = {}): void {
+    writeInstanceEnvFile(getLayout(), { ...instanceEnv, ...getTelegramFlowTestTimingsEnv(extraTimings) });
+  }
+
+  /** What the runner's `env` file held before a step made its probe slow (`null` = there was none). */
+  let runnerEnvBefore: string | null = null;
 
   let firstPairingLine = '';
   let secondPairingLine = '';
@@ -249,7 +268,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
   function seedMachines(count: number): string[] {
     const cacheDir = getRemoteRunCacheDir({}, getLayout().instanceHome);
     fs.mkdirSync(cacheDir, { recursive: true });
-    const snapshotText = ['os=Linux', 'os_name=Ubuntu', 'os_version=24.04', 'arch=x86_64', `cpu_model=${'M'.repeat(300)}`, 'cpu_cores=8', 'ram_total_mb=65536', 'ram_free_mb=40960', 'disk_free_mb=512000', 'pueue=4.0.4'].join('\n');
+    const snapshotText = ['os=Linux', 'os_name=Ubuntu', 'os_version=24.04', 'arch=x86_64', `cpu_model=${'M'.repeat(300)}`, 'cpu_cores=8', 'ram_total_mb=65536', 'ram_free_mb=40960', 'disk_free_mb=512000', 'pueue=4.0.4', 'awake=caffeinate'].join('\n');
     const names = Array.from({ length: count }, (_value, index) => `seed-${index.toString().padStart(2, '0')}`);
     const current = readJson<{ rev: number; runners: object[] }>(path.join(getRegistryDir(), 'paired.json'));
     const seeded = names.map((name, index) => {
@@ -324,7 +343,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     general = new TopicDriver(fakeTelegram, getCharness, generalTopicThreadId, replyTimeoutMs);
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
     const apiRoot = await fakeTelegram.start();
-    writeInstanceEnvFile(layout, {
+    instanceEnv = {
       TELEGRAM_BOT_TOKEN: fakeBotToken,
       TELEGRAM_API_ROOT: apiRoot,
       ALLOWED_GROUP_ID: group.id.toString(),
@@ -336,8 +355,8 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
-      ...getTelegramFlowTestTimingsEnv(),
-    });
+    };
+    writeInstanceEnvFile(layout, { ...instanceEnv, ...getTelegramFlowTestTimingsEnv() });
   });
 
   after(async () => {
@@ -467,6 +486,54 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     await general.waitForMessageText('the live data on the list', list, (text) => text.includes('jobs: 0 running, 0 queued') && text.includes('can: ') && !text.includes('Checking the machines'));
     assert.match(list.text, /RAM \d/);
     assert.match(list.text, /jobs: 0 running, 0 queued · projects: 0 · 2 at once/, 'the number chosen on the pairing message');
+  });
+
+  /**
+   * `awk` on the runner's PATH that takes `delaySec` to answer, then does what awk does: the probe uses it in a dozen places, one after the other, so it takes a loaded machine's time — far past the shortened
+   * deadline — without any step of it being stuck. The runner's own `env` file is read again for every command, so removing the line is all it takes to undo it.
+   */
+  function makeRunnerProbeSlow(delaySec: number): void {
+    const slowBin = path.join(link.root, 'slow-awk-bin');
+    fs.mkdirSync(slowBin, { recursive: true });
+    const realAwk = execFileSync('which', ['awk'], { encoding: 'utf8' }).trim();
+    fs.writeFileSync(path.join(slowBin, 'awk'), `#!/bin/sh\nsleep ${delaySec}\nexec ${realAwk} "$@"\n`, { mode: 0o755 });
+    const { envFile } = getRunnerHomePaths(link.runnerHome);
+    runnerEnvBefore = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : null;
+    fs.writeFileSync(envFile, `${runnerEnvBefore ?? ''}PATH=${slowBin}:${process.env.PATH ?? ''}\n`, { mode: 0o600 });
+  }
+
+  /** Put the runner's `env` file back as it was before {@link makeRunnerProbeSlow}. */
+  function restoreRunnerEnv(): void {
+    const { envFile } = getRunnerHomePaths(link.runnerHome);
+    if (runnerEnvBefore === null) fs.rmSync(envFile, { force: true });
+    else fs.writeFileSync(envFile, runnerEnvBefore, { mode: 0o600 });
+  }
+
+  it('a machine whose link is up but whose probe does not finish in time is «online, busy» on the list — never «offline» — with its Pause / Remove / Jobs-at-once keyboard and its last snapshot shown as old; with the probe in time it is plainly online again', async () => {
+    // The bot reads the shortened deadline at its boot: it is restarted with 2 s, and again with the production window afterwards (the next steps wait for live data).
+    await getCharness().stop();
+    rewriteInstanceEnv({ remoteRunProbeDeadlineMs: busyProbeDeadlineMs });
+    await startCharness();
+    makeRunnerProbeSlow(busyProbeAwkDelaySec);
+    try {
+      const list = await general.sendAndAwaitReply('/runners', `${runnerName} — online`);
+      await general.waitForMessageText('the busy status after the probe ran out of time', list, (text) => text.includes(`${runnerName} — online, busy — did not answer the probe in time`) && !text.includes('Checking the machines'));
+      assert.ok(!list.text.includes(`${runnerName} — offline`) && !list.text.includes('offline since'), list.text);
+      assert.match(list.text, /\n {2}as it was then: .* RAM \d/, 'its last snapshot, marked as old — no live load, jobs or capabilities');
+      assert.ok(!list.text.includes('jobs: 0 running'), 'no live jobs line for a machine that did not answer');
+      const revision = readPaired().rev;
+      assert.deepEqual(general.getKeyboardData(list), [['rnr_pair'], [`rnr_${revision}_0_p`, `rnr_${revision}_0_x`], [`rnr_${revision}_0_j`], ['rnr_refresh']], 'the keyboard of an online machine: nothing was taken away');
+      assert.ok((await getRunnerLinkStatus(getRegistryDir(), runnerId)).isOnline, 'the link is up all the while');
+    } finally {
+      restoreRunnerEnv();
+    }
+    // The probe in time again: the production window, and the live data are back.
+    await getCharness().stop();
+    rewriteInstanceEnv();
+    await startCharness();
+    const again = await general.sendAndAwaitReply('/runners', `${runnerName} — online`);
+    await general.waitForMessageText('the live data again', again, (text) => text.includes('jobs: 0 running, 0 queued') && !text.includes('Checking the machines'));
+    assert.ok(!again.text.includes('busy'), again.text);
   });
 
   it('«Jobs at once» opens the picker with the machine\'s hardware, and picking a number tells the runner NOW — its Pueue runs that many in parallel — saves it, redraws the list; a picker of an older revision sets nothing', async () => {
@@ -641,6 +708,10 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
       await general.waitForMessageText(`page ${page} of the list`, list, (text) => text.includes(`Page ${page} of ${pageCount}`) && !text.includes('Checking the machines'));
       assert.ok(list.text.length <= maxScreenTextChars, `page ${page}: ${list.text.length} characters`);
       seen.push(...readListedNames(list.text));
+      // The seeded machines are offline and their last report said they kept themselves awake: every one of them is told as most likely asleep — nothing can wake it from here — and the pages still fit.
+      const seededBlocks = list.text.split('\n\n').filter((block) => /^seed-\d+ — offline/.test(block));
+      assert.ok(seededBlocks.length > 0, `page ${page} lists seeded machines`);
+      for (const block of seededBlocks) assert.ok(block.includes(`\n  ${asleepNote}`), `the asleep note is under ${block.split('\n')[0]}: ${block}`);
       const labels = general.getKeyboardLabels(list).flat();
       assert.equal(labels.includes('‹ Previous'), page > 1, `Previous on page ${page}`);
       assert.equal(labels.includes('Next ›'), page < pageCount, `Next on page ${page}`);

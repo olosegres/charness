@@ -92,7 +92,7 @@ const testTimingsSchema = z.strictObject({
   pairingLifetimeMs: createShorterWindowSchema(pairingLifetimeMs).min(pairingLifetimeMinMs).optional(),
   /** How often `charness remote-run --needs <capability>` looks again while it waits for an offline paired runner (production: `runnerWaitPollMs`, 10 s; at least `runnerWaitPollMinMs`). Read by the remote-run CLI, not by the bot. */
   remoteRunRunnerPollMs: createShorterWindowSchema(runnerWaitPollMs).min(runnerWaitPollMinMs).optional(),
-  /** How long a view of the runners or a pick waits for every runner's answer in all (production: `probeAllTimeoutMs`, 20 s; at least `probeDeadlineMinMs`): a flow that needs a BUSY runner (its probe does not finish in time) cannot wait out 20 s. Read by the remote-run CLI, not by the bot. */
+  /** How long a view of the runners or a pick waits for every runner's answer in all (production: `probeAllTimeoutMs`, 20 s; at least `probeDeadlineMinMs`): a flow that needs a BUSY runner (its probe does not finish in time) cannot wait out 20 s. Read by the remote-run CLI and by the bot's `/runners` probe. */
   remoteRunProbeDeadlineMs: createShorterWindowSchema(probeAllTimeoutMs).min(probeDeadlineMinMs).optional(),
   /** The shortest gap between two fires of a cron schedule (production: `minFireIntervalMs`, 5 min). */
   scheduleMinFireIntervalMs: createShorterWindowSchema(minFireIntervalMs).optional(),

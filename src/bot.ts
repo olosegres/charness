@@ -7951,7 +7951,8 @@ const { registerRunnersCommands, registerRunnersCallbacks, handleRunnersAddressT
   saveRunnerHost: (address) => saveInstanceSettingsChange(getInstanceSettingsPath(), { runnerHost: address }),
   getBotLabel: () => (bot.botInfo?.username === undefined ? os.hostname() : `@${bot.botInfo.username}`),
   readOverview: (nowMs) => readRunnersOverview(runnersHub, runnersCacheDir, nowMs),
-  probeOverview: (overview, nowMs) => probeRunnersOverview(runnersHub, overview, runnersCacheDir, nowMs),
+  // The 20 s deadline of the live probe, which the test seam may shorten (a flow that must see a BUSY machine cannot wait it out).
+  probeOverview: (overview, nowMs) => probeRunnersOverview(runnersHub, overview, runnersCacheDir, nowMs, ENV.testTimings.remoteRunProbeDeadlineMs),
   listAddressCandidates: () => listPublicAddressCandidates(),
   scanHostKey,
   ensureGateWrapper: () => { ensureGateWrapper(runnersHub); },
