@@ -128,6 +128,8 @@ tmpdir_sweep_interval_hours=6
 # what an iOS build leaves — ~8.5 GB per app — back. The walk for it goes down to build_data_find_depth.
 build_data_keep_hours=24
 build_data_find_depth=5
+# The folder of an `ios/build` that stays: the codegen pods' sources `pod install` writes there are part of the native project, not derived data (see `list_build_data_folders`).
+build_data_kept_name=generated
 # A prune on a short disk sweeps them at once, not more often than this (minutes): the walk finds nothing new a minute after the last one, and a Mac whose disk stays short for days must not pay it on every submit.
 tmpdir_short_disk_sweep_interval_min=30
 # A NEW project copy (its first job) is seeded from a sibling copy of the same project (`seed_new_copy`) instead of installing its dependencies from scratch. The folders to carry are looked for down to this depth below the copy's root
@@ -996,7 +998,7 @@ prune_work() {
   done
   begin_copy_removal "$work_dir" "$when_busy" || return 0
   remove_leftover_trash "$work_dir"
-  prune_idle_copies "$work_dir" "$keep_slug"
+  prune_idle_copies "$work_dir" "$keep_slug" "$seed_slug"
   # A short disk gives up the stale files of the TMPDIRs, and the Xcode build data of the copies idle for a day, before it gives up a copy (at most every tmpdir_short_disk_sweep_interval_min minutes: see there).
   check_disk_is_short "$work_dir" && take_tmpdir_sweep_turn "$work_dir" "$tmpdir_short_disk_sweep_interval_min" && sweep_idle_copies "$work_dir"
   prune_copies_for_space "$work_dir" "$keep_slug" "$seed_slug"
@@ -1323,12 +1325,14 @@ remove_and_report_copy() {
 
 # Project copies unused for copy_keep_days (the runner's setting, else the default) are removed, unless in use or the copy of the job being submitted.
 prune_idle_copies() {
-  local work_dir=$1 keep_slug=$2
+  local work_dir=$1 keep_slug=$2 seed_slug=${3:-}
   local idle_minutes=$(($(get_copy_keep_days) * minutes_per_day))
   local used_file idle_slug
   while IFS= read -r used_file; do
     idle_slug=$(basename "$(dirname "$used_file")")
     [ "$idle_slug" = "$keep_slug" ] && continue
+    # The copy a new copy's first job is about to be seeded from is kept for this submit: the next `prepare` removes it by age if nobody has used it since (what the clone holds then is shared with it: little is given back).
+    [ -n "$seed_slug" ] && [ "$idle_slug" = "$seed_slug" ] && continue
     check_copy_is_busy "$work_dir" "$idle_slug" && continue
     remove_and_report_copy "$work_dir" "$idle_slug" idle || true
   done < <(find "$work_dir/p" -mindepth 2 -maxdepth 2 -name used -type f -mmin +"$idle_minutes" 2> /dev/null)
@@ -2597,8 +2601,9 @@ describe_failed_step() {
 # job's own install key first, then the most recently used. The folders are CLONES, copy-on-write, so nothing is ever shared for writing (one copy's build cannot touch the other's files): on a Mac `/bin/cp -cR` (clonefile(2); the system's own
 # cp, not whatever comes first on a PATH that has GNU coreutils), elsewhere `cp --reflink=always`, and where the filesystem cannot clone nothing is seeded at all — a plain copy would take MORE disk than the install it replaces when the
 # project's package manager links files into a store (hard links are only kept inside the copied set). Carried: every top-level `node_modules` (the root's and each workspace's, never one inside another) and, for every `<app>/ios/Pods`,
-# the whole `<app>/ios` when the new tree has the app folder but no `ios` (an Expo prebuild app keeps its `ios` out of git: the native project, its prebuild marker and its Pods come along) or just the `Pods` when it has an `ios` of its own;
-# never the build output (`ios/build`, `android/build`, `.cxx`, `.gradle`: absolute paths of the sibling are in them), and nothing whose parent folder the new tree lacks. `deps.hash` is written only when the sibling's key equals this job's —
+# the whole `<app>/ios` when the new tree has the app folder but no `ios` (an Expo prebuild app keeps its `ios` out of git: the native project, its prebuild marker and its Pods come along; cloned entry by entry, `build` skipped) or just the `Pods` when it has an
+# `ios` of its own — each with `ios/build/generated`, the codegen pods' sources `pod install` writes (a build with its `pod install` skipped needs them); never the build output (`ios/build` but for `generated`, `android/build`, `.cxx`, `.gradle`: absolute
+# paths of the sibling are in them), and nothing whose parent folder the new tree lacks. `deps.hash` is written only when the sibling's key equals this job's —
 # then the dependencies step is skipped; a different key still runs it, on top of what is there.
 # The sibling is taken under its project lock, tried once and never waited for (a job that holds it may be in its dependencies step or a build): a busy sibling is passed over for the next. Seeding never fails the job: whatever goes wrong
 # removes the partial seed, says one line and leaves the install to run from scratch. The folders are cloned into `seed.tmp` of the new copy and only then moved into place, so a job cut off half-way leaves no half-made `node_modules`.
@@ -2682,10 +2687,34 @@ get_seed_carried_path() {
   return 0
 }
 
+# Clone the `ios` folder $1 of an app as $2 WITHOUT its derived data: every entry of it but `build` one by one — never `build` as a whole, which holds ~8.5 GB of derived data and would be cloned and removed again under the sibling's lock (a job of
+# the sibling waits for it) — and then `build/generated` (`build_data_kept_name`), the codegen pods' sources, as the one thing of `build` that belongs to the native project. Fails when a clone fails (`seed_failure` says why when it is a stop).
+clone_ios_folder() {
+  local entry name
+  mkdir -p "$2" || return 1
+  for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    name=${entry##*/}
+    [ "$name" != build ] || continue
+    if [ "$killed" -eq 1 ]; then
+      seed_failure="the job was stopped"
+      return 1
+    fi
+    clone_folder "$entry" "$2/$name" || return 1
+  done
+  clone_generated_folder "$1" "$2"
+}
+
+# Clone the `build/generated` folder of the `ios` folder $1 into the `ios` folder $2 (made if need be), when there is one and it is a real folder.
+clone_generated_folder() {
+  [ -d "$1/build/$build_data_kept_name" ] && [ ! -L "$1/build/$build_data_kept_name" ] || return 0
+  mkdir -p "$2/build" && clone_folder "$1/build/$build_data_kept_name" "$2/build/$build_data_kept_name"
+}
+
 # Clone the folders of sibling $1 into $2 (the new copy's `seed.tmp`), the sibling's lock held by the caller. Sets seed_folders (the relative paths cloned, one per line) and, on a failure, seed_failure. Fails when nothing was
 # carried (with seed_failure empty: the sibling has nothing the new copy can take) or a clone failed.
 clone_sibling_folders() {
-  local sibling_tree="$work/p/$1/tree" seed_dir=$2 relative parent
+  local sibling_tree="$work/p/$1/tree" seed_dir=$2 relative parent listed_path generated_path
   seed_folders=
   seed_failure=
   if ! mkdir -p "$seed_dir"; then
@@ -2695,6 +2724,7 @@ clone_sibling_folders() {
   while IFS= read -r relative; do
     relative=${relative#./}
     [ -n "$relative" ] && check_relative_path "$relative" || continue
+    listed_path=$relative
     get_seed_carried_path "$relative"
     relative=$seed_carried
     parent=$(dirname "$relative")
@@ -2704,15 +2734,29 @@ clone_sibling_folders() {
       seed_failure="the job was stopped"
       return 1
     fi
-    if ! mkdir -p "$seed_dir/$parent" || ! clone_folder "$sibling_tree/$relative" "$seed_dir/$relative"; then
+    if [ "${relative##*/}" = ios ]; then
+      # The whole native project of an app whose `ios` git ignores: entry by entry, its derived data left behind.
+      if ! mkdir -p "$seed_dir/$parent" || ! clone_ios_folder "$sibling_tree/$relative" "$seed_dir/$relative"; then
+        [ -n "$seed_failure" ] || seed_failure="cloning $relative failed"
+        return 1
+      fi
+    elif ! mkdir -p "$seed_dir/$parent" || ! clone_folder "$sibling_tree/$relative" "$seed_dir/$relative"; then
       seed_failure="cloning $relative failed"
       return 1
     fi
-    case ${relative##*/} in
-      node_modules) remove_seeded_build_output "$seed_dir/$relative" ;;
-      ios) remove_path_even_if_read_only "$seed_dir/$relative/build" ;;
-    esac
+    [ "${relative##*/}" != node_modules ] || remove_seeded_build_output "$seed_dir/$relative"
     seed_folders="$seed_folders$relative"$'\n'
+    # `Pods` carried into an `ios` the new tree already has: the codegen pods' sources the Pods project refers to come with it, when the new tree has none.
+    if [ "$relative" = "$listed_path" ] && [ "${relative##*/}" = Pods ]; then
+      generated_path="$(dirname "$relative")/build/$build_data_kept_name"
+      if [ -d "$sibling_tree/$generated_path" ] && [ ! -L "$sibling_tree/$generated_path" ] && [ ! -e "$tree/$generated_path" ] && [ ! -L "$tree/$generated_path" ]; then
+        if ! mkdir -p "$seed_dir/$(dirname "$generated_path")" || ! clone_folder "$sibling_tree/$generated_path" "$seed_dir/$generated_path"; then
+          seed_failure="cloning $generated_path failed"
+          return 1
+        fi
+        seed_folders="$seed_folders$generated_path"$'\n'
+      fi
+    fi
   done <<< "$(list_seed_folders "$sibling_tree")"
   [ -n "$seed_folders" ]
 }
@@ -2755,7 +2799,7 @@ seed_new_copy() {
   if [ "$seed_code" -eq 0 ]; then
     while IFS= read -r relative; do
       [ -n "$relative" ] || continue
-      if ! mv "$seed_dir/$relative" "$tree/$relative"; then
+      if ! mkdir -p "$(dirname "$tree/$relative")" || ! mv "$seed_dir/$relative" "$tree/$relative"; then
         seed_failure="moving $relative into place failed"
         seed_code=1
         break
@@ -2964,15 +3008,26 @@ sweep_idle_tmpdirs() {
 }
 
 # What an iOS job builds INTO a copy, relative paths under the tree $1, one per line: Xcode's derived data — the `ios/build` that `-derivedDataPath ios/build` (the way the projects build) and `expo run:ios` write, and an `ios/DerivedData`.
-# Of any app folder of a monorepo; the walk never enters `.git`, `node_modules` or `Pods`.
+# Of any app folder of a monorepo; the walk never enters `.git`, `node_modules` or `Pods`. NOT all of `ios/build` is derived data: its `generated` folder (`build_data_kept_name`) is where `pod install` writes the sources of the codegen
+# pods (React Native 0.74+ podspecs point at `build/generated/ios/…`), part of the native project that `Pods.xcodeproj` refers to — a build with a copy's `pod install` skipped (a prebuild marker that still matches) fails without it.
 list_build_data_folders() {
   (cd "$1" && find . -maxdepth "$build_data_find_depth" \( -name .git -o -name node_modules -o -name Pods \) -prune -o \( -path '*/ios/build' -o -path '*/ios/DerivedData' \) -type d -print -prune 2> /dev/null)
 }
 
-# Does the copy $1's manifest — every file the main box sent, tracked or not ignored — list a file inside folder $2 (relative)? Then it holds sources, never build data. A copy with no manifest has had no stage applied: nothing is known of it.
+# Does the copy $1's manifest — every file the main box sent, tracked or not ignored — list the path $2 (relative), or a file inside it? Then it is, or holds, sources: never build data. A copy with no manifest has had no stage applied: nothing is known of it.
 check_manifest_lists_files_in() {
   [ -f "$1/manifest" ] || return 0
-  awk -v prefix="$2/" 'index($0, prefix) == 1 { found = 1; exit } END { if (found) exit 0; exit 1 }' "$1/manifest"
+  awk -v path="$2" -v prefix="$2/" '$0 == path || index($0, prefix) == 1 { found = 1; exit } END { if (found) exit 0; exit 1 }' "$1/manifest"
+}
+
+# The entries of the real folder $1 (an `ios/build`) that are derived data, one name per line: everything in it but `generated` (`build_data_kept_name`) and links (never followed).
+list_derived_data_entries() {
+  local entry name
+  for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+    [ -e "$entry" ] && [ ! -L "$entry" ] || continue
+    name=${entry##*/}
+    [ "$name" = "$build_data_kept_name" ] || printf '%s\n' "$name"
+  done
 }
 
 # Write the measured size of a copy into its figure file $1 (KiB $2), atomically: the one write both `measure-copies` and a trim make.
@@ -3006,7 +3061,7 @@ move_folder_aside() {
 # tree — the note for the next job's log (`build-data-trimmed`) and the lowered figure (`size-kb`) are written, and only then the lock is given back and the trash removed. The sizes are read before the lock: they are a walk of the same folders.
 # A trash a sweep left (`build-trash.<pid>` of a process that is gone) is removed by the next one (`remove_leftover_build_trash`).
 trim_copy_build_data() {
-  local copy_dir=$1 folders relative candidates= candidate folder_kb removed_kb=0 trimmed= trash_dir="$1/build-trash.$$" trash_count=0
+  local copy_dir=$1 folders relative unit entries entry is_split candidates= candidate folder_kb removed_kb=0 trimmed= trash_dir="$1/build-trash.$$" trash_count=0
   [ -d "$copy_dir/tree" ] || return 0
   folders=$(list_build_data_folders "$copy_dir/tree")
   [ -n "$folders" ] || return 0
@@ -3014,10 +3069,23 @@ trim_copy_build_data() {
     relative=${relative#./}
     [ -n "$relative" ] && check_relative_path "$relative" || continue
     [ -d "$copy_dir/tree/$relative" ] && [ ! -L "$copy_dir/tree/$relative" ] || continue
-    check_manifest_lists_files_in "$copy_dir" "$relative" && continue
-    folder_kb=$(du -sk "$copy_dir/tree/$relative" 2> /dev/null | awk '{ print $1 }')
-    case $folder_kb in '' | *[!0-9]*) folder_kb=0 ;; esac
-    candidates="$candidates$folder_kb $relative"$'\n'
+    # What goes is a UNIT: an `ios/DerivedData` whole, but of an `ios/build` every entry except `generated` — each looked at by itself (a sent file in one keeps that one), each sized by itself.
+    is_split=0
+    entries=
+    case $relative in
+      */ios/build | ios/build)
+        is_split=1
+        entries=$(list_derived_data_entries "$copy_dir/tree/$relative")
+        [ -n "$entries" ] || continue
+        ;;
+    esac
+    while IFS= read -r entry; do
+      if [ "$is_split" -eq 1 ]; then unit="$relative/$entry"; else unit=$relative; fi
+      check_manifest_lists_files_in "$copy_dir" "$unit" && continue
+      folder_kb=$(du -sk "$copy_dir/tree/$unit" 2> /dev/null | awk '{ print $1 }')
+      case $folder_kb in '' | *[!0-9]*) folder_kb=0 ;; esac
+      candidates="$candidates$folder_kb"$'\t'"$relative"$'\t'"$unit"$'\n'
+    done <<< "$entries"
   done <<< "$folders"
   [ -n "$candidates" ] || return 0
   try_take_lock "$copy_dir/lock" "$copy_dir/jobs" 0 || return 0
@@ -3025,14 +3093,16 @@ trim_copy_build_data() {
     release_own_lock "$copy_dir/lock"
     return 0
   fi
-  while IFS= read -r candidate; do
-    [ -n "$candidate" ] || continue
-    folder_kb=${candidate%% *}
-    relative=${candidate#* }
-    if move_folder_aside "$copy_dir/tree/$relative" "$trash_dir/$trash_count"; then
+  while IFS=$'\t' read -r folder_kb relative unit; do
+    [ -n "$unit" ] || continue
+    if move_folder_aside "$copy_dir/tree/$unit" "$trash_dir/$trash_count"; then
       trash_count=$((trash_count + 1))
       removed_kb=$((removed_kb + folder_kb))
-      trimmed="$trimmed${trimmed:+, }$relative"
+      # The note names the folder, once, whatever number of its entries went.
+      case ", $trimmed, " in
+        *", $relative, "*) ;;
+        *) trimmed="$trimmed${trimmed:+, }$relative" ;;
+      esac
     fi
   done <<< "$candidates"
   if [ -n "$trimmed" ]; then

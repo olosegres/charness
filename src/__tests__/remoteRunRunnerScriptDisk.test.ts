@@ -1187,6 +1187,19 @@ describe('the prune of a submit leaves the copy the submitted job\'s first run i
     assert.deepEqual(parseRemovals(hasRun.stdout)[0], 'overview-aaaaaaaaaa');
   });
 
+  it('the 3-day age rule keeps it too, for this one submit: a source idle for four days is not removed by the prepare of the copy that is about to be seeded from it — a copy of another repository idle as long is', () => {
+    makeSiblingCopy('overview-aaaaaaaaaa', 4 * dayMs);
+    makeCopy('other-repository-bbbbbbbbbb', 1, 4 * dayMs);
+    const result = runScript(['prepare', workDir, slug, jobId, 'default=1', projectKey, installKey], { REMOTE_RUN_MIN_FREE_GB: '0' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(parseRemovals(result.stdout), ['other-repository-bbbbbbbbbb']);
+    assert.ok(listCopies().includes('overview-aaaaaaaaaa'), 'the source of the seed is still there');
+    // What it was kept for ends with that submit: the next prepare (the copy has run now) takes it by age if nobody used it.
+    writeFile(path.join(workDir, 'p', slug), 'manifest', 'a.txt\n');
+    const next = runScript(['prepare', workDir, slug, 'box1-bbbbbb', 'default=1', projectKey, installKey], { REMOTE_RUN_MIN_FREE_GB: '0' });
+    assert.deepEqual(parseRemovals(next.stdout), ['overview-aaaaaaaaaa']);
+  });
+
   it('a copy of another repository, or one with no key, is not the source: it is removed in its turn', () => {
     makeSiblingCopy('other-repo-aaaaaaaaaa', 9 * hourMs, { hasProjectKey: false });
     makeCopy('unrelated-bbbbbbbbbb', 30, 5 * hourMs);
@@ -1807,11 +1820,15 @@ describe('the TMPDIR of a project copy (`<work>/t/<n>`) is part of the disk upke
   });
 });
 
-describe('the Xcode build data of a copy that nobody used for a day (`ios/build`) goes with the sweep of idle copies', () => {
+describe('the Xcode derived data of a copy that nobody used for a day (`ios/build`, but not its `generated`) goes with the sweep of idle copies', () => {
   const tree = (copySlug: string, relative: string): string => path.join(workDir, 'p', copySlug, 'tree', relative);
   const exists = (copySlug: string, relative: string): boolean => fs.existsSync(tree(copySlug, relative));
-  const buildData = ['projects/x/ios/build/Products/app.txt', 'projects/x/ios/build/Intermediates.noindex/a.o', 'ios/DerivedData/ModuleCache/m.pcm'];
+  const buildData = ['projects/x/ios/build/Products/app.txt', 'projects/x/ios/build/Intermediates.noindex/a.o', 'projects/x/ios/build/Build/Products/Debug/app', 'ios/DerivedData/ModuleCache/m.pcm'];
+  /** What `pod install` writes into `ios/build/generated`: the sources of the codegen pods (React Native 0.74+ podspecs point at them) — part of the native project, which a build with its `pod install` skipped cannot do without. */
+  const codegenPodspec = 'projects/x/ios/build/generated/ios/ReactCodegen/ReactCodegen.podspec';
   const notBuildData = [
+    codegenPodspec,
+    'projects/x/ios/build/generated/ios/ReactAppDependencyProvider/ReactAppDependencyProvider.podspec',
     'projects/x/ios/Podfile',
     'projects/x/ios/Pods/Pod/pod.h',
     'projects/x/ios/Source.swift',
@@ -1826,8 +1843,9 @@ describe('the Xcode build data of a copy that nobody used for a day (`ios/build`
   function makeCopyWithBuildData(copySlug: string, usedAgoMs: number): string {
     const copyDir = makeCopy(copySlug, 8, usedAgoMs);
     for (const relative of [...buildData, ...notBuildData]) writeFile(path.join(copyDir, 'tree'), relative);
-    // What the fake `du` says of the build folders: 3 GiB and 2 GiB of the copy's 8.
-    writeFile(path.join(copyDir, 'tree'), 'projects/x/ios/build/fake-kb', `${3 * kibPerGib}`);
+    // What the fake `du` says of the units that go: 3 GiB (`ios/build/Build`) and 2 GiB (`ios/DerivedData`) of the copy's 8, the other entries of `ios/build` nothing.
+    writeFile(path.join(copyDir, 'tree'), 'projects/x/ios/build/Build/fake-kb', `${3 * kibPerGib}`);
+    for (const small of ['Products', 'Intermediates.noindex']) writeFile(path.join(copyDir, 'tree'), `projects/x/ios/build/${small}/fake-kb`, '0');
     writeFile(path.join(copyDir, 'tree'), 'ios/DerivedData/fake-kb', `${2 * kibPerGib}`);
     writeFile(copyDir, 'manifest', 'projects/x/ios/Podfile\nprojects/x/ios/Source.swift\n');
     writeFile(copyDir, 'size-kb', `${8 * kibPerGib}`);
@@ -1843,7 +1861,7 @@ describe('the Xcode build data of a copy that nobody used for a day (`ios/build`
     for (const relative of [...buildData, ...notBuildData]) assert.equal(exists(copySlug, relative), true, `${relative} stays`);
   }
 
-  it('`sweep-tmpdirs` removes `ios/build` and `ios/DerivedData` of a copy idle for more than 24 hours — of every app folder — and nothing else: no sources, no Pods, no other build folder, nothing inside node_modules or Pods', () => {
+  it('`sweep-tmpdirs` removes the derived data of `ios/build` and `ios/DerivedData` of a copy idle for more than 24 hours — of every app folder — and nothing else: `ios/build/generated` (the codegen pods\' sources) stays, and so do the sources, the Pods, the other build folders, anything inside node_modules or Pods', () => {
     const copyDir = makeCopyWithBuildData('idle-aaaaaaaaaa', 25 * hourMs);
     const swept = runScript(['sweep-tmpdirs', workDir]);
     assert.equal(swept.status, 0, swept.stderr);
@@ -1900,13 +1918,15 @@ describe('the Xcode build data of a copy that nobody used for a day (`ios/build`
 
   it('never sources: a folder that holds a file the main box sent (the manifest lists it), and a copy with no manifest at all, are left whole', () => {
     const tracked = makeCopyWithBuildData('tracked-llllllllll', 30 * hourMs);
-    writeFile(tracked, 'manifest', 'projects/x/ios/Podfile\nprojects/x/ios/build/generated/Tracked.swift\n');
-    writeFile(path.join(tracked, 'tree'), 'projects/x/ios/build/generated/Tracked.swift');
+    writeFile(tracked, 'manifest', 'projects/x/ios/Podfile\nprojects/x/ios/build/Sources/Tracked.swift\nprojects/x/ios/build/tracked-flag.json\n');
+    writeFile(path.join(tracked, 'tree'), 'projects/x/ios/build/Sources/Tracked.swift');
+    writeFile(path.join(tracked, 'tree'), 'projects/x/ios/build/tracked-flag.json');
     const unknown = makeCopyWithBuildData('unknown-mmmmmmmmmm', 30 * hourMs);
     fs.rmSync(path.join(unknown, 'manifest'));
     assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
-    assert.equal(exists('tracked-llllllllll', 'projects/x/ios/build/generated/Tracked.swift'), true, 'the folder with a sent file stays whole');
-    assert.equal(exists('tracked-llllllllll', 'projects/x/ios/build/Products/app.txt'), true);
+    assert.equal(exists('tracked-llllllllll', 'projects/x/ios/build/Sources/Tracked.swift'), true, 'the entry of `ios/build` with a sent file in it stays whole');
+    assert.equal(exists('tracked-llllllllll', 'projects/x/ios/build/tracked-flag.json'), true, 'and so does a sent file that is itself an entry');
+    assert.equal(exists('tracked-llllllllll', 'projects/x/ios/build/Products/app.txt'), false, 'the other entries of the same `ios/build` go');
     assert.equal(exists('tracked-llllllllll', 'ios/DerivedData/ModuleCache/m.pcm'), false, 'the other build folder of that copy goes');
     expectUntouched('unknown-mmmmmmmmmm');
   });
@@ -1916,7 +1936,8 @@ describe('the Xcode build data of a copy that nobody used for a day (`ios/build`
     writeFile(path.join(workDir, 'p', 'readonly-nnnnnnnnnn', 'tree'), 'projects/x/ios/build/Pods/Core.xcframework/Info.plist');
     for (const folder of ['projects/x/ios/build/Pods/Core.xcframework', 'projects/x/ios/build/Pods', 'projects/x/ios/build']) fs.chmodSync(tree('readonly-nnnnnnnnnn', folder), 0o555);
     assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
-    assert.equal(exists('readonly-nnnnnnnnnn', 'projects/x/ios/build'), false);
+    assert.equal(exists('readonly-nnnnnnnnnn', 'projects/x/ios/build/Pods'), false);
+    assert.equal(exists('readonly-nnnnnnnnnn', codegenPodspec), true, 'while the codegen pods\' sources stay (their parent was read-only too)');
   });
 
   it('a prune on a SHORT disk trims before it removes a copy for space — on the stamp\'s turn, not every time — and a prune on a disk that is fine leaves it to the detached sweep', () => {
@@ -1967,7 +1988,7 @@ describe('the Xcode build data of a copy that nobody used for a day (`ios/build`
       const copyDir = makeCopyWithBuildData(name, usedAgoHours * hourMs);
       writeFile(copyDir, 'fake-kb', '0');
       writeFile(copyDir, 'size-kb', `${30 * kibPerGib}`);
-      writeFile(path.join(copyDir, 'tree'), 'projects/x/ios/build/fake-kb', `${8 * kibPerGib}`);
+      writeFile(path.join(copyDir, 'tree'), 'projects/x/ios/build/Build/fake-kb', `${8 * kibPerGib}`);
     }
     const result = runScript(['prune', workDir], { REMOTE_RUN_MIN_FREE_GB: '95', FAKE_DF_FREE_KB: `${10 * kibPerGib}` });
     assert.equal(result.status, 0, result.stderr);
@@ -1975,7 +1996,7 @@ describe('the Xcode build data of a copy that nobody used for a day (`ios/build`
     assert.match(result.stdout, /^stopped=middle-tttttttttt freed_kb=0 size_kb=\d+$/m);
     assert.deepEqual(listCopies(), ['newest-uuuuuuuuuu']);
     // The trim had run before them, on all three: what was left of the newest shows it.
-    assert.equal(exists('newest-uuuuuuuuuu', 'projects/x/ios/build'), false);
+    assert.equal(exists('newest-uuuuuuuuuu', buildData[0]), false);
   });
 
   describe('the copy\'s lock is held for the renames alone', () => {
@@ -2033,6 +2054,17 @@ describe('the Xcode build data of a copy that nobody used for a day (`ios/build`
     });
   });
 
+  it('an `ios/build` that holds nothing but `generated` is left alone, with no note and no change of the figure: nothing in it is derived data', () => {
+    const copyDir = makeCopy('onlygen-yyyyyyyyyy', 5, 30 * hourMs);
+    writeFile(path.join(copyDir, 'tree'), codegenPodspec);
+    writeFile(copyDir, 'manifest', 'projects/x/package.json\n');
+    writeFile(copyDir, 'size-kb', `${5 * kibPerGib}`);
+    assert.equal(runScript(['sweep-tmpdirs', workDir]).status, 0);
+    assert.equal(exists('onlygen-yyyyyyyyyy', codegenPodspec), true);
+    assert.equal(fs.existsSync(path.join(copyDir, 'build-data-trimmed')), false);
+    assert.equal(fs.readFileSync(path.join(copyDir, 'size-kb'), 'utf8').trim(), `${5 * kibPerGib}`);
+  });
+
   it('never leaves the copy: a build folder that is a symlink (`ios/build` -> somewhere), an app folder that is a symlink to a folder holding `ios/build`, are not followed and not touched; a folder with a SPACE in its path is trimmed like any', () => {
     const copyDir = makeCopy('links-xxxxxxxxxx', 5, 30 * hourMs);
     const outside = path.join(workRoot, 'outside');
@@ -2050,7 +2082,7 @@ describe('the Xcode build data of a copy that nobody used for a day (`ios/build`
     assert.equal(fs.readFileSync(path.join(outside, 'ios', 'build', 'Products', 'inner.txt'), 'utf8'), 'not the runner\'s either', 'and so is one an app folder link leads to');
     assert.ok(fs.lstatSync(path.join(treeDir, 'projects', 'x', 'ios', 'build')).isSymbolicLink(), 'the links stay as they are');
     assert.ok(fs.lstatSync(path.join(treeDir, 'projects', 'linked')).isSymbolicLink());
-    assert.equal(fs.existsSync(path.join(treeDir, 'projects', 'my app', 'ios', 'build')), false, 'the folder with a space in its path is trimmed');
+    assert.equal(fs.existsSync(path.join(treeDir, 'projects', 'my app', 'ios', 'build', 'Products')), false, 'the folder with a space in its path is trimmed');
     assert.equal(fs.existsSync(path.join(treeDir, 'projects', 'my app', 'ios', 'Podfile')), true, 'and its sources stay');
     assert.equal(fs.readFileSync(path.join(copyDir, 'build-data-trimmed'), 'utf8').trim(), 'projects/my app/ios/build');
   });

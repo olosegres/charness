@@ -9,7 +9,7 @@
  *     the first copy still has everything
  *   → a third checkout with another lockfile is seeded too, and its dependencies step still runs on top of the seeded folders, once
  *   → another repository whose folder has the SAME name as the first is not seeded from it, and installs
- *   → the first copy, idle for more than a day, loses its Xcode build data (and nothing else) a moment after a submit of another project, and its next job says so
+ *   → the first copy, idle for more than a day, loses its Xcode derived data (`ios/build` but for its `generated` folder, the codegen pods' sources; and nothing else) a moment after a submit of another project, and its next job says so
  *
  * Needs sshd, ssh, rsync, Pueue and the built CLI (`yarn build`): a local run without them is SKIPPED with the reason, CI (`CI` is `true` or `1`) installs them and fails without. Test case: N/A — Charness has no Jira tracker.
  */
@@ -25,7 +25,11 @@ import { layout, project, readDepsCounter, run, setUpFlow, skipReason, tearDownF
 const seededPackageContent = 'installed in the first copy';
 const buildOutputFile = 'node_modules/pkg/android/build/outputs/app.aar';
 const podFile = 'the first copy\'s Podfile';
-const readCopyCommand = `sh -c 'cat node_modules/pkg/index.js ios/Podfile ios/Pods/Pod/pod.h; test ! -e ${buildOutputFile} && test ! -e ios/build && echo no-build-output'`;
+/** What `pod install` writes into `ios/build/generated`: the codegen pods' sources, which a build with its `pod install` skipped needs, and so which neither the seed nor the trim may take. */
+const codegenPodspecFile = 'ios/build/generated/ios/ReactCodegen/ReactCodegen.podspec';
+const codegenPodspec = 'the codegen pod\'s podspec';
+const readCopyCommand = `sh -c 'cat node_modules/pkg/index.js ios/Podfile ios/Pods/Pod/pod.h ${codegenPodspecFile}; test ! -e ${buildOutputFile} && test ! -e ios/build/Products && test ! -e ios/build/Build && echo no-build-output'`;
+const carriedContent = `${seededPackageContent}${podFile}pod${codegenPodspec}`;
 
 function readCopyDepsCounter(copy: FlowProject): number {
   return Number(fs.readFileSync(path.join(copy.runnerDirectory, 'deps-counter'), 'utf8').trim());
@@ -65,6 +69,8 @@ describe('a new project copy is seeded from a sibling copy of the same repositor
       ['ios/Podfile', podFile],
       ['ios/Pods/Pod/pod.h', 'pod'],
       ['ios/build/Products/app.txt', 'derived data'],
+      ['ios/build/Build/Products/Debug/app', 'derived data too'],
+      [codegenPodspecFile, codegenPodspec],
     ];
     for (const [relativePath, content] of plantedFiles) {
       fs.mkdirSync(path.dirname(path.join(firstTree, relativePath)), { recursive: true });
@@ -80,8 +86,8 @@ describe('a new project copy is seeded from a sibling copy of the same repositor
     assert.equal(seeded.exitCode, 0, seeded.stderr);
     assert.match(seeded.stderr, /remote-run: seeded from the copy app-[0-9a-f]+ of this project: 2 folders cloned; its dependencies are the same, so the dependencies step is skipped/);
     assert.ok(!seeded.stderr.includes('installing dependencies'), seeded.stderr);
-    assert.match(seeded.stdout, new RegExp(`${seededPackageContent}${podFile}pod`), 'the package, the Podfile and the Pods came along');
-    assert.match(seeded.stdout, /no-build-output/, 'the build output of neither did');
+    assert.match(seeded.stdout, new RegExp(carriedContent), 'the package, the Podfile, the Pods and the codegen pods\' sources came along');
+    assert.match(seeded.stdout, /no-build-output/, 'the build output and the derived data of neither did');
     assert.equal(fs.existsSync(path.join(secondCheckout.runnerDirectory, 'deps-counter')), false, 'the dependencies step never ran in the second copy');
     assert.equal(fs.existsSync(path.join(secondCheckout.runnerDirectory, 'seed.tmp')), false);
     assert.equal(fs.readFileSync(path.join(secondCheckout.runnerDirectory, 'seeded-from'), 'utf8').trim(), path.basename(project.runnerDirectory), 'the marks the prune reads');
@@ -103,7 +109,7 @@ describe('a new project copy is seeded from a sibling copy of the same repositor
     assert.match(result.stderr, /remote-run: seeded from the copy [a-z]+-[0-9a-f]+ of this project: 2 folders cloned; its dependencies differ, so the dependencies step still runs on top/);
     assert.match(result.stderr, /installing dependencies:/);
     assert.equal(readCopyDepsCounter(thirdCheckout), 1);
-    assert.match(result.stdout, new RegExp(`${seededPackageContent}${podFile}pod`), 'the folders the seed put there are still there');
+    assert.match(result.stdout, new RegExp(carriedContent), 'the folders the seed put there are still there');
     assert.match(result.stdout, /no-build-output/);
     const second = await run([readCopyCommand], { cwd: thirdCheckout.root });
     assert.equal(second.exitCode, 0, second.stderr);
@@ -128,7 +134,7 @@ describe('a new project copy is seeded from a sibling copy of the same repositor
     assert.equal(readCopyDepsCounter(sameNameOtherRepository), 1);
   });
 
-  it('the first copy, idle for more than a day, loses its `ios/build` — and nothing else — a moment after a submit of another project; its next job says why an iOS build starts from scratch', async () => {
+  it('the first copy, idle for more than a day, loses the derived data of its `ios/build` — and nothing else — a moment after a submit of another project; its next job says why an iOS build starts from scratch', async () => {
     const runnerDirectory = project.runnerDirectory;
     const longAgo = new Date(Date.now() - 30 * 60 * 60 * 1000);
     // Idle for 30 hours: its mark of use, and the end of its last jobs (a job that ended within the hour keeps its copy for the results).
@@ -143,8 +149,10 @@ describe('a new project copy is seeded from a sibling copy of the same repositor
     const trigger = createProject(layout, 'sixth/trigger', { 'README.md': 'a project that only submits\n' });
     const submitted = await run(['echo', 'another project'], { cwd: trigger.root });
     assert.equal(submitted.exitCode, 0, submitted.stderr);
-    await waitUntil('the detached sweep to trim the first copy', 30_000, () => !fs.existsSync(path.join(runnerDirectory, 'tree', 'ios', 'build')));
+    await waitUntil('the detached sweep to trim the first copy', 30_000, () => !fs.existsSync(path.join(runnerDirectory, 'tree', 'ios', 'build', 'Products')));
     const firstTree = path.join(runnerDirectory, 'tree');
+    assert.equal(fs.existsSync(path.join(firstTree, 'ios', 'build', 'Build')), false, 'all the derived data is gone');
+    assert.equal(fs.readFileSync(path.join(firstTree, codegenPodspecFile), 'utf8'), codegenPodspec, 'the codegen pods\' sources are not: the next build, with its `pod install` skipped, needs them');
     assert.equal(fs.readFileSync(path.join(firstTree, 'ios', 'Podfile'), 'utf8'), podFile, 'the sources stay');
     assert.equal(fs.readFileSync(path.join(firstTree, 'ios', 'Pods', 'Pod', 'pod.h'), 'utf8'), 'pod');
     assert.equal(fs.readFileSync(path.join(firstTree, 'node_modules', 'pkg', 'index.js'), 'utf8'), seededPackageContent);

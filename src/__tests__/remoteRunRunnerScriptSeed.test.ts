@@ -64,6 +64,8 @@ function createSiblingFiles(slugName: string): Record<string, string> {
     'projects/x/ios/.e2e-prebuild.json': '{"fingerprint":"f"}',
     'projects/x/ios/Pods/Pod/pod.h': 'pod',
     'projects/x/ios/build/Products/app.txt': 'derived data',
+    'projects/x/ios/build/Build/Products/Debug/app': 'derived data too',
+    'projects/x/ios/build/generated/ios/ReactCodegen/ReactCodegen.podspec': 'the codegen pod\'s podspec',
     'projects/x/android/build/out.txt': 'gradle output',
     'projects/y/node_modules/gone/index.js': 'workspace the new revision does not have',
     '.gradle/cache.bin': 'gradle cache',
@@ -160,7 +162,7 @@ describe('a new copy is seeded from a sibling copy of the same repository', { sk
   it('with the same install key it carries every top-level node_modules and the Pods, none of the build output, skips the dependencies step, leaves the sibling as it was and marks who shares what', () => {
     createSiblingCopy(siblingSlug, { key: 'key' });
     const outcome = runNewCopyJob();
-    assert.match(outcome.log, /remote-run: seeded from the copy overview-aaaaaaaaaa of this project: 3 folders cloned; its dependencies are the same, so the dependencies step is skipped/);
+    assert.match(outcome.log, /remote-run: seeded from the copy overview-aaaaaaaaaa of this project: 4 folders cloned; its dependencies are the same, so the dependencies step is skipped/);
     assert.equal(countInstallRuns(), 0, 'the dependencies step did not run');
     assert.ok(!outcome.log.includes('installing dependencies'), outcome.log);
     assert.equal(readCopyFile(newSlug, 'deps.hash'), 'key');
@@ -169,6 +171,7 @@ describe('a new copy is seeded from a sibling copy of the same repository', { sk
     assert.equal(readTreeFile(newSlug, 'node_modules/pkg/index.js'), `root of ${siblingSlug}`);
     assert.equal(readTreeFile(newSlug, 'projects/x/node_modules/dep/index.js'), `workspace of ${siblingSlug}`);
     assert.equal(readTreeFile(newSlug, 'projects/x/ios/Pods/Pod/pod.h'), 'pod');
+    assert.equal(readTreeFile(newSlug, 'projects/x/ios/build/generated/ios/ReactCodegen/ReactCodegen.podspec'), 'the codegen pod\'s podspec', 'the sources of the codegen pods, which the Pods project refers to, come with the Pods');
     assert.equal(readTreeFile(newSlug, 'node_modules/inner/node_modules/deep/index.js'), 'nested', 'a nested node_modules comes with the one it is in');
     // The new tree has an `ios` of its own (a tracked Podfile): only the Pods are carried into it.
     assert.equal(readTreeFile(newSlug, 'projects/x/ios/Podfile'), 'x', 'what the new revision has is not replaced by the sibling\'s');
@@ -178,7 +181,8 @@ describe('a new copy is seeded from a sibling copy of the same repository', { sk
       'node_modules/pkg/android/build',
       'node_modules/pkg/android/.cxx',
       'node_modules/pkg/.gradle',
-      'projects/x/ios/build',
+      'projects/x/ios/build/Products',
+      'projects/x/ios/build/Build',
       'projects/x/android/build',
       '.gradle',
       'src/code.ts',
@@ -197,6 +201,8 @@ describe('a new copy is seeded from a sibling copy of the same repository', { sk
 
   it('an app whose `ios` the new tree does not have (git ignores it) gets the sibling\'s whole `ios` — its prebuild marker and Pods — without `ios/build`; a workspace the new revision dropped and a node_modules it already holds are left alone', () => {
     createSiblingCopy(siblingSlug, { key: 'key' });
+    // A file nothing may read: cloning the derived data would fail on it (the clone runs as the file's owner).
+    fs.chmodSync(treePath(siblingSlug, 'projects/x/ios/build/Build/Products/Debug/app'), 0);
     const outcome = runNewCopyJob({ stagedFiles: ['projects/x/package.json', 'node_modules/own/index.js'] });
     // Of the sibling's folders: the root node_modules is there already, `projects/y` is gone; left are the workspace's node_modules and the app's `ios`.
     assert.match(outcome.log, /seeded from the copy overview-aaaaaaaaaa of this project: 2 folders cloned/);
@@ -204,7 +210,8 @@ describe('a new copy is seeded from a sibling copy of the same repository', { sk
     assert.equal(readTreeFile(newSlug, 'projects/x/ios/Podfile'), 'the sibling\'s podfile');
     assert.equal(readTreeFile(newSlug, 'projects/x/ios/.e2e-prebuild.json'), '{"fingerprint":"f"}', 'the prebuild marker comes with the native project');
     assert.equal(readTreeFile(newSlug, 'projects/x/ios/Pods/Pod/pod.h'), 'pod');
-    assert.equal(fs.existsSync(treePath(newSlug, 'projects/x/ios/build')), false, 'the build output does not');
+    assert.equal(readTreeFile(newSlug, 'projects/x/ios/build/generated/ios/ReactCodegen/ReactCodegen.podspec'), 'the codegen pod\'s podspec', 'the codegen pods\' sources do: a build that skips `pod install` needs them');
+    assert.deepEqual(fs.readdirSync(treePath(newSlug, 'projects/x/ios/build')), ['generated'], 'the derived data does not — and was never cloned: the unreadable file in it did not stop the seed');
     assert.equal(fs.existsSync(treePath(newSlug, 'projects/y')), false);
     assert.equal(readTreeFile(newSlug, 'node_modules/own/index.js'), 'x', 'what the copy had is not replaced');
     assert.equal(fs.existsSync(treePath(newSlug, 'node_modules/pkg')), false);
@@ -230,7 +237,7 @@ describe('a new copy is seeded from a sibling copy of the same repository', { sk
   it('with another install key it carries the same folders and the dependencies step still runs, on top of them', () => {
     createSiblingCopy(siblingSlug, { key: 'old-key' });
     const outcome = runNewCopyJob({ installKey: 'new-key', installCommand: `cat node_modules/pkg/index.js >> '${installRunsFile()}'; echo >> '${installRunsFile()}'` });
-    assert.match(outcome.log, /seeded from the copy overview-aaaaaaaaaa of this project: 3 folders cloned; its dependencies differ, so the dependencies step still runs on top/);
+    assert.match(outcome.log, /seeded from the copy overview-aaaaaaaaaa of this project: 4 folders cloned; its dependencies differ, so the dependencies step still runs on top/);
     assert.match(outcome.log, /installing dependencies:/);
     assert.equal(fs.readFileSync(installRunsFile(), 'utf8').trim(), `root of ${siblingSlug}`, 'the step found the sibling\'s node_modules already there');
     assert.equal(readCopyFile(newSlug, 'deps.hash'), 'new-key', 'the key is the step\'s own, written after it ran');
@@ -415,7 +422,7 @@ describe('a trim of the sibling\'s Xcode build data that is under way does not k
       await waitUntil('the sweep to be removing the sibling\'s build trash', () => fs.existsSync(markerFile));
       assert.equal(readTreeFile(siblingSlug, 'projects/x/ios/build/Products/app.txt'), null, 'the sibling\'s build data is out of its tree already');
       const outcome = runNewCopyJob();
-      assert.match(outcome.log, /remote-run: seeded from the copy overview-aaaaaaaaaa of this project: 3 folders cloned; its dependencies are the same, so the dependencies step is skipped/);
+      assert.match(outcome.log, /remote-run: seeded from the copy overview-aaaaaaaaaa of this project: 4 folders cloned; its dependencies are the same, so the dependencies step is skipped/);
       assert.equal(countInstallRuns(), 0, 'the new copy did not have to install: the sibling was not busy');
       assert.equal(readTreeFile(newSlug, 'node_modules/pkg/index.js'), `root of ${siblingSlug}`);
       assert.equal(fs.existsSync(path.join(copyDir(newSlug), 'projects')), false, 'no folder of the trash came along');
