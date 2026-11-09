@@ -166,22 +166,43 @@ describe('every tmux -t in the source names its target exactly', () => {
     return command;
   }
 
+  /**
+   * The `-t` targets of `source` that do not go through the helper their command needs. A source that never mentions tmux cannot hold a tmux target: its `-t` is some other program's flag
+   * (`caffeinate -i -t <seconds>` in the runner's sleep holder) and is none of this check's business.
+   */
+  function findBadTmuxTargets(file: string, source: string): { count: number; problems: string[] } {
+    const problems: string[] = [];
+    if (!/tmux/i.test(source)) return { count: 0, problems };
+    let count = 0;
+    for (const match of source.matchAll(targetArgRe)) {
+      count += 1;
+      const command = getTmuxCommandBefore(source, match.index);
+      const expectedHelper = command !== null && sessionTargetCommands.has(command) ? 'getTmuxSessionTarget' : 'getTmuxPaneTarget';
+      const target = match[1].trim();
+      if (!target.startsWith(`${expectedHelper}(`)) problems.push(`${file}: tmux ${command ?? '<no tmux call>'} -t ${target} — name it with ${expectedHelper}`);
+    }
+    return { count, problems };
+  }
+
   it('through the helper matching the command, getTmuxSessionTarget or getTmuxPaneTarget', () => {
     let targetCount = 0;
     for (const file of getSourceFiles()) {
-      const source = fs.readFileSync(path.join(srcDir, file), 'utf8');
-      for (const match of source.matchAll(targetArgRe)) {
-        targetCount += 1;
-        const command = getTmuxCommandBefore(source, match.index);
-        const expectedHelper =
-          command !== null && sessionTargetCommands.has(command) ? 'getTmuxSessionTarget' : 'getTmuxPaneTarget';
-        const target = match[1].trim();
-        assert.ok(
-          target.startsWith(`${expectedHelper}(`),
-          `${file}: tmux ${command ?? '<no tmux call>'} -t ${target} — name it with ${expectedHelper}`,
-        );
-      }
+      const { count, problems } = findBadTmuxTargets(file, fs.readFileSync(path.join(srcDir, file), 'utf8'));
+      targetCount += count;
+      assert.deepEqual(problems, []);
     }
     assert.ok(targetCount > 0, 'the scan found the tmux call sites');
+  });
+
+  it('the check itself, against decoys: a bare name and a session target for a pane command are found; the helpers are not; another program\'s `-t` in a file that never mentions tmux is none of its business', () => {
+    const bare = "await tmuxAsync('send-keys', '-t', sessionName, '-l', text);";
+    assert.equal(findBadTmuxTargets('decoy.ts', bare).problems.length, 1, 'a bare name');
+    const wrongKind = "await tmuxAsync('send-keys', '-t', getTmuxSessionTarget(name), 'x');";
+    assert.equal(findBadTmuxTargets('decoy.ts', wrongKind).problems.length, 1, 'a session target for a pane command');
+    const exact = "await tmuxAsync('send-keys', '-t', getTmuxPaneTarget(name), 'x');\nawait tmuxAsync('kill-session', '-t', getTmuxSessionTarget(name));";
+    assert.deepEqual(findBadTmuxTargets('decoy.ts', exact), { count: 2, problems: [] });
+    const caffeinate = "args: ['-i', '-t', `${holdSeconds}`] };";
+    assert.deepEqual(findBadTmuxTargets('keepAwake.ts', caffeinate), { count: 0, problems: [] });
+    assert.equal(findBadTmuxTargets('decoy.ts', `${caffeinate}\n${bare}`).problems.length, 2, 'a file that mentions tmux is checked all through');
   });
 });
