@@ -19,6 +19,7 @@ import {
   getCompactMistakesFlagDirs,
   getOpenCodeCompactMistakesOffDir,
   openCodeCompactMistakesOffDirName,
+  pruneStaleClaudeCompactMistakesFlags,
   syncCompactMistakesFlags,
 } from '../utils/compactMistakesFlags';
 
@@ -85,7 +86,7 @@ test('applyCompactMistakesOffFlag: an id that cannot name a flag writes nothing,
   });
 });
 
-test('syncCompactMistakesFlags: each backend\'s id goes into its own folder, and only the sessions it was given are touched', () => {
+test('syncCompactMistakesFlags: each backend\'s ids — a parked one among them — go into its own folder, and only the sessions it was given are touched', () => {
   withTempDir((dir) => {
     const dirs = { claudeOffDir: path.join(dir, 'claude'), openCodeOffDir: path.join(dir, 'opencode') };
     // A flag of a session this instance does not know — the OpenCode folder is shared by every instance of the account.
@@ -93,19 +94,53 @@ test('syncCompactMistakesFlags: each backend\'s id goes into its own folder, and
     fs.writeFileSync(path.join(dirs.openCodeOffDir, 'ses_foreign'), '');
 
     syncCompactMistakesFlags([
-      { claudeSessionId: 'claude-off', opencodeSessionId: 'ses_off', isEnabled: false },
-      { claudeSessionId: 'claude-on', opencodeSessionId: null, isEnabled: true },
-      { claudeSessionId: null, opencodeSessionId: null, isEnabled: false },
+      { claudeSessionIds: ['claude-off', 'claude-off-parked'], opencodeSessionIds: ['ses_off'], isEnabled: false },
+      { claudeSessionIds: ['claude-on'], opencodeSessionIds: [], isEnabled: true },
+      { claudeSessionIds: [], opencodeSessionIds: [], isEnabled: false },
     ], dirs);
-    assert.deepEqual(fs.readdirSync(dirs.claudeOffDir), ['claude-off']);
+    assert.deepEqual(fs.readdirSync(dirs.claudeOffDir).sort(), ['claude-off', 'claude-off-parked']);
     assert.deepEqual(fs.readdirSync(dirs.openCodeOffDir).sort(), ['ses_foreign', 'ses_off']);
 
-    // The setting flips: the flag follows, for the session it names only.
+    // The setting flips: the flag follows, for the sessions it names only.
     syncCompactMistakesFlags([
-      { claudeSessionId: 'claude-off', opencodeSessionId: 'ses_off', isEnabled: true },
-      { claudeSessionId: 'claude-on', opencodeSessionId: null, isEnabled: false },
+      { claudeSessionIds: ['claude-off', 'claude-off-parked'], opencodeSessionIds: ['ses_off'], isEnabled: true },
+      { claudeSessionIds: ['claude-on'], opencodeSessionIds: [], isEnabled: false },
     ], dirs);
     assert.deepEqual(fs.readdirSync(dirs.claudeOffDir), ['claude-on']);
     assert.deepEqual(fs.readdirSync(dirs.openCodeOffDir), ['ses_foreign']);
+  });
+});
+
+test('pruneStaleClaudeCompactMistakesFlags: a flag no OFF topic owns any more is removed — current and parked ids of an OFF topic stay, nothing that is not a session flag goes', () => {
+  withTempDir((dir) => {
+    const claudeOffDir = path.join(dir, 'claude');
+    fs.mkdirSync(path.join(claudeOffDir, 'a-folder'), { recursive: true });
+    for (const name of ['owned-current', 'owned-parked', 'left-by-new', 'topic-is-on-again', 'not.an.id']) fs.writeFileSync(path.join(claudeOffDir, name), '');
+
+    pruneStaleClaudeCompactMistakesFlags([
+      { claudeSessionIds: ['owned-current', 'owned-parked'], opencodeSessionIds: ['ses_x'], isEnabled: false },
+      { claudeSessionIds: ['topic-is-on-again'], opencodeSessionIds: [], isEnabled: true },
+    ], claudeOffDir);
+
+    assert.deepEqual(fs.readdirSync(claudeOffDir).sort(), ['a-folder', 'not.an.id', 'owned-current', 'owned-parked'], 'the id a topic left and the one of a topic that is ON again are gone');
+  });
+});
+
+test('pruneStaleClaudeCompactMistakesFlags: a missing folder is nothing to do (silently), an unreadable one is logged instead of thrown', () => {
+  withTempDir((dir) => {
+    pruneStaleClaudeCompactMistakesFlags([], path.join(dir, 'never-made'));
+    assert.equal(fs.existsSync(path.join(dir, 'never-made')), false, 'and it is not created');
+    const blocker = path.join(dir, 'file');
+    fs.writeFileSync(blocker, '');
+    const originalWarn = console.warn;
+    const warnings: unknown[][] = [];
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    try {
+      pruneStaleClaudeCompactMistakesFlags([], path.join(blocker, 'flags'));
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.equal(warnings.length, 1, 'a folder that cannot be read is reported once');
+    assert.match(String(warnings[0][0]), /compact-mistakes/);
   });
 });

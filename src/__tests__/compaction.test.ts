@@ -21,6 +21,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
+import path from 'path';
 import { getThreadAdapter } from '../adapters/createAdapter';
 import { createCompaction } from '../connectors/telegram/commands/compaction';
 import { keyToString } from '../sessionKey';
@@ -278,6 +279,37 @@ describe('compaction: the compaction flow over its ports', () => {
     assert.ok(listFlags(claudeOffDir).includes('claude-session-new'), 'a topic that is OFF gets its new session flagged at once');
     await harness.runCommand('compact_mistakes', 'on');
     assert.deepEqual(listFlags(claudeOffDir), ['claude-session-a'], 'switching the topic on clears the flag of its CURRENT session; an id it left stays until the topic meets it again');
+  });
+
+  it('the flags follow a topic\'s PARKED sessions too, and the boot sync removes the Claude flags no OFF topic owns any more — the shared OpenCode folder is left alone', async () => {
+    isGeneralTopic = false;
+    const { claudeOffDir, openCodeOffDir } = harness.compactMistakesFlagDirs;
+    const listFlags = (dir: string): string[] => (fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []);
+    // The step before left the topic ON with an id it had left; a flag of a topic that no longer exists; one of another instance's OpenCode session.
+    fs.writeFileSync(path.join(claudeOffDir, 'claude-of-a-gone-topic'), '');
+    fs.mkdirSync(openCodeOffDir, { recursive: true });
+    fs.writeFileSync(path.join(openCodeOffDir, 'ses_of_another_instance'), '');
+    compaction.syncAllCompactMistakesFlags();
+    assert.deepEqual(listFlags(claudeOffDir), [], 'every topic is ON: no Claude flag is owned, the stale ones are gone');
+    assert.deepEqual(listFlags(openCodeOffDir), ['ses_of_another_instance'], 'the OpenCode folder is shared with other instances: a flag this instance does not know stays');
+
+    // The topic went from OpenCode to Claude and back: the other family's id is parked, and its flag follows the setting.
+    await harness.state.setClaudeSessionId(harness.key, 'claude-session-current');
+    await harness.state.setOpenCodeSessionId(harness.key, 'ses_current');
+    await harness.state.setParkedSession(harness.key, { adapterName: 'opencode', claudeSessionId: 'claude-session-parked', opencodeSessionId: 'ses_parked', parkedAt: '2026-11-09T00:00:00.000Z' });
+    await harness.runCommand('compact_mistakes', 'off');
+    assert.deepEqual(listFlags(claudeOffDir), ['claude-session-current', 'claude-session-parked'], 'the parked Claude id is flagged with the current one');
+    assert.deepEqual(listFlags(openCodeOffDir), ['ses_current', 'ses_of_another_instance', 'ses_parked']);
+
+    // A boot while the topic is OFF keeps what it owns and drops what it does not.
+    fs.writeFileSync(path.join(claudeOffDir, 'claude-left-by-new'), '');
+    compaction.syncAllCompactMistakesFlags();
+    assert.deepEqual(listFlags(claudeOffDir), ['claude-session-current', 'claude-session-parked']);
+
+    await harness.runCommand('compact_mistakes', 'on');
+    assert.deepEqual(listFlags(claudeOffDir), [], 'switched on: the parked id\'s flag goes with the current one');
+    assert.deepEqual(listFlags(openCodeOffDir), ['ses_of_another_instance']);
+    await harness.state.setParkedSession(harness.key, null);
   });
 
   it('the hooks the prompt, output and lifecycle paths call are harmless on a topic with no session', () => {

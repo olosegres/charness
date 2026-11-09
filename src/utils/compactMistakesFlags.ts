@@ -74,21 +74,48 @@ export function getCompactMistakesFlagDirs(dataDir: string, pluginDir: string): 
   return { claudeOffDir: getClaudeCompactMistakesOffDir(dataDir), openCodeOffDir: getOpenCodeCompactMistakesOffDir(pluginDir) };
 }
 
-/** A thread's agent sessions with the setting its topic resolves to. */
+/** A thread's agent sessions — the current ones and the parked ones — with the setting its topic resolves to. */
 export interface CompactMistakesFlagSession {
-  claudeSessionId: string | null;
-  opencodeSessionId: string | null;
+  claudeSessionIds: readonly string[];
+  opencodeSessionIds: readonly string[];
   isEnabled: boolean;
 }
 
 /**
- * @description Bring the flags of `sessions` in step with their topics' settings — each backend's id into its own folder.
+ * @description Bring the flags of `sessions` in step with their topics' settings — each backend's ids into its own folder.
  * Only these sessions' flags are touched: the plugin's folder is shared by every instance of the account, and a flag of a
  * session this instance does not know is somebody else's.
  */
 export function syncCompactMistakesFlags(sessions: readonly CompactMistakesFlagSession[], dirs: CompactMistakesFlagDirs): void {
   for (const session of sessions) {
-    if (session.claudeSessionId) applyCompactMistakesOffFlag(dirs.claudeOffDir, session.claudeSessionId, session.isEnabled);
-    if (session.opencodeSessionId) applyCompactMistakesOffFlag(dirs.openCodeOffDir, session.opencodeSessionId, session.isEnabled);
+    for (const sessionId of session.claudeSessionIds) applyCompactMistakesOffFlag(dirs.claudeOffDir, sessionId, session.isEnabled);
+    for (const sessionId of session.opencodeSessionIds) applyCompactMistakesOffFlag(dirs.openCodeOffDir, sessionId, session.isEnabled);
+  }
+}
+
+/**
+ * @description Remove the Claude flags that no OFF topic owns any more: the id of a session a topic left (`/new`, `/quit`,
+ * `/sessions`), of a topic that is gone, or of one that is ON again. Safe because the Claude folder is this instance's alone
+ * (it sits in its `DATA_DIR`) and `sessions` is every session the instance knows; the OpenCode folder is shared by the
+ * account's instances and its plugin, so it is never pruned. Only plain files named like a session id go: anything else in
+ * the folder is not the bot's.
+ */
+export function pruneStaleClaudeCompactMistakesFlags(sessions: readonly CompactMistakesFlagSession[], claudeOffDir: string): void {
+  const keptSessionIds = new Set(sessions.filter((session) => !session.isEnabled).flatMap((session) => session.claudeSessionIds));
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(claudeOffDir, { withFileTypes: true });
+  } catch (e) {
+    if (typeof e === 'object' && e !== null && 'code' in e && e.code === 'ENOENT') return;
+    console.warn(`[compact-mistakes] cannot read the flag folder ${claudeOffDir}:`, e instanceof Error ? e.message : e);
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !checkIsFlagSessionId(entry.name) || keptSessionIds.has(entry.name)) continue;
+    try {
+      fs.rmSync(path.join(claudeOffDir, entry.name), { force: true });
+    } catch (e) {
+      console.warn(`[compact-mistakes] cannot remove the stale flag ${entry.name}:`, e instanceof Error ? e.message : e);
+    }
   }
 }

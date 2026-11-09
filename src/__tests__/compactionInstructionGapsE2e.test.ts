@@ -15,8 +15,8 @@
  *   → `/compact_mistakes off`: the agent is NOT asked for the section — not by `/compact`, and not by the CLI's own overflow
  *     compaction, whose `PreCompact` hook finds the flag the bot keeps for the session — and nothing of it is posted, even
  *     though the fake's summary still holds one (the bot's own gate); the same after the agent is stopped and started anew
- *     (a NEW session id, flagged at its start) and after the bot restarts with a flag missing (flagged again at boot); back
- *     `on`: the flag is gone, both ask again and the section is posted again
+ *     (a NEW session id, flagged at its start) and after the bot restarts with a flag missing (flagged again at boot, and a
+ *     flag no OFF topic owns removed); back `on`: the flag is gone, both ask again and the section is posted again
  *
  * The idle compaction and the OpenCode stream are pinned through the compaction module in `compactionInstructionGaps.test.ts`.
  *
@@ -357,14 +357,21 @@ describe('The agent-mistakes section of a compaction summary: built charness, fa
     assert.ok(!listTextsAfter(messageBefore).some((text) => text.includes(enDict['compact.instructionGapsHeader'])), 'no section is posted');
   });
 
-  it('`/compact_mistakes off` holds across a restart of the bot: a flag that is missing at boot is made again for the session of an OFF topic', async () => {
+  it('`/compact_mistakes off` holds across a restart of the bot: a flag that is missing at boot is made again for the session of an OFF topic, and a flag no OFF topic owns is removed', async () => {
     const sessionId = listPreCompactHookRuns().at(-1)?.sessionId;
     assert.ok(sessionId);
     const flagPath = getOffFlagPath(sessionId);
     assert.ok(fs.existsSync(flagPath));
+    // The session an earlier `/quit` left kept its flag (nothing removes it while the bot runs), and the flag of a topic that is
+    // gone is in the folder too: no OFF topic owns either.
+    const leftSessionId = listPreCompactHookRuns().find((run) => run.sessionId !== sessionId)?.sessionId;
+    assert.ok(leftSessionId, 'an earlier session was compacted');
+    const staleFlagPaths = [getOffFlagPath(leftSessionId), getOffFlagPath('session-of-a-gone-topic')];
+    for (const staleFlagPath of staleFlagPaths) fs.writeFileSync(staleFlagPath, '');
     // The flag is lost while the bot is down (the saved setting is what stays): the next boot makes it again.
     charness = await restartCharnessWithState(getLayout(), fakeTelegram, getCharness(), () => fs.rmSync(flagPath));
     await getCharness().waitFor('the boot to flag the session of the OFF topic again', bootTimeoutMs, () => fs.existsSync(flagPath));
+    assert.deepEqual(staleFlagPaths.map((staleFlagPath) => fs.existsSync(staleFlagPath)), [false, false], 'the boot removed the flags of sessions no OFF topic owns any more');
   });
 
   it('`/compact_mistakes on` again: the flag is gone, /compact and the CLI\'s own compaction ask for the section again, and it is posted', async () => {

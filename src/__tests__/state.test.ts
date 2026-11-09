@@ -949,17 +949,30 @@ test('compactMistakes: a per-thread override beats the instance default, both wa
   assert.equal(second.checkIsCompactMistakesEnabled(key1), false);
 });
 
-test('listAgentSessionIds: every thread with an agent record, with the ids of both backends it holds', async () => {
+test('getAgentSessionIds / listAgentSessionIds: the ids of both backends a thread holds, the PARKED ones too, once each', async () => {
   const store = new StateStore(dataDir, { saveDebounceMs: 5 });
   await store.init();
   assert.deepEqual(store.listAgentSessionIds(), []);
+  assert.deepEqual(store.getAgentSessionIds(key1), { claudeSessionIds: [], opencodeSessionIds: [] }, 'a thread with nothing holds no ids');
   await store.setClaudeSessionId(key1, 'claude-uuid-1');
-  await store.setOpenCodeSessionId(key2, 'ses_2');
   await store.setOpenCodeSessionId(key1, 'ses_1');
+  await store.setOpenCodeSessionId(key2, 'ses_2');
+  assert.deepEqual(store.getAgentSessionIds(key1), { claudeSessionIds: ['claude-uuid-1'], opencodeSessionIds: ['ses_1'] });
+
+  // A thread that left OpenCode for Claude parks the OpenCode id; one that left Claude parks the Claude id.
+  await store.setParkedSession(key1, { adapterName: 'opencode', opencodeSessionId: 'ses_parked', parkedAt: '2026-11-09T00:00:00.000Z' });
+  await store.setParkedSession(key2, { adapterName: 'claude', claudeSessionId: 'claude-parked-2', opencodeSessionId: 'ses_2', parkedAt: '2026-11-09T00:00:00.000Z' });
+  assert.deepEqual(store.getAgentSessionIds(key1), { claudeSessionIds: ['claude-uuid-1'], opencodeSessionIds: ['ses_1', 'ses_parked'] }, 'current, then parked');
+  assert.deepEqual(store.getAgentSessionIds(key2), { claudeSessionIds: ['claude-parked-2'], opencodeSessionIds: ['ses_2'] }, 'an id that is both current and parked is listed once');
+
   const byKey = new Map(store.listAgentSessionIds().map((entry) => [keyToString(entry.key), entry]));
-  assert.deepEqual(byKey.get(keyToString(key1)), { key: key1, claudeSessionId: 'claude-uuid-1', opencodeSessionId: 'ses_1' });
-  assert.deepEqual(byKey.get(keyToString(key2)), { key: key2, claudeSessionId: null, opencodeSessionId: 'ses_2' });
+  assert.deepEqual(byKey.get(keyToString(key1)), { key: key1, claudeSessionIds: ['claude-uuid-1'], opencodeSessionIds: ['ses_1', 'ses_parked'] });
   assert.equal(byKey.size, 2);
+
+  // A thread whose agent record is gone but whose parked id remains is still listed: its flag must follow the setting.
+  const third = makeTelegramKey(getTelegramChatId(key1), 333);
+  await store.setParkedSession(third, { adapterName: 'claude', claudeSessionId: 'claude-parked-3', parkedAt: '2026-11-09T00:00:00.000Z' });
+  assert.deepEqual(store.listAgentSessionIds().find((entry) => keyToString(entry.key) === keyToString(third)), { key: third, claudeSessionIds: ['claude-parked-3'], opencodeSessionIds: [] });
 });
 
 // ── setTransientFrames (transient status-frame ids — restart cleanup, S2) ──

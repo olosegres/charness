@@ -257,6 +257,12 @@ export interface ClaudeProfileRecord {
 }
 
 /** The session id of the backend family a thread switched away from, kept for a switch back. */
+/** @name AgentSessionIds @description The agent session ids of one thread, by backend (see `StateStore.getAgentSessionIds`). */
+export interface AgentSessionIds {
+  claudeSessionIds: string[];
+  opencodeSessionIds: string[];
+}
+
 export interface ParkedSession {
   /** The adapter the id belongs to. */
   adapterName: string;
@@ -1276,17 +1282,31 @@ export class StateStore {
   }
 
   /**
-   * @description Every thread with a persisted agent session id, with the ids it holds — what the compaction hook and plugin
-   * flags (`utils/compactMistakesFlags.ts`) are kept in step with, which they must reach for ALL threads at once when the
-   * General default changes.
+   * @description The agent session ids a thread holds, by backend: the current ones and the PARKED ones (the other backend
+   * family's, kept for a switch back). What the compaction hook and plugin flags (`utils/compactMistakesFlags.ts`) are kept
+   * in step with: a parked conversation is resumed with its own id, and must find the setting of its topic as it is then.
    */
-  listAgentSessionIds(): Array<{ key: SessionKey; claudeSessionId: string | null; opencodeSessionId: string | null }> {
-    const out: Array<{ key: SessionKey; claudeSessionId: string | null; opencodeSessionId: string | null }> = [];
-    for (const [keyStr, agent] of Object.entries(this.state.agents)) {
+  getAgentSessionIds(key: SessionKey): AgentSessionIds {
+    return this.collectAgentSessionIds(this.state.agents[keyToString(key)], this.state.parkedSessions?.[keyToString(key)]);
+  }
+
+  /** @description {@link getAgentSessionIds} for every thread that holds an agent record or a parked session. */
+  listAgentSessionIds(): Array<{ key: SessionKey } & AgentSessionIds> {
+    const keyStrings = new Set([...Object.keys(this.state.agents), ...Object.keys(this.state.parkedSessions ?? {})]);
+    const out: Array<{ key: SessionKey } & AgentSessionIds> = [];
+    for (const keyStr of keyStrings) {
       const key = tryKeyFromString(keyStr);
-      if (key) out.push({ key, claudeSessionId: agent.claudeSessionId ?? null, opencodeSessionId: agent.opencodeSessionId ?? null });
+      if (key) out.push({ key, ...this.collectAgentSessionIds(this.state.agents[keyStr], this.state.parkedSessions?.[keyStr]) });
     }
     return out;
+  }
+
+  private collectAgentSessionIds(agent: AgentData | undefined, parked: ParkedSession | undefined): AgentSessionIds {
+    const pickIds = (...ids: Array<string | undefined>): string[] => [...new Set(ids.filter((id): id is string => typeof id === 'string' && id !== ''))];
+    return {
+      claudeSessionIds: pickIds(agent?.claudeSessionId, parked?.claudeSessionId),
+      opencodeSessionIds: pickIds(agent?.opencodeSessionId, parked?.opencodeSessionId),
+    };
   }
 
   getClaudeSessionId(key: SessionKey): string | null {

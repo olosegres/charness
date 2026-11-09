@@ -29,7 +29,7 @@ import {
   getPendingWorkRecheckDelayMs,
 } from '../../../utils/compactOnIdle';
 import { createStreamedSummaryTracker } from '../../../utils/streamedCompactionSummary';
-import { syncCompactMistakesFlags, type CompactMistakesFlagDirs } from '../../../utils/compactMistakesFlags';
+import { pruneStaleClaudeCompactMistakesFlags, syncCompactMistakesFlags, type CompactMistakesFlagDirs } from '../../../utils/compactMistakesFlags';
 import type { OutboundHints } from '../../../platform/outbound';
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from '../questionKeyboards';
 import { splitMessage, MAX_MESSAGE_LEN } from '../messageSplit';
@@ -1461,30 +1461,27 @@ export function createCompaction(ports: CompactionPorts) {
   }
 
   /**
-   * @description Make the hook and plugin flags of `key`'s agent sessions say what `/compact_mistakes` resolves to for its
-   * topic. Called when the setting changes for the topic and when a session starts, so the CLI's and OpenCode's own
-   * compactions — which read the flag inside the agent's process — follow the setting of the session they run in.
+   * @description Make the hook and plugin flags of `key`'s agent sessions — the current ones and the parked ones — say what
+   * `/compact_mistakes` resolves to for its topic. Called when the setting changes for the topic and when a session starts, so
+   * the CLI's and OpenCode's own compactions — which read the flag inside the agent's process — follow the setting of the
+   * session they run in.
    */
   function syncThreadCompactMistakesFlags(key: SessionKey): void {
-    const agent = getState().getAgent(key);
-    if (!agent) return;
-    syncCompactMistakesFlags([{
-      claudeSessionId: agent.claudeSessionId ?? null,
-      opencodeSessionId: agent.opencodeSessionId ?? null,
-      isEnabled: getState().checkIsCompactMistakesEnabled(key),
-    }], compactMistakesFlagDirs);
+    syncCompactMistakesFlags([{ ...getState().getAgentSessionIds(key), isEnabled: getState().checkIsCompactMistakesEnabled(key) }], compactMistakesFlagDirs);
   }
 
-  /** @description {@link syncThreadCompactMistakesFlags} for every thread: at boot, and when the General default changes. */
+  /**
+   * @description {@link syncThreadCompactMistakesFlags} for every thread, and the Claude flags no OFF topic owns any more are
+   * removed (a session a topic left, a topic that is gone): at boot, and when the General default changes.
+   */
   function syncAllCompactMistakesFlags(): void {
-    syncCompactMistakesFlags(
-      getState().listAgentSessionIds().map(({ key, claudeSessionId, opencodeSessionId }) => ({
-        claudeSessionId,
-        opencodeSessionId,
-        isEnabled: getState().checkIsCompactMistakesEnabled(key),
-      })),
-      compactMistakesFlagDirs,
-    );
+    const sessions = getState().listAgentSessionIds().map(({ key, claudeSessionIds, opencodeSessionIds }) => ({
+      claudeSessionIds,
+      opencodeSessionIds,
+      isEnabled: getState().checkIsCompactMistakesEnabled(key),
+    }));
+    syncCompactMistakesFlags(sessions, compactMistakesFlagDirs);
+    pruneStaleClaudeCompactMistakesFlags(sessions, compactMistakesFlagDirs.claudeOffDir);
   }
 
   /**
