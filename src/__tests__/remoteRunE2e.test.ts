@@ -80,9 +80,13 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
     });
 
     it('a runner whose Pueue is too slow for the probe\'s version call (a loaded machine) is online, told that Pueue is there but did not answer — never MISSING — and a job runs on it', async () => {
-      // The runner's Pueue, wrapped: `--version` hangs past the probe's 4 s step limit (the watchdog cuts it off); every other call goes through to the real one.
-      const slowVersionPueue = path.join(layout.root, 'slow-version-pueue.sh');
+      // The runner's Pueue, wrapped: `--version` hangs past the probe's 4 s step limit (the watchdog cuts it off); every other call goes through to the real one. The wrapper has a folder of its own with
+      // `pueued` beside it, as a real `bin/` has: the runner script starts the daemon from the folder of `pueue.bin` (else from its PATH — a runner's ssh shell has `~/.local/bin` only where its startup files add it).
+      const slowVersionBin = path.join(layout.root, 'slow-version-pueue-bin');
+      const slowVersionPueue = path.join(slowVersionBin, 'pueue');
+      fs.mkdirSync(slowVersionBin);
       fs.writeFileSync(slowVersionPueue, `#!/usr/bin/env bash\nfor word in "$@"; do\n  if [ "$word" = --version ]; then exec sleep 30; fi\ndone\nexec ${layout.pueueBin} "$@"\n`, { mode: 0o755 });
+      fs.symlinkSync(path.join(path.dirname(layout.pueueBin), 'pueued'), path.join(slowVersionBin, 'pueued'));
       writeRunnersJson(layout, [createRunnerEntry(layout, { pueue: { bin: slowVersionPueue, config: layout.pueueConfigPath } })]);
       try {
         const listed = await run(['runners']);
@@ -91,12 +95,13 @@ describe('charness remote-run against a loopback runner', { skip: skipReason }, 
         assert.match(listed.stdout, / · Pueue: present, no answer in time\n/);
         assert.doesNotMatch(listed.stdout, /MISSING/);
         // Before the fix the runner read «no Pueue» and this was refused with 125.
-        const ran = await run(['--runner', runnerName, 'echo', 'slow pueue']);
+        const ran = await run(['--runner', runnerName, 'echo slow-pueue']);
         assert.equal(ran.exitCode, 0, ran.stderr);
-        assert.match(ran.stdout, /slow pueue/);
+        assert.match(ran.stdout, /slow-pueue/);
+        assert.ok(!ran.stderr.includes('joined with spaces'), ran.stderr);
       } finally {
         writeRunnersJson(layout, [createRunnerEntry(layout)]);
-        fs.rmSync(slowVersionPueue, { force: true });
+        fs.rmSync(slowVersionBin, { recursive: true, force: true });
       }
     });
 

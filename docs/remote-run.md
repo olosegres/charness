@@ -415,7 +415,7 @@ One file per OS user, shared by every charness instance of that user (a Telegram
 | `ssh` | The ssh destination (`user@host` or a host alias of your ssh config). |
 | `sshOptions` | Optional extra `ssh` arguments (`-i`, `-p`, `-J`, …), put before charness's own. |
 | `workDir` | Where the runner keeps project copies, job logs and result files: an absolute path on the runner, or `~/…`. Created when missing. |
-| `pueue` | Optional `bin` / `config` when Pueue is not on the runner's `PATH` or uses a non-default config. |
+| `pueue` | Optional `bin` / `config` when Pueue is not on the runner's `PATH` or uses a non-default config. The daemon `pueued` is started from the folder of `bin` when it is there, else from the runner's `PATH`. |
 | `groups` | Optional Pueue groups and how many jobs each runs at once (`default` always exists; its number is the runner's «jobs at once», see [Jobs beside each other](#jobs-beside-each-other)). A job joins one with `--group`; two jobs of one *project* never run at the same time whatever the groups say. |
 | `minFreeGb` | Optional. The free space the runner keeps on its work disk, in GB; the default is the smaller of 60 GB and 15 % of the disk. `0` turns the free-space upkeep (and the refusal of a submit on a full disk) off; unused copies still go after `copyMaxIdleDays`. See [Queue, limits, cleanup](#queue-limits-cleanup). |
 | `copyMaxIdleDays` | Optional. Days a project copy may stay unused before it is removed (default 3). |
