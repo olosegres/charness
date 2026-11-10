@@ -679,22 +679,31 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     // The bot posts one message at a time per topic: with turn 1's text held on its Bot API round trip, everything posted after it waits.
     let releaseRoundTrip: () => void = () => {};
     const roundTripReleased = new Promise<void>((resolve) => { releaseRoundTrip = resolve; });
-    fakeTelegram.holdNextResponse('sendMessage', roundTripReleased, (payload) => String(payload.text).includes('Working on TOPIC-30.'));
-    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-30 [fake:answer]');
-    await getCharness().waitFor('turn 1\'s text on its held round trip', answerTimeoutMs, () => isPosted('Working on TOPIC-30.'));
-    // Turn 2's text reaches the bot and stays in its output buffer behind the flush that is on the round trip.
-    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-31 [fake:answer]');
-    await getCharness().waitFor('turn 2\'s text to reach the bot', answerTimeoutMs, () => hasReachedBot('Working on TOPIC-31.'));
-    // Turn 3's tool status is posted below the content, so it first lands that buffer — behind the held round trip. Turn 3's own text
-    // reaches the bot during that wait and supersedes the status, which was not posted yet.
-    fakeTelegram.pushOperatorMessage(topicThreadId, `TOPIC-32 [tool-name:${toolName}] [fake:answer]`);
-    await getCharness().waitFor('turn 3\'s text to reach the bot', answerTimeoutMs, () => hasReachedBot('Working on TOPIC-32.'));
-    assert.equal(isPosted('Working on TOPIC-31.'), false, 'turn 2\'s text is still waiting in the output buffer');
-    assert.equal(isStatusFramePosted(), false, 'turn 3\'s status frame is still waiting for that buffer to land');
+    try {
+      fakeTelegram.holdNextResponse('sendMessage', roundTripReleased, (payload) => String(payload.text).includes('Working on TOPIC-30.'));
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-30 [fake:answer]');
+      await getCharness().waitFor('turn 1\'s text on its held round trip', answerTimeoutMs, () => isPosted('Working on TOPIC-30.'));
+      // Turn 2's text reaches the bot and stays in its output buffer behind the flush that is on the round trip.
+      fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-31 [fake:answer]');
+      await getCharness().waitFor('turn 2\'s text to reach the bot', answerTimeoutMs, () => hasReachedBot('Working on TOPIC-31.'));
+      // Turn 3's tool status is posted below the content, so it first lands that buffer — behind the held round trip. Turn 3's own text
+      // reaches the bot during that wait and supersedes the status, which was not posted yet.
+      fakeTelegram.pushOperatorMessage(topicThreadId, `TOPIC-32 [tool-name:${toolName}] [fake:answer]`);
+      await getCharness().waitFor('turn 3\'s text to reach the bot', answerTimeoutMs, () => hasReachedBot('Working on TOPIC-32.'));
+      // The status did reach the bot, and before the text that supersedes it: without this the step would pass with no status at all.
+      const botLog = getCharness().output;
+      const statusLoggedAt = botLog.indexOf(`[Bot] status ${group.id}:${topicThreadId}: ${statusText}`);
+      const textLoggedAt = botLog.indexOf(`[Bot] output ${group.id}:${topicThreadId} (20): Working on TOPIC-32.`);
+      assert.ok(statusLoggedAt >= 0 && textLoggedAt >= 0 && statusLoggedAt < textLoggedAt, 'turn 3\'s status reached the bot before turn 3\'s text');
+      assert.equal(isPosted('Working on TOPIC-31.'), false, 'turn 2\'s text is still waiting in the output buffer');
+      assert.equal(isStatusFramePosted(), false, 'turn 3\'s status frame is still waiting for that buffer to land');
+    } finally {
+      // A failure above must not leave the topic's send queue wedged behind the held round trip.
+      releaseRoundTrip();
+    }
 
     // The round trip ends: the buffer lands, and a status frame created after it would be posted before turn 3's own text, whose flush
     // waits out the output debounce.
-    releaseRoundTrip();
     await getCharness().waitFor('turn 3\'s text in the topic', answerTimeoutMs, () => listTopicMessages().some((message) => message.text.includes('Working on TOPIC-32.')));
     // Back in the view the other steps run in.
     await sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');

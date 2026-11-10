@@ -1641,11 +1641,11 @@ interface StatusCoalesceState {
    */
   deferRetryTimer: NodeJS.Timeout | null;
   /**
-   * How many real outputs have superseded the status frames so far (bumped by `deliverAgentOutput`, where it also
-   * clears `pendingText`). A status frame waits for the ordering `finalize` in `handleAgentStatus`; if this count
-   * grew by the time it resumes, an output newer than the frame arrived meanwhile and the frame is dropped.
+   * How many times the status frames were superseded so far (`supersedeStatusFrames`). A status frame waits for the
+   * ordering `finalize` in `handleAgentStatus`; if this count grew by the time it resumes, something newer than the
+   * frame (real output, a question, an error, the forced idle removal) came meanwhile and the frame is dropped.
    */
-  supersedingOutputCount: number;
+  supersedeCount: number;
 }
 
 /**
@@ -3091,10 +3091,21 @@ function getStatusCoalesceState(key: SessionKey): StatusCoalesceState {
   const k = keyToString(key);
   let s = statusCoalescers.get(k);
   if (!s) {
-    s = { pendingText: null, inFlight: false, lastSentText: null, deferRetryTimer: null, supersedingOutputCount: 0 };
+    s = { pendingText: null, inFlight: false, lastSentText: null, deferRetryTimer: null, supersedeCount: 0 };
     statusCoalescers.set(k, s);
   }
   return s;
+}
+
+/**
+ * @description The status frames that exist so far are stale (real output, a question UI, an error, the forced idle
+ * removal came): drop the parked text, and tell every status still waiting for its ordering `finalize` in
+ * `handleAgentStatus` not to be created afterwards. A status that arrives after this call is newer and shows.
+ */
+function supersedeStatusFrames(key: SessionKey): void {
+  const coalescer = getStatusCoalesceState(key);
+  coalescer.pendingText = null;
+  coalescer.supersedeCount += 1;
 }
 
 function getThinkingCoalesceState(key: SessionKey): ThinkingCoalesceState {
@@ -11568,10 +11579,8 @@ function deliverAgentOutput(key: SessionKey, output: string, meta?: OutboundHint
   // real output already landed. Clearing `pendingText` here is safe even
   // mid-flush: the loop re-checks `pendingText` after every send. A status frame that
   // is still waiting for its ordering `finalize` (`handleAgentStatus`) is older than
-  // this output too: the count tells it so.
-  const statusCoalescer = getStatusCoalesceState(key);
-  statusCoalescer.pendingText = null;
-  statusCoalescer.supersedingOutputCount += 1;
+  // this output too.
+  supersedeStatusFrames(key);
 
   const msgState = getThreadMessageState(key);
   const hadStatusMessage = msgState.statusMessageId !== null;
@@ -11696,12 +11705,12 @@ async function handleAgentStatus(key: SessionKey, status: string): Promise<void>
   // arrive meanwhile. Parked after the wait, this frame would still be created — below the text
   // that outran it (`sendStatusFrame` reads the frame generation only after the wait) — a «🔧 tool»
   // line left under the finished turn, which the next tool status then edits instead of posting its
-  // own message. So a frame that newer output has superseded meanwhile is dropped.
-  const supersedingOutputCountAtArrival = getStatusCoalesceState(key).supersedingOutputCount;
-  await getOutboundFor(key).finalize(key);
-
+  // own message. So a frame that something newer superseded meanwhile (`supersedeStatusFrames`) is
+  // dropped — and so is one whose coalescer a teardown replaced during the wait.
   const c = getStatusCoalesceState(key);
-  if (c.supersedingOutputCount !== supersedingOutputCountAtArrival) return;
+  const supersedeCountAtArrival = c.supersedeCount;
+  await getOutboundFor(key).finalize(key);
+  if (statusCoalescers.get(keyToString(key)) !== c || c.supersedeCount !== supersedeCountAtArrival) return;
   c.pendingText = status;
   // Don't start a flush while one is already running OR while a deferred
   // retry is armed for a 429 cooldown — in both cases the newest
@@ -12137,7 +12146,7 @@ function runClaudeLivenessTick(key: SessionKey): void {
   ) {
     state.statusIdleSuppressed = true;
     stopClaudeLiveness(key);
-    getStatusCoalesceState(key).pendingText = null;
+    supersedeStatusFrames(key);
     void deleteStatusMessage(key).catch(() => {});
     return;
   }
@@ -12511,7 +12520,7 @@ function handleAgentQuestion(key: SessionKey, questionData: OpenCodePendingQuest
   // liveness loop first so it can't recreate a frame under the question prompt
   // (Claude-only; a no-op for OpenCode threads, which never arm it).
   stopClaudeLiveness(key);
-  getStatusCoalesceState(key).pendingText = null;
+  supersedeStatusFrames(key);
   deleteStatusMessage(key).catch(() => {});
   // The question UI takes over — remove any live thinking frame so it doesn't
   // sit above the prompt (it would otherwise persist past the answer).
@@ -12794,7 +12803,7 @@ function createLostWorkPostDeps(): PostToSessionDeps {
 function handleAgentError(key: SessionKey, error: Error): void {
   console.error(`[Bot] adapter error ${keyToString(key)}:`, error.message);
   stopClaudeLiveness(key);
-  getStatusCoalesceState(key).pendingText = null;
+  supersedeStatusFrames(key);
   deleteStatusMessage(key).catch(() => {});
   clearThinkingMessage(key);
   clearSubagentStatus(key);
