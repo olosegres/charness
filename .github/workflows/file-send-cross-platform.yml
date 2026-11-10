@@ -37,9 +37,10 @@ jobs:
           src/__tests__/fileSendTelegram.test.ts
           src/__tests__/findToolOnPath.test.ts
           src/__tests__/launchToolCommand.test.ts
-      # Under /bin/bash (3.2.57, which Apple keeps): the SIGTERM-stopped watchers of the runner script must not be reported in a job's
-      # output — a case that passes under bash 5, so the Linux run cannot guard it. `bash` is put first on PATH as /bin/bash because the
-      # tests start `bash` from PATH, and the step fails when that is not a bash 3 (the guard would then guard nothing).
+      # Under /bin/bash (3.2.57, which Apple keeps): the SIGTERM-stopped watcher of the runner script's `exec` must not be reported in a job's
+      # output — a case that passes under bash 5, so the Linux run cannot guard it. The WHOLE test file runs, selected by no test name: a
+      # selection that matches nothing runs 0 tests and passes. `bash` is put first on PATH as /bin/bash because the tests start `bash`
+      # from PATH, and the step fails when that is not a bash 3 (the guard would then guard nothing).
       - name: Runner script under the stock macOS bash 3.2
         if: ${{ !cancelled() && runner.os == 'macOS' }}
         run: |
@@ -51,5 +52,3 @@ jobs:
           test "$(bash -c 'echo "${BASH_VERSINFO[0]}"')" = 3 || { echo "::error::/bin/bash is not bash 3, this step guards the Mac's bash"; exit 1; }
           node --import tsx --import ./src/__tests__/globalTestSetup.ts --test --test-timeout=120000 \
             src/__tests__/remoteRunRunnerScriptBounded.test.ts
-          node --import tsx --import ./src/__tests__/globalTestSetup.ts --test --test-timeout=120000 \
-            --test-name-pattern='ends its stderr with the command' src/__tests__/remoteRunRunnerScript.test.ts
