@@ -261,6 +261,15 @@ keep_awake_while() {
   caffeinate -i -w "$1" > /dev/null 2>&1 < /dev/null &
 }
 
+# End the background job $1 of this shell with SIGTERM ($2 names another signal) and say nothing about its death. A shell reports a job a signal ended on ITS OWN stderr — `line N: PID Killed: 9  ( sleep … )`, in a
+# job's output, at the first command after the death — whatever redirections the job itself has; bash 3.2 (the Mac's) and 5.x alike. A `wait` with stderr thrown away would take the report, but it cannot be used for a job
+# that is stopped by TERM: its trap runs only when the foreground command it sits in ends, and the caller would stand there for it. The job is `disown`ed first, so the shell has no job left to report (and no `wait`
+# for it can follow). An already ended job, or a pid that is none of this shell's, is nothing to complain about.
+stop_background_job() {
+  disown "$1" 2> /dev/null
+  kill "-${2:-TERM}" "$1" > /dev/null 2>&1
+}
+
 # ─────────────────────────── the login session (always-on Mac) ───────────────────────────
 
 # A Mac runner kept running by LaunchDaemons has no login session of its own, and Xcode's nested builds crash in the System session the daemons
@@ -1529,8 +1538,8 @@ run_bounded() {
   wait "$command_pid" 2> /dev/null
   command_code=$?
   # KILL, not TERM: a caller that ignores TERM (the Simulator shutdown step does, `cmd_ios_device_shutdown`) hands that to the watchdog, whose subshell would then sleep out the whole limit - holding the caller's pipes, and
-  # firing a `kill -9` at a pid that may be another process's by then.
-  kill -9 "$watchdog_pid" > /dev/null 2>&1
+  # firing a `kill -9` at a pid that may be another process's by then. Quietly: the shell would report the killed watchdog («Killed: 9») in the output of whoever called this.
+  stop_background_job "$watchdog_pid" KILL
   return "$command_code"
 }
 
@@ -2364,7 +2373,7 @@ write_lease_beat() {
 }
 
 end_lease_watch() {
-  [ -n "${lease_reader_pid:-}" ] && kill "$lease_reader_pid" > /dev/null 2>&1
+  [ -n "${lease_reader_pid:-}" ] && stop_background_job "$lease_reader_pid"
   [ -n "${lease_state_dir:-}" ] && rm -rf "$lease_state_dir"
 }
 
@@ -2395,7 +2404,7 @@ cmd_lease() {
   if [ -f "$jd/kill-pending" ]; then
     wait "$watcher_pid" 2> /dev/null
   else
-    kill "$watcher_pid" > /dev/null 2>&1
+    stop_background_job "$watcher_pid"
   fi
   wait_for_exit_file
   touch "$jd/drain-stop"
@@ -3660,7 +3669,7 @@ cmd_exec() {
   local watcher_pid=$!
   wait "$exec_pid"
   local exec_code=$?
-  kill "$watcher_pid" > /dev/null 2>&1
+  stop_background_job "$watcher_pid"
   # The command's own code, said out loud: ssh reports 255 for ITS failures, and a command that really exits 255 (ssh and adb do) would
   # look like a lost connection. The marker (RS, the name, the code, a newline) is the last thing on stderr; the CLI takes it out of what it
   # shows. A session that dies before it has none, which is how a lost connection is told from a command that exited 255.
