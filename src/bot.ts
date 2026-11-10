@@ -1640,6 +1640,12 @@ interface StatusCoalesceState {
    * wins) instead of arming a second timer. `null` = none armed.
    */
   deferRetryTimer: NodeJS.Timeout | null;
+  /**
+   * How many real outputs have superseded the status frames so far (bumped by `deliverAgentOutput`, where it also
+   * clears `pendingText`). A status frame waits for the ordering `finalize` in `handleAgentStatus`; if this count
+   * grew by the time it resumes, an output newer than the frame arrived meanwhile and the frame is dropped.
+   */
+  supersedingOutputCount: number;
 }
 
 /**
@@ -3085,7 +3091,7 @@ function getStatusCoalesceState(key: SessionKey): StatusCoalesceState {
   const k = keyToString(key);
   let s = statusCoalescers.get(k);
   if (!s) {
-    s = { pendingText: null, inFlight: false, lastSentText: null, deferRetryTimer: null };
+    s = { pendingText: null, inFlight: false, lastSentText: null, deferRetryTimer: null, supersedingOutputCount: 0 };
     statusCoalescers.set(k, s);
   }
   return s;
@@ -11560,8 +11566,12 @@ function deliverAgentOutput(key: SessionKey, output: string, meta?: OutboundHint
   // a thinking-text edit queued ~50 ms before could still hit Telegram
   // and briefly overwrite the visible status with stale text after the
   // real output already landed. Clearing `pendingText` here is safe even
-  // mid-flush: the loop re-checks `pendingText` after every send.
-  getStatusCoalesceState(key).pendingText = null;
+  // mid-flush: the loop re-checks `pendingText` after every send. A status frame that
+  // is still waiting for its ordering `finalize` (`handleAgentStatus`) is older than
+  // this output too: the count tells it so.
+  const statusCoalescer = getStatusCoalesceState(key);
+  statusCoalescer.pendingText = null;
+  statusCoalescer.supersedingOutputCount += 1;
 
   const msgState = getThreadMessageState(key);
   const hadStatusMessage = msgState.statusMessageId !== null;
@@ -11681,9 +11691,17 @@ async function handleAgentStatus(key: SessionKey, status: string): Promise<void>
   // Group mode now drains any coalesced-but-unsent output here too (S2), so the
   // status likewise lands below content rather than above a still-buffered chunk;
   // a fully-delivered turn is a no-op.
+  //
+  // That drain waits for the buffered content's paced Bot API sends, and the agent's next text can
+  // arrive meanwhile. Parked after the wait, this frame would still be created — below the text
+  // that outran it (`sendStatusFrame` reads the frame generation only after the wait) — a «🔧 tool»
+  // line left under the finished turn, which the next tool status then edits instead of posting its
+  // own message. So a frame that newer output has superseded meanwhile is dropped.
+  const supersedingOutputCountAtArrival = getStatusCoalesceState(key).supersedingOutputCount;
   await getOutboundFor(key).finalize(key);
 
   const c = getStatusCoalesceState(key);
+  if (c.supersedingOutputCount !== supersedingOutputCountAtArrival) return;
   c.pendingText = status;
   // Don't start a flush while one is already running OR while a deferred
   // retry is armed for a 429 cooldown — in both cases the newest

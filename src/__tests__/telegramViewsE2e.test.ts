@@ -31,6 +31,9 @@
  *   → in «Answers only» a turn posts nothing but its pinned answer — no text, no
  *     status, no thinking, no tool result — while the typing indicator still
  *     runs; back in «Stream + answers» the same turn shows its stream again
+ *   → Telegram refusing the markup of a «🔧 tool» status frame: it is created again as
+ *     plain text; a status frame that its own turn's text outran while it waited behind
+ *     earlier unposted text is never posted at all
  *
  * Nothing leaves the machine: the Bot API and the bot MCP are on loopback, the
  * agent is the fake. Everything the test starts is stopped in `after`.
@@ -659,6 +662,44 @@ describe('Telegram views end to end: built charness, fake Bot API, fake claude (
     await getCharness().waitFor('the status frame to be sent as plain text after the refusal', replyTimeoutMs, () => fakeTelegram.listCalls('sendMessage').some((call) => call.payload.text === statusPlain));
     const statusSends = fakeTelegram.listCalls('sendMessage').filter((call) => call.payload.text === statusHtml || call.payload.text === statusPlain);
     assert.deepEqual(statusSends.map((call) => [call.payload.text, call.payload.parse_mode]), [[statusHtml, 'HTML'], [statusPlain, undefined]], 'the HTML send was refused once, then the plain twin — the tool name as written — went through');
+  });
+
+  it('a tool status frame that its own turn\'s text outran while it waited behind the earlier turns\' unposted text is never posted — no «🔧» line is left under the finished turn', async () => {
+    const toolName = 'StaleFrame';
+    const statusText = `🔧 ${toolName}`;
+    const isPosted = (text: string): boolean => fakeTelegram.listCalls('sendMessage').some((call) => String(call.payload.text).includes(text));
+    // The status frame is the whole text `🔧 <tool>`; the tool's result message, `🔧 <tool> → …`, is not it.
+    const isStatusFramePosted = (): boolean => fakeTelegram.listCalls('sendMessage').some((call) => call.payload.text === statusText);
+    const hasReachedBot = (text: string): boolean => getCharness().output.includes(`output ${group.id}:${topicThreadId} (20): ${text}`);
+    // The step before leaves its own text in the bot's output buffer for a few seconds; it lands first, so this step starts from an empty buffer.
+    await getCharness().waitFor('the step before to have its text posted', answerTimeoutMs, () => listTopicMessages().some((message) => message.text.includes('Working on TOPIC-14')));
+    // In the full stream a turn opens no request, so no turn waits for the bot MCP's answer, which would queue behind the held send below.
+    await sendAndAwaitReply('/verbosity stream', 'This topic shows: Stream only');
+
+    // The bot posts one message at a time per topic: with turn 1's text held on its Bot API round trip, everything posted after it waits.
+    let releaseRoundTrip: () => void = () => {};
+    const roundTripReleased = new Promise<void>((resolve) => { releaseRoundTrip = resolve; });
+    fakeTelegram.holdNextResponse('sendMessage', roundTripReleased, (payload) => String(payload.text).includes('Working on TOPIC-30.'));
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-30 [fake:answer]');
+    await getCharness().waitFor('turn 1\'s text on its held round trip', answerTimeoutMs, () => isPosted('Working on TOPIC-30.'));
+    // Turn 2's text reaches the bot and stays in its output buffer behind the flush that is on the round trip.
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'TOPIC-31 [fake:answer]');
+    await getCharness().waitFor('turn 2\'s text to reach the bot', answerTimeoutMs, () => hasReachedBot('Working on TOPIC-31.'));
+    // Turn 3's tool status is posted below the content, so it first lands that buffer — behind the held round trip. Turn 3's own text
+    // reaches the bot during that wait and supersedes the status, which was not posted yet.
+    fakeTelegram.pushOperatorMessage(topicThreadId, `TOPIC-32 [tool-name:${toolName}] [fake:answer]`);
+    await getCharness().waitFor('turn 3\'s text to reach the bot', answerTimeoutMs, () => hasReachedBot('Working on TOPIC-32.'));
+    assert.equal(isPosted('Working on TOPIC-31.'), false, 'turn 2\'s text is still waiting in the output buffer');
+    assert.equal(isStatusFramePosted(), false, 'turn 3\'s status frame is still waiting for that buffer to land');
+
+    // The round trip ends: the buffer lands, and a status frame created after it would be posted before turn 3's own text, whose flush
+    // waits out the output debounce.
+    releaseRoundTrip();
+    await getCharness().waitFor('turn 3\'s text in the topic', answerTimeoutMs, () => listTopicMessages().some((message) => message.text.includes('Working on TOPIC-32.')));
+    // Back in the view the other steps run in.
+    await sendAndAwaitReply('/verbosity stream_answers', 'This topic shows: Stream + answers');
+    // The call log, not the topic: the superseded frame, posted late, is deleted again by that flush of output.
+    assert.equal(isStatusFramePosted(), false, 'the superseded status frame was not created below the text that replaced it');
   });
 
   it('every tmux call named the private server; nothing of the instance runs on the default tmux server', () => {
