@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.12.0 — 2026-11-10
+
 **Jobs on a Mac runner no longer print «Killed: 9» lines into their output — a line like `runner.sh: line N: <pid> Killed: 9  ( sleep $limit_sec; kill -9 "$command_pid" )` that read like a failure after every step with a Simulator call.**
 Before, every time-limited call the runner script makes (the `simctl` steps of a job's own Simulator device, the Simulator cleanup) started a watchdog and stopped it with `kill -9` when the call ended in time; the Mac's bash 3.2 (and bash 5 as well) then reported that killed watchdog on its own stderr, which is the job's output, whatever the watchdog's own redirections said — seen on a Mac runner as three such lines in one job. The same report, as «Terminated», could follow an `exec` after its exit marker (bash 3.2 reports a job ended by SIGTERM as well; bash 5 only one ended by SIGKILL). Now the script `disown`s a watchdog or watcher before it ends it, so the shell has nothing to report; the time limit works as before (a call past its limit is still cut off with 137, a call that ends in time still stops its watchdog at once).
 
