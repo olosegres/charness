@@ -25,8 +25,8 @@ This happened when the bot took a while to come back up (a busy machine, or many
 **A runner whose service is stopped now ends with its program's own exit code, not with 143, also on a busy machine.**
 The `charness-runner` launcher passes the stop signal on to the runner program and waits for it. On a busy machine the program could end before the launcher checked on it again, and the launcher then reported the signal's 143 instead of the program's clean exit. A service manager reads 143 as a stop by a signal. The launcher now always waits for the program's own exit status. A runner writes the new launcher when it updates, and uses it from the next start of its service.
 
-**A «🔧 tool» status line is no longer left under a reply that was already posted.**
-Before, a tool call that started while the previous text was still waiting to be posted made its status line wait for that text to go out first; when the agent's next text arrived during that wait, the status line was created after it all the same — below the text that should have replaced it — and stayed there until the next message, and the next tool status then edited that stale line instead of posting its own. Now a status line that newer text has already replaced is dropped instead of created.
+**A «🔧 tool» status line is no longer left under a reply that was already posted, or under a question the agent asked.**
+Before, a tool call that started while the previous text was still waiting to be posted made its status line wait for that text to go out first; when the agent's next text arrived during that wait, the status line was created after it all the same — below the text that should have replaced it — and stayed there until the next message, and the next tool status then edited that stale line instead of posting its own. The same happened to the question tool's own «🔧 question…» line, which landed under the question it announced. Now a status line that newer text, a question or an error has already replaced is dropped instead of created.
 
 ## 3.13.0 — 2026-11-12
 
