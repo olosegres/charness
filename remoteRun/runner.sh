@@ -262,7 +262,8 @@ keep_awake_while() {
 }
 
 # End the background job $1 of this shell with SIGTERM ($2 names another signal) and say nothing about its death. A shell reports a job a signal ended on ITS OWN stderr — `line N: PID Killed: 9  ( sleep … )`, in a
-# job's output, at the first command after the death — whatever redirections the job itself has; bash 3.2 (the Mac's) and 5.x alike. A `wait` with stderr thrown away would take the report, but it cannot be used for a job
+# job's output, at the first command after the death — whatever redirections the job itself has. Measured: bash 3.2.57 (the Mac's) reports a job ended by SIGKILL and one ended by SIGTERM, bash 5.3 only one ended by
+# SIGKILL. A `wait` with stderr thrown away would take the report, but it cannot be used for a job
 # that is stopped by TERM: its trap runs only when the foreground command it sits in ends, and the caller would stand there for it. The job is `disown`ed first, so the shell has no job left to report (and no `wait`
 # for it can follow). An already ended job, or a pid that is none of this shell's, is nothing to complain about.
 stop_background_job() {

@@ -1,8 +1,12 @@
 /**
- * @description `remoteRun/runner.sh`, the time limit of a bounded call (`run_bounded`: a watchdog, there is no `timeout(1)` on a Mac) and the way the script ends a background job of its own. Bash reports a job
- * that a SIGNAL ended on ITS stderr (`line N: PID Killed: 9  ( sleep … )`, `Terminated`) — whatever redirections the job itself has — at the first command after the death: bash 3.2, the stock bash of macOS, and 5.x alike.
- * The script stops its watchdogs and watchers by signal, so every job that made a bounded `simctl` call carried such a line in its output, which reads like a failure. The limit itself must stay what it was: a call
- * that runs past it is cut off, a call that ends in time stops its watchdog at once.
+ * @description `remoteRun/runner.sh`, the time limit of a bounded call (`run_bounded`: a watchdog, there is no `timeout(1)` on a Mac) and the way the script ends a background job of its own. Bash reports a background job
+ * that a SIGNAL ended on ITS stderr (`line N: PID Killed: 9  ( sleep … )`, `Terminated`) — whatever redirections the job itself has — at the first command after the death. Measured: bash 3.2.57 (the stock bash of macOS)
+ * reports a job ended by SIGKILL AND one ended by SIGTERM; bash 5.3 reports only one ended by SIGKILL. The script stops its watchdogs and watchers by signal, so every job that made a bounded `simctl` call carried such a line
+ * in its output, which reads like a failure. The limit itself must stay what it was: a call that runs past it is cut off, a call that ends in time stops its watchdog at once.
+ *
+ * Which case is load-bearing on which bash: the SIGKILL ones (`run_bounded`'s watchdog, the log of the iOS job) on every bash, so the Linux suite guards them. The SIGTERM ones (the helper's default signal: the lease
+ * watcher of `exec` / `lease` and its heartbeat reader; the `exec` stderr case of `remoteRunRunnerScript.test.ts`) only on bash 3.2 — under bash 5 they still prove that the job is gone, not that nothing is reported — so
+ * `.github/workflows/file-send-cross-platform.yml` runs this file and that case on a macOS runner, whose /bin/bash is 3.2. Locally: put a bash 3.2 first on PATH (`src/remoteRun/README.md`).
  *
  * Test case: N/A — Charness has no Jira tracker.
  */
@@ -16,6 +20,8 @@ import { iosJob, rsyncSkip, sims, slugA, state, useSimulatorHarness } from './re
 
 /** What bash prints when it reports a job that a signal ended; on macOS the text carries the signal's number («Killed: 9»). */
 const jobDeathNotice = /Killed|Terminated/;
+/** The job-level case is not run on macOS CI: its apply step is tested against the rsync the Linux CI installs, and its SIGKILL path is the first case's, which runs there. */
+const iosJobSkip = process.platform === 'darwin' ? 'not run on macOS CI: its SIGKILL path is the first case of this file' : rsyncSkip;
 const programTimeoutMs = 60_000;
 const limitSec = 1;
 const longCallSec = 30;
@@ -32,7 +38,7 @@ function runProgram(lines: string[]): { status: number | null; stdout: string; s
 }
 
 describe('a bounded call and its watchdog', () => {
-  it('a call that ends in time keeps its exit code and the watchdog it stops is not reported — a round after round of calls leaves nothing on stderr', () => {
+  it('a call that ends in time keeps its exit code and the watchdog it stops (SIGKILL: reported by every bash) is not reported — a round after round of calls leaves nothing on stderr', () => {
     // One command per line, as a script runs them: bash reports a dead job at a command AFTER the call that ended it, and not inside a loop.
     const rounds = Array.from({ length: callRounds }, () => ['run_bounded 30 true; echo "zero=$?"', 'run_bounded 30 sleep 0.1; echo "slept=$?"', "run_bounded 30 sh -c 'exit 3'; echo \"three=$?\""]).flat();
     const result = runProgram([...rounds, 'true', 'true']);
@@ -70,13 +76,13 @@ describe('stopping a background job of the script\'s own', () => {
     ]);
   }
 
-  it('SIGTERM by default: the job is gone, and the shell says nothing about its death', () => {
+  it('SIGTERM by default: the job is gone, and the shell says nothing about its death (the silence is load-bearing on bash 3.2 only: bash 5 reports no job ended by SIGTERM)', () => {
     const result = stopLongJob('');
     assert.equal(result.stdout.trim(), 'gone', result.stderr);
     assert.equal(result.stderr, '');
   });
 
-  it('a signal named by the caller (SIGKILL, for a job that may ignore TERM) ends it as well, quietly', () => {
+  it('a signal named by the caller (SIGKILL, for a job that may ignore TERM) ends it as well, quietly (reported by every bash without the helper)', () => {
     const result = stopLongJob('KILL');
     assert.equal(result.stdout.trim(), 'gone', result.stderr);
     assert.equal(result.stderr, '');
@@ -95,10 +101,10 @@ describe('stopping a background job of the script\'s own', () => {
   });
 });
 
-describe('a job that needs iOS', { skip: rsyncSkip }, () => {
+describe('a job that needs iOS', { skip: iosJobSkip }, () => {
   useSimulatorHarness();
 
-  it('the output of the job has no line of bash about a killed process: its `simctl` calls are bounded, and their watchdogs are stopped quietly', () => {
+  it('the output of the job has no line of bash about a killed process: its `simctl` calls are bounded, and their watchdogs are stopped quietly (SIGKILL: every bash)', () => {
     const outcome = runJob(state.workDir, iosJob(slugA, 'box1-aaaaaa'), sims.environment);
     assert.equal(outcome.exit, '0', outcome.log);
     assert.ok(outcome.log.includes('is booted'), `the iOS steps ran, so their bounded calls were made:\n${outcome.log}`);
