@@ -77,3 +77,23 @@ const otherLineBreakPattern = /\r\n|[\r\u0085\u2028\u2029]/g;
 export function neutraliseHeaderLookalikes(text: string): string {
   return stripControlCharacters(text.replace(otherLineBreakPattern, '\n')).replace(headerLookalikePattern, '$1\\[');
 }
+
+/**
+ * @description What an answer to the agent's own question carries when somebody other than the operator gave it:
+ * `(answered by topic member "Alice Smith" (@alice), not the operator)`. The agent's question is its way to ask the operator
+ * before it acts, so an answer must say who chose it — a plain label would read as the operator's «yes».
+ */
+export function buildAnswerAttribution(senderDescription: string): string {
+  return `(answered by ${senderDescription}, ${authorMarkTail})`;
+}
+
+/**
+ * @description The chosen option label(s) of one question with the attribution after the last one — one per answer, so in a
+ * question of several parts each part says who chose it. The agent (Claude's answers map, OpenCode's reply matrix) takes a
+ * label that is no option as the answer's own text.
+ */
+export function getAnswerWithAttribution(labels: readonly string[], senderDescription: string): string[] {
+  const attribution = buildAnswerAttribution(senderDescription);
+  if (labels.length === 0) return [attribution];
+  return labels.map((label, index) => (index === labels.length - 1 ? `${label} ${attribution}` : label));
+}

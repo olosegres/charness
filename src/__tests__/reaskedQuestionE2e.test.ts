@@ -12,6 +12,8 @@
  *     is posted beside the toast, and the re-asked message stays with the chosen answer in place of its buttons
  *   → the same with the LONG option (longer than a toast holds): the toast is its start, the re-asked message carries the
  *     whole label under the question (no second copy is posted), and the whole label reaches the agent
+ *   → a TOPIC MEMBER (a talker an admin let in) taps an option of the re-asked question, and another types its number: each label
+ *     reaches the resumed agent under the author mark, never as a bare label the agent would read as the operator's answer
  *   → a tap the moment the re-asked question appears, which may land while the process is still being stopped: the
  *     label is held and still reaches the agent
  *   → a tap read INSIDE the idle stop (the process ignores its stop signals, so the stop lasts its kill wait) whose
@@ -59,6 +61,9 @@ import { getTelegramFlowTestTimingsEnv } from './telegramE2e/telegramFlowTimings
 const group = { id: -1001111111111, title: 'ExampleGroup' };
 const topicThreadId = 111;
 const operator = { id: 424242, is_bot: false, first_name: 'Operator' };
+/** A group member an admin let talk to the agent in this topic (seeded into `state.json` before the boot). */
+const topicTalker = { id: 515151, is_bot: false, first_name: 'Tess', last_name: 'Talker', username: 'tess' };
+const talkerMark = '[Message from topic member "Tess Talker" (@tess) · not the operator]';
 const botUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
@@ -162,6 +167,22 @@ describe('A pending question the idle compaction re-asks, end to end: built char
     process.once('SIGINT', exitOnSignal);
     process.once('SIGTERM', exitOnSignal);
 
+    fs.writeFileSync(
+      path.join(layout.dataDir, 'state.json'),
+      `${JSON.stringify({
+        version: 1,
+        bindings: {},
+        agents: {},
+        messages: {},
+        topicTalkers: {
+          [`${group.id}:${topicThreadId}`]: {
+            revision: 1,
+            talkers: [{ userId: topicTalker.id.toString(), username: topicTalker.username, name: `${topicTalker.first_name} ${topicTalker.last_name}`, addedAt: 1_800_000_000_000, addedBy: operator.id.toString(), addedByName: operator.first_name }],
+            invites: [],
+          },
+        },
+      }, null, 2)}\n`,
+    );
     fakeTelegram = new FakeTelegram({ botUser, operator, group });
     topic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, replyTimeoutMs);
     waitingTopic = new TopicDriver(fakeTelegram, getCharness, topicThreadId, reaskTimeoutMs);
@@ -237,6 +258,25 @@ describe('A pending question the idle compaction re-asks, end to end: built char
       0,
       'the label is not posted again beside the question that shows it',
     );
+  });
+
+  it('a topic member\'s tap on a re-asked question\'s option, and a number they type, reach the agent under their mark — never as a bare label', async () => {
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'WARM-T1 [fake:answer] a turn to compress');
+    await getCharness().waitFor('the warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('WARM-T1').length > 0);
+    const reasked = await waitForReaskedQuestion('REASK-T1');
+    const answersBefore = fakeTelegram.callbackAnswers.length;
+    fakeTelegram.pushCallback(reasked.message_id, 'reask_0', topicTalker);
+    await getCharness().waitFor('the member\'s tap to be answered', replyTimeoutMs, () => fakeTelegram.callbackAnswers.length > answersBefore);
+    assert.equal(fakeTelegram.callbackAnswers[answersBefore], fakeAskQuestion.shortOptionLabel, 'the tap of a question button is one a member may make');
+    const markedLabel = `${talkerMark}\n\n${fakeAskQuestion.shortOptionLabel}`;
+    await getCharness().waitFor('the member\'s label to reach the agent under their mark', agentStartTimeoutMs, () => getAgentPrompts(markedLabel).length > 0);
+
+    fakeTelegram.pushOperatorMessage(topicThreadId, 'WARM-T2 [fake:answer] one more turn to compress');
+    await getCharness().waitFor('the second warm-up turn to reach the agent', agentStartTimeoutMs, () => getAgentPrompts('WARM-T2').length > 0);
+    await waitForReaskedQuestion('REASK-T2');
+    fakeTelegram.pushUserMessage(topicThreadId, '2', topicTalker);
+    const markedLongLabel = `${talkerMark}\n\n${fakeAskQuestion.longOptionLabel}`;
+    await getCharness().waitFor('the member\'s typed number to deliver the label under their mark', agentStartTimeoutMs, () => getAgentPrompts(markedLongLabel).length > 0);
   });
 
   it('a tap the moment the re-asked question appears — before, inside or after the stop that follows it — still reaches the agent', async () => {

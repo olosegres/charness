@@ -34,6 +34,8 @@ import type { OutboundHints } from '../../../platform/outbound';
 import { buildQuestionOptionsKeyboard, buildKeyboardExtra } from '../questionKeyboards';
 import { splitMessage, MAX_MESSAGE_LEN } from '../messageSplit';
 import type { BotCore } from './botCore';
+import { getTelegramTalkerContext } from '../inbound';
+import type { MessageContext } from '../../../utils/messageContext';
 import { getQuestionReplyRoute, type QuestionEnd } from '../../../openCodeQuestionFlow';
 import type { LatePromptOutcome } from '../../../utils/promptDelivery';
 import { getCallbackMessageId, getCallbackMessageText } from './callbackMessage';
@@ -216,7 +218,8 @@ export interface CompactionPorts
    * a typed message is (a live session gets it, a stopping one buffers it, a sleeping one is woken). Resolves where it went:
    * `noSession` — nowhere, and the topic was told why.
    */
-  deliverLabel: (key: SessionKey, label: string) => Promise<LatePromptOutcome | null>;
+  /** Deliver the chosen label of a re-asked question as a prompt; `messageContext` carries who chose it when that is not the operator. */
+  deliverLabel: (key: SessionKey, label: string, messageContext?: MessageContext) => Promise<LatePromptOutcome | null>;
   /** Wake the topic's SLEEPING conversation for a prompt of its own; `true` when it is live (a start that failed has told the topic why). */
   resumeSleepingSessionForPrompt: (key: SessionKey) => Promise<boolean>;
   /** Whether a session of the topic is starting (or stopping), so a prompt is buffered for the one to come. */
@@ -1226,7 +1229,7 @@ export function createCompaction(ports: CompactionPorts) {
     // An answer to the agent's own question is never a request (S7), even delivered as a prompt. Routed at delivery,
     // not on the `checkIsStarting` read above: the stop may have ended during the toast, and a label buffered into its closed
     // window was never replayed.
-    const outcome = await deliverLabel(key, label);
+    const outcome = await deliverLabel(key, label, speaker.role === 'talker' && ctx.from ? getTelegramTalkerContext(ctx.from) : undefined);
     // The label reached no session (the topic was told why): the question is still open, so are its buttons.
     if (outcome === 'noSession') {
       await returnReAskedQuestionAfterTap(key, reAsked, reAskedMessageId);
@@ -1243,7 +1246,7 @@ export function createCompaction(ports: CompactionPorts) {
    * number would count as the person writing something else: the question would end «not answered» and the agent would get a
    * bare «2». Resolves whether the text was such a number (and was handled).
    */
-  async function answerReAskedQuestionByNumber(key: SessionKey, text: string): Promise<boolean> {
+  async function answerReAskedQuestionByNumber(key: SessionKey, text: string, messageContext?: MessageContext): Promise<boolean> {
     const reAsked = peekReAskedQuestion(key);
     if (!reAsked) return false;
     const route = getQuestionReplyRoute(text, reAsked.question);
@@ -1254,7 +1257,7 @@ export function createCompaction(ports: CompactionPorts) {
     takeReAskedQuestionForAnswer(key);
     // A person wrote — the latch clears like for any message; the record is gone, so nothing is closed as «not answered».
     notePersonActivity(key);
-    const outcome = await deliverLabel(key, label);
+    const outcome = await deliverLabel(key, label, messageContext);
     if (outcome === 'noSession') {
       const isPutBack = await returnReAskedQuestionAfterTap(key, reAsked, reAsked.messageId ?? reAsked.predecessorMessageId);
       if (isPutBack) await finishReAskAfterNumberFoundNoSession(key, reAsked);

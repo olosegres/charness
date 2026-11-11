@@ -174,10 +174,12 @@ import {
   checkHasLeftGroup,
   getDisplayName,
   getTelegramMessageContext,
+  getTelegramTalkerContext,
   type TelegramMessageAccess,
 } from './connectors/telegram/inbound';
 import { createRecentWriters, createSeenSenders, type SeenPerson } from './topicTalkerMemory';
 import { checkIsTalkerCallback } from './utils/talkerAccess';
+import { getAnswerWithAttribution } from './utils/authorMark';
 import { formatPersonLabel } from './utils/personLabel';
 import { createTelegramConnectorOutbound } from './connectors/telegram/outbound';
 import { createCommandRouter, type CommandRegistrationOptions } from './platform/commandRouter';
@@ -3502,7 +3504,9 @@ async function checkIsTalkerTapRefused(ctx: Context): Promise<boolean> {
  */
 async function noteServedGroupSender(ctx: Context): Promise<void> {
   const user = ctx.from;
-  if (!ctx.message || !user || user.is_bot) return;
+  // A post made as a channel or as the group (a linked channel's post carries Telegram's service user in `from`) is no person: it is
+  // never remembered, never offered as a stranger to add, never an invitation's match.
+  if (!ctx.message || !user || user.is_bot || ctx.message.sender_chat) return;
   const groupSpeaker = await getGroupSpeakerRole(ctx);
   if (groupSpeaker === null) return;
   const person: SeenPerson = { userId: user.id.toString(), username: user.username, name: getDisplayName(user) };
@@ -3515,8 +3519,10 @@ async function noteServedGroupSender(ctx: Context): Promise<void> {
     if (topicKey === null) continue;
     await replyToThread(topicKey, withThreadLocale(topicKey, () => t('access.inviteResolvedNotice', { person: formatPersonLabel(person) })));
   }
-  const wasGranted = grants.some((grant) => grant.threadKey === keyToString(groupSpeaker.key));
-  if (groupSpeaker.role === 'none' && !wasGranted) recentTopicWriters.noteIgnoredWriter(keyToString(groupSpeaker.key), person);
+  // The role is read AGAIN: a grant that came from General's invitation makes the person a talker in this topic too, and one for
+  // another topic does not.
+  const isTalkerNow = state.getEffectiveTalkerIds(groupSpeaker.key, getGroupGeneralKey(groupSpeaker.key)).has(person.userId);
+  if (groupSpeaker.role === 'none' && !isTalkerNow) recentTopicWriters.noteIgnoredWriter(keyToString(groupSpeaker.key), person);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -6374,7 +6380,8 @@ const {
   resumeSleepingSessionForCompaction: async (key) => (await ensureAgentSession(key, { isResumeOnly: true })).ok && getThreadAdapter(key).checkIsActive(key),
   getThreadAdapter,
   // An answer to the agent's own question is never a request (S7), even delivered as a prompt.
-  deliverLabel: (key, label) => withThreadLocale(key, () => deliverActivePrompt(key, getThreadAdapter(key), label, null)),
+  // The label of a re-asked question reaches the agent as a prompt; a topic member's carries their mark, the operator's stays bare.
+  deliverLabel: (key, label, messageContext) => withThreadLocale(key, () => deliverActivePrompt(key, getThreadAdapter(key), label, null, undefined, messageContext)),
   resumeSleepingSessionForPrompt: (key) => resumeSleepingSessionForPrompt(key),
   checkIsStarting: (key) => startupPromptBuffer.checkIsStarting(keyToString(key)),
   closeOrphanQuestionMessage,
@@ -9918,9 +9925,12 @@ async function handleTalkerText(ctx: NarrowedContext<Context, Update.MessageUpda
  * @description A raw-shell topic takes no talker: what is typed into a shell reaches it with no label, so none of the marks
  * and guards that tell the agent whose words these are can apply. Posts the refusal and answers `true` for such a topic.
  */
-async function refuseTalkerInTerminalTopic(key: SessionKey): Promise<boolean> {
+async function refuseTalkerInTerminalTopic(
+  key: SessionKey,
+  sendRefusal: (text: string) => Promise<unknown> = (text) => replyToThread(key, text),
+): Promise<boolean> {
   if (getThreadAdapter(key).name !== 'terminal') return false;
-  await replyToThread(key, t('access.terminalTopicRefusal'));
+  await sendRefusal(t('access.terminalTopicRefusal'));
   return true;
 }
 
@@ -10424,7 +10434,8 @@ async function processVoiceJob(
     // transcript is routed here — right after the 🎤 echo and BEFORE the
     // startup-buffer / natural-language-start / binding gates, which would
     // otherwise treat it as a prompt. Same single creation path as the text side.
-    const reminderVoiceRoute = claimReminderTextCapture(key);
+    // The step is an ADMIN's: a topic member's voice note neither fills it nor closes it when it has expired — it goes on as a prompt.
+    const reminderVoiceRoute = checkIsForeignWords(messageContext) ? null : claimReminderTextCapture(key);
     if (reminderVoiceRoute === 'capture') {
       await finishReminderWizard(key, transcript);
       return;
@@ -10819,8 +10830,12 @@ bot.on(
     if (!speaker) return;
     const { key } = speaker;
     const isFromTalker = speaker.role === 'talker';
-    // A talker's file goes to the agent like their text does — marked as theirs — but never into a raw shell.
-    if (isFromTalker && await refuseTalkerInTerminalTopic(key)) return;
+    // A talker's file goes to the agent like their text does — marked as theirs — but never into a raw shell. An album is refused once,
+    // not once per item.
+    const mediaGroupId = getMediaGroupId(ctx.message);
+    if (isFromTalker && await refuseTalkerInTerminalTopic(key, async (text) => {
+      if (!mediaGroupId || albumCollector.checkShouldAnnounceOnce(buildAlbumGroupKey(key, mediaGroupId))) await replyToThread(key, text);
+    })) return;
     try {
       await handleIncomingFile(ctx, key, isFromTalker);
     } catch (err) {
@@ -11420,12 +11435,12 @@ bot.action(/^resume_(\d+)$/, async (ctx) => {
   if (result !== null) await replyToThread(key, result);
 });
 
-// The agent's own question buttons (`opt_`, `qa_`, and `reask_` in the compaction module) are the taps a talker may make: they
-// answer the agent, so they ask the speaker gate; every other button keeps asking the admin gate.
+// The agent's own question buttons (`qa_`, and `reask_` in the compaction module) are the taps a talker may make: they answer the
+// agent, so they ask the speaker gate; every other button — `opt_`, which types a digit into whatever a Claude TUI shows, included —
+// keeps asking the admin gate.
 bot.action(/^opt_(\d+)$/, async (ctx) => {
-  const speaker = await authoriseTopicSpeaker(ctx);
-  if (!speaker) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
-  const { key } = speaker;
+  const key = await authoriseContext(ctx);
+  if (!key) { await ctx.answerCbQuery(t('cb.access_denied')); return; }
   const optNum = ctx.match[1];
   const adapter = getThreadAdapter(key);
   if (adapter.checkIsActive(key)) {
@@ -11459,7 +11474,9 @@ bot.action(/^qa_(\d+)_(\d+)$/, async (ctx) => {
     return;
   }
   const selectedLabel = question.options[optIdx].label;
-  const isAnswerShown = await applyQuestionAnswer(key, [selectedLabel]);
+  // The agent's question is its way to ask the OPERATOR: an answer a topic member chose says so, in the answer itself.
+  const answeredBy = speaker.role === 'talker' && ctx.from ? getTelegramTalkerContext(ctx.from).nonOperatorSender : undefined;
+  const isAnswerShown = await applyQuestionAnswer(key, [selectedLabel], answeredBy);
   if (isAnswerShown) {
     // The question message was just edited to carry the whole answer under the question: the toast only
     // confirms the tap, so a label too long for it is cut there and not posted a second time.
@@ -11489,7 +11506,7 @@ async function bufferPromptDuringStartup(
   // else's words, not the operator's pick: it is delivered, marked, like any other message. A topic member's number DOES
   // answer — the one thing foreign words may do here: members answer the agent's questions, and only that (every other
   // control guard asks `checkIsForeignWords`).
-  if (messageContext?.isForwarded !== true && await answerReAskedQuestionByNumber(key, text)) return;
+  if (messageContext?.isForwarded !== true && await answerReAskedQuestionByNumber(key, text, messageContext)) return;
   // A person wrote, in a window where the session is starting or being stopped: it counts like a message that reaches
   // `deliverActivePrompt` — the idle latch clears, and a question the idle compaction re-asked is closed (the idle fire
   // posts it just before the stop, so this window is where a message instead of a tap most often lands).
@@ -11531,7 +11548,7 @@ async function deliverActivePrompt(
   // alone, while the context wipe asks `checkIsForeignWords`.
   const isForwarded = messageContext?.isForwarded === true;
   // A bare option number answers the question the idle compaction asked again (a tap's own label comes in with no intake).
-  if (intake !== null && !isForwarded && await answerReAskedQuestionByNumber(key, text)) return null;
+  if (intake !== null && !isForwarded && await answerReAskedQuestionByNumber(key, text, messageContext)) return null;
   // A genuine USER message (text or voice) — clear the compact-on-idle latch so
   // the next idle period can compact again (D2), whether it answers a pending
   // question or is a fresh prompt.
@@ -11545,7 +11562,7 @@ async function deliverActivePrompt(
       // the quote — the reply context is deliberately dropped here. Not a request
       // either: the turn it unblocks continues under the open one. A forwarded digit
       // is not a pick: it falls to the free-form route below and reaches the agent marked.
-      await applyQuestionAnswer(key, route.labels);
+      await applyQuestionAnswer(key, route.labels, messageContext?.nonOperatorSender);
       return null;
     }
     // Free-form text cancels the question and is a fresh prompt — a request (S7).
@@ -11684,22 +11701,26 @@ async function cancelPendingQuestionAndForward(
  * inline-button (`qa_`) and custom-text answer paths so both collect answers
  * locally instead of closing the request on the first answer with empties.
  */
-async function applyQuestionAnswer(key: SessionKey, answerForCurrent: string[]): Promise<boolean> {
+async function applyQuestionAnswer(key: SessionKey, answerForCurrent: string[], answeredBy?: string): Promise<boolean> {
   // Serialized: an in-flight re-post (delete+re-send) must fully finish before
   // the answer reads `messageId` for its ✅-edit — otherwise the edit targets
   // a message the re-post just deleted (live 2026-06-10: "message to edit not
   // found" + the next question never reached the topic).
-  return runQuestionLifecycleOp(key, () => applyQuestionAnswerInner(key, answerForCurrent));
+  return runQuestionLifecycleOp(key, () => applyQuestionAnswerInner(key, answerForCurrent, answeredBy));
 }
 
-/** Resolves to whether the topic now shows the whole answer: the answered question's message was edited to carry it. */
-async function applyQuestionAnswerInner(key: SessionKey, answerForCurrent: string[]): Promise<boolean> {
+/**
+ * Resolves to whether the topic now shows the whole answer: the answered question's message was edited to carry it.
+ * `answeredBy` (the description of a person who is not the operator) rides in the answer the agent reads — each part of a
+ * question of several parts says who chose it — and never in the note the topic shows, which stays the chosen label.
+ */
+async function applyQuestionAnswerInner(key: SessionKey, answerForCurrent: string[], answeredBy?: string): Promise<boolean> {
   const kStr = keyToString(key);
   const pending = pendingQuestions.get(kStr);
   if (!pending) return false;
 
   const answeredQuestion = pending.data.questions[pending.currentIndex];
-  const { nextState, action } = recordAnswerAndAdvance(pending, answerForCurrent);
+  const { nextState, action } = recordAnswerAndAdvance(pending, answeredBy === undefined ? answerForCurrent : getAnswerWithAttribution(answerForCurrent, answeredBy));
 
   // Mark the answered question's message as done: the question stays as asked, the chosen answer takes the place of
   // its buttons.

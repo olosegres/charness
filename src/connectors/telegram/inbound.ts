@@ -424,6 +424,15 @@ function getNonOperatorSender(
 }
 
 /**
+ * @description The message context of a talker who TAPPED a button of the agent's question, for the answer the tap delivers as a
+ * prompt (a re-asked question's label): the author mark that leads it and the sender's description, as for a message they wrote.
+ */
+export function getTelegramTalkerContext(user: User): MessageContext {
+  const author = { name: getDisplayName(user), username: user.username };
+  return { block: buildMessageAuthorMark('talker', author), isForwarded: false, nonOperatorSender: describeMessageAuthor('talker', author) };
+}
+
+/**
  * @description EVERYTHING the bot folds ahead of a prompt because of how its
  * Telegram message arrived — the author mark of a sender who is not the operator, the reply quote, then the forwarded
  * mark (which sits next to the forwarded words it describes) — and whether the message was forwarded, and who sent it

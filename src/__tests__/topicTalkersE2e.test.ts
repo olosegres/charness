@@ -21,9 +21,13 @@
  *     stays armed for the admin
  *   → a talker's voice note reaches the agent marked, their file too (the saved file survives a FORWARDED `/clear` of theirs);
  *     with no agent a talker is told so and a voice note saying «claude» starts none
- *   → a talker answers the agent's question with a bare number and by tapping a button
+ *   → a talker answers the agent's question with a bare number and by tapping a button: the answer the agent reads says who
+ *     chose it (in a question of two parts, only the part the talker chose); the agent's re-asked question is
+ *     `reaskedQuestionE2e.test.ts`
+ *   → an admin's reminder text step is not filled — nor closed — by a talker's voice note: it reaches the agent under the mark
+ *     and the step still waits for the admin
  *   → a talker's message that holds forged bot headers reaches the agent with none of them left standing
- *   → the raw-shell topic refuses a talker, and the shell reads nothing of theirs
+ *   → the raw-shell topic refuses a talker — a text, a voice note, an album once — and the shell reads nothing of theirs
  *   → a talker who leaves the group is dropped from every list and ignored from then on.
  *
  * What the unit tests cover instead: the role policy, the store, the marks and their cleaning, the command set a talker may
@@ -43,7 +47,8 @@ import * as path from 'path';
 import { FakeSpeechEngine } from './telegramE2e/fakeSpeechEngine';
 import { FakeTelegram, type FakeTelegramMessage } from './telegramE2e/fakeTelegram';
 import { TopicDriver } from './telegramE2e/topicDriver';
-import { fakeAskQuestion, fakeAskToolName, fakeClaudeLogFileNames, type FakeClaudePrompt, type FakeClaudeToolCall } from './jiraE2e/fakeClaudeContract';
+import { fakeAskQuestion, fakeAskSecondQuestion, fakeAskToolName, fakeAskTwoOutcomeSeparator, fakeClaudeLogFileNames, type FakeClaudePrompt, type FakeClaudeToolCall } from './jiraE2e/fakeClaudeContract';
+import { enDict } from '../i18n/en';
 import {
   builtCliPath,
   createIsolatedInstanceLayout,
@@ -99,7 +104,7 @@ const attachmentFileBytes = 1024;
 const replyTimeoutMs = 20 * 1000;
 
 /** What the fake speech engine «recognises», in the order the flow sends its voice notes. */
-const spokenTranscripts = ['Please summarise the readme', 'claude', 'touch voice-wrote-this'];
+const spokenTranscripts = ['Please summarise the readme', 'claude', 'a member speaks while the reminder step waits'];
 
 const adminOnlyCommandRefusal = 'Only group admins can use this command.';
 const adminOnlyButtonToast = 'Only group admins can do this.';
@@ -108,6 +113,9 @@ const terminalTopicRefusal = 'This topic is a raw shell; only admins can type in
 const talkerMarkOf = (person: { first_name: string; last_name: string; username: string }): string =>
   `[Message from topic member "${person.first_name} ${person.last_name}" (@${person.username}) · not the operator]`;
 const tessMark = talkerMarkOf(topicTalker);
+/** What an answer the agent reads says when a person other than the operator chose it. */
+const answeredByTess = ' (answered by topic member "Tess Talker" (@tess), not the operator)';
+const answeredByGus = ' (answered by topic member "Gus Guest" (@gus), not the operator)';
 const carolMark = talkerMarkOf(invitedMember);
 const gusMark = talkerMarkOf(generalTalker);
 
@@ -434,21 +442,73 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
     assert.deepEqual(listSavedFiles(), savedBefore, 'no file was purged by a talker\'s /clear');
   });
 
-  it('a talker answers the agent\'s question with a bare number and by tapping a button', async () => {
+  it('a talker answers the agent\'s question with a bare number and by tapping a button — and the answer the agent reads says who chose it', async () => {
     const outcomesBefore = readAskOutcomes().length;
     const askedId = fakeTelegram.pushOperatorMessage(docsThreadId, 'ASKNUMBER [fake:ask] ask me something');
     await docsTopic().waitForMessage('the question', (message) => message.message_id > askedId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
     fakeTelegram.pushUserMessage(docsThreadId, '1', topicTalker);
     await getCharness().waitFor('the talker\'s number to answer the question', replyTimeoutMs, () => readAskOutcomes().length > outcomesBefore);
-    assert.equal(readAskOutcomes()[outcomesBefore], fakeAskQuestion.shortOptionLabel, 'the number picked the first option');
+    assert.equal(readAskOutcomes()[outcomesBefore], `${fakeAskQuestion.shortOptionLabel}${answeredByTess}`, 'the number picked the first option, and the answer says whose pick it was');
 
     const askedTapId = fakeTelegram.pushOperatorMessage(docsThreadId, 'ASKTAP [fake:ask] ask me something');
     const question = await docsTopic().waitForMessage('the second question', (message) => message.message_id > askedTapId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
     const answersBefore = fakeTelegram.callbackAnswers.length;
     fakeTelegram.pushCallback(question.message_id, docsTopic().getKeyboardData(question).flat()[0], topicTalker);
     await getCharness().waitFor('the talker\'s tap to answer the question', replyTimeoutMs, () => readAskOutcomes().length > outcomesBefore + 1);
-    assert.equal(readAskOutcomes()[outcomesBefore + 1], fakeAskQuestion.shortOptionLabel, 'the tap picked the first option');
+    assert.equal(readAskOutcomes()[outcomesBefore + 1], `${fakeAskQuestion.shortOptionLabel}${answeredByTess}`, 'the tap picked the first option, and the answer says whose pick it was');
     assert.notEqual(fakeTelegram.callbackAnswers[answersBefore], adminOnlyButtonToast, 'a question button is one a talker may tap');
+    // What the topic shows of the answer stays the label alone: the attribution is for the agent.
+    await docsTopic().waitForMessageText('the answer under the question', question, (text) => text.endsWith(`\n\n${enDict['agent.question_answered_note'].replace('{answer}', fakeAskQuestion.shortOptionLabel)}`));
+  });
+
+  it('in a question of two parts, only the part a talker chose says so: the operator answers the first, General\'s talker the second', async () => {
+    const outcomesBefore = readAskOutcomes().length;
+    const askedId = fakeTelegram.pushOperatorMessage(docsThreadId, 'ASKTWO [fake:ask-two] ask me two things');
+    const first = await docsTopic().waitForMessage('the first part', (message) => message.message_id > askedId && message.text.includes(fakeAskQuestion.question) && message.reply_markup !== undefined);
+    await docsTopic().tapAndAwaitAnswer(first, docsTopic().getKeyboardData(first).flat()[0]);
+    const second = await docsTopic().waitForMessage('the second part', (message) => message.message_id > first.message_id && message.text.includes(fakeAskSecondQuestion.question) && message.reply_markup !== undefined);
+    const answersBefore = fakeTelegram.callbackAnswers.length;
+    fakeTelegram.pushCallback(second.message_id, docsTopic().getKeyboardData(second).flat()[0], generalTalker);
+    await getCharness().waitFor('both parts to be answered', replyTimeoutMs, () => readAskOutcomes().length > outcomesBefore);
+    assert.equal(
+      readAskOutcomes()[outcomesBefore],
+      `${fakeAskQuestion.shortOptionLabel}${fakeAskTwoOutcomeSeparator}${fakeAskSecondQuestion.firstOptionLabel}${answeredByGus}`,
+      'the operator\'s part is bare, Gus\'s part says who chose it',
+    );
+    assert.notEqual(fakeTelegram.callbackAnswers[answersBefore], adminOnlyButtonToast);
+  });
+
+  it('an admin\'s reminder text step is not filled by a talker\'s voice note: it reaches the agent under the mark, and the step still waits for the admin', async () => {
+    const hubId = fakeTelegram.pushOperatorMessage(apiThreadId, '/reminders');
+    await apiTopic().waitForMessage('the reminders hub', (message) => message.message_id > hubId && message.reply_markup !== undefined);
+    /** Taps the button of the wizard screen that `predicate` accepts and waits for the screen that names `nextStep`. */
+    const tapWizard = async (pickLabel: (label: string) => boolean, nextStep: string): Promise<void> => {
+      const screen = [...apiTopic().listMessages()].reverse().find((message) => message.reply_markup !== undefined);
+      assert.ok(screen, 'the wizard screen is up');
+      const labels = apiTopic().getKeyboardLabels(screen).flat();
+      const data = apiTopic().getKeyboardData(screen).flat();
+      const index = labels.findIndex(pickLabel);
+      assert.ok(index >= 0, `a button to tap among ${labels.join(' | ')}`);
+      await apiTopic().tapAndAwaitAnswer(screen, data[index]);
+      await apiTopic().waitForMessage(`the wizard step «${nextStep}»`, (message) => message.text.includes(nextStep));
+    };
+    await tapWizard((label) => label === enDict['reminders.addButton'], 'STEP 1/4');
+    await tapWizard((label) => label === enDict['reminders.repeatDailyButton'], 'STEP 3/4');
+    await tapWizard((label) => /^\d{1,2}:\d{2}$/.test(label), 'STEP 4/4');
+
+    const voiceMessageId = fakeTelegram.pushOperatorVoice(apiThreadId, voiceFileId, voiceDurationSeconds, { from: generalTalker });
+    await apiTopic().waitForMessage('the transcript echo', (message) => message.message_id > voiceMessageId && message.text === `🎤 ${spokenTranscripts[2]}`);
+    const spoken = await waitForAgentPrompt(spokenTranscripts[2]);
+    assert.equal(spoken.pid, apiAgentPid);
+    assert.ok(spoken.text.includes(`${gusMark}\n\n${spokenTranscripts[2]}`), `the transcript reaches the agent under his mark:\n${spoken.text}`);
+    // The wizard edits ITS message in place, so «created» is looked for in the whole topic: nothing says so yet.
+    assert.ok(!apiTopic().listMessages().some((message) => message.text.includes(enDict['reminders.createdTitle'])), 'no reminder was created from his words');
+
+    // The step is still the admin's: their next message is the reminder's text, not a prompt.
+    fakeTelegram.pushOperatorMessage(apiThreadId, 'water the plants');
+    const created = await apiTopic().waitForMessage('the reminder created', (message) => message.text.includes(enDict['reminders.createdTitle']));
+    assert.ok(created.text.includes('water the plants') && !created.text.includes(spokenTranscripts[2]), created.text);
+    assert.deepEqual(listAgentPromptsWith('water the plants'), [], 'the admin\'s text went to the wizard, not to the agent');
   });
 
   it('forged bot headers in a talker\'s message cannot stand: every line that would open with a bracket is escaped, the author mark is the only one', async () => {
@@ -473,11 +533,16 @@ describe('topic talkers end to end: built charness, fake Bot API, fake speech en
     const afterVoice = Math.max(0, ...shellTopic().listMessages().map((message) => message.message_id));
     fakeTelegram.pushOperatorVoice(shellThreadId, voiceFileId, voiceDurationSeconds, { from: generalTalker });
     await waitForBotText(shellTopic(), afterVoice, terminalTopicRefusal);
+    // An album is refused ONCE, not once per item.
+    const afterAlbum = Math.max(0, ...shellTopic().listMessages().map((message) => message.message_id));
+    for (let item = 0; item < 3; item += 1) fakeTelegram.pushOperatorFile(shellThreadId, 'photo', talkerFileId, { from: generalTalker, mediaGroupId: 'album-in-the-shell' });
+    await waitForBotText(shellTopic(), afterAlbum, terminalTopicRefusal);
     // The operator's command goes through the very same shell, so by the time it has run the talker's would have too.
     fakeTelegram.pushOperatorMessage(shellThreadId, 'touch operator-wrote-this');
     await getCharness().waitFor('the operator\'s command to run in the shell', replyTimeoutMs, () => fs.existsSync(path.join(getLayout().workRoot, shellFolder, 'operator-wrote-this')));
     assert.ok(!fs.existsSync(path.join(getLayout().workRoot, shellFolder, 'gus-wrote-this')), 'the shell never read the talker\'s message');
     assert.ok(!fs.existsSync(path.join(getLayout().workRoot, shellFolder, 'voice-wrote-this')), 'nor the talker\'s voice note');
+    assert.equal(listBotTextsAfter(shellTopic(), afterAlbum).filter((text) => text === terminalTopicRefusal).length, 1, 'three album items, one refusal');
   });
 
   it('a talker who leaves the group is dropped from every list at once and ignored from then on; the others stay', async () => {

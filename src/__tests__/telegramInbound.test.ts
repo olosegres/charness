@@ -31,6 +31,7 @@ import {
   getTelegramForwardedMark,
   getTelegramMessageContext,
   getTelegramReplyQuoteBlock,
+  getTelegramTalkerContext,
   type TelegramMessageAccess,
 } from '../connectors/telegram/inbound';
 import type { InboundEvent } from '../platform/inbound';
@@ -954,4 +955,13 @@ test('checkHasLeftGroup: left, removed and banned members are gone; a restricted
   assert.equal(checkHasLeftGroup(asMember({ status: 'restricted', is_member: false })), true, 'muted, then left');
   assert.equal(checkHasLeftGroup(asMember({ status: 'restricted', is_member: true })), false, 'muted but still in the group');
   for (const status of ['member', 'administrator', 'creator']) assert.equal(checkHasLeftGroup(asMember({ status })), false, status);
+});
+
+test('getTelegramTalkerContext: a talker who TAPPED a button gets the context a message of theirs would — the mark and who they are', () => {
+  assert.deepEqual(getTelegramTalkerContext(talkerUser), {
+    block: talkerMark,
+    isForwarded: false,
+    nonOperatorSender: talkerDescription,
+  });
+  assert.equal(getTelegramTalkerContext(makeUser(12, { first_name: 'Nobody' })).block, '[Message from topic member "Nobody" · not the operator]');
 });

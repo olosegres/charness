@@ -67,7 +67,8 @@ per-backend controls are optional methods the bot checks before calling.
   `isTalkerAllowed` flag opens `/esc` (+ aliases), `/status`, `/whoami`, `/help` (pinned by a test). A talker's text takes ONE early branch
   (`handleTalkerText`: no armed input step, no start phrase, no folder picker, no raw shell); their words reach the agent under an author mark,
   with line-leading `[` escaped so they can never pass for the bot's own headers (`utils/authorMark.ts`). Foreign words — forwarded or a
-  talker's — are content, never control (`checkIsForeignWords`), except answering the agent's question with a bare number. A talker can make
+  talker's — are content, never control (`checkIsForeignWords`), except answering the agent's question (a button or a bare number), and that answer
+  says who chose it (`getAnswerWithAttribution`; a re-asked question's label arrives under the author mark). A talker can make
   the agent run anything in that topic's folder: adding one is trusting them with the bot's OS account.
 - **Per-thread isolation.** Routing, sessions, prefs and history key on `SessionKey` `{platform, space,
   thread}`; each connector owns its serialisation (Telegram: the frozen `"<chatId>:<threadId>"`, which also

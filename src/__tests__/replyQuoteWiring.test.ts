@@ -144,10 +144,10 @@ test('a FORWARDED voice note is content too: its transcript starts no agent', ()
 test('a FORWARDED message answers no pending question and wipes no context, whatever its words are', () => {
   const active = getFunctionBody('deliverActivePrompt');
   assert.match(active, /const\s+isForwarded\s*=\s*messageContext\?\.isForwarded\s*===\s*true/);
-  assert.match(active, /intake\s*!==\s*null\s*&&\s*!isForwarded\s*&&\s*await\s+answerReAskedQuestionByNumber/);
+  assert.match(active, /intake\s*!==\s*null\s*&&\s*!isForwarded\s*&&\s*await\s+answerReAskedQuestionByNumber\(key, text, messageContext\)/);
   assert.match(active, /route\.kind\s*===\s*'answer'\s*&&\s*!isForwarded/);
   assert.match(active, /text\s*===\s*forwardedClearCommand\s*&&\s*!checkIsForeignWords\(messageContext\)/, 'foreign words include the forwarded ones');
-  assert.match(getFunctionBody('bufferPromptDuringStartup'), /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*await\s+answerReAskedQuestionByNumber/);
+  assert.match(getFunctionBody('bufferPromptDuringStartup'), /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*await\s+answerReAskedQuestionByNumber\(key, text, messageContext\)/);
 });
 
 test('the decoration of a forwarded prompt and the request it opens ask «is it a slash command» with the context, not the bare text', () => {
@@ -174,11 +174,11 @@ test('the one thing a topic member\'s words may do in the shared prompt helpers 
   const active = getFunctionBody('deliverActivePrompt');
   const forwardOnlyGuards = active.match(/!isForwarded/g) ?? [];
   assert.equal(forwardOnlyGuards.length, 2, 'the re-asked number and the pending-question digit — nothing else in deliverActivePrompt');
-  assert.match(active, /answerReAskedQuestionByNumber\(key,\s*text\)/);
+  assert.match(active, /answerReAskedQuestionByNumber\(key,\s*text,\s*messageContext\)/);
   assert.match(active, /route\.kind\s*===\s*'answer'\s*&&\s*!isForwarded/);
   assert.match(active, /members may answer questions, the one thing foreign words may do here/, 'the carve-out says why');
   const buffer = getFunctionBody('bufferPromptDuringStartup');
-  assert.match(buffer, /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*await\s+answerReAskedQuestionByNumber/);
+  assert.match(buffer, /messageContext\?\.isForwarded\s*!==\s*true\s*&&\s*await\s+answerReAskedQuestionByNumber\(key,\s*text,\s*messageContext\)/);
   assert.match(buffer, /the one thing foreign words may do here/, 'the carve-out says why');
   // Every other control guard of the three prompt helpers asks the one predicate (or the slash test built on it): no forward-only
   // test of a control action is left outside the two answer routes.

@@ -23,6 +23,7 @@ import { createCompaction } from '../connectors/telegram/commands/compaction';
 import type { AgentAdapter, AgentSession, CompactionResult, OpenCodeQuestion, PendingQuestionState, ReAskedQuestionRecord } from '../types';
 import type { QuestionEnd } from '../openCodeQuestionFlow';
 import type { LatePromptOutcome } from '../utils/promptDelivery';
+import type { MessageContext } from '../utils/messageContext';
 import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { enDict } from '../i18n/en';
@@ -85,6 +86,8 @@ class StubAdapter extends EventEmitter implements AgentAdapter {
 
 interface PendingDelivery {
   label: string;
+  /** Who chose it when that is not the operator (the author mark and the sender), as the bot handed it on. */
+  messageContext?: MessageContext;
   settle: (outcome: LatePromptOutcome | null) => void;
 }
 
@@ -205,7 +208,7 @@ describe('the question the idle compaction asked again, through the compaction m
       suspendThreadSession: async () => { idleFireFinished.resolve(); },
       resumeSleepingSessionForCompaction: async () => false,
       getThreadAdapter: () => adapter,
-      deliverLabel: (_key, label) => new Promise((resolve) => { deliveries.push({ label, settle: resolve }); }),
+      deliverLabel: (_key, label, messageContext) => new Promise((resolve) => { deliveries.push({ label, messageContext, settle: resolve }); }),
       resumeSleepingSessionForPrompt: async () => canWakeConversation,
       checkIsStarting: () => false,
       closeOrphanQuestionMessage: async (_key, messageId, text) => {
@@ -250,6 +253,37 @@ describe('the question the idle compaction asked again, through the compaction m
     for (const delivery of deliveries) delivery.settle('forwarded');
     compaction.clearThreadCompaction(key);
     await harness.state.clearReAskedQuestion(key);
+  });
+
+  describe('who chose the label', () => {
+    const talkerContext: MessageContext = {
+      block: '[Message from topic member "Alice Smith" (@alice) · not the operator]',
+      isForwarded: false,
+      nonOperatorSender: 'topic member "Alice Smith" (@alice)',
+    };
+
+    it('a number a topic member typed hands the label on WITH their context — the agent reads it under their mark, never as the operator\'s answer', async () => {
+      await startIdleFireUntilReAskIsBeingSent();
+      const handled = compaction.answerReAskedQuestionByNumber(key, '2', talkerContext);
+      await waitForDelivery(1);
+      assert.equal(deliveries[0].label, 'Long');
+      assert.deepEqual(deliveries[0].messageContext, talkerContext);
+      reAskSendGate.resolve();
+      await idleFireFinished.promise;
+      deliveries[0].settle('forwarded');
+      assert.equal(await handled, true);
+    });
+
+    it('the operator\'s own number carries no context: the label stays bare, as it always was', async () => {
+      await startIdleFireUntilReAskIsBeingSent();
+      const handled = compaction.answerReAskedQuestionByNumber(key, '2');
+      await waitForDelivery(1);
+      assert.equal(deliveries[0].messageContext, undefined);
+      reAskSendGate.resolve();
+      await idleFireFinished.promise;
+      deliveries[0].settle('forwarded');
+      assert.equal(await handled, true);
+    });
   });
 
   describe('a number typed while the re-ask is being sent', () => {

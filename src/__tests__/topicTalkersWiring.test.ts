@@ -15,6 +15,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { botSource, getFunctionBody, getSourceSlice } from './botSource';
 
 /** Every call site of the speaker gate: this list IS the surface a talker can reach, and a new entry is a decision. */
@@ -23,11 +25,11 @@ const speakerGateCallSiteMarkers = [
   "bot.on(message('voice'), async (ctx) => {",
   '  incomingFileMessageFilter,\n  async (ctx) => {',
   "bot.on('edited_message', async (ctx) => {",
-  'bot.action(/^opt_(\\d+)$/, async (ctx) => {',
   'bot.action(/^qa_(\\d+)_(\\d+)$/, async (ctx) => {',
 ];
 
 test('the speaker gate is asked by the text, voice, file, edited-message and question-tap routes — as their first act', () => {
+  assert.equal(speakerGateCallSiteMarkers.length, 5, 'text, voice, file, edited message, and the `qa_` question button');
   for (const marker of speakerGateCallSiteMarkers) {
     const startIdx = botSource.indexOf(marker);
     assert.notEqual(startIdx, -1, `${marker} must exist`);
@@ -74,7 +76,7 @@ test('the talker branch refuses a slash text (a forward\'s is words), deletes a 
 
 test('a talker\'s voice note and file are refused in a raw shell, and with no agent they get one line, never the bind picker', () => {
   assert.match(getSourceSlice("bot.on(message('voice'), async (ctx) => {", 'const sttSettings'), /speaker\.role === 'talker' && await refuseTalkerInTerminalTopic\(key\)/);
-  assert.match(getSourceSlice('  incomingFileMessageFilter,\n  async (ctx) => {', 'handleIncomingFile(ctx, key, isFromTalker)'), /isFromTalker && await refuseTalkerInTerminalTopic\(key\)/);
+  assert.match(getSourceSlice('  incomingFileMessageFilter,\n  async (ctx) => {', 'handleIncomingFile(ctx, key, isFromTalker)'), /isFromTalker && await refuseTalkerInTerminalTopic\(key, /);
   const guidance = getFunctionBody('sendNoAgentGuidance');
   assert.ok(guidance.indexOf('isFromTalker') < guidance.indexOf('buildBindKeyboard'), 'the talker line comes before — and instead of — the folder picker');
   assert.match(guidance, /if \(isFromTalker\) \{\s*await sendHint\(t\('access\.noAgentForTalkerNotice'\)\);\s*return;/);
@@ -97,8 +99,8 @@ test('every update of the served group teaches the bot who wrote — before any 
   assert.match(body, /seenGroupSenders\.noteSender\(person\)/);
   assert.match(body, /state\.updateTalkerIdentity\(person\)/);
   assert.match(body, /if \(groupSpeaker\.role === 'admin'\) return;[^]*state\.resolveTopicInvites\(person\)/, 'an admin is never invited');
-  assert.match(body, /groupSpeaker\.role === 'none' && !wasGranted\) recentTopicWriters\.noteIgnoredWriter/, 'only a stranger is offered to the add screen');
-  assert.match(body, /!ctx\.message \|\| !user \|\| user\.is_bot\) return/, 'a bot is nobody\'s talker, a tap is not writing');
+  assert.match(body, /groupSpeaker\.role === 'none' && !isTalkerNow\) recentTopicWriters\.noteIgnoredWriter/, 'only a stranger is offered to the add screen');
+  assert.match(body, /!ctx\.message \|\| !user \|\| user\.is_bot \|\| ctx\.message\.sender_chat\) return/, 'a bot is nobody\'s talker, a tap is not writing, a post made as a chat is no person');
 });
 
 test('a member who leaves the group loses every entry; a re-pair drops the other chats\' lists', () => {
@@ -123,4 +125,50 @@ test('the commands flagged for a talker are registered with the flag where they 
     const handlerEnd = rest.search(/\n\}(, \{ isTalkerAllowed: true \})?\);\n/);
     assert.match(rest.slice(handlerEnd, handlerEnd + 40), /isTalkerAllowed: true/, `${marker} carries the talker flag`);
   }
+});
+
+test('`opt_` — the Claude TUI selector\'s digit — stays behind the ADMIN gate: nothing builds that button, and its handler types into whatever the TUI shows', () => {
+  const handler = getSourceSlice('bot.action(/^opt_(\\d+)$/, async (ctx) => {', 'const optNum');
+  assert.match(handler, /const key = await authoriseContext\(ctx\);/);
+  assert.doesNotMatch(handler, /authoriseTopicSpeaker/);
+});
+
+test('a talker\'s voice note feeds no reminder step of an admin — it neither fills it nor closes it when it has expired', () => {
+  const voice = getFunctionBody('processVoiceJob');
+  assert.match(voice, /const reminderVoiceRoute = checkIsForeignWords\(messageContext\) \? null : claimReminderTextCapture\(key\);/);
+  // The wiring above is the only claim of a reminder step in the voice route, and the text route's is inside the admin path only.
+  assert.equal(voice.match(/claimReminderTextCapture\(/g)?.length, 1);
+  assert.ok(!getFunctionBody('handleTalkerText').includes('claimReminderTextCapture'));
+});
+
+test('an answer a topic member chose says so, on every route that gives one: the button, the typed number, the re-asked question\'s tap and number', () => {
+  const tap = getSourceSlice("bot.action(/^qa_(\\d+)_(\\d+)$/, async (ctx) => {", 'Buffer a free-form prompt');
+  assert.match(tap, /const answeredBy = speaker\.role === 'talker' && ctx\.from \? getTelegramTalkerContext\(ctx\.from\)\.nonOperatorSender : undefined;/);
+  assert.match(tap, /applyQuestionAnswer\(key, \[selectedLabel\], answeredBy\)/);
+  assert.match(getFunctionBody('deliverActivePrompt'), /await applyQuestionAnswer\(key, route\.labels, messageContext\?\.nonOperatorSender\);/);
+  assert.match(getFunctionBody('applyQuestionAnswerInner'), /recordAnswerAndAdvance\(pending, answeredBy === undefined \? answerForCurrent : getAnswerWithAttribution\(answerForCurrent, answeredBy\)\)/);
+  // The note the topic shows is still the chosen label, and only the label.
+  assert.match(getFunctionBody('applyQuestionAnswerInner'), /t\('agent\.question_answered_note', \{ answer: answerForCurrent\.join\(', '\) \}\)/);
+  assert.match(botSource, /deliverLabel: \(key, label, messageContext\) => withThreadLocale\(key, \(\) => deliverActivePrompt\(key, getThreadAdapter\(key\), label, null, undefined, messageContext\)\)/);
+});
+
+test('the re-asked question\'s tap hands the label on with the context of the talker who tapped, and the number with the message\'s', () => {
+  const compaction = fs.readFileSync(path.join(__dirname, '..', 'connectors', 'telegram', 'commands', 'compaction.ts'), 'utf8');
+  assert.match(compaction, /const outcome = await deliverLabel\(key, label, speaker\.role === 'talker' && ctx\.from \? getTelegramTalkerContext\(ctx\.from\) : undefined\);/);
+  assert.match(compaction, /async function answerReAskedQuestionByNumber\(key: SessionKey, text: string, messageContext\?: MessageContext\)/);
+  assert.match(compaction, /const outcome = await deliverLabel\(key, label, messageContext\);/);
+});
+
+test('the sender tracking ignores a post made as a chat (a linked channel\'s carries Telegram\'s service user) and rereads the role after a grant', () => {
+  const body = getFunctionBody('noteServedGroupSender');
+  assert.match(body, /!ctx\.message \|\| !user \|\| user\.is_bot \|\| ctx\.message\.sender_chat\) return;/);
+  assert.match(body, /const isTalkerNow = state\.getEffectiveTalkerIds\(groupSpeaker\.key, getGroupGeneralKey\(groupSpeaker\.key\)\)\.has\(person\.userId\);/);
+  assert.match(body, /groupSpeaker\.role === 'none' && !isTalkerNow\) recentTopicWriters\.noteIgnoredWriter/);
+  assert.ok(body.indexOf('ctx.message.sender_chat') < body.indexOf('seenGroupSenders.noteSender'), 'before the person is remembered anywhere');
+});
+
+test('an album a talker sends into a raw-shell topic is refused ONCE, through the album\'s one-shot guard', () => {
+  const handler = getSourceSlice('  incomingFileMessageFilter,\n  async (ctx) => {', 'handleIncomingFile(ctx, key, isFromTalker)');
+  assert.match(handler, /refuseTalkerInTerminalTopic\(key, async \(text\) => \{\s*if \(!mediaGroupId \|\| albumCollector\.checkShouldAnnounceOnce\(buildAlbumGroupKey\(key, mediaGroupId\)\)\) await replyToThread\(key, text\);/);
+  assert.match(getFunctionBody('refuseTalkerInTerminalTopic'), /sendRefusal: \(text: string\) => Promise<unknown>/);
 });

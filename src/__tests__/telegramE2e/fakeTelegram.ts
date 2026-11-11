@@ -111,6 +111,8 @@ export type FakeForwardOrigin =
 export interface FakeOperatorMessageOptions {
   /** Who sends it: the operator by default; another person (an admin, a talker, a stranger) when set. */
   from?: TelegramUser;
+  /** The album this message is one item of (`media_group_id`): files sent together share one. */
+  mediaGroupId?: string;
   /** The id of the message in the topic this one replies to (the bot's or a person's). */
   replyToMessageId?: number;
   /** Where the message was first written. */
@@ -373,7 +375,7 @@ export class FakeTelegram {
     const fileFields = kind === 'document'
       ? { document: { file_id: fileId, file_unique_id: `unique-${fileId}`, file_name: options.fileName ?? `${fileId}.bin`, mime_type: 'application/octet-stream', file_size: file.bytes.length } }
       : { photo: [{ file_id: fileId, file_unique_id: `unique-${fileId}`, width: 90, height: 60, file_size: file.bytes.length }] };
-    this.pushUpdate({ message: { ...wireMessage, ...fileFields, ...(options.caption ? { caption: options.caption } : {}), ...this.getContext(options) } });
+    this.pushUpdate({ message: { ...wireMessage, ...fileFields, ...(options.caption ? { caption: options.caption } : {}), ...(options.mediaGroupId ? { media_group_id: options.mediaGroupId } : {}), ...this.getContext(options) } });
     return message.message_id;
   }
 
