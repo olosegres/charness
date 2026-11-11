@@ -37,9 +37,10 @@ Unless the user names others:
 
 ## Launch
 
-1. Make a private run directory, generate a UUID for the session, write the brief into `<run-dir>/brief.md`:
-   the task and its context (the worker does not see this conversation), the skills it must load by name, every
-   resource another live process holds, and "report every changed file and how you verified".
+1. Make a private run directory (an absolute path: a resume starts from the checkout), generate a UUID for the
+   session, write the brief into `<run-dir>/brief.md`: the task and its context (the worker does not see this
+   conversation), the skills it must load by name, every resource another live process holds, and "report every
+   changed file and how you verified".
 2. Run it in the target checkout:
 
 ```bash
@@ -65,9 +66,10 @@ printf '%s\n' "<uuid>" > "<run-dir>/session"
   it (skills in a subfolder of the checkout, e.g. a repository root whose agents work in one of its folders): add
   `--add-dir "<that folder>"` and check that the `init` event's `skills` lists every skill the brief names.
 3. Check the PID: `ps -o args= -p "$(cat "<run-dir>/pid")"` must show `claude -p … <uuid>`. If it does not (the CLI
-   handed over to a new process), take it from `pgrep -f "^claude -p .*<uuid>"` and write that into the pid file.
-   `$!` is often the wrapper shell that started it, gone a moment later: wait about 2 seconds after the launch, check,
-   and never arm the watch on a PID this check has not confirmed.
+   handed over to a new process), take the newest match, `pgrep -n -f "^claude -p .*<uuid>"`, and write that one PID
+   into the pid file. `$!` is often the wrapper shell that started it, gone a moment later: wait about 2 seconds after
+   the launch, check, and never arm the watch on a PID this check has not confirmed. Neither finds it → the worker
+   died at start: read `stderr.log` and the log, fix the cause and relaunch.
 4. Record the UUID (it is in `<run-dir>/session`), the profile name you launched on, the checkout and the run directory
    in the plan, then arm the watch check from `charness-orchestration` with this PID and run directory.
 
@@ -86,7 +88,8 @@ printf '%s\n' "<uuid>" > "<run-dir>/session"
   marker of the first run is old) and arm a new check. Never `--continue` or `--fork-session`.
 - Start it in the SAME checkout as the first run, in the same command: `cd "<checkout>" && setsid nohup …`. Your
   shell's working folder may have been reset since, and elsewhere the CLI may not find the session or loads another
-  folder's rules. Check that the new `init` event's `cwd` is the checkout.
+  folder's rules. `$!` is then the shell running that line at best: the PID check of step 3 applies. Check that the
+  new `init` event's `cwd` is the checkout; another folder → stop the worker and resume it from the checkout.
 - `<uuid>` comes only from `<run-dir>/session` or the `session_id` of the first (`system`/`init`) event of the first
   run's log — never from memory or a shortened prefix.
 - Keep the model, effort and flags of the first run.
