@@ -165,6 +165,16 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
     return path.join(getLayout().instanceHome, '.config', 'charness', 'runners');
   }
 
+  /**
+   * The bot's cache home, a SHORT folder. ssh shares one connection per runner through a socket `<cache>/charness/remote-run/ssh/<hash>` plus ssh's own
+   * temporary suffix, which must fit a unix socket path; the isolated instance's HOME is far deeper than that, so under it the sharing is switched off and
+   * every call to the runner (the probe, the jobs-at-once call) is a fresh handshake across both hops — a much slower path than production, where
+   * `~/.cache` is short, and one a loaded machine runs past the probe's and the call's deadlines.
+   */
+  function getBotCacheHome(): string {
+    return path.join(link.root, 'xdg');
+  }
+
   function getAuthorizedKeysPath(): string {
     return path.join(getLayout().instanceHome, '.ssh', 'authorized_keys');
   }
@@ -268,7 +278,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
    * list long enough for several pages needs no thirty machines. None is online. Returns their names.
    */
   function seedMachines(count: number): string[] {
-    const cacheDir = getRemoteRunCacheDir({}, getLayout().instanceHome);
+    const cacheDir = getRemoteRunCacheDir({ XDG_CACHE_HOME: getBotCacheHome() }, getLayout().instanceHome);
     fs.mkdirSync(cacheDir, { recursive: true });
     const snapshotText = ['os=Linux', 'os_name=Ubuntu', 'os_version=24.04', 'arch=x86_64', `cpu_model=${'M'.repeat(300)}`, 'cpu_cores=8', 'ram_total_mb=65536', 'ram_free_mb=40960', 'disk_free_mb=512000', 'pueue=4.0.4', 'awake=caffeinate'].join('\n');
     const names = Array.from({ length: count }, (_value, index) => `seed-${index.toString().padStart(2, '0')}`);
@@ -357,6 +367,7 @@ describe('/runners end to end: built charness, fake Bot API, loopback sshd, a ru
       // A free port nothing listens on: the boot's OpenCode pre-start finds no server and no binary, and gives up.
       OPENCODE_URL: `http://127.0.0.1:${await getFreePort()}`,
       SCHEDULER_MCP_PORT: (await getFreeFixedPort()).toString(),
+      XDG_CACHE_HOME: getBotCacheHome(),
     };
     writeInstanceEnvFile(layout, { ...instanceEnv, ...getTelegramFlowTestTimingsEnv() });
   });
